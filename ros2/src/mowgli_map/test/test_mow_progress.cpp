@@ -78,4 +78,30 @@ TEST(MowProgress, DoesNotSweepAcrossAProgressReset)
   rclcpp::shutdown();
 }
 
+TEST(MowProgress, CachesChangedCoverageAndInvalidatesItOnReset)
+{
+  rclcpp::init(0, nullptr);
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("mow_progress_publish_period_s", 0.0);
+  auto node = std::make_shared<mowgli_map::MapServerNode>(options);
+
+  node->stamp_mow_progress_for_test(0.0, 0.0);
+  node->publish_mow_progress_for_test();
+  EXPECT_TRUE(node->mow_progress_cache_valid_for_test());
+
+  // No coverage changed, but the timer may still republish the cached grid for
+  // a reconnecting GUI. The cache remains valid and requires no rebuild.
+  node->publish_mow_progress_for_test();
+  EXPECT_TRUE(node->mow_progress_cache_valid_for_test());
+
+  {
+    std::lock_guard<std::mutex> lock(node->map_mutex());
+    node->clear_map_layers();
+  }
+  EXPECT_FALSE(node->mow_progress_cache_valid_for_test());
+
+  node.reset();
+  rclcpp::shutdown();
+}
+
 }  // namespace

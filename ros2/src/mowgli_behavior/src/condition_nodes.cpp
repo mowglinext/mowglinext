@@ -68,7 +68,32 @@ BT::NodeStatus IsCharging::tick()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   std::lock_guard<std::mutex> lock(ctx->context_mutex);
-  return ctx->latest_power.charger_enabled ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+
+  if (!ctx->latest_power.charger_enabled)
+  {
+    // Any off sample breaks the run, so an intermittent bit can never
+    // accumulate a window across separate contacts.
+    charging_since_ = {};
+    return BT::NodeStatus::FAILURE;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  if (charging_since_.time_since_epoch().count() == 0)
+  {
+    charging_since_ = now;
+  }
+
+  double stable_for_sec = 0.0;
+  getInput<double>("stable_for_sec", stable_for_sec);
+  if (stable_for_sec <= 0.0)
+  {
+    // Default, and the behaviour of every call site that does not name the
+    // port: report the raw charger bit with no debounce at all.
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  const double elapsed = std::chrono::duration<double>(now - charging_since_).count();
+  return (elapsed >= stable_for_sec) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,8 +123,15 @@ BT::NodeStatus IsBatteryLow::tick()
   // Voltage gate as a redundant trip: a sagging pack can read fine on
   // percent (which is interpolated from full/empty endpoints) and still
   // be below the safe operating voltage. Disabled when threshold is 0.
-  if (voltage_threshold > 0.0f && ctx->latest_power.v_battery > 0.0f &&
-      ctx->latest_power.v_battery < voltage_threshold)
+  //
+  // Reads the FILTERED voltage, not latest_power.v_battery. Both trips in this
+  // node have to see the same signal — gating this one on the raw rail would
+  // re-open, for any operator who sets battery_critical_voltage, exactly the
+  // motor-transient false trip that filtering battery_percent closes. A pack
+  // that is genuinely below the threshold stays below it, so the gate still
+  // fires, just one time constant (~2 s) later. 0 means no reading yet.
+  if (voltage_threshold > 0.0f && ctx->battery_voltage_filtered > 0.0f &&
+      ctx->battery_voltage_filtered < voltage_threshold)
   {
     return BT::NodeStatus::SUCCESS;
   }
@@ -150,6 +182,61 @@ BT::NodeStatus IsBatteryAbove::tick()
   }
 
   return ctx->battery_percent >= threshold ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
+// IsManualResumeRequested
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsManualResumeRequested::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+
+  if (!ctx->manual_resume_requested)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // Every path below consumes the request: it is a one-shot operator action,
+  // and a refused or stale token must not linger into a later charge hold.
+  ctx->manual_resume_requested = false;
+
+  const double age_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                       ctx->manual_resume_requested_time)
+                             .count();
+  if (age_sec > BTContext::kManualResumeMaxAgeSec)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "IsManualResumeRequested: dropping a %.0f s old resume request "
+                "(older than %.0f s) — it was not made in this charge hold",
+                age_sec,
+                BTContext::kManualResumeMaxAgeSec);
+    return BT::NodeStatus::FAILURE;
+  }
+
+  float min_battery_pct = 30.0f;
+  if (auto res = getInput<float>("min_battery_pct"))
+  {
+    min_battery_pct = res.value();
+  }
+
+  const float battery = ctx->battery_percent;
+  if (battery < min_battery_pct)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "manual resume refused: battery %.1f %% < %.1f %%",
+                battery,
+                min_battery_pct);
+    return BT::NodeStatus::FAILURE;
+  }
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "IsManualResumeRequested: operator resume honoured at battery %.1f %% "
+              "(floor %.1f %%) — leaving the charge hold",
+              battery,
+              min_battery_pct);
+  return BT::NodeStatus::SUCCESS;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +319,17 @@ BT::NodeStatus IsLocalizationDegraded::tick()
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   std::lock_guard<std::mutex> lock(ctx->context_mutex);
   return ctx->localization_degraded ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
+// IsDigEscalated
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsDigEscalated::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  return ctx->dig_escalated ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 // ---------------------------------------------------------------------------
@@ -869,6 +967,42 @@ BT::NodeStatus IsCollisionStopSustained::tick()
     return BT::NodeStatus::SUCCESS;
   }
   return BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
+// IsCoverageStartBlocked
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsCoverageStartBlocked::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  // Consume: one blocked pass fires the recovery branch exactly once.
+  // Not guarded by context_mutex — coverage_start_blocked is written by
+  // FollowStrip from the BT tick itself, on the same MutuallyExclusive callback
+  // group (see the thread-safety comment in bt_context.hpp).
+  if (!ctx->coverage_start_blocked)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  ctx->coverage_start_blocked = false;
+
+  // ARM the bounded escape motion (issue #487 follow-up). This is the ONLY
+  // place the token is set, so the escape provably cannot fire on any failure
+  // other than a confirmed START_OCCUPIED-with-zero-progress pass.
+  // EscapeStartBlocked consumes it, and refuses a token older than
+  // kStartBlockedEscapeArmMaxAgeSec.
+  ctx->start_blocked_escape_armed = true;
+  ctx->start_blocked_escape_armed_time = std::chrono::steady_clock::now();
+
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "IsCoverageStartBlocked: the last coverage pass was refused from the robot's own "
+              "pose (START_OCCUPIED on every sub-path, 0 swaths mowed) — running the recovery "
+              "(stop, blade off, bounded escape nudge, clear costmaps, wait) before retrying. "
+              "NOTE: clearing the costmaps only helps if the lethal cell came from a TRANSIENT "
+              "obstacle reading; a keepout zone is a static costmap FILTER and survives the "
+              "clear, which is why the escape motion exists");
+  return BT::NodeStatus::SUCCESS;
 }
 
 }  // namespace mowgli_behavior

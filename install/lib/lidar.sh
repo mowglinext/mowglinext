@@ -10,6 +10,14 @@ configure_lidar() {
   if [[ "${PRESET_LOADED:-false}" == "true" && -n "${LIDAR_TYPE:-}" ]]; then
     : "${LIDAR_PORT:=/dev/lidar}"
 
+    # Keep STL27L's driver contract available even when an older/minimal
+    # preset only records the lidar type.  Explicit preset/user overrides
+    # remain authoritative.
+    if [[ "${LIDAR_TYPE}" == "stl27l" ]]; then
+      : "${LIDAR_MODEL:=LDLiDAR_STL27L}"
+      : "${LIDAR_BAUD:=921600}"
+    fi
+
     info "LiDAR pre-configured (skipping prompts)"
 
     # For UART connections, always let user confirm/change the port
@@ -60,8 +68,8 @@ configure_lidar() {
       4)
         LIDAR_ENABLED="true"
         LIDAR_TYPE="stl27l"
-        LIDAR_MODEL="STL27L"
-        LIDAR_BAUD="230400"
+        LIDAR_MODEL="LDLiDAR_STL27L"
+        LIDAR_BAUD="921600"
         ;;
       *)
         error "$MSG_LIDAR_INVALID_TYPE"

@@ -171,7 +171,7 @@ export function AppShell() {
 
         <main style={{
           flex: 1, overflow: 'auto', minHeight: 0,
-          padding: '12px 14px 110px',
+          padding: '12px 14px calc(110px + env(safe-area-inset-bottom, 0px))',
           position: 'relative', zIndex: 1,
         }}>
           <AnimatedOutlet currentPath={currentPath}/>
@@ -282,6 +282,10 @@ function AnimatedOutlet({currentPath}: {currentPath: string}) {
   // useOutlet() the element is captured per render/location, so the cached
   // exiting div keeps the OLD page and the freshly keyed div gets the new one.
   const outlet = useOutlet();
+  // Scrolling pages must grow with their content so main's bottom padding
+  // follows the final control instead of sitting behind overflowing children.
+  // Map and logs own their viewport layout and still need a definite height.
+  const fillViewport = currentPath === '/map' || currentPath === '/logs';
   return (
     <AnimatePresence mode="wait">
       <motion.div
@@ -290,7 +294,7 @@ function AnimatedOutlet({currentPath}: {currentPath: string}) {
         animate={{opacity: 1, y: 0}}
         exit={{opacity: 0, y: -6}}
         transition={{duration: 0.28, ease: [0.2, 0.7, 0.2, 1]}}
-        style={{height: '100%'}}
+        style={{minHeight: '100%', height: fillViewport ? '100%' : undefined}}
       >
         {outlet}
       </motion.div>

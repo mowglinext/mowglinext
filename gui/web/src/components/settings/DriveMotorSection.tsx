@@ -23,6 +23,7 @@ import { useDriveTuning } from "../../hooks/useDriveTuning.ts";
 import { useEmergency } from "../../hooks/useEmergency.ts";
 import { useStatus } from "../../hooks/useStatus.ts";
 import { useTranslation } from "react-i18next";
+import { useTimeFormat } from "../../hooks/useTimeFormat.tsx";
 import {
     formatDriveTuningBoolean,
     translateDriveTuningBackendMessage,
@@ -94,12 +95,6 @@ const jobTag = (t: TFunction, state?: string) => {
     return <Tag>{t("settingsDriveMotor.job.idle")}</Tag>;
 };
 
-const formatTimestamp = (t: TFunction, value?: string) => {
-    if (!value) return t("settingsDriveMotor.common.never");
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
-};
-
 const pickPersistedDriveValues = (report: Record<string, any> | undefined) => {
     if (!report) return {};
     const picked: Record<string, any> = {};
@@ -113,6 +108,11 @@ const pickPersistedDriveValues = (report: Record<string, any> | undefined) => {
 
 export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPersistedValues }) => {
     const { t } = useTranslation();
+    const { formatAbsolute } = useTimeFormat();
+    // "never" rather than the em-dash placeholder: an absent calibration
+    // timestamp means the job has not run, not that the value is unreadable.
+    const formatJobTimestamp = (value?: string): string =>
+        value ? formatAbsolute(value) : t("settingsDriveMotor.common.never");
     const { notification, modal } = App.useApp();
     const emergency = useEmergency();
     const status = useStatus();
@@ -410,14 +410,14 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                     <Text type="secondary">
                                         {t("settingsDriveMotor.summary.currentJob.startedAt", {
                                             mode: tuningStatus.job.mode.toUpperCase(),
-                                            timestamp: formatTimestamp(t, tuningStatus.job.started_at),
+                                            timestamp: formatJobTimestamp(tuningStatus.job.started_at),
                                         })}
                                     </Text>
                                 )}
                             </Space>
                         </Descriptions.Item>
                         <Descriptions.Item label={t("settingsDriveMotor.summary.lastReportDate.label")}>
-                            <Text>{formatTimestamp(t, latestReportMeta?.generated_at)}</Text>
+                            <Text>{formatJobTimestamp(latestReportMeta?.generated_at)}</Text>
                         </Descriptions.Item>
                         <Descriptions.Item label={t("settingsDriveMotor.summary.lastReportPath.label")}>
                             <Text code copyable={!!latestReportMeta?.report_path}>
@@ -793,7 +793,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     <Space direction="vertical" size={12} style={{ width: "100%" }}>
                         <Descriptions size="small" column={1} bordered>
                             <Descriptions.Item label={t("settingsDriveMotor.report.fields.mode")}>{latestReport.latest_report.mode.toUpperCase()}</Descriptions.Item>
-                            <Descriptions.Item label={t("settingsDriveMotor.report.fields.generatedAt")}>{formatTimestamp(t, latestReport.latest_report.generated_at)}</Descriptions.Item>
+                            <Descriptions.Item label={t("settingsDriveMotor.report.fields.generatedAt")}>{formatJobTimestamp(latestReport.latest_report.generated_at)}</Descriptions.Item>
                             <Descriptions.Item label={t("settingsDriveMotor.report.fields.cmdVelTopic")}>
                                 {latestCmdVelTopic ?? t("settingsDriveMotor.common.unknown")}
                             </Descriptions.Item>
@@ -849,7 +849,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                 </Descriptions.Item>
                                 <Descriptions.Item label={t("settingsDriveMotor.report.statusSnapshot.lastWheelTickTimestamp")} span={2}>
                                     {latestStatusSnapshot.last_wheel_tick_timestamp
-                                        ? formatTimestamp(t, latestStatusSnapshot.last_wheel_tick_timestamp)
+                                        ? formatJobTimestamp(latestStatusSnapshot.last_wheel_tick_timestamp)
                                         : t("settingsDriveMotor.common.unknown")}
                                 </Descriptions.Item>
                             </Descriptions>

@@ -1,6 +1,6 @@
 # AI-Assisted Contributing
 
-MowgliNext embraces AI-assisted development. Claude reviews every PR, proposes improvements, and helps contributors via `@claude` mentions. This page explains how to use AI tools effectively — and how to avoid common pitfalls.
+MowgliNext embraces AI-assisted development: the repository ships Claude Code configuration so that an assistant running on your machine loads the full project context. This page explains how to use AI tools effectively — and how to avoid common pitfalls.
 
 ## How AI Works in This Project
 
@@ -8,10 +8,9 @@ MowgliNext embraces AI-assisted development. Claude reviews every PR, proposes i
 
 | Feature | What happens |
 |---------|-------------|
-| **PR Review** | Claude automatically reviews every PR for safety, correctness, ROS2 best practices, and breaking changes |
-| **@claude Bot** | Mention `@claude` in any issue or PR comment — it reads the codebase and responds |
-| **Weekly Improvements** | Claude analyzes the codebase every Monday and proposes 2-3 improvements as new issues |
-| **Welcome Bot** | First-time contributors get a welcome message with guidance |
+| **Welcome Bot** | First-time contributors get a welcome message with guidance (`.github/workflows/welcome.yml`) |
+
+Until 2026-07 the repository also ran Claude GitHub Actions — automatic PR review, an `@claude` mention bot, and a weekly improvement proposer. Those workflows were removed; AI assistance here is now **local**, driven by the checked-in configuration described below, and PRs are reviewed by maintainers.
 
 ### For Contributors Using Claude Code
 
@@ -20,7 +19,8 @@ If you use [Claude Code](https://claude.ai/claude-code) locally, the project inc
 1. **`CLAUDE.md`** — Project instructions loaded automatically (safety rules, architecture invariants, code style)
 2. **`.claude/settings.json`** — Pre-configured permissions for colcon, docker, ros2, pio commands
 3. **`.claude/rules/ros2.md`** — ROS2-specific coding rules (QoS, node patterns, launch files)
-4. **`ros2/CLAUDE.md`** — Detailed ROS2 stack reference (packages, topics, architecture, TODOs)
+4. **A per-area `CLAUDE.md`** in `ros2/`, `gui/`, `firmware/`, `install/`, `docker/` and `sensors/` — a short orientation file for work inside that directory, pointing at the detailed reference
+5. **`docs/claude/`** — that detailed reference: `codemaps/` (one "where to look" map per package), `ros-interfaces.md` (every topic, service, action and TF frame, and the node and `file:line` that creates it), `parameters.md` (every config key, its default and its consumers), `testing-ci.md` (every test suite and the CI job that gates it), and `doc-index.md` (which document is authoritative and which is historical)
 
 **No extra setup needed** — just clone the repo and run `claude` in the project directory. The configuration loads automatically.
 
@@ -86,11 +86,18 @@ RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
 
 #### 3. TF Authority
 
-AI may suggest having multiple nodes publish the same TF transforms. **Don't.** `map→odom` is owned by either `ekf_map_node` (default) or `fusion_graph_node` (when `use_fusion_graph:=true`) — never both. `odom→base_footprint` is owned by `ekf_odom_node` (local dead reckoning). There is no SLAM back-end; the `/map` is built from user-recorded area polygons.
+AI may suggest having multiple nodes publish the same TF transforms. **Don't.** `fusion_graph_node` — the GTSAM factor-graph localizer — is the sole, unconditional localizer and owns **both** `map→odom` and `odom→base_footprint`. No other node may publish either. The robot_localization dual EKF (`ekf_map_node` / `ekf_odom_node`) and the `use_fusion_graph` launch argument were removed, so any suggestion built around them no longer applies. There is no SLAM back-end either: the navigable world comes from user-recorded area polygons that `map_server_node` publishes as Nav2 costmap filters (`/keepout_mask` + `/costmap_filter_info`).
 
 #### 4. MPPI Controller for Coverage
 
-AI often suggests MPPI as "more advanced". For boustrophedon coverage paths with 0.18 m swath spacing, MPPI's Euclidean nearest-point matching jumps between adjacent parallel swaths. Mowgli uses **FTCController** (Follow-the-Carrot, 3-axis PID + native obstacle deviation) for BOTH `FollowPath` (transit) and `FollowCoveragePath` (coverage swaths) — single plugin, single tuning, sub-10 mm lateral error along a strip. RPP/RotationShim are not in the active stack.
+AI often suggests MPPI as "more advanced". It was tried on the coverage slot and reverted on 2026-06-19: as a *sampling* controller it cut corners and made omega-loops at swath U-turns, and every attempt to sharpen its corners made it weave on the straights.
+
+The two controller slots are different plugins, and neither is MPPI:
+
+- `FollowCoveragePath` (coverage swaths) → **`mowgli_nav2_plugins/FTCController`**, a deterministic Follow-the-Carrot controller with a decoupled longitudinal/lateral/angular PID, which also skirts obstacles by deviating the path laterally (`enable_obstacle_deviation`).
+- `FollowPath` (transit) → **RotationShim wrapping `nav2_regulated_pure_pursuit_controller`** (RPP).
+
+Don't swap either one. `ros2/src/mowgli_bringup/test/test_nav2_params.py::test_coverage_is_ftc_transit_is_not` fails the build if coverage stops being FTC or if FTC leaks onto the transit slot.
 
 #### 5. Hallucinated ROS2 APIs
 
@@ -101,10 +108,10 @@ AI may generate service/topic names that don't exist:
 client = create_client<std_srvs::srv::SetBool>("/mowgli/enable_blade");
 
 // RIGHT — actual blade control
-client = create_client<mowgli_interfaces::srv::MowerControl>("/mowgli/hardware/mower_control");
+client = create_client<mowgli_interfaces::srv::MowerControl>("/hardware_bridge/mower_control");
 ```
 
-**Check:** Verify against `ros2/CLAUDE.md` which lists all real topics and services.
+**Check:** Verify against `docs/claude/ros-interfaces.md`, which lists every real topic, service, action and TF frame together with the node and `file:line` that creates it.
 
 #### 6. Missing Firmware Safety
 
@@ -114,11 +121,13 @@ AI may implement blade control as a direct motor command:
 // DANGEROUS — bypasses firmware safety
 publish_raw_motor_command(BLADE_MOTOR, speed);
 
-// CORRECT — fire-and-forget to firmware (firmware decides if safe)
-auto msg = mowgli_interfaces::msg::MowerControl();
-msg.blade_on = true;
-publisher_->publish(msg);
-// Firmware checks: tilt, emergency, battery, rain before activating
+// CORRECT — fire-and-forget service call (firmware decides if safe)
+auto request = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
+request->mow_enabled = 1u;
+request->mow_direction = 0u;
+client_->async_send_request(request);   // response deliberately ignored
+// Firmware gates the blade on the emergency latch (tilt, wheel lift, stop
+// button), the IDLE/docked state, and the cmd_vel watchdog.
 ```
 
 #### 7. ROS1 Patterns
@@ -138,39 +147,40 @@ node = rclpy.create_node('my_node')
 
 ## Quality Checks on PRs
 
-Every PR goes through these automated checks:
+Depending on which paths it touches, a PR goes through these automated checks:
 
 | Check | What it catches |
 |-------|----------------|
-| **Claude Code Review** | Safety issues, logic errors, ROS2 anti-patterns, breaking changes |
-| **clang-format** | C++ formatting violations |
-| **cppcheck** | Static analysis (warnings, performance, portability) |
-| **colcon build** | Compilation errors |
-| **colcon test** | Test failures |
+| **Build & Test (ROS2 kilted)** | Compilation errors and failing `colcon test` suites — the required status check on `dev` |
+| **Formatting (clang-format)** | C++ formatting violations, checked on changed lines with clang-format **18** |
+| **Static Analysis (cppcheck)** | Warnings, performance and portability findings — informational only (`continue-on-error`), never blocking |
+| **Codegen Drift (Go / TS / firmware msg types)** | A changed `.msg`/`.srv` without the regenerated Go, TypeScript and firmware bindings |
+| **Config Drift (mowgli_robot.yaml)** | Defaults padded into the sparse installed config instead of the in-package template |
+| **Unit Tests (vitest + tsc)** | `gui/web/` typecheck, lint and unit-test failures |
 
-If Claude flags something as 🔴 **Critical**, it must be fixed before merge. 🟡 **Suggestion** items are recommended but not blocking.
+There is no automated AI reviewer on this repository — a maintainer reads the PR. Fixing the red checks before asking for review is the fastest path to a merge.
 
 ## Contributing Workflow with AI
 
 ### Recommended approach:
 
-1. **Read first** — Let your AI tool read `CLAUDE.md` and `ros2/CLAUDE.md` before generating code
+1. **Read first** — Let your AI tool read the root `CLAUDE.md`, the `CLAUDE.md` of the directory you are working in, and the matching `docs/claude/codemaps/*.md` before generating code
 2. **Ask, then code** — Ask the AI to explain the relevant existing code before writing new code
 3. **Generate tests first** — Use `/tdd` or ask the AI to write tests before implementation
 4. **Review the diff** — Read every line the AI generates. If you don't understand it, don't commit it
 5. **Run checks locally** — `colcon build && colcon test` before pushing
-6. **Let Claude review** — The PR review will catch issues, but fixing them before submission is faster
+6. **Get CI green, then ask for review** — no bot will catch issues for you; a red check just delays the maintainer
 
-### If Claude's PR review flags issues:
+### If CI or a reviewer flags issues:
 
-1. Read the feedback carefully — it has full project context
-2. Fix 🔴 Critical items (blocking)
-3. Address 🟡 Suggestions where reasonable
-4. Push fixes — Claude will re-review automatically
+1. Read the feedback carefully, and re-check the claim against the code before acting on it
+2. Fix anything the required `Build & Test (ROS2 kilted)` check is unhappy about — that one is blocking
+3. Address the rest where reasonable
+4. Push fixes — the workflows re-run automatically on the new commit
 5. If you disagree with a suggestion, explain why in a comment — the maintainer will decide
 
 ## Need Help?
 
-- Mention `@claude` in your issue or PR for instant AI help
+- Open an [issue](https://github.com/mowglinext/mowglinext/issues) describing what you tried
 - Ask in [Discussions](https://github.com/mowglinext/mowglinext/discussions)
 - Check the [FAQ](FAQ) for common questions

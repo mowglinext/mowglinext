@@ -38,12 +38,16 @@
 #pragma once
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <optional>
 
 #include "geometry_msgs/msg/pose_with_covariance.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
+#include "mowgli_localization/navsat_status_association.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -66,6 +70,12 @@ private:
   void create_services();
 
   void on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
+  void on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg);
+  void on_association_timer();
+  void handle_association_batch(AssociationBatch batch);
+  void project_observation(
+      sensor_msgs::msg::NavSatFix::ConstSharedPtr msg,
+      const std::optional<mowgli_interfaces::msg::GnssStatus>& authoritative_status);
   void on_set_datum(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                     std::shared_ptr<std_srvs::srv::Trigger::Response> response);
 
@@ -81,6 +91,9 @@ private:
   double datum_lat_{0.0};
   double datum_lon_{0.0};
   double cos_datum_lat_{1.0};  ///< Precomputed cos(datum_lat) for projection
+  double status_pairing_window_s_{0.25};
+  double status_pairing_max_provenance_age_s_{2.0};
+  std::size_t status_pairing_capacity_{32};
 
   // Latest GPS fix for the set_datum service.
   sensor_msgs::msg::NavSatFix last_fix_;
@@ -100,12 +113,13 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_cov_pub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr fix_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr status_sub_;
+  rclcpp::TimerBase::SharedPtr association_timer_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr set_datum_srv_;
 
-  /// Latest typed GNSS status. /gps/status is the authoritative RTK/fix-state
-  /// source even when /gps/fix covariance is missing or rejected.
-  mowgli_interfaces::msg::GnssStatus last_status_;
-  bool has_status_{false};
+  /// Bounded exact receipt-provenance association. There is deliberately no
+  /// authoritative "latest status" fallback: an unmatched fix may produce only
+  /// the NavSatFix-derived AbsolutePose path, never a typed RTK projection.
+  std::unique_ptr<NavSatStatusAssociation> status_association_;
 
   /// TF listener to resolve base_footprint↔gps_link (static from URDF,
   /// gives the lever arm) and map↔base_footprint (dynamic from ekf_map,

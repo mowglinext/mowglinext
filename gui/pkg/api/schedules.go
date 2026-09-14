@@ -18,6 +18,10 @@ type Schedule struct {
 	Enabled    bool       `json:"enabled"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	LastRun    *time.Time `json:"lastRun,omitempty"`
+	// Written by the scheduler when a due run was skipped (soil wet); the GUI
+	// shows them, the API only preserves them across updates.
+	LastSkipReason string     `json:"lastSkipReason,omitempty"`
+	LastSkippedAt  *time.Time `json:"lastSkippedAt,omitempty"`
 }
 
 type ScheduleListResponse struct {
@@ -127,6 +131,8 @@ func updateSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 		sched.ID = id
 		sched.CreatedAt = existing.CreatedAt
 		sched.LastRun = existing.LastRun
+		sched.LastSkipReason = existing.LastSkipReason
+		sched.LastSkippedAt = existing.LastSkippedAt
 
 		if err := saveSchedule(dbProvider, &sched); err != nil {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})

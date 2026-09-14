@@ -71,4 +71,25 @@ inline FtcStallResult StallDecision(double target_speed,
   return {target_speed, false};
 }
 
+/// Bound a positive PID output by the acceleration-limited carrot speed while
+/// retaining the normal minimum-speed floor once the ramp has reached it.
+///
+/// After an obstacle hold the ramp restarts at zero. Applying min_speed_mps
+/// unconditionally would turn the first 0.02 m/s ramp step into an immediate
+/// 0.15 m/s command, defeating the acceleration limit that is meant to make
+/// the restart smooth.
+inline double ClampForwardToMovementRamp(double pid_speed,
+                                         double movement_speed,
+                                         double min_speed_mps)
+{
+  if (pid_speed <= 0.0)
+  {
+    return pid_speed;
+  }
+
+  const double ramped = std::min(pid_speed, std::max(0.0, movement_speed));
+  const double active_floor = std::min(std::max(0.0, min_speed_mps), std::max(0.0, movement_speed));
+  return (ramped > 0.0 && ramped < active_floor) ? active_floor : ramped;
+}
+
 }  // namespace mowgli_nav2_plugins

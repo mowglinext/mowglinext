@@ -13,17 +13,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
-// Regression guard for the coverage join/transit gap (task #14). The PLANNING
-// side (mowgli_coverage/coverage_planning.cpp) splits a continuous drivable
-// sub-path into a separate transit whenever a connector join exceeds this
-// gap; the EXECUTION side (FollowStrip, coverage_nodes.hpp) independently
-// re-decides transit-vs-drive-through at runtime using the same threshold.
-// Both now read mowgli_interfaces::coverage_geometry::kSegmentTransitGapM, so
-// they cannot drift apart at compile time — this test pins that wiring (and
-// the value itself) so a future edit that reintroduces a local literal on
-// either side is caught immediately rather than silently reopening the
-// blade-on-diagonal-crossing / redundant-transit failure modes described in
-// coverage_geometry.hpp.
+// Regression guards for coverage transits. Distance protects a far first unit;
+// every later planner-produced sub-path requires a blade-off transit even when
+// its first pose is nearby, because that boundary represents an intentional
+// heading/obstacle discontinuity.
 
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
@@ -47,4 +40,39 @@ TEST(CoverageTransitGap, ValueIsPinnedAndSane)
   EXPECT_DOUBLE_EQ(mowgli_interfaces::coverage_geometry::kSegmentTransitGapM, 0.6);
   EXPECT_GT(mowgli_interfaces::coverage_geometry::kSegmentTransitGapM, 0.0);
   EXPECT_LT(mowgli_interfaces::coverage_geometry::kSegmentTransitGapM, 2.0);
+}
+
+TEST(CoverageTransitGap, EveryLaterSubPathTransitsBladeOff)
+{
+  constexpr double kAdjacentSwathGap = 0.16;
+  EXPECT_FALSE(mowgli_behavior::coverageTransitRequired(kAdjacentSwathGap, false));
+  EXPECT_TRUE(mowgli_behavior::coverageTransitRequired(kAdjacentSwathGap, true));
+  EXPECT_TRUE(mowgli_behavior::coverageTransitRequired(0.0, true));
+}
+
+// 2026-09-10: a first unit that will be reached by a blade-off transit must not
+// have the blade spun up on start — the START_OCCUPIED retry loop cycled the
+// blade on/off on every pass. Only a directly-mowable first unit spins up.
+TEST(CoverageTransitGap, BladeSpinsUpOnStartOnlyForADirectlyMowableFirstUnit)
+{
+  EXPECT_TRUE(mowgli_behavior::bladeSpinupBeforeFirstUnit(0.0));
+  EXPECT_TRUE(mowgli_behavior::bladeSpinupBeforeFirstUnit(0.16));  // adjacent swath
+  EXPECT_FALSE(mowgli_behavior::bladeSpinupBeforeFirstUnit(0.61));
+  EXPECT_FALSE(mowgli_behavior::bladeSpinupBeforeFirstUnit(13.6));
+}
+
+// 2026-09-12: a 0.40 m sub-path-boundary transit spun on the spot for 164 s
+// because nothing bounded it. The bound must be generous (Smac detours are
+// much longer than the gap) but finite.
+TEST(CoverageTransitGap, TransitDeadlineIsFiniteAndGenerous)
+{
+  EXPECT_DOUBLE_EQ(mowgli_behavior::transitDeadlineSec(0.40), 20.0);  // floor
+  EXPECT_DOUBLE_EQ(mowgli_behavior::transitDeadlineSec(-1.0), 20.0);
+  EXPECT_NEAR(mowgli_behavior::transitDeadlineSec(13.6), 151.0, 1e-9);
+  EXPECT_LT(mowgli_behavior::transitDeadlineSec(0.40), 164.0);
+}
+
+TEST(CoverageTransitGap, DistantFirstUnitStillTransits)
+{
+  EXPECT_TRUE(mowgli_behavior::coverageTransitRequired(0.61, false));
 }

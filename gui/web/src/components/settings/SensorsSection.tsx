@@ -13,15 +13,8 @@ type Props = {
 
 export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
     const { t } = useTranslation();
-    // fusion_graph is the sole localizer and always runs (the use_fusion_graph
-    // launch flag was removed), so the LiDAR toggle drives the scan-factor
-    // gates that ARE consumed by fusion_graph.launch.py: use_scan_matching and
-    // use_loop_closure. With no LiDAR there are no scans to match, so both are
-    // forced off. Operators can still fine-tune them in the Localization tab.
     const handleLidarToggle = (enabled: boolean) => {
         onChange("lidar_enabled", enabled);
-        onChange("use_scan_matching", enabled);
-        onChange("use_loop_closure", enabled);
     };
 
     return (
@@ -35,9 +28,7 @@ export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
                             {t("settingsSensors.lidarSensor")}
                         </Text>
                         <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                            {t("settingsSensors.lidarDescriptionPart1")}
-                            {" "}<Text code>use_scan_matching</Text>{t("settingsSensors.lidarDescriptionAnd")}
-                            <Text code>use_loop_closure</Text>{t("settingsSensors.lidarDescriptionPart2")}
+                            {t("settingsSensors.lidarDescription")}
                         </Paragraph>
                     </div>
                     <Switch

@@ -31,7 +31,13 @@ def generate_launch_description() -> LaunchDescription:
         plugin="ldlidar::LdLidarComponent",
         name="ldlidar_node",
         namespace="",
-        parameters=[params_file],
+        # bond_heartbeat_period: the driver's side of its lifecycle bond. Left at
+        # bondcpp's 0.1 s default it publishes 10 Hz on the shared /bond topic —
+        # which EVERY bonded node in the system receives and deserialises. The
+        # Nav2 group already sets 0.5 s on its managed nodes; this matches it.
+        # (The manager's own side is hardcoded to 0.10 s in nav2's
+        # lifecycle_manager.cpp and cannot be configured.)
+        parameters=[params_file, {"bond_heartbeat_period": 0.5}],
         remappings=[
             ("~/scan", "/scan"),
         ],

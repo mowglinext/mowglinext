@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -141,13 +143,13 @@ std::string toLower(std::string value)
 {
   std::transform(
     value.begin(), value.end(), value.begin(),
-    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    [](unsigned char c) {return static_cast<char>(std::tolower(c));});
   return value;
 }
 
 std::string strip(const std::string & value)
 {
-  const auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
+  const auto is_space = [](unsigned char c) {return std::isspace(c) != 0;};
   auto begin = value.begin();
   while (begin != value.end() && is_space(*begin)) {
     ++begin;
@@ -157,19 +159,6 @@ std::string strip(const std::string & value)
     --end;
   }
   return std::string(begin, end);
-}
-
-bool contains(const std::string & haystack, const std::string & needle)
-{
-  return haystack.find(needle) != std::string::npos;
-}
-
-bool endsWith(const std::string & value, const std::string & suffix)
-{
-  if (suffix.size() > value.size()) {
-    return false;
-  }
-  return std::equal(suffix.rbegin(), suffix.rend(), value.rbegin());
 }
 
 std::string normalizeReceiverVendor(const std::string & receiver_family)
@@ -185,82 +174,6 @@ std::string normalizeReceiverVendor(const std::string & receiver_family)
     return "NMEA";
   }
   return "";
-}
-
-std::uint8_t correctionStreamStatusFromMessage(const std::string & message)
-{
-  const std::string normalized = toLower(strip(message));
-  if (contains(normalized, "write error") || endsWith(normalized, "error")) {
-    return PublicGnssStatus::CORRECTION_STREAM_STATUS_ERROR;
-  }
-  if (contains(normalized, "unavailable")) {
-    return PublicGnssStatus::CORRECTION_STREAM_STATUS_UNAVAILABLE;
-  }
-  if (contains(normalized, "waiting")) {
-    return PublicGnssStatus::CORRECTION_STREAM_STATUS_WAITING;
-  }
-  if (contains(normalized, "active")) {
-    return PublicGnssStatus::CORRECTION_STREAM_STATUS_ACTIVE;
-  }
-  if (contains(normalized, "idle")) {
-    return PublicGnssStatus::CORRECTION_STREAM_STATUS_IDLE;
-  }
-  return PublicGnssStatus::CORRECTION_STREAM_STATUS_UNKNOWN;
-}
-
-// Optional-parse helpers: mirror _parse_diagnostic_bool/uint/float. A missing or
-// unparseable value leaves the caller's target untouched (matching Python None).
-
-bool parseBool(const std::string & value, bool & out)
-{
-  const std::string normalized = toLower(strip(value));
-  if (normalized == "true") {
-    out = true;
-    return true;
-  }
-  if (normalized == "false") {
-    out = false;
-    return true;
-  }
-  return false;
-}
-
-bool parseUint(const std::string & value, std::uint32_t & out)
-{
-  const std::string trimmed = strip(value);
-  if (trimmed.empty()) {
-    return false;
-  }
-  try {
-    std::size_t consumed = 0;
-    const long long parsed = std::stoll(trimmed, &consumed, 10);  // NOLINT(runtime/int)
-    if (consumed != trimmed.size() || parsed < 0) {
-      return false;
-    }
-    out = static_cast<std::uint32_t>(parsed);
-    return true;
-  } catch (const std::exception &) {
-    return false;
-  }
-}
-
-bool parseFloat(const std::string & value, float & out)
-{
-  const std::string trimmed = strip(value);
-  if (trimmed.empty()) {
-    return false;
-  }
-  try {
-    std::size_t consumed = 0;
-    const double parsed = std::stod(trimmed, &consumed);
-    if (consumed != trimmed.size()) {
-      return false;
-    }
-    out = static_cast<float>(parsed);
-    return true;
-  } catch (const std::exception &) {
-    return false;
-  }
 }
 
 }  // namespace
@@ -282,8 +195,12 @@ UniversalGnssTopicBridge::UniversalGnssTopicBridge(const rclcpp::NodeOptions & o
     declare_parameter<std::string>("input_rtcm_topic", "/_gps_internal/universal/rtcm");
   const std::string output_rtcm_topic =
     declare_parameter<std::string>("output_rtcm_topic", "/rtcm");
+  const double correction_diagnostic_timeout_s =
+    declare_parameter<double>("correction_diagnostic_timeout_s", 2.0);
 
   receiver_vendor_ = normalizeReceiverVendor(receiver_family);
+  correction_diagnostics_ = std::make_unique<CorrectionDiagnosticTracker>(
+    std::chrono::duration<double>(correction_diagnostic_timeout_s));
 
   // Reliable / volatile, matching the reference Python bridge exactly so this
   // node stays connected to the C++ receiver_node and ntrip_node publishers.
@@ -296,13 +213,13 @@ UniversalGnssTopicBridge::UniversalGnssTopicBridge(const rclcpp::NodeOptions & o
 
   status_sub_ = create_subscription<UniversalGnssStatus>(
     input_status_topic, reliable_qos,
-    [this](const UniversalGnssStatus & msg) { onStatus(msg); });
+    [this](const UniversalGnssStatus & msg) {onStatus(msg);});
   diagnostics_sub_ = create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
     input_diagnostics_topic, reliable_qos,
-    [this](const diagnostic_msgs::msg::DiagnosticArray & msg) { onDiagnostics(msg); });
+    [this](const diagnostic_msgs::msg::DiagnosticArray & msg) {onDiagnostics(msg);});
   rtcm_sub_ = create_subscription<RtcmFrame>(
     input_rtcm_topic, rtcm_qos,
-    [this](const RtcmFrame & msg) { onRtcm(msg); });
+    [this](const RtcmFrame & msg) {onRtcm(msg);});
 
   RCLCPP_INFO(
     get_logger(),
@@ -317,6 +234,11 @@ void UniversalGnssTopicBridge::onStatus(const UniversalGnssStatus & msg)
   PublicGnssStatus public_msg;
   public_msg.header.stamp = msg.stamp;
   public_msg.header.frame_id = frame_id_;
+  // Receiver observation identity, copied verbatim. It advances only for a
+  // genuinely accepted position observation and stays put for the timer-driven
+  // cached republication, which is what lets consumers tell a frozen receiver
+  // from a live one. See mowgli_interfaces/gnss_observation_freshness.hpp.
+  public_msg.position_observation_sequence = msg.position_observation_sequence;
   public_msg.backend = backend_;
   public_msg.receiver_vendor = receiver_vendor_;
 
@@ -359,122 +281,12 @@ void UniversalGnssTopicBridge::onStatus(const UniversalGnssStatus & msg)
 
 void UniversalGnssTopicBridge::onDiagnostics(const diagnostic_msgs::msg::DiagnosticArray & msg)
 {
-  for (const auto & status : msg.status) {
-    DiagnosticEntry entry;
-    entry.message = strip(status.message);
-    for (const auto & item : status.values) {
-      const std::string key = strip(item.key);
-      if (key.empty()) {
-        continue;
-      }
-      entry.values[key] = strip(item.value);
-    }
-    diagnostic_entries_[status.name] = std::move(entry);
-  }
-}
-
-const UniversalGnssTopicBridge::DiagnosticEntry * UniversalGnssTopicBridge::pickDiagnosticEntry(
-  std::initializer_list<const char *> names) const
-{
-  for (const char * name : names) {
-    const auto it = diagnostic_entries_.find(name);
-    if (it != diagnostic_entries_.end()) {
-      return &it->second;
-    }
-  }
-  return nullptr;
+  correction_diagnostics_->update(msg);
 }
 
 void UniversalGnssTopicBridge::applyDiagnosticProjection(PublicGnssStatus & public_msg) const
 {
-  // Correction-stream summary.
-  const DiagnosticEntry * correction_entry = pickDiagnosticEntry(
-    {"universal_gnss_ntrip/rtcm_forwarding", "universal_gnss/rtcm_forwarding"});
-  if (correction_entry != nullptr) {
-    const std::uint8_t correction_stream_status =
-      correctionStreamStatusFromMessage(correction_entry->message);
-    public_msg.capability_flags |= PublicGnssStatus::CAP_CORRECTION_STREAM;
-    public_msg.correction_stream_status = correction_stream_status;
-    if (correction_stream_status != PublicGnssStatus::CORRECTION_STREAM_STATUS_UNKNOWN) {
-      public_msg.value_flags |= PublicGnssStatus::CAP_CORRECTION_STREAM;
-    }
-  }
-
-  // MSM summary.
-  const DiagnosticEntry * msm_entry = pickDiagnosticEntry(
-    {"universal_gnss_ntrip/rtcm_semantic/msm_summary",
-      "universal_gnss/rtcm_semantic/msm_summary"});
-  if (msm_entry == nullptr) {
-    return;
-  }
-
-  const auto & values = msm_entry->values;
-  const auto lookup = [&values](const char * key) -> const std::string * {
-    const auto it = values.find(key);
-    return it != values.end() ? &it->second : nullptr;
-  };
-
-  bool has_value = false;
-
-  bool seen = false;
-  if (const std::string * v = lookup("seen"); v && parseBool(*v, seen)) {
-    has_value = true;
-  }
-  bool decoded = false;
-  if (const std::string * v = lookup("decoded"); v && parseBool(*v, decoded)) {
-    has_value = true;
-  }
-  bool valid = false;
-  if (const std::string * v = lookup("valid"); v && parseBool(*v, valid)) {
-    has_value = true;
-  }
-
-  std::uint32_t message_type = 0;
-  if (const std::string * v = lookup("message_type"); v && parseUint(*v, message_type)) {
-    has_value = true;
-  }
-  std::uint32_t station_id = 0;
-  if (const std::string * v = lookup("station_id"); v && parseUint(*v, station_id)) {
-    has_value = true;
-  }
-  std::uint32_t satellite_count = 0;
-  if (const std::string * v = lookup("satellite_count"); v && parseUint(*v, satellite_count)) {
-    has_value = true;
-  }
-  std::uint32_t signal_count = 0;
-  if (const std::string * v = lookup("signal_count"); v && parseUint(*v, signal_count)) {
-    has_value = true;
-  }
-  std::uint32_t cell_count = 0;
-  if (const std::string * v = lookup("cell_count"); v && parseUint(*v, cell_count)) {
-    has_value = true;
-  }
-  float age_s = 0.0F;
-  if (const std::string * v = lookup("age_s"); v && parseFloat(*v, age_s)) {
-    has_value = true;
-  }
-  std::string constellations_seen;
-  if (const std::string * v = lookup("constellations_seen"); v != nullptr) {
-    constellations_seen = *v;
-    if (!constellations_seen.empty()) {
-      has_value = true;
-    }
-  }
-
-  public_msg.capability_flags |= PublicGnssStatus::CAP_MSM_SUMMARY;
-  public_msg.msm_summary_seen = seen;
-  public_msg.msm_summary_decoded = decoded;
-  public_msg.msm_summary_valid = valid;
-  public_msg.msm_summary_message_type = static_cast<std::uint16_t>(message_type);
-  public_msg.msm_summary_station_id = static_cast<std::uint16_t>(station_id);
-  public_msg.msm_summary_constellations_seen = constellations_seen;
-  public_msg.msm_summary_satellite_count = static_cast<std::uint16_t>(satellite_count);
-  public_msg.msm_summary_signal_count = static_cast<std::uint16_t>(signal_count);
-  public_msg.msm_summary_cell_count = static_cast<std::uint16_t>(cell_count);
-  public_msg.msm_summary_age_s = age_s;
-  if (has_value) {
-    public_msg.value_flags |= PublicGnssStatus::CAP_MSM_SUMMARY;
-  }
+  correction_diagnostics_->apply(public_msg);
 }
 
 void UniversalGnssTopicBridge::onRtcm(const RtcmFrame & msg)

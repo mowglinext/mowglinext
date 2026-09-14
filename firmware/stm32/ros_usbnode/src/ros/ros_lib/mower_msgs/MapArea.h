@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include "ros/msg.h"
 #include "geometry_msgs/Polygon.h"
+#include "mower_msgs/MapObstacleInfo.h"
 
 namespace mower_msgs
 {
@@ -26,12 +27,17 @@ namespace mower_msgs
       _obstacles_type * obstacles;
       typedef bool _is_navigation_area_type;
       _is_navigation_area_type is_navigation_area;
+      uint32_t obstacle_info_length;
+      typedef mower_msgs::MapObstacleInfo _obstacle_info_type;
+      _obstacle_info_type st_obstacle_info;
+      _obstacle_info_type * obstacle_info;
 
     MapArea():
       name(""),
       area(),
       obstacles_length(0), st_obstacles(), obstacles(nullptr),
-      is_navigation_area(0)
+      is_navigation_area(0),
+      obstacle_info_length(0), st_obstacle_info(), obstacle_info(nullptr)
     {
     }
 
@@ -59,6 +65,14 @@ namespace mower_msgs
       u_is_navigation_area.real = this->is_navigation_area;
       *(outbuffer + offset + 0) = (u_is_navigation_area.base >> (8 * 0)) & 0xFF;
       offset += sizeof(this->is_navigation_area);
+      *(outbuffer + offset + 0) = (this->obstacle_info_length >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (this->obstacle_info_length >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (this->obstacle_info_length >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (this->obstacle_info_length >> (8 * 3)) & 0xFF;
+      offset += sizeof(this->obstacle_info_length);
+      for( uint32_t i = 0; i < obstacle_info_length; i++){
+        offset += this->obstacle_info[i].serialize(outbuffer + offset);
+      }
       return offset;
     }
 
@@ -94,11 +108,22 @@ namespace mower_msgs
       u_is_navigation_area.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
       this->is_navigation_area = u_is_navigation_area.real;
       offset += sizeof(this->is_navigation_area);
+      uint32_t obstacle_info_lengthT = ((uint32_t) (*(inbuffer + offset)));
+      obstacle_info_lengthT |= ((uint32_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      obstacle_info_lengthT |= ((uint32_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      obstacle_info_lengthT |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      offset += sizeof(this->obstacle_info_length);
+      if(obstacle_info_lengthT > obstacle_info_length)
+        this->obstacle_info = (mower_msgs::MapObstacleInfo*)realloc(this->obstacle_info, obstacle_info_lengthT * sizeof(mower_msgs::MapObstacleInfo));
+      obstacle_info_length = obstacle_info_lengthT;
+      for( uint32_t i = 0; i < obstacle_info_length; i++){
+        offset += this->obstacle_info[i].deserialize(inbuffer + offset);
+      }
      return offset;
     }
 
     virtual const char * getType() override { return "mower_msgs/MapArea"; };
-    virtual const char * getMD5() override { return "4bbb3923b3fd99c42a33c9415dc0faeb"; };
+    virtual const char * getMD5() override { return "4056a28cabd849eb7f1a46e4686e606d"; };
 
   };
 

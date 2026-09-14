@@ -22,7 +22,7 @@ import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
 import { useFirmwareStatus } from "../hooks/useFirmwareStatus.ts";
 import { GnssStatusConstants } from "../types/ros.ts";
 import { CompassOutlined } from "@ant-design/icons";
-import { deriveGpsStatus, gnssReceiverLabel } from "../utils/gpsStatus.ts";
+import { deriveGpsStatus, gnssReceiverLabel, isGnssFixType } from "../utils/gpsStatus.ts";
 import { ReadinessStep } from "../components/onboarding/ReadinessStep.tsx";
 import {
     STEP_FIRMWARE, STEP_NTRIP, STEP_GPS, STEP_DATUM,
@@ -587,9 +587,9 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting, 
 
     const gnssStatus = useGnssStatus();
     const fixType = gnssStatus.fix_type ?? GnssStatusConstants.FIX_TYPE_NO_FIX;
-    const isRtkFixed = fixType === GnssStatusConstants.FIX_TYPE_RTK_FIXED;
-    const isRtkFloat = fixType === GnssStatusConstants.FIX_TYPE_RTK_FLOAT;
-    const isPlainFix = fixType === GnssStatusConstants.FIX_TYPE_GPS_FIX;
+    const isRtkFixed = isGnssFixType(fixType, GnssStatusConstants.FIX_TYPE_RTK_FIXED);
+    const isRtkFloat = isGnssFixType(fixType, GnssStatusConstants.FIX_TYPE_RTK_FLOAT);
+    const isPlainFix = isGnssFixType(fixType, GnssStatusConstants.FIX_TYPE_GPS_FIX);
     const fixLabel = isRtkFixed ? "RTK FIX" : isRtkFloat ? "RTK FLOAT" : isPlainFix ? "GPS FIX" : t("onboardingPage.noFix");
 
     const setDatumFromGps = async () => {
@@ -886,7 +886,7 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
 
 // ── Step 5: Firmware ────────────────────────────────────────────────────
 
-const FirmwareStep: React.FC<{ onNext: () => void; autoFlash?: boolean }> = ({ onNext, autoFlash = false }) => {
+const FirmwareStep: React.FC<{ onNext: () => void; autoFlash?: boolean; mowerModel?: string }> = ({ onNext, autoFlash = false, mowerModel }) => {
     const { t } = useTranslation();
     const { colors } = useThemeMode();
     // `autoFlash` (set by the dashboard deep-link when firmware is incompatible)
@@ -898,7 +898,7 @@ const FirmwareStep: React.FC<{ onNext: () => void; autoFlash?: boolean }> = ({ o
     if (showFlash) {
         return (
             <Card title={t("onboardingPage.flashFirmware")}>
-                <FlashBoardComponent onNext={onNext} />
+                <FlashBoardComponent onNext={onNext} mowerModel={mowerModel} />
             </Card>
         );
     }
@@ -1136,7 +1136,7 @@ const OnboardingWizard: React.FC = () => {
         <>
             {currentStep === 0 && <WelcomeStep onNext={handleNext} />}
             {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
-            {currentStep === 2 && <FirmwareStep onNext={handleNext} autoFlash={autoFlash} />}
+            {currentStep === 2 && <FirmwareStep onNext={handleNext} autoFlash={autoFlash} mowerModel={localValues.mower_model} />}
             {currentStep === 3 && <NtripStep values={localValues} onChange={handleChange} />}
             {currentStep === 4 && (
                 <GpsStep

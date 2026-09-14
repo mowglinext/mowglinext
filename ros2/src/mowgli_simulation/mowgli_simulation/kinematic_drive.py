@@ -25,8 +25,8 @@ iterate on coverage strips, obstacle deviation, and dock approach.
 This plugin replaces the wheel-friction-coupled body motion with a
 **fully kinematic** one. Each Webots timestep, the plugin:
 
-  1. Reads the latest ``/cmd_vel`` (TwistStamped) from twist_mux (or a
-     manual ``ros2 topic pub`` in Phase 1 testing).
+  1. Reads the latest achievable ``/cmd_vel_wheels`` (TwistStamped)
+     from ``sim_actuation_node``.
   2. Integrates the diff-drive kinematics forward by the timestep:
         new_yaw = yaw + ω·Δt
         new_x   = x + vx·cos(yaw + 0.5·ω·Δt)·Δt
@@ -37,8 +37,8 @@ This plugin replaces the wheel-friction-coupled body motion with a
      instantaneously, so the body's pose is exactly what we compute.
   4. The diff_drive_controller (a ros2_control plugin instantiated by
      webots_ros2_control alongside this plugin) continues to drive the
-     wheel motors with velocity setpoints derived from the same
-     ``/cmd_vel``. This is what keeps the wheel ``PositionSensor``
+     wheel motors with velocity setpoints derived from that same
+     ``/cmd_vel_wheels``. This is what keeps the wheel ``PositionSensor``
      outputs realistic and therefore /joint_states → /wheel_odom_raw →
      ekf_odom_node → odom→base_footprint TF all advancing — which Nav2
      pose-tracking behaviors (BackUp, DriveOnHeading, Spin) read for
@@ -67,7 +67,7 @@ Two earlier revisions failed in instructive ways:
     /wheel_odom_raw integrated to 0, and Nav2's BackUp/DriveOnHeading
     timed out thinking the robot had not moved.
 
-The current revision (3) drops per-step ``resetPhysics()``. The
+Revision 3 dropped per-step ``resetPhysics()``. The
 init-time call clears any settling impulses from the world load; from
 then on the field-set teleport is sufficient. ODE may briefly try to
 infer "infinite velocity" between teleports but the wheel constraints
@@ -75,9 +75,17 @@ infer "infinite velocity" between teleports but the wheel constraints
 not visibly affect the body pose, while the wheels are now free to
 spin under the diff_drive_controller's commands.
 
+Revision 4 makes ``sim_actuation_node`` the sole firmware motor-model
+authority. The earlier full-system wiring ran the same stateful PI/deadband
+model independently here and in ``sim_actuation_node``. Scheduler phase made
+their pulsed outputs diverge: the chassis antenna could move while
+``/wheel_odom`` reported zero, causing valid RTK fixes to fail the production
+motion-consistency gate. Both chassis integration and ros2_control now consume
+the same achievable twist.
+
 TRADEOFFS
 ---------
-+ cmd_vel response is exact (acceptance tests #1–#3 pass at ≥95 %).
++ Achievable-twist response is exact (acceptance tests #1–#3 pass at ≥95 %).
 + Chassis pitch stays effectively at 0° throughout (typically <0.1°).
 + Nav2's costmap, FTC controller, BT undock/coverage logic all see a
   robot that goes where they tell it (Phase 2: BackUp 1 m completes,
@@ -118,7 +126,7 @@ import rclpy
 
 
 class KinematicDrive:
-    """Drives the Mowgli body kinematically from /cmd_vel."""
+    """Drives the Mowgli body kinematically from an achievable twist."""
 
     # ── Robot geometry (must match config_webots/ros2_control.yaml + PROTO) ──
     # WHEEL_SEPARATION / WHEEL_RADIUS are kept as constants for
@@ -236,6 +244,9 @@ class KinematicDrive:
         self.__node = rclpy.create_node(node_name)
 
         topic = properties.get('cmdVelTopic', self.DEFAULT_CMD_VEL_TOPIC)
+        self.__apply_firmware_model = (
+            properties.get('applyFirmwareModel', 'true').lower() == 'true'
+        )
         # TwistStamped to match twist_mux output and the diff_drive
         # controller's use_stamped_vel: true.
         self.__node.create_subscription(
@@ -277,6 +288,7 @@ class KinematicDrive:
         self.__node.get_logger().info(
             f"KinematicDrive initialised. Robot='{self.__supervisor.getName()}', "
             f"cmd_vel topic='{topic}', timestep={self.__timestep_ms} ms, "
+            f'apply_firmware_model={self.__apply_firmware_model}, '
             f'wheel_separation={self.WHEEL_SEPARATION} m, '
             f'wheel_radius={self.WHEEL_RADIUS} m, '
             f'initial_pose=(x={self.__x:.3f}, y={self.__y:.3f}, '
@@ -427,16 +439,13 @@ class KinematicDrive:
             cmd_vx = self.__target_vx
             cmd_wz = self.__target_wz
 
-        # ── Firmware motor model ─────────────────────────────────────
-        # Run the cmd_vel through the same chain the real firmware
-        # does so the chassis only moves when the firmware's PI loop
-        # would actually push PWM above the motor's static-friction
-        # deadband. Sub-deadband commands stall briefly while the
-        # integrator builds; pure pivots <~0.6 rad/s (per-wheel
-        # mps <~0.1 m/s = PWM 30) get filtered by the kinetic
-        # hysteresis once moving; large step inputs saturate the
-        # integrator at INT_MAX_PWM in ~40 ms.
-        vx, wz = self.__simulate_firmware_motor_model(cmd_vx, cmd_wz)
+        # In the full system, sim_actuation_node is the single firmware-model
+        # authority and this plugin consumes its achievable /cmd_vel_wheels
+        # output directly. Standalone worlds may opt into the embedded model.
+        if self.__apply_firmware_model:
+            vx, wz = self.__simulate_firmware_motor_model(cmd_vx, cmd_wz)
+        else:
+            vx, wz = cmd_vx, cmd_wz
 
         # ── Diff-drive integration (body frame → world frame) ─────────
         # Use mid-point yaw for slightly better arc accuracy at high ω.

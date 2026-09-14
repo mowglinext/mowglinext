@@ -10,7 +10,11 @@ x-ros2-env: &ros2-env
   ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
   RCUTILS_COLORIZED_OUTPUT: "1"
   RCUTILS_LOGGING_USE_STDOUT: "1"
-  LIDAR_ENABLED: ${LIDAR_ENABLED:-true}
+  # LIDAR_ENABLED is deliberately NOT passed into the ROS2 container. The
+  # stack's LiDAR mode comes from mowgli_robot.yaml's `lidar_enabled` and
+  # nothing else; an ambient env var here used to silently override the
+  # operator's GUI toggle. LIDAR_ENABLED still lives in .env, where it decides
+  # whether the mowgli-lidar CONTAINER is composed in (install/lib/compose.sh).
   ENABLE_FOXGLOVE: ${ENABLE_FOXGLOVE:-true}
   HARDWARE_BACKEND: ${HARDWARE_BACKEND:-mowgli}
   # full_system.launch.py reads these to pick the GNSS adapter; without them

@@ -1,5 +1,7 @@
 # Research / Decision: obstacle handling during coverage with full-coverage guarantees
 
+> **Historical document (2026-05)** — describes the state at that time. Current reference: [`docs/claude/codemaps/mowgli_coverage.md`](claude/codemaps/mowgli_coverage.md) and [`docs/claude/codemaps/mowgli_behavior.md`](claude/codemaps/mowgli_behavior.md).
+
 **Status:** research only — nothing implemented. Decision document.
 **Date:** 2026-05-30
 **Author:** investigation + multi-source web research (deep-research harness: 22 sources, 77 claims extracted, 25 adversarially verified 2/3-vote, 0 refuted).

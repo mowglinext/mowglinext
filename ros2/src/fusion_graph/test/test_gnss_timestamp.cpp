@@ -23,8 +23,8 @@ fg::GraphParams MakeParams()
   gp.stationary_node_period_s = 0.0;
   gp.stationary_motion_thresh_m = 0.0;
   gp.stationary_motion_thresh_theta = 0.0;
-  gp.wheel_sigma_x = 0.01;
-  gp.wheel_sigma_y = 0.01;
+  gp.wheel_sigma_x_per_sqrt_m = 0.01;
+  gp.wheel_sigma_y_per_sqrt_m = 0.01;
   gp.wheel_sigma_theta = 0.01;
   gp.gyro_sigma_theta = 0.01;
   gp.adaptive_noise_enabled_gain = 0.0;

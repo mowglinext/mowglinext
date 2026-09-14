@@ -1,24 +1,36 @@
 ---
 name: E2E simulation status and remaining work
-description: Current state of coverage path execution and what needs tuning for production readiness
+description: SUPERSEDED — the 2026-04-04 Gazebo/SLAM-era E2E notes no longer apply; current reference is docs/claude/testing-ci.md § Simulation & E2E and docs/WEBOTS_SIM.md
 type: project
 ---
 
-Goal: production-ready mower with standard + complex + recovery scenarios before community testing.
+> **Superseded** — the original body (2026-04-04) described the Gazebo +
+> slam_toolbox + `ExecuteFullCoveragePath` + RPP-coverage stack. None of that
+> exists any more, so the notes were removed rather than kept as a trap.
 
-**What works (as of 2026-04-04):**
-- ExecuteFullCoveragePath sends full F2C path to Nav2 FollowPath (replaces broken per-swath approach)
-- Transit to path start via NavigateToPose, then FollowPath with FollowCoveragePath controller
-- Path subsampling (>5000 poses → ~4000) to avoid RPP segfault
-- BT cycle: UNDOCKING → PLANNING → MOWING → recovery → DOCKING
-- Robot moves and SLAM map grows (confirmed in E2E)
-- `make sim-stop` / `make e2e-test` with proper cleanup
+Why every item in the old note is dead:
 
-**Remaining issues to tune:**
-1. **First-run pose matching**: Robot at (0,0) matches mid-path (pose 4392) instead of start because boustrophedon passes near origin. Fix: always transit to first pose on fresh mow start, use findClosestPoseIndex only for retry-after-stuck.
-2. **FollowPath aborts after ~117s**: Likely progress_checker timeout or TF issue. Check nav2_params.yaml progress_checker config.
-3. **Stuck detection too aggressive (15s)**: During slow U-turns the robot may appear stuck. Consider 30s or checking angular velocity too.
-4. **Path subsampling loses turn precision**: Subsampling from 8326→4000 loses Dubins turn waypoints. Better fix: reduce F2C path discretization in coverage_planner_node instead of subsampling in BT.
-5. **Dual install trees**: `ros2/install/` vs `/ros2_ws/install/` — Makefile builds into `ros2/install/` but devcontainer post-create builds into `/ros2_ws/install/`. Need to unify or ensure e2e-test uses correct one.
+- **Simulator is Webots, not Gazebo.** `ros2/src/mowgli_simulation/` ships
+  `worlds_webots/`, `urdf_webots/`, `protos/` and one launch file
+  (`launch/webots_minimal.launch.py`) — there is no Gazebo world, SDF, or
+  `ros_gz_bridge` in the package.
+- **`ExecuteFullCoveragePath` no longer exists.** Coverage is `PlanCoverageArea`
+  (calls `mowgli_coverage`'s `plan_coverage` action, Fields2Cover v3) plus
+  `FollowStrip` driving each continuous `drivable_subpath` as one goal — see
+  `ros2/src/mowgli_behavior/trees/main_tree.xml:686-716`. Path subsampling and
+  the "first-run pose matching" cursor logic were replaced along with it.
+- **Coverage is not tracked by RPP.** The `FollowCoveragePath` slot is
+  `mowgli_nav2_plugins/FTCController`; RotationShim + RPP only drive transit
+  (`ros2/src/mowgli_bringup/config/nav2_params_base.yaml:11-12`, `:339`).
+- **SLAM is gone.** `fusion_graph_node` is the sole, unconditional localizer and
+  owns both `map→odom` and `odom→base_footprint` (root `CLAUDE.md` Invariant 1).
 
-**How to apply:** Start next session with `make sim-stop`, then address items above in priority order.
+**Current reference:**
+
+- [`docs/claude/testing-ci.md`](../../docs/claude/testing-ci.md) § Simulation &
+  E2E — `make sim`, `make sim-stop`, `make e2e-test`, `make e2e-test-no-lidar`
+  (`ros2/Makefile:78-129`) and what each harness scores.
+- [`docs/WEBOTS_SIM.md`](../../docs/WEBOTS_SIM.md) — Webots/ODE quirks and the
+  load-bearing workarounds.
+- [`docs/claude/codemaps/mowgli_simulation.md`](../../docs/claude/codemaps/mowgli_simulation.md)
+  — file map plus the known-dead subscriptions in `e2e_test.py`.

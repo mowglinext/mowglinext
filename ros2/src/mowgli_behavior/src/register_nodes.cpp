@@ -17,6 +17,7 @@
 #include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/docking_nodes.hpp"
+#include "mowgli_behavior/escape_nodes.hpp"
 #include "mowgli_behavior/navigation_nodes.hpp"
 #include "mowgli_behavior/recording_nodes.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
@@ -34,6 +35,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<IsRainDetected>("IsRainDetected");
   factory.registerNodeType<NeedsDocking>("NeedsDocking");
   factory.registerNodeType<IsBatteryAbove>("IsBatteryAbove");
+  factory.registerNodeType<IsManualResumeRequested>("IsManualResumeRequested");
   factory.registerNodeType<IsCommand>("IsCommand");
 
   factory.registerNodeType<IsGPSFixed>("IsGPSFixed");
@@ -42,6 +44,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<IsBoundaryViolation>("IsBoundaryViolation");
   factory.registerNodeType<IsLocalizationDegraded>("IsLocalizationDegraded");
   factory.registerNodeType<IsLethalBoundaryViolation>("IsLethalBoundaryViolation");
+  factory.registerNodeType<IsDigEscalated>("IsDigEscalated");
   factory.registerNodeType<IsDocking>("IsDocking");
   factory.registerNodeType<IsNewRain>("IsNewRain");
   factory.registerNodeType<IsRainModeAtLeast>("IsRainModeAtLeast");
@@ -53,11 +56,16 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<WasRecentlyInCollisionStop>("WasRecentlyInCollisionStop");
   factory.registerNodeType<IsScanStale>("IsScanStale");
   factory.registerNodeType<IsCollisionStopSustained>("IsCollisionStopSustained");
+  factory.registerNodeType<IsCoverageStartBlocked>("IsCoverageStartBlocked");
 
   // Action nodes
   factory.registerNodeType<SetMowerEnabled>("SetMowerEnabled");
   factory.registerNodeType<StopMoving>("StopMoving");
   factory.registerNodeType<ClearCostmap>("ClearCostmap");
+  // SAFETY: bounded open-loop escape off a START_OCCUPIED start pose (#487).
+  // Only fires behind IsCoverageStartBlocked's arming token — see
+  // mowgli_behavior/start_blocked_escape.hpp.
+  factory.registerNodeType<EscapeStartBlocked>("EscapeStartBlocked");
   factory.registerNodeType<SetNav2Lifecycle>("SetNav2Lifecycle");
   factory.registerNodeType<PublishHighLevelStatus>("PublishHighLevelStatus");
   factory.registerNodeType<WaitForDuration>("WaitForDuration");
@@ -66,6 +74,10 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<NavigateInsideBoundary>("NavigateInsideBoundary");
   factory.registerNodeType<BackUp>("BackUp");
   factory.registerNodeType<ClearCommand>("ClearCommand");
+  // Guard-halt marker: a guard handler that halts the Root mid-mow must tick
+  // this, or its pauses are charged to GetNextUnmowedArea's no-progress budget
+  // and a flapping sensor fails the mow at 0 swaths (field 2026-09-07/08).
+  factory.registerNodeType<MarkGuardHalt>("MarkGuardHalt");
   factory.registerNodeType<EndSession>("EndSession");
   factory.registerNodeType<IncrementSkippedSwaths>("IncrementSkippedSwaths");
   factory.registerNodeType<SaveObstacles>("SaveObstacles");

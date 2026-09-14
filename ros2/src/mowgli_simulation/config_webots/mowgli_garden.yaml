@@ -1,0 +1,8 @@
+# Shared geometry for mowgli_garden.wbt and its ROS simulation adapters.
+# Keep gps_reference in sync with WorldInfo.gpsReference in the Webots world.
+gps_reference:
+  latitude: 48.137154000
+  longitude: 11.576124000
+antenna_lever_arm:
+  x: 0.30
+  y: 0.0

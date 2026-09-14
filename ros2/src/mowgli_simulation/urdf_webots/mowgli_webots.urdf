@@ -199,7 +199,11 @@
          the body (90 % wheel-floor slip). See
          mowgli_simulation/kinematic_drive.py for the full rationale. -->
     <plugin type="mowgli_simulation.kinematic_drive.KinematicDrive">
-      <cmdVelTopic>/cmd_vel</cmdVelTopic>
+      <!-- sim_actuation_node is the sole firmware-model authority. Feed its
+           achievable twist to both this chassis driver and ros2_control so
+           ground truth and wheel odometry cannot diverge by scheduler phase. -->
+      <cmdVelTopic>/cmd_vel_wheels</cmdVelTopic>
+      <applyFirmwareModel>false</applyFirmwareModel>
     </plugin>
   </webots>
 

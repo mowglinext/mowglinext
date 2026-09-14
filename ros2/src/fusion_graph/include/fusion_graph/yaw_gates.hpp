@@ -1,7 +1,7 @@
 // Copyright 2026 Mowgli Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Pure yaw-robustness gates (Level 1 COG discipline + Level 2 LiDAR yaw yield),
+// Pure COG yaw-robustness gates,
 // factored out of the node so they are unit-testable without ROS/GTSAM.
 // See fusion_graph_node.hpp for the design rationale. The essence, borrowed from
 // OpenMower's xbot_positioning: absolute yaw from a single antenna is weakly
@@ -42,27 +42,6 @@ inline double CogEffectiveSigma(double msg_variance, double min_sigma_rad)
   if (!std::isfinite(var) || var <= 0.0)
     var = 0.05 * 0.05;
   return std::max(std::sqrt(var), min_sigma_rad);
-}
-
-// LiDAR (scan-match / loop-closure) yaw σ: floored so LiDAR yields yaw to the
-// gyro (can't bake a wrong heading), while its position σ stays tight.
-inline double ScanYawSigma(double raw_sigma_theta, double floor_rad)
-{
-  return std::max(raw_sigma_theta, floor_rad);
-}
-
-// Keyframe absolute-yaw mirror-guard. A scan-to-keyframe ICP match implies an
-// ABSOLUTE map-frame yaw (kf.abs_pose ⊕ delta). On symmetric / sparse-outdoor
-// scenery ICP can converge to a mirrored or 180°-flipped alignment whose xy
-// lands plausibly but whose yaw is grossly wrong — and the keyframe prior
-// engages during RTK-Float where COG yaw is gated off, so nothing downstream
-// would catch it (Huber can't reject a low-rmse mirror). Accept the match only
-// when its implied yaw is within max_dev_rad of the gyro-predicted yaw; both
-// angles are wrapped so the comparison is correct across the ±π seam.
-inline bool KeyframeYawWithinGate(double kf_abs_yaw, double pred_yaw, double max_dev_rad)
-{
-  const double d = std::atan2(std::sin(kf_abs_yaw - pred_yaw), std::cos(kf_abs_yaw - pred_yaw));
-  return std::abs(d) <= max_dev_rad;
 }
 
 }  // namespace fusion_graph

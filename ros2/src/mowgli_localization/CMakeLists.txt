@@ -64,6 +64,17 @@ ament_target_dependencies(wheel_odometry_node
 # Executable: navsat_to_absolute_pose_node
 # ---------------------------------------------------------------------------
 
+add_library(navsat_status_association
+  src/navsat_status_association.cpp
+)
+
+target_include_directories(navsat_status_association PUBLIC ${INCLUDE_DIR})
+
+ament_target_dependencies(navsat_status_association
+  sensor_msgs
+  mowgli_interfaces
+)
+
 add_executable(navsat_to_absolute_pose_node
   src/navsat_to_absolute_pose_node.cpp
 )
@@ -79,6 +90,8 @@ ament_target_dependencies(navsat_to_absolute_pose_node
   tf2_ros
   mowgli_interfaces
 )
+
+target_link_libraries(navsat_to_absolute_pose_node navsat_status_association)
 
 # ---------------------------------------------------------------------------
 # Executable: localization_monitor_node
@@ -113,6 +126,7 @@ ament_target_dependencies(cog_to_imu
   nav_msgs
   geometry_msgs
   sensor_msgs
+  mowgli_interfaces
 )
 
 target_link_libraries(cog_to_imu yaml-cpp)
@@ -169,6 +183,8 @@ target_link_libraries(calibrate_imu_yaw_node yaml-cpp)
 add_executable(costmap_scan_filter_node
   src/costmap_scan_filter_node.cpp
 )
+
+target_include_directories(costmap_scan_filter_node PUBLIC ${INCLUDE_DIR})
 
 ament_target_dependencies(costmap_scan_filter_node
   rclcpp
@@ -228,6 +244,7 @@ install(
 
 install(
   TARGETS
+    navsat_status_association
     wheel_odometry_node
     navsat_to_absolute_pose_node
     localization_monitor_node
@@ -287,6 +304,26 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
+  ament_add_gtest(test_cog_observation_timing
+    test/test_cog_observation_timing.cpp
+  )
+  target_include_directories(test_cog_observation_timing PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  ament_target_dependencies(test_cog_observation_timing
+    mowgli_interfaces
+  )
+
+  ament_add_gtest(test_localization_monitor_freshness
+    test/test_localization_monitor_freshness.cpp
+  )
+  target_include_directories(test_localization_monitor_freshness PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  ament_target_dependencies(test_localization_monitor_freshness
+    mowgli_interfaces
+  )
+
   # ---- test_costmap_scan_filter ----
   # Re-implements the static helper so we don't drag rclcpp/main symbols
   # into the test binary; the helper is small enough to keep in sync by
@@ -309,6 +346,18 @@ if(BUILD_TESTING)
     sensor_msgs
   )
 
+  ament_add_gtest(test_navsat_status_association
+    test/test_navsat_status_association.cpp
+  )
+  target_include_directories(test_navsat_status_association PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  ament_target_dependencies(test_navsat_status_association
+    mowgli_interfaces
+    sensor_msgs
+  )
+  target_link_libraries(test_navsat_status_association navsat_status_association)
+
   # ---- test_dock_cog_gate ----
   # Pure C++ test of the one-click dock-calibration COG-coherence gate
   # (dock_cog_gate.hpp): Resolution A — dock_yaw = circular_mean of the
@@ -330,6 +379,15 @@ if(BUILD_TESTING)
     test/test_delta_gate.cpp
   )
   target_include_directories(test_delta_gate PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  # ---- test_gravity_estimator ----
+  # Pure C++ regression test for the costmap IMU gravity gate.
+  ament_add_gtest(test_gravity_estimator
+    test/test_gravity_estimator.cpp
+  )
+  target_include_directories(test_gravity_estimator PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 

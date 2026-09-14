@@ -1,5 +1,5 @@
-# PromoteObstacle — convert a transient tracker observation into a
-# user-validated permanent keepout polygon.
+# PromoteObstacle — convert a transient observation or a pending proposal
+# into a user-validated permanent keepout polygon.
 #
 # After the obstacle-tracker decouple (2026-05-07), map_server no longer
 # auto-mirrors /obstacle_tracker/obstacles into the classification layer
@@ -7,28 +7,53 @@
 # turn one of those tracker observations (or any user-drawn polygon)
 # into a permanent keepout, the GUI calls this service.
 #
+# Since 2026-08-24 the wheel-slip dig detector follows the same rule: a
+# dig no longer writes itself into areas.dat. map_server stamps a
+# PENDING keepout at the spot — live in the mask for this session so
+# coverage cannot re-dig the same hole, but never persisted — and the
+# operator accepts it here (pending_id) or discards it with
+# ~/discard_obstacle.
+#
 # Effects:
-#   * The polygon is appended to the target area's obstacles list.
+#   * The polygon is appended to the target area's obstacles list (or, on
+#     the pending path, the existing proposal is marked accepted).
 #   * Cells inside become NO_GO_ZONE in the classification layer.
 #   * The keepout mask is rebuilt so Smac/Nav2 see the polygon as lethal.
 #   * The area YAML is persisted so the obstacle survives restart.
 #   * Reachability BFS is re-run for the area (DEAD recompute).
 #
-# Either obstacle_id or polygon must be set:
+# Exactly one of the three lookup paths is used, in this order:
+#   * pending_id != 0   → accept the PENDING obstacle carrying this
+#                          MapObstacleInfo.id (any area — area_index is
+#                          ignored). The polygon is already live; this
+#                          only clears the pending flag and persists it.
+#                          Note: re-sending the same polygon instead
+#                          would hit the centroid dedup guard and be a
+#                          silent no-op, which is why this path exists.
+#   * polygon set       → use the polygon directly. Free-form path for
+#                          user-drawn keepouts.
 #   * obstacle_id != 0  → look up the tracked obstacle with this id in
 #                          the most recent /obstacle_tracker/obstacles
 #                          snapshot (cached in map_server) and use its
 #                          polygon. Easiest GUI path: "promote tracker #N".
-#   * obstacle_id == 0  → use the polygon field directly. Free-form
-#                          path for user-drawn keepouts.
 
 # Target area (must be a mowing area, not a navigation area).
+# Ignored on the pending_id path — the proposal already knows its area.
 uint32 area_index
 
 # Either look up the tracker observation by id (recommended), or supply
 # a polygon directly. If both are set, polygon wins.
 uint32 obstacle_id
 geometry_msgs/Polygon polygon
+
+# Accept the pending proposal with this MapObstacleInfo.id (0 = unused).
+# Takes precedence over polygon and obstacle_id.
+uint32 pending_id
+
+# Operator-facing label stored with the keepout ("apple tree"). Empty
+# keeps the existing name on the pending path, and leaves a tracker- or
+# user-supplied polygon unnamed.
+string name
 ---
 bool success
 string message

@@ -15,11 +15,29 @@ on:
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'gui/web/**'
+      - 'gui/pkg/**'
+      - 'gui/asserts/**'
+      - 'gui/go.mod'
+      - 'gui/go.sum'
+      # The Go parity guards read the ROS2 template directly, so a
+      # template-only change must run them (that is the divergence class they
+      # exist to catch).
+      - 'ros2/src/mowgli_bringup/config/mowgli_robot.yaml'
       - '.github/workflows/gui-ci.yml'
   pull_request:
     branches: [main, dev]
+    # Kept in lockstep with the push trigger above by hand: GitHub Actions
+    # does not support YAML anchors, so this list cannot be shared.
     paths:
       - 'gui/web/**'
+      - 'gui/pkg/**'
+      - 'gui/asserts/**'
+      - 'gui/go.mod'
+      - 'gui/go.sum'
+      # The Go parity guards read the ROS2 template directly, so a
+      # template-only change must run them (that is the divergence class they
+      # exist to catch).
+      - 'ros2/src/mowgli_bringup/config/mowgli_robot.yaml'
       - '.github/workflows/gui-ci.yml'
   workflow_dispatch:
 
@@ -43,7 +61,7 @@ jobs:
       # in lockstep so a version-specific failure cannot pass here and break the
       # image build (or vice versa).
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: yarn
@@ -58,5 +76,54 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # ESLint gated NOTHING before this step: no workflow ran it, and
+      # `yarn lint` itself had been failing outright since the ESLint 9 upgrade
+      # (it still looked for the removed .eslintrc.cjs and analysed zero files).
+      # Wired here rather than in its own job so it reuses this job's yarn cache
+      # and node 22 setup — it costs seconds.
+      #
+      # What blocks here is ERRORS: eslint exits non-zero on any error whatever
+      # `--max-warnings` says. The warning ceiling in gui/web/package.json is a
+      # second-order ratchet with deliberate headroom over the current count —
+      # see the "debt ratchet" block in gui/web/eslint.config.js for the number,
+      # when it was measured, and how to lower it as debt is paid.
+      - name: Lint
+        run: yarn lint
+
       - name: Unit tests
         run: yarn test
+
+      - name: Install Chromium for power-menu regression tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Test shared power menu and Diagnostics shortcut
+        run: npx playwright test system-power.spec.ts --project=chromium
+
+  # The Go backend's ~36 test files gated NOTHING — no workflow ran `go test`,
+  # exactly the gap this file's header describes for vitest. That is how the
+  # imu_y template/model-preset divergence survived: the guards that would have
+  # caught it (TestSchemaDefaultsMatchTemplate, and now
+  # TestMowerModelPresetMatchesTemplate) are Go tests, and Go tests never ran.
+  # A parity guard nobody executes is documentation, not a gate.
+  #
+  # The suite is hermetic — the Docker-shaped tests use in-process fakes, not a
+  # daemon — and runs in seconds, so it belongs beside the vitest job rather
+  # than in the multi-minute image build.
+  go-tests:
+    name: Go Tests (gui backend)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gui/go.mod
+          cache-dependency-path: gui/go.sum
+
+      - name: Go tests
+        run: go test ./...

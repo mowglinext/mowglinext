@@ -1,4 +1,7 @@
 # Implementation Blueprint — RTK-Anchored Keyframe Map + Scan-to-Keyframe Absolute Factor
+
+> **Historical document (2026-06)** — describes the state at that time. Current reference: [`docs/claude/codemaps/fusion_graph.md`](../../../docs/claude/codemaps/fusion_graph.md).
+
 _fusion_graph · holding <2 cm during RTK-Float with LiDAR enabled · 2026-06-11_
 _Synthesized from workflow `wf_5b81497d-6d9` (6 integration maps + 3 design proposals; judge/synthesis/verify phases re-derived in main loop after the run hit the account spend limit)._
 

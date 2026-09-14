@@ -268,6 +268,19 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                 />
                             </Form.Item>
                         </Col>
+                        <Col xs={8}>
+                            <Form.Item
+                                label={fieldLabel("battery_manual_resume_percent", <Text style={{ color: "#1677ff", fontSize: 12 }}>{t("settingsBattery.manualResume")}</Text>)}
+                                tooltip={t("settingsBattery.manualResumeTooltip")}
+                            >
+                                <InputNumber
+                                    value={values.battery_manual_resume_percent}
+                                    onChange={(v) => onChange("battery_manual_resume_percent", v)}
+                                    min={5} max={95} step={5} precision={0}
+                                    style={{ width: "100%" }} addonAfter="%"
+                                />
+                            </Form.Item>
+                        </Col>
                     </Row>
                 </Form>
             </Card>

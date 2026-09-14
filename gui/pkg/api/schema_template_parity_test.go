@@ -50,16 +50,6 @@ var schemaDefaultsWithNoTemplateEntry = map[string]string{
 	"lift_recovery_mode":          "hardware_bridge_node.cpp declare_parameter default matches",
 	"lift_blade_resume_delay_sec": "hardware_bridge_node.cpp declare_parameter default matches",
 
-	// Documented dead controls — the template's own comments say no ROS2
-	// node reads these (see the "outline_*"/"mow_angle_*" comments in
-	// mowgli_robot.yaml). ros2/scripts/check_config_drift.py already
-	// categorizes them as USER_OVERRIDE (no template comparison expected).
-	"outline_passes":          "dead control, no ROS2 node reads it (see template comment)",
-	"outline_offset":          "dead control, no ROS2 node reads it (see template comment)",
-	"outline_overlap":         "dead control, no ROS2 node reads it (see template comment)",
-	"mow_angle_offset_deg":    "dead control, BT hardcodes -1.0 (see template comment)",
-	"mow_angle_increment_deg": "dead control, BT hardcodes 0.0 (see template comment)",
-
 	// slam_mode / map_save_on_dock are leftovers from the slam_toolbox era
 	// that ended with the FusionCore -> iSAM2 migration (see CLAUDE.md
 	// Architecture Invariant 1: "slam_toolbox... removed"). Verified via
@@ -72,6 +62,15 @@ var schemaDefaultsWithNoTemplateEntry = map[string]string{
 	// and the schema is also used to validate/flatten those files.
 	"slam_mode":        "dead config, no consumer (slam_toolbox removed; see useSettingsManager.ts)",
 	"map_save_on_dock": "dead config, no consumer (slam_toolbox removed; see useSettingsManager.ts)",
+
+	// path_spacing was DELETED from the ROS2 template on 2026-09-05: grep
+	// confirms no ROS2 node, no launch file and no gui/pkg code ever read it
+	// (F2C swath spacing is tool_width - swath_overlap, injected as
+	// coverage_server.operation_width), and the frontend already hid it
+	// (useSettingsManager.ts:134 "it is a dead knob"). Kept in the schema for
+	// the same reason as map_save_on_dock above: previously-installed YAMLs may
+	// still carry the key and the schema also validates/flattens those files.
+	"path_spacing": "dead knob, template line deleted 2026-09-05; no ROS2 consumer",
 }
 
 // findSchemaTemplateDivergence compares schemaDefaults against the

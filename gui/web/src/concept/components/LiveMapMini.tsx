@@ -36,6 +36,8 @@ interface LiveMapMiniProps {
   progress?: MiniProgress | null;
   /** Robot position 0..1. */
   robot?:   {x: number; y: number; heading: number};
+  /** Saved dock in the same normalised space. Omitted until known. */
+  dock?: {x: number; y: number};
   /** Coverage fraction 0..1 -- synthetic band drawn only when no `progress`. */
   coverage?: number;
   height?: number;
@@ -62,6 +64,7 @@ export function LiveMapMini({
   polygons,
   progress = null,
   robot   = {x: 0.62, y: 0.46, heading: 30},
+  dock,
   coverage = 0.42,
   height = 200,
 }: LiveMapMiniProps) {
@@ -88,10 +91,11 @@ export function LiveMapMini({
   return (
     <div style={{position: "relative", width: "100%", height, overflow: "hidden"}}>
       <svg
+        data-testid="live-map-mini"
         viewBox={`0 0 ${w} ${h}`}
         width="100%"
         height={height}
-        preserveAspectRatio="xMidYMid slice"
+        preserveAspectRatio="xMidYMid meet"
         style={{display: "block"}}
       >
         <defs>
@@ -190,13 +194,13 @@ export function LiveMapMini({
           )}
         </g>
 
-        {/* dock marker */}
-        <g transform={`translate(${toX(0.16)} ${toY(0.22)})`}>
+        {/* Only draw a dock supplied by the map; no decorative fallback. */}
+        {dock && <g data-testid="mini-map-dock" transform={`translate(${toX(dock.x)} ${toY(dock.y)})`}>
           <rect x={-6} y={-3} width={12} height={6} rx={2}
                 fill="rgba(243, 168, 92, 0.14)"
                 stroke="var(--amber)" strokeWidth={1}/>
           <circle cx={0} cy={0} r={1.2} fill="var(--amber)"/>
-        </g>
+        </g>}
       </svg>
     </div>
   );

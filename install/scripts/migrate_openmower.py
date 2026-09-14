@@ -102,15 +102,8 @@ OM_TO_YAML: Dict[str, Tuple[str, callable]] = {
     "OM_BATTERY_FULL_VOLTAGE": ("battery_full_voltage", _unquote),
     "OM_BATTERY_EMPTY_VOLTAGE": ("battery_empty_voltage", _unquote),
     "OM_BATTERY_CRITICAL_VOLTAGE": ("battery_critical_voltage", _unquote),
-    "OM_MOWING_MOTOR_TEMP_LOW": ("motor_temp_low_c", _unquote),
-    "OM_MOWING_MOTOR_TEMP_HIGH": ("motor_temp_high_c", _unquote),
     "OM_DOCKING_DISTANCE": ("dock_approach_distance", _unquote),
     "OM_UNDOCK_DISTANCE": ("undock_distance", _unquote),
-    "OM_MOWING_ANGLE_OFFSET": ("mow_angle_offset_deg", _unquote),
-    "OM_MOWING_ANGLE_INCREMENT": ("mow_angle_increment_deg", _unquote),
-    "OM_OUTLINE_OFFSET": ("outline_offset", _unquote),
-    "OM_OUTLINE_OVERLAP_COUNT": ("outline_overlap", _unquote),
-    "OM_OUTLINE_COUNT": ("outline_passes", _unquote),
     "OM_GPS_TIMEOUT_SEC": ("gps_timeout_sec", _unquote),
     "OM_GPS_WAIT_TIME_SEC": ("gps_wait_after_undock_sec", _unquote),
     "OM_ENABLE_MOWER": ("mowing_enabled", _bool),
@@ -118,6 +111,25 @@ OM_TO_YAML: Dict[str, Tuple[str, callable]] = {
 
 # Keys we deliberately drop (no equivalent in MowgliNext).
 OM_IGNORED = {
+    # Issue #195 — these USED to be migrated into MowgliNext keys that no node
+    # ever read. Writing an OpenMower value into a dead key is the same lie in
+    # a different file, so they are dropped instead.
+    # No thermal blade cutoff exists in ANY layer: the firmware only measures
+    # and reports blade temperature. MowgliNext's real temperature surface is
+    # mowgli_monitoring's motor_temp_warn_c / motor_temp_error_c (diagnostics
+    # WARN/ERROR only), which are not per-robot install choices.
+    "OM_MOWING_MOTOR_TEMP_LOW",
+    "OM_MOWING_MOTOR_TEMP_HIGH",
+    # Swath direction is the single mow_angle_deg knob (auto / fixed degrees);
+    # there is no per-pass offset or increment in the F2C v3 planner.
+    "OM_MOWING_ANGLE_OFFSET",
+    "OM_MOWING_ANGLE_INCREMENT",
+    # The legacy strip planner's outline knobs. Coverage is F2C v3 headland
+    # rings + serpentine swaths: use num_headland_passes / swath_overlap /
+    # chassis_safety_inset instead.
+    "OM_OUTLINE_OFFSET",
+    "OM_OUTLINE_OVERLAP_COUNT",
+    "OM_OUTLINE_COUNT",
     "OM_LANGUAGE",
     "OM_VOLUME",
     "OM_MOWER_GAMEPAD",

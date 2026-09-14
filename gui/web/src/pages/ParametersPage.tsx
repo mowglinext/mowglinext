@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {useTranslation} from "react-i18next";
+import {stringifyValue} from "../utils/stringifyValue.ts";
 import {Segmented, Input, InputNumber, Switch, Collapse, Spin, Empty, Tag, Alert, Button, App, Tooltip} from "antd";
 import {SearchOutlined, WarningOutlined, InfoCircleOutlined} from "@ant-design/icons";
 import {useApi} from "../hooks/useApi.ts";
@@ -91,7 +92,7 @@ function ParamRow({
             <strong>{t(meta.label)}</strong> {t("parametersPage.confirmSafetyBody")}
           </p>
           <p style={{marginBottom: 0, color: colors.textMuted}}>
-            {t("parametersPage.confirmNewValue")} <strong>{String(next)}</strong>{meta.unit ? ` ${meta.unit}` : ""}
+            {t("parametersPage.confirmNewValue")} <strong>{stringifyValue(next)}</strong>{meta.unit ? ` ${meta.unit}` : ""}
           </p>
         </div>
       ),
@@ -135,7 +136,7 @@ function ParamRow({
         </Tooltip>
       );
     }
-    return <Input value={String(value ?? "")} disabled={saving || disabled}
+    return <Input value={stringifyValue(value)} disabled={saving || disabled}
                   style={{width: controlWidth ?? 220}}
                   addonAfter={meta.unit}
                   onChange={(e) => setValue(e.target.value)}
@@ -195,7 +196,7 @@ export const ParametersPage = () => {
     try {
       const res = await guiApi.request<ParamsResponse>({path: "/params", method: "GET", format: "json"});
       setParams((res.data?.parameters ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)));
-    } catch (e) {
+    } catch {
       setError(t("parametersPage.loadError"));
     } finally {
       setLoading(false);
@@ -251,7 +252,7 @@ export const ParametersPage = () => {
         <div>
           <Segmented
             value={tier}
-            onChange={(v) => setTier(v as ParamTier)}
+            onChange={(v) => setTier(v)}
             options={TIER_ORDER.map((tierKey) => ({
               label: TIER_LABEL_KEY[tierKey] ? t(TIER_LABEL_KEY[tierKey]) : t(TIER_LABEL[tierKey]),
               value: tierKey,

@@ -11,11 +11,21 @@
 
   Key dimensions (from real YardForce Classic 500 URDF):
     Base:          0.54 m long, 0.40 m wide, 0.19 m high
-    Drive wheels:  radius 0.093 m (186 mm dia), width 0.04 m, track 0.325 m (rear)
+                   NOTE: this line is stale and contradicts the
+                   <xacro:arg> defaults below (chassis_length 0.60,
+                   chassis_center_x 0.20 vs the template's 0.18). The
+                   ARGS are what render; these numbers are prose. The
+                   0.54-vs-0.60 length disagreement is unreconciled —
+                   see the chassis_width note in mowgli_robot.yaml.
+    Drive wheels:  radius 0.1 m (200 mm dia), width 0.04 m, track 0.325 m (rear)
     Front casters: radius 0.03 m, width 0.03 m
     Blade disc:    radius 0.09 m, height 0.01 m (centred under base)
-    Wheel ground clearance sets base_link at z = drive_wheel_radius = 0.093 m
+    Wheel ground clearance sets base_link at z = drive_wheel_radius = 0.1 m
     above base_footprint.
+    2026-09-05: the wheel_radius default was 0.093 here while the
+    mowgli_robot.yaml template said 0.04475 — two numbers, 2x apart, for the
+    same wheel. Both are replaced by the maintainer's measured 0.1 m so the
+    launch-injected value and this fallback agree.
 -->
 <robot name="mowgli" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
@@ -31,7 +41,10 @@
   <xacro:arg name="lidar_yaw" default="3.1408"/>
 
   <xacro:arg name="imu_x"     default="0.18"/>
-  <xacro:arg name="imu_y"     default="0.0"/>
+  <!-- -0.195 = mowgli_robot.yaml's imu_y default: the IMU sits to the RIGHT
+       of the wheelbase centre. Was 0.0 here, matching the template's old
+       (wrong) 0.0 — keep both in lockstep. -->
+  <xacro:arg name="imu_y"     default="-0.195"/>
   <xacro:arg name="imu_z"     default="0.095"/>
   <!-- Full 3-axis mounting rotation (roll, pitch, yaw) in radians.
        yaw=only handles chip-Z ≡ robot-Z mounts. Upside-down, side-mounted,
@@ -52,7 +65,11 @@
   <xacro:arg name="chassis_height"   default="0.19"/>
   <xacro:arg name="chassis_mass_kg"  default="8.76"/>
   <xacro:arg name="chassis_center_x" default="0.20"/>
-  <xacro:arg name="wheel_radius"     default="0.093"/>
+  <!-- 0.1 m = mowgli_robot.yaml's wheel_radius default (measured 2026-09-05).
+       Drives base_z_offset (base_link's height above ground, which every
+       sensor z rides on) and the wheel visuals — nothing else. Keep in
+       lockstep with the template. -->
+  <xacro:arg name="wheel_radius"     default="0.1"/>
   <xacro:arg name="wheel_width"      default="0.04"/>
   <xacro:arg name="wheel_track"      default="0.325"/>
   <xacro:arg name="wheel_x_offset"   default="0.0"/>
@@ -290,12 +307,11 @@
                             h="${blade_height}"/>
   </link>
 
-  <joint name="blade_joint" type="continuous">
+  <joint name="blade_joint" type="fixed">
     <parent link="base_link"/>
     <child  link="blade_link"/>
     <!-- Blade disc centred under chassis -->
     <origin xyz="${chassis_cx} 0 ${-wheel_radius + 0.05}" rpy="0 0 0"/>
-    <axis xyz="0 0 1"/>
   </joint>
 
   <!-- ================================================================

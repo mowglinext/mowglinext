@@ -7,10 +7,16 @@ import {useApi} from "../hooks/useApi.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {appendCappedBatch, createLogBatcher, type LogBatcher} from "./logBatcher.ts";
+import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
+import {parseLogTimestamp, type LogTimestampSource} from "../utils/logTime.ts";
 
 type Severity = 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'OTHER';
 
 const LEVEL_PATTERN = /\b(ERROR|ERR|FATAL|CRITICAL|WARN(?:ING)?|INFO|DEBUG|TRACE)\b/i;
+// ESC is a control character by definition -- an ANSI escape matcher cannot
+// be written without it. Silenced at the one site that needs it rather than
+// globally, so a genuine stray control character elsewhere still reports.
+// eslint-disable-next-line no-control-regex
 const ANSI_REGEX = /\x1b\[[0-9;]*m/g;
 
 function detectSeverity(line: string): Severity {
@@ -26,8 +32,12 @@ function detectSeverity(line: string): Severity {
 
 interface ParsedLog {
     id: number;
+    /** The line with its producer-baked timestamp removed. */
     plain: string;
     severity: Severity;
+    /** Epoch ms, parsed once at ingest — never re-parsed during render. */
+    tsMs: number;
+    tsSource: LogTimestampSource;
 }
 
 const LEVEL_OPTIONS: { value: Severity; label: string }[] = [
@@ -41,12 +51,20 @@ const LEVEL_OPTIONS: { value: Severity; label: string }[] = [
 const DEFAULT_LEVELS: Severity[] = ['ERROR', 'WARN', 'INFO', 'OTHER'];
 const MAX_LINES = 5000;
 const LOG_BATCH_INTERVAL_MS = 100;
+// Width of the monospace timestamp column: "YYYY-MM-DDTHH:mm:ss" is 19 chars,
+// "HH:mm:ss" is 8. Fixed so the bodies line up.
+const TIMESTAMP_COLUMN_CH = 19;
+const TIMESTAMP_COLUMN_MOBILE_CH = 8;
+// A query with no digit in it cannot match a timestamp, so it never needs to
+// pay for formatting the buffer. Guards the search-the-time-column path below.
+const QUERY_HAS_DIGIT = /\d/;
 
 type ContainerList = { value: string, label: string, status: "started" | "stopped", labels: Record<string, string> };
 
 export const LogsPage = () => {
     const {t} = useTranslation();
     const {colors} = useThemeMode();
+    const {timeZoneMode, setTimeZoneMode, zoneLabel, formatLogTime} = useTimeFormat();
     const guiApi = useApi();
     const {notification} = App.useApp();
     const isMobile = useIsMobile();
@@ -86,11 +104,18 @@ export const LogsPage = () => {
         () => { /* connected */ },
         (line, first) => {
             if (first) resetLogs();
-            const plain = line.replace(ANSI_REGEX, '');
+            const stripped = line.replace(ANSI_REGEX, '');
+            // Parse ONCE here, at ingest. Doing it in the render map or the
+            // `filtered` memo would re-parse the whole 5000-line buffer on
+            // every frame, on the very path logBatcher.bench.ts exists to
+            // protect.
+            const {epochMs, source, body} = parseLogTimestamp(stripped, Date.now());
             batcherRef.current?.push({
                 id: nextIdRef.current++,
-                plain,
-                severity: detectSeverity(plain),
+                plain: body,
+                severity: detectSeverity(body),
+                tsMs: epochMs,
+                tsSource: source,
             });
         });
 
@@ -159,15 +184,34 @@ export const LogsPage = () => {
 
     const selectedContainer = containers.find(c => c.value === containerId);
 
+    // Issue #207 moved the timestamp out of the line body and into its own
+    // rendered column, so `plain` no longer contains it and a search for
+    // "22:02" — or for an epoch pasted out of a bug report — silently stopped
+    // matching. Search the rendered column too, but only for queries that can
+    // possibly match one: formatting the whole buffer costs ~11 ms per
+    // keystroke at MAX_LINES (with the formatter cache in logTime.ts; ~110 ms
+    // without it), and an ordinary word search must not pay that.
     const filtered = useMemo(() => {
         const levelSet = new Set(levels);
         const q = search.trim().toLowerCase();
+        const searchesTime = q !== '' && QUERY_HAS_DIGIT.test(q);
         return logs.filter(l => {
             if (!levelSet.has(l.severity)) return false;
-            if (q && !l.plain.toLowerCase().includes(q)) return false;
-            return true;
+            if (!q) return true;
+            if (l.plain.toLowerCase().includes(q)) return true;
+            if (!searchesTime) return false;
+            // Raw epochs, as pasted from a bug report or an older ROS console.
+            if (String(Math.floor(l.tsMs / 1000)).includes(q)) return true;
+            if (String(l.tsMs).includes(q)) return true;
+            // The rendered column, so "22:02" or "2026-05-12" match what is on
+            // screen. withMillis is a strict superset of both the desktop
+            // (YYYY-MM-DDTHH:mm:ss) and the mobile (HH:mm:ss) column, so one
+            // format call covers every layout and also matches ".123".
+            return formatLogTime(l.tsMs, {withMillis: true}).toLowerCase().includes(q);
         });
-    }, [logs, levels, search]);
+        // formatLogTime is a useCallback keyed on timeZoneMode: without it in
+        // the deps, toggling UTC would leave a stale filter result on screen.
+    }, [logs, levels, search, formatLogTime]);
 
     const counts = useMemo(() => {
         const c: Record<Severity, number> = {ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0, OTHER: 0};
@@ -277,6 +321,19 @@ export const LogsPage = () => {
                 </div>
                 <div style={{display: 'flex', gap: 6, marginLeft: isMobile ? 0 : 'auto'}}>
                     <button
+                        onClick={() => setTimeZoneMode(timeZoneMode === 'utc' ? 'local' : 'utc')}
+                        aria-label={t('logTime.toggleAria')}
+                        title={t('logTime.toggleAria')}
+                        style={{
+                            padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600,
+                            border: `1px solid ${colors.border}`, background: 'transparent',
+                            color: colors.textDim, cursor: 'pointer',
+                        }}
+                    >
+                        {timeZoneMode === 'utc' ? t('logsPage.timeZoneUtc') : t('logsPage.timeZoneLocal')}
+                        <span style={{opacity: 0.7, marginLeft: 4}}>{zoneLabel}</span>
+                    </button>
+                    <button
                         onClick={() => setAutoScroll(a => !a)}
                         style={{
                             padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 600,
@@ -336,6 +393,19 @@ export const LogsPage = () => {
                                 containIntrinsicSize: 'auto 26px',
                             }}
                         >
+                            <span
+                                title={line.tsSource === 'received'
+                                    ? t('logTime.approximate')
+                                    : formatLogTime(line.tsMs, {withMillis: true})}
+                                style={{
+                                    color: line.tsSource === 'received' ? colors.textMuted : colors.textDim,
+                                    marginRight: 10, fontSize: 11,
+                                    display: 'inline-block',
+                                    minWidth: `${isMobile ? TIMESTAMP_COLUMN_MOBILE_CH : TIMESTAMP_COLUMN_CH}ch`,
+                                }}
+                            >
+                                {formatLogTime(line.tsMs, {timeOnly: isMobile})}
+                            </span>
                             {line.severity !== 'OTHER' && (
                                 <span style={{
                                     color: accent, fontWeight: 700,

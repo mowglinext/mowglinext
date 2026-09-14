@@ -23,11 +23,11 @@ services:
     command: >
       ros2 run ldlidar_stl_ros2 ldlidar_stl_ros2_node
       --ros-args
-      -p product_name:=STL27L
+      -p product_name:=${LIDAR_MODEL:-LDLiDAR_STL27L}
       -p topic_name:=scan
       -p frame_id:=lidar_link
       -p port_name:=${LIDAR_PORT:-/dev/lidar}
-      -p port_baudrate:=${LIDAR_BAUD:-230400}
+      -p port_baudrate:=${LIDAR_BAUD:-921600}
       -p laser_scan_dir:=true
       -p enable_angle_crop_func:=false
     restart: unless-stopped

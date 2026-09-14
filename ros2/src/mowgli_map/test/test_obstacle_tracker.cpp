@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cmath>
+#include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -34,16 +36,38 @@ protected:
     {
       rclcpp::init(0, nullptr);
     }
-  }
-
-  void SetUp() override
-  {
+    // ONE node for the whole suite. This fixture used to build and destroy a
+    // full rclcpp::Node in every SetUp/TearDown — 17 create/destroy cycles per
+    // run — and the middleware teardown intermittently deadlocked, hanging the
+    // binary until ctest killed it (`test_obstacle_tracker (Timeout)`, red on
+    // dev and on unrelated PRs). The methods under test are pure algorithms
+    // that only need *a* node for its clock and parameters, not a fresh one,
+    // so the node is built once and the mutable state it carries is reset
+    // between tests instead (see SetUp).
     node_ = std::make_shared<mowgli_map::ObstacleTrackerNode>();
   }
 
-  void TearDown() override
+  static void TearDownTestSuite()
   {
     node_.reset();
+    if (rclcpp::ok())
+    {
+      rclcpp::shutdown();
+    }
+  }
+
+  /// Reset every piece of node state a test can mutate, so sharing one node
+  /// across the suite stays equivalent to the old fresh-node-per-test setup.
+  void SetUp() override
+  {
+    {
+      std::lock_guard<std::mutex> lock(node_->mutex_);
+      node_->tracked_.clear();
+      node_->next_id_ = 1;
+    }
+    std::lock_guard<std::mutex> lock(node_->keepout_mutex_);
+    node_->keepout_mask_ = nav_msgs::msg::OccupancyGrid{};
+    node_->have_keepout_mask_ = false;
   }
 
   // Expose private methods via delegation
@@ -126,8 +150,10 @@ protected:
     return obs;
   }
 
-  std::shared_ptr<mowgli_map::ObstacleTrackerNode> node_;
+  static std::shared_ptr<mowgli_map::ObstacleTrackerNode> node_;
 };
+
+std::shared_ptr<mowgli_map::ObstacleTrackerNode> ObstacleTrackerAlgorithmTest::node_;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // boundary_hull tests

@@ -65,3 +65,123 @@ jobs:
         assert hasattr(RtcmMessage, "message")
         PY
       no-cache: ${{ inputs.no-cache == true }}
+
+  # ---------------------------------------------------------------------------
+  # mowgli_gnss_bridge lives in sensors/gps/, OUTSIDE the ros2/ colcon
+  # workspace, so the "ROS2 — CI" job never sees it. Its Dockerfile builds it
+  # with -DBUILD_TESTING=OFF and deletes /ws/build, so its gtests were compiled
+  # by nothing and run by nothing. This job is the only thing that executes
+  # them. Keep it in lockstep with the builder stage of sensors/gps/Dockerfile:
+  # same distro, same package set.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test mowgli_gnss_bridge
+    runs-on: ubuntu-latest
+    container: ros:kilted-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # universal-gnss is a submodule and mowgli_gnss_bridge links against
+          # universal_gnss_ros2; without it the package will not configure.
+          submodules: recursive
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            python3-colcon-common-extensions \
+            ros-kilted-ament-cmake \
+            ros-kilted-ament-cmake-gtest \
+            ros-kilted-ament-lint-auto \
+            ros-kilted-ament-lint-common \
+            ros-kilted-diagnostic-msgs \
+            ros-kilted-geometry-msgs \
+            ros-kilted-nav-msgs \
+            ros-kilted-rclcpp \
+            ros-kilted-rosidl-default-generators \
+            ros-kilted-rosidl-default-runtime \
+            ros-kilted-rtcm-msgs \
+            ros-kilted-sensor-msgs \
+            ros-kilted-std-msgs
+
+      - name: Assemble the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /ws/src
+          cp -r ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces
+          cp -r sensors/gps/mowgli_gnss_bridge /ws/src/mowgli_gnss_bridge
+          # The Python reference bridge lives one level ABOVE the package, so a
+          # plain package copy leaves it out and the C++/Python parity test
+          # cannot import it. sensors/CLAUDE.md requires the two bridges to stay
+          # behaviour-identical, so that test is the only thing enforcing it.
+          cp sensors/gps/universal_gnss_topic_bridge.py /ws/src/
+          for p in gnss_ros2 gnss_core gnss_protocols gnss_transport \
+                   gnss_driver gnss_ntrip gnss_runtime gnss_tools; do
+            cp -r "ros2/src/external/universal-gnss/$p" "/ws/src/$p"
+          done
+          ls /ws/src
+
+      - name: Build dependencies
+        shell: bash
+        run: |
+          set -eo pipefail
+          # ROS's setup.bash dereferences unset AMENT_* variables, so it cannot
+          # be sourced under `set -u`. sensors/gps/Dockerfile works around this
+          # the same way.
+          source /opt/ros/kilted/setup.bash
+          cd /ws
+          # Dependencies only, tests off — we are not here to test upstream.
+          colcon build \
+            --packages-skip mowgli_gnss_bridge \
+            --packages-up-to mowgli_gnss_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -Wno-dev \
+            --event-handlers console_cohesion+
+
+      - name: Build and test mowgli_gnss_bridge
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/kilted/setup.bash
+          cd /ws
+          source install/setup.bash
+          colcon build \
+            --packages-select mowgli_gnss_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -Wno-dev \
+            --event-handlers console_cohesion+
+          colcon test \
+            --packages-select mowgli_gnss_bridge \
+            --return-code-on-test-failure \
+            --event-handlers console_cohesion+
+          colcon test-result --verbose
+
+      - name: Assert the gtests actually ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A package whose tests silently stop being registered would otherwise
+          # pass this job with zero tests — the exact failure mode that let these
+          # tests rot unnoticed in the first place.
+          #
+          # Count ONLY *.gtest.xml. ament writes a sibling xunit file per LINTER
+          # (cppcheck, cpplint, lint_cmake, uncrustify, xmllint, ...) and those
+          # also carry a tests="N" attribute, so globbing *.xml here would keep
+          # this assertion green on linters alone while every real test vanished.
+          results=/ws/build/mowgli_gnss_bridge/test_results/mowgli_gnss_bridge
+          test -d "$results" || { echo "no test_results directory"; exit 1; }
+          shopt -s nullglob
+          gtest_xml=("$results"/*.gtest.xml)
+          if [ ${#gtest_xml[@]} -eq 0 ]; then
+            echo "no *.gtest.xml produced — the gtests were not registered"
+            ls -la "$results" || true
+            exit 1
+          fi
+          n=$(grep -ho 'tests="[0-9]*"' "${gtest_xml[@]}" | grep -o '[0-9]*' \
+              | awk '{s+=$1} END {print s+0}')
+          echo "gtest binaries: ${#gtest_xml[@]}, gtest cases executed: $n"
+          test "$n" -gt 0 || { echo "mowgli_gnss_bridge ran ZERO gtest cases"; exit 1; }

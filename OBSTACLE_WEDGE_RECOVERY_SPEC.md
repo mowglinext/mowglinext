@@ -1,5 +1,7 @@
 # Spec — Obstacle wedge & erratic recovery (dedicated session)
 
+> **Historical document (2026-07)** — describes the state at that time; Part A's cul-de-sac guard (`ObstacleDeviation::hasClearExit`), Part B's "stalled beside an obstacle" detour gate (`detour_resume.hpp`) and `obstacle_reverse_enabled: true` have since shipped, while `use_footprint_clearance` is still `false`. Current reference: [docs/claude/codemaps/mowgli_nav2_plugins.md](docs/claude/codemaps/mowgli_nav2_plugins.md).
+
 _Written 2026-07-22 after a long field-debug session. Robot deployed image `755d58eb` (dev HEAD `876c1455`)._
 
 ## The single root cause (not three separate bugs)

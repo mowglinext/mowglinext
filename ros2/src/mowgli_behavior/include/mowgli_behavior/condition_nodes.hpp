@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <string>
 
 #include "behaviortree_cpp/behavior_tree.h"
@@ -52,6 +53,23 @@ public:
 // ---------------------------------------------------------------------------
 
 /// Returns SUCCESS when the charger relay is enabled (robot is on the dock).
+///
+/// Input ports:
+///   stable_for_sec (double, default "0.0") - debounce window. SUCCESS is only
+///     returned once charger_enabled has read true on every tick for at least
+///     this many seconds. 0.0 reports the RAW bit and is the default precisely
+///     so that every pre-existing <IsCharging/> call site keeps its exact
+///     current semantics; only a site that opts in by naming the port pays for
+///     the debounce.
+///
+/// Why the port exists: the firmware charger bit is not a clean signal. It
+/// stays high for ~100 ms into a BackUp undock (CLAUDE.md invariant 11) and it
+/// can bounce when the mower brushes the dock contacts on a swath that passes
+/// close to the station. Every historical reader of this node treated a
+/// transient as harmless, so the raw bit was fine. ManualChargeGuard is the
+/// first reader for which a transient is a STATE TRANSITION (blade off, stop,
+/// publish CHARGING, wait, publish MOWING), so it needs the bit to have
+/// settled before it acts.
 class IsCharging : public BT::ConditionNode
 {
 public:
@@ -62,10 +80,29 @@ public:
 
   static BT::PortsList providedPorts()
   {
-    return {};
+    return {BT::InputPort<double>("stable_for_sec",
+                                  0.0,
+                                  "Seconds the charger bit must read true "
+                                  "continuously before SUCCESS. 0 = raw bit.")};
   }
 
   BT::NodeStatus tick() override;
+
+private:
+  // Steady-clock stamp of the first tick in the current unbroken run of
+  // charger_enabled == true. Default-constructed (epoch) means "the last tick
+  // saw the charger off", matching the IsNewRain / rain_first_detected_time
+  // idiom. Deliberately PER-INSTANCE rather than on BTContext: the debounced
+  // ManualChargeGuard node must not share a window with the other ten raw
+  // <IsCharging/> nodes elsewhere in the tree.
+  //
+  // BT.CPP halts (and therefore stops ticking) this node whenever an earlier
+  // child of the StripGuards ReactiveSequence goes RUNNING, and halt does not
+  // clear this member. That is deliberate: the only way the stamp survives a
+  // halt is if charging was already true when the halt began, in which case
+  // re-engaging the guard promptly on re-entry is the correct outcome anyway -
+  // the mower really is sitting on the dock.
+  std::chrono::steady_clock::time_point charging_since_{};
 };
 
 // ---------------------------------------------------------------------------
@@ -167,6 +204,42 @@ public:
   static BT::PortsList providedPorts()
   {
     return {BT::InputPort<float>("threshold", 95.0f, "Battery percent threshold")};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
+// IsManualResumeRequested
+// ---------------------------------------------------------------------------
+
+/// Operator-forced exit from a charge hold. Returns SUCCESS — and CONSUMES
+/// BTContext::manual_resume_requested — when the ~/high_level_control handler
+/// has flagged a COMMAND_START received during CHARGING /
+/// CRITICAL_BATTERY_CHARGING AND the battery is at or above min_battery_pct.
+///
+/// A request below the floor is REFUSED: logged once at WARN, cleared, and the
+/// node returns FAILURE so the wait loop keeps charging. A request older than
+/// BTContext::kManualResumeMaxAgeSec is dropped the same way (stale token from
+/// a branch that never consumed it). With no request pending it is a plain
+/// FAILURE, so the enclosing Fallback falls through to the timed wait.
+///
+/// Input ports:
+///   min_battery_pct (float): floor below which a manual resume is refused;
+///                            the tree pulls {battery_manual_resume_pct}.
+class IsManualResumeRequested : public BT::ConditionNode
+{
+public:
+  IsManualResumeRequested(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<float>("min_battery_pct",
+                                 30.0f,
+                                 "Battery percent floor for an operator-forced resume")};
   }
 
   BT::NodeStatus tick() override;
@@ -294,6 +367,35 @@ class IsLocalizationDegraded : public BT::ConditionNode
 {
 public:
   IsLocalizationDegraded(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
+// IsDigEscalated — the robot has latched the dig detector repeatedly at one
+// spot and cannot free itself there (issue #500).
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS while /hardware_bridge/dig_escalated is true, i.e. the
+/// bridge has seen dig_escalate_count latches inside dig_escalate_radius_m
+/// within dig_escalate_window_s. A single dig is handled entirely by the
+/// bridge (hard stop, bounded reverse) and by map_server's pending keepout,
+/// and does NOT set this; repeated latches at one spot mean the next planned
+/// manoeuvre keeps aiming the robot back at the same physical object, which
+/// no amount of reversing or keeping-out can fix. The bridge only raises the
+/// flag — stopping the mission is the tree's job.
+class IsDigEscalated : public BT::ConditionNode
+{
+public:
+  IsDigEscalated(const std::string& name, const BT::NodeConfig& config)
       : BT::ConditionNode(name, config)
   {
   }
@@ -777,6 +879,51 @@ public:
                               3.0,
                               "collision_monitor_state freshness bound (s); stale = inert"),
     };
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
+// IsCoverageStartBlocked
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS when the FollowStrip pass that just failed did so because
+/// the ROBOT'S OWN POSE is a cell nav2 refuses to plan from (every blade-off
+/// sub-path transit came back START_OCCUPIED and zero swaths were mowed).
+/// FAILURE otherwise.
+///
+/// Field problem this solves (issue #487, 2026-08-24): the robot undocked into
+/// the inflated keepout around a 0.25 m obstacle circle. SmacPlanner2D has no
+/// start tolerance, so all 26 plan calls answered "Start occupied", FollowStrip
+/// skipped all four sub-paths in a row, and the whole field was declared
+/// unmowable at 0 % coverage. The area was perfectly mowable — a second attempt
+/// 13 minutes later completed it at 100 %.
+///
+/// CONSUMING condition: it clears ctx->coverage_start_blocked on read, so the
+/// recovery branch fires exactly once per blocked pass and a later, unrelated
+/// FollowStrip failure cannot re-trigger it. (ctx->start_blocked_area is a
+/// SEPARATE field with a separate consumer — GetNextUnmowedArea — so this read
+/// does not disturb the retirement-budget exemption.)
+///
+/// SAFETY: this node also ARMS the bounded escape motion
+/// (ctx->start_blocked_escape_armed, consumed by EscapeStartBlocked). It is the
+/// ONLY place that token is set, which is what makes the escape provably unable
+/// to fire on any other failure. See mowgli_behavior/start_blocked_escape.hpp
+/// for the bounds and the stand-down conditions; arming is not itself a
+/// commitment to move — every stand-down there degrades to the non-motion
+/// recovery this node originally shipped with.
+class IsCoverageStartBlocked : public BT::ConditionNode
+{
+public:
+  IsCoverageStartBlocked(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
   }
 
   BT::NodeStatus tick() override;

@@ -55,6 +55,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+import yaml
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -66,6 +67,17 @@ def generate_launch_description() -> LaunchDescription:
     behavior_dir = get_package_share_directory("mowgli_behavior")
     map_dir = get_package_share_directory("mowgli_map")
     monitoring_dir = get_package_share_directory("mowgli_monitoring")
+    scenario_config = os.path.join(
+        simulation_dir, "config_webots", "mowgli_garden.yaml"
+    )
+    with open(scenario_config, "r", encoding="utf-8") as handle:
+        scenario = yaml.safe_load(handle) or {}
+    gps_reference = scenario["gps_reference"]
+    antenna_lever_arm = scenario["antenna_lever_arm"]
+    datum_lat = float(gps_reference["latitude"])
+    datum_lon = float(gps_reference["longitude"])
+    lever_arm_x = float(antenna_lever_arm["x"])
+    lever_arm_y = float(antenna_lever_arm["y"])
 
     # ------------------------------------------------------------------
     # Declared arguments
@@ -168,19 +180,23 @@ def generate_launch_description() -> LaunchDescription:
             # republish a stale forward-motion yaw while the robot is
             # pivoting in place).
             #
-            # Sim-only TF / cadence overrides. Hardware defaults
-            # (declared in navigation.launch.py / fusion_graph.launch.py)
-            # are 0.0 forward-stamp + 25 Hz factor-graph because the
+            # Sim-only TF override. Hardware defaults (declared in
+            # navigation.launch.py / fusion_graph.launch.py) are 0.0
+            # forward-stamp + 25 Hz factor-graph because the
             # 100 ms lead costs ~5° yaw error per pivot at 0.5 rad/s on
             # real hardware. Under sim_time, the publish/lookup phase
-            # offset routinely throws ExtrapolationException without the
-            # lead, and the controller queries align poorly with the
-            # 25 Hz TF cadence — restore the sim-tested values here.
+            # offset routinely throws ExtrapolationException without the lead.
+            #
+            # Keep the graph cadence at the hardware 25 Hz. Wheel and gyro
+            # factor sigmas are per-node, so the previous 50 Hz override
+            # accumulated twice as much process variance between identical
+            # 5 Hz RTK fixes. That made SIM trip the production localization
+            # guard even though it uses the same thresholds as hardware.
             # fusion_graph_tf_lead_s now also applies to the
             # odom→base_footprint TF (ekf_odom_node was removed
             # 2026-05-18; fusion_graph owns both transforms).
             "fusion_graph_tf_lead_s": "0.1",
-            "fusion_graph_node_period_s": "0.02",
+            "fusion_graph_node_period_s": "0.04",
         }.items(),
     )
 
@@ -226,8 +242,8 @@ def generate_launch_description() -> LaunchDescription:
             # keeps the areas.dat datum stamp / datum-change migration
             # (issue #216) consistent in simulation.
             {
-                "datum_lat": 48.137154000,
-                "datum_lon": 11.576124000,
+                "datum_lat": datum_lat,
+                "datum_lon": datum_lon,
             },
         ],
     )
@@ -303,12 +319,13 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
-    # 9. Sim NavSat RTK status promoter
+    # 9. Sim NavSat RTK source
     #     Production code (navsat_to_absolute_pose_node) requires
-    #     STATUS_GBAS_FIX (2) for the GPS path. The sim GPS source
-    #     publishes on /gps/fix_raw with default STATUS_FIX (0); this
-    #     relay rewrites status -> GBAS_FIX and republishes on /gps/fix
-    #     with a realistic RTK-Fixed covariance (sigma ~3 mm).
+    #     STATUS_GBAS_FIX (2) for the GPS path. Webots samples GPS before
+    #     KinematicDrive restores its authoritative pose, so obstacle
+    #     contacts can displace the raw sensor reading from ground truth.
+    #     Use the raw fix only for cadence/header and derive antenna
+    #     position from the authoritative chassis pose plus lever arm.
     # ------------------------------------------------------------------
     sim_navsat_rtk_fix_node = Node(
         package="mowgli_simulation",
@@ -320,13 +337,17 @@ def generate_launch_description() -> LaunchDescription:
                 "use_sim_time": True,
                 "input_topic": "/gps/fix_raw",
                 "output_topic": "/gps/fix",
+                "ground_truth_topic": "/sim/ground_truth_pose",
+                "datum_lat": datum_lat,
+                "datum_lon": datum_lon,
+                "lever_arm_x": lever_arm_x,
+                "lever_arm_y": lever_arm_y,
                 # Realistic mowing scenario: 90 s RTK-Fixed (open sky),
                 # 30 s RTK-Float (light tree cover), 10 s no-fix (dense
                 # canopy / multipath). Empty pattern → always RTK_FIXED
-                # (σ=3 mm, no Python noise injection — sensor only sees
-                # the simulator GPS plugin's intrinsic ~2 cm noise). Bias
-                # disabled while debugging fusion_graph; restore the
-                # cycle pattern once the baseline is clean.
+                # (σ=3 mm, no Python noise injection). Bias disabled while
+                # debugging fusion_graph; restore the cycle pattern once
+                # the baseline is clean.
                 "quality_pattern": "",
                 "noise_seed": 42,
             }
@@ -342,8 +363,8 @@ def generate_launch_description() -> LaunchDescription:
     #     fuses as pose0. Without this, no GPS reaches the EKF in sim
     #     and the BT cannot transition out of IDLE.
     #
-    #     Datum matches the simulator world; if you change the sim
-    #     world's lat/lon, change these too.
+    #     Datum comes from the same installed scenario config used by
+    #     map_server and the synthetic antenna source.
     # ------------------------------------------------------------------
     navsat_converter_node = Node(
         package="mowgli_localization",
@@ -353,8 +374,8 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {
                 "use_sim_time": True,
-                "datum_lat": 48.137154000,
-                "datum_lon": 11.576124000,
+                "datum_lat": datum_lat,
+                "datum_lon": datum_lon,
             },
         ],
     )
@@ -449,57 +470,15 @@ def generate_launch_description() -> LaunchDescription:
                 "accel_bias_walk_std": 1.0e-3,  # m/s^2/sqrt(s)
                 "accel_bias_init_std": 0.05,    # m/s^2
                 "noise_seed": 42,
-                # Use the Webots gyro/accel directly (no cmd_vel
-                # synthesis). The kinematic_drive plugin now runs the
-                # firmware motor model end-to-end (deadband + PI +
-                # saturation), so the Webots-reported chassis motion
-                # IS the achievable-twist post-firmware response. An
-                # IMU synthesized from raw cmd_vel would lie about
-                # sub-deadband stalled rotations and starve the
-                # fusion_graph wheel/gyro consistency checks.
-                "synthesize_from_cmd_vel": False,
-                "cmd_vel_topic": "/cmd_vel",
-            }
-        ],
-    )
-
-    # ------------------------------------------------------------------
-    # Sim actuation model — inserts the per-wheel firmware motor model
-    # (firmware_wheel_model.hpp: inverse kinematics, two per-wheel PIs,
-    # per-wheel PWM stiction, forward kinematics) between the nav command
-    # (/cmd_vel) and the Webots wheels (/cmd_vel_wheels), so the sim
-    # reproduces the per-wheel PWM stiction the ideal diff_drive cannot.
-    # Set deadband_enabled:=false for an ideal-actuation baseline.
-    # Wheel-model gains mirror firmware/stm32/ros_usbnode/{include/board.h,
-    # src/ros/ros_custom/cpp_main.cpp} and MUST stay in lockstep with
-    # mowgli_simulation/kinematic_drive.py's identical Python copy.
-    #
-    # 2026-07-17 Option C (task #34): this used to ALSO insert a host-side
-    # angular-rate PI (Option B, task #24) ahead of the per-wheel model —
-    # that stage is removed. wz now passes straight through, matching
-    # hardware_bridge's new behaviour (the yaw-rate loop moved into
-    # firmware, task #33).
-    # ------------------------------------------------------------------
-    sim_actuation_node = Node(
-        package="mowgli_simulation",
-        executable="sim_actuation_node",
-        name="sim_actuation",
-        output="screen",
-        parameters=[
-            {
-                "use_sim_time": True,
-                "deadband_enabled": True,
-                "wheel_separation": 0.325,
-                "firmware_max_mps": 0.5,
-                "firmware_pwm_per_mps": 300.0,
-                "firmware_pwm_max": 255.0,
-                "firmware_deadband_pwm_static": 40.0,
-                "firmware_deadband_pwm_kinetic": 30.0,
-                "firmware_pi_kp_pwm_per_mps": 30.0,
-                "firmware_pi_ki_pwm_per_mps_s": 5000.0,
-                "firmware_pi_int_max_pwm": 100.0,
-                "firmware_pi_hold_thresh_mps": 0.02,
-                "min_linear_vel": 0.05,
+                # Webots samples the ODE body between KinematicDrive
+                # teleports, so obstacle contacts can create angular
+                # velocity that is absent from the authoritative
+                # kinematic pose. Synthesize gyro_z from the post-firmware
+                # achievable twist consumed by KinematicDrive itself.
+                # Using /cmd_vel_wheels rather than raw /cmd_vel preserves
+                # deadband, PI, and saturation behavior.
+                "synthesize_from_cmd_vel": True,
+                "cmd_vel_topic": "/cmd_vel_wheels",
             }
         ],
     )
@@ -525,7 +504,6 @@ def generate_launch_description() -> LaunchDescription:
             twist_mux_node,
             sim_wheel_slip_node,
             sim_imu_noise_node,
-            sim_actuation_node,
             behavior_tree_node,
             map_server_node,
             obstacle_tracker_node,

@@ -19,7 +19,8 @@ Three source formats are addressed:
 1. **`map.json`** (modern) — OpenMower's current persistence format.
    Lower-case `areas` / `docking_stations` keys, polygons as
    `outline: [{x, y}]`, dock as a struct with `position` + `heading`.
-   **Implemented** as parse + preview; write step stubbed.
+   **Implemented end-to-end**: parse + preview, then the live write on
+   Apply (`applyImport`).
 2. **Legacy bag-JSON** — `mower_map_service`'s rosbag content serialised
    to JSON (e.g. via the rosbridge JSON encoder or any ROS1→JSON tool).
    PascalCase fields with `Package: 0` envelopes, top-level
@@ -38,6 +39,19 @@ Three source formats are addressed:
    readers are unmaintained and we'd prefer a sidecar. Users with
    raw `.bag` files should run OpenMower 1.x once to auto-convert to
    either the modern `map.json` or the legacy bag-JSON above.
+
+**Offline alternative (install-time, no GUI).**
+`install/scripts/migrate_openmower.py --source <om-install> --target
+<mowglinext>/docker/config` reads `mower_config.sh` / `mower_config.yaml`
++ `ros/map.json` and writes `mowgli/mowgli_robot.yaml` (in-place key
+patch, comments preserved) plus `mowgli/garden_areas.dat` directly.
+It maps `OM_DATUM_LAT` / `OM_DATUM_LONG` → `datum_lat` / `datum_lon` and
+never overwrites an already-calibrated value unless `--force` is passed;
+`--dry-run` prints the report without writing. Unlike the GUI importer it
+does **not** reproject (it copies the OpenMower coordinates as-is, so the
+UTM convergence stays, see §3) and writes no datum stamp into
+`garden_areas.dat` — `map_server_node` then stamps the file with the
+datum in effect at first load (issue #216 migration path).
 
 ---
 
@@ -132,9 +146,15 @@ Notes on the structure that bit us in early prototypes:
   to `{ "id": "...", "properties": { "type": "mow" }, "outline": [...] }`.
 - `type:"draft"` is the default for half-recorded areas — the importer
   treats `draft` as a soft warning and skips it (no MowgliNext analogue).
-- `outline` is **not** closed. The first/last point are typically
-  distinct; MowgliNext's `MapArea.area.points` doesn't require a closing
-  point either.
+  An area with a missing or unknown `type` is skipped the same way.
+- `outline` is nominally an **open** ring, and MowgliNext's
+  `MapArea.area.points` doesn't require a closing point either — but real
+  exports routinely carry a doubled first vertex (`points[0] ==
+  points[1]`) and/or a closing repeat of the first point. Those
+  zero-length edges make the polygon non-simple and boost::geometry (under
+  F2C v3 and map_server's grid_map stamping) drops the area *after* it
+  previewed fine, so `dedupOutline` normalises them away before validation
+  (`openmower_import.go`).
 - `docking_stations` is plural, but in practice OpenMower writes
   exactly one entry. The importer takes the first `active` station and
   warns if there are more.
@@ -151,7 +171,7 @@ Notes on the structure that bit us in early prototypes:
 
 This means the importer **must** ask the user — or be told via an env
 var — what OpenMower datum the points are anchored to. See
-[§4 Coordinate frame handling](#4-coordinate-frame-handling).
+[§3 Coordinate frame handling](#3-coordinate-frame-handling).
 
 ---
 
@@ -163,15 +183,14 @@ var — what OpenMower datum the points are anchored to. See
 | `area.properties.type == "nav"`                     | `MapArea` with `is_navigation_area=true`, `Obstacles=[]`                 | Same service, flag flipped. |
 | `area.properties.type == "obstacle"`                | `geometry_msgs/Polygon` appended to the parent area's `Obstacles`        | Parent found by point-in-polygon against the `mow` and `nav` areas. Obstacles outside any area are dropped with a warning. |
 | `area.properties.type == "draft"`                   | dropped                                                                  | Warned. |
-| `area.properties.name`                              | `MapArea.name`                                                           | Empty string → MowgliNext auto-names it (`mowing_area_<idx>`). |
+| `area.properties.name`                              | `MapArea.name`                                                           | Copied verbatim. An empty name stays empty — `map_server_node` does not auto-name (`entry.name = req->area.name`); the GUI renders it as *(unnamed)*. |
 | `area.properties.active == false`                   | dropped                                                                  | Inactive areas are not imported. |
-| `area.outline[i].{x,y}`                             | `MapArea.area.points[i].{x, y}`, `z=0`                                   | After datum re-anchoring (see §4). |
-| `docking_stations[0].position.{x,y}`                | `dock_pose_x`, `dock_pose_y` in `mowgli_robot.yaml`                      | After datum re-anchoring. |
-| `docking_stations[0].heading`                       | `dock_pose_yaw` in `mowgli_robot.yaml`                                   | Already radians. The MowgliNext convention is identical (yaw 0 = +x = east, CCW positive), so no rotation flip is needed at the ENU level — but see §5 if the user is also rotating the map. |
+| `area.outline[i].{x,y}`                             | `MapArea.area.points[i].{x, y}`, `z=0`                                   | After datum re-anchoring (see §3). |
+| `docking_stations[0].position.{x,y}`                | `dock_pose_x`, `dock_pose_y` in `mowgli_robot.yaml`                      | After datum re-anchoring. Sent as `SetDockingPoint.docking_pose.position` with `use_gps_position=false` (manual placement). |
+| `docking_stations[0].heading`                       | `dock_pose_yaw` — **not written today**                                  | Already radians, and the MowgliNext convention is identical (yaw 0 = +x = east, CCW positive), so no flip is needed at the ENU level. But the importer leaves `SetDockingPoint.yaw_source` at its Go zero value, which is `PRESERVE (0)` — `map_server_node` then keeps the existing `dock_pose_yaw` and discards the imported heading. Only X/Y land; re-run the dock yaw calibration after an import. |
 | (no equivalent)                                     | `is_navigation_area` flag on obstacles                                   | MowgliNext stores obstacles per-area, OpenMower stores them globally. Reconstructed on import. |
 
-The MowgliNext write-side surface (already exists, just not yet wired
-to the importer):
+The MowgliNext write-side surface the importer reuses:
 
 - `PUT /api/mowglinext/map` — clear + bulk-insert all areas, calls
   `/map_server_node/clear_map`, then loops `/map_server_node/add_area`,
@@ -180,8 +199,24 @@ to the importer):
   `/map_server_node/set_docking_point`, which line-splices `dock_pose_*`
   into `mowgli_robot.yaml` while preserving comments + perms.
 
-The importer plans to call **exactly these two endpoints** from the Go
-handler — no new ROS service surface is needed.
+`applyImport` does **not** re-enter those HTTP handlers; it calls the same
+in-process helpers they do — `replaceMapInternal` + `setDockingPointInternal`
+in `gui/pkg/api/mowglinext.go` — so the importer and the map editor's *Save*
+button can't drift apart on what "save" means. No new ROS service surface is
+needed. The whole `clear_map → add_area×N → save_areas` sequence shares one
+size-scaled deadline (`mapWriteBudget`), and there is no transaction: a
+failure part-way leaves the areas already written in `map_server_node`'s
+state, exactly as the HTTP route does.
+
+**Dock write caveat.** `/map_server_node/set_docking_point` is gated:
+it refuses unless the firmware reports `is_charging` on a fresh
+`/hardware_bridge/status`, `/gps/pose_cov` is fresh with σ ≤
+`dock_set_gps_accuracy_max_m`, and the fused yaw has converged
+(`area_manager.cpp::on_set_docking_point`). Those gates apply to the
+importer's call too, so an import run with the robot off the dock — or
+without RTK-Fixed — writes the areas but silently leaves `dock_pose_*`
+untouched: `setDockingPointInternal` does not inspect the service's
+`success` flag, so the rejection never reaches the modal.
 
 ---
 
@@ -233,14 +268,33 @@ install imports correctly as long as the OpenMower datum is supplied.
 
 ### 3c. OpenMower datum required for georeferencing
 
-The fix needs the source `OM_DATUM_LAT/LONG` (the UTM anchor to invert
-against). The import modal has two optional inputs for it. When omitted,
-the importer **cannot** undo the convergence and falls back to copying the
-OpenMower coordinates through unchanged, with a prominent warning that the
-map will be both offset and rotated — the user should re-import with the
-datum filled in. (The GUI's display-only **Map offset / bearing** panel is
-no longer the rotation fix — it only spins the Mapbox camera, never the
-saved coordinates.)
+The exact fix needs the source `OM_DATUM_LAT/LONG` (the UTM anchor to
+invert against). The import modal has two optional inputs for it and
+re-previews on blur/Enter. `resolveReprojection` then picks one of four
+behaviours:
+
+| OM datum | MowgliNext datum | Behaviour |
+|----------|------------------|-----------|
+| given    | set              | Full round-trip: offset, east-scale and convergence all corrected. No warning. |
+| given    | unset (fresh install) | The **OM datum is adopted as the target frame** — the convergence is still removed. The importer does not write it; the warning tells the operator to set `datum_lat`/`datum_lon` to those values. |
+| omitted  | set              | The **MowgliNext datum is used as the UTM anchor**: the grid-north rotation *is* removed, but a residual translation remains if the two datums actually differed. Warned. |
+| omitted  | unset            | Identity copy — nothing to anchor against, so the map lands both offset and rotated. Warned loudly. |
+
+On a fresh install (`mn_datum_configured == false`) the modal additionally
+offers an **"Also import the datum (GPS origin)"** checkbox, on by default.
+When ticked, `handleApplyOpenMowerImport` writes `datum_lat`/`datum_lon`
+through the normal settings path (`POST /api/settings/yaml`) *after* the
+map/dock apply succeeded — the importer itself stays side-effect-free on the
+datum, so a datum failure can't roll back an imported map. The datum is a
+launch parameter, so restart the ROS2 stack for it to take effect; on the
+next load `map_server_node` stamps the freshly written `areas.dat` with it
+(the file carries no stamp yet, so nothing is re-projected — issue #216).
+When a datum already exists the checkbox is replaced by an info alert: the
+geometry was reprojected *into* that datum, so overwriting it would misalign
+the just-imported map.
+
+(The GUI's display-only **Map offset / bearing** panel is not the rotation
+fix — it only spins the Mapbox camera, never the saved coordinates.)
 
 ### Lat/lon round-trip
 
@@ -257,9 +311,14 @@ it from the JSON file**, because the file doesn't carry it. The UI asks.
 The importer enforces, before showing the preview modal:
 
 1. JSON parses as `MapData`. Unknown top-level keys are tolerated.
-2. There is at least one `area` with `type == "mow"`.
-3. Each `outline` has ≥3 points. Polygons with <3 points are dropped
-   with a per-area warning.
+   This is the only hard reject on the server — everything below
+   degrades to a per-item warning in the summary.
+2. There is at least one `area` with `type == "mow"`. Zero mow areas is
+   *not* a server-side rejection: the summary carries the warning and
+   the modal disables **Apply** (`noMowAreas`), so the block is
+   client-side.
+3. Each `outline` has ≥3 points (after `dedupOutline`). Polygons with
+   <3 points are dropped with a per-area warning.
 4. Each `outline` is finite: no `NaN`, `Inf`, or absurd magnitudes
    (`|x| > 100000` or `|y| > 100000` ⇒ rejected — sanity bound).
 5. Exactly one `active` docking station. >1 → first wins, warning.
@@ -281,7 +340,7 @@ can decide whether to confirm.
    scale and grid-north convergence are all corrected before Apply. It
    still surfaces the computed datum shift loudly ("Datum shift:
    east=X m, north=Y m") and the per-area approximate-area column. Without
-   the datum it warns that the map will be offset+rotated rather than
+   the datum it falls back per the table in §3c and warns, rather than
    silently shifting.
 
 2. **Dock yaw convention.** Both stacks use `yaw = atan2(north, east)`,
@@ -289,8 +348,10 @@ can decide whether to confirm.
    single scalar; some early OpenMower versions stored it as a
    two-point line (`docking_pose_a`, `docking_pose_b` in the legacy
    `.bag` topic) — those need conversion via `atan2(by-ay, bx-ax)`.
-   The .bag importer (§6) handles this; the JSON importer doesn't need
-   to.
+   Nothing in the tree does that conversion yet: the legacy bag-JSON
+   adapter reads the scalar `DockHeading` only, and the raw `.bag` path
+   (§6) is still design-only, so this is a requirement on whoever builds
+   it. The JSON importer doesn't need it.
 
 3. **Multiple docking stations.** OpenMower's schema supports a list,
    MowgliNext stores exactly one in `mowgli_robot.yaml`. We pick the
@@ -361,9 +422,10 @@ None of them are well-maintained, and ROS1 message-class metadata
 (`mower_map/MapArea`) would need to be hand-fed in for deserialisation.
 **Effort: ~1 day, fragile.**
 
-**(c) Python sidecar invoked by the Go importer.** The MowgliNext
-container already ships ROS2 + `rosbags` Python package
-(`pip install rosbags`) which reads ROS1 `.bag` and ROS2 `.db3` /
+**(c) Python sidecar invoked by the Go importer.** The `mowgli-ros2`
+container already ships ROS2 + Python; it would need one added
+dependency, the `rosbags` package (`pip install rosbags`, not currently
+in `ros2/Dockerfile`), which reads ROS1 `.bag` and ROS2 `.db3` /
 `.mcap`. The Go handler shells out to a small `import_bag.py` script
 that re-emits `map.json`-shaped output, then reuses the existing JSON
 import pipeline. **Effort: ~½ day, robust, single dependency
@@ -385,17 +447,31 @@ path; the UI shows a "coming soon" notification when the user picks a
 - `gui/pkg/api/openmower_import.go` — Gin handler, JSON parse,
   validation, structured preview log, live `applyImport()` calling the
   shared write helpers.
+- `gui/pkg/api/utm.go` — Go port of `RobotLocalization::NavsatConversions`
+  (`llToUTM` / `utmToLL`) plus `utmConvergenceRad`, the grid-north
+  correction §3 relies on.
 - `gui/pkg/api/mowglinext.go` — `replaceMapInternal` +
-  `setDockingPointInternal` shared between the public PUT/POST
-  endpoints and the importer.
+  `setDockingPointInternal` (and the shared `mapWriteBudget` deadline)
+  used by both the public PUT/POST endpoints and the importer.
 - `gui/pkg/api/openmower_import_test.go` — fixture-driven parse +
-  validation tests, plus an apply-path test that asserts the
+  validation tests, reprojection / `resolveReprojection` cases, plus an
+  apply-path test that asserts the
   clear_map → add_area×N → save_areas → set_docking_point sequence.
+- `gui/pkg/api/openmower_import_realmap_test.go` — regression tests over
+  a real legacy bag-JSON export (faithful counts, no degenerate
+  vertices after `dedupOutline`).
+- `gui/pkg/api/utm_test.go` — UTM forward/inverse round-trip + convergence
+  checks against reference values.
 - `gui/web/src/pages/MapPage.tsx` — stashes the uploaded file text,
-  wires the modal's `onApply` to `handleApplyOpenMowerImport`.
+  wires the modal's `onApply` / `onReproject`.
 - `gui/web/src/pages/map/hooks/useMapFiles.ts` — adds
-  `handleImportOpenMower` (preview) + `handleApplyOpenMowerImport`
-  (re-POST with `apply: true`).
+  `handleImportOpenMower` (preview), `handleReprojectOpenMowerPreview`
+  (re-preview with the OM datum) + `handleApplyOpenMowerImport`
+  (re-POST with `apply: true`, then the optional datum write).
 - `gui/web/src/pages/map/components/ImportOpenMowerModal.tsx` —
-  preview + apply UI with loading / error states.
+  preview + apply UI with datum inputs, the datum-adoption checkbox, and
+  loading / error states.
+- `install/scripts/migrate_openmower.py` — the offline, install-time
+  migration path (see the note in the intro); independent of the GUI
+  importer.
 - `docs/IMPORT_OPENMOWER_MAP.md` — this file.

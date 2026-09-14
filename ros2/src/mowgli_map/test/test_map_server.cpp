@@ -28,8 +28,11 @@
 #include "mowgli_map/map_types.hpp"
 #include <gtest/gtest.h>
 #include <mowgli_interfaces/msg/dig_event.hpp>
+#include <mowgli_interfaces/msg/map_obstacle_info.hpp>
 #include <mowgli_interfaces/srv/add_mowing_area.hpp>
+#include <mowgli_interfaces/srv/clear_obstacle.hpp>
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
+#include <mowgli_interfaces/srv/promote_obstacle.hpp>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test fixture — creates a MapServerNode with a small 10×10 m map
@@ -393,12 +396,14 @@ TEST_F(AreaTypeTest, PromoteObstacleIsIdempotent)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Wheel-slip dig reports → automatic permanent keepout.
+// Wheel-slip dig reports → PENDING keepout (proposal, not persistence).
 //
 // hardware_bridge_node detects the robot digging a hole (wheels turning while
 // the GNSS-anchored pose stays put), stops and reverses out, then publishes a
 // DigEvent. map_server turns that location into a keepout so the NEXT coverage
-// pass routes around the churned patch instead of digging it deeper.
+// pass routes around the churned patch instead of digging it deeper — but the
+// keepout is a PROPOSAL: live for this session, never written to areas.dat
+// until the operator accepts it (#502).
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace
@@ -416,7 +421,7 @@ mowgli_interfaces::msg::DigEvent::SharedPtr make_dig_event(double x, double y)
 }
 }  // namespace
 
-TEST_F(AreaTypeTest, DigInsideMowingAreaBecomesKeepout)
+TEST_F(AreaTypeTest, DigInsideMowingAreaBecomesPendingKeepout)
 {
   ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
   ASSERT_EQ(node_->area_obstacle_count_for_test(0), 0u);
@@ -424,8 +429,15 @@ TEST_F(AreaTypeTest, DigInsideMowingAreaBecomesKeepout)
   node_->on_dig_event_for_test(make_dig_event(1.0, 1.0));
 
   EXPECT_EQ(node_->area_obstacle_count_for_test(0), 1u)
-      << "a dig inside a mowing area must leave a permanent keepout behind";
+      << "a dig inside a mowing area must leave a live keepout behind";
   EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 1u);
+
+  const auto info = node_->obstacle_info_for_test(0, 0);
+  EXPECT_TRUE(info.pending) << "a single inferred dig is a proposal, not a permanent keepout";
+  EXPECT_EQ(info.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+  EXPECT_NE(info.id, 0u) << "a proposal needs a handle the operator can accept or discard";
+  EXPECT_NE(info.name.find("Dig at"), std::string::npos)
+      << "the proposal must carry its evidence: " << info.name;
 }
 
 TEST_F(AreaTypeTest, DigOutsideEveryMowingAreaIsNotPromoted)
@@ -463,6 +475,59 @@ TEST_F(AreaTypeTest, RepeatedDigsAtTheSameSpotDoNotStack)
   node_->on_dig_event_for_test(make_dig_event(1.01, 1.01));
 
   EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 1u) << "repeated digs stacked keepouts";
+}
+
+// Field regression 2026-09-10 (twice in one day): the dig keepout was a
+// 0.60 m square CENTRED on the dig point (0.45 m behind it once the mask's
+// 0.15 m obstacle_margin is painted), but the bridge only reverses the robot
+// ~0.2-0.3 m out of the hole, so the robot ended up standing INSIDE the
+// keepout it had just proposed. Smac refused every transit from there
+// (START_OCCUPIED) and the mission looped, blade cycling, until an operator
+// stopped it. The keepout must cover the hole and the ground ahead of it, and
+// must NOT reach back over the spot the reversed robot now occupies.
+TEST_F(AreaTypeTest, DigKeepoutIsBiasedAheadOfTheHeadingSoTheReversedRobotIsFree)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
+  const double yaw = 125.0 * M_PI / 180.0;  // heading at the 11:18 dig
+  const double cx = 0.0, cy = 0.0;
+  node_->set_robot_heading_for_test(yaw);
+
+  node_->on_dig_event_for_test(make_dig_event(cx, cy));
+  ASSERT_EQ(node_->area_obstacle_count_for_test(0), 1u);
+
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  auto along = [&](double d, double lateral, double& x, double& y)
+  {
+    x = cx + d * std::cos(yaw) - lateral * std::sin(yaw);
+    y = cy + d * std::sin(yaw) + lateral * std::cos(yaw);
+  };
+  double x, y;
+  along(0.0, 0.0, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 100) << "the hole itself must be lethal";
+  along(0.45, 0.0, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 100) << "ground ahead of the dig must be lethal";
+  along(0.2, 0.2, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 100) << "lateral tyre track must be lethal";
+  along(-0.25, 0.0, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 0)
+      << "the reversed robot (0.2-0.3 m behind the dig) must NOT stand on its own keepout";
+  along(0.95, 0.0, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 0) << "the keepout must stay bounded ahead (0.60 + 0.15 margin)";
+}
+
+// Without a heading (no TF yet) the only orientation-free keepout is the
+// centred square: still lethal at the dig, still bounded.
+TEST_F(AreaTypeTest, DigKeepoutWithoutHeadingIsTheCentredSquare)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
+  node_->on_dig_event_for_test(make_dig_event(0.0, 0.0));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100);
+  EXPECT_EQ(mask_at(mask, 0.30, 0.0), 100);
+  EXPECT_EQ(mask_at(mask, -0.30, 0.0), 100) << "centred square reaches behind (legacy)";
+  EXPECT_EQ(mask_at(mask, 0.70, 0.0), 0) << "bounded: 0.30 half-side + 0.15 margin";
 }
 
 TEST_F(AreaTypeTest, MowingAreaContainingResolvesTheRightArea)
@@ -543,6 +608,161 @@ TEST_F(AreaTypeTest, KeepoutMaskEmptyWhenNoAreas)
   const auto mask = node_->build_keepout_mask_for_test();
   EXPECT_TRUE(mask.data.empty())
       << "with zero areas, no keepout mask is produced (world stays drivable)";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Transit boundary clearance (boundary_inner_margin_m) + the dock exemption
+// (dock_inner_margin_exempt_radius_m). This is deliberately a SOFT mid-cost
+// band (kSoftPenaltyMaskCost, = 50 here), never lethal (100) — a lethal
+// version was tried during review and rejected on two independent grounds:
+//   1. It collides with chassis_safety_inset (also 0.20 m by default): the
+//      outermost coverage ring sits exactly that far inside the line, so a
+//      lethal band there plus inflation would swallow the ring itself and
+//      reopen the START_OCCUPIED skip cascade (issue #487).
+//   2. It walls off any area-to-area seam narrower than roughly twice the
+//      inflated margin.
+// An even earlier lethal attempt (0.15 m) was also reverted on 2026-04-23
+// (commit 7f4b43d5) because GNSS drift near a dock close to the recorded
+// edge landed the robot's own position in a lethal cell the planner could
+// not route out of. These tests pin the soft-cost design: the penalty band
+// is real (transit is nudged away from the edge) but nothing it touches —
+// an edge cell, a dock-adjacent cell, or a seam between two areas — is ever
+// unplannable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class BoundaryInnerMarginTest : public AreaTypeTest
+{
+protected:
+  static constexpr int8_t kSoftPenalty = 50;  // mirrors kSoftPenaltyMaskCost
+
+  // 20x20 m map; dock 0.1 m inside the +X edge of a 16x16 m area (edge at
+  // x=8) — a dock placed close to the recorded edge, same shape as the
+  // 2026-04-23 regression.
+  void SetUp() override
+  {
+    node_ = make_node(0.20, 2.5);
+  }
+
+  static std::shared_ptr<mowgli_map::MapServerNode> make_node(double boundary_inner_margin_m,
+                                                              double dock_exempt_radius_m)
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 20.0);
+    opts.append_parameter_override("map_size_y", 20.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    opts.append_parameter_override("areas_file_path", "");
+    opts.append_parameter_override("publish_rate", 1.0);
+    opts.append_parameter_override("boundary_inner_margin_m", boundary_inner_margin_m);
+    opts.append_parameter_override("dock_inner_margin_exempt_radius_m", dock_exempt_radius_m);
+    opts.append_parameter_override("dock_pose_x", 7.5);
+    opts.append_parameter_override("dock_pose_y", 0.0);
+    opts.append_parameter_override("dock_pose_yaw", 0.0);
+    return std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+};
+
+TEST_F(BoundaryInnerMarginTest, InteriorFarFromEveryEdgeStaysFullyFree)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 0)
+      << "far from every edge and far from the dock, must be free";
+}
+
+TEST_F(BoundaryInnerMarginTest, EdgeFarFromTheDockGetsTheSoftPenaltyNeverLethal)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  // 0.1 m inside the -X edge (x=-8), 15.6 m from the dock at (7.5, 0) — well
+  // outside the 2.5 m exemption radius, so the margin applies. It must be
+  // the soft mid-cost, NEVER the lethal value (100) — that distinction is
+  // the entire point of this rework.
+  EXPECT_EQ(mask_at(mask, -7.9, 0.0), kSoftPenalty)
+      << "within boundary_inner_margin_m of an edge, far from the dock, must be soft-penalised, "
+         "not lethal — a lethal cell here is exactly the regression under review";
+}
+
+TEST_F(BoundaryInnerMarginTest, OutermostCoverageRingBandIsNeverLethal)
+{
+  // The geometry the maintainer flagged: chassis_safety_inset (0.20 m
+  // default) places the outermost coverage ring's centreline right inside
+  // this same 0.20 m band. A cell just inside that line (-7.85, deliberately
+  // off the exact boundary_inner_margin_m cutoff to avoid a floating-point
+  // edge case in the test itself) must stay plannable — soft-penalised at
+  // worst — or every blade-off transit starting from the outer ring fails
+  // "Start occupied" (issue #487).
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, -7.85, 0.0), kSoftPenalty)
+      << "the band the outer ring's own line sits in must never be lethal";
+}
+
+TEST_F(BoundaryInnerMarginTest, EdgeNearTheDockCarriesNoPenaltyAtAll)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  // 0.1 m inside the +X edge (x=8) — same distance-to-edge as the previous
+  // test — but only 0.4 m from the dock at (7.5, 0): inside the 2.5 m
+  // exemption radius, so it must carry NO penalty at all (0), not merely
+  // "not lethal".
+  EXPECT_EQ(mask_at(mask, 7.9, 0.0), 0)
+      << "within the dock exemption radius, the inner-margin penalty must not apply";
+}
+
+TEST_F(BoundaryInnerMarginTest, NarrowSeamBetweenTwoAreasStaysCrossable)
+{
+  // Two 4x8 m areas separated by a 0.3 m navigation gap (x in [-0.15, 0.15])
+  // — narrower than 2x boundary_inner_margin_m (0.40 m). A lethal design
+  // would wall this off entirely; the soft-cost design must still allow a
+  // straight crossing, just at the penalised cost.
+  ASSERT_TRUE(add_area("west_lawn", make_rect(-4.15, -4, -0.15, 4), /*is_navigation=*/false));
+  ASSERT_TRUE(add_area("east_lawn", make_rect(0.15, -4, 4.15, 4), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+
+  // Both sides of the seam are inside their own area, close to its edge, far
+  // from the dock — soft-penalised, never lethal, so a straight-line
+  // crossing is never blocked.
+  EXPECT_EQ(mask_at(mask, -0.2, 0.0), kSoftPenalty) << "just inside the west area's edge";
+  EXPECT_EQ(mask_at(mask, 0.2, 0.0), kSoftPenalty) << "just inside the east area's edge";
+  // The gap between the two polygons is neither "inside an area" nor within
+  // outside_free_margin of one necessarily being tested here — this asserts
+  // it is at least never the lethal keepout default either.
+  EXPECT_NE(mask_at(mask, 0.0, 0.0), 100) << "the seam between two close areas must stay crossable";
+}
+
+TEST_F(BoundaryInnerMarginTest, ZeroExemptRadiusRemovesTheDockCarveOutButStillNeverLethal)
+{
+  // With the exemption disabled, the near-dock cell falls back to the plain
+  // soft penalty — it must NOT become lethal even then, since the mid-cost
+  // design no longer depends on the dock exemption for safety.
+  node_ = make_node(/*boundary_inner_margin_m=*/0.20, /*dock_exempt_radius_m=*/0.0);
+
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 7.9, 0.0), kSoftPenalty)
+      << "with the exemption radius at 0, a near-dock cell falls back to the soft penalty, "
+         "never lethal";
+}
+
+TEST_F(BoundaryInnerMarginTest, ZeroBoundaryMarginDisablesThePenaltyEntirely)
+{
+  // The pre-2026-09 default: no penalty at all, anywhere, dock or not.
+  node_ = make_node(/*boundary_inner_margin_m=*/0.0, /*dock_exempt_radius_m=*/2.5);
+
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, -7.9, 0.0), 0)
+      << "boundary_inner_margin_m=0 must restore the legacy edge-tight behaviour";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -920,4 +1140,395 @@ TEST_F(DatumMigrationTest, NodeWithoutDatumNeverMigrates)
   const std::string content = read_file(areas_path_);
   EXPECT_NEAR(yaml_scalar(content, "datum_lat"), kOldLat, 1e-9);
   EXPECT_NEAR(yaml_scalar(content, "datum_lon"), kOldLon, 1e-9);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dig proposals (#502): a detected dig protects the spot for THIS SESSION but
+// never edits the operator's saved map on its own. Accepting is what persists
+// it; discarding drops it for good (nothing was ever written).
+//
+// Also covers obstacle identity: name + provenance survive save/load, and an
+// areas.dat written before identity existed still loads.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+
+std::string temp_areas_path(const std::string& tag)
+{
+  const char* dir = std::getenv("TEST_TMPDIR");
+  return std::string(dir != nullptr ? dir : "/tmp") + "/mowgli_areas_" + tag + ".dat";
+}
+
+}  // namespace
+
+class DigProposalTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    areas_path_ = temp_areas_path("dig_proposal");
+    std::remove(areas_path_.c_str());
+
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 10.0);
+    opts.append_parameter_override("map_size_y", 10.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    // A real robot HAS a persistence path — that is the whole point of the
+    // test: even with somewhere to write, a dig must not write.
+    opts.append_parameter_override("areas_file_path", areas_path_);
+    opts.append_parameter_override("publish_rate", 1.0);
+    node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+
+  void TearDown() override
+  {
+    node_.reset();
+    std::remove(areas_path_.c_str());
+  }
+
+  static geometry_msgs::msg::Polygon make_rect(double x0, double y0, double x1, double y1)
+  {
+    geometry_msgs::msg::Polygon p;
+    auto add = [&](double x, double y)
+    {
+      geometry_msgs::msg::Point32 pt;
+      pt.x = static_cast<float>(x);
+      pt.y = static_cast<float>(y);
+      pt.z = 0.0F;
+      p.points.push_back(pt);
+    };
+    add(x0, y0);
+    add(x1, y0);
+    add(x1, y1);
+    add(x0, y1);
+    return p;
+  }
+
+  void add_lawn(const geometry_msgs::msg::Polygon* obstacle = nullptr,
+                const std::string& obstacle_name = {})
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+    req->area.name = "lawn";
+    req->area.area = make_rect(-3, -3, 3, 3);
+    if (obstacle != nullptr)
+    {
+      req->area.obstacles.push_back(*obstacle);
+      mowgli_interfaces::msg::MapObstacleInfo info;
+      info.name = obstacle_name;
+      info.source = mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER;
+      req->area.obstacle_info.push_back(info);
+    }
+    req->is_navigation_area = false;
+    auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+    node_->add_area_for_test(req, res);
+    ASSERT_TRUE(res->success);
+  }
+
+  void dig_at(double x, double y)
+  {
+    auto msg = std::make_shared<mowgli_interfaces::msg::DigEvent>();
+    msg->header.frame_id = "map";
+    msg->position.x = x;
+    msg->position.y = y;
+    msg->wheel_distance = 0.45;
+    msg->map_distance = 0.02;
+    msg->position_sigma = 0.004;
+    node_->on_dig_event_for_test(msg);
+  }
+
+  void add_other_areas()
+  {
+    // Three lawns reproduce the three GUI copies. Include an overlapping
+    // navigation area too: ownership must not depend on geometric containment.
+    for (uint32_t i = 1; i <= 3; ++i)
+    {
+      auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+      req->area.name = "other_" + std::to_string(i);
+      req->is_navigation_area = i == 3;
+      req->area.area = i == 3 ? make_rect(-2, -2, 2, 2) : make_rect(4 * i, -3, 4 * i + 3, 3);
+      auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+      node_->add_area_for_test(req, res);
+      ASSERT_TRUE(res->success);
+    }
+  }
+
+  void expect_other_areas_empty()
+  {
+    for (uint32_t i = 1; i <= 3; ++i)
+    {
+      SCOPED_TRACE(i);
+      const auto area = fetch_area(i);
+      EXPECT_TRUE(area.obstacles.empty()) << "another area's keepout leaked into this response";
+      EXPECT_TRUE(area.obstacle_info.empty());
+    }
+  }
+
+  mowgli_interfaces::msg::MapArea fetch_area(uint32_t index)
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+    req->index = index;
+    auto res = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Response>();
+    node_->get_mowing_area_for_test(req, res);
+    EXPECT_TRUE(res->success);
+    return res->area;
+  }
+
+  std::string areas_path_;
+  std::shared_ptr<mowgli_map::MapServerNode> node_;
+};
+
+TEST_F(DigProposalTest, DigNeverReachesTheAreasFile)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+
+  // Even an EXPLICIT save must skip the proposal.
+  node_->save_areas_for_test(areas_path_);
+  const std::string content = read_file(areas_path_);
+
+  EXPECT_NE(content.find("area_0_name: lawn"), std::string::npos) << "the area itself must persist";
+  EXPECT_NE(content.find("area_0_obstacle_count: 0"), std::string::npos)
+      << "a dig proposal must not be counted in areas.dat:\n"
+      << content;
+  EXPECT_EQ(content.find("area_0_obstacle_0:"), std::string::npos)
+      << "a dig proposal must not be written to areas.dat:\n"
+      << content;
+}
+
+TEST_F(DigProposalTest, PendingDigStillProtectsTheSpotThisSession)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+
+  // Coverage sees the proposal as a hole in the field...
+  const auto area = fetch_area(0);
+  ASSERT_EQ(area.obstacles.size(), 1U) << "the spot must be protected before the operator acts";
+  ASSERT_EQ(area.obstacle_info.size(), area.obstacles.size())
+      << "obstacle_info must stay index-aligned with obstacles";
+  EXPECT_TRUE(area.obstacle_info[0].pending);
+
+  // ...and Nav2 sees it as lethal, so the escape cannot drive straight back in
+  // (issue #500: 3 dig latches in 18.4 s inside 0.13 m).
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 1.0, 1.0), 100) << "the dig spot must be lethal for this session";
+}
+
+TEST_F(DigProposalTest, PendingDigIsReturnedOnlyWithItsOwningArea)
+{
+  add_lawn();
+  add_other_areas();
+  dig_at(1.0, 1.0);
+  const auto info = node_->obstacle_info_for_test(0, 0);
+
+  // Repeated GUI polls must return one polygon with its original identity.
+  for (int poll = 0; poll < 2; ++poll)
+  {
+    const auto owner = fetch_area(0);
+    ASSERT_EQ(owner.obstacles.size(), 1u);
+    ASSERT_EQ(owner.obstacle_info.size(), 1u);
+    EXPECT_EQ(owner.obstacle_info[0].id, info.id);
+    EXPECT_EQ(owner.obstacle_info[0].name, info.name);
+    EXPECT_EQ(owner.obstacle_info[0].source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+    EXPECT_TRUE(owner.obstacle_info[0].pending);
+    expect_other_areas_empty();
+  }
+  EXPECT_EQ(mask_at(node_->build_keepout_mask_for_test(), 1.0, 1.0), 100);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Request>();
+  req->obstacle_id = info.id;
+  auto res = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Response>();
+  node_->discard_obstacle_for_test(req, res);
+  ASSERT_TRUE(res->success);
+  EXPECT_TRUE(fetch_area(0).obstacles.empty());
+  expect_other_areas_empty();
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 0u);
+}
+
+TEST_F(DigProposalTest, AcceptedDigKeepsItsAreaAndProvenanceBeforeAndAfterReload)
+{
+  add_lawn();
+  add_other_areas();
+  dig_at(1.0, 1.0);
+  auto req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  req->pending_id = node_->obstacle_info_for_test(0, 0).id;
+  req->name = "dig patch";
+  auto res = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(req, res);
+  ASSERT_TRUE(res->success);
+
+  for (bool reload : {false, true})
+  {
+    if (reload)
+      node_->load_areas_for_test(areas_path_);
+    const auto owner = fetch_area(0);
+    ASSERT_EQ(owner.obstacles.size(), 1u);
+    ASSERT_EQ(owner.obstacle_info.size(), 1u);
+    EXPECT_FALSE(owner.obstacle_info[0].pending);
+    EXPECT_EQ(owner.obstacle_info[0].name, "dig patch");
+    EXPECT_EQ(owner.obstacle_info[0].source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+    expect_other_areas_empty();
+    EXPECT_EQ(mask_at(node_->build_keepout_mask_for_test(), 1.0, 1.0), 100);
+  }
+}
+
+TEST_F(DigProposalTest, PromotedPolygonIsReturnedOnlyWithItsOwningArea)
+{
+  add_lawn();
+  add_other_areas();
+  const auto polygon = make_rect(0.5, 0.5, 1.5, 1.5);
+  ASSERT_TRUE(node_->apply_promoted_obstacle_for_test(0, polygon));
+  const auto owner = fetch_area(0);
+  ASSERT_EQ(owner.obstacles.size(), 1u);
+  EXPECT_EQ(owner.obstacles[0], polygon);
+  ASSERT_EQ(owner.obstacle_info.size(), 1u);
+  EXPECT_EQ(owner.obstacle_info[0].source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER);
+  EXPECT_FALSE(owner.obstacle_info[0].pending);
+  expect_other_areas_empty();
+  EXPECT_EQ(mask_at(node_->build_keepout_mask_for_test(), 1.0, 1.0), 100);
+}
+
+TEST_F(DigProposalTest, AcceptingAProposalPersistsItWithItsProvenance)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+  const auto pending_id = node_->obstacle_info_for_test(0, 0).id;
+  ASSERT_NE(pending_id, 0u);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  req->pending_id = pending_id;
+  req->name = "compost corner";
+  auto res = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(req, res);
+  ASSERT_TRUE(res->success) << res->message;
+
+  const auto info = node_->obstacle_info_for_test(0, 0);
+  EXPECT_FALSE(info.pending);
+  EXPECT_EQ(info.name, "compost corner");
+  EXPECT_EQ(info.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG)
+      << "accepting must not erase where the keepout came from";
+
+  // on_promote_obstacle persists immediately.
+  const std::string content = read_file(areas_path_);
+  EXPECT_NE(content.find("area_0_obstacle_count: 1"), std::string::npos) << content;
+  EXPECT_NE(content.find("area_0_obstacle_0_name: compost corner"), std::string::npos) << content;
+  EXPECT_NE(content.find("area_0_obstacle_0_source: 2"), std::string::npos) << content;
+
+  // …and it survives a reload with its identity intact.
+  node_->load_areas_for_test(areas_path_);
+  const auto reloaded = node_->obstacle_info_for_test(0, 0);
+  EXPECT_EQ(reloaded.name, "compost corner");
+  EXPECT_EQ(reloaded.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+  EXPECT_FALSE(reloaded.pending);
+}
+
+TEST_F(DigProposalTest, AcceptingAnUnknownPendingIdFails)
+{
+  add_lawn();
+
+  auto req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  req->pending_id = 4242;
+  auto res = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_FALSE(res->message.empty());
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 0u);
+}
+
+TEST_F(DigProposalTest, DiscardingAProposalRemovesItAndWritesNothing)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+  const auto pending_id = node_->obstacle_info_for_test(0, 0).id;
+
+  auto req = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Request>();
+  req->obstacle_id = pending_id;
+  auto res = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Response>();
+  node_->discard_obstacle_for_test(req, res);
+  ASSERT_TRUE(res->success) << res->message;
+
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 0u);
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 0u)
+      << "the discarded proposal must leave the flat keepout store too";
+
+  node_->save_areas_for_test(areas_path_);
+  EXPECT_NE(read_file(areas_path_).find("area_0_obstacle_count: 0"), std::string::npos);
+
+  // Discarding twice is an explicit failure, not a silent no-op.
+  auto res2 = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Response>();
+  node_->discard_obstacle_for_test(req, res2);
+  EXPECT_FALSE(res2->success);
+}
+
+TEST_F(DigProposalTest, AcceptedKeepoutCannotBeDiscardedAsAProposal)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+  const auto pending_id = node_->obstacle_info_for_test(0, 0).id;
+
+  auto promote_req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  promote_req->pending_id = pending_id;
+  auto promote_res = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(promote_req, promote_res);
+  ASSERT_TRUE(promote_res->success);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Request>();
+  req->obstacle_id = pending_id;
+  auto res = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Response>();
+  node_->discard_obstacle_for_test(req, res);
+
+  EXPECT_FALSE(res->success) << "~/discard_obstacle only drops PROPOSALS, not the saved map";
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 1u);
+}
+
+TEST_F(DigProposalTest, UserDrawnObstacleNameRoundTripsThroughSaveAndLoad)
+{
+  const auto tree = make_rect(-0.5, -0.5, 0.5, 0.5);
+  add_lawn(&tree, "apple tree");
+
+  node_->save_areas_for_test(areas_path_);
+  node_->load_areas_for_test(areas_path_);
+
+  const auto info = node_->obstacle_info_for_test(0, 0);
+  EXPECT_EQ(info.name, "apple tree");
+  EXPECT_EQ(info.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER);
+  EXPECT_FALSE(info.pending);
+
+  const auto area = fetch_area(0);
+  ASSERT_EQ(area.obstacle_info.size(), area.obstacles.size());
+  EXPECT_EQ(area.obstacle_info[0].name, "apple tree");
+}
+
+TEST_F(DigProposalTest, LegacyAreasFileWithoutObstacleIdentityStillLoads)
+{
+  // Exactly the pre-#502 on-disk format — no _name / _source lines. Cedric's
+  // robot has a live file in this shape; it must keep loading.
+  {
+    std::ofstream out(areas_path_);
+    out << "# Mowgli ROS2 - Persisted areas and docking point\n\n";
+    out << "area_count: 1\n\n";
+    out << "area_0_name: lawn\n";
+    out << "area_0_polygon: -3,-3;3,-3;3,3;-3,3\n";
+    out << "area_0_is_navigation: 0\n";
+    out << "area_0_obstacle_count: 1\n";
+    out << "area_0_obstacle_0: -0.5,-0.5;0.5,-0.5;0.5,0.5;-0.5,0.5\n\n";
+  }
+
+  node_->load_areas_for_test(areas_path_);
+
+  ASSERT_EQ(node_->area_obstacle_count_for_test(0), 1u) << "legacy obstacle was dropped on load";
+  const auto info = node_->obstacle_info_for_test(0, 0);
+  EXPECT_TRUE(info.name.empty());
+  EXPECT_EQ(info.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER)
+      << "an obstacle with no recorded provenance is operator-drawn";
+  EXPECT_FALSE(info.pending) << "nothing loaded from disk may be pending";
+
+  const auto area = fetch_area(0);
+  ASSERT_EQ(area.obstacles.size(), 1U);
+  EXPECT_NEAR(area.obstacles[0].points[0].x, -0.5, 1e-3);
 }

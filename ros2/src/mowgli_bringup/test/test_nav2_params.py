@@ -22,7 +22,10 @@ import yaml
 # actually performs, instead of a parallel (and previously shallow-copy,
 # aliasing-prone) reimplementation.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "launch"))
-from robot_config_util import deep_merge as _deep_merge  # noqa: E402
+from robot_config_util import (  # noqa: E402
+    chassis_circumscribed_radius as _chassis_circumscribed_radius,
+    deep_merge as _deep_merge,
+)
 
 
 def _config_path(name: str) -> str:
@@ -91,6 +94,21 @@ def test_coverage_goal_checker_progress_threshold_is_high() -> None:
         "is out of the sane [0.90, 1.0] range; coverage would complete before "
         "the swath is mowed."
     )
+
+
+def test_transit_goal_checker_ignores_final_heading() -> None:
+    """Coverage transits (navigate_to_pose_transit.xml) must not demand a final
+    heading: RPP cannot pivot at the end of a path and the 1 Hz replan loop made
+    a 0.40 m transit spin for 164 s on 2026-09-12. Docking keeps
+    stopped_goal_checker (yaw 0.10) untouched."""
+    for params in (_load_params(), _load_no_lidar_params()):
+        cfg = _controller_section(params)
+        assert "transit_goal_checker" in cfg["goal_checker_plugins"]
+        gc = cfg["transit_goal_checker"]
+        assert gc["plugin"] == "nav2_controller::SimpleGoalChecker"
+        assert gc["xy_goal_tolerance"] <= 0.5
+        assert gc["yaw_goal_tolerance"] >= 3.1
+        assert cfg["stopped_goal_checker"]["yaw_goal_tolerance"] <= 0.2
 
 
 def test_stopped_goal_checker_velocity_threshold_is_set() -> None:
@@ -331,25 +349,47 @@ def test_clearance_margin_is_distinct_from_body_half_width() -> None:
 
 
 def test_navigation_launch_injects_local_inflation_with_floor() -> None:
-    """obstacle_inflation_radius reaches ONLY the local costmap, floored at
-    0.58 m (chassis circumscribed radius ~0.572 — below it the inflation
-    layer degrades footprint-cost semantics and FTC's threshold-253 deviation
-    detector loses its inscribed band)."""
+    """obstacle_inflation_radius reaches ONLY the local costmap, floored at the
+    chassis circumscribed radius. Below that radius the inflation layer loses
+    its inscribed band, so footprint-cost semantics degrade and FTC's
+    threshold-253 deviation detector has nothing to read.
+
+    The floor is DERIVED from the live chassis parameters, never a literal.
+    Chassis dimensions are operator-editable in the GUI, so a literal goes
+    stale the moment someone edits them — which is exactly what happened: the
+    old hardcoded 0.58 quoted a ~0.572 m radius taken from chassis_length 0.54
+    and was already below the real radius at the then-current chassis_width
+    0.40, let alone the measured 0.45."""
     src = _read_text("launch/navigation.launch.py")
     m = re.search(
-        r"lc_infl\[.inflation_radius.\]\s*=\s*min\(\s*([\d.]+),\s*max\(([\d.]+),"
-        r"\s*obstacle_inflation_radius", src)
+        r"lc_infl\[.inflation_radius.\]\s*=\s*min\(\s*([\d.]+),\s*"
+        r"max\(\s*infl_floor,\s*obstacle_inflation_radius", src)
     assert m, (
         "navigation.launch.py must clamp-inject obstacle_inflation_radius into the "
-        "local costmap inflation_layer (lc_infl['inflation_radius'] = min(hi, "
-        "max(lo, obstacle_inflation_radius)))."
+        "local costmap inflation_layer (lc_infl['inflation_radius'] = min(cap, "
+        "max(infl_floor, obstacle_inflation_radius)))."
     )
-    assert float(m.group(2)) >= 0.58, (
-        f"inflation floor {m.group(2)} is below the chassis circumscribed radius "
-        "(~0.572 m) — footprint-cost semantics degrade below it."
+    assert float(m.group(1)) == 1.50, (
+        f"inflation cap {m.group(1)} — the upper clamp is pinned at 1.50 m."
+    )
+    assert re.search(r"infl_floor\s*=\s*chassis_circumscribed_radius\(", src), (
+        "the inflation floor must be DERIVED via "
+        "robot_config_util.chassis_circumscribed_radius(), not hardcoded — a "
+        "literal goes stale when the operator edits the chassis in the GUI."
+    )
+    # And that derivation, on the shipped template, must still clear the old
+    # hand-tuned 0.58 floor. If a future chassis default makes it smaller, the
+    # inflation layer stops covering the footprint and this must be revisited
+    # deliberately rather than silently.
+    template = _load_yaml("mowgli_robot.yaml")["mowgli"]["ros__parameters"]
+    derived = _chassis_circumscribed_radius(template)
+    assert derived >= 0.58, (
+        f"template chassis derives an inflation floor of {derived:.3f} m, below "
+        "the 0.58 m the local costmap was tuned against — footprint-cost "
+        "semantics degrade below the circumscribed radius."
     )
     # The GLOBAL costmap radius is pinned at 0.20 (0.30 blocked all transit
-    # paths on a 9×6 m polygon) — the LOCAL chain must be the only
+    # paths on a 9x6 m polygon) — the LOCAL chain must be the only
     # inflation_radius writer in the launch script.
     writers = re.findall(r"(\w+)\[.inflation_radius.\]\s*=", src)
     assert writers == ["lc_infl"], (
@@ -485,6 +525,43 @@ def test_docking_controller_aligned_across_variants() -> None:
     )
 
 
+def test_docking_max_retries_and_battery_status_present() -> None:
+    """docking_server.max_retries and simple_charging_dock.use_battery_status are
+    INJECTED at launch from mowgli_robot.yaml (dock_max_retries /
+    dock_use_charger_detection, issue #195). navigation.launch.py writes them
+    into the MERGED doc, so both keys must exist in both merged variants — and,
+    per Invariant 8, they must live in the shared BASE with NEITHER overlay
+    redefining them (an overlay copy would win the deep-merge for one variant
+    only, silently splitting the two configs' docking behaviour).
+    """
+    for name, params in (("lidar", _load_params()), ("no_lidar", _load_no_lidar_params())):
+        ds = params["docking_server"]["ros__parameters"]
+        assert "max_retries" in ds, f"{name}: docking_server.max_retries missing"
+        assert isinstance(ds["max_retries"], int) and ds["max_retries"] >= 0, (
+            f"{name}: docking_server.max_retries={ds['max_retries']!r} must be a non-negative int"
+        )
+        scd = ds["simple_charging_dock"]
+        assert "use_battery_status" in scd, (
+            f"{name}: simple_charging_dock.use_battery_status missing"
+        )
+        assert isinstance(scd["use_battery_status"], bool), (
+            f"{name}: simple_charging_dock.use_battery_status must be a bool"
+        )
+
+    base = _load_yaml("nav2_params_base.yaml")["docking_server"]["ros__parameters"]
+    assert "max_retries" in base and "use_battery_status" in base["simple_charging_dock"], (
+        "both keys must be defined in the SHARED base (nav2_params_base.yaml)"
+    )
+    for overlay in ("nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"):
+        ov = (_load_yaml(overlay).get("docking_server") or {}).get("ros__parameters") or {}
+        assert "max_retries" not in ov, (
+            f"{overlay} redefines docking_server.max_retries — it belongs in the base only"
+        )
+        assert "use_battery_status" not in (ov.get("simple_charging_dock") or {}), (
+            f"{overlay} redefines simple_charging_dock.use_battery_status — base only"
+        )
+
+
 def test_docking_v_linear_min_above_firmware_deadband() -> None:
     """hardware_bridge zeros |vx| < 0.15, so the dock crawl floor must EXCEED it
     or the final approach is zeroed and the robot stops short of the cradle.
@@ -519,6 +596,24 @@ def test_coverage_server_geometry_aligned_across_variants() -> None:
             f"coverage_server.{k} differs across variants: "
             f"lidar={lp.get(k)} vs no_lidar={np_.get(k)}"
         )
+
+
+def test_coverage_server_num_headland_passes_sentinel_range() -> None:
+    """num_headland_passes is a THREE-WAY sentinel (issue #429):
+    <0 = NONE (no perimeter rings — the swaths mow to the boundary),
+    0 = AUTO (ceil(default_headland_width / operation_width), min 1),
+    >0 = exactly that many rings.
+
+    The value must therefore stay an int in [-1, 5]: nothing clamps it on the
+    way through navigation.launch.py, so a stray large/negative value would
+    silently reshape every plan.
+    """
+    for name, params in (("lidar", _load_params()), ("no_lidar", _load_no_lidar_params())):
+        n = params["coverage_server"]["ros__parameters"]["num_headland_passes"]
+        assert isinstance(n, int) and not isinstance(n, bool), (
+            f"{name}: num_headland_passes must be an int, got {type(n).__name__}"
+        )
+        assert -1 <= n <= 5, f"{name}: num_headland_passes={n} outside the [-1, 5] sentinel range"
 
 
 def test_coverage_server_has_no_turn_planning_knobs() -> None:
@@ -774,3 +869,192 @@ def test_transit_lookahead_damps_pursuit_weave() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ── Turn geometry / turn speed (issue #499) ──────────────────────────────────
+#
+# The violent swath-end turns that dig the lawn were traced to two numbers that
+# must be consistent but live in different files with nothing relating them:
+# coverage_server's turn radii (mowgli_robot.yaml) and FollowCoveragePath's
+# speed/angular clamps (nav2_params_base.yaml). These tests pin the *relations*
+# and the guard that reports them — deliberately NOT any particular radius,
+# which is a field-measured trade against the connector fallback rate.
+
+
+def _template_robot_params() -> dict:
+    """The in-package mowgli_robot.yaml template (Invariant 15: defaults live
+    here, the installed file is sparse)."""
+    with open(_config_path("mowgli_robot.yaml"), "r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh)["mowgli"]["ros__parameters"]
+
+
+def test_default_wheel_track_matches_template() -> None:
+    """DEFAULT_WHEEL_TRACK_M is the last-resort floor beneath the template's
+    wheel_track, not a second source of truth for it. If the two diverge, the
+    half-track the turn-geometry check compares against stops describing the
+    robot. Same contract as DEFAULT_TOOL_WIDTH_M."""
+    from robot_config_util import DEFAULT_WHEEL_TRACK_M
+
+    template = _template_robot_params()
+    assert "wheel_track" in template, (
+        "mowgli_robot.yaml template lost wheel_track — the turn-geometry check "
+        "and the firmware kinematics push would fall back to a constant."
+    )
+    assert float(template["wheel_track"]) == pytest.approx(DEFAULT_WHEEL_TRACK_M), (
+        f"template wheel_track={template['wheel_track']} != "
+        f"DEFAULT_WHEEL_TRACK_M={DEFAULT_WHEEL_TRACK_M} — the fallback has drifted "
+        "from the real default."
+    )
+
+
+def test_template_turn_speed_ratio_is_a_slowdown() -> None:
+    """turn_speed_ratio scales mowing_speed into FollowCoveragePath.speed_slow.
+    A default above 1.0 would ship the exact defect it was added to fix: swath-end
+    turns driven FASTER than the straights."""
+    template = _template_robot_params()
+    assert "turn_speed_ratio" in template, (
+        "mowgli_robot.yaml template is missing turn_speed_ratio — speed_slow would "
+        "fall back to a static value and stop tracking the operator's mowing_speed."
+    )
+    ratio = float(template["turn_speed_ratio"])
+    assert 0.0 < ratio <= 1.0, (
+        f"turn_speed_ratio={ratio} must be in (0, 1.0]: >1 drives turns faster than "
+        "straights (issue #499), <=0 stops the robot in every bend."
+    )
+
+
+def test_navigation_launch_injects_derived_speed_slow() -> None:
+    """One load-bearing line: without this injection speed_slow falls back to the
+    static base.yaml value and the operator's mowing_speed stops applying to
+    swath-end turns — the issue #499 defect where turns ran FASTER than straights.
+
+    The arithmetic itself (ratio clamp, min_speed_mps floor, mowing_speed ceiling)
+    is exercised for real in test_robot_config_util.py::TestDeriveTurnSpeed; this
+    only guards that the launch actually calls it and injects the result."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(r"fcp\[.speed_slow.\]\s*=\s*turn_speed", src), (
+        "navigation.launch.py no longer injects FollowCoveragePath.speed_slow from "
+        "the derived turn speed — mowing_speed stops applying to turns (issue #499)."
+    )
+    assert "derive_turn_speed(" in src and "turn_speed_ratio" in src, (
+        "navigation.launch.py does not derive the turn speed from mowing_speed via "
+        "robot_config_util.derive_turn_speed."
+    )
+
+
+def test_navigation_launch_runs_the_turn_geometry_check() -> None:
+    """The check must run at launch and must be fed the CONFIGURED wheel track,
+    never a literal — the half-track is what makes an arc undrivable forward-only.
+
+    Its behaviour (what it flags, and that it never raises) is exercised for real
+    in test_robot_config_util.py::TestCheckTurnGeometry."""
+    src = _read_text("launch/navigation.launch.py")
+    assert "check_turn_geometry(" in src, (
+        "navigation.launch.py does not run the turn-geometry check — the issue #499 "
+        "geometry defect can be reintroduced silently."
+    )
+    assert re.search(r"wheel_track\s*=\s*float\(rt_rp\.get\(", src), (
+        "wheel_track is not read from the robot config — the turn-geometry check "
+        "must never compare against a hardcoded track."
+    )
+
+
+def test_base_ftc_can_command_its_own_turn_speed() -> None:
+    """Consistency inside the file we control: FTC's own speed_slow and
+    max_cmd_vel_ang imply a tightest commandable arc of speed_slow/max_cmd_vel_ang.
+    That must stay a sane, positive radius — if max_cmd_vel_ang were ever dropped
+    toward zero the controller could not turn at all."""
+    fcp = _controller_section(_load_params())["FollowCoveragePath"]
+    wz_max = float(fcp["max_cmd_vel_ang"])
+    assert wz_max > 0.0, "max_cmd_vel_ang must be positive or FTC cannot turn"
+    tightest = float(fcp["speed_slow"]) / wz_max
+    assert 0.0 < tightest < 1.0, (
+        f"speed_slow/max_cmd_vel_ang = {tightest:.3f} m is not a plausible turn "
+        "radius for this chassis — check the FollowCoveragePath speed/angular pair."
+    )
+
+
+def test_ftc_blade_load_keys_present_in_both_variants() -> None:
+    """FTC's blade-load slowdown (ftc_blade_load.hpp / BladeLoadDecision) needs
+    all five blade_load_* keys in the static config — a missing key silently
+    falls back to the C++ struct default instead of failing loudly. The ramp
+    must be non-empty even while the feature ships disabled, so flipping the
+    GUI toggle alone is enough to engage it.
+    """
+    keys = ("blade_load_slowdown_enabled", "blade_load_rpm_full", "blade_load_rpm_min",
+            "blade_load_min_speed_ratio", "blade_load_telemetry_max_age_s")
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        for key in keys:
+            assert key in fcp, f"FollowCoveragePath.{key} missing from merged config"
+        assert fcp["blade_load_slowdown_enabled"] is False, (
+            "blade_load_slowdown_enabled must ship OFF in the static yaml: the "
+            "no-load blade RPM differs per motor, so a fresh install must not crawl "
+            "on unverified thresholds — the operator enables it from the GUI"
+        )
+        assert fcp["blade_load_rpm_full"] > fcp["blade_load_rpm_min"] > 0.0
+        assert 0.0 < fcp["blade_load_min_speed_ratio"] <= 1.0
+        # 4 Hz blade reports: the age gate must admit at least two missed reports.
+        assert fcp["blade_load_telemetry_max_age_s"] >= 0.5
+
+
+def test_blade_load_template_defaults_match_static_yaml() -> None:
+    """The template's blade_load_* knobs must equal the static
+    nav2_params_base.yaml values so a sparse installed file (no overrides) is
+    behaviour-preserving, and so the GUI's 'at default' marker tells the truth."""
+    rp = _template_robot_params()
+    fcp = _controller_section(_load_yaml("nav2_params_base.yaml"))["FollowCoveragePath"]
+    assert bool(rp["blade_load_slowdown_enabled"]) == bool(fcp["blade_load_slowdown_enabled"])
+    for key in ("blade_load_rpm_full", "blade_load_rpm_min", "blade_load_min_speed_ratio"):
+        assert float(rp[key]) == float(fcp[key]), (
+            f"template {key}={rp[key]} != nav2_params_base.yaml FollowCoveragePath.{key}={fcp[key]}"
+        )
+
+
+def test_navigation_launch_injects_ftc_blade_load() -> None:
+    """All four operator blade_load_* keys must reach FollowCoveragePath.
+
+    If this injection is dropped the GUI's Mowing → Blade load toggle goes inert
+    (FTC's declare_parameter default, false, wins) and the slowdown can never be
+    switched on from the settings page."""
+    src = _read_text("launch/navigation.launch.py")
+    for key in ("blade_load_slowdown_enabled", "blade_load_rpm_full", "blade_load_rpm_min",
+                "blade_load_min_speed_ratio"):
+        assert re.search(
+            r"fcp\[.%s.\]\s*=\s*blade_load_params\[.%s.\]" % (key, key), src), (
+            f"navigation.launch.py must inject {key} into FollowCoveragePath.{key} "
+            "via derive_blade_load_params."
+        )
+
+
+def test_lidar_map_anchor_flag_is_plumbed_end_to_end() -> None:
+    """use_lidar_map_anchor must travel template -> navigation.launch.py ->
+    fusion_graph.launch.py -> node, gated on LiDAR hardware.
+
+    Without the launch plumbing an installed override is silently inert, and
+    without the template key the GUI cannot reset it (Invariant 15)."""
+    nav = _read_text("launch/navigation.launch.py")
+    assert re.search(r'_rp\.get\("use_lidar_map_anchor", False\)', nav), (
+        "navigation.launch.py must read use_lidar_map_anchor from the robot config"
+    )
+    assert re.search(r'"use_lidar_map_anchor":\s*lidar_gated\(use_lidar_map_anchor\)', nav), (
+        "use_lidar_map_anchor must be forwarded to fusion_graph LiDAR-gated: no scanner, no grid"
+    )
+    fg_launch = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "..", "fusion_graph", "launch", "fusion_graph.launch.py")
+    with open(fg_launch, "r", encoding="utf-8") as fh:
+        fg = fh.read()
+    assert re.search(r'DeclareLaunchArgument\(\s*"use_lidar_map_anchor"', fg)
+    assert re.search(r'"use_lidar_map_anchor":\s*use_lidar_map_anchor', fg)
+    template = _load_yaml("mowgli_robot.yaml")["mowgli"]["ros__parameters"]
+    assert template.get("use_lidar_map_anchor") is False, (
+        "the LiDAR map anchor ships OFF by default (2026-09-13): experimental, costly on the "
+        "Pi, enabled per robot from Settings > Localization; the launch fallback must agree"
+    )
+    # Shadow mode rides the same path: config -> navigation.launch.py
+    # (LiDAR-gated) -> fusion_graph.launch.py -> node.
+    assert re.search(r'_rp\.get\("lidar_anchor_shadow_mode", False\)', nav)
+    assert re.search(r'"lidar_anchor_shadow_mode":\s*lidar_gated\(lidar_anchor_shadow_mode\)', nav)
+    assert re.search(r'DeclareLaunchArgument\(\s*"lidar_anchor_shadow_mode"', fg)
+    assert re.search(r'"lidar_anchor_shadow_mode":\s*lidar_anchor_shadow_mode', fg)
+    assert template.get("lidar_anchor_shadow_mode") is False

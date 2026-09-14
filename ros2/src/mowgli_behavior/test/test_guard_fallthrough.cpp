@@ -57,6 +57,7 @@
 #include <regex>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
@@ -69,6 +70,7 @@
 using mowgli_behavior::BTContext;
 using mowgli_behavior::IsCharging;
 using mowgli_behavior::IsCommand;
+using mowgli_behavior::IsDigEscalated;
 using mowgli_behavior::IsLocalizationDegraded;
 
 // ---------------------------------------------------------------------------
@@ -310,6 +312,7 @@ TEST(GuardFallthroughTest, AllBlockingGuardsTerminateWithFailure)
                                   "SensorSafetyGuard",
                                   "BoundaryGuard",
                                   "LocalizationGuard",
+                                  "DigObstructionGuard",
                                   "RainGuard",
                                   "BatteryGuard"})
   {
@@ -321,6 +324,104 @@ TEST(GuardFallthroughTest, AllBlockingGuardsTerminateWithFailure)
            "handler can return SUCCESS lets the Root ReactiveSequence advance "
            "into MainLogic for one tick per cycle, restarting MowingSequence "
            "from PREFLIGHT_CHECK/UNDOCKING (issues #459, #445).";
+  }
+}
+
+// The guards whose halt interrupts a mowing PASS (as opposed to ending the
+// session — emergency, boundary, rain, battery, dig obstruction) must tick
+// <MarkGuardHalt/> as the FIRST child of their handler Sequence, or every
+// pause is charged to GetNextUnmowedArea's per-area no-progress budget and a
+// flapping sensor fails the mow at 0 swaths (field 2026-09-07 / 2026-09-08:
+// three IsScanStale halts in 25 s exhausted the five attempts). First, not
+// merely before <AlwaysFailure/>: the ReactiveFallback halts the handler the
+// moment the fault clears, so a marker behind StopMoving + WaitForDuration
+// would miss every pause shorter than their combined duration.
+TEST(GuardFallthroughTest, PausingGuardsMarkTheHaltFirst)
+{
+  const std::string xml = ReadMainTree();
+  ASSERT_FALSE(xml.empty());
+
+  for (const auto& [guard, reason] : std::vector<std::pair<std::string, std::string>>{
+           {"SensorSafetyGuard", "scan_stale"}, {"LocalizationGuard", "localization_degraded"}})
+  {
+    const std::string block = ExtractGuardBlock(xml, guard);
+    ASSERT_FALSE(block.empty()) << "Guard not found in main_tree.xml: " << guard;
+    const std::size_t mark = block.find("<MarkGuardHalt reason=\"" + reason + "\"/>");
+    ASSERT_NE(mark, std::string::npos)
+        << guard << " does not tick <MarkGuardHalt reason=\"" << reason
+        << "\"/> — its pauses would be charged to the no-progress budget and retire the area.";
+    // Nothing that can return RUNNING or FAILURE may precede the marker: the
+    // handler's other children (SetMowerEnabled, StopMoving, WaitForDuration,
+    // PublishHighLevelStatus) must all come after it.
+    const std::size_t handler = block.find("Handler\">");
+    ASSERT_NE(handler, std::string::npos) << guard << ": no *Handler Sequence found";
+    ASSERT_LT(handler, mark) << guard << ": <MarkGuardHalt/> is outside the handler Sequence";
+    const std::string between = block.substr(handler, mark - handler);
+    for (const std::string preceding :
+         {"<SetMowerEnabled", "<StopMoving", "<WaitForDuration", "<PublishHighLevelStatus"})
+    {
+      EXPECT_EQ(between.find(preceding), std::string::npos)
+          << guard << ": " << preceding << " runs before <MarkGuardHalt/> — a fault that clears "
+          << "while it is RUNNING (or a service call that FAILS) skips the marker and the "
+          << "interrupted pass is charged after all.";
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DigObstructionGuard (issue #500) — the newest blocking guard
+// ---------------------------------------------------------------------------
+
+// Tick contract of the condition node itself: it is a pure mirror of the
+// latched /hardware_bridge/dig_escalated flag the bridge publishes.
+TEST(DigObstructionGuardTest, ConditionMirrorsTheLatchedFlag)
+{
+  auto ctx = MakeContext("test_dig_escalated_condition");
+  auto blackboard = BT::Blackboard::create();
+  blackboard->set("context", ctx);
+
+  BT::BehaviorTreeFactory factory;
+  factory.registerNodeType<IsDigEscalated>("IsDigEscalated");
+  auto tree = factory.createTreeFromText(
+      R"(<root BTCPP_format="4"><BehaviorTree ID="Main"><IsDigEscalated/></BehaviorTree>)"
+      R"(</root>)",
+      blackboard);
+
+  ctx->dig_escalated = false;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+
+  ctx->dig_escalated = true;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+}
+
+// The guard must stop the MISSION without ever blocking the lanes the
+// operator needs to recover a wedged robot — a guard that also blocked HOME
+// or teleop would strand the robot exactly where it is already stuck.
+TEST(DigObstructionGuardTest, ExemptsEveryOperatorRecoveryLane)
+{
+  const std::string xml = ReadMainTree();
+  ASSERT_FALSE(xml.empty());
+
+  const std::string block = ExtractGuardBlock(xml, "DigObstructionGuard");
+  ASSERT_FALSE(block.empty()) << "DigObstructionGuard missing from main_tree.xml";
+
+  EXPECT_NE(block.find("<IsDigEscalated/>"), std::string::npos)
+      << "DigObstructionGuard no longer keys on IsDigEscalated.";
+
+  // charging (latch already cleared), idle (no mission), HOME, and the
+  // manual/recording modes.
+  for (const std::string& exempt : {std::string("<IsCharging/>"),
+                                    std::string("command=\"0\""),
+                                    std::string("command=\"2\""),
+                                    std::string("command=\"3\""),
+                                    std::string("command=\"5\""),
+                                    std::string("command=\"6\""),
+                                    std::string("command=\"7\"")})
+  {
+    EXPECT_NE(block.find(exempt), std::string::npos)
+        << "DigObstructionGuard stopped exempting " << exempt
+        << " — the operator must always be able to recall or drive a wedged "
+           "robot out (issue #500).";
   }
 }
 

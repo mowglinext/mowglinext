@@ -1,3 +1,3 @@
-- [Always clean DDS/Gazebo state before sim launch](feedback_sim_cleanup.md) — kill processes + rm /dev/shm/cyclone* before every ros2 launch
-- [E2E simulation status and remaining work](project_e2e_status.md) — coverage path works, 5 items to tune for production
+- [Always clean DDS/Webots state before sim launch](feedback_sim_cleanup.md) — kill processes + rm /dev/shm/cyclone* and /tmp/webots/* before every ros2 launch
+- [E2E simulation status and remaining work](project_e2e_status.md) — SUPERSEDED (Gazebo/SLAM era); current sim/E2E reference is docs/claude/testing-ci.md § Simulation & E2E
 - [Cedric - project owner](user_cedric.md) — experienced ROS2/robotics dev, wants production quality

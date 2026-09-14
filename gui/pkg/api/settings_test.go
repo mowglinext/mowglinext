@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -880,6 +880,65 @@ func TestGetSettingsYAML_UsesEnvFallbackForFamilyDeviceAndBaudWhenYAMLIsMissing(
 	assert.Equal(t, float64(460800), response["gnss_serial_baud"])
 }
 
+func TestGetSettingsYAML_NTRIPEnvFallbackIsBoolean(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"false", false}, {"0", false}, {"off", false}, {"no", false},
+		{"true", true}, {"1", true}, {" ON ", true}, {"yes", true}, {"Y", true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			yamlFile := createTempYAMLFile(t, "")
+			envFile := createTempConfigFile(t, "GNSS_NTRIP_ENABLED="+tc.value+"\nGNSS_NTRIP_GGA_ENABLED="+tc.value+"\n")
+			db := types.NewMockDBProvider()
+			db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+			db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/api/settings/yaml", nil)
+			setupSettingsRouter(db).ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code)
+			var response map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			assert.Equal(t, tc.want, response["ntrip_enabled"])
+			assert.Equal(t, tc.want, response["gnss_ntrip_gga_enabled"])
+		})
+	}
+}
+
+func TestPostSettingsYAML_NTRIPDisableSurvivesReloadAfterDefaultPruning(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+	yamlFile := createTempYAMLFileAtGuiRoot(t, "mowgli:\n  ros__parameters:\n    ntrip_enabled: true\n")
+	envFile := createTempConfigFileAtGuiRoot(t, "GNSS_NTRIP_ENABLED=true\n")
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+	router := setupSettingsRouter(db)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/yaml", strings.NewReader(`{"ntrip_enabled":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	assert.NotContains(t, string(content), "ntrip_enabled:")
+	env, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(env), "GNSS_NTRIP_ENABLED=false")
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/api/settings/yaml", nil)
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, false, response["ntrip_enabled"])
+}
+
 func TestGetSettingsYAML_KeepsExplicitNTRIPDisableOverEnvFallback(t *testing.T) {
 	yamlFile := createTempYAMLFile(t, `mowgli:
   ros__parameters:
@@ -1021,6 +1080,61 @@ func TestPostSettingsYAML_ResetToDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(content), "mowing_speed:")
 	assert.Contains(t, string(content), "datum_lat: 48.123")
+}
+
+// TestPostSettingsYAMLPrunesRetiredKeys verifies that keys retired in issue #195
+// (removed from BOTH the ROS2 template and the GUI schema, because no node ever
+// read them) are scrubbed from a pre-existing installed YAML on the next save.
+// sparsifyFlat cannot do this on its own: a key with no schema default left is
+// invisible to it, so retiredParamKeys must carry them explicitly. A genuine
+// non-default override must still survive the same write.
+func TestPostSettingsYAMLPrunesRetiredKeys(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	yamlFile := createTempYAMLFileAtGuiRoot(t, `mowgli:
+  ros__parameters:
+    outline_passes: 3
+    motor_temp_high_c: 80.0
+    mow_angle_increment_deg: 15.0
+    ticks_per_revolution: 84
+    use_scan_matching: true
+    use_loop_closure: true
+    icp_max_iter: 30
+    lc_max_dist_m: 5.0
+    lidar_map_half_extent_m: 80.0
+    use_lidar_map_anchor: true
+    mowing_speed: 0.55
+`)
+	envFile := createTempConfigFileAtGuiRoot(t, "")
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+
+	router := setupSettingsRouter(db)
+
+	// A save that does not even mention the retired keys must still remove them.
+	payload := map[string]any{"mowing_speed": 0.55}
+	body, _ := json.Marshal(payload)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/yaml", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	for _, retired := range []string{"outline_passes", "motor_temp_high_c", "mow_angle_increment_deg", "ticks_per_revolution", "use_scan_matching", "use_loop_closure", "icp_max_iter", "lc_max_dist_m", "lidar_map_half_extent_m"} {
+		assert.NotContains(t, string(content), retired,
+			"retired key %s must be scrubbed from the installed YAML", retired)
+	}
+	assert.Contains(t, string(content), "use_lidar_map_anchor: true")
+	// A real operator override (0.55 != the 0.2 default) must survive.
+	assert.Contains(t, string(content), "mowing_speed: 0.55")
 }
 
 // TestGetSettingsYAMLDefaults_ReturnsSchemaDefaults verifies the defaults

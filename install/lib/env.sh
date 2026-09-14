@@ -243,11 +243,16 @@ setup_env() {
   # LiDAR
   : "${LIDAR_ENABLED:=true}"
   : "${LIDAR_TYPE:=ldlidar}"
-  : "${LIDAR_MODEL:=LDLiDAR_LD19}"
   : "${LIDAR_CONNECTION:=uart}"
   : "${LIDAR_PORT:=/dev/lidar}"
   : "${LIDAR_UART_DEVICE:=/dev/ttyAMA5}"
-  : "${LIDAR_BAUD:=230400}"
+  if [[ "${LIDAR_TYPE:-ldlidar}" == "stl27l" ]]; then
+    : "${LIDAR_MODEL:=LDLiDAR_STL27L}"
+    : "${LIDAR_BAUD:=921600}"
+  else
+    : "${LIDAR_MODEL:=LDLiDAR_LD19}"
+    : "${LIDAR_BAUD:=230400}"
+  fi
 
   # TF-Luna
   : "${TFLUNA_FRONT_ENABLED:=false}"

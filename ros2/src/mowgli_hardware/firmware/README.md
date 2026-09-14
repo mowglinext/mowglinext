@@ -1,8 +1,24 @@
 # Mowgli Firmware COBS Protocol
 
-Replacement for `rosserial` in the Mowgli STM32F103 firmware.
-These files implement the same binary protocol already used by the ROS 2 bridge
-in `mowgli_hardware/include/mowgli_hardware/`.
+The COBS + CRC-16 wire protocol that replaced `rosserial` between the Mowgli
+STM32F103 firmware and the ROS 2 bridge. The host side of the same protocol lives
+in `mowgli_hardware/include/mowgli_hardware/` (`cobs.hpp`, `crc16.hpp`,
+`ll_datatypes.hpp`).
+
+> **The C files in this directory are a reference copy, not the shipped firmware.**
+> The STM32 project integrated them long ago and has moved on: the authoritative
+> sources are `firmware/stm32/ros_usbnode/include|src/`, now at
+> `MOWGLI_PROTOCOL_VERSION 6`, while this copy is still at `3` — it is missing
+> packets `0x05`, `0x51`, `0x52` and `0x55`–`0x57`, and its
+> `MOWGLI_COMMS_MAX_HANDLERS` is still 8 instead of 16. Nothing compiles this
+> directory and no CI job checks it. Read it for the framing narrative; take
+> packet layouts from `firmware/stm32/ros_usbnode/include/mowgli_protocol.h` or
+> its host mirror
+> `ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp`.
+
+Wider context: [`docs/claude/codemaps/mowgli_hardware.md`](../../../../docs/claude/codemaps/mowgli_hardware.md)
+(package map, change coupling, pitfalls) and [`firmware/CLAUDE.md`](../../../../firmware/CLAUDE.md)
+(STM32 tree, wire-protocol rules).
 
 ---
 
@@ -34,21 +50,72 @@ Every packet follows this wire format:
 
 ### Packet flow
 
+Packet IDs and host-side struct names as of `MOWGLI_PROTOCOL_VERSION 6`
+(`firmware/stm32/ros_usbnode/include/mowgli_protocol.h`):
+
 ```
-Firmware (STM32)                         Host (Raspberry Pi / ROS 2 bridge)
+Firmware (STM32)                          Host (Raspberry Pi / ROS 2 bridge)
      |                                              |
-     |-- PKT_ID_STATUS (0x01) ------------------>  |  LlStatus
-     |-- PKT_ID_IMU    (0x02) ------------------>  |  LlImu
-     |-- PKT_ID_UI_EVENT (0x03) --------------->   |  LlUiEvent
+     |-- PKT_ID_STATUS           (0x01) --------->  |  LlStatus
+     |-- PKT_ID_IMU              (0x02) --------->  |  LlImu
+     |-- PKT_ID_UI_EVENT         (0x03) --------->  |  LlUiEvent
+     |-- PKT_ID_ODOMETRY         (0x04) --------->  |  LlOdometry
+     |-- PKT_ID_BLADE_STATUS     (0x05) --------->  |  LlBladeStatus
+     |-- PKT_ID_RESET_CAUSE      (0x06) --------->  |  LlResetCause
+     |-- PKT_ID_CONFIG_RSP       (0x12) --------->  |  LlConfigRsp
      |                                              |
-     |<-- PKT_ID_HEARTBEAT   (0x42) -------------|  LlHeartbeat
-     |<-- PKT_ID_HL_STATE    (0x43) -------------|  LlHighLevelState
-     |<-- PKT_ID_CMD_VEL     (0x50) -------------|  LlCmdVel
+     |<-- PKT_ID_CONFIG_REQ        (0x11) --------|  LlConfigReq
+     |<-- PKT_ID_HEARTBEAT         (0x42) --------|  LlHeartbeat
+     |<-- PKT_ID_HL_STATE          (0x43) --------|  LlHighLevelState
+     |<-- PKT_ID_CMD_VEL           (0x50) --------|  LlCmdVel
+     |<-- PKT_ID_CMD_BLADE         (0x51) --------|  LlCmdBlade
+     |<-- PKT_ID_REBOOT            (0x52) --------|  LlReboot
+     |<-- PKT_ID_SET_DRIVE_PID     (0x54) --------|  LlSetDrivePid
+     |<-- PKT_ID_SET_YAW_PID       (0x55) --------|  LlSetYawPid
+     |<-- PKT_ID_SET_KINEMATICS    (0x56) --------|  LlSetKinematics
+     |<-- PKT_ID_SET_SAFETY_LIMITS (0x57) --------|  LlSetSafetyLimits
 ```
+
+`PKT_ID_CONFIG_REQ` / `PKT_ID_CONFIG_RSP` are the compatibility handshake — see
+*Protocol versioning* below.
+
+---
+
+## Protocol versioning
+
+The wire format is versioned by a single constant, mirrored **by hand** on both
+ends:
+
+| Constant | File | Value today |
+|----------|------|-------------|
+| `MOWGLI_PROTOCOL_VERSION` | `firmware/stm32/ros_usbnode/include/mowgli_protocol.h` | `6u` |
+| `kMowgliProtocolVersion` | `ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp` | `6u` |
+| `MOWGLI_FW_VERSION_MAJOR/MINOR/PATCH` | `firmware/stm32/ros_usbnode/include/mowgli_protocol.h` | `1.0.0` |
+
+`MOWGLI_PROTOCOL_VERSION` is the **compatibility key**: the bridge sends
+`PKT_ID_CONFIG_REQ` on every (re)connect, the firmware answers `PKT_ID_CONFIG_RSP`
+carrying its own version, and `hardware_bridge_node` compares that against
+`kMowgliProtocolVersion`. On a mismatch — or when an old firmware never answers at
+all — the board is marked incompatible and `PreFlightCheck` blocks mowing until it
+is reflashed. `MOWGLI_FW_VERSION_*` is only the human-readable build identity.
+
+Changing any `pkt_*_t` struct or `PKT_ID_*` id therefore means: bump both version
+constants in lockstep, update the `_Static_assert`s / `static_assert`s on both sides
+and `ros2/src/mowgli_hardware/test/test_protocol.cpp`, then refresh the fingerprint
+with `firmware/scripts/protocol_version_guard.py` (run without `--check`). CI runs
+the same script with `--check` in `.github/workflows/protocol-version-drift.yml` and
+fails on un-versioned wire drift or a firmware/host version mismatch.
 
 ---
 
 ## Integration Steps
+
+> **Already done in the shipped firmware.** `firmware/stm32/ros_usbnode/` carries
+> these files and wires them up in `src/ros/ros_custom/cpp_main.cpp`: the USB CDC
+> RX callback calls `mowgli_comms_process_rx()` (`:728`), `usb_cdc_transmit()` is
+> defined at `:736`, and `mowgli_comms_init()` plus ten
+> `mowgli_comms_register_handler()` calls run at `:1437`–`:1449`. The steps below
+> are kept as a porting reference for a different STM32 project.
 
 ### 1. Copy files into the firmware project
 
@@ -136,7 +203,7 @@ mowgli_comms_register_handler(PKT_ID_HL_STATE,  on_hl_state);
 ### 7. Send packets from the firmware main loop
 
 ```c
-/* Example: send status at 25 Hz */
+/* Example: send status every 250 ms (STATUS_NBT_TIME_MS, ~4 Hz) */
 pkt_status_t status = {
     .type             = PKT_ID_STATUS,
     .status_bitmask   = STATUS_BIT_INITIALIZED | STATUS_BIT_RASPI_POWER,
@@ -161,12 +228,14 @@ mowgli_comms_send_status(&status);
 |------|------|
 | RX accumulation buffer (`s_rx_buf`) | 512 bytes RAM |
 | COBS decode scratch (`s_decode_buf`) | 64 bytes RAM |
-| Handler table (`s_handlers`, 8 entries) | ~40 bytes RAM |
-| TX stack frame in `mowgli_comms_send()` | ~192 bytes stack (transient) |
+| Handler table (`s_handlers`, 16 entries × 8 bytes) | 128 bytes RAM |
+| TX stack frame in `mowgli_comms_send()` (`raw[64]` + `encoded[128]`) | ~192 bytes stack (transient) |
 | `cobs.c` + `crc16.c` code | < 400 bytes Flash (estimated) |
 | `mowgli_comms.c` code | < 1 KB Flash (estimated) |
 
-Total static RAM: ~620 bytes (< 1 % of 64 KB).
+Total static RAM: ~720 bytes (≈ 1 % of 64 KB). The stale copy in this directory
+still sizes the handler table at 8 entries — too few for the ten handlers the
+shipped firmware registers.
 
 ---
 

@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
-	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/docker/distribution/uuid"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -48,6 +48,14 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// fusionGraphTriggerServices maps the /mowglinext/call/:command names for
+// fusion_graph_node's std_srvs/Trigger services to the ROS service names.
+var fusionGraphTriggerServices = map[string]string{
+	"fusion_graph_save":            "/fusion_graph_node/save_graph",
+	"fusion_graph_clear":           "/fusion_graph_node/clear_graph",
+	"fusion_graph_clear_lidar_map": "/fusion_graph_node/clear_lidar_map",
+}
+
 func MowgliNextRoutes(r *gin.RouterGroup, provider types.IRosProvider) {
 	group := r.Group("/mowglinext")
 	ServiceRoute(group, provider)
@@ -69,9 +77,9 @@ func topicSubscribeInterval(topic string) (int, bool) {
 	switch topic {
 	case "gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar":
 		return 100, true
-	case "fusionRaw", "cogHeading", "magYaw", "obstacles", "icpOdom":
+	case "fusionRaw", "cogHeading", "magYaw", "obstacles":
 		return 200, true
-	case "mowProgress":
+	case "mowProgress", "lidarMap":
 		return 500, true // large OccupancyGrid — throttle hard
 	case "diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
@@ -607,11 +615,14 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				return
 			}
 		case "promote_obstacle":
-			// Convert a transient /obstacle_tracker/obstacles observation
-			// (or a free-form polygon) into a persistent keepout for one
-			// of the mowing areas. After the obstacle-tracker decouple
-			// (#6), this is the only path that mutates obstacle_polygons_;
-			// auto-promotion is gone.
+			// Convert a transient /obstacle_tracker/obstacles observation,
+			// a free-form polygon, or a PENDING dig proposal (pending_id,
+			// see MapObstacleInfo) into a persistent keepout for one of the
+			// mowing areas. After the obstacle-tracker decouple (#6), this
+			// is the only path that mutates obstacle_polygons_;
+			// auto-promotion is gone — and since #502 a detected dig is a
+			// proposal that lands here too, instead of writing itself into
+			// areas.dat.
 			var CallReq mowgli.PromoteObstacleReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
@@ -633,16 +644,44 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, map[string]interface{}{"message": promoteRes.Message})
 				return
 			}
-		case "fusion_graph_save", "fusion_graph_clear":
-			// Both target std_srvs/Trigger services on fusion_graph_node.
+		case "ignore_obstacle", "discard_obstacle":
+			// Reject a PENDING obstacle proposal (currently: wheel-slip dig
+			// keepouts) by its MapObstacleInfo.id. Nothing was persisted, so
+			// this only drops it from the live keepout mask.
+			// Tracker IDs belong to a separate namespace: Ignore must target
+			// the tracker, never the map server's pending dig proposals.
+			service := "/map_server_node/discard_obstacle"
+			if command == "ignore_obstacle" {
+				service = "/obstacle_tracker/clear_obstacle"
+			}
+			var CallReq mowgli.ClearObstacleReq
+			err = c.BindJSON(&CallReq)
+			if err != nil {
+				c.JSON(400, ErrorResponse{Error: err.Error()})
+				return
+			}
+			var discardRes mowgli.ClearObstacleRes
+			err = provider.CallService(ctx,
+				service,
+				&CallReq,
+				&discardRes,
+				"mowgli_interfaces/srv/ClearObstacle")
+			if err == nil && !discardRes.Success {
+				err = errors.New(discardRes.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": discardRes.Message})
+				return
+			}
+		case "fusion_graph_save", "fusion_graph_clear", "fusion_graph_clear_lidar_map":
+			// All three target std_srvs/Trigger services on fusion_graph_node.
+			// clear_lidar_map drops only the LiDAR map-anchor occupancy grid
+			// (use_lidar_map_anchor); the graph itself is untouched.
 			type TriggerRes struct {
 				Success bool   `json:"success"`
 				Message string `json:"message"`
 			}
-			service := "/fusion_graph_node/save_graph"
-			if command == "fusion_graph_clear" {
-				service = "/fusion_graph_node/clear_graph"
-			}
+			service := fusionGraphTriggerServices[command]
 			var res TriggerRes
 			err = provider.CallService(ctx, service, &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {

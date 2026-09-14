@@ -44,7 +44,6 @@ import {useGPS} from "../hooks/useGPS.ts";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
 import {useBTLog, isBTNodeStale} from "../hooks/useBTLog.ts";
-import {useImu} from "../hooks/useImu.ts";
 import {useCogHeading} from "../hooks/useCogHeading.ts";
 import {useMagYaw} from "../hooks/useMagYaw.ts";
 import {useCalibrationStatus} from "../hooks/useCalibrationStatus.ts";
@@ -53,6 +52,7 @@ import {useWheelTicks} from "../hooks/useWheelTicks.ts";
 import {useWheelRpm} from "../hooks/useWheelRpm.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useDiagnostics} from "../hooks/useDiagnostics.ts";
+import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {
@@ -70,6 +70,7 @@ import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
 import {useRosbag, RosbagRecording} from "../hooks/useRosbag.ts";
 import {useFirmwareDebugLogs} from "../hooks/useFirmwareDebugLogs.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
+import {useImu} from "../hooks/useImu.ts";
 import {useImuYawCalibration} from "../hooks/useImuYawCalibration.ts";
 import {AsyncButton} from "../components/AsyncButton.tsx";
 import {TelemetryStat} from "../components/TelemetryStat.tsx";
@@ -81,7 +82,9 @@ import {GnssLiveDiagnosticsCard} from "../components/gnss/GnssLiveDiagnosticsCar
 import {clampTinyToZero} from "../utils/telemetryFormat.ts";
 import {detectNav2Recovery} from "../utils/nav2Recovery.ts";
 import {groupAlertsByComponent} from "../utils/diagnosticsAlerts.ts";
+import {deriveLidarAnchor} from "../utils/lidarAnchor.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
+import {SystemPowerCard} from "../components/SystemPowerCard.tsx";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -154,6 +157,7 @@ function BoolStatusTag({label, ok}: {label: string; ok: boolean}) {
 export const DiagnosticsPage = () => {
     const {colors} = useThemeMode();
     const {t} = useTranslation();
+    const {formatAbsolute, formatLogTime} = useTimeFormat();
     const isMobile = useIsMobile();
 
     const {highLevelStatus} = useHighLevelStatus();
@@ -164,7 +168,6 @@ export const DiagnosticsPage = () => {
     const gnssStatus = useGnssStatus();
     const pose = useFusionOdom();
     const btNodeStates = useBTLog();
-    const imu = useImu();
     const {imu: cogImu, lastMessageAt: cogLastAt} = useCogHeading();
     const {imu: magImu, lastMessageAt: magLastAt} = useMagYaw();
     const wheelOdom = useWheelOdom();
@@ -181,6 +184,12 @@ export const DiagnosticsPage = () => {
     const {modal} = App.useApp();
     const {snapshot, loading, error: snapshotError, refresh} = useDiagnosticsSnapshot();
     const {diagnostics} = useDiagnostics();
+    // Mobile uses collapsible panels; desktop shows sensors in the Robot tab.
+    // Subscribe to the high-rate IMU stream only in the visible sensor view.
+    const [openPanels, setOpenPanels] = useState<string[]>([]);
+    const [activeTab, setActiveTab] = useState("system");
+    const sensorsPanelOpen = isMobile ? openPanels.includes("sensors") : activeTab === "robot";
+    const imu = useImu(sensorsPanelOpen);
     const {settings} = useSettings();
     const guiApi = useApi();
     const wheelRpm = useWheelRpm({wheelRadiusM: settings?.wheel_radius ?? 0.04475});
@@ -213,6 +222,7 @@ export const DiagnosticsPage = () => {
     const gpsOk = gpsFixValid && gpsAccuracy !== undefined && gpsAccuracy <= 0.1;
     const gpsWarn = gpsFixValid && (gpsAccuracy === undefined || gpsAccuracy > 0.1);
     const cpuTemp = snapshot?.system?.cpu_temperature ?? 0;
+    const cpuUsage = snapshot?.system?.cpu_usage;
 
     const alerts = useMemo(
         () => (diagnostics.status ?? []).filter(s =>
@@ -334,6 +344,10 @@ export const DiagnosticsPage = () => {
                     label={cpuTemp > 0 ? t('diagnosticsPage.cpuTemp', {value: cpuTemp.toFixed(1)}) : t('diagnosticsPage.cpuTempUnknown')}
                     color={cpuTemp > 70 ? "error" : cpuTemp > 55 ? "warning" : "success"}
                 />
+                <HealthBadge
+                    label={cpuUsage != null ? t('diagnosticsPage.cpuUsageBadge', {value: cpuUsage.toFixed(0)}) : t('diagnosticsPage.cpuUsageUnknown')}
+                    color="default"
+                />
             </Flex>
         </Card>
     );
@@ -365,7 +379,7 @@ export const DiagnosticsPage = () => {
             key: "started_at",
             render: (v: string) => (
                 <Typography.Text style={{fontSize: 12}}>
-                    {v ? new Date(v).toLocaleTimeString() : "--"}
+                    {formatAbsolute(v, {timeOnly: true})}
                 </Typography.Text>
             ),
         },
@@ -381,6 +395,19 @@ export const DiagnosticsPage = () => {
     const scansReceivedRaw = fusionStats?.values?.["scans_received"];
     const scansReceivedSince = useValueSince(scansReceivedRaw);
     const lidarStreaming = scansReceivedSince !== null && (nowMs - scansReceivedSince) < 15_000;
+    // IMU liveness comes from diagnostics_node's 1 Hz "IMU" status, not from a
+    // live /imu/data subscription. This page only ever needed a boolean, yet
+    // useImu() held a 90 Hz upstream foxglove subscription open for as long as
+    // the page was, and that stream is serialised by foxglove_bridge at full
+    // rate regardless of client-side decimation. Measured on the docked robot
+    // 2026-09-06 it was a visible slice of GUI + bridge CPU. The diagnostics
+    // status is also more honest: useTopic kept the last IMU message forever,
+    // so imuOk stayed true after the IMU died until a page reload.
+    const imuStatus = diagnostics?.status?.find((s) => s.name === "IMU");
+    const imuAlive =
+        imuStatus != null &&
+        imuStatus.level < 2 && // OK or WARN; ERROR (2) / STALE (3) mean no fresh data
+        (nowMs - imuStatus.receivedAt) < 15_000;
     const anatomyInputs = {
         batteryPct: batteryPercent,
         vBattery: power.v_battery ?? 0,
@@ -389,7 +416,7 @@ export const DiagnosticsPage = () => {
         gpsLabel: anatomyGps.label,
         gpsOk: anatomyGps.percent >= 50,
         imuYawDeg: yaw,
-        imuOk: imu != null && imu.angular_velocity != null,
+        imuOk: imuAlive,
         lidarOk: lidarEnabled === false ? false : (lidarStreaming ? true : undefined),
         // Mowgli is rear-axle drive: only the rear wheels are encoded (the
         // fronts are unencoded casters whose RPM is always 0).
@@ -492,6 +519,15 @@ export const DiagnosticsPage = () => {
             <Col xs={24} lg={8}>
                 <Card title={<Space><DashboardOutlined/> CPU</Space>} size="small" style={{height: "100%"}}>
                     <Statistic
+                        title={t('diagnosticsPage.cpuUsage')}
+                        value={cpuUsage ?? "—"}
+                        precision={1}
+                        suffix={cpuUsage != null ? "%" : undefined}
+                    />
+                    <Typography.Paragraph type="secondary" style={{fontSize: 12, marginTop: 4}}>
+                        {t('diagnosticsPage.cpuUsageHint')}
+                    </Typography.Paragraph>
+                    <Statistic
                         title={t('diagnosticsPage.temperature')}
                         value={cpuTemp > 0 ? cpuTemp : undefined}
                         precision={1}
@@ -559,6 +595,14 @@ export const DiagnosticsPage = () => {
                             ) : (
                                 firmwareDebugLines.map((line) => (
                                     <div key={line.id} style={{color: colors.primary, whiteSpace: "pre-wrap"}}>
+                                        <span
+                                            title={line.tsSource === 'received'
+                                                ? t('logTime.approximate')
+                                                : formatLogTime(line.tsMs, {withMillis: true})}
+                                            style={{color: colors.textDim, marginRight: 8}}
+                                        >
+                                            {formatLogTime(line.tsMs, {timeOnly: true})}
+                                        </span>
                                         {line.plain}
                                     </div>
                                 ))
@@ -566,6 +610,9 @@ export const DiagnosticsPage = () => {
                         </div>
                     )}
                 </Card>
+            </Col>
+            <Col span={24}>
+                <SystemPowerCard/>
             </Col>
             {snapshot?.timestamp && (
                 <Col span={24}>
@@ -777,7 +824,7 @@ export const DiagnosticsPage = () => {
                                     title: t('diagnosticsPage.rosbagColDate'),
                                     dataIndex: "modified_at",
                                     key: "modified_at",
-                                    render: (d: string) => (d ? new Date(d).toLocaleString() : "—"),
+                                    render: (d: string) => formatAbsolute(d),
                                 },
                                 {
                                     title: t('diagnosticsPage.rosbagColActions'),
@@ -818,14 +865,20 @@ export const DiagnosticsPage = () => {
 
     const mowerAction = useMowerAction();
     const resetEmergencyAction = mowerAction("emergency", {Emergency: 0});
-    const [fusionBusy, setFusionBusy] = useState<"save" | "clear" | null>(null);
-    const callFusionService = async (command: "fusion_graph_save" | "fusion_graph_clear") => {
-        setFusionBusy(command === "fusion_graph_save" ? "save" : "clear");
+    type FusionCommand = "fusion_graph_save" | "fusion_graph_clear" | "fusion_graph_clear_lidar_map";
+    const FUSION_SUCCESS_KEY: Record<FusionCommand, string> = {
+        fusion_graph_save: "diagnosticsPage.graphSaved",
+        fusion_graph_clear: "diagnosticsPage.graphCleared",
+        fusion_graph_clear_lidar_map: "diagnosticsPage.lidarMapCleared",
+    };
+    const [fusionBusy, setFusionBusy] = useState<FusionCommand | null>(null);
+    const callFusionService = async (command: FusionCommand) => {
+        setFusionBusy(command);
         try {
             const res = await guiApi.mowglinext.callCreate(command, {});
             if (res.error) throw new Error((res.error as any)?.error ?? "service call failed");
             notification.success({
-                message: command === "fusion_graph_save" ? t('diagnosticsPage.graphSaved') : t('diagnosticsPage.graphCleared'),
+                message: t(FUSION_SUCCESS_KEY[command]),
                 description: (res.data as any)?.message,
             });
         } catch (e: any) {
@@ -846,6 +899,17 @@ export const DiagnosticsPage = () => {
         });
     };
 
+    const confirmClearLidarMap = () => {
+        modal.confirm({
+            title: t('diagnosticsPage.clearLidarMapConfirmTitle'),
+            content: t('diagnosticsPage.clearLidarMapConfirmBody'),
+            okText: t('diagnosticsPage.clearLidarMapConfirmOk'),
+            cancelText: t('diagnosticsPage.calibrationCancel'),
+            okButtonProps: {danger: true},
+            onOk: () => callFusionService("fusion_graph_clear_lidar_map"),
+        });
+    };
+
     const fusionAgeS = fusionStats ? Math.floor((nowMs - fusionStats.receivedAt) / 1000) : null;
     const fusionStale = fusionAgeS === null || fusionAgeS > 5;
     const fv = fusionStats?.values ?? {};
@@ -856,11 +920,6 @@ export const DiagnosticsPage = () => {
         return Number.isFinite(n) ? n : null;
     };
     const totalNodes = num("total_nodes");
-    const scansAttached = num("scans_attached");
-    const loopClosures = num("loop_closures");
-    const scansReceived = num("scans_received");
-    const scanOk = num("scan_matches_ok");
-    const scanFail = num("scan_matches_fail");
     const covXX = num("cov_xx");
     const covYY = num("cov_yy");
     const covYaw = num("cov_yawyaw");
@@ -870,27 +929,27 @@ export const DiagnosticsPage = () => {
     const sigmaYawDeg = (covYaw !== null && covYaw >= 0)
         ? Math.sqrt(covYaw) * (180 / Math.PI)
         : null;
-    const scanTotal = (scanOk ?? 0) + (scanFail ?? 0);
-    const scanRate = scanTotal > 0 ? Math.round(((scanOk ?? 0) / scanTotal) * 100) : null;
-
-    // ICP / scan-matching detail (live LiDAR monitor).
-    const keyframesTotal = num("keyframes_total");
-    const kfOk = num("kf_matches_ok");
-    const kfFail = num("kf_matches_fail");
-    const kfTotal = (kfOk ?? 0) + (kfFail ?? 0);
-    const kfRate = kfTotal > 0 ? Math.round(((kfOk ?? 0) / kfTotal) * 100) : null;
-    const rejRmse = num("icp_rejects_rmse");
-    const rejInliers = num("icp_rejects_inliers");
-    const rejSanity = num("icp_rejects_sanity");
-    const rejDiverge = num("icp_rejects_divergence");
-    const rejTotal = (rejRmse ?? 0) + (rejInliers ?? 0) + (rejSanity ?? 0) + (rejDiverge ?? 0);
     const gpsRejWrongfix = num("gps_rejects_wrongfix");
     const stationaryHandPush = num("stationary_hand_push");
-    // Fraction of received scans that actually became graph factors. The two
-    // counters have slightly different lifecycles (attached counts nodes,
-    // received counts messages), so cap at 100% to avoid nonsense like 108%.
-    const attachRate = (scansReceived !== null && scansReceived > 0 && scansAttached !== null)
-        ? Math.min(100, Math.round((scansAttached / scansReceived) * 100))
+
+    // LiDAR map anchor (optional scan-to-map particle filter). null when the
+    // running node predates it, in which case the tile group is not rendered.
+    const lidarAnchor = deriveLidarAnchor(fv);
+    const LIDAR_ANCHOR_STATE_LABEL = {
+        off: "diagnosticsPage.lidarAnchorStateOff",
+        waitingForMap: "diagnosticsPage.lidarAnchorStateWaitingForMap",
+        mapping: "diagnosticsPage.lidarAnchorStateMapping",
+        anchoring: "diagnosticsPage.lidarAnchorStateAnchoring",
+    } as const;
+    const LIDAR_ANCHOR_STATE_TONE = {off: "default", waitingForMap: "warn", mapping: "default", anchoring: "ok"} as const;
+    const LIDAR_ANCHOR_VERDICT_LABEL = {
+        accepted: "diagnosticsPage.lidarAnchorVerdictAccepted",
+        rejectedScore: "diagnosticsPage.lidarAnchorVerdictRejectedScore",
+        rejectedSpread: "diagnosticsPage.lidarAnchorVerdictRejectedSpread",
+        rejectedDeadReckoning: "diagnosticsPage.lidarAnchorVerdictRejectedDeadReckoning",
+    } as const;
+    const lidarAnchorStateText = lidarAnchor
+        ? `${t(LIDAR_ANCHOR_STATE_LABEL[lidarAnchor.stateKey])}${lidarAnchor.isShadow ? ` ${t('diagnosticsPage.lidarAnchorShadowSuffix')}` : ""}`
         : null;
 
     const sectionFusionGraph = (
@@ -912,7 +971,7 @@ export const DiagnosticsPage = () => {
                             <Button
                                 size="small"
                                 onClick={() => callFusionService("fusion_graph_save")}
-                                loading={fusionBusy === "save"}
+                                loading={fusionBusy === "fusion_graph_save"}
                                 disabled={fusionBusy !== null}
                             >
                                 {t('diagnosticsPage.saveGraph')}
@@ -921,11 +980,22 @@ export const DiagnosticsPage = () => {
                                 size="small"
                                 danger
                                 onClick={confirmClearGraph}
-                                loading={fusionBusy === "clear"}
+                                loading={fusionBusy === "fusion_graph_clear"}
                                 disabled={fusionBusy !== null}
                             >
                                 {t('diagnosticsPage.clearGraph')}
                             </Button>
+                            {lidarAnchor !== null && (
+                                <Button
+                                    size="small"
+                                    danger
+                                    onClick={confirmClearLidarMap}
+                                    loading={fusionBusy === "fusion_graph_clear_lidar_map"}
+                                    disabled={fusionBusy !== null}
+                                >
+                                    {t('diagnosticsPage.clearLidarMap')}
+                                </Button>
+                            )}
                         </Space>
                     }
                 >
@@ -934,21 +1004,6 @@ export const DiagnosticsPage = () => {
                             xs={12} md={6} large
                             title={t('diagnosticsPage.nodesInGraph')}
                             value={totalNodes}
-                            hint={scansAttached !== null ? t('diagnosticsPage.withScans', {count: scansAttached}) : ""}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.loopClosures')}
-                            value={loopClosures}
-                            tone={(loopClosures ?? 0) > 0 ? "ok" : "default"}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.icpSuccessRate')}
-                            value={scanRate}
-                            suffix="%"
-                            precision={0}
-                            hint={scanTotal > 0 ? t('diagnosticsPage.matches', {ok: scanOk ?? 0, total: scanTotal}) : t('diagnosticsPage.scansReceived', {count: scansReceived ?? 0})}
                         />
                         <TelemetryStat
                             xs={12} md={6} large
@@ -963,41 +1018,73 @@ export const DiagnosticsPage = () => {
                     <Row gutter={[12, 12]} style={{marginTop: 4}}>
                         <TelemetryStat
                             xs={12} md={6} large
-                            title={t('diagnosticsPage.icpKeyframes')}
-                            value={keyframesTotal}
-                            tone={(keyframesTotal ?? 0) > 0 ? "ok" : "warn"}
-                            hint={kfTotal > 0
-                                ? t('diagnosticsPage.icpKfMatches', {rate: kfRate ?? 0, ok: kfOk ?? 0, total: kfTotal})
-                                : t('diagnosticsPage.icpNoKeyframes')}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.icpRejects')}
-                            value={rejTotal}
-                            tone={rejTotal > 0 ? "warn" : "ok"}
-                            hint={t('diagnosticsPage.icpRejectBreakdown', {
-                                rmse: rejRmse ?? 0,
-                                inliers: rejInliers ?? 0,
-                                sanity: rejSanity ?? 0,
-                                diverge: rejDiverge ?? 0,
-                            })}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.attachRateTitle')}
-                            value={attachRate}
-                            suffix="%"
-                            precision={0}
-                            hint={t('diagnosticsPage.scansReceived', {count: scansReceived ?? 0})}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
                             title={t('diagnosticsPage.handPushTitle')}
                             value={stationaryHandPush}
                             tone={(stationaryHandPush ?? 0) > 0 ? "warn" : "default"}
-                            hint={t('diagnosticsPage.icpGpsWrongfix', {count: gpsRejWrongfix ?? 0})}
+                            hint={t('diagnosticsPage.gpsWrongfix', {count: gpsRejWrongfix ?? 0})}
                         />
                     </Row>
+                    {lidarAnchor !== null && (
+                        <>
+                            <Typography.Text strong style={{display: "block", marginTop: 12, marginBottom: 4}}>
+                                {t('diagnosticsPage.lidarAnchorGroupTitle')}
+                            </Typography.Text>
+                            <Row gutter={[12, 12]}>
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorState')}
+                                    value={lidarAnchorStateText}
+                                    tone={LIDAR_ANCHOR_STATE_TONE[lidarAnchor.stateKey]}
+                                    hint={lidarAnchor.sigmaM !== null ? t('diagnosticsPage.lidarAnchorSigma', {value: lidarAnchor.sigmaM.toFixed(2)}) : ""}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorMapCells')}
+                                    value={lidarAnchor.mapCells}
+                                    hint={t('diagnosticsPage.lidarAnchorSeeds', {seeds: lidarAnchor.seeds ?? 0, skipped: lidarAnchor.skipped ?? 0})}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorVerdict')}
+                                    value={lidarAnchor.verdictKey !== null ? t(LIDAR_ANCHOR_VERDICT_LABEL[lidarAnchor.verdictKey]) : null}
+                                    tone={lidarAnchor.verdictKey === null ? "default" : lidarAnchor.verdictKey === "accepted" ? "ok" : "warn"}
+                                    hint={lidarAnchor.hitRatioPct !== null ? t('diagnosticsPage.lidarAnchorHitRatio', {pct: lidarAnchor.hitRatioPct}) : ""}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorFactors')}
+                                    value={lidarAnchor.factors}
+                                    tone={(lidarAnchor.factors ?? 0) > 0 ? "ok" : "default"}
+                                    hint={t('diagnosticsPage.lidarAnchorFactorsHint')}
+                                />
+                            </Row>
+                            <Row gutter={[12, 12]} style={{marginTop: 4}}>
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorAccepted')}
+                                    value={lidarAnchor.accepted}
+                                    tone={lidarAnchor.rejected > 0 ? "warn" : "default"}
+                                    hint={t('diagnosticsPage.lidarAnchorRejectBreakdown', {
+                                        rejected: lidarAnchor.rejected,
+                                        score: lidarAnchor.rejScore,
+                                        spread: lidarAnchor.rejSpread,
+                                        dr: lidarAnchor.rejDr,
+                                    })}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorReseeds')}
+                                    value={lidarAnchor.reseeds}
+                                    tone={(lidarAnchor.reseeds ?? 0) > 0 ? "warn" : "default"}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorOdomRebases')}
+                                    value={lidarAnchor.odomRebases}
+                                />
+                            </Row>
+                        </>
+                    )}
                     <Typography.Paragraph type="secondary" style={{fontSize: 11, marginTop: 8, marginBottom: 0}}>
                         {t('diagnosticsPage.fusionGraphDescPart1')}{" "}
                         <Typography.Text code>/ros2_ws/maps/fusion_graph.*</Typography.Text>;
@@ -1442,15 +1529,6 @@ export const DiagnosticsPage = () => {
         });
     };
 
-    const formatTs = (ts?: string): string => {
-        if (!ts) return "—";
-        try {
-            return new Date(ts).toLocaleString();
-        } catch {
-            return ts;
-        }
-    };
-
     const dockCal = calibrationStatus?.dock;
     const imuCal = calibrationStatus?.imu;
     const magCal = calibrationStatus?.mag;
@@ -1532,7 +1610,7 @@ export const DiagnosticsPage = () => {
                     {imuCal?.present && !imuCal?.error ? (
                         <Descriptions size="small" column={1}>
                             <Descriptions.Item label={t('diagnosticsPage.calibratedAt')}>
-                                {formatTs(imuCal.calibrated_at)}
+                                {formatAbsolute(imuCal.calibrated_at)}
                             </Descriptions.Item>
                             <Descriptions.Item label={t('diagnosticsPage.samples')}>
                                 {imuCal.samples_used ?? "—"}
@@ -1580,7 +1658,7 @@ export const DiagnosticsPage = () => {
                     {magCal?.present && !magCal?.error ? (
                         <Descriptions size="small" column={1}>
                             <Descriptions.Item label={t('diagnosticsPage.calibratedAt')}>
-                                {formatTs(magCal.calibrated_at)}
+                                {formatAbsolute(magCal.calibrated_at)}
                             </Descriptions.Item>
                             <Descriptions.Item label="|B| mean">
                                 {magCal.magnitude_mean_uT?.toFixed(2)} µT
@@ -1866,7 +1944,8 @@ export const DiagnosticsPage = () => {
                 {healthBar}
                 {sectionAlerts}
                 <Collapse
-                    defaultActiveKey={[]}
+                    activeKey={openPanels}
+                    onChange={(keys) => setOpenPanels(Array.isArray(keys) ? keys.map(String) : [String(keys)])}
                     size="small"
                     items={[
                         {
@@ -1970,7 +2049,7 @@ export const DiagnosticsPage = () => {
             {healthHero}
             {healthBar}
             {sectionAlerts}
-            <Tabs defaultActiveKey="system" items={tabItems} size="large"/>
+            <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} size="large"/>
         </Space>
     );
 };

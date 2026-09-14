@@ -2,8 +2,9 @@
 
 Docker Compose deployment for the **Mowgli** open-source robot mower.
 v3 is a ground-up rewrite: the ROS1 Noetic stack has been replaced by a
-single `mowgli_ros2` container running **ROS2 Kilted**, Nav2, SLAM Toolbox,
-and a full behavior-tree coverage planner.
+single `mowgli_ros2` container running **ROS2 Kilted**, Nav2, the
+`fusion_graph` GTSAM factor-graph localizer, and a full behavior-tree
+coverage planner.
 
 ## What changed from v2
 
@@ -13,7 +14,7 @@ and a full behavior-tree coverage planner.
 | `rosserial` | Removed — hardware bridge is inside `mowgli_ros2` |
 | `openmower` | Replaced by `mowgli_ros2` (Nav2 + BT + coverage) |
 | Foxglove Bridge as separate image | Built into `mowgli_ros2`, enabled via launch arg |
-| Rosbridge as separate container | Built into `mowgli_ros2`, enabled via launch arg |
+| Rosbridge as separate container | Removed — the GUI and Foxglove Studio both speak to Foxglove Bridge on `:8765` |
 | FastDDS | Cyclone DDS (all containers share `config/cyclonedds.xml`) |
 
 ---
@@ -33,10 +34,12 @@ Minimum recommended: 4-core ARM64, 4 GB RAM, 16 GB storage.
 Set `mower_model` in `config/mowgli/mowgli_robot.yaml` to one of:
 
 - `YardForce500`
-- `SA650`
-- `900ECO`
+- `YardForce500B`
+- `YardForceSA650`
+- `YardForce900ECO`
 - `LUV1000RI`
 - `Sabo` (Sabo Mestercut)
+- `CUSTOM`
 
 ### Sensors and serial devices
 
@@ -45,10 +48,13 @@ Set `mower_model` in `config/mowgli/mowgli_robot.yaml` to one of:
 | Mowgli STM32 board | `/dev/mowgli` | USB-CDC | `product=="Mowgli"` |
 | u-blox ZED-F9P (simpleRTK2B) | `/dev/serial/by-id/...` | `/dev/gps` | VID `1546` PID `01a9` |
 | u-blox RTK1010Board (ESP USB-CDC) | `/dev/serial/by-id/...` | `/dev/gps` | VID `303a` PID `4001` |
-| LDRobot LD19 LiDAR | `/dev/ttyS1` (hardware UART) | UART | — |
+| LDRobot LD19 LiDAR | `/dev/ttyS1` (hardware UART) | `/dev/lidar` | — |
 
-The LiDAR connects to a hardware UART on the compute board, not USB. Set
-`LIDAR_PORT` in `.env` if your board exposes it differently.
+The LiDAR connects to a hardware UART on the compute board, not USB. The LD19
+image opens `/dev/lidar` at 230400 baud — both are hardcoded in
+`sensors/lidar-ldlidar/ldlidar.yaml`, so the `/dev/lidar` udev symlink must
+exist. `LIDAR_PORT` / `LIDAR_BAUD` in `.env` only reach the RPLiDAR and STL27L
+driver images.
 
 For Universal GNSS, prefer the stable `/dev/serial/by-id/...` receiver path in
 `.env` and let `/dev/gps` remain a compatibility symlink only.
@@ -109,13 +115,16 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="1546", ATTRS{idProduct}=="01a9", SYMLINK+="g
 
 # GPS: RTK1010Board (ESP32 USB-CDC)
 SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="4001", SYMLINK+="gps", MODE="0666"
+
+# LiDAR on a hardware UART — adjust KERNEL to your board's UART device
+SUBSYSTEM=="tty", KERNEL=="ttyS1", SYMLINK+="lidar", MODE="0666"
 ```
 
 Reload and verify:
 
 ```bash
 sudo udevadm control --reload-rules && sudo udevadm trigger
-ls -l /dev/mowgli /dev/gps
+ls -l /dev/mowgli /dev/gps /dev/lidar
 ```
 
 #### 4. Create `.env`
@@ -127,22 +136,34 @@ cp .env.example .env
 Edit `.env` — see the [Configuration reference](#env--image-tags-and-ports)
 section below for all variables.
 
-#### 5. Edit `config/mowgli/mowgli_robot.yaml`
+#### 5. Seed and edit `config/mowgli/mowgli_robot.yaml`
 
-At minimum, set your GPS datum (dock coordinates), NTRIP parameters, and
-dock pose. See [mowgli_robot.yaml reference](#mowgli_robotyaml-key-parameters).
-
-#### 6. Pull images and start
+`docker/config/mowgli/mowgli_robot.yaml` is git-ignored runtime state. The full
+installer seeds it; for a manual deploy copy the sparse seed yourself:
 
 ```bash
-docker compose pull
-docker compose up -d
+mkdir -p config/mowgli
+cp ../install/config/mowgli/mowgli_robot.yaml config/mowgli/mowgli_robot.yaml
+```
+
+At minimum, set your GPS datum (dock coordinates) and NTRIP parameters. See
+[mowgli_robot.yaml reference](#mowgli_robotyaml-key-parameters).
+
+#### 6. Generate the compose file, pull images and start
+
+`docker/docker-compose.yaml` is **generated** by merging the fragments in
+`install/compose/` against `.env`; it is not checked in. Drive the stack with
+`stack.sh`, which regenerates it, rather than calling `docker compose` directly:
+
+```bash
+./stack.sh pull
+./stack.sh up
 ```
 
 #### 7. Open the GUI
 
 ```
-http://<board-ip>
+http://<board-ip>:4006
 ```
 
 ---
@@ -151,30 +172,46 @@ http://<board-ip>
 
 ### `.env` — image tags and ports
 
-Copy `.env.example` to `.env` and edit. All keys and their defaults:
+Copy `.env.example` to `.env` and edit. These are the keys `.env.example`
+ships; the full installer writes many more (`GNSS_*`, `LIDAR_TYPE`,
+`HARDWARE_BACKEND`, `MAVROS_*`, `IMAGE_TAG`, …) — their defaults live in
+`install/lib/env.sh` `setup_env`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `ROS_DOMAIN_ID` | `0` | DDS domain ID — must be the same across all containers and any remote machines |
-| `MOWER_IP` | `10.0.0.161` | IP of the mower Pi — only used in ser2net mode |
-| `LIDAR_PORT` | `/dev/ttyS1` | Host device path for the LD19 UART |
-| `LIDAR_BAUD` | `230400` | LD19 baud rate |
+| `COMPOSE_PROJECT_NAME` | `install` | Compose project name — prefixes the `mowgli_maps` named volume. Keep it stable; renaming it orphans the persisted map data |
+| `ENABLE_MQTT` | `false` | Compose the `mowgli-mqtt` broker. Honoured by `stack.sh` only — the full installer always includes it |
+| `ENABLE_WATCHTOWER` | `false` | Compose `mowgli-watchtower`. `stack.sh` only, same as above |
+| `ROS_DOMAIN_ID` | `0` | DDS domain ID — must be the same across all containers |
+| `MOWER_IP` | `10.0.0.161` | Informational only — printed by the login MOTD, read by nothing else |
+| `LIDAR_PORT` | `/dev/ttyS1` | Device path passed to the RPLiDAR / STL27L drivers (the LD19 image ignores it and opens `/dev/lidar`) |
+| `LIDAR_BAUD` | `230400` | Baud rate for the RPLiDAR / STL27L drivers (the LD19 image ignores it) |
 | `MOWGLI_ROS2_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowgli-ros2:main` | Full ROS2 stack |
-| `GPS_IMAGE` | `ghcr.io/mowglinext/mowglinext/gps:main` | u-blox + NTRIP driver |
+| `GPS_IMAGE` | `ghcr.io/mowglinext/mowglinext/gps:main` | Universal GNSS sidecar + NTRIP client |
 | `LIDAR_IMAGE` | `ghcr.io/mowglinext/mowglinext/lidar-ldlidar:main` | LD19 LiDAR driver |
 | `MAVROS_IMAGE` | `ghcr.io/mowglinext/mowglinext/mavros:main` | MAVROS bridge |
 | `GUI_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web GUI |
 
-For Universal GNSS, set `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...` and keep
-`GPS_PORT` aligned with the same by-id path when you need the legacy
-compatibility keys. Use raw `ttyACM*` or `ttyUSB*` paths only as a temporary
-diagnostic fallback when `/dev/serial/by-id` is unavailable.
+For Universal GNSS, set `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...` — note that
+`gnss_serial_device` in `mowgli_robot.yaml` wins over the env value when both
+are set. The legacy `GPS_PORT` / `GPS_BAUD` / `GPS_PROTOCOL` keys are obsolete;
+the installer deletes them from `.env` on every run. Use raw `ttyACM*` or
+`ttyUSB*` paths only as a temporary diagnostic fallback when
+`/dev/serial/by-id` is unavailable.
 
 ### `mowgli_robot.yaml` key parameters
 
-`config/mowgli/mowgli_robot.yaml` is bind-mounted read-only into the
-`mowgli` and `gps` containers. The GUI writes this file directly; restart
-the affected containers to apply manual edits.
+`config/mowgli/mowgli_robot.yaml` is bind-mounted **read-write** into the
+`mowgli` container (calibration nodes splice `dock_pose_*`, `datum_*` and
+`imu_yaw` back into it) and read-only into `gps`. The GUI writes this file
+directly; restart the affected containers to apply manual edits.
+
+The installed file is deliberately **sparse** — it holds only install-time
+choices and calibration outputs. Every other parameter's default lives in the
+in-package template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`, which
+the launch files deep-merge *underneath* it, so an absent key falls through to
+its template default and deleting a key restores that default. Do not paste
+defaults in; the tables below give the template value for reference.
 
 **GPS and datum**
 
@@ -182,13 +219,13 @@ the affected containers to apply manual edits.
 |---|---|---|
 | `datum_lat` | `48.879640599999995` | Map origin latitude — set to your dock's GPS coordinates |
 | `datum_lon` | `2.1728332999999997` | Map origin longitude |
-| `gps_port` | `/dev/gps` | GPS device path inside the container (mapped from host by udev) |
-| `gps_baudrate` | `921600` | Serial baud rate for the F9P |
-| `gps_protocol` | `UBX` | Protocol — leave as `UBX` for u-blox receivers |
-| `gps_timeout_sec` | `5` | Seconds to wait for a fix before raising a warning |
-| `gps_antenna_x` | `0.3` | Antenna offset from `base_link` centre, metres (forward) |
-| `gps_antenna_y` | `0` | Antenna offset, metres (left) |
-| `gps_antenna_z` | `0.2` | Antenna height above base plane, metres |
+| `gnss_serial_device` | `/dev/ttyAMA4` | Receiver device path — a UART, or a `/dev/serial/by-id/...` path for USB receivers |
+| `gnss_serial_baud` | `921600` | Serial baud rate for the receiver |
+| `gnss_receiver_family` | `auto` | Receiver family for the Universal GNSS driver (`auto` probes) |
+| `gps_timeout_sec` | `5.0` | Seconds to wait for a fix before raising a warning |
+| `gps_x` | `0.3` | Antenna lever arm from `base_link` (rear wheel axis), metres (forward) |
+| `gps_y` | `0.0` | Antenna lever arm, metres (left) |
+| `gps_z` | `0.20` | Antenna height above base plane, metres |
 
 **NTRIP RTK corrections**
 
@@ -208,10 +245,10 @@ the affected containers to apply manual edits.
 | `dock_pose_x` | `0` | Dock position X in map frame (metres) |
 | `dock_pose_y` | `0` | Dock position Y in map frame (metres) |
 | `dock_pose_yaw` | `3.8921` | Dock approach heading (radians) |
-| `dock_approach_distance` | `1` | Stop distance before final dock approach (metres) |
+| `dock_approach_distance` | `1.5` | Stop distance before the final dock approach (metres) — injected as nav2 `simple_charging_dock.staging_x_offset` |
 | `undock_distance` | `1.5` | How far to reverse before turning (metres) |
-| `undock_speed` | `0.15` | Reverse speed during undocking (m/s) |
-| `dock_use_charger_detection` | `true` | Stop when charging current detected |
+| `undock_speed` | `0.16` | Reverse speed during undocking (m/s) |
+| `dock_use_charger_detection` | `true` | Confirm the dock from the charging current (injected at launch into nav2 `simple_charging_dock.use_battery_status`). `false` = dock confirmed on pose proximity alone |
 
 **Robot geometry**
 
@@ -220,7 +257,6 @@ the affected containers to apply manual edits.
 | `mower_model` | `YardForce500` | Hardware model — determines URDF and firmware expectations |
 | `wheel_radius` | `0.04475` | Wheel radius in metres |
 | `wheel_track` | `0.325` | Lateral distance between wheel centres (metres) |
-| `ticks_per_revolution` | `1050` | Encoder ticks per full wheel revolution |
 | `chassis_center_x` | `0.18` | Longitudinal offset from axle to chassis centre (metres) |
 | `blade_radius` | `0.09` | Cutting disc radius (metres) |
 | `tool_width` | `0.18` | Effective cut width used for coverage path spacing (metres) |
@@ -229,67 +265,64 @@ the affected containers to apply manual edits.
 
 | Parameter | Example | Description |
 |---|---|---|
-| `lidar_enabled` | `true` | Enable LiDAR-based obstacle detection and SLAM |
-| `lidar_x` | `0` | LiDAR position, forward from `base_link` (metres) |
-| `lidar_y` | `0.026` | LiDAR position, left from `base_link` (metres) |
-| `lidar_z` | `0.22` | LiDAR height above base plane (metres) |
-| `lidar_yaw` | `-3.1416` | LiDAR rotation in radians (`-3.1416` = 180° = scanner facing rear) |
+| `lidar_enabled` | `true` | Enable LiDAR obstacle detection plus the `fusion_graph` scan-matching / loop-closure factors |
+| `lidar_x` | `0.0` | LiDAR position, forward from `base_link` (metres) |
+| `lidar_y` | `0.024` | LiDAR position, left from `base_link` (metres) |
+| `lidar_z` | `0.30` | LiDAR height above base plane (metres) |
+| `lidar_yaw` | `3.1408` | LiDAR rotation in radians (≈ π = 180° = scanner facing rear) |
 
 **Mowing behaviour**
 
 | Parameter | Example | Description |
 |---|---|---|
-| `mowing_speed` | `0.3` | Mowing speed in m/s |
-| `transit_speed` | `0.4` | Transit-to-area speed in m/s |
-| `path_spacing` | `0.13` | Distance between parallel mowing passes (metres) |
-| `headland_width` | `0.18` | Width of the headland strip around the boundary |
-| `outline_passes` | `1` | Number of perimeter passes before filling |
-| `outline_offset` | `0.05` | Inset from the mapped boundary (metres) |
-| `min_turning_radius` | `0.3` | Minimum turning radius for path planning (metres) |
-| `mow_angle_increment_deg` | `0` | Rotate mowing angle by this many degrees each session |
-
-**SLAM**
-
-| Parameter | Example | Description |
-|---|---|---|
-| `slam_mode` | `lifelong` | SLAM Toolbox mode: `mapping` (build new map) or `lifelong` (update existing) |
-| `map_save_path` | `/ros2_ws/maps/garden_map` | Path inside container where the map is saved on dock |
-| `map_save_on_dock` | `true` | Automatically serialise the SLAM map when the mower docks |
+| `mowing_speed` | `0.2` | Mowing speed in m/s |
+| `transit_speed` | `0.2` | Transit-to-area speed in m/s |
+| `swath_overlap` | `0.02` | How much adjacent coverage swaths overlap (metres) — the live swath-spacing knob |
+| `headland_width` | `0.18` | **Inert** — the behavior tree derives the headland from `chassis_width` and overrides this in the coverage goal |
+| `num_headland_passes` | `2` | Concentric perimeter rings before the inner field. `<0` = none, `0` = auto |
+| `min_turning_radius` | `0.15` | Floor on every coverage turn-around / corner-fillet arc (metres) |
 
 **Battery**
 
 | Parameter | Example | Description |
 |---|---|---|
-| `battery_full_voltage` | `28.5` | Voltage threshold for "fully charged" |
+| `battery_full_voltage` | `28.0` | Voltage threshold for "fully charged" |
 | `battery_empty_voltage` | `24` | Voltage threshold for "return to dock" |
 | `battery_critical_voltage` | `23` | Voltage threshold for emergency stop |
 
-### Advanced parameter overrides
+**Removed keys**
 
-The `mowgli` container also reads optional YAML files from
-`config/mowgli/` at startup. Drop any of these files into that directory
-to override the built-in defaults without rebuilding the image:
+`slam_mode`, `map_save_path` and `map_save_on_dock` are dead. slam_toolbox was
+removed in favour of the `fusion_graph` (GTSAM iSAM2) localizer, and nothing in
+the stack reads them any more. They may still be present in an older installed
+`mowgli_robot.yaml`; deleting them changes nothing.
 
-| File | What it tunes |
-|---|---|
-| `nav2_params.yaml` | Nav2 costmap, planner, controller, collision monitor |
-| `localization.yaml` | Dual EKF — GPS/odometry fusion weights and process noise |
-| `slam_toolbox.yaml` | SLAM loop closure, scan matching, map resolution |
-| `hardware_bridge.yaml` | Serial port, baud rate, heartbeat and publish rates |
-| `coverage_planner.yaml` | B-RV coverage planner (tool width, headland, Voronoi transit, sweep direction) |
-| `behavior_tree.yaml` | Behavior tree tick rate, battery thresholds |
-| `mqtt_bridge.yaml` | MQTT broker connection for Home Assistant |
+### Advanced parameters
 
-To extract a built-in default for editing:
+`/ros2_ws/config/` (the `config/mowgli/` bind mount) is **not** a general
+override directory: `mowgli_robot.yaml` is the only file the launch files read
+from it. Dropping a `nav2_params.yaml`, `localization.yaml`,
+`hardware_bridge.yaml` or `mqtt_bridge.yaml` in there has no effect — every
+other config is loaded from the package share directory baked into the image.
+
+So the operator-facing surface is `mowgli_robot.yaml` (which the launch files
+inject into the relevant nodes) plus the GUI Settings page. Everything else —
+Nav2 costmaps/planner/controller, the collision monitor, behaviour-tree
+internals, coverage-server tuning, the MQTT bridge — is changed by editing the
+package `config/` files in `ros2/src/` and rebuilding the image. Note that Nav2
+params are a shared base plus a thin LiDAR / no-LiDAR overlay
+(`nav2_params_base.yaml` + `nav2_params_{lidar,no_lidar}.yaml`), deep-merged at
+launch; there is no single `nav2_params.yaml`.
+
+To read a built-in default:
 
 ```bash
-# List all built-in configs
+# List the bringup configs shipped in the image
 docker exec mowgli-ros2 ls /ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/
 
-# Copy one out for local editing
+# Print one
 docker exec mowgli-ros2 cat \
-  /ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/nav2_params.yaml \
-  > config/mowgli/nav2_params.yaml
+  /ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/nav2_params_base.yaml
 ```
 
 ---
@@ -304,34 +337,36 @@ docker exec mowgli-ros2 cat \
 │  │  mowgli-ros2                                   │     │
 │  │  ros2 launch mowgli_bringup full_system.launch │     │
 │  │  ├─ hardware_bridge  ←→  /dev/mowgli (STM32)   │     │
-│  │  ├─ Nav2 stack (planner, controller, BT)       │     │
-│  │  ├─ SLAM Toolbox  ←  /scan (from mowgli-lidar) │     │
-│  │  ├─ dual EKF  ←  /gps/fix + /wheel_odom        │     │
-│  │  ├─ rosbridge_server  :9090                    │     │
+│  │  ├─ Nav2 stack (planner, controllers, costmaps)│     │
+│  │  ├─ behavior_tree_node (mission logic)         │     │
+│  │  ├─ map_server + coverage_server (areas, F2C)  │     │
+│  │  ├─ fusion_graph  ←  /gps/fix, /wheel_odom,    │     │
+│  │  │                  /imu/data, /scan_deskewed  │     │
+│  │  │    → map→odom AND odom→base_footprint       │     │
 │  │  └─ foxglove_bridge   :8765                    │     │
 │  └────────────────────────────────────────────────┘     │
 │                                                         │
 │  ┌──────────────────┐   ┌──────────────────────────┐   │
 │  │  mowgli-gps      │   │  mowgli-lidar            │   │
-│  │  ublox_gps_node  │   │  ldlidar_stl_ros2_node   │   │
-│  │  ntrip_client    │   │  publishes /scan          │   │
-│  │  rtcm_serial_    │   │  frame_id: lidar_link     │   │
-│  │    bridge        │   │  port: /dev/ttyS1         │   │
-│  │  pub: /gps/fix   │   │  baud: 230400             │   │
+│  │  receiver_node   │   │  ldlidar_node (LD19)     │   │
+│  │  ntrip_node      │   │  publishes /scan          │   │
+│  │  gnss_bridge     │   │  frame_id: lidar_link     │   │
+│  │  pub: /gps/fix,  │   │  port: /dev/lidar         │   │
+│  │   /gps/status    │   │  baud: 230400             │   │
 │  └──────────────────┘   └──────────────────────────┘   │
 │                                                         │
 │  ┌──────────────────┐   ┌──────────────────────────┐   │
 │  │  mowgli-gui      │   │  mowgli-mqtt             │   │
 │  │  Go + React      │   │  eclipse-mosquitto        │   │
-│  │  ws://…:9090     │   │  :1883 (MQTT)             │   │
-│  │  port: 80        │   │  :9001 (MQTT-WS)          │   │
+│  │  ws://…:8765     │   │  :1883 (MQTT)             │   │
+│  │  port: 4006      │   │  :9001 (MQTT-WS)          │   │
 │  └──────────────────┘   └──────────────────────────┘   │
 │                                                         │
 │  ┌──────────────────────────────────────────────────┐   │
 │  │  mowgli-watchtower  (polls gui label every 4h)   │   │
 │  └──────────────────────────────────────────────────┘   │
 │                                                         │
-│  Volume: mowgli_maps  →  /ros2_ws/maps (in mowgli)     │
+│  Volume: mowgli_maps  →  /ros2_ws/maps (mowgli + gui)   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -339,10 +374,10 @@ docker exec mowgli-ros2 cat \
 
 | Container | Image | Purpose | Exposed ports |
 |---|---|---|---|
-| `mowgli-ros2` | `ghcr.io/mowglinext/mowglinext/mowgli-ros2:main` | Full ROS2 stack: hardware bridge, Nav2, fusion_graph localizer, rosbridge, Foxglove | 9090 (rosbridge), 8765 (Foxglove) |
-| `mowgli-gps` | `ghcr.io/mowglinext/mowglinext/gps:main` | u-blox ZED-F9P driver + NTRIP RTK corrections | — |
+| `mowgli-ros2` | `ghcr.io/mowglinext/mowglinext/mowgli-ros2:main` | Full ROS2 stack: hardware bridge, Nav2, behavior tree, map/coverage servers, fusion_graph localizer, Foxglove Bridge | 8765 (Foxglove) |
+| `mowgli-gps` | `ghcr.io/mowglinext/mowglinext/gps:main` | Universal GNSS sidecar (u-blox / Unicore / NMEA) + NTRIP RTK corrections; publishes `/gps/fix`, `/gps/status`, `/rtcm` | — |
 | `mowgli-lidar` | `ghcr.io/mowglinext/mowglinext/lidar-ldlidar:main` | LDRobot LD19 driver, publishes `/scan` | — |
-| `mowgli-gui` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web UI — area mapping, mowing control, config editor | 80 (host networking) |
+| `mowgli-gui` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web UI — area mapping, mowing control, config editor. Talks to the stack over Foxglove Bridge | 4006 (host networking) |
 | `mowgli-mqtt` | `eclipse-mosquitto:latest` | MQTT broker for Home Assistant and telemetry | 1883, 9001 |
 | `mowgli-watchtower` | `ghcr.io/nicholas-fedor/watchtower:latest` | Auto-updates containers labelled `com.centurylinklabs.watchtower.enable: "true"` | — |
 
@@ -391,79 +426,46 @@ discovery works over the loopback interface without multicast routing.
 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` restricts discovery to the local
 machine, preventing DDS traffic from leaking to the LAN.
 
-### SLAM maps
+### Persistent state (`mowgli_maps` volume)
 
-Maps are persisted in the Docker named volume `mowgli_maps`, mounted at
-`/ros2_ws/maps` inside the `mowgli-ros2` container. The map is saved
-automatically when the mower docks (controlled by `map_save_on_dock` in
-`mowgli_robot.yaml`). The volume survives `docker compose down` and image
-updates.
+Persistent robot state lives in the Docker named volume `mowgli_maps`, mounted
+at `/ros2_ws/maps` in `mowgli-ros2` (and in `mowgli-gui`). There is no SLAM map:
+slam_toolbox was removed in favour of the `fusion_graph` localizer. What the
+volume holds:
+
+| File | Written by |
+|---|---|
+| `areas.dat` | `map_server_node` — mowing-area polygons, keepouts, dock point, datum stamp |
+| `obstacles.yaml` | `obstacle_tracker_node` — promoted permanent obstacles |
+| `fusion_graph.*` | `fusion_graph_node` — the factor graph; auto-saved on dock arrival and periodically while mowing, reloaded at startup |
+| `imu_calibration.txt`, `mag_calibration.yaml` | IMU / magnetometer calibration |
+| `coverage_resume.txt` | behavior tree — mid-area resume cursor |
+
+The volume survives `docker compose down` and image updates. It is prefixed
+with `COMPOSE_PROJECT_NAME` (`install_mowgli_maps` by default) — renaming that
+`.env` key orphans all of the above.
 
 ---
 
 ## Deployment modes
 
-### Standard — all-in-one on one board (default)
+### Standard — all-in-one on one board (the only supported mode)
 
-The default `docker-compose.yaml` runs everything on the board that has
-the USB serial devices attached. Use this for Rockchip SBCs where the
-compute and hardware interfaces are on the same machine.
-
-```bash
-docker compose up -d
-```
-
-### Ser2net — serial over TCP
-
-Use when the compute board (running Docker) is physically separate from
-the mower board, connected via Ethernet. The mower Pi must run `ser2net`
-to expose serial ports as TCP sockets:
-
-```yaml
-# /etc/ser2net.yaml on the mower Pi
-connection: &mowgli
-  accepter: tcp,4001
-  connector: serialdev,/dev/mowgli,115200n81
-connection: &gps
-  accepter: tcp,4002
-  connector: serialdev,/dev/gps,460800n81
-connection: &lidar
-  accepter: tcp,4003
-  connector: serialdev,/dev/lidar,230400n81
-```
-
-On the brain machine, set `MOWER_IP` in `.env`, then:
+The generated `docker-compose.yaml` runs everything on the board that has the
+serial devices attached — Rockchip SBCs and Raspberry Pis where compute and
+hardware interfaces sit on the same machine.
 
 ```bash
-docker compose -f docker-compose.ser2net.yaml up -d
+./stack.sh up
 ```
 
-Three `socat` relay containers create virtual PTYs (`/dev/mowgli`,
-`/dev/gps`, `/dev/lidar`) that the `mowgli` container reads as normal
-serial ports.
-
-### Remote split — Nav2 on a powerful host, hardware on a Pi
-
-Run only the hardware bridge on the mower Pi, and the full Nav2 / GUI
-stack on a desktop or server.
-
-On the mower Pi (serial access required):
-
-```bash
-docker compose -f docker-compose.remote.pi.yaml up -d
-```
-
-On the remote host:
-
-```bash
-docker compose -f docker-compose.remote.host.yaml up -d
-```
-
-Both machines must have the same `ROS_DOMAIN_ID` in `.env`. DDS
-multicast must be routable between them (same L2 segment). If the
-machines are on different subnets, configure FastDDS unicast peer
-discovery (see `fastdds.xml` in the repository root for a reference
-profile).
+Split deployments were removed. Until 2026 the repo also carried a ser2net
+mode (serial over TCP) and a remote split (Nav2 on a desktop, hardware on the
+Pi); `docker-compose.ser2net.yaml`, `docker-compose.remote.pi.yaml` and
+`docker-compose.remote.host.yaml` no longer exist, and Cyclone DDS is now
+deliberately pinned to the loopback interface (see *DDS middleware* above), so
+the ROS graph cannot span two machines. `docker/fastdds.xml` is kept as a reference profile
+only — nothing mounts it, and FastRTPS is not supported.
 
 ### Foxglove Bridge as a separate container
 
@@ -471,9 +473,8 @@ By default, Foxglove Bridge runs inside `mowgli-ros2` on port 8765. To
 run it as a restartable, standalone container instead:
 
 ```bash
-# First, disable the built-in bridge to avoid port conflicts.
-# Set enable_foxglove:=false in the mowgli command in docker-compose.yaml,
-# then:
+# First, disable the built-in bridge to avoid a port conflict:
+#   set ENABLE_FOXGLOVE=false in .env, then ./stack.sh regen
 docker compose -f docker-compose.yaml -f docker-compose.foxglove.yaml up -d
 ```
 
@@ -489,16 +490,16 @@ Re-run the installer (handles pull, restart, and any new config keys):
 cd ~/mowglinext/install && ./mowglinext.sh
 ```
 
-Or manually:
+Or, from a dev checkout, pull and re-create in one step:
 
 ```bash
-docker compose pull
-docker compose up -d
+./stack.sh update
 ```
 
-The `gui` container is also watched by Watchtower, which polls every
-4 hours (`WATCHTOWER_POLL_INTERVAL=14400`) and restarts the container
-automatically when a new image is pushed.
+The `gui` container is the only one labelled for Watchtower, which polls every
+4 hours (`WATCHTOWER_POLL_INTERVAL=14400`) and restarts it automatically when a
+new image is pushed. Watchtower is always composed by the full installer; from
+a dev checkout `stack.sh` only includes it when `ENABLE_WATCHTOWER=true`.
 
 To force an immediate Watchtower check:
 
@@ -516,9 +517,10 @@ docker exec mowgli-watchtower /watchtower --run-once
 cd ~/mowglinext/install && ./mowglinext.sh --check
 ```
 
-Checks: Docker, device nodes, container health, firmware response,
-GPS fix quality, NTRIP connection, LiDAR `/scan` publisher, SLAM state,
-and GUI accessibility. Prints a numbered list of issues to fix.
+Checks: Docker, device nodes, the generated GPS YAML, container health,
+firmware response, GPS fix quality, NTRIP connection, LiDAR `/scan` publisher,
+rangefinders, and GUI + Foxglove accessibility. Prints a numbered list of
+issues to fix.
 
 ### Containers do not start
 
@@ -543,10 +545,11 @@ If a device is missing after reconnecting USB, reload rules:
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-The LiDAR connects via UART, not USB. Confirm the port exists:
+The LiDAR connects via UART, not USB. Confirm both the UART and the symlink
+the LD19 container opens exist:
 
 ```bash
-ls -l /dev/ttyS1     # or whatever LIDAR_PORT is set to in .env
+ls -l /dev/ttyS1 /dev/lidar   # UART, and the udev symlink pointing at it
 ```
 
 ### GPS has no fix or poor accuracy
@@ -626,8 +629,9 @@ expected; Nav2 does not receive LiDAR scans.
    A host-native `ros2` binary will not see the graph unless it uses the same
    config: `export CYCLONEDDS_URI=file://$PWD/config/cyclonedds.xml`.
 
-The split deployment shares serial devices over ser2net, not DDS — DDS never
-crosses hosts here, so there is nothing to make routable between boards.
+There is no multi-host deployment: every container runs on the one board, and
+DDS is pinned to loopback on purpose, so nothing about DDS needs to be routable
+between machines.
 
 ### Nav2 does not start or times out on ARM
 
@@ -640,21 +644,20 @@ times out waiting for a node:
    docker compose logs mowgli | grep -i "timed out\|lifecycle\|error"
    ```
 
-2. The most common cause is SLAM Toolbox taking longer than Nav2's
-   lifecycle timeout allows. If maps are not loading, confirm
-   `slam_mode: lifelong` is set and a `.posegraph` file exists:
+2. Check whether `fusion_graph_node` is reloading a large saved graph — it
+   loads `/ros2_ws/maps/fusion_graph.*` at startup if present:
    ```bash
-   docker exec mowgli-ros2 ls /ros2_ws/maps/
+   docker exec mowgli-ros2 ls -lh /ros2_ws/maps/
    ```
-   If there is no saved map, change `slam_mode` to `mapping` for the
-   first run, then switch back to `lifelong` after a map has been saved.
+   Deleting the saved graph makes the node start from a fresh one (the map
+   frame is re-anchored from GPS, so no mowing areas are lost).
 
 3. A full restart often resolves transient timing failures:
    ```bash
    docker compose restart mowgli
    ```
 
-### SLAM not building a map
+### LiDAR scans not reaching the stack
 
 Confirm the LiDAR is publishing:
 
@@ -665,8 +668,9 @@ docker exec mowgli-ros2 bash -c "
   ros2 topic info /scan"
 ```
 
-`Publisher count` must be `1`. If it is `0`, check the `lidar` container
-logs and verify the UART port and baud rate in `.env`.
+`Publisher count` must be `1`. If it is `0`, check the `lidar` container logs
+and confirm `/dev/lidar` resolves to the board's LiDAR UART (the LD19 image
+opens that path at 230400 baud regardless of `.env`).
 
 Also confirm the TF chain from `base_link` to `lidar_link` is complete:
 
@@ -677,24 +681,24 @@ docker exec mowgli-ros2 bash -c "
   ros2 run tf2_tools view_frames"
 ```
 
-### SLAM map not saved after docking
+### Mowing areas or the factor graph are not persisted
 
-Ensure `map_save_on_dock: true` and verify the `mowgli_maps` volume is
-mounted:
+Verify the `mowgli_maps` volume is mounted:
 
 ```bash
 docker inspect mowgli-ros2 | grep -A3 mowgli_maps
 ```
 
-To save the map manually without docking:
+`areas.dat` is written by `map_server_node` whenever areas change. The factor
+graph auto-saves on dock arrival and periodically while mowing; to checkpoint
+it on demand call the service directly (the GUI exposes it under
+Diagnostics → Fusion Graph):
 
 ```bash
 docker exec mowgli-ros2 bash -c "
   source /opt/ros/kilted/setup.bash
   source /ros2_ws/install/setup.bash
-  ros2 service call /slam_toolbox/save_map \
-    slam_toolbox/srv/SaveMap \
-    '{name: {data: /ros2_ws/maps/garden_map}}'"
+  ros2 service call /fusion_graph_node/save_graph std_srvs/srv/Trigger"
 ```
 
 ### ROS nodes crashed inside `mowgli-ros2`
@@ -704,8 +708,9 @@ docker compose logs mowgli | grep "process has died"
 ```
 
 Each crashed node is identified in the log. Common causes: missing device
-(`/dev/mowgli` not found), YAML syntax error in a config override, or
-out-of-memory on a board with less than 4 GB RAM.
+(`/dev/mowgli` not found), a YAML syntax error in
+`config/mowgli/mowgli_robot.yaml`, or out-of-memory on a board with less than
+4 GB RAM.
 
 ### Mowgli firmware not responding
 
@@ -733,8 +738,7 @@ If the topic is empty, the STM32 board is not communicating. Check:
 
 | Service | URL |
 |---|---|
-| OpenMower GUI | `http://<board-ip>` |
-| Rosbridge WebSocket | `ws://<board-ip>:9090` |
+| MowgliNext GUI | `http://<board-ip>:4006` |
 | Foxglove Bridge | `ws://<board-ip>:8765` |
 | MQTT broker | `<board-ip>:1883` |
 | MQTT over WebSocket | `<board-ip>:9001` |
@@ -765,10 +769,11 @@ docker exec mowgli-ros2 bash -c "
   source /ros2_ws/install/setup.bash
   ros2 topic list"
 
-# Stop the stack (maps are preserved in the mowgli_maps volume)
+# Stop the stack (areas.dat and the factor graph survive in mowgli_maps)
 docker compose down
 
-# Stop the stack and delete all volumes including the map
+# Stop the stack and delete all volumes — this ERASES areas.dat, the factor
+# graph and the IMU/mag calibration
 docker compose down -v
 ```
 
@@ -777,18 +782,38 @@ docker compose down -v
 ## Contributing
 
 1. Fork the repository on GitHub.
-2. Create a branch from `v3`.
+2. Create a branch from `dev` (`feat/`, `fix/`, `refactor/`, `chore/` or
+   `perf/` — the CI push triggers match exactly these prefixes).
 3. Make your changes. Test on real hardware where possible.
-4. Open a pull request against the `v3` branch.
+4. Open a pull request against `dev`. `main` is the release branch; both are
+   protected and require a review.
 
-The CI workflow (`.github/workflows/docker.yml`) builds the `gps` and
-`lidar` images for both `linux/amd64` and `linux/arm64` on native runners
-and publishes multi-arch manifests to GHCR on every push to `v3`.
+Do not hand-edit `docker-compose.yaml`, `.env` or `config/mowgli/*` — they are
+generated or runtime state. Change the source instead: `install/compose/*.yml`
+(services), `install/lib/env.sh` (`.env` keys), `install/config/` (seeds), then
+`./stack.sh regen`.
+
+The sensor images have one workflow each — `.github/workflows/sensors-gps.yml`
+and `sensors-lidar-{ldlidar,rplidar,stl27l}.yml` — all calling the reusable
+`_sensor-docker.yml`, which builds `linux/amd64` and `linux/arm64` on native
+runners and publishes multi-arch manifests to GHCR. `ros2-docker.yml` builds
+`mowgli-ros2` and `gui-docker.yml` builds the GUI. Note that **no CI workflow
+watches this directory** — the only checks on the generated compose are
+`install/tests/test_compose_validity.sh` and `install/tests/test_env_output.sh`,
+which you must run by hand.
+
+Working on this directory with Claude? Start from
+[`CLAUDE.md`](CLAUDE.md) here, then
+[`../docs/claude/codemaps/deploy.md`](../docs/claude/codemaps/deploy.md)
+(the `.env` → fragment → container map),
+[`../docs/claude/parameters.md`](../docs/claude/parameters.md) and
+[`../docs/claude/doc-index.md`](../docs/claude/doc-index.md).
 
 ---
 
 ## License
 
-This repository does not currently include a `LICENSE` file. The upstream
-Mowgli project is open source — refer to
-<https://github.com/cedbossneo/Mowgli> for licensing information.
+MowgliNext is dual-licensed: **GPLv3** for open-source, personal, educational,
+non-profit and community use, and a separate commercial licence for any
+commercial use. See [`../LICENSE`](../LICENSE). The upstream Mowgli firmware
+project lives at <https://github.com/cedbossneo/Mowgli>.

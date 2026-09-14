@@ -5,19 +5,23 @@
 """
 sim_navsat_rtk_fix.py — SIMULATION ONLY.
 
-Programmable GPS-quality controller for the simulator. Subscribes to a
-raw Gazebo NavSatFix and republishes on the production topic with
-status, covariance, and position noise consistent with one of three
-quality regimes:
+Programmable GPS-quality controller for the simulator. Uses the raw
+Webots NavSatFix as a clock/header source, but derives antenna position
+from the kinematic simulator's authoritative ground-truth chassis pose.
+It republishes on the production topic with status, covariance, and
+position noise consistent with one of three quality regimes. It also
+publishes the matching typed GnssStatus used
+by the GUI and other consumers that cannot safely infer RTK mode from
+NavSatFix.status alone:
 
   RTK_FIXED  status=GBAS_FIX (4), sigma_xy ~3 mm, no position noise
   RTK_FLOAT  status=SBAS_FIX (1), sigma_xy ~30 cm, Gaussian position noise
   NO_FIX     status=NO_FIX (-1), sigma_xy ~2 m, larger Gaussian noise
 
-Gazebo's gz-sim-navsat-system plugin always emits status.status==
-STATUS_FIX (0). Production code (navsat_to_absolute_pose_node,
-slam_pose_anchor_node) gates on STATUS_GBAS_FIX, so without this relay
-the sim's GPS never feeds /gps/pose_cov.
+The Webots GPS device always emits status.status==STATUS_FIX (0).
+Production code (navsat_to_absolute_pose_node, and fusion_graph's own
+RTK gating) keys on STATUS_GBAS_FIX, so without this relay the sim's
+GPS never reaches the localizer as an RTK-quality fix.
 
 Quality cycling
 ---------------
@@ -33,10 +37,10 @@ Pattern examples:
 
 Wiring
 ------
-  gazebo_bridge.yaml: ros_topic_name=/gps/fix_raw  (was /gps/fix)
+  Webots URDF (urdf_webots/mowgli_webots.urdf): GPS -> /gps/fix_raw
   this node:          /gps/fix_raw -> /gps/fix     (with quality regime)
 
-Safety: read-only consumer of one Gazebo-bridged topic, publishes a
+Safety: read-only consumer of one sim sensor topic, publishes a
 single sensor topic. No drive commands, no TF, no safety topic.
 """
 
@@ -47,6 +51,8 @@ import math
 import random
 from typing import List, Optional, Tuple
 
+from geometry_msgs.msg import PoseStamped
+from mowgli_interfaces.msg import GnssStatus
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import (
@@ -65,6 +71,17 @@ QUALITY_REGIMES: dict[str, Tuple[int, float, float]] = {
     'RTK_FLOAT': (NavSatStatus.STATUS_SBAS_FIX, 0.30, 0.60),
     'NO_FIX': (NavSatStatus.STATUS_NO_FIX, 2.0, 4.0),
 }
+
+EARTH_RADIUS_M = 6378137.0
+METERS_PER_DEG = EARTH_RADIUS_M * math.pi / 180.0
+
+GNSS_STATUS_CAPABILITIES = (
+    GnssStatus.CAP_RTK_MODE
+    | GnssStatus.CAP_HORIZONTAL_ACCURACY
+    | GnssStatus.CAP_VERTICAL_ACCURACY
+    | GnssStatus.CAP_DIFFERENTIAL_CORRECTIONS
+    | GnssStatus.CAP_CORRECTIONS_ACTIVE
+)
 
 
 @dataclass(frozen=True)
@@ -101,6 +118,63 @@ def _parse_pattern(spec: str) -> List[_Segment]:
     return out
 
 
+def _build_gnss_status(
+    header, regime: str, sigma_xy: float, sigma_z: float
+) -> GnssStatus:
+    status = GnssStatus()
+    status.header = header
+    status.backend = 'simulation'
+    status.receiver_vendor = 'Webots'
+    status.fix_valid = regime != 'NO_FIX'
+    status.differential_corrections = regime != 'NO_FIX'
+    status.corrections_active = regime != 'NO_FIX'
+    status.capability_flags = GNSS_STATUS_CAPABILITIES
+    status.value_flags = GNSS_STATUS_CAPABILITIES
+    status.horizontal_accuracy_m = sigma_xy
+    status.vertical_accuracy_m = sigma_z
+
+    if regime == 'RTK_FIXED':
+        status.fix_type = GnssStatus.FIX_TYPE_RTK_FIXED
+        status.rtk_mode = GnssStatus.RTK_MODE_FIXED
+        status.quality_percent = 100.0
+    elif regime == 'RTK_FLOAT':
+        status.fix_type = GnssStatus.FIX_TYPE_RTK_FLOAT
+        status.rtk_mode = GnssStatus.RTK_MODE_FLOAT
+        status.quality_percent = 70.0
+    else:
+        status.fix_type = GnssStatus.FIX_TYPE_NO_FIX
+        status.rtk_mode = GnssStatus.RTK_MODE_NONE
+        status.quality_percent = 0.0
+
+    return status
+
+
+def _antenna_wgs84(
+    base_x: float,
+    base_y: float,
+    yaw: float,
+    datum_lat: float,
+    datum_lon: float,
+    lever_arm_x: float,
+    lever_arm_y: float,
+) -> Tuple[float, float]:
+    antenna_x = (
+        base_x
+        + math.cos(yaw) * lever_arm_x
+        - math.sin(yaw) * lever_arm_y
+    )
+    antenna_y = (
+        base_y
+        + math.sin(yaw) * lever_arm_x
+        + math.cos(yaw) * lever_arm_y
+    )
+    latitude = datum_lat + antenna_y / METERS_PER_DEG
+    longitude = datum_lon + antenna_x / (
+        METERS_PER_DEG * math.cos(math.radians(datum_lat))
+    )
+    return latitude, longitude
+
+
 class SimNavSatRtkFix(Node):
 
     def __init__(self) -> None:
@@ -112,6 +186,24 @@ class SimNavSatRtkFix(Node):
         self._output_topic = self.declare_parameter(
             'output_topic', '/gps/fix'
         ).value
+        self._status_topic = self.declare_parameter(
+            'status_topic', '/gps/status'
+        ).value
+        self._ground_truth_topic = self.declare_parameter(
+            'ground_truth_topic', '/sim/ground_truth_pose'
+        ).value
+        self._datum_lat = float(
+            self.declare_parameter('datum_lat', 0.0).value
+        )
+        self._datum_lon = float(
+            self.declare_parameter('datum_lon', 0.0).value
+        )
+        self._lever_arm_x = float(
+            self.declare_parameter('lever_arm_x', 0.30).value
+        )
+        self._lever_arm_y = float(
+            self.declare_parameter('lever_arm_y', 0.0).value
+        )
         # Programmable cycle. Empty means always RTK_FIXED (legacy mode).
         pattern_spec = str(
             self.declare_parameter('quality_pattern', '').value
@@ -134,7 +226,7 @@ class SimNavSatRtkFix(Node):
         self._cycle_total_s = sum(s.duration_s for s in self._segments) or 0.0
         self._start_t: Optional[float] = None  # ros time at first fix
 
-        # Subscribe with BEST_EFFORT (matches Gazebo bridge sensor QoS).
+        # Subscribe with BEST_EFFORT (matches the Webots driver's sensor QoS).
         sub_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -155,9 +247,19 @@ class SimNavSatRtkFix(Node):
         self._pub = self.create_publisher(
             NavSatFix, self._output_topic, pub_qos
         )
+        self._status_pub = self.create_publisher(
+            GnssStatus, self._status_topic, pub_qos
+        )
         self._sub = self.create_subscription(
             NavSatFix, self._input_topic, self._on_fix, sub_qos
         )
+        self._ground_truth_sub = self.create_subscription(
+            PoseStamped,
+            self._ground_truth_topic,
+            self._on_ground_truth,
+            sub_qos,
+        )
+        self._ground_truth: Optional[PoseStamped] = None
 
         # Diagnostics — surface the regime distribution observed.
         self._regime_counts: dict[str, int] = {k: 0 for k in QUALITY_REGIMES}
@@ -214,14 +316,31 @@ class SimNavSatRtkFix(Node):
     # Callback
     # ------------------------------------------------------------------
 
+    def _on_ground_truth(self, msg: PoseStamped) -> None:
+        self._ground_truth = msg
+
     def _on_fix(self, msg: NavSatFix) -> None:
+        if self._ground_truth is None:
+            return
+
         ros_now_s = self.get_clock().now().nanoseconds * 1e-9
         regime = self._current_regime(ros_now_s)
         status_code, sigma_xy, sigma_z = QUALITY_REGIMES[regime]
         self._regime_counts[regime] += 1
 
-        lat = msg.latitude
-        lon = msg.longitude
+        pose = self._ground_truth.pose
+        yaw = 2.0 * math.atan2(
+            pose.orientation.z, pose.orientation.w
+        )
+        lat, lon = _antenna_wgs84(
+            pose.position.x,
+            pose.position.y,
+            yaw,
+            self._datum_lat,
+            self._datum_lon,
+            self._lever_arm_x,
+            self._lever_arm_y,
+        )
         # Add Gaussian position noise above the RTK-Fixed bedrock.
         if sigma_xy > 0.01:
             # 1 deg latitude  ~= 111 320 m  =>  m_per_deg_lat = 111320
@@ -244,6 +363,9 @@ class SimNavSatRtkFix(Node):
             NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
         )
         self._pub.publish(out)
+        self._status_pub.publish(
+            _build_gnss_status(out.header, regime, sigma_xy, sigma_z)
+        )
 
     def _log_stats(self) -> None:
         total = sum(self._regime_counts.values())

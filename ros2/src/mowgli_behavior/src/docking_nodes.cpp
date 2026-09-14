@@ -16,6 +16,7 @@
 #include "mowgli_behavior/docking_nodes.hpp"
 
 #include "action_msgs/msg/goal_status.hpp"
+#include "mowgli_behavior/dock_alignment.hpp"
 
 namespace mowgli_behavior
 {
@@ -23,6 +24,25 @@ namespace mowgli_behavior
 // ---------------------------------------------------------------------------
 // DockRobot
 // ---------------------------------------------------------------------------
+
+void DockRobot::log_contact_delta(const std::shared_ptr<BTContext>& ctx, uint16_t num_retries) const
+{
+  const auto d =
+      ComputeDockContactDelta(ctx->gps_x, ctx->gps_y, ctx->dock_x, ctx->dock_y, ctx->dock_yaw);
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "DockRobot: contact claimed (retry %u) at (%.3f, %.3f) vs dock "
+              "(%.3f, %.3f, %.2f°) — along=%+.3f m cross=%+.3f m range=%.3f m",
+              num_retries,
+              ctx->gps_x,
+              ctx->gps_y,
+              ctx->dock_x,
+              ctx->dock_y,
+              ctx->dock_yaw * 180.0 / M_PI,
+              d.along_m,
+              d.cross_m,
+              d.range_m);
+}
 
 BT::NodeStatus DockRobot::onStart()
 {
@@ -56,7 +76,21 @@ BT::NodeStatus DockRobot::onStart()
   goal_msg.dock_type = dock_type;
   goal_msg.navigate_to_staging_pose = true;
 
+  last_feedback_state_ = DockAction::Feedback::NONE;
+
   auto send_goal_options = rclcpp_action::Client<DockAction>::SendGoalOptions{};
+  send_goal_options.feedback_callback =
+      [this, ctx](GoalHandle::SharedPtr, const std::shared_ptr<const DockAction::Feedback> fb)
+  {
+    // Log once on each ENTRY into WAIT_FOR_CHARGE — the server re-enters it on
+    // every retry, and each entry is a separate claimed contact worth recording.
+    const uint16_t prev = last_feedback_state_.exchange(fb->state);
+    if (fb->state == DockAction::Feedback::WAIT_FOR_CHARGE &&
+        prev != DockAction::Feedback::WAIT_FOR_CHARGE)
+    {
+      log_contact_delta(ctx, fb->num_retries);
+    }
+  };
   goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
   goal_handle_.reset();
 

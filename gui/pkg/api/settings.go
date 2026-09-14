@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -349,6 +349,74 @@ func valuesEqual(a, b any) bool {
 		}
 	}
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+}
+
+// retiredParamKeys are parameters that were REMOVED from both the ROS2
+// template and the GUI schema (issue #195) because no node ever read them.
+//
+// They need their own list because of the one-way tail sparsifyFlat has: it can
+// only prune a key that still HAS a schema default (see the note on
+// setGnssStringIfNeeded — "a key with no schema default can never be pruned
+// back out once written"). A robot whose installed mowgli_robot.yaml already
+// carries e.g. outline_passes would therefore keep it forever. Unioning these
+// into the pruned set on every Settings save scrubs them on the next write.
+//
+// Harmless at runtime either way — the launch-time deep-merge just carries an
+// unused key — but a stale key in the installed file also defeats
+// check_config_drift.py's orphan report, which no longer suppresses them.
+var retiredParamKeys = map[string]bool{
+	// Removed ICP localizer and fixed-grid settings; scrub old installed overrides.
+	"use_scan_matching":            true,
+	"use_loop_closure":             true,
+	"icp_max_iter":                 true,
+	"icp_max_corresp_dist":         true,
+	"icp_source_subsample":         true,
+	"scan_min_inliers":             true,
+	"icp_sigma_xy_base":            true,
+	"icp_sigma_theta_base":         true,
+	"icp_max_rmse_m":               true,
+	"icp_max_delta_xy_m":           true,
+	"icp_max_delta_theta_rad":      true,
+	"icp_max_divergence_xy_m":      true,
+	"icp_max_divergence_theta_rad": true,
+	"scan_yield_to_rtk":            true,
+	"scan_yield_timeout_s":         true,
+	"scan_yield_sigma_xy":          true,
+	"scan_yield_sigma_theta":       true,
+	"scan_yaw_sigma_floor_rad":     true,
+	"lc_max_dist_m":                true,
+	"lc_min_age_s":                 true,
+	"lc_max_candidates":            true,
+	"lc_min_delta_m":               true,
+	"lc_min_delta_theta":           true,
+	"lc_max_rmse":                  true,
+	"lc_sigma_xy":                  true,
+	"lc_sigma_theta":               true,
+	"lc_skip_when_rtk_fixed":       true,
+	"lc_min_travel_m":              true,
+	"lc_min_interval_s":            true,
+	"lc_gps_sigma_ratio":           true,
+	"scan_retention_nodes":         true,
+	"lidar_map_half_extent_m":      true,
+
+	// Legacy strip-planner knobs: coverage is F2C v3 headland rings + swaths.
+	"outline_passes":  true,
+	"outline_offset":  true,
+	"outline_overlap": true,
+	// Superseded by the single mow_angle_deg (auto/fixed) knob.
+	"mow_angle_offset_deg":    true,
+	"mow_angle_increment_deg": true,
+	// No thermal blade cutoff exists in ANY layer — the firmware only measures
+	// and reports blade temperature. The real surface is mowgli_monitoring's
+	// motor_temp_warn_c / motor_temp_error_c diagnostics thresholds.
+	"motor_temp_high_c": true,
+	"motor_temp_low_c":  true,
+	// Deleted from the template on 2026-09-05: no consumer anywhere in ros2/,
+	// and it never had a schema default, so sparsifyFlat cannot see it. Its
+	// value (84) was also derived from the old wrong wheel_radius (0.04475) and
+	// a ticks_per_meter (300) no calibrated robot runs. The live encoder scale
+	// is ticks_per_meter, which stays.
+	"ticks_per_revolution": true,
 }
 
 // sparsifyFlat prunes flat down to only keys whose value differs from its
@@ -1372,6 +1440,12 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		// also how "reset to default" persists — the field is written with
 		// its default value from the form, and pruned here.
 		prunedKeys := sparsifyFlat(existing, defaults)
+		// Retired keys have no schema default left, so sparsifyFlat cannot see
+		// them — scrub them explicitly (issue #195).
+		for key := range retiredParamKeys {
+			delete(existing, key)
+			prunedKeys[key] = true
+		}
 
 		// Nest back into ROS2 YAML structure
 		nested := nestToROS2YAML(existing, nodeMappings, existingYAML)

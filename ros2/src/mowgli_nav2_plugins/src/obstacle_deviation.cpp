@@ -52,31 +52,24 @@ inline void offsetLateral(const geometry_msgs::msg::PoseStamped& pose,
 }
 
 /// Is the sample point (x, y) blocked? True if the LOCAL (obstacle) costmap
-/// cell is at/above `local_threshold`, OR — when a boundary guard is supplied —
-/// if the point projected into the guard costmap's frame lands on a lethal cell
-/// (out-of-zone). The guard is always checked at kLethalThreshold (zone cells
-/// are stamped LETHAL). Used for both the lateral-offset line samples and the
-/// footprint-interior samples so the skirt never leaves the mowing zone.
+/// cell is an OBSTACLE — at/above `local_threshold` and not masked out by
+/// `mask` (out-of-zone lethal, see ObstacleDeviation::isObstacleCell) — OR,
+/// when a boundary guard is supplied, if the point projected into the guard
+/// costmap's frame lands on a lethal cell (out-of-zone). Used for both the
+/// lateral-offset line samples and the footprint-interior samples so the skirt
+/// never leaves the mowing zone.
 bool cellBlocked(const nav2_costmap_2d::Costmap2D& local,
                  double x,
                  double y,
                  const ObstacleDeviation::BoundaryGuard& g,
-                 unsigned char local_threshold)
+                 unsigned char local_threshold,
+                 const ObstacleDeviation::BoundaryGuard& mask)
 {
-  if (sampleCell(local, x, y) >= local_threshold)
+  if (ObstacleDeviation::isObstacleCell(sampleCell(local, x, y), mask, x, y, local_threshold))
   {
     return true;
   }
-  if (g.costmap != nullptr)
-  {
-    const double bx = g.tx + g.cos_yaw * x - g.sin_yaw * y;
-    const double by = g.ty + g.sin_yaw * x + g.cos_yaw * y;
-    if (sampleCell(*g.costmap, bx, by) >= ObstacleDeviation::kLethalThreshold)
-    {
-      return true;
-    }
-  }
-  return false;
+  return g.isLethalAt(x, y);
 }
 
 /// Sample the robot BODY as a lateral span [center_dev - half_width,
@@ -93,7 +86,8 @@ bool bodyBlocked(const nav2_costmap_2d::Costmap2D& local,
                  const geometry_msgs::msg::PoseStamped& pose,
                  double center_dev,
                  double half_width,
-                 const ObstacleDeviation::BoundaryGuard& g)
+                 const ObstacleDeviation::BoundaryGuard& g,
+                 const ObstacleDeviation::BoundaryGuard& mask)
 {
   int n = 1;
   if (half_width > 0.0)
@@ -112,7 +106,7 @@ bool bodyBlocked(const nav2_costmap_2d::Costmap2D& local,
     double x = 0.0;
     double y = 0.0;
     offsetLateral(pose, dev, x, y);
-    if (cellBlocked(local, x, y, g, ObstacleDeviation::kLethalThreshold))
+    if (cellBlocked(local, x, y, g, ObstacleDeviation::kLethalThreshold, mask))
     {
       return true;
     }
@@ -153,24 +147,53 @@ bool regionBlocked(const nav2_costmap_2d::Costmap2D& local,
                    double center_dev,
                    double half_width,
                    const ObstacleDeviation::Footprint& footprint,
-                   const ObstacleDeviation::BoundaryGuard& g)
+                   const ObstacleDeviation::BoundaryGuard& g,
+                   const ObstacleDeviation::BoundaryGuard& mask = {})
 {
   if (!footprint.empty())
   {
     return ObstacleDeviation::footprintBlocked(
-        local, pose, center_dev, footprint, g, ObstacleDeviation::kLethalOnlyThreshold);
+        local, pose, center_dev, footprint, g, ObstacleDeviation::kLethalOnlyThreshold, mask);
   }
-  return bodyBlocked(local, pose, center_dev, half_width, g);
+  return bodyBlocked(local, pose, center_dev, half_width, g, mask);
 }
 
 }  // namespace
+
+bool BoundaryGuard::isLethalAt(double x, double y) const
+{
+  if (costmap == nullptr)
+  {
+    return false;
+  }
+  const double bx = tx + cos_yaw * x - sin_yaw * y;
+  const double by = ty + sin_yaw * x + cos_yaw * y;
+  return sampleCell(*costmap, bx, by) >= ObstacleDeviation::kLethalThreshold;
+}
+
+bool ObstacleDeviation::isObstacleCell(unsigned char local_cost,
+                                       const BoundaryGuard& zone_mask,
+                                       double x,
+                                       double y,
+                                       unsigned char threshold)
+{
+  if (local_cost < threshold)
+  {
+    return false;  // free / inflation gradient — never an obstacle
+  }
+  // Lethal locally. It is an obstacle only if the mowing zone actually
+  // contains it; a lethal that is also keepout/out-of-zone is something the
+  // planned path already stays clear of.
+  return !zone_mask.isLethalAt(x, y);
+}
 
 bool ObstacleDeviation::footprintBlocked(const nav2_costmap_2d::Costmap2D& costmap,
                                          const geometry_msgs::msg::PoseStamped& pose,
                                          double center_dev,
                                          const Footprint& footprint,
                                          const BoundaryGuard& guard,
-                                         unsigned char threshold)
+                                         unsigned char threshold,
+                                         const BoundaryGuard& zone_mask)
 {
   if (footprint.size() < 3)
   {
@@ -225,7 +248,8 @@ bool ObstacleDeviation::footprintBlocked(const nav2_costmap_2d::Costmap2D& costm
       double cx = 0.0;
       double cy = 0.0;
       costmap.mapToWorld(static_cast<unsigned int>(mx), static_cast<unsigned int>(my), cx, cy);
-      if (pointInPolygon(world_poly, cx, cy) && cellBlocked(costmap, cx, cy, guard, threshold))
+      if (pointInPolygon(world_poly, cx, cy) &&
+          cellBlocked(costmap, cx, cy, guard, threshold, zone_mask))
       {
         return true;
       }
@@ -297,7 +321,8 @@ bool ObstacleDeviation::hasClearExit(const nav2_costmap_2d::Costmap2D& costmap,
                                      std::size_t start_idx,
                                      int lookahead_count,
                                      double half_width,
-                                     const Footprint& footprint)
+                                     const Footprint& footprint,
+                                     const BoundaryGuard& zone_mask)
 {
   if (lookahead_count <= 0 || path.empty())
   {
@@ -308,9 +333,10 @@ bool ObstacleDeviation::hasClearExit(const nav2_costmap_2d::Costmap2D& costmap,
   bool obstacle_seen = false;
   for (std::size_t i = start_idx; i < end_idx; ++i)
   {
-    // Nominal (zero-deviation) body sample — no zone guard (see doc comment).
+    // Nominal (zero-deviation) body sample — no zone guard (see doc comment),
+    // but zone-MASKED so an out-of-zone lethal is not "an obstacle".
     const bool blocked =
-        regionBlocked(costmap, path[i], 0.0, half_width, footprint, BoundaryGuard{});
+        regionBlocked(costmap, path[i], 0.0, half_width, footprint, BoundaryGuard{}, zone_mask);
     if (blocked)
     {
       obstacle_seen = true;
@@ -332,7 +358,8 @@ int ObstacleDeviation::findFirstObstacleIndex(
     std::size_t start_idx,
     int lookahead_count,
     double half_width,
-    const Footprint& footprint)
+    const Footprint& footprint,
+    const BoundaryGuard& zone_mask)
 {
   if (lookahead_count <= 0 || path.empty())
   {
@@ -344,8 +371,9 @@ int ObstacleDeviation::findFirstObstacleIndex(
   {
     // Detection scans the NOMINAL path body (no zone guard — the guard only
     // rejects skirting OUT of zone, which is meaningless for "is there an
-    // obstacle ahead").
-    if (regionBlocked(costmap, path[i], 0.0, half_width, footprint, BoundaryGuard{}))
+    // obstacle ahead"). The zone MASK is the other direction: an out-of-zone
+    // lethal is not an obstacle to detect (issue #517).
+    if (regionBlocked(costmap, path[i], 0.0, half_width, footprint, BoundaryGuard{}, zone_mask))
     {
       return static_cast<int>(i);
     }
@@ -395,7 +423,8 @@ bool ObstacleDeviation::isPathClearWithDeviation(
     double deviation,
     const BoundaryGuard& guard,
     double half_width,
-    const Footprint& footprint)
+    const Footprint& footprint,
+    const BoundaryGuard& zone_mask)
 {
   if (lookahead_count <= 0 || path.empty())
   {
@@ -407,7 +436,7 @@ bool ObstacleDeviation::isPathClearWithDeviation(
   {
     // Body must clear at the offset `deviation` — sample the full footprint (or
     // the ±half_width span), not just the offset centerline.
-    if (regionBlocked(costmap, path[i], deviation, half_width, footprint, guard))
+    if (regionBlocked(costmap, path[i], deviation, half_width, footprint, guard, zone_mask))
     {
       return false;
     }

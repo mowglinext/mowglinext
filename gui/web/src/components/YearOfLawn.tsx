@@ -3,6 +3,8 @@ import {useTranslation} from "react-i18next";
 import i18n from "../i18n";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
+import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
+import {zonedDayAnchorMs} from "../utils/logTime.ts";
 
 /**
  * GitHub-style contribution-graph rendered against mowing sessions.
@@ -10,6 +12,13 @@ import {useIsMobile} from "../hooks/useIsMobile";
  * Each cell is one day; the cell intensity is the total mowing distance
  * for that day. We render the last 52 weeks ending today, padded so the
  * leftmost column is a Sunday.
+ *
+ * "Day" follows the shared time-zone preference (`useTimeFormat`), not the
+ * browser's zone: the sessions table on the same page renders its dates in that
+ * zone, and bucketing on a different calendar would put a session in a cell its
+ * own displayed date contradicts. Every day is carried as the epoch ms of noon
+ * UTC on that civil date (see `zonedDayAnchorMs`), so it doubles as the bucket
+ * key, steps by whole days across DST, and is read back with `getUTC*`.
  */
 
 export interface SessionLike {
@@ -26,13 +35,10 @@ interface YearOfLawnProps {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function startOfDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function dateKey(date: Date): string {
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-}
+// Every day anchor is noon UTC on its civil date, so the label formatters have
+// to read it back in UTC or they would drift a day for far-eastern/western
+// browser zones.
+const DAY_LABEL_ZONE = 'UTC';
 
 function intensity(km: number, max: number): number {
   if (km <= 0 || max <= 0) return 0;
@@ -48,25 +54,28 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
   const {colors} = useThemeMode();
   const {t} = useTranslation();
   const isMobile = useIsMobile();
+  const {timeZoneMode} = useTimeFormat();
   // The full year SVG (~810px) always horizontal-scroll-clips on phones; on
   // mobile we render only the most recent weeks. Summary stats stay over the
   // full 52-week window.
   const weeksToShow = isMobile ? 20 : 52;
 
   const {grid, weeks, totalKm, activeDays, streak, monthLabels} = useMemo(() => {
-    const today = startOfDay(new Date());
+    const today = zonedDayAnchorMs(Date.now(), timeZoneMode);
     // 52 weeks ending today, leftmost column starts on a Sunday.
-    const endDay = today.getDay(); // 0..6
+    const endDay = new Date(today).getUTCDay(); // 0..6
     const startOffsetDays = 52 * 7 - 1 - endDay;
-    const start = new Date(today.getTime() - startOffsetDays * DAY_MS);
+    const start = today - startOffsetDays * DAY_MS;
 
     // Bucket distance per day.
-    const perDay = new Map<string, number>();
+    const perDay = new Map<number, number>();
     sessions.forEach(s => {
-      const d = startOfDay(new Date(s.start_time));
+      const startedAtMs = Date.parse(s.start_time);
+      if (!Number.isFinite(startedAtMs)) return;
+      const d = zonedDayAnchorMs(startedAtMs, timeZoneMode);
       if (d < start || d > today) return;
       const km = s.distance_meters / 1000;
-      perDay.set(dateKey(d), (perDay.get(dateKey(d)) ?? 0) + km);
+      perDay.set(d, (perDay.get(d) ?? 0) + km);
     });
 
     const days = 52 * 7;
@@ -74,9 +83,9 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
     let totalKm = 0;
     let activeDays = 0;
     for (let i = 0; i < days; i++) {
-      const d = new Date(start.getTime() + i * DAY_MS);
-      const km = perDay.get(dateKey(d)) ?? 0;
-      cells.push({km, date: d});
+      const dayMs = start + i * DAY_MS;
+      const km = perDay.get(dayMs) ?? 0;
+      cells.push({km, date: new Date(dayMs)});
       totalKm += km;
       if (km > 0) activeDays += 1;
     }
@@ -104,16 +113,19 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
     const monthLabels: { col: number; label: string }[] = [];
     let prevMonth = -1;
     weeks.forEach((col, ci) => {
-      const m = col[0].date.getMonth();
+      const m = col[0].date.getUTCMonth();
       if (m !== prevMonth) {
-        const isoMonth = col[0].date.toLocaleString(i18n.language, {month: 'short'});
+        const isoMonth = col[0].date.toLocaleString(i18n.language, {
+          month: 'short',
+          timeZone: DAY_LABEL_ZONE,
+        });
         monthLabels.push({col: ci, label: isoMonth});
         prevMonth = m;
       }
     });
 
     return {grid: cells, weeks, totalKm, activeDays, streak, monthLabels};
-  }, [sessions]);
+  }, [sessions, timeZoneMode]);
 
   const maxKm = grid.reduce((m, c) => Math.max(m, c.km), 0.001);
 
@@ -207,7 +219,10 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
                   fill={intensityColors[lvl]}
                   stroke={lvl === 0 ? colors.borderSubtle : 'none'}
                 >
-                  <title>{t('yearOfLawn.cellTooltip', {date: cell.date.toLocaleDateString(i18n.language), km: cell.km.toFixed(2)})}</title>
+                  <title>{t('yearOfLawn.cellTooltip', {
+                    date: cell.date.toLocaleDateString(i18n.language, {timeZone: DAY_LABEL_ZONE}),
+                    km: cell.km.toFixed(2),
+                  })}</title>
                 </rect>
               );
             })

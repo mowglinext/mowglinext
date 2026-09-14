@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Check board.h/template consume board_defaults.h
@@ -50,7 +50,7 @@ jobs:
           restore-keys: |
             pio-${{ matrix.environment }}-
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -59,6 +59,23 @@ jobs:
 
       - name: Build firmware (${{ matrix.environment }})
         run: pio run -e ${{ matrix.environment }}
+        working-directory: firmware/stm32/ros_usbnode
+
+  test:
+    name: Firmware safety unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Run native firmware unit tests
+        run: pio test -e native
         working-directory: firmware/stm32/ros_usbnode
 
   # ─── Publish prebuilt binaries on a version tag ────────────────────────────
@@ -90,7 +107,7 @@ jobs:
           restore-keys: |
             pio-release-
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -115,7 +132,7 @@ jobs:
             --out-dir dist
 
       - name: Attach to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.bin

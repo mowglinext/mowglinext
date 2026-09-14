@@ -19,6 +19,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nav2_core/controller_exceptions.hpp>
@@ -28,7 +29,9 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_nav2_plugins/ftc_obstacle_wait.hpp"
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
+#include "mowgli_nav2_plugins/ftc_start_index.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 
 namespace mowgli_nav2_plugins
@@ -94,6 +97,21 @@ void FTCController::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr& pa
         boundary_frame_ = og->header.frame_id;
       });
 
+  // Blade telemetry for the blade-load slowdown (ftc_blade_load.hpp). Always
+  // subscribed — the feature can be switched on live via the
+  // blade_load_slowdown_enabled parameter — and cheap: one struct copy per
+  // status message. Reliable QoS matches the bridge's publisher (QoS(10)).
+  blade_status_sub_ = node->create_subscription<mowgli_interfaces::msg::Status>(
+      "/hardware_bridge/status",
+      rclcpp::QoS(1),
+      [this](const mowgli_interfaces::msg::Status::SharedPtr msg)
+      {
+        std::lock_guard<std::mutex> lock(blade_mutex_);
+        blade_active_ = msg->mower_esc_status != 0u;
+        blade_rpm_ = static_cast<double>(msg->mower_motor_rpm);
+        blade_status_time_ = rclcpp::Time(msg->blade_status_stamp, RCL_ROS_TIME);
+      });
+
   current_state_ = PlannerState::PRE_ROTATE;
   last_time_ = clock_->now();
   time_last_oscillation_ = clock_->now();
@@ -111,6 +129,7 @@ void FTCController::cleanup()
   global_plan_pub_.reset();
   obstacle_marker_pub_.reset();
   boundary_costmap_sub_.reset();
+  blade_status_sub_.reset();
   {
     std::lock_guard<std::mutex> lock(boundary_mutex_);
     boundary_costmap_.reset();
@@ -168,10 +187,21 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.speed_slow = declare_double("speed_slow", 0.2);
   config_.speed_angular = declare_double("speed_angular", 20.0);
   config_.acceleration = declare_double("acceleration", 1.0);
+  config_.obstacle_restart_angular_acceleration =
+      declare_double("obstacle_restart_angular_acceleration", 1.0);
   config_.min_speed_mps = declare_double("min_speed_mps", 0.15);
   config_.stall_speed_ratio = declare_double("stall_speed_ratio", 0.35);
   config_.stall_grace_s = declare_double("stall_grace_s", 0.6);
   config_.stall_crawl_speed = declare_double("stall_crawl_speed", 0.08);
+
+  // Blade-load slowdown (ftc_blade_load.hpp). Operator knobs are injected from
+  // mowgli_robot.yaml by navigation.launch.py; the telemetry age is a static
+  // nav2_params_base.yaml value.
+  config_.blade_load_slowdown_enabled = declare_bool("blade_load_slowdown_enabled", false);
+  config_.blade_load_rpm_full = declare_double("blade_load_rpm_full", 2500.0);
+  config_.blade_load_rpm_min = declare_double("blade_load_rpm_min", 1800.0);
+  config_.blade_load_min_speed_ratio = declare_double("blade_load_min_speed_ratio", 0.4);
+  config_.blade_load_telemetry_max_age_s = declare_double("blade_load_telemetry_max_age_s", 1.0);
 
   // PID longitudinal
   config_.kp_lon = declare_double("kp_lon", 1.0);
@@ -209,6 +239,9 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
 
   // Options
   config_.forward_only = declare_bool("forward_only", true);
+  // Legacy nearest-point snap in setPlan. OFF by default: on closed headland
+  // rings it could skip the entire ring (see setPlan).
+  config_.snap_to_nearest_on_set_plan = declare_bool("snap_to_nearest_on_set_plan", false);
   config_.debug_pid = declare_bool("debug_pid", false);
   config_.debug_obstacle = declare_bool("debug_obstacle", false);
 
@@ -240,6 +273,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.obstacle_wait_timeout_s = declare_double("obstacle_wait_timeout_s", 2.5);
   config_.obstacle_clear_hold_s = declare_double("obstacle_clear_hold_s", 1.5);
   config_.confine_deviation_to_zone = declare_bool("confine_deviation_to_zone", true);
+  config_.ignore_obstacles_outside_zone = declare_bool("ignore_obstacles_outside_zone", true);
 
   // Footprint-polygon clearance + bounded reverse-escape.
   config_.use_footprint_clearance = declare_bool("use_footprint_clearance", false);
@@ -323,6 +357,12 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
         break;
       config_.acceleration = p.as_double();
     }
+    else if (key == "obstacle_restart_angular_acceleration")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 10.0))
+        break;
+      config_.obstacle_restart_angular_acceleration = p.as_double();
+    }
     else if (key == "min_speed_mps")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
@@ -346,6 +386,34 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
         break;
       config_.stall_crawl_speed = p.as_double();
+    }
+    else if (key == "blade_load_slowdown_enabled")
+    {
+      config_.blade_load_slowdown_enabled = p.as_bool();
+    }
+    else if (key == "blade_load_rpm_full")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 20000.0))
+        break;
+      config_.blade_load_rpm_full = p.as_double();
+    }
+    else if (key == "blade_load_rpm_min")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 20000.0))
+        break;
+      config_.blade_load_rpm_min = p.as_double();
+    }
+    else if (key == "blade_load_min_speed_ratio")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 1.0))
+        break;
+      config_.blade_load_min_speed_ratio = p.as_double();
+    }
+    else if (key == "blade_load_telemetry_max_age_s")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 60.0))
+        break;
+      config_.blade_load_telemetry_max_age_s = p.as_double();
     }
     else if (key == "kp_lon")
     {
@@ -569,6 +637,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     {
       config_.confine_deviation_to_zone = p.as_bool();
     }
+    else if (key == "ignore_obstacles_outside_zone")
+    {
+      config_.ignore_obstacles_outside_zone = p.as_bool();
+    }
     else if (key == "use_footprint_clearance")
     {
       config_.use_footprint_clearance = p.as_bool();
@@ -614,6 +686,12 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   is_avoiding_ = false;
   target_lateral_deviation_ = 0.0;
   lateral_deviation_ = 0.0;
+  obstacle_wait_start_.reset();
+  obstacle_waiting_ = false;
+  obstacle_followable_time_ = 0.0;
+  obstacle_recovery_active_ = false;
+  last_recovery_angular_cmd_ = 0.0;
+  avoidance_clear_start_.reset();
 
   // Reset reverse-escape sub-state — a new strip must never inherit a
   // mid-reverse budget from the previous one.
@@ -628,50 +706,92 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   current_index_ = 0;
   current_progress_ = 0.0;
 
-  // Find the nearest path point to the robot's current position so we don't
-  // start from index 0 when the robot is far from the path start.
-  try
+  // Start at the BEGINNING of a freshly dispatched plan.
+  //
+  // This used to run an UNBOUNDED nearest-point search over the whole plan and
+  // begin tracking wherever that landed. On coverage headland rings — which are
+  // CLOSED, start == end to the millimetre — index 0 and index N-1 are the SAME
+  // POINT, so the search is genuinely ambiguous and floating-point noise decides
+  // which end wins. When the last index won, FTC drove three poses, reported the
+  // goal reached, and FollowStrip recorded the ring as MOWED. Observed on the
+  // robot on both 2026-08-24 runs:
+  //
+  //     new path with 436 poses, start=(1.95,9.50), end=(1.95,9.50)
+  //     setPlan with 436 points, starting at idx=432   -> 99 % of the ring skipped
+  //     setPlan with 805 points, starting at idx=372   -> 46 % skipped
+  //
+  // and both were then logged "reached 99-100 % of path - treating as MOWED".
+  // Un-mowed ground marked done, with skipped_swaths still reading 0.
+  //
+  // Resume is not this function's job and never was: FollowStrip already owns it
+  // by trimming the path at its resume cursor BEFORE dispatch, and it decides
+  // whether to transit blade-off first by measuring to poses.front() — index 0.
+  // Snapping to a different index here silently disagreed with that decision.
+  // Starting at 0 makes the two consistent again.
+  //
+  // snap_to_nearest_on_set_plan restores the old behaviour if a site needs it.
+  //
+  // NOTE: this block chooses the START INDEX ONLY. Everything after it —
+  // PID/derivative/stall reset, the tail-duplication the state machine's
+  // `size() - 2` arithmetic depends on, the latched plan publish, and the
+  // <3-pose termination guard — is SHARED and must run on BOTH paths. An
+  // earlier revision returned early from the default branch and skipped all of
+  // it, which leaked integrator windup from an aborted strip into the next
+  // strip's first tick and transitioned the state machine one segment early.
+  // Do not reintroduce an early return here.
+  if (!config_.snap_to_nearest_on_set_plan)
   {
-    const auto base_to_map = tf_buffer_->lookupTransform("map",
-                                                         "base_link",
-                                                         tf2::TimePointZero,
-                                                         tf2::durationFromSec(0.5));
-    const double rx = base_to_map.transform.translation.x;
-    const double ry = base_to_map.transform.translation.y;
-    double best_dist = std::numeric_limits<double>::max();
-    for (uint32_t i = 0; i < global_plan_.size(); ++i)
-    {
-      const double dx = global_plan_[i].pose.position.x - rx;
-      const double dy = global_plan_[i].pose.position.y - ry;
-      const double d = dx * dx + dy * dy;
-      if (d < best_dist)
-      {
-        best_dist = d;
-        current_index_ = i;
-      }
-    }
-    best_dist = std::sqrt(best_dist);
+    // current_index_ is already 0 from the reset above.
     RCLCPP_INFO(logger_,
-                "FTCController: setPlan with %zu points, starting at idx=%u (%.2fm from robot at "
-                "%.2f,%.2f).",
-                global_plan_.size(),
-                current_index_,
-                best_dist,
-                rx,
-                ry);
+                "FTCController: setPlan with %zu points, starting at idx=0.",
+                global_plan_.size());
   }
-  catch (const tf2::TransformException& ex)
+  else
   {
-    RCLCPP_WARN(logger_,
-                "FTCController: TF lookup in setPlan failed (%s), starting from idx=0.",
-                ex.what());
-    current_index_ = 0;
+    try
+    {
+      const auto base_to_map = tf_buffer_->lookupTransform("map",
+                                                           "base_link",
+                                                           tf2::TimePointZero,
+                                                           tf2::durationFromSec(0.5));
+      const double rx = base_to_map.transform.translation.x;
+      const double ry = base_to_map.transform.translation.y;
+
+      std::vector<std::pair<double, double>> xy;
+      xy.reserve(global_plan_.size());
+      for (const auto& p : global_plan_)
+      {
+        xy.emplace_back(p.pose.position.x, p.pose.position.y);
+      }
+      current_index_ = static_cast<uint32_t>(ChooseStartIndex(true, xy, rx, ry));
+
+      const double bdx = global_plan_[current_index_].pose.position.x - rx;
+      const double bdy = global_plan_[current_index_].pose.position.y - ry;
+      const double best_dist = std::hypot(bdx, bdy);
+      RCLCPP_INFO(logger_,
+                  "FTCController: setPlan with %zu points, starting at idx=%u (%.2fm from robot "
+                  "at %.2f,%.2f).",
+                  global_plan_.size(),
+                  current_index_,
+                  best_dist,
+                  rx,
+                  ry);
+    }
+    catch (const tf2::TransformException& ex)
+    {
+      RCLCPP_WARN(logger_,
+                  "FTCController: TF lookup in setPlan failed (%s), starting from idx=0.",
+                  ex.what());
+      current_index_ = 0;
+    }
   }
 
   last_time_ = clock_->now();
   current_movement_speed_ = config_.speed_slow;
   stall_time_ = 0.0;
   is_stalled_ = false;
+  is_blade_limited_ = false;
+  blade_load_scale_ = 1.0;
 
   lat_error_ = 0.0;
   lon_error_ = 0.0;
@@ -714,6 +834,56 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   RCLCPP_INFO(logger_,
               "FTCController: received new global plan with %zu points.",
               path.poses.size());
+}
+
+// ── applyBladeLoad ────────────────────────────────────────────────────────────
+
+double FTCController::applyBladeLoad(double target_speed)
+{
+  bool active = false;
+  double rpm = 0.0;
+  double age_s = -1.0;  // never received
+  {
+    std::lock_guard<std::mutex> lock(blade_mutex_);
+    active = blade_active_;
+    rpm = blade_rpm_;
+    if (blade_status_time_.nanoseconds() > 0)
+    {
+      age_s = (clock_->now() - blade_status_time_).seconds();
+    }
+  }
+
+  const FtcBladeLoadCfg cfg{config_.blade_load_slowdown_enabled,
+                            config_.blade_load_rpm_full,
+                            config_.blade_load_rpm_min,
+                            config_.blade_load_min_speed_ratio,
+                            config_.blade_load_telemetry_max_age_s};
+  const FtcBladeLoadResult out =
+      BladeLoadDecision(target_speed, active, rpm, age_s, config_.stall_crawl_speed, cfg);
+
+  if (out.is_limited != is_blade_limited_)
+  {
+    if (out.is_limited)
+    {
+      RCLCPP_INFO(logger_,
+                  "FTCController: blade load slowdown ENGAGED — blade %.0f rpm (ramp %.0f..%.0f), "
+                  "speed scale %.2f → %.3f m/s.",
+                  rpm,
+                  cfg.rpm_min,
+                  cfg.rpm_full,
+                  out.scale,
+                  out.target_speed);
+    }
+    else
+    {
+      RCLCPP_INFO(logger_,
+                  "FTCController: blade load slowdown released — blade %.0f rpm, full speed.",
+                  rpm);
+    }
+  }
+  is_blade_limited_ = out.is_limited;
+  blade_load_scale_ = out.scale;
+  return out.target_speed;
 }
 
 // ── setSpeedLimit ─────────────────────────────────────────────────────────────
@@ -1133,6 +1303,17 @@ void FTCController::update_control_point(double dt)
 
     case PlannerState::FOLLOWING:
     {
+      // A zero-velocity obstacle hold owns the output. Keep the virtual carrot
+      // fixed as well; otherwise it walks away from the stationary robot and
+      // creates a catch-up surge as soon as one scan looks clear.
+      if (obstacle_waiting_)
+      {
+        current_movement_speed_ = 0.0;
+        stall_time_ = 0.0;
+        is_stalled_ = false;
+        break;
+      }
+
       // Don't advance the carrot if it's already too far ahead of the robot.
       // This prevents the carrot from running away when an external component
       // (e.g. collision_monitor) slows the robot below the carrot's speed.
@@ -1172,6 +1353,12 @@ void FTCController::update_control_point(double dt)
       // calculate_velocity_commands reads this to cap the commanded velocity
       // at the crawl speed (bypassing the min_speed_mps floor) while blocked.
       is_stalled_ = stall.in_stall;
+
+      // Blade-load slowdown: scale the (possibly stall-eased) target by the
+      // blade motor's RPM sag so a bogged blade gets fed slower. Sets
+      // is_blade_limited_ for calculate_velocity_commands. Pure decision +
+      // unit tests in ftc_blade_load.hpp / test_ftc_blade_load.cpp.
+      target_speed = applyBladeLoad(target_speed);
 
       // Smooth speed ramp (acceleration / deceleration).
       if (target_speed > current_movement_speed_)
@@ -1440,11 +1627,15 @@ void FTCController::calculate_velocity_commands(double dt,
       // settles" the operator sees. Clamping the forward output to the
       // acceleration-limited current_movement_speed_ closes the lag at the ramp
       // rate instead of leaping; max_cmd_vel_speed stays as the absolute cap only.
-      if (lin_speed > current_movement_speed_)
-        lin_speed = current_movement_speed_;
-      if (lin_speed > 0.0 && lin_speed < config_.min_speed_mps)
-        lin_speed = config_.min_speed_mps;
-      cmd_vel.twist.linear.x = lin_speed;
+      // ClampForwardToMovementRamp bounds the PID output by the acceleration-
+      // limited carrot speed and floors at min(min_speed_mps, movement speed).
+      // That floor is also what the blade-load slowdown needs: while the blade
+      // load is limiting, current_movement_speed_ is the slowed carrot speed,
+      // so the min_speed_mps floor cannot undo a slowdown below 0.15 m/s
+      // (0.20 x 0.4 = 0.08); BladeLoadDecision never goes below
+      // stall_crawl_speed, which still clears the firmware wheel deadband.
+      cmd_vel.twist.linear.x =
+          ClampForwardToMovementRamp(lin_speed, current_movement_speed_, config_.min_speed_mps);
     }
   }
   else
@@ -1507,6 +1698,15 @@ void FTCController::calculate_velocity_commands(double dt,
       const double sign = (angle_error_ >= 0.0) ? 1.0 : -1.0;
       cmd_vel.twist.angular.z = sign * config_.max_cmd_vel_ang;
     }
+  }
+
+  if (obstacle_recovery_active_)
+  {
+    cmd_vel.twist.angular.z = ClampCommandSlew(last_recovery_angular_cmd_,
+                                               cmd_vel.twist.angular.z,
+                                               config_.obstacle_restart_angular_acceleration,
+                                               dt);
+    last_recovery_angular_cmd_ = cmd_vel.twist.angular.z;
   }
 
   if (config_.debug_pid)
@@ -1652,6 +1852,12 @@ bool FTCController::currentBodyInLethal()
 // log message + is_crashed_ latch.
 bool FTCController::waitOrThrowForObstacle(const std::string& reason)
 {
+  // Any blocked tick breaks the continuous-clear evidence accumulated while
+  // waiting. It also owns a hard zero command, so freeze the carrot/PID state
+  // before returning to computeVelocityCommands.
+  obstacle_followable_time_ = 0.0;
+  holdObstacleMotion();
+
   if (!obstacle_wait_start_.has_value())
   {
     obstacle_wait_start_ = clock_->now();
@@ -1670,6 +1876,29 @@ bool FTCController::waitOrThrowForObstacle(const std::string& reason)
   }
   obstacle_waiting_ = true;
   return true;
+}
+
+void FTCController::holdObstacleMotion()
+{
+  current_movement_speed_ = 0.0;
+  stall_time_ = 0.0;
+  is_stalled_ = false;
+  obstacle_recovery_active_ = true;
+  last_recovery_angular_cmd_ = 0.0;
+
+  // The controller does not run calculate_velocity_commands() while holding,
+  // so its derivative history would otherwise become stale and the integral
+  // terms would survive the stop. Track the current errors as the new baseline
+  // and clear stored energy on every hold tick.
+  i_lon_error_ = 0.0;
+  i_lat_error_ = 0.0;
+  i_angle_error_ = 0.0;
+  last_lat_error_ = lat_error_;
+  last_lon_error_ = lon_error_;
+  last_angle_error_ = angle_error_;
+  d_lat_filt_ = 0.0;
+  d_lon_filt_ = 0.0;
+  d_angle_filt_ = 0.0;
 }
 
 // Bounded straight reverse-escape for the WEDGED case. SAFETY-CRITICAL: this is
@@ -1751,6 +1980,13 @@ bool FTCController::reverseEscapeOrWait(const std::string& reason,
     // wait state so the two states never fight over cmd_vel.
     obstacle_waiting_ = false;
     obstacle_wait_start_.reset();
+    obstacle_followable_time_ = 0.0;
+    // The post-hold angular slew (obstacle_restart_angular_acceleration) is
+    // only meant for the probation after a hold. Its other reset lives in the
+    // wait branch we just left, so clear it here or it stays armed for the
+    // rest of the sub-path, including PRE_ROTATE pivots.
+    obstacle_recovery_active_ = false;
+    last_recovery_angular_cmd_ = 0.0;
     return true;  // caller returns; computeVelocityCommands emits the reverse.
   }
 
@@ -1891,6 +2127,18 @@ void FTCController::updateLateralDeviation(double dt)
     }
   }
 
+  // Zone MASK for the obstacle-DETECTION checks (issue #517) — the same guard,
+  // used in the opposite direction: a lethal LOCAL cell that is ALSO lethal in
+  // the boundary costmap (out-of-zone / keepout hole) is NOT an obstacle. The
+  // path ends chassis_safety_inset inside the boundary and U-turns there, so at
+  // every row end the lookahead footprints reach the hedge the boundary was
+  // recorded along — a real LiDAR return the robot was never going to drive
+  // into. guard.costmap is non-null only when confine_deviation_to_zone is on
+  // AND the global costmap has arrived, so the mask is inert otherwise (old
+  // behaviour). In-zone obstacles are unaffected.
+  const ObstacleDeviation::BoundaryGuard zone_mask =
+      config_.ignore_obstacles_outside_zone ? guard : ObstacleDeviation::BoundaryGuard{};
+
   // Robot chassis FOOTPRINT (base frame), fetched once per tick when
   // use_footprint_clearance is on. Passed to the ObstacleDeviation helpers so
   // they sample the true rectangular body (at true-lethal 254) instead of the
@@ -1929,7 +2177,8 @@ void FTCController::updateLateralDeviation(double dt)
   // centerline — otherwise an obstacle in the lateral band the chassis hits but
   // the inscribed-inflation radius misses never flips clear_at_zero false, so
   // avoidance never engages. No zone guard here: this asks "does the body hit an
-  // obstacle on the nominal line", independent of the mowing-zone boundary.
+  // obstacle on the nominal line", independent of the mowing-zone boundary —
+  // but the zone MASK applies, so an out-of-zone lethal is not "an obstacle".
   const bool clear_at_zero =
       ObstacleDeviation::isPathClearWithDeviation(*costmap_map_,
                                                   window,
@@ -1938,7 +2187,8 @@ void FTCController::updateLateralDeviation(double dt)
                                                   0.0,
                                                   ObstacleDeviation::BoundaryGuard{},
                                                   config_.obstacle_body_half_width,
-                                                  detect_footprint);
+                                                  detect_footprint,
+                                                  zone_mask);
 
   if (clear_at_zero)
   {
@@ -1980,36 +2230,19 @@ void FTCController::updateLateralDeviation(double dt)
     }
     else
     {
-      // Not avoiding, but possibly WAITING (both-sides-blocked / needs-more-
-      // than-max, set by waitOrThrowForObstacle below). Same window-edge
-      // flicker risk as the is_avoiding_ branch above — the observation_
-      // persistence:0 costmap can transiently miss the obstacle cell for one
-      // tick. Require a sustained clear (obstacle_clear_hold_s, same field as
-      // the avoidance case) before releasing the wait; otherwise a single-
-      // tick flicker falls through to the obstacle_waiting_ clear below and
-      // resets obstacle_wait_start_, deferring the abort indefinitely.
-      if (obstacle_waiting_)
-      {
-        if (!avoidance_clear_start_.has_value())
-        {
-          avoidance_clear_start_ = clock_->now();
-        }
-        const double clear_for = (clock_->now() - avoidance_clear_start_.value()).seconds();
-        if (clear_for < config_.obstacle_clear_hold_s)
-        {
-          return;  // still holding zero velocity via obstacle_waiting_
-        }
-        avoidance_clear_start_.reset();
-      }
-      // Not avoiding and the path is clear: nominal line tracking.
+      // Not avoiding and the path is clear: nominal line tracking. A pending
+      // wait is released by the single continuous-followable debounce below,
+      // shared with the valid-skirt case.
       target_lateral_deviation_ = 0.0;
     }
   }
   else
   {
-    // Obstacle (re)appeared on the nominal path — still committed. Cancel any
-    // pending clear-hold so a brief clear gap between scans doesn't count
-    // toward completion (the skirt holds until a SUSTAINED clear).
+    // Obstacle (re)appeared on the nominal path — still committed. Cancel the
+    // nominal-path clear hold so a brief clear gap between scans doesn't count
+    // toward avoidance completion. The separate followable-skirt debounce is
+    // reset only if the clearance search fails (inside waitOrThrowForObstacle),
+    // allowing a continuously valid skirt to release a pending wait.
     avoidance_clear_start_.reset();
     // Obstacle present on the nominal path within the lookahead. Commit to a
     // deviation that keeps the OFFSET path clear and HOLD it until the robot
@@ -2024,7 +2257,8 @@ void FTCController::updateLateralDeviation(double dt)
                                                     0,
                                                     config_.obstacle_lookahead,
                                                     config_.obstacle_body_half_width,
-                                                    detect_footprint);
+                                                    detect_footprint,
+                                                    zone_mask);
       if (obs_idx < 0)
       {
         // Footprint collision but no path-pose hit (e.g. inflated cell next
@@ -2043,7 +2277,8 @@ void FTCController::updateLateralDeviation(double dt)
                                            0,
                                            config_.obstacle_lookahead,
                                            config_.obstacle_body_half_width,
-                                           detect_footprint))
+                                           detect_footprint,
+                                           zone_mask))
       {
         if (reverseEscapeOrWait("no clear exit past obstacle — refusing to skirt into a pocket",
                                 detect_footprint,
@@ -2155,14 +2390,41 @@ void FTCController::updateLateralDeviation(double dt)
     }
   }
 
-  // Path is now followable inside the deviation cap — we are not wedged. Clear
-  // any pending wait / reverse-escape state so the next blockage starts its own
-  // fresh wait window and full reverse budget.
+  // Path is now followable inside the deviation cap. If a previous tick put us
+  // into a hard zero hold, require this result to remain continuously valid
+  // before moving again. A single scan can momentarily erase an obstacle cell;
+  // immediately clearing the wait here caused the field-observed stop/go loop.
   if (obstacle_waiting_)
   {
+    if (!ObstacleWaitReadyToResume(
+            true, dt, config_.obstacle_clear_hold_s, obstacle_followable_time_))
+    {
+      holdObstacleMotion();
+      return;
+    }
     RCLCPP_INFO(logger_, "FTCController: obstacle cleared, resuming after wait.");
     obstacle_waiting_ = false;
-    obstacle_wait_start_.reset();
+    obstacle_followable_time_ = 0.0;
+  }
+  else if (obstacle_wait_start_.has_value())
+  {
+    // Keep the original wait start through a moving probation window. If the
+    // obstacle reappears before the path has remained stable for a second
+    // clear-hold period, waitOrThrowForObstacle sees the original episode's
+    // deadline instead of granting another complete wait/restart cycle.
+    if (ObstacleWaitReadyToResume(
+            true, dt, config_.obstacle_clear_hold_s, obstacle_followable_time_))
+    {
+      RCLCPP_INFO(logger_, "FTCController: obstacle recovery stable; ending restart limits.");
+      obstacle_wait_start_.reset();
+      obstacle_followable_time_ = 0.0;
+      obstacle_recovery_active_ = false;
+      last_recovery_angular_cmd_ = 0.0;
+    }
+  }
+  else
+  {
+    obstacle_followable_time_ = 0.0;
   }
   reverse_escape_active_ = false;
   reverse_distance_done_ = 0.0;

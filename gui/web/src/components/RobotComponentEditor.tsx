@@ -240,9 +240,9 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             notification.warning({message: t("robotComponentEditor.noRobotPoseYet")});
             return;
         }
-        const px = robotX!;
-        const py = robotY!;
-        const yawRad = robotYaw!;
+        const px = robotX;
+        const py = robotY;
+        const yawRad = robotYaw;
         const yawDeg = roundTo(yawRadToCompassBearing(yawRad), 1);
         const savedX = values.dock_pose_x;
         const savedY = values.dock_pose_y;
@@ -988,7 +988,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                 <Col flex="auto">
                                     <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                                         {poseAvailable
-                                            ? t("robotComponentEditor.robotNow", {x: roundTo(robotX!, 2), y: roundTo(robotY!, 2), bearing: roundTo(yawRadToCompassBearing(robotYaw!), 0)})
+                                            ? t("robotComponentEditor.robotNow", {x: roundTo(robotX, 2), y: roundTo(robotY, 2), bearing: roundTo(yawRadToCompassBearing(robotYaw), 0)})
                                             : t("robotComponentEditor.waitingForPose")}
                                     </Typography.Text>
                                 </Col>

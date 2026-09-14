@@ -96,7 +96,10 @@ def generate_launch_description() -> LaunchDescription:
     chassis_height   = float(robot_params.get("chassis_height", 0.19))
     chassis_mass_kg  = float(robot_params.get("chassis_mass_kg", 8.76))
     chassis_center_x = float(robot_params.get("chassis_center_x", 0.18))
-    wheel_radius     = float(robot_params.get("wheel_radius", 0.093))
+    # 0.1 m: keep this fallback equal to the mowgli_robot.yaml template default
+    # AND to mowgli.urdf.xacro's own <xacro:arg> default. It used to be 0.093
+    # while the template said 0.04475 — three numbers for one wheel.
+    wheel_radius     = float(robot_params.get("wheel_radius", 0.1))
     wheel_width      = float(robot_params.get("wheel_width", 0.04))
     wheel_track      = float(robot_params.get("wheel_track", 0.325))
     wheel_x_offset   = float(robot_params.get("wheel_x_offset", 0.0))
@@ -110,7 +113,9 @@ def generate_launch_description() -> LaunchDescription:
     lidar_z   = str(robot_params.get("lidar_z", 0.30))
     lidar_yaw = str(robot_params.get("lidar_yaw", 0.0))
     imu_x     = str(robot_params.get("imu_x", 0.18))
-    imu_y     = str(robot_params.get("imu_y", 0.0))
+    # -0.195: keep equal to the mowgli_robot.yaml template default AND the
+    # xacro <xacro:arg> default (IMU is right of the wheelbase centre).
+    imu_y     = str(robot_params.get("imu_y", -0.195))
     imu_z     = str(robot_params.get("imu_z", 0.095))
     imu_roll  = str(robot_params.get("imu_roll", 0.0))
     imu_pitch = str(robot_params.get("imu_pitch", 0.0))
@@ -196,6 +201,9 @@ def generate_launch_description() -> LaunchDescription:
             # Allow command-line override of the serial port.
             {"serial_port": serial_port},
             {"use_sim_time": use_sim_time},
+            # Forward configured charge ceilings; firmware enforces its board limits.
+            {"max_charge_voltage": float(robot_params.get("max_charge_voltage", 29.4))},
+            {"max_charge_current": float(robot_params.get("max_charge_current", 1.2))},
             # Pass dock pose from robot config for dock position anchoring
             {"dock_pose_x": float(robot_params.get("dock_pose_x", 0.0))},
             {"dock_pose_y": float(robot_params.get("dock_pose_y", 0.0))},
@@ -230,6 +238,12 @@ def generate_launch_description() -> LaunchDescription:
             {"lift_recovery_mode": bool(robot_params.get("lift_recovery_mode", False))},
             {"lift_blade_resume_delay_sec": float(robot_params.get(
                 "lift_blade_resume_delay_sec", 1.0))},
+            # Dry-run inhibit (issue #195): false suppresses every blade ENABLE
+            # that reaches /hardware_bridge/mower_control — the merged chokepoint
+            # every caller (BT, FollowStrip, GUI) goes through. NOT a safety
+            # interlock: the firmware remains the sole blade safety authority and
+            # a DISABLE always passes through (mowgli_hardware/blade_gate.hpp).
+            {"mowing_enabled": bool(robot_params.get("mowing_enabled", True))},
             # 2026-07-17 Option C (task #34): the host-side gyro angular-rate
             # loop (angular_rate_loop_enabled/_kp/_ki/_kff, Option B task #24)
             # is REMOVED — the yaw-rate loop now runs in firmware (task #33),

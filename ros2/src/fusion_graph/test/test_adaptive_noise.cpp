@@ -8,14 +8,25 @@
 // the bogus delta until a downstream sensor (GPS / ICP) corrects.
 //
 // The mechanism observed: |dtheta_wheel - dtheta_gyro| is a per-tick
-// proxy for slip. We EMA-smooth it and add `gain * net_residual` (in
-// metres per radian) on top of the configured σ_x baseline.
+// proxy for slip. We EMA-smooth it and use `gain * net_residual` (in
+// metres per radian) as a per-node FLOOR under the baseline σ_x.
 //
-// Tests pin three behaviours:
-//   1. Matched wheel + gyro (no slip)         → σ_x stays at baseline.
+// Updated 2026-08-24 (issue #491): the σ_x baseline is no longer a fixed
+// per-node constant — it is a distance-scaled random walk,
+// σ = k·√(step_m + creep·dt). The adaptive term deliberately stayed a
+// per-node absolute release (it models a wheel FAULT, not a distance-driven
+// random walk), so it is now applied as max(travel, release) instead of
+// baseline + release. The "baseline" the tests below compare against is
+// therefore ExpectedTravelSigmaX() rather than a literal 0.05.
+//
+// Tests pin four behaviours:
+//   1. Matched wheel + gyro (no slip)         → σ_x stays at the travel
+//                                                baseline.
 //   2. Sustained wheel↔gyro disagreement (slip) → σ_x inflates.
 //   3. Slip event followed by quiet           → EMA decays back, σ_x
-//                                                returns near baseline.
+//                                                returns to the travel
+//                                                baseline.
+//   4. gain = 0                               → no inflation at all.
 
 #include <cmath>
 #include <cstdio>
@@ -33,8 +44,8 @@ fg::GraphParams MakeParams()
 {
   fg::GraphParams gp;
   gp.node_period_s = 0.1;
-  gp.wheel_sigma_x = 0.05;
-  gp.wheel_sigma_y = 0.005;
+  gp.wheel_sigma_x_per_sqrt_m = 0.05;
+  gp.wheel_sigma_y_per_sqrt_m = 0.005;
   gp.wheel_sigma_theta = 0.01;
   gp.gyro_sigma_theta = 0.005;
   gp.stationary_thresh_xy_m = 1.0e-3;
@@ -46,7 +57,31 @@ fg::GraphParams MakeParams()
   gp.adaptive_noise_enabled_gain = 10.0;
   gp.adaptive_noise_ema_tau_s = 0.5;
   gp.adaptive_noise_residual_floor_rad = 0.005;
+  gp.wheel_creep_speed_mps = 0.04;
   return gp;
+}
+
+// The no-fault σ_x for a node that advanced `step_m` metres over `dt`
+// seconds. Mirrors the model in CreateNodeLocked so a params change here
+// stays in step with the code under test.
+double ExpectedTravelSigmaX(double step_m, double dt)
+{
+  const auto gp = MakeParams();
+  return gp.wheel_sigma_x_per_sqrt_m * std::sqrt(step_m + gp.wheel_creep_speed_mps * dt);
+}
+
+// These tests tick at 0.1 s against node_period_s = 0.1, a comparison that
+// drifts in binary float, so a node absorbs ONE OR TWO wheel samples. With
+// σ_x now scaled by the step, that makes the exact value ambiguous — assert
+// the band the travel model allows instead. The old per-node constant
+// (0.05 m) sits an order of magnitude above the whole band either way, so the
+// regression this pins is not weakened.
+void ExpectTravelBaseline(double sigma_x_eff, double step_per_sample_m, double dt_per_sample)
+{
+  const double lo = ExpectedTravelSigmaX(step_per_sample_m, dt_per_sample);
+  const double hi = ExpectedTravelSigmaX(2.0 * step_per_sample_m, 2.0 * dt_per_sample);
+  EXPECT_GE(sigma_x_eff, lo - 1.0e-9);
+  EXPECT_LE(sigma_x_eff, hi + 1.0e-9);
 }
 
 }  // namespace
@@ -79,9 +114,10 @@ TEST(AdaptiveNoise, NoSlipKeepsBaselineSigma)
 
   // Residual EMA must stay under the floor (no inflation kicks in).
   EXPECT_LT(stats.residual_ema_rad, 0.005);
-  // σ_x_eff must equal the configured wheel_sigma_x within a small
-  // numeric epsilon — adaptive gain × (residual − floor) must be 0.
-  EXPECT_NEAR(stats.wheel_sigma_x_eff, 0.05, 1.0e-6);
+  // σ_x_eff must sit on the travel-scaled baseline — adaptive gain ×
+  // (residual − floor) is 0, so the release floor is 0 and
+  // max(travel, 0) == travel.
+  ExpectTravelBaseline(stats.wheel_sigma_x_eff, kVx * kDt, kDt);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -122,7 +158,8 @@ TEST(AdaptiveNoise, SlipInflatesSigma)
   EXPECT_GT(stats.residual_ema_rad, 0.020);
   EXPECT_LT(stats.residual_ema_rad, 0.070);
 
-  // σ_x_eff = baseline + gain × (residual − floor) ≈ 0.05 + 10 × 0.05 ≈ 0.55 m
+  // σ_x_eff = max(travel, gain × (residual − floor)) ≈ 10 × 0.05 ≈ 0.5 m —
+  // the release dominates the ~3 mm travel term by two orders of magnitude.
   // Wide bounds — this just checks "inflated meaningfully".
   EXPECT_GT(stats.wheel_sigma_x_eff, 0.15);
   EXPECT_LT(stats.wheel_sigma_x_eff, 0.65);
@@ -165,10 +202,10 @@ TEST(AdaptiveNoise, EmaDecaysAfterSlipEnds)
               recovered.residual_ema_rad,
               recovered.wheel_sigma_x_eff);
 
-  // 10 τ of zero residual collapses the EMA to << floor; σ_x returns
-  // to the configured baseline (0.05).
+  // 10 τ of zero residual collapses the EMA to << floor; σ_x returns to the
+  // travel baseline for a zero-length step (creep floor only).
   EXPECT_LT(recovered.residual_ema_rad, 0.001);
-  EXPECT_NEAR(recovered.wheel_sigma_x_eff, 0.05, 1.0e-6);
+  ExpectTravelBaseline(recovered.wheel_sigma_x_eff, 0.0, kDt);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -195,7 +232,9 @@ TEST(AdaptiveNoise, GainZeroDisablesAdaptation)
               stats.residual_ema_rad,
               stats.wheel_sigma_x_eff);
 
-  // EMA still tracks (it's a passive measurement), but σ_x_eff
-  // must equal the baseline — the gain=0 short-circuits inflation.
-  EXPECT_NEAR(stats.wheel_sigma_x_eff, 0.05, 1.0e-6);
+  // EMA still tracks (it's a passive measurement), but σ_x_eff must sit on
+  // the travel baseline — gain=0 short-circuits inflation. The wheels claim
+  // rotation only (vx = 0), so the step is zero and only the creep floor
+  // contributes.
+  ExpectTravelBaseline(stats.wheel_sigma_x_eff, 0.0, kDt);
 }

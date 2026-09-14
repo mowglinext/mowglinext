@@ -5,8 +5,9 @@
 """
 sim_wheel_slip.py — SIMULATION ONLY.
 
-Relays /wheel_odom_raw (Gazebo ground-truth) → /wheel_odom (what the EKF
-sees), with periodic short slip events that briefly inflate the reported
+Relays /wheel_odom_raw (the sim's ground-truth wheel odometry) →
+/wheel_odom (what the localizer sees), with periodic short slip events
+that briefly inflate the reported
 longitudinal velocity. Models the encoder-vs-ground-truth divergence a
 real diff-drive robot sees on grass: wheel keeps rotating, encoder keeps
 ticking, but the chassis under-translates — so wheel_odom over-reports.
@@ -16,17 +17,18 @@ Default cycle (tunable via parameters):
   for    slip_duration_s (1.0 s),
   add    slip_vx_bias  (+0.05 m/s)  to twist.linear.x.
 
-Pose is passed through unchanged. The dual EKF only fuses /wheel_odom
-twist (not pose), so the slip surfaces as a transient encoder vs GPS /
-gyro divergence.
+Pose is passed through unchanged. fusion_graph's wheel between-factor
+uses the twist (not the pose), so the slip surfaces as a transient
+encoder-vs-GPS/gyro divergence — which is also what exercises the
+graph's slip veto and the hardware_bridge dig detector.
 
 Wiring
 ------
-  gazebo_bridge.yaml: ros_topic_name=/wheel_odom_raw  (was /wheel_odom)
-  this node:          /wheel_odom_raw -> /wheel_odom
+  wheel_odometry_node (sim): -> /wheel_odom_raw
+  this node:                 /wheel_odom_raw -> /wheel_odom
 
-Safety: read-only consumer of one Gazebo-bridged topic, publishes a
-single sensor topic. No drive commands, no TF, no safety topic.
+Safety: read-only consumer of one sim topic, publishes a single sensor
+topic. No drive commands, no TF, no safety topic.
 """
 
 from __future__ import annotations
@@ -123,7 +125,7 @@ class SimWheelSlip(Node):
             out.twist.twist.linear.x += self._slip_vx_bias
             self._slip_count += 1
         # Override covariance to match the real hardware_bridge values
-        # (hardware_bridge_node.cpp ~lines 1196-1212). gz-sim diff-drive
+        # (hardware_bridge_node.cpp ~lines 1196-1212). The sim's diff-drive
         # publishes default covariance which doesn't enforce the
         # non-holonomic constraint on vy. Without cov[7]=1e-4, GPS lateral
         # noise leaks into apparent sideways drift inside the EKF.

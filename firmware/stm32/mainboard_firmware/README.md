@@ -4,7 +4,7 @@ ST Link, and OpenOCD
 
 # Firmware restore (ST Link + openocd)
 
-Edit the restore.sh script, and update the filename to whatever your backup is called and run it.
+Edit the restore_firmware.sh script, and update the filename to whatever your backup is called and run it.
 
 ```
 Open On-Chip Debugger 0.11.0
@@ -40,8 +40,6 @@ You should see the normal panel behaviour, plenty of LEDS active, panel locked e
 ## Locating the connector
 
 There is a 4-pin connector on the board (J9) - it has silkscreen that is labeled with GND, SWCL, SWDA, 3V3 pins.
-
-<img src="../../images/mainboard_swd.jpg" width="60%"/>
 
 ## Backing up the firmware yourself (ST Link + openocd)
 

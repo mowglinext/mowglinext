@@ -11,10 +11,10 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
-	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"golang.org/x/sys/execabs"
 	"golang.org/x/xerrors"
 )
@@ -158,7 +158,7 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> board.h built\n"))
 	//Build firmware
-	_, _ = writer.Write([]byte("------> Building and uploading firmware...\n"))
+	_, _ = writer.Write([]byte("------> Building firmware...\n"))
 	pioEnv := "Yardforce500"
 	switch config.BoardType {
 	case "BOARD_YARDFORCE500B":
@@ -166,16 +166,37 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 	case "BOARD_LUV1000RI":
 		pioEnv = "LUV1000RI"
 	}
-	cmd := execabs.Command("/bin/bash", "-c", "platformio run -e "+pioEnv+" -t upload")
+	// BUILD ONLY — deliberately not `-t upload`. PlatformIO's uploader forces
+	// `transport select swd`, which excludes ST-Link V2 dongles without recent
+	// firmware; see openocdProgramCmd. Expert mode exists to compile a custom
+	// board.h, not to own the flashing transport, so it now hands the artifact
+	// to the same openocd command the prebuilt path uses.
+	cmd := execabs.Command("/bin/bash", "-c", "platformio run -e "+pioEnv)
 	cmd.Dir = pioProjectDir
 	cmd.Stdout = writer
 	cmd.Stderr = writer
 	err = cmd.Run()
 	if err != nil {
-		_, _ = writer.Write([]byte("------> Error while building and uploading firmware: " + err.Error() + "\n"))
+		_, _ = writer.Write([]byte("------> Error while building firmware: " + err.Error() + "\n"))
+		return xerrors.Errorf("error while building firmware: %w", err)
+	}
+	_, _ = writer.Write([]byte("------> Firmware built\n"))
+
+	// The .elf carries its own load addresses, so no offset is passed here.
+	elfPath := pioProjectDir + "/.pio/build/" + pioEnv + "/firmware.elf"
+	if _, statErr := os.Stat(elfPath); statErr != nil {
+		_, _ = writer.Write([]byte("------> Build produced no firmware.elf at " + elfPath + "\n"))
+		return xerrors.Errorf("firmware.elf not found after build: %w", statErr)
+	}
+	_, _ = writer.Write([]byte("------> Flashing firmware (openocd program+verify)...\n"))
+	cmd = execabs.Command("/bin/bash", "-c", openocdProgramCmd(config.BoardType, elfPath))
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err = cmd.Run(); err != nil {
+		_, _ = writer.Write([]byte("------> Error while flashing firmware: " + err.Error() + "\n"))
 		return xerrors.Errorf("error while flashing firmware: %w", err)
 	}
-	_, _ = writer.Write([]byte("------> Firmware flashed\n"))
+	_, _ = writer.Write([]byte("------> Firmware flashed and byte-verified\n"))
 	return nil
 }
 
@@ -233,6 +254,28 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	return nil
 }
 
+// openocdProgramCmd builds the ONE openocd invocation every flash path uses.
+//
+// It deliberately passes NO `transport select`, and that is the whole point.
+// PlatformIO's ststm32 platform hardcodes `-c "transport select swd"`
+// (platform.py), which means dapdirect SWD: an ST-Link **V3** always offers it,
+// but an ST-Link **V2** only does with recent dongle firmware. On an older V2 —
+// perfectly good hardware that flashes fine otherwise — openocd refuses with
+// "Debug adapter doesn't support 'swd' transport". Letting openocd negotiate
+// the transport with whatever adapter is actually plugged in is what makes a
+// single command work on V2 and V3 alike.
+//
+// interface/stlink.cfg covers both generations: its vid_pid list carries the
+// V2, V2-1 and V3 product IDs.
+//
+// programArg is passed to openocd's `program` verbatim, so callers append a
+// load address for a raw .bin and pass a bare path for an .elf (which carries
+// its own addresses).
+func openocdProgramCmd(board, programArg string) string {
+	return "openocd -f interface/stlink.cfg -f " + openocdTargetCfg(board) +
+		" -c \"program " + programArg + " verify reset exit\""
+}
+
 // openocdTargetCfg maps a board to its OpenOCD target config. YardForce 500 is a
 // STM32F103 (f1x); the 500B is a STM32F401 (f4x). Different MCU family = different
 // target cfg, so flashing with the wrong one simply fails — itself a guard.
@@ -288,9 +331,8 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 	// reset=10) are Broadcom BCM numbers that land on the wrong RK3588 pins, and
 	// /dev/gpiomem does not exist. The GPIO `export` also fails EBUSY on retry
 	// because sysfs export state is kernel-global and leaks across attempts.
-	openocdCmd := "openocd -f interface/stlink.cfg -f " + openocdTargetCfg(entry.Board) +
-		" -c \"program " + binPath + " 0x08000000 verify reset exit\""
-	cmd := execabs.Command("/bin/bash", "-c", openocdCmd)
+	cmd := execabs.Command("/bin/bash", "-c",
+		openocdProgramCmd(entry.Board, binPath+" 0x08000000"))
 	cmd.Stdout = writer
 	cmd.Stderr = writer
 	if err := cmd.Run(); err != nil {

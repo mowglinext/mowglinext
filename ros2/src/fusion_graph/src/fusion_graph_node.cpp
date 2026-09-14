@@ -19,6 +19,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "fusion_graph/fusion_graph_node_util.hpp"
+#include <beluga_ros/amcl.hpp>
 
 namespace fusion_graph
 {
@@ -29,8 +30,10 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   // ── Parameters ────────────────────────────────────────────────────
   GraphParams gp;
   gp.node_period_s = declare_parameter<double>("node_period_s", 0.1);
-  gp.wheel_sigma_x = declare_parameter<double>("wheel_sigma_x", 0.05);
-  gp.wheel_sigma_y = declare_parameter<double>("wheel_sigma_y", 0.005);
+  // Random-walk coefficients (m/√m), not per-node sigmas — issue #491.
+  gp.wheel_sigma_x_per_sqrt_m = declare_parameter<double>("wheel_sigma_x_per_sqrt_m", 0.05);
+  gp.wheel_sigma_y_per_sqrt_m = declare_parameter<double>("wheel_sigma_y_per_sqrt_m", 0.005);
+  gp.wheel_creep_speed_mps = declare_parameter<double>("wheel_creep_speed_mps", 0.04);
   gp.wheel_sigma_theta = declare_parameter<double>("wheel_sigma_theta", 0.01);
   gp.gyro_sigma_theta = declare_parameter<double>("gyro_sigma_theta", 0.005);
   gp.gps_sigma_floor = declare_parameter<double>("gps_sigma_floor", 0.003);
@@ -43,6 +46,10 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   // we only mirror the magnitude here for the gate-side threshold
   // and never re-apply the offset to the GPS sample.
   lever_arm_radius_m_ = std::hypot(gp.lever_arm_x, gp.lever_arm_y);
+  // ...and the full vector for the docked antenna prediction (issue #512):
+  // dock_pose ⊕ R(yaw)·lever_arm is where a correct fix puts the antenna.
+  lever_arm_x_m_ = gp.lever_arm_x;
+  lever_arm_y_m_ = gp.lever_arm_y;
   gp.cov_update_every_n = declare_parameter<int>("cov_update_every_n", 10);
   gp.isam2_relinearize_skip = declare_parameter<int>("isam2_relinearize_skip", 5);
   gp.max_graph_nodes = static_cast<uint64_t>(declare_parameter<int>("max_graph_nodes", 6000));
@@ -63,6 +70,8 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.slip_residual_thresh_rad = declare_parameter<double>("slip_residual_thresh_rad", 0.01);
   gp.slip_gyro_max_rad = declare_parameter<double>("slip_gyro_max_rad", 0.005);
   gp.slip_wheel_min_rad = declare_parameter<double>("slip_wheel_min_rad", 0.005);
+  // Window the three thresholds are integrated over (issue #516); 0 = per node.
+  gp.slip_window_s = declare_parameter<double>("slip_window_s", 0.5);
   gp.gyro_bias_estimation_enabled = declare_parameter<bool>("gyro_bias_estimation_enabled", true);
   gp.gyro_bias_ema_tau_s = declare_parameter<double>("gyro_bias_ema_tau_s", 30.0);
   gp.gyro_bias_max_sample_rad_per_s =
@@ -99,6 +108,30 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   // the docked pose 11.5 cm + 53° over a dwell — field 2026-06-10). σ small so
   // the dock prior dominates xy; yaw σ from dock_pose_yaw_sigma_rad.
   dock_reanchor_sigma_xy_m_ = declare_parameter<double>("dock_reanchor_sigma_xy_m", 0.03);
+  // Dock-prior vs RTK-Fixed GPS consistency (issue #512, dock_gps_consistency.hpp).
+  // Field case 2026-09-02, 12:27-12:50 UTC, robot docked + charging after a
+  // power cycle: the ZED-F9P reported RTK Fixed at 14-20 mm while placing the
+  // antenna 2.45 m / 2.33 m / 1.88 m from dock_pose (three bases/readings);
+  // it converged to 10-24 cm on its own after ~45 min. The 3 cm prior pinned
+  // the pose through all of it and nothing was logged. Above
+  // dock_prior_max_gps_disagreement_m — with a FRESH Fixed sample whose σ is
+  // ≤ dock_prior_max_gps_sigma_m — the prior yields for that node and the
+  // sample is fused instead (ERROR log + diagnostics). 0.50 m sits far above
+  // the 5-30 cm ambiguity-set shift the dock hold exists for, and the σ cap
+  // keeps a Float fix (dm-m σ) from ever triggering it. No fix / Float on the
+  // dock (the terrace case) is deliberately NOT a trigger. ≤ 0 disables.
+  dock_prior_max_gps_disagreement_m_ =
+      declare_parameter<double>("dock_prior_max_gps_disagreement_m", 0.50);
+  dock_prior_max_gps_sigma_m_ = declare_parameter<double>("dock_prior_max_gps_sigma_m", 0.05);
+  // Dead-reckoning slip veto thresholds (see header + dr_slip_veto.hpp).
+  // dr_slip_wheel_min_rad_per_s MUST stay above the 1-tick quantization floor
+  // of the wheel-derived yaw rate, or the veto fires on encoder rounding
+  // during ordinary straight driving (issue #488).
+  dr_slip_gyro_max_rad_per_s_ =
+      declare_parameter<double>("dr_slip_gyro_max_rad_per_s", dr_slip_gyro_max_rad_per_s_);
+  dr_slip_wheel_min_rad_per_s_ =
+      declare_parameter<double>("dr_slip_wheel_min_rad_per_s", dr_slip_wheel_min_rad_per_s_);
+
   // Dock-approach pose stabilisation (see header). During the final graceful
   // approach, drop COG yaw + reject RTK-float epochs so the dock controller
   // gets a stable target instead of a flickering pose.
@@ -109,19 +142,12 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
   datum_cos_lat_ = std::cos(datum_lat_ * M_PI / 180.0);
 
-  // Keyframe-map GraphParams (used by the GraphManager store/persistence;
-  // the node-side capture/apply params are declared in the scan-matching
-  // block below). datum tags persisted maps to their garden (cross-site
-  // guard on Load).
+  // The datum tags the persisted graph to its garden (cross-site guard on
+  // Load, see graph_manager_persistence.cpp).
   gp.datum_lat = datum_lat_;
   gp.datum_lon = datum_lon_;
-  gp.kf_spacing_m = declare_parameter<double>("kf_spacing_m", 0.5);
-  gp.max_keyframes = static_cast<uint64_t>(declare_parameter<int>("max_keyframes", 2000));
-  // Hard yaw-σ floor on the scan-to-keyframe absolute prior (GraphManager-side,
-  // enforced in CreateNodeLocked). Mirrors the scan/loop-closure LiDAR-yaw floor
-  // so the keyframe heading can only weakly correct gyro drift. See graph_params.
-  gp.kf_yaw_sigma_floor_rad = declare_parameter<double>("kf_apply_yaw_sigma_floor_rad", 0.30);
-  kf_spacing_m_ = gp.kf_spacing_m;  // node reuses for the capture-spacing gate
+  gp.lidar_anchor_sigma_floor_m = declare_parameter<double>("lidar_anchor_sigma_floor_m", 0.05);
+  lidar_anchor_sigma_floor_param_m_ = gp.lidar_anchor_sigma_floor_m;
 
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
   odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");

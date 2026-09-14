@@ -53,8 +53,8 @@ fg::GraphParams MakeParams()
 {
   fg::GraphParams gp;
   gp.node_period_s = 0.1;
-  gp.wheel_sigma_x = 0.05;
-  gp.wheel_sigma_y = 0.005;
+  gp.wheel_sigma_x_per_sqrt_m = 0.05;
+  gp.wheel_sigma_y_per_sqrt_m = 0.005;
   gp.wheel_sigma_theta = 0.01;
   gp.gyro_sigma_theta = 0.005;
   gp.stationary_thresh_xy_m = 1.0e-3;

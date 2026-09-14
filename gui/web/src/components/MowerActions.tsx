@@ -10,6 +10,7 @@ import {useCoverageResumeAvailable} from "../hooks/useCoverageResumeAvailable.ts
 import {HighLevelStatusConstants} from "../types/ros.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useTranslation} from "react-i18next";
+import {stringifyValue} from "../utils/stringifyValue.ts";
 
 const ActionsCard = styled(Card)`
   .ant-card-body > button {
@@ -86,7 +87,7 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
                             await sendHome();
                             resolve();
                         } catch (e) {
-                            reject(e);
+                            reject(e instanceof Error ? e : new Error(stringifyValue(e)));
                         }
                     },
                     onCancel: () => resolve(),
@@ -200,6 +201,18 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
                     <AsyncButton icon={<PlayCircleOutlined/>} type="primary" key="btnHLC1"
                                  onAsyncClick={mowerAction("high_level_control", {Command: 1})}
                     >{resumeAvailable ? t('mowerActions.resume') : t('mowerActions.start')}</AsyncButton>
+                ) : null}
+                {/* Mid-session charge hold (low/critical battery docked the
+                    robot, state=1 but current_command is still START): a
+                    COMMAND_START here asks the BT to resume BEFORE the pack is
+                    full. The BT honours it only above
+                    battery_manual_resume_percent and refuses it otherwise, so
+                    the button is always safe to offer. */}
+                {highLevelStatus.state !== HighLevelStatusConstants.HIGH_LEVEL_STATE_AUTONOMOUS &&
+                 (highLevelStatus.state_name === "CHARGING" || highLevelStatus.state_name === "CRITICAL_BATTERY_CHARGING") ? (
+                    <AsyncButton icon={<PlayCircleOutlined/>} type="primary" key="btnHLCManualResume"
+                                 onAsyncClick={mowerAction("high_level_control", {Command: 1})}
+                    >{t('mowerActions.resumeNow')}</AsyncButton>
                 ) : null}
                 {/* When a prior mow was interrupted, "Start" resumes mid-path; this
                     second button discards that progress and mows from the first

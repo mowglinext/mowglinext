@@ -49,7 +49,9 @@
 #include <memory>
 #include <string>
 
+#include "mowgli_interfaces/gnss_observation_freshness.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
+#include "mowgli_localization/localization_monitor_policy.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/int32.hpp"
@@ -57,15 +59,6 @@
 
 namespace mowgli_localization
 {
-
-/// Integer IDs for each localization mode (published on /localization/mode_id).
-enum class LocalizationMode : int32_t
-{
-  DEAD_RECKONING = 0,
-  GPS_ONLY = 1,
-  RTK_FLOAT = 2,
-  RTK_FIXED = 3,
-};
 
 class LocalizationMonitorNode : public rclcpp::Node
 {
@@ -100,7 +93,7 @@ private:
   /**
    * @brief Evaluate the current localization mode from source freshness / quality.
    */
-  LocalizationMode evaluate_mode() const;
+  LocalizationMode evaluate_mode(bool gps_observation_fresh) const;
 
   /**
    * @brief Convert a LocalizationMode enum to its string representation.
@@ -129,7 +122,10 @@ private:
   // Source state
   // ---------------------------------------------------------------------------
   rclcpp::Time last_wheel_odom_stamp_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_gps_stamp_{0, 0, RCL_ROS_TIME};
+  mowgli_interfaces::gnss_observation_freshness::PhysicalObservationTracker
+      gps_observation_freshness_;
+  bool gps_freshness_initialized_{false};
+  bool last_gps_observation_fresh_{false};
 
   /// True when the last GPS message carried an RTK-fixed or RTK-float flag.
   bool gps_rtk_active_{false};
@@ -154,6 +150,8 @@ private:
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr abs_pose_sub_;
 
   rclcpp::TimerBase::SharedPtr publish_timer_;
+
+  static std::int64_t steady_now_ns();
 };
 
 }  // namespace mowgli_localization

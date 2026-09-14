@@ -5,7 +5,10 @@ export type GnssRuntimeValue = {
     configured_value?: string;
     fallback_env_value?: string;
     active_value?: string;
-    source?: "config" | "env" | "default" | string;
+    // Known values are "config" | "env" | "default"; the backend may add
+    // more, so this stays an open string rather than a closed union that
+    // TypeScript would collapse to `string` anyway.
+    source?: string;
 };
 
 export type GnssSerialDeviceOption = {

@@ -133,7 +133,25 @@ void LocalizationMonitorNode::on_absolute_pose(
 {
   using Flags = mowgli_interfaces::msg::AbsolutePose;
 
-  last_gps_stamp_ = msg->header.stamp;
+  const rclcpp::Time ros_now = now();
+  const rclcpp::Time receipt_stamp(msg->header.stamp, get_clock()->get_clock_type());
+  const auto update = gps_observation_freshness_.Observe(0,
+                                                         receipt_stamp.nanoseconds(),
+                                                         ros_now.nanoseconds(),
+                                                         steady_now_ns());
+  using mowgli_interfaces::gnss_observation_freshness::IsAcceptedObservation;
+  using mowgli_interfaces::gnss_observation_freshness::ObservationUpdate;
+  if (!IsAcceptedObservation(update))
+  {
+    if (update == ObservationUpdate::kInvalidProvenance)
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           5000,
+                           "localization monitor: GPS receipt stamp is zero/future; sample denied");
+    }
+    return;
+  }
 
   gps_rtk_fixed_ = (msg->flags & Flags::FLAG_GPS_RTK_FIXED) != 0u;
   gps_rtk_active_ = gps_rtk_fixed_ || ((msg->flags & Flags::FLAG_GPS_RTK_FLOAT) != 0u) ||
@@ -146,7 +164,45 @@ void LocalizationMonitorNode::on_absolute_pose(
 
 void LocalizationMonitorNode::on_publish_timer()
 {
-  const LocalizationMode instant = evaluate_mode();
+  const rclcpp::Time now = this->now();
+  const auto maximum_age_ns = static_cast<std::int64_t>(gps_timeout_ * 1.0e9);
+  const auto steady_now = steady_now_ns();
+  const bool gps_observation_fresh =
+      gps_observation_freshness_.ObservationIsFresh(now.nanoseconds(), steady_now, maximum_age_ns);
+  if (gps_observation_freshness_.ConsumeEpochReset())
+  {
+    // A clock epoch break is not mode flicker. Publish the safe mode now and
+    // require new provenance before ordinary mode debounce can start again.
+    stable_mode_ = LocalizationMode::DEAD_RECKONING;
+    pending_mode_ = stable_mode_;
+    pending_since_ = now;
+  }
+  const bool gps_delivery_live =
+      gps_observation_freshness_.DeliveryIsLive(steady_now, maximum_age_ns);
+  if (!gps_freshness_initialized_)
+  {
+    gps_freshness_initialized_ = true;
+    last_gps_observation_fresh_ = gps_observation_fresh;
+  }
+  else if (gps_observation_fresh != last_gps_observation_fresh_)
+  {
+    last_gps_observation_fresh_ = gps_observation_fresh;
+    if (gps_observation_fresh)
+    {
+      RCLCPP_INFO(get_logger(), "GNSS physical observation freshness recovered");
+    }
+    else if (gps_delivery_live)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "GNSS physical observations stale while cached message delivery remains active");
+    }
+    else
+    {
+      RCLCPP_WARN(get_logger(), "GNSS physical observations and message delivery are stale");
+    }
+  }
+
+  const LocalizationMode instant = evaluate_mode(gps_observation_fresh);
 
   // Hysteresis (mode_debounce_sec_): only commit a changed mode once the new
   // value has persisted continuously for the debounce window. This filters the
@@ -154,7 +210,6 @@ void LocalizationMonitorNode::on_publish_timer()
   // toggle every epoch during motion while position σ stays sub-cm) so the
   // published localization mode — and anything gating on it — does not flap.
   // mode_debounce_sec_ <= 0 disables the hysteresis (commit immediately).
-  const rclcpp::Time now = this->now();
   if (instant == stable_mode_)
   {
     // Back to the committed mode — cancel any pending change.
@@ -189,28 +244,9 @@ void LocalizationMonitorNode::on_publish_timer()
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-LocalizationMode LocalizationMonitorNode::evaluate_mode() const
+LocalizationMode LocalizationMonitorNode::evaluate_mode(const bool gps_observation_fresh) const
 {
-  const bool gps_fresh = is_fresh(last_gps_stamp_, gps_timeout_);
-
-  // Ordered from best to worst; first matching rule wins.
-
-  if (gps_fresh && gps_rtk_fixed_)
-  {
-    return LocalizationMode::RTK_FIXED;
-  }
-
-  if (gps_fresh && gps_rtk_active_)
-  {
-    return LocalizationMode::RTK_FLOAT;
-  }
-
-  if (gps_fresh)
-  {
-    return LocalizationMode::GPS_ONLY;
-  }
-
-  return LocalizationMode::DEAD_RECKONING;
+  return EvaluateLocalizationMode(gps_observation_fresh, gps_rtk_active_, gps_rtk_fixed_);
 }
 
 std::string LocalizationMonitorNode::mode_to_string(const LocalizationMode mode)
@@ -241,6 +277,13 @@ bool LocalizationMonitorNode::is_fresh(const rclcpp::Time last_stamp,
 
   const rclcpp::Duration age = now() - last_stamp;
   return age.seconds() < timeout_sec;
+}
+
+std::int64_t LocalizationMonitorNode::steady_now_ns()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
 }
 
 }  // namespace mowgli_localization

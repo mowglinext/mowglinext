@@ -115,6 +115,26 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+
+  ament_add_pytest_test(test_sim_navsat_rtk_fix
+    test/test_sim_navsat_rtk_fix.py
+  )
+  ament_add_pytest_test(test_e2e_validation_policy
+    test/test_e2e_validation_policy.py
+  )
+  ament_add_pytest_test(test_e2e_ground_truth
+    test/test_e2e_ground_truth.py
+  )
+  ament_add_pytest_test(test_nav2_readiness_gate
+    test/test_nav2_readiness_gate.py
+  )
+  ament_add_pytest_test(test_ground_truth_publisher
+    test/test_ground_truth_publisher.py
+  )
+  ament_add_pytest_test(test_webots_controller_remaps
+    test/test_webots_controller_remaps.py
+  )
 
   # ---- test_firmware_wheel_model ----
   # firmware_wheel_model.hpp is header-only and ROS-free; no ROS deps needed.

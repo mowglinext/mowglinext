@@ -21,6 +21,11 @@
   "runArgs": [
     "--privileged"
   ],
+  // Let the host-networked GUI container reach Foxglove at localhost:8765.
+  // forwardPorts alone only creates an editor tunnel.
+  "appPort": [
+    "127.0.0.1:8765:8765"
+  ],
   "mounts": [
     "source=/dev,target=/host-dev,type=bind,readonly"
   ],
@@ -57,7 +62,12 @@
   // Claude Code CLI
   "features": {
     "ghcr.io/anthropics/devcontainer-features/claude-code:latest": {},
-    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false
+    }
   },
 
   // Build the ROS2 workspace after container creation

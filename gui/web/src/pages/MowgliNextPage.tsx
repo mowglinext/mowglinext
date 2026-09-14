@@ -22,6 +22,7 @@ import {rasterizeMowProgress} from "../utils/mowProgress.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {computeBatteryPercent} from "../utils/battery.ts";
 import {deriveGpsStatus} from "../utils/gpsStatus.ts";
+import {deriveIsMoving} from "../utils/mowerMotion.ts";
 
 import {GlassCard} from "../concept/components/GlassCard.tsx";
 import {BatteryRing} from "../concept/components/BatteryRing.tsx";
@@ -30,6 +31,7 @@ import {ActionCluster} from "../concept/components/ActionCluster.tsx";
 import {LiveMapMini} from "../concept/components/LiveMapMini.tsx";
 import type {MiniArea, MiniProgress} from "../concept/components/LiveMapMini.tsx";
 import {ProgressRibbon} from "../concept/components/ProgressRibbon.tsx";
+import {SoilWetBanner} from "../components/dashboard/SoilWetBanner.tsx";
 import {WeatherChip} from "../concept/components/WeatherChip.tsx";
 import {useWeather} from "../hooks/useWeather.ts";
 import {NoiseTexture} from "../concept/components/NoiseTexture.tsx";
@@ -69,7 +71,7 @@ function useMowerData() {
   // OBSTACLE_BACKOFF, DYNAMIC_OBSTACLE_CLEARED, AREA_UNREACHABLE) and carried a
   // phantom SKIP_STRIP, so every planning/backoff phase read as "idle" mid-mow.
   const stateNum = highLevelStatus.state ?? -1;
-  const isMoving = stateNum === 2 || stateNum === 3 || stateNum === 4;
+  const isMoving = deriveIsMoving(stateNum, isCharging);
 
   return {
     state: stateName,
@@ -130,6 +132,9 @@ export const MowgliNextPage = () => {
   // multi-area field render just the first zone on the dashboard.
   const workingAreas = map.working_area ?? [];
   const validAreas = workingAreas.filter(a => (a.area?.points?.length ?? 0) >= 3);
+  const dock = typeof map.dock_x === "number" && Number.isFinite(map.dock_x)
+    && typeof map.dock_y === "number" && Number.isFinite(map.dock_y)
+    ? {x: map.dock_x, y: map.dock_y} : undefined;
   const bbox = (() => {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     validAreas.forEach(a => (a.area?.points ?? []).forEach(p => {
@@ -140,6 +145,12 @@ export const MowgliNextPage = () => {
       if (y > y1) y1 = y;
     }));
     if (!isFinite(x0)) return null;
+    // Docks can sit outside the mowing polygons. Expand the shared bounds
+    // instead of clipping the marker or clamping it to a false position.
+    if (dock) {
+      x0 = Math.min(x0, dock.x); x1 = Math.max(x1, dock.x);
+      y0 = Math.min(y0, dock.y); y1 = Math.max(y1, dock.y);
+    }
     return {x0, y0, dx: (x1 - x0) || 1, dy: (y1 - y0) || 1};
   })();
   // Map frame -> unit square with a 10 % inset (matches the old look). Non-
@@ -165,6 +176,7 @@ export const MowgliNextPage = () => {
   const robotNormalised = (pose && bbox)
     ? {...norm(pose.x ?? 0, pose.y ?? 0), heading: robotYawDeg}
     : undefined;
+  const dockNormalised = dock && bbox ? norm(dock.x, dock.y) : undefined;
 
   // Real mowed-cell overlay: same OccupancyGrid MapPage renders, rasterised
   // once per grid message (throttled to ~1 Hz) and placed in the same unit
@@ -319,6 +331,9 @@ export const MowgliNextPage = () => {
           />
         </motion.header>
 
+        {/* IrriSense: the garden is wet — warn before anyone starts a mow */}
+        <SoilWetBanner variants={riseFade}/>
+
         {/* layout */}
         {isMobile ? (
           <div style={{display: 'flex', flexDirection: 'column', gap: 14}}>
@@ -330,7 +345,7 @@ export const MowgliNextPage = () => {
                 todayMowedM2={todayMowedM2} totalArea={totalArea}
               />
             </motion.div>
-            <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} coverage={coveragePct} onViewMap={() => navigate("/map")}/></motion.div>
+            <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} onViewMap={() => navigate("/map")}/></motion.div>
             <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
           </div>
@@ -349,7 +364,7 @@ export const MowgliNextPage = () => {
               <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-              <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} coverage={coveragePct} height={300} onViewMap={() => navigate("/map")}/></motion.div>
+              <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} height={300} onViewMap={() => navigate("/map")}/></motion.div>
               <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             </div>
           </div>
@@ -475,12 +490,13 @@ interface LiveMapCardProps {
   polygons: MiniArea[];
   progress: MiniProgress | null;
   robot?: {x: number; y: number; heading: number};
+  dock?: {x: number; y: number};
   coverage: number;
   height?: number;
   onViewMap?: () => void;
 }
 
-function LiveMapCard({polygons, progress, robot, coverage, height = 220, onViewMap}: LiveMapCardProps) {
+function LiveMapCard({polygons, progress, robot, dock, coverage, height = 220, onViewMap}: LiveMapCardProps) {
   const {t} = useTranslation();
   const hasArea = polygons.length > 0;
   return (
@@ -517,6 +533,7 @@ function LiveMapCard({polygons, progress, robot, coverage, height = 220, onViewM
           polygons={polygons}
           progress={progress}
           robot={robot}
+          dock={dock}
           coverage={coverage}
           height={height}
         />

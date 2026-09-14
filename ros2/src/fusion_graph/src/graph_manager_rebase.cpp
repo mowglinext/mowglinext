@@ -1,7 +1,7 @@
 // Copyright 2026 Mowgli Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// GraphManager implementation — rebase/loop-closure/transform: RebaseISAM2, RigidTransformAll,
+// GraphManager implementation — rebase/transform: RebaseISAM2, RigidTransformAll,
 // etc.. (The class implementation is split across several translation units to keep each file
 // within the project's 600-line budget; all share graph_manager.hpp + the inline PoseKey().)
 
@@ -30,85 +30,6 @@
 
 namespace fusion_graph
 {
-std::vector<uint64_t> GraphManager::FindLoopClosureCandidates(uint64_t query_index,
-                                                              double max_dist_m,
-                                                              double min_age_s,
-                                                              size_t max_candidates) const
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  std::vector<uint64_t> out;
-  if (next_index_ == 0)
-    return out;
-
-  if (!HasPoseAt(query_index))
-    return out;
-  const auto Xq = PoseAt(query_index);
-
-  // Per-node age proxy: nodes are created at node_period_s cadence,
-  // so age_idx = (next - i) * node_period_s. Within ±10% of wall
-  // clock, sufficient for the >30s gate.
-  const double age_per_idx = params_.node_period_s;
-  const auto cutoff_idx_diff = static_cast<uint64_t>(std::ceil(min_age_s / age_per_idx));
-
-  // Window bound: never offer a candidate older than the max_graph_nodes sliding
-  // window. Its pose is (or is imminently) marginalized by the maintenance
-  // rebase, so a loop-closure factor to it either fails or resurrects a node the
-  // window is trying to drop — the mechanism behind the unbounded factor growth
-  // that OOM-killed the node 2026-06-09 (an LC formed to node 2098 while the live
-  // index was ~10138). scans_ are retained far longer than the pose window
-  // (scan_retention_nodes), so the HasPoseAt filter alone did not bound this.
-  // max_graph_nodes==0 disables the window → no extra bound.
-  uint64_t window_cutoff = 0;
-  if (params_.max_graph_nodes > 0 && next_index_ > params_.max_graph_nodes)
-    window_cutoff = next_index_ - params_.max_graph_nodes;
-
-  // Linear scan over scans_ keys (== nodes with a stored scan, which
-  // is what we want — no point loop-closing to a node without a
-  // scan). PoseAt is O(depth) on the Bayes tree path, so this loop
-  // is roughly O(scans_.size() · depth).
-  std::vector<std::pair<double, uint64_t>> hits;
-  hits.reserve(scans_.size());
-  const double max_d2 = max_dist_m * max_dist_m;
-  for (const auto& [idx, _] : scans_)
-  {
-    if (idx == query_index)
-      continue;
-    if (idx < window_cutoff)
-      continue;
-    if (query_index - idx < cutoff_idx_diff)
-      continue;
-    if (!HasPoseAt(idx))
-      continue;
-    const auto X = PoseAt(idx);
-    const double dx = X.x() - Xq.x();
-    const double dy = X.y() - Xq.y();
-    const double d2 = dx * dx + dy * dy;
-    if (d2 <= max_d2)
-      hits.emplace_back(d2, idx);
-  }
-
-  std::sort(hits.begin(), hits.end());
-  for (size_t i = 0; i < hits.size() && out.size() < max_candidates; ++i)
-    out.push_back(hits[i].second);
-  return out;
-}
-
-void GraphManager::PruneOldScans(uint64_t max_age_nodes)
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  if (next_index_ <= max_age_nodes)
-    return;
-  const uint64_t cutoff = next_index_ - max_age_nodes;
-  auto it = scans_.begin();
-  while (it != scans_.end())
-  {
-    if (it->first < cutoff)
-      it = scans_.erase(it);
-    else
-      break;  // map is ordered by key, rest is newer
-  }
-}
-
 void GraphManager::RebaseISAM2()
 {
   // Phase 1: snapshot under the lock. The heavy work (building the
@@ -116,7 +37,7 @@ void GraphManager::RebaseISAM2()
   // so per-tick Tick() can keep publishing TF — see the comment on
   // rebase_in_progress_ in graph_manager.hpp for the 2026-05-14
   // incident that motivated this. While we're outside the lock,
-  // Tick / ForceAnchor / AddLoopClosure go through
+  // Tick / ForceAnchor go through
   // ApplyIsamUpdateLocked, which mirrors their factors+values into
   // rebase_pending_factors_ / rebase_pending_values_ so the fresh
   // iSAM2 catches up at phase 3.
@@ -155,7 +76,7 @@ void GraphManager::RebaseISAM2()
   gtsam::ISAM2 fresh(p);
 
   // Re-anchor every existing variable with a tight prior. The exact
-  // sigma is a balance: too tight and future loop closures can't move
+  // sigma is a balance: too tight and future absolute observations can't move
   // anything; too loose and iSAM2 wanders. 5 cm / 3° matches typical
   // RTK + COG noise floors and keeps the rebase non-destructive.
   gtsam::NonlinearFactorGraph fg;
@@ -195,7 +116,7 @@ void GraphManager::RebaseISAM2()
     return;
   }
 
-  // Phase 3: replay anything Tick / ForceAnchor / AddLoopClosure
+  // Phase 3: replay anything Tick / ForceAnchor
   // added while we were rebuilding, then atomically swap isam_.
   // The lock is held only for this replay (typically a handful of
   // factors/values — ms-scale), so the TF publisher unblocks quickly.
@@ -230,10 +151,6 @@ void GraphManager::RebaseISAM2()
     }
     isam_ = std::move(fresh);
     estimate_dirty_ = true;
-    // Loop-closure edges accumulated so far were collapsed into the
-    // priors; reset the visualization list so future LCs are
-    // distinguishable from the rebased history.
-    loop_closure_edges_.clear();
     rebase_pending_factors_.resize(0);
     rebase_pending_values_.clear();
     rebase_in_progress_ = false;
@@ -309,7 +226,7 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   }
 
   // Build a fresh iSAM2 with priors at the shifted poses. Loose σ
-  // (5 cm / 3°) on the older nodes so future loop closures can still
+  // (5 cm / 3°) on the older nodes so future absolute observations can still
   // refine them; tight σ on the latest node so the dock anchor isn't
   // washed out by the next stream of GPS factors when the robot
   // undocks.
@@ -361,19 +278,6 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   }
   isam_ = std::move(fresh);
   estimate_dirty_ = true;
-  // Loop-closure edges collapsed into priors during the rebuild.
-  loop_closure_edges_.clear();
-
-  // Co-transform the frozen keyframe map by the SAME correction so the absolute
-  // keyframe constraints stay consistent with the rigidly-corrected live frame.
-  // Keyframes are NOT iSAM2 variables (untouched by the pose loop above), so
-  // without this the map and the live trajectory desync by `correction` and the
-  // scan-to-keyframe factor would then drag the robot off-truth — a silent gauge
-  // break. scan_body is body-frame and gauge-invariant; only abs_pose moves.
-  // Ordered BEFORE the D2 cleanup below (same mu_ section) so a late async
-  // rebase cannot revert the shift.
-  for (auto& [id, kf] : keyframes_)
-    kf.abs_pose = correction * kf.abs_pose;
 
   // Cancel any in-flight async rebase (D2 race, field 2026-06-10 dock walk).
   // RebaseISAM2 phase 2 builds its fresh tree WITHOUT the lock from a snapshot
@@ -393,60 +297,6 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   {
     latest_->pose = correction * latest_->pose;
   }
-}
-
-void GraphManager::AddLoopClosure(uint64_t prev_index,
-                                  uint64_t curr_index,
-                                  const gtsam::Pose2& delta,
-                                  double sigma_xy,
-                                  double sigma_theta)
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  if (sigma_xy <= 0.0)
-    sigma_xy = 0.5;
-  if (sigma_theta <= 0.0)
-    sigma_theta = 0.1;
-
-  if (!HasPoseAt(prev_index) || !HasPoseAt(curr_index))
-    return;
-  auto k_prev = PoseKey(prev_index);
-  auto k_curr = PoseKey(curr_index);
-
-  // Robust noise model on loop-closure between-factors (item #11).
-  // Wraps the diagonal Gaussian in a Dynamic Covariance Scaling
-  // (DCS) m-estimator. DCS smoothly downweights an LC whose
-  // residual exceeds ~k·σ instead of letting a single bad LC
-  // anchor the entire trajectory to a wrong place — even with the
-  // upstream ICP guards (PR #233) and rmse acceptance gate, a
-  // degenerate match can still squeak through on symmetric
-  // outdoor scenery. DCS keeps inliers fully efficient (factor
-  // weight ≈ 1 when residual is below k·σ) and decays the weight
-  // quadratically beyond. Cheaper than PCM and well-validated in
-  // the SLAM literature (Agarwal et al., "Robust Map Optimization
-  // using Dynamic Covariance Scaling", ICRA 2013).
-  //
-  // DCS shape parameter Φ (kDcsPhi): residuals below √Φ are
-  // unaffected; above, the loss switches from quadratic to
-  // sub-quadratic. Φ = 1 is the classic value — equivalent to
-  // saying "an LC residual of 1 σ is borderline acceptable".
-  auto base_noise = MakeDiagonal({sigma_xy, sigma_xy, sigma_theta});
-  constexpr double kDcsPhi = 1.0;
-  auto robust_noise =
-      gtsam::noiseModel::Robust::Create(gtsam::noiseModel::mEstimator::DCS::Create(kDcsPhi),
-                                        base_noise);
-
-  gtsam::NonlinearFactorGraph fg;
-  fg.add(gtsam::BetweenFactor<gtsam::Pose2>(k_prev, k_curr, delta, robust_noise));
-
-  if (!ApplyIsamUpdateLocked(fg, gtsam::Values()))
-  {
-    // Loop-closure factor triggered an ill-posed reset; the graph is now
-    // empty — don't record the (now-meaningless) edge/count.
-    return;
-  }
-  estimate_dirty_ = true;
-  ++loop_closures_added_;
-  loop_closure_edges_.emplace_back(prev_index, curr_index);
 }
 
 }  // namespace fusion_graph

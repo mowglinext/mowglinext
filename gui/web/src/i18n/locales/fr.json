@@ -1,4 +1,9 @@
 {
+  "systemPower": {
+    "title": "Hôte",
+    "description": "Redémarrez ou éteignez l’ordinateur qui exécute les services du robot et l’interface web.",
+    "open": "Alimentation de l’hôte…"
+  },
   "language": {
     "label": "Langue",
     "fr": "Français",
@@ -140,14 +145,14 @@
     "restartMowgliConfirm": "Cela redémarre toute la pile Mowgli (ROS2, GPS, LiDAR et cette interface web) — comme la commande mowgli-restart. La page se déconnectera brièvement et se rechargera automatiquement au retour de l'interface.",
     "restartingStackTitle": "Redémarrage de Mowgli…",
     "restartingStackBody": "Redémarrage de toute la pile. Cette page se reconnectera et se rechargera automatiquement au retour de l'interface.",
-    "rebootingPiTitle": "Redémarrage du Raspberry Pi…",
-    "rebootingPiBody": "Le Raspberry Pi redémarre. Cette page se reconnectera et se rechargera automatiquement à son retour (cela peut prendre une à deux minutes).",
+    "rebootingPiTitle": "Redémarrage de l’hôte…",
+    "rebootingPiBody": "L’hôte redémarre. Cette page se reconnectera et se rechargera automatiquement à son retour (cela peut prendre une à deux minutes).",
     "advanced": "Avancé",
     "restartBoard": "Redémarrer la carte (STM32)",
     "restartBoardConfirm": "Réinitialise le firmware STM32 (NVIC_SystemReset). À utiliser pour débloquer une carte figée — par ex. l'IMU renvoyant NaN. Les moteurs/la lame s'arrêtent pendant le reset (~1 s).",
-    "restartPi": "Redémarrer le Raspberry Pi",
+    "restartPi": "Redémarrer l’hôte",
     "restartPiConfirm": "Le système va redémarrer. Vous perdrez la connexion temporairement.",
-    "shutdownPi": "Éteindre le Raspberry Pi",
+    "shutdownPi": "Éteindre l’hôte",
     "shutdownPiConfirm": "Le système va s'éteindre. Un accès physique sera nécessaire pour le rallumer.",
     "rearm": "Réarmer",
     "rearmEmergencyTooltip": "Réarmer l'arrêt d'urgence (le firmware décide si le verrou se libère)",
@@ -169,6 +174,7 @@
     "bladeOff": "Lame arrêtée",
     "start": "Démarrer",
     "resume": "Reprendre",
+    "resumeNow": "Reprendre maintenant (sans attendre la charge)",
     "startFresh": "Redémarrer à zéro",
     "emergencyStop": "Arrêt d'urgence",
     "rearm": "Réarmer",
@@ -221,6 +227,8 @@
     "prebuiltInfoDesc": "Choisissez votre carte et votre panneau ci-dessus, laissez Source du firmware sur « Image précompilée », puis cliquez sur Flasher. Le binaire précompilé correspondant, vérifié par somme de contrôle, est téléchargé et écrit — aucune compilation nécessaire. Ne choisissez « Personnalisé » que si vous avez besoin de compiler depuis les sources.",
     "noPrebuiltTitle": "Pas encore de firmware précompilé pour ce modèle",
     "noPrebuiltDesc": "Aucun binaire précompilé testé n'existe pour la carte sélectionnée. Réglez Source du firmware sur « Personnalisé — compiler depuis les sources » et renseignez la section experte ci-dessous pour le compiler et le flasher.",
+    "selectionRequiredTitle": "Sélectionnez une carte et un panneau avant de flasher",
+    "selectionRequiredDesc": "Le modèle de tondeuse n'identifie pas toujours la carte contrôleur. Choisissez la carte et le panneau exacts de votre matériel ; le flashage reste désactivé tant que les deux ne sont pas sélectionnés.",
     "expertBuildLabel": "Expert : paramètres du build personnalisé",
     "expertBuildAlertMessage": "Utilisé uniquement quand Source du firmware est « Personnalisé »",
     "expertBuildAlertDescription": "Ces réglages compilent le firmware depuis les sources au lieu de flasher le binaire précompilé testé. De mauvaises valeurs peuvent endommager la batterie ou désactiver une sécurité physique. Ils ne prennent effet que lorsque Source du firmware ci-dessus est réglé sur « Personnalisé — compiler depuis les sources ».",
@@ -315,7 +323,7 @@
     "approachDistance": "Distance d'approche",
     "approachDistanceTooltip": "Distance du point de préparation devant la base",
     "chargerDetection": "Détection du chargeur",
-    "chargerDetectionTooltip": "Utiliser la tension de charge pour confirmer l'accostage",
+    "chargerDetectionTooltip": "Confirmer l'accostage par le courant de charge (nav2 simple_charging_dock.use_battery_status). Désactivé = l'accostage est considéré atteint sur la seule proximité de pose, le délai d'attente de charge ne conditionne donc plus le contact. Prend effet au prochain redémarrage de ROS2.",
     "advanced": "Avancé",
     "maxRetries": "Tentatives max",
     "maxRetriesTooltip": "Nombre d'essais d'accostage avant d'abandonner",
@@ -427,28 +435,34 @@
     "clearGraphConfirmTitle": "Effacer le graphe de fusion ?",
     "clearGraphConfirmBody": "Cette action supprime tous les nœuds accumulés, les fermetures de boucle et la covariance — le localisateur repart de zéro. Cette action est irréversible.",
     "clearGraphConfirmOk": "Effacer le graphe",
+    "clearLidarMap": "Effacer la carte LiDAR",
+    "lidarMapCleared": "Carte LiDAR effacée",
+    "clearLidarMapConfirmTitle": "Effacer la carte de l'ancre LiDAR ?",
+    "clearLidarMapConfirmBody": "Cette action supprime la grille d'occupation géoréférencée dans laquelle l'ancre LiDAR projette les scans. L'ancre repasse en cartographie et ne peut plus tenir la position pendant une fenêtre RTK-Float tant que la carte n'a pas été reconstruite en RTK Fixe. Le graphe de fusion lui-même n'est pas touché.",
+    "clearLidarMapConfirmOk": "Effacer la carte LiDAR",
+    "lidarAnchorGroupTitle": "Ancre LiDAR",
+    "lidarAnchorState": "État de l'ancre",
+    "lidarAnchorStateOff": "Désactivée",
+    "lidarAnchorStateWaitingForMap": "En attente de carte",
+    "lidarAnchorStateMapping": "Cartographie",
+    "lidarAnchorStateAnchoring": "Ancrage",
+    "lidarAnchorShadowSuffix": "(ombre)",
+    "lidarAnchorSigma": "σ {{value}} m",
+    "lidarAnchorMapCells": "Cellules de carte",
+    "lidarAnchorSeeds": "amorces {{seeds}} · ignorées {{skipped}}",
+    "lidarAnchorVerdict": "Dernier verdict",
+    "lidarAnchorVerdictAccepted": "Accepté",
+    "lidarAnchorVerdictRejectedScore": "Rejeté (score)",
+    "lidarAnchorVerdictRejectedSpread": "Rejeté (dispersion)",
+    "lidarAnchorVerdictRejectedDeadReckoning": "Rejeté (navigation à l'estime)",
+    "lidarAnchorHitRatio": "taux de concordance {{pct}} %",
+    "lidarAnchorFactors": "Facteurs d'ancre",
+    "lidarAnchorFactorsHint": "appliqués au graphe",
+    "lidarAnchorAccepted": "Estimations acceptées",
+    "lidarAnchorRejectBreakdown": "{{rejected}} rejetées · score {{score}} · dispersion {{spread}} · estime {{dr}}",
+    "lidarAnchorReseeds": "Réamorçages",
+    "lidarAnchorOdomRebases": "Rebasages odom",
     "nodesInGraph": "Nœuds dans le graphe",
-    "withScans": "{{count}} avec scans",
-    "loopClosures": "Fermetures de boucle",
-    "icpSuccessRate": "Taux de réussite ICP",
-    "matches": "{{ok}}/{{total}} correspondances",
-    "scansReceived": "{{count}} scans reçus",
-    "icpMonitorTitle": "ICP / Recalage de scans",
-    "icpMonitorShort": "Moniteur ICP",
-    "icpScanMatchRate": "Taux de recalage",
-    "icpRejects": "Rejets ICP",
-    "icpRejectBreakdown": "rmse {{rmse}} · inliers {{inliers}} · cohérence {{sanity}} · divergence {{diverge}}",
-    "icpKeyframes": "Images-clés",
-    "icpKfMatches": "{{rate}} % · {{ok}}/{{total}} recalages clés",
-    "icpNoKeyframes": "aucune image-clé — pas de cap absolu",
-    "icpAttachRate": "{{rate}} % des scans intégrés",
-    "icpGpsWrongfix": "Rejets GPS mauvais-fix : {{count}}",
-    "icpStationaryPush": "poussée à l'arrêt : {{count}}",
-    "icpMonitorHint": "l'ICP image-à-image ne donne qu'un cap relatif ; le cap absolu nécessite images-clés / fermetures de boucle",
-    "icpHeading": "Cap ICP",
-    "fusedHeading": "Cap fusionné",
-    "icpHeadingDiff": "Δ cap (ICP−fusionné)",
-    "icpPosDiff": "Δ position (ICP−fusionné)",
     "poseSigma": "σ de pose",
     "yawSigma": "lacet ±{{value}}°",
     "fusionGraphDescPart1": "Graphe de facteurs GTSAM iSAM2. Enregistrer conserve les nœuds + scans dans",
@@ -502,7 +516,6 @@
     "subPathsLabel": "Sous-trajets",
     "subPathsSkipped": "{{count}} ignoré(s)",
     "handPushTitle": "Poussées à l'arrêt",
-    "attachRateTitle": "Scans intégrés",
     "coverage": "Couverture",
     "configurationCrossChecks": "Vérifications croisées de configuration",
     "noWarnings": "Aucun avertissement.",
@@ -594,6 +607,10 @@
     "calibrationTimedOut": "Délai de calibration dépassé",
     "cpuTemp": "CPU : {{value}} °C",
     "cpuTempUnknown": "CPU : --",
+    "cpuUsage": "Utilisation du CPU",
+    "cpuUsageBadge": "Utilisation CPU : {{value}} %",
+    "cpuUsageUnknown": "Utilisation CPU : --",
+    "cpuUsageHint": "Ordinateur entier, tous cœurs confondus. Actualisation environ toutes les 10 secondes ; deux mesures sont nécessaires pour calculer l’utilisation.",
     "crossCheckError": "Erreur",
     "crossCheckOk": "OK",
     "crossCheckWarn": "Avertissement",
@@ -626,7 +643,8 @@
     "rosbagDeleted": "Enregistrement supprimé",
     "rosbagDeleteFailed": "Impossible de supprimer l'enregistrement",
     "rosbagDeleteConfirmTitle": "Supprimer l'enregistrement ?",
-    "rosbagDeleteConfirmBody": "Ceci supprime définitivement l'enregistrement {{name}} du robot. Action irréversible."
+    "rosbagDeleteConfirmBody": "Ceci supprime définitivement l'enregistrement {{name}} du robot. Action irréversible.",
+    "gpsWrongfix": "Rejets GPS mauvais-fix : {{count}}"
   },
   "mowgliNextPage": {
     "headlineUntilHomePrefix": "Encore ",
@@ -694,7 +712,9 @@
     "coverageProgress": "Couverture de la zone · {{pct}} %",
     "bladesOff": "arrêt",
     "areaN": "Zone {{number}}",
-    "actionFailed": "Échec de la commande"
+    "actionFailed": "Échec de la commande",
+    "soilWetTitle": "Attention : le jardin est humide (IrriSense)",
+    "soilWetBlocking": "tontes planifiées suspendues"
   },
   "onboardingPage": {
     "preview": "Aperçu",
@@ -900,6 +920,12 @@
   },
   "schedulePage": {
     "planning": "Planning",
+    "soilWetBlocking": "Sol humide — tontes planifiées suspendues",
+    "soilWet": "Sol humide",
+    "soilDry": "Sol sec",
+    "soilUnknown": "IrriSense : état inconnu",
+    "soilFetchedAt": "Données IrriSense du {{value}}",
+    "lastSkipped": "Ignorée {{value}} : {{reason}}",
     "scheduledMows": "Tontes programmées",
     "areaLabel": "Zone {{index}}",
     "dayMon": "Lun",
@@ -1527,6 +1553,12 @@
     "unnamedArea": "Zone {{index}}"
   },
   "mapTrackedObstacles": {
+    "ignore": "Ignorer",
+    "ignoreTooltip": "Écarter cette détection suivie",
+    "ignoreConfirmTitle": "Ignorer l’obstacle n°{{id}} ?",
+    "ignoreConfirmBody": "Cette action écarte la détection actuelle. L’obstacle peut réapparaître s’il est détecté à nouveau. L’évitement des collisions en temps réel et les zones interdites enregistrées restent actifs.",
+    "ignoredSuccess": "Obstacle n°{{id}} ignoré",
+    "ignoreFailed": "Impossible d’ignorer l’obstacle",
     "outsideAreaMessage": "L'obstacle est en dehors de toutes les zones de tonte",
     "outsideAreaDescription": "Tracez une zone de tonte qui couvre cet obstacle avant de le promouvoir.",
     "areaFallback": "zone {{index}}",
@@ -1567,6 +1599,8 @@
     "selectExactlyOneToSplit": "Sélectionnez exactement 1 zone à découper",
     "selectionMustBePolygon": "La sélection doit être une zone polygonale",
     "drawLineAcrossArea": "Tracez une ligne à travers la zone pour la découper",
+    "deletePointsConfirmTitle": "Supprimer les points sélectionnés ?",
+    "deletePointsConfirmBody": "Les points sélectionnés seront supprimés. Si le nombre de points restants ne suffit plus pour former un polygone, cette forme sera également supprimée. Vous pouvez annuler avant de sauvegarder.",
     "deleteAreaConfirmTitle": "Supprimer cette zone ?",
     "deleteAreaConfirmBody": "La zone sélectionnée (et ses obstacles) sera supprimée. Vous pouvez annuler avant d’enregistrer.",
     "deleteAreaConfirmOk": "Supprimer",
@@ -1633,9 +1667,29 @@
       "label": "Vitesse de tonte",
       "description": "Vitesse en marche avant pendant la tonte d'une bande."
     },
+    "blade_load_slowdown_enabled": {
+      "label": "Ralentissement selon la charge de la lame",
+      "description": "Réduit la vitesse de tonte quand le régime de la lame chute sous la charge."
+    },
+    "blade_load_rpm_full": {
+      "label": "Régime lame pleine vitesse",
+      "description": "Régime de lame à partir duquel aucun ralentissement ne s'applique."
+    },
+    "blade_load_rpm_min": {
+      "label": "Régime lame vitesse minimale",
+      "description": "Régime de lame en dessous duquel le ratio de vitesse minimale s'applique."
+    },
+    "blade_load_min_speed_ratio": {
+      "label": "Ratio de vitesse minimale sous charge",
+      "description": "Avance la plus lente sous charge de lame, en fraction de la vitesse de tonte."
+    },
+    "blade_load_telemetry_max_age_s": {
+      "label": "Âge max de la télémétrie lame",
+      "description": "Les rapports de lame plus anciens sont ignorés (pas de ralentissement)."
+    },
     "num_headland_passes": {
       "label": "Passes de bordure",
-      "description": "Nombre d'anneaux de bordure concentriques tondus avant les bandes en va-et-vient."
+      "description": "Nombre d'anneaux de bordure concentriques tondus avant les bandes en va-et-vient. Une valeur négative (« aucune ») désactive complètement les anneaux de bordure : les bandes deviennent la passe la plus extérieure et leur axe suit exactement la ligne qu'aurait parcourue l'anneau extérieur, la bande non tondue latérale reste donc inchangée (environ 12 cm avec le retrait de sécurité châssis par défaut de 0,20 m). En revanche les EXTRÉMITÉS des bandes atteignent cette limite, soit environ 8 cm plus près de la bordure que n'importe quelle passe d'anneau, et sans tablier tondu les demi-tours en bout de rang deviennent des pivots à angle vif au lieu d'arcs réguliers."
     },
     "headland_width": {
       "label": "Largeur de bordure",
@@ -1701,25 +1755,13 @@
       "label": "Période des nœuds du graphe",
       "description": "Cadence à laquelle le graphe de facteurs ajoute un nouveau nœud Pose2."
     },
-    "use_scan_matching": {
-      "label": "Recalage de scans LiDAR",
-      "description": "Ajouter des facteurs intermédiaires de recalage de scans LiDAR pour traverser les fenêtres RTK-Float."
+    "use_lidar_map_anchor": {
+      "label": "Ancre carte LiDAR",
+      "description": "Filtre particulaire scan-vers-carte qui tient la position XY quand le RTK Fixe est perdu."
     },
-    "use_loop_closure": {
-      "label": "Fermeture de boucle LiDAR",
-      "description": "Ajouter des facteurs de fermeture de boucle à partir de scans LiDAR revisités."
-    },
-    "icp_max_iter": {
-      "label": "Itérations max ICP",
-      "description": "Nombre maximal d'itérations pour la résolution ICP du recalage de scans."
-    },
-    "icp_max_corresp_dist": {
-      "label": "Distance de correspondance ICP",
-      "description": "Distance maximale entre paires de points considérée comme une correspondance."
-    },
-    "icp_max_rmse_m": {
-      "label": "RMSE max ICP",
-      "description": "Rejeter un recalage de scan dont le RMSE dépasse cette valeur."
+    "lidar_anchor_shadow_mode": {
+      "label": "Mode ombre de l'ancre",
+      "description": "Exécute et évalue l'ancre LiDAR en RTK Fixe sans l'appliquer."
     },
     "dock_blank_range": {
       "label": "Portée d'occultation de la base",
@@ -1900,10 +1942,18 @@
         "tooltip": "Modèle de mouvement que le récepteur suppose pour le RTK. UAV est le moteur cinématique qui fixe rapidement et conserve le verrouillage pendant que la tondeuse se déplace ; Survey Mow est optimisé pour un relevé quasi statique (plus lent à fixer, peut perdre le verrouillage en mouvement) ; Rover est le repli générique.",
         "helpText": "Auto utilise la valeur par défaut selon le modèle (le UM980 utilise UAV par défaut). Choisissez UAV si votre récepteur est lent à atteindre le RTK-Fixe ou perd le fix pendant la tonte.",
         "option": {
-          "auto": { "label": "Auto (défaut selon le modèle)" },
-          "uav": { "label": "UAV (cinématique — recommandé)" },
-          "survey_mow": { "label": "Survey Mow" },
-          "rover": { "label": "Rover (générique)" }
+          "auto": {
+            "label": "Auto (défaut selon le modèle)"
+          },
+          "uav": {
+            "label": "UAV (cinématique — recommandé)"
+          },
+          "survey_mow": {
+            "label": "Survey Mow"
+          },
+          "rover": {
+            "label": "Rover (générique)"
+          }
         }
       },
       "pvtAlgorithm": {
@@ -2333,19 +2383,21 @@
     "critical": "Critique",
     "criticalTooltip": "Niveau de batterie critique",
     "criticalRecovery": "Récupération critique",
-    "criticalRecoveryTooltip": "Quitter l'état batterie critique une fois rechargée au-dessus de ce %. Borne supérieure d'hystérésis, doit être supérieure à Critique."
+    "criticalRecoveryTooltip": "Quitter l'état batterie critique une fois rechargée au-dessus de ce %. Borne supérieure d'hystérésis, doit être supérieure à Critique.",
+    "manualResume": "Reprise manuelle",
+    "manualResumeTooltip": "Appuyer sur Lecture pendant une recharge en cours de session ne reprend la tonte qu'au-dessus de ce %. Doit être supérieur à Faible (accostage), sinon le robot retourne à la base en quelques minutes."
   },
   "settingsSafety": {
     "alertMessage": "Les réglages de sécurité protègent le robot et son environnement",
-    "alertDescription": "Le firmware est la seule autorité de sécurité. Ces réglages configurent le comportement du firmware — les désactiver réduit la protection.",
-    "motorTemperatureLimits": "Limites de température moteur",
-    "motorTemperatureLimitsDescription": "Le moteur de lame s'arrête au-dessus du seuil haut et reprend en dessous du seuil bas (hystérésis).",
-    "stopAbove": "Arrêt au-dessus",
-    "stopAboveTooltip": "Arrêter le moteur de lame au-dessus de cette température",
-    "resumeBelow": "Reprise en dessous",
-    "resumeBelowTooltip": "Reprendre le moteur de lame en dessous de cette température"
+    "alertDescription": "Le firmware STM32 est la seule autorité de sécurité : il coupe la lame en cas de soulèvement, d’inclinaison ou d’arrêt d’urgence, et rien de cela n’est configurable depuis cette page. Il n’y a rien à modifier ici.",
+    "firmwareOwnedTitle": "Géré par le firmware",
+    "firmwareOwnedDescription": "La détection de soulèvement et d’inclinaison, le verrou d’arrêt d’urgence et la coupure de la lame résident tous dans le firmware STM32, qui décide selon ses propres seuils physiques. L’interface ne peut ni les assouplir, ni les retarder, ni les contourner : aucun réglage n’est donc proposé ici.",
+    "temperatureThresholdsNote": "La température du moteur de lame est uniquement mesurée et rapportée — aucune couche de la pile n’arrête la lame en fonction de la température. Les seuils d’alerte et d’erreur utilisés par les diagnostics (motor_temp_warn_c et motor_temp_error_c, dans mowgli_monitoring/config/diagnostics.yaml) se modifient sur la page Paramètres."
   },
   "settingsObstacles": {
+    "digKeepouts": "Obstacles de patinage",
+    "digAutoPromotion": "Créer automatiquement des zones d’exclusion de patinage",
+    "digKeepoutsDescription": "Crée une zone d’exclusion temporaire lorsqu’un patinage est détecté dans une zone de tonte. Acceptez la proposition sur la carte pour la conserver. Si désactivé, aucune zone d’exclusion de patinage n’est créée ; la détection, l’arrêt et la récupération restent actifs. Enregistrez et redémarrez ROS2 pour appliquer.",
     "rootZoneHintTitle": "Arbres avec de grosses racines ?",
     "rootZoneHintDescription": "Le LiDAR 2D ne voit pas les racines sous son plan de scan (~10–20 cm). Dessinez l'arbre comme obstacle dans l'éditeur de carte et augmentez la marge des obstacles dessinés pour que la tonte et les transits restent hors de la zone de racines.",
     "avoidanceMargins": "Marges d'évitement",
@@ -2369,18 +2421,29 @@
   },
   "settingsMowing": {
     "mowingMotor": "Moteur de tonte",
-    "mowingMotorDescription": "Désactivez pour tester sans faire tourner la lame.",
+    "mowingMotorDescription": "Désactivé = essai à vide : le robot parcourt tout le trajet sans jamais faire tourner la lame. Il s’agit d’une inhibition de confort, PAS d’une coupure de sécurité — le firmware reste l’autorité de sécurité de la lame. Prend effet au prochain redémarrage de ROS2.",
     "mowingSpeed": "Vitesse de tonte",
     "mowingSpeedTooltip": "Vitesse pendant les bandes de tonte (m/s)",
     "transitSpeed": "Vitesse de transit",
     "transitSpeedTooltip": "Vitesse lors des trajets vers/depuis la base ou entre les zones",
+    "bladeLoad": "Ralentissement selon la charge de la lame",
+    "bladeLoadDescription": "Ralentit l’avance de tonte quand le régime du moteur de lame chute sous la charge (herbe épaisse ou mouillée), pour laisser à la lame le temps de couper au lieu de caler ou de laisser une bande non tondue. La vitesse varie linéairement entre les deux seuils de régime. Sécurité positive : une lame inactive ou une télémétrie périmée ne ralentit jamais le robot. Trajets de tonte uniquement. Relevez le régime à vide de votre lame dans Diagnostics → Régime moteur avant d’activer. Prend effet après un redémarrage de ROS2.",
+    "bladeLoadRpmFull": "Pleine vitesse au-dessus de",
+    "bladeLoadRpmFullTooltip": "Régime de lame (tr/min) à partir duquel la pleine vitesse de tonte s’applique. Réglez-le un peu sous le régime à vide affiché dans Diagnostics.",
+    "bladeLoadRpmMin": "Vitesse minimale en dessous de",
+    "bladeLoadRpmMinTooltip": "Régime de lame (tr/min) en dessous duquel l’avance minimale s’applique. Réglez-le là où la coupe peine audiblement ; doit être inférieur au seuil de pleine vitesse.",
+    "bladeLoadMinSpeedRatio": "Ratio de vitesse minimale",
+    "bladeLoadMinSpeedRatioTooltip": "Avance la plus lente sous charge de lame, en fraction de la vitesse de tonte. Jamais sous les 0,08 m/s de vitesse de rampement du contrôleur.",
+    "bladeLoadRampInvalid": "Le régime de pleine vitesse doit être supérieur au régime de vitesse minimale — avec une rampe vide, le ralentissement est désactivé au lancement.",
     "mowingPattern": "Motif de tonte",
     "headlandWidth": "Largeur de tournière",
-    "headlandWidthTooltip": "Largeur de la bande périmétrique tondue avant le champ intérieur (retrait ConstHL de F2C). Relié à coverage_server.default_headland_width.",
+    "headlandWidthTooltip": "Largeur de la bande périmétrique tondue avant le champ intérieur (retrait ConstHL de F2C). Reliée à coverage_server.default_headland_width, où elle ne sert qu'à UNE chose : le nombre d'anneaux automatique, ceil(largeur de tournière / espacement des passes). Elle n'a donc d'effet que si Passes de tournière est sur Auto — avec un nombre de passes imposé (2 par défaut), cette valeur est ignorée.",
     "swathOverlap": "Chevauchement des passes",
     "swathOverlapTooltip": "Chevauchement supplémentaire entre passes adjacentes pour éviter les bandes non tondues. Espacement F2C = tool_width − swath_overlap.",
     "headlandPasses": "Passes de tournière",
-    "headlandPassesTooltip": "Nombre d'anneaux périmétriques concentriques avant le champ intérieur. 0 = auto (ceil(headland_width / tool_width)). >0 force exactement ce nombre quelle que soit headland_width. Relié à coverage_server.num_headland_passes.",
+    "headlandPassesTooltip": "Anneaux périmétriques concentriques tondus avant le champ intérieur. Aucune = pas d'anneau périmétrique : les bandes en va-et-vient deviennent la passe la plus extérieure, et leur axe suit exactement la ligne qu'aurait parcourue l'anneau extérieur — latéralement, la bande non tondue reste donc la même qu'avec les anneaux (environ 12 cm avec le retrait de sécurité châssis par défaut de 0,20 m), ni plus près du bord ni plus loin. En revanche les EXTRÉMITÉS des bandes atteignent cette limite, soit environ 8 cm plus près de la bordure que n'importe quelle passe d'anneau, et sans tablier tondu les demi-tours en bout de rang deviennent des pivots à angle vif au lieu d'arcs réguliers. À tester sur votre terrain avant de vous y fier.",
+    "headlandPassesNone": "Aucune",
+    "headlandPassesAuto": "Auto",
     "mowDirection": "Sens de tonte du périmètre",
     "mowDirectionTooltip": "Sens de déplacement autour des anneaux de périmètre/tournière. Réglez-le pour qu'une lame déportée sur le côté reste du côté à tondre. Auto conserve le sens naturel du planificateur. Relié à coverage_server.ring_direction.",
     "mowDirectionAuto": "Auto (défaut du planificateur)",
@@ -2418,13 +2481,16 @@
     "coverageXyToleranceTooltip": "Tolérance de position pendant les bandes de tonte",
     "recovery": "Récupération",
     "progressTimeout": "Délai de progression",
-    "progressTimeoutTooltip": "Secondes sans progression vers l'avant avant que la récupération ne se déclenche"
+    "progressTimeoutTooltip": "Secondes sans progression vers l'avant avant que la récupération ne se déclenche",
+    "boundaryClearance": "Distance à la limite",
+    "boundaryClearanceDescription": "À quelle distance les trajets de transit entre deux emplacements préfèrent rester de la limite enregistrée. C'est une préférence souple, pas une règle stricte — le transit peut toujours franchir la marge si c'est la seule option (par ex. juste après le débranchement). La tonte elle-même n'est pas affectée — le robot coupe toujours jusqu'au bord réel comme configuré ailleurs ; seuls les déplacements point à point sont légèrement rappelés vers l'intérieur.",
+    "boundaryInnerMargin": "Marge de transit à la limite",
+    "boundaryInnerMarginTooltip": "Distance (m) à laquelle les trajets de transit sont incités à rester à l'intérieur de la limite enregistrée. 0 désactive ce réglage et laisse le transit longer ou couper la ligne enregistrée, comme avant l'existence de ce réglage.",
+    "dockExemptRadius": "Rayon d'exemption autour du socle",
+    "dockExemptRadiusTooltip": "Rayon (m) autour de la position du socle, dans toutes les directions, exempté de la marge de transit ci-dessus — pour que l'approche du socle ne subisse aucun biais, pas seulement « jamais bloquée ». Élargissez ce rayon si votre socle subit beaucoup de dérive GNSS (par ex. sous un auvent). Ne prend effet qu'une fois une position de socle définie."
   },
   "settingsSensors": {
     "lidarSensor": "Capteur LiDAR",
-    "lidarDescriptionPart1": "Activez si votre robot dispose d'un LiDAR. Bascule aussi",
-    "lidarDescriptionAnd": " et ",
-    "lidarDescriptionPart2": " afin que le graphe de facteurs fusionne les scans LiDAR. Affinez-les dans l'onglet Localisation.",
     "imuBiasCalibration": "Calibration du biais IMU",
     "imuBiasCalibrationDescription": "Le pont matériel réestime automatiquement le biais gyro/accel de l'IMU pendant que le robot est garé et immobile sur la base. Ceci règle la façon dont il échantillonne.",
     "calibrationSamples": "Échantillons de calibration",
@@ -2432,7 +2498,8 @@
     "restWindowBeforeCal": "Fenêtre de repos avant calibration",
     "restWindowBeforeCalTooltip": "Durée pendant laquelle le robot doit être détecté immobile avant qu'une calibration ne démarre.",
     "periodicRecalInterval": "Intervalle de recalibration périodique",
-    "periodicRecalIntervalTooltip": "Réestime le biais IMU toutes les N secondes lorsque le robot est sur la base. 0 désactive la recalibration périodique."
+    "periodicRecalIntervalTooltip": "Réestime le biais IMU toutes les N secondes lorsque le robot est sur la base. 0 désactive la recalibration périodique.",
+    "lidarDescription": "À activer si le robot possède un LiDAR. Active la détection des obstacles et autorise la localisation sur carte, configurée dans l’onglet Localisation."
   },
   "settingsRain": {
     "rainBehavior": "Comportement en cas de pluie",
@@ -2501,12 +2568,12 @@
     "expertScopeDescription": "Les valeurs brutes de groupe de signaux, l'algorithme PVT, la fiabilité RTK, le délai RTK et le délai DGPS sont stockés ici pour une future traduction backend. La zone de texte de commande brute, le plan de simulation et les outils de réinitialisation/application nécessitent encore une API dédiée."
   },
   "settingsLocalization": {
-    "scanMatchingTitle": "Recalage de scan LiDAR",
-    "scanMatchingSummary": "Ajoute des facteurs intermédiaires ICP de /scan au graphe.",
-    "scanMatchingDetail": "Chaque nouveau nœud du graphe exécute un ICP sur le scan précédent et ajoute un BetweenFactor avec le mouvement relatif. Combat les pertes GPS mais coûte ~5 ms/tick à 10 Hz.",
-    "loopClosureTitle": "Fermeture de boucle",
-    "loopClosureSummary": "Cherche des revisites dans les scans passés et ajoute des facteurs LC.",
-    "loopClosureDetail": "Déclenche une recherche de candidats autour de chaque nouveau nœud (rayon de 5 m, âge minimum de 10 min). Les fermetures de boucle réussies ramènent la dérive vers la pose initialement cartographiée, même en cours de session.",
+    "lidarMapAnchorTitle": "Ancre carte LiDAR",
+    "lidarMapAnchorSummary": "Filtre particulaire scan-vers-carte qui tient la position quand le RTK Fixe est perdu (XY seulement).",
+    "lidarMapAnchorDetail": "Sous RTK Fixed, une sélection de scans alimente des tuiles géoréférencées persistantes. Une portion locale de la carte permet la localisation lorsque le GPS devient périmé ; seules les corrections XY validées entrent dans le graphe. Diagnostics → Fusion Graph indique son état.",
+    "anchorShadowTitle": "Mode ombre de l'ancre",
+    "anchorShadowSummary": "Exécute et mesure l'ancre en RTK Fixe sans l'appliquer.",
+    "anchorShadowDetail": "Maintient la calibration sous RTK Fixed fiable à la fréquence configurée du filtre, au lieu de séquences périodiques. Publie les candidats et compteurs pour comparaison ; aucun facteur n’est appliqué tant que Fixed reste fiable.",
     "magYawTitle": "Lacet magnétomètre",
     "magYawSummary": "Fusionne le lacet mag compensé en inclinaison comme facteur unaire de lacet.",
     "magYawDetail": "Désactivé par défaut — le biais induit par les moteurs rend le magnétomètre peu fiable sur la plupart des châssis. À n'activer qu'après une calibration mag moteurs coupés et la validation d'un |B| stable.",
@@ -2531,7 +2598,7 @@
     "lidarLocalizationTitle": "LiDAR — localisation (graphe de facteurs)",
     "lidarLocalizationIntro": "Optionnel. Quand activé,",
     "lidarLocalizationConsumes": "consomme",
-    "lidarLocalizationOutro": "comme facteurs intermédiaires de recalage de scan et facteurs de fermeture de boucle, afin que la pose en repère carte puisse tenir pendant des fenêtres RTK-Float de plusieurs minutes.",
+    "lidarLocalizationOutro": "pour se localiser dans les sous-cartes géoréférencées et corriger la position XY lorsque le GPS devient périmé. Sans repères exploitables, le LiDAR ne peut pas corriger la pose.",
     "yawSourcesTitle": "Sources de lacet",
     "magCalibrationTitle": "Calibration et réglage du magnétomètre",
     "magCalibrationIntroPrefix": "Utilisé uniquement quand",
@@ -2901,7 +2968,9 @@
     "paused": "En pause",
     "clear": "Effacer",
     "waitingForOutput": "En attente de la sortie des logs…",
-    "noLinesMatch": "Aucune ligne ne correspond aux filtres actifs."
+    "noLinesMatch": "Aucune ligne ne correspond aux filtres actifs.",
+    "timeZoneLocal": "Locale",
+    "timeZoneUtc": "UTC"
   },
   "imuYawCalibration": {
     "timedOut": "Délai dépassé après 155 s. Le service tourne peut-être encore — vérifiez le robot et réessayez.",
@@ -2949,10 +3018,118 @@
   "asyncButton": {
     "errorOccurred": "Une erreur est survenue"
   },
+  "settingsIrriSense": {
+    "title": "Humidité du sol IrriSense Cloud",
+    "description": "Lit le déficit hydrique des zones de votre service d'arrosage pour que le planificateur ne lance pas de tonte sur herbe mouillée.",
+    "failOpenTitle": "Sécurité positive par conception",
+    "failOpenBody": "Si IrriSense est injoignable, mal configuré ou si ses données sont plus anciennes que la fenêtre de validité, l'état du sol est « inconnu » et les tontes planifiées se lancent normalement. Une panne du cloud ne garde jamais le robot à la station.",
+    "connection": "Connexion",
+    "baseUrl": "URL du service",
+    "baseUrlTooltip": "URL de base de votre instance IrriSense Cloud ; l'API en lecture seule est sous /api/ha.",
+    "token": "Jeton API en lecture seule",
+    "tokenTooltip": "Créez un jeton API en lecture seule dans IrriSense (Réglages → Jetons API). Une session de connexion est refusée. Le jeton est stocké sur le robot et n'est plus jamais affiché.",
+    "tokenPlaceholder": "Collez un nouveau jeton…",
+    "tokenApply": "Définir",
+    "tokenClear": "Effacer",
+    "tokenSet": "Jeton enregistré ({{masked}})",
+    "tokenNotSet": "Aucun jeton enregistré",
+    "tokenPending": "Le nouveau jeton sera enregistré à la sauvegarde",
+    "tokenCleared": "Le jeton sera supprimé à la sauvegarde",
+    "garden": "Jardin",
+    "gardenTooltip": "Le jardin IrriSense à lire. Utilisez « Tester la connexion » pour remplir la liste.",
+    "gardenPlaceholder": "Choisir un jardin",
+    "zones": "Zones (optionnel)",
+    "zonesTooltip": "Laissez vide pour considérer toutes les zones actives du jardin.",
+    "zonesPlaceholder": "Toutes les zones actives",
+    "zoneDisabled": "{{label}} (désactivée)",
+    "testConnection": "Tester la connexion",
+    "testOk_one": "IrriSense joignable : {{count}} jardin",
+    "testOk_other": "IrriSense joignable : {{count}} jardins",
+    "testFailed": "Échec de la connexion à IrriSense",
+    "rule": "Règle d'humidité",
+    "ruleDescription": "Une zone est humide quand son déficit (mm évaporés depuis le dernier arrosage ou la dernière pluie) est inférieur ou égal au seuil, ou quand elle a été arrosée récemment. Le jardin est humide dès qu'une zone sélectionnée l'est.",
+    "wetDeficit": "Humide si déficit ≤",
+    "wetDeficitTooltip": "Déficit en dessous duquel la surface est considérée humide. Défaut 2 mm.",
+    "dryAfterWatering": "Humide après arrosage pendant",
+    "dryAfterWateringTooltip": "Une zone arrosée depuis moins de ce nombre d'heures compte comme humide quel que soit son déficit. Défaut 3 h.",
+    "maxStale": "Validité des données",
+    "maxStaleTooltip": "Si la dernière lecture réussie est plus ancienne, l'état est inconnu et la tonte n'est pas bloquée. Défaut 90 min.",
+    "gateScheduler": "Bloquer les tontes planifiées si humide",
+    "gateSchedulerDescription": "Désactivé, l'état du sol est seulement affiché et aucune tonte n'est ignorée.",
+    "status": "État en direct",
+    "verdict": {
+      "wet": "Humide",
+      "dry": "Sec",
+      "unknown": "Inconnu"
+    },
+    "fetchedAt": "lu le {{value}}",
+    "neverFetched": "aucune donnée lue pour l'instant",
+    "refresh": "Actualiser",
+    "saved": "Réglages IrriSense enregistrés",
+    "saveFailed": "Échec de l'enregistrement des réglages IrriSense",
+    "loadFailed": "Échec du chargement des réglages IrriSense"
+  },
+  "settingsLeds": {
+    "statusRing": "Anneau d'état WS2812",
+    "statusRingDescription": "Un anneau de LED adressables sur le robot qui montre l'état d'un coup d'œil : arrêt d'urgence, charge, progression de la tonte et santé RTK. En lecture seule — il ne commande jamais le robot et ne fait pas partie de la chaîne de sécurité des lames (le firmware garde sa propre LED d'état).",
+    "prerequisitesTitle": "À faire avant que ça fonctionne",
+    "prerequisiteOverlay": "Activez l'overlay SPI dans U-Boot puis redémarrez — les étapes exactes sont dans ros2/src/mowgli_leds/README.md :",
+    "prerequisiteDevice": "Renseignez ensuite ci-dessous le périphérique réellement rapporté — la numérotation est attribuée par le noyau, la valeur par défaut n'est qu'une supposition :",
+    "prerequisiteLevels": "Si l'anneau s'allume mais que les couleurs sont fausses, suspectez la ligne de données en 3,3 V vers un anneau alimenté en 5 V avant le logiciel : le WS2812B attend 3,5 V et un adaptateur de niveau règle le problème.",
+    "hardware": "Matériel",
+    "ledCount": "Nombre de LED",
+    "ledCountTooltip": "Nombre de LED sur l'anneau. La valeur par défaut de 16 est un simple espace réservé — mettez le nombre réel, sinon l'arc de progression sera faux.",
+    "spiDevice": "Périphérique SPI",
+    "spiDeviceTooltip": "Périphérique spidev de la ligne de données de l'anneau (broche 19 du connecteur 40 points). Confirmez-le avec `ls /dev/spidev*` après avoir activé l'overlay et redémarré.",
+    "spiClock": "Horloge SPI",
+    "spiClockTooltip": "L'encodage WS2812 envoie trois bits SPI par bit de protocole et découle d'exactement 2,4 MHz. Modifier cette valeur casse la temporisation des bits et produit de mauvaises couleurs.",
+    "appearance": "Apparence",
+    "brightness": "Luminosité",
+    "brightnessTooltip": "Échelle linéaire 0-1 sur chaque canal de couleur. Du blanc plein sur un anneau de 16 LED à 1,0 consomme environ 1 A ; 0,6 reste sous environ 0,6 A tout en restant lisible en plein jour.",
+    "idleBrightness": "Luminosité au repos",
+    "idleBrightnessTooltip": "Luminosité de l'anneau atténué au repos, relative à la luminosité ci-dessus.",
+    "refreshRate": "Fréquence de rafraîchissement",
+    "refreshRateTooltip": "Cadence de rendu. Les trames ne sont envoyées à l'anneau que lorsqu'elles changent (plus un keepalive lent), donc un motif fixe ne coûte presque rien quelle que soit cette valeur.",
+    "behavior": "Seuils et temporisations",
+    "lowBattery": "Seuil batterie faible",
+    "lowBatteryTooltip": "En dessous de ce pourcentage, et hors charge, tout l'anneau clignote en rouge.",
+    "chargeFull": "Charge terminée",
+    "chargeFullTooltip": "À partir de ce pourcentage, l'anneau de charge cesse de respirer et passe au vert fixe.",
+    "statusTimeout": "Délai d'état",
+    "statusTimeoutTooltip": "Durée sans message d'état avant que l'anneau n'affiche le motif « aucun état ».",
+    "keepalive": "Keepalive",
+    "keepaliveTooltip": "Réémet une trame inchangée au moins à cette fréquence, pour qu'un anneau ayant perdu son alimentation retrouve son dernier état.",
+    "deviceRetry": "Nouvelle tentative périphérique",
+    "deviceRetryTooltip": "Fréquence des tentatives silencieuses de réouverture d'un périphérique SPI absent ou en échec. Seul le premier échec d'une panne est journalisé, cela n'inonde donc jamais les logs.",
+    "chargeCompleteTimeout": "Délai avant atténuation (charge terminée)",
+    "chargeCompleteTimeoutTooltip": "Une fois que l'anneau affiche le vert fixe « charge terminée » depuis ce délai (10 minutes par défaut — par ex. laissé sur le socle toute la nuit), il s'atténue jusqu'à la luminosité ci-dessous. 0 désactive cette fonction et l'anneau reste vert fixe indéfiniment. Débrancher, ou repasser sous le seuil de charge terminée, restaure immédiatement la pleine luminosité.",
+    "chargeCompleteDim": "Luminosité une fois atténué",
+    "chargeCompleteDimTooltip": "Luminosité appliquée une fois le délai ci-dessus écoulé. 0 (par défaut) éteint l'anneau ; une petite valeur garde une lueur verte discrète comme indicateur « toujours chargé ».",
+    "legend": "Ce que l'anneau vous dit",
+    "legendDescription": "La première correspondance gagne — une alarme l'emporte toujours sur une activité. Chaque motif est conçu pour être lisible en plein jour à plusieurs mètres, par la couleur et le mouvement seuls.",
+    "modeEmergency": "Arrêt d'urgence",
+    "modeEmergencyDescription": "Tout l'anneau en rouge fixe, sans mouvement. Le seul rouge fixe.",
+    "modeCharging": "En charge",
+    "modeChargingDescription": "Arc vert qui grandit avec le niveau de batterie, en respiration. Vert plein et fixe quand la charge est terminée, puis atténué après le délai configuré si cela persiste.",
+    "modeStale": "Aucun état",
+    "modeStaleDescription": "Point orange tournant sur un anneau éteint. Alimenté et en marche, mais l'arbre de comportement ne répond pas.",
+    "modeLowBattery": "Batterie faible",
+    "modeLowBatteryDescription": "Tout l'anneau clignote en rouge. Même couleur que l'arrêt d'urgence — c'est le clignotement qui les distingue.",
+    "modeMowing": "Tonte",
+    "modeMowingDescription": "Arc vert qui grandit avec la couverture, avec un pixel blanc à sa pointe.",
+    "modeMowingDegraded": "Tonte sans fix RTK",
+    "modeMowingDegradedDescription": "Le même arc en orange, pointe clignotante. La précision de coupe est dégradée tant que le fix RTK n'est pas revenu.",
+    "modeRecording": "Enregistrement d'une limite",
+    "modeRecordingDescription": "Point cyan tournant sur l'anneau pendant que vous parcourez le périmètre.",
+    "modeManual": "Tonte manuelle",
+    "modeManualDescription": "Tout l'anneau respire en violet. Les lames peuvent tourner.",
+    "modeIdle": "Au repos",
+    "modeIdleDescription": "Tout l'anneau en blanc atténué, sans mouvement. Alimenté et éveillé, sans activité."
+  },
   "settingsSections": {
     "appearance": {
       "label": "Apparence",
-      "description": "Richesse visuelle et consommation d'énergie sur cet appareil"
+      "description": "Richesse visuelle, consommation d'énergie et affichage des horodatages sur cet appareil"
     },
     "hardware": {
       "label": "Matériel",
@@ -2992,7 +3169,7 @@
     },
     "safety": {
       "label": "Sécurité",
-      "description": "Arrêts d'urgence et limites de température"
+      "description": "Ce que le firmware gère lui-même"
     },
     "obstacles": {
       "label": "Obstacles",
@@ -3005,6 +3182,14 @@
     "rain": {
       "label": "Pluie",
       "description": "Comportement de détection de pluie et délai"
+    },
+    "irrisense": {
+      "label": "IrriSense",
+      "description": "Humidité du sol depuis votre jardin IrriSense Cloud : suspend les tontes planifiées sur herbe mouillée"
+    },
+    "leds": {
+      "label": "LED d'état",
+      "description": "Anneau d'état WS2812 : ce qu'il affiche et sa luminosité"
     },
     "advanced": {
       "label": "Avancé",
@@ -3085,5 +3270,20 @@
   },
   "settingsSchema": {
     "loadFailed": "Échec du chargement du schéma de réglages"
+  },
+  "logTime": {
+    "title": "Horodatage des journaux",
+    "description": "Les lignes de journal et les dates de calibration sont réaffichées dans le fuseau choisi ici, afin que le robot, les conteneurs et ce navigateur se lisent de la même façon. Enregistré uniquement sur cet appareil.",
+    "zoneBadge": "Heures affichées actuellement en {{zone}}.",
+    "toggleAria": "Basculer entre l'heure locale et UTC",
+    "approximate": "Cette ligne ne contenait pas d'horodatage — affichage de l'heure de réception.",
+    "local": {
+      "label": "Heure locale",
+      "description": "Le fuseau de ce navigateur. Correspond à l'horloge de l'appareil utilisé."
+    },
+    "utc": {
+      "label": "UTC",
+      "description": "Le fuseau des conteneurs du robot. Idéal pour comparer des journaux à plusieurs."
+    }
   }
 }

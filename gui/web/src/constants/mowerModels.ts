@@ -1,3 +1,28 @@
+// Per-model physical presets applied by the GUI's "mower model" picker.
+//
+// PARITY CONTRACT (guarded by gui/pkg/api/schema_template_parity_test.go,
+// TestMowerModelPresetMatchesTemplate): the preset whose `value` equals the
+// ROS2 template's `mower_model` — "YardForce500" today — is the same machine
+// the in-package template ros2/src/mowgli_bringup/config/mowgli_robot.yaml
+// describes, so every key it defines MUST equal that template's default.
+// Divergences that are known and deliberately NOT fixed are listed with a
+// reason in modelPresetDivergesFromTemplate in that test; a NEW divergence
+// fails CI. This guard exists because imu_y sat at -0.195 here and 0.0 in the
+// template for a long time, silently, and a GUI "reset to default" moved the
+// IMU 19.5 cm sideways. The other presets describe DIFFERENT machines and are
+// not compared to the template.
+//
+// wheel_radius: 0.1 m is the maintainer's measurement on the YardForce 500
+// (2026-09-05). Every preset here carried 0.04475 m — an 8.95 cm DIAMETER
+// drive wheel — copied identically across six different machines, while
+// mowgli.urdf.xacro and all three Webots surfaces independently used 0.093 for
+// the same wheel. Only the two YardForce 500 variants are corrected here,
+// because that is the only machine anyone has actually measured; SA650 /
+// 900ECO / LUV1000RI / Sabo still carry the legacy 0.04475 and each needs its
+// own measurement. wheel_radius feeds only the URDF (base_link's height above
+// ground + wheel visuals) — nothing computes odometry from it — so a wrong
+// value silently offsets every sensor z rather than corrupting distance.
+
 export type MowerModel = {
     value: string;
     label: string;
@@ -13,7 +38,7 @@ export const MOWER_MODELS: MowerModel[] = [
         description: "mowerModels.YardForce500.description",
         tag: "mowerModels.YardForce500.tag",
         defaults: {
-            wheel_radius: 0.04475, wheel_track: 0.325, wheel_x_offset: 0.0,
+            wheel_radius: 0.1, wheel_track: 0.325, wheel_x_offset: 0.0,
             wheel_width: 0.04, chassis_height: 0.19, chassis_mass_kg: 8.76,
             caster_radius: 0.03, caster_track: 0.36,
             blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 300,
@@ -22,7 +47,7 @@ export const MOWER_MODELS: MowerModel[] = [
             gps_x: 0.3, gps_y: 0.0, gps_z: 0.2,
             imu_x: 0.187, imu_y: -0.195, imu_z: 0.0, imu_yaw: 0.0,
             lidar_x: 0.0, lidar_y: 0.025, lidar_z: 0.3, lidar_yaw: -3.1416,
-            chassis_length: 0.54, chassis_width: 0.40, chassis_center_x: 0.18,
+            chassis_length: 0.60, chassis_width: 0.45, chassis_center_x: 0.18,
         },
     },
     {
@@ -30,7 +55,7 @@ export const MOWER_MODELS: MowerModel[] = [
         label: "mowerModels.YardForce500B.label",
         description: "mowerModels.YardForce500B.description",
         defaults: {
-            wheel_radius: 0.04475, wheel_track: 0.325, wheel_x_offset: 0.0,
+            wheel_radius: 0.1, wheel_track: 0.325, wheel_x_offset: 0.0,
             wheel_width: 0.04, chassis_height: 0.19, chassis_mass_kg: 8.76,
             caster_radius: 0.03, caster_track: 0.36,
             blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 300,
@@ -39,7 +64,7 @@ export const MOWER_MODELS: MowerModel[] = [
             gps_x: 0.3, gps_y: 0.0, gps_z: 0.2,
             imu_x: 0.187, imu_y: -0.195, imu_z: 0.0, imu_yaw: 0.0,
             lidar_x: 0.0, lidar_y: 0.025, lidar_z: 0.3, lidar_yaw: -3.1416,
-            chassis_length: 0.54, chassis_width: 0.40, chassis_center_x: 0.18,
+            chassis_length: 0.60, chassis_width: 0.45, chassis_center_x: 0.18,
         },
     },
     {

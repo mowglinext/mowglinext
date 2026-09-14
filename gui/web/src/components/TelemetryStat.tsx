@@ -24,7 +24,7 @@ export interface TelemetryStatProps {
     /** Secondary hint line below the statistic. */
     hint?: ReactNode;
     tone?: TelemetryTone;
-    /** Larger value font used by the fusion-graph / ICP monitor cells. */
+    /** Larger value font used by the fusion-graph monitor cells. */
     large?: boolean;
     /** antd Col span props. */
     span?: number;

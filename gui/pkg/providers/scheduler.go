@@ -21,6 +21,10 @@ type schedule struct {
 	Enabled    bool       `json:"enabled"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	LastRun    *time.Time `json:"lastRun,omitempty"`
+	// LastSkipReason / LastSkippedAt record the most recent time a due run was
+	// deliberately NOT started (soil wet), so the GUI can say why.
+	LastSkipReason string     `json:"lastSkipReason,omitempty"`
+	LastSkippedAt  *time.Time `json:"lastSkippedAt,omitempty"`
 }
 
 const schedulerKeyPrefix = "schedule:"
@@ -28,21 +32,26 @@ const schedulerKeyPrefix = "schedule:"
 // SchedulerProvider polls the database every minute and triggers autonomous
 // mowing via the high_level_control ROS2 service when a schedule fires.
 // Before triggering it checks that no emergency is active and the robot is
-// not already in autonomous or recording state.
+// not already in autonomous or recording state, then asks the soil provider
+// (IrriSense) whether the grass is wet.
 type SchedulerProvider struct {
-	rosProvider types.IRosProvider
-	dbProvider  types.IDBProvider
+	rosProvider  types.IRosProvider
+	dbProvider   types.IDBProvider
+	soilProvider types.ISoilProvider
 
-	mu                sync.RWMutex
-	lastHighLevelState uint8
-	lastEmergency      bool
+	mu                     sync.RWMutex
+	lastHighLevelState     uint8
+	lastHighLevelStateName string
+	lastEmergency          bool
 }
 
 // NewSchedulerProvider creates and starts the scheduler background goroutine.
-func NewSchedulerProvider(rosProvider types.IRosProvider, dbProvider types.IDBProvider) *SchedulerProvider {
+// soilProvider may be nil, in which case no soil gate is applied.
+func NewSchedulerProvider(rosProvider types.IRosProvider, dbProvider types.IDBProvider, soilProvider types.ISoilProvider) *SchedulerProvider {
 	s := &SchedulerProvider{
-		rosProvider: rosProvider,
-		dbProvider:  dbProvider,
+		rosProvider:  rosProvider,
+		dbProvider:   dbProvider,
+		soilProvider: soilProvider,
 	}
 	s.subscribeToStatus()
 	go s.run()
@@ -68,9 +77,17 @@ func (s *SchedulerProvider) subscribeToStatus() {
 					break
 				}
 			}
+			// Accept "state_name" or "StateName"
+			for _, k := range []string{"state_name", "StateName"} {
+				if v, ok := raw[k]; ok {
+					_ = json.Unmarshal(v, &hls.StateName)
+					break
+				}
+			}
 		}
 		s.mu.Lock()
 		s.lastHighLevelState = hls.State
+		s.lastHighLevelStateName = hls.StateName
 		s.mu.Unlock()
 	}); err != nil {
 		logrus.Warnf("Scheduler: failed to subscribe to highLevelStatus: %v", err)
@@ -144,6 +161,12 @@ func (s *SchedulerProvider) checkSchedules() {
 			continue
 		}
 
+		if blocked, reason := s.soilBlocksStart(); blocked {
+			logrus.Infof("Scheduler: skipping schedule %s — soil wet (%s)", sched.ID, reason)
+			s.persistSkip(sched, reason, now)
+			continue
+		}
+
 		logrus.Infof("Scheduler: triggering autonomous mowing for schedule %s (area %d)", sched.ID, sched.Area)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -170,10 +193,40 @@ func (s *SchedulerProvider) checkSchedules() {
 	}
 }
 
+// soilBlocksStart asks the soil provider whether the grass is wet. Fail-open:
+// no provider, disabled integration, gate switched off, stale or unknown data
+// all return false — only a FRESH, positive "wet" verdict skips a run.
+func (s *SchedulerProvider) soilBlocksStart() (bool, string) {
+	if s.soilProvider == nil {
+		return false, ""
+	}
+	status := s.soilProvider.SoilStatus()
+	if !status.BlocksScheduledMowing() {
+		return false, ""
+	}
+	return true, status.Reason
+}
+
+// persistSkip records why a due run was not started, so the GUI can show it.
+func (s *SchedulerProvider) persistSkip(sched schedule, reason string, now time.Time) {
+	sched.LastSkipReason = reason
+	sched.LastSkippedAt = &now
+	updated, err := json.Marshal(&sched)
+	if err != nil {
+		logrus.Warnf("Scheduler: failed to encode skip for schedule %s: %v", sched.ID, err)
+		return
+	}
+	if err := s.dbProvider.Set(schedulerKeyPrefix+sched.ID, updated); err != nil {
+		logrus.Warnf("Scheduler: failed to persist skip for schedule %s: %v", sched.ID, err)
+	}
+}
+
 // safeToStart returns true when it is safe to send COMMAND_START.
 // It blocks mowing when:
 //   - an emergency is active (latched or active), or
-//   - the robot is already in autonomous (2) or recording (3) state.
+//   - the robot is already in autonomous (2) or recording (3) state,
+//     EXCEPT the post-mow dock transit (state 2, state_name MOWING_COMPLETE),
+//     which reports autonomous only to keep the firmware wheel gate open.
 //
 // HIGH_LEVEL_STATE constants:
 //
@@ -185,11 +238,26 @@ func (s *SchedulerProvider) checkSchedules() {
 func (s *SchedulerProvider) safeToStart() bool {
 	s.mu.RLock()
 	state := s.lastHighLevelState
+	stateName := s.lastHighLevelStateName
 	emergency := s.lastEmergency
 	s.mu.RUnlock()
 
 	if emergency {
 		return false
+	}
+	// The blade-off dock transit that follows a FINISHED mow stays startable:
+	// the run is over, the robot is only trundling home, and a schedule due in
+	// that window should not be silently skipped. It reports AUTONOMOUS purely
+	// so the firmware will move the wheels (HL_MODE_IDLE is a wheel hard stop),
+	// not because a session is still running.
+	//
+	// Deliberately MOWING_COMPLETE only. The other transits that report
+	// AUTONOMOUS must stay blocked: RETURNING_HOME is an explicit operator
+	// "go home", and LOW_BATTERY_DOCKING / CRITICAL_BATTERY_DOCKING /
+	// RAIN_DETECTED_DOCKING are the robot protecting itself — starting a mow
+	// on a flat battery or in the rain is exactly what they exist to prevent.
+	if state == 2 && stateName == "MOWING_COMPLETE" {
+		return true
 	}
 	// Do not interrupt an already-running autonomous session or an ongoing
 	// area recording. State 0 (NULL/emergency) is also blocked.

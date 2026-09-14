@@ -34,6 +34,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/bool.hpp>
 
+#include "mowgli_map/internal_helpers.hpp"
 #include <grid_map_core/GridMap.hpp>
 #include <grid_map_core/GridMapMath.hpp>
 #include <grid_map_core/iterators/CircleIterator.hpp>
@@ -56,13 +57,18 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   map_size_y_ = declare_parameter<double>("map_size_y", 20.0);
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
   tool_width_ = declare_parameter<double>("tool_width", 0.18);
-  // Wheel-slip dig auto-keepout (see on_dig_event). Default size is one
-  // tool width: wide enough that coverage's next swath plans around the
-  // churned patch rather than clipping its edge, small enough that a single
-  // bad patch doesn't carve a hole out of the lawn the robot will never
-  // revisit. Resolved after tool_width_ so it can default from it.
+  // Wheel-slip dig keepout (see on_dig_event). The keepout is stamped as a
+  // PENDING proposal - live in the mask for this session, never written to
+  // areas.dat until the operator accepts it.
+  //
+  // Size: it used to default to one tool width (0.18 m), which is NARROWER
+  // THAN THE CHASSIS (0.60 m x 0.40 m footprint). Issue #500 recorded the
+  // consequence: 3 dig latches in 18.4 s within 0.13 m - the escape reverses
+  // and the controller drives the body straight back over a keepout the body
+  // does not fit around. Default is now kDefaultDigKeepoutSizeM, one chassis
+  // length, so routing around the patch actually clears it.
   dig_obstacle_enabled_ = declare_parameter<bool>("dig_obstacle_enabled", true);
-  dig_obstacle_size_ = declare_parameter<double>("dig_obstacle_size", tool_width_);
+  dig_obstacle_size_ = declare_parameter<double>("dig_obstacle_size", kDefaultDigKeepoutSizeM);
   yaw_convergence_threshold_rad_ =
       declare_parameter<double>("yaw_convergence_threshold_rad", 0.00873);  // 0.5°
   yaw_convergence_window_s_ = declare_parameter<double>("yaw_convergence_window_s", 5.0);
@@ -127,7 +133,24 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   boundary_debounce_samples_ =
       static_cast<int>(declare_parameter<int>("boundary_debounce_samples", 3));
   boundary_recovery_offset_m_ = declare_parameter<double>("boundary_recovery_offset_m", 0.8);
+  // NOTE: kept at 0.0 here deliberately, NOT 0.20 — every C++ unit test in
+  // this package constructs the node directly via NodeOptions (bypassing
+  // map_server.yaml / the mowgli_robot.yaml template / launch injection
+  // entirely), so raising this default would silently add the mid-cost
+  // penalty band to EVERY pre-existing keepout-mask test that doesn't
+  // explicitly override it, changing their expected mask values with no
+  // dock configured to exempt anything. The 0.20 m fleet default lives in
+  // map_server.yaml + the template instead (the normal launch path layers
+  // both on top of this compiled-in default) — see BoundaryInnerMarginTest
+  // for the tests that exercise 0.20 on purpose.
   boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.0);
+  // See map_server_node.hpp: the dock exemption isn't load-bearing for
+  // safety with the mid-cost design (a soft-cost cell never fails "Start
+  // occupied", so it can no longer strand the robot near the dock the way
+  // a lethal band once did), but it keeps the dock approach bias-free
+  // rather than merely non-blocking.
+  dock_inner_margin_exempt_radius_m_ =
+      std::max(declare_parameter<double>("dock_inner_margin_exempt_radius_m", 2.5), 0.0);
   strip_boundary_margin_m_ = declare_parameter<double>("strip_boundary_margin_m", 1.20);
   mow_angle_override_deg_ =
       declare_parameter<double>("mow_angle_deg", std::numeric_limits<double>::quiet_NaN());
@@ -381,10 +404,12 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 
   // ── Wheel-slip dig reports (hardware_bridge_node) ─────────────────────
   // The bridge detects the robot digging a hole (wheels turning, GNSS pose
-  // not moving), hard-stops and reverses out. We turn that location into a
-  // permanent keepout so the next coverage pass routes around it instead of
-  // driving back into the same patch. TRANSIENT_LOCAL matches the bridge's
-  // publisher so a dig that happened while we were restarting still lands.
+  // not moving), hard-stops and reverses out. We stamp a PENDING keepout at
+  // that location so the next coverage pass routes around it instead of
+  // driving back into the same patch; making it permanent is the operator's
+  // call (~/promote_obstacle{pending_id}). TRANSIENT_LOCAL matches the
+  // bridge's publisher so a dig that happened while we were restarting
+  // still lands.
   if (dig_obstacle_enabled_)
   {
     dig_event_sub_ = create_subscription<mowgli_interfaces::msg::DigEvent>(
@@ -402,6 +427,14 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
              mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res)
       {
         on_promote_obstacle(req, res);
+      });
+
+  discard_obstacle_srv_ = create_service<mowgli_interfaces::srv::ClearObstacle>(
+      "~/discard_obstacle",
+      [this](const mowgli_interfaces::srv::ClearObstacle::Request::SharedPtr req,
+             mowgli_interfaces::srv::ClearObstacle::Response::SharedPtr res)
+      {
+        on_discard_obstacle(req, res);
       });
 
   // Dock pose: single source of truth is mowgli_robot.yaml. Calibration
@@ -651,6 +684,8 @@ void MapServerNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr /*msg*/)
   // centroid when the robot is inside the area).
   last_robot_x_ = x;
   last_robot_y_ = y;
+  last_robot_yaw_ = yaw;
+  have_robot_heading_ = true;
 
   const rclcpp::Time now_t = now();
   const bool telemetry_fresh =
@@ -841,21 +876,22 @@ void MapServerNode::on_publish_timer()
       masks_dirty_ = false;
     }
 
-    // Republish the mowed overlay only when it grew, and at most once per
-    // mow_progress_publish_period_s_. Re-serializing the full-extent overlay on
-    // every tick is O(cells) per second while mowing — the dominant steady cost
-    // on a large map. transient_local keeps late subscribers up to date, and
-    // mow_progress_dirty_ stays set until we actually publish, so no growth is
-    // lost between throttled publishes.
-    if (mow_progress_dirty_)
+    // Rebuild the full-extent OccupancyGrid only after coverage changed, then
+    // republish that cached message at the existing throttle interval. Foxglove
+    // WebSocket reconnects do not reliably receive transient_local history.
+    const rclcpp::Time now_t = now();
+    if (last_mow_progress_pub_time_.nanoseconds() == 0 ||
+        (now_t - last_mow_progress_pub_time_).seconds() >= mow_progress_publish_period_s_)
     {
-      const rclcpp::Time now_t = now();
-      if (last_mow_progress_pub_time_.nanoseconds() == 0 ||
-          (now_t - last_mow_progress_pub_time_).seconds() >= mow_progress_publish_period_s_)
+      if (mow_progress_dirty_)
       {
-        publish_mow_progress();
-        last_mow_progress_pub_time_ = now_t;
+        rebuild_mow_progress_cache();
         mow_progress_dirty_ = false;
+      }
+      if (mow_progress_cache_valid_)
+      {
+        publish_cached_mow_progress();
+        last_mow_progress_pub_time_ = now_t;
       }
     }
   }
@@ -873,13 +909,7 @@ void MapServerNode::stamp_mow_progress(double x, double y)
       mow_progress_map_.getSize()(1) != map_.getSize()(1) ||
       mow_progress_map_.getPosition() != map_.getPosition())
   {
-    mow_progress_map_ = grid_map::GridMap({layer});
-    mow_progress_map_.setFrameId(map_frame_);
-    mow_progress_map_.setGeometry(map_.getLength(), map_.getResolution(), map_.getPosition());
-    mow_progress_map_[layer].setConstant(0.0F);
-    // The previous point belonged to different grid geometry, so it must not
-    // be joined to the first pose in the fresh overlay.
-    have_last_mow_tool_position_ = false;
+    initialize_mow_progress_map();
   }
 
   const grid_map::Position center(x, y);
@@ -927,18 +957,55 @@ float MapServerNode::mow_progress_value_for_test(double x, double y) const
   return mow_progress_map_.at(layer, index);
 }
 
-void MapServerNode::publish_mow_progress()
+bool MapServerNode::mow_progress_cache_valid_for_test() const
+{
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  return mow_progress_cache_valid_;
+}
+
+void MapServerNode::rebuild_mow_progress_cache()
 {
   const std::string layer = "mowed";
   if (!mow_progress_map_.exists(layer))
   {
+    mow_progress_cache_valid_ = false;
     return;
   }
-  nav_msgs::msg::OccupancyGrid grid;
   // 0 → unmowed (rendered transparent by the GUI), 100 → mowed. The converter
   // handles the grid_map↔OccupancyGrid index convention correctly.
-  grid_map::GridMapRosConverter::toOccupancyGrid(mow_progress_map_, layer, 0.0F, 100.0F, grid);
-  mow_progress_pub_->publish(grid);
+  grid_map::GridMapRosConverter::toOccupancyGrid(
+      mow_progress_map_, layer, 0.0F, 100.0F, mow_progress_cache_);
+  mow_progress_cache_valid_ = true;
+}
+
+void MapServerNode::publish_cached_mow_progress()
+{
+  if (mow_progress_cache_valid_)
+  {
+    mow_progress_pub_->publish(mow_progress_cache_);
+  }
+}
+
+void MapServerNode::reset_mow_progress()
+{
+  mow_progress_map_ = grid_map::GridMap();
+  mow_progress_dirty_ = false;
+  mow_progress_cache_ = nav_msgs::msg::OccupancyGrid();
+  mow_progress_cache_valid_ = false;
+  last_mow_progress_pub_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  have_last_mow_tool_position_ = false;
+}
+
+void MapServerNode::initialize_mow_progress_map()
+{
+  const std::string layer = "mowed";
+  reset_mow_progress();
+  mow_progress_map_ = grid_map::GridMap({layer});
+  mow_progress_map_.setFrameId(map_frame_);
+  mow_progress_map_.setGeometry(map_.getLength(), map_.getResolution(), map_.getPosition());
+  mow_progress_map_[layer].setConstant(0.0F);
+  // Refresh the latched publisher with the empty grid after a reset or resize.
+  mow_progress_dirty_ = true;
 }
 
 }  // namespace mowgli_map

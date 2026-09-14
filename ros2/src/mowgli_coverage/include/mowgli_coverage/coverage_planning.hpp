@@ -16,7 +16,7 @@
 //      decomposition — verified in F2C v3 Swaths::append).
 // The output is a list of explicit, ordered, individually-drivable segments.
 // Turns between segments are the navigation stack's job (RotationShim in-place
-// pivot + MPPI straight tracking), NOT F2C's: every prior design that let F2C
+// pivot + FTC straight tracking), NOT F2C's: every prior design that let F2C
 // plan turns (Dubins Ω-loops, CC-Dubins arcs, Reeds-Shepp cusps) produced
 // geometry this chassis could not track, and the downstream heading-jump
 // re-segmentation heuristic silently failed on the smooth arcs.
@@ -98,6 +98,19 @@ struct BoustrophedonPlan
   // perimeter ring, forcing every edge turn-around below min_turning_radius →
   // straight fallback → sub-path fragmentation. Empty when the erosion degenerates
   // (tiny field) — the caller then falls back to safe_boundary. (x, y), first==last.
+  //
+  // The invariant, uniform across both branches: a connector centerline may go
+  // NO FURTHER OUT than the outermost DRIVEN pass. WITH THE RING STAGE DISABLED
+  // (num_headland_passes < 0 → zero rings, issue #429) there is no ring 0 to
+  // erode to — the SWATH ENDS are then the outermost driven geometry and they
+  // lie exactly ON safe_boundary, so this ring is safe_boundary EXACTLY (no
+  // expansion, no erosion). Ends sitting on the ring are accepted by
+  // allInside()'s 1 mm on-edge tolerance, not by moving the polygon outward.
+  // Consequence to expect: with no mowed apron beyond the swath ends, a U-turn
+  // arc usually does NOT fit, so buildConnector falls back to a straight join —
+  // a pivot-through corner (which roundSharpCorners fillets where a
+  // min_turning_radius arc fits). That fallback still passes allInside, so
+  // conn_safe stays true and the sub-path does NOT fragment.
   std::vector<std::pair<double, double>> connector_clearance_boundary;
   // Inset ("grown") interior hole rings the continuous-path connectors and
   // corner fillets must stay OUT of, mirroring how safe_boundary is the ring
@@ -117,9 +130,23 @@ struct BoustrophedonPlan
 // Plan boustrophedon coverage of `field_cell` (outer ring + optional holes).
 //
 //   op_width             swath spacing = F2C cov_width (m)
-//   headland_width       desired headland band width (m); the ring count is
-//                        ceil(headland_width / op_width), min 1, unless
-//                        num_headland_passes_override > 0 forces a count
+//   headland_width       desired headland band width (m); used only by the AUTO
+//                        ring count (see num_headland_passes_override)
+//   num_headland_passes_override
+//                        THREE-WAY contract (issue #429):
+//                          < 0  NONE   — zero perimeter rings; the serpentine
+//                                        swaths are the outermost driven pass.
+//                                        They cut to the SAME line the outermost
+//                                        ring would have (chassis_safety_inset
+//                                        inside the recorded boundary) — this is
+//                                        NOT "closer to the edge", it only drops
+//                                        the perimeter loop. With no mowed apron
+//                                        beyond the swath ends, row-end U-turns
+//                                        degrade to straight pivot-through
+//                                        joins.
+//                          == 0 AUTO   — ceil(headland_width / op_width),
+//                                        floored at 1.
+//                          > 0  FORCED — exactly that many rings.
 //   chassis_safety_inset polygon pull-back applied before everything (m)
 //   mow_angle_rad        fixed swath heading; < 0 → auto (minimise swath count)
 //   min_swath_length     drop straight swaths shorter than this (m)
@@ -132,6 +159,9 @@ struct BoustrophedonPlan
 // Geometry: safe = inset(field, chassis_safety_inset); rings are n_rings
 // concentric loops spaced op_width inside safe; mainland = inset(safe,
 // n_rings * op_width) so the swaths butt against the innermost ring's cut.
+// With n_rings == 0 the whole ring stage is skipped and mainland == safe (never
+// inset(safe, 0.0) — upstream that is a real GEOS buffer round-trip, not a
+// no-op), so the swaths run edge to edge of the inset field.
 //
 // Returns a plan whose rings/swaths may BOTH be empty (field too small after
 // insets — the caller reports failure). Throws on internal F2C errors. The
@@ -153,11 +183,65 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double mow_angle_rad,
                                     double min_swath_length,
                                     int ring_direction = 0,
-                                    double min_turn_radius = 0.15);
+                                    double min_turn_radius = 0.20);
 
-// Flatten a BoustrophedonPlan into ONE continuous, cusp-free, in-bounds
-// polyline so an MPPI-class sampling controller can track it without the
-// bimodal dither/spin it does at sharp ~180° reversals.
+// Per-plan accounting of how every segment-to-segment join was resolved by
+// buildConnector's radius-shrink search. Pure visibility — populating it
+// changes no decision.
+//
+// WHY THIS EXISTS (issue #499): the swath-end turn radius was believed to be
+// the lever on the "violent turns dig the lawn" failure, and raising
+// `min_turning_radius` was believed to be a TRADE rather than a free win — it
+// is the FLOOR of buildConnector's shrink loop, so raising it should make the
+// search give up sooner and fall through to the straight blind connector.
+// Nobody could tell a radius change that fixed the turns from one that quietly
+// replaced arcs with straight joins, so this counter shipped first as the
+// prerequisite measurement.
+//
+// WHAT IT MEASURED (2026-08-24, the first plan it ever counted): on the old
+// geometry — num_headland_passes 2, op_width = tool_width - swath_overlap,
+// connector_turn_radius 0.18, min_turning_radius 0.15 — only 1 join in 32 gets
+// an arc. The other 31 are already straight blind connectors, and raising the
+// floor to 0.25 m moves exactly one more. So the fallback TRADE above is not
+// what constrains the radius, and the swath-end turns being carved are NOT
+// too-tight Dubins arcs: there is no arc there to be tight.
+//
+// The binding constraint is the mowed HEADLAND APRON beyond the swath ends. At
+// swath spacing d < 2R the turn-around must be an omega (RLR/LRL) loop whose
+// forward extent past the swath end is ~sqrt(4R^2 - (R + d/2)^2) + R (~0.43 m
+// at R = 0.18, d = 0.16), while the apron is num_headland_passes * op_width
+// (0.32 m in that configuration). Nothing in [min_turn_radius, turn_radius] fits, so
+// buildConnector falls through; roundSharpCorners then cannot fillet the
+// resulting 90 degree corners either, because the fillet's tangent length is
+// floored at min_turn_radius (0.15 m) while the connector it must be trimmed
+// into is only op_width (0.16 m) long. The path handed to FTC at a swath end is
+// therefore a sharp corner, not an arc. The 2026-09-09 field bag confirmed that
+// FTC alternates its saturated angular command at those corners. Production now
+// provides a five-pass apron for 0.20 m arcs and splits any residual
+// discontinuous fallback. See the CoverageConnectorStats tests.
+//
+// The three outcomes are mutually exclusive and sum to `attempted`:
+struct ConnectorStats
+{
+  // Segment-to-segment joins where a connector was attempted (== segments - 1
+  // in the common single-sub-path case).
+  std::size_t attempted = 0;
+  // A real forward Dubins turn-around arc fitted at some radius in
+  // [min_turn_radius, turn_radius] and stayed in-bounds + clear of holes. This
+  // is the healthy outcome.
+  std::size_t arc = 0;
+  // The shrink loop found no in-bounds arc, but its straight fallback stayed
+  // inside the boundary, clear of holes, and aligned with both segment headings.
+  // Only this tangent-enough fallback is kept blade-on.
+  std::size_t straight_kept = 0;
+  // No continuous blade-on connector: empty, outside the boundary, through a
+  // hole, or a straight fallback whose heading is discontinuous. The sub-path
+  // is broken here and FollowStrip repositions and reorients blade-off.
+  std::size_t split = 0;
+};
+
+// Flatten a BoustrophedonPlan into continuous, in-bounds polylines that FTC can
+// track without crossing a zero-radius segment join.
 //
 // The robot drives the plan as: all rings (densified closed loops, outermost
 // first) then all swaths (straight start→end, serpentine order). Reversals
@@ -176,11 +260,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 // If no full-radius connector fits in-bounds, `turn_radius` is shrunk for that
 // connector — but NEVER below `min_turn_radius`. A loop tighter than the robot's
 // minimum trackable turning radius is untrackable (wz≈vx/r exceeds the
-// controller's authority), so MPPI loops/hesitates instead of driving it. If no
-// arc of radius >= min_turn_radius fits in-bounds, a straight connector is used
-// as a last resort (an out-of-bounds straight join is then a real, reportable
-// gap — not silently clipped). The same floor caps the corner-fillet radius, so
-// the whole path is free of sub-min_turn_radius arcs.
+// controller's authority), so FTC saturates and oscillates instead of driving it. If no
+// arc of radius >= min_turn_radius fits in-bounds, a straight connector is kept
+// only when it is aligned with both segments. Otherwise the drivable path is
+// split there. The same floor caps the corner-fillet radius.
 //
 //   plan            the rings + swaths from planBoustrophedon
 //   boundary        the recorded-area polygon (open or closed), for the
@@ -188,7 +271,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 //   turn_radius     nominal connector arc radius (m); shrunk per-connector toward
 //                   min_turn_radius if the nominal arc leaves the boundary
 //   min_turn_radius hard floor on every connector/fillet arc (m) — the robot's
-//                   minimum MPPI-trackable turning radius (mowgli_robot.yaml)
+//                   minimum FTC-trackable turning radius (mowgli_robot.yaml)
 //   step            densification step along the whole path (m, ~0.03)
 //
 // Returns one densified polyline starting at the first ring's first point. Pure
@@ -205,31 +288,24 @@ std::vector<std::pair<double, double>> buildContinuousPath(
     double min_turn_radius,
     double step);
 
-// Like buildContinuousPath, but SPLIT into one or more hole-free continuous
-// sub-paths (issue #333). A forward turn-around connector is a local Dubins arc;
-// it cannot route around a large interior obstacle, so the path is BROKEN
-// instead of joined blade-on when:
-//   * the only join between two segments would cross a hole or leave the
-//     boundary (a straight fallback that isn't safe), OR
-//   * the join gap exceeds ~0.6 m (kMaxMowJoinGapM) — that is a RELOCATION
-//     (lobe change across a concave bite, innermost ring → far first swath),
-//     not a turn-around; an in-bounds Dubins for it would mow a long diagonal
-//     across the middle of the lawn.
+// Like buildContinuousPath, but split into one or more continuous sub-paths.
+// The path is broken when no in-bounds, hole-free and heading-continuous
+// connector exists. This includes straight fallbacks between antiparallel
+// swaths: keeping them would hand FTC a zero-radius corner and cause alternating
+// saturated steering commands.
 // Swath pieces are nearest-endpoint chained before joining (identical to the
 // plain serpentine on a convex field; mows each lobe of a concave/hole-split
 // field contiguously so a lobe change costs ONE split, not one per column).
-// Each returned sub-path is internally continuous and cusp-free (an
-// MPPI-trackable run); the caller (FollowStrip) drives them in order, bridging
-// the gap between consecutive sub-paths with a blade-off, costmap-aware Nav2
-// transit that routes around the obstacle. With a convex hole-free field this
-// returns exactly one sub-path identical to buildContinuousPath. Sub-paths
-// with < 2 points are dropped.
+// The caller (FollowStrip) drives them in order, bridging every sub-path boundary
+// with a blade-off, costmap-aware Nav2 reposition/reorientation. Sub-paths with
+// fewer than two points are dropped.
 std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,
     double turn_radius,
     double min_turn_radius,
-    double step);
+    double step,
+    ConnectorStats* stats = nullptr);
 
 // 2-D point-in-polygon (ray casting) against `ring`, a list of (x, y)
 // vertices. Open or closed ring; winding-independent. Used by the server to

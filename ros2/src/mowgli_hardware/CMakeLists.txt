@@ -161,6 +161,111 @@ if(BUILD_TESTING)
     PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+  ament_target_dependencies(test_dig_detector mowgli_interfaces)
+
+  # ---- test_dig_escalation ----
+  # Header-only pure logic (dig_escalation.hpp): no link against
+  # mowgli_hardware_core needed, just the include path.
+  ament_add_gtest(test_dig_escalation
+    test/test_dig_escalation.cpp
+  )
+  target_include_directories(test_dig_escalation
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  # ---- test_imu_liveness ----
+  # Header-only pure logic (imu_liveness.hpp): no link against
+  # mowgli_hardware_core needed, just the include path.
+  ament_add_gtest(test_imu_liveness
+    test/test_imu_liveness.cpp
+  )
+  target_include_directories(test_imu_liveness
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  # ---- test_blade_gate ----
+  # Header-only pure logic (blade_gate.hpp): no link against
+  # mowgli_hardware_core needed, just the include path.
+  ament_add_gtest(test_blade_gate
+    test/test_blade_gate.cpp
+  )
+  target_include_directories(test_blade_gate
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  # ---- test_heartbeat_emergency_policy ----
+  # The firmware's pure heartbeat safety policy is compiled here directly so
+  # all stop/release combinations are verified without physical hardware.
+  ament_add_gtest(test_heartbeat_emergency_policy
+    test/test_heartbeat_emergency_policy.cpp
+  )
+  target_include_directories(test_heartbeat_emergency_policy
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware/stm32/ros_usbnode/include
+  )
+
+  # ---- test_cmd_vel_validation ----
+  ament_add_gtest(test_cmd_vel_validation
+    test/test_cmd_vel_validation.cpp
+  )
+  target_include_directories(test_cmd_vel_validation
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  # ---- test_cmd_vel_slew ----
+  ament_add_gtest(test_cmd_vel_slew
+    test/test_cmd_vel_slew.cpp
+  )
+  target_include_directories(test_cmd_vel_slew
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  # ---- test_battery_state_semantics ----
+  ament_add_gtest(test_battery_state_semantics
+    test/test_battery_state_semantics.cpp
+  )
+  target_include_directories(test_battery_state_semantics
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  # ---- test_timer_period ----
+  ament_add_gtest(test_timer_period
+    test/test_timer_period.cpp
+  )
+  target_include_directories(test_timer_period
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  # ---- test_hardware_bridge_parameters ----
+  # Includes the node implementation to exercise ROS's actual read-only
+  # parameter contract while a missing serial device keeps the test hardware-free.
+  ament_add_gtest(test_hardware_bridge_parameters
+    test/test_hardware_bridge_parameters.cpp
+    src/odometry_publisher.cpp
+  )
+  target_link_libraries(test_hardware_bridge_parameters
+    mowgli_hardware_core
+  )
+  target_include_directories(test_hardware_bridge_parameters
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(test_hardware_bridge_parameters
+    rclcpp
+    std_msgs
+    std_srvs
+    sensor_msgs
+    geometry_msgs
+    nav_msgs
+    mowgli_interfaces
+  )
 endif()
 
 # ---------------------------------------------------------------------------

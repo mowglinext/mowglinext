@@ -29,12 +29,39 @@
 #include <cstring>
 #include <vector>
 
+#include "mowgli_hardware/blade_telemetry.hpp"
 #include "mowgli_hardware/crc16.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
 #include "mowgli_hardware/packet_handler.hpp"
 #include <gtest/gtest.h>
 
 using namespace mowgli_hardware;
+
+TEST(BladeTelemetry, LegacyWireCurrentIsConvertedToAmps)
+{
+  // A decoded 16-byte blade packet: active, 2444 RPM, 611 mA. The current
+  // remains a little-endian uint16 at offset 4 despite its legacy wire name.
+  const uint8_t payload[16] = {0x05, 0x01, 0x8c, 0x09, 0x63, 0x02};
+  LlBladeStatus packet{};
+  std::memcpy(&packet, payload, sizeof(packet));
+
+  EXPECT_EQ(packet.rpm, 2444u);
+  EXPECT_EQ(packet.power_watts, 611u);
+  EXPECT_FLOAT_EQ(blade_current_amps(packet), 0.611f);
+  EXPECT_EQ(std::memcmp(&packet, payload, sizeof(packet)), 0);
+}
+
+TEST(BladeTelemetry, CurrentRangePreservesSubAmpReadings)
+{
+  LlBladeStatus packet{};
+  EXPECT_FLOAT_EQ(blade_current_amps(packet), 0.0f);
+  packet.power_watts = 1;
+  EXPECT_FLOAT_EQ(blade_current_amps(packet), 0.001f);
+  packet.power_watts = 600;
+  EXPECT_FLOAT_EQ(blade_current_amps(packet), 0.6f);
+  packet.power_watts = 65535;
+  EXPECT_FLOAT_EQ(blade_current_amps(packet), 65.535f);
+}
 
 // ---------------------------------------------------------------------------
 // Size checks — ensure packed structs match expected wire sizes

@@ -64,7 +64,7 @@ export const useSettingsSchema = () => {
                 }
                 setSchema(schemaRes.data as JSONSchema);
                 if (!valuesRes.error) {
-                    setValues((valuesRes.data as Record<string, any>) || {});
+                    setValues((valuesRes.data) || {});
                 }
             } catch (e: any) {
                 notification.error({

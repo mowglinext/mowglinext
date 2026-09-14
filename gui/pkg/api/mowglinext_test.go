@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,6 +76,64 @@ func TestServiceRoute_MowEnabled(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	require.Len(t, mock.ServiceCalls, 1)
 	assert.Equal(t, "/hardware_bridge/mower_control", mock.ServiceCalls[0].Service)
+}
+
+func TestServiceRoute_FusionGraphTriggers(t *testing.T) {
+	cases := []struct {
+		command string
+		service string
+	}{
+		{"fusion_graph_save", "/fusion_graph_node/save_graph"},
+		{"fusion_graph_clear", "/fusion_graph_node/clear_graph"},
+		{"fusion_graph_clear_lidar_map", "/fusion_graph_node/clear_lidar_map"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.command, func(t *testing.T) {
+			mock := types.NewMockRosProvider()
+			// The handler maps a std_srvs/Trigger {success:false} to a 500,
+			// so the mock has to answer like a healthy node.
+			mock.ServiceResponder = func(_ string, _ any, res any) {
+				_ = json.Unmarshal([]byte(`{"success":true,"message":"done"}`), res)
+			}
+			router := setupMowgliNextRouter(mock)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("POST", "/api/mowglinext/call/"+tc.command, bytes.NewReader([]byte("{}")))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Contains(t, w.Body.String(), "done")
+			require.Len(t, mock.ServiceCalls, 1)
+			assert.Equal(t, tc.service, mock.ServiceCalls[0].Service)
+		})
+	}
+}
+
+func TestServiceRoute_FusionGraphClearLidarMap_ServiceError(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	mock.ServiceErr = assert.AnError
+	router := setupMowgliNextRouter(mock)
+	// A node-side {success:false} must surface as a 500 too, not a silent 200.
+	t.Run("node reports failure", func(t *testing.T) {
+		failing := types.NewMockRosProvider()
+		failing.ServiceResponder = func(_ string, _ any, res any) {
+			_ = json.Unmarshal([]byte(`{"success":false,"message":"anchor disabled"}`), res)
+		}
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/api/mowglinext/call/fusion_graph_clear_lidar_map", bytes.NewReader([]byte("{}")))
+		req.Header.Set("Content-Type", "application/json")
+		setupMowgliNextRouter(failing).ServeHTTP(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Contains(t, w.Body.String(), "anchor disabled")
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/mowglinext/call/fusion_graph_clear_lidar_map", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
 func TestServiceRoute_UnknownCommand(t *testing.T) {
@@ -284,8 +342,8 @@ func TestMultiplexRoute_DropsSubscriptionsOnDisconnect(t *testing.T) {
 func TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics(t *testing.T) {
 	knownTopics := []string{
 		"gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar",
-		"fusionRaw", "cogHeading", "magYaw", "obstacles", "icpOdom",
-		"mowProgress",
+		"fusionRaw", "cogHeading", "magYaw", "obstacles",
+		"mowProgress", "lidarMap",
 		"diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",

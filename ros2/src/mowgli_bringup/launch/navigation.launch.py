@@ -22,7 +22,8 @@ Navigation stack launch file for the Mowgli robot mower.
 Brings up:
   1. Localization — fusion_graph_node (GTSAM iSAM2 factor graph) owns
      both map→odom AND odom→base_footprint. Map-frame inputs: wheel +
-     IMU + GPS + COG (+ optional LiDAR scan-matching and loop-closure).
+     IMU + GPS + COG (+ an optional RTK-built LiDAR map anchor for
+     complete GNSS outages).
      Local-frame: wheel vx + gyro_z integrated at IMU rate (replaces
      the standalone robot_localization ekf_odom_node).
   2. Two helper nodes — cog_to_imu (GPS COG as a continuous absolute-
@@ -35,8 +36,7 @@ Brings up:
 Architecture (REP-105):
   map → odom → base_footprint → base_link → sensors
   fusion_graph_node owns both map→odom AND odom→base_footprint.
-  It runs WITHOUT LiDAR when use_scan_matching=false AND
-  use_loop_closure=false — the graph is then just a Pose2 backbone
+  It runs WITHOUT LiDAR when use_lidar_map_anchor=false — the graph is then just a Pose2 backbone
   with wheel between-factors, gyro between-factors, and GNSS
   lever-arm + COG / mag unaries; local-frame DR is still produced
   from the same wheel + gyro stream.
@@ -72,7 +72,23 @@ from nav2_common.launch import RewrittenYaml
 # with the selected lidar/no-lidar overlay — one tested recursive-merge
 # implementation instead of a per-file copy that can drift.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from robot_config_util import DEFAULT_TOOL_WIDTH_M, deep_merge, load_robot_params  # noqa: E402
+from robot_config_util import (
+    chassis_circumscribed_radius,
+    chassis_footprint,  # noqa: E402
+    DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO,
+    DEFAULT_BLADE_LOAD_RPM_FULL,
+    DEFAULT_BLADE_LOAD_RPM_MIN,
+    DEFAULT_TOOL_WIDTH_M,
+    DEFAULT_WHEEL_TRACK_M,
+    TRUE_TOKENS,
+    check_turn_geometry,
+    deep_merge,
+    derive_blade_load_params,
+    derive_turn_speed,
+    load_robot_params,
+    resolve_lidar_enabled,
+    warn_lidar_key_absent,
+)
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -90,11 +106,7 @@ def generate_launch_description() -> LaunchDescription:
     # default only when no CLI value is set.
     # ------------------------------------------------------------------
     _runtime_cfg_path = "/ros2_ws/config/mowgli_robot.yaml"
-    _early_use_lidar = "true"
-    _lidar_from_yaml = False
     _early_use_magnetometer = "false"
-    _early_use_scan_matching = "false"
-    _early_use_loop_closure = "false"
     _early_fusion_graph_period = "0.04"
     # GPS-derived dock detection: approach the cradle off RTK-Fixed
     # /gps/absolute_pose instead of the corruptible map→odom factor-graph TF
@@ -106,50 +118,31 @@ def generate_launch_description() -> LaunchDescription:
     # Merged params = in-package template defaults with the installed sparse
     # config layered on top (robot_config_util.load_robot_params). INSTALL-
     # DECIDED keys (e.g. lidar_enabled) live ONLY in the installed config and
-    # are absent from the template, so their PRESENCE in _rp still signals an
-    # explicit operator choice (env-var fallback preserved); DEFAULT toggles
-    # (use_magnetometer / use_scan_matching / …) fall through to the template
-    # value when the installed config omits them.
+    # are absent from the template, so their PRESENCE in _rp signals an
+    # explicit operator choice; default toggles such as use_magnetometer
+    # fall through to the template when the installed config omits them.
+    #
+    # LiDAR presence comes from the CONFIG ONLY — the LIDAR_ENABLED env var is
+    # no longer read (see robot_config_util's "LiDAR presence" block). The yaml
+    # key is `lidar_enabled` (matching the install seed + GUI); the launch CLI
+    # arg stays `use_lidar:=true|false` so existing CI / dev scripts don't
+    # break.
     _rp = load_robot_params(bringup_dir, _runtime_cfg_path)
-    if "lidar_enabled" in _rp:
-        # The yaml key is `lidar_enabled` (matches install template + GUI). The
-        # launch CLI arg is still `use_lidar:=true|false` so existing CI / dev
-        # scripts don't break.
-        _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
-        _lidar_from_yaml = True
+    _lidar_enabled, _lidar_explicit = resolve_lidar_enabled(_rp)
+    _early_use_lidar = "true" if _lidar_enabled else "false"
+    if not _lidar_explicit:
+        warn_lidar_key_absent(_runtime_cfg_path)
     _early_use_magnetometer = "true" if bool(
         _rp.get("use_magnetometer", False)) else "false"
-    _early_use_scan_matching = "true" if bool(
-        _rp.get("use_scan_matching", False)) else "false"
-    _early_use_loop_closure = "true" if bool(
-        _rp.get("use_loop_closure", False)) else "false"
+    _early_use_lidar_map_anchor = "true" if bool(
+        _rp.get("use_lidar_map_anchor", False)) else "false"
+    _early_lidar_anchor_shadow_mode = "true" if bool(
+        _rp.get("lidar_anchor_shadow_mode", False)) else "false"
     _early_fusion_graph_period = str(
         float(_rp.get("fusion_graph_node_period_s", 0.04)))
     _early_use_gps_dock_detection = "true" if bool(
         _rp.get("use_gps_dock_detection", True)) else "false"
 
-    # LIDAR_ENABLED env var is a FALLBACK ONLY — it applies only when the yaml
-    # does NOT set lidar_enabled. The GUI-managed yaml is authoritative when
-    # present (a stale installer .env must never override the user's config).
-    if not _lidar_from_yaml:
-        _env_lidar = os.environ.get("LIDAR_ENABLED", "").strip().lower()
-        if _env_lidar in ("false", "0", "no"):
-            _early_use_lidar = "false"
-        elif _env_lidar in ("true", "1", "yes"):
-            _early_use_lidar = "true"
-
-    # ------------------------------------------------------------------
-    # Loop-closure gating
-    # ------------------------------------------------------------------
-    # Loop closure (when use_loop_closure=true) is force-OFF on the
-    # very first boot — there is no persisted graph for the iSAM2
-    # backend to close against. fusion_graph_node auto-saves on dock
-    # arrival, so the next boot honours the operator yaml flag.
-    _graph_file = "/ros2_ws/maps/fusion_graph.graph"
-    _graph_exists = os.path.isfile(_graph_file)
-    _effective_use_loop_closure = (
-        _early_use_loop_closure if _graph_exists else "false"
-    )
 
     # ------------------------------------------------------------------
     # Declared arguments
@@ -164,7 +157,7 @@ def generate_launch_description() -> LaunchDescription:
     use_lidar_arg = DeclareLaunchArgument(
         "use_lidar",
         default_value=_early_use_lidar,
-        description="When false, use nav2_params_no_lidar.yaml (no obstacle layer, collision monitor pass-through). Default read from mowgli_robot.yaml.lidar_enabled; CLI/compose override wins.",
+        description="When false, use nav2_params_no_lidar.yaml (no obstacle layer, collision monitor pass-through) and disable the fusion_graph LiDAR map anchor. Default read from mowgli_robot.yaml.lidar_enabled ONLY (the LIDAR_ENABLED env var is not consulted); CLI/compose override wins.",
     )
 
     use_magnetometer_arg = DeclareLaunchArgument(
@@ -173,18 +166,18 @@ def generate_launch_description() -> LaunchDescription:
         description="Enable magnetometer yaw fusion. Default read from mowgli_robot.yaml.use_magnetometer; CLI override wins. OFF on chassis without motor-isolated mag.",
     )
 
-    use_scan_matching_arg = DeclareLaunchArgument(
-        "use_scan_matching",
-        default_value=_early_use_scan_matching,
-        description="LiDAR scan-matching between consecutive nodes (fusion_graph). Default read from mowgli_robot.yaml.",
-    )
 
-    use_loop_closure_arg = DeclareLaunchArgument(
-        "use_loop_closure",
-        default_value=_effective_use_loop_closure,
-        description="Loop-closure search against earlier graph nodes (fusion_graph). Default read from mowgli_robot.yaml AND gated on a persisted graph file existing on disk — first session can't loop-close against itself.",
-    )
 
+    use_lidar_map_anchor_arg = DeclareLaunchArgument(
+        "use_lidar_map_anchor",
+        default_value=_early_use_lidar_map_anchor,
+        description="LiDAR map anchor (fusion_graph): persistent tiles built under RTK-Fixed, with a Beluga particle filter enabled only after a complete GNSS outage; XY-only factor. Default read from mowgli_robot.yaml. ANDed with use_lidar; no scan subscription without LiDAR.",
+    )
+    lidar_anchor_shadow_mode_arg = DeclareLaunchArgument(
+        "lidar_anchor_shadow_mode",
+        default_value=_early_lidar_anchor_shadow_mode,
+        description="LiDAR map anchor SHADOW mode (fusion_graph): run, score and publish the particle filter under RTK-Fixed as well, never apply a factor — the field measurement of the anchor against RTK. Default read from mowgli_robot.yaml. LiDAR-gated.",
+    )
     use_gps_dock_detection_arg = DeclareLaunchArgument(
         "use_gps_dock_detection",
         default_value=_early_use_gps_dock_detection,
@@ -226,11 +219,22 @@ def generate_launch_description() -> LaunchDescription:
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_lidar = LaunchConfiguration("use_lidar")
     use_magnetometer = LaunchConfiguration("use_magnetometer")
-    use_scan_matching = LaunchConfiguration("use_scan_matching")
-    use_loop_closure = LaunchConfiguration("use_loop_closure")
+    use_lidar_map_anchor = LaunchConfiguration("use_lidar_map_anchor")
+    lidar_anchor_shadow_mode = LaunchConfiguration("lidar_anchor_shadow_mode")
     use_gps_dock_detection = LaunchConfiguration("use_gps_dock_detection")
     fusion_graph_tf_lead_s = LaunchConfiguration("fusion_graph_tf_lead_s")
     fusion_graph_node_period_s = LaunchConfiguration("fusion_graph_node_period_s")
+
+    def lidar_gated(flag):
+        """Gate the scan-to-map anchor on hardware availability at substitution
+        time, including CLI/compose overrides of ``use_lidar``.
+        """
+        tokens = str(TRUE_TOKENS)
+        return PythonExpression([
+            "'true' if '", use_lidar, "'.strip().lower() in ", tokens,
+            " and '", flag, "'.strip().lower() in ", tokens,
+            " else 'false'",
+        ])
 
     # ------------------------------------------------------------------
     # Config paths — one shared base + thin lidar/no-lidar overlays, deep-
@@ -274,14 +278,9 @@ def generate_launch_description() -> LaunchDescription:
     if rp:
         lidar_height_m = float(rp.get("lidar_z", lidar_height_m))
         lidar_mount_yaw = float(rp.get("lidar_yaw", 0.0)) - float(rp.get("imu_yaw", 0.0))
-        cl = float(rp.get("chassis_length", 0.54))
-        cw = float(rp.get("chassis_width", 0.40))
-        ccx = float(rp.get("chassis_center_x", 0.18))
-        # Add 5cm margin to chassis footprint for costmap planning clearance
-        margin = 0.05
-        fp_f = ccx + cl / 2.0 + margin
-        fp_r = ccx - cl / 2.0 - margin
-        fp_hw = cw / 2.0 + margin
+        # Footprint geometry comes from robot_config_util so that this and the
+        # inflation floor below cannot drift apart — see chassis_footprint().
+        fp_f, fp_r, fp_hw = chassis_footprint(rp)
         footprint_str = (
             f"[[{fp_f:.3f}, {fp_hw:.3f}], "
             f"[{fp_f:.3f}, {-fp_hw:.3f}], "
@@ -364,22 +363,41 @@ def generate_launch_description() -> LaunchDescription:
     # in-bounds produced loops too tight to track (wz≈vx/r), so the robot
     # looped/hesitated at corners — the bug this knob prevents. Injected into
     # coverage_server.min_turning_radius; operator-tunable via mowgli_robot.yaml.
-    min_turning_radius = 0.15
+    min_turning_radius = 0.20
     # connector_turn_radius: nominal radius of the swath-to-swath turn-around
     # arcs in the continuous coverage path. A forward 180° reversal at op_width
     # spacing always loops (a clean U needs r ≤ op_width/2 ≈ 0.09, below the
     # min_turning_radius floor), but the loop SIZE scales with this radius: 0.30
-    # balloons a big teardrop into the headland (the "turning loops" seen with
-    # >2 headland passes); ~op_width (0.18) collapses it to a compact U-turn.
+    # balloons a big teardrop into the headland. 0.20 m matches FTC's tightest
+    # controllable bend at the deployed bend speed and angular limit.
     # Injected into coverage_server.connector_turn_radius; operator-tunable via
-    # mowgli_robot.yaml (raise toward 0.30 if the tighter turns hesitate).
-    connector_turn_radius = 0.18
+    # mowgli_robot.yaml when a site needs a wider turn.
+    connector_turn_radius = 0.20
+    # wheel_track: centre-to-centre wheel distance. NOT injected into anything
+    # here — it is read so the turn-geometry check below can compare the planned
+    # turn radii against the HALF-track. Must match the firmware WHEEL_BASE that
+    # does the actual differential-drive IK (left = vx - wz*track/2).
+    wheel_track = DEFAULT_WHEEL_TRACK_M
+    # turn_speed_ratio: FollowCoveragePath.speed_slow as a fraction of
+    # mowing_speed. See the mowgli_robot.yaml template for the rationale
+    # (issue #499 — speed_slow used to be static, so turns ran FASTER than the
+    # straights whenever the operator lowered mowing_speed).
+    turn_speed_ratio = 0.8
+    # Blade-load slowdown (FollowCoveragePath.blade_load_*): fallbacks mirror the
+    # template. OFF by default — the no-load blade RPM differs per motor, so the
+    # operator reads it off Diagnostics and sets the ramp before enabling.
+    blade_load_slowdown_enabled = False
+    blade_load_rpm_full = DEFAULT_BLADE_LOAD_RPM_FULL
+    blade_load_rpm_min = DEFAULT_BLADE_LOAD_RPM_MIN
+    blade_load_min_speed_ratio = DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO
     # Fallback if progress_timeout_sec is absent from the resolved robot config
     # (normally the mowgli_robot.yaml template supplies it — default 30.0, see
     # #396). Kept equal to that default so the effective timeout is one number.
     progress_timeout_sec = 30.0
     # num_headland_passes: 0 = auto (ceil(headland_width / tool_width)),
-    # >0 forces exactly that many concentric perimeter rings.
+    # >0 forces exactly that many concentric perimeter rings, <0 = NONE (no
+    # perimeter rings at all — the serpentine swaths mow to the boundary, #429).
+    # The negative sentinel must flow through UNCLAMPED to coverage_server.
     num_headland_passes = 0
     # mow_direction: perimeter/headland travel winding (issue #335) — 0 = planner
     # default (F2C natural), 1 = clockwise, 2 = counter-clockwise. Set it to keep
@@ -432,6 +450,19 @@ def generate_launch_description() -> LaunchDescription:
     # early, 0.5 over-presses" rationale). Operator-overridable via
     # mowgli_robot.yaml so sites with different chargers can tune.
     dock_charging_threshold = 0.3
+    # docking_server retry budget (issue #195). MUST have a module-level default
+    # for the same reason dock_approach_overshoot does: it is read
+    # unconditionally in _inject_dock_pose_and_speeds, but only assigned inside
+    # the `if runtime yaml exists` block below — a fresh checkout / CI run with
+    # no /ros2_ws/config/mowgli_robot.yaml would otherwise NameError and abort
+    # the whole navigation launch. Matches nav2_params_base.yaml's static value.
+    dock_max_retries = 3
+    # Confirm docking from the charging current (SimpleChargingDock
+    # use_battery_status). False = the dock is considered reached on pose
+    # proximity alone (wait_charge_timeout no longer gates contact). Matches
+    # nav2_params_base.yaml's static value. See dock_max_retries for why this
+    # needs a module-level default.
+    dock_use_charger_detection = True
     # Phantom-tuning knobs surfaced through mowgli_robot.yaml so the GUI
     # can edit them without an SSH session. Defaults match the C++ node
     # defaults; override on the Settings page.
@@ -444,7 +475,9 @@ def generate_launch_description() -> LaunchDescription:
     # 0.80 (was 0.60) — task #35, 2026-07-17 field analysis: obstacles were
     # only pushing the path from 0.4-0.6 m out at ~0.17 m/s, too late to react
     # smoothly. See nav2_params_base.yaml's local_costmap.inflation_layer
-    # comment for the full rationale; clamped to [0.58, 1.50] below.
+    # comment for the full rationale; floored at the chassis circumscribed
+    # radius (derived from chassis_*, ~0.597 m at the shipped dimensions)
+    # and capped at 1.50 below.
     obstacle_inflation_radius = 0.80
     # obstacle_detection_range_m (task #51): the real "avoid from further out
     # during mowing" knob — inflation_radius above only affects Nav2 transit
@@ -478,6 +511,11 @@ def generate_launch_description() -> LaunchDescription:
     declination_deg = 1.5
     min_horizontal_uT = 5.0
     mag_yaw_variance = 0.0027
+    # Physical receiver observation cadence, not the ROS publication cadence.
+    # The same gnss_profile_rate_hz value configures the receiver profile in
+    # start_gps.sh; pass it to cog_to_imu so its receipt-gap policy has one
+    # source of truth.
+    physical_gnss_observation_rate_hz = 5.0
     runtime_robot_config = "/ros2_ws/config/mowgli_robot.yaml"
     # Merged params: in-package template defaults with the installed sparse
     # config layered on top. Every rt_rp.get(key, <fallback>) below therefore
@@ -509,6 +547,9 @@ def generate_launch_description() -> LaunchDescription:
             rt_rp.get("dock_approach_overshoot", 0.05))
         dock_charging_threshold = float(
             rt_rp.get("dock_charging_threshold", dock_charging_threshold))
+        dock_max_retries = int(rt_rp.get("dock_max_retries", dock_max_retries))
+        dock_use_charger_detection = bool(
+            rt_rp.get("dock_use_charger_detection", dock_use_charger_detection))
         # NOTE: coverage_xy_tolerance is FLOORED at FTC's max_goal_distance_error
         # at injection time (see _inject below) — a value tighter than FTC's
         # parking distance would make the area never complete and re-mow. We no
@@ -523,12 +564,28 @@ def generate_launch_description() -> LaunchDescription:
         declination_deg = float(rt_rp.get("declination_deg", declination_deg))
         min_horizontal_uT = float(rt_rp.get("min_horizontal_uT", min_horizontal_uT))
         mag_yaw_variance = float(rt_rp.get("mag_yaw_variance", mag_yaw_variance))
+        physical_gnss_observation_rate_hz = float(
+            rt_rp.get(
+                "gnss_profile_rate_hz",
+                physical_gnss_observation_rate_hz,
+            )
+        )
         tool_width = float(rt_rp.get("tool_width", tool_width))
         headland_width = float(rt_rp.get("headland_width", headland_width))
         num_headland_passes = int(rt_rp.get(
             "num_headland_passes", num_headland_passes))
         mow_direction = int(rt_rp.get("mow_direction", mow_direction))
         swath_overlap = float(rt_rp.get("swath_overlap", swath_overlap))
+        wheel_track = float(rt_rp.get("wheel_track", wheel_track))
+        turn_speed_ratio = float(rt_rp.get("turn_speed_ratio", turn_speed_ratio))
+        blade_load_slowdown_enabled = rt_rp.get(
+            "blade_load_slowdown_enabled", blade_load_slowdown_enabled)
+        blade_load_rpm_full = float(rt_rp.get(
+            "blade_load_rpm_full", blade_load_rpm_full))
+        blade_load_rpm_min = float(rt_rp.get(
+            "blade_load_rpm_min", blade_load_rpm_min))
+        blade_load_min_speed_ratio = float(rt_rp.get(
+            "blade_load_min_speed_ratio", blade_load_min_speed_ratio))
         min_turning_radius = float(rt_rp.get(
             "min_turning_radius", min_turning_radius))
         connector_turn_radius = float(rt_rp.get(
@@ -605,9 +662,12 @@ def generate_launch_description() -> LaunchDescription:
             overlay_doc = yaml.safe_load(fh) or {}
         doc = deep_merge(base_doc, overlay_doc)
         # home_dock.pose must be a YAML list (PARAMETER_DOUBLE_ARRAY).
-        home_dock = (doc.setdefault("docking_server", {})
-                        .setdefault("ros__parameters", {})
-                        .setdefault("home_dock", {}))
+        ds = (doc.setdefault("docking_server", {})
+                 .setdefault("ros__parameters", {}))
+        # Retry budget (issue #195) — was a static nav2_params_base.yaml value
+        # with the mowgli_robot.yaml key wired to nothing.
+        ds["max_retries"] = int(dock_max_retries)
+        home_dock = ds.setdefault("home_dock", {})
         # Apply dock_approach_overshoot in the body forward direction.
         # opennav_docking's graceful_controller will drive toward this
         # shifted target and stop at docking_threshold (5 cm) before it,
@@ -631,6 +691,10 @@ def generate_launch_description() -> LaunchDescription:
                   .setdefault("ros__parameters", {})
                   .setdefault("simple_charging_dock", {}))
         scd["charging_threshold"] = dock_charging_threshold
+        # Confirm contact from the charging current (issue #195). False falls
+        # back to pose proximity alone — wait_charge_timeout then no longer
+        # gates dock success.
+        scd["use_battery_status"] = bool(dock_use_charger_detection)
         # GPS-derived dock detection. When enabled, SimpleChargingDock pulls
         # the live dock target from the `detected_dock_pose` topic
         # (gps_dock_detection_node, fed by RTK-Fixed /gps/absolute_pose) every
@@ -699,6 +763,63 @@ def generate_launch_description() -> LaunchDescription:
         if mowing_speed > ftc_speed_cap:
             fcp["max_cmd_vel_speed"] = mowing_speed
 
+        # ── Turn speed: derived from mowing_speed, not static (issue #499) ──
+        #
+        # speed_slow is FTC's carrot target wherever the path BENDS — every
+        # swath-end turn-around arc and every headland corner fillet. It used to
+        # be a STATIC value in nav2_params_base.yaml while speed_fast tracked the
+        # operator's mowing_speed, so lowering mowing_speed made the TURNS faster
+        # than the straights: backwards everywhere, and worst exactly where the
+        # robot carves the lawn. The arithmetic and both clamp rationales live in
+        # robot_config_util.derive_turn_speed — pure and unit-tested, because this
+        # launch file imports launch/launch_ros and cannot be imported outside a
+        # sourced ROS2 install.
+        turn_speed, turn_speed_warnings = derive_turn_speed(
+            mowing_speed, turn_speed_ratio, float(fcp.get("min_speed_mps", 0.15)))
+        for line in turn_speed_warnings:
+            print(line)
+        fcp["speed_slow"] = turn_speed
+
+        # ── Blade-load slowdown: feed the blade slower when its RPM sags ──
+        #
+        # FTC scales its carrot speed on a linear ramp between the two RPM
+        # thresholds (ftc_blade_load.hpp); the operator's four mowgli_robot.yaml
+        # keys are validated by robot_config_util.derive_blade_load_params (pure,
+        # unit-tested) and injected here. Without this injection the GUI's Mowing
+        # → Blade load toggle would be inert (the FTC declare_parameter default,
+        # false, would win).
+        blade_load_params, blade_load_warnings = derive_blade_load_params(
+            blade_load_slowdown_enabled, blade_load_rpm_full, blade_load_rpm_min,
+            blade_load_min_speed_ratio)
+        for line in blade_load_warnings:
+            print(line)
+        fcp["blade_load_slowdown_enabled"] = blade_load_params["blade_load_slowdown_enabled"]
+        fcp["blade_load_rpm_full"] = blade_load_params["blade_load_rpm_full"]
+        fcp["blade_load_rpm_min"] = blade_load_params["blade_load_rpm_min"]
+        fcp["blade_load_min_speed_ratio"] = blade_load_params["blade_load_min_speed_ratio"]
+
+        # Effective turn radii — the CLAMPED values actually injected into
+        # coverage_server further down. Computed here so the geometry check below
+        # reports the numbers the planner really receives, not the raw yaml values
+        # it would have clamped away. Clamp to the tuned [0.10, 0.50] band
+        # (sub-0.10 loops are untrackable, >0.50 bulges out of bounds);
+        # connector_turn_radius is additionally held at or above the floor —
+        # buildConnector floors it anyway, but the injected pair stays coherent.
+        eff_min_turn_radius = min(0.50, max(0.10, min_turning_radius))
+        eff_connector_turn_radius = min(
+            0.50, max(eff_min_turn_radius, connector_turn_radius))
+
+        # ── Turn-geometry sanity check (issue #499) ─────────────────────────
+        # WARN-only by design — see check_turn_geometry for why hard-failing here
+        # would brick every existing robot's navigation stack rather than protect
+        # it. wheel_track comes from the robot config, never a literal.
+        for line in check_turn_geometry(eff_min_turn_radius,
+                                        eff_connector_turn_radius,
+                                        wheel_track,
+                                        turn_speed,
+                                        float(fcp.get("max_cmd_vel_ang", 0.8))):
+            print(line)
+
         # Obstacle-avoidance knobs (GUI: Settings → Obstacles).
         # max_obstacle_avoidance_distance historically only reached
         # map_server.bypass_max_length (full_system.launch.py) while FTC's
@@ -743,18 +864,36 @@ def generate_launch_description() -> LaunchDescription:
             1.0, max(0.0, obstacle_reverse_max_dist_m))
         fcp["obstacle_reverse_speed_mps"] = min(
             0.30, max(0.0, obstacle_reverse_speed_mps))
-        # LOCAL costmap inflation only. Floor 0.58: the nav2 inflation layer
+        # LOCAL costmap inflation only. The floor is the chassis circumscribed
+        # radius, computed from the live chassis_* params: the nav2 inflation layer
         # degrades footprint-cost semantics below the chassis circumscribed
-        # radius (~0.572 m) and FTC's deviation detector (threshold 253)
-        # assumes the inscribed band exists. The GLOBAL costmap radius (0.20)
+        # radius and FTC's deviation detector (threshold 253) assumes the
+        # inscribed band exists. That radius follows chassis_width: with the
+        # template's chassis_length 0.60 / chassis_center_x 0.18 the footprint
+        # is x[-0.170, 0.530] y±(chassis_width/2 + 0.05), giving
+        # sqrt(0.530² + 0.275²) ≈ 0.597 m at chassis_width 0.45 (2026-09-05,
+        # maintainer-measured). The previous floor of 0.58 quoted ~0.572 m,
+        # which came from the older chassis_length 0.54 and was already below
+        # the real radius (≈0.586 m) even at the old chassis_width 0.40. The GLOBAL costmap radius (0.20)
         # is deliberately untouched — 0.30 already blocked all transit paths
         # on a 9×6 m polygon (see the inflation_layer comment in base.yaml).
         lc_infl = (doc.setdefault("local_costmap", {})
                       .setdefault("local_costmap", {})
                       .setdefault("ros__parameters", {})
                       .setdefault("inflation_layer", {}))
+        # DERIVED, not a literal: chassis dimensions are operator-editable in
+        # the GUI, so a hardcoded floor goes stale the moment someone edits
+        # them — which is exactly what happened before 2026-09-05.
+        infl_floor = chassis_circumscribed_radius(rp)
+        if infl_floor > 1.50:
+            print(
+                "[navigation.launch] WARNING: chassis circumscribed radius "
+                f"{infl_floor:.3f} m exceeds the 1.50 m inflation cap; the cap "
+                "wins and the local costmap will under-inflate for this "
+                "chassis. Check chassis_length / chassis_width."
+            )
         lc_infl["inflation_radius"] = min(
-            1.50, max(0.58, obstacle_inflation_radius))
+            1.50, max(infl_floor, obstacle_inflation_radius))
         # PolygonSlow only exists in the LiDAR overlay's collision_monitor —
         # write the slowdown ratio only when the merged doc carries it so the
         # no-lidar variant (pass-through monitor) stays untouched.
@@ -838,13 +977,11 @@ def generate_launch_description() -> LaunchDescription:
         # Hard floor on the continuous path's turn-around / fillet arcs so no
         # turn is ever tighter than the robot can track (clamp to the tuned
         # [0.10, 0.50] band; sub-0.10 loops are untrackable, >0.50 bulges OOB).
-        cov_params["min_turning_radius"] = min(0.50, max(0.10, min_turning_radius))
+        cov_params["min_turning_radius"] = eff_min_turn_radius
         # Nominal turn-around radius for the continuous path (compact U vs big
-        # teardrop). Clamp to a sane band and never below the trackable floor:
-        # buildConnector floors it at min_turning_radius anyway, but keep the
-        # injected value coherent.
-        cov_params["connector_turn_radius"] = min(
-            0.50, max(min(0.50, max(0.10, min_turning_radius)), connector_turn_radius))
+        # teardrop). Clamped alongside the floor above (eff_min_turn_radius) so the
+        # geometry check and the injected value can never describe different plans.
+        cov_params["connector_turn_radius"] = eff_connector_turn_radius
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w", prefix="mowgli_nav2_", suffix=".yaml", delete=False)
@@ -968,7 +1105,7 @@ def generate_launch_description() -> LaunchDescription:
     # fusion_graph_node — GTSAM iSAM2 factor-graph localizer. Always
     # primary (no fallback to ekf_map_node, which was removed alongside
     # the use_fusion_graph flag in this refactor). Works WITHOUT LiDAR
-    # when use_scan_matching=false AND use_loop_closure=false (default).
+    # when use_lidar_map_anchor=false (forced when use_lidar=false).
     # Reads datum + lever-arm from mowgli_robot.yaml inside the include.
     fusion_graph_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -980,8 +1117,10 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "use_sim_time": use_sim_time,
             "use_magnetometer": use_magnetometer,
-            "use_scan_matching": use_scan_matching,
-            "use_loop_closure": use_loop_closure,
+            # LiDAR-gated: no scanner -> no scan factors, and no subscription to
+            # a topic nothing publishes. See lidar_gated() above.
+            "use_lidar_map_anchor": lidar_gated(use_lidar_map_anchor),
+            "lidar_anchor_shadow_mode": lidar_gated(lidar_anchor_shadow_mode),
             "primary_mode": "true",
             "tf_publish_lead_s": fusion_graph_tf_lead_s,
             "node_period_s": fusion_graph_node_period_s,
@@ -1026,6 +1165,7 @@ def generate_launch_description() -> LaunchDescription:
              "enable_mag_cal": enable_mag_cal,
              "mag_calibration_path": mag_cal_path,
              "stationary_seed_rate_hz": cog_stationary_rate,
+             "physical_gnss_observation_rate_hz": physical_gnss_observation_rate_hz,
              # Stationary-yaw aging penalty. The republish_latched path
              # adds (rate · age)² to the variance to model the chance
              # that the latched yaw has gone stale (manual rotation,
@@ -1191,8 +1331,8 @@ def generate_launch_description() -> LaunchDescription:
             use_sim_time_arg,
             use_lidar_arg,
             use_magnetometer_arg,
-            use_scan_matching_arg,
-            use_loop_closure_arg,
+            use_lidar_map_anchor_arg,
+            lidar_anchor_shadow_mode_arg,
             use_gps_dock_detection_arg,
             cog_stationary_seed_rate_hz_arg,
             fusion_graph_tf_lead_arg,

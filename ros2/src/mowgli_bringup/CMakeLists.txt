@@ -72,10 +72,20 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_urdf_xacro test/test_urdf_xacro.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_cmd_vel_ws_relay test/test_cmd_vel_ws_relay.py
+    TIMEOUT 30
+  )
 
   # Static guard for Inv 2 (TF sole ownership) — greps sources/configs, no
   # nodes spun up.
   ament_add_pytest_test(test_tf_ownership test/test_tf_ownership.py
+    TIMEOUT 30
+  )
+
+  # Static guards for the single-line mowgli_robot.yaml -> node-parameter
+  # injections in the launch files (num_headland_passes, mowing_enabled,
+  # dock_max_retries, dock_use_charger_detection). AST-based, no ROS2 runtime.
+  ament_add_pytest_test(test_launch_injection test/test_launch_injection.py
     TIMEOUT 30
   )
 

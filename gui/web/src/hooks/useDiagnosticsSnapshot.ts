@@ -37,7 +37,7 @@ export interface CrossChecks {
 export interface DiagnosticsSnapshot {
     timestamp: string;
     containers: ContainerHealth[];
-    system: { cpu_temperature: number };
+    system: { cpu_temperature: number; cpu_usage?: number | null };
     coverage: AreaCoverageInfo[];
     cross_checks: CrossChecks;
 }

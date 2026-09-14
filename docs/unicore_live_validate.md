@@ -1,5 +1,7 @@
 # Archived Receiver Validation Note
 
+> **Historical document (2026-06)** — describes the state at that time. Current reference: [`sensors/README.md`](../sensors/README.md).
+
 This page is kept only to catch old links.
 
 MowgliNext no longer ships a receiver-specific GNSS runtime wrapper. Direct GNSS installs now use Universal GNSS only, and the public install path is:

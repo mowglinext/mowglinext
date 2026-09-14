@@ -113,12 +113,12 @@ export function getNewId(
     } else {
         maxArea = Object.values<MowingFeature>(currFeatures)
             .filter((f) => {
-                const parts = (f.id as string).split("-");
+                const parts = (f.id).split("-");
                 if (parts.length !== 4) return false;
                 return parts[0] === type && component === parts[2];
             })
             .reduce((acc, val) => {
-                const parts = (val.id as string).split("-");
+                const parts = (val.id).split("-");
                 if (parts.length !== 4) return acc;
                 const idx = parseInt(parts[1]);
                 return idx > acc ? idx : acc;
@@ -127,12 +127,12 @@ export function getNewId(
 
     const maxComponent = Object.values<MowingFeature>(currFeatures)
         .filter((f) =>
-            (f.id as string).startsWith(
+            (f.id).startsWith(
                 `${type}-${maxArea + 1}-${component}-`
             )
         )
         .reduce((acc, val) => {
-            const parts = (val.id as string).split("-");
+            const parts = (val.id).split("-");
             if (parts.length !== 4) return acc;
             const idx = parseInt(parts[3]);
             return idx > acc ? idx : acc;
@@ -398,7 +398,7 @@ export function useMapEditing({
             const polygon: Feature<Polygon> = {
                 type: "Feature",
                 properties: {},
-                geometry: targetFeat.geometry as Polygon,
+                geometry: targetFeat.geometry,
             };
 
             // Extend the cutting line far beyond the polygon so it fully crosses through
@@ -409,7 +409,7 @@ export function useMapEditing({
                 Number(c[0]),
                 Number(c[1]),
             ]);
-            const polyCoords = (targetFeat.geometry as Polygon).coordinates[0];
+            const polyCoords = (targetFeat.geometry).coordinates[0];
             let minX = Infinity,
                 minY = Infinity,
                 maxX = -Infinity,
@@ -443,7 +443,7 @@ export function useMapEditing({
             }
 
             try {
-                const ring = (polygon.geometry as Polygon).coordinates[0];
+                const ring = (polygon.geometry).coordinates[0];
                 const ringOpen = ring.slice(0, -1);
 
                 const hits: {index: number; point: Position}[] = [];
@@ -623,7 +623,7 @@ export function useMapEditing({
                     )
                         continue;
                     if (f.geometry.type === "Polygon") {
-                        feature.setGeometry(f.geometry as Polygon);
+                        feature.setGeometry(f.geometry);
                     }
                 }
                 return newFeatures;
@@ -897,11 +897,15 @@ export function useMapEditing({
     }, [drawRef, mapInstanceRef, notification, t]);
 
     const handleTrash = useCallback(() => {
-        // Deleting an area is destructive and (until saved) only reversible via
-        // undo — gate it behind a confirm so a mistap can't wipe a zone.
+        const draw = drawRef.current;
+        if (!draw) return;
+        // Draw's trash action depends on its mode: direct_select removes
+        // selected vertices; simple_select removes complete features.
+        const deletingPoints = draw.getMode() === 'direct_select';
+        if (!deletingPoints && draw.getSelectedIds().length === 0) return;
         modal.confirm({
-            title: t('mapEditing.deleteAreaConfirmTitle'),
-            content: t('mapEditing.deleteAreaConfirmBody'),
+            title: t(deletingPoints ? 'mapEditing.deletePointsConfirmTitle' : 'mapEditing.deleteAreaConfirmTitle'),
+            content: t(deletingPoints ? 'mapEditing.deletePointsConfirmBody' : 'mapEditing.deleteAreaConfirmBody'),
             okText: t('mapEditing.deleteAreaConfirmOk'),
             okType: 'danger',
             cancelText: t('mapEditing.deleteAreaConfirmCancel'),

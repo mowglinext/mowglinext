@@ -17,17 +17,21 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <ctime>
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
 
 #include "geometry_msgs/msg/quaternion.hpp"
+#include "mowgli_localization/cog_observation_timing.hpp"
 #include "mowgli_localization/cog_yaw_math.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/qos.hpp"
@@ -45,6 +49,20 @@ namespace
 {
 constexpr double kDegToRad = M_PI / 180.0;
 constexpr double kMetersPerDeg = 111319.49079327357;
+constexpr double kNanosecondsPerSecond = 1.0e9;
+
+std::int64_t stamp_to_nanoseconds(const builtin_interfaces::msg::Time& stamp)
+{
+  return static_cast<std::int64_t>(stamp.sec) * static_cast<std::int64_t>(kNanosecondsPerSecond) +
+         static_cast<std::int64_t>(stamp.nanosec);
+}
+
+std::int64_t steady_now_nanoseconds()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 
 rclcpp::QoS sensor_qos()
 {
@@ -142,7 +160,33 @@ public:
     rotation_quiet_min_samples_ = declare_parameter<int>("rotation_quiet_min_samples", 2);
     max_pos_accuracy_ = declare_parameter<double>("max_pos_accuracy_m", 0.05);
     min_dt_ = declare_parameter<double>("min_sample_dt_s", 0.05);
-    max_dt_ = declare_parameter<double>("max_sample_dt_s", 0.50);
+    physical_gnss_observation_rate_hz_ =
+        declare_parameter<double>("physical_gnss_observation_rate_hz", 5.0);
+    // A 1.5-period deadline admits up to half a receiver period of receipt
+    // jitter at every configured rate, while a genuinely missed full cycle
+    // (2 periods) still resets instead of spanning an unbounded baseline.
+    sample_period_tolerance_factor_ =
+        declare_parameter<double>("sample_period_tolerance_factor", 1.5);
+    const double expected_observation_period_s =
+        DeriveMaximumCogObservationIntervalSeconds(physical_gnss_observation_rate_hz_, 1.0);
+    const double derived_max_dt_s =
+        DeriveMaximumCogObservationIntervalSeconds(physical_gnss_observation_rate_hz_,
+                                                   sample_period_tolerance_factor_);
+    // Existing max_sample_dt_s remains an explicit operator override. Its
+    // default is now derived from PHYSICAL receiver cadence, never callback or
+    // ROS publication cadence.
+    max_dt_ = declare_parameter<double>("max_sample_dt_s", derived_max_dt_s);
+    maximum_fix_provenance_age_s_ = declare_parameter<double>("maximum_fix_provenance_age_s", 2.0);
+    if (!std::isfinite(min_dt_) || min_dt_ < 0.0 || !std::isfinite(max_dt_) ||
+        max_dt_ < expected_observation_period_s || !std::isfinite(maximum_fix_provenance_age_s_) ||
+        maximum_fix_provenance_age_s_ <= 0.0)
+    {
+      throw std::invalid_argument(
+          "COG timing requires finite non-negative min_dt, max_dt >= the physical "
+          "observation period, and positive provenance age");
+    }
+    observation_timing_ =
+        std::make_unique<CogObservationTiming>(min_dt_, max_dt_, maximum_fix_provenance_age_s_);
     max_yaw_var_ = declare_parameter<double>("max_yaw_variance", 3.0);
     min_yaw_var_ = declare_parameter<double>("min_yaw_variance", 7.6e-5);
 
@@ -159,6 +203,11 @@ public:
     stationary_seed_rate_hz_ = declare_parameter<double>("stationary_seed_rate_hz", 2.0);
     stationary_drift_rate_ = declare_parameter<double>("stationary_yaw_drift_rate", 0.005);
     stationary_max_age_s_ = declare_parameter<double>("stationary_max_age_s", 600.0);
+    if (!std::isfinite(stationary_max_age_s_) || stationary_max_age_s_ <= 0.0)
+    {
+      throw std::invalid_argument("stationary_max_age_s must be finite and positive");
+    }
+    stationary_latch_clock_ = std::make_unique<StationaryLatchClock>(stationary_max_age_s_);
 
     // Datum for flat-earth ENU projection.
     datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
@@ -297,6 +346,15 @@ public:
                 lever_arm_x_,
                 lever_arm_y_,
                 omega_noise_rps_);
+    RCLCPP_INFO(get_logger(),
+                "COG receipt timing: physical GNSS rate %.3f Hz, expected period %.3f s, "
+                "effective max gap %.3f s (automatic-default period factor %.2f), "
+                "min gap %.3f s",
+                physical_gnss_observation_rate_hz_,
+                expected_observation_period_s,
+                max_dt_,
+                sample_period_tolerance_factor_,
+                min_dt_);
   }
 
 private:
@@ -340,6 +398,38 @@ private:
       return;
     }
 
+    const std::int64_t receipt_time_ns = stamp_to_nanoseconds(msg.header.stamp);
+    const rclcpp::Time ros_now = now();
+    const CogObservationTimingResult timing =
+        observation_timing_->Observe(receipt_time_ns, ros_now.nanoseconds());
+    if (!timing.accepts_current_observation())
+    {
+      if (timing.decision == CogObservationTimingDecision::kDuplicate ||
+          timing.decision == CogObservationTimingDecision::kTooSoon)
+      {
+        return;
+      }
+
+      reset_cog_temporal_state();
+      RCLCPP_WARN_THROTTLE(
+          get_logger(),
+          *get_clock(),
+          5000,
+          "COG rejected invalid/rewound receipt timing (decision=%d, receipt=%lld ns)",
+          static_cast<int>(timing.decision),
+          static_cast<long long>(receipt_time_ns));
+      return;
+    }
+    if (timing.decision == CogObservationTimingDecision::kGapReseed)
+    {
+      reset_cog_temporal_state();
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           5000,
+                           "COG physical observation gap exceeded %.3f s; baseline reseeded",
+                           max_dt_);
+    }
+
     if (!datum_seeded_)
     {
       datum_lat_ = msg.latitude;
@@ -354,29 +444,8 @@ private:
 
     const double x = (msg.longitude - datum_lon_) * cos_datum_lat_ * kMetersPerDeg;
     const double y = (msg.latitude - datum_lat_) * kMetersPerDeg;
-    const double t = static_cast<double>(msg.header.stamp.sec) +
-                     static_cast<double>(msg.header.stamp.nanosec) * 1e-9;
+    const double t = static_cast<double>(receipt_time_ns) / kNanosecondsPerSecond;
     pos_acc = std::max(pos_acc, 0.002);
-
-    // Sample-to-sample dt sanity. A long gap means we lost lock or paused;
-    // the anchor's age would inflate σ_pos and the wheel direction may
-    // have flipped silently — drop the anchor and restart accumulation.
-    if (have_last_sample_)
-    {
-      const double dt_sample = t - last_sample_t_;
-      if (dt_sample > max_dt_)
-      {
-        have_anchor_ = false;
-        have_last_sample_ = false;
-      }
-      else if (dt_sample < min_dt_)
-      {
-        // Duplicate / out-of-order; ignore but don't disturb anchor.
-        return;
-      }
-    }
-    last_sample_t_ = t;
-    have_last_sample_ = true;
 
     // Rotation gate. During in-place pivots (PRE_ROTATE, headland turns)
     // the GPS antenna swings on a lever-arm arc around base_link. Each
@@ -553,8 +622,17 @@ private:
     // fix epoch.
     publish_imu(rclcpp::Time(msg.header.stamp), yaw, yaw_var);
 
-    const double mono_now = static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9;
-    latched_yaw_ = LatchedYaw{mono_now, yaw, yaw_var};
+    const rclcpp::Time latch_ros_now = now();
+    if (stationary_latch_clock_->Latch(receipt_time_ns,
+                                       latch_ros_now.nanoseconds(),
+                                       steady_now_nanoseconds()))
+    {
+      latched_yaw_ = LatchedYaw{yaw, yaw_var};
+    }
+    else
+    {
+      latched_yaw_.reset();
+    }
     // Fresh latch — start counting rotation away from this heading from zero.
     abs_dtheta_since_latch_ = 0.0;
 
@@ -574,6 +652,18 @@ private:
   {
     if (!latched_yaw_)
     {
+      return;
+    }
+    const rclcpp::Time ros_now = now();
+    const StationaryLatchResult latch_time =
+        stationary_latch_clock_->Check(ros_now.nanoseconds(), steady_now_nanoseconds());
+    if (!latch_time.fresh())
+    {
+      latched_yaw_.reset();
+      if (latch_time.state == StationaryLatchState::kClockDiscontinuity)
+      {
+        RCLCPP_WARN(get_logger(), "COG stationary latch reset after clock discontinuity");
+      }
       return;
     }
     if (std::abs(wheel_vx_) >= min_abs_wheel_)
@@ -616,21 +706,26 @@ private:
     if (abs_dtheta_since_latch_.load() > latch_max_rotation_rad_)
     {
       latched_yaw_.reset();
+      stationary_latch_clock_->Reset();
       ++latch_invalidated_rotation_;
       return;
     }
-    const double mono_now = static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9;
-    const double age = std::max(0.0, mono_now - latched_yaw_->stamp);
-    if (age > stationary_max_age_s_)
-    {
-      latched_yaw_.reset();
-      return;
-    }
+    const double age = latch_time.age_s;
     const double drift_var = (stationary_drift_rate_ * age) * (stationary_drift_rate_ * age);
     const double yaw_var =
         std::max(min_yaw_var_, std::min(latched_yaw_->base_var + drift_var, max_yaw_var_));
-    publish_imu(now(), latched_yaw_->yaw, yaw_var);
+    publish_imu(ros_now, latched_yaw_->yaw, yaw_var);
     ++stationary_seeds_published_;
+  }
+
+  void reset_cog_temporal_state()
+  {
+    have_anchor_ = false;
+    anchor_wheel_sign_ = 0;
+    abs_dtheta_since_anchor_ = 0.0;
+    latched_yaw_.reset();
+    stationary_latch_clock_->Reset();
+    abs_dtheta_since_latch_ = 0.0;
   }
 
   void publish_imu(const rclcpp::Time& stamp, double yaw, double yaw_var)
@@ -926,6 +1021,9 @@ private:
   double latch_rotation_deadband_rps_{0.05};
   double max_pos_accuracy_{};
   double min_dt_{}, max_dt_{};
+  double physical_gnss_observation_rate_hz_{5.0};
+  double sample_period_tolerance_factor_{1.5};
+  double maximum_fix_provenance_age_s_{2.0};
   double max_yaw_var_{}, min_yaw_var_{};
   double stationary_seed_rate_hz_{};
   double stationary_drift_rate_{};
@@ -952,20 +1050,20 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr mag_sub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr stats_timer_, stationary_timer_, mag_refit_timer_;
+  std::unique_ptr<CogObservationTiming> observation_timing_;
+  std::unique_ptr<StationaryLatchClock> stationary_latch_clock_;
 
   // Baseline accumulator. The COG yaw is computed from the displacement
   // between an anchor sample and the current sample once the accumulated
   // displacement crosses min_baseline_displacement_m. The anchor advances
   // to the current sample after each successful publish; it is reset
   // whenever the wheel direction changes, the robot is stationary, or
-  // the gap to the previous fix exceeds max_dt_.
+  // CogObservationTiming reports a physical receipt gap exceeding max_dt_.
   bool have_anchor_{false};
   double anchor_t_{}, anchor_x_{}, anchor_y_{}, anchor_pa_{};
   // Wheel sign at the anchor sample: +1 forward, -1 reverse, 0 unknown.
   // A change in sign during the baseline invalidates the anchor.
   int anchor_wheel_sign_{0};
-  double last_sample_t_{};
-  bool have_last_sample_{false};
   // wheel_vx_ / wheel_omega_ are mutated from the /wheel_odom callback
   // (50 Hz), gyro_z_ from the /imu/data callback (100 Hz). Both are
   // read by on_fix() (GPS callback, ~5 Hz) and by
@@ -1006,7 +1104,6 @@ private:
 
   struct LatchedYaw
   {
-    double stamp;
     double yaw;
     double base_var;
   };

@@ -23,8 +23,8 @@
         "wheel_radius": {
           "type": "number",
           "title": "Wheel Radius",
-          "default": 0.04475,
-          "description": "Drive wheel radius in metres."
+          "default": 0.1,
+          "description": "Drive wheel radius in metres. Measured on the YardForce 500 (2026-09-05); was 0.04475, an 8.95 cm diameter wheel that no chassis here has. Consumed only by the URDF: it sets base_link's height above ground, so every sensor z offset is measured from it."
         },
         "wheel_track": {
           "type": "number",
@@ -59,7 +59,7 @@
         "chassis_width": {
           "type": "number",
           "title": "Chassis Width",
-          "default": 0.4,
+          "default": 0.45,
           "description": "Chassis width in metres."
         },
         "chassis_height": {
@@ -160,8 +160,8 @@
         "imu_y": {
           "type": "number",
           "title": "IMU Offset Y",
-          "default": 0.0,
-          "description": "Body-frame left offset of IMU from base_footprint (metres)."
+          "default": -0.195,
+          "description": "Body-frame left offset of IMU from base_footprint (metres). Negative = right of the wheelbase centre, which is where the IMU physically sits on the YardForce 500. Was 0.0 until 2026-09-05, so a reset-to-default moved the IMU 19.5 cm sideways in the URDF."
         },
         "imu_z": {
           "type": "number",
@@ -190,8 +190,20 @@
         "lidar_enabled": {
           "type": "boolean",
           "title": "Enable LiDAR",
-          "default": true,
-          "description": "Enable LiDAR. Scan-matching and loop-closure factors in fusion_graph_node are opt-in (use_scan_matching, use_loop_closure). Disable for non-LiDAR builds."
+          "default": false,
+          "description": "Enable LiDAR. Sole source of truth for the ROS2 stack's LiDAR mode (the LIDAR_ENABLED env var is not read). Scan-to-map localization in fusion_graph_node is gated by this setting, so it cannot run without a scanner. Default false: this default MUST match robot_config_util.DEFAULT_LIDAR_ENABLED, because the settings backend prunes any value equal to its schema default -- with a default of true, switching LiDAR ON would be pruned away and the toggle would never persist."
+        },
+        "use_lidar_map_anchor": {
+          "type": "boolean",
+          "title": "LiDAR map anchor",
+          "default": false,
+          "description": "Scan-to-map (Beluga) XY anchor factors from a persistent LiDAR occupancy map, applied only after a full GNSS outage. Default false (matches the template): the anchor is experimental and costly on the Pi; requires LiDAR enabled. Restart the ROS2 stack after changing."
+        },
+        "lidar_anchor_shadow_mode": {
+          "type": "boolean",
+          "title": "LiDAR anchor shadow mode",
+          "default": false,
+          "description": "With the anchor enabled, also run and score the particle filter under RTK Fixed without ever applying a factor (calibrates the adaptive sigma floor, costs CPU). Default false (matches the template)."
         },
         "lidar_x": {
           "type": "number",
@@ -459,13 +471,13 @@
           "type": "integer",
           "title": "Dock Max Retries",
           "default": 3,
-          "description": "Maximum docking retry attempts."
+          "description": "Maximum docking retry attempts (nav2 docking_server.max_retries). Applied at launch: takes effect after a ROS2 restart."
         },
         "dock_use_charger_detection": {
           "type": "boolean",
           "title": "Use Charger Detection",
           "default": true,
-          "description": "Detect charging voltage to confirm successful dock."
+          "description": "Confirm docking from the charging current (nav2 simple_charging_dock.use_battery_status). Off = the dock is considered reached on pose proximity alone. Applied at launch: takes effect after a ROS2 restart."
         },
         "dock_charging_threshold": {
           "type": "number",
@@ -483,7 +495,7 @@
           "type": "boolean",
           "title": "Enable Mowing Motor",
           "default": true,
-          "description": "Enable mowing blade. Set false for testing without blade."
+          "description": "Enable the mowing blade. false = DRY RUN: the robot mows the full path with the blade never spinning (commissioning, coverage tuning). This is a convenience inhibit, NOT a safety cut-out \u2014 the STM32 firmware remains the blade safety authority. Read by hardware_bridge_node at startup: takes effect after a ROS2 restart."
         },
         "mowing_speed": {
           "type": "number",
@@ -497,41 +509,48 @@
           "default": 0.2,
           "description": "Robot speed when transiting between zones and to dock (m/s)."
         },
-        "outline_passes": {
-          "type": "integer",
-          "title": "Outline Passes",
-          "default": 1,
-          "description": "Number of perimeter passes before fill mowing."
+        "blade_load_slowdown_enabled": {
+          "type": "boolean",
+          "title": "Blade Load Slowdown",
+          "default": false,
+          "description": "Slow the mowing speed down when the blade motor's RPM sags under load (thick or wet grass), so the blade gets time to cut instead of stalling or leaving an uncut strip. Off by default: read your blade's no-load RPM off Diagnostics first and set the two thresholds. Fail-open \u2014 an inactive blade or stale telemetry never slows the robot. Coverage paths only; takes effect after a ROS2 restart."
         },
-        "outline_offset": {
+        "blade_load_rpm_full": {
           "type": "number",
-          "title": "Outline Offset",
-          "default": 0.05,
-          "description": "Inward offset from recorded boundary (metres)."
+          "title": "Blade RPM Full Speed",
+          "default": 2500,
+          "description": "Blade RPM at or above which the full mowing speed applies. Set it a little below the no-load RPM shown on Diagnostics."
         },
-        "outline_overlap": {
+        "blade_load_rpm_min": {
           "type": "number",
-          "title": "Outline Overlap",
-          "default": 0.0,
-          "description": "Overlap between outline and fill passes (metres)."
+          "title": "Blade RPM Min Speed",
+          "default": 1800,
+          "description": "Blade RPM at or below which the minimum mowing speed applies. Set it where the cut audibly labours; must be below Blade RPM Full Speed. The speed ramps linearly between the two."
+        },
+        "blade_load_min_speed_ratio": {
+          "type": "number",
+          "title": "Blade Load Min Speed Ratio",
+          "default": 0.4,
+          "description": "Slowest mowing feed under blade load, as a fraction of Mowing Speed (0.1\u20131.0). Never below the controller's 0.08 m/s crawl speed."
         },
         "path_spacing": {
           "type": "number",
           "title": "Path Spacing",
           "default": 0.18,
-          "description": "DEPRECATED / informational only — no ROS2 node reads this. Swath spacing is driven by tool_width (coverage_server.operation_width), so this matches tool_width. A separate value re-opens the swath-gap bug."
+          "description": "DEAD KEY — nothing reads this, and it no longer exists in the ROS2 template (removed 2026-09-05). Kept in the schema only so previously-installed YAMLs still validate. Swath spacing is tool_width minus swath_overlap (coverage_server.operation_width); a separate value re-opens the swath-gap bug."
         },
         "headland_width": {
           "type": "number",
           "title": "Headland Width",
           "default": 0.18,
-          "description": "Width of headland (turning area) in metres."
+          "description": "Headland band width in metres. Injected as coverage_server.default_headland_width, where it is used for one thing only: the AUTO ring count, ceil(headland_width / operation_width). It therefore has NO effect unless Headland Passes is set to Auto (0) — with a forced pass count the ring count wins."
         },
         "num_headland_passes": {
           "type": "integer",
           "title": "Headland Passes",
-          "default": 2,
-          "description": "Number of concentric perimeter rings before the inner field. 0 = auto (ceil(headland_width / tool_width)); >0 forces exactly that count."
+          "default": 5,
+          "minimum": -1,
+          "description": "Number of concentric perimeter rings before the inner field. -1 (or any negative) = none — no perimeter rings. The back-and-forth swaths become the outermost pass, and their centreline lands on exactly the line the outermost ring would have driven (chassis_safety_inset inside the recorded boundary), so sideways they leave the same uncut band as the rings — about 12 cm at the default 0.20 m inset. The swath ENDS, however, reach that same band, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs. 0 = auto (ceil(headland_width / tool_width)); >0 forces exactly that count."
         },
         "chassis_safety_inset": {
           "type": "number",
@@ -542,7 +561,7 @@
         "min_turning_radius": {
           "type": "number",
           "title": "Min Turning Radius",
-          "default": 0.15,
+          "default": 0.2,
           "description": "Minimum turning radius for coverage path (metres). Skid-steer pivots in place; large values force wide F2C U-turns."
         },
         "mow_angle_deg": {
@@ -552,18 +571,6 @@
           "maximum": 179,
           "default": -1.0,
           "description": "Swath (mowing line) direction. -1 (or any negative) = auto: the coverage server picks the swath-count-minimising angle. 0..179 forces a fixed swath angle in degrees."
-        },
-        "mow_angle_offset_deg": {
-          "type": "number",
-          "title": "Mow Angle Offset",
-          "default": -1.0,
-          "description": "Mowing angle offset in degrees (-1 = auto-detect)."
-        },
-        "mow_angle_increment_deg": {
-          "type": "number",
-          "title": "Mow Angle Increment",
-          "default": 0.0,
-          "description": "Rotate mowing pattern by this many degrees each full pass."
         }
       }
     },
@@ -612,6 +619,12 @@
           "title": "Critical Recovery Percent",
           "default": 30.0,
           "description": "Leave the critical-battery state once recharged above this percentage. Hysteresis upper bound, must be greater than Critical Percent."
+        },
+        "battery_manual_resume_percent": {
+          "type": "number",
+          "title": "Manual Resume Percent",
+          "default": 30.0,
+          "description": "Floor for an operator-forced resume from the charger: pressing Play while the robot is charging mid-session resumes mowing only above this percentage. Must be greater than Low Percent or the robot re-docks within minutes."
         }
       }
     },
@@ -619,18 +632,6 @@
       "title": "Safety",
       "type": "object",
       "properties": {
-        "motor_temp_high_c": {
-          "type": "number",
-          "title": "Motor Temp High",
-          "default": 80.0,
-          "description": "Stop blade above this motor temperature (C)."
-        },
-        "motor_temp_low_c": {
-          "type": "number",
-          "title": "Motor Temp Low",
-          "default": 40.0,
-          "description": "Resume blade below this motor temperature (C)."
-        },
         "lift_blade_resume_delay_sec": {
           "type": "number",
           "title": "Lift Blade Resume Delay",
@@ -678,6 +679,12 @@
           "title": "Max Obstacle Detour",
           "default": 1,
           "description": "Maximum lateral detour (m) around obstacles — drives both the coverage controller's skirting and the bypass give-up threshold."
+        },
+        "dig_obstacle_enabled": {
+          "type": "boolean",
+          "default": true,
+          "title": "Automatically create dig keepouts",
+          "description": "Create temporary keepout proposals for detected wheel-slip digs. Disabling this leaves dig detection and recovery active. Restart ROS2 to apply."
         },
         "obstacle_margin": {
           "type": "number",
@@ -751,6 +758,115 @@
         }
       }
     },
+    "led_settings": {
+      "title": "Status LEDs",
+      "type": "object",
+      "properties": {
+        "led_enabled": {
+          "type": "boolean",
+          "title": "Enable Status Ring",
+          "default": false,
+          "description": "Drive a WS2812 (NeoPixel) status ring from the SBC over SPI MOSI. Read-only display: it never commands the robot and is not part of the blade-safety path (the STM32 keeps its own status LED). Default false MUST stay false and MUST equal the mowgli_bringup template value, because the settings backend prunes any value equal to its schema default -- with a default of true, switching the ring ON would be pruned away and the toggle would never persist (this is exactly the lidar_enabled bug fixed in #508). Requires the SPI4-M0 device-tree overlay plus a reboot before /dev/spidev exists at all; until then the node warns once and stands down."
+        },
+        "led_count": {
+          "type": "integer",
+          "title": "LED Count",
+          "default": 16,
+          "minimum": 0,
+          "maximum": 512,
+          "description": "Number of LEDs on the ring. The default of 16 is a placeholder, not a measurement -- set it to what your ring actually has, or the progress arc will be wrong."
+        },
+        "led_spi_device": {
+          "type": "string",
+          "title": "SPI Device",
+          "default": "/dev/spidev4.1",
+          "description": "spidev character device for the ring's data line (40-pin header pin 19 = GPIO1_C1 = SPI4_MOSI_M0). The spidevB.C numbering is assigned by the kernel, so confirm it with `ls /dev/spidev*` AFTER enabling the rk3588-spi4-m0-cs1-spidev overlay and rebooting -- the default is a best guess. The node warns once and stands down if the device is missing or unreadable."
+        },
+        "led_brightness": {
+          "type": "number",
+          "title": "Brightness",
+          "default": 0.6,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Linear 0..1 scale applied to every colour channel. Full white on a 16-LED ring at 1.0 draws roughly 1 A; 0.6 keeps it under about 0.6 A and is still readable in daylight."
+        },
+        "led_refresh_hz": {
+          "type": "number",
+          "title": "Refresh Rate",
+          "default": 20.0,
+          "minimum": 1.0,
+          "maximum": 60.0,
+          "description": "Render tick in Hz. Frames are only WRITTEN to the ring when they change (plus the keepalive), so a static pattern costs about one write every keepalive interval regardless of this value."
+        },
+        "led_keepalive_s": {
+          "type": "number",
+          "title": "Keepalive Interval",
+          "default": 2.0,
+          "minimum": 0.2,
+          "description": "Re-send an unchanged frame at least this often (seconds), so a ring that lost power mid-run recovers its last state."
+        },
+        "led_status_timeout_s": {
+          "type": "number",
+          "title": "Status Timeout",
+          "default": 5.0,
+          "minimum": 0.5,
+          "description": "Seconds without a HighLevelStatus before the ring switches to the STALE pattern (amber comet). Also gates the charging fallback read from the hardware bridge's Power message."
+        },
+        "led_device_retry_s": {
+          "type": "number",
+          "title": "Device Retry Interval",
+          "default": 30.0,
+          "minimum": 1.0,
+          "description": "How often (seconds) to silently retry opening a missing or failed /dev/spidev. Only the FIRST failure of an outage is logged, so this never spams."
+        },
+        "led_low_battery_percent": {
+          "type": "number",
+          "title": "Low Battery Threshold",
+          "default": 20.0,
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "description": "Below this battery percentage, and not charging, the whole ring blinks red at 1 Hz. Blinking, where the emergency pattern is SOLID red -- motion is what tells the two apart."
+        },
+        "led_charge_full_percent": {
+          "type": "number",
+          "title": "Charge Complete Threshold",
+          "default": 99.0,
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "description": "At or above this battery percentage a charging ring stops breathing and goes steady full green."
+        },
+        "led_idle_scale": {
+          "type": "number",
+          "title": "Idle Brightness",
+          "default": 0.1,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Brightness of the dim idle ring, relative to the global brightness above."
+        },
+        "led_charge_complete_timeout_s": {
+          "type": "number",
+          "title": "Charge Complete Dim Delay",
+          "default": 600.0,
+          "minimum": 0.0,
+          "description": "After the ring has shown steady full-green \"charge complete\" for this many seconds (10 minutes by default -- e.g. left on the dock overnight), dim it to the Charge Complete Brightness below. 0 disables this and the ring stays full green indefinitely. Unplugging, or the level dropping back below the Charge Complete Threshold, restores full brightness immediately."
+        },
+        "led_charge_complete_dim_scale": {
+          "type": "number",
+          "title": "Charge Complete Brightness",
+          "default": 0.0,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Brightness scale applied once the Charge Complete Dim Delay above has elapsed. 0 (default) turns the ring off; a small non-zero value keeps a faint green glow as an at-a-glance \"still charged\" indicator instead."
+        },
+        "led_spi_speed_hz": {
+          "type": "integer",
+          "title": "SPI Clock",
+          "default": 2400000,
+          "minimum": 1,
+          "description": "SPI clock in Hz. The WS2812 symbol table encodes each protocol bit as three SPI bits and is derived from exactly 2.4 MHz (3 bits = 1.25 us). Changing this breaks the bit timing and produces wrong colours; the node warns at startup if it is not 2400000."
+        }
+      }
+    },
     "nav_settings": {
       "title": "Navigation",
       "type": "object",
@@ -778,6 +894,22 @@
           "title": "Progress Timeout",
           "default": 30.0,
           "description": "Seconds without progress before recovery."
+        },
+        "boundary_inner_margin_m": {
+          "type": "number",
+          "title": "Transit Boundary Margin",
+          "default": 0.20,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Distance (m) point-to-point TRANSIT moves are nudged to stay inside the recorded boundary, planned against the global costmap. This is a soft preference, never a hard block: transit can still start, end, or pass through the margin band if that is the only option (e.g. right after undocking, or a narrow gap between two areas) -- it just prefers a route that respects it when one exists. Coverage/mowing is unaffected -- it tracks the F2C path against the local costmap instead, and still reaches the true edge as configured elsewhere. 0 disables this and lets transit hug or clip the recorded line."
+        },
+        "dock_inner_margin_exempt_radius_m": {
+          "type": "number",
+          "title": "Dock Exemption Radius",
+          "default": 2.5,
+          "minimum": 0.0,
+          "maximum": 10.0,
+          "description": "Radius (m) around the dock pose, in every direction, exempt from Transit Boundary Margin above -- so the dock approach carries no bias at all, not just \"never blocked\". Only takes effect once a dock pose is set; widen it if your dock sees a lot of GNSS drift (e.g. under a canopy)."
         }
       }
     }
