@@ -8,7 +8,7 @@ Read the root [`CLAUDE.md`](../CLAUDE.md) first — Safety, the 16 Architecture 
 
 | File | Read it when… |
 |------|---------------|
-| [`docs/claude/codemaps/fusion_graph.md`](../docs/claude/codemaps/fusion_graph.md) | Touching the GTSAM localizer: factors, GPS gates, keyframes, persistence, TF publication |
+| [`docs/claude/codemaps/fusion_graph.md`](../docs/claude/codemaps/fusion_graph.md) | Touching the GTSAM localizer: factors, GPS gates, LiDAR map anchor, persistence, TF publication |
 | [`docs/claude/codemaps/mowgli_behavior.md`](../docs/claude/codemaps/mowgli_behavior.md) | BT nodes, `main_tree.xml`, guards, coverage resume, docking/undocking, `HighLevelControl` handling |
 | [`docs/claude/codemaps/mowgli_bringup.md`](../docs/claude/codemaps/mowgli_bringup.md) | Launch files, the `mowgli_robot.yaml` template, Nav2 base+overlay params, twist_mux, URDF |
 | [`docs/claude/codemaps/mowgli_coverage.md`](../docs/claude/codemaps/mowgli_coverage.md) | The F2C v3 `plan_coverage` server: rings, swaths, connectors, sub-path splitting, verification |

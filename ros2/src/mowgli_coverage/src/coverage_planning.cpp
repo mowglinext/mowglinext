@@ -85,7 +85,7 @@ constexpr double kAutoAngleStepRad = 5.0 * M_PI / 180.0;
 //
 // An earlier revision instead EXPANDED the zero-ring clearance ring outward by
 // 0.03 m. Do not reintroduce that: 0.03 m is ~5× too small to fit any Dubins
-// turn-around (buildConnector's min radius is min_turning_radius = 0.15 m), so
+// turn-around (buildConnector's production min radius is 0.20 m), so
 // it bought no arc it was added for, yet it let a connector centerline ride
 // 3 cm PAST the recorded line — invisible to the server's 0.05 m verify slack —
 // which erodes the keep-inside contract that is the SHIPPED mode at the default
@@ -571,6 +571,32 @@ std::vector<std::pair<double, double>> buildConnector(
   return straight;
 }
 
+// A straight fallback is only a continuous connector when its line is already
+// tangent to both segments. Otherwise the polyline contains one or two
+// zero-radius corners. FTC cannot track those while moving forward: the carrot
+// crosses the corner, the heading error changes side, and the angular command
+// alternates at its clamp. The 2026-09-09 field bag measured this exact pattern
+// on the F2C swath ends (up to 29 sign flips in 3.3 s).
+bool straightFallbackIsContinuous(const Pose& start, const Pose& goal)
+{
+  constexpr double kMaxHeadingError = 15.0 * M_PI / 180.0;
+  auto angleError = [](double a, double b)
+  {
+    return std::abs(std::atan2(std::sin(a - b), std::cos(a - b)));
+  };
+
+  const double dx = goal.x - start.x;
+  const double dy = goal.y - start.y;
+  if (std::hypot(dx, dy) < 1e-6)
+  {
+    return angleError(start.theta, goal.theta) <= kMaxHeadingError;
+  }
+
+  const double connector_heading = std::atan2(dy, dx);
+  return angleError(connector_heading, start.theta) <= kMaxHeadingError &&
+         angleError(goal.theta, connector_heading) <= kMaxHeadingError;
+}
+
 // Round any corner of `pts` whose turn angle exceeds `max_turn_rad` with a
 // circular fillet tangent to both edges (cusp-free in/out), so the WHOLE path
 // has no >90° turn. Such corners are intrinsic to the headland rings, which
@@ -579,7 +605,7 @@ std::vector<std::pair<double, double>> buildConnector(
 // radius is shrunk until the arc stays in-bounds and fits the adjacent edges.
 // If a corner can't be rounded in-bounds with an arc of radius >= `min_radius`
 // it is left as-is (a sharp corner the robot pivots through is better than a
-// fillet too tight for MPPI to track — that produces the very loop/hesitation
+// fillet too tight for FTC to track — that produces the very loop/hesitation
 // we're avoiding; a reportable residual, rare). Operates on the densified
 // polyline; arc sampled at `step`.
 std::vector<std::pair<double, double>> roundSharpCorners(
@@ -1100,7 +1126,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
             sparse.insert(sparse.begin(), mid);
             sparse.push_back(mid);
             // Fillet every corner sharper than ~30° with a forward arc (floored at
-            // min_turn_radius so MPPI/FTC can track it); corners that cannot be
+            // min_turn_radius so FTC can track it); corners that cannot be
             // rounded in-bounds are left sharp, as before.
             const auto& fillet_boundary =
                 plan.safe_boundary.size() >= 3 ? plan.safe_boundary : field_outer_pts;
@@ -1563,7 +1589,7 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
 
   // Hard floor on every connector arc: the robot's minimum trackable turning
   // radius (mowgli_robot.yaml min_turning_radius). Shrinking a turn-around below
-  // this to "fit in-bounds" produced loops MPPI could not track (wz≈vx/r), so the
+  // this to "fit in-bounds" produced loops FTC could not track (wz≈vx/r), so the
   // robot looped/hesitated; when no arc >= this fits, buildConnector falls back
   // to a straight join instead of an untrackable loop.
   const double min_radius = std::max(0.02, min_turn_radius);
@@ -1586,37 +1612,26 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       // transit. Single-sourced from mowgli_interfaces so this matches the BT's
       // FollowStrip::kSegmentTransitGap for the same decision — see
       // coverage_geometry.hpp for why the two sides must agree.
-      // Attempt a blade-on connector for EVERY segment join, regardless of length.
-      // buildConnector fits a forward turn-around arc when one fits (adjacent
-      // passes ~op_width apart) and otherwise falls back to a straight join. The
-      // sub-path is BROKEN — finalized here, the next started fresh at segs[i], so
-      // FollowStrip bridges the gap with a blade-off, costmap-aware Nav2 transit —
-      // ONLY when that connector is genuinely un-drivable blade-on: empty, or a
-      // straight fallback that leaves the boundary OR crosses an interior hole
-      // (issue #333, the split's sole purpose — routing AROUND an obstacle).
-      //
-      // A long but CLEAR join (e.g. innermost-ring → first-swath on a hole-free
-      // field, or a lobe change that passes to the side of a hole) is kept blade-on
-      // as ONE continuous sub-path. The earlier length gate (join_gap >
-      // kSegmentTransitGapM ⇒ split) fragmented such clear joins into needless
-      // blade-off transits — a hole-free field split into 2+ sub-paths, and every
-      // one-hole field carried an extra ring→swath transit. kSegmentTransitGapM
-      // remains the BT-side FollowStrip threshold for classifying the gaps BETWEEN
-      // the sub-paths this function emits; it no longer drives the split decision.
+      // Attempt a blade-on connector for every segment join. A real Dubins
+      // connector is tangent at both ends. When no such arc fits, the straight
+      // fallback may stay in the same sub-path only if it is also aligned with
+      // both segment headings. An in-bounds fallback with a heading discontinuity
+      // is geometrically safe but not drivable as one forward path; split it so
+      // FollowStrip performs a blade-off reorientation before the next segment.
       bool conn_safe = false;
       {
         bool fallback = false;
         auto conn = buildConnector(
             start, goal, boundary, plan.safe_holes, turn_radius, min_radius, step, fallback);
-        conn_safe =
-            !conn.empty() &&
-            (!fallback || (allInside(conn, boundary) && clearOfHoles(conn, plan.safe_holes)));
+        conn_safe = !conn.empty() && (!fallback || (allInside(conn, boundary) &&
+                                                    clearOfHoles(conn, plan.safe_holes) &&
+                                                    straightFallbackIsContinuous(start, goal)));
         // Pure accounting of how this join resolved (issue #499) — see
         // ConnectorStats. Deliberately AFTER conn_safe so the classification
         // reflects what is actually driven, not just whether buildConnector
-        // reached its straight-connector last resort: a straight fallback that
-        // verifies in-bounds is driven blade-on, one that does not becomes a
-        // sub-path split. Changes no decision.
+        // reached its straight-connector last resort: only an in-bounds fallback
+        // tangent to both segments is driven blade-on; every other fallback
+        // becomes a sub-path split. Changes no decision.
         if (stats != nullptr)
         {
           ++stats->attempted;
@@ -1666,10 +1681,10 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
 
   // Round ONLY the true cusps — corners that exceed the 90° inversion limit
   // (e.g. the recorded boundary's ~91° acute vertex the rings inherit). We do
-  // NOT fillet gentle (≤88°) ring corners: those are not cusps (MPPI tracks a
+  // NOT fillet gentle (≤88°) ring corners: those are not cusps (FTC tracks a
   // one-directional ≤90° turn fine, just slowing a bit), and filleting them near
   // the boundary forced the radius down to ~0.02 m — an arc far too tight for
-  // MPPI to track (wz≈vx/r), so the robot looped/hesitated at corners it used to
+  // FTC to track (wz≈vx/r), so the robot looped/hesitated at corners it used to
   // turn through cleanly. 88° (not 90°) leaves a small margin so every corner
   // findFirstPathInversion would flag (>90°) is still rounded. The fillet radius
   // is floored at min_radius (= min_turn_radius): a corner that can only be
@@ -1705,16 +1720,9 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
         pt = clampInsideRing(pt.first, pt.second, boundary, kClearanceClampMarginM);
       }
     }
-    // Emit each rounded sub-path WHOLE — sub-paths split ONLY at Split A (a real
-    // obstacle-gap / relocation), never at an interior cusp. FTC (restored
-    // 2026-06-19, reverting MPPI) tracks the continuous full_path through the
-    // forward turn-around arcs with a single PRE_ROTATE, so a residual sharp
-    // U-turn between antiparallel swaths that no forward teardrop can fit (op_width
-    // ~0.16 m apart, needs ~2·r) must stay in ONE sub-path: its cusp tip lies in
-    // already-mowed headland (no coverage lost), and cutting there would fragment
-    // the plan into a blade-off Nav2 transit PER U-turn (measured 18 sub-paths /
-    // 17 transits on a 1-hole 72 m² field). The old MPPI-era residual-cusp split
-    // (>115° corners) was removed with the MPPI revert.
+    // Connector discontinuities were split before rounding, so every remaining
+    // join in this sub-path is either part of an original segment or tangent to a
+    // real connector arc.
     if (rounded.size() >= 2)
     {
       out.emplace_back(std::move(rounded));
@@ -1812,9 +1820,9 @@ std::vector<std::pair<double, double>> buildContinuousPath(
     double min_turn_radius,
     double step)
 {
-  // Concatenate the hole-free sub-paths into one polyline (GUI full_path + the
-  // no-hole common case, where there is exactly one sub-path). The driver uses
-  // buildContinuousSubPaths so any inter-sub-path gap becomes a Nav2 transit.
+  // Concatenate the drivable sub-paths into one visualisation polyline. The
+  // driver uses buildContinuousSubPaths directly so every boundary becomes a
+  // blade-off Nav2 transit rather than a driven discontinuity.
   const auto subs = buildContinuousSubPaths(plan, boundary, turn_radius, min_turn_radius, step);
   std::vector<std::pair<double, double>> path;
   for (const auto& sp : subs)

@@ -195,7 +195,7 @@ The Settings page (`gui/web/src/pages/SettingsPage.tsx`) groups parameters into 
 | NTRIP Corrections | — | RTK correction network / base station — set this **before** GPS |
 | GPS & Positioning | `settings/02-gps-positioning.png` | Datum lat/lon, GNSS receiver family, serial device / baud, signal profile |
 | Sensors | `settings/03-sensors.png` | LiDAR enable, sensor placement (drag editor), IMU calibration cadence |
-| Localization | `settings/04-localization.png` | LiDAR scan matching, loop closure, magnetometer yaw + mag calibration/tuning |
+| Localization | `settings/04-localization.png` | LiDAR map anchor, shadow calibration, magnetometer yaw + calibration |
 | Mowing | `settings/05-mowing.png` | Speeds, headland width / passes, swath overlap, safety inset, turning radius, mow angle & direction |
 | Docking | `settings/06-docking.png` | One-click dock calibration, undock distance / speed, approach distance, max retries, charger detection |
 | Battery | `settings/07-battery.png` | Full / empty / critical voltage, percentage thresholds for resume / dock |
@@ -220,8 +220,8 @@ The **Localization** tab is worth a closer look:
 There is **no "use fusion graph" switch**: `fusion_graph_node` (GTSAM iSAM2) is the one and only map-frame localizer and it also publishes the local `odom → base_footprint` transform, so the page opens with an info banner saying exactly that. What you toggle here are the *optional factors it can add* (`gui/web/src/components/settings/LocalizationSection.tsx:32-52`):
 
 - **LiDAR — obstacle avoidance** — not a toggle, just a status card with a live badge. The Nav2 obstacle layer and `collision_monitor` consume `/scan` whenever the LiDAR driver runs; you turn the driver itself on or off under **Sensors → lidar_enabled**.
-- **LiDAR scan matching** (`use_scan_matching`) — adds per-tick ICP between-factors. **On by default**, but the launch file ANDs it with `use_lidar`, so on a GPS-only robot it is silently inert.
-- **Loop closure** (`use_loop_closure`) — searches earlier graph nodes within 5 m that are at least 30 s old and snaps the trajectory back when one matches. Also **on by default** and also ANDed with `use_lidar`. Rate-limited (one accepted closure per node, and none until 2 s and 1 m of travel have passed) and skipped entirely while RTK is Fixed.
+- **LiDAR map anchor** (`use_lidar_map_anchor`) — learns persistent georeferenced tiles under RTK-Fixed and can add validated XY-only factors after a complete GNSS outage. Any usable Fix or Float keeps the particle filter asleep.
+- **LiDAR anchor shadow mode** (`lidar_anchor_shadow_mode`) — runs bounded calibration under RTK-Fixed and publishes comparison telemetry without adding factors.
 - **Magnetometer yaw** (`use_magnetometer`) — fuses tilt-compensated mag yaw as a unary factor. **Off by default**, the in-app help text says: *"motor-induced bias makes the magnetometer unreliable on most chassis. Enable only after running mag calibration with motors-off and validating a stable |B|."*
 - Below those, a **Magnetometer calibration & tuning** card: a *Collect calibration samples* switch (`enable_mag_cal`, off by default — turn it on with the motors off, then turn it back off) plus magnetic declination (1.5° default), minimum horizontal field and mag-yaw variance.
 
@@ -239,7 +239,7 @@ This is the most information-dense page in the app. It is a near-superset of wha
 
 **Filtered Pose / GPS / Fusion Graph (iSAM2) / Heading sources / BT State / Coverage**:
 
-- *Fusion Graph (iSAM2)*: nodes in graph (13,092 in our session), loop closures (491), ICP success rate (100% / 15540 of 15573), **Pose σ** (0.0 cm — yaw ±1.15°). Two action buttons: **Save graph** (calls `~/save_graph` `Trigger`, which writes `<graph_save_prefix>.{graph,scans,meta}`) and **Clear graph** (`~/clear_graph`, which drops the in-memory graph, its keyframes and the dead-reckoning frame and waits for re-initialisation — use it after relocating the robot to a new garden).
+- *Fusion Graph (iSAM2)*: graph size and pose covariance, GNSS rejection/slip telemetry, plus LiDAR tile/filter/anchor activity. **Save graph**, **Clear graph**, and **Clear LiDAR map** call the corresponding `Trigger` services.
 - *Heading sources*: side-by-side comparison of the active filter yaw, GPS course-over-ground (`/imu/cog_heading`), and magnetometer yaw (`/imu/mag_yaw`). When mag is "Stale" the unary factor is not being fused.
 - *Coverage*: per-area progress (cells mowed / total cells, obstacles, strips left).
 
@@ -308,8 +308,8 @@ Localization is the part the user feels is most under-explained today. Here is t
 
 **What the LiDAR factors change:**
 
-- No LiDAR (or `lidar_enabled` off) → the scan-matching and loop-closure switches are inert whatever they say, and the graph runs on GPS + wheels + gyro + COG yaw alone. It tolerates RTK-Float windows of seconds, not minutes.
-- LiDAR mounted, both switches on (the default) → the robot rides through multi-minute RTK-Float windows on scan matching, and loop closures pull accumulated drift back onto previously-mapped ground mid-session.
+- No LiDAR (or `lidar_enabled` off) → the graph runs on GNSS, wheels, gyro and COG yaw; no scan subscription is created.
+- LiDAR map anchor enabled → RTK-Fixed builds persistent tiles. Fix and Float remain GNSS-owned; only a complete outage can start the filter and later add validated XY factors.
 - Watch the *ICP success rate* on Diagnostics → Fusion Graph: a low rate means the LiDAR mount or `lidar_yaw` is wrong, not that the graph is broken.
 
 ### 3.2 Sensors
@@ -337,7 +337,7 @@ These are operator-facing and self-explanatory in the UI:
 
 - **Schedule** — add weekly recurrences with start time + duration. Rain-aware and auto-dock-low rules apply globally.
 - **IrriSense** (settings) — optional. Point the GUI at your IrriSense Cloud garden with a read-only token, pick the zones that cover the lawn, and a **scheduled** run is skipped while those zones read wet. It fails open by design: not configured, the service unreachable, or a stale reading all count as "unknown" and the mow goes ahead. Manual **Start mowing** is never blocked — the Dashboard just shows a wet-soil banner.
-- **Mowing** (settings) — `mowing_speed` / `transit_speed` (0.2 m/s default for both), `mow_angle_deg` (auto by default; flip the switch to force a fixed swath angle), `num_headland_passes` (concentric perimeter rings: negative = none, 0 = auto, >0 = exactly that many — 2 by default), `headland_width` (0.18 m — **only used when `num_headland_passes` is Auto/0**, where it sets the ring count `ceil(headland_width / swath spacing)`; with a forced pass count, which is the shipped default, changing it does nothing), `swath_overlap` (0.02 m: adjacent swaths deliberately overlap by this much) and `chassis_safety_inset` (0.20 m, how far inside the recorded boundary the outermost swath runs). `mowing_enabled` off is a dry run — the robot drives the whole path with the blade never spinning. `tool_width` (0.18 m, the single source for blade cut width and, minus `swath_overlap`, the swath spacing) lives one section up, under **Hardware**.
+- **Mowing** (settings) — `mowing_speed` / `transit_speed` (0.2 m/s default for both), `mow_angle_deg` (auto by default; flip the switch to force a fixed swath angle), `num_headland_passes` (concentric perimeter rings: negative = none, 0 = auto, >0 = exactly that many — 5 by default so swath-end turns fit), `headland_width` (0.18 m — **only used when `num_headland_passes` is Auto/0**, where it sets the ring count `ceil(headland_width / swath spacing)`; with a forced pass count, which is the shipped default, changing it does nothing), `swath_overlap` (0.02 m: adjacent swaths deliberately overlap by this much) and `chassis_safety_inset` (0.20 m, how far inside the recorded boundary the outermost swath runs). `mowing_enabled` off is a dry run — the robot drives the whole path with the blade never spinning. `tool_width` (0.18 m, the single source for blade cut width and, minus `swath_overlap`, the swath spacing) lives one section up, under **Hardware**.
 - **Battery** — voltage thresholds with hysteresis (Low Dock 20% / Resume Above 95%) — this is also enforced firmware-side.
 - **Rain** — choose Dock / Dock Until Dry / Pause Auto / Ignore behaviour, plus debounce (10 s default) and resume delay (30 min default).
 

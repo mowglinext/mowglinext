@@ -158,3 +158,25 @@ TEST(StallDecision, NormalDrivingDoesNotFlagStallSoFloorStillApplies)
   }
   EXPECT_DOUBLE_EQ(stall_time, 0.0);
 }
+
+TEST(ForwardSpeedRamp, ObstacleRestartDoesNotJumpToMinimumSpeed)
+{
+  // At 0.20 m/s² and 10 Hz, the first ramp step after a hard obstacle hold is
+  // 0.02 m/s. The old unconditional floor changed it directly to 0.15 m/s.
+  EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(0.30, 0.02, 0.15), 0.02);
+}
+
+TEST(ForwardSpeedRamp, MinimumSpeedFloorReturnsGradually)
+{
+  EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(0.30, 0.10, 0.15), 0.10);
+  EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(0.30, 0.15, 0.15), 0.15);
+  EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(0.05, 0.20, 0.15), 0.15);
+}
+
+TEST(ForwardSpeedRamp, HonorsMovementCapAndLeavesNonPositiveCommandsUnchanged)
+{
+  EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(0.12, 0.20, 0.0), 0.12);
+  EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(0.30, 0.18, 0.15), 0.18);
+  EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(0.0, 0.20, 0.15), 0.0);
+  EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(-0.05, 0.20, 0.15), -0.05);
+}

@@ -40,6 +40,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.hpp>
 
+#include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_nav2_plugins/ftc_blade_load.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
@@ -134,6 +136,18 @@ private:
   // Latest measured forward speed (odom feedback), cached from
   // computeVelocityCommands so update_control_point can detect a stall.
   double last_measured_fwd_speed_{0.0};
+  // True while the blade-load slowdown is holding the carrot's target speed
+  // below the path speed: set in update_control_point, read in
+  // calculate_velocity_commands to let the commanded speed follow the slowed
+  // carrot under the min_speed_mps floor. See ftc_blade_load.hpp.
+  bool is_blade_limited_{false};
+  // Last applied blade-load scale (1.0 = not limiting); kept for the
+  // limit-engaged/released log lines.
+  double blade_load_scale_{1.0};
+
+  /// Apply the blade-load slowdown (Config::blade_load_*) to a carrot target
+  /// speed, reading the latest blade telemetry under blade_mutex_.
+  double applyBladeLoad(double target_speed);
 
   // ── PID state ────────────────────────────────────────────────────────────
 
@@ -219,6 +233,11 @@ private:
   /// unwinds the stack instead).
   bool waitOrThrowForObstacle(const std::string& reason);
 
+  /// Freeze the virtual carrot and reset PID history while an obstacle hold
+  /// owns the output. This prevents the controller from accumulating a large
+  /// catch-up error and derivative kick behind a zero-velocity command.
+  void holdObstacleMotion();
+
   /// Bounded reverse-escape gate for the WEDGED case. Called from
   /// updateLateralDeviation instead of waitOrThrowForObstacle when the skirt
   /// search runs out of headroom. If reverse-escape is enabled, a footprint is
@@ -265,23 +284,27 @@ private:
   // obstacle_wait_timeout_s seconds; if the costmap clears in that
   // window the controller resumes, otherwise it throws as before.
   // IMPORTANT: only clear obstacle_wait_start_/obstacle_waiting_ once a
-  // candidate has been CONFIRMED workable (post max_lateral_deviation
-  // check) or the debounced clear-hold below has elapsed — clearing it the
-  // moment a candidate side is merely *found* let the two wait call-sites
-  // hand each other fresh 5s windows on every chooseDeviationSide flip-flop
-  // near a marginal gap, deferring the abort indefinitely (field: observed
-  // ~40s stall with cmd_vel pinned at zero, vs. the intended 5s cap).
+  // candidate has remained workable continuously for obstacle_clear_hold_s.
+  // Clearing it on one good scan creates a stop/go loop; clearing it when a
+  // side is merely found lets the two wait call-sites hand each other fresh
+  // timeout windows near a marginal gap.
   std::optional<rclcpp::Time> obstacle_wait_start_;
   bool obstacle_waiting_{false};
-  /// When the nominal path first read CLEAR — during an active AVOIDANCE
-  /// episode (is_avoiding_) OR during a not-yet-avoiding WAIT
-  /// (obstacle_waiting_). Shared by both: the skirt / the wait is held
-  /// until the path has stayed clear CONTINUOUSLY for
-  /// config_.obstacle_clear_hold_s (debounces the window-edge flicker —
-  /// observation_persistence:0 costmap re-marking a cell — that caused the
-  /// ±step left-right flap in the avoidance case and the same-symptom
-  /// indefinite-wait stall in the waiting case). Reset whenever the
-  /// obstacle re-appears or on a new plan.
+  /// Continuous time for which a valid skirt has existed while
+  /// obstacle_waiting_ is active. A blocked tick resets it to zero.
+  double obstacle_followable_time_{0.0};
+  /// True from the first hard hold until the path has remained followable
+  /// while moving for obstacle_clear_hold_s. During this probation the angular
+  /// command is slew-limited and a reappearing obstacle keeps the original
+  /// wait timeout instead of opening a fresh stop/restart episode.
+  bool obstacle_recovery_active_{false};
+  /// Last angular command emitted while recovering, used by ClampCommandSlew.
+  double last_recovery_angular_cmd_{0.0};
+  /// When the nominal path first read CLEAR during an active AVOIDANCE
+  /// episode. The skirt is held until the nominal path has stayed clear
+  /// continuously for obstacle_clear_hold_s. Obstacle-wait recovery has its
+  /// own followable-duration counter because a valid offset path may exist
+  /// while the nominal path remains blocked.
   std::optional<rclcpp::Time> avoidance_clear_start_;
 
   // ── Oscillation detection ─────────────────────────────────────────────────
@@ -322,6 +345,22 @@ private:
   std::string boundary_frame_;  ///< frame_id of the global costmap (e.g. "map").
   std::mutex boundary_mutex_;
 
+  // ── Blade-load slowdown telemetry (blade_load_slowdown_enabled) ───────────
+  //
+  // hardware_bridge republishes the STM32's 4 Hz blade-controller report in
+  // /hardware_bridge/status (mower_esc_status = is_active, mower_motor_rpm,
+  // blade_status_stamp = time of the last DIRECT blade report — NOT the
+  // message stamp, which refreshes on every mainboard packet even when the
+  // blade stream has died). update_control_point reads the trio under
+  // blade_mutex_ and scales the carrot speed by the RPM sag; a stale stamp
+  // fails OPEN (no slowdown). Written by the subscription callback on the
+  // controller_server executor, read on the control-loop thread.
+  rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr blade_status_sub_;
+  std::mutex blade_mutex_;
+  bool blade_active_{false};
+  double blade_rpm_{0.0};
+  rclcpp::Time blade_status_time_{0, 0, RCL_ROS_TIME};
+
   std::string plugin_name_;
 
   // Publishers (lifecycle-aware)
@@ -351,6 +390,10 @@ private:
     double speed_slow{0.2};
     double speed_angular{20.0};
     double acceleration{1.0};
+    /// Angular acceleration limit (rad/s^2) after an obstacle hard hold. This
+    /// applies until the resumed path has remained stable for
+    /// obstacle_clear_hold_s. 0 disables the limiter.
+    double obstacle_restart_angular_acceleration{1.0};
     double min_speed_mps{0.15};
 
     // Anti-wheelspin / traction control. When the carrot commands a forward
@@ -363,6 +406,23 @@ private:
     double stall_speed_ratio{0.35};
     double stall_grace_s{0.6};
     double stall_crawl_speed{0.08};
+
+    // Blade-load slowdown. When the blade motor's reported RPM sags under
+    // load (thick / wet grass), scale the carrot's target speed down on a
+    // linear ramp from 1.0 at blade_load_rpm_full to blade_load_min_speed_ratio
+    // at blade_load_rpm_min, floored at stall_crawl_speed, so the blade gets
+    // time to chew through instead of stalling or leaving an uncut strip.
+    // Fail-open: an inactive blade or telemetry older than
+    // blade_load_telemetry_max_age_s never slows the robot. Operator knobs
+    // flow from mowgli_robot.yaml (GUI Mowing section) via
+    // navigation.launch.py; OFF by default because the no-load RPM differs per
+    // blade motor and the thresholds must be read off the Diagnostics page
+    // first. See ftc_blade_load.hpp.
+    bool blade_load_slowdown_enabled{false};
+    double blade_load_rpm_full{2500.0};
+    double blade_load_rpm_min{1800.0};
+    double blade_load_min_speed_ratio{0.4};
+    double blade_load_telemetry_max_age_s{1.0};
 
     // PID longitudinal
     double kp_lon{1.0};

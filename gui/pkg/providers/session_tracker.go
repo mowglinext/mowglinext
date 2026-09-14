@@ -192,7 +192,12 @@ func (s *SessionTracker) OnHighLevelStatus(msg []byte) {
 	prevState := s.currentState
 	s.currentState = status.StateName
 
-	isMowing := status.State == 2 // HIGH_LEVEL_STATE_AUTONOMOUS
+	// HIGH_LEVEL_STATE_AUTONOMOUS. MOWING_COMPLETE is excluded on purpose: since the
+	// dock-motion gate fix the tree keeps publishing state=2 while it drives back to
+	// the dock after a finished mow (the firmware hard-stops the wheels on IDLE), but
+	// that return trip is not part of the mowing session — counting it would inflate
+	// the session distance/duration and turn a failed docking into an "error" session.
+	isMowing := status.State == 2 && status.StateName != "MOWING_COMPLETE"
 	wasMowing := prevState == "MOWING" || prevState == "TRANSIT" || prevState == "RECOVERING" || prevState == "RESUMING_AFTER_RAIN" || prevState == "RESUMING_UNDOCKING"
 
 	// Start session

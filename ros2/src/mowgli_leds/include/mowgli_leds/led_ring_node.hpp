@@ -49,6 +49,11 @@ private:
   void onTimer();
   LedInputs collectInputs() const;
 
+  /// Tracks how long the steady "charge complete" frame has been showing and
+  /// fills in `in.charge_complete_elapsed_s` accordingly. Separate from
+  /// collectInputs() (which stays const) because this advances node state.
+  void updateChargeCompleteTracking(LedInputs& in);
+
   /// (Re)open the SPI device if it is closed and the retry backoff has
   /// elapsed. Warns at most once per outage; silent while standing down.
   void ensureDevice();
@@ -86,6 +91,10 @@ private:
   bool power_charging_ = false;
   bool have_power_ = false;
   double power_time_s_ = 0.0;
+
+  /// monotonicSeconds() when the ring first entered the steady "charge
+  /// complete" frame, or < 0.0 while it is not in that state.
+  double charge_complete_since_s_ = -1.0;
 
   // -- Output state ----------------------------------------------------------
   SpiDevice spi_;

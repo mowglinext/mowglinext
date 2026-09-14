@@ -7,7 +7,6 @@ import {
     LaserScan,
     Map as MapType,
     ObstacleArray,
-    OccupancyGrid,
     Path,
     TrackedObstacle,
 } from "../../../types/ros.ts";
@@ -21,42 +20,14 @@ import {
 } from "../../../types/map.ts";
 import { drawLine, drawRobotSilhouette, transpose } from "../../../utils/map.tsx";
 import { rasterizeMowProgress } from "../../../utils/mowProgress.ts";
+import { rasterizeLidarMap } from "../../../utils/lidarMap.ts";
+import { GridImage, useGridImageStream } from "./useGridImageStream.ts";
 import { useRobotDescription } from "../../../hooks/useRobotDescription.ts";
 import {useLatestThrottle} from "./useLatestThrottle.ts";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 import {MAP_RENDER_BUDGETS} from "./mapRenderBudget.ts";
 
-export type MowProgressImage = {
-    url: string;
-    coordinates: [[number, number], [number, number], [number, number], [number, number]];
-};
-
-// Rasterize the mow-progress OccupancyGrid to a Mapbox image source. The heavy
-// per-cell pixel pass lives in the shared rasterizeMowProgress util (reused by
-// the dashboard mini-map); this only maps the resulting canvas to Mapbox
-// lon/lat corners. Invoked from a coalesced rAF, never on the WebSocket message
-// handler — so a burst of grids can't stall the pump.
-function renderMowProgress(
-    grid: OccupancyGrid,
-    offsetX: number,
-    offsetY: number,
-    datum: [number, number, number],
-    setImage: (v: MowProgressImage | null) => void,
-) {
-    const raster = rasterizeMowProgress(grid);
-    if (!raster) return;
-
-    const {originX, originY, resolution} = raster;
-    const gridWidth = raster.width * resolution;
-    const gridHeight = raster.height * resolution;
-    // Mapbox image source coords: [top-left, top-right, bottom-right, bottom-left].
-    const topLeft = transpose(offsetX, offsetY, datum, originY + gridHeight, originX);
-    const topRight = transpose(offsetX, offsetY, datum, originY + gridHeight, originX + gridWidth);
-    const bottomRight = transpose(offsetX, offsetY, datum, originY, originX + gridWidth);
-    const bottomLeft = transpose(offsetX, offsetY, datum, originY, originX);
-
-    setImage({url: raster.dataUrl, coordinates: [topLeft, topRight, bottomRight, bottomLeft]});
-}
+export type MowProgressImage = GridImage;
 
 interface UseMapStreamsOptions {
     editMap: boolean;
@@ -207,6 +178,20 @@ export function useMapStreams({
         () => {}
     );
 
+    // Mow-progress overlay and the LiDAR anchor map are both OccupancyGrids
+    // rasterized off the message handler (see useGridImageStream).
+    const mowProgress = useGridImageStream(rasterizeMowProgress, offsetX, offsetY, datum);
+    const lidarMap = useGridImageStream(rasterizeLidarMap, offsetX, offsetY, datum);
+    // Once fusion_graph publishes its LiDAR map the map REPLACES the raw scan
+    // points: the points are what the map is built from, and drawing both just
+    // hides the walls under a moving cloud. Ref, not state, so the WebSocket
+    // handler closure below never reads a stale value.
+    const lidarMapPresentRef = useRef(false);
+    useEffect(() => {
+        lidarMapPresentRef.current = lidarMap.image != null;
+        if (lidarMap.image != null) setLidarCollection({type: "FeatureCollection", features: []});
+    }, [lidarMap.image]);
+
     const lidarRender = useLatestThrottle<LidarRenderFrame>(({scan, pose}) => {
         if (!scan.ranges) return;
 
@@ -267,6 +252,7 @@ export function useMapStreams({
         () => {
         },
         (e) => {
+            if (lidarMapPresentRef.current) return;
             const pose = robotPoseRef.current;
             if (!pose) return;
             lidarRender.push({scan: (e as any) as LaserScan, pose});
@@ -305,34 +291,6 @@ export function useMapStreams({
                         }
                     });
                     return newFeatures;
-                });
-            }
-        }
-    );
-
-    // Mow-progress overlay: the latest grid waits in a ref and is rasterized at
-    // most once per animation frame (the raster + toDataURL is too heavy to run
-    // on the WebSocket message handler — it would stall pose/lidar frames).
-    const [mowProgressImage, setMowProgressImage] = useState<MowProgressImage | null>(null);
-    const mowProgressPendingRef = React.useRef<
-        { grid: OccupancyGrid; offsetX: number; offsetY: number; datum: [number, number, number] } | null
-    >(null);
-    const mowProgressRafRef = React.useRef<number | null>(null);
-    const mowProgressStream = useWS<string>(
-        () => {},
-        () => {},
-        (e) => {
-            const grid = (e as any) as OccupancyGrid;
-            if (!grid.info || !grid.data) return;
-            if ((grid.info.width ?? 0) === 0 || (grid.info.height ?? 0) === 0) return;
-            mowProgressPendingRef.current = { grid, offsetX, offsetY, datum };
-            if (mowProgressRafRef.current == null) {
-                mowProgressRafRef.current = requestAnimationFrame(() => {
-                    mowProgressRafRef.current = null;
-                    const pending = mowProgressPendingRef.current;
-                    mowProgressPendingRef.current = null;
-                    if (!pending) return;
-                    renderMowProgress(pending.grid, pending.offsetX, pending.offsetY, pending.datum, setMowProgressImage);
                 });
             }
         }
@@ -411,7 +369,8 @@ export function useMapStreams({
             planStream.start("/api/mowglinext/subscribe/plan");
             lidarStream.start("/api/mowglinext/subscribe/lidar");
             obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
-            mowProgressStream.start("/api/mowglinext/subscribe/mowProgress");
+            mowProgress.stream.start("/api/mowglinext/subscribe/mowProgress");
+            lidarMap.stream.start("/api/mowglinext/subscribe/lidarMap");
         }
     }, [editMap]);
 
@@ -476,7 +435,8 @@ export function useMapStreams({
         planStream.start("/api/mowglinext/subscribe/plan");
         lidarStream.start("/api/mowglinext/subscribe/lidar");
         obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
-        mowProgressStream.start("/api/mowglinext/subscribe/mowProgress");
+        mowProgress.stream.start("/api/mowglinext/subscribe/mowProgress");
+            lidarMap.stream.start("/api/mowglinext/subscribe/lidarMap");
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [settings["datum_lon"], settings["datum_lat"]]);
 
@@ -492,11 +452,10 @@ export function useMapStreams({
             poseRender.cancel();
             lidarRender.cancel();
             obstaclesStream.stop();
-            mowProgressStream.stop();
-            if (mowProgressRafRef.current != null) {
-                cancelAnimationFrame(mowProgressRafRef.current);
-                mowProgressRafRef.current = null;
-            }
+            mowProgress.stream.stop();
+            mowProgress.cancel();
+            lidarMap.stream.stop();
+            lidarMap.cancel();
             recordingTrajectoryStream.stop();
             highLevelStatus.stop();
         };
@@ -509,7 +468,8 @@ export function useMapStreams({
         path,
         plan,
         lidarCollection,
-        mowProgressImage,
+        mowProgressImage: mowProgress.image,
+        lidarMapImage: lidarMap.image,
         highLevelStatus,
         joyStream,
     };

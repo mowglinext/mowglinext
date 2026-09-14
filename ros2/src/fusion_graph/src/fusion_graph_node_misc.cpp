@@ -111,6 +111,7 @@ void FusionGraphNode::SeedFromDockPose()
     dr_x_ = 0.0;
     dr_y_ = 0.0;
     dr_yaw_ = 0.0;
+    ResetLidarTiming();
     t_map_odom_anchor_valid_ = false;
   }
   // Latch the RTK-Fixed override one-shot so it doesn't fire later if

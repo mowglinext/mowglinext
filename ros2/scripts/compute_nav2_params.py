@@ -315,7 +315,7 @@ def gather_inputs(rp: dict, knobs: dict, board: dict) -> dict:
         "mowing_speed": float(rp.get("mowing_speed", 0.25)),
         "transit_speed": float(rp.get("transit_speed", 0.3)),
         "wheel_track": float(rp.get("wheel_track", board["wheel_track"])),
-        "min_turning_radius": float(rp.get("min_turning_radius", 0.15)),
+        "min_turning_radius": float(rp.get("min_turning_radius", 0.20)),
         "coverage_xy_tolerance": float(rp.get("coverage_xy_tolerance", 0.10)),
         "xy_goal_tolerance": float(rp.get("xy_goal_tolerance", 0.30)),
         "yaw_goal_tolerance": float(rp.get("yaw_goal_tolerance", 0.10)),

@@ -96,6 +96,21 @@ def test_coverage_goal_checker_progress_threshold_is_high() -> None:
     )
 
 
+def test_transit_goal_checker_ignores_final_heading() -> None:
+    """Coverage transits (navigate_to_pose_transit.xml) must not demand a final
+    heading: RPP cannot pivot at the end of a path and the 1 Hz replan loop made
+    a 0.40 m transit spin for 164 s on 2026-09-12. Docking keeps
+    stopped_goal_checker (yaw 0.10) untouched."""
+    for params in (_load_params(), _load_no_lidar_params()):
+        cfg = _controller_section(params)
+        assert "transit_goal_checker" in cfg["goal_checker_plugins"]
+        gc = cfg["transit_goal_checker"]
+        assert gc["plugin"] == "nav2_controller::SimpleGoalChecker"
+        assert gc["xy_goal_tolerance"] <= 0.5
+        assert gc["yaw_goal_tolerance"] >= 3.1
+        assert cfg["stopped_goal_checker"]["yaw_goal_tolerance"] <= 0.2
+
+
 def test_stopped_goal_checker_velocity_threshold_is_set() -> None:
     """StoppedGoalChecker without trans_stopped_velocity defaults to
     a permissive threshold; pin a value so the check is deterministic.
@@ -957,3 +972,89 @@ def test_base_ftc_can_command_its_own_turn_speed() -> None:
         f"speed_slow/max_cmd_vel_ang = {tightest:.3f} m is not a plausible turn "
         "radius for this chassis — check the FollowCoveragePath speed/angular pair."
     )
+
+
+def test_ftc_blade_load_keys_present_in_both_variants() -> None:
+    """FTC's blade-load slowdown (ftc_blade_load.hpp / BladeLoadDecision) needs
+    all five blade_load_* keys in the static config — a missing key silently
+    falls back to the C++ struct default instead of failing loudly. The ramp
+    must be non-empty even while the feature ships disabled, so flipping the
+    GUI toggle alone is enough to engage it.
+    """
+    keys = ("blade_load_slowdown_enabled", "blade_load_rpm_full", "blade_load_rpm_min",
+            "blade_load_min_speed_ratio", "blade_load_telemetry_max_age_s")
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        for key in keys:
+            assert key in fcp, f"FollowCoveragePath.{key} missing from merged config"
+        assert fcp["blade_load_slowdown_enabled"] is False, (
+            "blade_load_slowdown_enabled must ship OFF in the static yaml: the "
+            "no-load blade RPM differs per motor, so a fresh install must not crawl "
+            "on unverified thresholds — the operator enables it from the GUI"
+        )
+        assert fcp["blade_load_rpm_full"] > fcp["blade_load_rpm_min"] > 0.0
+        assert 0.0 < fcp["blade_load_min_speed_ratio"] <= 1.0
+        # 4 Hz blade reports: the age gate must admit at least two missed reports.
+        assert fcp["blade_load_telemetry_max_age_s"] >= 0.5
+
+
+def test_blade_load_template_defaults_match_static_yaml() -> None:
+    """The template's blade_load_* knobs must equal the static
+    nav2_params_base.yaml values so a sparse installed file (no overrides) is
+    behaviour-preserving, and so the GUI's 'at default' marker tells the truth."""
+    rp = _template_robot_params()
+    fcp = _controller_section(_load_yaml("nav2_params_base.yaml"))["FollowCoveragePath"]
+    assert bool(rp["blade_load_slowdown_enabled"]) == bool(fcp["blade_load_slowdown_enabled"])
+    for key in ("blade_load_rpm_full", "blade_load_rpm_min", "blade_load_min_speed_ratio"):
+        assert float(rp[key]) == float(fcp[key]), (
+            f"template {key}={rp[key]} != nav2_params_base.yaml FollowCoveragePath.{key}={fcp[key]}"
+        )
+
+
+def test_navigation_launch_injects_ftc_blade_load() -> None:
+    """All four operator blade_load_* keys must reach FollowCoveragePath.
+
+    If this injection is dropped the GUI's Mowing → Blade load toggle goes inert
+    (FTC's declare_parameter default, false, wins) and the slowdown can never be
+    switched on from the settings page."""
+    src = _read_text("launch/navigation.launch.py")
+    for key in ("blade_load_slowdown_enabled", "blade_load_rpm_full", "blade_load_rpm_min",
+                "blade_load_min_speed_ratio"):
+        assert re.search(
+            r"fcp\[.%s.\]\s*=\s*blade_load_params\[.%s.\]" % (key, key), src), (
+            f"navigation.launch.py must inject {key} into FollowCoveragePath.{key} "
+            "via derive_blade_load_params."
+        )
+
+
+def test_lidar_map_anchor_flag_is_plumbed_end_to_end() -> None:
+    """use_lidar_map_anchor must travel template -> navigation.launch.py ->
+    fusion_graph.launch.py -> node, gated on LiDAR hardware.
+
+    Without the launch plumbing an installed override is silently inert, and
+    without the template key the GUI cannot reset it (Invariant 15)."""
+    nav = _read_text("launch/navigation.launch.py")
+    assert re.search(r'_rp\.get\("use_lidar_map_anchor", False\)', nav), (
+        "navigation.launch.py must read use_lidar_map_anchor from the robot config"
+    )
+    assert re.search(r'"use_lidar_map_anchor":\s*lidar_gated\(use_lidar_map_anchor\)', nav), (
+        "use_lidar_map_anchor must be forwarded to fusion_graph LiDAR-gated: no scanner, no grid"
+    )
+    fg_launch = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "..", "fusion_graph", "launch", "fusion_graph.launch.py")
+    with open(fg_launch, "r", encoding="utf-8") as fh:
+        fg = fh.read()
+    assert re.search(r'DeclareLaunchArgument\(\s*"use_lidar_map_anchor"', fg)
+    assert re.search(r'"use_lidar_map_anchor":\s*use_lidar_map_anchor', fg)
+    template = _load_yaml("mowgli_robot.yaml")["mowgli"]["ros__parameters"]
+    assert template.get("use_lidar_map_anchor") is False, (
+        "the LiDAR map anchor ships OFF by default (2026-09-13): experimental, costly on the "
+        "Pi, enabled per robot from Settings > Localization; the launch fallback must agree"
+    )
+    # Shadow mode rides the same path: config -> navigation.launch.py
+    # (LiDAR-gated) -> fusion_graph.launch.py -> node.
+    assert re.search(r'_rp\.get\("lidar_anchor_shadow_mode", False\)', nav)
+    assert re.search(r'"lidar_anchor_shadow_mode":\s*lidar_gated\(lidar_anchor_shadow_mode\)', nav)
+    assert re.search(r'DeclareLaunchArgument\(\s*"lidar_anchor_shadow_mode"', fg)
+    assert re.search(r'"lidar_anchor_shadow_mode":\s*lidar_anchor_shadow_mode', fg)
+    assert template.get("lidar_anchor_shadow_mode") is False

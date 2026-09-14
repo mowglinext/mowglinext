@@ -1,0 +1,82 @@
+<!--
+  navigate_to_pose_transit.xml — Nav2 BT for COVERAGE transits only
+  (FollowStrip sub-path boundary / detour transits, TransitToStrip).
+
+  Identical to navigate_to_pose.xml except for the goal checker:
+  `transit_goal_checker` (xy 0.30 m, yaw ignored) instead of the default
+  `stopped_goal_checker` (yaw ±0.10 rad, kept for opennav_docking's staging
+  approach, which needs the heading).
+
+  Field 2026-09-12: a 0.40 m sub-path-boundary transit demanded ±5.7° of final
+  heading. RPP cannot pivot at the end of a path (use_rotate_to_heading: false,
+  hardware-confirmed 2026-06-20) and RotationShim only pivots at the start, so
+  RPP overshot the goal, IsPathValid failed, the tree replanned from the new
+  pose at 1 Hz, the shim pivoted again — the robot turned on the spot for
+  164 s until the operator sent HOME. Coverage does not need a final heading:
+  FTC does its own PRE_ROTATE at the start of the next sub-path.
+
+  Selected per goal through NavigateToPose.behavior_tree by the coverage nodes
+  (see FollowStrip::transitBehaviorTree). Everything else (replan only if the
+  path is invalid, recovery round-robin) is unchanged; keep the two files in
+  lockstep.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+        <GoalCheckerSelector selected_goal_checker="{selected_goal_checker}" default_goal_checker="transit_goal_checker" topic_name="goal_checker_selector"/>
+        <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+        <RateController hz="1.0">
+          <!--
+            Replan only if the existing path is invalid OR the goal has been
+            updated. Otherwise the previous path stays in {path} and the
+            downstream FollowPath keeps tracking it — no PRE_ROTATE flap.
+
+            ClearGlobalCostmap-Context recovery removed: under the no-lidar
+            config the global_costmap has only static_layer + keepout_filter
+            + inflation, and ClearEntireCostmap forces those layers to
+            re-subscribe and resets current_=false, which puts Nav2 into a
+            loop where every plan attempt times out. The bottom-level
+            RecoveryFallback below still has a costmap-clear action if real
+            recovery is needed.
+          -->
+          <Fallback name="FallbackComputePathToPose">
+            <ReactiveSequence name="CheckIfNewPathNeeded">
+              <Inverter>
+                <GlobalUpdatedGoal/>
+              </Inverter>
+              <IsPathValid path="{path}"/>
+            </ReactiveSequence>
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
+          </Fallback>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="{selected_controller}" goal_checker_id="{selected_goal_checker}" error_code_id="{follow_path_error_code}"/>
+          <Sequence>
+            <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+          </Sequence>
+        </RecoveryNode>
+      </PipelineSequence>
+      <Sequence>
+        <Fallback>
+          <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+          <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+        </Fallback>
+        <ReactiveFallback name="RecoveryFallback">
+          <GoalUpdated/>
+          <RoundRobin name="RecoveryActions">
+            <Sequence name="ClearingActions">
+              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+            <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
+            <Wait wait_duration="5.0"/>
+            <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
+          </RoundRobin>
+        </ReactiveFallback>
+      </Sequence>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

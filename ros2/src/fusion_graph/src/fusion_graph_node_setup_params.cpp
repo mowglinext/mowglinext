@@ -28,7 +28,7 @@ void FusionGraphNode::DeclareParameters()
   // Read from mowgli_robot.yaml — calibrate_imu_yaw_node and the
   // map_server /set_docking_point service write back to that file,
   // so the values here are always the latest persisted dock anchor.
-  // Declared outside the scan_matching gate because SeedFromDockPose()
+  // SeedFromDockPose()
   // is the only seed path that fires while the robot boots docked
   // and stationary (COG needs motion, mag is off by default) — the
   // no-LiDAR config must still be able to bootstrap.
@@ -37,74 +37,97 @@ void FusionGraphNode::DeclareParameters()
   dock_pose_yaw_ = declare_parameter<double>("dock_pose_yaw", 0.0);
   dock_pose_yaw_sigma_rad_ = declare_parameter<double>("dock_pose_yaw_sigma_rad", 0.035);
 
-  // ── Scan matching (optional) ─────────────────────────────────────
-  use_scan_matching_ = declare_parameter<bool>("use_scan_matching", false);
-  if (use_scan_matching_)
+  // LiDAR map anchor (Beluga particle filter against a grid built under
+  // RTK-Fixed). Complete-GNSS-outage fallback; navigation enables it only with
+  // LiDAR present.
+  use_lidar_map_anchor_ = declare_parameter<bool>("use_lidar_map_anchor", false);
+  lidar_map_resolution_m_ = declare_parameter<double>("lidar_map_resolution_m", 0.10);
+  lidar_map_tile_size_m_ = declare_parameter<double>("lidar_map_tile_size_m", 10.0);
+  lidar_map_radius_tiles_ = declare_parameter<int>("lidar_map_radius_tiles", 2);
+  lidar_map_insert_period_s_ = declare_parameter<double>("lidar_map_insert_period_s", 0.5);
+  lidar_map_rebuild_period_s_ = declare_parameter<double>("lidar_map_rebuild_period_s", 5.0);
+  // 1.0 s, not 0.3: a 5 Hz receiver whose stamps arrive ~80 ms old sits at
+  // ~0.28 s of age just before every next fix — 0.3 flapped on timer phase.
+  lidar_scan_max_age_s_ = declare_parameter<double>("lidar_scan_max_age_s", 0.5);
+  lidar_anchor_apply_age_s_ = declare_parameter<double>("lidar_anchor_apply_age_s", 20.0);
+  lidar_anchor_engage_age_s_ = declare_parameter<double>("lidar_anchor_engage_age_s", 1.0);
+  lidar_anchor_disengage_dwell_s_ =
+      declare_parameter<double>("lidar_anchor_disengage_dwell_s", 1.0);
+  lidar_anchor_max_beams_ = declare_parameter<int>("lidar_anchor_max_beams", 60);
+  lidar_anchor_min_particles_ = declare_parameter<int>("lidar_anchor_min_particles", 300);
+  lidar_anchor_max_particles_ = declare_parameter<int>("lidar_anchor_max_particles", 1500);
+  lidar_anchor_update_min_d_ = declare_parameter<double>("lidar_anchor_update_min_d", 0.05);
+  lidar_anchor_update_min_a_ = declare_parameter<double>("lidar_anchor_update_min_a", 0.05);
+  lidar_anchor_seed_sigma_xy_m_ = declare_parameter<double>("lidar_anchor_seed_sigma_xy_m", 0.10);
+  lidar_anchor_seed_sigma_theta_rad_ =
+      declare_parameter<double>("lidar_anchor_seed_sigma_theta_rad", 0.10);
+  lidar_anchor_z_hit_ = declare_parameter<double>("lidar_anchor_z_hit", 0.7);
+  lidar_anchor_z_rand_ = declare_parameter<double>("lidar_anchor_z_rand", 0.3);
+  lidar_anchor_sigma_hit_m_ = declare_parameter<double>("lidar_anchor_sigma_hit_m", 0.15);
+  lidar_anchor_max_laser_distance_m_ =
+      declare_parameter<double>("lidar_anchor_max_laser_distance_m", 12.0);
+  lidar_anchor_odom_alpha_rot_ = declare_parameter<double>("lidar_anchor_odom_alpha_rot", 0.05);
+  lidar_anchor_odom_alpha_trans_ = declare_parameter<double>("lidar_anchor_odom_alpha_trans", 0.05);
+  // AMCL's augmented-MCL recovery (alpha_slow / alpha_fast > 0) injects
+  // RANDOM particles across the whole map whenever the average weight drops
+  // — on open lawn it drops every time, the injected particles that land
+  // near saturated clutter (the terrace) win, and the estimate teleports:
+  // replay 2026-09-07 showed a 2.7 m jump on the FIRST update after a
+  // 0.10 m seed. Our seed is always trustworthy (fused pose or dead
+  // reckoning), so global relocalisation is never wanted: both OFF.
+  lidar_anchor_alpha_slow_ = declare_parameter<double>("lidar_anchor_alpha_slow", 0.0);
+  lidar_anchor_alpha_fast_ = declare_parameter<double>("lidar_anchor_alpha_fast", 0.0);
+  lidar_anchor_selective_resampling_ =
+      declare_parameter<bool>("lidar_anchor_selective_resampling", true);
+  // Per-estimate trust. Defaults sized on the 2026-09-06 replay: the lost
+  // filter scored 0.13 while a healthy one scores ≥ 0.9; wheels + gyro
+  // drifted < 0.4 m over 2.7 min and a U-turn.
+  lidar_anchor_validator_.min_hit_ratio =
+      declare_parameter<double>("lidar_anchor_min_hit_ratio", 0.5);
+  lidar_anchor_validator_.min_hit_count = declare_parameter<int>("lidar_anchor_min_hit_count", 30);
+  lidar_anchor_validator_.max_sigma_m = declare_parameter<double>("lidar_anchor_max_sigma_m", 0.5);
+  lidar_anchor_validator_.dr_budget_m = declare_parameter<double>("lidar_anchor_dr_budget_m", 0.3);
+  lidar_anchor_validator_.dr_drift_frac =
+      declare_parameter<double>("lidar_anchor_dr_drift_frac", 0.02);
+  lidar_anchor_reseed_after_s_ = declare_parameter<double>("lidar_anchor_reseed_after_s", 5.0);
+  lidar_anchor_shadow_mode_ = declare_parameter<bool>("lidar_anchor_shadow_mode", false);
+  lidar_map_import_topic_ = declare_parameter<std::string>("lidar_map_import_topic", "");
+  lidar_anchor_shadow_ref_period_s_ =
+      declare_parameter<double>("lidar_anchor_shadow_ref_period_s", 20.0);
+  lidar_anchor_undock_dwell_s_ = declare_parameter<double>("lidar_anchor_undock_dwell_s", 10.0);
+  // Self-calibrated σ floor: shadow-mode error vs RTK-Fixed, rolling window,
+  // served as a quantile (field 2026-09-08: p90 0.15 m vs a fixed 0.05).
+  lidar_anchor_adaptive_floor_ = declare_parameter<bool>("lidar_anchor_adaptive_floor", true);
+  lidar_anchor_floor_quantile_ = declare_parameter<double>("lidar_anchor_floor_quantile", 0.9);
+  lidar_anchor_shadow_stats_ = LidarAnchorShadowStats(
+      static_cast<std::size_t>(
+          std::max<int64_t>(1, declare_parameter<int64_t>("lidar_anchor_shadow_window", 300))),
+      static_cast<std::size_t>(
+          std::max<int64_t>(1, declare_parameter<int64_t>("lidar_anchor_shadow_min_samples", 50))));
+  if (use_lidar_map_anchor_)
   {
-    ScanMatcherParams sp;
-    // 10 iters converges within 1 mm of the 15-iter solution on the
-    // outdoor LiDAR shapes we see; the extra 5 iters were CPU sink.
-    sp.max_iterations = declare_parameter<int>("icp_max_iter", 10);
-    sp.max_correspondence_dist = declare_parameter<double>("icp_max_corresp_dist", 0.5);
-    // 40 source points keeps ICP rmse within a few mm of the 60-pt
-    // result while halving inner-loop NN cost. ARM hot-path saving.
-    sp.source_subsample = static_cast<size_t>(declare_parameter<int>("icp_source_subsample", 40));
-    // Inlier floor for the scan-to-scan between-factor (near-total overlap, so
-    // 30/40 subsampled points is easy). Keyframe matching uses its own, looser
-    // kf_min_inliers below (cross-viewpoint overlap is partial).
-    sp.min_inliers = declare_parameter<int>("scan_min_inliers", 30);
-    sp.sigma_xy_base = declare_parameter<double>("icp_sigma_xy_base", 0.02);
-    sp.sigma_theta_base = declare_parameter<double>("icp_sigma_theta_base", 0.005);
-    scan_matcher_ = std::make_unique<ScanMatcher>(sp);
+    LidarOccupancyMapperParams mp;
+    mp.resolution_m = lidar_map_resolution_m_;
 
-    // Per-tick ICP guard rails (see fusion_graph_node.hpp comments).
-    icp_max_rmse_m_ = declare_parameter<double>("icp_max_rmse_m", 0.10);
-    icp_max_delta_xy_m_ = declare_parameter<double>("icp_max_delta_xy_m", 0.30);
-    icp_max_delta_theta_rad_ = declare_parameter<double>("icp_max_delta_theta_rad", 0.50);
-    icp_max_divergence_xy_m_ = declare_parameter<double>("icp_max_divergence_xy_m", 0.15);
-    icp_max_divergence_theta_rad_ = declare_parameter<double>("icp_max_divergence_theta_rad", 0.35);
+    mp.max_range_m = lidar_anchor_max_laser_distance_m_;
+    // Evidence weights. Defaults = one hit marks a cell occupied; a garden
+    // (foliage, wind) wants a higher occupied threshold so a cell needs
+    // several concordant hits before the filter may trust it — tuned on
+    // the replay harness, not by hand.
+    mp.log_odds_hit = declare_parameter<double>("lidar_map_log_odds_hit", mp.log_odds_hit);
+    mp.log_odds_miss = declare_parameter<double>("lidar_map_log_odds_miss", mp.log_odds_miss);
+    mp.occupied_threshold =
+        declare_parameter<double>("lidar_map_occupied_threshold", 2.0 * mp.log_odds_hit);
+    mp.free_threshold = declare_parameter<double>("lidar_map_free_threshold", mp.free_threshold);
+    lidar_mapper_params_ = mp;
 
-    // Yield-to-RTK gating (see fusion_graph_node.hpp). When RTK-Fixed is
-    // fresh, inflate the scan-between σ so GPS dominates and map→odom stays
-    // pinned; scan-matching only carries the estimate once the fix is lost.
-    scan_yield_to_rtk_ = declare_parameter<bool>("scan_yield_to_rtk", true);
-    scan_yield_timeout_s_ = declare_parameter<double>("scan_yield_timeout_s", 2.0);
-    scan_yield_sigma_xy_ = declare_parameter<double>("scan_yield_sigma_xy", 0.5);
-    scan_yield_sigma_theta_ = declare_parameter<double>("scan_yield_sigma_theta", 0.3);
-
-    // ── RTK-anchored keyframe map (absolute scan-to-keyframe localization) ──
-    // Requires scan matching (this block). Code default OFF (yaml enables).
-    // CAPTURE under stable RTK-Fixed; APPLY a PriorFactor<Pose2> (xy + yaw)
-    // during RTK-Float to hold <2 cm. Yaw is protected by the GraphManager
-    // kf_yaw_sigma_floor + the mirror-guard below.
-    use_keyframe_map_ = declare_parameter<bool>("use_keyframe_map", false);
-    kf_capture_sigma_max_m_ = declare_parameter<double>("kf_capture_sigma_max_m", 0.01);
-    kf_capture_rtk_debounce_ = declare_parameter<int>("kf_capture_rtk_debounce", 3);
-    kf_capture_max_omega_ = declare_parameter<double>("kf_capture_max_omega", 0.10);
-    // Looser inlier floor for cross-viewpoint scan-to-keyframe ICP. The
-    // scan-to-scan default (scan_min_inliers=30) assumes near-total overlap;
-    // a keyframe is an older scan from a different pose, so 30/40 is rarely
-    // reachable and was rejecting ~99.7% of keyframe matches at the min_inliers
-    // early-abort. 16 keeps a genuine geometric lock while letting the RTK-Float
-    // anchor actually engage.
-    kf_min_inliers_ = declare_parameter<int>("kf_min_inliers", 16);
-    kf_match_max_dist_m_ = declare_parameter<double>("kf_match_max_dist_m", 3.0);
-    kf_max_candidates_ = static_cast<size_t>(declare_parameter<int>("kf_max_candidates", 5));
-    kf_apply_sigma_floor_m_ = declare_parameter<double>("kf_apply_sigma_floor_m", 0.02);
-    kf_apply_sigma_theta_rad_ = declare_parameter<double>("kf_apply_sigma_theta_rad", 0.05);
-    kf_engage_age_s_ = declare_parameter<double>("kf_engage_age_s", 0.3);
-    kf_match_max_rmse_m_ = declare_parameter<double>("kf_match_max_rmse_m", 0.15);
-    kf_match_max_divergence_xy_m_ = declare_parameter<double>("kf_match_max_divergence_xy_m", 0.30);
-    kf_match_max_divergence_theta_rad_ =
-        declare_parameter<double>("kf_match_max_divergence_theta_rad", 0.50);
-    // Absolute-yaw mirror-guard bound (see fusion_graph_node.hpp): reject a
-    // keyframe match whose implied map-frame yaw is more than this off the
-    // gyro-predicted yaw — catches mirrored / flipped ICP the xy guard misses.
-    kf_match_max_yaw_dev_rad_ = declare_parameter<double>("kf_match_max_yaw_dev_rad", 0.5);
+    lidar_anchor_gate_.emplace(true,
+                               lidar_anchor_engage_age_s_,
+                               lidar_map_insert_period_s_,
+                               lidar_anchor_disengage_dwell_s_);
   }
 
-  // 180° yaw-flip recovery (see fusion_graph_node.hpp). Declared outside the
-  // scan_matching gate — it keys off COG, not LiDAR.
+  // 180° yaw-flip recovery from COG (see fusion_graph_node.hpp).
   cog_flip_recovery_enabled_ = declare_parameter<bool>("cog_flip_recovery_enabled", true);
   cog_flip_threshold_rad_ = declare_parameter<double>("cog_flip_threshold_rad", 2.618);
   cog_flip_consecutive_n_ = declare_parameter<int>("cog_flip_consecutive_n", 3);
@@ -119,10 +142,6 @@ void FusionGraphNode::DeclareParameters()
   // gate + σ floor so a slow/reverse/noisy COG can't yank the yaw.
   cog_min_speed_mps_ = declare_parameter<double>("cog_min_speed_mps", 0.08);
   cog_min_sigma_rad_ = declare_parameter<double>("cog_min_sigma_rad", 0.15);
-  // Level 2: floor the LiDAR scan/loop-closure yaw σ so it can't bake a wrong
-  // heading (keeps LiDAR position carry). 0 = disabled.
-  scan_yaw_sigma_floor_rad_ = declare_parameter<double>("scan_yaw_sigma_floor_rad", 0.30);
-
   // ── Magnetometer (off by default) ───────────────────────────────
   // Motors near the chassis induce a heading-dependent bias on the
   // magnetometer that no static cal can remove (see CLAUDE.md
@@ -137,43 +156,10 @@ void FusionGraphNode::DeclareParameters()
   // keeps driving Nav2 while fusion_graph builds the graph silently.
   primary_mode_ = declare_parameter<bool>("primary_mode", true);
 
-  // ── Loop closure + persistence ───────────────────────────────────
-  loop_closure_enabled_ = declare_parameter<bool>("use_loop_closure", false);
-  lc_max_dist_m_ = declare_parameter<double>("lc_max_dist_m", 5.0);
-  // Default 600s (10 min): stationary clutter at the dock or during
-  // long IDLE windows produces O(N²) LC factors with the lower 30/120s
-  // defaults. Real revisits across a mowing pattern are minutes apart,
-  // so 600s is a comfortable floor. Override per-test if needed.
-  lc_min_age_s_ = declare_parameter<double>("lc_min_age_s", 30.0);
-  lc_max_candidates_ = static_cast<size_t>(declare_parameter<int>("lc_max_candidates", 3));
-  lc_min_delta_m_ = declare_parameter<double>("lc_min_delta_m", 0.05);
-  lc_min_delta_theta_ = declare_parameter<double>("lc_min_delta_theta", 0.05);
-  // 0.10 m rmse rejected too aggressively in field tests: outdoor
-  // LiDAR scans of the same place separated by minutes typically
-  // see ~15-25 cm point-wise rmse from wind / shadow / dynamic
-  // obstacles, even when the relative pose delta is sub-cm. The
-  // BetweenFactor noise scales with rmse anyway (sigma_xy_base +
-  // sigma_xy_scale * rmse), so a noisier match enters the graph
-  // with proportionally lower weight rather than being dropped.
-  lc_max_rmse_ = declare_parameter<double>("lc_max_rmse", 0.20);
-  lc_sigma_xy_ = declare_parameter<double>("lc_sigma_xy", 0.05);
-  lc_sigma_theta_ = declare_parameter<double>("lc_sigma_theta", 0.02);
-  // Skip loop-closure generation while RTK-Fixed is fresh (see the member doc in
-  // fusion_graph_node.hpp). This is the bound that stops the stationary-dwell
-  // factor leak that OOM-killed the node; leave it on unless a site genuinely
-  // mows under permanent RTK-Float and needs LC even near the dock.
-  lc_skip_when_rtk_fixed_ = declare_parameter<bool>("lc_skip_when_rtk_fixed", true);
-  // Rate/travel gate + GPS σ floor on loop closures (issue #513, see
-  // loop_closure_gate.hpp + the member doc). <= 0 disables each one.
-  lc_min_travel_m_ = declare_parameter<double>("lc_min_travel_m", 1.0);
-  lc_min_interval_s_ = declare_parameter<double>("lc_min_interval_s", 2.0);
-  lc_gps_sigma_ratio_ = declare_parameter<double>("lc_gps_sigma_ratio", 1.0);
-
+  // ── Graph persistence ───────────────────────────────────────────
   graph_save_prefix_ =
       declare_parameter<std::string>("graph_save_prefix", "/ros2_ws/maps/fusion_graph");
 
-  scan_retention_nodes_ =
-      static_cast<uint64_t>(declare_parameter<int>("scan_retention_nodes", 18000));
   isam2_rebase_every_nodes_ =
       static_cast<uint64_t>(declare_parameter<int>("isam2_rebase_every_nodes", 2000));
   const bool autoload = declare_parameter<bool>("autoload_graph", true);
@@ -197,6 +183,52 @@ void FusionGraphNode::DeclareParameters()
                   "fusion_graph: loaded persisted graph from '%s.*'",
                   graph_save_prefix_.c_str());
     }
+  }
+
+  if (use_lidar_map_anchor_)
+  {
+    if (lidar_map_tile_size_m_ * lidar_map_radius_tiles_ < lidar_anchor_max_laser_distance_m_ + 2.0)
+      throw std::invalid_argument("LiDAR local window must cover laser range plus 2 m");
+    lidar_submaps_ = std::make_unique<LidarSubmapStore>(lidar_mapper_params_,
+                                                        graph_save_prefix_,
+                                                        datum_lat_,
+                                                        datum_lon_,
+                                                        lidar_map_tile_size_m_,
+                                                        lidar_map_radius_tiles_);
+    LidarComputeGateParams cp;
+    cp.engage_age_s = lidar_anchor_engage_age_s_;
+    cp.apply_age_s = lidar_anchor_apply_age_s_;
+    cp.max_rate_hz = declare_parameter<double>("lidar_anchor_max_rate_hz", 5.0);
+    cp.calibration_period_s = declare_parameter<double>("lidar_anchor_calibration_period_s", 60.0);
+    cp.calibration_burst_s = declare_parameter<double>("lidar_anchor_calibration_burst_s", 10.0);
+    cp.warmup_s = declare_parameter<double>("lidar_anchor_warmup_s", 5.0);
+    lidar_compute_gate_ = LidarComputeGate(cp);
+    const auto nonnegative = [](double v)
+    {
+      return std::isfinite(v) && v >= 0.0;
+    };
+    const auto positive = [](double v)
+    {
+      return std::isfinite(v) && v > 0.0;
+    };
+    if (!lidar_compute_gate_.ValidConfiguration() ||
+        !ValidLidarAnchorParams(lidar_anchor_validator_) || !positive(lidar_map_insert_period_s_) ||
+        !nonnegative(lidar_map_rebuild_period_s_) ||
+        !nonnegative(lidar_anchor_disengage_dwell_s_) ||
+        !nonnegative(lidar_anchor_undock_dwell_s_) || !nonnegative(lidar_anchor_floor_quantile_) ||
+        lidar_anchor_floor_quantile_ > 1.0 || !positive(lidar_anchor_sigma_floor_param_m_) ||
+        !std::isfinite(lidar_anchor_z_hit_ + lidar_anchor_z_rand_) ||
+        !positive(lidar_scan_max_age_s_) || !positive(lidar_anchor_seed_sigma_xy_m_) ||
+        !positive(lidar_anchor_seed_sigma_theta_rad_) || !positive(lidar_anchor_sigma_hit_m_) ||
+        !positive(lidar_anchor_shadow_ref_period_s_) ||
+        !nonnegative(lidar_anchor_reseed_after_s_) || !nonnegative(lidar_anchor_update_min_d_) ||
+        !nonnegative(lidar_anchor_update_min_a_) || !nonnegative(lidar_anchor_odom_alpha_rot_) ||
+        !nonnegative(lidar_anchor_odom_alpha_trans_) || !nonnegative(lidar_anchor_alpha_slow_) ||
+        !nonnegative(lidar_anchor_alpha_fast_) || !nonnegative(lidar_anchor_z_hit_) ||
+        !nonnegative(lidar_anchor_z_rand_) || lidar_anchor_z_hit_ + lidar_anchor_z_rand_ <= 0.0 ||
+        lidar_anchor_max_beams_ < 1 || lidar_anchor_min_particles_ < 1 ||
+        lidar_anchor_max_particles_ < lidar_anchor_min_particles_)
+      throw std::invalid_argument("invalid LiDAR scheduling, sensor or validation parameters");
   }
 
   // ── Auto-checkpoint configuration ───────────────────────────────

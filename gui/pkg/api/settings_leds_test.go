@@ -97,6 +97,7 @@ func TestLedSchemaDefaultsMatchTemplate(t *testing.T) {
 		"led_enabled", "led_count", "led_spi_device", "led_spi_speed_hz",
 		"led_brightness", "led_idle_scale", "led_refresh_hz",
 		"led_low_battery_percent", "led_charge_full_percent",
+		"led_charge_complete_timeout_s", "led_charge_complete_dim_scale",
 		"led_status_timeout_s", "led_keepalive_s", "led_device_retry_s",
 	}
 	for _, key := range expected {

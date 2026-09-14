@@ -49,7 +49,7 @@
 | `ros2/src/mowgli_leds/src/led_ring_node.cpp` | 320 | Node impl: param declare/clamp, subs, `collectInputs`, `ensureDevice`, `writeFrame`, `blank`, `static_assert`s |
 | `ros2/src/mowgli_leds/src/spi_device.cpp` | 135 | Only hardware-touching code: `open`/`ioctl`(mode 0, 8 bpw, MSB, speed)/`write`; `#ifdef __linux__` |
 | `ros2/src/mowgli_leds/src/led_ring_main.cpp` | 18 | `main()`: `rclcpp::spin(LedRingNode)` |
-| `ros2/src/mowgli_leds/test/test_led_pattern.cpp` | 446 | 32 gtests: mode priority, arc arithmetic, animation helpers, rendered frames per mode |
+| `ros2/src/mowgli_leds/test/test_led_pattern.cpp` | ~510 | 36 gtests: mode priority, arc arithmetic, animation helpers, rendered frames per mode |
 | `ros2/src/mowgli_leds/test/test_ws2812_encoder.cpp` | 181 | 13 gtests: symbol expansion, MSB-first, GRB order, frame size, reset gap, clock, brightness |
 | **Integration points outside the package** | | |
 | `ros2/src/mowgli_bringup/launch/full_system.launch.py` | 742 | Launches `led_ring_node` (l.668-706) under `IfCondition(led_enabled)`; passes every `led_*` from merged config |
@@ -87,7 +87,7 @@ Freshness: every source is stale after `led_status_timeout_s` (`collectInputs()`
 None.
 
 ### Parameters
-All 12 declared in the constructor (`led_ring_node.cpp:65-77`), read **once at startup** (no parameter callback). Defaults live in the template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` (l.721-737) and are mirrored in `gui/asserts/mower_config.schema.json` (l.717-806); `full_system.launch.py:679-704` forwards them with matching fallbacks.
+All 14 declared in the constructor (`led_ring_node.cpp:65-83`), read **once at startup** (no parameter callback). Defaults live in the template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` and are mirrored in `gui/asserts/mower_config.schema.json`; `full_system.launch.py` forwards them with matching fallbacks.
 
 | Param | Default | Node clamp (file:line) | Effect |
 |-------|---------|------------------------|--------|
@@ -103,6 +103,8 @@ All 12 declared in the constructor (`led_ring_node.cpp:65-77`), read **once at s
 | `led_low_battery_percent` | `20.0` | `[0, 100]` (l.109) | Blinking-red threshold (`LedPatternCfg`) |
 | `led_charge_full_percent` | `99.0` | `[0, 100]` (l.110) | Steady-green threshold |
 | `led_idle_scale` | `0.10` | `[0, 1]` (l.111) | Idle ring dim factor |
+| `led_charge_complete_timeout_s` | `600.0` | `≥ 0` (0 = disabled) | Seconds of steady full-green before dimming (`LedRingNode::updateChargeCompleteTracking`) |
+| `led_charge_complete_dim_scale` | `0.0` | `[0, 1]` | Brightness once the timeout above elapses; 0 = off |
 
 `use_sim_time` is also passed by launch (l.676) but has no effect: animations use `std::chrono::steady_clock` (`monotonicSeconds()` l.185-189) and the tick is a wall timer.
 
@@ -113,7 +115,7 @@ None (no TF publish or lookup).
 | # | `LedMode` | Condition | Frame |
 |---|-----------|-----------|-------|
 | 1 | `kEmergency` | `status_fresh && emergency` | solid `kRed` |
-| 2 | `kCharging` | `is_charging` (from BT or Power) | green arc breathing 3 s; comet if `!battery_valid`; solid green at `charge_full_percent` |
+| 2 | `kCharging` | `is_charging` (from BT or Power) | green arc breathing 3 s; comet if `!battery_valid`; solid green at `charge_full_percent`, dimming to `charge_complete_dim_scale` after `charge_complete_timeout_s` of steady full green |
 | 3 | `kStale` | `!status_fresh` | `kAmber` comet, 1.5 s/rev |
 | 4 | `kLowBattery` | `battery_valid && battery_percent < low_battery_percent` | whole ring `kRed` blink 1 Hz |
 | 5 | `kMowing` / `kMowingDegraded` | `kAutonomous` + `rtk_fixed` / not | green arc + white head / amber arc + 2 Hz blinking head |
@@ -137,7 +139,7 @@ Lint: `ament_lint_auto` with copyright/cpplint/uncrustify suppressed (`CMakeList
 
 | Test | Registered in | Pins |
 |------|---------------|------|
-| `ros2/src/mowgli_leds/test/test_led_pattern.cpp` (32 cases) | `CMakeLists.txt:103-108` `ament_add_gtest(test_led_pattern)` | Mode priority (emergency > charging > stale > low-battery > activity; stale emergency ignored), `FilledCount` end rules, `Breathe`/`BlinkOn`/`RotationIndex` bounds + negative time, exact rendered frames per mode, zero-length ring |
+| `ros2/src/mowgli_leds/test/test_led_pattern.cpp` (36 cases) | `CMakeLists.txt:103-108` `ament_add_gtest(test_led_pattern)` | Mode priority (emergency > charging > stale > low-battery > activity; stale emergency ignored), `FilledCount` end rules, `Breathe`/`BlinkOn`/`RotationIndex` bounds + negative time, exact rendered frames per mode, zero-length ring, charge-complete dim timeout (below timeout stays full green, at/after timeout dims, non-zero dim scale, timeout=0 disables) |
 | `ros2/src/mowgli_leds/test/test_ws2812_encoder.cpp` (13 cases) | `CMakeLists.txt:96-101` `ament_add_gtest(test_ws2812_encoder)` | `0→0b100`, `1→0b110`, MSB-first, every symbol starts high/ends low, GRB order, 9 bytes/pixel + reset gap, gap ≥ 280 µs of zeros, 3 bits @ 2.4 MHz = 1.25 µs, brightness linear/clamped/NaN-safe, empty buffer still emits the gap |
 | `gui/pkg/api/settings_leds_test.go` | `cd gui && go test ./pkg/api/...` | `led_enabled` schema default `false` + `sparsifyFlat` round-trip; every `led_*` schema default == template value and no extra `led_*` in schema; `3 / led_spi_speed_hz == 1.25 µs` |
 | `gui/web/src/components/settings/LedsSection.test.tsx` (14 cases) | `cd gui/web && yarn test` | Absent key renders OFF, controls hidden until enabled, ON writes `true` / OFF writes `false`, overlay + `ls /dev/spidev*` hint, 3.3 V warning, hardware + appearance field sets, count/device edits, legend lists every mode, two reds differ by motion, reset-to-default, no-defaults render |
@@ -170,6 +172,7 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` ("Build & Test (ROS2 ki
 - `Breathe()` spells out `kTwoPi` (`led_pattern.hpp:175-179`) because `CMAKE_CXX_EXTENSIONS OFF` (`CMakeLists.txt:14`) hides `M_PI` — don't reintroduce `M_PI`.
 - Container access: compose service `mowgli` is `privileged: true` with `/dev:/dev` (`install/compose/docker-compose.base.yml:39,46`), so `/dev/spidev*` appears once the U-Boot overlay is enabled (README §2); no `devices:` entry is needed, but the overlay step is manual and not done by the installer (no `spidev`/`led` mention in `install/`).
 - `use_sim_time` is passed but irrelevant (steady clock + wall timer, l.165, 185-189). Tests render exact phases by setting `LedInputs::now_s`.
+- `charge_complete_since_s_` is node-local, reset to `-1.0` on construction: a node restart while already sitting at charge-complete restarts the `led_charge_complete_timeout_s` countdown from zero, same as every other freshness/backoff timer in this node. `updateChargeCompleteTracking()` is deliberately NOT part of `collectInputs()` (which stays `const`) — it mutates `charge_complete_since_s_`, so `onTimer()` calls it as a separate step between `collectInputs()` and `RenderFrame()`.
 - Hardware unverified: README §1-2 (3.3 V data vs `VIH = 0.7·VDD`) — wrong colours with correct software are a level-shifting problem first.
 - Safety: this package is deliberately outside the blade path (CLAUDE.md "Safety — READ FIRST"); it must never grow a publisher or service that commands the robot.
 

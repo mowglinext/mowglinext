@@ -55,7 +55,7 @@ mowglinext/
 ## Key Design Decisions
 
 1. **base_link at rear wheel axis** — OpenMower convention.
-2. **One localizer: `fusion_graph_node` (GTSAM iSAM2 factor graph).** It is launched unconditionally and owns **both** `map → odom` and `odom → base_footprint`. It fuses raw `/gps/fix` (projected in-node, through an antenna lever-arm factor), wheel odometry, gyro yaw, GPS-COG yaw and optional magnetometer yaw, plus optional LiDAR scan-matching and loop-closure factors. Until 2026-05 this was a robot_localization dual EKF (`ekf_map_node` + `ekf_odom_node`) with the factor graph as an opt-in alternative; both EKFs and the `use_fusion_graph` switch have been removed. No SLAM — the `/map` is built from user-recorded area polygons.
+2. **One localizer: `fusion_graph_node` (GTSAM iSAM2 factor graph).** It is launched unconditionally and owns **both** `map → odom` and `odom → base_footprint`. It fuses raw `/gps/fix` (projected in-node, through an antenna lever-arm factor), wheel odometry, gyro yaw, GPS-COG yaw and optional magnetometer yaw, plus an optional persistent LiDAR map anchor for complete GNSS outages. Until 2026-05 this was a robot_localization dual EKF (`ekf_map_node` + `ekf_odom_node`) with the factor graph as an opt-in alternative; both EKFs and the `use_fusion_graph` switch have been removed. No SLAM — the `/map` is built from user-recorded area polygons.
 3. **Cyclone DDS** — replaces FastRTPS (stale shm on ARM).
 4. **Map frame = GPS frame** — X=east, Y=north, no rotation.
 5. **Firmware is blade safety authority** — ROS2 is fire-and-forget.
@@ -63,5 +63,5 @@ mowglinext/
 7. **Per-area F2C v3 coverage** — `mowgli_coverage` (Fields2Cover 3.0.0) plans one path per area per session from the area polygon and its obstacle holes (`get_mowing_area`). The plan comes back as continuous, hole-free `drivable_subpaths` — headland rings and serpentine swaths already joined by forward turn-around arcs — and `FollowStrip` drives each as one `FollowCoveragePath` goal with `FTCController`, bridging consecutive sub-paths with a blade-off Nav2 transit. Resume is `FollowStrip`'s job: it trims the path at its persisted pose cursor before dispatch (the plan is deterministic, so the cursor stays valid), while FTC `setPlan` always starts tracking at index 0. The `mow_progress` grid is progress bookkeeping for the GUI, not a planner input.
 8. **Emergency auto-reset on dock** — firmware decides whether to clear latch.
 9. **Area recording via BT** — drive boundary, Douglas-Peucker simplification, save polygon.
-10. **LiDAR feeds the map-frame estimate via fusion_graph** — the `use_scan_matching` / `use_loop_closure` factors (both gated on `lidar_enabled`) keep the map-frame pose stable across multi-minute RTK-Float windows.
+10. **LiDAR provides a bounded outage fallback** — persistent georeferenced tiles are learned under RTK-Fixed; fresh Fix or Float keeps the particle filter asleep, and only a complete GNSS outage permits validated XY-only factors.
 11. **Dedicated manual mowing mode** — teleop with collision_monitor, GPS, and the fusion_graph localizer all running.

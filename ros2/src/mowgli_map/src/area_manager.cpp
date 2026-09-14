@@ -1138,21 +1138,17 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
     return;
   }
 
-  // Square keepout centred on the dig, side = dig_obstacle_size_ (defaults to
-  // one chassis length, see kDefaultDigKeepoutSizeM).
-  const double half = std::max(dig_obstacle_size_, kMinDigKeepoutSizeM) * 0.5;
-  geometry_msgs::msg::Polygon poly;
-  const double corners[4][2] = {{x - half, y - half},
-                                {x + half, y - half},
-                                {x + half, y + half},
-                                {x - half, y + half}};
-  for (const auto& c : corners)
-  {
-    geometry_msgs::msg::Point32 p;
-    p.x = static_cast<float>(c[0]);
-    p.y = static_cast<float>(c[1]);
-    poly.points.push_back(p);
-  }
+  // Keepout dig_obstacle_size_ wide (one chassis length by default, see
+  // kDefaultDigKeepoutSizeM), biased AHEAD of the robot's heading: the hole is
+  // under the wheels and the bridge has just reversed the robot ~0.2-0.3 m out
+  // of it, so the keepout must not reach back over the spot the robot now
+  // stands on or every transit from there is START_OCCUPIED
+  // (kDigKeepoutBehindM, net of the mask's obstacle_margin band). The heading is the last one
+  // latched by on_odom; a dig with no heading yet falls back to the centred square.
+  const bool have_heading = have_robot_heading_;
+  const double yaw = last_robot_yaw_;
+  const geometry_msgs::msg::Polygon poly =
+      dig_keepout_polygon(x, y, yaw, have_heading, dig_obstacle_size_, obstacle_margin_m_);
 
   // The name IS the proposal's evidence: it is what the operator reads in the
   // GUI when deciding whether this inferred dig deserves a permanent hole in
@@ -1180,10 +1176,11 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
   }
 
   RCLCPP_WARN(get_logger(),
-              "Dig keepout (%.2f m square) proposed for area %zu at (%.2f, %.2f); coverage "
+              "Dig keepout (%.2f m wide, %s) proposed for area %zu at (%.2f, %.2f); coverage "
               "will route around it for this session. It is NOT saved to the map - accept "
               "it in the GUI to make it permanent.",
-              2.0 * half,
+              std::max(dig_obstacle_size_, kMinDigKeepoutSizeM),
+              have_heading ? "ahead of the heading" : "centred square, no heading yet",
               *area_index,
               x,
               y);

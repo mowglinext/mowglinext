@@ -8,6 +8,11 @@
     "off": "Off",
     "unknown": "Unknown"
   },
+  "systemPower": {
+    "title": "Host",
+    "description": "Restart or shut down the computer running the mower and web interface.",
+    "open": "Host power…"
+  },
   "language": {
     "label": "Language",
     "fr": "Français",
@@ -149,14 +154,14 @@
     "restartMowgliConfirm": "This restarts the entire Mowgli stack (ROS2, GPS, LiDAR, and this web GUI) — like the mowgli-restart command. The page will disconnect briefly and reload automatically when the GUI is back.",
     "restartingStackTitle": "Restarting Mowgli…",
     "restartingStackBody": "Restarting the whole stack. This page will reconnect and reload automatically when the GUI is back.",
-    "rebootingPiTitle": "Rebooting the Raspberry Pi…",
-    "rebootingPiBody": "The Raspberry Pi is rebooting. This page will reconnect and reload automatically when it's back (this can take a minute or two).",
+    "rebootingPiTitle": "Rebooting the Host…",
+    "rebootingPiBody": "The Host is rebooting. This page will reconnect and reload automatically when it's back (this can take a minute or two).",
     "advanced": "Advanced",
     "restartBoard": "Restart the board (STM32)",
     "restartBoardConfirm": "Resets the STM32 firmware (NVIC_SystemReset). Use it to unstick a frozen board — e.g. the IMU returning NaN. The motors/blade stop during the reset (~1 s).",
-    "restartPi": "Restart the Raspberry Pi",
+    "restartPi": "Restart Host",
     "restartPiConfirm": "The system will restart. You will lose the connection temporarily.",
-    "shutdownPi": "Shut down the Raspberry Pi",
+    "shutdownPi": "Shut down Host",
     "shutdownPiConfirm": "The system will shut down. Physical access will be required to power it back on.",
     "rearm": "Re-arm",
     "rearmEmergencyTooltip": "Re-arm the emergency stop (the firmware decides whether the latch releases)",
@@ -439,28 +444,34 @@
     "clearGraphConfirmTitle": "Clear the fusion graph?",
     "clearGraphConfirmBody": "This discards all accumulated nodes, loop closures, and covariance — the localizer restarts from scratch. This cannot be undone.",
     "clearGraphConfirmOk": "Clear graph",
+    "clearLidarMap": "Clear LiDAR map",
+    "lidarMapCleared": "LiDAR map cleared",
+    "clearLidarMapConfirmTitle": "Clear the LiDAR anchor map?",
+    "clearLidarMapConfirmBody": "This discards the georeferenced occupancy grid the LiDAR anchor ray-casts scans into. The anchor goes back to mapping and cannot hold the position through an RTK-Float window until the map is rebuilt under RTK Fixed. The fusion graph itself is untouched.",
+    "clearLidarMapConfirmOk": "Clear LiDAR map",
+    "lidarAnchorGroupTitle": "LiDAR anchor",
+    "lidarAnchorState": "Anchor state",
+    "lidarAnchorStateOff": "Off",
+    "lidarAnchorStateWaitingForMap": "Waiting for map",
+    "lidarAnchorStateMapping": "Mapping",
+    "lidarAnchorStateAnchoring": "Anchoring",
+    "lidarAnchorShadowSuffix": "(shadow)",
+    "lidarAnchorSigma": "σ {{value}} m",
+    "lidarAnchorMapCells": "Map cells",
+    "lidarAnchorSeeds": "seeds {{seeds}} · skipped {{skipped}}",
+    "lidarAnchorVerdict": "Last verdict",
+    "lidarAnchorVerdictAccepted": "Accepted",
+    "lidarAnchorVerdictRejectedScore": "Rejected (score)",
+    "lidarAnchorVerdictRejectedSpread": "Rejected (spread)",
+    "lidarAnchorVerdictRejectedDeadReckoning": "Rejected (dead reckoning)",
+    "lidarAnchorHitRatio": "hit ratio {{pct}}%",
+    "lidarAnchorFactors": "Anchor factors",
+    "lidarAnchorFactorsHint": "applied to the graph",
+    "lidarAnchorAccepted": "Accepted estimates",
+    "lidarAnchorRejectBreakdown": "{{rejected}} rejected · score {{score}} · spread {{spread}} · DR {{dr}}",
+    "lidarAnchorReseeds": "Reseeds",
+    "lidarAnchorOdomRebases": "Odom rebases",
     "nodesInGraph": "Nodes in graph",
-    "withScans": "{{count}} with scans",
-    "loopClosures": "Loop closures",
-    "icpSuccessRate": "ICP success rate",
-    "matches": "{{ok}}/{{total}} matches",
-    "scansReceived": "{{count}} scans received",
-    "icpMonitorTitle": "ICP / Scan Matching",
-    "icpMonitorShort": "ICP Monitor",
-    "icpScanMatchRate": "Scan-match rate",
-    "icpRejects": "ICP rejects",
-    "icpRejectBreakdown": "rmse {{rmse}} · inliers {{inliers}} · sanity {{sanity}} · diverge {{diverge}}",
-    "icpKeyframes": "Keyframes",
-    "icpKfMatches": "{{rate}}% · {{ok}}/{{total}} kf matches",
-    "icpNoKeyframes": "no keyframes — no absolute heading",
-    "icpAttachRate": "{{rate}}% of scans attached",
-    "icpGpsWrongfix": "GPS wrong-fix rejects: {{count}}",
-    "icpStationaryPush": "stationary hand-push: {{count}}",
-    "icpMonitorHint": "frame-to-frame ICP gives relative yaw only; absolute heading needs keyframes/loop closures",
-    "icpHeading": "ICP heading",
-    "fusedHeading": "Fused heading",
-    "icpHeadingDiff": "Δ heading (ICP−fused)",
-    "icpPosDiff": "Δ position (ICP−fused)",
     "poseSigma": "Pose σ",
     "yawSigma": "yaw ±{{value}}°",
     "fusionGraphDescPart1": "GTSAM iSAM2 factor graph. Save persists nodes + scans to",
@@ -514,7 +525,6 @@
     "subPathsLabel": "Sub-paths",
     "subPathsSkipped": "{{count}} skipped",
     "handPushTitle": "Stationary pushes",
-    "attachRateTitle": "Scans attached",
     "coverage": "Coverage",
     "configurationCrossChecks": "Configuration Cross-checks",
     "noWarnings": "No warnings.",
@@ -642,7 +652,8 @@
     "rosbagDeleted": "Recording deleted",
     "rosbagDeleteFailed": "Could not delete recording",
     "rosbagDeleteConfirmTitle": "Delete recording?",
-    "rosbagDeleteConfirmBody": "This permanently deletes the recording {{name}} from the robot. This cannot be undone."
+    "rosbagDeleteConfirmBody": "This permanently deletes the recording {{name}} from the robot. This cannot be undone.",
+    "gpsWrongfix": "GPS wrong-fix rejects: {{count}}"
   },
   "mowgliNextPage": {
     "headlineUntilHomePrefix": "Just ",
@@ -1555,6 +1566,12 @@
     "unnamedArea": "Area {{index}}"
   },
   "mapTrackedObstacles": {
+    "ignore": "Ignore",
+    "ignoreTooltip": "Dismiss this tracked detection",
+    "ignoreConfirmTitle": "Ignore obstacle #{{id}}?",
+    "ignoreConfirmBody": "This dismisses the current tracked detection. It may reappear if detected again. Live collision avoidance and saved keepouts remain active.",
+    "ignoredSuccess": "Obstacle #{{id}} ignored",
+    "ignoreFailed": "Failed to ignore obstacle",
     "outsideAreaMessage": "Obstacle is outside every mowing area",
     "outsideAreaDescription": "Draw a mowing area that covers this obstacle before promoting it.",
     "areaFallback": "area {{index}}",
@@ -1663,6 +1680,26 @@
       "label": "Mowing speed",
       "description": "Forward speed while mowing a swath."
     },
+    "blade_load_slowdown_enabled": {
+      "label": "Blade load slowdown",
+      "description": "Scale the coverage speed down when the blade RPM sags under load."
+    },
+    "blade_load_rpm_full": {
+      "label": "Blade RPM full speed",
+      "description": "Blade RPM at or above which no slowdown applies."
+    },
+    "blade_load_rpm_min": {
+      "label": "Blade RPM min speed",
+      "description": "Blade RPM at or below which the minimum speed ratio applies."
+    },
+    "blade_load_min_speed_ratio": {
+      "label": "Blade load min speed ratio",
+      "description": "Slowest feed under blade load as a fraction of the mowing speed."
+    },
+    "blade_load_telemetry_max_age_s": {
+      "label": "Blade telemetry max age",
+      "description": "Blade reports older than this are ignored (no slowdown)."
+    },
     "num_headland_passes": {
       "label": "Headland passes",
       "description": "Number of concentric border rings mowed before the back-and-forth swaths. A negative value ('none') disables the perimeter rings entirely: the swaths become the outermost pass and their centreline lands on exactly the line the outermost ring would have driven, so sideways the uncut band is unchanged (about 12 cm at the default 0.20 m chassis safety inset). The swath ENDS do reach that band, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs."
@@ -1731,25 +1768,13 @@
       "label": "Graph node period",
       "description": "Cadence at which the factor graph adds a new Pose2 node."
     },
-    "use_scan_matching": {
-      "label": "LiDAR scan matching",
-      "description": "Add LiDAR scan-match between-factors to ride through RTK-Float windows."
+    "use_lidar_map_anchor": {
+      "label": "LiDAR map anchor",
+      "description": "Scan-to-map particle filter that holds the XY position when RTK Fixed drops."
     },
-    "use_loop_closure": {
-      "label": "LiDAR loop closure",
-      "description": "Add loop-closure factors from revisited LiDAR scans."
-    },
-    "icp_max_iter": {
-      "label": "ICP max iterations",
-      "description": "Maximum iterations for the scan-match ICP solve."
-    },
-    "icp_max_corresp_dist": {
-      "label": "ICP correspondence dist",
-      "description": "Maximum point-pair distance considered a correspondence."
-    },
-    "icp_max_rmse_m": {
-      "label": "ICP max RMSE",
-      "description": "Reject a scan match whose RMSE exceeds this."
+    "lidar_anchor_shadow_mode": {
+      "label": "Anchor shadow mode",
+      "description": "Run and score the LiDAR anchor under RTK Fixed without applying it."
     },
     "dock_blank_range": {
       "label": "Dock blank range",
@@ -2416,6 +2441,15 @@
     "mowingSpeedTooltip": "Speed during mowing strips (m/s)",
     "transitSpeed": "Transit Speed",
     "transitSpeedTooltip": "Speed when going to/from dock or between zones",
+    "bladeLoad": "Blade Load Slowdown",
+    "bladeLoadDescription": "Slow the mowing feed down when the blade motor's RPM sags under load (thick or wet grass), so the blade gets time to cut instead of stalling or leaving an uncut strip. The speed ramps linearly between the two RPM thresholds. Fail-open: an inactive blade or stale telemetry never slows the robot. Coverage paths only. Read your blade's no-load RPM off Diagnostics → Motor RPM before enabling. Takes effect after a ROS2 restart.",
+    "bladeLoadRpmFull": "Full speed above",
+    "bladeLoadRpmFullTooltip": "Blade RPM at or above which the full mowing speed applies. Set it a little below the no-load RPM shown on Diagnostics.",
+    "bladeLoadRpmMin": "Min speed below",
+    "bladeLoadRpmMinTooltip": "Blade RPM at or below which the minimum feed applies. Set it where the cut audibly labours; must be below the full-speed threshold.",
+    "bladeLoadMinSpeedRatio": "Min speed ratio",
+    "bladeLoadMinSpeedRatioTooltip": "Slowest feed under blade load, as a fraction of Mowing Speed. Never below the controller's 0.08 m/s crawl speed.",
+    "bladeLoadRampInvalid": "The full-speed RPM must be above the min-speed RPM — with an empty ramp the slowdown is disabled at launch.",
     "mowingPattern": "Mowing Pattern",
     "headlandWidth": "Headland Width",
     "headlandWidthTooltip": "Width of the perimeter strip mowed before the inner field (F2C ConstHL inset). Wired to coverage_server.default_headland_width, where it is used for ONE thing: the automatic ring count, ceil(headland width / swath spacing). It therefore only has an effect when Headland Passes is set to Auto — with a forced pass count (the shipped default is 2) this value is ignored.",
@@ -2462,13 +2496,16 @@
     "coverageXyToleranceTooltip": "Position tolerance during mowing strips",
     "recovery": "Recovery",
     "progressTimeout": "Progress Timeout",
-    "progressTimeoutTooltip": "Seconds without forward progress before recovery kicks in"
+    "progressTimeoutTooltip": "Seconds without forward progress before recovery kicks in",
+    "boundaryClearance": "Boundary Clearance",
+    "boundaryClearanceDescription": "How far transit moves between locations prefer to stay from the recorded boundary. This is a soft preference, not a hard rule — transit can still cross the margin when that's the only option (e.g. right after undocking). Mowing itself is unaffected — the robot still cuts up to the true edge as configured elsewhere; only point-to-point travel is nudged back.",
+    "boundaryInnerMargin": "Transit Boundary Margin",
+    "boundaryInnerMarginTooltip": "Distance (m) transit paths are nudged to stay inside the recorded boundary. 0 disables this and lets transit hug or clip the recorded line, as before this setting existed.",
+    "dockExemptRadius": "Dock Exemption Radius",
+    "dockExemptRadiusTooltip": "Radius (m) around the dock pose, in every direction, exempt from the transit boundary margin above — so the dock approach carries no bias at all, not just \"never blocked\". Widen this if your dock sees a lot of GNSS drift (e.g. under a canopy). Only takes effect once a dock pose is set."
   },
   "settingsSensors": {
     "lidarSensor": "LiDAR Sensor",
-    "lidarDescriptionPart1": "Enable if your robot has a LiDAR. Also flips",
-    "lidarDescriptionAnd": " and ",
-    "lidarDescriptionPart2": " so the factor graph fuses LiDAR scans. Fine-tune those in the Localization tab.",
     "imuBiasCalibration": "IMU bias calibration",
     "imuBiasCalibrationDescription": "The hardware bridge re-estimates IMU gyro/accel bias automatically while the robot is parked and stationary on the dock. These tune how it samples.",
     "calibrationSamples": "Calibration samples",
@@ -2476,7 +2513,8 @@
     "restWindowBeforeCal": "Rest window before cal",
     "restWindowBeforeCalTooltip": "How long the robot must be detected stationary before a calibration starts.",
     "periodicRecalInterval": "Periodic recal interval",
-    "periodicRecalIntervalTooltip": "Re-estimate the IMU bias every N seconds while docked. 0 disables periodic recal."
+    "periodicRecalIntervalTooltip": "Re-estimate the IMU bias every N seconds while docked. 0 disables periodic recal.",
+    "lidarDescription": "Enable if your robot has a LiDAR. Enables obstacle detection and allows scan-to-map localization, configured in the Localization tab."
   },
   "settingsRain": {
     "rainBehavior": "Rain Behavior",
@@ -2545,12 +2583,12 @@
     "expertScopeDescription": "Raw signal-group values, PVT algorithm, RTK reliability, RTK timeout, and DGPS timeout are stored here for future backend translation. Raw command textarea, dry-run plan, and reset/apply tooling still need a dedicated API."
   },
   "settingsLocalization": {
-    "scanMatchingTitle": "LiDAR scan matching",
-    "scanMatchingSummary": "Add ICP between-factors from /scan to the graph.",
-    "scanMatchingDetail": "Each new graph node runs ICP against the previous scan and adds a BetweenFactor with the relative motion. Fights GPS dropouts but costs ~5 ms/tick at 10 Hz.",
-    "loopClosureTitle": "Loop closure",
-    "loopClosureSummary": "Search past scans for revisits and add LC factors.",
-    "loopClosureDetail": "Triggers a candidate search around each new node (5 m radius, 10 min minimum age). Successful loop closures pull drift back to the originally-mapped pose, even mid-session.",
+    "lidarMapAnchorTitle": "LiDAR map anchor",
+    "lidarMapAnchorSummary": "Scan-to-map particle filter that holds the position when RTK Fixed drops (XY only).",
+    "lidarMapAnchorDetail": "Under RTK Fixed, selected scans update persistent georeferenced tiles. A local map window supports scan-to-map localization when GPS becomes stale; only validated XY corrections enter the graph. Diagnostics → Fusion Graph shows its state.",
+    "anchorShadowTitle": "Anchor shadow mode",
+    "anchorShadowSummary": "Run and measure the anchor under RTK Fixed without applying it.",
+    "anchorShadowDetail": "Keeps calibration active under trusted RTK Fixed at the configured filter rate, instead of periodic calibration bursts. Publishes candidates and counters for comparison; applies no factors while Fixed remains trusted.",
     "magYawTitle": "Magnetometer yaw",
     "magYawSummary": "Fuse tilt-compensated mag yaw as a yaw unary factor.",
     "magYawDetail": "Off by default — motor-induced bias makes the magnetometer unreliable on most chassis. Enable only after running mag calibration with motors-off and validating a stable |B|.",
@@ -2575,7 +2613,7 @@
     "lidarLocalizationTitle": "LiDAR — localization (factor graph)",
     "lidarLocalizationIntro": "Optional. When enabled,",
     "lidarLocalizationConsumes": "consumes",
-    "lidarLocalizationOutro": "as scan-matching between-factors and loop-closure factors so the map-frame pose can ride through multi-minute RTK-Float windows.",
+    "lidarLocalizationOutro": "to localize against georeferenced submaps and add XY corrections when GPS becomes stale. Areas without usable landmarks cannot provide LiDAR corrections.",
     "yawSourcesTitle": "Yaw sources",
     "magCalibrationTitle": "Magnetometer calibration & tuning",
     "magCalibrationIntroPrefix": "Only used when",
@@ -3078,12 +3116,16 @@
     "keepaliveTooltip": "Re-send an unchanged frame at least this often, so a ring that lost power recovers its last state.",
     "deviceRetry": "Device retry",
     "deviceRetryTooltip": "How often to silently retry opening a missing or failed SPI device. Only the first failure of an outage is logged, so this never floods the log.",
+    "chargeCompleteTimeout": "Charge complete dim delay",
+    "chargeCompleteTimeoutTooltip": "After the ring has shown steady full-green \"charge complete\" for this long (10 minutes by default — e.g. left on the dock overnight), dim it to the brightness below. 0 disables this and the ring stays full green indefinitely. Unplugging, or the level dropping back below the charge-complete threshold, restores full brightness immediately.",
+    "chargeCompleteDim": "Charge complete brightness",
+    "chargeCompleteDimTooltip": "Brightness once the dim delay above has elapsed. 0 (default) turns the ring off; a small value keeps a faint green glow as an at-a-glance \"still charged\" indicator instead.",
     "legend": "What the ring is telling you",
     "legendDescription": "First match wins — an alarm always beats an activity. Every pattern is meant to be readable in daylight from several metres by colour and movement alone.",
     "modeEmergency": "Emergency",
     "modeEmergencyDescription": "Whole ring solid red, not moving. The only solid red.",
     "modeCharging": "Charging",
-    "modeChargingDescription": "Green arc growing with the battery level, breathing. Steady full green when the charge is complete.",
+    "modeChargingDescription": "Green arc growing with the battery level, breathing. Steady full green when the charge is complete, dimming after the configured delay if it stays that way.",
     "modeStale": "No status",
     "modeStaleDescription": "Amber dot circling a dark ring. Powered and running, but the behavior tree is not reporting.",
     "modeLowBattery": "Low battery",

@@ -76,9 +76,9 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
   // 1 = clockwise, 2 = counter-clockwise. Read live in planCoverage.
   declare_int("ring_direction", 0);
   // Hard floor on every turn-around / fillet arc in the continuous path: the
-  // robot's minimum MPPI-trackable turning radius (mowgli_robot.yaml). Read live
+  // robot's minimum FTC-trackable turning radius (mowgli_robot.yaml). Read live
   // in planCoverage so it can be field-tuned between plans.
-  declare_double("min_turning_radius", 0.15);
+  declare_double("min_turning_radius", 0.20);
   // Nominal turn-around arc radius for the continuous-path connectors. A forward
   // 180° swath-to-swath reversal at op_width spacing (~0.18 m) cannot avoid a
   // loop (a clean U needs r ≤ op_width/2 ≈ 0.09 m, below the min_turning_radius
@@ -86,12 +86,13 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
   // nominal radius: at 0.30 m it balloons into a big teardrop that overshoots
   // deep into the headland (the "turning loops" users see with >2 headland
   // passes, where there's room for the big loop); at ~op_width it collapses to a
-  // compact, tight U-turn. Default 0.18 (≈ op_width) for compact turns. Floored
+  // compact, tight U-turn. Default 0.20 matches FTC's controllable radius at
+  // speed_slow=0.16 m/s and max_cmd_vel_ang=0.8 rad/s. Floored
   // at min_turning_radius by buildConnector, so it never goes sub-trackable.
   // TUNING TRADE-OFF: smaller = compact turns but nearer the trackable floor
-  // (a deadband diff-drive may track a 0.30 m arc more smoothly than a 0.18 m
+  // (a deadband diff-drive may track a 0.30 m arc more smoothly than a 0.20 m
   // one); raise toward 0.30 if tight turns induce hesitation. Read live.
-  declare_double("connector_turn_radius", 0.18);
+  declare_double("connector_turn_radius", 0.20);
   // Extra buffer (m) grown around drawn map-obstacle polygons (holes) before
   // planning — keeps swaths/connectors off root zones the 2D LiDAR cannot see.
   // Injected at launch from mowgli_robot.yaml.obstacle_margin (GUI: Settings →
@@ -159,20 +160,15 @@ namespace
 constexpr double kSwathStep = 0.10;  // m between poses on a straight swath
 
 // Connector-outcome reporting (issue #499). Share of segment joins resolved by
-// a straight blind connector or a sub-path split, at or above which the summary
+// an aligned straight connector or a sub-path split, at or above which the summary
 // is logged at WARN instead of INFO. 25 % is a judgement call, not a measured
 // threshold: below it the odd un-fittable join is normal on a concave field,
 // above it the plan is mostly NOT being joined by real turn-around arcs.
 //
-// Expect this to WARN on every plan at the shipped defaults. The first
-// measurement this counter ever produced was ~97 % fallback (1 arc in 32 joins)
-// on a hole-free convex field, and that is the BASELINE, not a regression: the
-// headland apron beyond the swath ends (num_headland_passes * operation_width =
-// 0.32 m) is narrower than the omega turn-around's forward extent (~0.43 m at
-// connector_turn_radius 0.18, swath spacing 0.16), so no radius in the shrink
-// range fits. The WARN is kept rather than tuned away because a swath end that
-// is a straight join with a sharp corner instead of a tangent arc is exactly the
-// lawn-carving defect #499 is about — see ConnectorStats in coverage_planning.hpp.
+// The 2026-09-09 field bag measured 146 fallbacks in 168 joins with the old
+// two-pass apron. Production now uses five passes and 0.20 m arcs, so this should
+// remain INFO on ordinary fields. A WARN means the plan will require many
+// blade-off reorientations and the site geometry/configuration needs review.
 constexpr double kConnectorFallbackWarnPct = 25.0;
 // One format string, two severities — keeps the WARN and INFO variants from
 // drifting apart. A macro rather than a `constexpr const char*` so it expands to
@@ -186,10 +182,10 @@ constexpr double kConnectorFallbackWarnPct = 25.0;
 // each other forever.
 #define MOWGLI_CONNECTOR_STATS_FMT                                             \
   "PlanCoverage connectors: %zu join(s): %zu turn-around arc, %zu straight "   \
-  "fallback (driven blade-on), %zu split (blade-off transit); fallback rate "  \
+  "aligned fallback (blade-on), %zu split (blade-off transit); fallback rate " \
   "%.1f%% at connector_turn_radius=%.2f min_turning_radius=%.2f. A high rate " \
-  "is the headland apron (num_headland_passes x operation_width) being "       \
-  "narrower than the turn-around's forward extent, not the radii"
+  "means the available headland/site geometry could not fit the configured "   \
+  "turn-around arcs"
 
 // Build the F2C cell from the goal's outer boundary + obstacle holes.
 // F2C wants closed rings (first == last); the BT passes open rings.
@@ -297,14 +293,14 @@ void douglasPeucker(const std::vector<std::pair<double, double>>& pts,
 // edge of the simplified perimeter, with a RotationShim pivot at every corner.
 //
 // Why not feed the ring as one path: a closed loop's goal pose == its start
-// pose, so MPPI's GoalCritic thinks it's already arrived and barely drives it
+// pose, so a goal checker can think it has already arrived and barely drive it
 // (field 2026-06-12: cmd_vel≈0, "Failed to make progress"). And this chassis
 // CANNOT steer through a bend at low speed — the deadband kills fine angular
 // corrections (that's why we pivot in place) — so any arc carrying a real bend
 // gets driven STRAIGHT and overshoots the turn ("goes too far without turning",
 // field 2026-06-12). So we Douglas-Peucker the densified ring down to its true
 // corners (tol kDpTol), then emit one STRAIGHT arc per corner-to-corner edge
-// (re-densified to kSwathStep). MPPI only ever tracks a straight line; every
+// (re-densified to kSwathStep). FTC only ever tracks a straight line here; every
 // turn is a clean pivot. The loop is rotated to start at the point nearest the
 // previous segment's end so the hand-over hop is minimal.
 std::vector<nav_msgs::msg::Path> ringToArcs(const std::vector<std::pair<double, double>>& loop,
@@ -359,7 +355,7 @@ std::vector<nav_msgs::msg::Path> ringToArcs(const std::vector<std::pair<double, 
   }
 
   // One straight arc per corner-to-corner edge, densified to kSwathStep with a
-  // constant tangent heading (a pure straight line MPPI tracks cleanly).
+  // constant tangent heading (a pure straight line FTC tracks cleanly).
   for (std::size_t c = 0; c + 1 < corners.size(); ++c)
   {
     const double x0 = corners[c].first, y0 = corners[c].second;
@@ -564,16 +560,11 @@ void CoverageServer::planCoverage()
       result->segment_types.push_back(PlanCoverage::Result::SEGMENT_SWATH);
     }
 
-    // full_path = ONE CONTINUOUS route. buildContinuousPath connects the rings +
-    // swaths with forward turn-around arcs (looping into the already-mowed
-    // headland side), producing a single CUSP-FREE, in-bounds polyline. MPPI
-    // follows this without the bimodal "dither/spin" it does at sharp ~180°
-    // reversals, and keeps its dynamic obstacle avoidance; the backported
-    // arc-length MPPI fix tracks the arcs cleanly. Re-mowing on the turn loops
-    // is accepted. Cusp-free + in-bounds are GUARANTEED by test_coverage_planning
-    // (CoverageContinuousPath) on the real recorded area. The discrete
-    // result->segments above are kept for the GUI / resume bookkeeping; the BT
-    // drives full_path.
+    // The execution path connects rings and swaths with forward turn-around
+    // arcs that loop into the already-mowed headland. Any join that cannot be
+    // made continuous at the configured radius is split below for a blade-off
+    // Nav2 reorientation. The discrete result->segments above remain available
+    // for GUI display and resume bookkeeping.
     std::vector<std::pair<double, double>> outer;
     outer.reserve(goal->outer_boundary.points.size());
     for (const auto& p : goal->outer_boundary.points)
@@ -600,16 +591,14 @@ void CoverageServer::planCoverage()
     // trade-off.
     const double connector_turn_radius = get_parameter("connector_turn_radius").as_double();
     constexpr double kConnectorStep = 0.03;  // connector densify step (m)
-    // Build the plan as one or more HOLE-FREE continuous sub-paths. A single
-    // forward turn-around connector can't route around a large interior hole, so
-    // the path breaks where it would otherwise cross one; the BT drives each
-    // sub-path with MPPI and bridges the gaps with a blade-off Nav2 transit that
-    // routes around the obstacle (issue #333). full_path is their concatenation
-    // (GUI viz); drivable_subpaths is what the BT follows.
+    // Build one or more hole-free, heading-continuous sub-paths. The path breaks
+    // at obstacle crossings and at any zero-radius fallback; the BT bridges each
+    // boundary with a blade-off Nav2 transit. full_path is their concatenation
+    // for GUI visualisation; drivable_subpaths is what the BT follows.
     const auto t_subpaths0 = now();
     // connector_stats is pure visibility (issue #499): it records how each
-    // segment join resolved — a real turn-around arc, a straight blind
-    // connector driven blade-on, or a sub-path split. See ConnectorStats.
+    // segment join resolved — a real turn-around arc, an aligned straight
+    // connector, or a blade-off sub-path split. See ConnectorStats.
     mowgli_coverage::ConnectorStats connector_stats;
     const auto subpaths = buildContinuousSubPaths(plan,
                                                   connector_boundary,

@@ -39,6 +39,8 @@ describe("LedsSection", () => {
         led_refresh_hz: 20,
         led_low_battery_percent: 20,
         led_charge_full_percent: 99,
+        led_charge_complete_timeout_s: 600,
+        led_charge_complete_dim_scale: 0,
         led_status_timeout_s: 5,
         led_keepalive_s: 2,
         led_device_retry_s: 30,
@@ -118,12 +120,31 @@ describe("LedsSection", () => {
             "Refresh rate",
             "Low battery threshold",
             "Charge complete",
+            "Charge complete dim delay",
+            "Charge complete brightness",
             "Status timeout",
             "Keepalive",
             "Device retry",
         ]) {
             expect(screen.getByText(label)).toBeInTheDocument();
         }
+    });
+
+    it("edits the charge-complete dim delay and brightness", async () => {
+        const onChange = vi.fn();
+        renderSection(enabledValues, { onChange });
+
+        const spinbuttons = screen.getAllByRole("spinbutton");
+        const timeoutInput = spinbuttons[spinbuttons.length - 2];
+        const dimInput = spinbuttons[spinbuttons.length - 1];
+
+        await userEvent.clear(timeoutInput);
+        await userEvent.type(timeoutInput, "300");
+        expect(onChange).toHaveBeenCalledWith("led_charge_complete_timeout_s", 300);
+
+        await userEvent.clear(dimInput);
+        await userEvent.type(dimInput, "0.2");
+        expect(onChange).toHaveBeenCalledWith("led_charge_complete_dim_scale", 0.2);
     });
 
     it("edits the LED count, which is a placeholder rather than a measurement", async () => {

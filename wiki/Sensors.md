@@ -171,11 +171,10 @@ nodes before anything consumes it:
 ever arrives — that is the symptom of `lidar_enabled: true` with the container
 not running.
 
-`fusion_graph`'s scan-matching and loop-closure factors subscribe to
-`/scan_deskewed`, and `use_scan_matching` / `use_loop_closure` are **ANDed with
-`use_lidar`** in `navigation.launch.py` before they reach the node. Without that
-AND a GPS-only stack ran the matcher against a topic nothing published, matching
-nothing while reporting success-shaped diagnostics.
+When `use_lidar_map_anchor` is enabled, `fusion_graph` subscribes to
+`/scan_deskewed` to learn persistent tiles under RTK-Fixed and to localize only
+after a complete GNSS outage. The flag is **ANDed with `use_lidar`** in
+`navigation.launch.py`, so a GPS-only stack never subscribes to a missing scan.
 
 ## Adding a New Sensor
 

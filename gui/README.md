@@ -29,6 +29,43 @@ cd gui && make build      # docker build -t mowglinext .
 Once the container is running, you can access the GUI by opening a browser and going
 to `http://<ip of the machine running the container>:4006`
 
+### Host reboot and shutdown permissions
+
+**Diagnostics → System → Host power…** opens the same confirmed host reboot and
+shutdown actions as the battery menu's **Advanced** submenu.
+The existing backend enters the host's namespaces with `nsenter`, then runs the host's
+`systemctl reboot` or `systemctl poweroff`. This requires all of the following:
+
+- A Linux host running systemd and rootful Docker.
+- The GUI process running as root, as it does in the supplied image.
+- `pid: host` and `privileged: true` on the GUI service, already supplied by the
+  [installer's GUI fragment](../install/compose/docker-compose.gui.yml).
+- `nsenter` in the GUI image, already installed through `util-linux` in its Dockerfile.
+
+The installer and `docker/stack.sh` both generate the service from that fragment.
+No host-user sudoers entry, extra daemon or additional package on the host is needed for
+the standard installation. Rootless Docker, non-systemd hosts and custom non-root or
+unprivileged GUI containers do not support this execution path.
+
+For an older standard installation missing these settings, update the checkout and GUI
+image to the intended release, then regenerate the Compose configuration and recreate
+the GUI service using `./docker/stack.sh up --no-deps gui` from the repository root.
+An image update or container restart alone cannot change its PID namespace or privileges.
+Custom deployments must preserve these settings in their own Compose configuration.
+
+To check the permission path without requesting a power action:
+
+```bash
+docker inspect --format 'pid={{.HostConfig.PidMode}} privileged={{.HostConfig.Privileged}}' mowgli-gui
+docker exec mowgli-gui id
+docker exec mowgli-gui nsenter -t 1 -m -u -i -n -p -- systemctl --version
+```
+
+Expect `pid=host privileged=true`, `uid=0(root)`, and the host's systemd version.
+This checks namespace access and command execution, not an end-to-end power cycle.
+For a real test, park the mower with the blade stopped, finish any updates or flashing,
+and have physical access to restore power after shutdown.
+
 ### HomeKit
 
 The default password to use MowgliNext in iOS home app is 00102003 (override it with HOMEKIT_PINCODE)

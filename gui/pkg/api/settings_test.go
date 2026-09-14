@@ -1099,6 +1099,12 @@ func TestPostSettingsYAMLPrunesRetiredKeys(t *testing.T) {
     motor_temp_high_c: 80.0
     mow_angle_increment_deg: 15.0
     ticks_per_revolution: 84
+    use_scan_matching: true
+    use_loop_closure: true
+    icp_max_iter: 30
+    lc_max_dist_m: 5.0
+    lidar_map_half_extent_m: 80.0
+    use_lidar_map_anchor: true
     mowing_speed: 0.55
 `)
 	envFile := createTempConfigFileAtGuiRoot(t, "")
@@ -1122,10 +1128,11 @@ func TestPostSettingsYAMLPrunesRetiredKeys(t *testing.T) {
 
 	content, err := os.ReadFile(yamlFile)
 	require.NoError(t, err)
-	for _, retired := range []string{"outline_passes", "motor_temp_high_c", "mow_angle_increment_deg", "ticks_per_revolution"} {
+	for _, retired := range []string{"outline_passes", "motor_temp_high_c", "mow_angle_increment_deg", "ticks_per_revolution", "use_scan_matching", "use_loop_closure", "icp_max_iter", "lc_max_dist_m", "lidar_map_half_extent_m"} {
 		assert.NotContains(t, string(content), retired,
 			"retired key %s must be scrubbed from the installed YAML", retired)
 	}
+	assert.Contains(t, string(content), "use_lidar_map_anchor: true")
 	// A real operator override (0.55 != the 0.2 default) must survive.
 	assert.Contains(t, string(content), "mowing_speed: 0.55")
 }

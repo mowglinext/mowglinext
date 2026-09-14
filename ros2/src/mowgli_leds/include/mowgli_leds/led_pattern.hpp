@@ -21,7 +21,14 @@
 //                     it is the only SOLID red and the only static full ring.
 //   2. CHARGING       green arc proportional to battery, breathing ~3 s.
 //                     Steady (non-breathing) full green once battery is at
-//                     charge_full_percent -- "done, you can take it".
+//                     charge_full_percent -- "done, you can take it". If that
+//                     steady state persists for charge_complete_timeout_s (a
+//                     robot left on the dock overnight), the ring dims to
+//                     charge_complete_dim_scale instead -- 0 by default, i.e.
+//                     off -- so a fully charged robot does not shine a bright
+//                     green light indefinitely. Any change (unplugged, level
+//                     drops below charge_full_percent) resets the timer and
+//                     the ring goes back to full brightness immediately.
 //                     Ranked above STALE so a robot charging on the dock with
 //                     the behavior tree down still reads as charging: the
 //                     charge state comes from the hardware bridge's Power
@@ -117,6 +124,12 @@ struct LedInputs
   bool emergency = false;
   /// GNSS currently reports an RTK-Fixed solution.
   bool rtk_fixed = false;
+  /// Seconds the ring has continuously shown the steady "charge complete"
+  /// frame (is_charging && battery_valid && battery_percent >=
+  /// charge_full_percent). Zero whenever that condition does not hold. The
+  /// node resets this the instant the condition breaks, so it never survives
+  /// an unplug or a level dropping back below charge_full_percent.
+  double charge_complete_elapsed_s = 0.0;
   /// Monotonic seconds, the only time base the animations use.
   double now_s = 0.0;
 };
@@ -130,6 +143,15 @@ struct LedPatternCfg
   float charge_full_percent = 99.0f;
   /// Scale applied to the idle ring, on top of the global led_brightness.
   float idle_scale = 0.10f;
+  /// After the ring has shown steady full-green "charge complete" for this
+  /// many seconds, dim it to charge_complete_dim_scale. 0 disables the
+  /// feature (the ring stays full green indefinitely, the original
+  /// behaviour).
+  double charge_complete_timeout_s = 600.0;
+  /// Brightness scale applied once charge_complete_timeout_s has elapsed.
+  /// 0 (the default) turns the ring off; a small non-zero value keeps a faint
+  /// green glow as an at-a-glance "still on and charged" indicator.
+  float charge_complete_dim_scale = 0.0f;
 };
 
 namespace colors
@@ -338,7 +360,11 @@ inline std::vector<Rgb> RenderFrame(const LedInputs& in, const LedPatternCfg& cf
       }
       if (in.battery_percent >= cfg.charge_full_percent)
       {
-        std::fill(pixels.begin(), pixels.end(), colors::kGreen);
+        const bool gone_dim = cfg.charge_complete_timeout_s > 0.0 &&
+                              in.charge_complete_elapsed_s >= cfg.charge_complete_timeout_s;
+        const Rgb frame =
+            gone_dim ? Dim(colors::kGreen, cfg.charge_complete_dim_scale) : colors::kGreen;
+        std::fill(pixels.begin(), pixels.end(), frame);
         break;
       }
       const Rgb body = Dim(colors::kGreen, Breathe(in.now_s, 3.0, 0.25f, 1.0f));

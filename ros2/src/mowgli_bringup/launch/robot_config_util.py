@@ -370,9 +370,9 @@ def check_turn_geometry(min_turn_radius, connector_turn_radius, wheel_track,
 
     WARNINGS ONLY — never an exception — and that is load-bearing:
 
-      1. the CURRENTLY SHIPPED defaults trip check A (min_turning_radius 0.15 <=
-         half-track 0.1625), so raising would refuse to start navigation on every
-         existing robot, turning a lawn-quality defect into a total outage;
+      1. installed robots may still carry the old min_turning_radius 0.15 value,
+         which trips check A against the 0.1625 m half-track; rejecting it would
+         turn a lawn-quality warning into a total outage during an upgrade;
       2. neither condition is a safety hazard at launch. The firmware remains the
          sole blade-safety authority and still owns the e-stop; what these degrade
          is mowing QUALITY, and a robot that refuses to mow is strictly worse than
@@ -403,9 +403,9 @@ def check_turn_geometry(min_turn_radius, connector_turn_radius, wheel_track,
             "{:+.3f} m/s while the outer runs {:.3f} m/s — a reversing inner wheel "
             "carves the lawn at swath ends (issue #499). Raise "
             "mowgli_robot.yaml.min_turning_radius above {:.4f} m — but note that "
-            "at the shipped headland apron the coverage server fits an arc at only "
-            "~1 join in 32 anyway ('PlanCoverage connectors:'), so this alone will "
-            "not change the swath-end turns.".format(
+            "with the old two-pass headland apron the coverage server fitted an "
+            "arc at only ~1 join in 32 ('PlanCoverage connectors:'), so update the "
+            "headland pass count together with this radius.".format(
                 r_floor, wheel_track, half_track, v_in, v_out, half_track))
     # Planner/controller consistency: the tightest arc FTC can COMMAND at the turn
     # speed is turn_speed / max_cmd_vel_ang. An arc tighter than that saturates the
@@ -425,3 +425,58 @@ def check_turn_geometry(min_turn_radius, connector_turn_radius, wheel_track,
                 planned_tightest, r_floor, connector_turn_radius, turn_speed,
                 max_cmd_vel_ang, r_commandable))
     return warnings
+
+
+# Blade-load slowdown defaults, mirrored from the mowgli_robot.yaml template so
+# navigation.launch.py's belt-and-suspenders fallbacks and the FTC struct agree.
+DEFAULT_BLADE_LOAD_RPM_FULL = 2500.0
+DEFAULT_BLADE_LOAD_RPM_MIN = 1800.0
+DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO = 0.4
+# The slowest feed as a fraction of mowing_speed. Below this the robot would
+# effectively park with the blade grinding one spot; FTC additionally floors
+# the slowed speed at stall_crawl_speed (ftc_blade_load.hpp), so the ratio
+# floor here is a sanity clamp on operator input, not the real motion floor.
+BLADE_LOAD_MIN_SPEED_RATIO_FLOOR = 0.1
+
+
+def derive_blade_load_params(enabled, rpm_full, rpm_min, min_speed_ratio):
+    """FollowCoveragePath.blade_load_* from the operator's mowgli_robot.yaml keys.
+
+    Returns ``(params, warnings)`` — ``params`` is the dict of the four
+    FollowCoveragePath keys to inject, ``warnings`` a list of human-readable
+    strings the caller prints (empty when nothing was clamped or disabled).
+
+    The FTC decision (ftc_blade_load.hpp) already fails open on a degenerate
+    ramp (rpm_full <= rpm_min), so nothing here is load-bearing for safety;
+    the point is to SAY so at launch instead of letting an operator enable a
+    slowdown that silently never engages. Two clamps:
+      * ``min_speed_ratio`` into [BLADE_LOAD_MIN_SPEED_RATIO_FLOOR, 1.0] — a
+        ratio above 1 would SPEED UP under load, and 0 would stop the robot on
+        the spot with the blade spinning.
+      * an inverted or flat ramp disables the feature (with a warning) rather
+        than injecting thresholds FTC would ignore.
+    """
+    warnings = []
+    is_enabled = str(enabled).strip().lower() in TRUE_TOKENS
+    full = float(rpm_full)
+    low = float(rpm_min)
+    ratio = min(1.0, max(BLADE_LOAD_MIN_SPEED_RATIO_FLOOR, float(min_speed_ratio)))
+    if ratio != float(min_speed_ratio):
+        warnings.append(
+            "WARN: blade_load_min_speed_ratio={} is outside [{}, 1.0] — clamped to {}. "
+            "Above 1.0 the slowdown would SPEED UP a bogged blade; near 0 it would "
+            "park the robot with the blade grinding one spot.".format(
+                min_speed_ratio, BLADE_LOAD_MIN_SPEED_RATIO_FLOOR, ratio))
+    if is_enabled and not full > low:
+        warnings.append(
+            "WARN: blade_load_slowdown_enabled but blade_load_rpm_full={} is not above "
+            "blade_load_rpm_min={} — the ramp is empty, so the slowdown could never "
+            "engage. DISABLED for this launch; fix the thresholds in mowgli_robot.yaml "
+            "(read the no-load RPM off Diagnostics first).".format(rpm_full, rpm_min))
+        is_enabled = False
+    return ({
+        "blade_load_slowdown_enabled": is_enabled,
+        "blade_load_rpm_full": full,
+        "blade_load_rpm_min": low,
+        "blade_load_min_speed_ratio": ratio,
+    }, warnings)

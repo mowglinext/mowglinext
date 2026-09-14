@@ -167,6 +167,8 @@ it.
 | `led_low_battery_percent` | `20.0` | Below this, and not charging, the ring blinks red. |
 | `led_charge_full_percent` | `99.0` | At or above this a charging ring goes steady. |
 | `led_idle_scale` | `0.10` | Idle-ring brightness, relative to `led_brightness`. |
+| `led_charge_complete_timeout_s` | `600.0` | After the ring has shown steady full-green "charge complete" this many seconds, dim it to `led_charge_complete_dim_scale`. `0` disables the feature — the ring stays full green indefinitely. Resets the instant charging stops or the level drops back below `led_charge_full_percent`. |
+| `led_charge_complete_dim_scale` | `0.0` | Brightness scale applied once `led_charge_complete_timeout_s` has elapsed. `0` (default) turns the ring off; a small non-zero value keeps a faint green glow as an at-a-glance "still charged" indicator instead. |
 | `led_spi_speed_hz` | `2400000` | Do **not** retune without re-reading `ws2812_encoder.hpp` — the symbol table is derived from this exact clock. |
 
 ---
@@ -178,7 +180,7 @@ Priority order, first match wins — an alarm always beats an activity:
 | # | State | Pattern |
 |---|---|---|
 | 1 | **Emergency** | Whole ring **solid red**, static. The only solid red and the only static full ring. |
-| 2 | **Charging** | **Green arc** proportional to battery, breathing over ~3 s. Goes **steady full green** at `led_charge_full_percent`. If the level is unknown (behavior tree down, charge state from the hardware bridge alone) a **green comet** instead of an arc — it will not invent a level. |
+| 2 | **Charging** | **Green arc** proportional to battery, breathing over ~3 s. Goes **steady full green** at `led_charge_full_percent`. If that steady state persists for `led_charge_complete_timeout_s` (10 minutes by default — a robot left on the dock), the ring **dims to `led_charge_complete_dim_scale`** (off by default) instead of staying bright indefinitely; unplugging or dropping back below `led_charge_full_percent` restores full brightness immediately. If the level is unknown (behavior tree down, charge state from the hardware bridge alone) a **green comet** instead of an arc — it will not invent a level. |
 | 3 | **Stale** | **Amber comet** on a dark ring, ~1.5 s per revolution. "Powered and running, but the behavior tree is not talking to me." |
 | 4 | **Low battery** | Whole ring **blinking red** at 1 Hz. Same hue as emergency because both mean "attend to me"; **motion** is the discriminator (blinking vs solid). |
 | 5 | **Mowing** | **Green arc** proportional to `coverage_percent`, with a **white head pixel** at the tip so the boundary is crisp at distance. Steady. |
@@ -286,7 +288,7 @@ so the ring does not stay lit after the stack stops.
 | `include/mowgli_leds/ws2812_encoder.hpp` | **Pure**: pixel buffer -> SPI byte stream. |
 | `include/mowgli_leds/spi_device.hpp`, `src/spi_device.cpp` | The only hardware-touching code, and the only untested part. |
 | `include/mowgli_leds/led_ring_node.hpp`, `src/led_ring_node.cpp` | ROS glue: subscriptions, staleness, change detection, retry policy. |
-| `test/test_led_pattern.cpp` | 32 tests: mode priority, arc arithmetic, animation helpers, rendered frames. |
+| `test/test_led_pattern.cpp` | 36 tests: mode priority, arc arithmetic, animation helpers, rendered frames. |
 | `test/test_ws2812_encoder.cpp` | 13 tests: symbol expansion, GRB order, frame size, reset gap, brightness. |
 
 Same shape as `mowgli_hardware/dig_detector.hpp` and

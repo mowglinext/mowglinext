@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Check board.h/template consume board_defaults.h
@@ -50,7 +50,7 @@ jobs:
           restore-keys: |
             pio-${{ matrix.environment }}-
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -107,7 +107,7 @@ jobs:
           restore-keys: |
             pio-release-
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -132,7 +132,7 @@ jobs:
             --out-dir dist
 
       - name: Attach to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.bin

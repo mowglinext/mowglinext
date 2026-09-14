@@ -75,6 +75,10 @@ LedRingNode::LedRingNode(const rclcpp::NodeOptions& options)
   const double low_battery = declare_parameter<double>("led_low_battery_percent", 20.0);
   const double charge_full = declare_parameter<double>("led_charge_full_percent", 99.0);
   const double idle_scale = declare_parameter<double>("led_idle_scale", 0.10);
+  const double charge_complete_timeout =
+      declare_parameter<double>("led_charge_complete_timeout_s", 600.0);
+  const double charge_complete_dim_scale =
+      declare_parameter<double>("led_charge_complete_dim_scale", 0.0);
 
   led_count_ = static_cast<std::size_t>(std::clamp(led_count, 0, static_cast<int>(kMaxLedCount)));
   if (static_cast<int>(led_count_) != led_count)
@@ -109,6 +113,10 @@ LedRingNode::LedRingNode(const rclcpp::NodeOptions& options)
   pattern_cfg_.low_battery_percent = static_cast<float>(std::clamp(low_battery, 0.0, 100.0));
   pattern_cfg_.charge_full_percent = static_cast<float>(std::clamp(charge_full, 0.0, 100.0));
   pattern_cfg_.idle_scale = static_cast<float>(std::clamp(idle_scale, 0.0, 1.0));
+  // 0 is the documented "disabled" sentinel, not clamped away.
+  pattern_cfg_.charge_complete_timeout_s = std::max(charge_complete_timeout, 0.0);
+  pattern_cfg_.charge_complete_dim_scale =
+      static_cast<float>(std::clamp(charge_complete_dim_scale, 0.0, 1.0));
 
   if (!enabled_ || led_count_ == 0u)
   {
@@ -312,9 +320,30 @@ void LedRingNode::blank()
   spi_.Close();
 }
 
+void LedRingNode::updateChargeCompleteTracking(LedInputs& in)
+{
+  const bool charge_complete_now =
+      in.is_charging && in.battery_valid && in.battery_percent >= pattern_cfg_.charge_full_percent;
+  if (!charge_complete_now)
+  {
+    // Unplugged, or the level fell back below the threshold: the ring must
+    // return to full brightness immediately, not stay dim from a stale timer.
+    charge_complete_since_s_ = -1.0;
+    in.charge_complete_elapsed_s = 0.0;
+    return;
+  }
+  if (charge_complete_since_s_ < 0.0)
+  {
+    charge_complete_since_s_ = in.now_s;
+  }
+  in.charge_complete_elapsed_s = in.now_s - charge_complete_since_s_;
+}
+
 void LedRingNode::onTimer()
 {
-  writeFrame(RenderFrame(collectInputs(), pattern_cfg_));
+  LedInputs in = collectInputs();
+  updateChargeCompleteTracking(in);
+  writeFrame(RenderFrame(in, pattern_cfg_));
 }
 
 }  // namespace mowgli_leds

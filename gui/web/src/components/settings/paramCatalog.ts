@@ -4,7 +4,7 @@
 // a handful of developers, so each known parameter is tagged with a tier:
 //   - basic:  things a normal operator may reasonably want to change
 //   - middle: tuning that affects behaviour but needs some understanding
-//   - expert: deep internals (estimator gains, scan-match thresholds, PID, ...)
+//   - expert: deep internals (estimator gains, localization thresholds, PID, ...)
 // Parameters not listed here default to the "expert" tier and the "Other" group,
 // so nothing is ever hidden from the expert view — the catalog only curates the
 // label, description and grouping for the ones we understand.
@@ -38,6 +38,11 @@ const CATALOG: Record<string, ParamMeta> = {
   tool_width: {label: "paramCatalog.tool_width.label", description: "paramCatalog.tool_width.description", tier: "basic", group: "Coverage", unit: "m"},
   transit_speed: {label: "paramCatalog.transit_speed.label", description: "paramCatalog.transit_speed.description", tier: "basic", group: "Coverage", unit: "m/s"},
   mowing_speed: {label: "paramCatalog.mowing_speed.label", description: "paramCatalog.mowing_speed.description", tier: "basic", group: "Coverage", unit: "m/s"},
+  blade_load_slowdown_enabled: {label: "paramCatalog.blade_load_slowdown_enabled.label", description: "paramCatalog.blade_load_slowdown_enabled.description", tier: "middle", group: "Coverage"},
+  blade_load_rpm_full: {label: "paramCatalog.blade_load_rpm_full.label", description: "paramCatalog.blade_load_rpm_full.description", tier: "middle", group: "Coverage", unit: "rpm"},
+  blade_load_rpm_min: {label: "paramCatalog.blade_load_rpm_min.label", description: "paramCatalog.blade_load_rpm_min.description", tier: "middle", group: "Coverage", unit: "rpm"},
+  blade_load_min_speed_ratio: {label: "paramCatalog.blade_load_min_speed_ratio.label", description: "paramCatalog.blade_load_min_speed_ratio.description", tier: "middle", group: "Coverage"},
+  blade_load_telemetry_max_age_s: {label: "paramCatalog.blade_load_telemetry_max_age_s.label", description: "paramCatalog.blade_load_telemetry_max_age_s.description", tier: "expert", group: "Coverage", unit: "s"},
   num_headland_passes: {label: "paramCatalog.num_headland_passes.label", description: "paramCatalog.num_headland_passes.description", tier: "basic", group: "Coverage"},
   headland_width: {label: "paramCatalog.headland_width.label", description: "paramCatalog.headland_width.description", tier: "middle", group: "Coverage", unit: "m"},
   swath_overlap: {label: "paramCatalog.swath_overlap.label", description: "paramCatalog.swath_overlap.description", tier: "middle", group: "Coverage", unit: "m"},
@@ -61,11 +66,8 @@ const CATALOG: Record<string, ParamMeta> = {
 
   // ── Fusion graph (localizer) ─────────────────────────────────────────────
   node_period_s: {label: "paramCatalog.node_period_s.label", description: "paramCatalog.node_period_s.description", tier: "expert", group: "Localization", unit: "s"},
-  use_scan_matching: {label: "paramCatalog.use_scan_matching.label", description: "paramCatalog.use_scan_matching.description", tier: "middle", group: "Localization"},
-  use_loop_closure: {label: "paramCatalog.use_loop_closure.label", description: "paramCatalog.use_loop_closure.description", tier: "middle", group: "Localization"},
-  icp_max_iter: {label: "paramCatalog.icp_max_iter.label", description: "paramCatalog.icp_max_iter.description", tier: "expert", group: "Localization"},
-  icp_max_corresp_dist: {label: "paramCatalog.icp_max_corresp_dist.label", description: "paramCatalog.icp_max_corresp_dist.description", tier: "expert", group: "Localization", unit: "m"},
-  icp_max_rmse_m: {label: "paramCatalog.icp_max_rmse_m.label", description: "paramCatalog.icp_max_rmse_m.description", tier: "expert", group: "Localization", unit: "m"},
+  use_lidar_map_anchor: {label: "paramCatalog.use_lidar_map_anchor.label", description: "paramCatalog.use_lidar_map_anchor.description", tier: "middle", group: "Localization"},
+  lidar_anchor_shadow_mode: {label: "paramCatalog.lidar_anchor_shadow_mode.label", description: "paramCatalog.lidar_anchor_shadow_mode.description", tier: "middle", group: "Localization"},
 
   // ── LiDAR filtering ──────────────────────────────────────────────────────
   dock_blank_range: {label: "paramCatalog.dock_blank_range.label", description: "paramCatalog.dock_blank_range.description", tier: "expert", group: "LiDAR", unit: "m"},

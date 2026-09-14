@@ -264,6 +264,38 @@ export const LedsSection: React.FC<Props> = ({
                                         />
                                     </Form.Item>
                                 </Col>
+                                <Col xs={12} sm={8}>
+                                    <Form.Item
+                                        label={label(
+                                            "led_charge_complete_timeout_s",
+                                            t("settingsLeds.chargeCompleteTimeout"),
+                                        )}
+                                        tooltip={t("settingsLeds.chargeCompleteTimeoutTooltip")}
+                                    >
+                                        <InputNumber
+                                            value={values.led_charge_complete_timeout_s}
+                                            onChange={(v) => onChange("led_charge_complete_timeout_s", v)}
+                                            min={0} step={60}
+                                            style={{ width: "100%" }} addonAfter="s"
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12} sm={8}>
+                                    <Form.Item
+                                        label={label(
+                                            "led_charge_complete_dim_scale",
+                                            t("settingsLeds.chargeCompleteDim"),
+                                        )}
+                                        tooltip={t("settingsLeds.chargeCompleteDimTooltip")}
+                                    >
+                                        <InputNumber
+                                            value={values.led_charge_complete_dim_scale}
+                                            onChange={(v) => onChange("led_charge_complete_dim_scale", v)}
+                                            min={0} max={1} step={0.05}
+                                            style={{ width: "100%" }}
+                                        />
+                                    </Form.Item>
+                                </Col>
                             </Row>
                         </Form>
                     </Card>

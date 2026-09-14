@@ -25,6 +25,14 @@ if [ -f /opt/ublox_msgs/setup.bash ]; then
     source /opt/ublox_msgs/setup.bash
 fi
 
+# Source the schema-only Universal GNSS interface overlay. The receiver driver
+# runs elsewhere; these generated msg/srv types let foxglove_bridge resolve its
+# graph schemas. Guarded so the dev image still starts before a build.
+if [ -f /opt/universal_gnss_interfaces/setup.bash ]; then
+    # shellcheck source=/opt/universal_gnss_interfaces/setup.bash
+    source /opt/universal_gnss_interfaces/setup.bash
+fi
+
 # Source the workspace overlay if it has been built (not present in dev before
 # first colcon build, but always present in runtime/simulation images).
 if [ -f /ros2_ws/install/setup.bash ]; then

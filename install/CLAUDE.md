@@ -71,7 +71,6 @@ python3 install/scripts/migrate_openmower.py --source ~/mowgli-docker \
 
 - A new `docker/.env` key must be added to `lib/state.sh` `is_allowed_installer_key` (L11–33) or presets and `.env` reload **silently drop it**; also extend the `REQUIRED_KEYS` list in `tests/test_env_output.sh` L41.
 - `write_config` (`lib/config.sh` L1327–1443) NEVER overwrites an existing installed `mowgli_robot.yaml` — it line-splices ~25 keys. Changing the seed alone does nothing on an already-installed robot.
-- `write_config` L1425–1427 forces `use_scan_matching` + `use_loop_closure` to follow `lidar_enabled` on **every** re-run — an operator who turned one off in the GUI gets it back on after the next installer pass.
 - `LIDAR_ENABLED` in `.env` decides only whether the *container* is composed; the ROS-side LiDAR mode is `mowgli_robot.yaml:lidar_enabled` (comment in `compose/docker-compose.base.yml` L13–17).
 - Empty `GNSS_*` values in `compose/docker-compose.gps.yml` L45–57 mean "not set" on purpose — `sensors/gps/start_gps.sh` resolves YAML → env → default, so a compose default silently masks the operator's YAML.
 - `config/mowgli/{hardware_bridge,twist_mux,foxglove_bridge}.yaml` are **dead seeds** — the installer never copies them into `docker/config/mowgli/`, and launch loads `hardware_bridge.yaml` / `twist_mux.yaml` from the package share. Only `mowgli_robot.yaml` is read from `/ros2_ws/config`.

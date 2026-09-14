@@ -365,6 +365,77 @@ TEST(LedPatternRender, AFullBatteryStopsBreathingAndFillsTheRing)
   }
 }
 
+TEST(LedPatternRender, ChargeCompleteStaysFullGreenBeforeTheTimeoutElapses)
+{
+  LedInputs in;
+  in.status_fresh = true;
+  in.state = HighLevelState::kIdle;
+  in.is_charging = true;
+  in.battery_valid = true;
+  in.battery_percent = 100.0f;
+  in.charge_complete_elapsed_s = 599.0;  // just under the 600 s default
+
+  const auto pixels = RenderFrame(in, MakeCfg());
+  for (const Rgb& pixel : pixels)
+  {
+    EXPECT_EQ(pixel, colors::kGreen);
+  }
+}
+
+TEST(LedPatternRender, ChargeCompleteDimsToOffAfterTheTimeoutByDefault)
+{
+  LedInputs in;
+  in.status_fresh = true;
+  in.state = HighLevelState::kIdle;
+  in.is_charging = true;
+  in.battery_valid = true;
+  in.battery_percent = 100.0f;
+  in.charge_complete_elapsed_s = 600.0;  // exactly the 600 s default timeout
+
+  const auto pixels = RenderFrame(in, MakeCfg());
+  EXPECT_EQ(CountLit(pixels), 0u) << "charge_complete_dim_scale defaults to 0, i.e. fully off";
+}
+
+TEST(LedPatternRender, ChargeCompleteDimScaleKeepsAFaintIndicatorInstead)
+{
+  LedInputs in;
+  in.status_fresh = true;
+  in.state = HighLevelState::kIdle;
+  in.is_charging = true;
+  in.battery_valid = true;
+  in.battery_percent = 100.0f;
+  in.charge_complete_elapsed_s = 1000.0;
+
+  LedPatternCfg cfg = MakeCfg();
+  cfg.charge_complete_dim_scale = 0.2f;
+  const auto pixels = RenderFrame(in, cfg);
+  for (const Rgb& pixel : pixels)
+  {
+    EXPECT_EQ(pixel.r, 0u);
+    EXPECT_GT(pixel.g, 0u);
+    EXPECT_LT(pixel.g, 255u);
+  }
+}
+
+TEST(LedPatternRender, ChargeCompleteTimeoutOfZeroDisablesDimmingEntirely)
+{
+  LedInputs in;
+  in.status_fresh = true;
+  in.state = HighLevelState::kIdle;
+  in.is_charging = true;
+  in.battery_valid = true;
+  in.battery_percent = 100.0f;
+  in.charge_complete_elapsed_s = 1e6;  // absurdly long, must still not dim
+
+  LedPatternCfg cfg = MakeCfg();
+  cfg.charge_complete_timeout_s = 0.0;
+  const auto pixels = RenderFrame(in, cfg);
+  for (const Rgb& pixel : pixels)
+  {
+    EXPECT_EQ(pixel, colors::kGreen);
+  }
+}
+
 TEST(LedPatternRender, LowBatteryBlinksTheWholeRingBetweenRedAndOff)
 {
   LedInputs in = MakeMowingInputs();

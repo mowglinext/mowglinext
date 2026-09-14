@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -365,6 +365,40 @@ func valuesEqual(a, b any) bool {
 // unused key — but a stale key in the installed file also defeats
 // check_config_drift.py's orphan report, which no longer suppresses them.
 var retiredParamKeys = map[string]bool{
+	// Removed ICP localizer and fixed-grid settings; scrub old installed overrides.
+	"use_scan_matching":            true,
+	"use_loop_closure":             true,
+	"icp_max_iter":                 true,
+	"icp_max_corresp_dist":         true,
+	"icp_source_subsample":         true,
+	"scan_min_inliers":             true,
+	"icp_sigma_xy_base":            true,
+	"icp_sigma_theta_base":         true,
+	"icp_max_rmse_m":               true,
+	"icp_max_delta_xy_m":           true,
+	"icp_max_delta_theta_rad":      true,
+	"icp_max_divergence_xy_m":      true,
+	"icp_max_divergence_theta_rad": true,
+	"scan_yield_to_rtk":            true,
+	"scan_yield_timeout_s":         true,
+	"scan_yield_sigma_xy":          true,
+	"scan_yield_sigma_theta":       true,
+	"scan_yaw_sigma_floor_rad":     true,
+	"lc_max_dist_m":                true,
+	"lc_min_age_s":                 true,
+	"lc_max_candidates":            true,
+	"lc_min_delta_m":               true,
+	"lc_min_delta_theta":           true,
+	"lc_max_rmse":                  true,
+	"lc_sigma_xy":                  true,
+	"lc_sigma_theta":               true,
+	"lc_skip_when_rtk_fixed":       true,
+	"lc_min_travel_m":              true,
+	"lc_min_interval_s":            true,
+	"lc_gps_sigma_ratio":           true,
+	"scan_retention_nodes":         true,
+	"lidar_map_half_extent_m":      true,
+
 	// Legacy strip-planner knobs: coverage is F2C v3 headland rings + swaths.
 	"outline_passes":  true,
 	"outline_offset":  true,

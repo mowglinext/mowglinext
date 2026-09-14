@@ -10,7 +10,7 @@ The installer selects fragments from `install/compose/` based on hardware choice
 - `docker-compose.gps.yml` — the Universal GNSS sidecar, included whenever `GNSS_STACK=universal` (the default on the Mowgli/STM32 backend). It is the only GNSS fragment the installer can select; `GNSS_STACK=disabled` selects none.
 - optional LiDAR / MAVROS / TF-Luna fragments
 
-`LIDAR_ENABLED` in `docker/.env` only decides whether the `mowgli-lidar` *container* is composed in — it is deliberately not passed into `mowgli-ros2`. The ROS-side LiDAR mode (scan matching, loop closure, the LiDAR Nav2 overlay) comes from `lidar_enabled` in `docker/config/mowgli/mowgli_robot.yaml` and nothing else.
+`LIDAR_ENABLED` in `docker/.env` only decides whether the `mowgli-lidar` *container* is composed in — it is deliberately not passed into `mowgli-ros2`. The ROS-side LiDAR mode (persistent map anchor and the LiDAR Nav2 overlay) comes from `lidar_enabled` in `docker/config/mowgli/mowgli_robot.yaml` and nothing else.
 
 ## Runtime Services
 

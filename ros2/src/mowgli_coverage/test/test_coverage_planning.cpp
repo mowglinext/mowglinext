@@ -408,13 +408,10 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
   ASSERT_GE(subs.size(), 2u)
       << "a central hole must split the path into >=2 sub-paths (else a connector "
          "cut through the hole)";
-  // Upper bound: a single hole must NOT over-fragment. Sub-paths split ONLY at
-  // real obstacle-gap relocations (Split A) — not at every serpentine U-turn cusp
-  // (the removed MPPI-era Split B), and not at the per-pass outer↔hole ring
-  // ping-pong (rings are grouped outer-first). One central hole ⇒ ~2 sub-paths.
-  EXPECT_LE(subs.size(), 3u) << subs.size()
-                             << " sub-paths for ONE hole — over-fragmentation regression "
-                                "(residual-cusp split or interleaved rings)";
+  // At most one break can be introduced per join. This catches accidental
+  // fragmentation inside a segment while allowing untrackable swath-end
+  // fallbacks to become explicit blade-off transitions.
+  EXPECT_LE(subs.size(), plan.rings.size() + plan.swaths.size());
 
   // The RAW hole ring: sub-paths are validated against the GROWN (inset) hole,
   // so the raw hole is cleared with margin. Any sub-path pose inside it is a real
@@ -440,29 +437,25 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
                          << " sub-path poses fall inside the obstacle hole";
 }
 
-// A hole-free field must yield EXACTLY ONE continuous sub-path — nothing splits it
-// (no obstacle gap to route around, so Split A never fires), and no interior
-// serpentine U-turn cusp splits it either (the removed MPPI-era Split B). One
-// sub-path means the whole field is driven blade-on end-to-end with zero blade-off
-// transits, which is the point of the continuous full_path.
-TEST(CoverageContinuousPath, HoleFreeFieldIsOneSubPath)
+// An in-bounds straight fallback between opposing swaths is still a zero-radius
+// turn. It must split even on a hole-free field rather than being driven as one
+// blade-on path.
+TEST(CoverageContinuousPath, HoleFreeFieldSplitsDiscontinuousFallbacks)
 {
-  // Deployed connector knobs (turn 0.18, min_turn 0.15) on a hole-free rectangle.
   const auto cell = makeRectCentered(9.0, 6.0);
   const auto plan = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15);
   ASSERT_FALSE(plan.rings.empty());
   ASSERT_TRUE(plan.safe_holes.empty()) << "test field must be hole-free";
-  const auto subs = buildContinuousSubPaths(plan, plan.safe_boundary, 0.18, 0.15, 0.05);
-  EXPECT_EQ(subs.size(), 1u) << subs.size()
-                             << " sub-paths on a HOLE-FREE field — a spurious split "
-                                "(residual-cusp or ring-ordering artifact)";
+  mowgli_coverage::ConnectorStats stats;
+  const auto subs = buildContinuousSubPaths(plan, plan.safe_boundary, 0.18, 0.15, 0.05, &stats);
+  EXPECT_GT(stats.split, 0u);
+  EXPECT_EQ(stats.straight_kept, 0u);
+  EXPECT_EQ(subs.size(), stats.split + 1u);
 }
 
-// Repro of the field-reported over-fragmentation: a ~10.5 m square with a single
-// ~1 m central hole over a 72 m² field split into 18 sub-paths / 17 blade-off
-// transits. With Split B removed and rings grouped outer-first it must collapse to
-// ~2 (one blade-off transit around the single obstacle), bounded here at 3.
-TEST(CoverageContinuousPath, SingleCentralHoleDoesNotOverFragment)
+// A single hole may add obstacle-driven splits, while each segment join can add
+// at most one transition for a discontinuous fallback.
+TEST(CoverageContinuousPath, SingleCentralHoleSplitsOnlyAtJoins)
 {
   constexpr double kSide = 10.5;
   f2c::types::Cell cell = makeSquare(kSide);
@@ -481,8 +474,7 @@ TEST(CoverageContinuousPath, SingleCentralHoleDoesNotOverFragment)
   const auto boundary = plan.safe_boundary.empty() ? squareRing(kSide) : plan.safe_boundary;
   const auto subs = buildContinuousSubPaths(plan, boundary, 0.18, 0.15, 0.05);
   EXPECT_GE(subs.size(), 2u) << "the central hole must still split the path (safety)";
-  EXPECT_LE(subs.size(), 3u) << subs.size()
-                             << " sub-paths — over-fragmentation regression (was 18)";
+  EXPECT_LE(subs.size(), plan.rings.size() + plan.swaths.size());
 }
 
 // Sub-path DRIVE ORDER: on a multi-lobe field the sub-paths are reordered by
@@ -653,13 +645,8 @@ TEST(CoverageContinuousPath, NotchFieldLobeChainedNoMidFieldJoins)
   const auto subs =
       buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
   ASSERT_GE(subs.size(), 2u) << "the bite must split at least one lobe change";
-  // With the outermost ring now on the recorded line (chassis_safety_inset is
-  // the ring-centerline inset, so the planning field is only shrunk by
-  // inset − op_width/2 = 0.07 m here instead of the old 0.15 m), the left bite
-  // stays sharper and the notch chains into one extra lobe. Still a handful of
-  // relocations, not a per-column explosion.
-  EXPECT_LE(subs.size(), 6u) << subs.size()
-                             << " sub-paths — one split per column instead of per lobe";
+  EXPECT_LE(subs.size(), plan.rings.size() + plan.swaths.size())
+      << "a join created more than one sub-path boundary";
 
   // Every plan primitive as a segment list (swaths + densified ring edges), to
   // classify poses as on-primitive vs connector.
@@ -1054,8 +1041,8 @@ TEST(CoveragePlanning, HeadlandDisabledBorderNoWorseThanRingsOn)
 // while staying invisible to the server's 0.05 m verify slack, eroding the
 // keep-inside contract that is the SHIPPED mode (chassis_safety_inset 0.20 ==
 // robot_width/2). On-edge swath ends are accepted by allInside()'s 1 mm
-// tolerance instead — see HeadlandDisabledIsOneSubPath for the no-fragmentation
-// half of that argument.
+// tolerance instead — see HeadlandDisabledSplitsDiscontinuousTurns for the
+// resulting execution behavior.
 TEST(CoveragePlanning, HeadlandDisabledClearanceRingIsExactlySafeBoundary)
 {
   constexpr double kSize = 6.0;
@@ -1386,20 +1373,14 @@ TEST(CoverageContinuousPath, OutermostRingStaysInsideClearanceRingOnTheLine)
 // #429 REGRESSION: with the headland rings DISABLED the swath ENDS are the
 // outermost driven geometry and sit exactly ON safe_boundary, which is also the
 // connector clearance ring. If connector_clearance_boundary were still built by
-// eroding op_width/2 inward, buildConnector's allInside() would reject every
-// U-turn arc AND the straight fallback → conn_safe false → the sub-path SPLIT at
-// every U-turn, i.e. one blade-off Nav2 transit per swath on a hole-free field.
-// The clearance ring is safe_boundary EXACTLY (no outward expansion — that would
-// let a connector centerline cross the recorded line); what keeps the on-edge
-// ends acceptable is allInside()'s 1 mm kOnEdgeTolM tolerance, since pointInRing
-// is a strict-`>` crossing test that resolves on-edge poses inconsistently.
+// eroding op_width/2 inward, even a heading-continuous fallback could be rejected
+// as outside. The clearance ring is safe_boundary exactly; allInside()'s 1 mm
+// tolerance makes the geometric classification deterministic for on-edge ends.
 //
 // With no mowed apron beyond the swath ends most U-turn ARCS legitimately do not
-// fit, so buildConnector falls back to a straight pivot-through join — that is
-// the intended, documented behaviour of "None" and it still passes allInside, so
-// this asserts the hole-free field yields exactly ONE sub-path and that no pose
-// escapes the clearance ring by more than the server's verify slack.
-TEST(CoverageContinuousPath, HeadlandDisabledIsOneSubPath)
+// fit. Their opposing-heading straight fallbacks must become blade-off
+// transitions, while every emitted pose remains inside the clearance ring.
+TEST(CoverageContinuousPath, HeadlandDisabledSplitsDiscontinuousTurns)
 {
   constexpr double kOpWidth = 0.16;
   constexpr double kHeadland = 0.18;
@@ -1425,10 +1406,12 @@ TEST(CoverageContinuousPath, HeadlandDisabledIsOneSubPath)
       << "connector_clearance_boundary not populated with the rings off";
   const std::vector<std::pair<double, double>>& clearance = plan.connector_clearance_boundary;
 
-  const auto subs = buildContinuousSubPaths(plan, clearance, kTurnRadius, kMinTurnRadius, kStep);
-  EXPECT_EQ(subs.size(), 1u)
-      << "a hole-free field must stay ONE sub-path with the headland rings off — " << subs.size()
-      << " sub-paths means a blade-off Nav2 transit per U-turn (#429)";
+  mowgli_coverage::ConnectorStats stats;
+  const auto subs =
+      buildContinuousSubPaths(plan, clearance, kTurnRadius, kMinTurnRadius, kStep, &stats);
+  EXPECT_GT(subs.size(), 1u);
+  EXPECT_EQ(stats.straight_kept, 0u);
+  EXPECT_EQ(stats.split + 1u, subs.size());
 
   std::size_t out_of_bounds = 0;
   double worst = 0.0;
@@ -1514,8 +1497,8 @@ TEST(BoundaryClipGeometry, PointInRingHandlesConcaveNotch)
 // ===========================================================================
 // INTEGRATION: plan on the operator's REAL recorded area and analyse the trace
 // the way the robot drives it — ordered segments → continuous runs (split at a
-// gap > kSegmentTransitGap, FollowStrip's logic) → the MPPI path-inversion crop
-// per run (enforce_path_inversion). This reproduces, offline, the "lost at the
+// gap > kSegmentTransitGap, the historical FollowStrip logic) → the old MPPI
+// path-inversion crop per run. This reproduces, offline, the "lost at the
 // end of the headland" class of bug: it pinpoints where each run would be
 // cropped on the real concave geometry, and verifies the plan stays in-bounds.
 // ===========================================================================
@@ -1663,10 +1646,9 @@ TEST(CoverageIntegration, RecordedArea1FullTraceAnalysis)
 }
 
 // ===========================================================================
-// CONTINUOUS PATH: flatten the plan into ONE cusp-free, in-bounds polyline via
-// forward turn-around connectors at every reversal, so MPPI tracks it without
-// the bimodal dither/spin at sharp 180° reversals. Re-mowing on the turns is
-// accepted. Asserts on the REAL operator area with the deployed knobs.
+// CONTINUOUS SUB-PATHS: connect the plan with in-bounds forward turn-arounds and
+// split any residual discontinuity. Asserts on a recorded operator area using
+// the historical geometry that first exposed the connector defects.
 // ===========================================================================
 TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
 {
@@ -1675,7 +1657,7 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
   constexpr double kInset = 0.15;
   constexpr double kMinSwath = 0.15;
   constexpr double kTurnRadius = 0.18;  // deployed connector_turn_radius default
-  constexpr double kMinTurnRadius = 0.15;  // robot's min MPPI-trackable radius
+  constexpr double kMinTurnRadius = 0.15;  // historical deployed radius
   constexpr double kStep = 0.03;
 
   const auto cell = makeRecordedArea1();
@@ -1694,17 +1676,14 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
          "fall back to the raw boundary (the safety bug this guards)";
   const auto& connector_boundary = plan.safe_boundary;
   // The driven units are the SUB-PATHS: each is an independently continuous,
-  // cusp-free, in-bounds MPPI run; the gap BETWEEN sub-paths is a blade-off Nav2
+  // heading-continuous, in-bounds FTC run; the gap between sub-paths is a blade-off Nav2
   // transit (a relocation, not a driven cusp), so the per-path invariants below
   // apply PER SUB-PATH, not across the viz-only concatenation.
   const auto subs =
       buildContinuousSubPaths(plan, connector_boundary, kTurnRadius, kMinTurnRadius, kStep);
   ASSERT_GE(subs.size(), 1u);
-  // A concave garden may split at lobe changes, but the nearest-endpoint
-  // chaining must keep it to a handful of relocations — a per-column explosion
-  // means the ordering regressed.
-  EXPECT_LE(subs.size(), 6u) << subs.size()
-                             << " sub-paths — lobe chaining regressed (one split per column?)";
+  EXPECT_LE(subs.size(), plan.rings.size() + plan.swaths.size())
+      << "a join created more than one sub-path boundary";
 
   std::size_t total_poses = 0;
   double total_len = 0.0, worst_turn = 0.0;
@@ -1752,7 +1731,7 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
             << std::flush;
 
   EXPECT_LT(worst_turn, 120.0) << "a sub-path has a " << worst_turn
-                               << "° turn — a near-reversal cusp MPPI will dither at";
+                               << "° turn — a near-reversal cusp is not trackable";
   EXPECT_EQ(oob, 0u) << oob << "/" << total_poses
                      << " continuous-path points are outside the safety-inset ring";
   // Effective planning inset = chassis_safety_inset − op_width/2 (the outermost
@@ -2127,12 +2106,12 @@ TEST(CoveragePlanning, DegenerateRecordedRingSanitizedToFullCoverage)
 // blind connector, and nothing else in the plan or the logs distinguishes that
 // from a healthy turn-around arc.
 //
-// WHAT THE COUNTER MEASURED, once it existed (2026-08-24, this PR): on the
-// SHIPPED coverage geometry — num_headland_passes = 2, op_width = tool_width −
+// WHAT THE COUNTER MEASURED, once it existed (2026-08-24): on the old coverage
+// geometry — num_headland_passes = 2, op_width = tool_width −
 // swath_overlap, connector_turn_radius 0.18, min_turning_radius 0.15 — only
 // 1 join in 32 gets a real turn-around arc. The other 31 are straight blind
-// connectors. That is not a regression and not an artefact of the synthetic
-// field; it is the baseline, and it is geometric (see the apron test below).
+// connectors. The 2026-09-09 bag confirmed the same geometric failure on the
+// robot; those fallbacks are now split rather than driven blade-on.
 //
 // These tests therefore pin the MECHANISM that decides an arc from a straight
 // join — the width of the mowed headland apron beyond the swath ends, measured
@@ -2141,20 +2120,19 @@ TEST(CoveragePlanning, DegenerateRecordedRingSanitizedToFullCoverage)
 // counts, which is the entire point of having them.
 
 // Shared plan geometry for the connector-outcome tests. Everything except the
-// ring count and the radii is held at the SHIPPED configuration so the numbers
-// these tests report are the numbers the robot actually plans with:
+// ring count and the radii uses the default robot geometry:
 // mowgli_robot.yaml tool_width 0.18 − swath_overlap 0.02 = op_width 0.16,
-// chassis_safety_inset 0.20, num_headland_passes 2.
+// chassis_safety_inset 0.20.
 namespace
 {
 constexpr double kStatsOpWidth = 0.16;
 constexpr double kStatsHeadland = 0.18;
 constexpr double kStatsInset = 0.20;
 constexpr double kStatsMinSwath = 0.15;
-constexpr double kStatsTurnRadius = 0.18;
-constexpr double kStatsMinTurnRadius = 0.15;
+constexpr double kStatsTurnRadius = 0.20;
+constexpr double kStatsMinTurnRadius = 0.20;
 constexpr double kStatsStep = 0.03;
-constexpr int kShippedHeadlandPasses = 2;  // mowgli_robot.yaml num_headland_passes
+constexpr int kShippedHeadlandPasses = 5;  // mowgli_robot.yaml num_headland_passes
 
 // Plan a 6 m square with `rings` perimeter passes, then join it exactly the way
 // coverage_server does — bounded by connector_clearance_boundary, not the looser
@@ -2211,90 +2189,48 @@ TEST(CoverageConnectorStats, EveryJoinIsAnArcWhenSpacingExceedsTwiceTheTurnRadiu
       << " m) — the classifier or the connector search is broken, not the geometry";
 }
 
-// THE #499 FINDING. What decides an arc from a straight blind connector at a
-// swath end is the width of the mowed HEADLAND APRON beyond the swath ends, not
-// the turn radius.
+// The headland apron decides whether a forward turn-around fits. The old
+// two-pass geometry leaves too little room and must split at almost every swath
+// end; the production five-pass geometry fits trackable 0.20 m arcs.
 //
 // When the swath spacing d is below 2R the turn-around cannot be a half circle;
 // Dubins has to emit an omega (RLR/LRL) loop, whose forward extent past the
-// swath end is roughly sqrt(4R^2 - (R + d/2)^2) + R — about 0.43 m at R = 0.18,
-// d = 0.16. The apron available is num_headland_passes * op_width, so the
-// shipped two passes give 0.32 m and the omega does not fit: buildConnector
-// exhausts its shrink search and falls through to the straight connector. Widen
-// the apron and the same search, at the same radii, succeeds almost everywhere.
-//
-// If this test starts failing on the narrow arm, swath-end joins have started
-// getting real arcs — that is the desired outcome, not a regression: re-measure
-// and update issue #499 rather than relaxing the bound.
+// swath end is roughly sqrt(4R^2 - (R + d/2)^2) + R. At R = 0.20 and d = 0.16
+// it needs about 0.49 m. Five passes provide 0.80 m in the default geometry and
+// 0.65 m on the field robot's narrower 0.13 m spacing.
 TEST(CoverageConnectorStats, SwathEndArcsAreDecidedByTheHeadlandApronNotTheRadius)
 {
-  constexpr int kWideHeadlandPasses = 8;  // 8 * 0.16 = 1.28 m of apron
-
-  const auto narrow = connectorOutcomes(
+  constexpr int kInsufficientPasses = 2;
+  const auto insufficient = connectorOutcomes(
+      kInsufficientPasses, kStatsOpWidth, kStatsHeadland, kStatsTurnRadius, kStatsMinTurnRadius);
+  const auto production = connectorOutcomes(
       kShippedHeadlandPasses, kStatsOpWidth, kStatsHeadland, kStatsTurnRadius, kStatsMinTurnRadius);
-  const auto wide = connectorOutcomes(
-      kWideHeadlandPasses, kStatsOpWidth, kStatsHeadland, kStatsTurnRadius, kStatsMinTurnRadius);
 
-  ASSERT_GT(narrow.attempted, 10u);
-  ASSERT_GT(wide.attempted, 10u);
-  const double narrow_arc_share =
-      static_cast<double>(narrow.arc) / static_cast<double>(narrow.attempted);
-  const double wide_arc_share = static_cast<double>(wide.arc) / static_cast<double>(wide.attempted);
-
-  // Shipped apron: the omega does not fit, so almost every join is straight.
-  EXPECT_LT(narrow_arc_share, 0.2)
-      << "shipped geometry (" << kShippedHeadlandPasses << " headland passes, " << kStatsOpWidth
-      << " m apron/pass) now gets arcs at " << narrow.arc << "/" << narrow.attempted
-      << " joins. Swath-end turns are no longer straight blind connectors — "
-         "re-measure and update issue #499 instead of relaxing this bound";
-  // Wide apron: the SAME search at the SAME radii fits an arc nearly everywhere,
-  // which is what proves the radius is not the binding constraint.
-  EXPECT_GT(wide_arc_share, 0.8) << "with a " << kWideHeadlandPasses * kStatsOpWidth
-                                 << " m apron only " << wide.arc << "/" << wide.attempted
-                                 << " joins got an arc — the connector search itself has regressed";
-
-  // The straight fallbacks stay inside the connector-clearance envelope, so they
-  // are driven blade-on: the shipped plan is one continuous sub-path, NOT a
-  // fragmented one. This separates "no arc" (quality) from "no drivable
-  // connector" (extra blade-off transits), which are very different costs.
-  EXPECT_EQ(narrow.split, 0u)
-      << narrow.split << " join(s) had no drivable connector at all on a hole-free convex field";
+  ASSERT_GT(insufficient.attempted, 10u);
+  ASSERT_GT(production.attempted, 10u);
+  EXPECT_LT(static_cast<double>(insufficient.arc) / insufficient.attempted, 0.2);
+  EXPECT_GT(static_cast<double>(production.arc) / production.attempted, 0.8);
+  EXPECT_EQ(insufficient.straight_kept, 0u)
+      << "discontinuous fallbacks must never be driven blade-on";
+  EXPECT_GT(insufficient.split, insufficient.attempted * 8u / 10u);
+  EXPECT_LE(production.split, 4u)
+      << "the production apron should leave only ring/relocation transitions";
 }
 
-// The trade issue #499 feared — that raising min_turning_radius buys fewer
-// carving arcs at the price of many more straight blind connectors — is not
-// present at the shipped headland apron, because there are almost no arcs left
-// to lose. Raising the floor from 0.15 m (below the 0.1625 m half-track) to
-// 0.25 m, with the ceiling raised alongside it so the shrink search still has
-// somewhere to start, moves at most one join and creates no sub-path split.
-//
-// This does not say what the radius SHOULD be — that decision is the
-// maintainer's. It says the fallback rate is not the argument against changing
-// it, which is the opposite of what #499 assumed.
-TEST(CoverageConnectorStats, RaisingTheTurnRadiusFloorBarelyMovesTheFallbackRate)
+TEST(CoverageConnectorStats, ProductionApronFitsNarrowRobotSwaths)
 {
-  constexpr double kCeiling = 0.30;  // >= both floors, so the search starts identically
-  constexpr double kRaisedFloor = 0.25;  // clears the 0.1625 m half-track
+  constexpr double kRobotOperationWidth = 0.13;
+  constexpr double kRobotHeadland = 0.15;
+  const auto stats = connectorOutcomes(kShippedHeadlandPasses,
+                                       kRobotOperationWidth,
+                                       kRobotHeadland,
+                                       kStatsTurnRadius,
+                                       kStatsMinTurnRadius);
 
-  const auto low = connectorOutcomes(
-      kShippedHeadlandPasses, kStatsOpWidth, kStatsHeadland, kCeiling, kStatsMinTurnRadius);
-  const auto high = connectorOutcomes(
-      kShippedHeadlandPasses, kStatsOpWidth, kStatsHeadland, kCeiling, kRaisedFloor);
-
-  ASSERT_EQ(low.attempted, high.attempted) << "the two arms must plan the same joins";
-  ASSERT_GT(low.attempted, 10u);
-
-  const std::size_t low_fallbacks = low.straight_kept + low.split;
-  const std::size_t high_fallbacks = high.straight_kept + high.split;
-  ASSERT_GE(high_fallbacks, low_fallbacks) << "a higher floor cannot fit MORE arcs";
-  EXPECT_LE(high_fallbacks - low_fallbacks, 2u)
-      << "raising min_turning_radius " << kStatsMinTurnRadius << " -> " << kRaisedFloor
-      << " m turned " << (high_fallbacks - low_fallbacks) << " of " << low.attempted
-      << " joins into straight fallbacks (" << low.arc << " -> " << high.arc
-      << " arcs). The fallback trade #499 assumed is now real — re-open that "
-         "trade-off before choosing a radius";
-  EXPECT_EQ(high.split, 0u) << "a higher floor must not fragment a hole-free field into "
-                            << high.split << " blade-off transit(s)";
+  ASSERT_GT(stats.attempted, 10u);
+  EXPECT_GT(static_cast<double>(stats.arc) / stats.attempted, 0.8);
+  EXPECT_EQ(stats.straight_kept, 0u);
+  EXPECT_LE(stats.split, 4u);
 }
 
 // The counter is opt-in: every existing caller passes no stats pointer, so the

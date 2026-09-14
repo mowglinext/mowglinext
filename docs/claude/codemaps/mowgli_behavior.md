@@ -23,6 +23,8 @@
 | Obstacle detour inside a sub-path | `include/mowgli_behavior/detour_resume.hpp` (`decideDetour`, `footprintClear`) + `FollowStrip::tryStartDetour` `src/coverage_nodes.cpp` :1133+ |
 | LocalizationGuard signal (`WAITING_FOR_RTK`) | `include/mowgli_behavior/localization_health.hpp` (`LocalizationHealthMonitor`, `PersistentLatch`) + `behavior_tree_node.cpp` :285-295, :330-340, :427-474, `updateLocalizationHealthLocked` :658 |
 | BoundaryGuard soft recovery | `src/navigation_nodes.cpp` `NavigateInsideBoundary` :410-760 (get_recovery_point → keepout off → clear → nav → BackUp fallback → keepout on) |
+| Coverage transit that never ends / spins in place | `trees/navigate_to_pose_transit.xml` (`transit_goal_checker`, yaw ignored — docking keeps `stopped_goal_checker` via `navigate_to_pose.xml`), `FollowStrip::transitBehaviorTree` + `armTransitWatchdog` (`transitDeadlineSec`, `coverage_nodes.hpp`), `test_transit_tree.cpp`. Field 2026-09-12 |
+| LiDAR dropout while mowing (blade pause vs Root halt) | `include/mowgli_behavior/scan_pause.hpp`, `src/coverage_nodes.cpp` `FollowStrip::stepScanPause`, `trees/main_tree.xml` `SensorSafetyGuard` (`IsScanStale max_age_sec=20`) |
 | Start-pose-blocked (#487) recovery + escape motion | `include/mowgli_behavior/transit_failure.hpp` (`classifyTransitFailure`), `include/mowgli_behavior/start_blocked_escape.hpp` (`EscapeDecide`, ceilings), `src/escape_nodes.cpp` (`EscapeStartBlocked`), `src/condition_nodes.cpp` `IsCoverageStartBlocked` :885 |
 | Docking / undocking flow | `src/docking_nodes.cpp` (`DockRobot` → `/dock_robot`), undock = `BackUp` in `src/navigation_nodes.cpp` :800+ (`/backup`), `main_tree.xml` `UndockSequence` :487-538 |
 | Heading calibration on undock / off-dock start | `src/calibration_nodes.cpp` (`RecordUndockStart`, `CalibrateHeadingFromUndock` line-fit → `/fusion_graph_node/set_pose`, `SeedYawFromMotion` drives via `/cmd_vel_teleop`) |
@@ -60,6 +62,7 @@
 | `calibration_nodes.hpp` | 152 | `RecordUndockStart`, `CalibrateHeadingFromUndock`, `SeedYawFromMotion` |
 | `localization_health.hpp` | 328 | Header-only `LocalizationHealthMonitor` (GNSS accuracy / fix-lost / stale latches + σ_xy divergence backstop) |
 | `start_blocked_escape.hpp` | 329 | Header-only escape policy; compiled ceilings `kEscapeMaxSpeed=0.15`, `kEscapeMaxDistance=0.60`, `kEscapeMaxTimeout=15`, `SanitizeEscapeCfg` |
+| `scan_pause.hpp` | 105 | Header-only blade pause across a SHORT LiDAR dropout (`ScanPauseStep`, `kScanPauseMaxAgeSec=1.0`, `kScanResumeFreshSec=0.5`): blade OFF, coverage goal kept, blade back after a continuous fresh window. Driven by `FollowStrip::stepScanPause`; the Root `IsScanStale` halt (`max_age_sec=20`) is the second stage. Field 2026-09-12 |
 | `transit_failure.hpp` | 178 | `TransitFailure` enum + `classifyTransitFailure(nav2 error_code)`; `isStartPoseBlocked` |
 | `detour_resume.hpp` | 233 | Header-only costmap footprint test + resume-pose search (`DetourCostmap`, `decideDetour`) |
 | `dock_alignment.hpp` | 129 | Header-only along/cross-track dock delta + `EvaluateDockYawDrift` (`kDockStagingRunwayM=1.5`, σ floor 0.035 rad) |
@@ -90,7 +93,7 @@
 | `test_start_occupied_retry.cpp` | 348 | 13 tests: `classifyTransitFailure`, consume-once `IsCoverageStartBlocked`, structural check of `StartPoseBlockedRetry` in `main_tree.xml` |
 | `test_coverage_persistence.cpp` | 248 | 10 tests: round-trip, header/version, malformed rows, `current_command` restore |
 | `test_gnss_status_authority.cpp` | 56 | 2 tests: `mowgli_interfaces::gnss_status_utils` fix-type mapping the BT relies on |
-| `test_coverage_transit_gap.cpp` | 50 | 2 tests: `FollowStrip::kSegmentTransitGap == coverage_geometry::kSegmentTransitGapM` |
+| `test_coverage_transit_gap.cpp` | 50 | Transit threshold wiring plus mandatory blade-off transit at every later sub-path boundary |
 | `test_coverage_resume_location.cpp` | 192 | 11 tests: `resolveResumeLocation` shared by `FollowStrip` and `PlanCoverageArea` |
 | `test_swath_progress.cpp` | 153 | 7 tests: `refreshSwathProgress` / `coveragePercentFromCursor` climb during a pass |
 | `test_detour_resume.cpp` | 365 | 15 tests: `footprintClear`, `decideDetour` |
@@ -147,14 +150,14 @@ Clients (node → file:line):
 | `/map_server_node/add_area` | `mowgli_interfaces/srv/AddMowingArea` | `RecordArea` (`recording_nodes.cpp` :441) |
 | `/map_server_node/get_recovery_point` | `mowgli_interfaces/srv/GetRecoveryPoint` | `NavigateInsideBoundary` (`navigation_nodes.cpp` :415) |
 | `/global_costmap/clear_entirely_global_costmap`, `/local_costmap/clear_entirely_local_costmap` | `nav2_msgs/srv/ClearEntireCostmap` | `ClearCostmap` (:143-148), `NavigateInsideBoundary` (:420) |
-| `/global_costmap/global_costmap` `set_parameters` (`keepout_filter.enabled`) | rcl_interfaces | `NavigateInsideBoundary` (:405, :490, :735) |
+| `/global_costmap/keepout_filter/toggle_filter` | `std_srvs/SetBool` | `NavigateInsideBoundary` — disable before clear/plan, re-enable on every exit |
 | `/controller_server` `set_parameters` | rcl_interfaces | `SetNavMode` (:922-965): `FollowPath.desired_linear_vel`, `FollowCoveragePath.speed_fast` |
 | `/lifecycle_manager_navigation/is_active` | `std_srvs/srv/Trigger` | `Nav2Active` (`condition_nodes.cpp` :605) |
 | `/lifecycle_manager_navigation/manage_nodes` | `nav2_msgs/srv/ManageLifecycleNodes` | `SetNav2Lifecycle` (:226) |
 | `/obstacle_tracker/save_obstacles` | `std_srvs/srv/Trigger` | `SaveObstacles` (`utility_nodes.cpp` :216) — no server exists in the repo; node skips with SUCCESS |
 | `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | readiness poll (:758), `NavigateToPose` (:266), `NavigateInsideBoundary` (:430), `FollowStrip` transit (:383), `TransitToStrip` (:1268), `DetourAroundObstacle` (:1398) |
 | `/follow_path` | `nav2_msgs/action/FollowPath` | `FollowStrip` (:379) with `controller_id="FollowCoveragePath"`, `goal_checker_id="coverage_goal_checker"` (:581-582) |
-| `/backup` | `nav2_msgs/action/BackUp` | `BackUp` (:815), `NavigateInsideBoundary` fallback (:434) |
+| `/backup` | `nav2_msgs/action/BackUp` | `BackUp` (:815) |
 | `/dock_robot` / `/undock_robot` | `nav2_msgs/action/DockRobot` / `UndockRobot` | `DockRobot` (`docking_nodes.cpp` :65), `UndockRobot` (:185) + readiness poll (:759) |
 | `/plan_coverage` | `mowgli_interfaces/action/PlanCoverage` | `PlanCoverageArea` (`coverage_nodes.cpp` :1914); server `mowgli_coverage` `coverage_server.cpp` :110 |
 
@@ -190,7 +193,7 @@ All declared in `behavior_tree_node.cpp` with `declare_parameter`, read ONCE at 
 | `battery_low_percent` / `battery_critical_percent` / `battery_full_percent` / `battery_critical_voltage` / `battery_critical_recovery_percent` | 20 / 10 / 95 / 0 / 30 (:913-925) | :290-294 | XML `{battery_low_pct}` `{battery_critical_pct}` `{battery_full_pct}` `{battery_critical_voltage}`; `battery_critical_recovery_pct` is seeded but unused by XML (CriticalBatteryDock resumes at `{battery_full_pct}`, `main_tree.xml` :394) |
 | `battery_manual_resume_percent` | 30.0, clamped to `battery_low_percent + 5` if not above it | :296 | XML `{battery_manual_resume_pct}` → `IsManualResumeRequested` in BOTH charge wait loops (`ChargeOrAbort`, `CriticalChargeOrAbort`); the token is set by the `~/high_level_control` handler on a `COMMAND_START` while `last_high_level_status.state_name` is a charge-hold state (`isChargeHoldState`) |
 | `loc_gnss_acc_pause_m` / `loc_gnss_acc_resume_m` / `loc_gnss_stale_s` / `loc_sigma_pause_persist_s` / `loc_sigma_resume_persist_s` / `loc_sigma_pause_m` / `loc_sigma_resume_m` / `loc_sigma_backstop_persist_s` | 0.30 / 0.15 / 5 / 3 / 2 / 5 / 2 / 10 (:286-294) | :148-163 | `LocalizationHealthMonitor` → `IsLocalizationDegraded` |
-| `start_blocked_escape_enabled` / `_speed` / `_distance` / `_timeout_s` / `_min_signal_speed` / `_signal_max_age_s` | true / 0.10 / 0.40 / 6 / 0.03 / 90 (:309-316), clamped by `SanitizeEscapeCfg` | :546-558 | `EscapeStartBlocked`, `/cmd_vel` tracker |
+| `start_blocked_escape_enabled` / `_speed` / `_distance` / `_timeout_s` / `_min_signal_speed` / `_signal_max_age_s` | false / 0.10 / 0.40 / 6 / 0.03 / 90 (:309-316), clamped by `SanitizeEscapeCfg` | :546-558 | `EscapeStartBlocked`, `/cmd_vel` tracker; motion is opt-in after the 2026-09-09 field failure |
 | `mow_angle_deg` | -1 = AUTO (:947) | :338 | `PlanCoverageArea::buildGoal` → `PlanCoverage.mow_angle_deg` |
 | `area_simplification_tolerance` / `area_record_rate_hz` | 0.05 / 10 (:958-961) | :115 / :129 | `RecordArea` ports via XML |
 | `bt_debug_logging` | false (:973) | :164 | `BT::StdCoutLogger` |
@@ -214,7 +217,7 @@ Publishes none. `ctx->tf_buffer` (`behavior_tree_node.cpp` :82) is used to look 
 - New `HighLevelControl` command → `ros2/src/mowgli_interfaces/srv/HighLevelControl.srv`, the handler in `behavior_tree_node.cpp` :547, an `IsCommand` branch in `main_tree.xml`, the guard whitelists (`SensorSafetyGuard` :86-89, `BoundaryGuard` :155-182, `LocalizationGuard` :262-270), GUI bindings (see `docs/claude/commands.md` codegen), and `docs/claude/high-level-api.md`.
 - New `HighLevelStatus` field → `status_snapshot.cpp` (`withLiveStatusFields`) or it will be frozen by the 1 Hz republish; `test/test_high_level_status_snapshot.cpp`; firmware `HL_MODE_*` mirror if `state` values change (see `docs/claude/high-level-api.md`).
 - New node parameter → declare in `behavior_tree_node.cpp`, add the default to the TEMPLATE `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` (never the sparse installed file, Invariant 15), forward it in `full_system.launch.py` :216-354 (otherwise the node silently runs its C++ default), and — if operator-facing — `gui/web/src/components/settings/paramCatalog.ts`.
-- `kSegmentTransitGap` is single-sourced from `ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp` :26 (`kSegmentTransitGapM = 0.6`) — `mowgli_coverage` splits sub-paths on the same constant; `test/test_coverage_transit_gap.cpp` pins it.
+- `kSegmentTransitGap` is single-sourced from `ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp` :26 (`kSegmentTransitGapM = 0.6`) and guards a distant first/legacy unit. Every later planner-produced sub-path transits blade-off regardless of positional gap because its boundary represents a heading or obstacle discontinuity; `test/test_coverage_transit_gap.cpp` pins both rules.
 - `coverage_resume.txt` layout → bump `kHeader` in `coverage_persistence.cpp` :34 (unknown header = start fresh) and `test/test_coverage_persistence.cpp`.
 - `FollowStrip` goal ids `FollowCoveragePath` / `coverage_goal_checker` (`coverage_nodes.cpp` :581-582) must match `controller_server` plugin names in `ros2/src/mowgli_bringup/config/nav2_params_base.yaml`; `SetNavMode` param names (`FollowPath.desired_linear_vel`, `FollowCoveragePath.speed_fast`) must match the RPP/FTC plugin params there.
 - `navigate_to_pose.xml` `GoalCheckerSelector` default `stopped_goal_checker` and the selector topics must match `controller_server` `goal_checker_plugins` in `nav2_params_base.yaml`; the path is injected by `navigation.launch.py` :626.
@@ -227,7 +230,7 @@ Publishes none. `ctx->tf_buffer` (`behavior_tree_node.cpp` :82) is used to look 
 - `SensorSafetyGuard`/`IsCollisionStopSustained` must stay freshness-gated (`max_state_age_sec`): collision_monitor only publishes while `cmd_vel_nav` flows, so a halted tree leaves `collision_action_type` as a stale STOP latch (`bt_context.hpp` :453-460).
 - LocalizationGuard keys on `/gps/status` quality, NOT fused covariance; `loc_sigma_pause_m` must stay above fusion_graph's pivot inflation (~2.35 m) or mowing livelocks at 0 % (`behavior_tree_node.cpp` :271-295; `localization_health.hpp`).
 - Coverage-tracking maps on `BTContext` are deliberately NOT under `context_mutex`; they rely on the default MutuallyExclusive callback group serialising tick/service/timer callbacks (`bt_context.hpp` :77-103). Do not add locking back, and do not move callbacks to a Reentrant group without re-deriving this. `~/clear_coverage_resume` is deferred to `tickTree` for the same reason (:612-638).
-- `FollowStrip::sendCurrentSwath` forces the blade OFF before any transit >`kSegmentTransitGap` (`coverage_nodes.cpp` :614-640) — structural blade safety; never add a blade-on path around it.
+- `FollowStrip::sendCurrentSwath` forces the blade OFF before any transit >`kSegmentTransitGap` and before every later sub-path transition (`coverage_nodes.cpp` :614-640) — structural blade safety.
 - `EscapeStartBlocked` only moves behind `IsCoverageStartBlocked`'s arming token (≤30 s old, `bt_context.hpp` :212-228), with blade verified off from a fresh `/hardware_bridge/status`; the `/cmd_vel` tracker ignores samples during `last_motion_suppress_until` so the escape never becomes "the last motion".
 - Persisted `current_command` auto-continues mowing on boot ONLY when it was `COMMAND_START` AND a resumable snapshot exists (a resume cursor OR a non-empty completed-area set); anything else is forced to IDLE (`behavior_tree_node.cpp` :93-118). `EndSession` deletes the file; a low-battery dock keeps it.
 - `COMMAND_S2` (4) is normalised to `COMMAND_START` in the service handler (:561); there is no separate "next area" branch. A plain `COMMAND_START` clears single-area mode (:579-582); `~/start_in_area` sets `current_command` itself.

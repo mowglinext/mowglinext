@@ -17,6 +17,9 @@
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>
   <exec_depend>xacro</exec_depend>
+  <!-- cmd_vel_ws_relay.py imports websockets at runtime; the image installs
+       the apt package, this makes the dependency visible to rosdep too. -->
+  <exec_depend>python3-websockets</exec_depend>
 
   <!-- Navigation stack -->
   <exec_depend>nav2_bringup</exec_depend>
@@ -63,6 +66,9 @@
   <test_depend>launch_testing_ros</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>python3-yaml</test_depend>
+  <!-- test_cmd_vel_ws_relay.py imports the relay, which imports websockets;
+       without this rosdep leaves it off the CI runner and the test cannot load. -->
+  <test_depend>python3-websockets</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -120,7 +120,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "node-index",
         description: "settingsSections.localization.description",
         keys: [
-            "use_scan_matching", "use_loop_closure",
+            "use_lidar_map_anchor", "lidar_anchor_shadow_mode",
             "use_magnetometer",
             "enable_mag_cal", "declination_deg", "min_horizontal_uT", "mag_yaw_variance",
         ],
@@ -141,6 +141,10 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // so they were dead controls. swath_overlap (a real coverage_server
             // param) is surfaced here instead.
             "mowing_enabled", "blade_auto_reverse", "mowing_speed", "transit_speed",
+            // Blade-load slowdown (FollowCoveragePath.blade_load_*, injected by
+            // navigation.launch.py): slow the feed when the blade RPM sags.
+            "blade_load_slowdown_enabled", "blade_load_rpm_full",
+            "blade_load_rpm_min", "blade_load_min_speed_ratio",
             "headland_width", "num_headland_passes", "swath_overlap",
             "chassis_safety_inset", "min_turning_radius", "mow_direction",
         ],
@@ -208,6 +212,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "xy_goal_tolerance", "yaw_goal_tolerance", "coverage_xy_tolerance",
             "progress_timeout_sec",
+            "boundary_inner_margin_m", "dock_inner_margin_exempt_radius_m",
         ],
     },
     {
@@ -229,6 +234,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "led_enabled", "led_count", "led_spi_device", "led_spi_speed_hz",
             "led_brightness", "led_idle_scale", "led_refresh_hz",
             "led_low_battery_percent", "led_charge_full_percent",
+            "led_charge_complete_timeout_s", "led_charge_complete_dim_scale",
             "led_status_timeout_s", "led_keepalive_s", "led_device_retry_s",
         ],
     },

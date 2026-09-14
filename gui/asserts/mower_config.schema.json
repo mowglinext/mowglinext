@@ -191,7 +191,19 @@
           "type": "boolean",
           "title": "Enable LiDAR",
           "default": false,
-          "description": "Enable LiDAR. Sole source of truth for the ROS2 stack's LiDAR mode (the LIDAR_ENABLED env var is not read). Scan-matching and loop-closure factors in fusion_graph_node are ANDed with it, so they cannot run without a scanner. Default false: this default MUST match robot_config_util.DEFAULT_LIDAR_ENABLED, because the settings backend prunes any value equal to its schema default -- with a default of true, switching LiDAR ON would be pruned away and the toggle would never persist."
+          "description": "Enable LiDAR. Sole source of truth for the ROS2 stack's LiDAR mode (the LIDAR_ENABLED env var is not read). Scan-to-map localization in fusion_graph_node is gated by this setting, so it cannot run without a scanner. Default false: this default MUST match robot_config_util.DEFAULT_LIDAR_ENABLED, because the settings backend prunes any value equal to its schema default -- with a default of true, switching LiDAR ON would be pruned away and the toggle would never persist."
+        },
+        "use_lidar_map_anchor": {
+          "type": "boolean",
+          "title": "LiDAR map anchor",
+          "default": false,
+          "description": "Scan-to-map (Beluga) XY anchor factors from a persistent LiDAR occupancy map, applied only after a full GNSS outage. Default false (matches the template): the anchor is experimental and costly on the Pi; requires LiDAR enabled. Restart the ROS2 stack after changing."
+        },
+        "lidar_anchor_shadow_mode": {
+          "type": "boolean",
+          "title": "LiDAR anchor shadow mode",
+          "default": false,
+          "description": "With the anchor enabled, also run and score the particle filter under RTK Fixed without ever applying a factor (calibrates the adaptive sigma floor, costs CPU). Default false (matches the template)."
         },
         "lidar_x": {
           "type": "number",
@@ -503,6 +515,30 @@
           "default": 0.2,
           "description": "Robot speed when transiting between zones and to dock (m/s)."
         },
+        "blade_load_slowdown_enabled": {
+          "type": "boolean",
+          "title": "Blade Load Slowdown",
+          "default": false,
+          "description": "Slow the mowing speed down when the blade motor's RPM sags under load (thick or wet grass), so the blade gets time to cut instead of stalling or leaving an uncut strip. Off by default: read your blade's no-load RPM off Diagnostics first and set the two thresholds. Fail-open \u2014 an inactive blade or stale telemetry never slows the robot. Coverage paths only; takes effect after a ROS2 restart."
+        },
+        "blade_load_rpm_full": {
+          "type": "number",
+          "title": "Blade RPM Full Speed",
+          "default": 2500,
+          "description": "Blade RPM at or above which the full mowing speed applies. Set it a little below the no-load RPM shown on Diagnostics."
+        },
+        "blade_load_rpm_min": {
+          "type": "number",
+          "title": "Blade RPM Min Speed",
+          "default": 1800,
+          "description": "Blade RPM at or below which the minimum mowing speed applies. Set it where the cut audibly labours; must be below Blade RPM Full Speed. The speed ramps linearly between the two."
+        },
+        "blade_load_min_speed_ratio": {
+          "type": "number",
+          "title": "Blade Load Min Speed Ratio",
+          "default": 0.4,
+          "description": "Slowest mowing feed under blade load, as a fraction of Mowing Speed (0.1\u20131.0). Never below the controller's 0.08 m/s crawl speed."
+        },
         "path_spacing": {
           "type": "number",
           "title": "Path Spacing",
@@ -518,7 +554,7 @@
         "num_headland_passes": {
           "type": "integer",
           "title": "Headland Passes",
-          "default": 2,
+          "default": 5,
           "minimum": -1,
           "description": "Number of concentric perimeter rings before the inner field. -1 (or any negative) = none — no perimeter rings. The back-and-forth swaths become the outermost pass, and their centreline lands on exactly the line the outermost ring would have driven (chassis_safety_inset inside the recorded boundary), so sideways they leave the same uncut band as the rings — about 12 cm at the default 0.20 m inset. The swath ENDS, however, reach that same band, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs. 0 = auto (ceil(headland_width / tool_width)); >0 forces exactly that count."
         },
@@ -531,7 +567,7 @@
         "min_turning_radius": {
           "type": "number",
           "title": "Min Turning Radius",
-          "default": 0.15,
+          "default": 0.2,
           "description": "Minimum turning radius for coverage path (metres). Skid-steer pivots in place; large values force wide F2C U-turns."
         },
         "mow_angle_deg": {
@@ -813,6 +849,21 @@
           "maximum": 1.0,
           "description": "Brightness of the dim idle ring, relative to the global brightness above."
         },
+        "led_charge_complete_timeout_s": {
+          "type": "number",
+          "title": "Charge Complete Dim Delay",
+          "default": 600.0,
+          "minimum": 0.0,
+          "description": "After the ring has shown steady full-green \"charge complete\" for this many seconds (10 minutes by default -- e.g. left on the dock overnight), dim it to the Charge Complete Brightness below. 0 disables this and the ring stays full green indefinitely. Unplugging, or the level dropping back below the Charge Complete Threshold, restores full brightness immediately."
+        },
+        "led_charge_complete_dim_scale": {
+          "type": "number",
+          "title": "Charge Complete Brightness",
+          "default": 0.0,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Brightness scale applied once the Charge Complete Dim Delay above has elapsed. 0 (default) turns the ring off; a small non-zero value keeps a faint green glow as an at-a-glance \"still charged\" indicator instead."
+        },
         "led_spi_speed_hz": {
           "type": "integer",
           "title": "SPI Clock",
@@ -849,6 +900,22 @@
           "title": "Progress Timeout",
           "default": 30.0,
           "description": "Seconds without progress before recovery."
+        },
+        "boundary_inner_margin_m": {
+          "type": "number",
+          "title": "Transit Boundary Margin",
+          "default": 0.20,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Distance (m) point-to-point TRANSIT moves are nudged to stay inside the recorded boundary, planned against the global costmap. This is a soft preference, never a hard block: transit can still start, end, or pass through the margin band if that is the only option (e.g. right after undocking, or a narrow gap between two areas) -- it just prefers a route that respects it when one exists. Coverage/mowing is unaffected -- it tracks the F2C path against the local costmap instead, and still reaches the true edge as configured elsewhere. 0 disables this and lets transit hug or clip the recorded line."
+        },
+        "dock_inner_margin_exempt_radius_m": {
+          "type": "number",
+          "title": "Dock Exemption Radius",
+          "default": 2.5,
+          "minimum": 0.0,
+          "maximum": 10.0,
+          "description": "Radius (m) around the dock pose, in every direction, exempt from Transit Boundary Margin above -- so the dock approach carries no bias at all, not just \"never blocked\". Only takes effect once a dock pose is set; widen it if your dock sees a lot of GNSS drift (e.g. under a canopy)."
         }
       }
     }
