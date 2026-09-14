@@ -301,31 +301,32 @@ TEST_F(BladeLiftRecovery, DryRunAndFailedSendCannotResume)
   Peer::send(*node, 1, 1);
   EXPECT_FALSE(Peer::pending(*node));
   EXPECT_EQ(Peer::requested(*node), "unknown");
-  TEST_F(HardwareBridgeParametersTest, CmdVelSlewLimitsRejectRuntimeUpdate)
+}
+
+TEST_F(HardwareBridgeParametersTest, CmdVelSlewLimitsRejectRuntimeUpdate)
+{
+  rclcpp::NodeOptions options;
+  options.parameter_overrides(
+      {rclcpp::Parameter("serial_port", "/definitely/not/a/serial/device")});
+  auto node = std::make_shared<HardwareBridgeNode>(options);
+
+  for (const auto* name : {"cmd_vel_linear_accel_limit",
+                           "cmd_vel_linear_decel_limit",
+                           "cmd_vel_angular_accel_limit",
+                           "cmd_vel_angular_decel_limit"})
   {
-    rclcpp::NodeOptions options;
-    options.parameter_overrides(
-        {rclcpp::Parameter("serial_port", "/definitely/not/a/serial/device")});
-    auto node = std::make_shared<HardwareBridgeNode>(options);
-
-    for (const auto* name : {"cmd_vel_linear_accel_limit",
-                             "cmd_vel_linear_decel_limit",
-                             "cmd_vel_angular_accel_limit",
-                             "cmd_vel_angular_decel_limit"})
-    {
-      const auto result = node->set_parameter(rclcpp::Parameter(name, 3.0));
-      EXPECT_FALSE(result.successful) << name;
-    }
+    const auto result = node->set_parameter(rclcpp::Parameter(name, 3.0));
+    EXPECT_FALSE(result.successful) << name;
   }
+}
 
-  TEST_F(HardwareBridgeParametersTest, NonPositiveCmdVelSlewLimitFailsStartup)
-  {
-    rclcpp::NodeOptions options;
-    options.parameter_overrides(
-        {rclcpp::Parameter("serial_port", "/definitely/not/a/serial/device"),
-         rclcpp::Parameter("cmd_vel_angular_accel_limit", 0.0)});
+TEST_F(HardwareBridgeParametersTest, NonPositiveCmdVelSlewLimitFailsStartup)
+{
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({rclcpp::Parameter("serial_port", "/definitely/not/a/serial/device"),
+                               rclcpp::Parameter("cmd_vel_angular_accel_limit", 0.0)});
 
-    EXPECT_THROW(std::make_shared<HardwareBridgeNode>(options), std::invalid_argument);
-  }
+  EXPECT_THROW(std::make_shared<HardwareBridgeNode>(options), std::invalid_argument);
+}
 
 }  // namespace mowgli_hardware
