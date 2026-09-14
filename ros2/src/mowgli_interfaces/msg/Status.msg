@@ -33,6 +33,12 @@ float32 mower_motor_rpm
 # blade telemetry stream has stopped. A zero stamp means no report received.
 builtin_interfaces/Time blade_status_stamp
 
+# Last blade request successfully written to the firmware link:
+# unknown (also the empty default), off, forward, or reverse.
+# Command intent only: unsigned RPM cannot confirm physical direction, and
+# firmware may inhibit the request or wait for a stopped reversal.
+string blade_requested_direction
+
 # Firmware version handshake (image <-> firmware compatibility). Populated by
 # hardware_bridge from the STM32's CONFIG_RSP reply. firmware_compatible is
 # false until a matching reply arrives; if the firmware never answers (too old

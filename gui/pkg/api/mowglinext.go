@@ -590,6 +590,9 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				return
 			}
 			err = provider.CallService(ctx, "/hardware_bridge/mower_control", &CallReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
+		case "blade_control":
+			handleBladeControl(c, provider)
+			return
 		case "start_in_area":
 			var CallReq mowgli.StartInAreaReq
 			err = c.BindJSON(&CallReq)

@@ -234,6 +234,23 @@ def test_mowgli_launch_passes_mowing_enabled_to_hardware_bridge() -> None:
     )
 
 
+def test_full_system_injects_blade_auto_reverse() -> None:
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    values = _node_parameter_values(call, "blade_auto_reverse")
+    assert len(values) == 1
+    # Exercise both values: losing the injection silently disables the setting,
+    # while bool("false") would mistakenly enable it for a string-based path.
+    for enabled in (False, True):
+        expression = ast.Expression(body=values[0])
+        assert eval(compile(expression, "launch", "eval"), {
+            "robot_params": {"blade_auto_reverse": enabled},
+        }) is enabled
+    assert eval(compile(ast.Expression(body=values[0]), "launch", "eval"), {
+        "robot_params": {},
+    }) is False
+
+
 def test_mowing_enabled_is_not_wired_to_some_other_node() -> None:
     """Companion guard: moving the parameter onto a node that cannot act on it
     (e.g. the BT or coverage server) would keep this file's first assertion

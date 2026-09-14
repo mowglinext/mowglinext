@@ -11,6 +11,7 @@ import {useIsMobile} from "../hooks/useIsMobile";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {usePower} from "../hooks/usePower.ts";
 import {useStatus} from "../hooks/useStatus.ts";
+import {BladeDirectionDisplay} from "../components/BladeDirectionDisplay.tsx";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {useSettings} from "../hooks/useSettings.ts";
@@ -564,7 +565,7 @@ function TilesRow({data}: {data: ReturnType<typeof useMowerData>}) {
       <StatTile label="GPS" value={`${Math.round(data.gps)}`} unit="%"
                 hint={data.gpsLabel} accent="cyan" icon={<Wifi size={14}/>}/>
       <StatTile label={t('mowgliNextPage.blades')} value={data.rpm > 0 ? Math.round(data.rpm).toString() : t('mowgliNextPage.bladesOff')}
-                unit={data.rpm > 0 ? 'rpm' : ''} hint={`${data.bladeCurrent.toFixed(1)} A`}
+                unit={data.rpm > 0 ? 'rpm' : ''} hint={<>{data.bladeCurrent.toFixed(1)} A · <BladeDirectionDisplay compact/></>}
                 accent="amber" icon={<Sparkles size={14}/>}/>
       <StatTile label={t('mowgliNextPage.motor')} value={data.motorTemp.toFixed(0)} unit="°c"
                 hint={`ESC ${data.escTemp.toFixed(0)} °C`}
@@ -582,7 +583,7 @@ interface StatTileProps {
   label: string;
   value: string;
   unit: string;
-  hint: string;
+  hint: ReactNode;
   accent: "lime" | "cyan" | "amber" | "rose";
   icon: React.ReactNode;
 }
