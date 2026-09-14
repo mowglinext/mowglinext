@@ -1,6 +1,6 @@
 <p align="center">
-  <a href="https://docs.ros.org/en/kilted/">
-    <img src="https://img.shields.io/badge/ROS2-Kilted-22314E?logo=ros" alt="ROS2">
+  <a href="https://docs.ros.org/en/lyrical/">
+    <img src="https://img.shields.io/badge/ROS2-Lyrical-22314E?logo=ros" alt="ROS2">
   </a>
   <a href="https://github.com/ros-navigation/navigation2">
     <img src="https://img.shields.io/badge/Nav2-enabled-blue" alt="Nav2">

@@ -41,7 +41,7 @@
 | File | Lines | Purpose |
 |------|-------|---------|
 | `ros2/src/mowgli_coverage/CMakeLists.txt` | 153 | `mowgli_coverage_core` shared lib + `mowgli_coverage` exe; ortools/F2C 3.0.0 discovery; RPATHs; gtest registration |
-| `ros2/src/mowgli_coverage/package.xml` | 37 | ament_cmake deps (rclcpp, rclcpp_action, rclcpp_lifecycle, rclcpp_components, nav2_util, nav_msgs, geometry_msgs, builtin_interfaces, mowgli_interfaces, ortools_vendor); test deps ament_lint_auto/common, ament_cmake_gtest |
+| `ros2/src/mowgli_coverage/package.xml` | 37 | ament_cmake deps (rclcpp, rclcpp_action, rclcpp_lifecycle, rclcpp_components, nav2_util, nav2_ros_common, nav_msgs, geometry_msgs, builtin_interfaces, mowgli_interfaces, ortools_vendor); test deps ament_lint_auto/common, ament_cmake_gtest |
 | `ros2/src/mowgli_coverage/include/mowgli_coverage/coverage_server.hpp` | 68 | `CoverageServer : nav2_util::LifecycleNode`; lifecycle overrides; static param members |
 | `ros2/src/mowgli_coverage/include/mowgli_coverage/coverage_planning.hpp` | 353 | Pure-geometry API: `PlanDiagnostics`, `BoustrophedonPlan`, `ConnectorStats`, `planBoustrophedon`, `buildContinuousPath`, `buildContinuousSubPaths`, `pointInRing`, `distanceToRing`, `dedupClosedRing`, `bufferRingOutward` |
 | `ros2/src/mowgli_coverage/src/coverage_server.cpp` | 846 | Lifecycle + action server; goal→Cell; plan→`segments`/`full_path`/`drivable_subpaths`; verification + logging; component registration |
@@ -138,7 +138,7 @@ None used. Geometry is map-frame metres end to end (CLAUDE.md Invariant 4).
 ## Build, test, run
 
 ```bash
-# Build (devcontainer / CI image; needs F2C 3.0.0 at /opt/fields2cover-300 + ros-kilted-ortools-vendor)
+# Build (devcontainer / CI image; needs F2C 3.0.0 at /opt/fields2cover-300 + ros-lyrical-ortools-vendor)
 cd ros2 && make build-pkg PKG=mowgli_coverage        # = PACKAGES=mowgli_coverage ./scripts/build.sh (--packages-up-to)
 cd ros2 && PACKAGES=mowgli_coverage PACKAGES_MODE=select ./scripts/build.sh   # this package only
 # raw: colcon build --packages-up-to mowgli_coverage --cmake-args -DCMAKE_BUILD_TYPE=Release

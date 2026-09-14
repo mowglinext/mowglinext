@@ -112,9 +112,9 @@
           "*.urdf": "xml"
         },
         "python.analysis.extraPaths": [
-          "/opt/ros/kilted/lib/python3.12/site-packages",
-          "/ros2_ws/install/mowgli_interfaces/lib/python3.12/site-packages",
-          "/ros2_ws/install/mowgli_localization/lib/python3.12/site-packages"
+          "/opt/ros/lyrical/lib/python3.14/site-packages",
+          "/ros2_ws/install/mowgli_interfaces/lib/python3.14/site-packages",
+          "/ros2_ws/install/mowgli_localization/lib/python3.14/site-packages"
         ],
         "[python]": {
           "editor.defaultFormatter": "charliermarsh.ruff",

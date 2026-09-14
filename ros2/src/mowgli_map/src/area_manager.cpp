@@ -1280,6 +1280,81 @@ void MapServerNode::on_discard_obstacle(
   RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
 }
 
+namespace
+{
+/// How far outside a pending dig polygon the robot centre may sit and still
+/// count as "trapped by it": one chassis length, which also covers the
+/// inflation the global costmap wraps around the lethal band (floor 0.58 m).
+constexpr double kDigDiscardClearanceM = 0.60;
+}  // namespace
+
+std::size_t MapServerNode::discard_dig_keepouts_near_robot()
+{
+  if (!have_robot_heading_)
+  {
+    RCLCPP_WARN(get_logger(),
+                "discard_dig_keepouts_near_robot: no robot pose latched yet - nothing dropped.");
+    return 0;
+  }
+  const double rx = last_robot_x_;
+  const double ry = last_robot_y_;
+  geometry_msgs::msg::Point32 robot;
+  robot.x = static_cast<float>(rx);
+  robot.y = static_cast<float>(ry);
+  std::size_t dropped = 0;
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    for (auto& area : areas_)
+    {
+      for (auto it = area.obstacles.begin(); it != area.obstacles.end();)
+      {
+        const bool is_pending_dig =
+            it->pending && it->source == mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG;
+        const bool touches_robot =
+            is_pending_dig &&
+            (point_in_polygon(robot, it->polygon) ||
+             point_to_polygon_distance(rx, ry, it->polygon) <= kDigDiscardClearanceM);
+        if (!touches_robot)
+        {
+          ++it;
+          continue;
+        }
+        RCLCPP_WARN(get_logger(),
+                    "Dropping pending dig keepout %u ('%s') - it sits under the robot at "
+                    "(%.2f, %.2f) and would refuse the way out.",
+                    it->id,
+                    it->name.c_str(),
+                    rx,
+                    ry);
+        erase_obstacle_polygon_locked(it->polygon);
+        it = area.obstacles.erase(it);
+        masks_dirty_ = true;
+        ++dropped;
+      }
+    }
+  }
+  if (dropped == 0)
+  {
+    return 0;
+  }
+  // Same re-stamp + replan nudge as a single discard.
+  apply_area_classifications();
+  std_msgs::msg::Bool replan_msg;
+  replan_msg.data = true;
+  replan_needed_pub_->publish(replan_msg);
+  return dropped;
+}
+
+void MapServerNode::on_discard_dig_keepouts_near_robot(
+    const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
+    std_srvs::srv::Trigger::Response::SharedPtr res)
+{
+  const std::size_t dropped = discard_dig_keepouts_near_robot();
+  res->success = true;
+  res->message = std::to_string(dropped) + " pending dig keepout(s) under the robot discarded";
+  RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
+}
+
 void MapServerNode::erase_obstacle_polygon_locked(const geometry_msgs::msg::Polygon& polygon)
 {
   const auto target = polygon_centroid(polygon);

@@ -5,6 +5,11 @@
 > authoritative and which is a historical record. Excludes `ros2/src/opennav_coverage/**` and
 > `ros2/src/external/**` (vendored submodules) and `node_modules/`.
 
+## Update-system documents added after index generation
+
+- [Software updates and recovery](../UPDATES.md) — **current**, operator/contributor: host updater, installer, publication and platform contract.
+- [Update-system design snapshot](../UPDATE_SYSTEM_PLAN.md) — **historical**, contributor: original design intent; use UPDATES.md for implemented behavior.
+
 ## How to read this index
 
 - **status** — `current` (trust it), `historical` (a dated record of *what was decided/found then*),
@@ -67,6 +72,10 @@ tree at f21729e9; regenerate when files are added or removed rather than hand-pa
 | [`ci_repo_tooling.md`](codemaps/ci_repo_tooling.md) | GitHub Actions, drift gates, GHCR pipelines, wiki/Pages publishers, repo metadata. |
 
 ## Contributor docs (current)
+
+Migration update (2026-09-14): [ROS2_LYRICAL_MIGRATION.md](../ROS2_LYRICAL_MIGRATION.md)
+is current for the Lyrical APIs, source dependency pins, build targets and acceptance
+procedure. It supersedes Kilted-specific build details in the September 3 codemaps.
 
 | Doc | Audience | What it is |
 |-----|----------|-----------|

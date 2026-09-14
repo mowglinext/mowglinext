@@ -288,7 +288,7 @@ check_firmware() {
   local status_data
   status_data="$(
     docker_cmd exec mowgli-ros2 bash -lc \
-      "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /hardware_bridge/status --once 2>/dev/null" \
+      "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /hardware_bridge/status --once 2>/dev/null" \
       2>/dev/null || echo ""
   )"
 
@@ -350,7 +350,7 @@ check_gps() {
     local mavros_state
     mavros_state="$(
       docker_cmd exec mowgli-ros2 bash -lc \
-        "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/state --once 2>/dev/null" \
+        "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/state --once 2>/dev/null" \
         2>/dev/null || echo ""
     )"
     if [[ -z "$mavros_state" ]]; then
@@ -363,7 +363,7 @@ check_gps() {
     local mavros_global
     mavros_global="$(
       docker_cmd exec mowgli-ros2 bash -lc \
-        "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/global_position/global --once 2>/dev/null" \
+        "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/global_position/global --once 2>/dev/null" \
         2>/dev/null || echo ""
     )"
     if [[ -z "$mavros_global" ]]; then
@@ -376,7 +376,7 @@ check_gps() {
     local rtcm_info
     rtcm_info="$(
       docker_cmd exec mowgli-ros2 bash -lc \
-        "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /rtcm 2>/dev/null" \
+        "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /rtcm 2>/dev/null" \
         2>/dev/null || echo ""
     )"
     if echo "$rtcm_info" | grep -q "Publisher count: [1-9]"; then
@@ -412,7 +412,7 @@ check_gps() {
   local fix_data
   fix_data="$(
     docker_cmd exec mowgli-ros2 bash -lc \
-      "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /gps/fix --once 2>/dev/null" \
+      "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /gps/fix --once 2>/dev/null" \
       2>/dev/null || echo ""
   )"
 
@@ -456,7 +456,7 @@ check_gps() {
     local rtcm_info
     rtcm_info="$(
       docker_cmd exec mowgli-ros2 bash -lc \
-        "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /rtcm 2>/dev/null" \
+        "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /rtcm 2>/dev/null" \
         2>/dev/null || echo ""
     )"
     if echo "$rtcm_info" | grep -q "Publisher count: [1-9]"; then
@@ -516,7 +516,7 @@ check_lidar() {
   local scan_check
   scan_check="$(
     docker_cmd exec mowgli-ros2 bash -lc \
-      "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /scan 2>/dev/null" \
+      "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /scan 2>/dev/null" \
       2>/dev/null || echo ""
   )"
 
@@ -591,7 +591,7 @@ check_gui() {
   local fg_info
   fg_info="$(
     docker_cmd exec mowgli-ros2 bash -lc \
-      "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list 2>/dev/null" \
+      "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list 2>/dev/null" \
       2>/dev/null | grep foxglove_bridge || echo ""
   )"
 

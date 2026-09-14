@@ -9,7 +9,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -54,19 +54,20 @@ target_include_directories(mowgli_map_lib PUBLIC
   ${Boost_INCLUDE_DIRS}
 )
 
-ament_target_dependencies(mowgli_map_lib
-  rclcpp
-  std_msgs
-  std_srvs
-  nav_msgs
-  geometry_msgs
-  grid_map_core
-  grid_map_ros
-  grid_map_msgs
-  mowgli_interfaces
-  nav2_msgs
-  tf2_ros
+target_link_libraries(mowgli_map_lib
+  ${rclcpp_TARGETS}
+  ${std_msgs_TARGETS}
+  ${std_srvs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${grid_map_core_TARGETS}
+  ${grid_map_ros_LIBRARIES}
+  ${grid_map_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
+  ${nav2_msgs_TARGETS}
+  ${tf2_ros_TARGETS}
 )
+target_include_directories(mowgli_map_lib PUBLIC ${grid_map_ros_INCLUDE_DIRS})
 
 # ---------------------------------------------------------------------------
 # Library: mowgli_obstacle_tracker_lib
@@ -83,17 +84,17 @@ target_include_directories(mowgli_obstacle_tracker_lib PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(mowgli_obstacle_tracker_lib
-  rclcpp
-  std_srvs
-  nav_msgs
-  map_msgs
-  geometry_msgs
-  sensor_msgs
-  visualization_msgs
-  mowgli_interfaces
-  tf2_ros
-  tf2_geometry_msgs
+target_link_libraries(mowgli_obstacle_tracker_lib
+  ${rclcpp_TARGETS}
+  ${std_srvs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${map_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${visualization_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
+  ${tf2_ros_TARGETS}
+  ${tf2_geometry_msgs_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -108,8 +109,8 @@ target_link_libraries(map_server_node
   mowgli_map_lib
 )
 
-ament_target_dependencies(map_server_node
-  rclcpp
+target_link_libraries(map_server_node
+  ${rclcpp_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -124,8 +125,8 @@ target_link_libraries(obstacle_tracker_node
   mowgli_obstacle_tracker_lib
 )
 
-ament_target_dependencies(obstacle_tracker_node
-  rclcpp
+target_link_libraries(obstacle_tracker_node
+  ${rclcpp_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -177,15 +178,16 @@ if(BUILD_TESTING)
     mowgli_map_lib
   )
 
-  ament_target_dependencies(test_map_server
-    rclcpp
-    grid_map_core
-    grid_map_ros
-    grid_map_msgs
-    nav_msgs
-    geometry_msgs
-    mowgli_interfaces
+  target_link_libraries(test_map_server
+    ${rclcpp_TARGETS}
+    ${grid_map_core_TARGETS}
+    ${grid_map_ros_LIBRARIES}
+    ${grid_map_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${mowgli_interfaces_TARGETS}
   )
+  target_include_directories(test_map_server PUBLIC ${grid_map_ros_INCLUDE_DIRS})
 
   ament_add_gtest(test_mow_progress
     test/test_mow_progress.cpp
@@ -197,15 +199,16 @@ if(BUILD_TESTING)
 
   target_include_directories(test_mow_progress PRIVATE include)
 
-  ament_target_dependencies(test_mow_progress
-    rclcpp
-    grid_map_core
-    grid_map_ros
-    grid_map_msgs
-    nav_msgs
-    geometry_msgs
-    mowgli_interfaces
+  target_link_libraries(test_mow_progress
+    ${rclcpp_TARGETS}
+    ${grid_map_core_TARGETS}
+    ${grid_map_ros_LIBRARIES}
+    ${grid_map_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${mowgli_interfaces_TARGETS}
   )
+  target_include_directories(test_mow_progress PUBLIC ${grid_map_ros_INCLUDE_DIRS})
 
   ament_add_gtest(test_obstacle_tracker
     test/test_obstacle_tracker.cpp
@@ -215,17 +218,17 @@ if(BUILD_TESTING)
     mowgli_obstacle_tracker_lib
   )
 
-  ament_target_dependencies(test_obstacle_tracker
-    rclcpp
-    std_srvs
-    nav_msgs
-    map_msgs
-    geometry_msgs
-    sensor_msgs
-    visualization_msgs
-    mowgli_interfaces
-    tf2_ros
-    tf2_geometry_msgs
+  target_link_libraries(test_obstacle_tracker
+    ${rclcpp_TARGETS}
+    ${std_srvs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${visualization_msgs_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
   )
 
   # Pure logic, no ROS deps — mirrors fusion_graph's header-only gate tests.

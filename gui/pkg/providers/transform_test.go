@@ -31,6 +31,9 @@ func TestAdaptGPSMapsNavSatFixToAbsolutePose(t *testing.T) {
 	assert.Equal(t, 43.9542, pose.Pose.Pose.Position.X)
 	assert.Equal(t, 2.2022, pose.Pose.Pose.Position.Y)
 	assert.Equal(t, 170.06, pose.Pose.Pose.Position.Z)
+	assert.Equal(t, uint32(7), pose.Header.Stamp.Sec)
+	assert.Equal(t, uint32(8), pose.Header.Stamp.Nanosec)
+	assert.Equal(t, "gps_link", pose.Header.FrameId)
 }
 
 func TestAdaptGPSKeepsSbasAndGbasAsGenericGpsFixes(t *testing.T) {
@@ -205,7 +208,7 @@ func TestAdaptLidarDecimatesLargeScan(t *testing.T) {
 	ranges := make([]string, n)
 	intensities := make([]string, n)
 	for i := 0; i < n; i++ {
-		ranges[i] = fmt.Sprintf("%d", i)     // value == original index, so we can verify which beams survive
+		ranges[i] = fmt.Sprintf("%d", i) // value == original index, so we can verify which beams survive
 		intensities[i] = fmt.Sprintf("%d", i)
 	}
 	raw := []byte(fmt.Sprintf(

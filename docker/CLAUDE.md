@@ -73,7 +73,7 @@ On a real robot the installer also drops `mowgli-up/-down/-restart/-logs/-ps/-ch
 - `COMPOSE_PROJECT_NAME` (default `install`) must stay stable: renaming it orphans the `install_mowgli_maps` volume holding `areas.dat` and the persisted fusion graph.
 - `stack.sh` re-asserts `REPO_DIR`/`DOCKER_DIR` **after** sourcing `install/lib/config.sh` (L76–83), because config.sh recomputes them from `MOWGLI_HOME` at source time. Any new lib that caches a path at source time needs the same treatment.
 - `stack.sh` drops `mqtt`/`watchtower` unless `ENABLE_MQTT`/`ENABLE_WATCHTOWER` are `true` (L88–103), but the **full installer always composes both** — a `stack.sh` stack is not service-identical to a real robot's.
-- `docker-compose.simulation.yaml`'s header comments say "Gazebo"; the simulator is **Webots**. The `Xvfb` / `DISPLAY=:99` part of the command is still real.
+- `docker-compose.simulation.yaml` uses **Webots** and pins `linux/amd64`, including on ARM hosts. The `Xvfb` / `DISPLAY=:99` part of the command is still real.
 - `dev-sim` bind-mounts `ros2/src/**/{config,launch,trees,worlds}` over the installed share dirs — edits apply on container restart, but a stale mount silently shadows a freshly rebuilt package.
 - `logs/mow_sessions/patch_dwb.py`, `splice_dwb_source.py`, `square_test.py` target a single `nav2_params.yaml` and DWB/MPPI. Both are gone (params are base + overlay; coverage is FTCController — root Invariant 8). Historical artefacts, they will not run as written.
 - `logs/mow_sessions/*.jsonl` is gitignored; the session monitor writes inside the container, so redirect to `/ros2_ws/maps` (the named volume) or bind-mount this directory — see `../docs/claude/session-monitoring.md`.

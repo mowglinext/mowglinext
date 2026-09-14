@@ -31,9 +31,12 @@ SYNC_WORKSPACE_SCRIPT="${SCRIPT_DIR}/sync_workspace_packages.sh"
 
 cd "${WORKSPACE}"
 
-# shellcheck source=/opt/ros/kilted/setup.bash
+# shellcheck source=/opt/ros/lyrical/setup.bash
 set +u
-source /opt/ros/${ROS_DISTRO:-kilted}/setup.bash
+source /opt/ros/${ROS_DISTRO:-lyrical}/setup.bash
+if [ -f /opt/lyrical_vendor/local_setup.bash ]; then
+    source /opt/lyrical_vendor/local_setup.bash
+fi
 set -u
 
 mapfile -t BUILD_PATHS < <("${SYNC_WORKSPACE_SCRIPT}" --print-base-paths)
@@ -65,6 +68,7 @@ if [ -n "${PACKAGES}" ]; then
                 --base-paths "${BUILD_PATHS[@]}" \
                 --packages-up-to ${PACKAGES} \
                 --cmake-args -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+                -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
                 --parallel-workers "${PARALLEL_WORKERS}" \
                 --symlink-install \
                 --event-handlers console_cohesion+
@@ -75,6 +79,7 @@ if [ -n "${PACKAGES}" ]; then
                 --base-paths "${BUILD_PATHS[@]}" \
                 --packages-select ${PACKAGES} \
                 --cmake-args -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+                -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
                 --parallel-workers "${PARALLEL_WORKERS}" \
                 --symlink-install \
                 --event-handlers console_cohesion+
@@ -88,6 +93,7 @@ else
     colcon build \
         --base-paths "${BUILD_PATHS[@]}" \
         --cmake-args -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+        -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
         --parallel-workers "${PARALLEL_WORKERS}" \
         --symlink-install \
         --event-handlers console_cohesion+

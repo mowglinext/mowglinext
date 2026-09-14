@@ -429,6 +429,14 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         on_promote_obstacle(req, res);
       });
 
+  discard_dig_keepouts_near_robot_srv_ = create_service<std_srvs::srv::Trigger>(
+      "~/discard_dig_keepouts_near_robot",
+      [this](const std_srvs::srv::Trigger::Request::SharedPtr req,
+             std_srvs::srv::Trigger::Response::SharedPtr res)
+      {
+        on_discard_dig_keepouts_near_robot(req, res);
+      });
+
   discard_obstacle_srv_ = create_service<mowgli_interfaces::srv::ClearObstacle>(
       "~/discard_obstacle",
       [this](const mowgli_interfaces::srv::ClearObstacle::Request::SharedPtr req,

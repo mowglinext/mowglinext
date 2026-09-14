@@ -11,7 +11,7 @@
 set -euo pipefail
 
 CONFIG="${GNSS_CONFIG_PATH:-/config/mowgli_robot.yaml}"
-ROS_SETUP_BASH="${ROS_SETUP_BASH:-/opt/ros/kilted/setup.bash}"
+ROS_SETUP_BASH="${ROS_SETUP_BASH:-/opt/ros/lyrical/setup.bash}"
 GNSS_SIDECAR_SETUP_BASH="${GNSS_SIDECAR_SETUP_BASH:-/opt/gnss_sidecar/setup.bash}"
 UNIVERSAL_BRIDGE_SCRIPT="${UNIVERSAL_BRIDGE_SCRIPT:-/universal_gnss_topic_bridge.py}"
 ROS2_BIN="${ROS2_BIN:-ros2}"

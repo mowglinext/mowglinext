@@ -460,9 +460,9 @@ def build_remote_benchmark_script(args: argparse.Namespace, remote_results_dir: 
 
       capture_state() {{
         local tag="$1"
-        docker exec mowgli-ros2 bash -lc 'source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout '"$GPS_STATUS_TIMEOUT_SECONDS"' ros2 topic echo /gps/status --once' \
+        docker exec mowgli-ros2 bash -lc 'source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout '"$GPS_STATUS_TIMEOUT_SECONDS"' ros2 topic echo /gps/status --once' \
           >"$RESULTS_DIR/${{tag}}_gps_status.yaml" 2>"$RESULTS_DIR/${{tag}}_gps_status.stderr" || true
-        docker exec mowgli-ros2 bash -lc 'source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout '"$DIAGNOSTICS_SECONDS"' ros2 topic echo /diagnostics' \
+        docker exec mowgli-ros2 bash -lc 'source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout '"$DIAGNOSTICS_SECONDS"' ros2 topic echo /diagnostics' \
           >"$RESULTS_DIR/${{tag}}_diagnostics_raw.yaml" 2>"$RESULTS_DIR/${{tag}}_diagnostics_raw.stderr" || true
         docker stats --no-stream --format '{{{{json .}}}}' mowgli-gps >"$RESULTS_DIR/${{tag}}_docker_stats.json" 2>"$RESULTS_DIR/${{tag}}_docker_stats.stderr" || true
         docker inspect --format '{{{{json .State}}}}' mowgli-gps >"$RESULTS_DIR/${{tag}}_docker_state.json" 2>"$RESULTS_DIR/${{tag}}_docker_state.stderr" || true
@@ -818,7 +818,7 @@ PY
       fi
       docker start mowgli-gps >"$RESULTS_DIR/${{tag}}_docker_start.log" 2>&1
       sleep 30
-      docker exec mowgli-ros2 bash -lc 'source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 12 ros2 topic echo /gps/status --once' \
+      docker exec mowgli-ros2 bash -lc 'source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 12 ros2 topic echo /gps/status --once' \
         >"$RESULTS_DIR/${{tag}}_gps_status.yaml" 2>"$RESULTS_DIR/${{tag}}_gps_status.stderr" || true
       """)
 

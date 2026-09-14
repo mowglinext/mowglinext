@@ -1,16 +1,37 @@
+# syntax=docker/dockerfile:1.7
+# Source overlays for dependencies not released as Lyrical binaries.
+FROM ros:lyrical-ros-base AS lyrical-vendor
+ARG TARGETARCH
+ARG DEBIAN_FRONTEND=noninteractive
+COPY ros2/lyrical-vendor-packages.txt /tmp/vendor-packages.txt
+RUN apt-get update && xargs apt-get install -y --no-install-recommends < /tmp/vendor-packages.txt \
+ && mkdir -p /opt/lyrical_vendor && chown ubuntu:ubuntu /opt/lyrical_vendor
+COPY ros2/scripts/build_lyrical_vendor.sh /tmp/build_lyrical_vendor.sh
+USER ubuntu
+RUN --mount=type=cache,id=mowgli-vendor-lyrical-${TARGETARCH},target=/tmp/lyrical-vendor,uid=1000,gid=1000,sharing=locked \
+    VENDOR_WORKSPACE=/tmp/lyrical-vendor bash /tmp/build_lyrical_vendor.sh
+
 # =============================================================================
 # Stage 0: gtsam-builder
 # Builds GTSAM 4.3a1 from source. The Ubuntu Noble apt package
 # (libgtsam-dev 4.2) ships a broken GTSAMConfig.cmake (references files
 # that aren't installed) AND uses the legacy boost::optional<Matrix&>
-# API for custom factors. There is no ros-kilted-gtsam yet (only Jazzy).
+# API for custom factors. Keep the existing 4.3a1 pin during this migration.
 # Building from source gives us a clean install + the modern
 # OptionalMatrixType API + a single pinned version we control.
 #
 # Install lands in /opt/gtsam; runtime stages COPY it across, set up
 # ldconfig, and export CMAKE_PREFIX_PATH so find_package(GTSAM) works.
+#
+# -Wno-error=array-bounds mirrors .github/workflows/ros2-ci.yml (same recipe,
+# keep in lockstep): GTSAM 4.3a1 hardcodes -Werror, and on the GitHub
+# `ubuntu-26.04` runner (Ubuntu `amd64v3` variant, GCC 15 targeting x86-64-v3
+# by default) GCC 15 emits a false-positive -Warray-bounds on Eigen's AVX
+# loads of fixed-size vectors. This baseline-amd64/arm64 image never enables
+# AVX, so the flag is inert here.
 # =============================================================================
-FROM ros:kilted-ros-base AS gtsam-builder
+FROM ros:lyrical-ros-base AS gtsam-builder
+ARG TARGETARCH
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -22,58 +43,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /tmp
 RUN git clone --depth 1 -b 4.3a1 https://github.com/borglab/gtsam.git
 
-RUN cd gtsam && mkdir build && cd build && \
-    cmake .. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/opt/gtsam \
-        -DGTSAM_BUILD_TESTS=OFF \
-        -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
-        -DGTSAM_BUILD_PYTHON=OFF \
-        -DGTSAM_BUILD_UNSTABLE=OFF \
-        -DGTSAM_USE_SYSTEM_EIGEN=ON \
-        -DGTSAM_USE_SYSTEM_METIS=ON \
-        -DGTSAM_WITH_TBB=OFF \
-        -DGTSAM_WITH_EIGEN_MKL=OFF \
-        -DGTSAM_INSTALL_MATLAB_TOOLBOX=OFF \
-        -DBUILD_SHARED_LIBS=ON \
- && make -j$(nproc) install
-
-# =============================================================================
-# Stage 0b: fields2cover-builder
-# Builds Fields2Cover 2.0.0 from source into /opt/fields2cover-200. The
-# upstream repo (https://github.com/Fields2Cover/Fields2Cover) has no
-# debian package for v2 on Noble. mowgli_coverage's CMakeLists pins
-#   find_package(Fields2Cover 2.0.0 REQUIRED PATHS /opt/fields2cover-200)
-# so the install prefix matters. Runtime stages COPY /opt/fields2cover-200
-# across; libgdal/libgeos/libortools/libtinyxml2 are installed in `base`.
-# =============================================================================
-FROM ros:kilted-ros-base AS fields2cover-builder
-
-ARG DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake git pkg-config \
-      libeigen3-dev libgdal-dev libgeos++-dev libgeos-dev libgsl-dev \
-      libtinyxml2-dev libpython3-dev python3-dev libtbb-dev \
-      ros-kilted-ortools-vendor \
- && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /tmp
-RUN git clone --depth 1 -b v2.0.0 https://github.com/Fields2Cover/Fields2Cover.git f2c
-
-RUN . /opt/ros/kilted/setup.sh && \
-    cd f2c && mkdir build && cd build && \
-    cmake .. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-200 \
-        -DBUILD_TESTS=OFF \
-        -DBUILD_PYTHON=OFF \
-        -DBUILD_TUTORIALS=OFF \
-        -DBUILD_DOC=OFF \
-        -DALLOW_PARALLELIZATION=ON \
-        -DCMAKE_CXX_FLAGS=-DALLOW_PARALLELIZATION \
-        -DBUILD_SHARED_LIBS=ON \
- && make -j$(nproc) install
+RUN mkdir -p /opt/gtsam && chown -R ubuntu:ubuntu /opt/gtsam /tmp/gtsam
+USER ubuntu
+RUN --mount=type=cache,id=mowgli-gtsam-lyrical-4.3a1-${TARGETARCH},target=/tmp/gtsam/build,uid=1000,gid=1000,sharing=locked \
+    cmake -S /tmp/gtsam -B /tmp/gtsam/build \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_INSTALL_PREFIX=/opt/gtsam \
+      -DGTSAM_BUILD_TESTS=OFF -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+      -DGTSAM_BUILD_PYTHON=OFF -DGTSAM_BUILD_UNSTABLE=OFF \
+      -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_USE_SYSTEM_METIS=ON \
+      -DGTSAM_WITH_TBB=OFF -DGTSAM_WITH_EIGEN_MKL=OFF \
+      -DGTSAM_INSTALL_MATLAB_TOOLBOX=OFF -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_CXX_FLAGS=-Wno-error=array-bounds \
+ && cmake --build /tmp/gtsam/build --parallel 3 \
+ && cmake --install /tmp/gtsam/build
 
 # =============================================================================
 # Stage 0b2: fields2cover-v3-builder  (coverage migration — Phase 1b: live)
@@ -81,14 +64,13 @@ RUN . /opt/ros/kilted/setup.sh && \
 # release); it lives on the moving `v3.0` branch, so we PIN a commit SHA. The win
 # is native headland routing (rp::RoutePlannerBase::genRoute, graph via OR-Tools)
 # to fix the headland-perimeter freeze. OR-Tools comes from
-# ros-kilted-ortools-vendor (same as the v2 stage); nlohmann-json3-dev is an
+# ros-lyrical-ortools-vendor; nlohmann-json3-dev is an
 # added v3 dep. mowgli_coverage now find_package()es 3.0.0 at
 # /opt/fields2cover-300 and adapts the one API break (generateHeadlandSwaths
-# returns vector<F2CMultiLineString>, was vector<F2CCells>). The v2 stage below
-# is retained as a build-time revert fallback (its tree is COPY'd but NOT
-# ldconfig'd in the runtime stage).
+# returns vector<F2CMultiLineString>, was vector<F2CCells>).
 # =============================================================================
-FROM ros:kilted-ros-base AS fields2cover-v3-builder
+FROM ros:lyrical-ros-base AS fields2cover-v3-builder
+ARG TARGETARCH
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -96,7 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake git pkg-config \
       libeigen3-dev libgdal-dev libgeos++-dev libgeos-dev libgsl-dev \
       libtinyxml2-dev libpython3-dev python3-dev libtbb-dev nlohmann-json3-dev \
-      ros-kilted-ortools-vendor \
+      ros-lyrical-ortools-vendor \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp
@@ -105,21 +87,22 @@ WORKDIR /tmp
 # without #include <iomanip> (modern GCC/libstdc++ no longer pulls it in
 # transitively), which fails the build with "'setw' is not a member of 'std'".
 RUN git clone https://github.com/Fields2Cover/Fields2Cover.git f2c3 && \
-    cd f2c3 && git checkout 884d895b59192882476e986ba44ea9143a06a6a9 && \
-    sed -i '1i #include <iomanip>' src/fields2cover/utils/visualizer.cpp
+    cd f2c3 && git checkout 884d895b59192882476e986ba44ea9143a06a6a9
+RUN cd /tmp/f2c3 && \
+    sed -i '1i #include <iomanip>' src/fields2cover/utils/visualizer.cpp && \
+    sed -i '1i #include <algorithm>' src/fields2cover/types/Graph.cpp
 
-RUN . /opt/ros/kilted/setup.sh && \
-    cd f2c3 && mkdir build && cd build && \
-    cmake .. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-300 \
-        -DBUILD_TESTS=OFF \
-        -DBUILD_PYTHON=OFF \
-        -DBUILD_TUTORIALS=OFF \
-        -DBUILD_DOC=OFF \
-        -DALLOW_PARALLELIZATION=ON \
-        -DBUILD_SHARED_LIBS=ON \
- && make -j$(nproc) install
+RUN mkdir -p /opt/fields2cover-300 && chown -R ubuntu:ubuntu /opt/fields2cover-300 /tmp/f2c3
+USER ubuntu
+RUN --mount=type=cache,id=mowgli-f2c-lyrical-884d895-${TARGETARCH},target=/tmp/f2c3/build,uid=1000,gid=1000,sharing=locked \
+    . /opt/ros/lyrical/setup.sh \
+ && cmake -S /tmp/f2c3 -B /tmp/f2c3/build \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-300 \
+      -DBUILD_TESTS=OFF -DBUILD_PYTHON=OFF -DBUILD_TUTORIALS=OFF \
+      -DBUILD_DOC=OFF -DALLOW_PARALLELIZATION=ON -DBUILD_SHARED_LIBS=ON \
+ && cmake --build /tmp/f2c3/build --parallel 3 \
+ && cmake --install /tmp/f2c3/build
 
 # =============================================================================
 # Stage 0c: ublox-msgs-builder
@@ -139,7 +122,7 @@ RUN . /opt/ros/kilted/setup.sh && \
 # and what foxglove loads here would be worse than the current log spam.
 # Bump both Dockerfiles together when the fork moves.
 # =============================================================================
-FROM ros:kilted-ros-base AS ublox-msgs-builder
+FROM ros:lyrical-ros-base AS ublox-msgs-builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG UBLOX_DGNSS_REF=fix/hp-fix-stale-status-cov
@@ -149,7 +132,7 @@ ARG UBLOX_DGNSS_URL=https://github.com/cedbossneo/ublox_dgnss.git
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake git \
       python3-colcon-common-extensions \
-      ros-kilted-rosidl-default-generators \
+      ros-lyrical-rosidl-default-generators \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /ws/src
@@ -157,10 +140,13 @@ RUN git clone --branch ${UBLOX_DGNSS_REF} ${UBLOX_DGNSS_URL} ublox_dgnss \
  && cd ublox_dgnss && git checkout ${UBLOX_DGNSS_SHA}
 
 WORKDIR /ws
-RUN . /opt/ros/kilted/setup.sh \
+RUN chown -R ubuntu:ubuntu /ws
+USER ubuntu
+RUN . /opt/ros/lyrical/setup.sh \
  && colcon build --merge-install \
       --packages-up-to ublox_ubx_msgs ublox_ubx_interfaces \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -Wno-dev \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -Wno-dev \
  && rm -rf /ws/build /ws/log /ws/src
 
 # =============================================================================
@@ -174,17 +160,17 @@ RUN . /opt/ros/kilted/setup.sh \
 # local CMakeLists is deliberately interface-only: the upstream package's
 # CMakeLists also builds the complete Universal GNSS driver stack.
 # =============================================================================
-FROM ros:kilted-ros-base AS universal-gnss-interfaces-builder
+FROM ros:lyrical-ros-base AS universal-gnss-interfaces-builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake \
       python3-colcon-common-extensions \
-      ros-kilted-ament-cmake \
-      ros-kilted-diagnostic-msgs \
-      ros-kilted-rosidl-default-generators \
-      ros-kilted-rosidl-default-runtime \
+      ros-lyrical-ament-cmake \
+      ros-lyrical-diagnostic-msgs \
+      ros-lyrical-rosidl-default-generators \
+      ros-lyrical-rosidl-default-runtime \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /ws/src/universal_gnss_ros2
@@ -194,10 +180,13 @@ COPY ros2/src/external/universal-gnss/gnss_ros2/srv/ srv/
 COPY ros2/universal_gnss_interfaces.CMakeLists.txt CMakeLists.txt
 
 WORKDIR /ws
-RUN . /opt/ros/kilted/setup.sh \
+RUN chown -R ubuntu:ubuntu /ws
+USER ubuntu
+RUN . /opt/ros/lyrical/setup.sh \
  && colcon build --merge-install \
       --packages-select universal_gnss_ros2 \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -Wno-dev \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -Wno-dev \
  && rm -rf /ws/build /ws/log /ws/src
 
 # =============================================================================
@@ -205,9 +194,15 @@ RUN . /opt/ros/kilted/setup.sh \
 # Installs all runtime ROS2 dependencies. Both runtime and simulation stages
 # inherit from here, keeping the image lean.
 # =============================================================================
-FROM ros:kilted-ros-base AS base
+FROM ros:lyrical-ros-base AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
+COPY ros2/lyrical-vendor-packages.txt /tmp/vendor-packages.txt
+RUN apt-get update && xargs apt-get install -y --no-install-recommends < /tmp/vendor-packages.txt
+COPY --from=lyrical-vendor /opt/lyrical_vendor /opt/lyrical_vendor
+ENV AMENT_PREFIX_PATH=/opt/lyrical_vendor
+ENV CMAKE_PREFIX_PATH=/opt/lyrical_vendor
+ENV LD_LIBRARY_PATH=/opt/lyrical_vendor/lib
 
 # LOCAL-ONLY (do not commit): this Docker host has no IPv6 route, so apt's
 # default IPv6-first to ports.ubuntu.com times out. Force IPv4 for all apt in
@@ -216,58 +211,55 @@ RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Navigation
-    ros-kilted-nav2-bringup \
-    ros-kilted-nav2-bt-navigator \
-    ros-kilted-nav2-controller \
-    ros-kilted-nav2-planner \
-    ros-kilted-nav2-behaviors \
-    ros-kilted-nav2-regulated-pure-pursuit-controller \
-    ros-kilted-nav2-smac-planner \
-    ros-kilted-nav2-costmap-2d \
-    ros-kilted-nav2-map-server \
-    ros-kilted-nav2-lifecycle-manager \
-    ros-kilted-nav2-waypoint-follower \
-    ros-kilted-nav2-velocity-smoother \
+    ros-lyrical-nav2-bt-navigator \
+    ros-lyrical-nav2-controller \
+    ros-lyrical-nav2-planner \
+    ros-lyrical-nav2-smoother \
+    ros-lyrical-nav2-collision-monitor \
+    ros-lyrical-nav2-behaviors \
+    ros-lyrical-nav2-regulated-pure-pursuit-controller \
+    ros-lyrical-nav2-costmap-2d \
+    ros-lyrical-nav2-map-server \
+    ros-lyrical-nav2-lifecycle-manager \
+    ros-lyrical-nav2-waypoint-follower \
+    ros-lyrical-nav2-velocity-smoother \
     # Motion control
-    ros-kilted-twist-mux \
+    ros-lyrical-twist-mux \
     # Behavior trees
-    ros-kilted-behaviortree-cpp \
+    ros-lyrical-behaviortree-cpp \
     # Robot description / TF
-    ros-kilted-xacro \
-    ros-kilted-robot-state-publisher \
-    ros-kilted-joint-state-publisher \
-    ros-kilted-tf2-ros \
-    ros-kilted-tf2-eigen \
-    ros-kilted-tf2-geometry-msgs \
+    ros-lyrical-xacro \
+    ros-lyrical-robot-state-publisher \
+    ros-lyrical-joint-state-publisher \
+    ros-lyrical-tf2-ros \
+    ros-lyrical-tf2-eigen \
+    ros-lyrical-tf2-geometry-msgs \
     # Grid map
-    ros-kilted-grid-map-core \
-    ros-kilted-grid-map-ros \
-    ros-kilted-grid-map-msgs \
     # Diagnostics
-    ros-kilted-diagnostic-msgs \
-    ros-kilted-diagnostic-updater \
+    ros-lyrical-diagnostic-msgs \
+    ros-lyrical-diagnostic-updater \
     # Foxglove Bridge (WebSocket bridge for GUI and Foxglove Studio)
-    ros-kilted-foxglove-bridge \
+    ros-lyrical-foxglove-bridge \
     # RTCM message definitions for the public /rtcm topic
-    ros-kilted-rtcm-msgs \
+    ros-lyrical-rtcm-msgs \
     # tinyxml2 (required at runtime by BehaviorTree.CPP)
     libtinyxml2-dev \
     # Topic tools (relay, throttle — used in simulation for topic remapping)
-    ros-kilted-topic-tools \
+    ros-lyrical-topic-tools \
     # Docking (opennav_docking — dock/undock action server)
     # DockRobot/UndockRobot actions are in nav2_msgs (already installed).
     # The docking_server executable is in opennav_docking.
-    ros-kilted-opennav-docking \
+    ros-lyrical-opennav-docking \
     # Rotation shim controller for transit navigation
-    ros-kilted-nav2-rotation-shim-controller \
+    ros-lyrical-nav2-rotation-shim-controller \
     # Nav2 core headers (FTC controller plugin depends on nav2_core)
-    ros-kilted-nav2-core \
-    ros-kilted-nav2-util \
+    ros-lyrical-nav2-core \
+    ros-lyrical-nav2-util \
     # Nav2 msgs (CostmapFilterInfo for costmap filters)
-    ros-kilted-nav2-msgs \
+    ros-lyrical-nav2-msgs \
     # DDS middleware — Cyclone DDS is more reliable than FastRTPS on ARM
     # (no shared memory, no stale /dev/shm segments, better service discovery)
-    ros-kilted-rmw-cyclonedds-cpp \
+    ros-lyrical-rmw-cyclonedds-cpp \
     # GTSAM runtime deps — libgtsam itself is COPYed from the
     # gtsam-builder stage below. libmetis-dev provides both the
     # runtime libmetis5 and the unversioned libmetis.so symlink
@@ -281,9 +273,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # mowgli_coverage's find_package pulls in transitive headers via
     # the exported Fields2Cover CMake target.
     libgdal-dev libgeos++-dev libtinyxml2-dev libtbb12 \
-    ros-kilted-ortools-vendor \
+    ros-lyrical-ortools-vendor \
     # LiDAR map anchor: Beluga MCL (header-only) + its ROS adapters
-    ros-kilted-beluga-ros \
     # Utilities
     python3-argcomplete \
     # WebSocket server for cmd_vel_ws_relay (manual mowing low-latency path)
@@ -295,21 +286,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # external CMake prefixes explicitly before colcon so the overlay setup
 # scripts cannot drop them.
 COPY --from=gtsam-builder /opt/gtsam /opt/gtsam
-RUN echo '/opt/gtsam/lib' > /etc/ld.so.conf.d/gtsam.conf && ldconfig
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libboost-serialization-dev libboost-filesystem-dev libboost-thread-dev \
+    libboost-program-options-dev libboost-date-time-dev libboost-timer-dev \
+    libboost-chrono-dev libboost-regex-dev \
+ && rm -rf /var/lib/apt/lists/* \
+ && echo '/opt/gtsam/lib' > /etc/ld.so.conf.d/gtsam.conf && ldconfig
 
-# Coverage runs on Fields2Cover v3 (Phase 1b). Pull BOTH source-built trees in
-# but ldconfig ONLY v3 — they share the SONAME libFields2Cover.so, so exactly
-# one may sit on the global ld path or the loader races. Registering
-# /opt/fields2cover-300/lib lets the runtime loader resolve libFields2Cover.so
-# + libsteering_functions.so + libmatplot.so.1; libortools comes from the
-# ROS-sourced LD_LIBRARY_PATH (ros-kilted-ortools-vendor). mowgli_coverage's
-# CMakeLists pins PATHS /opt/fields2cover-300 + INSTALL_RPATH, so find_package
-# and the binary both resolve v3.
-#
-# v2 is kept on disk (NOT ldconfig'd) as a one-line-revert fallback: point
-# mowgli_coverage's CMake/RPATH back to /opt/fields2cover-200 and move the
-# ldconfig line below to fields2cover-200.
-COPY --from=fields2cover-builder /opt/fields2cover-200 /opt/fields2cover-200
+# Coverage uses the pinned Fields2Cover v3 install. Its OR-Tools dependency
+# is supplied by the ROS environment.
 COPY --from=fields2cover-v3-builder /opt/fields2cover-300 /opt/fields2cover-300
 RUN echo '/opt/fields2cover-300/lib' > /etc/ld.so.conf.d/fields2cover-300.conf && ldconfig
 
@@ -326,9 +311,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-colcon-common-extensions \
     python3-rosdep \
     python3-vcstool \
-    ros-kilted-ament-cmake \
-    ros-kilted-rosidl-default-generators \
-    ros-kilted-beluga-ros \
+    ccache \
+    ros-lyrical-ament-cmake \
+    ros-lyrical-rosidl-default-generators \
     build-essential \
     cmake \
     git \
@@ -362,8 +347,7 @@ COPY ros2/src/mowgli_bringup/package.xml       src/mowgli_bringup/package.xml
 COPY ros2/src/mowgli_bringup/CMakeLists.txt    src/mowgli_bringup/CMakeLists.txt
 COPY ros2/src/fusion_graph/package.xml         src/fusion_graph/package.xml
 COPY ros2/src/fusion_graph/CMakeLists.txt      src/fusion_graph/CMakeLists.txt
-# fusion_graph is the opt-in factor-graph replacement for ekf_map_node;
-# depends on libgtsam-dev installed in the base stage.
+# fusion_graph is the sole localizer and uses the pinned source GTSAM install.
 COPY ros2/src/mowgli_coverage/package.xml      src/mowgli_coverage/package.xml
 COPY ros2/src/mowgli_coverage/CMakeLists.txt   src/mowgli_coverage/CMakeLists.txt
 # opennav_coverage submodule provides opennav_coverage_msgs (action types
@@ -377,14 +361,16 @@ COPY ros2/src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt src/opennav_
 COPY tools/motor/package.xml    src/mowgli_tools/package.xml
 COPY tools/motor/CMakeLists.txt src/mowgli_tools/CMakeLists.txt
 
-# Resolve rosdep dependencies (cached until package.xml changes)
-RUN rosdep update --rosdistro kilted \
+# Resolve rosdep dependencies (cached until package.xml changes). The skipped
+# libraries come from lyrical-vendor; Webots belongs to the simulation image.
+RUN apt-get update \
+ && rosdep update --rosdistro lyrical \
  && rosdep install \
       --from-paths src \
       --ignore-src \
-      --rosdistro kilted \
-      -y \
- || true
+      --rosdistro lyrical \
+      --skip-keys "grid_map_core grid_map_ros grid_map_msgs beluga_ros nav2_smac_planner webots_ros2_driver webots_ros2_control" \
+      -y
 
 # =============================================================================
 # Stage 3: build-interfaces
@@ -396,19 +382,19 @@ FROM deps AS build-interfaces
 # Copy the full mowgli_interfaces package
 COPY ros2/src/mowgli_interfaces/ src/mowgli_interfaces/
 
-RUN /bin/bash -c "\
-    source /opt/ros/kilted/setup.bash && \
-    colcon build \
-      --packages-select mowgli_interfaces \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release \
-      --parallel-workers \$(nproc) \
-    "
+RUN chown -R ubuntu:ubuntu /ros2_ws
+USER ubuntu
+RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash \
+ && colcon build --packages-select mowgli_interfaces \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 --parallel-workers 2'
 
 # =============================================================================
 # Stage 4: build
 # Compiles all remaining workspace packages from source.
 # =============================================================================
 FROM build-interfaces AS build
+USER root
 
 ARG BUILD_TYPE=Release
 
@@ -423,7 +409,7 @@ RUN touch src/external/universal-gnss/COLCON_IGNORE
 
 # Skip every opennav_coverage subpackage except _msgs. The upstream server
 # is pinned to F2C 1.2.1 (no TrapezoidalDecomp / generateHeadlandSwaths /
-# planPathForConnection); we use mowgli_coverage with F2C 2.0 instead, and
+# planPathForConnection); we use mowgli_coverage with F2C v3 instead, and
 # only need the action types from opennav_coverage_msgs. Marker files
 # aren't tracked in the submodule, so create them here.
 RUN touch \
@@ -440,42 +426,30 @@ RUN /bin/bash -c "\
     "
 
 # Build all packages (mowgli_interfaces is already built and cached)
-RUN /bin/bash -c "\
-    source /opt/ros/kilted/setup.bash && \
-    source install/setup.bash && \
-    export CMAKE_PREFIX_PATH=/opt/fields2cover-300:/opt/gtsam:\${CMAKE_PREFIX_PATH:-} && \
-    export MAKEFLAGS=-j3 && \
-    colcon build \
+RUN chown -R ubuntu:ubuntu /ros2_ws
+ARG TARGETARCH
+USER ubuntu
+RUN --mount=type=cache,id=mowgli-ros2-lyrical-${TARGETARCH},target=/home/ubuntu/.cache/ccache,uid=1000,gid=1000,sharing=locked \
+    /bin/bash -c 'source /opt/ros/lyrical/setup.bash \
+ && source /opt/lyrical_vendor/local_setup.bash \
+ && source install/setup.bash \
+ && export CMAKE_PREFIX_PATH=/opt/lyrical_vendor:/opt/fields2cover-300:/opt/gtsam:${CMAKE_PREFIX_PATH:-} \
+ && MAKEFLAGS=-j3 colcon build --parallel-workers 2 \
       --cmake-args -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTING=OFF \
-      --parallel-workers 2 \
-      --event-handlers console_cohesion+ \
-    "
+      -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+      --event-handlers console_cohesion+'
 
-# Run unit tests (non-blocking)
-RUN /bin/bash -c "\
-    source /opt/ros/kilted/setup.bash && \
-    source install/setup.bash && \
-    colcon test \
-      --ctest-args -L 'gtest' --output-on-failure \
-    ; colcon test-result --verbose \
-    " || true
+# Tests are built and gated by ros2-ci.yml (BUILD_TESTING=ON).
 
 # =============================================================================
 # Stage 5: runtime
 # Minimal image containing only what is needed to run the robot.
 # =============================================================================
 FROM base AS runtime
+LABEL garden.mowgli.maintenance-api="1"
 
 WORKDIR /ros2_ws
-
-# Ensure libtinyxml2 .so.9 and .so.10 both resolve. The build stage may
-# compile against a different minor version than the runtime base provides
-# when Docker layer caching spans a base image update.
-RUN reallib=$(find /usr/lib -name 'libtinyxml2.so.*.*.*' | head -1) && \
-    dir=$(dirname "$reallib") && \
-    [ ! -e "$dir/libtinyxml2.so.9" ] && ln -sf "$(basename "$reallib")" "$dir/libtinyxml2.so.9" || true && \
-    [ ! -e "$dir/libtinyxml2.so.10" ] && ln -sf "$(basename "$reallib")" "$dir/libtinyxml2.so.10" || true && \
-    ldconfig
 
 # Pull compiled install tree from the build stage
 COPY --from=build /ros2_ws/install/ install/
@@ -521,11 +495,31 @@ RUN chmod +x /ros2_ws/scripts/mow_session_monitor.py
 ENTRYPOINT ["/ros2_entrypoint.sh"]
 CMD ["ros2", "launch", "mowgli_bringup", "mowgli.launch.py"]
 
+# Webots has no Lyrical binary in the ROS main repository yet.
+FROM base AS webots-driver-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git build-essential cmake python3-colcon-common-extensions python3-dev \
+    python3-collada python3-lark libxml2-dev libzip-dev libssl-dev libcurl4-openssl-dev \
+    ros-lyrical-vision-msgs ros-lyrical-python-cmake-module ros-lyrical-tinyxml2-vendor \
+    ros-lyrical-controller-manager
+WORKDIR /webots_ws
+RUN mkdir src && chown -R ubuntu:ubuntu /webots_ws
+USER ubuntu
+RUN git init -q src/webots_ros2 \
+ && git -C src/webots_ros2 fetch --depth 1 https://github.com/cyberbotics/webots_ros2.git db4a77c84ee91445d39de9a631e5b57a888814e2 \
+ && git -C src/webots_ros2 checkout -q --detach FETCH_HEAD \
+ && git -C src/webots_ros2 submodule update --init --recursive \
+ && sed -i 's/CMAKE_CXX_STANDARD 17/CMAKE_CXX_STANDARD 20/' src/webots_ros2/webots_ros2_driver/CMakeLists.txt
+RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash && MAKEFLAGS=-j3 colcon build \
+    --merge-install --packages-up-to webots_ros2_control --parallel-workers 2 \
+    --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+    -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5'
+
 # =============================================================================
 # Stage 6: simulation
 # Extends runtime with the Webots simulator for headless/web simulation.
 #
-# Webots R2025a is the minimum version required by the ROS 2 Kilted driver.
+# Webots R2025a is the minimum version required by the ROS 2 Lyrical driver.
 # Pin the vendor package so a clean checkout builds the same simulator image.
 # Cyberbotics publishes this Linux package for amd64 only; the regular runtime
 # target remains architecture-neutral, while this simulator target fails early
@@ -550,16 +544,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     x11-utils \
     # Required by Qt 6's xcb platform plugin in the headless Linux image.
     libxcb-cursor0 \
+    # Webots' bundled FFmpeg still links libsndio.so.7 on Ubuntu 26.04.
+    libsndio7.0 \
     wget \
     ca-certificates \
     # Webots ROS 2 launcher, controller and driver
-    ros-kilted-webots-ros2 \
+    python3-collada python3-lark python3-pil ros-lyrical-vision-msgs \
+    ros-lyrical-controller-manager ros-lyrical-diff-drive-controller \
+    ros-lyrical-joint-state-broadcaster \
  && test "${TARGETARCH}" = "amd64" \
  && wget -q "https://github.com/cyberbotics/webots/releases/download/${WEBOTS_VERSION}/webots_2025a_amd64.deb" -O /tmp/webots.deb \
  && apt-get install -y --no-install-recommends /tmp/webots.deb \
  && rm -f /tmp/webots.deb \
  && rm -rf /var/lib/apt/lists/*
 
+COPY --from=webots-driver-builder /webots_ws/install /opt/webots_ros2
 ENV WEBOTS_HOME=/usr/local/webots
 ENV USER=root
 
@@ -571,7 +570,7 @@ ENV USER=root
 RUN python3 - <<'PY'
 from pathlib import Path
 
-path = Path('/opt/ros/kilted/lib/python3.12/site-packages/webots_ros2_driver/utils.py')
+path = next(Path('/opt/webots_ros2').glob('**/site-packages/webots_ros2_driver/utils.py'))
 old = "def is_wsl():\n    return 'microsoft-standard' in uname().release\n"
 new = (
     "def is_wsl():\n"

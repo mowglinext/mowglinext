@@ -1,8 +1,8 @@
 # Mowgli ROS2
 
-A complete ROS2 Kilted robot mower stack built from scratch. Autonomous coverage mowing with RTK-GPS, a GTSAM iSAM2 factor-graph localizer (`fusion_graph`), multi-area continuous-subpath coverage, and a BehaviorTree.CPP v4 mission executor. Targets ARM boards (Rockchip) deployed in Docker containers.
+A complete ROS2 Lyrical robot mower stack built from scratch. Autonomous coverage mowing with RTK-GPS, a GTSAM iSAM2 factor-graph localizer (`fusion_graph`), multi-area continuous-subpath coverage, and a BehaviorTree.CPP v4 mission executor. Targets ARM boards (Rockchip) deployed in Docker containers.
 
-Originally inspired by the [OpenMower](https://github.com/ClemensElflein/open_mower_ros) project but rewritten from the ground up for ROS2 Kilted with Nav2, a REP-105-compliant GPS+IMU+wheels localizer, and multi-area continuous-subpath coverage. The localizer is `fusion_graph_node` (GTSAM iSAM2) — a factor-graph estimator that is the sole, default, unconditional localizer and owns **both** `map→odom` AND `odom→base_footprint`. It fuses RTK-GPS, wheel odometry, IMU gyro, GPS course-over-ground, and magnetometer yaw in one Pose2 graph, with an optional RTK-built LiDAR map anchor for complete GNSS outages. It replaced the earlier robot_localization dual-EKF (`ekf_map_node` + `ekf_odom_node`), `navsat_transform_node`, slam_toolbox, and Kinematic-ICP, all of which were removed.
+Originally inspired by the [OpenMower](https://github.com/ClemensElflein/open_mower_ros) project but rewritten from the ground up for ROS2 Lyrical with Nav2, a REP-105-compliant GPS+IMU+wheels localizer, and multi-area continuous-subpath coverage. The localizer is `fusion_graph_node` (GTSAM iSAM2) — a factor-graph estimator that is the sole, default, unconditional localizer and owns **both** `map→odom` AND `odom→base_footprint`. It fuses RTK-GPS, wheel odometry, IMU gyro, GPS course-over-ground, and magnetometer yaw in one Pose2 graph, with an optional RTK-built LiDAR map anchor for complete GNSS outages. It replaced the earlier robot_localization dual-EKF (`ekf_map_node` + `ekf_odom_node`), `navsat_transform_node`, slam_toolbox, and Kinematic-ICP, all of which were removed.
 
 [![CI](https://github.com/mowglinext/mowglinext/actions/workflows/ros2-ci.yml/badge.svg)](https://github.com/mowglinext/mowglinext/actions/workflows/ros2-ci.yml)
 [![Docker](https://github.com/mowglinext/mowglinext/actions/workflows/ros2-docker.yml/badge.svg)](https://github.com/mowglinext/mowglinext/actions/workflows/ros2-docker.yml)
@@ -46,7 +46,7 @@ Originally inspired by the [OpenMower](https://github.com/ClemensElflein/open_mo
  +------+--------------------------------------+----------------------+
         |                                      |
  +------v------+                        +------v---------------------+
- |  map_server |                        |         Nav2 Kilted         |
+ |  map_server |                        |         Nav2 Lyrical         |
  |  GridMap    |                        |  FollowPath (RPP+Rotation)  |
  |  keepout    |                        |  FollowCoveragePath (FTC)   |
  |  mask       |                        |  SmacPlanner2D              |
@@ -94,12 +94,12 @@ Originally inspired by the [OpenMower](https://github.com/ClemensElflein/open_mo
 - **RTK GPS localization** — UBX protocol. RTK Fixed gives σ ~3 mm. `fusion_graph_node` subscribes directly to `/gps/fix`, honors its covariance, and uses a bounded motion-consistent wrong-fix gate.
 - **BehaviorTree.CPP v4 mission executor** — reactive guards for emergency, boundary, rain, and battery. Automatic rain-stop-dock-wait-resume cycle. Battery-aware dock-charge-undock-resume cycle.
 - **Persistent obstacle tracking** — `obstacle_tracker_node` clusters the global costmap and promotes stable clusters to PERSISTENT after age and observation thresholds, publishing them on `/obstacle_tracker/obstacles`. A tracked obstacle only becomes a hard keepout once it is promoted via `map_server_node/promote_obstacle` (the GUI's Tracked Obstacles panel); `map_server_node` then rasterises it into `/keepout_mask` and persists it to `areas.dat`. A wheel-slip dig event raises the same kind of keepout as a *pending* proposal — lethal immediately, persisted only when accepted.
-- **Nav2 Kilted** — SmacPlanner2D global planner, RegulatedPurePursuit for transit, FTCController for coverage strips, RotationShimController, `docking_server` (opennav_docking), `collision_monitor`.
+- **Nav2 Lyrical** — SmacPlanner2D global planner, RegulatedPurePursuit for transit, FTCController for coverage strips, RotationShimController, `docking_server` (opennav_docking), `collision_monitor`.
 - **FTCController Nav2 plugin** — Follow-the-Carrot controller with 3-axis PID for coverage strip following. Provides <10mm lateral accuracy on swaths.
 - **Mow progress tracking** — `map_server_node` marks cells as mowed with time-based decay. Visualised as an OccupancyGrid on `/map_server_node/mow_progress`.
 - **Keepout mask** — `map_server_node` publishes the Nav2 costmap filter mask (`/keepout_mask` + `/costmap_filter_info`) for mowing boundaries, promoted obstacles and the dock corridor. (The separate speed mask was removed — nothing consumed it.)
 - **Cyclone DDS middleware** — `rmw_cyclonedds_cpp` selected in the runtime Docker image for reliable service discovery on ARM without shared memory issues.
-- **Docker multi-stage build** — 10 stages from `ros:kilted-ros-base`: four source-builders (GTSAM, Fields2Cover 2.x, Fields2Cover 3.x, ublox msgs) feeding `base → deps → build-interfaces → build → runtime → simulation`. ARM-tested on Rockchip.
+- **Docker multi-stage build** — 10 stages from `ros:lyrical-ros-base`: four source-builders (GTSAM, Fields2Cover 2.x, Fields2Cover 3.x, ublox msgs) feeding `base → deps → build-interfaces → build → runtime → simulation`. Lyrical hardware acceptance is tracked in [the migration guide](../docs/ROS2_LYRICAL_MIGRATION.md).
 - **Foxglove Studio bridge** — WebSocket on port 8765. Pre-built layout at `foxglove/mowgli_sim.json`.
 - **MowgliNext GUI integration** — the Go backend talks to ROS2 **only** through `foxglove_bridge` (`ws://<robot-ip>:8765`), plus the teleop relay on 8766.
 - **Diagnostics** — `diagnostics_node` publishes nine `diagnostic_msgs/DiagnosticStatus` entries at 1 Hz on `/diagnostics`: Hardware Bridge, Emergency System, Battery, IMU, LiDAR, GPS, Odometry, EKF Map (freshness/attitude of `/odometry/filtered_map`) and Motors. Optional MQTT bridge.
@@ -348,7 +348,7 @@ All sensor positions drive both the URDF (TF frames) and the Nav2 footprint poly
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `mowing_speed` | `0.20` | Speed during coverage paths (m/s) |
-| `transit_speed` | `0.20` | Speed during point-to-point navigation (m/s) → RPP `desired_linear_vel` |
+| `transit_speed` | `0.20` | Speed during point-to-point navigation (m/s) → RPP `primary_controller.max_linear_vel` |
 | `swath_overlap` | `0.02` | F2C swath spacing = `tool_width − swath_overlap`, so adjacent swaths overlap |
 | `num_headland_passes` | `5` | Concentric perimeter passes (`0` = auto); provides room for trackable swath-end turns |
 | `mow_angle_deg` | `-1.0` | Swath angle in degrees; negative = auto (swath-count-minimising) |
@@ -406,18 +406,20 @@ full-stack coverage dependencies from blocking container startup.
 
 ### Prerequisites
 
-- ROS2 Kilted on Ubuntu 24.04
+- ROS2 Lyrical on Ubuntu 26.04
 - `colcon`, `rosdep`, `xacro` (`python3-colcon-common-extensions`, `python3-rosdep`)
 
 ### Build the Workspace
 
 ```bash
-source /opt/ros/kilted/setup.bash
+source /opt/ros/lyrical/setup.bash
+source /opt/lyrical_vendor/local_setup.bash
 cd /path/to/mowgli-ros2
 
-rosdep update --rosdistro kilted
+rosdep update --rosdistro lyrical
 git submodule update --init --recursive
-rosdep install --from-paths src --ignore-src --rosdistro kilted -y
+rosdep install --from-paths src --ignore-src --rosdistro lyrical -y \
+  --skip-keys "grid_map_core grid_map_ros grid_map_msgs beluga_ros nav2_smac_planner webots_ros2_driver opennav_coverage opennav_coverage_bt opennav_coverage_demo opennav_coverage_navigator opennav_row_coverage"
 
 colcon build \
   --cmake-args -DCMAKE_BUILD_TYPE=Release \
@@ -447,7 +449,7 @@ will prefer that checkout over the vendored submodule.
 ### Running Tests
 
 ```bash
-source /opt/ros/kilted/setup.bash && source install/setup.bash
+source /opt/ros/lyrical/setup.bash && source install/setup.bash
 colcon test --return-code-on-test-failure
 colcon test-result --verbose
 ```
@@ -497,11 +499,11 @@ The Docker build context is the **repository root**, not `ros2/` (the Dockerfile
 
 | Stage | From | Contents |
 |-------|------|----------|
-| `gtsam-builder` · `fields2cover-builder` · `fields2cover-v3-builder` · `ublox-msgs-builder` | `ros:kilted-ros-base` | Source builds of GTSAM 4.3a1, Fields2Cover 2.x and 3.x, and the forked `ublox_ubx_msgs`, copied into later stages |
-| `base` | `ros:kilted-ros-base` | All apt runtime deps: Nav2, foxglove-bridge, twist_mux, BehaviorTree.CPP, grid_map, opennav_docking, Cyclone DDS + the source-built GTSAM / Fields2Cover |
+| `lyrical-vendor` · `gtsam-builder` · `fields2cover-v3-builder` · `ublox-msgs-builder` · `universal-gnss-interfaces-builder` | `ros:lyrical-ros-base` | Pinned source dependencies and GNSS interfaces, copied into later stages |
+| `base` | `ros:lyrical-ros-base` | All apt runtime deps: Nav2, foxglove-bridge, twist_mux, BehaviorTree.CPP, grid_map, opennav_docking, Cyclone DDS + the source-built GTSAM / Fields2Cover |
 | `deps` | `base` | Build tools, rosdep resolution over the copied `package.xml`/`CMakeLists.txt` set |
 | `build-interfaces` | `deps` | `mowgli_interfaces` compiled only (cached layer, rarely rebuilt) |
-| `build` | `build-interfaces` | All remaining packages compiled; `colcon test … \|\| true`, so image builds never fail on unit tests (the gate is CI) |
+| `build` | `build-interfaces` | All remaining packages compiled with tests disabled; the separate ROS2 CI job builds and gates tests |
 | `runtime` | `base` | Compiled install tree + launch/config overlays. Sets `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` |
 | `simulation` | `runtime` | Webots + TigerVNC + noVNC for GUI access (Linux amd64 only) |
 
@@ -521,7 +523,7 @@ The runtime image also includes the `mowgli_tools` package from
 `tools/motor/`. After sourcing:
 
 ```bash
-source /opt/ros/kilted/setup.bash
+source /opt/ros/lyrical/setup.bash
 source /ros2_ws/install/setup.bash
 ros2 pkg list | grep mowgli_tools
 ros2 run mowgli_tools tune_drive_pid --help
@@ -896,12 +898,12 @@ docker logs mowgli_dev_sim -f 2>&1 \
 
 # Check robot position
 docker exec mowgli_dev_sim bash -c \
-  'source /opt/ros/kilted/setup.bash && ros2 topic echo /wheel_odom --once' \
+  'source /opt/ros/lyrical/setup.bash && ros2 topic echo /wheel_odom --once' \
   | grep -A3 position:
 
 # Watch coverage path progress
 docker exec mowgli_dev_sim bash -c \
-  'source /opt/ros/kilted/setup.bash && ros2 topic echo /follow_path/_action/feedback --once' \
+  'source /opt/ros/lyrical/setup.bash && ros2 topic echo /follow_path/_action/feedback --once' \
   | grep distance
 ```
 
@@ -1003,7 +1005,7 @@ kept-in-sync reference set:
 
 ### Conventions
 
-- **C++ standard:** C++17, `ament_cmake` build system (`mowgli_simulation` is C++20)
+- **C++ standard:** C++20, `ament_cmake` build system
 - **Naming:** `snake_case` for files and ROS parameters, `CamelCase` for C++ classes and node names
 - **Units:** SI throughout — metres, radians, seconds
 - **Frames:** `map` (global), `odom` (local), `base_footprint` (Nav2 robot frame), `base_link` (robot body, at the rear wheel axis)
@@ -1023,7 +1025,7 @@ pre-commit install
 `.github/workflows/ros2-ci.yml` runs on pushes to `main`, `dev` and `feat/**`, `fix/**`,
 `refactor/**`, `chore/**`, `perf/**`, and on every pull request to `main` or `dev`:
 
-- **`Build & Test (ROS2 kilted)`** on `ubuntu-24.04` — the required status check on `dev`
+- **`Build & Test (ROS2 kilted)`** on `ubuntu-26.04` — the required status check on `dev`
 - `clang-format` compliance on **changed lines only** (`git-clang-format-18`)
 - `cppcheck` static analysis on changed files — **report-only**, does not fail the build
 

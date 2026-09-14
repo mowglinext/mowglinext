@@ -64,3 +64,6 @@ credentials.json
 docker/logs/mow_sessions/*.jsonl
 !docker/logs/mow_sessions/.gitkeep
 .playwright-mcp/
+docker/.updater-managed
+docker/update-images.json
+docker/.deployment.lock

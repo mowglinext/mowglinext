@@ -675,7 +675,7 @@ def follow_path(inp: dict, knobs: dict, kin: dict, rs: dict) -> dict:
     """
     approach = round(knobs["deadband_margin"] * kin["_vx_breakaway"][0] * 1.1, 2)
     return {
-        "desired_linear_vel": (round(inp["transit_speed"], 3), "= transit_speed"),
+        "max_linear_vel": (round(inp["transit_speed"], 3), "= transit_speed"),
         "rotate_to_heading_angular_vel": (
             rs["transit_rotate_to_heading_angular_vel"][0],
             "RotationShim transit pivot rate"),
@@ -762,10 +762,14 @@ def emit_yaml(res: dict) -> str:
             "ros__parameters": {
                 "controller_frequency": 1.0 / mppi_p["model_dt"],
                 "FollowPath": {
-                    "desired_linear_vel": fpth["desired_linear_vel"],
+                    "primary_controller": {
+                        "max_linear_vel": fpth["max_linear_vel"],
+                        "min_approach_linear_velocity": fpth["min_approach_linear_velocity"],
+                        "rotate_to_heading_angular_vel": fpth["rotate_to_heading_angular_vel"],
+                        "max_angular_accel": fpth["max_angular_accel"],
+                    },
                     "rotate_to_heading_angular_vel": fpth["rotate_to_heading_angular_vel"],
                     "max_angular_accel": fpth["max_angular_accel"],
-                    "min_approach_linear_velocity": fpth["min_approach_linear_velocity"],
                 },
                 "FollowCoveragePath": {
                     "rotate_to_heading_angular_vel":
@@ -950,15 +954,15 @@ def emit_compare(res: dict, nav: dict, label: str) -> str:
          m["deadband_velocity_vx"][0],
          (_get(nav, *fcp, "VelocityDeadbandCritic", "deadband_velocities") or [None])[0],
          "margin * vx_breakaway", None),
-        ("FollowPath.desired_linear_vel", fp["desired_linear_vel"][0],
-         _get(nav, *fpp, "desired_linear_vel"), "= transit_speed (launch-injected)", None),
+        ("FollowPath.primary_controller.max_linear_vel", fp["max_linear_vel"][0],
+         _get(nav, *fpp, "primary_controller", "max_linear_vel"), "= transit_speed (launch-injected)", None),
         ("FollowPath.rotate_to_heading_angular_vel",
          fp["rotate_to_heading_angular_vel"][0],
          _get(nav, *fpp, "rotate_to_heading_angular_vel"),
          "calmer transit pivot", hard_wz),
-        ("FollowPath.min_approach_linear_velocity",
+        ("FollowPath.primary_controller.min_approach_linear_velocity",
          fp["min_approach_linear_velocity"][0],
-         _get(nav, *fpp, "min_approach_linear_velocity"),
+         _get(nav, *fpp, "primary_controller", "min_approach_linear_velocity"),
          f"must clear breakaway {vx_break}", hard_vx_floor),
         ("FollowPath.max_angular_accel", fp["max_angular_accel"][0],
          _get(nav, *fpp, "max_angular_accel"), "az_max", None),

@@ -93,7 +93,7 @@ jobs:
           provenance: true
           # SBOM attestation is DISABLED for the ROS2 images (it stays on for
           # the much smaller sensor images in _sensor-docker.yml). The image
-          # carries a full ROS2 Kilted userland plus the colcon install tree,
+          # carries a full ROS2 Lyrical userland plus the colcon install tree,
           # so syft's SPDX document came out over buildkit's attestation cap
           # and failed the export AFTER every layer had already built:
           #   #89 exporting to image
@@ -108,10 +108,15 @@ jobs:
       - name: Smoke test runtime image
         run: |
           image="${{ env.IMAGE_NAME }}${{ matrix.suffix }}@${{ steps.build.outputs.digest }}"
-          docker run --rm "$image" bash -lc '
+          docker run --rm --user ubuntu "$image" bash -lc '
             set -euo pipefail
             ros2 pkg prefix mowgli_bringup
             ros2 pkg prefix mowgli_tools
+            ros2 pkg prefix nav2_smoother
+            ros2 pkg prefix nav2_collision_monitor
+            ros2 pkg prefix nav2_smac_planner
+            ros2 pkg prefix grid_map_ros
+            ros2 pkg prefix beluga_ros
             ros2 pkg prefix universal_gnss_ros2
             ros2 interface show universal_gnss_ros2/msg/GnssStatus
             ros2 interface show universal_gnss_ros2/msg/RtcmFrame

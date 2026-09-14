@@ -24,7 +24,7 @@
 
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
-#include "tf2/exceptions.h"
+#include "tf2/exceptions.hpp"
 
 namespace mowgli_behavior
 {

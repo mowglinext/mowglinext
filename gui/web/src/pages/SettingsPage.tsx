@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
+import { UpdatesSection } from "../components/settings/UpdatesSection.tsx";
 import { Alert, App, Badge, Button, Empty, Input, Space, Spin, Typography } from "antd";
 import {
     ReloadOutlined,
@@ -42,7 +44,10 @@ export const SettingsPage = () => {
     const guiApi = useApi();
     const isMobile = useIsMobile();
     const { colors } = useThemeMode();
-    const [activeSection, setActiveSection] = useState<SettingsSection>("hardware");
+    const [searchParams, setSearchParams] = useSearchParams();
+    const selectSection = (section: SettingsSection) => {
+        setSearchParams((current) => { const next = new URLSearchParams(current); next.set('section', section); return next; }, {replace: true});
+    };
 
     const {
         sections,
@@ -107,17 +112,14 @@ export const SettingsPage = () => {
         );
     }, [sections, searchQuery, matchesSearch, t]);
 
-    // When the active section gets filtered out by the search, jump to the
-    // first still-visible section so the content pane never goes blank.
-    useEffect(() => {
-        if (visibleSections.length === 0) return;
-        if (!visibleSections.some((s) => s.id === activeSection)) {
-            setActiveSection(visibleSections[0].id);
-        }
-    }, [visibleSections, activeSection]);
+    const requestedSection = searchParams.get('section') ?? 'hardware';
+    const activeSection = visibleSections.find(section => section.id === requestedSection)?.id
+        ?? visibleSections[0]?.id ?? 'hardware';
 
     const renderSection = () => {
         switch (activeSection) {
+            case "updates":
+                return <UpdatesSection configuredModel={values.mower_model ? String(values.mower_model) : undefined}/>;
             case "appearance":
                 return (
                     <Space direction="vertical" size={16} style={{width: "100%"}}>
@@ -323,7 +325,7 @@ export const SettingsPage = () => {
                         <SettingsNav
                             sections={visibleSections}
                             activeSection={activeSection}
-                            onSectionChange={setActiveSection}
+                        onSectionChange={selectSection}
                             isSectionDirty={isSectionDirty}
                         />
                     ) : (
@@ -363,7 +365,7 @@ export const SettingsPage = () => {
                 </div>
 
                 {/* Live preview rail (desktop only) */}
-                {!isMobile && (
+                {!isMobile && activeSection !== 'updates' && (
                     <div style={{
                         width: 260, flexShrink: 0,
                         padding: "0 16px 120px 0",
@@ -377,7 +379,7 @@ export const SettingsPage = () => {
             </div>
 
             {/* Fixed save bar */}
-            <div style={{
+            {(activeSection !== 'updates' || isDirty) && <div style={{
                 position: "fixed",
                 // Sit above the floating bottom-nav (~85px tall + safe-area) so the
                 // Save bar doesn't collide with / hide behind the nav on mobile.
@@ -419,7 +421,7 @@ export const SettingsPage = () => {
                 >
                     {ros2Restart.pending ? ros2Restart.pendingLabel : t("settingsPage.restartRos2")}
                 </Button>
-            </div>
+            </div>}
         </div>
     );
 };

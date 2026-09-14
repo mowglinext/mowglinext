@@ -1,8 +1,9 @@
+# syntax=docker/dockerfile:1.7
 # =============================================================================
 # MowgliNext Development Container
 #
 # All-in-one image for GitHub Codespaces and local devcontainer usage.
-# Includes: ROS2 Kilted, Nav2, Gazebo Harmonic (headless), Go 1.24, Node 22,
+# Includes: ROS2 Lyrical, Nav2, Gazebo (headless), Go 1.24, Node 22,
 # Python linting, build tools, and developer utilities.
 #
 # Gazebo runs headless (CPU rendering) — connect Foxglove Studio to
@@ -18,7 +19,7 @@
 #     --build-arg BASE_IMAGE=ghcr.io/mowglinext/mowglinext/mowgli-ros2:feat-my-branch \
 #     -f .devcontainer/Dockerfile -t mowglinext-devcontainer .
 #
-# Default (ros:kilted-ros-base) reproduces the upstream Codespaces flow
+# Default (ros:lyrical-ros-base) reproduces the upstream Codespaces flow
 # bit-for-bit; that is what CI uses so contributors get an identical
 # environment.
 # =============================================================================
@@ -26,13 +27,18 @@
 # Stage 0: gtsam-builder
 # Mirrors ros2/Dockerfile stage 0. Builds GTSAM 4.3a1 from source —
 # the Ubuntu Noble libgtsam-dev (4.2) ships a broken GTSAMConfig.cmake
-# and uses the legacy boost::optional<Matrix&> custom-factor API, and
-# there is no ros-kilted-gtsam package. Source build gives the modern
-# OptionalMatrixType API needed by fusion_graph's GnssLeverArmFactor.
+# and uses the legacy boost::optional<Matrix&> custom-factor API. Lyrical's
+# ROS binary is a different 4.3 snapshot with TBB enabled; retain the existing
+# source pin and TBB setting used by fusion_graph.
 # ---------------------------------------------------------------------------
-ARG BASE_IMAGE=ros:kilted-ros-base
+ARG BASE_IMAGE=ros:lyrical-ros-base
 
-FROM ros:kilted-ros-base AS gtsam-builder
+# -Wno-error=array-bounds below mirrors ros2/Dockerfile + ros2-ci.yml (same
+# GTSAM recipe, keep in lockstep): GCC 15 on an x86-64-v3 default toolchain
+# (GitHub's amd64v3 `ubuntu-26.04` runner) trips a false-positive
+# -Warray-bounds in Eigen's AVX loads, and GTSAM 4.3a1 hardcodes -Werror.
+FROM ros:lyrical-ros-base AS gtsam-builder
+ARG TARGETARCH
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -44,25 +50,74 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /tmp
 RUN git clone --depth 1 -b 4.3a1 https://github.com/borglab/gtsam.git
 
-RUN cd gtsam && mkdir build && cd build && \
-    cmake .. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/opt/gtsam \
-        -DGTSAM_BUILD_TESTS=OFF \
-        -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
-        -DGTSAM_BUILD_PYTHON=OFF \
-        -DGTSAM_BUILD_UNSTABLE=OFF \
-        -DGTSAM_USE_SYSTEM_EIGEN=ON \
-        -DGTSAM_USE_SYSTEM_METIS=ON \
-        -DGTSAM_WITH_TBB=OFF \
-        -DGTSAM_WITH_EIGEN_MKL=OFF \
-        -DGTSAM_INSTALL_MATLAB_TOOLBOX=OFF \
-        -DBUILD_SHARED_LIBS=ON \
- && make -j$(nproc) install
+RUN mkdir -p /opt/gtsam && chown -R ubuntu:ubuntu /opt/gtsam /tmp/gtsam
+USER ubuntu
+RUN --mount=type=cache,id=mowgli-gtsam-lyrical-4.3a1-${TARGETARCH},target=/tmp/gtsam/build,uid=1000,gid=1000,sharing=locked \
+    cmake -S /tmp/gtsam -B /tmp/gtsam/build \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_INSTALL_PREFIX=/opt/gtsam \
+      -DGTSAM_BUILD_TESTS=OFF -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+      -DGTSAM_BUILD_PYTHON=OFF -DGTSAM_BUILD_UNSTABLE=OFF \
+      -DGTSAM_USE_SYSTEM_EIGEN=ON -DGTSAM_USE_SYSTEM_METIS=ON \
+      -DGTSAM_WITH_TBB=OFF -DGTSAM_WITH_EIGEN_MKL=OFF \
+      -DGTSAM_INSTALL_MATLAB_TOOLBOX=OFF -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_CXX_FLAGS=-Wno-error=array-bounds \
+ && cmake --build /tmp/gtsam/build --parallel 3 \
+ && cmake --install /tmp/gtsam/build
+
+FROM ros:lyrical-ros-base AS fields2cover-v3-builder
+ARG TARGETARCH
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake git pkg-config \
+      libeigen3-dev libgdal-dev libgeos++-dev libgeos-dev libgsl-dev \
+      libtinyxml2-dev libpython3-dev python3-dev libtbb-dev nlohmann-json3-dev \
+      ros-lyrical-ortools-vendor \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+# Pinned to v3.0 @ 884d895 (2026-03-02) — do NOT track the moving branch head.
+# Patch an upstream bug in this commit: visualizer.cpp uses std::setw/setfill
+# without #include <iomanip> (modern GCC/libstdc++ no longer pulls it in
+# transitively), which fails the build with "'setw' is not a member of 'std'".
+RUN git clone https://github.com/Fields2Cover/Fields2Cover.git f2c3 && \
+    cd f2c3 && git checkout 884d895b59192882476e986ba44ea9143a06a6a9
+RUN cd /tmp/f2c3 && \
+    sed -i '1i #include <iomanip>' src/fields2cover/utils/visualizer.cpp && \
+    sed -i '1i #include <algorithm>' src/fields2cover/types/Graph.cpp
+
+RUN mkdir -p /opt/fields2cover-300 && chown -R ubuntu:ubuntu /opt/fields2cover-300 /tmp/f2c3
+USER ubuntu
+RUN --mount=type=cache,id=mowgli-f2c-lyrical-884d895-${TARGETARCH},target=/tmp/f2c3/build,uid=1000,gid=1000,sharing=locked \
+    . /opt/ros/lyrical/setup.sh \
+ && cmake -S /tmp/f2c3 -B /tmp/f2c3/build \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-300 \
+      -DBUILD_TESTS=OFF -DBUILD_PYTHON=OFF -DBUILD_TUTORIALS=OFF \
+      -DBUILD_DOC=OFF -DALLOW_PARALLELIZATION=ON -DBUILD_SHARED_LIBS=ON \
+ && cmake --build /tmp/f2c3/build --parallel 3 \
+ && cmake --install /tmp/f2c3/build
+
+
+# Source overlays for dependencies not released as Lyrical binaries.
+FROM ros:lyrical-ros-base AS lyrical-vendor
+ARG TARGETARCH
+ARG DEBIAN_FRONTEND=noninteractive
+COPY ros2/lyrical-vendor-packages.txt /tmp/vendor-packages.txt
+RUN apt-get update && xargs apt-get install -y --no-install-recommends < /tmp/vendor-packages.txt \
+ && mkdir -p /opt/lyrical_vendor && chown ubuntu:ubuntu /opt/lyrical_vendor
+COPY ros2/scripts/build_lyrical_vendor.sh /tmp/build_lyrical_vendor.sh
+USER ubuntu
+RUN --mount=type=cache,id=mowgli-vendor-lyrical-${TARGETARCH},target=/tmp/lyrical-vendor,uid=1000,gid=1000,sharing=locked \
+    VENDOR_WORKSPACE=/tmp/lyrical-vendor bash /tmp/build_lyrical_vendor.sh
 
 FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
+# A cached project image must use the same distribution as these dependencies.
+RUN test "${ROS_DISTRO}" = lyrical
 
 # ---------------------------------------------------------------------------
 # 1. ROS2 runtime + build + simulation dependencies
@@ -70,69 +125,65 @@ ARG DEBIAN_FRONTEND=noninteractive
 # ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # ── Navigation ──
-    ros-kilted-nav2-bringup \
-    ros-kilted-nav2-bt-navigator \
-    ros-kilted-nav2-controller \
-    ros-kilted-nav2-planner \
-    ros-kilted-nav2-behaviors \
-    ros-kilted-nav2-regulated-pure-pursuit-controller \
-    ros-kilted-nav2-smac-planner \
-    ros-kilted-nav2-costmap-2d \
-    ros-kilted-nav2-map-server \
-    ros-kilted-nav2-lifecycle-manager \
-    ros-kilted-nav2-waypoint-follower \
-    ros-kilted-nav2-velocity-smoother \
-    ros-kilted-nav2-rotation-shim-controller \
-    ros-kilted-nav2-core \
-    ros-kilted-nav2-util \
-    ros-kilted-nav2-msgs \
-    ros-kilted-fields2cover \
+    ros-lyrical-nav2-bt-navigator \
+    ros-lyrical-nav2-controller \
+    ros-lyrical-nav2-planner \
+    ros-lyrical-nav2-smoother \
+    ros-lyrical-nav2-collision-monitor \
+    ros-lyrical-nav2-behaviors \
+    ros-lyrical-nav2-regulated-pure-pursuit-controller \
+    ros-lyrical-nav2-costmap-2d \
+    ros-lyrical-nav2-map-server \
+    ros-lyrical-nav2-lifecycle-manager \
+    ros-lyrical-nav2-waypoint-follower \
+    ros-lyrical-nav2-velocity-smoother \
+    ros-lyrical-nav2-rotation-shim-controller \
+    ros-lyrical-nav2-core \
+    ros-lyrical-nav2-util \
+    ros-lyrical-nav2-msgs \
     # ── DDS (Cyclone is required — FastRTPS has stale shm issues on ARM) ──
-    ros-kilted-rmw-cyclonedds-cpp \
+    ros-lyrical-rmw-cyclonedds-cpp \
     # ── Docking ──
-    ros-kilted-opennav-docking \
+    ros-lyrical-opennav-docking \
     # ── Motion control ──
-    ros-kilted-twist-mux \
-    ros-kilted-topic-tools \
+    ros-lyrical-twist-mux \
+    ros-lyrical-topic-tools \
     # ── Behavior trees ──
-    ros-kilted-behaviortree-cpp \
+    ros-lyrical-behaviortree-cpp \
     # ── Robot description / TF ──
-    ros-kilted-xacro \
-    ros-kilted-robot-state-publisher \
-    ros-kilted-joint-state-publisher \
-    ros-kilted-tf2-ros \
-    ros-kilted-tf2-eigen \
-    ros-kilted-tf2-geometry-msgs \
+    ros-lyrical-xacro \
+    ros-lyrical-robot-state-publisher \
+    ros-lyrical-joint-state-publisher \
+    ros-lyrical-tf2-ros \
+    ros-lyrical-tf2-eigen \
+    ros-lyrical-tf2-geometry-msgs \
     # ── Grid map ──
-    ros-kilted-grid-map-core \
-    ros-kilted-grid-map-ros \
-    ros-kilted-grid-map-msgs \
     # ── Diagnostics ──
-    ros-kilted-diagnostic-msgs \
-    ros-kilted-diagnostic-updater \
-    ros-kilted-rclcpp-components \
-    ros-kilted-rclcpp-lifecycle \
+    ros-lyrical-diagnostic-msgs \
+    ros-lyrical-diagnostic-updater \
+    ros-lyrical-rclcpp-components \
+    ros-lyrical-rclcpp-lifecycle \
     # ── Bridges ──
-    ros-kilted-foxglove-bridge \
-    ros-kilted-rosbridge-suite \
+    ros-lyrical-foxglove-bridge \
+    ros-lyrical-rosbridge-suite \
     # ── Message definitions ──
-    ros-kilted-ublox-msgs \
-    ros-kilted-nmea-msgs \
-    ros-kilted-rtcm-msgs \
-    ros-kilted-geometry-msgs \
-    ros-kilted-nav-msgs \
-    ros-kilted-sensor-msgs \
-    ros-kilted-std-msgs \
-    # ── Gazebo Harmonic (headless simulation) ──
-    ros-kilted-ros-gz-sim \
-    ros-kilted-ros-gz-bridge \
-    ros-kilted-ros-gz-interfaces \
+    ros-lyrical-ublox-msgs \
+    ros-lyrical-nmea-msgs \
+    ros-lyrical-rtcm-msgs \
+    ros-lyrical-geometry-msgs \
+    ros-lyrical-nav-msgs \
+    ros-lyrical-sensor-msgs \
+    ros-lyrical-std-msgs \
+    # ── Gazebo (headless simulation) ──
+    ros-lyrical-ros-gz-sim \
+    ros-lyrical-ros-gz-bridge \
+    ros-lyrical-ros-gz-interfaces \
     # ── Build tools ──
     python3-colcon-common-extensions \
     python3-rosdep \
     python3-vcstool \
-    ros-kilted-ament-cmake \
-    ros-kilted-rosidl-default-generators \
+    ros-lyrical-ament-cmake \
+    ros-lyrical-rosidl-default-generators \
     build-essential \
     cmake \
     git \
@@ -153,7 +204,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     bash-completion \
-    clang-format \
+    clang-format-18 \
     cppcheck \
     # ── Python runtime + linting (matches mowgli_localization runtime deps) ──
     python3 \
@@ -174,17 +225,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
-# Fields2Cover as system CMake dependency for mowgli_coverage.
-RUN git clone --depth 1 --branch v2.0.0 https://github.com/Fields2Cover/Fields2Cover.git /tmp/Fields2Cover && \
-    cmake -S /tmp/Fields2Cover -B /tmp/Fields2Cover/build \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-200 \
-      -DBUILD_TESTING=OFF && \
-    cmake --build /tmp/Fields2Cover/build -j$(nproc) && \
-    cmake --install /tmp/Fields2Cover/build && \
-    echo '/opt/fields2cover-200/lib' > /etc/ld.so.conf.d/fields2cover-200.conf && \
-    rm -rf /tmp/Fields2Cover && \
-    ldconfig
+RUN ln -sf /usr/bin/clang-format-18 /usr/local/bin/clang-format
+COPY ros2/lyrical-vendor-packages.txt /tmp/vendor-packages.txt
+RUN apt-get update && xargs apt-get install -y --no-install-recommends < /tmp/vendor-packages.txt
+COPY --from=fields2cover-v3-builder /opt/fields2cover-300 /opt/fields2cover-300
+COPY --from=lyrical-vendor /opt/lyrical_vendor /opt/lyrical_vendor
+RUN echo '/opt/fields2cover-300/lib' > /etc/ld.so.conf.d/fields2cover.conf && ldconfig
+ENV CMAKE_PREFIX_PATH=/opt/lyrical_vendor:/opt/fields2cover-300:/opt/gtsam
 
 # ---------------------------------------------------------------------------
 # 2. Python linters + pre-commit (system-wide, PEP 668 override OK inside
@@ -200,6 +247,8 @@ RUN pip install --break-system-packages --no-cache-dir \
 #    Installed under /usr/local/go, put on PATH.
 # ---------------------------------------------------------------------------
 ENV GO_VERSION=1.24.0
+# Python extraction also works under amd64/Rosetta, where Resolute's GNU tar
+# fails on nested paths (orbstack/orbstack#2588).
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -207,8 +256,9 @@ RUN set -eux; \
       arm64) go_arch=arm64 ;; \
       *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" \
-      | tar -C /usr/local -xz
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" -o /tmp/go.tar.gz; \
+    python3 -m tarfile --filter data -e /tmp/go.tar.gz /usr/local; \
+    rm /tmp/go.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # ---------------------------------------------------------------------------
@@ -217,7 +267,10 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/* \
- && npm install -g --no-fund --no-audit yarn
+ && mkdir -p /opt/node-tools \
+ && chown ubuntu:ubuntu /opt/node-tools \
+ && runuser -u ubuntu -- npm install --prefix /opt/node-tools -g --no-fund --no-audit yarn
+ENV PATH="/opt/node-tools/bin:${PATH}"
 
 # ---------------------------------------------------------------------------
 # 5. Pull source-built GTSAM 4.3a1 into /opt/gtsam, register its lib
@@ -232,7 +285,7 @@ ENV CMAKE_PREFIX_PATH=/opt/gtsam:${CMAKE_PREFIX_PATH}
 # ---------------------------------------------------------------------------
 # 6. rosdep init (needed for resolving deps on first build)
 # ---------------------------------------------------------------------------
-RUN rosdep update --rosdistro kilted || true
+RUN runuser -u ubuntu -- rosdep update --rosdistro lyrical
 
 # ---------------------------------------------------------------------------
 # 7. Workspace directory
@@ -242,7 +295,8 @@ WORKDIR /ros2_ws
 # ---------------------------------------------------------------------------
 # 8. Environment setup — auto-source ROS2 + workspace in every shell
 # ---------------------------------------------------------------------------
-RUN echo 'source /opt/ros/kilted/setup.bash' >> /etc/bash.bashrc && \
+RUN echo 'source /opt/ros/lyrical/setup.bash' >> /etc/bash.bashrc && \
+    echo 'source /opt/lyrical_vendor/local_setup.bash' >> /etc/bash.bashrc && \
     echo '[ -f /ros2_ws/install/setup.bash ] && source /ros2_ws/install/setup.bash' >> /etc/bash.bashrc && \
     echo 'export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp' >> /etc/bash.bashrc && \
     echo 'export RCUTILS_COLORIZED_OUTPUT=1' >> /etc/bash.bashrc
@@ -264,3 +318,10 @@ ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 #   Docker-in-Docker — multi-container sim/hardware topologies. Add the
 #                     docker-in-docker feature to devcontainer.json.
 # ---------------------------------------------------------------------------
+
+# Builds and generated files belong to the normal project user.
+RUN apt-get update && apt-get install -y --no-install-recommends sudo \
+ && usermod -aG dialout ubuntu \
+ && echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu \
+ && chown -R ubuntu:ubuntu /ros2_ws
+USER ubuntu

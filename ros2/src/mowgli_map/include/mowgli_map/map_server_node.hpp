@@ -38,9 +38,9 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <tf2/exceptions.h>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
+#include <tf2/exceptions.hpp>
+#include <tf2_ros/buffer.hpp>
+#include <tf2_ros/transform_listener.hpp>
 
 #include "mowgli_map/map_types.hpp"
 #include "mowgli_map/mow_progress.hpp"
@@ -184,6 +184,20 @@ public:
   void on_dig_event_for_test(mowgli_interfaces::msg::DigEvent::ConstSharedPtr msg)
   {
     on_dig_event(std::move(msg));
+  }
+  /// Test-only: stand in for on_odom's TF-derived pose latch (tests have no
+  /// TF tree), so the footprint-relative dig discard can be exercised.
+  void set_robot_pose_for_test(double x, double y, double yaw)
+  {
+    last_robot_x_ = x;
+    last_robot_y_ = y;
+    last_robot_yaw_ = yaw;
+    have_robot_heading_ = true;
+  }
+  /// Test-only: run the DIG_OBSTRUCTION exit helper directly.
+  [[nodiscard]] std::size_t discard_dig_keepouts_near_robot_for_test()
+  {
+    return discard_dig_keepouts_near_robot();
   }
 
   /// Test-only: stand in for on_odom's TF-derived heading latch (tests have no
@@ -369,6 +383,18 @@ private:
   /// Reject a pending proposal (currently: wheel-slip dig keepouts) by its
   /// MapObstacleInfo.id. Removes it from the live mask; nothing was ever
   /// persisted, so it cannot come back after a restart either.
+  /// DIG_OBSTRUCTION exit (~/discard_dig_keepouts_near_robot, std_srvs/Trigger):
+  /// drop every PENDING dig proposal whose polygon contains, or lies within
+  /// kDigDiscardClearanceM of, the robot's latest map-frame position. Three
+  /// same-spot latches leave up to three 0.60 m keepouts stamped around the
+  /// robot, so the HOME dock transit's plan starts in a lethal cell
+  /// (START_OCCUPIED) and never moves; the tree calls this before planning
+  /// home. Accepted (persisted) keepouts and proposals farther away are kept.
+  void on_discard_dig_keepouts_near_robot(const std_srvs::srv::Trigger::Request::SharedPtr req,
+                                          std_srvs::srv::Trigger::Response::SharedPtr res);
+  /// @return how many pending dig proposals were dropped (0 = nothing touched).
+  std::size_t discard_dig_keepouts_near_robot();
+
   void on_discard_obstacle(const mowgli_interfaces::srv::ClearObstacle::Request::SharedPtr req,
                            mowgli_interfaces::srv::ClearObstacle::Response::SharedPtr res);
 
@@ -925,6 +951,7 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::GetRecoveryPoint>::SharedPtr get_recovery_point_srv_;
   rclcpp::Service<mowgli_interfaces::srv::PromoteObstacle>::SharedPtr promote_obstacle_srv_;
   rclcpp::Service<mowgli_interfaces::srv::ClearObstacle>::SharedPtr discard_obstacle_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr discard_dig_keepouts_near_robot_srv_;
 
   // ── TF ────────────────────────────────────────────────────────────────────
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

@@ -56,6 +56,7 @@ export const MOWER_STATES: Record<string, { label: string; tone: 'info' | 'prima
   // Failures / emergencies
   EMERGENCY:                  { label: 'mowerStates.EMERGENCY.label',                   tone: 'danger',  friendly: 'mowerStates.EMERGENCY.friendly' },
   BOUNDARY_EMERGENCY_STOP:    { label: 'mowerStates.BOUNDARY_EMERGENCY_STOP.label',     tone: 'danger',  friendly: 'mowerStates.BOUNDARY_EMERGENCY_STOP.friendly' },
+  DIG_OBSTRUCTION:            { label: 'mowerStates.DIG_OBSTRUCTION.label',             tone: 'danger',  friendly: 'mowerStates.DIG_OBSTRUCTION.friendly' },
   UNDOCK_FAILED:              { label: 'mowerStates.UNDOCK_FAILED.label',               tone: 'warning', friendly: 'mowerStates.UNDOCK_FAILED.friendly' },
   CHARGER_FAILED:             { label: 'mowerStates.CHARGER_FAILED.label',              tone: 'warning', friendly: 'mowerStates.CHARGER_FAILED.friendly' },
   NAV_TO_DOCK_FAILED:         { label: 'mowerStates.NAV_TO_DOCK_FAILED.label',          tone: 'danger',  friendly: 'mowerStates.NAV_TO_DOCK_FAILED.friendly' },

@@ -46,3 +46,13 @@ The GUI's scheduler (`gui/pkg/providers/scheduler.go`) polls its `schedule:*` DB
 - Exit with `COMMAND_STOP` (8) — the GUI's "Stop Manual" button; it halts in place and turns the blade off without driving to the dock
 
 > Protocol constants (`HL_MODE_*`) are manually mirrored in `firmware/stm32/ros_usbnode/include/mowgli_protocol.h` AND `ros2/src/mowgli_hardware/firmware/mowgli_protocol.h` — keep both in sync with `HighLevelStatus.msg` (see [`commands.md`](commands.md) → Code Generation Workflow).
+
+### DIG_OBSTRUCTION (repeat-dig escalation, Invariant 16)
+
+Published with **numeric state 1 (IDLE)** and `state_name="DIG_OBSTRUCTION"` while `hardware_bridge` holds `~/dig_escalated`. The IDLE value is deliberate: the firmware maps it to a wheel + blade hard stop, so a wedged robot cannot grind on. Exits:
+
+- **HOME (command 2)** — `HomeSequence` publishes `RETURNING_HOME` (state 2, firmware unlocked), then, gated on `IsDigEscalated`, calls `/map_server_node/discard_dig_keepouts_near_robot` to drop the PENDING dig proposals that contain / lie within 0.60 m of the robot before `DockRobot` plans (otherwise Smac starts in a lethal cell → START_OCCUPIED → "HOME never moves"). Accepted keepouts and farther proposals stay.
+- **Lift the robot clear, then Play** — the bridge releases the latch once the fused pose is 2 × `dig_escalate_radius_m` (1.0 m by default) from the escalation point; Play (command 1) is refused by `DigObstructionGuard` until then.
+- Reaching the charger also clears the latch. Manual / recording modes (3/5/6/7) are never blocked by the guard.
+
+The GUI shows the state as "Dig obstruction" with the recovery hint, and the map toolbar offers Continue (Play) rather than Pause while it is held.

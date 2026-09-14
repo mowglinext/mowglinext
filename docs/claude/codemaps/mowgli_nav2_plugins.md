@@ -4,6 +4,8 @@
 > Index updated 2026-09-09 for FTC obstacle-hold steering recovery; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
+> Lyrical API: full plans enter `newPathReceived`; local processed plans do not replace FTC progress. The goal checker transforms the costmap-frame query into the full-plan frame and exposes both XY and XY+yaw checks. Regression tests: `test/test_lyrical_goal_checker.cpp`.
+
 ## Where to look
 
 | Task | Start here |
@@ -11,7 +13,7 @@
 | Carrot speed target / accel ramp / carrot lead cap (1.0 m) | `ros2/src/mowgli_nav2_plugins/src/ftc_controller.cpp` `update_control_point()` (L1176) + `distanceLookahead()` (L1144) |
 | PID mix, forward_only clamp, min_speed floor, stall cap, oscillation override | `ftc_controller.cpp` `calculate_velocity_commands()` (L1407) |
 | FSM transitions / timeouts (`PRE_ROTATE → FOLLOWING → WAITING_FOR_GOAL_APPROACH → POST_ROTATE → FINISHED`) | `ftc_controller.cpp` `update_planner_state()` (L987); enum at `include/mowgli_nav2_plugins/ftc_controller.hpp:93` |
-| Where a fresh plan starts tracking (idx 0 vs legacy nearest snap) | `ftc_controller.cpp` `setPlan()` (L616) + `include/mowgli_nav2_plugins/ftc_start_index.hpp` `ChooseStartIndex` |
+| Where a fresh plan starts tracking (idx 0 vs legacy nearest snap) | `ftc_controller.cpp` `newPathReceived()` (L616) + `include/mowgli_nav2_plugins/ftc_start_index.hpp` `ChooseStartIndex` |
 | Anti-wheelspin stall (crawl at `stall_crawl_speed`, freeze carrot) | `include/mowgli_nav2_plugins/ftc_stall.hpp` `StallDecision`; consumed in `update_control_point()` and `calculate_velocity_commands()` (`is_stalled_`) |
 | Blade-load slowdown (scale carrot speed by blade RPM sag, fail-open) | `include/mowgli_nav2_plugins/ftc_blade_load.hpp` `BladeLoadDecision`; `applyBladeLoad()` in `update_control_point()`, `is_blade_limited_` lowers the `min_speed_mps` floor in `calculate_velocity_commands()`; telemetry from `/hardware_bridge/status` |
 | Obstacle skirt policy: side choice, grow, min floor, clear-hold, wait-or-abort | `ftc_controller.cpp` `updateLateralDeviation()` (L1821); pure helpers `src/obstacle_deviation.cpp` |
@@ -55,7 +57,7 @@
 | `oscillation_detector.hpp` | 113 | `FailureDetector` — rolling (v, ω) window, mean + zero-crossing test |
 | `path_progress_goal_checker.hpp` | 122 | `PathProgressGoalChecker` — progress-gated goal checker state + params |
 | **`src/`** | | |
-| `ftc_controller.cpp` | ~2.4k | Lifecycle, params + dynamic callback, setPlan, computeVelocityCommands, FSM, carrot, PID, collision, deviation, reverse-escape, oscillation |
+| `ftc_controller.cpp` | ~2.4k | Lifecycle, params + dynamic callback, newPathReceived, computeVelocityCommands, FSM, carrot, PID, collision, deviation, reverse-escape, oscillation |
 | `ftc_controller_plugin.cpp` | 20 | `PLUGINLIB_EXPORT_CLASS(FTCController, nav2_core::Controller)` |
 | `obstacle_deviation.cpp` | 486 | cell/body/footprint samplers, `isObstacleCell`, `hasClearExit`, `findFirstObstacleIndex`, `chooseDeviationSide`, `isPathClearWithDeviation`, `growDeviationUntilClear` |
 | `oscillation_detector.cpp` | 153 | `FailureDetector` impl (normalise by v_max/ω_max, half-full buffer before deciding) |
@@ -78,7 +80,7 @@ None. Both classes are pluginlib plugins loaded by Nav2's `controller_server` (l
 | Topic | Type | Dir | QoS | Notes / other end |
 |-------|------|-----|-----|-------------------|
 | `/controller_server/FollowCoveragePath/global_point` | `geometry_msgs/PoseStamped` | pub | depth 1, lifecycle | Carrot pose (map frame) every tick — viz only |
-| `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub | `QoS(1).transient_local()` | Published ONCE per `setPlan` with the tail pose duplicated (`ftc_controller.cpp:762`). Sub: `PathProgressGoalChecker` (`KeepLast(1).reliable()`, `path_progress_goal_checker.cpp:67-70`). ALSO published by BT `FollowStrip` (`ros2/src/mowgli_behavior/src/coverage_nodes.cpp:391`, same QoS) |
+| `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub | `QoS(1).transient_local()` | Published ONCE per `newPathReceived` with the tail pose duplicated (`ftc_controller.cpp:762`). Sub: `PathProgressGoalChecker` (`KeepLast(1).reliable()`, `path_progress_goal_checker.cpp:67-70`). ALSO published by BT `FollowStrip` (`ros2/src/mowgli_behavior/src/coverage_nodes.cpp:391`, same QoS) |
 | `/controller_server/FollowCoveragePath/costmap_marker` | `visualization_msgs/Marker` | pub | depth 10 | Only when `debug_obstacle` and deviation OFF (`debugObstacle`) |
 | `/global_costmap/costmap` | `nav_msgs/OccupancyGrid` | sub | `QoS(1).transient_local()` | Rebuilt into `boundary_costmap_` (`data >= 99 → 254`, else 0) for the zone guard/mask (`ftc_controller.cpp:75-96`) |
 | `/hardware_bridge/status` | `mowgli_interfaces/Status` | sub | `QoS(1)` | `mower_esc_status` / `mower_motor_rpm` / `blade_status_stamp` → `blade_active_` / `blade_rpm_` / `blade_status_time_` under `blade_mutex_` for the blade-load slowdown (always subscribed; inert unless `blade_load_slowdown_enabled`) |
@@ -159,7 +161,7 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 - **`min_speed_mps` / `max_cmd_vel_ang`** are read by `robot_config_util.derive_turn_speed` / `check_turn_geometry` (`test_robot_config_util.py:251,296`).
 - **`obstacle_lookahead` is a pose count** assuming F2C 0.05 m sampling (`kF2CSamplingM`, `navigation.launch.py:822`); change coverage sampling → change the conversion.
 - **Line-model threshold 253** relies on the local costmap inscribed band → `local_costmap.inflation_layer.inflation_radius` floor 0.58 (`navigation.launch.py:859-860`). Footprint model (254) does not; clearance there is `obstacle_clearance_margin` only.
-- **Goal-checker topic has TWO publishers** (FTC `setPlan` and BT `FollowStrip`); keep QoS identical (`coverage_nodes.cpp:387-391`).
+- **Goal-checker topic has TWO publishers** (FTC `newPathReceived` and BT `FollowStrip`); keep QoS identical (`coverage_nodes.cpp:387-391`).
 - **`oscillation_recovery_min_duration` × 10 = buffer length** assumes `controller_frequency: 10.0` (`nav2_params_base.yaml:83`).
 - **`<library path="mowgli_nav2_plugins">`** in both XMLs must equal the CMake target name.
 - **`controller_server.odom_topic`** must stay a published topic (CLAUDE.md "Do NOT leave controller_server.odom_topic unset") — stall detection and the reverse budget read `velocity.linear.x`.
@@ -171,8 +173,8 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 - `nav2_params_base.yaml:330-331` comment says FTC "follows U-turn arcs in reverse (forward_only=false)"; the live value is `forward_only: true` (L420). Reverse motion exists ONLY as the escape sub-state.
 - `checkCollision()` samples map-frame plan poses against the odom-frame local costmap without a transform (`ftc_controller.cpp:1621-1626`). It only runs when `enable_obstacle_deviation=false`; do not turn `check_obstacles` on with deviation off.
 - Never call `goal_checker->reset()` inside `computeVelocityCommands` (`ftc_controller.cpp:844-853`): `max_reached_index_` can only advance `max_idx_advance_per_call` (10) poses per call, so a per-tick reset pins progress < 95 % forever.
-- `setPlan` duplicates the last pose and re-orients the second-to-last (`ftc_controller.cpp:744-748`); the FSM's `size() - 2` test depends on it. Plans with < 3 poses go straight to `FINISHED` — one reason FTC is not the transit controller.
-- `setPlan` starts at idx 0 by default; re-adding a nearest-point snap skipped 46–99 % of closed headland rings on 2026-08-24 (`ftc_start_index.hpp` header). Resume trimming is `FollowStrip`'s job.
+- `newPathReceived` duplicates the last pose and re-orients the second-to-last (`ftc_controller.cpp:744-748`); the FSM's `size() - 2` test depends on it. Plans with < 3 poses go straight to `FINISHED` — one reason FTC is not the transit controller.
+- `newPathReceived` starts at idx 0 by default; re-adding a nearest-point snap skipped 46–99 % of closed headland rings on 2026-08-24 (`ftc_start_index.hpp` header). Resume trimming is `FollowStrip`'s job.
 - Goal-checker "new path" fingerprint = pose-count change OR front pose moved > 2 m (`path_progress_goal_checker.cpp:123-125`). Two consecutive plans of identical length starting < 2 m apart are treated as the SAME path (progress carries over).
 - Paths with ≤ `short_path_poses` (10) poses complete on xy+yaw proximity only (`path_progress_goal_checker.cpp:209`), bypassing the progress gate.
 - `chooseDeviationSide` scans LEFT first at each radius (`obstacle_deviation.cpp:400-412`) — equal clearance always skirts left.

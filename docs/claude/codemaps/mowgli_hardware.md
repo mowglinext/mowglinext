@@ -231,3 +231,4 @@ CI: `.github/workflows/ros2-ci.yml` (`colcon build` + `colcon test --return-code
 
 - Nothing in this package is generated. `ros2/src/mowgli_hardware/firmware/*.{c,h}` is a hand-maintained reference copy of the STM32 side (authoritative source: `firmware/stm32/ros_usbnode/include|src`); `ll_datatypes.hpp` is a port of OpenMower's `ll_datatypes.h`.
 - Message/service types come from `ros2/src/mowgli_interfaces`; their GUI bindings (`gui/pkg/msgs/mowgli/types_generated.go`, `gui/web/src/types/ros.generated.ts`) are generated — see `docs/claude/commands.md`.
+- **Dig escalation latch exits:** charger (unchanged) OR displacement — `dig_escalation.hpp` `DigEscalationClearedByDisplacement` (2 × `dig_escalate_radius_m` from `dig_escalation_x_/y_`, checked in `on_filtered_map_odom`). Tests in `test/test_dig_escalation.cpp` (`*Clear*`).

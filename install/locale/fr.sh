@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+MSG_UPDATER_UNSUPPORTED="Les mises à jour automatiques nécessitent Linux amd64/arm64, systemd et Docker Compose. Les versions restent consultables."
+MSG_UPDATER_RECOVERY="Une mise à jour est en maintenance/récupération. Terminez-la avant de relancer l'installation."
+MSG_UPDATER_SOURCE="Dépôt source du programme de mise à jour non pris en charge."
+MSG_UPDATER_UNPUBLISHED="Le programme de mise à jour de cette révision est indisponible. Attendez la fin du workflow Host updater, ou fournissez MOWGLI_UPDATER_BINARY compilé depuis cette révision. Installation arrêtée ; Watchtower n'a pas été activé en remplacement."
+MSG_UPDATER_CHECKSUM="Échec de vérification du programme de mise à jour."
+MSG_UPDATER_INSTALLED="Programme de mise à jour installé. Consultez sa version dans Paramètres > Mises à jour."
 # French locale
 
 # ── Common ──
@@ -71,3 +77,8 @@ MSG_MOTD_PACKAGES="paquet(s)"
 MSG_MOTD_LOCAL_IP="IP locale"
 MSG_MOTD_NOT_SET="non defini"
 MSG_MOTD_RUNNING="actif(s)"
+
+MSG_UPDATER_STACK_BACKEND="Les mises à jour gérées prennent en charge le matériel Mowgli."
+MSG_UPDATER_HARDWARE_LEGACY="Ces choix matériels nécessitent le parcours d'installation existant (MAVROS, TF-Luna ou VESC). Les conteneurs sélectionnés sont conservés ; les mises à jour coordonnées ne sont pas activées."
+MSG_UPDATER_HARDWARE_MANAGED="Cette installation utilise déjà les mises à jour gérées. Les choix MAVROS, TF-Luna et VESC nécessitent une migration explicite ; les fichiers d'exécution n'ont pas été régénérés."
+MSG_UPDATER_STACK_REVIEW="Choix matériels enregistrés. Consultez les mises à jour logicielles pour appliquer les changements de conteneurs ; la définition installée a été conservée."

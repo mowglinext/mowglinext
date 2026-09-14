@@ -17,7 +17,7 @@ NOVNC_PORT="${NOVNC_PORT:-6080}"
 VNC_RESOLUTION="${VNC_RESOLUTION:-1280x720}"
 
 set +u
-source /opt/ros/kilted/setup.bash
+source /opt/ros/lyrical/setup.bash
 set -u
 
 # ---- Build workspace if install tree is empty or stale ----------------------

@@ -9,15 +9,16 @@
 #include <limits>
 
 #include "pluginlib/class_list_macros.hpp"
-#include "tf2/utils.h"
+#include "tf2/utils.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 namespace mowgli_nav2_plugins
 {
 
 void PathProgressGoalChecker::initialize(
-    const rclcpp_lifecycle::LifecycleNode::WeakPtr& parent,
+    const nav2::LifecycleNode::WeakPtr& parent,
     const std::string& plugin_name,
-    const std::shared_ptr<nav2_costmap_2d::Costmap2DROS> /*costmap_ros*/)
+    const std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros)
 {
   auto node = parent.lock();
   if (!node)
@@ -26,6 +27,11 @@ void PathProgressGoalChecker::initialize(
   }
   logger_ = node->get_logger();
   clock_ = node->get_clock();
+  if (costmap_ros)
+  {
+    tf_buffer_ = costmap_ros->getTfBuffer();
+    query_frame_ = costmap_ros->getGlobalFrameID();
+  }
 
   auto declare = [&](const std::string& key, auto default_value)
   {
@@ -66,13 +72,13 @@ void PathProgressGoalChecker::initialize(
 
   rclcpp::QoS qos(rclcpp::KeepLast(1));
   qos.reliable();
-  path_sub_ =
-      node->create_subscription<nav_msgs::msg::Path>(plan_topic_,
-                                                     qos,
-                                                     [this](nav_msgs::msg::Path::SharedPtr msg)
-                                                     {
-                                                       onPath(msg);
-                                                     });
+  path_sub_ = node->create_subscription<nav_msgs::msg::Path>(
+      plan_topic_,
+      [this](nav_msgs::msg::Path::SharedPtr msg)
+      {
+        onPath(msg);
+      },
+      qos);
 
   RCLCPP_INFO(logger_,
               "PathProgressGoalChecker[%s]: progress_threshold=%.2f, "
@@ -102,6 +108,7 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
   // Path arrived — clear the watchdog so future empty-path windows
   // (e.g. between strips) get their own grace period.
   empty_path_first_call_.reset();
+  path_frame_ = msg->header.frame_id;
 
   const size_t n = msg->poses.size();
   const double fx = msg->poses.front().pose.position.x;
@@ -150,7 +157,8 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
 
 bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& query_pose,
                                             const geometry_msgs::msg::Pose& goal_pose,
-                                            const geometry_msgs::msg::Twist& /*velocity*/)
+                                            const geometry_msgs::msg::Twist& /*velocity*/,
+                                            const nav_msgs::msg::Path& /*transformed_global_plan*/)
 {
   std::lock_guard<std::mutex> lock(mutex_);
 
@@ -236,14 +244,34 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
   // loop) and path_step ≈ 5 cm we get ≤ 0.5 poses/call. Cap at
   // max_idx_advance_per_call_ (default 10) for a safety margin
   // against tick-rate jitter and shorter-than-expected path steps.
+  // Lyrical passes the robot pose in the local costmap frame (odom), while
+  // FTC publishes the complete path in map. Transform only the progress query;
+  // the final XY/yaw comparison below already has both poses in odom.
+  auto progress_pose = query_pose;
+  if (!query_frame_.empty() && path_frame_ != query_frame_)
+  {
+    if (!tf_buffer_ || path_frame_.empty())
+      return false;
+    geometry_msgs::msg::PoseStamped stamped;
+    stamped.header.frame_id = query_frame_;
+    stamped.pose = query_pose;
+    try
+    {
+      progress_pose = tf_buffer_->transform(stamped, path_frame_).pose;
+    }
+    catch (const tf2::TransformException&)
+    {
+      return false;
+    }
+  }
   const size_t start = std::min(max_reached_index_, n - 1);
   const size_t end_exclusive = std::min(start + max_idx_advance_per_call_ + 1, n);
   double best_d2 = std::numeric_limits<double>::infinity();
   size_t best_idx = max_reached_index_;
   for (size_t i = start; i < end_exclusive; ++i)
   {
-    const double dx = path_poses_[i].pose.position.x - query_pose.position.x;
-    const double dy = path_poses_[i].pose.position.y - query_pose.position.y;
+    const double dx = path_poses_[i].pose.position.x - progress_pose.position.x;
+    const double dy = path_poses_[i].pose.position.y - progress_pose.position.y;
     const double d2 = dx * dx + dy * dy;
     if (d2 < best_d2)
     {
@@ -292,9 +320,23 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
   return true;
 }
 
-bool PathProgressGoalChecker::getTolerances(geometry_msgs::msg::Pose& pose_tolerance,
-                                            geometry_msgs::msg::Twist& vel_tolerance)
+bool PathProgressGoalChecker::isGoalXYReached(const geometry_msgs::msg::Pose& query_pose,
+                                              const geometry_msgs::msg::Pose& goal_pose,
+                                              const geometry_msgs::msg::Twist& velocity,
+                                              const nav_msgs::msg::Path& transformed_global_plan)
 {
+  // Keep the same full-path progress gate while ignoring only the final yaw.
+  auto xy_goal = goal_pose;
+  xy_goal.orientation = query_pose.orientation;
+  return isGoalReached(query_pose, xy_goal, velocity, transformed_global_plan);
+}
+
+bool PathProgressGoalChecker::getTolerances(geometry_msgs::msg::Pose& pose_tolerance,
+                                            geometry_msgs::msg::Twist& vel_tolerance,
+                                            double& path_length_tolerance)
+{
+  // Full-path progress, rather than the local pruned path length, gates FTC.
+  path_length_tolerance = std::numeric_limits<double>::max();
   // Report XY + yaw tolerance for upstream (e.g., bt_navigator). Velocity
   // tolerance is unused — we don't gate on velocity at all.
   pose_tolerance.position.x = xy_goal_tolerance_;

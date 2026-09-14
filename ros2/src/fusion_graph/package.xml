@@ -33,9 +33,9 @@
   <depend>mowgli_interfaces</depend>
   <depend>eigen</depend>
 
-  <!-- GTSAM is not in the rosdep index for Kilted; the Docker image
-       installs it from source (libgtsam-dev >= 4.2). The build looks it
-       up via find_package(GTSAM CONFIG REQUIRED). -->
+  <!-- GTSAM 4.3a1 is pinned from source with TBB disabled in Docker and CI.
+       The Lyrical gtsam binary is a different 4.3.0 snapshot; do not pull it
+       in alongside the pinned install. CMake uses find_package(GTSAM). -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

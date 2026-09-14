@@ -170,7 +170,10 @@ export const MapToolbarMobile = ({
         boxShadow: colors.glassShadow,
     };
 
-    const isIdle = stateName === "IDLE" || stateName === "IDLE_DOCKED";
+    // DIG_OBSTRUCTION is a held robot (numeric state IDLE, wheels hard-stopped
+    // by firmware): the exits are Play after lifting it clear, or Home — so
+    // offer Continue, not Pause.
+    const isIdle = stateName === "IDLE" || stateName === "IDLE_DOCKED" || stateName === "DIG_OBSTRUCTION";
     const isRecording = stateName === "RECORDING";
     const resetDisabled = highLevelState === undefined || highLevelState >= 2;
 

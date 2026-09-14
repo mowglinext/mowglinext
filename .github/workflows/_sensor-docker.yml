@@ -133,6 +133,8 @@ jobs:
           printf '%s\n' "$SMOKE_TEST" > "$script"
           chmod +x "$script"
           docker run --rm \
+            --user ubuntu \
+            -e PYTHONPYCACHEPREFIX=/tmp/pycache \
             -v "$script:/tmp/smoke-test.sh:ro" \
             "${IMAGE}@${DIGEST}" \
             bash /tmp/smoke-test.sh

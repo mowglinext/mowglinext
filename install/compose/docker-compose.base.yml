@@ -33,6 +33,8 @@ services:
 
   mowgli:
     container_name: mowgli-ros2
+    labels:
+      garden.mowgli.update.image: mowgli-ros2
     image: ${MOWGLI_ROS2_IMAGE}
     network_mode: host
     ipc: host

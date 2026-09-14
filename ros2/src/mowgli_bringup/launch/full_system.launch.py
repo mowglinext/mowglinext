@@ -237,7 +237,7 @@ def generate_launch_description() -> LaunchDescription:
             {"idle_nav2_suspend":
                 bool(robot_params.get("idle_nav2_suspend", False))},
             # transit_speed / mowing_speed flow into SetNavMode, which sets
-            # them on the live controllers (FollowPath.desired_linear_vel for
+            # them on the live controllers (FollowPath.primary_controller.max_linear_vel for
             # the RPP transit controller, FollowCoveragePath.speed_fast for the
             # FTC coverage controller) per nav mode. Without these the BT used
             # hardcoded 0.5/0.25 and the configured speeds never took effect.
@@ -727,6 +727,15 @@ def generate_launch_description() -> LaunchDescription:
                 ),
                 "led_charge_complete_dim_scale": float(
                     robot_params.get("led_charge_complete_dim_scale", 0.0)
+                ),
+                "led_charge_complete_indicator_count": int(
+                    robot_params.get("led_charge_complete_indicator_count", 0)
+                ),
+                "led_charge_complete_indicator_scale": float(
+                    robot_params.get("led_charge_complete_indicator_scale", 0.15)
+                ),
+                "led_charge_complete_indicator_ids": str(
+                    robot_params.get("led_charge_complete_indicator_ids", "")
                 ),
                 "led_spi_speed_hz": int(
                     robot_params.get("led_spi_speed_hz", 2400000)

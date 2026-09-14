@@ -24,7 +24,7 @@
 
 #include <nav2_core/controller_exceptions.hpp>
 #include <nav2_costmap_2d/costmap_2d.hpp>
-#include <nav2_util/node_utils.hpp>
+#include <nav2_ros_common/node_utils.hpp>
 #include <tf2/utils.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_listener.hpp>
@@ -39,7 +39,7 @@ namespace mowgli_nav2_plugins
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
-void FTCController::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr& parent,
+void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
                               std::string name,
                               std::shared_ptr<tf2_ros::Buffer> tf,
                               std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros)
@@ -63,11 +63,13 @@ void FTCController::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr& pa
 
   // Publishers (created as lifecycle-aware, activated/deactivated with the node).
   global_point_pub_ =
-      node->create_publisher<geometry_msgs::msg::PoseStamped>(plugin_name_ + "/global_point", 1);
+      node->create_publisher<geometry_msgs::msg::PoseStamped>(plugin_name_ + "/global_point",
+                                                              rclcpp::QoS(1));
   global_plan_pub_ = node->create_publisher<nav_msgs::msg::Path>(plugin_name_ + "/global_plan",
                                                                  rclcpp::QoS(1).transient_local());
   obstacle_marker_pub_ =
-      node->create_publisher<visualization_msgs::msg::Marker>(plugin_name_ + "/costmap_marker", 10);
+      node->create_publisher<visualization_msgs::msg::Marker>(plugin_name_ + "/costmap_marker",
+                                                              rclcpp::QoS(10));
 
   // Subscribe to the GLOBAL costmap (map frame, latched). It carries the
   // mowing-zone boundary as lethal cells (keepout / lethal_outside_areas
@@ -75,7 +77,6 @@ void FTCController::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr& pa
   // OFFSET deviation checks can refuse to skirt out of the zone.
   boundary_costmap_sub_ = node->create_subscription<nav_msgs::msg::OccupancyGrid>(
       "/global_costmap/costmap",
-      rclcpp::QoS(1).transient_local(),
       [this](const nav_msgs::msg::OccupancyGrid::SharedPtr og)
       {
         auto cm = std::make_unique<nav2_costmap_2d::Costmap2D>(og->info.width,
@@ -95,7 +96,8 @@ void FTCController::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr& pa
         std::lock_guard<std::mutex> lock(boundary_mutex_);
         boundary_costmap_ = std::move(cm);
         boundary_frame_ = og->header.frame_id;
-      });
+      },
+      rclcpp::QoS(1).transient_local());
 
   // Blade telemetry for the blade-load slowdown (ftc_blade_load.hpp). Always
   // subscribed — the feature can be switched on live via the
@@ -103,14 +105,14 @@ void FTCController::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr& pa
   // status message. Reliable QoS matches the bridge's publisher (QoS(10)).
   blade_status_sub_ = node->create_subscription<mowgli_interfaces::msg::Status>(
       "/hardware_bridge/status",
-      rclcpp::QoS(1),
       [this](const mowgli_interfaces::msg::Status::SharedPtr msg)
       {
         std::lock_guard<std::mutex> lock(blade_mutex_);
         blade_active_ = msg->mower_esc_status != 0u;
         blade_rpm_ = static_cast<double>(msg->mower_motor_rpm);
         blade_status_time_ = rclcpp::Time(msg->blade_status_stamp, RCL_ROS_TIME);
-      });
+      },
+      rclcpp::QoS(1));
 
   current_state_ = PlannerState::PRE_ROTATE;
   last_time_ = clock_->now();
@@ -154,29 +156,29 @@ void FTCController::deactivate()
 
 // ── Parameter handling ────────────────────────────────────────────────────────
 
-void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node)
+void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node)
 {
   auto declare_double = [&](const std::string& key, double default_val)
   {
-    nav2_util::declare_parameter_if_not_declared(node,
-                                                 plugin_name_ + "." + key,
-                                                 rclcpp::ParameterValue(default_val));
+    nav2::declare_parameter_if_not_declared(node,
+                                            plugin_name_ + "." + key,
+                                            rclcpp::ParameterValue(default_val));
     return node->get_parameter(plugin_name_ + "." + key).as_double();
   };
 
   auto declare_int = [&](const std::string& key, int default_val)
   {
-    nav2_util::declare_parameter_if_not_declared(node,
-                                                 plugin_name_ + "." + key,
-                                                 rclcpp::ParameterValue(default_val));
+    nav2::declare_parameter_if_not_declared(node,
+                                            plugin_name_ + "." + key,
+                                            rclcpp::ParameterValue(default_val));
     return static_cast<int>(node->get_parameter(plugin_name_ + "." + key).as_int());
   };
 
   auto declare_bool = [&](const std::string& key, bool default_val)
   {
-    nav2_util::declare_parameter_if_not_declared(node,
-                                                 plugin_name_ + "." + key,
-                                                 rclcpp::ParameterValue(default_val));
+    nav2::declare_parameter_if_not_declared(node,
+                                            plugin_name_ + "." + key,
+                                            rclcpp::ParameterValue(default_val));
     return node->get_parameter(plugin_name_ + "." + key).as_bool();
   };
 
@@ -675,7 +677,7 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
 
 // ── setPlan ───────────────────────────────────────────────────────────────────
 
-void FTCController::setPlan(const nav_msgs::msg::Path& path)
+void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
 {
   current_state_ = PlannerState::PRE_ROTATE;
   state_entered_time_ = clock_->now();
@@ -924,8 +926,12 @@ void FTCController::setSpeedLimit(const double& speed_limit, const bool& percent
 geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     const geometry_msgs::msg::PoseStamped& /*pose*/,
     const geometry_msgs::msg::Twist& velocity,
-    nav2_core::GoalChecker* goal_checker)
+    nav2_core::GoalChecker* goal_checker,
+    const nav_msgs::msg::Path& /*transformed_global_plan*/,
+    const geometry_msgs::msg::PoseStamped& /*global_goal*/)
 {
+  // FTC owns the complete coverage path and its monotonic carrot cursor.
+  // Do not replace it with the path handler's pruned local path each tick.
   geometry_msgs::msg::TwistStamped cmd_vel;
   cmd_vel.header.frame_id = "base_link";
   cmd_vel.header.stamp = clock_->now();

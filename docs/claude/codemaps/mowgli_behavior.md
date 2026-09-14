@@ -33,7 +33,7 @@
 | Rain handling (mode / debounce / dock-and-wait) | `src/condition_nodes.cpp` `IsNewRain`, `IsRainModeAtLeast`; `main_tree.xml` `RainGuard` :576-634 |
 | Obstacle-stuck / sensor-fault guards | `src/condition_nodes.cpp` `IsObstacleStuck`, `WasRecentlyInCollisionStop`, `IsScanStale`, `IsCollisionStopSustained`; `behavior_tree_node.cpp` :479-538 (collision_monitor + scan liveness latches) |
 | Idle Nav2 suspend (`idle_nav2_suspend`) | `src/navigation_nodes.cpp` `SetNav2Lifecycle` :170-255 (`/lifecycle_manager_navigation/manage_nodes`) |
-| Transit/mowing speed → live controllers | `src/navigation_nodes.cpp` `SetNavMode` :915-970 (`FollowPath.desired_linear_vel`, `FollowCoveragePath.speed_fast` on `/controller_server`) |
+| Transit/mowing speed → live controllers | `src/navigation_nodes.cpp` `SetNavMode` :915-970 (`FollowPath.primary_controller.max_linear_vel`, `FollowCoveragePath.speed_fast` on `/controller_server`) |
 | Area recording | `src/recording_nodes.cpp` (`RecordArea`: Douglas-Peucker, `~/recording_trajectory` preview, `/map_server_node/add_area`) |
 | Nav2 navigate_to_pose tree (replan-only-if-invalid) | `ros2/src/mowgli_behavior/trees/navigate_to_pose.xml` (wired by `ros2/src/mowgli_bringup/launch/navigation.launch.py` :626-629) |
 | Launch wiring / which params get forwarded | `ros2/src/mowgli_bringup/launch/full_system.launch.py` :216-354 (`behavior_tree_node` Node), `sim_full_system.launch.py` :190-199 |
@@ -151,7 +151,7 @@ Clients (node → file:line):
 | `/map_server_node/get_recovery_point` | `mowgli_interfaces/srv/GetRecoveryPoint` | `NavigateInsideBoundary` (`navigation_nodes.cpp` :415) |
 | `/global_costmap/clear_entirely_global_costmap`, `/local_costmap/clear_entirely_local_costmap` | `nav2_msgs/srv/ClearEntireCostmap` | `ClearCostmap` (:143-148), `NavigateInsideBoundary` (:420) |
 | `/global_costmap/keepout_filter/toggle_filter` | `std_srvs/SetBool` | `NavigateInsideBoundary` — disable before clear/plan, re-enable on every exit |
-| `/controller_server` `set_parameters` | rcl_interfaces | `SetNavMode` (:922-965): `FollowPath.desired_linear_vel`, `FollowCoveragePath.speed_fast` |
+| `/controller_server` `set_parameters` | rcl_interfaces | `SetNavMode` (:922-965): `FollowPath.primary_controller.max_linear_vel`, `FollowCoveragePath.speed_fast` |
 | `/lifecycle_manager_navigation/is_active` | `std_srvs/srv/Trigger` | `Nav2Active` (`condition_nodes.cpp` :605) |
 | `/lifecycle_manager_navigation/manage_nodes` | `nav2_msgs/srv/ManageLifecycleNodes` | `SetNav2Lifecycle` (:226) |
 | `/obstacle_tracker/save_obstacles` | `std_srvs/srv/Trigger` | `SaveObstacles` (`utility_nodes.cpp` :216) — no server exists in the repo; node skips with SUCCESS |
@@ -219,7 +219,7 @@ Publishes none. `ctx->tf_buffer` (`behavior_tree_node.cpp` :82) is used to look 
 - New node parameter → declare in `behavior_tree_node.cpp`, add the default to the TEMPLATE `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` (never the sparse installed file, Invariant 15), forward it in `full_system.launch.py` :216-354 (otherwise the node silently runs its C++ default), and — if operator-facing — `gui/web/src/components/settings/paramCatalog.ts`.
 - `kSegmentTransitGap` is single-sourced from `ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp` :26 (`kSegmentTransitGapM = 0.6`) and guards a distant first/legacy unit. Every later planner-produced sub-path transits blade-off regardless of positional gap because its boundary represents a heading or obstacle discontinuity; `test/test_coverage_transit_gap.cpp` pins both rules.
 - `coverage_resume.txt` layout → bump `kHeader` in `coverage_persistence.cpp` :34 (unknown header = start fresh) and `test/test_coverage_persistence.cpp`.
-- `FollowStrip` goal ids `FollowCoveragePath` / `coverage_goal_checker` (`coverage_nodes.cpp` :581-582) must match `controller_server` plugin names in `ros2/src/mowgli_bringup/config/nav2_params_base.yaml`; `SetNavMode` param names (`FollowPath.desired_linear_vel`, `FollowCoveragePath.speed_fast`) must match the RPP/FTC plugin params there.
+- `FollowStrip` goal ids `FollowCoveragePath` / `coverage_goal_checker` (`coverage_nodes.cpp` :581-582) must match `controller_server` plugin names in `ros2/src/mowgli_bringup/config/nav2_params_base.yaml`; `SetNavMode` param names (`FollowPath.primary_controller.max_linear_vel`, `FollowCoveragePath.speed_fast`) must match the RPP/FTC plugin params there.
 - `navigate_to_pose.xml` `GoalCheckerSelector` default `stopped_goal_checker` and the selector topics must match `controller_server` `goal_checker_plugins` in `nav2_params_base.yaml`; the path is injected by `navigation.launch.py` :626.
 - Topic names consumed here are hard-coded absolute: `map_server_node` `~/boundary_violation` etc. (`map_server_node.cpp` :363-367), `hardware_bridge` `~/status|emergency|power|mower_control|emergency_stop` (`hardware_bridge_node.cpp` :704-818), `fusion_graph_node` `~/set_pose` (`fusion_graph_node_setup_comms.cpp` :196). Renaming a node name on either side breaks the guard silently (see the `/map_server/…` regression note at `behavior_tree_node.cpp` :242-246).
 - `EscapeStartBlocked` ceilings (`start_blocked_escape.hpp` :99-105) and `dig_*` in `hardware_bridge` are independent safety envelopes — CLAUDE.md Invariant 16 / What NOT to Do.
@@ -246,3 +246,4 @@ Publishes none. `ctx->tf_buffer` (`behavior_tree_node.cpp` :82) is used to look 
 ## Generated & vendored — do not hand-edit
 - Nothing generated inside `ros2/src/mowgli_behavior/`. Message/service/action types come from `ros2/src/mowgli_interfaces` (`HighLevelStatus.msg`, `HighLevelControl.srv`, `StartInArea.srv`, `PlanCoverage.action`, …); after editing those, regenerate GUI bindings per `docs/claude/commands.md`.
 - BehaviorTree.CPP v4 and Nav2 (`nav2_msgs`, `bt_navigator` stock nodes used by `navigate_to_pose.xml`) are system packages, not vendored here.
+- **DIG_OBSTRUCTION exit:** `utility_nodes.hpp` `DiscardNearbyDigKeepouts` (Trigger client on `helper_node`, bounded `kAckTimeoutSec` 3 s wait, always SUCCESS) sits in `HomeSequence` under `ForceSuccess(Sequence(IsDigEscalated, DiscardNearbyDigKeepouts))` before `DockRobot`; pinned by `test/test_dig_obstruction_recovery.cpp` (structural, like `test_dock_motion_gate`).

@@ -5,7 +5,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -30,7 +30,7 @@ find_package(mowgli_interfaces  REQUIRED)
 find_package(Eigen3             REQUIRED)
 
 # GTSAM ships its own CMake config; require >= 4.2 (Pose2 + ISAM2 stable
-# API). On Kilted the Docker image builds GTSAM from source.
+# API). Docker and CI retain the pinned 4.3a1 source install.
 find_package(GTSAM CONFIG REQUIRED)
 
 # LiDAR map anchor: Beluga particle filter (header-only MCL toolkit; the
@@ -63,20 +63,20 @@ target_link_libraries(fusion_graph_core PUBLIC
   Eigen3::Eigen
 )
 
-ament_target_dependencies(fusion_graph_core PUBLIC
-  rclcpp
-  nav_msgs
-  geometry_msgs
-  sensor_msgs
-  std_msgs
-  std_srvs
-  diagnostic_msgs
-  visualization_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  tf2_eigen
-  mowgli_interfaces
+target_link_libraries(fusion_graph_core PUBLIC
+  ${rclcpp_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${std_msgs_TARGETS}
+  ${std_srvs_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+  ${visualization_msgs_TARGETS}
+  ${tf2_TARGETS}
+  ${tf2_ros_TARGETS}
+  ${tf2_geometry_msgs_TARGETS}
+  ${tf2_eigen_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -98,7 +98,9 @@ add_executable(fusion_graph_node
 target_link_libraries(fusion_graph_node
   fusion_graph_core
 )
-ament_target_dependencies(fusion_graph_node beluga_ros)
+target_link_libraries(fusion_graph_node
+  ${beluga_ros_TARGETS}
+)
 
 # ---------------------------------------------------------------------------
 # Install
@@ -244,7 +246,9 @@ if(BUILD_TESTING)
     test/test_lidar_anchor_odom.cpp
   )
   target_link_libraries(test_lidar_anchor_odom fusion_graph_core)
-  ament_target_dependencies(test_lidar_anchor_odom beluga_ros)  # Sophus comes with beluga_ros
+  target_link_libraries(test_lidar_anchor_odom
+    ${beluga_ros_TARGETS}
+  )  # Sophus comes with beluga_ros
   ament_add_gtest(test_lidar_map_file
     test/test_lidar_map_file.cpp
   )

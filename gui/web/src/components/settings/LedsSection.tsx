@@ -296,6 +296,53 @@ export const LedsSection: React.FC<Props> = ({
                                         />
                                     </Form.Item>
                                 </Col>
+                                <Col xs={12} sm={8}>
+                                    <Form.Item
+                                        label={label(
+                                            "led_charge_complete_indicator_count",
+                                            t("settingsLeds.chargeCompleteIndicatorCount"),
+                                        )}
+                                        tooltip={t("settingsLeds.chargeCompleteIndicatorCountTooltip")}
+                                    >
+                                        <InputNumber
+                                            value={values.led_charge_complete_indicator_count}
+                                            onChange={(v) => onChange("led_charge_complete_indicator_count", v)}
+                                            min={0} max={values.led_count ?? 512} step={1} precision={0}
+                                            style={{ width: "100%" }}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12} sm={8}>
+                                    <Form.Item
+                                        label={label(
+                                            "led_charge_complete_indicator_scale",
+                                            t("settingsLeds.chargeCompleteIndicatorScale"),
+                                        )}
+                                        tooltip={t("settingsLeds.chargeCompleteIndicatorScaleTooltip")}
+                                    >
+                                        <InputNumber
+                                            value={values.led_charge_complete_indicator_scale}
+                                            onChange={(v) => onChange("led_charge_complete_indicator_scale", v)}
+                                            min={0} max={1} step={0.05}
+                                            style={{ width: "100%" }}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={24} sm={16}>
+                                    <Form.Item
+                                        label={label(
+                                            "led_charge_complete_indicator_ids",
+                                            t("settingsLeds.chargeCompleteIndicatorIds"),
+                                        )}
+                                        tooltip={t("settingsLeds.chargeCompleteIndicatorIdsTooltip")}
+                                    >
+                                        <Input
+                                            value={values.led_charge_complete_indicator_ids}
+                                            onChange={(e) => onChange("led_charge_complete_indicator_ids", e.target.value)}
+                                            placeholder="0,4,8,12"
+                                        />
+                                    </Form.Item>
+                                </Col>
                             </Row>
                         </Form>
                     </Card>

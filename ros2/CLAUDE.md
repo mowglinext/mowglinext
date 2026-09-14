@@ -42,7 +42,7 @@ Read the root [`CLAUDE.md`](../CLAUDE.md) first — Safety, the 16 Architecture 
 
 ## Build · test · run
 
-All of these assume the devcontainer (`/ros2_ws` exists, sourced ROS Kilted), run from `ros2/`.
+All of these assume the devcontainer (`/ros2_ws` exists, sourced ROS Lyrical), run from `ros2/`.
 
 ```bash
 make build                     # = build-full: colcon build --symlink-install, Release
@@ -96,7 +96,7 @@ docker build -f ros2/Dockerfile --target runtime -t mowgli-ros2 .    # context M
 - ROS2 cannot type an **empty YAML list** in a params file — lifecycle bring-up throws. Omit the key instead (`src/mowgli_map/config/map_server.yaml`).
 - The GUI/firmware generators **glob** `mowgli_interfaces/msg/`, not the `CMakeLists.txt` `msg_files` list: an unregistered `.msg` still produces Go/TS/firmware bindings while not existing at runtime (`CoveragePath.msg` today).
 - The E2E harnesses are gated by nothing and carry dead topics plus Gazebo `gz service` calls under a Webots sim — some criteria report "no data" or SKIP by design. `scripts/e2e_test.py` and `scripts/precision_monitor.py` are stale duplicates; edit the `src/` copies.
-- The Docker `build` stage runs `colcon test … || true` — image builds never fail on unit tests. The gate is `ros2-ci.yml` → **`Build & Test (ROS2 kilted)`**.
+- Unit tests are built and gated by `ros2-ci.yml` → **`Build & Test (ROS2 kilted)`** (the protected legacy check name is retained while the build uses Lyrical). Docker production builds disable tests.
 
 ## Safety
 

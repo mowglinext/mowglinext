@@ -33,6 +33,101 @@ export interface ApiGetSettingsResponse {
   settings?: Record<string, any>;
 }
 
+export interface ApiImportDockPose {
+  x?: number;
+  y?: number;
+  yaw_rad?: number;
+}
+
+export interface ApiImportOpenMowerRequest {
+  apply?: boolean;
+  map?: number[];
+  om_datum_lat?: number;
+  om_datum_lon?: number;
+}
+
+export interface ApiImportOpenMowerSummary {
+  applied?: boolean;
+  areas?: ApiImportedAreaBrief[];
+  datum_shift_east_m?: number;
+  datum_shift_north_m?: number;
+  dock_pose?: ApiImportDockPose;
+  /**
+   * MnDatumConfigured is true when mowgli_robot.yaml already has a
+   * datum_lat/datum_lon set. The GUI uses this to decide whether to
+   * offer the "import the datum too" step: on a fresh install (false)
+   * the OpenMower datum can be adopted as the robot's datum; when a
+   * datum already exists (true) the geometry was reprojected INTO it,
+   * so overwriting it would misalign the just-imported map — the GUI
+   * then hides the datum-import option.
+   */
+  mn_datum_configured?: boolean;
+  mowing_areas?: number;
+  navigation_areas?: number;
+  obstacles?: number;
+  orphan_obstacles?: number;
+  warnings?: string[];
+}
+
+export interface ApiImportedAreaBrief {
+  approx_area_sqm?: number;
+  is_navigation_area?: boolean;
+  name?: string;
+  obstacles?: number;
+  /** "mow" | "nav" */
+  type?: string;
+  vertices?: number;
+}
+
+export interface ApiInstalledComponent {
+  architecture?: string;
+  built_at?: string;
+  component?: string;
+  digests?: string[];
+  image?: string;
+  image_id?: string;
+  metadata_available?: boolean;
+  name?: string;
+  revision?: string;
+  state?: string;
+  version?: string;
+}
+
+export interface ApiIrriSenseErrorResponse {
+  code?: string;
+  error?: string;
+}
+
+export interface ApiIrriSenseGardensResponse {
+  gardens?: ProvidersIrriSenseGardenSummary[];
+}
+
+export interface ApiIrriSenseSettingsResponse {
+  baseUrl?: string;
+  dryAfterWateringHours?: number;
+  enabled?: boolean;
+  gardenId?: string;
+  gateScheduler?: boolean;
+  maxStaleMinutes?: number;
+  tokenMasked?: string;
+  tokenSet?: boolean;
+  wetDeficitMm?: number;
+  zoneIds?: string[];
+}
+
+export interface ApiIrriSenseSettingsUpdate {
+  baseUrl?: string;
+  clearToken?: boolean;
+  dryAfterWateringHours?: number;
+  enabled?: boolean;
+  gardenId?: string;
+  gateScheduler?: boolean;
+  maxStaleMinutes?: number;
+  token?: string;
+  wetDeficitMm?: number;
+  zoneIds?: string[];
+}
+
 export interface ApiOkResponse {
   ok?: string;
 }
@@ -45,6 +140,12 @@ export interface ApiSchedule {
   enabled?: boolean;
   id?: string;
   lastRun?: string;
+  /**
+   * Written by the scheduler when a due run was skipped (soil wet); the GUI
+   * shows them, the API only preserves them across updates.
+   */
+  lastSkipReason?: string;
+  lastSkippedAt?: string;
   /** HH:mm format */
   time?: string;
 }
@@ -59,6 +160,41 @@ export interface ApiSettingsStatusResponse {
 
 export interface ApiSystemInfo {
   cpuTemperature?: number;
+}
+
+export interface ApiUpdateCheck {
+  channel?: string;
+  checked_at?: string;
+  components?: ApiUpdateComponent[];
+  last_successful_at?: string;
+  notes_url?: string;
+  state?: string;
+  version?: string;
+}
+
+export interface ApiUpdateComponent {
+  available_image?: string;
+  available_revision?: string;
+  custom_image?: boolean;
+  digest_reference?: boolean;
+  installed_revision?: string;
+  name?: string;
+  source_relation?: string;
+  state?: string;
+}
+
+export interface ApiVersionsResponse {
+  components?: ApiInstalledComponent[];
+  docker_available?: boolean;
+  observed_at?: string;
+  server?: BuildinfoInfo;
+}
+
+export interface BuildinfoInfo {
+  built_at?: string;
+  modified?: boolean;
+  revision?: string;
+  version?: string;
 }
 
 export interface GeometryPoint {
@@ -98,7 +234,15 @@ export interface MowgliMapArea {
   area?: GeometryPolygon;
   is_navigation_area?: boolean;
   name?: string;
+  obstacle_info?: MowgliMapObstacleInfo[];
   obstacles?: GeometryPolygon[];
+}
+
+export interface MowgliMapObstacleInfo {
+  id?: number;
+  name?: string;
+  pending?: boolean;
+  source?: number;
 }
 
 export interface MowgliReplaceMapArea {
@@ -113,23 +257,52 @@ export interface MowgliReplaceMapReq {
 export interface MowgliSetDockingPointReq {
   docking_pose?: GeometryPose;
   use_gps_position?: boolean;
-  /** Yaw source: 0=PRESERVE (keep stored yaw), 1=REQUEST (use docking_pose orientation), 2=MOTION (use yaw_rad). */
-  yaw_source?: number;
-  /** ENU chassis yaw (rad); used only when yaw_source === 2 (MOTION). */
   yaw_rad?: number;
+  yaw_source?: number;
+}
+
+export interface ProvidersIrriSenseGardenSummary {
+  id?: string;
+  name?: string;
+  zones?: ProvidersIrriSenseZoneSummary[];
+}
+
+export interface ProvidersIrriSenseZoneSummary {
+  enabled?: boolean;
+  id?: string;
+  label?: string;
 }
 
 export interface TypesFirmwareConfig {
   batChargeCutoffVoltage?: number;
   boardType?: string;
+  /**
+   * Firmware selection provenance is written alongside the saved config so
+   * later mower-model changes can update only fields that still follow model
+   * defaults. Empty/unknown values are legacy and are handled conservatively
+   * by the GUI.
+   */
+  boardTypeOrigin?: string;
   bothWheelsLiftEmergencyMillis?: number;
   branch?: string;
-  debugType?: string;
   directory?: string;
   disableEmergency?: boolean;
+  /**
+   * ExpertBuild routes the flash to the compile-from-source path
+   * (flashMowgli); the default (false) flashes a prebuilt binary. Kept for
+   * backward compatibility — FirmwareSource == "custom" implies it.
+   */
+  expertBuild?: boolean;
   externalImuAcceleration?: boolean;
   externalImuAngular?: boolean;
   file?: string;
+  firmwareSelectionModel?: string;
+  /**
+   * FirmwareSource is the GUI dropdown selector: "custom" compiles from
+   * source (the expert path), "prebuilt" (or empty, for older payloads)
+   * flashes the tested prebuilt binary.
+   */
+  firmwareSource?: string;
   imuOnboardInclinationThreshold?: number;
   limitVoltage150MA?: number;
   masterJ18?: boolean;
@@ -138,6 +311,7 @@ export interface TypesFirmwareConfig {
   maxMps?: number;
   oneWheelLiftEmergencyMillis?: number;
   panelType?: string;
+  panelTypeOrigin?: string;
   perimeterWire?: boolean;
   playButtonClearEmergencyMillis?: number;
   repository?: string;
@@ -146,6 +320,31 @@ export interface TypesFirmwareConfig {
   tiltEmergencyMillis?: number;
   version?: string;
   wheelBase?: number;
+}
+
+export interface TypesSoilStatus {
+  configured?: boolean;
+  enabled?: boolean;
+  error?: string;
+  fetchedAt?: string;
+  fresh?: boolean;
+  gardenName?: string;
+  gateScheduler?: boolean;
+  reason?: string;
+  unknown?: boolean;
+  wet?: boolean;
+  zones?: TypesSoilZoneStatus[];
+}
+
+export interface TypesSoilZoneStatus {
+  deficitMm?: number;
+  enabled?: boolean;
+  id?: string;
+  label?: string;
+  lastWateredAt?: string;
+  reason?: string;
+  selected?: boolean;
+  wet?: boolean;
 }
 
 export type QueryParamsType = Record<string | number, any>;
@@ -525,6 +724,98 @@ export class Api<
         ...params,
       }),
   };
+  import = {
+    /**
+     * @description Parse a user-supplied OpenMower map.json, translate it into MowgliNext's coordinate frame, and return a summary for confirmation. Setting `apply=true` runs the live write path (areas + dock pose). See docs/IMPORT_OPENMOWER_MAP.md.
+     *
+     * @tags import
+     * @name OpenmowerCreate
+     * @summary import an OpenMower map.json (preview-only by default)
+     * @request POST:/import/openmower
+     */
+    openmowerCreate: (
+      body: ApiImportOpenMowerRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<ApiImportOpenMowerSummary, ApiErrorResponse>({
+        path: `/import/openmower`,
+        method: "POST",
+        body: body,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+  };
+  irrisense = {
+    /**
+     * @description gardens readable by the stored token, for the picker and "test connection"
+     *
+     * @tags irrisense
+     * @name GardensList
+     * @summary list IrriSense gardens
+     * @request GET:/irrisense/gardens
+     */
+    gardensList: (params: RequestParams = {}) =>
+      this.request<ApiIrriSenseGardensResponse, ApiIrriSenseErrorResponse>({
+        path: `/irrisense/gardens`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags irrisense
+     * @name SettingsList
+     * @summary IrriSense settings
+     * @request GET:/irrisense/settings
+     */
+    settingsList: (params: RequestParams = {}) =>
+      this.request<ApiIrriSenseSettingsResponse, any>({
+        path: `/irrisense/settings`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags irrisense
+     * @name SettingsUpdate
+     * @summary update IrriSense settings
+     * @request PUT:/irrisense/settings
+     */
+    settingsUpdate: (
+      settings: ApiIrriSenseSettingsUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<ApiIrriSenseSettingsResponse, ApiErrorResponse>({
+        path: `/irrisense/settings`,
+        method: "PUT",
+        body: settings,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description cached wet/dry/unknown verdict the scheduler gate reads
+     *
+     * @tags irrisense
+     * @name StatusList
+     * @summary IrriSense soil status
+     * @request GET:/irrisense/status
+     */
+    statusList: (params: RequestParams = {}) =>
+      this.request<TypesSoilStatus, any>({
+        path: `/irrisense/status`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+  };
   mowglinext = {
     /**
      * @description call a service
@@ -622,6 +913,21 @@ export class Api<
         body: CallReq,
         type: ContentType.Json,
         format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description multiplexed topic subscription
+     *
+     * @tags mowglinext
+     * @name MultiplexList
+     * @summary multiplexed topic subscription
+     * @request GET:/mowglinext/multiplex
+     */
+    multiplexList: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/mowglinext/multiplex`,
+        method: "GET",
         ...params,
       }),
 
@@ -847,6 +1153,22 @@ export class Api<
         format: "json",
         ...params,
       }),
+
+    /**
+     * @description returns a flat key-value map of default values (the reset-to-default source)
+     *
+     * @tags settings
+     * @name YamlDefaultsList
+     * @summary returns the schema default value for every known parameter
+     * @request GET:/settings/yaml/defaults
+     */
+    yamlDefaultsList: (params: RequestParams = {}) =>
+      this.request<Record<string, any>, ApiErrorResponse>({
+        path: `/settings/yaml/defaults`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
   };
   setup = {
     /**
@@ -914,6 +1236,93 @@ export class Api<
       this.request<ApiOkResponse, ApiErrorResponse>({
         path: `/system/shutdown`,
         method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags updates
+     * @name UpdaterStateList
+     * @summary Read cached host updater status
+     * @request GET:/system/updater/state
+     */
+    updaterStateList: (params: RequestParams = {}) =>
+      this.request<Record<string, any>, ApiErrorResponse>({
+        path: `/system/updater/state`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Same-origin JSON and X-Mowgli-Update: 1 are required. See docs/UPDATES.md for the operation contract.
+     *
+     * @tags updates
+     * @name UpdaterCreate
+     * @summary Review or control a coordinated software update
+     * @request POST:/system/updater/{operation}
+     */
+    updaterCreate: (
+      operation:
+        | "policy"
+        | "check"
+        | "plan"
+        | "apply"
+        | "rollback"
+        | "recover"
+        | "notice"
+        | "agent-update",
+      request: Record<string, any>,
+      params: RequestParams = {},
+    ) =>
+      this.request<Record<string, any>, ApiErrorResponse>({
+        path: `/system/updater/${operation}`,
+        method: "POST",
+        body: request,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags system
+     * @name UpdatesList
+     * @summary Check available software versions
+     * @request GET:/system/updates
+     */
+    updatesList: (
+      query: {
+        /** Comparison channel */
+        channel: "stable" | "dev";
+        /** Check remote metadata (otherwise cached result) */
+        check?: boolean;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ApiUpdateCheck, any>({
+        path: `/system/updates`,
+        method: "GET",
+        query: query,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags system
+     * @name VersionsList
+     * @summary Installed software versions
+     * @request GET:/system/versions
+     */
+    versionsList: (params: RequestParams = {}) =>
+      this.request<ApiVersionsResponse, any>({
+        path: `/system/versions`,
+        method: "GET",
         format: "json",
         ...params,
       }),

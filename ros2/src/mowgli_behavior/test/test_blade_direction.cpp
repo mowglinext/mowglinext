@@ -18,12 +18,14 @@
 #include <vector>
 
 #include "behaviortree_cpp/bt_factory.h"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "mowgli_behavior/blade_control_service.hpp"
 #include "mowgli_behavior/blade_direction.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_behavior/utility_nodes.hpp"
 #include "mowgli_interfaces/srv/blade_control.hpp"
+#include "tf2_ros/buffer.h"
 #include <gtest/gtest.h>
 
 using namespace mowgli_behavior;
@@ -114,6 +116,18 @@ protected:
   {
     ctx = std::make_shared<BTContext>();
     ctx->node = rclcpp::Node::make_shared("blade_direction_test");
+    // FollowStrip::onStart measures the gap to the first unit through the TF
+    // buffer (blade spin-up deferral, ae6d5780) and dereferences it without a
+    // null check. Stand the robot at the path start so the first unit is mowed
+    // from here and the spin-up request carries the session direction, which is
+    // what the coverage assertions below exercise.
+    ctx->tf_buffer = std::make_shared<tf2_ros::Buffer>(ctx->node->get_clock());
+    geometry_msgs::msg::TransformStamped map_to_base;
+    map_to_base.header.frame_id = "map";
+    map_to_base.header.stamp = ctx->node->now();
+    map_to_base.child_frame_id = "base_footprint";
+    map_to_base.transform.rotation.w = 1.0;
+    ctx->tf_buffer->setTransform(map_to_base, "blade_direction_test", /*is_static=*/true);
     ctx->blade_auto_reverse = true;
     ctx->blade_direction = BladeDirection(42);
     // Start in a reverse session so a silently-defaulted direction field fails.

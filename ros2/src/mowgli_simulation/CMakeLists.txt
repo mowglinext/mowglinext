@@ -32,11 +32,11 @@ target_include_directories(fake_hardware_bridge_node
     $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(fake_hardware_bridge_node
-  rclcpp
-  mowgli_interfaces
-  nav_msgs
-  sensor_msgs
+target_link_libraries(fake_hardware_bridge_node
+  ${rclcpp_TARGETS}
+  ${mowgli_interfaces_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
 )
 
 install(TARGETS
@@ -62,9 +62,9 @@ target_include_directories(sim_actuation_node
     $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(sim_actuation_node
-  rclcpp
-  geometry_msgs
+target_link_libraries(sim_actuation_node
+  ${rclcpp_TARGETS}
+  ${geometry_msgs_TARGETS}
 )
 
 install(TARGETS

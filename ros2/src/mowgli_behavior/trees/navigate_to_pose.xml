@@ -43,7 +43,7 @@
               <Inverter>
                 <GlobalUpdatedGoal/>
               </Inverter>
-              <IsPathValid path="{path}"/>
+              <ValidatePath path="{path}"/>
             </ReactiveSequence>
             <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
           </Fallback>
@@ -63,7 +63,7 @@
         </Fallback>
         <ReactiveFallback name="RecoveryFallback">
           <GoalUpdated/>
-          <RoundRobin name="RecoveryActions">
+          <RoundRobin name="RecoveryActions" wrap_around="true">
             <Sequence name="ClearingActions">
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>

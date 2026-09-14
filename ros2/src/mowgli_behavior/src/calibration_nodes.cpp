@@ -24,7 +24,7 @@
 
 #include "mowgli_behavior/dock_alignment.hpp"
 #include "mowgli_interfaces/motion_yaw_fit.hpp"
-#include "tf2/LinearMath/Quaternion.h"
+#include "tf2/LinearMath/Quaternion.hpp"
 
 namespace mowgli_behavior
 {

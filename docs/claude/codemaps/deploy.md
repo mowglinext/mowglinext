@@ -6,6 +6,11 @@
 
 ## Where to look
 
+Managed installer and updater share `install/compose/stack.json` via the Go `installer-stack` command. Releases ship a checksummed Compose bundle; installed releases survive older-checkout installer reruns. See `docs/UPDATES.md` for selection, ownership and migration constraints.
+
+Coordinated updates: `install/deployment.json` owns the publication build list and per-image compatibility contracts and verified service projection. Installed Compose fragments declare `garden.mowgli.update.*` labels; absent optional services stay absent. See `docs/UPDATES.md` for dependency, health and supported persistence contracts.
+
+
 | Task | Start here |
 |------|------------|
 | Trace an install end-to-end (15 steps) | `install/mowglinext.sh` `main()` L88–199 (each `progress_run*` names the lib function) |
@@ -268,3 +273,5 @@ CI: sensor images build via `.github/workflows/sensors-{gps,lidar-ldlidar,lidar-
 - `install/.preset` / `install/.preset.consumed` — optional hardware preset dropped next to the installer; read and renamed to `.consumed` by `lib/state.sh` (`mark_preset_consumed` L160). Nothing in this repo writes it — `docs/install.sh` passes web-composer choices as CLI flags instead.
 - `ros2/src/external/universal-gnss` — git submodule, pinned to the mowglinext fork; the gps image copies its packages, never patch them in place.
 - LiDAR driver sources (`Myzhar/ldrobot-lidar-ros2`, `Slamtec/rplidar_ros`, `ldrobotSensorTeam/ldlidar_stl_ros2`) are cloned inside the Dockerfiles; the `sed` patches there are the only supported way to modify them.
+
+External release components: `gui/cmd/publish-deployment/definition.go` reads built/external entries in `install/deployment.json`. The workflow builds only built entries; publisher resolves external Docker Hub/GHCR index digests and both platforms. Deployment schema 3 and journal schema 5 preserve external provenance; existing storage, health, installer-selection and core-image guards still apply. See `docs/UPDATES.md`, External images in standard deployments.

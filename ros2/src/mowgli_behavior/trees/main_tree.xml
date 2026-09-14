@@ -369,10 +369,15 @@
         <IsCommand command="7"/>
         <Inverter><IsDigEscalated/></Inverter>
 
-        <!-- Blade off, wheels stopped, operator-visible reason. The bridge
-             clears the latch only when the robot reaches the charger, so the
-             robot holds here until the operator recalls it (COMMAND_HOME) or
-             extracts it — it cannot quietly resume into the same object. -->
+        <!-- Blade off, wheels stopped, operator-visible reason. state="1"
+             (IDLE) is deliberate: the firmware turns it into a wheel + blade
+             hard stop for as long as the hold lasts. The bridge clears the
+             latch when the robot reaches the charger OR once the fused pose
+             is 2x dig_escalate_radius_m away from the escalation point, so
+             the robot holds here until the operator recalls it (COMMAND_HOME,
+             which first drops the dig keepouts under the robot — see
+             HomeSequence) or lifts it clear and presses Play — it cannot
+             quietly resume into the same object. -->
         <Sequence name="DigObstructionHandler">
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
@@ -1195,6 +1200,21 @@
               <IsCharging/>
               <Sequence name="NavigateHome">
                 <PublishHighLevelStatus state="2" state_name="RETURNING_HOME"/>
+                <!-- DIG_OBSTRUCTION exit (issue #500, field report 2026-09-14).
+                     Three same-spot dig latches leave up to three 0.60 m PENDING
+                     keepouts stamped under and around the robot, so this dock
+                     transit's Smac plan starts in a lethal cell (START_OCCUPIED)
+                     and the operator's HOME never moves. Drop the proposals that
+                     touch the footprint BEFORE planning; farther proposals and
+                     accepted keepouts stay, and the dig detector stays armed on
+                     the way out. ForceSuccess: a robot that is not escalated
+                     (IsDigEscalated fails) goes home exactly as before. -->
+                <ForceSuccess>
+                  <Sequence name="FreeDigKeepoutsIfEscalated">
+                    <IsDigEscalated/>
+                    <DiscardNearbyDigKeepouts/>
+                  </Sequence>
+                </ForceSuccess>
                 <SaveObstacles/>
                 <!-- Wipe stale obstacle cells so the nav-to-staging dock
                      approach isn't walled off (see MowingCompleteSequence). -->

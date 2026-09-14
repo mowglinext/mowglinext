@@ -864,6 +864,28 @@
           "maximum": 1.0,
           "description": "Brightness scale applied once the Charge Complete Dim Delay above has elapsed. 0 (default) turns the ring off; a small non-zero value keeps a faint green glow as an at-a-glance \"still charged\" indicator instead."
         },
+        "led_charge_complete_indicator_count": {
+          "type": "integer",
+          "title": "Charge Complete Indicator Pixels",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 512,
+          "description": "Number of pixels, spaced evenly around the ring, that stay lit at Charge Complete Indicator Brightness instead of dimming with the rest once Charge Complete Dim Delay elapses. 0 (default) disables this and the whole ring dims uniformly. E.g. 1 keeps a single pixel lit; 4 keeps four pixels 90 degrees apart."
+        },
+        "led_charge_complete_indicator_scale": {
+          "type": "number",
+          "title": "Charge Complete Indicator Brightness",
+          "default": 0.15,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Brightness of the indicator pixels above, independent of Charge Complete Brightness, so they can stay visibly brighter than the dimmed (or fully off) background."
+        },
+        "led_charge_complete_indicator_ids": {
+          "type": "string",
+          "title": "Charge Complete Indicator Pixel IDs",
+          "default": "",
+          "description": "Comma-separated pixel indices to use instead of Charge Complete Indicator Pixels' auto-even spacing, e.g. \"0,4,8,12\" -- pick exactly which pixels stay lit (0-indexed, 0 = the first pixel on the data line). Leave empty (default) to use the count above instead. Indices at or beyond LED Count are ignored."
+        },
         "led_spi_speed_hz": {
           "type": "integer",
           "title": "SPI Clock",

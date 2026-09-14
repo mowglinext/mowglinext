@@ -30,8 +30,8 @@ It must NOT own robot behaviour: no autonomy, no localizer, no TF, no *default* 
 make deps                       # web: yarn; go mod download
 make run-backend                # CGO_ENABLED=0 go run main.go   (serves :4006)
 make build                      # docker build -t mowglinext .
-go test ./...                   # 36 test files, ~30 s, no ROS/Docker needed — CI RUNS NOTHING HERE
-gofmt -l . && go vet ./...      # also enforced by nothing
+go test ./...                   # 36 test files, ~30 s, no ROS/Docker needed — gated by gui-ci.yml go-tests
+gofmt -l . && go vet ./...      # run gofmt locally; go test includes standard vet checks
 
 # React frontend (gui/web/)
 yarn install --frozen-lockfile

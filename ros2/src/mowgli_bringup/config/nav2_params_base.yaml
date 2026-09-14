@@ -47,7 +47,7 @@ bt_navigator:
     # Paths are injected by navigation.launch.py via RewrittenYaml — keep empty here.
     default_nav_to_pose_bt_xml: ""
     default_nav_through_poses_bt_xml: ""
-    # plugin_lib_names: auto-loaded in Kilted — no manual list needed.
+    # plugin_lib_names: auto-loaded in Lyrical — no manual list needed.
     enable_stamped_cmd_vel: true
 
 bt_navigator_navigate_through_poses_rclcpp_node:
@@ -81,17 +81,8 @@ controller_server:
     # (10-25 Hz jittery), which hurts FTC tracking more than the lower
     # nominal frequency does.
     controller_frequency: 10.0
-    # Top-level transform_tolerance is used by controller_server when
-    # transforming the global plan into the costmap frame (separate from
-    # each plugin's own transform_tolerance, which only covers the
-    # plugin-internal pose lookups). Nav2 default is 0.1 s, which is
-    # tighter than our 25 Hz map→odom publish gap (~40 ms) once you add
-    # ARM scheduler jitter; controller_server then throws "Lookup would
-    # require extrapolation into the future" mid-FollowPath and Nav2
-    # aborts the action with error_code 102. 0.5 s gives ~12 fusion_graph
-    # periods of headroom — well past the worst-case stamp drift we have
-    # seen in the field (35-80 ms).
-    controller.transform_tolerance: 0.5
+    # Lyrical takes controller/path-handler TF tolerance from local_costmap
+    # (0.5 s below), rather than a controller.transform_tolerance override.
     # 5s vs 0.3s default — ARM scheduler jitter can stall local_costmap
     # updates 2-3s under load; the controller would error out otherwise.
     costmap_update_timeout: 5.0
@@ -111,6 +102,10 @@ controller_server:
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
+    path_handler_plugins: ["PathHandler"]
+    PathHandler:
+      plugin: "nav2_controller::FeasiblePathHandler"
+      max_robot_pose_search_dist: 10.0
 
     progress_checker:
       # PoseProgressChecker counts rotation as progress: headland corners
@@ -239,7 +234,6 @@ controller_server:
     # lateral precision the swath tiling needs.
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
 
       # --- RotationShim params ---
       # 0.785 rad (45°) — under this, hand straight to RPP. Above, pivot
@@ -285,51 +279,52 @@ controller_server:
       # FollowCoveragePath below. Open-loop ramp is required here too.
       closed_loop: false
 
-      # --- RegulatedPurePursuitController (primary) params ---
-      transform_tolerance: 0.3            # ARM TF jitter envelope
-      desired_linear_vel: 0.30            # transit speed cap (m/s)
-      # 0.16 kept conservative. The old host clamp (kMinLinVel=0.15) is gone:
-      # hardware_bridge now floors |vx| at the RUNTIME param min_linear_vel
-      # (hardware_bridge_node.cpp, default 0.05), so this MAY be lowered.
-      min_approach_linear_velocity: 0.16
-      approach_velocity_scaling_dist: 0.6
-      # Lookahead: velocity-scaled = lookahead_time × v, clamped to
-      # [min_lookahead_dist, max_lookahead_dist]. At 0.30 m/s → 0.60 m; floored
-      # at 0.45 m below ~0.225 m/s.
-      # 2026-07-21 FIELD TUNING: raised lookahead_time 1.5→2.0 and
-      # min_lookahead_dist 0.30→0.45 to kill a slow (meter-scale) S-weave on
-      # transits. Diagnosing transit oscillation: a FAST 2–4 Hz buzz is the
-      # firmware yaw-rate loop (Option C) lagging the wheel command — tune that
-      # in FIRMWARE, not here; a SLOW, meter-scale S is the pure-pursuit limit
-      # cycle (lookahead too short for the lagged yaw loop → RPP overshoots each
-      # carrot then corrects), which lengthening the lookahead damps (this
-      # change). Field-tunable: shorten again only if near-dock cornering slops.
-      use_velocity_scaled_lookahead_dist: true
-      lookahead_time: 2.0
-      min_lookahead_dist: 0.45            # long enough to damp the pursuit S-weave
-      max_lookahead_dist: 0.90
-      # Curvature-based slowdown: when steering radius < 0.9 m, drop to
-      # min 0.20 m/s. Keeps tight turns controllable without stalling.
-      use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.9
-      regulated_linear_scaling_min_speed: 0.20
-      use_cost_regulated_linear_velocity_scaling: false
-      max_allowed_time_to_collision_up_to_carrot: 1.0
-      # DISABLED: RPP's mid-path in-place re-rotate (together with RotationShim
-      # re-engaging on each setPlan) fires against the FROZEN transit plan and,
-      # once the robot has driven off poses.front(), rotates toward a STALE target
-      # → oscillation / wrong-heading runaway (hardware-confirmed 2026-06-20).
-      # With rotate_to_heading_once:true above, the shim does ONE start pivot then
-      # RPP PURSUES through any mid-path bends (smooth on the deadband chassis).
-      use_rotate_to_heading: false
-      rotate_to_heading_min_angle: 0.785
-      # Match the RotationShim values above (decisive pivot, clear of the
-      # firmware deadband) so RPP's mid-path rotate-to-heading hand-off is
-      # as smooth as the start-of-path pivot.
-      rotate_to_heading_angular_vel: 0.75
-      max_angular_accel: 2.5
-      allow_reversing: false
-      max_robot_pose_search_dist: 10.0
+      primary_controller:
+        plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+        # --- RegulatedPurePursuitController (primary) params ---
+        max_linear_vel: 0.30            # transit speed cap (m/s)
+        # 0.16 kept conservative. The old host clamp (kMinLinVel=0.15) is gone:
+        # hardware_bridge now floors |vx| at the RUNTIME param min_linear_vel
+        # (hardware_bridge_node.cpp, default 0.05), so this MAY be lowered.
+        min_approach_linear_velocity: 0.16
+        approach_velocity_scaling_dist: 0.6
+        # Lookahead: velocity-scaled = lookahead_time × v, clamped to
+        # [min_lookahead_dist, max_lookahead_dist]. At 0.30 m/s → 0.60 m; floored
+        # at 0.45 m below ~0.225 m/s.
+        # 2026-07-21 FIELD TUNING: raised lookahead_time 1.5→2.0 and
+        # min_lookahead_dist 0.30→0.45 to kill a slow (meter-scale) S-weave on
+        # transits. Diagnosing transit oscillation: a FAST 2–4 Hz buzz is the
+        # firmware yaw-rate loop (Option C) lagging the wheel command — tune that
+        # in FIRMWARE, not here; a SLOW, meter-scale S is the pure-pursuit limit
+        # cycle (lookahead too short for the lagged yaw loop → RPP overshoots each
+        # carrot then corrects), which lengthening the lookahead damps (this
+        # change). Field-tunable: shorten again only if near-dock cornering slops.
+        use_velocity_scaled_lookahead_dist: true
+        lookahead_time: 2.0
+        min_lookahead_dist: 0.45            # long enough to damp the pursuit S-weave
+        max_lookahead_dist: 0.90
+        # Curvature-based slowdown: when steering radius < 0.9 m, drop to
+        # min 0.20 m/s. Keeps tight turns controllable without stalling.
+        use_regulated_linear_velocity_scaling: true
+        regulated_linear_scaling_min_radius: 0.9
+        regulated_linear_scaling_min_speed: 0.20
+        use_cost_regulated_linear_velocity_scaling: false
+        max_allowed_time_to_collision_up_to_carrot: 1.0
+        # DISABLED: RPP's mid-path in-place re-rotate (together with RotationShim
+        # re-engaging on each setPlan) fires against the FROZEN transit plan and,
+        # once the robot has driven off poses.front(), rotates toward a STALE target
+        # → oscillation / wrong-heading runaway (hardware-confirmed 2026-06-20).
+        # With rotate_to_heading_once:true above, the shim does ONE start pivot then
+        # RPP PURSUES through any mid-path bends (smooth on the deadband chassis).
+        use_rotate_to_heading: false
+        rotate_to_heading_min_angle: 0.785
+        # Match the RotationShim values above (decisive pivot, clear of the
+        # firmware deadband) so RPP's mid-path rotate-to-heading hand-off is
+        # as smooth as the start-of-path pivot.
+        rotate_to_heading_angular_vel: 0.75
+        max_angular_accel: 2.5
+        allow_reversing: false
+
       use_interpolation: true
 
     # ── Coverage controller: FTCController (Follow-the-Carrot PID) ──────────
@@ -697,7 +692,7 @@ waypoint_follower:
       waypoint_pause_duration: 200
 
 # velocity_smoother removed 2026-04-26 — caps live in the controllers
-# (RPP desired_linear_vel, FTC max_cmd_vel_*) and the final common slew
+# (RPP max_linear_vel, FTC max_cmd_vel_*) and the final common slew
 # limiter lives in hardware_bridge, after twist_mux. Keeping the limiter at
 # that existing chokepoint covers every motion lane without another node;
 # exact-zero safety stops bypass its ramp. cmd_vel skips this Nav2 hop.

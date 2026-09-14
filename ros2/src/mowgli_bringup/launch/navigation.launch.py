@@ -299,7 +299,7 @@ def generate_launch_description() -> LaunchDescription:
     # them before — they were orphan params — so editing them looked like
     # it should do something but didn't. Load here and inject into the
     # Nav2 YAMLs (controller + docking) alongside the dock pose.
-    #   transit_speed    → FollowPath.desired_linear_vel (RPP)
+    #   transit_speed    → FollowPath.primary_controller.max_linear_vel (RPP)
     #   mowing_speed     → FollowCoveragePath.speed_fast (FTC)
     #   undock_speed     → behavior_tree_node param of the same name,
     #                      pushed onto the BT blackboard at startup and
@@ -742,7 +742,7 @@ def generate_launch_description() -> LaunchDescription:
         fp = (doc.setdefault("controller_server", {})
                  .setdefault("ros__parameters", {})
                  .setdefault("FollowPath", {}))
-        fp["desired_linear_vel"] = transit_speed
+        fp.setdefault("primary_controller", {})["max_linear_vel"] = transit_speed
 
         # FollowCoveragePath (coverage controller = FTCController). FTC's
         # carrot forward-speed knob is speed_fast; mowing_speed overrides it.

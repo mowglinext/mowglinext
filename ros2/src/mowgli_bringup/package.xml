@@ -22,16 +22,18 @@
   <exec_depend>python3-websockets</exec_depend>
 
   <!-- Navigation stack -->
-  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_common</exec_depend>
   <exec_depend>nav2_bt_navigator</exec_depend>
   <exec_depend>nav2_controller</exec_depend>
   <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_smoother</exec_depend>
+  <exec_depend>nav2_collision_monitor</exec_depend>
+  <exec_depend>opennav_docking</exec_depend>
   <exec_depend>nav2_behaviors</exec_depend>
   <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
-  <!-- MPPI: coverage controller (FollowCoveragePath slot). RotationShim
-       (nav2_rotation_shim_controller, pulled in via nav2_controller) wraps it
-       for swath-start in-place pivots. -->
-  <exec_depend>nav2_mppi_controller</exec_depend>
+  <!-- RotationShim wraps RPP for transit; FTC follows coverage paths. -->
+  <exec_depend>nav2_rotation_shim_controller</exec_depend>
+  <exec_depend>mowgli_nav2_plugins</exec_depend>
   <exec_depend>nav2_smac_planner</exec_depend>
   <exec_depend>nav2_costmap_2d</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>

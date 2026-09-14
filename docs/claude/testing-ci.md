@@ -4,7 +4,7 @@
 >
 > Every test suite in the monorepo, the exact command that runs it, and the workflow (if any) that gates it. Loaded on demand from [`../../CLAUDE.md`](../../CLAUDE.md). Per-package detail lives in [`codemaps/`](codemaps/); this file is the cross-cutting map.
 
-**The short version:** ROS2 C++/Python tests and the GUI web suite are gated in CI. **Go tests, Playwright e2e, the installer bash suite, the `docs/` static checks and the simulation E2E are gated by NOTHING** — run them by hand.
+**The short version:** ROS2 C++/Python tests and the GUI Go/web suites are gated in CI. **Playwright e2e, the installer bash suite, the `docs/` static checks and the simulation E2E are gated by NOTHING** — run them by hand.
 
 ---
 
@@ -29,7 +29,7 @@
 | Config-drift guard | `ros2/scripts/test_check_config_drift.py` over `ros2/scripts/check_config_drift.py` | pytest (run directly, not via colcon) | `python3 -m pytest -q ros2/scripts/test_check_config_drift.py` | `ros2-ci.yml` → `config-drift` |
 | Firmware ↔ host msg/wire guards | `firmware/scripts/sync_ros_lib.py`, `protocol_version_guard.py`, `board_defaults_parity.py` (self-checking scripts, no test files) | plain Python `--check` gates | `python3 firmware/scripts/sync_ros_lib.py --check` · `python3 firmware/scripts/protocol_version_guard.py --check` · `python3 firmware/scripts/board_defaults_parity.py` | `msg-codegen-drift.yml`, `protocol-version-drift.yml`, `firmware-ci.yml` → `defaults-parity` |
 | GUI web unit tests (45 files) | `gui/web/src/**/*.test.ts`, `*.test.tsx` | vitest + jsdom + Testing Library (`gui/web/vitest.config.ts`) | `cd gui/web && yarn test` | `gui-ci.yml` → `unit-tests` |
-| GUI backend (36 files) | `gui/pkg/api/*_test.go`, `gui/pkg/providers/*_test.go`, `gui/pkg/foxglove/*_test.go`, `gui/pkg/msgs/mowgli/mower_control_bind_test.go`, `gui/pkg/types/mocks_test.go` | Go `testing` | `cd gui && go test ./...` | **NONE** — no workflow contains `go test` |
+| GUI backend (36 files) | `gui/pkg/api/*_test.go`, `gui/pkg/providers/*_test.go`, `gui/pkg/foxglove/*_test.go`, `gui/pkg/msgs/mowgli/mower_control_bind_test.go`, `gui/pkg/types/mocks_test.go` | Go `testing` | `cd gui && go test ./...` | `gui-ci.yml` → `go-tests` |
 | GUI browser E2E (5 specs) | `gui/web/tests/e2e/*.spec.ts` (+ `mock/` backend, fully mocked REST + WebSocket) | Playwright (`gui/web/playwright.config.ts`) | `cd gui/web && yarn test:e2e` | **NONE** |
 | Installer suite (20 scripts) | `install/test_mowglinext.sh` + `install/tests/test_*.sh` (harness in `install/tests/lib/`) | Hand-rolled bash framework (`install/tests/lib/framework.sh`) | `bash install/test_mowglinext.sh` · `for t in install/tests/test_*.sh; do bash "$t" \|\| echo "FAILED: $t"; done` | **NONE** |
 | Landing page / bootstrap static checks | `docs/test_install.sh` (over `docs/install.sh`), `docs/test_web_composer.sh` (over `docs/index.html`) | Static grep assertions | `bash docs/test_install.sh` · `bash docs/test_web_composer.sh` | **NONE** — and both exit 1 at this SHA (2 failures each) |
@@ -49,7 +49,7 @@ Two more piles of test files exist but **never execute**: the 62 CTest suites in
 
 | Workflow | Trigger | Jobs | Builds / tests / lints | Required check | Notes |
 |---|---|---|---|---|---|
-| `ros2-ci.yml` | push: `main`, `dev`, `feat/**`, `fix/**`, `refactor/**`, `chore/**`, `perf/**` on `ros2/**`, `tools/motor/**`, `install/config/mowgli/**`, self · PR: `[main, dev]` **with no `paths:` filter** | `changes`, `config-drift`, `build-and-test`, `format-check`, `static-analysis` | Full `colcon build` (Release) + `colcon test` + `colcon test-result --verbose`; GTSAM 4.3a1 and Fields2Cover v3 `@884d895` built from source and cached; `mowgli_robot.yaml` drift gate; clang-format-18 changed-lines gate; cppcheck | **`Build & Test (ROS2 kilted)`** (protected on `dev`) | The PR trigger has no `paths:` on purpose — a workflow skipped by a trigger filter reports *nothing* and leaves the required check pending forever. Path filtering moved into the `changes` job gate (L43–84); an `if:`-skipped job *does* satisfy branch protection. Do **not** add a `strategy.matrix` to `build-and-test`: it rewrites the published check name (L115–127). Checks out `submodules: recursive` (`opennav_coverage_msgs` must exist for `rosdep --ignore-src`), and `COLCON_IGNORE`s the five upstream `opennav_coverage` server subpackages (L302–307) plus `--skip-keys` for them (L321). |
+| `ros2-ci.yml` | push: `main`, `dev`, `feat/**`, `fix/**`, `refactor/**`, `chore/**`, `perf/**` on `ros2/**`, `tools/motor/**`, `install/config/mowgli/**`, self · PR: `[main, dev]` **with no `paths:` filter** | `changes`, `config-drift`, `build-and-test`, `format-check`, `static-analysis` | Lyrical on `ubuntu-26.04` (protected check retains its Kilted name); pinned source overlay via `ros2/scripts/build_lyrical_vendor.sh`; full `colcon build` (Release) + `colcon test` + `colcon test-result --verbose`; GTSAM 4.3a1 and Fields2Cover v3 `@884d895` built from source and cached; `mowgli_robot.yaml` drift gate; clang-format-18 changed-lines gate; cppcheck | **`Build & Test (ROS2 kilted)`** (protected on `dev`) | The PR trigger has no `paths:` on purpose — a workflow skipped by a trigger filter reports *nothing* and leaves the required check pending forever. Path filtering moved into the `changes` job gate (L43–84); an `if:`-skipped job *does* satisfy branch protection. Do **not** add a `strategy.matrix` to `build-and-test`: it rewrites the published check name (L115–127). Checks out `submodules: recursive` (`opennav_coverage_msgs` must exist for `rosdep --ignore-src`), and `COLCON_IGNORE`s the five upstream `opennav_coverage` server subpackages (L302–307) plus `--skip-keys` for them (L321). |
 | `gui-ci.yml` | push (same branch set) + PR `[main, dev]`, paths `gui/web/**`, self; `workflow_dispatch` | `unit-tests` | `yarn install --frozen-lockfile` → `npx tsc --noEmit` → `yarn lint` → `yarn test` (vitest) | `Unit Tests (vitest + tsc)` | Node **22**, pinned to match `gui/Dockerfile`'s web build stage. Deliberately separate from `gui-docker.yml` so test feedback does not wait on an emulated arm64 image build. Nothing here runs `go test`. |
 | `msg-codegen-drift.yml` | push (same branch set) · **PR: `branches: [main]` only**; paths `ros2/src/mowgli_interfaces/**`, `gui/generate_*.sh`, `gui/pkg/msgs/**`, `gui/web/src/types/ros.generated.ts`, `firmware/scripts/sync_ros_lib.py`, firmware `ros_lib/mower_msgs/**`, self | `codegen-drift` | `sync_ros_lib.py --check`, then re-runs `gui/generate_go_msgs.sh` + `gui/generate_ts_types.sh` and `git diff --exit-code` on `gui/pkg/msgs` and `gui/web/src/types/ros.generated.ts` | `Codegen Drift (Go / TS / firmware msg types)` | Pure Python + bash, no toolchain. A `.msg` change without regenerating leaves the GUI reading the wrong JSON keys and the firmware (de)serializing a shifted byte layout. |
 | `protocol-version-drift.yml` | push (same branch set) · **PR: `branches: [main]` only**; paths `mowgli_protocol.h`, `ll_datatypes.hpp`, the guard script + baseline, self | `protocol-version-drift` | `firmware/scripts/protocol_version_guard.py --check` — fingerprints the wire-defining region and fails if a `pkt_*_t`/`PKT_ID_*` changed without a `MOWGLI_PROTOCOL_VERSION` bump, or if firmware/host versions fell out of lockstep | `Protocol Version Drift (COBS wire vs MOWGLI_PROTOCOL_VERSION)` | — |
@@ -67,7 +67,7 @@ Two more piles of test files exist but **never execute**: the 62 CTest suites in
 ### Version pins that must move together
 
 - **clang-format 18** — `ros2-ci.yml:419` installs `clang-format-18`; `ros2/scripts/format.sh:12` sets `REQUIRED_MAJOR=18` but only **warns** on a mismatch. A locally-installed clang-format 19+/22 reformats files CI never asked about.
-- **GTSAM 4.3a1** — `ros2-ci.yml:191` cache key `gtsam-4.3a1-…` ↔ `ros2/Dockerfile` stage 0 ↔ `.devcontainer/Dockerfile`. The Ubuntu apt 4.2 package ships a broken `GTSAMConfig.cmake` and the legacy custom-factor API.
+- **GTSAM 4.3a1** — `ros2-ci.yml` cache key `gtsam-4.3a1-…-noerr-array-bounds` ↔ `ros2/Dockerfile` stage 0 ↔ `.devcontainer/Dockerfile`. The Ubuntu apt 4.2 package ships a broken `GTSAMConfig.cmake` and the legacy custom-factor API. All three recipes pass `-DCMAKE_CXX_FLAGS=-Wno-error=array-bounds`: the `ubuntu-26.04` runner is Ubuntu's `amd64v3` variant (GCC 15 defaults to x86-64-v3/AVX2) and GCC 15 false-positives `-Warray-bounds` in Eigen's AVX loads, which GTSAM's hardcoded `-Werror` turns fatal. Bump the cache key whenever the cmake flags change.
 - **Fields2Cover v3 @ `884d895b59192882476e986ba44ea9143a06a6a9`** → `/opt/fields2cover-300`; `ros2-ci.yml:245` cache key `f2c-3.0.0-884d895-…` ↔ `ros2/Dockerfile` ↔ `mowgli_coverage/CMakeLists.txt`'s `find_package(Fields2Cover 3.0.0 … PATHS /opt/fields2cover-300)`.
 - **Node 22** — `gui-ci.yml:45–50` ↔ `gui/Dockerfile` web build stage.
 
@@ -75,7 +75,7 @@ Two more piles of test files exist but **never execute**: the 62 CTest suites in
 
 - **`static-analysis` is `continue-on-error: true`** (`ros2-ci.yml:472`) — cppcheck findings never fail a PR; they only land in the log and the `cppcheck-report` artifact.
 - **`msg-codegen-drift.yml` and `protocol-version-drift.yml` have `pull_request: branches: [main]` only.** A PR into `dev` gets them only through the `push` trigger on the source branch — a branch name outside `feat|fix|refactor|chore|perf/**` (e.g. `codex/…`) matches neither, so both gates can be silently absent. `ros2-ci.yml` solved exactly this with its `changes` job.
-- **No workflow runs `go test`, Playwright, the installer suite, the `docs/` static checks, or the simulation E2E.**
+- **No workflow runs Playwright, the installer suite, the `docs/` static checks, or the simulation E2E.**
 
 ---
 
@@ -109,7 +109,9 @@ PACKAGES="" ./scripts/test.sh                      # whole workspace
 PACKAGES="mowgli_behavior" ./scripts/test.sh       # one package
 
 # Or drive colcon directly (this is what CI does):
-source /opt/ros/kilted/setup.bash && source install/setup.bash
+source /opt/ros/lyrical/setup.bash
+source /opt/lyrical_vendor/local_setup.bash
+source install/setup.bash
 colcon test --return-code-on-test-failure --event-handlers console_cohesion+
 colcon test-result --verbose
 colcon test --packages-select fusion_graph --return-code-on-test-failure
@@ -173,7 +175,7 @@ Any test that makes the **real robot move** (a `COMMAND_START`, an undock, a tun
 | TypeScript | `cd gui/web && npx tsc --noEmit` | `gui/web/tsconfig.json` | `gui-ci.yml` → `unit-tests` (and implicitly by `yarn build` = `tsc && vite build` inside `gui-docker.yml`). |
 | vitest | `cd gui/web && yarn test` (= `vitest run`) · `yarn test:watch` | `gui/web/vitest.config.ts` (jsdom, `testTimeout: 20000`, `tests/e2e/**` excluded) | `gui-ci.yml` → `unit-tests`. |
 | Prettier | — | — | **Not installed and not configured anywhere.** No `prettier` dependency, no `.prettierrc`, no `format` script. Several docs still say to run it. |
-| gofmt / go vet | `cd gui && gofmt -l .` · `go vet ./...` | — | **Nothing enforces them.** No workflow contains `gofmt`, `go vet`, `go test` or `setup-go`. |
+| gofmt / go vet | `cd gui && gofmt -l .` · `go vet ./...` | — | `go test` in `gui-ci.yml` includes standard vet checks; gofmt and standalone `go vet` are not gated. |
 
 ---
 
@@ -190,7 +192,7 @@ Grounded in the workflows, in the order things fail:
 5. **Touched C++?** Format the changed lines with clang-format **18**: `git-clang-format-18 --binary clang-format-18 --style=file:ros2/.clang-format --diff $(git merge-base origin/main HEAD) -- ros2/src`. `format-check` fails otherwise. Do not `--no-verify` past the pre-push hook with a non-18 clang-format installed — it amends a formatting commit CI will then disagree with.
 6. **Touched `ros2/**` or `tools/motor/**`?** The whole workspace must build and `colcon test` must pass — that is the required check. Run it locally first (`PACKAGES="" ./scripts/test.sh`, or `colcon test --return-code-on-test-failure`).
 7. **Touched `gui/web/**`?** `cd gui/web && npx tsc --noEmit && yarn lint && yarn test` — all three run in `gui-ci.yml` and any one of them fails the job. Zero eslint **errors** is the gate.
-8. **Touched Go under `gui/pkg/**`?** `cd gui && go test ./...` — **no workflow will catch a Go regression for you.** Same for `gofmt`.
+8. **Touched Go under `gui/pkg/**`?** `cd gui && go test ./...` — gated by `gui-ci.yml` → `go-tests`. Run `gofmt` locally too.
 9. **Touched `install/**`?** `bash install/test_mowglinext.sh` and `for t in install/tests/test_*.sh; do bash "$t"; done` — ungated. (`ros2-ci.yml` watches only `install/config/mowgli/**`, and only for the config-drift job.)
 10. **Touched `docs/install.sh` or `docs/index.html`?** `bash docs/test_install.sh` / `bash docs/test_web_composer.sh` — ungated, and both already fail at this SHA (2 assertions each), so compare against the current baseline rather than expecting green.
 11. **Touched `firmware/**`?** `pio run -e Yardforce500 && pio run -e Yardforce500B` from `firmware/stm32/ros_usbnode`, plus `python3 firmware/scripts/board_defaults_parity.py`. There are no firmware unit tests.

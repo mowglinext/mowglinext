@@ -18,14 +18,18 @@
 set -euo pipefail
 
 WORKSPACE=/ros2_ws
+PACKAGES="${PACKAGES:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYNC_WORKSPACE_SCRIPT="${SCRIPT_DIR}/sync_workspace_packages.sh"
 
 cd "${WORKSPACE}"
 
-# shellcheck source=/opt/ros/kilted/setup.bash
+# shellcheck source=/opt/ros/lyrical/setup.bash
 set +u
-source /opt/ros/${ROS_DISTRO:-kilted}/setup.bash
+source /opt/ros/${ROS_DISTRO:-lyrical}/setup.bash
+if [ -f /opt/lyrical_vendor/local_setup.bash ]; then
+    source /opt/lyrical_vendor/local_setup.bash
+fi
 set -u
 
 # The workspace must be built before running tests

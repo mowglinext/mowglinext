@@ -58,7 +58,7 @@ The fastest way to explore and develop MowgliNext — no local setup required:
 
 ### What's included
 
-The devcontainer provides a complete ROS2 Kilted development environment:
+The devcontainer provides a complete ROS2 Lyrical development environment:
 
 - Full Nav2 navigation stack plus GTSAM 4.3a1, for the `fusion_graph` factor-graph localizer — the stack's sole localizer, with an optional persistent LiDAR map anchor for complete GNSS outages
 - Nav2 controller plugins as the stack uses them: `mowgli_nav2_plugins/FTCController` follows the coverage path, RotationShim + Regulated Pure Pursuit handle transit
@@ -68,7 +68,7 @@ The devcontainer provides a complete ROS2 Kilted development environment:
 - Claude Code CLI + GitHub CLI for AI-assisted development
 - Auto-sourced ROS2 workspace
 
-Two things the devcontainer deliberately does **not** carry: the Webots simulator (see [Run the simulation](#run-the-simulation) below), and Fields2Cover v3. The image builds Fields2Cover 2.0.0 into `/opt/fields2cover-200`, while `mowgli_coverage` pins Fields2Cover 3.0.0 at `/opt/fields2cover-300` — which only the full `ros2/Dockerfile` build provides. Build the focused development set in the devcontainer rather than the whole workspace.
+The devcontainer builds Fields2Cover v3 and the pinned Lyrical source dependencies. Webots itself remains in the dedicated simulation image (see [Run the simulation](#run-the-simulation) below).
 
 **Forwarded ports:**
 

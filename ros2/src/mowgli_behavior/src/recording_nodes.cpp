@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "tf2/exceptions.h"
+#include "tf2/exceptions.hpp"
 
 namespace mowgli_behavior
 {

@@ -66,7 +66,7 @@
 | `ros2/scripts/start_vnc.sh` | 64 | TigerVNC + noVNC + `sim_full_system.launch.py` (compose `simulation-gui` entrypoint) |
 | `ros2/scripts/start_dev_sim.sh` | 79 | Same as above with a first-run `build.sh`; `LAUNCH_FILE`/`LAUNCH_ARGS` env overrides |
 | `docker/docker-compose.simulation.yaml` | 125 | Services `simulation` (Xvfb :99), `dev-sim` (bind mounts), `simulation-gui` (6080/8765) |
-| `ros2/Dockerfile` (stage `simulation`, :478–559) | 559 | Adds Webots R2025a (amd64 only), `ros-kilted-webots-ros2`, Xvfb/VNC; patches `webots_ros2_driver.utils.is_wsl` |
+| `ros2/Dockerfile` (stage `simulation`, :478–559) | 559 | Adds Webots R2025a (amd64 only), source-built `webots_ros2_driver` / `webots_ros2_control`, Xvfb/VNC; patches `webots_ros2_driver.utils.is_wsl` |
 | `ros2/foxglove/mowgli_sim.json` | 505 | Foxglove layout copied into the sim image (`Dockerfile:552`) |
 
 ## Runtime surface
@@ -200,12 +200,12 @@ CI: `.github/workflows/ros2-ci.yml` builds the whole workspace and runs `colcon 
 - Invariant 16's dig detector reads `/odometry/filtered_map`; in sim the only wheel-independent truth is `/sim/ground_truth_pose`. `sim_wheel_slip` over-reports `/wheel_odom` vx by 0.05 m/s for 1 s every 30 s (`sim_full_system.launch.py:406–412`) — expect periodic encoder-vs-GNSS divergence by design.
 - Stale in-code comments still name `ekf_odom_node` / `ekf_map_node` / robot_localization (`kinematic_drive.py:43,85,223,495,528,555`; `ros2_control.yaml:12,44–46`; `mowgli_webots.urdf:56`; `MowgliMower.proto:11`; `sim_full_system.launch.py:28–29,342`; `sim_wheel_slip.py:8,19`; `e2e_test_no_lidar.py:12`). The localizer is `fusion_graph_node` (Invariant 1); the mechanism described is otherwise right.
 - `navigation.launch.py:1106–1112` says `cog_stationary_seed_rate_hz` is "overridden to 0.0 in sim_full_system.launch.py" — it is not (`sim_full_system.launch.py:166–169` deliberately keeps the default). Likewise `sim_full_system.launch.py:171–181`, `navigation.launch.py:203–212` and `fusion_graph.yaml:345–346` describe the hardware TF lead as 0.0 / 25 Hz; the live defaults are 0.05 s (`navigation.launch.py:216`) and the `mowgli_robot.yaml` period (fallback 0.04, `:221`).
-- `docker/docker-compose.simulation.yaml:82–83` bind-mounts `../ros2/src/mowgli_simulation/worlds` and `/config`, which do not exist (the dirs are `worlds_webots/` and `config_webots/`); Docker creates empty host dirs and the mounts are inert. The compose comments (`:24`, `:94`) still say "Gazebo".
+- `docker/docker-compose.simulation.yaml` explicitly selects Linux amd64 for all three Webots services; dev-sim bind-mounts `worlds_webots/` and `config_webots/`.
 - After any crash run `ros2/scripts/sim-stop.sh` — a stale `/tmp/webots/*/ipc/MowgliMower/extern` socket makes the next launch hang in "retrying" (`sim-stop.sh:54–61`).
 - `webots-controller` has a hard 30 s connect timeout vs a 20–40 s world load; keep `respawn=True` (`webots_minimal.launch.py:114–125`).
 - The `simulation` Docker stage is amd64-only (`Dockerfile:510`) — there is no ARM sim image.
 
 ## Generated & vendored — do not hand-edit
 - `protos/MowgliMower.proto:90` pulls `webots://projects/appearances/protos/TireRubber.proto` from the Webots install; `/opt/webots/resources/nodes/*.wrl` are Webots' own node definitions referenced in comments.
-- `webots_ros2_driver` / `webots_ros2_control` come from `ros-kilted-webots-ros2` (`Dockerfile:509`); `Dockerfile:524–538` patches its `utils.is_wsl()` in place at image build — re-check that patch if the driver version changes.
+- `webots_ros2_driver` / `webots_ros2_control` are built from the pinned source revision in `ros2/Dockerfile` (`webots-driver-builder`); the simulation stage patches `utils.is_wsl()` for Docker. Re-check that patch when updating the driver.
 - `ros2/foxglove/mowgli_sim.json` is an exported Foxglove layout (edit in Foxglove, re-export).

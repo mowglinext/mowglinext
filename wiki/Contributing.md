@@ -16,7 +16,7 @@ some checks.
 
 ### Option A: GitHub Codespaces (recommended)
 
-Click **Code → Codespaces → Create codespace** on the [repo page](https://github.com/mowglinext/mowglinext) (pick `dev`). You get a full ROS2 Kilted environment with Nav2, GTSAM, and all dev tools — ready in minutes, no local setup.
+Click **Code → Codespaces → Create codespace** on the [repo page](https://github.com/mowglinext/mowglinext) (pick `dev`). You get a full ROS2 Lyrical environment with Nav2, GTSAM, and all dev tools — ready in minutes, no local setup.
 
 The Codespace image does **not** ship Webots or Fields2Cover 3.0.0, so the simulator and `mowgli_coverage` cannot be run or built there. Use Option C for simulation.
 

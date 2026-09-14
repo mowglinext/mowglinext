@@ -518,6 +518,58 @@ TEST_F(AreaTypeTest, DigKeepoutIsBiasedAheadOfTheHeadingSoTheReversedRobotIsFree
 
 // Without a heading (no TF yet) the only orientation-free keepout is the
 // centred square: still lethal at the dig, still bounded.
+// DIG_OBSTRUCTION exit (field report 2026-09-14). Three same-spot latches
+// stamp up to three pending keepouts around the robot; a HOME then plans from
+// inside them (START_OCCUPIED) and the operator sees a robot that "never
+// moves". Before the dock transit the tree asks map_server to drop the
+// proposals that touch the robot's footprint - and only those.
+TEST_F(AreaTypeTest, DiscardDigKeepoutsNearRobotDropsOnlyTheProposalsUnderIt)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
+  node_->set_robot_pose_for_test(1.0, 1.0, 0.0);
+  node_->on_dig_event_for_test(make_dig_event(1.0, 1.0));  // box ahead of the robot, +x
+  node_->on_dig_event_for_test(make_dig_event(-2.0, -2.0));  // far corner, unrelated
+  ASSERT_EQ(node_->area_obstacle_count_for_test(0), 2u);
+  ASSERT_EQ(node_->obstacle_polygon_count_for_test(), 2u);
+
+  // Robot now sits 0.20 m past the dig point, i.e. inside the heading-biased box.
+  node_->set_robot_pose_for_test(1.2, 1.0, 0.0);
+  EXPECT_EQ(node_->discard_dig_keepouts_near_robot_for_test(), 1u);
+  ASSERT_EQ(node_->area_obstacle_count_for_test(0), 1u) << "the unrelated proposal must survive";
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 1u) << "the mask source must shrink too";
+  const auto survivor = node_->obstacle_info_for_test(0, 0);
+  EXPECT_TRUE(survivor.pending);
+  EXPECT_NE(survivor.name.find("-2.00"), std::string::npos) << survivor.name;
+
+  // Nothing near the robot any more: a second call is a no-op.
+  EXPECT_EQ(node_->discard_dig_keepouts_near_robot_for_test(), 0u);
+}
+
+TEST_F(AreaTypeTest, DiscardDigKeepoutsNearRobotKeepsAcceptedKeepoutsAndFarProposals)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
+  node_->set_robot_pose_for_test(1.0, 1.0, 0.0);
+  node_->on_dig_event_for_test(make_dig_event(1.0, 1.0));
+  // Operator accepted this one: it is part of the map now, never auto-dropped.
+  const auto info = node_->obstacle_info_for_test(0, 0);
+  auto req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  auto res = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  req->pending_id = info.id;
+  node_->promote_obstacle_for_test(req, res);
+  ASSERT_TRUE(res->success) << res->message;
+  ASSERT_FALSE(node_->obstacle_info_for_test(0, 0).pending);
+
+  node_->set_robot_pose_for_test(1.2, 1.0, 0.0);
+  EXPECT_EQ(node_->discard_dig_keepouts_near_robot_for_test(), 0u);
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 1u);
+
+  // A pending proposal 3 m from the robot is left alone too.
+  node_->on_dig_event_for_test(make_dig_event(-2.0, -2.0));
+  node_->set_robot_pose_for_test(1.2, 1.0, 0.0);
+  EXPECT_EQ(node_->discard_dig_keepouts_near_robot_for_test(), 0u);
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 2u);
+}
+
 TEST_F(AreaTypeTest, DigKeepoutWithoutHeadingIsTheCentredSquare)
 {
   ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));

@@ -83,6 +83,10 @@ const STATE_ALIASES: Record<string, string> = {
   // #487: coverage refused because the robot's OWN pose is a lethal/keepout
   // cell. Same family as an obstacle wedge from the operator's point of view.
   'START_POSE_BLOCKED': 'OBSTACLE_BACKOFF',
+  // #500: repeat-dig escalation — held against an object it cannot free
+  // itself from. Obstacle family for the operator; the dashboard card carries
+  // the recovery hint (lift clear then Play, or Home).
+  'DIG_OBSTRUCTION': 'OBSTACLE_BACKOFF',
   'PREFLIGHT_CHECK': 'UNDOCKING',
   'CALIBRATING_HEADING': 'TRANSIT',
   'BOUNDARY_EMERGENCY_STOP': 'EMERGENCY',

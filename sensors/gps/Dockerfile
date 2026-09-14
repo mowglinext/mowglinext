@@ -7,7 +7,7 @@
 #   docker build -t mowgli-gps -f sensors/gps/Dockerfile .
 # =============================================================================
 
-FROM ros:kilted-ros-base AS builder
+FROM ros:lyrical-ros-base AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -19,19 +19,19 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       build-essential \
       cmake \
       python3-colcon-common-extensions \
-      ros-kilted-ament-cmake \
-      ros-kilted-diagnostic-msgs \
-      ros-kilted-geometry-msgs \
-      ros-kilted-launch \
-      ros-kilted-launch-ros \
-      ros-kilted-nav-msgs \
-      ros-kilted-rclcpp \
-      ros-kilted-rclpy \
-      ros-kilted-rosidl-default-generators \
-      ros-kilted-rosidl-default-runtime \
-      ros-kilted-rtcm-msgs \
-      ros-kilted-sensor-msgs \
-      ros-kilted-std-msgs
+      ros-lyrical-ament-cmake \
+      ros-lyrical-diagnostic-msgs \
+      ros-lyrical-geometry-msgs \
+      ros-lyrical-launch \
+      ros-lyrical-launch-ros \
+      ros-lyrical-nav-msgs \
+      ros-lyrical-rclcpp \
+      ros-lyrical-rclpy \
+      ros-lyrical-rosidl-default-generators \
+      ros-lyrical-rosidl-default-runtime \
+      ros-lyrical-rtcm-msgs \
+      ros-lyrical-sensor-msgs \
+      ros-lyrical-std-msgs
 
 WORKDIR /ws/src
 COPY ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces
@@ -47,25 +47,25 @@ COPY ros2/src/external/universal-gnss/gnss_tools /ws/src/gnss_tools
 COPY ros2/src/external/universal-gnss/CMakeLists.txt /ws/gnss_tools_root/CMakeLists.txt
 
 WORKDIR /ws
-RUN . /opt/ros/kilted/setup.sh \
- && colcon build --merge-install \
+RUN chown -R ubuntu:ubuntu /ws
+USER ubuntu
+# The pinned GNSS package does not install its intermediate driver libraries.
+# Keep them static under Lyrical's ament defaults so installed nodes are self-contained.
+RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash \
+ && MAKEFLAGS=-j3 colcon build --merge-install --parallel-workers 2 \
       --packages-select mowgli_interfaces universal_gnss_ros2 mowgli_gnss_bridge \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -Wno-dev \
- && ln -s /ws/src/gnss_core /ws/gnss_tools_root/gnss_core \
- && ln -s /ws/src/gnss_protocols /ws/gnss_tools_root/gnss_protocols \
- && ln -s /ws/src/gnss_driver /ws/gnss_tools_root/gnss_driver \
- && ln -s /ws/src/gnss_transport /ws/gnss_tools_root/gnss_transport \
- && ln -s /ws/src/gnss_ntrip /ws/gnss_tools_root/gnss_ntrip \
- && ln -s /ws/src/gnss_runtime /ws/gnss_tools_root/gnss_runtime \
- && ln -s /ws/src/gnss_tools /ws/gnss_tools_root/gnss_tools \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DCMAKE_CXX_STANDARD=20 -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -Wno-dev \
+ && for component in gnss_core gnss_protocols gnss_driver gnss_transport gnss_ntrip gnss_runtime gnss_tools; do \
+      ln -s "/ws/src/$component" "/ws/gnss_tools_root/$component"; \
+    done \
  && cmake -S /ws/gnss_tools_root -B /ws/gnss_tools_build \
-      -DBUILD_TESTING=OFF \
-      -DUNIVERSAL_GNSS_BUILD_ROS2=OFF \
- && cmake --build /ws/gnss_tools_build -j"$(nproc)" \
+      -DBUILD_TESTING=OFF -DUNIVERSAL_GNSS_BUILD_ROS2=OFF \
+ && cmake --build /ws/gnss_tools_build --parallel 3 \
  && cmake --install /ws/gnss_tools_build --prefix /ws/install \
- && rm -rf /ws/build /ws/log /ws/gnss_tools_build /ws/gnss_tools_root /ws/src
+ && rm -rf /ws/build /ws/log /ws/gnss_tools_build /ws/gnss_tools_root /ws/src'
 
-FROM ros:kilted-ros-base
+FROM ros:lyrical-ros-base
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -74,11 +74,11 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/u
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-      ros-kilted-diagnostic-msgs \
-      ros-kilted-rmw-cyclonedds-cpp \
-      ros-kilted-rclpy \
-      ros-kilted-rosidl-default-runtime \
-      ros-kilted-rtcm-msgs
+      ros-lyrical-diagnostic-msgs \
+      ros-lyrical-rmw-cyclonedds-cpp \
+      ros-lyrical-rclpy \
+      ros-lyrical-rosidl-default-runtime \
+      ros-lyrical-rtcm-msgs
 
 COPY --from=builder /ws/install /opt/gnss_sidecar
 

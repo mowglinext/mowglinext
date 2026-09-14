@@ -38,6 +38,172 @@ definitions:
         additionalProperties: {}
         type: object
     type: object
+  api.ImportDockPose:
+    properties:
+      x:
+        type: number
+      "y":
+        type: number
+      yaw_rad:
+        type: number
+    type: object
+  api.ImportOpenMowerRequest:
+    properties:
+      apply:
+        type: boolean
+      map:
+        items:
+          type: integer
+        type: array
+      om_datum_lat:
+        type: number
+      om_datum_lon:
+        type: number
+    type: object
+  api.ImportOpenMowerSummary:
+    properties:
+      applied:
+        type: boolean
+      areas:
+        items:
+          $ref: '#/definitions/api.ImportedAreaBrief'
+        type: array
+      datum_shift_east_m:
+        type: number
+      datum_shift_north_m:
+        type: number
+      dock_pose:
+        $ref: '#/definitions/api.ImportDockPose'
+      mn_datum_configured:
+        description: |-
+          MnDatumConfigured is true when mowgli_robot.yaml already has a
+          datum_lat/datum_lon set. The GUI uses this to decide whether to
+          offer the "import the datum too" step: on a fresh install (false)
+          the OpenMower datum can be adopted as the robot's datum; when a
+          datum already exists (true) the geometry was reprojected INTO it,
+          so overwriting it would misalign the just-imported map — the GUI
+          then hides the datum-import option.
+        type: boolean
+      mowing_areas:
+        type: integer
+      navigation_areas:
+        type: integer
+      obstacles:
+        type: integer
+      orphan_obstacles:
+        type: integer
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  api.ImportedAreaBrief:
+    properties:
+      approx_area_sqm:
+        type: number
+      is_navigation_area:
+        type: boolean
+      name:
+        type: string
+      obstacles:
+        type: integer
+      type:
+        description: '"mow" | "nav"'
+        type: string
+      vertices:
+        type: integer
+    type: object
+  api.InstalledComponent:
+    properties:
+      architecture:
+        type: string
+      built_at:
+        type: string
+      component:
+        type: string
+      digests:
+        items:
+          type: string
+        type: array
+      image:
+        type: string
+      image_id:
+        type: string
+      metadata_available:
+        type: boolean
+      name:
+        type: string
+      revision:
+        type: string
+      state:
+        type: string
+      version:
+        type: string
+    type: object
+  api.IrriSenseErrorResponse:
+    properties:
+      code:
+        type: string
+      error:
+        type: string
+    type: object
+  api.IrriSenseGardensResponse:
+    properties:
+      gardens:
+        items:
+          $ref: '#/definitions/providers.IrriSenseGardenSummary'
+        type: array
+    type: object
+  api.IrriSenseSettingsResponse:
+    properties:
+      baseUrl:
+        type: string
+      dryAfterWateringHours:
+        type: number
+      enabled:
+        type: boolean
+      gardenId:
+        type: string
+      gateScheduler:
+        type: boolean
+      maxStaleMinutes:
+        type: number
+      tokenMasked:
+        type: string
+      tokenSet:
+        type: boolean
+      wetDeficitMm:
+        type: number
+      zoneIds:
+        items:
+          type: string
+        type: array
+    type: object
+  api.IrriSenseSettingsUpdate:
+    properties:
+      baseUrl:
+        type: string
+      clearToken:
+        type: boolean
+      dryAfterWateringHours:
+        type: number
+      enabled:
+        type: boolean
+      gardenId:
+        type: string
+      gateScheduler:
+        type: boolean
+      maxStaleMinutes:
+        type: number
+      token:
+        type: string
+      wetDeficitMm:
+        type: number
+      zoneIds:
+        items:
+          type: string
+        type: array
+    type: object
   api.OkResponse:
     properties:
       ok:
@@ -60,6 +226,13 @@ definitions:
         type: string
       lastRun:
         type: string
+      lastSkipReason:
+        description: |-
+          Written by the scheduler when a due run was skipped (soil wet); the GUI
+          shows them, the API only preserves them across updates.
+        type: string
+      lastSkippedAt:
+        type: string
       time:
         description: HH:mm format
         type: string
@@ -80,6 +253,68 @@ definitions:
     properties:
       cpuTemperature:
         type: number
+    type: object
+  api.UpdateCheck:
+    properties:
+      channel:
+        type: string
+      checked_at:
+        type: string
+      components:
+        items:
+          $ref: '#/definitions/api.UpdateComponent'
+        type: array
+      last_successful_at:
+        type: string
+      notes_url:
+        type: string
+      state:
+        type: string
+      version:
+        type: string
+    type: object
+  api.UpdateComponent:
+    properties:
+      available_image:
+        type: string
+      available_revision:
+        type: string
+      custom_image:
+        type: boolean
+      digest_reference:
+        type: boolean
+      installed_revision:
+        type: string
+      name:
+        type: string
+      source_relation:
+        type: string
+      state:
+        type: string
+    type: object
+  api.VersionsResponse:
+    properties:
+      components:
+        items:
+          $ref: '#/definitions/api.InstalledComponent'
+        type: array
+      docker_available:
+        type: boolean
+      observed_at:
+        type: string
+      server:
+        $ref: '#/definitions/buildinfo.Info'
+    type: object
+  buildinfo.Info:
+    properties:
+      built_at:
+        type: string
+      modified:
+        type: boolean
+      revision:
+        type: string
+      version:
+        type: string
     type: object
   geometry.Point:
     properties:
@@ -139,10 +374,25 @@ definitions:
         type: boolean
       name:
         type: string
+      obstacle_info:
+        items:
+          $ref: '#/definitions/mowgli.MapObstacleInfo'
+        type: array
       obstacles:
         items:
           $ref: '#/definitions/geometry.Polygon'
         type: array
+    type: object
+  mowgli.MapObstacleInfo:
+    properties:
+      id:
+        type: integer
+      name:
+        type: string
+      pending:
+        type: boolean
+      source:
+        type: integer
     type: object
   mowgli.ReplaceMapArea:
     properties:
@@ -162,6 +412,32 @@ definitions:
     properties:
       docking_pose:
         $ref: '#/definitions/geometry.Pose'
+      use_gps_position:
+        type: boolean
+      yaw_rad:
+        type: number
+      yaw_source:
+        type: integer
+    type: object
+  providers.IrriSenseGardenSummary:
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      zones:
+        items:
+          $ref: '#/definitions/providers.IrriSenseZoneSummary'
+        type: array
+    type: object
+  providers.IrriSenseZoneSummary:
+    properties:
+      enabled:
+        type: boolean
+      id:
+        type: string
+      label:
+        type: string
     type: object
   types.FirmwareConfig:
     properties:
@@ -169,21 +445,40 @@ definitions:
         type: number
       boardType:
         type: string
+      boardTypeOrigin:
+        description: |-
+          Firmware selection provenance is written alongside the saved config so
+          later mower-model changes can update only fields that still follow model
+          defaults. Empty/unknown values are legacy and are handled conservatively
+          by the GUI.
+        type: string
       bothWheelsLiftEmergencyMillis:
         type: integer
       branch:
         type: string
-      debugType:
-        type: string
       directory:
         type: string
       disableEmergency:
+        type: boolean
+      expertBuild:
+        description: |-
+          ExpertBuild routes the flash to the compile-from-source path
+          (flashMowgli); the default (false) flashes a prebuilt binary. Kept for
+          backward compatibility — FirmwareSource == "custom" implies it.
         type: boolean
       externalImuAcceleration:
         type: boolean
       externalImuAngular:
         type: boolean
       file:
+        type: string
+      firmwareSelectionModel:
+        type: string
+      firmwareSource:
+        description: |-
+          FirmwareSource is the GUI dropdown selector: "custom" compiles from
+          source (the expert path), "prebuilt" (or empty, for older payloads)
+          flashes the tested prebuilt binary.
         type: string
       imuOnboardInclinationThreshold:
         type: integer
@@ -201,6 +496,8 @@ definitions:
         type: integer
       panelType:
         type: string
+      panelTypeOrigin:
+        type: string
       perimeterWire:
         type: boolean
       playButtonClearEmergencyMillis:
@@ -217,6 +514,52 @@ definitions:
         type: string
       wheelBase:
         type: number
+    type: object
+  types.SoilStatus:
+    properties:
+      configured:
+        type: boolean
+      enabled:
+        type: boolean
+      error:
+        type: string
+      fetchedAt:
+        type: string
+      fresh:
+        type: boolean
+      gardenName:
+        type: string
+      gateScheduler:
+        type: boolean
+      reason:
+        type: string
+      unknown:
+        type: boolean
+      wet:
+        type: boolean
+      zones:
+        items:
+          $ref: '#/definitions/types.SoilZoneStatus'
+        type: array
+    type: object
+  types.SoilZoneStatus:
+    properties:
+      deficitMm:
+        type: number
+      enabled:
+        type: boolean
+      id:
+        type: string
+      label:
+        type: string
+      lastWateredAt:
+        type: string
+      reason:
+        type: string
+      selected:
+        type: boolean
+      wet:
+        type: boolean
     type: object
 host: localhost:4200
 info:
@@ -359,6 +702,111 @@ paths:
       summary: get container logs
       tags:
       - containers
+  /import/openmower:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Parse a user-supplied OpenMower map.json, translate it
+        into MowgliNext's coordinate frame, and return a summary
+        for confirmation. Setting `apply=true` runs the live write
+        path (areas + dock pose). See docs/IMPORT_OPENMOWER_MAP.md.
+      parameters:
+      - description: import request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.ImportOpenMowerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ImportOpenMowerSummary'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: import an OpenMower map.json (preview-only by default)
+      tags:
+      - import
+  /irrisense/gardens:
+    get:
+      description: gardens readable by the stored token, for the picker and "test
+        connection"
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.IrriSenseGardensResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.IrriSenseErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/api.IrriSenseErrorResponse'
+      summary: list IrriSense gardens
+      tags:
+      - irrisense
+  /irrisense/settings:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.IrriSenseSettingsResponse'
+      summary: IrriSense settings
+      tags:
+      - irrisense
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: partial settings
+        in: body
+        name: settings
+        required: true
+        schema:
+          $ref: '#/definitions/api.IrriSenseSettingsUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.IrriSenseSettingsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: update IrriSense settings
+      tags:
+      - irrisense
+  /irrisense/status:
+    get:
+      description: cached wet/dry/unknown verdict the scheduler gate reads
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.SoilStatus'
+      summary: IrriSense soil status
+      tags:
+      - irrisense
   /mowglinext/call/{command}:
     post:
       consumes:
@@ -488,6 +936,13 @@ paths:
       summary: set the docking point
       tags:
       - mowglinext
+  /mowglinext/multiplex:
+    get:
+      description: multiplexed topic subscription
+      responses: {}
+      summary: multiplexed topic subscription
+      tags:
+      - mowglinext
   /mowglinext/publish/{topic}:
     get:
       description: publish to a topic
@@ -506,8 +961,8 @@ paths:
       description: subscribe to a topic
       parameters:
       - description: 'logical topic key: diagnostics, status, highLevelStatus, gps,
-          pose, imu, ticks, map, path, plan, mowingPath, power, emergency, dockingSensor,
-          lidar'
+          gnssStatus, pose, imu, ticks, map, path, plan, mowingPath, power, emergency,
+          dockingSensor, lidar'
         in: path
         name: topic
         required: true
@@ -750,6 +1205,25 @@ paths:
       summary: saves the mower configuration as YAML
       tags:
       - settings
+  /settings/yaml/defaults:
+    get:
+      description: returns a flat key-value map of default values (the reset-to-default
+        source)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: returns the schema default value for every known parameter
+      tags:
+      - settings
   /setup/flashBoard:
     post:
       consumes:
@@ -821,6 +1295,121 @@ paths:
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: shutdown the system
+      tags:
+      - system
+  /system/updater/{operation}:
+    post:
+      consumes:
+      - application/json
+      description: 'Same-origin JSON and X-Mowgli-Update: 1 are required. See docs/UPDATES.md
+        for the operation contract.'
+      parameters:
+      - description: Operation
+        enum:
+        - policy
+        - check
+        - plan
+        - apply
+        - rollback
+        - recover
+        - notice
+        - agent-update
+        in: path
+        name: operation
+        required: true
+        type: string
+      - description: Must be 1
+        in: header
+        name: X-Mowgli-Update
+        required: true
+        type: string
+      - description: Operation-specific request
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Review or control a coordinated software update
+      tags:
+      - updates
+  /system/updater/state:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Read cached host updater status
+      tags:
+      - updates
+  /system/updates:
+    get:
+      parameters:
+      - description: Comparison channel
+        enum:
+        - stable
+        - dev
+        in: query
+        name: channel
+        required: true
+        type: string
+      - description: Check remote metadata (otherwise cached result)
+        in: query
+        name: check
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.UpdateCheck'
+      summary: Check available software versions
+      tags:
+      - system
+  /system/versions:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.VersionsResponse'
+      summary: Installed software versions
       tags:
       - system
 swagger: "2.0"

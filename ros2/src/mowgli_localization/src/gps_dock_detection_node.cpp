@@ -121,8 +121,8 @@
 #include "tf2/LinearMath/Vector3.hpp"
 #include "tf2/utils.hpp"  // tf2::getYaw
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"  // tf2::toMsg(Quaternion)
-#include "tf2_ros/buffer.h"
-#include "tf2_ros/transform_listener.h"
+#include "tf2_ros/buffer.hpp"
+#include "tf2_ros/transform_listener.hpp"
 
 namespace mowgli_localization
 {

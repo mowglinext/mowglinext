@@ -9,7 +9,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -62,23 +62,23 @@ target_include_directories(behavior_tree_node PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(behavior_tree_node
-  ament_index_cpp
-  rclcpp
-  rclcpp_action
-  behaviortree_cpp
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  nav2_msgs
-  sensor_msgs
-  nav_msgs
-  geometry_msgs
-  action_msgs
-  std_msgs
-  std_srvs
-  mowgli_interfaces
-  rcl_interfaces
+target_link_libraries(behavior_tree_node
+  ${ament_index_cpp_TARGETS}
+  ${rclcpp_TARGETS}
+  ${rclcpp_action_TARGETS}
+  ${behaviortree_cpp_TARGETS}
+  ${tf2_TARGETS}
+  ${tf2_ros_TARGETS}
+  ${tf2_geometry_msgs_TARGETS}
+  ${nav2_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${action_msgs_TARGETS}
+  ${std_msgs_TARGETS}
+  ${std_srvs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
+  ${rcl_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -117,9 +117,24 @@ if(BUILD_TESTING)
   list(REMOVE_ITEM blade_service_sources src/behavior_tree_node.cpp)
   ament_add_gtest(test_blade_services test/test_blade_services.cpp ${blade_service_sources})
   target_include_directories(test_blade_services PUBLIC include)
-  ament_target_dependencies(test_blade_services
-    ament_index_cpp rclcpp rclcpp_action behaviortree_cpp mowgli_interfaces nav2_msgs nav_msgs
-    geometry_msgs sensor_msgs std_msgs std_srvs tf2 tf2_ros tf2_geometry_msgs rcl_interfaces action_msgs)
+  target_link_libraries(test_blade_services
+    ${ament_index_cpp_TARGETS}
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
+  )
 
   ament_add_gtest(test_blade_direction
     test/test_blade_direction.cpp
@@ -130,9 +145,21 @@ if(BUILD_TESTING)
     src/status_snapshot.cpp
   )
   target_include_directories(test_blade_direction PUBLIC include)
-  ament_target_dependencies(test_blade_direction
-    rclcpp rclcpp_action behaviortree_cpp mowgli_interfaces nav2_msgs nav_msgs
-    geometry_msgs std_msgs std_srvs tf2 tf2_ros tf2_geometry_msgs rcl_interfaces action_msgs
+  target_link_libraries(test_blade_direction
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
   )
 
   # ---- test_recording_nodes ----
@@ -146,14 +173,14 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_recording_nodes
-    rclcpp
-    geometry_msgs
-    behaviortree_cpp
-    mowgli_interfaces
-    nav_msgs
-    tf2
-    tf2_ros
+  target_link_libraries(test_recording_nodes
+    ${rclcpp_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
   )
 
   # ---- test_obstacle_recovery ----
@@ -170,18 +197,18 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_obstacle_recovery
-    rclcpp
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
+  target_link_libraries(test_obstacle_recovery
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
   )
 
   # ---- test_docking_boundary_exempt ----
@@ -199,18 +226,18 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_docking_boundary_exempt
-    rclcpp
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
+  target_link_libraries(test_docking_boundary_exempt
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
   )
 
   # ---- test_set_nav2_lifecycle ----
@@ -227,21 +254,21 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_set_nav2_lifecycle
-    rclcpp
-    rclcpp_action
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
-    rcl_interfaces
-    action_msgs
+  target_link_libraries(test_set_nav2_lifecycle
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
   )
 
   # ---- test_boundary_recovery ----
@@ -257,21 +284,21 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_boundary_recovery
-    rclcpp
-    rclcpp_action
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
-    rcl_interfaces
-    action_msgs
+  target_link_libraries(test_boundary_recovery
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
   )
 
   # ---- test_get_next_unmowed_area ----
@@ -296,21 +323,21 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_get_next_unmowed_area
-    rclcpp
-    rclcpp_action
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
-    rcl_interfaces
-    action_msgs
+  target_link_libraries(test_get_next_unmowed_area
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
   )
 
   # ---- test_start_occupied_retry ----
@@ -334,21 +361,21 @@ if(BUILD_TESTING)
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
 
-  ament_target_dependencies(test_start_occupied_retry
-    rclcpp
-    rclcpp_action
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
-    rcl_interfaces
-    action_msgs
+  target_link_libraries(test_start_occupied_retry
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
   )
 
   # Round-trip + staleness coverage for the disk-backed resume state (issue #334:
@@ -364,13 +391,13 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_coverage_persistence
-    rclcpp
-    behaviortree_cpp
-    mowgli_interfaces
-    nav_msgs
-    geometry_msgs
-    tf2_ros
+  target_link_libraries(test_coverage_persistence
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${tf2_ros_TARGETS}
   )
 
   ament_add_gtest(test_gnss_status_authority
@@ -382,8 +409,8 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_gnss_status_authority
-    mowgli_interfaces
+  target_link_libraries(test_gnss_status_authority
+    ${mowgli_interfaces_TARGETS}
   )
 
   # Single-source regression guard (task #14): FollowStrip::kSegmentTransitGap
@@ -420,21 +447,21 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_coverage_transit_gap
-    rclcpp
-    rclcpp_action
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
-    rcl_interfaces
-    action_msgs
+  target_link_libraries(test_coverage_transit_gap
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
   )
 
   # ---- test_coverage_resume_location ----
@@ -453,21 +480,21 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_coverage_resume_location
-    rclcpp
-    rclcpp_action
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
-    rcl_interfaces
-    action_msgs
+  target_link_libraries(test_coverage_resume_location
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
   )
 
   # ---- test_swath_progress ----
@@ -486,21 +513,21 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_swath_progress
-    rclcpp
-    rclcpp_action
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
-    rcl_interfaces
-    action_msgs
+  target_link_libraries(test_swath_progress
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
   )
 
   # ---- test_detour_resume ----
@@ -517,9 +544,9 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_detour_resume
-    geometry_msgs
-    mowgli_interfaces
+  target_link_libraries(test_detour_resume
+    ${geometry_msgs_TARGETS}
+    ${mowgli_interfaces_TARGETS}
   )
 
   # ---- test_start_blocked_escape ----
@@ -551,7 +578,9 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
-  ament_target_dependencies(test_localization_health mowgli_interfaces)
+  target_link_libraries(test_localization_health
+    ${mowgli_interfaces_TARGETS}
+  )
 
   # ---- test_battery_critical_resume ----
   # Regression for "robot stuck after a critical-battery charge": the
@@ -570,18 +599,18 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_battery_critical_resume
-    rclcpp
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
+  target_link_libraries(test_battery_critical_resume
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
   )
 
   # ---- test_manual_resume ----
@@ -607,18 +636,18 @@ if(BUILD_TESTING)
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
 
-  ament_target_dependencies(test_manual_resume
-    rclcpp
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
+  target_link_libraries(test_manual_resume
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
   )
 
   # ---- test_guard_fallthrough ----
@@ -645,18 +674,18 @@ if(BUILD_TESTING)
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
 
-  ament_target_dependencies(test_guard_fallthrough
-    rclcpp
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
+  target_link_libraries(test_guard_fallthrough
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
   )
 
   # ---- test_manual_charge_guard ----
@@ -685,18 +714,18 @@ if(BUILD_TESTING)
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
 
-  ament_target_dependencies(test_manual_charge_guard
-    rclcpp
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
+  target_link_libraries(test_manual_charge_guard
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
   )
 
   # ---- test_high_level_status_snapshot ----
@@ -715,18 +744,18 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
-  ament_target_dependencies(test_high_level_status_snapshot
-    rclcpp
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
+  target_link_libraries(test_high_level_status_snapshot
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
   )
 
   # ---- test_battery_filter ----
@@ -769,6 +798,18 @@ if(BUILD_TESTING)
   )
 
   target_compile_definitions(test_dock_motion_gate PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+
+  # ---- test_dig_obstruction_recovery ----
+  # Structural: HOME drops the dig keepouts under the robot (gated on
+  # IsDigEscalated) before its DockRobot; the DIG_OBSTRUCTION hold publishes
+  # state=1 so the firmware hard stop holds the wedged robot.
+  ament_add_gtest(test_dig_obstruction_recovery
+    test/test_dig_obstruction_recovery.cpp
+  )
+
+  target_compile_definitions(test_dig_obstruction_recovery PRIVATE
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
 

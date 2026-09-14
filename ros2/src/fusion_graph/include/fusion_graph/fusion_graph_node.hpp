@@ -33,9 +33,9 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_broadcaster.h>
-#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.hpp>
+#include <tf2_ros/transform_broadcaster.hpp>
+#include <tf2_ros/transform_listener.hpp>
 
 #include "fusion_graph/dr_slip_veto.hpp"
 #include "fusion_graph/graph_manager.hpp"
@@ -68,7 +68,7 @@ namespace fusion_graph
 class FusionGraphNode : public rclcpp::Node
 {
 public:
-  explicit FusionGraphNode(const rclcpp::NodeOptions& opts = {});
+  explicit FusionGraphNode(const rclcpp::NodeOptions& opts = rclcpp::NodeOptions());
   ~FusionGraphNode() override;
 
 private:

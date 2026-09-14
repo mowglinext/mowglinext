@@ -9,7 +9,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -50,14 +50,14 @@ add_executable(wheel_odometry_node
 
 target_include_directories(wheel_odometry_node PUBLIC ${INCLUDE_DIR})
 
-ament_target_dependencies(wheel_odometry_node
-  rclcpp
-  nav_msgs
-  geometry_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  mowgli_interfaces
+target_link_libraries(wheel_odometry_node
+  ${rclcpp_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${tf2_TARGETS}
+  ${tf2_ros_TARGETS}
+  ${tf2_geometry_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -70,9 +70,9 @@ add_library(navsat_status_association
 
 target_include_directories(navsat_status_association PUBLIC ${INCLUDE_DIR})
 
-ament_target_dependencies(navsat_status_association
-  sensor_msgs
-  mowgli_interfaces
+target_link_libraries(navsat_status_association
+  ${sensor_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 add_executable(navsat_to_absolute_pose_node
@@ -81,14 +81,14 @@ add_executable(navsat_to_absolute_pose_node
 
 target_include_directories(navsat_to_absolute_pose_node PUBLIC ${INCLUDE_DIR})
 
-ament_target_dependencies(navsat_to_absolute_pose_node
-  rclcpp
-  sensor_msgs
-  geometry_msgs
-  std_srvs
-  tf2
-  tf2_ros
-  mowgli_interfaces
+target_link_libraries(navsat_to_absolute_pose_node
+  ${rclcpp_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${std_srvs_TARGETS}
+  ${tf2_TARGETS}
+  ${tf2_ros_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 target_link_libraries(navsat_to_absolute_pose_node navsat_status_association)
@@ -103,12 +103,12 @@ add_executable(localization_monitor_node
 
 target_include_directories(localization_monitor_node PUBLIC ${INCLUDE_DIR})
 
-ament_target_dependencies(localization_monitor_node
-  rclcpp
-  nav_msgs
-  geometry_msgs
-  std_msgs
-  mowgli_interfaces
+target_link_libraries(localization_monitor_node
+  ${rclcpp_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${std_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -121,12 +121,12 @@ add_executable(cog_to_imu
 
 target_include_directories(cog_to_imu PUBLIC ${INCLUDE_DIR})
 
-ament_target_dependencies(cog_to_imu
-  rclcpp
-  nav_msgs
-  geometry_msgs
-  sensor_msgs
-  mowgli_interfaces
+target_link_libraries(cog_to_imu
+  ${rclcpp_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 target_link_libraries(cog_to_imu yaml-cpp)
@@ -139,12 +139,12 @@ add_executable(mag_yaw_publisher
   src/mag_yaw_publisher_node.cpp
 )
 
-ament_target_dependencies(mag_yaw_publisher
-  rclcpp
-  geometry_msgs
-  sensor_msgs
-  tf2
-  tf2_ros
+target_link_libraries(mag_yaw_publisher
+  ${rclcpp_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${tf2_TARGETS}
+  ${tf2_ros_TARGETS}
 )
 
 target_link_libraries(mag_yaw_publisher yaml-cpp)
@@ -162,14 +162,14 @@ add_executable(calibrate_imu_yaw_node
 
 target_include_directories(calibrate_imu_yaw_node PUBLIC ${INCLUDE_DIR})
 
-ament_target_dependencies(calibrate_imu_yaw_node
-  rclcpp
-  rclcpp_action
-  geometry_msgs
-  sensor_msgs
-  nav_msgs
-  std_srvs
-  mowgli_interfaces
+target_link_libraries(calibrate_imu_yaw_node
+  ${rclcpp_TARGETS}
+  ${rclcpp_action_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${std_srvs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 target_link_libraries(calibrate_imu_yaw_node yaml-cpp)
@@ -186,10 +186,10 @@ add_executable(costmap_scan_filter_node
 
 target_include_directories(costmap_scan_filter_node PUBLIC ${INCLUDE_DIR})
 
-ament_target_dependencies(costmap_scan_filter_node
-  rclcpp
-  sensor_msgs
-  mowgli_interfaces
+target_link_libraries(costmap_scan_filter_node
+  ${rclcpp_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -203,10 +203,10 @@ add_executable(scan_deskew_node
   src/scan_deskew_node.cpp
 )
 
-ament_target_dependencies(scan_deskew_node
-  rclcpp
-  sensor_msgs
-  nav_msgs
+target_link_libraries(scan_deskew_node
+  ${rclcpp_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -223,14 +223,14 @@ add_executable(gps_dock_detection_node
 
 target_include_directories(gps_dock_detection_node PUBLIC ${INCLUDE_DIR})
 
-ament_target_dependencies(gps_dock_detection_node
-  rclcpp
-  geometry_msgs
-  sensor_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  mowgli_interfaces
+target_link_libraries(gps_dock_detection_node
+  ${rclcpp_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${tf2_TARGETS}
+  ${tf2_ros_TARGETS}
+  ${tf2_geometry_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -310,8 +310,8 @@ if(BUILD_TESTING)
   target_include_directories(test_cog_observation_timing PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
-  ament_target_dependencies(test_cog_observation_timing
-    mowgli_interfaces
+  target_link_libraries(test_cog_observation_timing
+    ${mowgli_interfaces_TARGETS}
   )
 
   ament_add_gtest(test_localization_monitor_freshness
@@ -320,8 +320,8 @@ if(BUILD_TESTING)
   target_include_directories(test_localization_monitor_freshness PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
-  ament_target_dependencies(test_localization_monitor_freshness
-    mowgli_interfaces
+  target_link_libraries(test_localization_monitor_freshness
+    ${mowgli_interfaces_TARGETS}
   )
 
   # ---- test_costmap_scan_filter ----
@@ -331,8 +331,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_costmap_scan_filter
     test/test_costmap_scan_filter.cpp
   )
-  ament_target_dependencies(test_costmap_scan_filter
-    sensor_msgs
+  target_link_libraries(test_costmap_scan_filter
+    ${sensor_msgs_TARGETS}
   )
 
   ament_add_gtest(test_navsat_projection_utils
@@ -341,9 +341,9 @@ if(BUILD_TESTING)
   target_include_directories(test_navsat_projection_utils PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
-  ament_target_dependencies(test_navsat_projection_utils
-    mowgli_interfaces
-    sensor_msgs
+  target_link_libraries(test_navsat_projection_utils
+    ${mowgli_interfaces_TARGETS}
+    ${sensor_msgs_TARGETS}
   )
 
   ament_add_gtest(test_navsat_status_association
@@ -352,9 +352,9 @@ if(BUILD_TESTING)
   target_include_directories(test_navsat_status_association PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
-  ament_target_dependencies(test_navsat_status_association
-    mowgli_interfaces
-    sensor_msgs
+  target_link_libraries(test_navsat_status_association
+    ${mowgli_interfaces_TARGETS}
+    ${sensor_msgs_TARGETS}
   )
   target_link_libraries(test_navsat_status_association navsat_status_association)
 
@@ -400,8 +400,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_robot_yaml_scalar
     test/test_robot_yaml_scalar.cpp
   )
-  ament_target_dependencies(test_robot_yaml_scalar
-    mowgli_interfaces
+  target_link_libraries(test_robot_yaml_scalar
+    ${mowgli_interfaces_TARGETS}
   )
 
 endif()

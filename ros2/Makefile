@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-ROS_DISTRO    ?= kilted
+ROS_DISTRO    ?= lyrical
 BUILD_TYPE    ?= Release
 DOCKER_IMAGE  ?= mowgli-ros2
 DOCKER_TAG    ?= latest

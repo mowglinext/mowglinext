@@ -21,11 +21,13 @@ x-ros2-env: &ros2-env
 services:
 
   # -------------------------------------------------------------------------
-  # Headless simulation — Gazebo + full Nav2 + BT + coverage + Foxglove
+  # Headless simulation — Webots + full Nav2 + BT + coverage + Foxglove
   # No GUI, lowest resource usage. Good for CI and automated E2E tests.
   # -------------------------------------------------------------------------
   simulation:
     container_name: mowgli_simulation
+    # Cyberbotics publishes the Linux simulator for amd64 only.
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: ros2/Dockerfile
@@ -55,6 +57,7 @@ services:
   # -------------------------------------------------------------------------
   dev-sim:
     container_name: mowgli_dev_sim
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: ros2/Dockerfile
@@ -79,8 +82,8 @@ services:
       - ../ros2/src/mowgli_map/config:/ros2_ws/install/mowgli_map/share/mowgli_map/config
       - ../ros2/src/mowgli_localization/config:/ros2_ws/install/mowgli_localization/share/mowgli_localization/config
       - ../ros2/src/mowgli_simulation/launch:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/launch
-      - ../ros2/src/mowgli_simulation/worlds:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/worlds
-      - ../ros2/src/mowgli_simulation/config:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/config
+      - ../ros2/src/mowgli_simulation/worlds_webots:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/worlds_webots
+      - ../ros2/src/mowgli_simulation/config_webots:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/config_webots
       # E2E test script
       - ../ros2/src/e2e_test.py:/ros2_ws/src/e2e_test.py
     restart: unless-stopped
@@ -91,11 +94,12 @@ services:
         max-size: 10m
 
   # -------------------------------------------------------------------------
-  # Simulation with VNC GUI — Gazebo visible via browser at :6080
+  # Simulation with VNC GUI — Webots visible via browser at :6080
   # Useful for visual debugging and watching the robot mow.
   # -------------------------------------------------------------------------
   simulation-gui:
     container_name: mowgli_sim_gui
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: ros2/Dockerfile

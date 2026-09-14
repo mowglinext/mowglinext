@@ -24,7 +24,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
 #include "rcl_interfaces/srv/set_parameters.hpp"
-#include "tf2/LinearMath/Quaternion.h"
+#include "tf2/LinearMath/Quaternion.hpp"
 #include "tf2/utils.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
@@ -842,7 +842,7 @@ BT::NodeStatus SetNavMode::tick()
   // Apply the operator-configured speeds (from mowgli_robot.yaml via
   // behavior_tree_node → BTContext), NOT hardcoded magic numbers. We set the
   // knob each controller actually reads: FollowPath is RPP (via RotationShim),
-  // whose speed knob is desired_linear_vel; FollowCoveragePath is FTCController,
+  // whose speed knob is max_linear_vel; FollowCoveragePath is FTCController,
   // whose carrot-speed knob is speed_fast (FTC applies it live via its
   // onParameterChange). Setting vx_max here — the old MPPI knob — would spam
   // "parameter not declared" warnings and silently drop the operator's
@@ -858,7 +858,7 @@ BT::NodeStatus SetNavMode::tick()
       (mode == "precise") ? ctx->mowing_speed : std::max(0.5 * ctx->mowing_speed, kMinDriveSpeed);
 
   const std::vector<rclcpp::Parameter> params = {
-      rclcpp::Parameter("FollowPath.desired_linear_vel", transit),
+      rclcpp::Parameter("FollowPath.primary_controller.max_linear_vel", transit),
       rclcpp::Parameter("FollowCoveragePath.speed_fast", mowing),
   };
 

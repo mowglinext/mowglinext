@@ -2,7 +2,7 @@
 # =============================================================================
 # ros2_entrypoint.sh
 #
-# Container entrypoint. Sources ROS2 Kilted and the workspace overlay before
+# Container entrypoint. Sources ROS2 Lyrical and the workspace overlay before
 # exec'ing whatever command was passed as CMD (or via `docker run <cmd>`).
 #
 # NOTE: Make this script executable on the host before building:
@@ -11,8 +11,11 @@
 set -e
 
 # Source ROS2 base installation
-# shellcheck source=/opt/ros/kilted/setup.bash
-source /opt/ros/kilted/setup.bash
+# shellcheck source=/opt/ros/lyrical/setup.bash
+source /opt/ros/lyrical/setup.bash
+if [ -f /opt/lyrical_vendor/local_setup.bash ]; then
+    source /opt/lyrical_vendor/local_setup.bash
+fi
 
 # Source the ublox interface overlay (ublox_ubx_msgs + ublox_ubx_interfaces),
 # built from the cedbossneo/ublox_dgnss fork into /opt/ublox_msgs. These are
@@ -31,6 +34,10 @@ fi
 if [ -f /opt/universal_gnss_interfaces/setup.bash ]; then
     # shellcheck source=/opt/universal_gnss_interfaces/setup.bash
     source /opt/universal_gnss_interfaces/setup.bash
+fi
+
+if [ -f /opt/webots_ros2/local_setup.bash ]; then
+    source /opt/webots_ros2/local_setup.bash
 fi
 
 # Source the workspace overlay if it has been built (not present in dev before

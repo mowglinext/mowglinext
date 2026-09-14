@@ -5,6 +5,16 @@
 > Loaded on demand from `gui/CLAUDE.md`. Frontend (`gui/web/`) is a separate codemap.
 
 ## Where to look
+
+Release-owned stack definitions and installer selection: `bundle.go`, `stack.go`, `installer_stack.go`; private topology journals use schema 5.
+
+Host update service membership and ordering: `gui/pkg/updater/services.go`; cached Docker identity/health reconciliation: `runtime.go`; per-family compatibility and release service projection: `component_selection.go`; component plans, schema migration and exact transaction rollback: `manager.go`. Explicit current-stack image resolution, validation and planning: `custom_images.go`; published descriptor/digest/version verification: `image_release.go`; custom provenance persists separately from the published base. Publication build definitions: `install/deployment.json`. See `docs/UPDATES.md` before extending persistence or health contracts.
+
+
+Installed version and update discovery: `pkg/api/versions.go`, `pkg/api/updates.go`,
+`pkg/updates/{image,registry,revisions}.go`. Checks resolve Stable/Dev tags and compare
+immutable image identities, then optionally compare source ancestry using GitHub.
+See `docs/UPDATE_CHECKS.md` for the behavior.
 | Task | Start here |
 |------|------------|
 | Add / change an HTTP route | `gui/pkg/api/api.go:37-61` (`NewAPI` registers every `*Routes` fn) → the per-feature file; add `// @Router` swag annotations |
@@ -256,3 +266,5 @@ Tests (what each pins):
 - `gui/docs/{docs.go,swagger.json,swagger.yaml}` — swaggo/swag output from `// @…` annotations; served at `/swagger/`.
 - `gui/asserts/board.h` — rendered sample of `board.h.template`; the template is the source.
 - `gui/openmower-gui` — build artifact (binary) checked into git; `gui/go.sum` — Go module checksums.
+
+External release components: `gui/cmd/publish-deployment/definition.go` reads built/external entries in `install/deployment.json`. The workflow builds only built entries; publisher resolves external Docker Hub/GHCR index digests and both platforms. Deployment schema 3 and journal schema 5 preserve external provenance; existing storage, health, installer-selection and core-image guards still apply. See `docs/UPDATES.md`, External images in standard deployments.

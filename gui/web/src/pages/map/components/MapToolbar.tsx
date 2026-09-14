@@ -78,7 +78,10 @@ export const MapToolbar = ({
 }: MapToolbarProps) => {
     const {notification} = App.useApp();
     const {t} = useTranslation();
-    const isIdle = stateName === "IDLE" || stateName === "IDLE_DOCKED";
+    // DIG_OBSTRUCTION is a held robot (numeric state IDLE, wheels hard-stopped
+    // by firmware): the exits are Play after lifting it clear, or Home — so
+    // offer Continue, not Pause.
+    const isIdle = stateName === "IDLE" || stateName === "IDLE_DOCKED" || stateName === "DIG_OBSTRUCTION";
     const isRecording = stateName === "RECORDING";
     // Numeric state is the authoritative signal. States 2 and above are
     // autonomous, recording, manual mowing, or a future active mode; clearing

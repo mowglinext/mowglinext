@@ -30,7 +30,7 @@
 #include <geometry_msgs/msg/polygon.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <std_msgs/msg/header.hpp>
-#include <tf2/exceptions.h>
+#include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>

@@ -262,7 +262,7 @@ class SimNavSatRtkFix(Node):
         self._ground_truth: Optional[PoseStamped] = None
 
         # Diagnostics — surface the regime distribution observed.
-        self._regime_counts: dict[str, int] = {k: 0 for k in QUALITY_REGIMES}
+        self._regime_counts: dict[str, int] = dict.fromkeys(QUALITY_REGIMES, 0)
         self.create_timer(15.0, self._log_stats)
 
         if self._segments:

@@ -11,10 +11,12 @@ name: GUI — CI
 # well under a minute.
 
 on:
+  workflow_call:
   push:
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'gui/web/**'
+      - 'gui/*.go'
       - 'gui/pkg/**'
       - 'gui/asserts/**'
       - 'gui/go.mod'
@@ -30,6 +32,7 @@ on:
     # does not support YAML anchors, so this list cannot be shared.
     paths:
       - 'gui/web/**'
+      - 'gui/*.go'
       - 'gui/pkg/**'
       - 'gui/asserts/**'
       - 'gui/go.mod'
@@ -42,7 +45,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: gui-ci-${{ github.ref }}
+  group: gui-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 defaults:

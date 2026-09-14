@@ -757,7 +757,7 @@ def test_coverage_is_ftc_transit_is_not() -> None:
         )
         fp = cs["FollowPath"]
         assert "FTCController" not in fp.get("plugin", ""), "FollowPath (transit) must not be FTC"
-        assert "FTCController" not in fp.get("primary_controller", ""), (
+        assert "FTCController" not in fp.get("primary_controller", {}).get("plugin", ""), (
             "FollowPath (transit) must not wrap FTC"
         )
 
@@ -853,7 +853,7 @@ def test_transit_lookahead_damps_pursuit_weave() -> None:
     weave loudly. (A fast 2-4 Hz buzz is the firmware loop, tuned in firmware,
     NOT here.)
     """
-    fp = _controller_section(_load_params())["FollowPath"]
+    fp = _controller_section(_load_params())["FollowPath"]["primary_controller"]
     assert float(fp["lookahead_time"]) >= 2.0, (
         f"FollowPath.lookahead_time={fp['lookahead_time']} < 2.0 — too short, "
         "re-opens the pursuit S-weave with the lagged firmware yaw loop."
@@ -865,6 +865,25 @@ def test_transit_lookahead_damps_pursuit_weave() -> None:
     assert float(fp["min_lookahead_dist"]) <= float(fp["max_lookahead_dist"]), (
         "min_lookahead_dist must not exceed max_lookahead_dist"
     )
+
+
+def test_lyrical_transit_parameters_reach_primary_controller() -> None:
+    for overlay, collision in (("lidar", True), ("no_lidar", False)):
+        cfg = _deep_merge(_load_yaml("nav2_params_base.yaml"),
+                          _load_yaml(f"nav2_params_{overlay}.yaml"))
+        controller = _controller_section(cfg)
+        rpp = controller["FollowPath"]["primary_controller"]
+        assert rpp["plugin"] == (
+            "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+        )
+        assert rpp["max_linear_vel"] == 0.30
+        assert rpp["use_collision_detection"] is collision
+        assert "desired_linear_vel" not in rpp
+        assert "max_linear_vel" not in controller["FollowPath"]
+        assert "transform_tolerance" not in rpp
+        assert "max_robot_pose_search_dist" not in rpp
+        assert "transform_tolerance" not in controller["PathHandler"]
+        assert cfg["local_costmap"]["local_costmap"]["ros__parameters"]["transform_tolerance"] == 0.5
 
 
 if __name__ == "__main__":

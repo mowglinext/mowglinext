@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs INSIDE the mowgli-ros2 image. env: ANCHOR (true/false), RATE, TAG (output subdir), EXTRA (extra -p args), OVERLAY (setup.bash of a local build)
 set -o pipefail
-source /opt/ros/kilted/setup.bash; source /ros2_ws/install/setup.bash
+source /opt/ros/lyrical/setup.bash; source /ros2_ws/install/setup.bash
 [ -n "${OVERLAY:-}" ] && source "$OVERLAY"
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 OUT=/data/replay/${TAG:-run}; mkdir -p "$OUT"

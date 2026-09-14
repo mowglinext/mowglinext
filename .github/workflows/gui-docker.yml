@@ -2,6 +2,7 @@ name: GUI — Docker
 
 on:
   push:
+    tags: ['v*.*.*']
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'gui/**'
@@ -78,6 +79,10 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: ./gui
+          build-args: |
+            BUILD_REVISION=${{ github.sha }}
+            BUILD_VERSION=${{ steps.meta.outputs.version }}
+            BUILD_TIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
           platforms: ${{ matrix.arch }}
           no-cache: ${{ inputs.no-cache == true }}
           cache-from: ${{ github.event_name != 'pull_request' && inputs.no-cache != true && format('type=registry,ref={0}:buildcache-{1}', env.IMAGE_NAME, matrix.arch == 'linux/arm64' && 'arm64' || 'amd64') || '' }}

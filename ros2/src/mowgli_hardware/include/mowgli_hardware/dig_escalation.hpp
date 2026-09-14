@@ -177,6 +177,26 @@ inline int DigNearbyLatchCount(
 /// @param radius_m  "same spot" radius; <= 0 disables
 /// @param window_s  look-back window; <= 0 disables
 /// @param min_count latches required to escalate; <= 1 disables
+/// Distance from the escalation point, in multiples of the same-spot radius,
+/// beyond which the latch is released: at 2x the radius the robot is provably
+/// no longer where it was digging — the operator carried it clear, or a HOME
+/// drove it out. Below that it may merely have shuffled inside the same hole.
+/// Reaching the charger still clears it too (the unambiguous proof).
+inline constexpr double kDigEscalationClearFactor = 2.0;
+
+/// True when the fused pose (x, y) has moved far enough from the escalation
+/// anchor to release the latch. A non-positive radius never clears (feature
+/// disabled — the caller never latched either).
+inline bool DigEscalationClearedByDisplacement(
+    double anchor_x, double anchor_y, double x, double y, double radius_m)
+{
+  if (radius_m <= 0.0)
+  {
+    return false;
+  }
+  return std::hypot(x - anchor_x, y - anchor_y) > kDigEscalationClearFactor * radius_m;
+}
+
 inline bool ShouldEscalate(const DigLatchHistory& history,
                            double x,
                            double y,

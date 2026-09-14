@@ -11,6 +11,8 @@ x-ros2-env: &ros2-env
 services:
   lidar:
     container_name: mowgli-lidar
+    labels:
+      garden.mowgli.update.image: lidar-stl27l
     image: ${LIDAR_IMAGE}
     network_mode: host
     ipc: host

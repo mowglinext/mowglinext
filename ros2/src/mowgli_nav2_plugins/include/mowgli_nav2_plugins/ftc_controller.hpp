@@ -31,11 +31,11 @@
 #include <nav2_core/goal_checker.hpp>
 #include <nav2_costmap_2d/costmap_2d.hpp>
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
+#include <nav2_ros_common/lifecycle_node.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <rclcpp_lifecycle/lifecycle_node.hpp>
-#include <tf2/LinearMath/Quaternion.h>  // No .hpp equivalent for LinearMath
+#include <tf2/LinearMath/Quaternion.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.hpp>
@@ -71,7 +71,7 @@ public:
 
   // ── nav2_core::Controller interface ──────────────────────────────────────
 
-  void configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr& parent,
+  void configure(const nav2::LifecycleNode::WeakPtr& parent,
                  std::string name,
                  std::shared_ptr<tf2_ros::Buffer> tf,
                  std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) override;
@@ -80,12 +80,14 @@ public:
   void activate() override;
   void deactivate() override;
 
-  void setPlan(const nav_msgs::msg::Path& path) override;
+  void newPathReceived(const nav_msgs::msg::Path& path) override;
 
   geometry_msgs::msg::TwistStamped computeVelocityCommands(
       const geometry_msgs::msg::PoseStamped& pose,
       const geometry_msgs::msg::Twist& velocity,
-      nav2_core::GoalChecker* goal_checker) override;
+      nav2_core::GoalChecker* goal_checker,
+      const nav_msgs::msg::Path& transformed_global_plan,
+      const geometry_msgs::msg::PoseStamped& global_goal) override;
 
   void setSpeedLimit(const double& speed_limit, const bool& percentage) override;
 
@@ -322,7 +324,7 @@ private:
 
   // ── ROS2 infrastructure ───────────────────────────────────────────────────
 
-  rclcpp_lifecycle::LifecycleNode::WeakPtr node_;
+  nav2::LifecycleNode::WeakPtr node_;
   rclcpp::Logger logger_{rclcpp::get_logger("FTCController")};
   rclcpp::Clock::SharedPtr clock_;
 
@@ -373,7 +375,7 @@ private:
   // ── Parameters ────────────────────────────────────────────────────────────
 
   /// Declare all ROS2 parameters and populate the local config struct.
-  void declareParameters(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node);
+  void declareParameters(const nav2::LifecycleNode::SharedPtr& node);
 
   /// Parameter-change callback registered with the node.
   rcl_interfaces::msg::SetParametersResult onParameterChange(

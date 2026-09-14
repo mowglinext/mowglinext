@@ -4,6 +4,8 @@
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `CLAUDE.md`.
 
+Complete deployment image metadata/versioning: `.github/workflows/deployment-release.yml`, validated before descriptor publication by `gui/cmd/publish-deployment/main.go`. Image contract 1 links immutable bytes to release/version/source/component/protocol; custom-image verification lives in `gui/pkg/updater/image_release.go`.
+
 ## Where to look
 
 | Task | Start here |
@@ -213,3 +215,5 @@ Where the tests run in CI: `tools/motor` is symlinked to `ros2/src/mowgli_tools`
 - Nothing in this area is code-generated. The drift gates in `msg-codegen-drift.yml` police generated files that live in *other* areas (`gui/pkg/msgs/**`, `gui/web/src/types/ros.generated.ts`, `firmware/.../ros_lib/mower_msgs/**`) — regenerate with the `gui/generate_*.sh` scripts and `firmware/scripts/sync_ros_lib.py`, never by hand.
 - `.github/scripts/install-ros-apt-source.sh` downloads a third-party `.deb` from the `ros-infrastructure/ros-apt-source` releases; the asset is resolved at run time, not pinned in-tree.
 - `/tmp/digests/*`, `cppcheck-report.xml`, `dist/` (firmware release packaging) are CI scratch — never committed.
+
+External release components: `gui/cmd/publish-deployment/definition.go` reads built/external entries in `install/deployment.json`. The workflow builds only built entries; publisher resolves external Docker Hub/GHCR index digests and both platforms. Deployment schema 3 and journal schema 5 preserve external provenance; existing storage, health, installer-selection and core-image guards still apply. See `docs/UPDATES.md`, External images in standard deployments.

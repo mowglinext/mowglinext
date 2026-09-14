@@ -139,6 +139,37 @@ private:
 // SaveObstacles
 // ---------------------------------------------------------------------------
 
+/// DIG_OBSTRUCTION exit: asks map_server to drop the PENDING dig keepouts that
+/// sit under the robot (`/map_server_node/discard_dig_keepouts_near_robot`,
+/// std_srvs/Trigger) so the HOME dock transit can plan out of them. Three
+/// same-spot latches stamp up to three 0.60 m keepouts around the robot; Smac
+/// then reports START_OCCUPIED and the operator's HOME "never moves" (field
+/// report 2026-09-14). Waits a bounded time for the acknowledgement so the
+/// mask is rebuilt BEFORE DockRobot plans; on timeout it logs and still
+/// returns SUCCESS — a slow map_server must not turn HOME into a no-op.
+class DiscardNearbyDigKeepouts : public BT::SyncActionNode
+{
+public:
+  DiscardNearbyDigKeepouts(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+
+  /// Upper bound on the wait for map_server's reply. The discard itself is a
+  /// few polygon tests plus a mask re-stamp (well under a second on the Pi).
+  static constexpr double kAckTimeoutSec = 3.0;
+
+private:
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr client_;
+};
+
 /// Calls /obstacle_tracker/save_obstacles to persist the obstacle map to disk.
 class SaveObstacles : public BT::SyncActionNode
 {

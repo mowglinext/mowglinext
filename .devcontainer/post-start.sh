@@ -62,19 +62,20 @@ if [ ! -d "$HOST_SERIAL_BY_ID" ]; then
   exit 0
 fi
 
-mkdir -p "$CONTAINER_SERIAL_DIR"
+# The devcontainer runs as ubuntu; only /dev maintenance needs elevation.
+sudo mkdir -p "$CONTAINER_SERIAL_DIR"
 
 if [ -L "$CONTAINER_SERIAL_BY_ID" ]; then
   current_target="$(readlink "$CONTAINER_SERIAL_BY_ID" || true)"
   if [ "$current_target" = "$HOST_SERIAL_BY_ID" ]; then
     exit 0
   fi
-  rm -f "$CONTAINER_SERIAL_BY_ID"
+  sudo rm -f "$CONTAINER_SERIAL_BY_ID"
 elif [ -d "$CONTAINER_SERIAL_BY_ID" ]; then
   # A native by-id directory already exists in the container. Keep it.
   exit 0
 elif [ -e "$CONTAINER_SERIAL_BY_ID" ]; then
-  rm -f "$CONTAINER_SERIAL_BY_ID"
+  sudo rm -f "$CONTAINER_SERIAL_BY_ID"
 fi
 
-ln -s "$HOST_SERIAL_BY_ID" "$CONTAINER_SERIAL_BY_ID"
+sudo ln -s "$HOST_SERIAL_BY_ID" "$CONTAINER_SERIAL_BY_ID"

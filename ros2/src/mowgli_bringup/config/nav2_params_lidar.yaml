@@ -10,7 +10,8 @@ controller_server:
       # Collision sim: project the carrot forward, abort if the path
       # to the carrot hits an obstacle. 1.0 s look-ahead at 0.3 m/s
       # = 30 cm projected; collision_monitor handles the close-range case.
-      use_collision_detection: true
+      primary_controller:
+        use_collision_detection: true
 
 global_costmap:
   global_costmap:

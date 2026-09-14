@@ -10,7 +10,7 @@ set -euo pipefail
 LOOP_SEC="${1:-0}"
 [[ "$LOOP_SEC" == "--loop" ]] && LOOP_SEC="${2:-30}"
 
-ROS_SETUP="source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash"
+ROS_SETUP="source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash"
 CONTAINER="mowgli-ros2"
 
 ros2cmd() {

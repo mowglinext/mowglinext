@@ -4,7 +4,7 @@
 set -euo pipefail
 
 set +u
-source /opt/ros/kilted/setup.bash
+source /opt/ros/lyrical/setup.bash
 source /opt/ldlidar/setup.bash
 set -u
 

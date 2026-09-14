@@ -34,7 +34,7 @@ from nav2_common.launch import RewrittenYaml
 
 def generate_launch_description():
     # Get the launch directory
-    bringup_dir = get_package_share_directory('nav2_bringup')
+    bringup_dir = get_package_share_directory('mowgli_bringup')
 
     namespace = LaunchConfiguration('namespace')
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -196,7 +196,7 @@ def generate_launch_description():
             # 2026-04-26: velocity_smoother removed. The job it was doing
             # (velocity caps + accel limits + deadband) is duplicated by
             # the controller plugins themselves (FTCController has its own
-            # accel/cap params, RPP has desired_linear_vel) and by the
+            # accel/cap params, RPP has max_linear_vel) and by the
             # firmware deadband. Having the smoother in the pipeline added
             # a hidden layer that mismatched the controller intent and
             # confused tuning. Pipeline now:

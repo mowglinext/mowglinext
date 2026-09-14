@@ -18,7 +18,7 @@ Run inside the `mowgli-ros2` container after `docker cp`ing the file:
 ```bash
 docker cp ros2/scripts/diagnostics/<script>.py mowgli-ros2:/tmp/
 docker exec mowgli-ros2 bash -c \
-  'source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && \
+  'source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && \
    python3 /tmp/<script>.py [args]'
 ```
 
@@ -66,7 +66,7 @@ What the monitor records, and how to read it back, is documented in
 # Start monitor in background (writes JSONL)
 SESSION="my-test-$(date +%Y%m%d-%H%M)"
 docker exec -d mowgli-ros2 bash -c \
-  "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && \
+  "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && \
    timeout -s INT 120 python3 /ros2_ws/scripts/mow_session_monitor.py \
      --session $SESSION --output-dir /ros2_ws/maps --rate 20 > /tmp/mon.log 2>&1"
 sleep 3  # let subscriptions settle
@@ -74,7 +74,7 @@ sleep 3  # let subscriptions settle
 # Run the motion pattern
 docker cp ros2/scripts/diagnostics/forward_5m.py mowgli-ros2:/tmp/
 docker exec mowgli-ros2 bash -c \
-  'source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && \
+  'source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && \
    python3 /tmp/forward_5m.py'
 
 # Wait for monitor to finish (auto-stops on timeout) then analyze

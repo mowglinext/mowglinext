@@ -16,7 +16,7 @@
 # launch (ldlidar_with_mgr.launch.py).
 # =============================================================================
 
-FROM ros:kilted-ros-base AS build
+FROM ros:lyrical-ros-base AS build
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG LDLIDAR_REF=v0.3.0
@@ -30,21 +30,23 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       git \
       libudev-dev \
       python3-colcon-common-extensions \
-      ros-kilted-ament-cmake \
-      ros-kilted-bond \
-      ros-kilted-bondcpp \
-      ros-kilted-diagnostic-msgs \
-      ros-kilted-diagnostic-updater \
-      ros-kilted-launch-ros \
-      ros-kilted-nav2-lifecycle-manager \
-      ros-kilted-nav2-msgs \
-      ros-kilted-nav2-util \
-      ros-kilted-rclcpp \
-      ros-kilted-rclcpp-components \
-      ros-kilted-rclcpp-lifecycle \
-      ros-kilted-robot-state-publisher \
-      ros-kilted-sensor-msgs \
-      ros-kilted-std-msgs
+      ros-lyrical-ament-cmake \
+      ros-lyrical-bond \
+      ros-lyrical-bondcpp \
+      ros-lyrical-diagnostic-msgs \
+      ros-lyrical-diagnostic-updater \
+      ros-lyrical-launch-ros \
+      ros-lyrical-nav2-lifecycle-manager \
+      ros-lyrical-nav2-msgs \
+      ros-lyrical-nav2-util \
+      ros-lyrical-nav2-common \
+      ros-lyrical-nav2-ros-common \
+      ros-lyrical-rclcpp \
+      ros-lyrical-rclcpp-components \
+      ros-lyrical-rclcpp-lifecycle \
+      ros-lyrical-robot-state-publisher \
+      ros-lyrical-sensor-msgs \
+      ros-lyrical-std-msgs
 
 WORKDIR /ros2_ws/src
 RUN git clone --depth 1 --branch ${LDLIDAR_REF} \
@@ -55,7 +57,7 @@ RUN git clone --depth 1 --branch ${LDLIDAR_REF} \
 
 # Upstream CMakeLists has a FATAL_ERROR when the ROS distro isn't humble
 # or jazzy. Downgrade every FATAL_ERROR to WARNING in the driver's cmake
-# so Kilted builds — the FATAL_ERROR on the distro check is multi-line
+# so Lyrical builds — the FATAL_ERROR on the distro check is multi-line
 # so a targeted sed can't anchor on the string. The driver has no
 # distro-specific calls; the check is a courtesy.
 RUN find ldrobot-lidar-ros2 -name CMakeLists.txt -exec \
@@ -71,11 +73,30 @@ RUN find ldrobot-lidar-ros2 -name CMakeLists.txt -exec \
 RUN sed -i 's|count_subscribers(_scanTopic)|_scanPub->get_subscription_count()|g' \
       ldrobot-lidar-ros2/ldlidar_component/component/src/ldlidar_component.cpp
 
+# Adapt the pinned upstream driver to Nav2's Lyrical lifecycle API.
+RUN python3 - <<'PY_PATCH'
+from pathlib import Path
+root = Path('/ros2_ws/src/ldrobot-lidar-ros2/ldlidar_component')
+for p in root.rglob('*'):
+    if p.suffix not in {'.cpp', '.hpp', '.xml', '.txt'}:
+        continue
+    s = p.read_text().replace('nav2_util', 'nav2_ros_common').replace('nav2_ros_common::', 'nav2::')
+    s = s.replace('  nav2::LifecycleNode::integer_range limits_int;\n', '')
+    s = s.replace('(_scanTopic, qos, pub_opt)', '(_scanTopic, qos)')
+    s = s.replace('ament_target_dependencies(${PROJECT_NAME}\n    ${DEPENDENCIES}\n)',
+                  'foreach(dep IN LISTS DEPENDENCIES)\n'
+                  '  target_link_libraries(${PROJECT_NAME} ${${dep}_TARGETS})\n'
+                  'endforeach()')
+    p.write_text(s)
+PY_PATCH
+
 WORKDIR /ros2_ws
-RUN . /opt/ros/kilted/setup.sh \
- && colcon build --merge-install \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
-      --parallel-workers $(nproc)
+RUN chown -R ubuntu:ubuntu /ros2_ws
+USER ubuntu
+RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash \
+ && MAKEFLAGS=-j3 colcon build --merge-install --parallel-workers 2 \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DCMAKE_CXX_STANDARD=20 -DBUILD_TESTING=OFF'
 
 # Upstream ldlidar_component builds the LDROBOT SDK as a SHARED library
 # target named `ldlidar` (libldlidar.so) and links the component against it,
@@ -92,7 +113,7 @@ RUN cp "$(find /ros2_ws/build -name libldlidar.so -print -quit)" \
 # =============================================================================
 # Runtime
 # =============================================================================
-FROM ros:kilted-ros-base AS runtime
+FROM ros:lyrical-ros-base AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -100,15 +121,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       libudev1 \
-      ros-kilted-bond \
-      ros-kilted-bondcpp \
-      ros-kilted-diagnostic-updater \
-      ros-kilted-launch-ros \
-      ros-kilted-nav2-lifecycle-manager \
-      ros-kilted-rclcpp-components \
-      ros-kilted-rclcpp-lifecycle \
-      ros-kilted-rmw-cyclonedds-cpp \
-      ros-kilted-robot-state-publisher
+      ros-lyrical-bond \
+      ros-lyrical-bondcpp \
+      ros-lyrical-diagnostic-updater \
+      ros-lyrical-launch-ros \
+      ros-lyrical-nav2-lifecycle-manager \
+      ros-lyrical-rclcpp-components \
+      ros-lyrical-rclcpp-lifecycle \
+      ros-lyrical-rmw-cyclonedds-cpp \
+      ros-lyrical-robot-state-publisher
 
 COPY --from=build /ros2_ws/install /opt/ldlidar
 

@@ -218,6 +218,160 @@ const docTemplate = `{
                 }
             }
         },
+        "/import/openmower": {
+            "post": {
+                "description": "Parse a user-supplied OpenMower map.json, translate it\ninto MowgliNext's coordinate frame, and return a summary\nfor confirmation. Setting ` + "`" + `apply=true` + "`" + ` runs the live write\npath (areas + dock pose). See docs/IMPORT_OPENMOWER_MAP.md.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "import"
+                ],
+                "summary": "import an OpenMower map.json (preview-only by default)",
+                "parameters": [
+                    {
+                        "description": "import request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.ImportOpenMowerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ImportOpenMowerSummary"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/irrisense/gardens": {
+            "get": {
+                "description": "gardens readable by the stored token, for the picker and \"test connection\"",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "irrisense"
+                ],
+                "summary": "list IrriSense gardens",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.IrriSenseGardensResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.IrriSenseErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.IrriSenseErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/irrisense/settings": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "irrisense"
+                ],
+                "summary": "IrriSense settings",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.IrriSenseSettingsResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "irrisense"
+                ],
+                "summary": "update IrriSense settings",
+                "parameters": [
+                    {
+                        "description": "partial settings",
+                        "name": "settings",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.IrriSenseSettingsUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.IrriSenseSettingsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/irrisense/status": {
+            "get": {
+                "description": "cached wet/dry/unknown verdict the scheduler gate reads",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "irrisense"
+                ],
+                "summary": "IrriSense soil status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/types.SoilStatus"
+                        }
+                    }
+                }
+            }
+        },
         "/mowglinext/call/{command}": {
             "post": {
                 "description": "call a service",
@@ -413,6 +567,16 @@ const docTemplate = `{
                 }
             }
         },
+        "/mowglinext/multiplex": {
+            "get": {
+                "description": "multiplexed topic subscription",
+                "tags": [
+                    "mowglinext"
+                ],
+                "summary": "multiplexed topic subscription",
+                "responses": {}
+            }
+        },
         "/mowglinext/publish/{topic}": {
             "get": {
                 "description": "publish to a topic",
@@ -442,7 +606,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "logical topic key: diagnostics, status, highLevelStatus, gps, pose, imu, ticks, map, path, plan, mowingPath, power, emergency, dockingSensor, lidar",
+                        "description": "logical topic key: diagnostics, status, highLevelStatus, gps, gnssStatus, pose, imu, ticks, map, path, plan, mowingPath, power, emergency, dockingSensor, lidar",
                         "name": "topic",
                         "in": "path",
                         "required": true
@@ -803,6 +967,33 @@ const docTemplate = `{
                 }
             }
         },
+        "/settings/yaml/defaults": {
+            "get": {
+                "description": "returns a flat key-value map of default values (the reset-to-default source)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "settings"
+                ],
+                "summary": "returns the schema default value for every known parameter",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/setup/flashBoard": {
             "post": {
                 "description": "flash the mower board with the given config",
@@ -914,6 +1105,174 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/system/updater/state": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "updates"
+                ],
+                "summary": "Read cached host updater status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/updater/{operation}": {
+            "post": {
+                "description": "Same-origin JSON and X-Mowgli-Update: 1 are required. See docs/UPDATES.md for the operation contract.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "updates"
+                ],
+                "summary": "Review or control a coordinated software update",
+                "parameters": [
+                    {
+                        "enum": [
+                            "policy",
+                            "check",
+                            "plan",
+                            "apply",
+                            "rollback",
+                            "recover",
+                            "notice",
+                            "agent-update"
+                        ],
+                        "type": "string",
+                        "description": "Operation",
+                        "name": "operation",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Must be 1",
+                        "name": "X-Mowgli-Update",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Operation-specific request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/updates": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Check available software versions",
+                "parameters": [
+                    {
+                        "enum": [
+                            "stable",
+                            "dev"
+                        ],
+                        "type": "string",
+                        "description": "Comparison channel",
+                        "name": "channel",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Check remote metadata (otherwise cached result)",
+                        "name": "check",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.UpdateCheck"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/versions": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Installed software versions",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.VersionsResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -976,6 +1335,248 @@ const docTemplate = `{
                 }
             }
         },
+        "api.ImportDockPose": {
+            "type": "object",
+            "properties": {
+                "x": {
+                    "type": "number"
+                },
+                "y": {
+                    "type": "number"
+                },
+                "yaw_rad": {
+                    "type": "number"
+                }
+            }
+        },
+        "api.ImportOpenMowerRequest": {
+            "type": "object",
+            "properties": {
+                "apply": {
+                    "type": "boolean"
+                },
+                "map": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "om_datum_lat": {
+                    "type": "number"
+                },
+                "om_datum_lon": {
+                    "type": "number"
+                }
+            }
+        },
+        "api.ImportOpenMowerSummary": {
+            "type": "object",
+            "properties": {
+                "applied": {
+                    "type": "boolean"
+                },
+                "areas": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ImportedAreaBrief"
+                    }
+                },
+                "datum_shift_east_m": {
+                    "type": "number"
+                },
+                "datum_shift_north_m": {
+                    "type": "number"
+                },
+                "dock_pose": {
+                    "$ref": "#/definitions/api.ImportDockPose"
+                },
+                "mn_datum_configured": {
+                    "description": "MnDatumConfigured is true when mowgli_robot.yaml already has a\ndatum_lat/datum_lon set. The GUI uses this to decide whether to\noffer the \"import the datum too\" step: on a fresh install (false)\nthe OpenMower datum can be adopted as the robot's datum; when a\ndatum already exists (true) the geometry was reprojected INTO it,\nso overwriting it would misalign the just-imported map — the GUI\nthen hides the datum-import option.",
+                    "type": "boolean"
+                },
+                "mowing_areas": {
+                    "type": "integer"
+                },
+                "navigation_areas": {
+                    "type": "integer"
+                },
+                "obstacles": {
+                    "type": "integer"
+                },
+                "orphan_obstacles": {
+                    "type": "integer"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "api.ImportedAreaBrief": {
+            "type": "object",
+            "properties": {
+                "approx_area_sqm": {
+                    "type": "number"
+                },
+                "is_navigation_area": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "obstacles": {
+                    "type": "integer"
+                },
+                "type": {
+                    "description": "\"mow\" | \"nav\"",
+                    "type": "string"
+                },
+                "vertices": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.InstalledComponent": {
+            "type": "object",
+            "properties": {
+                "architecture": {
+                    "type": "string"
+                },
+                "built_at": {
+                    "type": "string"
+                },
+                "component": {
+                    "type": "string"
+                },
+                "digests": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "image": {
+                    "type": "string"
+                },
+                "image_id": {
+                    "type": "string"
+                },
+                "metadata_available": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.IrriSenseErrorResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.IrriSenseGardensResponse": {
+            "type": "object",
+            "properties": {
+                "gardens": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/providers.IrriSenseGardenSummary"
+                    }
+                }
+            }
+        },
+        "api.IrriSenseSettingsResponse": {
+            "type": "object",
+            "properties": {
+                "baseUrl": {
+                    "type": "string"
+                },
+                "dryAfterWateringHours": {
+                    "type": "number"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "gardenId": {
+                    "type": "string"
+                },
+                "gateScheduler": {
+                    "type": "boolean"
+                },
+                "maxStaleMinutes": {
+                    "type": "number"
+                },
+                "tokenMasked": {
+                    "type": "string"
+                },
+                "tokenSet": {
+                    "type": "boolean"
+                },
+                "wetDeficitMm": {
+                    "type": "number"
+                },
+                "zoneIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "api.IrriSenseSettingsUpdate": {
+            "type": "object",
+            "properties": {
+                "baseUrl": {
+                    "type": "string"
+                },
+                "clearToken": {
+                    "type": "boolean"
+                },
+                "dryAfterWateringHours": {
+                    "type": "number"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "gardenId": {
+                    "type": "string"
+                },
+                "gateScheduler": {
+                    "type": "boolean"
+                },
+                "maxStaleMinutes": {
+                    "type": "number"
+                },
+                "token": {
+                    "type": "string"
+                },
+                "wetDeficitMm": {
+                    "type": "number"
+                },
+                "zoneIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "api.OkResponse": {
             "type": "object",
             "properties": {
@@ -1009,6 +1610,13 @@ const docTemplate = `{
                 "lastRun": {
                     "type": "string"
                 },
+                "lastSkipReason": {
+                    "description": "Written by the scheduler when a due run was skipped (soil wet); the GUI\nshows them, the API only preserves them across updates.",
+                    "type": "string"
+                },
+                "lastSkippedAt": {
+                    "type": "string"
+                },
                 "time": {
                     "description": "HH:mm format",
                     "type": "string"
@@ -1039,6 +1647,101 @@ const docTemplate = `{
             "properties": {
                 "cpuTemperature": {
                     "type": "number"
+                }
+            }
+        },
+        "api.UpdateCheck": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string"
+                },
+                "checked_at": {
+                    "type": "string"
+                },
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.UpdateComponent"
+                    }
+                },
+                "last_successful_at": {
+                    "type": "string"
+                },
+                "notes_url": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.UpdateComponent": {
+            "type": "object",
+            "properties": {
+                "available_image": {
+                    "type": "string"
+                },
+                "available_revision": {
+                    "type": "string"
+                },
+                "custom_image": {
+                    "type": "boolean"
+                },
+                "digest_reference": {
+                    "type": "boolean"
+                },
+                "installed_revision": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "source_relation": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.VersionsResponse": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.InstalledComponent"
+                    }
+                },
+                "docker_available": {
+                    "type": "boolean"
+                },
+                "observed_at": {
+                    "type": "string"
+                },
+                "server": {
+                    "$ref": "#/definitions/buildinfo.Info"
+                }
+            }
+        },
+        "buildinfo.Info": {
+            "type": "object",
+            "properties": {
+                "built_at": {
+                    "type": "string"
+                },
+                "modified": {
+                    "type": "boolean"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
                 }
             }
         },
@@ -1132,11 +1835,34 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
+                "obstacle_info": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/mowgli.MapObstacleInfo"
+                    }
+                },
                 "obstacles": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/geometry.Polygon"
                     }
+                }
+            }
+        },
+        "mowgli.MapObstacleInfo": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "pending": {
+                    "type": "boolean"
+                },
+                "source": {
+                    "type": "integer"
                 }
             }
         },
@@ -1167,6 +1893,46 @@ const docTemplate = `{
             "properties": {
                 "docking_pose": {
                     "$ref": "#/definitions/geometry.Pose"
+                },
+                "use_gps_position": {
+                    "type": "boolean"
+                },
+                "yaw_rad": {
+                    "type": "number"
+                },
+                "yaw_source": {
+                    "type": "integer"
+                }
+            }
+        },
+        "providers.IrriSenseGardenSummary": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "zones": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/providers.IrriSenseZoneSummary"
+                    }
+                }
+            }
+        },
+        "providers.IrriSenseZoneSummary": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
                 }
             }
         },
@@ -1179,19 +1945,24 @@ const docTemplate = `{
                 "boardType": {
                     "type": "string"
                 },
+                "boardTypeOrigin": {
+                    "description": "Firmware selection provenance is written alongside the saved config so\nlater mower-model changes can update only fields that still follow model\ndefaults. Empty/unknown values are legacy and are handled conservatively\nby the GUI.",
+                    "type": "string"
+                },
                 "bothWheelsLiftEmergencyMillis": {
                     "type": "integer"
                 },
                 "branch": {
                     "type": "string"
                 },
-                "debugType": {
-                    "type": "string"
-                },
                 "directory": {
                     "type": "string"
                 },
                 "disableEmergency": {
+                    "type": "boolean"
+                },
+                "expertBuild": {
+                    "description": "ExpertBuild routes the flash to the compile-from-source path\n(flashMowgli); the default (false) flashes a prebuilt binary. Kept for\nbackward compatibility — FirmwareSource == \"custom\" implies it.",
                     "type": "boolean"
                 },
                 "externalImuAcceleration": {
@@ -1201,6 +1972,13 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "file": {
+                    "type": "string"
+                },
+                "firmwareSelectionModel": {
+                    "type": "string"
+                },
+                "firmwareSource": {
+                    "description": "FirmwareSource is the GUI dropdown selector: \"custom\" compiles from\nsource (the expert path), \"prebuilt\" (or empty, for older payloads)\nflashes the tested prebuilt binary.",
                     "type": "string"
                 },
                 "imuOnboardInclinationThreshold": {
@@ -1227,6 +2005,9 @@ const docTemplate = `{
                 "panelType": {
                     "type": "string"
                 },
+                "panelTypeOrigin": {
+                    "type": "string"
+                },
                 "perimeterWire": {
                     "type": "boolean"
                 },
@@ -1250,6 +2031,76 @@ const docTemplate = `{
                 },
                 "wheelBase": {
                     "type": "number"
+                }
+            }
+        },
+        "types.SoilStatus": {
+            "type": "object",
+            "properties": {
+                "configured": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "fetchedAt": {
+                    "type": "string"
+                },
+                "fresh": {
+                    "type": "boolean"
+                },
+                "gardenName": {
+                    "type": "string"
+                },
+                "gateScheduler": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "unknown": {
+                    "type": "boolean"
+                },
+                "wet": {
+                    "type": "boolean"
+                },
+                "zones": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/types.SoilZoneStatus"
+                    }
+                }
+            }
+        },
+        "types.SoilZoneStatus": {
+            "type": "object",
+            "properties": {
+                "deficitMm": {
+                    "type": "number"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "lastWateredAt": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "selected": {
+                    "type": "boolean"
+                },
+                "wet": {
+                    "type": "boolean"
                 }
             }
         }

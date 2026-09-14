@@ -218,3 +218,4 @@ All node tests call handlers directly through the `*_for_test` accessors (`map_s
 ## Generated & vendored — do not hand-edit
 - Nothing generated inside `ros2/src/mowgli_map`. Downstream generated artefacts of its interfaces: `gui/pkg/msgs/mowgli/types_generated.go`, `gui/web/src/types/ros.generated.ts` (regen scripts in `gui/`).
 - `grid_map_*`, `nav2_msgs`, `map_msgs`, Boost come from the ROS Kilted image; `/opt/fields2cover-300` is not used here.
+- **DIG_OBSTRUCTION exit:** `~/discard_dig_keepouts_near_robot` (`std_srvs/Trigger`, `area_manager.cpp` `discard_dig_keepouts_near_robot`) drops PENDING `SOURCE_DIG` proposals that contain / lie within `kDigDiscardClearanceM` (0.60 m) of the latched robot pose; accepted keepouts and farther proposals are untouched. Test hooks: `set_robot_pose_for_test`, `discard_dig_keepouts_near_robot_for_test`.

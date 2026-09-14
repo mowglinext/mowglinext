@@ -1,0 +1,72 @@
+name: Host updater
+on:
+  push:
+    # Bootstrap addresses the exact checkout SHA, including docs/sensor-only
+    # commits and custom branches. Every installable revision needs an asset.
+    branches: ['**']
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main, dev]
+    paths: ['gui/**', 'install/**', 'ros2/**', 'docker/**', '.github/workflows/updater.yml', '.github/workflows/deployment-release.yml', '.github/scripts/publish-stable-deployment.sh']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: gui/go.mod
+          cache-dependency-path: gui/go.sum
+      - name: Test updater and installer
+        env:
+          MOWGLI_UPDATER_DOCKER_TESTS: '1'
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -Iros2/src/mowgli_interfaces/include ros2/src/mowgli_interfaces/test/test_update_maintenance.cpp -o /tmp/test-update-maintenance
+          /tmp/test-update-maintenance
+          cd gui
+          go test -race ./pkg/updater ./pkg/api
+          go build -o "$RUNNER_TEMP/mowgli-updater-installer-test" ./cmd/mowgli-updater
+          export MOWGLI_UPDATER_STACK_BINARY="$RUNNER_TEMP/mowgli-updater-installer-test"
+          cd ..
+          bash install/tests/test_updater.sh
+          bash install/tests/test_deployment_publication.sh
+          bash install/tests/test_compose_validity.sh
+          bash install/tests/test_idempotency.sh
+      - name: Cross-build static host binaries
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p dist
+          cd gui
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/mowglinext/mowglinext/pkg/updater.Version=updater-${REVISION} -X github.com/mowglinext/mowglinext/pkg/updater.Revision=${REVISION}" -o "../dist/mowgli-updater-linux-$arch" ./cmd/mowgli-updater
+          done
+          cd ../dist
+          sha256sum mowgli-updater-linux-* > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: updater-binaries
+          path: dist/*
+  publish:
+    needs: test-build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: updater-binaries
+          path: dist
+      - name: Publish immutable installer bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        run: |
+          if ! gh release view "updater-$REVISION" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "updater-$REVISION" dist/* --repo "$REPO" --target "$REVISION" --prerelease --title "Updater $REVISION" --notes 'Installer bootstrap binaries. Not a complete container deployment.'
+          fi

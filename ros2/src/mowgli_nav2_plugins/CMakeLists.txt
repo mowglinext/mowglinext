@@ -9,7 +9,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -23,6 +23,7 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(nav2_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
+find_package(nav2_ros_common REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -57,21 +58,22 @@ target_include_directories(${PROJECT_NAME}
     ${EIGEN3_INCLUDE_DIRS}
 )
 
-ament_target_dependencies(${PROJECT_NAME}
-  rclcpp
-  rclcpp_lifecycle
-  nav2_core
-  nav2_costmap_2d
-  nav2_util
-  nav_msgs
-  geometry_msgs
-  pluginlib
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  tf2_eigen
-  visualization_msgs
-  mowgli_interfaces
+target_link_libraries(${PROJECT_NAME}
+  ${rclcpp_TARGETS}
+  ${rclcpp_lifecycle_TARGETS}
+  ${nav2_core_TARGETS}
+  ${nav2_costmap_2d_TARGETS}
+  ${nav2_util_TARGETS}
+  ${nav2_ros_common_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${pluginlib_TARGETS}
+  ${tf2_TARGETS}
+  ${tf2_ros_TARGETS}
+  ${tf2_geometry_msgs_TARGETS}
+  ${tf2_eigen_TARGETS}
+  ${visualization_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # pluginlib needs the export macro defined.
@@ -114,6 +116,9 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_gtest REQUIRED)
 
+  ament_add_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
+  target_link_libraries(test_lyrical_goal_checker ${PROJECT_NAME})
+
   ament_add_gtest(test_oscillation_detector
     test/test_oscillation_detector.cpp
     src/oscillation_detector.cpp
@@ -134,11 +139,11 @@ if(BUILD_TESTING)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
-  ament_target_dependencies(test_obstacle_deviation
-    geometry_msgs
-    nav2_costmap_2d
-    tf2
-    tf2_geometry_msgs
+  target_link_libraries(test_obstacle_deviation
+    ${geometry_msgs_TARGETS}
+    ${nav2_costmap_2d_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
   )
 
   ament_add_gtest(test_ftc_start_index
@@ -199,6 +204,7 @@ ament_export_dependencies(
   nav2_core
   nav2_costmap_2d
   nav2_util
+  nav2_ros_common
   nav_msgs
   geometry_msgs
   pluginlib

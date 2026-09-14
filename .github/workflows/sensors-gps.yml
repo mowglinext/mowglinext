@@ -2,6 +2,7 @@ name: Sensors — GPS
 
 on:
   push:
+    tags: ['v*.*.*']
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'sensors/gps/**'
@@ -38,7 +39,7 @@ jobs:
         set -euo pipefail
         find /opt -name setup.bash 2>/dev/null | sort
         set +u
-        source /opt/ros/kilted/setup.bash
+        source /opt/ros/lyrical/setup.bash
         for f in /opt/gnss_sidecar/setup.bash; do
           [ -f "$f" ] && echo "sourcing $f" && source "$f"
         done
@@ -64,6 +65,25 @@ jobs:
         assert hasattr(RtcmFrame, "data")
         assert hasattr(RtcmMessage, "message")
         PY
+        # Installed executables must not retain links into the deleted build tree.
+        python3 - <<'PY'
+        from pathlib import Path
+        import subprocess
+        checked = 0
+        for path in Path('/opt/gnss_sidecar').rglob('*'):
+            if not path.is_file():
+                continue
+            with path.open('rb') as stream:
+                if stream.read(4) != b'\x7fELF':
+                    continue
+            result = subprocess.run(['ldd', str(path)], capture_output=True, text=True)
+            assert result.returncode == 0, (path, result.stderr)
+            assert 'not found' not in result.stdout, (path, result.stdout)
+            checked += 1
+        assert checked > 0
+        print(f'GNSS runtime libraries checked: {checked} ELF files')
+        PY
+        gnss_inspect --help
       no-cache: ${{ inputs.no-cache == true }}
 
   # ---------------------------------------------------------------------------
@@ -77,7 +97,7 @@ jobs:
   test:
     name: Test mowgli_gnss_bridge
     runs-on: ubuntu-latest
-    container: ros:kilted-ros-base
+    container: ros:lyrical-ros-base
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -95,19 +115,19 @@ jobs:
             build-essential \
             cmake \
             python3-colcon-common-extensions \
-            ros-kilted-ament-cmake \
-            ros-kilted-ament-cmake-gtest \
-            ros-kilted-ament-lint-auto \
-            ros-kilted-ament-lint-common \
-            ros-kilted-diagnostic-msgs \
-            ros-kilted-geometry-msgs \
-            ros-kilted-nav-msgs \
-            ros-kilted-rclcpp \
-            ros-kilted-rosidl-default-generators \
-            ros-kilted-rosidl-default-runtime \
-            ros-kilted-rtcm-msgs \
-            ros-kilted-sensor-msgs \
-            ros-kilted-std-msgs
+            ros-lyrical-ament-cmake \
+            ros-lyrical-ament-cmake-gtest \
+            ros-lyrical-ament-lint-auto \
+            ros-lyrical-ament-lint-common \
+            ros-lyrical-diagnostic-msgs \
+            ros-lyrical-geometry-msgs \
+            ros-lyrical-nav-msgs \
+            ros-lyrical-rclcpp \
+            ros-lyrical-rosidl-default-generators \
+            ros-lyrical-rosidl-default-runtime \
+            ros-lyrical-rtcm-msgs \
+            ros-lyrical-sensor-msgs \
+            ros-lyrical-std-msgs
 
       - name: Assemble the workspace
         shell: bash
@@ -126,39 +146,46 @@ jobs:
             cp -r "ros2/src/external/universal-gnss/$p" "/ws/src/$p"
           done
           ls /ws/src
+          chown -R ubuntu:ubuntu /ws
 
       - name: Build dependencies
         shell: bash
         run: |
+          runuser -u ubuntu -- bash <<'BUILD'
           set -eo pipefail
           # ROS's setup.bash dereferences unset AMENT_* variables, so it cannot
           # be sourced under `set -u`. sensors/gps/Dockerfile works around this
           # the same way.
-          source /opt/ros/kilted/setup.bash
+          source /opt/ros/lyrical/setup.bash
           cd /ws
           # Dependencies only, tests off — we are not here to test upstream.
           colcon build \
             --packages-skip mowgli_gnss_bridge \
             --packages-up-to mowgli_gnss_bridge \
-            --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -Wno-dev \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -Wno-dev \
             --event-handlers console_cohesion+
+
+          BUILD
 
       - name: Build and test mowgli_gnss_bridge
         shell: bash
         run: |
+          runuser -u ubuntu -- bash <<'BUILD'
           set -eo pipefail
-          source /opt/ros/kilted/setup.bash
+          source /opt/ros/lyrical/setup.bash
           cd /ws
           source install/setup.bash
           colcon build \
             --packages-select mowgli_gnss_bridge \
-            --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -Wno-dev \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=ON -Wno-dev \
             --event-handlers console_cohesion+
           colcon test \
             --packages-select mowgli_gnss_bridge \
             --return-code-on-test-failure \
             --event-handlers console_cohesion+
           colcon test-result --verbose
+
+          BUILD
 
       - name: Assert the gtests actually ran
         shell: bash

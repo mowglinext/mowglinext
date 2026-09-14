@@ -22,12 +22,12 @@ namespace mowgli_coverage
 {
 
 CoverageServer::CoverageServer(const rclcpp::NodeOptions& options)
-    : nav2_util::LifecycleNode("coverage_server", "", options)
+    : nav2::LifecycleNode("coverage_server", "", options)
 {
   RCLCPP_INFO(get_logger(), "Creating %s", get_name());
 }
 
-nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State& /*state*/)
+nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Configuring %s", get_name());
 
@@ -100,20 +100,15 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
   // and coverage keep the same distance. Read LIVE per plan.
   declare_double("obstacle_margin", 0.0);
 
-  // Action server result timeout. Keep this >= the BT client's per-plan wait
-  // (PlanCoverageArea, 12 s): if the server expires the result first the
-  // client's goal handle is invalidated underneath it. 15 s clears the client.
-  double action_server_result_timeout = declare_double("action_server_result_timeout", 15.0);
-  rcl_action_server_options_t server_options = rcl_action_server_get_default_options();
-  server_options.result_timeout.nanoseconds = RCL_S_TO_NS(action_server_result_timeout);
-
+  // Lyrical's SimpleActionServer owns the standard ROS action options.
+  // Result retention starts after completion; it is not a planning deadline.
   action_server_ = std::make_unique<ActionServer>(shared_from_this(),
                                                   "plan_coverage",
                                                   std::bind(&CoverageServer::planCoverage, this),
                                                   nullptr,
+                                                  nullptr,
                                                   std::chrono::milliseconds(500),
-                                                  true,
-                                                  server_options);
+                                                  true);
 
   RCLCPP_INFO(get_logger(),
               "F2C v3 boustrophedon backend ready. robot_width=%.2fm "
@@ -122,36 +117,36 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
               operation_width_,
               default_headland_width_,
               num_headland_passes_);
-  return nav2_util::CallbackReturn::SUCCESS;
+  return nav2::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_activate(const rclcpp_lifecycle::State& /*state*/)
+nav2::CallbackReturn CoverageServer::on_activate(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Activating %s", get_name());
   action_server_->activate();
   createBond();
-  return nav2_util::CallbackReturn::SUCCESS;
+  return nav2::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_deactivate(const rclcpp_lifecycle::State& /*state*/)
+nav2::CallbackReturn CoverageServer::on_deactivate(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Deactivating %s", get_name());
   action_server_->deactivate();
   destroyBond();
-  return nav2_util::CallbackReturn::SUCCESS;
+  return nav2::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_cleanup(const rclcpp_lifecycle::State& /*state*/)
+nav2::CallbackReturn CoverageServer::on_cleanup(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Cleaning up %s", get_name());
   action_server_.reset();
-  return nav2_util::CallbackReturn::SUCCESS;
+  return nav2::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_shutdown(const rclcpp_lifecycle::State& /*state*/)
+nav2::CallbackReturn CoverageServer::on_shutdown(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Shutting down %s", get_name());
-  return nav2_util::CallbackReturn::SUCCESS;
+  return nav2::CallbackReturn::SUCCESS;
 }
 
 namespace

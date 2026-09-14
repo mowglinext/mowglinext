@@ -23,7 +23,7 @@ Usage:
         --output-dir /home/ubuntu/mowglinext/docker/logs/mow_sessions
 
     # via docker exec:
-    docker exec mowgli-ros2 bash -c 'source /opt/ros/kilted/setup.bash && \
+    docker exec mowgli-ros2 bash -c 'source /opt/ros/lyrical/setup.bash && \
         source /ros2_ws/install/setup.bash && \
         python3 /host/scripts/mow_session_monitor.py --session NAME'
 

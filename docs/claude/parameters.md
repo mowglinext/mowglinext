@@ -106,7 +106,7 @@ still require operator acceptance to persist. Save and restart ROS2 to apply.
 | `area_record_rate_hz` (L129) | 10.0 | `full_system.launch.py:265` | no | launch |
 | `mowing_enabled` (L308) | `true` | **hardware_bridge only** `mowgli.launch.py:238` (dry-run blade inhibit; guarded by `test_launch_injection.py`) | Mowing | launch |
 | `mowing_speed` (L309) | 0.20 | BT `full_system.launch.py:245` (→ `SetNavMode`); `FollowCoveragePath.speed_fast` `navigation.launch.py:755`; also raises FTC's `max_cmd_vel_speed` clamp L764 | Mowing | dynamic (BT sets it per nav mode, `navigation_nodes.cpp:962`) |
-| `transit_speed` (L310) | 0.20 | BT `full_system.launch.py:244`; `FollowPath.desired_linear_vel` `navigation.launch.py:745` | Mowing | dynamic (`navigation_nodes.cpp:961`) |
+| `transit_speed` (L310) | 0.20 | BT `full_system.launch.py:244`; `FollowPath.primary_controller.max_linear_vel` `navigation.launch.py:745` | Mowing | dynamic (`navigation_nodes.cpp:961`) |
 | `undock_distance` (L432) | 1.5 | BT BackUp `full_system.launch.py:232`; dock-calib `:492` | Docking | launch |
 | `undock_speed` (L433) | 0.16 | BT BackUp `full_system.launch.py:231`; dock-calib `:493` | Docking | launch |
 | `mow_angle_deg` (L338) | -1.0 (auto) | BT `full_system.launch.py:250` → `PlanCoverage` goal | Mowing | launch |
@@ -303,6 +303,9 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `led_idle_scale` (L736) | 0.10 | Status LEDs | launch |
 | `led_charge_complete_timeout_s` | 600.0 (0 disables) | Status LEDs | launch |
 | `led_charge_complete_dim_scale` | 0.0 | Status LEDs | launch |
+| `led_charge_complete_indicator_count` | 0 (0 disables) | Status LEDs | launch |
+| `led_charge_complete_indicator_scale` | 0.15 | Status LEDs | launch |
+| `led_charge_complete_indicator_ids` | `""` (string, comma-separated) | Status LEDs | launch |
 | `led_spi_speed_hz` (L737) | 2400000 (3 SPI bits per WS2812 bit — do not retune) | Status LEDs | launch |
 
 ### Read by a launch file but absent from the template
@@ -396,12 +399,18 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 |---|---|---|
 | Global costmap `plugins` | `[obstacle_layer, keepout_filter, inflation_layer]` (L18) | `[static_layer, keepout_filter, inflation_layer]` (L33) fed by `/no_lidar_static_map` |
 | Local costmap `plugins` | `[obstacle_layer, inflation_layer]` (L75) | `[static_layer, inflation_layer]` (L46) |
-| `FollowPath.use_collision_detection` | `true` (L13) | `false` (L11) |
+| `FollowPath.primary_controller.use_collision_detection` | `true` (L13) | `false` (L11) |
 | `FollowCoveragePath` obstacle flags | from base (`check_obstacles: true`, `enable_obstacle_deviation: true`) | `check_obstacles: false`, `enable_obstacle_deviation: false` (L20–21) |
 | `collision_monitor.polygons` | `[FootprintApproach, PolygonStopNarrow, PolygonSlow]` (L146) — all `enabled: true`; the static `PolygonStop` is kept **disabled** at L238–245 for the record | `[PolygonStop, FootprintApproach]` both `enabled: false`, `scan` source `enabled: false` (L56–80) — pass-through |
 | `planner_server.costmap_update_timeout` | unset in base and overlay → Nav2 default 1.0 | `5.0` (L28) |
 
 ### Where the blocks live (`nav2_params_base.yaml`)
+
+Lyrical adds `controller_server.path_handler_plugins: [PathHandler]` and
+`PathHandler.plugin: nav2_controller::FeasiblePathHandler`. Its TF tolerance,
+like the controller's, is taken from `local_costmap.transform_tolerance` at launch.
+RPP parameters are nested under `FollowPath.primary_controller`; RotationShim
+parameters remain directly under `FollowPath`.
 
 | Block | Lines | Notes |
 |---|---|---|
@@ -410,7 +419,7 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 | `progress_checker` | 115–129 | `PoseProgressChecker`, `required_movement_radius: 0.15` L121, `movement_time_allowance: 30.0` L129 (injected from `progress_timeout_sec`) |
 | `stopped_goal_checker` | 131–149 | transit goal gate |
 | `coverage_goal_checker` | 170–189 | `mowgli_nav2_plugins/PathProgressGoalChecker` L171, `plan_topic: /controller_server/FollowCoveragePath/global_plan` L189 — **never `StoppedGoalChecker`** |
-| `FollowPath` (transit) | 226–320 | RotationShim L227 wrapping RPP L228; `desired_linear_vel: 0.30` L276 (overwritten by `transit_speed`) |
+| `FollowPath` (transit) | 226–320 | RotationShim L227 wrapping RPP L228; `primary_controller.max_linear_vel: 0.30` L276 (overwritten by `transit_speed`) |
 | `FollowCoveragePath` (coverage) | 338–550 | `mowgli_nav2_plugins/FTCController` L339; `speed_fast` L346 / `speed_slow` L357 / `min_speed_mps` L364 (speed fast/slow launch-overwritten); obstacle restart angular acceleration `1.0 rad/s²` L363; `max_cmd_vel_ang: 0.8` L408; `max_goal_distance_error: 0.50` L414; `forward_only: true` L424; `check_obstacles` L429, `obstacle_lookahead` L435, `obstacle_body_half_width` L481, `ignore_obstacles_outside_zone` L512, `enable_obstacle_deviation` L513, `max_lateral_deviation` L519, reverse-escape trio L548–550 |
 | `planner_server` | 551–590 | Smac |
 | `smoother_server` / `behavior_server` / `waypoint_follower` | 591 / 604 / 655 | BackUp lives in `behavior_server` (undock, Invariant 10) |

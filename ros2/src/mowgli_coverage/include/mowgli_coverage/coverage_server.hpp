@@ -20,28 +20,28 @@
 #include <string>
 
 #include "mowgli_interfaces/action/plan_coverage.hpp"
-#include "nav2_util/lifecycle_node.hpp"
-#include "nav2_util/simple_action_server.hpp"
+#include "nav2_ros_common/lifecycle_node.hpp"
+#include "nav2_ros_common/simple_action_server.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 namespace mowgli_coverage
 {
 
-class CoverageServer : public nav2_util::LifecycleNode
+class CoverageServer : public nav2::LifecycleNode
 {
 public:
   using PlanCoverage = mowgli_interfaces::action::PlanCoverage;
-  using ActionServer = nav2_util::SimpleActionServer<PlanCoverage>;
+  using ActionServer = nav2::SimpleActionServer<PlanCoverage>;
 
   explicit CoverageServer(const rclcpp::NodeOptions& options = rclcpp::NodeOptions{});
   ~CoverageServer() override = default;
 
 protected:
-  nav2_util::CallbackReturn on_configure(const rclcpp_lifecycle::State& state) override;
-  nav2_util::CallbackReturn on_activate(const rclcpp_lifecycle::State& state) override;
-  nav2_util::CallbackReturn on_deactivate(const rclcpp_lifecycle::State& state) override;
-  nav2_util::CallbackReturn on_cleanup(const rclcpp_lifecycle::State& state) override;
-  nav2_util::CallbackReturn on_shutdown(const rclcpp_lifecycle::State& state) override;
+  nav2::CallbackReturn on_configure(const rclcpp_lifecycle::State& state) override;
+  nav2::CallbackReturn on_activate(const rclcpp_lifecycle::State& state) override;
+  nav2::CallbackReturn on_deactivate(const rclcpp_lifecycle::State& state) override;
+  nav2::CallbackReturn on_cleanup(const rclcpp_lifecycle::State& state) override;
+  nav2::CallbackReturn on_shutdown(const rclcpp_lifecycle::State& state) override;
 
 private:
   // Action callback. Pulls the active goal, runs planBoustrophedon, converts

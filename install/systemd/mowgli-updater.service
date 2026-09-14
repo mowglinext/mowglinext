@@ -1,0 +1,18 @@
+[Unit]
+Description=MowgliNext deployment updater and recovery supervisor
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mowgli-updater supervise --config /etc/mowgli-updater.json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

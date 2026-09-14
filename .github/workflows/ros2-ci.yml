@@ -1,6 +1,7 @@
 name: ROS2 — CI
 
 on:
+  workflow_call:
   push:
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
@@ -26,11 +27,11 @@ on:
     branches: [main, dev]
 
 concurrency:
-  group: ros2-ci-${{ github.ref }}
+  group: ros2-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  ROS_DISTRO: kilted
+  ROS_DISTRO: lyrical
 
 jobs:
   # ─── Change Detection ────────────────────────────────────────────────────────
@@ -129,7 +130,8 @@ jobs:
   # the matrix-suffixed names.
   build-and-test:
     name: Build & Test (ROS2 kilted)
-    runs-on: ubuntu-24.04
+    # Keep the protected check name stable; the build itself now runs Lyrical.
+    runs-on: ubuntu-26.04
     needs: changes
     if: needs.changes.outputs.ros2 == 'true'
 
@@ -185,12 +187,25 @@ jobs:
       # custom-factor API, so the Docker image build (ros2/Dockerfile stage 0)
       # builds 4.3a1 from source and lands it under /opt/gtsam. We mirror the
       # same recipe here, cached so subsequent runs are instant.
+      #
+      # -Wno-error=array-bounds: GTSAM 4.3a1 hardcodes -Werror. The GitHub
+      # `ubuntu-26.04` runner is Ubuntu's `amd64v3` variant, so its GCC 15
+      # targets x86-64-v3 (AVX2) by default — with NO -march flag from us
+      # ("Build for native architecture: Disabled" in the configure summary).
+      # At that ISA level GCC 15 emits a false-positive -Warray-bounds on
+      # Eigen's AVX ploadu() of fixed-size Vector3/Matrix13 temporaries
+      # (EssentialMatrix.cpp / FundamentalMatrix.cpp), which -Werror turns
+      # into a hard build failure. The baseline-amd64 ros:lyrical-ros-base
+      # image (and every arm64 build) never enables AVX, so the Docker
+      # recipe only carries the flag to stay in lockstep with this one. Keep
+      # the flag in `-Wno-error=` form — a bare -Wno-error would be
+      # overridden by GTSAM's later target-level -Werror.
       - name: Cache GTSAM build
         id: cache-gtsam
         uses: actions/cache@v4
         with:
           path: /opt/gtsam
-          key: gtsam-4.3a1-${{ runner.os }}-noble
+          key: gtsam-4.3a1-${{ runner.os }}-resolute-lyrical-noerr-array-bounds
 
       - name: Build GTSAM 4.3a1 from source
         working-directory: .
@@ -205,6 +220,8 @@ jobs:
           cd gtsam && mkdir build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_INSTALL_PREFIX=/opt/gtsam \
             -DGTSAM_BUILD_TESTS=OFF \
             -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
@@ -215,8 +232,11 @@ jobs:
             -DGTSAM_WITH_TBB=OFF \
             -DGTSAM_WITH_EIGEN_MKL=OFF \
             -DGTSAM_INSTALL_MATLAB_TOOLBOX=OFF \
-            -DBUILD_SHARED_LIBS=ON
-          sudo make -j$(nproc) install
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_CXX_FLAGS=-Wno-error=array-bounds
+          sudo mkdir -p /opt/gtsam
+          sudo chown "$(id -u):$(id -g)" /opt/gtsam
+          make -j$(nproc) install
           # The ldconfig + CMAKE_PREFIX_PATH setup is done in subsequent
           # steps so that cached restores also see the library.
 
@@ -244,7 +264,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /opt/fields2cover-300
-          key: f2c-3.0.0-884d895-${{ runner.os }}-noble
+          key: f2c-3.0.0-884d895-${{ runner.os }}-resolute-lyrical
 
       - name: Build Fields2Cover v3 from source
         working-directory: .
@@ -264,9 +284,12 @@ jobs:
           git clone https://github.com/Fields2Cover/Fields2Cover.git f2c3
           cd f2c3 && git checkout 884d895b59192882476e986ba44ea9143a06a6a9
           sed -i '1i #include <iomanip>' src/fields2cover/utils/visualizer.cpp
+          sed -i '1i #include <algorithm>' src/fields2cover/types/Graph.cpp
           mkdir build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-300 \
             -DBUILD_TESTS=OFF \
             -DBUILD_PYTHON=OFF \
@@ -274,7 +297,9 @@ jobs:
             -DBUILD_DOC=OFF \
             -DALLOW_PARALLELIZATION=ON \
             -DBUILD_SHARED_LIBS=ON
-          sudo make -j$(nproc) install
+          sudo mkdir -p /opt/fields2cover-300
+          sudo chown "$(id -u):$(id -g)" /opt/fields2cover-300
+          make -j$(nproc) install
 
       - name: Register Fields2Cover in linker + CMake search paths
         run: |
@@ -287,6 +312,15 @@ jobs:
           echo "/opt/fields2cover-300/lib" | sudo tee /etc/ld.so.conf.d/f2c.conf
           sudo ldconfig
           echo "CMAKE_PREFIX_PATH=/opt/fields2cover-300:$CMAKE_PREFIX_PATH" >> $GITHUB_ENV
+
+      - name: Build pinned Lyrical source dependencies
+        working-directory: .
+        run: |
+          sudo apt-get update
+          xargs sudo apt-get install -y --no-install-recommends < ros2/lyrical-vendor-packages.txt
+          sudo mkdir -p /opt/lyrical_vendor
+          sudo chown "$(id -u):$(id -g)" /opt/lyrical_vendor
+          bash ros2/scripts/build_lyrical_vendor.sh
 
       - name: Cache rosdep
         uses: actions/cache@v4
@@ -307,20 +341,26 @@ jobs:
                    opennav_coverage_navigator opennav_row_coverage; do
             touch "src/opennav_coverage/$p/COLCON_IGNORE" 2>/dev/null || true
           done
+          # The generic upstream CMake root otherwise shadows gnss_ros2 and
+          # builds driver tools. The GPS image owns that separate workspace.
+          touch src/external/universal-gnss/COLCON_IGNORE
 
       - name: Install rosdep dependencies
         run: |
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          source /opt/lyrical_vendor/local_setup.bash
           sudo apt-get update
           rosdep update --rosdistro ${{ env.ROS_DISTRO }}
           # skip-keys:
+          # - grid_map, Beluga and Smac come from /opt/lyrical_vendor
+          # - webots_ros2_driver is built by the dedicated simulation image
           # - the opennav_coverage server subpackages are intentionally not
           #   part of this CI build (only opennav_coverage_msgs is used)
           rosdep install \
             --from-paths src \
             --ignore-src \
             --rosdistro ${{ env.ROS_DISTRO }} \
-            --skip-keys "opennav_coverage opennav_coverage_bt opennav_coverage_demo opennav_coverage_navigator opennav_row_coverage" \
+            --skip-keys "webots_ros2_driver webots_ros2_control grid_map_core grid_map_ros grid_map_msgs beluga_ros nav2_smac_planner opennav_coverage opennav_coverage_bt opennav_coverage_demo opennav_coverage_navigator opennav_row_coverage" \
             -y
 
       - name: Cache colcon workspace
@@ -337,14 +377,18 @@ jobs:
       - name: Build workspace
         run: |
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          source /opt/lyrical_vendor/local_setup.bash
           colcon build \
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             --parallel-workers $(nproc) \
             --event-handlers console_cohesion+
 
       - name: Run tests
         run: |
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          source /opt/lyrical_vendor/local_setup.bash
           source install/setup.bash
           colcon test \
             --return-code-on-test-failure \
@@ -354,6 +398,7 @@ jobs:
       - name: Validate mowgli_tools package entrypoint
         run: |
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          source /opt/lyrical_vendor/local_setup.bash
           source install/setup.bash
           ros2 pkg prefix mowgli_tools
           ros2 run mowgli_tools tune_drive_pid --help | tee /tmp/mowgli_tools_help.txt
@@ -369,6 +414,7 @@ jobs:
           find / -type d -name install 2>/dev/null | head -50 || true
           set +u
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          source /opt/lyrical_vendor/local_setup.bash
           source "${GITHUB_WORKSPACE}/ros2/install/setup.bash"
           set -u
           # This CI job runs on the GitHub-hosted runner checkout under

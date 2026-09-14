@@ -79,6 +79,7 @@
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
 #include "mowgli_hardware/timer_period.hpp"
+#include "mowgli_interfaces/update_maintenance.hpp"
 
 // High-level mode constants — must match HighLevelStatus.msg and the
 // HL_MODE_* defines in firmware/mowgli_protocol.h. Declared locally to
@@ -2438,6 +2439,11 @@ private:
 
   void send_blade_command(uint8_t on, uint8_t dir)
   {
+    if (mowgli_interfaces::updateMaintenanceActive())
+    {
+      on = 0;
+      mow_enabled_ = false;
+    }
     LlCmdBlade pkt{};
     pkt.type = PACKET_ID_LL_CMD_BLADE;
     pkt.blade_on = on;
@@ -3065,6 +3071,27 @@ private:
   {
     last_map_pose_x_ = msg->pose.pose.position.x;
     last_map_pose_y_ = msg->pose.pose.position.y;
+    // Release the repeat-dig latch once the robot is provably away from the
+    // spot (2x the same-spot radius): the operator lifted it clear, or HOME
+    // drove it out. Without this the only exit was the charger, so a robot
+    // carried onto open grass still refused Play ("DIG_OBSTRUCTION" forever).
+    if (dig_escalated_ && DigEscalationClearedByDisplacement(dig_escalation_x_,
+                                                             dig_escalation_y_,
+                                                             last_map_pose_x_,
+                                                             last_map_pose_y_,
+                                                             dig_escalate_cfg_.radius_m))
+    {
+      dig_escalated_ = false;
+      dig_latch_history_.clear();
+      publish_dig_escalated();
+      RCLCPP_INFO(get_logger(),
+                  "Dig escalation cleared: robot is %.2f m from the escalation point "
+                  "(%.2f, %.2f) — carried clear or driven out.",
+                  std::hypot(last_map_pose_x_ - dig_escalation_x_,
+                             last_map_pose_y_ - dig_escalation_y_),
+                  dig_escalation_x_,
+                  dig_escalation_y_);
+    }
     // Worst axis of the position block; the detector compares a scalar
     // distance so the larger sigma is the honest one to gate on.
     // MAJOR AXIS of the xy covariance ellipse, not max(var_xx, var_yy).
@@ -3300,6 +3327,8 @@ private:
     }
 
     dig_escalated_ = true;
+    dig_escalation_x_ = last_map_pose_x_;
+    dig_escalation_y_ = last_map_pose_y_;
     RCLCPP_ERROR(get_logger(),
                  "Dig escalation: %d latches within %.2f m in %.0f s at map (%.2f, %.2f) — "
                  "the robot cannot free itself here; stopping.",
@@ -3336,6 +3365,11 @@ private:
   /// Single point where a velocity command reaches the firmware.
   void send_cmd_vel_packet(double vx, double wz)
   {
+    if (mowgli_interfaces::updateMaintenanceActive())
+    {
+      vx = 0.0;
+      wz = 0.0;
+    }
     // Keep this final construction boundary defensive as well: callers such
     // as the bounded dig escape pass doubles.  Check float32 representability
     // before narrowing: converting an out-of-range double is not a safe way
@@ -3492,11 +3526,18 @@ private:
   DigEscalationCfg dig_escalate_cfg_;
   DigLatchHistory dig_latch_history_;
   /// Latched once the robot proves it cannot free itself at one spot. Cleared
-  /// only when the robot reaches the charger: mating with the dock is
-  /// unambiguous proof it physically left the obstruction, whether the
-  /// operator carried it out or it drove home. Nothing else clears it, so a
-  /// robot still sitting against the object cannot quietly resume.
+  /// when the robot reaches the charger (mating with the dock is unambiguous
+  /// proof it physically left the obstruction) or when the fused pose has
+  /// moved kDigEscalationClearFactor x dig_escalate_radius_m away from the
+  /// escalation point (carried clear by the operator, or driven out on a
+  /// HOME). A robot still sitting against the object matches neither, so it
+  /// cannot quietly resume: Play stays refused by the tree's
+  /// DigObstructionGuard until one of the two happens.
   bool dig_escalated_{false};
+  /// Map-frame position at which the latch was raised; the displacement
+  /// clear above is measured from here.
+  double dig_escalation_x_{0.0};
+  double dig_escalation_y_{0.0};
 
   /// Latest differential-drive command, captured in on_cmd_vel, with the time
   /// it arrived. Both components are required: a pure pivot has vx == 0 while

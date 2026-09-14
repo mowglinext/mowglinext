@@ -22,9 +22,9 @@
 #include <string>
 #include <vector>
 
-#include "tf2/exceptions.h"
+#include "tf2/exceptions.hpp"
 #include "tf2/time.hpp"
-#include "tf2_ros/buffer.h"
+#include "tf2_ros/buffer.hpp"
 
 namespace mowgli_behavior
 {

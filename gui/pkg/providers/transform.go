@@ -265,6 +265,12 @@ func adaptGPS(raw []byte) ([]byte, error) {
 	}
 
 	pose := mowgli.AbsolutePose{
+		// Preserve observation identity through the GUI adapter. Cached fixes
+		// must not acquire a new timestamp when delivered to another consumer.
+		Header: geometry.Header{
+			Stamp:   geometry.Stamp{Sec: fix.Header.Stamp.Sec, Nanosec: fix.Header.Stamp.Nanosec},
+			FrameId: fix.Header.FrameId,
+		},
 		Flags:            navSatStatusToFlags(fix.Status.Status),
 		PositionAccuracy: accuracy,
 		Pose: geometry.PoseWithCovariance{

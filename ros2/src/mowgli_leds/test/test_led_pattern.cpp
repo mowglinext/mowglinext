@@ -436,6 +436,90 @@ TEST(LedPatternRender, ChargeCompleteTimeoutOfZeroDisablesDimmingEntirely)
   }
 }
 
+TEST(LedPatternRender, ChargeCompleteIndicatorCountKeepsEvenlySpacedPixelsLit)
+{
+  LedInputs in;
+  in.status_fresh = true;
+  in.state = HighLevelState::kIdle;
+  in.is_charging = true;
+  in.battery_valid = true;
+  in.battery_percent = 100.0f;
+  in.charge_complete_elapsed_s = 1000.0;
+
+  LedPatternCfg cfg = MakeCfg();  // led_count = 16
+  cfg.charge_complete_dim_scale = 0.0f;
+  cfg.charge_complete_indicator_count = 4u;  // 16 / 4 = every 4th pixel
+  cfg.charge_complete_indicator_scale = 0.5f;
+  const auto pixels = RenderFrame(in, cfg);
+
+  EXPECT_EQ(CountLit(pixels), 4u) << "exactly the requested count stays lit, no more";
+  for (const std::size_t idx : {0u, 4u, 8u, 12u})
+  {
+    EXPECT_GT(pixels[idx].g, 0u) << "pixel " << idx << " should be an indicator pixel";
+  }
+  EXPECT_EQ(pixels[1], colors::kOff) << "a non-indicator pixel must stay at the (0) dim scale";
+}
+
+TEST(LedPatternRender, ChargeCompleteIndicatorIdsTakePriorityOverCount)
+{
+  LedInputs in;
+  in.status_fresh = true;
+  in.state = HighLevelState::kIdle;
+  in.is_charging = true;
+  in.battery_valid = true;
+  in.battery_percent = 100.0f;
+  in.charge_complete_elapsed_s = 1000.0;
+
+  LedPatternCfg cfg = MakeCfg();
+  cfg.charge_complete_dim_scale = 0.0f;
+  cfg.charge_complete_indicator_count = 4u;  // would light 0,4,8,12 if honoured
+  cfg.charge_complete_indicator_ids = {2u, 9u};  // must win instead, count is ignored
+  const auto pixels = RenderFrame(in, cfg);
+
+  EXPECT_EQ(CountLit(pixels), 2u);
+  EXPECT_NE(pixels[2], colors::kOff);
+  EXPECT_NE(pixels[9], colors::kOff);
+  EXPECT_EQ(pixels[0], colors::kOff) << "count-based spacing must not apply once ids is set";
+  EXPECT_EQ(pixels[4], colors::kOff);
+}
+
+TEST(LedPatternRender, ChargeCompleteIndicatorIdsIgnoresOutOfRangeIndices)
+{
+  LedInputs in;
+  in.status_fresh = true;
+  in.state = HighLevelState::kIdle;
+  in.is_charging = true;
+  in.battery_valid = true;
+  in.battery_percent = 100.0f;
+  in.charge_complete_elapsed_s = 1000.0;
+
+  LedPatternCfg cfg = MakeCfg();  // led_count = 16
+  cfg.charge_complete_dim_scale = 0.0f;
+  cfg.charge_complete_indicator_ids = {3u, 999u};  // 999 is out of range
+  const auto pixels = RenderFrame(in, cfg);
+
+  EXPECT_EQ(CountLit(pixels), 1u) << "an out-of-range id must be dropped, not crash or wrap";
+  EXPECT_NE(pixels[3], colors::kOff);
+}
+
+TEST(LedPatternRender, ChargeCompleteIndicatorCountBeyondLedCountLightsWholeRing)
+{
+  LedInputs in;
+  in.status_fresh = true;
+  in.state = HighLevelState::kIdle;
+  in.is_charging = true;
+  in.battery_valid = true;
+  in.battery_percent = 100.0f;
+  in.charge_complete_elapsed_s = 1000.0;
+
+  LedPatternCfg cfg = MakeCfg();  // led_count = 16
+  cfg.charge_complete_dim_scale = 0.0f;
+  cfg.charge_complete_indicator_count = 999u;  // far more than led_count
+  const auto pixels = RenderFrame(in, cfg);
+
+  EXPECT_EQ(CountLit(pixels), 16u) << "clamped to led_count, not a crash or an out-of-bounds write";
+}
+
 TEST(LedPatternRender, LowBatteryBlinksTheWholeRingBetweenRedAndOff)
 {
   LedInputs in = MakeMowingInputs();

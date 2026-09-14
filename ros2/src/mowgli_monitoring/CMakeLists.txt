@@ -9,7 +9,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -70,13 +70,13 @@ target_include_directories(mowgli_monitoring_core
     $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(mowgli_monitoring_core
-  rclcpp
-  diagnostic_msgs
-  sensor_msgs
-  nav_msgs
-  geometry_msgs
-  mowgli_interfaces
+target_link_libraries(mowgli_monitoring_core
+  ${rclcpp_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 if(MOSQUITTO_FOUND)
@@ -98,13 +98,13 @@ target_link_libraries(diagnostics_node
   mowgli_monitoring_core
 )
 
-ament_target_dependencies(diagnostics_node
-  rclcpp
-  diagnostic_msgs
-  sensor_msgs
-  nav_msgs
-  geometry_msgs
-  mowgli_interfaces
+target_link_libraries(diagnostics_node
+  ${rclcpp_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -119,13 +119,13 @@ target_link_libraries(mqtt_bridge_node
   mowgli_monitoring_core
 )
 
-ament_target_dependencies(mqtt_bridge_node
-  rclcpp
-  diagnostic_msgs
-  sensor_msgs
-  nav_msgs
-  geometry_msgs
-  mowgli_interfaces
+target_link_libraries(mqtt_bridge_node
+  ${rclcpp_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -172,13 +172,13 @@ if(BUILD_TESTING)
     mowgli_monitoring_core
   )
 
-  ament_target_dependencies(test_diagnostics
-    rclcpp
-    diagnostic_msgs
-    sensor_msgs
-    nav_msgs
-    geometry_msgs
-    mowgli_interfaces
+  target_link_libraries(test_diagnostics
+    ${rclcpp_TARGETS}
+    ${diagnostic_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${mowgli_interfaces_TARGETS}
   )
 endif()
 

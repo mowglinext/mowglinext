@@ -1,14 +1,14 @@
-# Mowgli Docker — v3 (ROS2 Kilted)
+# Mowgli Docker — v3 (ROS2 Lyrical)
 
 Docker Compose deployment for the **Mowgli** open-source robot mower.
 v3 is a ground-up rewrite: the ROS1 Noetic stack has been replaced by a
-single `mowgli_ros2` container running **ROS2 Kilted**, Nav2, the
+single `mowgli_ros2` container running **ROS2 Lyrical**, Nav2, the
 `fusion_graph` GTSAM factor-graph localizer, and a full behavior-tree
 coverage planner.
 
 ## What changed from v2
 
-| v2 (ROS1 Noetic) | v3 (ROS2 Kilted) |
+| v2 (ROS1 Noetic) | v3 (ROS2 Lyrical) |
 |---|---|
 | `roscore` | Removed — DDS has no master |
 | `rosserial` | Removed — hardware bridge is inside `mowgli_ros2` |
@@ -386,7 +386,7 @@ sidecar source at `tools/motor/`. This is required by the MowgliNext GUI Drive
 Motor assistant, which launches:
 
 ```bash
-source /opt/ros/kilted/setup.bash
+source /opt/ros/lyrical/setup.bash
 source /ros2_ws/install/setup.bash
 ros2 run mowgli_tools tune_drive_pid --help
 ```
@@ -572,7 +572,7 @@ Check the live fix quality from inside the container:
 
 ```bash
 docker exec mowgli-gps bash -c "
-  source /opt/ros/kilted/setup.bash
+  source /opt/ros/lyrical/setup.bash
   ros2 topic echo /gps/fix --once"
 ```
 
@@ -663,7 +663,7 @@ Confirm the LiDAR is publishing:
 
 ```bash
 docker exec mowgli-ros2 bash -c "
-  source /opt/ros/kilted/setup.bash
+  source /opt/ros/lyrical/setup.bash
   source /ros2_ws/install/setup.bash
   ros2 topic info /scan"
 ```
@@ -676,7 +676,7 @@ Also confirm the TF chain from `base_link` to `lidar_link` is complete:
 
 ```bash
 docker exec mowgli-ros2 bash -c "
-  source /opt/ros/kilted/setup.bash
+  source /opt/ros/lyrical/setup.bash
   source /ros2_ws/install/setup.bash
   ros2 run tf2_tools view_frames"
 ```
@@ -696,7 +696,7 @@ Diagnostics → Fusion Graph):
 
 ```bash
 docker exec mowgli-ros2 bash -c "
-  source /opt/ros/kilted/setup.bash
+  source /opt/ros/lyrical/setup.bash
   source /ros2_ws/install/setup.bash
   ros2 service call /fusion_graph_node/save_graph std_srvs/srv/Trigger"
 ```
@@ -719,7 +719,7 @@ arrives:
 
 ```bash
 docker exec mowgli-ros2 bash -c "
-  source /opt/ros/kilted/setup.bash
+  source /opt/ros/lyrical/setup.bash
   source /ros2_ws/install/setup.bash
   timeout 5 ros2 topic echo /hardware_bridge/status --once"
 ```
@@ -759,13 +759,13 @@ docker exec -it mowgli-ros2 bash
 
 # List all active ROS2 nodes
 docker exec mowgli-ros2 bash -c "
-  source /opt/ros/kilted/setup.bash
+  source /opt/ros/lyrical/setup.bash
   source /ros2_ws/install/setup.bash
   ros2 node list"
 
 # List all active topics
 docker exec mowgli-ros2 bash -c "
-  source /opt/ros/kilted/setup.bash
+  source /opt/ros/lyrical/setup.bash
   source /ros2_ws/install/setup.bash
   ros2 topic list"
 

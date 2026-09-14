@@ -4,17 +4,19 @@
 #
 # Symlinks the monorepo's ROS2 packages into the workspace and resolves
 # dependencies. It intentionally does not build the full workspace by default:
-# optional coverage packages need Fields2Cover and should not block opening the
-# devcontainer.
+# opening the editor should not wait for a full workspace compilation.
 # =============================================================================
 set -euo pipefail
 
 echo "=== MowgliNext: Setting up ROS2 workspace ==="
 
 # Source ROS2
-# shellcheck source=/opt/ros/kilted/setup.bash
+# shellcheck source=/opt/ros/lyrical/setup.bash
 set +u
-source /opt/ros/kilted/setup.bash
+source /opt/ros/lyrical/setup.bash
+if [ -f /opt/lyrical_vendor/local_setup.bash ]; then
+    source /opt/lyrical_vendor/local_setup.bash
+fi
 set -u
 
 cd /ros2_ws
@@ -60,7 +62,7 @@ fi
 # Resolve rosdep dependencies
 # ---------------------------------------------------------------------------
 echo "Resolving rosdep dependencies..."
-ROSDEP_SKIP_KEYS=()
+ROSDEP_SKIP_KEYS=(grid_map_core grid_map_ros grid_map_msgs beluga_ros nav2_smac_planner webots_ros2_driver webots_ros2_control)
 
 # universal_gnss_ros2 normally comes from the vendored submodule linked by
 # sync_workspace_packages.sh. If that submodule or an override checkout is
@@ -73,12 +75,12 @@ rosdep_args=(
     install
     --from-paths "${BUILD_PATHS[@]}"
     --ignore-src
-    --rosdistro kilted
+    --rosdistro lyrical
     -y
 )
 
 if [ "${#ROSDEP_SKIP_KEYS[@]}" -gt 0 ]; then
-    echo "Skipping rosdep keys not linked into this workspace: ${ROSDEP_SKIP_KEYS[*]}"
+    echo "Skipping rosdep keys provided externally or by optional images: ${ROSDEP_SKIP_KEYS[*]}"
     rosdep_args+=(--skip-keys "${ROSDEP_SKIP_KEYS[*]}")
 fi
 
@@ -116,12 +118,13 @@ echo ""
 echo "=== MowgliNext workspace ready ==="
 echo ""
 echo "Quick start (from ros2/ directory):"
-echo "  make sim          # Launch headless simulation (Foxglove ws://localhost:8765)"
-echo "  make e2e-test     # Run E2E validation (sim must be running)"
 echo "  make build-dev    # Build the focused dev package set"
 echo "  make build-full   # Build the full linked workspace"
 echo "  make format       # Format C++ code"
 echo "  make help         # Show all targets"
+echo ""
+echo "Webots simulation (from the host, at the repository root; Linux amd64 image):"
+echo "  docker compose -f docker/docker-compose.simulation.yaml up --build dev-sim"
 echo ""
 echo "GUI work (from gui/ directory):"
 echo "  go build -o openmower-gui          # Build the Go backend"
