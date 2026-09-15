@@ -100,7 +100,8 @@ controller_server:
     min_theta_velocity_threshold: 0.0
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker"]
+    goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker",
+                           "coverage_axis_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
     path_handler_plugins: ["PathHandler"]
     PathHandler:
@@ -196,6 +197,45 @@ controller_server:
       xy_goal_tolerance: 0.50
       yaw_goal_tolerance: 3.14   # ≈π → ignore final heading (test pins ≤ 3.1416)
       plan_topic: "/controller_server/FollowCoveragePath/global_plan"
+
+    # Stock alternative to coverage_goal_checker, NOT selected by default.
+    #
+    # ROS 2 Lyrical's nav2_controller::AxisGoalChecker is the first upstream
+    # checker that can survive a closed headland ring, because Lyrical passes the
+    # TRANSFORMED PLAN into isGoalReached(): `path_length_tolerance` refuses to
+    # accept the goal while more than that much plan is left, which is the same
+    # "you have not driven the ring yet" guard PathProgressGoalChecker implements
+    # by counting poses — with no custom plugin and no plan topic to keep in sync.
+    # It also splits the XY tolerance into an ALONG-path and a CROSS-track
+    # component, which matches how FTC actually parks: short of the last pose
+    # (along) but tightly on the line (cross).
+    #
+    # Two reasons it is not the default yet, both to be settled by a field test:
+    #   1. The length it measures is that of the LOCAL plan the FeasiblePathHandler
+    #      hands over, bounded by `prune_distance` (2.0 m) — so a tolerance
+    #      anywhere near 2.0 m would unlock immediately. 1.0 m = "the last metre".
+    #   2. That handler finds the closest pose by searching forward up to
+    #      `max_robot_pose_search_dist` (10.0 m). On a headland ring SHORTER than
+    #      that, the pose nearest the start is also the ring's END, which is the
+    #      exact snap that made a nearest-point start skip 46-99 % of closed rings
+    #      in 2026-08-24. FTC is immune (it tracks the full plan itself); a goal
+    #      checker fed the pruned plan is not.
+    #
+    # Select it with `coverage_goal_checker_id: "coverage_axis_goal_checker"` in
+    # mowgli_robot.yaml. See docs/NAV2_LYRICAL_CONTROLLER_REVIEW.md.
+    coverage_axis_goal_checker:
+      plugin: "nav2_controller::AxisGoalChecker"
+      # Along-path: FTC stops max_goal_distance_error (0.50 m) short of the final
+      # pose by design, so anything tighter can never be reached.
+      along_path_tolerance: 0.50
+      # Cross-track: FTC tracks coverage to 8-16 mm; 0.25 m is loose enough to
+      # accept a legitimate arrival and tight enough to reject "passing nearby".
+      cross_track_tolerance: 0.25
+      # The last metre of the LOCAL (pruned) plan — see note 1 above.
+      path_length_tolerance: 1.0
+      # Overshooting the last pose still completes the segment: for coverage the
+      # ground is cut either way, and refusing the goal would re-mow the area.
+      is_overshoot_valid: true
 
     # FollowPath (transit / dock approach / home / undock recovery) —
     # MPPI. FTC was the wrong tool for transit: it has a rigid state
@@ -324,6 +364,49 @@ controller_server:
         rotate_to_heading_angular_vel: 0.75
         max_angular_accel: 2.5
         allow_reversing: false
+
+        # --- Dynamic Window Pure Pursuit (DWPP, ROS 2 Lyrical / Nav2 1.5.1) ---
+        # OPT-IN, OFF by default. Instead of applying the pure-pursuit curvature
+        # to the regulated linear velocity directly, DWPP searches the velocity
+        # window reachable within one control period under the acceleration
+        # limits below and picks the (v, w) pair that tracks the path most
+        # closely. It slows into sharp turns on its own, without the manual
+        # curvature tuning above.
+        #
+        # WHY IT IS HERE: the slow, metre-scale S-weave on transits (field
+        # 2026-07-21) is the pure-pursuit limit cycle — RPP overshoots each
+        # carrot because the firmware yaw loop lags its command, then corrects.
+        # It was damped by LENGTHENING the lookahead (lookahead_time 1.5 -> 2.0,
+        # min_lookahead_dist 0.30 -> 0.45), which costs cornering accuracy near
+        # the dock. DWPP attacks the same limit cycle at its source, by refusing
+        # to command a (v, w) the chassis cannot actually reach this period.
+        #
+        # NOT for the coverage lane: DWPP is still a lookahead-carrot method, so
+        # it cuts corners on the R = 0.20 m turn-around arcs of an F2C route the
+        # way any pure pursuit does. Coverage stays on FTCController
+        # (CLAUDE.md Invariant 8) — this knob only ever touches transit.
+        #
+        # Flip it with `transit_dynamic_window` in mowgli_robot.yaml (GUI:
+        # Settings -> Navigation); the launch file injects it here.
+        use_dynamic_window: false
+        # Forward-only window: allow_reversing is false above, and a transit that
+        # reverses would drag the blade deck backwards over ground the robot
+        # cannot see. 0.0 bounds the search to forward motion.
+        min_linear_vel: 0.0
+        # Yaw authority actually available on this chassis: the RotationShim
+        # pivots at 0.75 rad/s and FTC clamps at max_cmd_vel_ang 0.8. Anything
+        # larger would let DWPP pick a rate the firmware yaw loop cannot hold.
+        max_angular_vel: 0.8
+        min_angular_vel: -0.8
+        # 0 -> transit_speed in ~0.6 s. Deliberately gentle: this drive has a
+        # ~PWM 40 wheel deadband, so a window that reaches for a large step ends
+        # up commanding velocities the wheels do not produce, which is what makes
+        # the open-loop ramp elsewhere in this file necessary.
+        max_linear_accel: 0.5
+        max_linear_decel: -0.5
+        # Mirror of max_angular_accel above (that key is shared with the
+        # rotate-to-heading ramp). Nav2 expects the decel limits NEGATIVE.
+        max_angular_decel: -2.5
 
       use_interpolation: true
 

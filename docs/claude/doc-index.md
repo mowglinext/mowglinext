@@ -5,6 +5,13 @@
 > authoritative and which is a historical record. Excludes `ros2/src/opennav_coverage/**` and
 > `ros2/src/external/**` (vendored submodules) and `node_modules/`.
 
+## Documents added after index generation
+
+- [Nav2 Lyrical controller review](../NAV2_LYRICAL_CONTROLLER_REVIEW.md) — **current**, contributor:
+  why FTC stays the coverage controller after the Lyrical migration, what Nav2 1.5.1 actually adds
+  (DWPP, TrackingFeedback, AxisGoalChecker, custom_inscribed_radius), what was evaluated and
+  rejected, and the upstream Fields2Cover state (v3.0 branch frozen).
+
 ## Update-system documents added after index generation
 
 - [Software updates and recovery](../UPDATES.md) — **current**, operator/contributor: host updater, installer, publication and platform contract.

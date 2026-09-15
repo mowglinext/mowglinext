@@ -601,7 +601,7 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   Nav2FollowPath::Goal goal;
   goal.path = swaths_[swath_idx_];
   goal.controller_id = "FollowCoveragePath";
-  goal.goal_checker_id = "coverage_goal_checker";
+  goal.goal_checker_id = ctx->coverage_goal_checker_id;
 
   // Publish the segment on the coverage controller's global_plan topic BEFORE
   // dispatching the goal, so the PathProgressGoalChecker has the plan in hand
@@ -612,7 +612,26 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   }
 
   follow_handle_.reset();
-  follow_future_ = follow_client_->async_send_goal(goal);
+
+  // Collect the controller's own path-tracking error for this segment. The slot
+  // is renewed per goal so a late callback from the previous segment cannot fold
+  // its error into this one's summary.
+  tracking_slot_ = std::make_shared<TrackingFeedbackSlot>();
+  rclcpp_action::Client<Nav2FollowPath>::SendGoalOptions follow_opts;
+  follow_opts.feedback_callback =
+      [slot = tracking_slot_](FollowGoalHandle::SharedPtr,
+                              const std::shared_ptr<const Nav2FollowPath::Feedback> fb)
+  {
+    if (!slot || !fb)
+    {
+      return;
+    }
+    std::lock_guard<std::mutex> lk(slot->mutex);
+    slot->summary.Add({static_cast<double>(fb->tracking_feedback.position_tracking_error),
+                       static_cast<double>(fb->tracking_feedback.heading_tracking_error),
+                       fb->tracking_feedback.current_path_index});
+  };
+  follow_future_ = follow_client_->async_send_goal(goal, follow_opts);
   swath_goal_sent_ = true;
   follow_goal_ever_sent_ = true;
 
@@ -622,6 +641,40 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
               swaths_.size(),
               goal.path.poses.size());
   return true;
+}
+
+void FollowStrip::logSegmentTracking(const std::shared_ptr<BTContext>& ctx, const char* outcome)
+{
+  if (!tracking_slot_ || !ctx)
+  {
+    return;
+  }
+
+  mowgli_interfaces::path_tracking::Summary summary;
+  {
+    std::lock_guard<std::mutex> lk(tracking_slot_->mutex);
+    summary = tracking_slot_->summary;
+    tracking_slot_->summary.Reset();
+  }
+
+  if (!summary.HasSamples())
+  {
+    // No feedback at all: an older controller_server, or a goal that ended
+    // before its first control tick. Silence beats a line of zeros.
+    return;
+  }
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "FollowStrip: segment %zu/%zu %s — tracking max %.3f m, mean %.3f m, rms %.3f m "
+              "over %zu samples (area %u)",
+              swath_idx_ + 1,
+              swaths_.size(),
+              outcome,
+              summary.MaxAbsPositionErrorM(),
+              summary.MeanAbsPositionErrorM(),
+              summary.RmsPositionErrorM(),
+              summary.Count(),
+              area_idx_);
 }
 
 bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
@@ -1054,6 +1107,7 @@ BT::NodeStatus FollowStrip::onRunning()
                 swath_idx_ + 1,
                 swaths_.size(),
                 area_idx_);
+    logSegmentTracking(ctx, "completed");
     follow_handle_.reset();
     return advance();
   }
@@ -1061,6 +1115,7 @@ BT::NodeStatus FollowStrip::onRunning()
   if (status == action_msgs::msg::GoalStatus::STATUS_ABORTED ||
       status == action_msgs::msg::GoalStatus::STATUS_CANCELED)
   {
+    logSegmentTracking(ctx, "ended early");
     // Progress WITHIN the current unit (resume_start_idx_ = trim offset,
     // path_progress_idx_ = furthest pose reached in the trimmed unit) as a
     // fraction of that unit's FULL length — so "near the end" is judged per unit,
