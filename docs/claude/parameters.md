@@ -111,6 +111,9 @@ The five `wheel_pid_*` defaults are pinned in lockstep across template ↔ `mowg
 | `mowing_enabled` (L308) | `true` | **hardware_bridge only** `mowgli.launch.py:238` (dry-run blade inhibit; guarded by `test_launch_injection.py`) | Mowing | launch |
 | `mowing_speed` (L309) | 0.20 | BT `full_system.launch.py:245` (→ `SetNavMode`); `FollowCoveragePath.speed_fast` `navigation.launch.py:755`; also raises FTC's `max_cmd_vel_speed` clamp L764 | Mowing | dynamic (BT sets it per nav mode, `navigation_nodes.cpp:962`) |
 | `transit_speed` (L310) | 0.20 | BT `full_system.launch.py:244`; `FollowPath.primary_controller.max_linear_vel` `navigation.launch.py:745` | Mowing | dynamic (`navigation_nodes.cpp:961`) |
+| `transit_dynamic_window` | `false` | `FollowPath.primary_controller.use_dynamic_window` `navigation.launch.py` (DWPP, Nav2 1.5.1). Transit only — coverage stays FTC. OFF until a supervised field test; guarded by `test_nav2_params.py` | Mowing | launch |
+| `coverage_goal_checker_id` | `"coverage_goal_checker"` | `behavior_tree_node` param `full_system.launch.py` → `BTContext` → `FollowStrip` goal. Alternative: `"coverage_axis_goal_checker"` (stock `nav2_controller::AxisGoalChecker`, declared in `nav2_params_base.yaml`) | Mowing | launch (read once at BT startup) |
+| `local_inflation_inscribed_radius` | -1.0 (derive from footprint) | `local_costmap.inflation_layer.custom_inscribed_radius` `navigation.launch.py`; when >= 0 it also replaces the chassis-derived `inflation_radius` floor | Obstacles | launch |
 | `undock_distance` (L432) | 1.5 | BT BackUp `full_system.launch.py:232`; dock-calib `:492` | Docking | launch |
 | `undock_speed` (L433) | 0.16 | BT BackUp `full_system.launch.py:231`; dock-calib `:493` | Docking | launch |
 | `mow_angle_deg` (L338) | -1.0 (auto) | BT `full_system.launch.py:250` → `PlanCoverage` goal | Mowing | launch |

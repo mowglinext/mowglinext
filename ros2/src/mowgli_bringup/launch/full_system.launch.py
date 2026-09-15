@@ -256,6 +256,15 @@ def generate_launch_description() -> LaunchDescription:
             # off the BT blackboard into the plan_coverage action goal.
             {"mow_angle_deg": float(robot_params.get("mow_angle_deg", -1.0))},
             {"mow_cross_hatch": bool(robot_params.get("mow_cross_hatch", False))},
+            # Goal-checker instance the coverage FollowPath goals carry. Default
+            # is mowgli_nav2_plugins' PathProgressGoalChecker; Lyrical's stock
+            # AxisGoalChecker is declared alongside it in nav2_params_base.yaml
+            # as "coverage_axis_goal_checker" for a field comparison.
+            {
+                "coverage_goal_checker_id": str(
+                    robot_params.get("coverage_goal_checker_id", "coverage_goal_checker")
+                )
+            },
             # Area-recording boundary resolution. Both were hardcoded in
             # main_tree.xml (0.2 m Douglas-Peucker tolerance, 2 Hz sampling),
             # which cost a field recording all but 24 vertices of a 38 m

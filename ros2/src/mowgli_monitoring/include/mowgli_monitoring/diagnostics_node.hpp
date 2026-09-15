@@ -29,6 +29,8 @@
  *   - Odometry          (freshness of /wheel_odom)
  *   - EKF Map           (/odometry/filtered_map: rate, position, orientation, z-drift, flat check)
  *   - Motors            (ESC temperatures from /status)
+ *   - Path Tracking     (/controller_server/tracking_feedback: lateral error while a
+ *                        FollowPath goal runs — mowing-quality measure, ROS 2 Lyrical)
  */
 
 #ifndef MOWGLI_MONITORING__DIAGNOSTICS_NODE_HPP_
@@ -44,6 +46,8 @@
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_interfaces/path_tracking_stats.hpp"
+#include "nav2_msgs/msg/tracking_feedback.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -100,6 +104,11 @@ struct DiagnosticsState
   std::optional<sensor_msgs::msg::NavSatFix> last_gps{};
   rclcpp::Time last_gps_time{0, 0, RCL_ROS_TIME};
   bool gps_ever_received{false};
+
+  // Path tracking (controller_server, any controller — FTC or RPP)
+  mowgli_interfaces::path_tracking::Summary path_tracking{};
+  rclcpp::Time last_tracking_time{0, 0, RCL_ROS_TIME};
+  bool tracking_ever_received{false};
 };
 
 /**
@@ -155,6 +164,10 @@ std::string level_name(uint8_t level);
  * motor_temp_error_c   double  80.0   °C — ESC/motor ERROR temperature
  * lidar_enabled        bool    false     — gate the LiDAR /scan health check; when
  *                                          false, report OK "LiDAR disabled"
+ * path_tracking_warn_m  double 0.10   m  — max |lateral error| above which tracking WARNs
+ * path_tracking_error_m double 0.25   m  — max |lateral error| above which tracking ERRORs
+ * path_tracking_idle_sec double 2.0   s  — silence above which no FollowPath goal is
+ *                                          assumed to be running (reports OK "idle")
  */
 class DiagnosticsNode : public rclcpp::Node
 {
@@ -172,6 +185,7 @@ public:
   diagnostic_msgs::msg::DiagnosticStatus check_odometry(const rclcpp::Time& now) const;
   diagnostic_msgs::msg::DiagnosticStatus check_fusion(const rclcpp::Time& now) const;
   diagnostic_msgs::msg::DiagnosticStatus check_motors() const;
+  diagnostic_msgs::msg::DiagnosticStatus check_path_tracking(const rclcpp::Time& now) const;
 
   /// Read-only access to the internal state snapshot (for tests).
   const DiagnosticsState& state() const
@@ -197,6 +211,7 @@ private:
   void on_odom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
   void on_fusion_odom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
   void on_gps(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
+  void on_tracking_feedback(nav2_msgs::msg::TrackingFeedback::ConstSharedPtr msg);
 
   // ---- Timer callback -------------------------------------------------------
 
@@ -222,6 +237,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_fusion_odom_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps_;
+  rclcpp::Subscription<nav2_msgs::msg::TrackingFeedback>::SharedPtr sub_tracking_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -235,6 +251,9 @@ private:
   double motor_temp_warn_c_{60.0};
   double motor_temp_error_c_{80.0};
   bool lidar_enabled_{false};
+  double path_tracking_warn_m_{0.10};
+  double path_tracking_error_m_{0.25};
+  double path_tracking_idle_sec_{2.0};
 
   // ---- State snapshot -------------------------------------------------------
 
