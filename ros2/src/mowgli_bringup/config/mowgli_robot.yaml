@@ -232,12 +232,28 @@ mowgli:
     loc_sigma_resume_m: 2.0
     loc_sigma_backstop_persist_s: 10.0
     bt_debug_logging: false
-    # idle_nav2_suspend (default false): when true, the BT PAUSEs the Nav2
-    # lifecycle stack while parked on the dock so the costmaps stop looping and
-    # idle CPU/thermal load drops sharply. Nav2 is RESUMEd (collision_monitor
-    # back up) before any motion via the root Nav2ResumeGuard + Nav2ReadyPoll.
-    # Opt-in per site.
-    idle_nav2_suspend: false
+    # idle_nav2_suspend (default TRUE since 2026-09-16): when true, the BT
+    # PAUSEs the Nav2 lifecycle stack while parked on the dock so the costmaps
+    # stop looping and idle CPU/thermal load drops sharply. Nav2 is RESUMEd
+    # (collision_monitor back up) before any motion via the root
+    # Nav2ResumeGuard + Nav2ReadyPoll, and MowingSequence's Nav2ReadyPoll
+    # blocks motion until lifecycle_manager reports the stack active again.
+    #
+    # Why it is now on by default: measured on a docked Orange Pi 5B
+    # (2026-09-16) the mowgli-ros2 container burned 86 % of one core doing
+    # NOTHING, and ~40 % of a core of that was the idle Nav2 servers
+    # (controller_server 6.1 %, planner_server 3.6 %, bt_navigator 2.8 %,
+    # collision_monitor 2.9 %, behavior_server 2.7 %, opennav_docking 2.7 %,
+    # lifecycle_manager 3.8 %) re-looping costmaps at 2.2 Hz while parked.
+    # That is pure thermal/battery cost on a robot that is not moving.
+    #
+    # OPERATOR TRADE-OFF: the first Play press after idling on the dock waits
+    # for the Nav2 stack to come back up before the robot moves — measured
+    # 10-26 s on this hardware. Nothing is lost (the tree simply holds in
+    # Nav2ReadyPoll), but the robot does not react instantly. Set this to
+    # false in the installed /ros2_ws/config/mowgli_robot.yaml if that wait is
+    # unacceptable at your site.
+    idle_nav2_suspend: true
     # IMU calibration (consumed by hardware_bridge_node — auto-triggered on dock)
     imu_cal_samples: 200
     imu_cal_persist_path: /ros2_ws/maps/imu_calibration.txt

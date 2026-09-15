@@ -105,7 +105,7 @@ The five `wheel_pid_*` defaults are pinned in lockstep across template ↔ `mowg
 |---|---|---|---|---|
 | `tick_rate` (L93) | 10.0 | `full_system.launch.py:226` | no | launch |
 | `bt_debug_logging` (L164) | `false` | `full_system.launch.py:227` | no | launch |
-| `idle_nav2_suspend` (L170) | `false` | `full_system.launch.py:238` (pause Nav2 lifecycle on the dock) | no | launch |
+| `idle_nav2_suspend` (L256) | `true` | `full_system.launch.py:248` (pause Nav2 lifecycle on the dock) | no | launch |
 | `area_simplification_tolerance` (L115) | 0.05 | `full_system.launch.py:262` (Douglas–Peucker on `RecordArea`) | no | launch |
 | `area_record_rate_hz` (L129) | 10.0 | `full_system.launch.py:265` | no | launch |
 | `mowing_enabled` (L308) | `true` | **hardware_bridge only** `mowgli.launch.py:238` (dry-run blade inhibit; guarded by `test_launch_injection.py`) | Mowing | launch |

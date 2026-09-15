@@ -1003,6 +1003,12 @@
           "minimum": 0.0,
           "maximum": 10.0,
           "description": "Radius (m) around the dock pose, in every direction, exempt from Transit Boundary Margin above -- so the dock approach carries no bias at all, not just \"never blocked\". Only takes effect once a dock pose is set; widen it if your dock sees a lot of GNSS drift (e.g. under a canopy)."
+        },
+        "idle_nav2_suspend": {
+          "type": "boolean",
+          "title": "Suspend navigation on the dock",
+          "default": true,
+          "description": "Suspend the Nav2 navigation stack while the robot is parked on the dock, to cut idle CPU and heat (the idle servers cost roughly 40% of one CPU core doing nothing). Starting a mow waits for navigation to come back, measured 10-26 s. Turn this off if you want the robot to react to Play immediately. Restart ROS2 to apply."
         }
       }
     }

@@ -388,6 +388,16 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  # SetMowerEnabled send throttle (mower_enable_throttle.hpp) — pure header,
+  # no ROS. Drives a fake clock; no sleeps.
+  ament_add_gtest(test_mower_enable_throttle
+    test/test_mower_enable_throttle.cpp
+  )
+  target_include_directories(test_mower_enable_throttle PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   ament_add_gtest(test_coverage_transit_gap
     test/test_coverage_transit_gap.cpp
   )

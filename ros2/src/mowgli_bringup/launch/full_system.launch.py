@@ -239,10 +239,13 @@ def generate_launch_description() -> LaunchDescription:
             {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
             # idle_nav2_suspend: PAUSE the Nav2 lifecycle stack while parked on
             # the dock to cut idle CPU/thermal load (costmaps stop looping).
-            # Default off — a deliberate per-site opt-in. RESUME is guaranteed
-            # before motion by the root Nav2ResumeGuard + Nav2ReadyPoll.
+            # Default ON since 2026-09-16 — the idle Nav2 servers measured
+            # ~40 % of a core on a docked Orange Pi 5B. RESUME is guaranteed
+            # before motion by the root Nav2ResumeGuard + Nav2ReadyPoll, at the
+            # cost of a 10-26 s wait on the first Play press after idling.
+            # This fallback must track the template default (Invariant 15).
             {"idle_nav2_suspend":
-                bool(robot_params.get("idle_nav2_suspend", False))},
+                bool(robot_params.get("idle_nav2_suspend", True))},
             # transit_speed / mowing_speed flow into SetNavMode, which sets
             # them on the live controllers (FollowPath.primary_controller.max_linear_vel for
             # the RPP transit controller, FollowCoveragePath.speed_fast for the
