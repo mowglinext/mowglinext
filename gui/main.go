@@ -8,9 +8,11 @@
 package main
 
 import (
+	"log"
+
+	"github.com/joho/godotenv"
 	"github.com/mowglinext/mowglinext/pkg/api"
 	"github.com/mowglinext/mowglinext/pkg/providers"
-	"github.com/joho/godotenv"
 )
 
 func main() {
@@ -36,5 +38,11 @@ func main() {
 	}
 	irriSenseProvider := providers.NewIrriSenseProvider(dbProvider)
 	providers.NewSchedulerProvider(rosProvider, dbProvider, irriSenseProvider)
-	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider, irriSenseProvider)
+	notificationProvider := providers.NewNotificationProvider(dbProvider)
+	if ros, ok := rosProvider.(*providers.RosProvider); ok {
+		ros.AttachNotifier(notificationProvider)
+	} else {
+		log.Printf("notifications: ROS provider %T cannot feed status events", rosProvider)
+	}
+	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider, irriSenseProvider, notificationProvider)
 }

@@ -3128,6 +3128,107 @@
   "asyncButton": {
     "errorOccurred": "Une erreur est survenue"
   },
+  "settingsNotifications": {
+    "title_section": "Notifications push",
+    "description": "Recevez un message sur votre téléphone quand le robot démarre ou termine une zone, se retrouve bloqué, déclenche l'arrêt d'urgence ou rentre pour cause de pluie ou de batterie.",
+    "channel": "Canal d'envoi",
+    "channelLabel": "Canal",
+    "channelTooltip": "Telegram passe par un bot créé avec @BotFather. Pushover est l'appli push payante (achat unique). ntfy est gratuit, sans compte. Webhook envoie un POST JSON à n'importe quelle URL (Home Assistant, Node-RED, n8n).",
+    "channelPushover": "Pushover",
+    "pushoverHelp": "Créez une application sur pushover.net/apps pour obtenir son jeton API ; votre clé utilisateur est sur le tableau de bord Pushover.",
+    "pushoverAppToken": "Jeton API de l'application",
+    "pushoverAppTokenTooltip": "Le jeton de l'application Pushover que vous avez créée. Stocké sur le robot et jamais réaffiché.",
+    "pushoverUserKey": "Clé utilisateur",
+    "pushoverUserKeyTooltip": "Votre clé utilisateur Pushover (ou une clé de groupe).",
+    "channelNtfy": "ntfy (appli, sans compte)",
+    "channelTelegram": "Bot Telegram",
+    "channelWebhook": "Webhook (POST JSON)",
+    "title": "Nom de l'expéditeur",
+    "titleTooltip": "Affiché comme titre de la notification, par ex. le nom de votre robot.",
+    "language": "Langue des messages",
+    "languageTooltip": "Langue du texte des notifications.",
+    "ntfyHelp": "Installez l'appli ntfy, abonnez-vous à un nom de sujet de votre choix et saisissez le même sujet ici. Quiconque connaît le sujet peut le lire : choisissez un nom difficile à deviner.",
+    "ntfyServer": "Serveur ntfy",
+    "ntfyServerTooltip": "https://ntfy.sh ou votre instance auto-hébergée.",
+    "ntfyTopic": "Sujet",
+    "ntfyTopicTooltip": "Lettres, chiffres, '-' et '_' uniquement. Doit correspondre au sujet auquel vous êtes abonné dans l'appli.",
+    "ntfyToken": "Jeton d'accès (optionnel)",
+    "ntfyTokenTooltip": "Seulement pour un sujet protégé ou un serveur auto-hébergé avec authentification. Stocké sur le robot et jamais réaffiché.",
+    "telegramHelp": "Créez un bot avec @BotFather pour obtenir son jeton, envoyez un message au bot, puis lisez votre identifiant de discussion sur https://api.telegram.org/bot<jeton>/getUpdates.",
+    "telegramBotToken": "Jeton du bot",
+    "telegramBotTokenTooltip": "Le jeton fourni par @BotFather. Stocké sur le robot et jamais réaffiché.",
+    "telegramChatId": "Identifiant de discussion",
+    "telegramChatIdTooltip": "Votre identifiant utilisateur ou de groupe : un nombre entier, négatif pour un groupe.",
+    "webhookHelp": "Chaque événement est envoyé en POST JSON : title, body, kind, message, priority, tags, params, at.",
+    "webhookUrl": "URL du webhook",
+    "webhookUrlTooltip": "URL http(s) absolue acceptant un POST JSON.",
+    "secretPlaceholder": "Collez une nouvelle valeur…",
+    "secretApply": "Définir",
+    "secretClear": "Effacer",
+    "secretSet": "Stocké ({{masked}})",
+    "secretNotSet": "Non stocké",
+    "secretPending": "Sera stocké à l'enregistrement",
+    "secretCleared": "Sera supprimé à l'enregistrement",
+    "sendTest": "Envoyer une notification de test",
+    "testOk": "Notification de test envoyée",
+    "testFailed": "Échec de la notification de test",
+    "events": "Événements",
+    "eventsDescription": "Choisissez ce qui mérite une alerte. Les répétitions d'un même événement en moins d'une minute sont ignorées, et une attente GPS n'est signalée qu'après deux minutes.",
+    "event": {
+      "mowStarted": {
+        "label": "Tonte démarrée",
+        "description": "Le robot quitte la station pour tondre."
+      },
+      "zoneStarted": {
+        "label": "Zone démarrée",
+        "description": "Une nouvelle zone commence (fusionné avec « zone terminée » si les deux sont actifs)."
+      },
+      "zoneFinished": {
+        "label": "Zone terminée",
+        "description": "Une zone est finie, avec sa couverture."
+      },
+      "mowComplete": {
+        "label": "Tonte terminée",
+        "description": "Toutes les zones sont faites, plus le retour à la station."
+      },
+      "mowStopped": {
+        "label": "Tonte arrêtée",
+        "description": "La tonte s'est arrêtée pour une raison non couverte ci-dessus, y compris un arrêt manuel."
+      },
+      "blocked": {
+        "label": "Bloqué / coincé",
+        "description": "Roues qui creusent, échec d'accostage ou de navigation : le robot a besoin de vous."
+      },
+      "emergency": {
+        "label": "Arrêt d'urgence",
+        "description": "Le verrou d'urgence du firmware s'est déclenché."
+      },
+      "battery": {
+        "label": "Batterie",
+        "description": "Retour à la station sur batterie faible, et reprise une fois chargé."
+      },
+      "rain": {
+        "label": "Pluie",
+        "description": "Pluie détectée, reprise après la pluie, délai d'attente dépassé."
+      },
+      "waitingForRtk": {
+        "label": "En attente de GPS",
+        "description": "Pas de fix RTK depuis plus de deux minutes, et son retour."
+      }
+    },
+    "status": "État des envois",
+    "statusUnknown": "Pas encore d'état",
+    "stateNotConfigured": "Canal non configuré",
+    "stateDisabled": "Configuré, notifications désactivées",
+    "stateArmed": "Actif",
+    "counts": "Envoyées : {{sent}} · Échouées : {{failed}}",
+    "lastSent": "Dernier envoi {{when}} : {{message}}",
+    "lastError": "Dernière erreur : {{error}}",
+    "refresh": "Actualiser",
+    "saved": "Paramètres de notification enregistrés",
+    "saveFailed": "Échec de l'enregistrement des paramètres de notification",
+    "loadFailed": "Échec du chargement des paramètres de notification"
+  },
   "settingsIrriSense": {
     "title": "Humidité du sol IrriSense Cloud",
     "description": "Lit le déficit hydrique des zones de votre service d'arrosage pour que le planificateur ne lance pas de tonte sur herbe mouillée.",
@@ -3319,6 +3420,7 @@
       "label": "Pluie",
       "description": "Comportement de détection de pluie et délai"
     },
+    "notifications": {"label": "Notifications", "description": "Messages push sur votre téléphone : début/fin de zone, blocage, urgence, pluie, batterie"},
     "irrisense": {
       "label": "IrriSense",
       "description": "Humidité du sol depuis votre jardin IrriSense Cloud : suspend les tontes planifiées sur herbe mouillée"

@@ -3132,6 +3132,107 @@
   "asyncButton": {
     "errorOccurred": "An error occured"
   },
+  "settingsNotifications": {
+    "title_section": "Push notifications",
+    "description": "Get a message on your phone when the robot starts or finishes a zone, gets stuck, hits an emergency stop or heads home for rain or battery.",
+    "channel": "Delivery channel",
+    "channelLabel": "Channel",
+    "channelTooltip": "Telegram uses a bot you create with @BotFather. Pushover is the paid push app (one-off purchase). ntfy is free with no account. Webhook POSTs JSON to any URL (Home Assistant, Node-RED, n8n).",
+    "channelPushover": "Pushover",
+    "pushoverHelp": "Create an application at pushover.net/apps to get its API token; your user key is on the Pushover dashboard.",
+    "pushoverAppToken": "Application API token",
+    "pushoverAppTokenTooltip": "The token of the Pushover application you created. Stored on the robot and never shown again.",
+    "pushoverUserKey": "User key",
+    "pushoverUserKeyTooltip": "Your Pushover user key (or a group key).",
+    "channelNtfy": "ntfy (app, no account)",
+    "channelTelegram": "Telegram bot",
+    "channelWebhook": "Webhook (JSON POST)",
+    "title": "Sender name",
+    "titleTooltip": "Shown as the notification title, e.g. your robot's name.",
+    "language": "Message language",
+    "languageTooltip": "Language of the notification text.",
+    "ntfyHelp": "Install the ntfy app, subscribe to a topic name of your choice, and enter the same topic here. Anyone who knows the topic can read it, so pick something hard to guess.",
+    "ntfyServer": "ntfy server",
+    "ntfyServerTooltip": "https://ntfy.sh or your self-hosted instance.",
+    "ntfyTopic": "Topic",
+    "ntfyTopicTooltip": "Letters, digits, '-' and '_' only. Must match the topic you subscribed to in the app.",
+    "ntfyToken": "Access token (optional)",
+    "ntfyTokenTooltip": "Only for protected topics or a self-hosted server with authentication. Stored on the robot and never shown again.",
+    "telegramHelp": "Create a bot with @BotFather to get its token, send the bot a message, then read your chat id from https://api.telegram.org/bot<token>/getUpdates.",
+    "telegramBotToken": "Bot token",
+    "telegramBotTokenTooltip": "The token @BotFather gave you. Stored on the robot and never shown again.",
+    "telegramChatId": "Chat id",
+    "telegramChatIdTooltip": "Your user or group chat id: a whole number, negative for groups.",
+    "webhookHelp": "Each event is POSTed as JSON: title, body, kind, message, priority, tags, params, at.",
+    "webhookUrl": "Webhook URL",
+    "webhookUrlTooltip": "Absolute http(s) URL that accepts a JSON POST.",
+    "secretPlaceholder": "Paste a new value…",
+    "secretApply": "Set",
+    "secretClear": "Clear",
+    "secretSet": "Stored ({{masked}})",
+    "secretNotSet": "Not stored",
+    "secretPending": "Will be stored on save",
+    "secretCleared": "Will be removed on save",
+    "sendTest": "Send test notification",
+    "testOk": "Test notification sent",
+    "testFailed": "Test notification failed",
+    "events": "Events",
+    "eventsDescription": "Choose what is worth a buzz. Repeats of the same event within a minute are dropped, and a GPS wait is only reported after two minutes.",
+    "event": {
+      "mowStarted": {
+        "label": "Mowing started",
+        "description": "The robot leaves the dock for a mow."
+      },
+      "zoneStarted": {
+        "label": "Zone started",
+        "description": "A new zone begins (merged with 'zone finished' when both are on)."
+      },
+      "zoneFinished": {
+        "label": "Zone finished",
+        "description": "A zone is done, with its coverage."
+      },
+      "mowComplete": {
+        "label": "Mowing complete",
+        "description": "All zones done, plus the return to the dock."
+      },
+      "mowStopped": {
+        "label": "Mowing stopped",
+        "description": "The mow ended for any reason not covered above, including a manual stop."
+      },
+      "blocked": {
+        "label": "Stuck / blocked",
+        "description": "Dig obstruction, docking or navigation failure: the robot needs you."
+      },
+      "emergency": {
+        "label": "Emergency stop",
+        "description": "The firmware emergency latch tripped."
+      },
+      "battery": {
+        "label": "Battery",
+        "description": "Low battery return to the dock, and the resume once charged."
+      },
+      "rain": {
+        "label": "Rain",
+        "description": "Rain detected, resume after rain, rain wait timeout."
+      },
+      "waitingForRtk": {
+        "label": "Waiting for GPS",
+        "description": "No RTK fix for more than two minutes, and its recovery."
+      }
+    },
+    "status": "Delivery status",
+    "statusUnknown": "No status yet",
+    "stateNotConfigured": "Channel not configured",
+    "stateDisabled": "Configured, notifications off",
+    "stateArmed": "Active",
+    "counts": "Sent: {{sent}} · Failed: {{failed}}",
+    "lastSent": "Last sent {{when}}: {{message}}",
+    "lastError": "Last error: {{error}}",
+    "refresh": "Refresh",
+    "saved": "Notification settings saved",
+    "saveFailed": "Failed to save notification settings",
+    "loadFailed": "Failed to load notification settings"
+  },
   "settingsIrriSense": {
     "title": "IrriSense Cloud soil moisture",
     "description": "Read your irrigation service's zone deficits so the scheduler does not start a mow on wet grass.",
@@ -3323,6 +3424,7 @@
       "label": "Rain",
       "description": "Rain detection behavior and delay"
     },
+    "notifications": {"label": "Notifications", "description": "Push messages to your phone: zone start/finish, stuck, emergency, rain, battery"},
     "irrisense": {
       "label": "IrriSense",
       "description": "Soil moisture from your IrriSense Cloud garden: skip scheduled mows on wet grass"

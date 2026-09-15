@@ -32,6 +32,7 @@ import { RainSection } from "../components/settings/RainSection.tsx";
 import { LedsSection } from "../components/settings/LedsSection.tsx";
 import { MqttSection } from "../components/settings/MqttSection.tsx";
 import { IrriSenseSection } from "../components/settings/IrriSenseSection.tsx";
+import { NotificationsSection } from "../components/settings/NotificationsSection.tsx";
 import { AdvancedSection } from "../components/settings/AdvancedSection.tsx";
 import { SettingsPreview } from "../components/settings/SettingsPreview.tsx";
 import { DisplayModeSection } from "../components/settings/DisplayModeSection.tsx";
@@ -248,6 +249,13 @@ export const SettingsPage = () => {
             case "irrisense":
                 return (
                     <IrriSenseSection
+                        registerSaver={registerExternalSaver}
+                        unregisterSaver={unregisterExternalSaver}
+                    />
+                );
+            case "notifications":
+                return (
+                    <NotificationsSection
                         registerSaver={registerExternalSaver}
                         unregisterSaver={unregisterExternalSaver}
                     />

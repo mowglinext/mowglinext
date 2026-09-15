@@ -52,7 +52,7 @@ Settings updates: `components/settings/HostUpdaterPanel.tsx` and `hooks/useHostU
 | `src/types/ros.generated.ts` | 487 | GENERATED ROS message types (snake_case) from `ros2/src/mowgli_interfaces/msg` |
 | `src/types/ros.ts` | 1 | `export * from "./ros.generated.ts"` — the import path every consumer uses |
 | `src/types/map.ts` | 440 | Map feature class hierarchy (`MowingAreaFeature`, `NavigationFeature`, `ObstacleFeature`, `DockFeatureBase`, `PathFeature`, `RobotPartFeature`, `DynObstacleFeature`) + `serializeFeatures`/`featuresFromJSON` (prototype-preserving round-trip) |
-| `src/types/irrisense.ts`, `src/types/mapbox-gl-draw.d.ts`, `src/global.d.ts`, `src/vite-env.d.ts` | 76/72/12/1 | IrriSense DTOs; ambient typings |
+| `src/types/irrisense.ts`, `src/types/notifications.ts`, `src/types/mapbox-gl-draw.d.ts`, `src/global.d.ts`, `src/vite-env.d.ts` | 76/60/72/12/1 | IrriSense + push-notification DTOs; ambient typings |
 | **`src/pages/` — one per route** | | |
 | `pages/MowgliNextPage.tsx` | 711 | `/mowglinext` dashboard: state-adaptive hero, battery ring, live mini-map, progress ribbon, weather chip, soil banner |
 | `pages/MapPage.tsx` | 1227 | `/map` Mapbox GL editor + live overlay; `MAPBOX_TOKEN` L46; `editMap` toggle L87 drives stream teardown |
@@ -101,9 +101,10 @@ Settings updates: `components/settings/HostUpdaterPanel.tsx` and `hooks/useHostU
 | `components/schedule/IrriSenseStatusChip.tsx` | 64 | Soil-gate chip on the Schedule page |
 | **`src/components/settings/`** | | |
 | `SettingsNav.tsx` / `SettingsPreview.tsx` / `SettingFieldLabel.tsx` | 117/265/71 | Section nav; live SVG preview of the edited chassis/tool/battery values; overridden-dot + reset button |
-| Section components: `HardwareSection` `DriveMotorSection` `NtripSection` `PositioningSection` `SensorsSection` `LocalizationSection` `MowingSection` `DockingSection` `BatterySection` `SafetySection` `ObstaclesSection` `NavigationSection` `RainSection` `LedsSection` `IrriSenseSection` `AdvancedSection` `DisplayModeSection` `LogTimeZoneSection` | 64–964 | One per `SettingsSection` id, except `appearance`, which renders `DisplayModeSection` + `LogTimeZoneSection` (18 components for 17 ids); `DriveMotorSection` (964) also hosts PID/FF tuning runs |
+| Section components: `HardwareSection` `DriveMotorSection` `NtripSection` `PositioningSection` `SensorsSection` `LocalizationSection` `MowingSection` `DockingSection` `BatterySection` `SafetySection` `ObstaclesSection` `NavigationSection` `RainSection` `LedsSection` `IrriSenseSection` `NotificationsSection` `AdvancedSection` `DisplayModeSection` `LogTimeZoneSection` | 64–964 | One per `SettingsSection` id, except `appearance`, which renders `DisplayModeSection` + `LogTimeZoneSection` (18 components for 17 ids); `DriveMotorSection` (964) also hosts PID/FF tuning runs |
 | `gnssConfig.ts` / `ntripProviders.ts` / `GnssReceiverActionsCard.tsx` / `GnssSerialDeviceConfigField.tsx` / `UniversalGnssAdvancedSettings.tsx` / `GnssSignalProfileHelp.tsx` / `NtripStationMap.tsx` | 365/86/501/201/197/42/138 | Receiver families/profiles, NTRIP provider presets + station map, receiver actions `POST /settings/gnss/{plan,apply,factory-reset-apply,restart}` (`GnssReceiverActionsCard.tsx` L162–180) |
 | `DockCalibrationCard.tsx` / `IrriSenseConnectionCard.tsx` / `IrriSenseRuleCard.tsx` / `IrriSenseStatusLine.tsx` | 102/129/75/59 | One-click dock calibration; IrriSense token/garden/rule UI |
+| `NotificationsChannelCard.tsx` / `NotificationsEventsCard.tsx` | ~230/~50 | Push channel picker (Telegram / Pushover / ntfy / webhook, write-only secrets, send-test) and the per-event switches; `NotificationsSection` is DB-backed like IrriSense and registers as an external saver |
 | `paramCatalog.ts` | 142 | Curated tier (`basic`/`middle`/`expert`) + group + unit for ~45 ROS params; unknown params default to expert/"Other" |
 | **`src/theme/`, `src/i18n/`, `src/concept/`, `src/modes/`, `src/constants/`** | | |
 | `theme/ThemeContext.tsx` / `theme/colors.ts` | 84/248 | Dark-locked provider (`toggleMode` is a no-op) + display mode; palette and `cssVars()` |
