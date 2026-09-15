@@ -1,8 +1,9 @@
 import React from "react";
-import { Card, Col, Form, InputNumber, Row, Space, Typography } from "antd";
+import { Card, Col, Form, InputNumber, Row, Space, Switch, Typography } from "antd";
 import { CompassOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
+import { parseBoolish } from "../../utils/settingsValues.ts";
 
 const { Text, Paragraph } = Typography;
 
@@ -125,6 +126,24 @@ export const NavigationSection: React.FC<Props> = ({
                             </Form.Item>
                         </Col>
                     </Row>
+                </Form>
+            </Card>
+
+            <Card size="small" title={t("settingsNavigation.idlePower")} style={{ marginBottom: 16 }}>
+                <Paragraph type="secondary" style={{ margin: "0 0 12px", fontSize: 12 }}>
+                    {t("settingsNavigation.idlePowerDescription")}
+                </Paragraph>
+                <Form layout="vertical" size="small">
+                    <Form.Item
+                        label={fieldLabel("idle_nav2_suspend", t("settingsNavigation.idleNav2Suspend"))}
+                        tooltip={t("settingsNavigation.idleNav2SuspendTooltip")}
+                    >
+                        <Switch
+                            aria-label={t("settingsNavigation.idleNav2Suspend")}
+                            checked={parseBoolish(values.idle_nav2_suspend) ?? false}
+                            onChange={(enabled) => onChange("idle_nav2_suspend", enabled)}
+                        />
+                    </Form.Item>
                 </Form>
             </Card>
         </div>

@@ -225,6 +225,10 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "xy_goal_tolerance", "yaw_goal_tolerance", "coverage_xy_tolerance",
             "progress_timeout_sec",
             "boundary_inner_margin_m", "dock_inner_margin_exempt_radius_m",
+            // Idle power saving: PAUSE the Nav2 lifecycle stack while parked
+            // on the dock. Default ON — it must have an off switch here
+            // because it costs a 10-26 s wait on the first Play press.
+            "idle_nav2_suspend",
         ],
     },
     {

@@ -17,6 +17,7 @@ import {useSettings} from "../hooks/useSettings.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useMowingMap} from "../hooks/useMowingMap.ts";
 import {useMowProgress} from "../hooks/useMowProgress.ts";
+import {useDocumentVisible} from "../hooks/useDocumentVisible.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
 import {rasterizeMowProgress} from "../utils/mowProgress.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
@@ -182,7 +183,14 @@ export const MowgliNextPage = () => {
   // once per grid message (throttled to ~1 Hz) and placed in the same unit
   // space. The raster (heavy) is memoised on grid identity; the unit-rect math
   // (cheap) re-runs when the bbox moves.
-  const mowGrid = useMowProgress();
+  // Gated on tab visibility: LiveMapCard below is the only thing that draws
+  // this grid, and it is mounted for as long as this page is — but the grid is
+  // 351 kB per message (~207 kB/s into the browser, measured 2026-09-16) and a
+  // backgrounded tab keeps its websocket open, so the whole stream would be
+  // delivered and discarded. useTopic drops the upstream subscription while
+  // disabled and re-opens it on return.
+  const documentVisible = useDocumentVisible();
+  const mowGrid = useMowProgress(documentVisible);
   const raster = useMemo(() => rasterizeMowProgress(mowGrid), [mowGrid]);
   const progress: MiniProgress | null = (raster && bbox)
     ? (() => {

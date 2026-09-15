@@ -2597,7 +2597,11 @@
     "boundaryInnerMargin": "Marge de transit à la limite",
     "boundaryInnerMarginTooltip": "Distance (m) à laquelle les trajets de transit sont incités à rester à l'intérieur de la limite enregistrée. 0 désactive ce réglage et laisse le transit longer ou couper la ligne enregistrée, comme avant l'existence de ce réglage.",
     "dockExemptRadius": "Rayon d'exemption autour du socle",
-    "dockExemptRadiusTooltip": "Rayon (m) autour de la position du socle, dans toutes les directions, exempté de la marge de transit ci-dessus — pour que l'approche du socle ne subisse aucun biais, pas seulement « jamais bloquée ». Élargissez ce rayon si votre socle subit beaucoup de dérive GNSS (par ex. sous un auvent). Ne prend effet qu'une fois une position de socle définie."
+    "dockExemptRadiusTooltip": "Rayon (m) autour de la position du socle, dans toutes les directions, exempté de la marge de transit ci-dessus — pour que l'approche du socle ne subisse aucun biais, pas seulement « jamais bloquée ». Élargissez ce rayon si votre socle subit beaucoup de dérive GNSS (par ex. sous un auvent). Ne prend effet qu'une fois une position de socle définie.",
+    "idlePower": "Économie d'énergie au repos",
+    "idlePowerDescription": "Ce que le robot éteint lorsqu'il est stationné sur le socle sans rien à faire.",
+    "idleNav2Suspend": "Suspendre la navigation sur le socle",
+    "idleNav2SuspendTooltip": "La navigation est suspendue lorsque le robot est stationné sur le socle, ce qui réduit la charge CPU et la chaleur au repos (les serveurs inactifs consomment environ 40 % d'un cœur sans rien faire). Le démarrage d'une tonte attend le retour de la navigation, mesuré entre 10 et 26 s sur un Orange Pi 5B. Désactivez cette option si vous voulez que le robot réagisse immédiatement à Lecture. Redémarrez ROS2 pour appliquer."
   },
   "settingsSensors": {
     "lidarSensor": "Capteur LiDAR",
