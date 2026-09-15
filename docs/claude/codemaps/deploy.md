@@ -49,7 +49,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `lib/deploy.sh` | 297 | Git sync (`report_repository_sync_status`, `sync_repo_branch_to_selected_branch`, submodules), `setup_directory`, `migrate_runtime_paths`, `fix_path_type_conflict` |
 | `lib/state.sh` | 173 | Strict KV parser for `install/.preset` and `docker/.env` + the allowed-key whitelist; preset consume/backup |
 | `lib/udev.sh` | 232 | Static + dynamic udev rule generation and install |
-| `lib/backend_choice.sh` | 271 | Mowgli-STM32 vs Pixhawk/MAVROS selection, MAVROS device detect, GCS URL |
+| `lib/backend_choice.sh` | ~340 | Mowgli-STM32 vs Pixhawk/MAVROS vs OpenMower selection (`SUPPORTED_HARDWARE_BACKENDS`, `is_supported_hardware_backend`), MAVROS device detect, GCS URL, OpenMower ESC type |
 | `lib/tools.sh` | 205 | Optional host tools + `/usr/local/bin/mowgli-{up,down,restart,logs,ps,pull,check,gps-logs,lidar-logs,shell,status}` |
 | `lib/progress.sh` | 212 | Step progress bar/spinner, install log capture (`init_install_logs`) |
 | `lib/gps.sh` | 176 | `pick_serial_by_id`, `preset_key_loaded`, `configure_gps` |
@@ -81,6 +81,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `compose/docker-compose.lidar-rplidar.yml` | 38 | `lidar` with `rplidar_a2m8_launch.py` + `LIDAR_PORT`/`LIDAR_BAUD` |
 | `compose/docker-compose.lidar-stl27l.yml` | 38 | `lidar` with `ldlidar_stl_ros2_node` + `LIDAR_MODEL`/`LIDAR_PORT`/`LIDAR_BAUD` |
 | `compose/docker-compose.mavros.yml` | 49 | `mavros` (mowgli-mavros) + `ntrip` (mowgli-ntrip) |
+| `compose/docker-compose.openmower.yml` | 52 | `openmower` (mowgli-openmower) — OpenMower LowLevel + xESC bridge sidecar, mounts `docker/config/mowgli` read-only at `/config` |
 | `compose/docker-compose.vesc.yml` | 20 | `vesc` — gated off (`vesc_service_available` always returns 1) |
 | `compose/docker-compose.tfluna-front.yml` / `-edge.yml` | 8 / 8 | TF-Luna — gated off (image placeholder `ghcr.io/...`) |
 | `compose/docker-compose.foxglove.yml` | 5 | **Unused** — no code selects it; overrides `mowgli.command` with a non-existent `enable_coverage:=` arg |
@@ -108,7 +109,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `tests/test_lidar_matrix.sh` | 150 | `LIDAR_TYPE` × connection → fragment + baud + `LIDAR_IMAGE` |
 | `tests/test_robot_yaml.sh` | 115 | Installed yaml shape, datum placeholders, no legacy `mower_config.sh` |
 | `tests/test_bootstrap_repo_update.sh` | 111 | `docs/install.sh` stays conservative on existing checkouts |
-| `tests/test_hardware_presets.sh` | 103 | mowgli vs mavros backend matrix |
+| `tests/test_hardware_presets.sh` | ~150 | mowgli vs mavros vs openmower backend matrix |
 | `tests/test_check_mode.sh` | 101 | `--check` targets the right services/commands |
 | `tests/test_optional_features.sh` | 97 | TF-Luna / VESC never leak into the generated compose |
 | `tests/test_udev_install.sh` | 87 | `install_udev_rules` under `set -u` |
@@ -157,6 +158,8 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `.env` key | Selects (file:line) | Container | Reaches the process as | Ends up as |
 |---|---|---|---|---|
 | `HARDWARE_BACKEND` = `mavros` | `compose.sh` L127 → `docker-compose.mavros.yml` | `mowgli-mavros` + `mowgli-ntrip` | container env | forces `GNSS_BACKEND=disabled`, `GNSS_STACK=disabled` (`env.sh` L303–305) |
+| `HARDWARE_BACKEND` = `openmower` | `compose.sh` → `docker-compose.openmower.yml` | `mowgli-openmower` (+ `mowgli-gps` as usual) | container env; `mowgli.launch.py` reads `HARDWARE_BACKEND` and **skips `hardware_bridge_node`** for anything but `mowgli` | GNSS stays universal; `write_config` seeds `ticks_per_meter: 1600.0` once |
+| `OPENMOWER_LL_PORT`, `OPENMOWER_XESC_TYPE`, `OPENMOWER_XESC_{LEFT,RIGHT,MOW}_PORT`, `OPENMOWER_ENABLED` | `env.sh` `setup_env` | `mowgli-openmower` | container env → `openmower_bridge.launch.py` | defaults `/dev/ttyAMA0`, `xesc_mini`, `/dev/ttyAMA5`/`3`/`4` |
 | `GNSS_STACK` (`universal`\|`disabled`), `GNSS_BACKEND` | `compose.sh` L72–95 (`compose_gnss_service_name` → service `gps`) | `mowgli-gps` | `GNSS_STACK` env; `start_gps.sh` L389 rejects `disabled` | which sidecar (if any) runs |
 | `GNSS_RECEIVER_FAMILY` / `GNSS_TRANSPORT` / `GNSS_SERIAL_DEVICE` / `GNSS_SERIAL_BAUD` / `GNSS_FRAME_ID` | `docker-compose.gps.yml` L45–49 (no defaults) | `mowgli-gps` | `start_gps.sh` `resolve_*` L66–123, L269 | `receiver_node --ros-args -p receiver_family/transport/serial_device/serial_baud/frame_id` (L515–527) |
 | `GNSS_NTRIP_*` (`ENABLED/HOST/PORT/MOUNTPOINT/USERNAME/PASSWORD/GGA_ENABLED/GGA_INTERVAL_S`) | same | `mowgli-gps` | `resolve_ntrip_*` L125–267 | `ntrip_node -p caster_host/caster_port/mountpoint/username/password/gga_enabled/gga_interval_s` (L553–566) |
@@ -164,7 +167,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `LIDAR_IMAGE` | `env.sh` L284–290 (per `LIDAR_TYPE`) | `mowgli-lidar` | image ref | — |
 | `LIDAR_PORT` / `LIDAR_BAUD` / `LIDAR_MODEL` | rplidar L26–27, stl27l L26–30 | `mowgli-lidar` | `serial_port:=`/`serial_baudrate:=` (rplidar) or `-p port_name/port_baudrate/product_name` (stl27l) | driver params. **ldlidar ignores them** — hardcoded in `sensors/lidar-ldlidar/ldlidar.yaml` L6–7 |
 | `ENABLE_FOXGLOVE` | `docker-compose.base.yml` L44 | `mowgli-ros2` | `full_system.launch.py enable_foxglove:=` | `foxglove_bridge` node on :8765 |
-| `MOWGLI_ROS2_IMAGE`/`GPS_IMAGE`/`GUI_IMAGE`/`MAVROS_IMAGE`/`LIDAR_IMAGE` | `config.sh` `recompute_image_defaults` L41–52 | all | image refs | `ghcr.io/<owner>/<repo>/<name>:${IMAGE_TAG}` |
+| `MOWGLI_ROS2_IMAGE`/`GPS_IMAGE`/`GUI_IMAGE`/`MAVROS_IMAGE`/`OPENMOWER_IMAGE`/`LIDAR_IMAGE` | `config.sh` `recompute_image_defaults` L41–53 | all | image refs | `ghcr.io/<owner>/<repo>/<name>:${IMAGE_TAG}` |
 | `IMAGE_TAG` (`main`\|`dev`\|sanitised branch) | `config.sh` `select_image_channel` L202, `sanitize_image_tag` L61 | all | — | which tag Watchtower/`pull` fetches |
 | `ROS_DOMAIN_ID`, `RMW_IMPLEMENTATION`, `CYCLONEDDS_URI`, `ROS_AUTOMATIC_DISCOVERY_RANGE` | `x-ros2-env` anchor in every ROS fragment (base/gps/lidar-*/mavros/vesc; gui, mqtt, watchtower and tfluna carry none) | ROS services | container env | Cyclone DDS via `/cyclonedds.xml` |
 | `TFLUNA_FRONT_ENABLED` / `TFLUNA_EDGE_ENABLED` | `compose.sh` L119–125 via `effective_tfluna_*` | `mowgli-tfluna-front/-edge` | — | **gated off**: `range_services_available` (`config.sh` L354) returns 1 while the fragments carry the `ghcr.io/...` placeholder |
@@ -176,7 +179,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 
 ### Compose services (container names, from `install/lib/checks.sh` L3–19)
 
-`mowgli`→`mowgli-ros2`, `gps`→`mowgli-gps`, `lidar`→`mowgli-lidar`, `gui`→`mowgli-gui`, `mosquitto`→`mowgli-mqtt`, `mavros`→`mowgli-mavros`, `ntrip`→`mowgli-ntrip`, `vesc`→`mowgli-vesc`, `tfluna_front`/`tfluna_edge`→`mowgli-tfluna-front`/`-edge`. Always composed: base + gui + mqtt + watchtower (`compose.sh` L58–60, L97). Named volume `mowgli_maps` → `/ros2_ws/maps` (base L47, L61) and also mounted into `gui` (gui L33).
+`mowgli`→`mowgli-ros2`, `gps`→`mowgli-gps`, `lidar`→`mowgli-lidar`, `gui`→`mowgli-gui`, `mosquitto`→`mowgli-mqtt`, `mavros`→`mowgli-mavros`, `ntrip`→`mowgli-ntrip`, `openmower`→`mowgli-openmower`, `vesc`→`mowgli-vesc`, `tfluna_front`/`tfluna_edge`→`mowgli-tfluna-front`/`-edge`. Always composed: base + gui + mqtt + watchtower (`compose.sh` L58–60, L97). Named volume `mowgli_maps` → `/ros2_ws/maps` (base L47, L61) and also mounted into `gui` (gui L33).
 
 ### Bind mounts (host → container)
 
@@ -234,7 +237,7 @@ docker build -t mowgli-lidar --target runtime sensors/lidar-ldlidar/
 GNSS_DRY_RUN=true GNSS_CONFIG_PATH=install/config/mowgli/mowgli_robot.yaml bash sensors/gps/start_gps.sh   # prints the commands, launches nothing
 ```
 
-CI: sensor images build via `.github/workflows/sensors-{gps,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`, each calling the reusable `_sensor-docker.yml` (multi-arch amd64+arm64, push-by-digest then manifest merge; `sensors-gps.yml` L37–66 carries the only smoke test). `ros2-docker.yml` builds `mowgli-ros2`, `gui-docker.yml` builds `mowglinext-gui`. `ros2-ci.yml` watches `install/config/mowgli/**` (L9, L76) for the config-drift job. **No workflow runs `install/test_mowglinext.sh` or `install/tests/*` — run them by hand before touching the installer.** No workflow builds a `mavros` image, though `MAVROS_IMAGE` defaults to one.
+CI: sensor images build via `.github/workflows/sensors-{gps,openmower,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`, each calling the reusable `_sensor-docker.yml` (multi-arch amd64+arm64, push-by-digest then manifest merge; `sensors-gps.yml` and `sensors-openmower.yml` carry smoke tests plus a gtest job). `ros2-docker.yml` builds `mowgli-ros2`, `gui-docker.yml` builds `mowglinext-gui`. `ros2-ci.yml` watches `install/config/mowgli/**` (L9, L76) for the config-drift job. **No workflow runs `install/test_mowglinext.sh` or `install/tests/*` — run them by hand before touching the installer.** No workflow builds a `mavros` image, though `MAVROS_IMAGE` defaults to one.
 
 ## Change coupling — "if you change X, also update Y"
 

@@ -79,6 +79,6 @@ MSG_MOTD_NOT_SET="not set"
 MSG_MOTD_RUNNING="running"
 
 MSG_UPDATER_STACK_BACKEND="Managed release updates support the Mowgli hardware backend."
-MSG_UPDATER_HARDWARE_LEGACY="These hardware choices require the existing installer path (MAVROS, TF-Luna or VESC). Keeping their selected containers; coordinated release updates are not enabled."
-MSG_UPDATER_HARDWARE_MANAGED="This installation already uses managed updates. MAVROS, TF-Luna and VESC selections require an explicit stack migration; runtime files have not been regenerated."
+MSG_UPDATER_HARDWARE_LEGACY="These hardware choices require the existing installer path (MAVROS, OpenMower, TF-Luna or VESC). Keeping their selected containers; coordinated release updates are not enabled."
+MSG_UPDATER_HARDWARE_MANAGED="This installation already uses managed updates. MAVROS, OpenMower, TF-Luna and VESC selections require an explicit stack migration; runtime files have not been regenerated."
 MSG_UPDATER_STACK_REVIEW="Saved hardware choices. Review Software updates to apply container changes; the installed release definition has been retained."

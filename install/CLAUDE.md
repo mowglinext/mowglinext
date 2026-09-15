@@ -70,6 +70,7 @@ python3 install/scripts/migrate_openmower.py --source ~/mowgli-docker \
 ## Component-specific gotchas
 
 - A new `docker/.env` key must be added to `lib/state.sh` `is_allowed_installer_key` (L11–33) or presets and `.env` reload **silently drop it**; also extend the `REQUIRED_KEYS` list in `tests/test_env_output.sh` L41.
+- A new `HARDWARE_BACKEND` value must land in FOUR places at once: `lib/backend_choice.sh` (`SUPPORTED_HARDWARE_BACKENDS` + menu + `is_supported_hardware_backend`), `lib/config.sh` `parse_args --backend=`, `docs/install.sh` + the composer in `docs/index.html`, and `SUPPORTED_HARDWARE_BACKENDS` in `ros2/src/mowgli_bringup/launch/mowgli.launch.py` (pinned by `test_hardware_backend_launch.py`). Only `mowgli` launches the in-tree bridge; `mavros`/`openmower` own it in a sidecar.
 - `write_config` (`lib/config.sh` L1327–1443) NEVER overwrites an existing installed `mowgli_robot.yaml` — it line-splices ~25 keys. Changing the seed alone does nothing on an already-installed robot.
 - `LIDAR_ENABLED` in `.env` decides only whether the *container* is composed; the ROS-side LiDAR mode is `mowgli_robot.yaml:lidar_enabled` (comment in `compose/docker-compose.base.yml` L13–17).
 - Empty `GNSS_*` values in `compose/docker-compose.gps.yml` L45–57 mean "not set" on purpose — `sensors/gps/start_gps.sh` resolves YAML → env → default, so a compose default silently masks the operator's YAML.

@@ -22,7 +22,12 @@ Main bringup launch file for the Mowgli robot mower (physical hardware).
 Brings up:
   1. robot_state_publisher  – processes URDF/xacro and publishes /robot_description
                               plus static TF from URDF fixed joints.
-  2. hardware_bridge        – serial bridge to the Mowgli firmware board.
+  2. hardware_bridge        – serial bridge to the Mowgli firmware board, only
+                              when HARDWARE_BACKEND=mowgli. The mavros and
+                              openmower backends run their own bridge in a
+                              sidecar container that publishes the same
+                              /hardware_bridge contract, so launching this one
+                              too would put two command consumers on the wire.
   3. twist_mux              – priority-based cmd_vel multiplexer.
 """
 
@@ -31,9 +36,12 @@ import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.conditions import IfCondition
 from launch.substitutions import (
     Command,
+    EnvironmentVariable,
+    EqualsSubstitution,
     FindExecutable,
     LaunchConfiguration,
     PathJoinSubstitution,
@@ -47,6 +55,22 @@ from launch_ros.substitutions import FindPackageShare
 # template defaults, so a missing key falls through to its versioned default.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import load_robot_params  # noqa: E402
+
+# Every hardware backend the installer can select (HARDWARE_BACKEND in
+# docker/.env, forwarded into the container environment). Only "mowgli" runs
+# the in-tree STM32 bridge; the others own their bridge in a sidecar.
+SUPPORTED_HARDWARE_BACKENDS = ("mowgli", "mavros", "openmower")
+NATIVE_BRIDGE_BACKEND = "mowgli"
+
+
+def _validate_hardware_backend(context):
+    hardware_backend = LaunchConfiguration("hardware_backend").perform(context)
+    if hardware_backend not in SUPPORTED_HARDWARE_BACKENDS:
+        supported = ", ".join(SUPPORTED_HARDWARE_BACKENDS)
+        raise RuntimeError(
+            f"Invalid hardware_backend '{hardware_backend}'; expected one of: {supported}"
+        )
+    return []
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -70,11 +94,19 @@ def generate_launch_description() -> LaunchDescription:
         description="Serial port connected to the Mowgli firmware board.",
     )
 
+    hardware_backend_arg = DeclareLaunchArgument(
+        "hardware_backend",
+        default_value=EnvironmentVariable("HARDWARE_BACKEND", default_value="mowgli"),
+        description="Hardware backend: mowgli (in-tree STM32 bridge), mavros or "
+        "openmower (bridge runs in its own sidecar container).",
+    )
+
     # ------------------------------------------------------------------
     # Resolved substitutions
     # ------------------------------------------------------------------
     use_sim_time = LaunchConfiguration("use_sim_time")
     serial_port = LaunchConfiguration("serial_port")
+    hardware_backend = LaunchConfiguration("hardware_backend")
 
     # ------------------------------------------------------------------
     # Robot config (mowgli_robot.yaml)
@@ -196,6 +228,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="hardware_bridge_node",
         name="hardware_bridge",
         output="screen",
+        condition=IfCondition(EqualsSubstitution(hardware_backend, NATIVE_BRIDGE_BACKEND)),
         parameters=[
             hardware_bridge_params,
             # Allow command-line override of the serial port.
@@ -305,6 +338,8 @@ def generate_launch_description() -> LaunchDescription:
         [
             use_sim_time_arg,
             serial_port_arg,
+            hardware_backend_arg,
+            OpaqueFunction(function=_validate_hardware_backend),
             robot_state_publisher_node,
             hardware_bridge_node,
             twist_mux_node,

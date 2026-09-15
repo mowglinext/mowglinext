@@ -45,7 +45,7 @@
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`ros2/src/mowgli_hardware/`** | | |
-| `ros2/src/mowgli_hardware/CMakeLists.txt` | 286 | Static lib `mowgli_hardware_core` (cobs, crc16, serial_port, packet_handler, clock_fit) + exe `hardware_bridge_node`; 15 gtests |
+| `ros2/src/mowgli_hardware/CMakeLists.txt` | ~300 | Static lib `mowgli_hardware_core` (cobs, crc16, serial_port, packet_handler, clock_fit) — **exported** as `mowgli_hardware::mowgli_hardware_core` (`ament_export_targets`) so `sensors/openmower/mowgli_openmower_bridge` reuses the LowLevel framing — + exe `hardware_bridge_node`; 15 gtests |
 | `ros2/src/mowgli_hardware/package.xml` | 27 | Deps: rclcpp, std_msgs, std_srvs, sensor_msgs, geometry_msgs, nav_msgs, mowgli_interfaces |
 | **`src/`** | | |
 | `ros2/src/mowgli_hardware/src/hardware_bridge_node.cpp` | ~3.3k | `HardwareBridgeNode` (plain `rclcpp::Node`, name `hardware_bridge`): params, pub/sub/services, serial loop, packet handlers, IMU cal, dig detector glue, `main()` |

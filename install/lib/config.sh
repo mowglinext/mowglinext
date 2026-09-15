@@ -48,6 +48,7 @@ recompute_image_defaults() {
   LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
   MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
+  OPENMOWER_IMAGE_DEFAULT="${prefix}/openmower:${IMAGE_TAG}"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
 }
 
@@ -331,6 +332,8 @@ compose_restart_services_for_backend() {
       gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
       [ -n "$gnss_service" ] && services+=("$gnss_service")
     fi
+    # The OpenMower bridge reads the robot yaml too, so it restarts with it.
+    [[ "$backend" == "openmower" ]] && services+=(openmower)
     services+=(mowgli)
   fi
 
@@ -883,8 +886,12 @@ parse_args() {
           mavros)
             HARDWARE_BACKEND="mavros"
             ;;
+          openmower)
+            HARDWARE_BACKEND="openmower"
+            MAVROS_BY_ID=""
+            ;;
           *)
-            error "Unknown hardware backend: $backend_spec (expected mowgli or mavros)"
+            error "Unknown hardware backend: $backend_spec (expected mowgli, mavros or openmower)"
             exit 1
             ;;
         esac
@@ -1420,6 +1427,20 @@ EOF
     lidar_on="true"
   fi
   _yaml_patch_key "$yaml_file" lidar_enabled     "$lidar_on"
+
+  # OpenMower electronics count wheel ticks on the xESC hall sensors
+  # (OM_WHEEL_TICKS_PER_M, 1600/m on a YardForce 500), not on the Mowgli STM32
+  # encoders the seed's 399.0 describes. Seed the OpenMower default once; a
+  # value the operator has since calibrated is left alone.
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    local current_ticks
+    current_ticks="$(grep -m1 -E '^[[:space:]]+ticks_per_meter:' "$yaml_file" 2>/dev/null \
+      | sed -E 's/^[^:]*:[[:space:]]*([0-9.]+).*/\1/')"
+    if [[ -z "$current_ticks" || "$current_ticks" == "399.0" || "$current_ticks" == "399" ]]; then
+      _yaml_patch_key "$yaml_file" ticks_per_meter "1600.0"
+      info "OpenMower backend: seeded ticks_per_meter=1600.0 (xESC hall ticks)"
+    fi
+  fi
 
   # Remove retired localization overrides from upgraded installations.
   python3 - "$yaml_file" <<'PY_RETIRED'

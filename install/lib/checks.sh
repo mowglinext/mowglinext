@@ -10,6 +10,7 @@ container_name_for_service() {
     gui)          printf 'mowgli-gui\n' ;;
     mosquitto)    printf 'mowgli-mqtt\n' ;;
     mavros)       printf 'mowgli-mavros\n' ;;
+    openmower)    printf 'mowgli-openmower\n' ;;
     ntrip)        printf 'mowgli-ntrip\n' ;;
     vesc)         printf 'mowgli-vesc\n' ;;
     tfluna_front) printf 'mowgli-tfluna-front\n' ;;
@@ -48,6 +49,10 @@ expected_runtime_services() {
     if [[ "$gnss_stack" != "disabled" ]]; then
       gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
       [ -n "$gnss_service" ] && services+=("$gnss_service")
+    fi
+
+    if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+      services+=(openmower)
     fi
   fi
 
@@ -88,6 +93,12 @@ check_devices() {
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     devices+=("${MAVROS_PORT:-/dev/mavros}:Pixhawk MAVROS serial")
+  elif [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    devices+=("${OPENMOWER_LL_PORT:-/dev/ttyAMA0}:OpenMower LowLevel board")
+    devices+=("${OPENMOWER_XESC_LEFT_PORT:-/dev/ttyAMA5}:OpenMower left xESC")
+    devices+=("${OPENMOWER_XESC_RIGHT_PORT:-/dev/ttyAMA3}:OpenMower right xESC")
+    devices+=("${OPENMOWER_XESC_MOW_PORT:-/dev/ttyAMA4}:OpenMower mow xESC")
+    devices+=("${gnss_device}:GPS receiver")
   else
     devices+=("/dev/mowgli:Mowgli STM32 board")
     devices+=("${gnss_device}:GPS receiver")
@@ -274,6 +285,11 @@ check_containers() {
 
 check_firmware() {
   step "Check: Mowgli firmware"
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    info "OpenMower backend: the LowLevel board keeps its own firmware; check the bridge with: $(print_logs_command_for_container mowgli-openmower 50)"
+    return 0
+  fi
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     info "MAVROS backend: skipping direct Mowgli firmware check"

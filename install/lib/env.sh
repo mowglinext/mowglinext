@@ -281,6 +281,7 @@ setup_env() {
   : "${GPS_IMAGE:=${GPS_IMAGE_DEFAULT}}"
   : "${GUI_IMAGE:=${GUI_IMAGE_DEFAULT}}"
   : "${MAVROS_IMAGE:=${MAVROS_IMAGE_DEFAULT}}"
+  : "${OPENMOWER_IMAGE:=${OPENMOWER_IMAGE_DEFAULT}}"
   if [[ -z "${LIDAR_IMAGE:-}" ]]; then
     case "${LIDAR_TYPE:-ldlidar}" in
       rplidar) LIDAR_IMAGE="${LIDAR_RPLIDAR_IMAGE_DEFAULT}" ;;
@@ -298,6 +299,21 @@ setup_env() {
   : "${MAVROS_GCS_URL:=udp-b://@255.255.255.255:14550}" # udp-b = broadcast, udp = unicast, empty = disabled
   : "${MAVROS_TGT_SYSTEM:=1}"
   : "${MAVROS_TGT_COMPONENT:=1}"
+
+  # OpenMower electronics (LowLevel board + xESC on the Pi UARTs). GNSS stays
+  # with the Universal GNSS sidecar — the OpenMower GPS is a plain receiver.
+  : "${OPENMOWER_LL_PORT:=/dev/ttyAMA0}"
+  : "${OPENMOWER_XESC_TYPE:=xesc_mini}"
+  : "${OPENMOWER_XESC_LEFT_PORT:=/dev/ttyAMA5}"
+  : "${OPENMOWER_XESC_RIGHT_PORT:=/dev/ttyAMA3}"
+  : "${OPENMOWER_XESC_MOW_PORT:=/dev/ttyAMA4}"
+  case "$OPENMOWER_XESC_TYPE" in
+    xesc_mini|xesc_2040) ;;
+    *)
+      warn "Unknown OPENMOWER_XESC_TYPE=${OPENMOWER_XESC_TYPE} — defaulting to xesc_mini"
+      OPENMOWER_XESC_TYPE="xesc_mini"
+      ;;
+  esac
 
   # Si MAVROS → GNSS backend désactivé
   if [[ "$HARDWARE_BACKEND" == "mavros" ]]; then
@@ -319,6 +335,11 @@ setup_env() {
     enable_mavros="true"
   fi
   MAVROS_ENABLED="$enable_mavros"
+  local enable_openmower="false"
+  if [[ "$HARDWARE_BACKEND" == "openmower" ]]; then
+    enable_openmower="true"
+  fi
+  OPENMOWER_ENABLED="$enable_openmower"
 
   touch "$env_file"
 
@@ -354,6 +375,7 @@ setup_env() {
   upsert_env_key "$env_file" "GPS_IMAGE" "$GPS_IMAGE"
   upsert_env_key "$env_file" "LIDAR_IMAGE" "$LIDAR_IMAGE"
   upsert_env_key "$env_file" "MAVROS_IMAGE" "$MAVROS_IMAGE"
+  upsert_env_key "$env_file" "OPENMOWER_IMAGE" "$OPENMOWER_IMAGE"
   upsert_env_key "$env_file" "GUI_IMAGE" "$GUI_IMAGE"
 
   upsert_env_key "$env_file" "HARDWARE_BACKEND" "$HARDWARE_BACKEND"
@@ -365,6 +387,12 @@ setup_env() {
   upsert_env_key "$env_file" "MAVROS_TGT_SYSTEM" "$MAVROS_TGT_SYSTEM"
   upsert_env_key "$env_file" "MAVROS_TGT_COMPONENT" "$MAVROS_TGT_COMPONENT"
   upsert_env_key "$env_file" "MAVROS_AUTOPILOT" "$MAVROS_AUTOPILOT"
+  upsert_env_key "$env_file" "OPENMOWER_ENABLED" "$OPENMOWER_ENABLED"
+  upsert_env_key "$env_file" "OPENMOWER_LL_PORT" "$OPENMOWER_LL_PORT"
+  upsert_env_key "$env_file" "OPENMOWER_XESC_TYPE" "$OPENMOWER_XESC_TYPE"
+  upsert_env_key "$env_file" "OPENMOWER_XESC_LEFT_PORT" "$OPENMOWER_XESC_LEFT_PORT"
+  upsert_env_key "$env_file" "OPENMOWER_XESC_RIGHT_PORT" "$OPENMOWER_XESC_RIGHT_PORT"
+  upsert_env_key "$env_file" "OPENMOWER_XESC_MOW_PORT" "$OPENMOWER_XESC_MOW_PORT"
 
   remove_legacy_gnss_env_keys "$env_file"
   remove_env_key "$env_file" "NMEA_IMAGE"

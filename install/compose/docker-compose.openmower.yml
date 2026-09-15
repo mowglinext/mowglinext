@@ -1,0 +1,51 @@
+  # -------------------------------------------------------------------------
+  # OpenMower hardware bridge (HARDWARE_BACKEND=openmower).
+  #
+  # Stock OpenMower v1 electronics: the LowLevel (Pico) board and the three
+  # xESC motor controllers stay on their own firmware; this sidecar speaks
+  # their protocols and publishes MowgliNext's hardware_bridge contract
+  # (/hardware_bridge/{status,emergency,power}, /battery_state, /imu/data,
+  # /wheel_odom, /wheel_ticks, mower_control + emergency_stop services).
+  # mowgli-ros2 skips its own hardware_bridge_node for this backend
+  # (mowgli.launch.py gates it on HARDWARE_BACKEND=mowgli). GNSS is NOT part
+  # of this backend: the Universal GNSS sidecar keeps the receiver.
+  # -------------------------------------------------------------------------
+x-ros2-env: &ros2-env
+  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+  RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+  CYCLONEDDS_URI: file:///cyclonedds.xml
+  ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+  RCUTILS_COLORIZED_OUTPUT: "1"
+  RCUTILS_LOGGING_USE_STDOUT: "1"
+
+services:
+
+  openmower:
+    container_name: mowgli-openmower
+    labels:
+      garden.mowgli.update.image: openmower
+    image: ${OPENMOWER_IMAGE}
+    network_mode: host
+    ipc: host
+    privileged: true
+    environment:
+      <<: *ros2-env
+      HARDWARE_BACKEND: ${HARDWARE_BACKEND:-openmower}
+      OPENMOWER_LL_PORT: ${OPENMOWER_LL_PORT:-/dev/ttyAMA0}
+      OPENMOWER_XESC_TYPE: ${OPENMOWER_XESC_TYPE:-xesc_mini}
+      OPENMOWER_XESC_LEFT_PORT: ${OPENMOWER_XESC_LEFT_PORT:-/dev/ttyAMA5}
+      OPENMOWER_XESC_RIGHT_PORT: ${OPENMOWER_XESC_RIGHT_PORT:-/dev/ttyAMA3}
+      OPENMOWER_XESC_MOW_PORT: ${OPENMOWER_XESC_MOW_PORT:-/dev/ttyAMA4}
+    volumes:
+      - /dev:/dev
+      # Read-only: this bridge only READS the sparse robot config
+      # (ticks_per_meter, wheel_track, mowing_enabled, charge limits). The
+      # single writer of that file remains mowgli-ros2.
+      - ./docker/config/mowgli:/config:ro
+      - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-file: "3"
+        max-size: 5m

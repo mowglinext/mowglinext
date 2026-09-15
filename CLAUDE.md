@@ -65,6 +65,7 @@ Also: [`.claude/rules/ros2.md`](.claude/rules/ros2.md) — ROS2 node/QoS/launch/
 This robot has spinning blades. The STM32 firmware is the sole blade safety authority.
 
 - NEVER bypass firmware blade safety checks from ROS2
+- On the **OpenMower backend** (`HARDWARE_BACKEND=openmower`, `sensors/openmower/`) the stock OpenMower controllers have no such policy — the bridge on the host is in the actuation path (zero duty on any emergency / stale link / stale `cmd_vel`, blade only in AUTONOMOUS or MANUAL_MOWING — `blade_policy.hpp`). Treat every change there as safety-critical too.
 - Blade commands from ROS2 are fire-and-forget — firmware decides whether to execute
 - Emergency stop is handled by firmware, not software
 - Flag ANY change that could affect physical behavior as safety-critical in PR reviews
@@ -77,7 +78,7 @@ This robot has spinning blades. The STM32 firmware is the sole blade safety auth
 | `install/` | Shell | `./mowglinext.sh` | Interactive installer, hardware presets, modular Docker Compose configs |
 | `gui/` | Go, TypeScript/React | `go build`, `yarn build` | Web interface for config, map editing, monitoring |
 | `docker/` | YAML, Shell | `docker compose` | Manual deployment configs, DDS, service orchestration |
-| `sensors/` | Dockerfile | `docker build` | Dockerized sensor drivers (GPS, LiDAR) |
+| `sensors/` | Dockerfile, C++ | `docker build` | Dockerized sensor drivers (GPS, LiDAR) + the OpenMower hardware-bridge sidecar (`sensors/openmower/`, `HARDWARE_BACKEND=openmower`: stock LowLevel + xESC firmware behind a bridge that publishes the `/hardware_bridge` contract; `mowgli.launch.py` skips the STM32 bridge for any backend but `mowgli`) |
 | `firmware/` | C | `pio run` | STM32F103 firmware (motor, IMU, blade, battery) |
 | `docs/` | HTML, CSS, JS, Markdown | GitHub Pages | Landing page + install composer at mowgli.garden; also the Claude reference set (`docs/claude/`, incl. `docs/claude/codemaps/`) and the operator/handoff docs |
 

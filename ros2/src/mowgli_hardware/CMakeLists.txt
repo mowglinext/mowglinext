@@ -88,12 +88,26 @@ install(
   DESTINATION include
 )
 
+# mowgli_hardware_core is exported so out-of-tree bridges can reuse the
+# COBS/CRC/serial/packet layer instead of copying it. The OpenMower sidecar
+# (sensors/openmower/mowgli_openmower_bridge) links
+# mowgli_hardware::mowgli_hardware_core for the LowLevel-board link, whose
+# wire framing is byte-identical to the STM32 one.
 install(
-  TARGETS mowgli_hardware_core hardware_bridge_node
+  TARGETS mowgli_hardware_core
+  EXPORT export_mowgli_hardware_core
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+install(
+  TARGETS hardware_bridge_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+ament_export_targets(export_mowgli_hardware_core HAS_LIBRARY_TARGET)
+ament_export_dependencies(rclcpp)
 
 # ---------------------------------------------------------------------------
 # Testing
