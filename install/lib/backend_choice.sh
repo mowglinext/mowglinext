@@ -47,6 +47,66 @@ configure_mavros_backend_details() {
   fi
 }
 
+# Every backend the installer knows. Keep in lockstep with
+# SUPPORTED_HARDWARE_BACKENDS in ros2/src/mowgli_bringup/launch/mowgli.launch.py
+# and the composer in docs/index.html.
+SUPPORTED_HARDWARE_BACKENDS="mowgli mavros openmower"
+
+is_supported_hardware_backend() {
+  case "${1:-}" in
+    mowgli|mavros|openmower) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# OpenMower v1 electronics: LowLevel (Pico) board + three xESC controllers on
+# the Pi's hardware UARTs. The bridge runs in the mowgli-openmower sidecar;
+# nothing is flashed. Defaults follow open_mower_ros for kernels >= 6.1.28
+# (ttyAMA0 = LowLevel, ttyAMA5/3/4 = left/right/mow xESC).
+configure_openmower_backend_details() {
+  local allow_existing="${1:-false}"
+
+  : "${OPENMOWER_LL_PORT:=/dev/ttyAMA0}"
+  : "${OPENMOWER_XESC_LEFT_PORT:=/dev/ttyAMA5}"
+  : "${OPENMOWER_XESC_RIGHT_PORT:=/dev/ttyAMA3}"
+  : "${OPENMOWER_XESC_MOW_PORT:=/dev/ttyAMA4}"
+
+  if [[ "$allow_existing" == "true" && ( "${OPENMOWER_XESC_TYPE:-}" == "xesc_mini" || "${OPENMOWER_XESC_TYPE:-}" == "xesc_2040" ) ]]; then
+    info "Using OpenMower ESC type preset/default: ${OPENMOWER_XESC_TYPE}"
+  else
+    select_openmower_xesc_type || return 1
+  fi
+
+  export OPENMOWER_LL_PORT OPENMOWER_XESC_LEFT_PORT OPENMOWER_XESC_RIGHT_PORT \
+    OPENMOWER_XESC_MOW_PORT OPENMOWER_XESC_TYPE
+  info "OpenMower ports: LowLevel=${OPENMOWER_LL_PORT} xESC L=${OPENMOWER_XESC_LEFT_PORT} R=${OPENMOWER_XESC_RIGHT_PORT} M=${OPENMOWER_XESC_MOW_PORT}"
+}
+
+select_openmower_xesc_type() {
+  echo ""
+  echo "Select the OpenMower motor controller type (OM_MOWER_ESC_TYPE):"
+  echo "  [1] xesc_mini — STM32 ESC, VESC protocol (stock YardForce builds)"
+  echo "  [2] xesc_2040 — RP2040 ESC"
+  echo ""
+  prompt "Choice [1-2]" "1"
+  choice="$REPLY"
+
+  case "$choice" in
+    1)
+      export OPENMOWER_XESC_TYPE="xesc_mini"
+      info "Selected OpenMower ESC type: xesc_mini"
+      ;;
+    2)
+      export OPENMOWER_XESC_TYPE="xesc_2040"
+      info "Selected OpenMower ESC type: xesc_2040"
+      ;;
+    *)
+      error "Invalid choice"
+      return 1
+      ;;
+  esac
+}
+
 select_hardware_backend() {
   if [[ "${PRESET_LOADED:-false}" == "true" && -n "${HARDWARE_BACKEND:-}" ]]; then
     case "${HARDWARE_BACKEND}" in
@@ -62,8 +122,15 @@ select_hardware_backend() {
         configure_mavros_backend_details true || return 1
         return 0
         ;;
+      openmower)
+        export HARDWARE_BACKEND="openmower"
+        export MAVROS_BY_ID=""
+        info "Hardware backend pre-configured: OpenMower electronics (LowLevel + xESC)"
+        configure_openmower_backend_details true || return 1
+        return 0
+        ;;
       *)
-        error "Invalid HARDWARE_BACKEND preset: ${HARDWARE_BACKEND} (expected mowgli or mavros)"
+        error "Invalid HARDWARE_BACKEND preset: ${HARDWARE_BACKEND} (expected ${SUPPORTED_HARDWARE_BACKENDS// /|})"
         return 1
         ;;
     esac
@@ -73,8 +140,9 @@ select_hardware_backend() {
   echo "Select hardware backend:"
   echo "  [1] Mowgli STM32 board"
   echo "  [2] Pixhawk via MAVROS"
+  echo "  [3] OpenMower electronics (LowLevel board + xESC, stock firmware)"
   echo ""
-  prompt "Choice [1-2]" "1"
+  prompt "Choice [1-3]" "1"
   choice="$REPLY"
 
   case "$choice" in
@@ -87,6 +155,12 @@ select_hardware_backend() {
       export HARDWARE_BACKEND="mavros"
       info "Selected backend: Pixhawk via MAVROS"
       configure_mavros_backend_details false || return 1
+      ;;
+    3)
+      export HARDWARE_BACKEND="openmower"
+      export MAVROS_BY_ID=""
+      info "Selected backend: OpenMower electronics (LowLevel board + xESC)"
+      configure_openmower_backend_details false || return 1
       ;;
     *)
       error "Invalid choice"

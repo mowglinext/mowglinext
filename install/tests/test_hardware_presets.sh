@@ -2,9 +2,11 @@
 # =============================================================================
 # A.3 Hardware preset matrix — Mowgli STM32 vs Pixhawk MAVROS
 #
-# The installer's select_hardware_backend offers exactly two backends:
-#   1. Mowgli STM32 board (HARDWARE_BACKEND=mowgli)
-#   2. Pixhawk via MAVROS    (HARDWARE_BACKEND=mavros)
+# The installer's select_hardware_backend offers three backends:
+#   1. Mowgli STM32 board      (HARDWARE_BACKEND=mowgli)
+#   2. Pixhawk via MAVROS      (HARDWARE_BACKEND=mavros)
+#   3. OpenMower electronics   (HARDWARE_BACKEND=openmower — LowLevel + xESC
+#      behind the mowgli-openmower bridge sidecar, GNSS stays universal)
 # The "Yardforce500*" labels mentioned in product copy are mower_model
 # strings inside docker/config/mowgli/mowgli_robot.yaml, not separate
 # install presets.  This test covers both backends end-to-end.
@@ -66,6 +68,15 @@ case "$mowgli_fragments" in
     pass "mowgli backend: no MAVROS fragment by default"
     ;;
 esac
+case "$mowgli_fragments" in
+  *docker-compose.openmower.yml*)
+    fail "mowgli backend: no OpenMower fragment by default" "unexpected fragment selected"
+    ;;
+  *)
+    pass "mowgli backend: no OpenMower fragment by default"
+    ;;
+esac
+assert_eq "mowgli backend: OPENMOWER_ENABLED=false" "false" "$(env_value "$mowgli_repo" OPENMOWER_ENABLED)"
 
 # ── Pixhawk MAVROS backend ────────────────────────────────────────────────
 section "HARDWARE_BACKEND=mavros (Pixhawk via MAVROS)"
@@ -121,5 +132,49 @@ case "$mavros_no_gnss_fragments" in
   *docker-compose.gps.yml*) fail "mavros + disabled GNSS: GPS fragment absent" ;;
   *) pass "mavros + disabled GNSS: GPS fragment absent" ;;
 esac
+
+# ── OpenMower electronics backend ────────────────────────────────────────
+section "HARDWARE_BACKEND=openmower (LowLevel board + xESC behind the bridge sidecar)"
+
+openmower_repo="$SANDBOX/repo_openmower"
+sandbox_repo "$openmower_repo"
+harness_init "$openmower_repo"
+harness_set_preset backend=openmower gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+if harness_run; then
+  pass "openmower backend: harness_run succeeds"
+else
+  fail "openmower backend: harness_run succeeds"
+fi
+assert_eq "openmower backend: HARDWARE_BACKEND=openmower" "openmower" "$(env_value "$openmower_repo" HARDWARE_BACKEND)"
+assert_eq "openmower backend: GNSS stays universal"     "universal" "$(env_value "$openmower_repo" GNSS_BACKEND)"
+assert_eq "openmower backend: GNSS_STACK=universal"      "universal" "$(env_value "$openmower_repo" GNSS_STACK)"
+assert_eq "openmower backend: OPENMOWER_ENABLED=true"    "true"      "$(env_value "$openmower_repo" OPENMOWER_ENABLED)"
+assert_eq "openmower backend: MAVROS_ENABLED=false"      "false"     "$(env_value "$openmower_repo" MAVROS_ENABLED)"
+assert_eq "openmower backend: default ESC type"          "xesc_mini" "$(env_value "$openmower_repo" OPENMOWER_XESC_TYPE)"
+assert_eq "openmower backend: LowLevel port default"     "/dev/ttyAMA0" "$(env_value "$openmower_repo" OPENMOWER_LL_PORT)"
+assert_eq "openmower backend: left xESC port default"    "/dev/ttyAMA5" "$(env_value "$openmower_repo" OPENMOWER_XESC_LEFT_PORT)"
+assert_eq "openmower backend: right xESC port default"   "/dev/ttyAMA3" "$(env_value "$openmower_repo" OPENMOWER_XESC_RIGHT_PORT)"
+assert_eq "openmower backend: mow xESC port default"     "/dev/ttyAMA4" "$(env_value "$openmower_repo" OPENMOWER_XESC_MOW_PORT)"
+assert_match "openmower backend: OPENMOWER_IMAGE points at the openmower image" "/openmower:" "$(env_value "$openmower_repo" OPENMOWER_IMAGE)"
+
+openmower_fragments=$(selected_fragments_in_current_run)
+for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.gps.yml docker-compose.openmower.yml docker-compose.lidar-ldlidar.yml; do
+  case "$openmower_fragments" in
+    *"$required"*) pass "openmower backend: fragment $required present" ;;
+    *)             fail "openmower backend: fragment $required present" ;;
+  esac
+done
+case "$openmower_fragments" in
+  *docker-compose.mavros.yml*)
+    fail "openmower backend: no MAVROS fragment" "mavros fragment leaked into openmower compose selection"
+    ;;
+  *)
+    pass "openmower backend: no MAVROS fragment"
+    ;;
+esac
+
+openmower_yaml="$openmower_repo/docker/config/mowgli/mowgli_robot.yaml"
+assert_match "openmower backend: ticks_per_meter seeded for xESC hall ticks" "ticks_per_meter: 1600.0" "$(grep -E '^[[:space:]]+ticks_per_meter:' "$openmower_yaml")"
+assert_match "openmower backend: the sparse config keeps lidar_enabled" "lidar_enabled: true" "$(grep -E '^[[:space:]]+lidar_enabled:' "$openmower_yaml")"
 
 test_summary

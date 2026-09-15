@@ -159,7 +159,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: curl -sSL https://mowgli.garden/install.sh | bash -s -- [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --backend=TYPE      Hardware backend: mowgli (default), mavros (advanced Pixhawk path)"
+      echo "  --backend=TYPE      Hardware backend: mowgli (default), openmower (stock OpenMower electronics), mavros (advanced Pixhawk path)"
       echo "  --gnss-receiver-family"
       echo "                     Universal GNSS receiver family first-boot default: auto, ublox, unicore, nmea"
       echo "  --gnss-connection  Universal GNSS serial link first-boot default: usb or uart"
@@ -241,13 +241,13 @@ HAS_INSTALLER_PRESET_ARGS=false
 
 if [[ -n "$BACKEND_FLAG" ]]; then
   case "$BACKEND_FLAG" in
-    mowgli|mavros)
+    mowgli|mavros|openmower)
       INSTALLER_ARGS+=("--backend=$BACKEND_FLAG")
       HAS_INSTALLER_PRESET_ARGS=true
       info "Hardware backend: $BACKEND_FLAG"
       ;;
     *)
-      warn "Unknown hardware backend: $BACKEND_FLAG (expected mowgli|mavros) — installer will ask interactively"
+      warn "Unknown hardware backend: $BACKEND_FLAG (expected mowgli|openmower|mavros) — installer will ask interactively"
       ;;
   esac
 fi

@@ -242,7 +242,7 @@ main() {
 
     # Image refs are tied to the install script version — never inherit
     # stale paths from older installs (e.g. mowgli-docker, openmower-gui).
-    unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE GUI_IMAGE
+    unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE OPENMOWER_IMAGE GUI_IMAGE
 
       # Image tag selection is independent from the selected repository branch.
       select_image_channel

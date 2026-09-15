@@ -110,6 +110,12 @@ if(BUILD_TESTING)
     TIMEOUT 30
   )
 
+  # HARDWARE_BACKEND gating: only the mowgli backend launches the in-tree
+  # hardware_bridge_node; mavros/openmower sidecars own the bridge. AST-based.
+  ament_add_pytest_test(test_hardware_backend_launch test/test_hardware_backend_launch.py
+    TIMEOUT 30
+  )
+
 endif()
 
 ament_package()

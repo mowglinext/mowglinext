@@ -1,6 +1,6 @@
 # sensors/ — working notes for Claude
 
-Four self-contained Docker images that run **beside** `mowgli-ros2` and talk to it only over DDS: the Universal GNSS sidecar (`gps/`) and three LiDAR driver wrappers (`lidar-ldlidar/`, `lidar-rplidar/`, `lidar-stl27l/`). The only ROS node this tree owns is `gps/mowgli_gnss_bridge`; everything else is a vendored upstream driver plus a startup shell script.
+Five self-contained Docker images that run **beside** `mowgli-ros2` and talk to it only over DDS: the Universal GNSS sidecar (`gps/`), three LiDAR driver wrappers (`lidar-ldlidar/`, `lidar-rplidar/`, `lidar-stl27l/`) and the OpenMower hardware bridge (`openmower/`, composed only for `HARDWARE_BACKEND=openmower`). This tree owns two ROS nodes: `gps/mowgli_gnss_bridge` and `openmower/mowgli_openmower_bridge` (node name `hardware_bridge`, replacing `mowgli-ros2`'s STM32 bridge on stock OpenMower electronics — see [`openmower/README.md`](openmower/README.md), safety section first); everything else is a vendored upstream driver plus a startup shell script.
 It must NOT own: which containers run, device paths, udev symlinks, `docker/.env` or the compose fragments (installer — see `install/CLAUDE.md`); the `GnssStatus.msg` schema (`ros2/src/mowgli_interfaces`); or any consumer of `/gps/*` and `/scan` (see `ros2/CLAUDE.md`). Nothing here publishes TF or a pose — root CLAUDE.md Invariants 1–2.
 
 ## Read next
@@ -17,6 +17,7 @@ It must NOT own: which containers run, device paths, udev symlinks, `docker/.env
 | [`wiki/Sensors.md`](../wiki/Sensors.md) | Operator-facing GNSS contract + the 2026-06 F9P/UM982 field-validation notes. **Partly stale** (see gotchas). |
 | [`wiki/Deployment.md`](../wiki/Deployment.md) | The compose stack these containers sit in, from the operator's side. |
 | [`sensors/README.md`](README.md) | User-facing sensor overview / "how to add a sensor". **Partly stale** (see gotchas). |
+| [`openmower/README.md`](openmower/README.md) | The OpenMower backend: ports, config keys, the host-side wheel loop, and the **safety model** (the host is in the actuation path there). |
 
 ## Build · test · run
 
@@ -24,6 +25,9 @@ It must NOT own: which containers run, device paths, udev symlinks, `docker/.env
 # GPS sidecar — build context MUST be the repo root (the Dockerfile copies ros2/src/**)
 git submodule update --init --recursive ros2/src/external/universal-gnss
 docker build -t mowgli-gps -f sensors/gps/Dockerfile .
+
+# OpenMower bridge — repo-root context too (copies ros2/src/mowgli_{interfaces,hardware})
+docker build -t mowgli-openmower -f sensors/openmower/Dockerfile .
 
 # LiDAR images — context is the sensor directory
 docker build -t mowgli-lidar-ldlidar --target runtime sensors/lidar-ldlidar/
@@ -45,7 +49,7 @@ mowgli-gps-logs ; mowgli-lidar-logs
 
 `mowgli_gnss_bridge`'s tests run in the **`Test mowgli_gnss_bridge` job of `sensors-gps.yml`** — and nowhere else. The image itself still builds with `-DBUILD_TESTING=OFF` and deletes `/ws/build`, and `ros2-ci.yml` only builds `ros2/src`, so that job is the sole thing that compiles and executes them. It assembles the same source set as the Dockerfile's builder stage, then runs `colcon test --packages-select mowgli_gnss_bridge`, and finally asserts the gtest XML reports a non-zero case count — because a package whose tests silently stop being registered would otherwise turn the job green with zero coverage, which is exactly how these tests rotted unnoticed until 2026-09-05. **Keep that job's package list in lockstep with the Dockerfile's builder stage.** To reproduce locally, build a scratch overlay containing `mowgli_interfaces`, `ros2/src/external/universal-gnss/gnss_ros2` (`universal_gnss_ros2`) and this package: `colcon build --packages-up-to mowgli_gnss_bridge && colcon test --packages-select mowgli_gnss_bridge`.
 
-CI: one thin caller per image (`.github/workflows/sensors-{gps,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`) → reusable `_sensor-docker.yml` (amd64 + arm64, push-by-digest then manifest merge). Only `sensors-gps.yml` has a smoke test (L37–66: packages/executables present, `CAP_RTK_MODE`, `RtcmFrame.data`, `rtcm_msgs/Message.message`).
+CI: one thin caller per image (`.github/workflows/sensors-{gps,openmower,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`) → reusable `_sensor-docker.yml` (amd64 + arm64, push-by-digest then manifest merge). `sensors-gps.yml` and `sensors-openmower.yml` carry smoke tests and a `test` job that assembles a minimal workspace and runs the package gtests (asserting a non-zero case count); `mowgli_openmower_bridge`'s 47 gtests run **only** there.
 
 ## Conventions
 
@@ -58,6 +62,8 @@ CI: one thin caller per image (`.github/workflows/sensors-{gps,lidar-ldlidar,lid
 
 ## Component-specific gotchas
 
+- **openmower build context = repo root** as well, and `mowgli_openmower_bridge` links `mowgli_hardware::mowgli_hardware_core` (exported from `ros2/src/mowgli_hardware/CMakeLists.txt`) for COBS/CRC/serial. Build `mowgli_hardware` with `-DBUILD_TESTING=OFF` in that scratch workspace: its tests include a firmware header by relative path that only resolves inside `ros2/`.
+- **`sensors/openmower/.clang-format` is a copy of `ros2/.clang-format`** because `ros2/scripts/format.sh` only walks `ros2/src`; format the package with `clang-format --style=file` by hand.
 - **gps build context = repo root.** `sensors/gps/Dockerfile:37–46` copies `ros2/src/mowgli_interfaces` + seven universal-gnss packages; `docker build sensors/gps/` fails. CI passes `context: .` with `dockerfile: sensors/gps/Dockerfile`.
 - **universal-gnss is a submodule on the mowglinext FORK**, branch `main` (`.gitmodules`). Both issue #395 fixes (GLONASS-1230 optional-for-RTK correction health, UM980 `MODE ROVER UAV` default) are now upstream in that fork's main, so the old stacked `fix/rover-dynamic-mode-uav` branch is gone. A bump means re-pinning the gitlink, not just editing the branch line; with the submodule uninitialised the Dockerfile's seven `COPY`s have nothing to copy and the build fails.
 - **Adding a default to `install/compose/docker-compose.gps.yml` masks the operator's YAML.** Empty `GNSS_*` env values are deliberate ("not set") — the resolvers (`start_gps.sh:66–376`) read `/config/mowgli_robot.yaml` first.

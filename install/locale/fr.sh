@@ -79,8 +79,8 @@ MSG_MOTD_NOT_SET="non defini"
 MSG_MOTD_RUNNING="actif(s)"
 
 MSG_UPDATER_STACK_BACKEND="Les mises à jour gérées prennent en charge le matériel Mowgli."
-MSG_UPDATER_HARDWARE_LEGACY="Ces choix matériels nécessitent le parcours d'installation existant (MAVROS, TF-Luna ou VESC). Les conteneurs sélectionnés sont conservés ; les mises à jour coordonnées ne sont pas activées."
-MSG_UPDATER_HARDWARE_MANAGED="Cette installation utilise déjà les mises à jour gérées. Les choix MAVROS, TF-Luna et VESC nécessitent une migration explicite ; les fichiers d'exécution n'ont pas été régénérés."
+MSG_UPDATER_HARDWARE_LEGACY="Ces choix matériels nécessitent le parcours d'installation existant (MAVROS, OpenMower, TF-Luna ou VESC). Les conteneurs sélectionnés sont conservés ; les mises à jour coordonnées ne sont pas activées."
+MSG_UPDATER_HARDWARE_MANAGED="Cette installation utilise déjà les mises à jour gérées. Les choix MAVROS, OpenMower, TF-Luna et VESC nécessitent une migration explicite ; les fichiers d'exécution n'ont pas été régénérés."
 MSG_UPDATER_STACK_REVIEW="Choix matériels enregistrés. Consultez les mises à jour logicielles pour appliquer les changements de conteneurs ; la définition installée a été conservée."
 
 # Compose baseline / legacy adoption (install/lib/compose.sh)

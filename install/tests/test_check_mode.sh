@@ -65,6 +65,12 @@ GNSS_BACKEND="disabled"
 restart_mavros="$(compose_restart_services_for_backend mavros | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
 assert_eq "restart services for mavros" "mavros ntrip mowgli" "$restart_mavros"
 
+HARDWARE_BACKEND="openmower"
+GNSS_BACKEND="universal"
+GNSS_STACK="universal"
+restart_openmower="$(compose_restart_services_for_backend openmower | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+assert_eq "restart services for openmower" "gps openmower mowgli" "$restart_openmower"
+
 section "--check aligns with runtime backend selection"
 
 repo_mowgli="$SANDBOX/repo_mowgli"
@@ -92,6 +98,18 @@ assert_eq "mavros: --check exits 0" "0" "$ec"
 assert_contains "mavros: expected mavros service" "mavros (mowgli-mavros)" "$output_mavros"
 assert_contains "mavros: firmware check skipped" "MAVROS backend: skipping direct Mowgli firmware check" "$output_mavros"
 assert_not_contains "mavros: no direct gps container expected" "gps (mowgli-gps)" "$output_mavros"
+
+repo_openmower="$SANDBOX/repo_openmower"
+sandbox_repo "$repo_openmower"
+harness_init "$repo_openmower"
+harness_set_preset backend=openmower gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_run >/dev/null 2>&1
+output_openmower="$(bash "$repo_openmower/install/mowglinext.sh" --check 2>&1)"
+ec=$?
+assert_eq "openmower: --check exits 0" "0" "$ec"
+assert_contains "openmower: expected bridge service" "openmower (mowgli-openmower)" "$output_openmower"
+assert_contains "openmower: gps container still expected" "gps (mowgli-gps)" "$output_openmower"
+assert_contains "openmower: firmware check delegated to the bridge" "OpenMower backend: the LowLevel board keeps its own firmware" "$output_openmower"
 
 section "No stale check/restart paths remain"
 
