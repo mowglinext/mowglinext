@@ -88,6 +88,8 @@ STRUCTURAL = {
 
 # Fields the operator legitimately tunes per-deployment. We do NOT compare.
 USER_OVERRIDE = {
+    # Per-robot identity (docs/MULTI_ROBOT.md): every mower picks its own.
+    "robot_name",
     "datum_lat", "datum_lon", "datum_alt",
     "dock_pose_x", "dock_pose_y", "dock_pose_yaw",
     "imu_pitch", "imu_roll", "imu_yaw", "imu_x", "imu_y", "imu_z",
