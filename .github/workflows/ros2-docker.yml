@@ -117,10 +117,11 @@ jobs:
             ros2 pkg prefix nav2_smac_planner
             ros2 pkg prefix grid_map_ros
             ros2 pkg prefix beluga_ros
-            ros2 pkg prefix universal_gnss_ros2
-            ros2 interface show universal_gnss_ros2/msg/GnssStatus
-            ros2 interface show universal_gnss_ros2/msg/RtcmFrame
-            ros2 interface show universal_gnss_ros2/srv/GetReceiverSnapshot
+            ros2 pkg prefix universal_gnss_msgs
+            ros2 interface show universal_gnss_msgs/msg/GnssStatus
+            ros2 interface show universal_gnss_msgs/msg/RtcmFrame
+            ros2 interface show universal_gnss_msgs/srv/GetReceiverSnapshot
+            ! ros2 pkg prefix universal_gnss_ros2
             ros2 run mowgli_tools tune_drive_pid --help > /tmp/mowgli_tools_help.txt
             grep -q "Controlled drive PID tuning" /tmp/mowgli_tools_help.txt
             ros2 launch mowgli_bringup full_system.launch.py --show-args \

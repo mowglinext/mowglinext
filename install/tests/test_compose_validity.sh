@@ -210,6 +210,18 @@ else
   fi
 fi
 
+# The MAVROS coexistence scenario above reinitializes the shared installer
+# harness against MAVROS_REPO. Restore the original Mowgli preset before the
+# managed-updater checks below; managed release updates intentionally support
+# the Mowgli hardware backend only.
+harness_init "$SANDBOX_REPO"
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+if ! harness_run; then
+  fail "restore default Mowgli harness" "non-zero exit"
+fi
+COMPOSE_FILE="$SANDBOX_REPO/docker/docker-compose.yaml"
+ENV_FILE="$SANDBOX_REPO/docker/.env"
+
 section "Managed updater Compose layout"
 if real_docker_compose_available && [[ -x "${MOWGLI_UPDATER_STACK_BINARY:-/usr/local/bin/mowgli-updater}" ]]; then
   touch "$DOCKER_DIR/.updater-managed"
