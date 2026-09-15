@@ -183,6 +183,41 @@ def generate_launch_description() -> LaunchDescription:
     # default (single source of truth).
     robot_params = load_robot_params(bringup_dir, _runtime_cfg_path)
 
+    # The Universal GNSS receiver runtime stays in the gps sidecar.  This
+    # process owns only its public-topic contract adapter.  GNSS_STACK is an
+    # independent compose concern: a MAVROS hardware backend can still use a
+    # Universal GNSS receiver.
+    gnss_stack = os.environ.get("GNSS_STACK", "universal").strip().lower()
+    gnss_bridge_node = None
+    if gnss_stack == "universal":
+        gnss_bridge_node = Node(
+            package="mowgli_gnss_bridge",
+            executable="universal_gnss_topic_bridge",
+            name="universal_gnss_topic_bridge",
+            output="screen",
+            parameters=[
+                {
+                    "backend": "universal",
+                    "receiver_family": str(
+                        robot_params.get(
+                            "gnss_receiver_family",
+                            os.environ.get("GNSS_RECEIVER_FAMILY", "auto"),
+                        )
+                    ),
+                    "frame_id": str(
+                        robot_params.get(
+                            "gnss_frame_id", os.environ.get("GNSS_FRAME_ID", "gps_link")
+                        )
+                    ),
+                    "input_status_topic": "/universal_gnss_receiver/status",
+                    "output_status_topic": "/gps/status",
+                    "input_diagnostics_topic": "/diagnostics",
+                    "input_rtcm_topic": "/universal_gnss_receiver/rtcm",
+                    "output_rtcm_topic": "/rtcm",
+                }
+            ],
+        )
+
     # ------------------------------------------------------------------
     # 1. mowgli.launch.py — hardware bridge, RSP, twist_mux
     # ------------------------------------------------------------------
@@ -747,8 +782,7 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # LaunchDescription
     # ------------------------------------------------------------------
-    return LaunchDescription(
-        [
+    launch_entities = [
             # Arguments
             use_sim_time_arg,
             serial_port_arg,
@@ -777,4 +811,6 @@ def generate_launch_description() -> LaunchDescription:
             # charging (~/dock_heading → /gnss/heading via mowgli.launch.py
             # remapping). No separate launch action needed.
         ]
-    )
+    if gnss_bridge_node is not None:
+        launch_entities.append(gnss_bridge_node)
+    return LaunchDescription(launch_entities)

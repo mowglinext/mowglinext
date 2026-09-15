@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch_ros.actions import Node
 
 
 def _load_module(filename: str, module_name: str):
@@ -47,6 +48,48 @@ def test_full_system_no_longer_includes_internal_universal_launch() -> None:
     ]
 
     assert all(not location.endswith("universal_gnss.launch.py") for location in included_locations)
+    assert all(
+        not (
+            isinstance(entity, Node) and entity.package == "universal_gnss_ros2"
+        )
+        for entity in launch_description.entities
+    )
+
+
+def _bridge_nodes(launch_description):
+    return [
+        entity
+        for entity in launch_description.entities
+        if isinstance(entity, Node)
+        and entity.package == "mowgli_gnss_bridge"
+        and entity.executable == "universal_gnss_topic_bridge"
+    ]
+
+
+def test_full_system_launches_contract_bridge_only_for_universal_stack(monkeypatch) -> None:
+    monkeypatch.delenv("GNSS_STACK", raising=False)
+    launch_module = _load_module("full_system.launch.py", "full_system_default_bridge")
+    bridge_nodes = _bridge_nodes(launch_module.generate_launch_description())
+
+    assert len(bridge_nodes) == 1
+    params = bridge_nodes[0].parameters[0]
+    assert params["backend"] == "universal"
+    assert params["input_status_topic"] == "/universal_gnss_receiver/status"
+    assert params["output_status_topic"] == "/gps/status"
+    assert params["input_rtcm_topic"] == "/universal_gnss_receiver/rtcm"
+    assert params["output_rtcm_topic"] == "/rtcm"
+
+    monkeypatch.setenv("GNSS_STACK", "disabled")
+    launch_module = _load_module("full_system.launch.py", "full_system_disabled_bridge")
+    assert not _bridge_nodes(launch_module.generate_launch_description())
+
+
+def test_universal_bridge_does_not_depend_on_hardware_backend(monkeypatch) -> None:
+    monkeypatch.setenv("GNSS_STACK", "universal")
+    monkeypatch.setenv("HARDWARE_BACKEND", "mavros")
+    launch_module = _load_module("full_system.launch.py", "full_system_mavros_universal_bridge")
+
+    assert len(_bridge_nodes(launch_module.generate_launch_description())) == 1
 
 
 def test_full_system_no_longer_passes_legacy_gnss_status_params() -> None:
