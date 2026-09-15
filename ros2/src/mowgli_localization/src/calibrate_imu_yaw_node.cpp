@@ -951,11 +951,13 @@ private:
   // ═══ One-click dock calibration (CalibrateDock action, Resolution A) ═══
   // The dock yaw is circular_mean(/imu/cog_heading over the reverse leg) with
   // NO +pi (the topic is already the reverse-aware BODY heading). The sequence
-  // reverses on /cmd_vel_docking, gates COG coherence, re-docks forward until
-  // charging, then persists via map_server's set_docking_point (yaw_source=
-  // MOTION) — the single canonical writer. Blade is never commanded; every
-  // drive loop zero-vels on emergency/cancel; the dock pose is persisted ONLY
-  // after a verified re-dock+charge.
+  // reverses on /cmd_vel_docking, gates COG coherence, persists via
+  // map_server's set_docking_point (yaw_source=MOTION) — the single canonical
+  // writer — then attempts a supervised re-dock forward as a CONFIRMATION
+  // pass (see the persist block's comment for why the write can no longer
+  // wait on that pass: docking_server only reads dock_pose at container
+  // startup, so a same-session re-dock always steers on the OLD heading).
+  // Blade is never commanded; every drive loop zero-vels on emergency/cancel.
   using CalibrateDock = mowgli_interfaces::action::CalibrateDock;
   using DockGoalHandle = rclcpp_action::ServerGoalHandle<CalibrateDock>;
   using DockStatus = mowgli_interfaces::msg::DockCalibrationStatus;
@@ -1426,7 +1428,70 @@ private:
       have_imu = imu_result.success;
     }
 
-    // ── (4) Re-dock via the production docking pipeline, supervised ──
+    // ── Persist via the ONE canonical writer (map_server, yaw_source=MOTION),
+    //    as soon as the measurement itself is validated — NOT after the live
+    //    re-dock below is verified. That used to be the order (see git
+    //    history), on the theory that redocking successfully was the real
+    //    proof the measurement was good. It is not, and worse, it made a
+    //    genuinely stale dock_pose_yaw un-fixable in one run: docking_server
+    //    and gps_dock_detection_node only read dock_pose_x/y/yaw as ROS
+    //    parameters at container STARTUP (navigation.launch.py bakes them
+    //    into docking_server's dock database and gps_dock_detection_node's
+    //    params) — they never re-read mowgli_robot.yaml live. So the re-dock
+    //    attempt below is steering on the OLD heading no matter when in this
+    //    function we persist the new one; deferring the write bought no
+    //    extra confidence, it just discarded a good measurement whenever the
+    //    old heading was too far off for the live approach to land (the
+    //    "drives out, never finds its way back" report). The COG-coherence
+    //    gate above already has its own strong validation (min samples, σ
+    //    ceiling, bearing-match, baseline displacement) — that is what
+    //    actually vouches for this measurement, not a same-session redock.
+    //
+    // map_server's yaw-convergence gate wants the fused yaw quiet over a full
+    // rolling window, and right after the drive it is still settling (observed
+    // ~6° window-std immediately after the reverse leg) — so retry for a bit
+    // instead of failing on the first attempt.
+    publish_status(DockStatus::PHASE_PERSIST, 0.55f, 0.0f, true, false, 0, "saving dock pose");
+    {
+      std::string perr;
+      bool persisted = false;
+      for (int attempt = 0; attempt < PERSIST_MAX_ATTEMPTS && rclcpp::ok(); ++attempt)
+      {
+        if (attempt > 0)
+        {
+          publish_status(DockStatus::PHASE_PERSIST,
+                         0.55f,
+                         0.0f,
+                         true,
+                         false,
+                         0,
+                         "saving dock pose (waiting for yaw to settle)");
+          const double t_retry = monotonic() + PERSIST_RETRY_DELAY_SEC;
+          while (rclcpp::ok() && monotonic() < t_retry)
+            sleep_for(period);
+        }
+        if (is_canceled() || emergency_active_)
+          break;
+        if (persist_dock_via_map_server(gate.dock_yaw_rad, perr))
+        {
+          persisted = true;
+          break;
+        }
+      }
+      if (!persisted)
+      {
+        return finish(false,
+                      CalibrateDock::Result::RETRY_PERSIST_FAILED,
+                      perr,
+                      false,
+                      &gate,
+                      have_imu ? &imu_result : nullptr);
+      }
+    }
+
+    // ── (4) Re-dock via the production docking pipeline, supervised — this
+    //    is now a CONFIRMATION pass (the measurement above is already
+    //    saved), not the gate for whether it gets saved. ──
     publish_status(DockStatus::PHASE_REDOCKING, 0.60f, 0.0f, true, false, 0, "re-docking");
     {
       // Line geometry shared by the guard and the steered backoff.
@@ -1617,51 +1682,25 @@ private:
     }
     if (!is_charging_)
     {
+      // The measured yaw was already persisted right after the COG-coherence
+      // gate (see the persist block before section (4)) — a failure here
+      // does NOT lose it. It usually means the live redock attempt above was
+      // still steering on docking_server's OLD, pre-restart dock_pose_yaw
+      // (see that persist block's comment for why this node cannot fix that
+      // itself within one run): tell the operator plainly instead of
+      // implying nothing happened.
       return finish(false,
                     CalibrateDock::Result::RETRY_NO_CHARGE_ON_REDOCK,
-                    "Re-dock did not re-engage the charger — retry.",
-                    false,
-                    &gate,
-                    have_imu ? &imu_result : nullptr);
-    }
-
-    // ── Persist via the ONE canonical writer (map_server, yaw_source=MOTION),
-    //    ONLY now that re-dock + charging are verified. ──
-    // map_server's yaw-convergence gate wants the fused yaw quiet over a full
-    // rolling window, and right after the drive it is still settling (observed
-    // ~6° window-std immediately after re-dock) — so retry while the robot
-    // sits still on the charger instead of failing on the first attempt.
-    publish_status(DockStatus::PHASE_PERSIST, 0.95f, 0.0f, true, false, 0, "saving dock pose");
-    std::string perr;
-    bool persisted = false;
-    for (int attempt = 0; attempt < PERSIST_MAX_ATTEMPTS && rclcpp::ok(); ++attempt)
-    {
-      if (attempt > 0)
-      {
-        publish_status(DockStatus::PHASE_PERSIST,
-                       0.95f,
-                       0.0f,
-                       true,
-                       false,
-                       0,
-                       "saving dock pose (waiting for yaw to settle)");
-        const double t_retry = monotonic() + PERSIST_RETRY_DELAY_SEC;
-        while (rclcpp::ok() && monotonic() < t_retry)
-          sleep_for(period);
-      }
-      if (is_canceled() || emergency_active_)
-        break;
-      if (persist_dock_via_map_server(gate.dock_yaw_rad, perr))
-      {
-        persisted = true;
-        break;
-      }
-    }
-    if (!persisted)
-    {
-      return finish(false,
-                    CalibrateDock::Result::RETRY_PERSIST_FAILED,
-                    perr,
+                    "Yaw measured and saved (" +
+                        std::to_string(
+                            static_cast<int>(std::lround(gate.dock_yaw_rad * 180.0 / M_PI))) +
+                        "°), but live re-dock could not be verified this run "
+                        "— docking_server only reads dock_pose at container "
+                        "startup, so it is still steering on the OLD heading. "
+                        "Restart mowgli-ros2 (Logs page → select it → "
+                        "Restart, or `docker restart mowgli-ros2`), then "
+                        "run this calibration again to confirm the physical "
+                        "re-dock.",
                     false,
                     &gate,
                     have_imu ? &imu_result : nullptr);

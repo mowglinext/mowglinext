@@ -10,13 +10,20 @@
 #      (blade OFF, collision_monitor active), monitoring COG.
 #   3. Gate COG coherence (circular std + bearing match + min displacement);
 #      derive the dock chassis yaw from the reverse leg.
-#   4. Drive FORWARD along the same line until the firmware reports charging
-#      (re-dock), or fail.
-#   5. Persist the dock pose via map_server /set_docking_point (the single
+#   4. Persist the dock pose via map_server /set_docking_point (the single
 #      canonical writer): averaged GPS x/y + the motion-derived yaw.
+#   5. Drive FORWARD along the same line as a live CONFIRMATION pass, until
+#      the firmware reports charging (re-dock), or fail.
 #
-# The dock pose is persisted ONLY after a verified re-dock (charging), so an
-# aborted / incoherent / non-charging run never corrupts mowgli_robot.yaml.
+# The dock pose is persisted as soon as step 3's coherence gate passes, NOT
+# after step 5. It used to be the other way round, but docking_server and
+# gps_dock_detection_node only read dock_pose_x/y/yaw as ROS parameters at
+# container startup — a same-session step-5 re-dock always steers on the OLD
+# heading no matter when the write happens, so deferring it just discarded a
+# good measurement whenever the old heading was too far off for that live
+# approach to land. Step 5 failing does not mean the pose was not saved —
+# check `message` / `retry_reason`; RETRY_NO_CHARGE_ON_REDOCK means it WAS
+# saved but needs a mowgli-ros2 restart before the live approach reflects it.
 
 # ── Goal ──────────────────────────────────────────────────────────────────
 bool include_imu_yaw     # also solve the IMU mounting-yaw offset from the straight legs
