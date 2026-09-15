@@ -47,6 +47,7 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | on change |
 | `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | `publish_rate` Hz |
 | `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | `publish_rate` Hz |
+| `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | on change |
 | `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
 | `<prefix>/available` | out | yes | connection state (LWT) | on connect/disconnect |
 | `<prefix>/command` | **in** | — | → `/behavior_tree_node/high_level_control` | — |
@@ -74,6 +75,13 @@ reads. Every field of `mowgli_interfaces/msg/HighLevelStatus.msg`:
   "emergency": false
 }
 ```
+
+`gps_quality_percent` is a genuine 0–100 percent on the wire — the bridge scales it up from the
+underlying ROS field, which (despite its name) is actually a 0.0–1.0 fraction at the source
+(`mowgli_behavior/src/status_snapshot.cpp` assigns the BT context's `gps_quality` — itself
+`std::clamp(..., 0.0f, 1.0f)` — straight into `HighLevelStatus.gps_quality_percent` with no ×100).
+If you're reading this field via any *other* path than `<prefix>/high_level_status` (e.g. straight
+off the `/behavior_tree_node/high_level_status` ROS topic), remember it's 0.0–1.0 there, not 0–100.
 
 `state` values (`mowgli_interfaces/msg/HighLevelStatus.msg`):
 
@@ -149,8 +157,26 @@ for anything that needs a real-world location (e.g. a Home Assistant `device_tra
 
 Raw relay of `sensor_msgs/msg/NavSatFix` — `status` is `NavSatStatus.status`
 (-1 `NO_FIX`, 0 `FIX`, 1 `SBAS_FIX`, 2 `GBAS_FIX`); it does **not** distinguish RTK Fixed from
-Float the way the GUI's `universal_gnss/summary` does, so don't read it as an RTK-quality signal —
-`<prefix>/high_level_status.gps_quality_percent` is the field for that.
+Float, so don't read it as an RTK-quality signal — use `<prefix>/rtk_status` for that.
+
+### `<prefix>/rtk_status`
+
+```json
+{"fix_type": 3, "fix_type_name": "RTK_FIXED", "rtk_mode": 3, "rtk_mode_name": "FIXED", "fix_valid": true, "quality_percent": 100}
+```
+
+Relay of `/gps/status` (`mowgli_interfaces/msg/GnssStatus`) — the **same** typed status and
+`gnss_status_utils` helpers the robot's own LED ring and behavior tree read, so this can never
+disagree with what the robot itself shows (e.g. the LED ring's amber "mowing without RTK fix"
+pattern, or the GUI's own GPS % health-check card). `quality_percent` is
+`gnss_status_utils::HardwareQualityPercent()` — a genuine 0–100 — not `GnssStatus.quality_percent`
+directly, whose own population is backend-dependent and not guaranteed to be on that scale.
+
+| Field | Values |
+|-------|--------|
+| `fix_type` / `fix_type_name` | 0 `NO_FIX`, 1 `GPS_FIX`, 2 `RTK_FLOAT`, 3 `RTK_FIXED`, 4 `DEAD_RECKONING` |
+| `rtk_mode` / `rtk_mode_name` | 0 `UNKNOWN`, 1 `NONE`, 2 `FLOAT`, 3 `FIXED` |
+| `fix_valid` | Overrides everything else — a stale/leftover `fix_type` with `fix_valid: false` means no usable fix, full stop |
 
 ### `<prefix>/diagnostics`
 

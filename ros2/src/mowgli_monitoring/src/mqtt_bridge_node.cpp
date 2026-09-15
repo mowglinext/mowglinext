@@ -556,6 +556,19 @@ void MqttBridgeNode::create_subscriptions()
         on_gps_fix(msg);
       });
 
+  // RTK/GNSS fix quality — the same typed status (and gnss_status_utils
+  // helpers) the LED ring and behavior tree read, so this topic can never
+  // disagree with what the robot itself shows. QoS(10) reliable, matching
+  // led_ring_node's and behavior_tree_node's own subscriptions to it (a
+  // derived status topic, not raw sensor data).
+  sub_gnss_status_ = create_subscription<mowgli_interfaces::msg::GnssStatus>(
+      "/gps/status",
+      10,
+      [this](mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
+      {
+        on_gnss_status(msg);
+      });
+
   // Subscribe to MQTT command topic.
   mqtt_client_->subscribe(full_topic("command"),
                           [this](const std::string& topic, const std::string& payload)
@@ -623,6 +636,11 @@ void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // Store the latest fix; the timer will rate-limit publication (same
   // pattern as on_odom/pending_odom_ above).
   pending_gps_ = *msg;
+}
+
+void MqttBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
+{
+  mqtt_client_->publish(full_topic("rtk_status"), serialise_rtk_status(*msg), /*retain=*/true);
 }
 
 // ---------------------------------------------------------------------------
@@ -865,6 +883,20 @@ std::string MqttBridgeNode::serialise_diagnostics(const diagnostic_msgs::msg::Di
 std::string MqttBridgeNode::serialise_high_level_status(
     const mowgli_interfaces::msg::HighLevelStatus& msg)
 {
+  // HighLevelStatus.gps_quality_percent is misnamed at the source: BT
+  // context (behavior_tree_node.cpp's context_->gps_quality) is a 0.0-1.0
+  // normalized fraction (std::clamp(..., 0.0f, 1.0f) / gnss_status_utils::
+  // NormalizedQuality), and status_snapshot.cpp assigns it straight into
+  // this field with no *100 — so a "fully good" fix reads as 1.0, not
+  // 100.0. Not something to fix at the source (mowgli_behavior has other
+  // consumers of that same field/context member; changing its scale there
+  // is a separate, larger change). Scale it here so the MQTT contract's
+  // field genuinely means "percent", matching docs/MQTT_CONTROL.md and
+  // what an external consumer (e.g. a Home Assistant sensor with
+  // PERCENTAGE as its unit) will reasonably assume from the field name.
+  const double gps_quality_pct =
+      std::max(0.0, std::min(100.0, static_cast<double>(msg.gps_quality_percent) * 100.0));
+
   char buf[768];
   std::snprintf(buf,
                 sizeof(buf),
@@ -894,7 +926,7 @@ std::string MqttBridgeNode::serialise_high_level_status(
                 static_cast<int>(msg.completed_swaths),
                 static_cast<int>(msg.skipped_swaths),
                 static_cast<double>(msg.coverage_percent),
-                static_cast<double>(msg.gps_quality_percent),
+                gps_quality_pct,
                 static_cast<double>(msg.battery_percent),
                 msg.is_charging ? "true" : "false",
                 msg.emergency ? "true" : "false");
@@ -904,9 +936,9 @@ std::string MqttBridgeNode::serialise_high_level_status(
 std::string MqttBridgeNode::serialise_gps(const sensor_msgs::msg::NavSatFix& msg)
 {
   // status.status is STATUS_NO_FIX(-1)/STATUS_FIX(0)/STATUS_SBAS_FIX(1)/
-  // STATUS_GBAS_FIX(2); this is a raw NavSatFix relay, not the richer
-  // universal_gnss RTK-quality summary the GUI/BT use elsewhere — a
-  // consumer wanting Fixed-vs-Float should not read this field as that.
+  // STATUS_GBAS_FIX(2); this is a raw NavSatFix relay, not RTK-quality — a
+  // consumer wanting Fixed-vs-Float should read <prefix>/rtk_status
+  // (serialise_rtk_status() below) instead.
   char buf[192];
   std::snprintf(buf,
                 sizeof(buf),
@@ -917,6 +949,80 @@ std::string MqttBridgeNode::serialise_gps(const sensor_msgs::msg::NavSatFix& msg
                 msg.altitude,
                 static_cast<int>(msg.status.status),
                 static_cast<unsigned>(msg.status.service));
+  return std::string{buf};
+}
+
+namespace
+{
+const char* FixTypeName(uint8_t fix_type)
+{
+  using mowgli_interfaces::msg::GnssStatus;
+  switch (fix_type)
+  {
+    case GnssStatus::FIX_TYPE_NO_FIX:
+      return "NO_FIX";
+    case GnssStatus::FIX_TYPE_GPS_FIX:
+      return "GPS_FIX";
+    case GnssStatus::FIX_TYPE_RTK_FLOAT:
+      return "RTK_FLOAT";
+    case GnssStatus::FIX_TYPE_RTK_FIXED:
+      return "RTK_FIXED";
+    case GnssStatus::FIX_TYPE_DEAD_RECKONING:
+      return "DEAD_RECKONING";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+const char* RtkModeName(uint8_t rtk_mode)
+{
+  using mowgli_interfaces::msg::GnssStatus;
+  switch (rtk_mode)
+  {
+    case GnssStatus::RTK_MODE_UNKNOWN:
+      return "UNKNOWN";
+    case GnssStatus::RTK_MODE_NONE:
+      return "NONE";
+    case GnssStatus::RTK_MODE_FLOAT:
+      return "FLOAT";
+    case GnssStatus::RTK_MODE_FIXED:
+      return "FIXED";
+    default:
+      return "UNKNOWN";
+  }
+}
+}  // namespace
+
+std::string MqttBridgeNode::serialise_rtk_status(const mowgli_interfaces::msg::GnssStatus& msg)
+{
+  // quality_percent here is mowgli_interfaces::gnss_status_utils::
+  // HardwareQualityPercent(msg) — deliberately NOT msg.quality_percent
+  // directly. That field's own population is backend-dependent per
+  // GnssStatus.msg's header comment ("richer value" vs "derived from
+  // fix_type") and isn't guaranteed 0-100 the way this already-relied-upon
+  // helper is: it's the exact computation hardware_bridge_node.cpp uses for
+  // its own gps_quality_ (the GUI's "GPS %" health-check card), so this
+  // topic can never disagree with what the robot itself already shows.
+  const unsigned quality_percent =
+      static_cast<unsigned>(mowgli_interfaces::gnss_status_utils::HardwareQualityPercent(msg));
+
+  char buf[320];
+  std::snprintf(buf,
+                sizeof(buf),
+                "{"
+                "\"fix_type\":%u,"
+                "\"fix_type_name\":\"%s\","
+                "\"rtk_mode\":%u,"
+                "\"rtk_mode_name\":\"%s\","
+                "\"fix_valid\":%s,"
+                "\"quality_percent\":%u"
+                "}",
+                static_cast<unsigned>(msg.fix_type),
+                FixTypeName(msg.fix_type),
+                static_cast<unsigned>(msg.rtk_mode),
+                RtkModeName(msg.rtk_mode),
+                msg.fix_valid ? "true" : "false",
+                quality_percent);
   return std::string{buf};
 }
 

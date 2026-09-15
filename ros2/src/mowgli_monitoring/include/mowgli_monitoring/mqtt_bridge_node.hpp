@@ -34,6 +34,11 @@
  * rate-limited /diagnostics                         → <prefix>/diagnostics        (JSON summary)
  *   /behavior_tree_node/high_level_status → <prefix>/high_level_status (JSON) — retained
  *   /gps/fix                             → <prefix>/gps        (JSON: lat/lon/alt) — rate-limited
+ *   /gps/status                          → <prefix>/rtk_status (JSON) — retained; the SAME
+ *                                           mowgli_interfaces/msg/GnssStatus + gnss_status_utils
+ *                                           helpers the LED ring and behavior tree use, so this
+ *                                           can never disagree with what the robot's own ring or
+ *                                           GUI "GPS %" badge shows.
  *   (connection state)                   → <prefix>/available  ("online"/"offline", retained, LWT)
  *
  * MQTT → ROS2
@@ -63,7 +68,9 @@
 #include <string>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
@@ -260,6 +267,7 @@ public:
   static std::string serialise_high_level_status(
       const mowgli_interfaces::msg::HighLevelStatus& msg);
   static std::string serialise_gps(const sensor_msgs::msg::NavSatFix& msg);
+  static std::string serialise_rtk_status(const mowgli_interfaces::msg::GnssStatus& msg);
 
   /// Escape a raw string so it is safe inside a JSON string literal.
   static std::string json_escape(const std::string& raw);
@@ -295,6 +303,7 @@ private:
   void on_diagnostics(diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr msg);
   void on_high_level_status(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg);
   void on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
+  void on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg);
 
   // ---- MQTT command callback ------------------------------------------------
 
@@ -322,6 +331,7 @@ private:
   rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr sub_diagnostics_;
   rclcpp::Subscription<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr sub_high_level_status_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps_fix_;
+  rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr sub_gnss_status_;
 
   rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedPtr srv_high_level_;
 
