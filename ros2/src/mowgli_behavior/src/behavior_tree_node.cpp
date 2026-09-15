@@ -1105,6 +1105,12 @@ private:
     const double mow_angle_deg = declare_parameter<double>("mow_angle_deg", kMowAngleAutoDeg);
     blackboard_->set("mow_angle_deg", mow_angle_deg);
     context_->mow_cross_hatch = declare_parameter<bool>("mow_cross_hatch", false);
+    // Which goal-checker instance the coverage FollowPath goals carry. The
+    // default is the only one proven against closed headland rings; the stock
+    // Lyrical AxisGoalChecker is offered as `coverage_axis_goal_checker` for a
+    // side-by-side field comparison (nav2_params_base.yaml declares both).
+    context_->coverage_goal_checker_id =
+        declare_parameter<std::string>("coverage_goal_checker_id", "coverage_goal_checker");
 
     // Area-recording boundary resolution — operator-tunable in
     // mowgli_robot.yaml, previously HARDCODED in main_tree.xml (a 0.2 m

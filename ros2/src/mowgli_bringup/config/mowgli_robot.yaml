@@ -395,6 +395,32 @@ mowgli:
     mowing_enabled: true
     mowing_speed: 0.2              # m/s during coverage paths (field-validated comfortable cut speed)
     transit_speed: 0.2             # m/s during point-to-point navigation (→ RPP max_linear_vel)
+    # transit_dynamic_window: use Dynamic Window Pure Pursuit (DWPP, new in Nav2
+    # 1.5.1 / ROS 2 Lyrical) on the TRANSIT controller only. RPP then picks the
+    # (v, ω) pair reachable within one control period that tracks the path most
+    # closely, instead of applying the carrot curvature to the regulated speed —
+    # it slows into sharp turns by itself and, on this chassis, attacks the slow
+    # S-weave the long lookahead currently masks (see nav2_params_base.yaml).
+    # OFF by default: it changes how every transit, dock approach and HOME leg
+    # is driven, so it wants one supervised field test before becoming the
+    # default. It NEVER touches mowing — coverage is FTCController either way.
+    # Injected as FollowPath.primary_controller.use_dynamic_window.
+    transit_dynamic_window: false
+    # coverage_goal_checker_id: which goal-checker instance the coverage
+    # FollowPath goals carry (declared in nav2_params_base.yaml).
+    #   "coverage_goal_checker"      — mowgli_nav2_plugins/PathProgressGoalChecker
+    #                                  (default): "done" means >= 95 % of the
+    #                                  plan's poses were tracked. The only
+    #                                  definition that survives a closed headland
+    #                                  ring, whose start and end coincide.
+    #   "coverage_axis_goal_checker" — stock nav2_controller::AxisGoalChecker,
+    #                                  new in ROS 2 Lyrical: along-path /
+    #                                  cross-track tolerances plus a remaining-
+    #                                  plan-length gate. Offered for a field
+    #                                  comparison; read nav2_params_base.yaml's
+    #                                  two caveats before selecting it.
+    # Read once at startup by behavior_tree_node.
+    coverage_goal_checker_id: "coverage_goal_checker"
     # turn_speed_ratio: the coverage controller's speed THROUGH a bend, as a
     # fraction of mowing_speed. Injected at launch as
     # FollowCoveragePath.speed_slow = clamp(mowing_speed * turn_speed_ratio,
@@ -774,6 +800,31 @@ mowgli:
     # smallest value the inflation layer supports without degrading footprint-
     # cost semantics. Values below 0.58 are raised to 0.58 at launch.
     obstacle_inflation_radius: 0.58
+    # local_inflation_inscribed_radius: what the LOCAL costmap's inflation layer
+    # calls "inscribed" (the 253 band), in metres. -1.0 = derive it from the
+    # footprint, which is Nav2's behaviour and what this robot has always used.
+    #
+    # WHY IT EXISTS (Nav2 1.5.1 / ROS 2 Lyrical added `custom_inscribed_radius`):
+    # the 0.58 floor above is not a tuning choice, it is a CONSEQUENCE — the
+    # inflation layer derives the inscribed radius from the footprint's
+    # CIRCUMSCRIBED radius (~0.597 m on the template chassis), and FTC's obstacle
+    # detector reads the 253 inscribed band, so an inflation radius below that
+    # radius silently truncates the band FTC depends on. That is why a 1.0 m halo
+    # had to be cut to 0.58 and not lower, even though 0.58 m of inflation around
+    # every obstacle is far more than this 0.45 m-wide chassis needs and is what
+    # makes narrow gaps between areas unplannable.
+    #
+    # Setting this to the real half-width-plus-margin (≈ 0.275 m) declares the
+    # inscribed radius directly, which lets obstacle_inflation_radius drop to
+    # roughly that value while keeping the 253 band meaningful — recovering the
+    # gap clearance without giving up FTC's detector.
+    #
+    # OFF (-1.0) by default: it changes how much room the robot demands around
+    # every obstacle, so it wants a supervised field test. When >= 0 it also
+    # becomes the clamp floor for obstacle_inflation_radius in
+    # navigation.launch.py (otherwise the chassis radius would raise it straight
+    # back up and the knob would do nothing).
+    local_inflation_inscribed_radius: -1.0
     # How far ahead along the coverage path (m) FTC scans for a lethal
     # obstacle cell before starting to skirt it — the real "avoid from
     # further out during mowing" knob (task #49; obstacle_inflation_radius

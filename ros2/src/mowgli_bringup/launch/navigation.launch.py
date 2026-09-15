@@ -300,6 +300,8 @@ def generate_launch_description() -> LaunchDescription:
     # it should do something but didn't. Load here and inject into the
     # Nav2 YAMLs (controller + docking) alongside the dock pose.
     #   transit_speed    → FollowPath.primary_controller.max_linear_vel (RPP)
+    #   transit_dynamic_window
+    #                    → FollowPath.primary_controller.use_dynamic_window (RPP/DWPP)
     #   mowing_speed     → FollowCoveragePath.speed_fast (FTC)
     #   undock_speed     → behavior_tree_node param of the same name,
     #                      pushed onto the BT blackboard at startup and
@@ -308,6 +310,9 @@ def generate_launch_description() -> LaunchDescription:
     #                      Wired in full_system.launch.py (Node parameters
     #                      list). See issue #191.
     transit_speed = 0.3
+    # Dynamic Window Pure Pursuit on the TRANSIT controller (Nav2 1.5.1).
+    # OFF by default — see the template mowgli_robot.yaml for the rationale.
+    transit_dynamic_window = False
     mowing_speed = 0.25
     datum_lat = 0.000000000
     datum_lon = 0.000000000
@@ -490,6 +495,9 @@ def generate_launch_description() -> LaunchDescription:
     # radius (derived from chassis_*, ~0.597 m at the shipped dimensions)
     # and capped at 1.50 below.
     obstacle_inflation_radius = 0.80
+    # LOCAL costmap inscribed radius override (Nav2 1.5.1 custom_inscribed_radius).
+    # -1.0 = derive from the footprint, Nav2's own behaviour. See the template.
+    local_inflation_inscribed_radius = -1.0
     # obstacle_detection_range_m (task #51): the real "avoid from further out
     # during mowing" knob — inflation_radius above only affects Nav2 transit
     # (MPPI/RPP's cost-gradient), not FTC's coverage-time deviation, which
@@ -541,6 +549,8 @@ def generate_launch_description() -> LaunchDescription:
         dock_pose_y = float(rt_rp.get("dock_pose_y", 0.0))
         dock_pose_yaw = float(rt_rp.get("dock_pose_yaw", 0.0))
         transit_speed = float(rt_rp.get("transit_speed", transit_speed))
+        transit_dynamic_window = bool(rt_rp.get(
+            "transit_dynamic_window", transit_dynamic_window))
         mowing_speed = float(rt_rp.get("mowing_speed", mowing_speed))
         datum_lat = float(rt_rp.get("datum_lat", 0.000000000))
         datum_lon = float(rt_rp.get("datum_lon", 0.000000000))
@@ -607,6 +617,8 @@ def generate_launch_description() -> LaunchDescription:
             "max_obstacle_avoidance_distance", max_obstacle_avoidance_distance))
         obstacle_inflation_radius = float(rt_rp.get(
             "obstacle_inflation_radius", obstacle_inflation_radius))
+        local_inflation_inscribed_radius = float(rt_rp.get(
+            "local_inflation_inscribed_radius", local_inflation_inscribed_radius))
         obstacle_detection_range_m = float(rt_rp.get(
             "obstacle_detection_range_m", obstacle_detection_range_m))
         obstacle_clearance_margin = float(rt_rp.get(
@@ -756,6 +768,11 @@ def generate_launch_description() -> LaunchDescription:
                  .setdefault("ros__parameters", {})
                  .setdefault("FollowPath", {}))
         fp.setdefault("primary_controller", {})["max_linear_vel"] = transit_speed
+        # DWPP (Nav2 1.5.1) on the transit lane only. The acceleration and
+        # velocity BOUNDS of the window live in nav2_params_base.yaml — they
+        # describe the chassis, not an operator preference; this is only the
+        # on/off switch. The coverage lane is FTCController and is not affected.
+        fp["primary_controller"]["use_dynamic_window"] = bool(transit_dynamic_window)
 
         # FollowCoveragePath (coverage controller = FTCController). FTC's
         # carrot forward-speed knob is speed_fast; mowing_speed overrides it.
@@ -898,12 +915,22 @@ def generate_launch_description() -> LaunchDescription:
         # the GUI, so a hardcoded floor goes stale the moment someone edits
         # them — which is exactly what happened before 2026-09-05.
         infl_floor = chassis_circumscribed_radius(rp)
+        # Nav2 1.5.1 lets the inflation layer be TOLD its inscribed radius
+        # instead of deriving it from the footprint's circumscribed radius. When
+        # the operator does so, that declared radius — not the chassis diagonal —
+        # is what the 253 band (and therefore FTC's obstacle detector) rests on,
+        # so it becomes the floor. Without this the floor below would raise the
+        # inflation radius straight back up and the override would be inert.
+        if local_inflation_inscribed_radius >= 0.0:
+            lc_infl["custom_inscribed_radius"] = local_inflation_inscribed_radius
+            infl_floor = local_inflation_inscribed_radius
         if infl_floor > 1.50:
             print(
-                "[navigation.launch] WARNING: chassis circumscribed radius "
+                "[navigation.launch] WARNING: local costmap inscribed radius "
                 f"{infl_floor:.3f} m exceeds the 1.50 m inflation cap; the cap "
                 "wins and the local costmap will under-inflate for this "
-                "chassis. Check chassis_length / chassis_width."
+                "chassis. Check chassis_length / chassis_width, or "
+                "local_inflation_inscribed_radius if it is set."
             )
         lc_infl["inflation_radius"] = min(
             1.50, max(infl_floor, obstacle_inflation_radius))

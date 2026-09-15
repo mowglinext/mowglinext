@@ -559,6 +559,18 @@ struct BTContext
   /// behavior_tree_node from the main tree's directory.
   std::string transit_tree_xml;
 
+  /// Goal-checker instance the coverage controller is dispatched with.
+  ///
+  /// Defaults to `coverage_goal_checker` — mowgli_nav2_plugins'
+  /// PathProgressGoalChecker, the only checker that survives a coverage path
+  /// whose start and end coincide (a closed headland ring): it requires the
+  /// robot to have tracked >= 95 % of the plan's poses before "reached" can
+  /// fire. ROS 2 Lyrical added a stock alternative, `coverage_axis_goal_checker`
+  /// (nav2_controller::AxisGoalChecker), which gates on the REMAINING length of
+  /// the transformed plan instead; it is configured in nav2_params_base.yaml and
+  /// selectable here for a field comparison. See docs/NAV2_LYRICAL_CONTROLLER_REVIEW.md.
+  std::string coverage_goal_checker_id{"coverage_goal_checker"};
+
   // -----------------------------------------------------------------------
   // Per-session flags reset by ClearCommand at session end
   // -----------------------------------------------------------------------
