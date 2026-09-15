@@ -811,7 +811,11 @@
     "areaN": "Zone {{number}}",
     "actionFailed": "Échec de la commande",
     "soilWetTitle": "Attention : le jardin est humide (IrriSense)",
-    "soilWetBlocking": "tontes planifiées suspendues"
+    "soilWetBlocking": "tontes planifiées suspendues",
+    "digEscalationTitle": "Tonte arrêtée — creusement répété détecté",
+    "digEscalationBody": "La tondeuse n'a pas pu se dégager et s'est arrêtée à {{distance}} m de l'endroit (il faut {{required}} m pour réinitialiser). Éloignez-la davantage, puis réessayez.",
+    "digEscalationReady": "Éloignée de {{distance}} m de l'endroit — prête à réinitialiser.",
+    "digEscalationClear": "Réinitialiser et reprendre"
   },
   "onboardingPage": {
     "preview": "Aperçu",

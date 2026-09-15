@@ -127,268 +127,268 @@ export type MarkerArray = {
 };
 
 export const enum AbsolutePoseConstants {
-  SOURCE_GPS = 1,
-  SOURCE_LIGHTHOUSE = 2,
-  SOURCE_SENSOR_FUSION = 100,
-  FLAG_GPS_RTK = 1,
-  FLAG_GPS_RTK_FIXED = 2,
-  FLAG_GPS_RTK_FLOAT = 4,
-  FLAG_GPS_DEAD_RECKONING = 8,
-  FLAG_SENSOR_FUSION_RECENT_ABSOLUTE_POSE = 1,
-  FLAG_SENSOR_FUSION_DEAD_RECKONING = 8,
+  SOURCE_GPS = 1,
+  SOURCE_LIGHTHOUSE = 2,
+  SOURCE_SENSOR_FUSION = 100,
+  FLAG_GPS_RTK = 1,
+  FLAG_GPS_RTK_FIXED = 2,
+  FLAG_GPS_RTK_FLOAT = 4,
+  FLAG_GPS_DEAD_RECKONING = 8,
+  FLAG_SENSOR_FUSION_RECENT_ABSOLUTE_POSE = 1,
+  FLAG_SENSOR_FUSION_DEAD_RECKONING = 8,
 };
 
 export type AbsolutePose = {
-  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
-  sensor_stamp?: number;
-  received_stamp?: number;
-  source?: number;
-  flags?: number;
-  orientation_valid?: number;
-  motion_vector_valid?: number;
-  position_accuracy?: number;
-  orientation_accuracy?: number;
-  pose?: PoseWithCovariance;
-  motion_vector?: Vector3;
-  vehicle_heading?: number;
-  motion_heading?: number;
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  sensor_stamp?: number;
+  received_stamp?: number;
+  source?: number;
+  flags?: number;
+  orientation_valid?: number;
+  motion_vector_valid?: number;
+  position_accuracy?: number;
+  orientation_accuracy?: number;
+  pose?: PoseWithCovariance;
+  motion_vector?: Vector3;
+  vehicle_heading?: number;
+  motion_heading?: number;
 };
 
 export type CoveragePath = {
-  is_outline?: boolean;
-  path?: Path;
+  is_outline?: boolean;
+  path?: Path;
 };
 
 export type DigEvent = {
-  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
-  position?: Point;
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  position?: Point;
   wheel_distance?: number;
   map_distance?: number;
   position_sigma?: number;
 };
 
 export const enum DockCalibrationStatusConstants {
-  PHASE_WAIT_RTK = 0,
-  PHASE_REVERSING = 1,
-  PHASE_CHECK_COG = 2,
-  PHASE_REDOCKING = 3,
-  PHASE_VERIFY_CHARGE = 4,
-  PHASE_PERSIST = 5,
+  PHASE_WAIT_RTK = 0,
+  PHASE_REVERSING = 1,
+  PHASE_CHECK_COG = 2,
+  PHASE_REDOCKING = 3,
+  PHASE_VERIFY_CHARGE = 4,
+  PHASE_PERSIST = 5,
   PHASE_IDLE = 6,
   PHASE_DONE = 7,
 };
 
 export type DockCalibrationStatus = {
-  phase?: number;
+  phase?: number;
   progress?: number;
   cog_std_deg?: number;
   displacement_m?: number;
   charging?: boolean;
   running?: boolean;
-  success?: boolean;
+  success?: boolean;
   retry_reason?: number;
-  message?: string;
+  message?: string;
 };
 
 export const enum ESCStatusConstants {
-  ESC_STATUS_DISCONNECTED = 99,
-  ESC_STATUS_ERROR = 100,
-  ESC_STATUS_STALLED = 150,
-  ESC_STATUS_OK = 200,
-  ESC_STATUS_RUNNING = 201,
+  ESC_STATUS_DISCONNECTED = 99,
+  ESC_STATUS_ERROR = 100,
+  ESC_STATUS_STALLED = 150,
+  ESC_STATUS_OK = 200,
+  ESC_STATUS_RUNNING = 201,
 };
 
 export type ESCStatus = {
-  status?: number;
-  current?: number;
-  tacho?: number;
-  rpm?: number;
-  temperature_motor?: number;
-  temperature_pcb?: number;
+  status?: number;
+  current?: number;
+  tacho?: number;
+  rpm?: number;
+  temperature_motor?: number;
+  temperature_pcb?: number;
 };
 
 export type Emergency = {
-  stamp?: { sec: number; nanosec: number };
-  active_emergency?: boolean;
-  latched_emergency?: boolean;
+  stamp?: { sec: number; nanosec: number };
+  active_emergency?: boolean;
+  latched_emergency?: boolean;
   lift_warning?: boolean;
   lift_duration_sec?: number;
-  reason?: string;
+  reason?: string;
 };
 
 export const enum GnssStatusConstants {
-  FIX_TYPE_NO_FIX = 0,
-  FIX_TYPE_GPS_FIX = 1,
-  FIX_TYPE_RTK_FLOAT = 2,
-  FIX_TYPE_RTK_FIXED = 3,
-  FIX_TYPE_DEAD_RECKONING = 4,
-  RTK_MODE_UNKNOWN = 0,
-  RTK_MODE_NONE = 1,
-  RTK_MODE_FLOAT = 2,
-  RTK_MODE_FIXED = 3,
-  BASELINE_STATUS_UNKNOWN = 0,
-  BASELINE_STATUS_COMPUTED = 1,
-  BASELINE_STATUS_NOT_SOLVED = 2,
-  BASELINE_STATUS_INSUFFICIENT_OBSERVATIONS = 3,
-  BASELINE_STATUS_NO_CONVERGENCE = 4,
-  BASELINE_STATUS_OUT_OF_TOLERANCE = 5,
-  BASELINE_STATUS_COVARIANCE_TRACE_EXCEEDED = 6,
-  BASELINE_STATUS_NOT_CONFIGURED = 7,
-  CORRECTION_STREAM_STATUS_UNKNOWN = 0,
-  CORRECTION_STREAM_STATUS_IDLE = 1,
-  CORRECTION_STREAM_STATUS_WAITING = 2,
-  CORRECTION_STREAM_STATUS_ACTIVE = 3,
-  CORRECTION_STREAM_STATUS_UNAVAILABLE = 4,
-  CORRECTION_STREAM_STATUS_ERROR = 5,
-  CORRECTION_TRANSPORT_STATUS_UNKNOWN = 0,
-  CORRECTION_TRANSPORT_STATUS_DISCONNECTED = 1,
-  CORRECTION_TRANSPORT_STATUS_CONNECTING = 2,
-  CORRECTION_TRANSPORT_STATUS_CONNECTED = 3,
-  CORRECTION_TRANSPORT_STATUS_STREAMING = 4,
-  CORRECTION_TRANSPORT_STATUS_RECONNECTING = 5,
-  CORRECTION_TRANSPORT_STATUS_FAILED = 6,
-  CORRECTION_FLOW_STATUS_UNKNOWN = 0,
-  CORRECTION_FLOW_STATUS_IDLE = 1,
-  CORRECTION_FLOW_STATUS_WAITING = 2,
-  CORRECTION_FLOW_STATUS_ACTIVE = 3,
-  CORRECTION_FLOW_STATUS_STALE = 4,
-  CORRECTION_FLOW_STATUS_INVALID = 5,
-  CORRECTION_SEMANTIC_STATUS_UNKNOWN = 0,
-  CORRECTION_SEMANTIC_STATUS_UNAVAILABLE = 1,
-  CORRECTION_SEMANTIC_STATUS_WAITING = 2,
-  CORRECTION_SEMANTIC_STATUS_HEALTHY = 3,
-  CORRECTION_SEMANTIC_STATUS_STALE = 4,
-  CORRECTION_SEMANTIC_STATUS_INVALID = 5,
-  CAP_RTK_MODE = 1,
-  CAP_HDOP = 2,
-  CAP_VDOP = 4,
-  CAP_HORIZONTAL_ACCURACY = 8,
-  CAP_VERTICAL_ACCURACY = 16,
-  CAP_HEADING = 32,
-  CAP_HEADING_ACCURACY = 64,
-  CAP_SATELLITES_USED = 128,
-  CAP_SATELLITES_VISIBLE = 256,
-  CAP_SATELLITES_TRACKED = 512,
-  CAP_DIFFERENTIAL_CORRECTIONS = 1024,
-  CAP_CORRECTIONS_ACTIVE = 2048,
-  CAP_CORRECTION_AGE = 4096,
-  CAP_MEAN_CN0 = 8192,
-  CAP_MAX_CN0 = 16384,
-  CAP_DUAL_ANTENNA_STATUS = 32768,
-  CAP_INTERFERENCE_STATUS = 65536,
-  CAP_JAMMING_STATUS = 131072,
-  CAP_DUAL_ANTENNA_BASELINE = 262144,
-  CAP_BASELINE_AZIMUTH = 524288,
-  CAP_BASELINE_PITCH = 1048576,
-  CAP_BASELINE_LENGTH = 2097152,
-  CAP_BASELINE_SOLUTION_STATUS = 4194304,
-  CAP_CORRECTION_STREAM = 8388608,
-  CAP_MSM_SUMMARY = 16777216,
-  CAP_CORRECTION_TRANSPORT = 33554432,
-  CAP_CORRECTION_FLOW = 67108864,
-  CAP_CORRECTION_SEMANTIC = 134217728,
+  FIX_TYPE_NO_FIX = 0,
+  FIX_TYPE_GPS_FIX = 1,
+  FIX_TYPE_RTK_FLOAT = 2,
+  FIX_TYPE_RTK_FIXED = 3,
+  FIX_TYPE_DEAD_RECKONING = 4,
+  RTK_MODE_UNKNOWN = 0,
+  RTK_MODE_NONE = 1,
+  RTK_MODE_FLOAT = 2,
+  RTK_MODE_FIXED = 3,
+  BASELINE_STATUS_UNKNOWN = 0,
+  BASELINE_STATUS_COMPUTED = 1,
+  BASELINE_STATUS_NOT_SOLVED = 2,
+  BASELINE_STATUS_INSUFFICIENT_OBSERVATIONS = 3,
+  BASELINE_STATUS_NO_CONVERGENCE = 4,
+  BASELINE_STATUS_OUT_OF_TOLERANCE = 5,
+  BASELINE_STATUS_COVARIANCE_TRACE_EXCEEDED = 6,
+  BASELINE_STATUS_NOT_CONFIGURED = 7,
+  CORRECTION_STREAM_STATUS_UNKNOWN = 0,
+  CORRECTION_STREAM_STATUS_IDLE = 1,
+  CORRECTION_STREAM_STATUS_WAITING = 2,
+  CORRECTION_STREAM_STATUS_ACTIVE = 3,
+  CORRECTION_STREAM_STATUS_UNAVAILABLE = 4,
+  CORRECTION_STREAM_STATUS_ERROR = 5,
+  CORRECTION_TRANSPORT_STATUS_UNKNOWN = 0,
+  CORRECTION_TRANSPORT_STATUS_DISCONNECTED = 1,
+  CORRECTION_TRANSPORT_STATUS_CONNECTING = 2,
+  CORRECTION_TRANSPORT_STATUS_CONNECTED = 3,
+  CORRECTION_TRANSPORT_STATUS_STREAMING = 4,
+  CORRECTION_TRANSPORT_STATUS_RECONNECTING = 5,
+  CORRECTION_TRANSPORT_STATUS_FAILED = 6,
+  CORRECTION_FLOW_STATUS_UNKNOWN = 0,
+  CORRECTION_FLOW_STATUS_IDLE = 1,
+  CORRECTION_FLOW_STATUS_WAITING = 2,
+  CORRECTION_FLOW_STATUS_ACTIVE = 3,
+  CORRECTION_FLOW_STATUS_STALE = 4,
+  CORRECTION_FLOW_STATUS_INVALID = 5,
+  CORRECTION_SEMANTIC_STATUS_UNKNOWN = 0,
+  CORRECTION_SEMANTIC_STATUS_UNAVAILABLE = 1,
+  CORRECTION_SEMANTIC_STATUS_WAITING = 2,
+  CORRECTION_SEMANTIC_STATUS_HEALTHY = 3,
+  CORRECTION_SEMANTIC_STATUS_STALE = 4,
+  CORRECTION_SEMANTIC_STATUS_INVALID = 5,
+  CAP_RTK_MODE = 1,
+  CAP_HDOP = 2,
+  CAP_VDOP = 4,
+  CAP_HORIZONTAL_ACCURACY = 8,
+  CAP_VERTICAL_ACCURACY = 16,
+  CAP_HEADING = 32,
+  CAP_HEADING_ACCURACY = 64,
+  CAP_SATELLITES_USED = 128,
+  CAP_SATELLITES_VISIBLE = 256,
+  CAP_SATELLITES_TRACKED = 512,
+  CAP_DIFFERENTIAL_CORRECTIONS = 1024,
+  CAP_CORRECTIONS_ACTIVE = 2048,
+  CAP_CORRECTION_AGE = 4096,
+  CAP_MEAN_CN0 = 8192,
+  CAP_MAX_CN0 = 16384,
+  CAP_DUAL_ANTENNA_STATUS = 32768,
+  CAP_INTERFERENCE_STATUS = 65536,
+  CAP_JAMMING_STATUS = 131072,
+  CAP_DUAL_ANTENNA_BASELINE = 262144,
+  CAP_BASELINE_AZIMUTH = 524288,
+  CAP_BASELINE_PITCH = 1048576,
+  CAP_BASELINE_LENGTH = 2097152,
+  CAP_BASELINE_SOLUTION_STATUS = 4194304,
+  CAP_CORRECTION_STREAM = 8388608,
+  CAP_MSM_SUMMARY = 16777216,
+  CAP_CORRECTION_TRANSPORT = 33554432,
+  CAP_CORRECTION_FLOW = 67108864,
+  CAP_CORRECTION_SEMANTIC = 134217728,
 };
 
 export type GnssStatus = {
-  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
-  backend?: string;
-  receiver_vendor?: string;
-  receiver_model?: string;
-  receiver_firmware?: string;
-  fix_type?: number;
-  fix_valid?: boolean;
-  differential_corrections?: boolean;
-  corrections_active?: boolean;
-  dead_reckoning?: boolean;
-  rtk_mode?: number;
-  dual_antenna_heading?: boolean;
-  interference_detected?: boolean;
-  jamming_detected?: boolean;
-  quality_percent?: number;
-  capability_flags?: number;
-  value_flags?: number;
-  hdop?: number;
-  vdop?: number;
-  horizontal_accuracy_m?: number;
-  vertical_accuracy_m?: number;
-  heading_deg?: number;
-  heading_accuracy_deg?: number;
-  satellites_used?: number;
-  satellites_visible?: number;
-  satellites_tracked?: number;
-  correction_age_s?: number;
-  mean_cn0_db_hz?: number;
-  max_cn0_db_hz?: number;
-  dual_antenna_baseline?: boolean;
-  baseline_azimuth_deg?: number;
-  baseline_pitch_deg?: number;
-  baseline_length_m?: number;
-  baseline_solution_status?: number;
-  correction_stream_status?: number;
-  msm_summary_seen?: boolean;
-  msm_summary_decoded?: boolean;
-  msm_summary_valid?: boolean;
-  msm_summary_message_type?: number;
-  msm_summary_station_id?: number;
-  msm_summary_constellations_seen?: string;
-  msm_summary_satellite_count?: number;
-  msm_summary_signal_count?: number;
-  msm_summary_cell_count?: number;
-  msm_summary_age_s?: number;
-  position_observation_sequence?: number;
-  correction_transport_status?: number;
-  correction_response_accepted?: boolean;
-  correction_flow_status?: number;
-  correction_semantic_status?: number;
-  correction_source?: string;
-  correction_forwarding_source?: string;
-  msm_summary_source?: string;
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  backend?: string;
+  receiver_vendor?: string;
+  receiver_model?: string;
+  receiver_firmware?: string;
+  fix_type?: number;
+  fix_valid?: boolean;
+  differential_corrections?: boolean;
+  corrections_active?: boolean;
+  dead_reckoning?: boolean;
+  rtk_mode?: number;
+  dual_antenna_heading?: boolean;
+  interference_detected?: boolean;
+  jamming_detected?: boolean;
+  quality_percent?: number;
+  capability_flags?: number;
+  value_flags?: number;
+  hdop?: number;
+  vdop?: number;
+  horizontal_accuracy_m?: number;
+  vertical_accuracy_m?: number;
+  heading_deg?: number;
+  heading_accuracy_deg?: number;
+  satellites_used?: number;
+  satellites_visible?: number;
+  satellites_tracked?: number;
+  correction_age_s?: number;
+  mean_cn0_db_hz?: number;
+  max_cn0_db_hz?: number;
+  dual_antenna_baseline?: boolean;
+  baseline_azimuth_deg?: number;
+  baseline_pitch_deg?: number;
+  baseline_length_m?: number;
+  baseline_solution_status?: number;
+  correction_stream_status?: number;
+  msm_summary_seen?: boolean;
+  msm_summary_decoded?: boolean;
+  msm_summary_valid?: boolean;
+  msm_summary_message_type?: number;
+  msm_summary_station_id?: number;
+  msm_summary_constellations_seen?: string;
+  msm_summary_satellite_count?: number;
+  msm_summary_signal_count?: number;
+  msm_summary_cell_count?: number;
+  msm_summary_age_s?: number;
+  position_observation_sequence?: number;
+  correction_transport_status?: number;
+  correction_response_accepted?: boolean;
+  correction_flow_status?: number;
+  correction_semantic_status?: number;
+  correction_source?: string;
+  correction_forwarding_source?: string;
+  msm_summary_source?: string;
 };
 
 export const enum HighLevelStatusConstants {
-  HIGH_LEVEL_STATE_NULL = 0,
-  HIGH_LEVEL_STATE_IDLE = 1,
-  HIGH_LEVEL_STATE_AUTONOMOUS = 2,
-  HIGH_LEVEL_STATE_RECORDING = 3,
-  HIGH_LEVEL_STATE_MANUAL_MOWING = 4,
+  HIGH_LEVEL_STATE_NULL = 0,
+  HIGH_LEVEL_STATE_IDLE = 1,
+  HIGH_LEVEL_STATE_AUTONOMOUS = 2,
+  HIGH_LEVEL_STATE_RECORDING = 3,
+  HIGH_LEVEL_STATE_MANUAL_MOWING = 4,
 };
 
 export type HighLevelStatus = {
-  state?: number;
-  state_name?: string;
-  sub_state_name?: string;
-  current_area?: number;
-  current_path?: number;
-  current_path_index?: number;
-  total_swaths?: number;
-  completed_swaths?: number;
-  skipped_swaths?: number;
-  coverage_percent?: number;
-  gps_quality_percent?: number;
-  battery_percent?: number;
-  is_charging?: boolean;
-  emergency?: boolean;
+  state?: number;
+  state_name?: string;
+  sub_state_name?: string;
+  current_area?: number;
+  current_path?: number;
+  current_path_index?: number;
+  total_swaths?: number;
+  completed_swaths?: number;
+  skipped_swaths?: number;
+  coverage_percent?: number;
+  gps_quality_percent?: number;
+  battery_percent?: number;
+  is_charging?: boolean;
+  emergency?: boolean;
 };
 
 export type ImuRaw = {
-  dt?: number;
-  ax?: number;
-  ay?: number;
-  az?: number;
-  gx?: number;
-  gy?: number;
-  gz?: number;
-  mx?: number;
-  my?: number;
-  mz?: number;
+  dt?: number;
+  ax?: number;
+  ay?: number;
+  az?: number;
+  gx?: number;
+  gy?: number;
+  gz?: number;
+  mx?: number;
+  my?: number;
+  mz?: number;
 };
 
 export type MapArea = {
-  name?: string;
-  area?: Polygon;
-  obstacles?: Polygon[];
-  is_navigation_area?: boolean;
-  obstacle_info?: MapObstacleInfo[];
+  name?: string;
+  area?: Polygon;
+  obstacles?: Polygon[];
+  is_navigation_area?: boolean;
+  obstacle_info?: MapObstacleInfo[];
 };
 
 export const enum MapObstacleInfoConstants {
@@ -398,24 +398,24 @@ export const enum MapObstacleInfoConstants {
 };
 
 export type MapObstacleInfo = {
-  name?: string;
-  source?: number;
-  pending?: boolean;
-  id?: number;
+  name?: string;
+  source?: number;
+  pending?: boolean;
+  id?: number;
 };
 
 export type ObstacleArray = {
-  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
-  obstacles?: TrackedObstacle[];
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  obstacles?: TrackedObstacle[];
 };
 
 export type Power = {
-  stamp?: { sec: number; nanosec: number };
-  v_charge?: number;
-  v_battery?: number;
-  charge_current?: number;
-  charger_enabled?: boolean;
-  charger_status?: string;
+  stamp?: { sec: number; nanosec: number };
+  v_charge?: number;
+  v_battery?: number;
+  charge_current?: number;
+  charger_enabled?: boolean;
+  charger_status?: string;
 };
 
 export const enum StatusConstants {
@@ -445,6 +445,9 @@ export type Status = {
   ui_board_available?: boolean;
   mow_enabled?: boolean;
   firmware_debug_enabled?: boolean;
+  dig_escalated?: boolean;
+  dig_escalated_distance_m?: number;
+  dig_escalated_required_distance_m?: number;
   mower_esc_status?: number;
   mower_esc_temperature?: number;
   mower_esc_current?: number;
@@ -457,39 +460,39 @@ export type Status = {
 };
 
 export const enum TrackedObstacleConstants {
-  TRANSIENT = 0,
-  PERSISTENT = 1,
+  TRANSIENT = 0,
+  PERSISTENT = 1,
 };
 
 export type TrackedObstacle = {
-  id?: number;
-  polygon?: Polygon;
-  centroid?: Point;
-  radius?: number;
-  first_seen?: { sec: number; nanosec: number };
-  observation_count?: number;
-  status?: number;
+  id?: number;
+  polygon?: Polygon;
+  centroid?: Point;
+  radius?: number;
+  first_seen?: { sec: number; nanosec: number };
+  observation_count?: number;
+  status?: number;
 };
 
 export const enum WheelTickConstants {
-  WHEEL_VALID_FL = 1,
-  WHEEL_VALID_FR = 2,
-  WHEEL_VALID_RL = 4,
-  WHEEL_VALID_RR = 8,
+  WHEEL_VALID_FL = 1,
+  WHEEL_VALID_FR = 2,
+  WHEEL_VALID_RL = 4,
+  WHEEL_VALID_RR = 8,
 };
 
 export type WheelTick = {
-  stamp?: { sec: number; nanosec: number };
-  wheel_tick_factor?: number;
-  valid_wheels?: number;
-  wheel_direction_fl?: number;
-  wheel_ticks_fl?: number;
-  wheel_direction_fr?: number;
-  wheel_ticks_fr?: number;
-  wheel_direction_rl?: number;
-  wheel_ticks_rl?: number;
-  wheel_direction_rr?: number;
-  wheel_ticks_rr?: number;
+  stamp?: { sec: number; nanosec: number };
+  wheel_tick_factor?: number;
+  valid_wheels?: number;
+  wheel_direction_fl?: number;
+  wheel_ticks_fl?: number;
+  wheel_direction_fr?: number;
+  wheel_ticks_fr?: number;
+  wheel_direction_rl?: number;
+  wheel_ticks_rl?: number;
+  wheel_direction_rr?: number;
+  wheel_ticks_rr?: number;
 };
 
 // --- Additional types not from .msg files ---

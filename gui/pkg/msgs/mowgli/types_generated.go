@@ -8,31 +8,31 @@ import (
 
 // AbsolutePose matches mowgli_interfaces/msg/AbsolutePose.
 type AbsolutePose struct {
-	Header                    geometry.Header                `json:"header"`
-	SensorStamp               uint32                         `json:"sensor_stamp"`
-	ReceivedStamp             uint32                         `json:"received_stamp"`
-	Source                    uint8                          `json:"source"`
-	Flags                     uint16                         `json:"flags"`
-	OrientationValid          uint8                          `json:"orientation_valid"`
-	MotionVectorValid         uint8                          `json:"motion_vector_valid"`
-	PositionAccuracy          float32                        `json:"position_accuracy"`
-	OrientationAccuracy       float32                        `json:"orientation_accuracy"`
-	Pose                      geometry.PoseWithCovariance    `json:"pose"`
-	MotionVector              geometry.Vector3               `json:"motion_vector"`
-	VehicleHeading            float64                        `json:"vehicle_heading"`
-	MotionHeading             float64                        `json:"motion_heading"`
+	Header                   geometry.Header                `json:"header"`
+	SensorStamp              uint32                         `json:"sensor_stamp"`
+	ReceivedStamp            uint32                         `json:"received_stamp"`
+	Source                   uint8                          `json:"source"`
+	Flags                    uint16                         `json:"flags"`
+	OrientationValid         uint8                          `json:"orientation_valid"`
+	MotionVectorValid        uint8                          `json:"motion_vector_valid"`
+	PositionAccuracy         float32                        `json:"position_accuracy"`
+	OrientationAccuracy      float32                        `json:"orientation_accuracy"`
+	Pose                     geometry.PoseWithCovariance    `json:"pose"`
+	MotionVector             geometry.Vector3               `json:"motion_vector"`
+	VehicleHeading           float64                        `json:"vehicle_heading"`
+	MotionHeading            float64                        `json:"motion_heading"`
 }
 
 // CoveragePath matches mowgli_interfaces/msg/CoveragePath.
 type CoveragePath struct {
-	IsOutline                 bool                           `json:"is_outline"`
-	Path                      nav.Path                       `json:"path"`
+	IsOutline                bool                           `json:"is_outline"`
+	Path                     nav.Path                       `json:"path"`
 }
 
 // DigEvent matches mowgli_interfaces/msg/DigEvent.
 type DigEvent struct {
-	Header                    geometry.Header                `json:"header"`
-	Position                  geometry.Point                 `json:"position"`
+	Header                   geometry.Header                `json:"header"`
+	Position                 geometry.Point                 `json:"position"`
 	WheelDistance             float64                        `json:"wheel_distance"`
 	MapDistance               float64                        `json:"map_distance"`
 	PositionSigma             float64                        `json:"position_sigma"`
@@ -40,157 +40,157 @@ type DigEvent struct {
 
 // DockCalibrationStatus matches mowgli_interfaces/msg/DockCalibrationStatus.
 type DockCalibrationStatus struct {
-	Phase                     uint8                          `json:"phase"`
+	Phase                    uint8                          `json:"phase"`
 	Progress                  float32                        `json:"progress"`
 	CogStdDeg                 float32                        `json:"cog_std_deg"`
 	DisplacementM             float32                        `json:"displacement_m"`
 	Charging                  bool                           `json:"charging"`
 	Running                   bool                           `json:"running"`
-	Success                   bool                           `json:"success"`
+	Success                  bool                           `json:"success"`
 	RetryReason               uint8                          `json:"retry_reason"`
-	Message                   string                         `json:"message"`
+	Message                  string                         `json:"message"`
 }
 
 // ESCStatus matches mowgli_interfaces/msg/ESCStatus.
 type ESCStatus struct {
-	Status                    uint8                          `json:"status"`
-	Current                   float32                        `json:"current"`
-	Tacho                     uint32                         `json:"tacho"`
-	Rpm                       int16                          `json:"rpm"`
-	TemperatureMotor          float32                        `json:"temperature_motor"`
-	TemperaturePcb            float32                        `json:"temperature_pcb"`
+	Status                   uint8                          `json:"status"`
+	Current                  float32                        `json:"current"`
+	Tacho                    uint32                         `json:"tacho"`
+	Rpm                      int16                          `json:"rpm"`
+	TemperatureMotor         float32                        `json:"temperature_motor"`
+	TemperaturePcb           float32                        `json:"temperature_pcb"`
 }
 
 // Emergency matches mowgli_interfaces/msg/Emergency.
 type Emergency struct {
-	Stamp                     geometry.Stamp                 `json:"stamp"`
-	ActiveEmergency           bool                           `json:"active_emergency"`
-	LatchedEmergency          bool                           `json:"latched_emergency"`
+	Stamp                    geometry.Stamp                 `json:"stamp"`
+	ActiveEmergency          bool                           `json:"active_emergency"`
+	LatchedEmergency         bool                           `json:"latched_emergency"`
 	LiftWarning               bool                           `json:"lift_warning"`
 	LiftDurationSec           float32                        `json:"lift_duration_sec"`
-	Reason                    string                         `json:"reason"`
+	Reason                   string                         `json:"reason"`
 }
 
 // GnssStatus matches mowgli_interfaces/msg/GnssStatus.
 type GnssStatus struct {
-	Header                    geometry.Header                `json:"header"`
-	Backend                   string                         `json:"backend"`
-	ReceiverVendor            string                         `json:"receiver_vendor"`
-	ReceiverModel             string                         `json:"receiver_model"`
-	ReceiverFirmware          string                         `json:"receiver_firmware"`
-	FixType                   uint8                          `json:"fix_type"`
-	FixValid                  bool                           `json:"fix_valid"`
-	DifferentialCorrections   bool                           `json:"differential_corrections"`
-	CorrectionsActive         bool                           `json:"corrections_active"`
-	DeadReckoning             bool                           `json:"dead_reckoning"`
-	RtkMode                   uint8                          `json:"rtk_mode"`
-	DualAntennaHeading        bool                           `json:"dual_antenna_heading"`
-	InterferenceDetected      bool                           `json:"interference_detected"`
-	JammingDetected           bool                           `json:"jamming_detected"`
-	QualityPercent            float32                        `json:"quality_percent"`
-	CapabilityFlags           uint32                         `json:"capability_flags"`
-	ValueFlags                uint32                         `json:"value_flags"`
-	Hdop                      float32                        `json:"hdop"`
-	Vdop                      float32                        `json:"vdop"`
-	HorizontalAccuracyM       float32                        `json:"horizontal_accuracy_m"`
-	VerticalAccuracyM         float32                        `json:"vertical_accuracy_m"`
-	HeadingDeg                float32                        `json:"heading_deg"`
-	HeadingAccuracyDeg        float32                        `json:"heading_accuracy_deg"`
-	SatellitesUsed            uint16                         `json:"satellites_used"`
-	SatellitesVisible         uint16                         `json:"satellites_visible"`
-	SatellitesTracked         uint16                         `json:"satellites_tracked"`
-	CorrectionAgeS            float32                        `json:"correction_age_s"`
-	MeanCn0DbHz               float32                        `json:"mean_cn0_db_hz"`
-	MaxCn0DbHz                float32                        `json:"max_cn0_db_hz"`
-	DualAntennaBaseline       bool                           `json:"dual_antenna_baseline"`
-	BaselineAzimuthDeg        float32                        `json:"baseline_azimuth_deg"`
-	BaselinePitchDeg          float32                        `json:"baseline_pitch_deg"`
-	BaselineLengthM           float32                        `json:"baseline_length_m"`
-	BaselineSolutionStatus    uint8                          `json:"baseline_solution_status"`
-	CorrectionStreamStatus    uint8                          `json:"correction_stream_status"`
-	MsmSummarySeen            bool                           `json:"msm_summary_seen"`
-	MsmSummaryDecoded         bool                           `json:"msm_summary_decoded"`
-	MsmSummaryValid           bool                           `json:"msm_summary_valid"`
-	MsmSummaryMessageType     uint16                         `json:"msm_summary_message_type"`
-	MsmSummaryStationId       uint16                         `json:"msm_summary_station_id"`
-	MsmSummaryConstellationsSeen string                         `json:"msm_summary_constellations_seen"`
-	MsmSummarySatelliteCount  uint16                         `json:"msm_summary_satellite_count"`
-	MsmSummarySignalCount     uint16                         `json:"msm_summary_signal_count"`
-	MsmSummaryCellCount       uint16                         `json:"msm_summary_cell_count"`
-	MsmSummaryAgeS            float32                        `json:"msm_summary_age_s"`
-	PositionObservationSequence uint64                         `json:"position_observation_sequence"`
-	CorrectionTransportStatus uint8                          `json:"correction_transport_status"`
-	CorrectionResponseAccepted bool                           `json:"correction_response_accepted"`
-	CorrectionFlowStatus      uint8                          `json:"correction_flow_status"`
-	CorrectionSemanticStatus  uint8                          `json:"correction_semantic_status"`
-	CorrectionSource          string                         `json:"correction_source"`
-	CorrectionForwardingSource string                         `json:"correction_forwarding_source"`
-	MsmSummarySource          string                         `json:"msm_summary_source"`
+	Header                   geometry.Header                `json:"header"`
+	Backend                  string                         `json:"backend"`
+	ReceiverVendor           string                         `json:"receiver_vendor"`
+	ReceiverModel            string                         `json:"receiver_model"`
+	ReceiverFirmware         string                         `json:"receiver_firmware"`
+	FixType                  uint8                          `json:"fix_type"`
+	FixValid                 bool                           `json:"fix_valid"`
+	DifferentialCorrections  bool                           `json:"differential_corrections"`
+	CorrectionsActive        bool                           `json:"corrections_active"`
+	DeadReckoning            bool                           `json:"dead_reckoning"`
+	RtkMode                  uint8                          `json:"rtk_mode"`
+	DualAntennaHeading       bool                           `json:"dual_antenna_heading"`
+	InterferenceDetected     bool                           `json:"interference_detected"`
+	JammingDetected          bool                           `json:"jamming_detected"`
+	QualityPercent           float32                        `json:"quality_percent"`
+	CapabilityFlags          uint32                         `json:"capability_flags"`
+	ValueFlags               uint32                         `json:"value_flags"`
+	Hdop                     float32                        `json:"hdop"`
+	Vdop                     float32                        `json:"vdop"`
+	HorizontalAccuracyM      float32                        `json:"horizontal_accuracy_m"`
+	VerticalAccuracyM        float32                        `json:"vertical_accuracy_m"`
+	HeadingDeg               float32                        `json:"heading_deg"`
+	HeadingAccuracyDeg       float32                        `json:"heading_accuracy_deg"`
+	SatellitesUsed           uint16                         `json:"satellites_used"`
+	SatellitesVisible        uint16                         `json:"satellites_visible"`
+	SatellitesTracked        uint16                         `json:"satellites_tracked"`
+	CorrectionAgeS           float32                        `json:"correction_age_s"`
+	MeanCn0DbHz              float32                        `json:"mean_cn0_db_hz"`
+	MaxCn0DbHz               float32                        `json:"max_cn0_db_hz"`
+	DualAntennaBaseline      bool                           `json:"dual_antenna_baseline"`
+	BaselineAzimuthDeg       float32                        `json:"baseline_azimuth_deg"`
+	BaselinePitchDeg         float32                        `json:"baseline_pitch_deg"`
+	BaselineLengthM          float32                        `json:"baseline_length_m"`
+	BaselineSolutionStatus   uint8                          `json:"baseline_solution_status"`
+	CorrectionStreamStatus   uint8                          `json:"correction_stream_status"`
+	MsmSummarySeen           bool                           `json:"msm_summary_seen"`
+	MsmSummaryDecoded        bool                           `json:"msm_summary_decoded"`
+	MsmSummaryValid          bool                           `json:"msm_summary_valid"`
+	MsmSummaryMessageType    uint16                         `json:"msm_summary_message_type"`
+	MsmSummaryStationId      uint16                         `json:"msm_summary_station_id"`
+	MsmSummaryConstellationsSeen string                         `json:"msm_summary_constellations_seen"`
+	MsmSummarySatelliteCount uint16                         `json:"msm_summary_satellite_count"`
+	MsmSummarySignalCount    uint16                         `json:"msm_summary_signal_count"`
+	MsmSummaryCellCount      uint16                         `json:"msm_summary_cell_count"`
+	MsmSummaryAgeS           float32                        `json:"msm_summary_age_s"`
+	PositionObservationSequence uint64                         `json:"position_observation_sequence"`
+	CorrectionTransportStatus uint8                          `json:"correction_transport_status"`
+	CorrectionResponseAccepted bool                           `json:"correction_response_accepted"`
+	CorrectionFlowStatus     uint8                          `json:"correction_flow_status"`
+	CorrectionSemanticStatus uint8                          `json:"correction_semantic_status"`
+	CorrectionSource         string                         `json:"correction_source"`
+	CorrectionForwardingSource string                         `json:"correction_forwarding_source"`
+	MsmSummarySource         string                         `json:"msm_summary_source"`
 }
 
 // HighLevelStatus matches mowgli_interfaces/msg/HighLevelStatus.
 type HighLevelStatus struct {
-	State                     uint8                          `json:"state"`
-	StateName                 string                         `json:"state_name"`
-	SubStateName              string                         `json:"sub_state_name"`
-	CurrentArea               int16                          `json:"current_area"`
-	CurrentPath               int16                          `json:"current_path"`
-	CurrentPathIndex          int16                          `json:"current_path_index"`
-	TotalSwaths               int16                          `json:"total_swaths"`
-	CompletedSwaths           int16                          `json:"completed_swaths"`
-	SkippedSwaths             int16                          `json:"skipped_swaths"`
-	CoveragePercent           float32                        `json:"coverage_percent"`
-	GpsQualityPercent         float32                        `json:"gps_quality_percent"`
-	BatteryPercent            float32                        `json:"battery_percent"`
-	IsCharging                bool                           `json:"is_charging"`
-	Emergency                 bool                           `json:"emergency"`
+	State                    uint8                          `json:"state"`
+	StateName                string                         `json:"state_name"`
+	SubStateName             string                         `json:"sub_state_name"`
+	CurrentArea              int16                          `json:"current_area"`
+	CurrentPath              int16                          `json:"current_path"`
+	CurrentPathIndex         int16                          `json:"current_path_index"`
+	TotalSwaths              int16                          `json:"total_swaths"`
+	CompletedSwaths          int16                          `json:"completed_swaths"`
+	SkippedSwaths            int16                          `json:"skipped_swaths"`
+	CoveragePercent          float32                        `json:"coverage_percent"`
+	GpsQualityPercent        float32                        `json:"gps_quality_percent"`
+	BatteryPercent           float32                        `json:"battery_percent"`
+	IsCharging               bool                           `json:"is_charging"`
+	Emergency                bool                           `json:"emergency"`
 }
 
 // ImuRaw matches mowgli_interfaces/msg/ImuRaw.
 type ImuRaw struct {
-	Dt                        uint16                         `json:"dt"`
-	Ax                        float64                        `json:"ax"`
-	Ay                        float64                        `json:"ay"`
-	Az                        float64                        `json:"az"`
-	Gx                        float64                        `json:"gx"`
-	Gy                        float64                        `json:"gy"`
-	Gz                        float64                        `json:"gz"`
-	Mx                        float64                        `json:"mx"`
-	My                        float64                        `json:"my"`
-	Mz                        float64                        `json:"mz"`
+	Dt                       uint16                         `json:"dt"`
+	Ax                       float64                        `json:"ax"`
+	Ay                       float64                        `json:"ay"`
+	Az                       float64                        `json:"az"`
+	Gx                       float64                        `json:"gx"`
+	Gy                       float64                        `json:"gy"`
+	Gz                       float64                        `json:"gz"`
+	Mx                       float64                        `json:"mx"`
+	My                       float64                        `json:"my"`
+	Mz                       float64                        `json:"mz"`
 }
 
 // MapArea matches mowgli_interfaces/msg/MapArea.
 type MapArea struct {
-	Name                      string                         `json:"name"`
-	Area                      geometry.Polygon               `json:"area"`
-	Obstacles                 []geometry.Polygon             `json:"obstacles"`
-	IsNavigationArea          bool                           `json:"is_navigation_area"`
-	ObstacleInfo              []MapObstacleInfo              `json:"obstacle_info"`
+	Name                     string                         `json:"name"`
+	Area                     geometry.Polygon               `json:"area"`
+	Obstacles                []geometry.Polygon             `json:"obstacles"`
+	IsNavigationArea         bool                           `json:"is_navigation_area"`
+	ObstacleInfo             []MapObstacleInfo              `json:"obstacle_info"`
 }
 
 // MapObstacleInfo matches mowgli_interfaces/msg/MapObstacleInfo.
 type MapObstacleInfo struct {
-	Name                      string                         `json:"name"`
-	Source                    uint8                          `json:"source"`
-	Pending                   bool                           `json:"pending"`
-	Id                        uint32                         `json:"id"`
+	Name                     string                         `json:"name"`
+	Source                   uint8                          `json:"source"`
+	Pending                  bool                           `json:"pending"`
+	Id                       uint32                         `json:"id"`
 }
 
 // ObstacleArray matches mowgli_interfaces/msg/ObstacleArray.
 type ObstacleArray struct {
-	Header                    geometry.Header                `json:"header"`
-	Obstacles                 []TrackedObstacle              `json:"obstacles"`
+	Header                   geometry.Header                `json:"header"`
+	Obstacles                []TrackedObstacle              `json:"obstacles"`
 }
 
 // Power matches mowgli_interfaces/msg/Power.
 type Power struct {
-	Stamp                     geometry.Stamp                 `json:"stamp"`
-	VCharge                   float32                        `json:"v_charge"`
-	VBattery                  float32                        `json:"v_battery"`
-	ChargeCurrent             float32                        `json:"charge_current"`
-	ChargerEnabled            bool                           `json:"charger_enabled"`
-	ChargerStatus             string                         `json:"charger_status"`
+	Stamp                    geometry.Stamp                 `json:"stamp"`
+	VCharge                  float32                        `json:"v_charge"`
+	VBattery                 float32                        `json:"v_battery"`
+	ChargeCurrent            float32                        `json:"charge_current"`
+	ChargerEnabled           bool                           `json:"charger_enabled"`
+	ChargerStatus            string                         `json:"charger_status"`
 }
 
 // Status matches mowgli_interfaces/msg/Status.
@@ -208,6 +208,9 @@ type Status struct {
 	UiBoardAvailable          bool                           `json:"ui_board_available"`
 	MowEnabled                bool                           `json:"mow_enabled"`
 	FirmwareDebugEnabled      bool                           `json:"firmware_debug_enabled"`
+	DigEscalated              bool                           `json:"dig_escalated"`
+	DigEscalatedDistanceM     float32                        `json:"dig_escalated_distance_m"`
+	DigEscalatedRequiredDistanceM float32                        `json:"dig_escalated_required_distance_m"`
 	MowerEscStatus            uint8                          `json:"mower_esc_status"`
 	MowerEscTemperature       float32                        `json:"mower_esc_temperature"`
 	MowerEscCurrent           float32                        `json:"mower_esc_current"`
@@ -221,27 +224,27 @@ type Status struct {
 
 // TrackedObstacle matches mowgli_interfaces/msg/TrackedObstacle.
 type TrackedObstacle struct {
-	Id                        uint32                         `json:"id"`
-	Polygon                   geometry.Polygon               `json:"polygon"`
-	Centroid                  geometry.Point                 `json:"centroid"`
-	Radius                    float64                        `json:"radius"`
-	FirstSeen                 geometry.Stamp                 `json:"first_seen"`
-	ObservationCount          uint32                         `json:"observation_count"`
-	Status                    uint8                          `json:"status"`
+	Id                       uint32                         `json:"id"`
+	Polygon                  geometry.Polygon               `json:"polygon"`
+	Centroid                 geometry.Point                 `json:"centroid"`
+	Radius                   float64                        `json:"radius"`
+	FirstSeen                geometry.Stamp                 `json:"first_seen"`
+	ObservationCount         uint32                         `json:"observation_count"`
+	Status                   uint8                          `json:"status"`
 }
 
 // WheelTick matches mowgli_interfaces/msg/WheelTick.
 type WheelTick struct {
-	Stamp                     geometry.Stamp                 `json:"stamp"`
-	WheelTickFactor           float32                        `json:"wheel_tick_factor"`
-	ValidWheels               uint8                          `json:"valid_wheels"`
-	WheelDirectionFl          uint8                          `json:"wheel_direction_fl"`
-	WheelTicksFl              uint32                         `json:"wheel_ticks_fl"`
-	WheelDirectionFr          uint8                          `json:"wheel_direction_fr"`
-	WheelTicksFr              uint32                         `json:"wheel_ticks_fr"`
-	WheelDirectionRl          uint8                          `json:"wheel_direction_rl"`
-	WheelTicksRl              uint32                         `json:"wheel_ticks_rl"`
-	WheelDirectionRr          uint8                          `json:"wheel_direction_rr"`
-	WheelTicksRr              uint32                         `json:"wheel_ticks_rr"`
+	Stamp                    geometry.Stamp                 `json:"stamp"`
+	WheelTickFactor          float32                        `json:"wheel_tick_factor"`
+	ValidWheels              uint8                          `json:"valid_wheels"`
+	WheelDirectionFl         uint8                          `json:"wheel_direction_fl"`
+	WheelTicksFl             uint32                         `json:"wheel_ticks_fl"`
+	WheelDirectionFr         uint8                          `json:"wheel_direction_fr"`
+	WheelTicksFr             uint32                         `json:"wheel_ticks_fr"`
+	WheelDirectionRl         uint8                          `json:"wheel_direction_rl"`
+	WheelTicksRl             uint32                         `json:"wheel_ticks_rl"`
+	WheelDirectionRr         uint8                          `json:"wheel_direction_rr"`
+	WheelTicksRr             uint32                         `json:"wheel_ticks_rr"`
 }
 

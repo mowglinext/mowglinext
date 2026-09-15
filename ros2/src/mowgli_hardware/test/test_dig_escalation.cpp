@@ -223,6 +223,43 @@ TEST(DigEscalation, ShippedDefaultsMatchTheDocumentedValues)
   EXPECT_EQ(cfg.min_count, 3);
 }
 
+// ── Operator override: CanClearDigEscalation ────────────────────────────────
+
+TEST(DigEscalation, WithinRadiusOfTheAnchorCannotClear)
+{
+  // 0.30 m from the anchor: still inside the 0.50 m "same spot" radius that
+  // raised the escalation — moving this little could still be the chassis
+  // rocking against the same object.
+  EXPECT_FALSE(mh::CanClearDigEscalation(0.0, 0.0, 0.30, 0.0, 0.50));
+}
+
+TEST(DigEscalation, ExactlyAtTheRadiusCannotClear)
+{
+  // Symmetric with ShouldEscalate's own <= radius_m "same spot" test — the
+  // boundary itself still counts as the spot, not clear of it.
+  EXPECT_FALSE(mh::CanClearDigEscalation(0.0, 0.0, 0.50, 0.0, 0.50));
+}
+
+TEST(DigEscalation, PastTheRadiusCanClear)
+{
+  EXPECT_TRUE(mh::CanClearDigEscalation(0.0, 0.0, 0.51, 0.0, 0.50));
+}
+
+TEST(DigEscalation, DistanceIsMeasuredFromTheAnchorNotTheOrigin)
+{
+  // Anchor away from (0,0): a naive hypot(x, y) would wrongly pass this.
+  EXPECT_FALSE(mh::CanClearDigEscalation(10.0, 20.0, 10.2, 20.1, 0.50));
+  EXPECT_TRUE(mh::CanClearDigEscalation(10.0, 20.0, 10.6, 20.0, 0.50));
+}
+
+TEST(DigEscalation, NonPositiveRadiusNeverBlocksAClear)
+{
+  // Mirrors ShouldEscalate's own disable sentinel: escalation itself cannot
+  // fire at this threshold, so a clear request must never be refused either.
+  EXPECT_TRUE(mh::CanClearDigEscalation(0.0, 0.0, 0.0, 0.0, 0.0));
+  EXPECT_TRUE(mh::CanClearDigEscalation(0.0, 0.0, 0.0, 0.0, -1.0));
+}
+
 // ── Displacement clear ──────────────────────────────────────────────────────
 // Field report 2026-09-14: after DIG_OBSTRUCTION the operator lifted the robot
 // onto open grass and pressed Play; nothing happened, because the latch only

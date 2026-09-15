@@ -30,6 +30,7 @@
 | Wheel odometry (`/wheel_odom`, `/wheel_ticks`) | `src/odometry_publisher.cpp` `handle_packet()` (:54): 16-bit unwrap (:80), spike limit (:96), 50 ms aggregation (:156), dock force-zero (:228), covariances (:241–251) |
 | Timestamp smoothing (firmware `dt_millis` → host stamp) | `include/mowgli_hardware/clock_fit.hpp` `HostFirmwareClockFit`, `src/clock_fit.cpp` (`Ingest`, reset gap :16, window :29) |
 | Dig detector (wheel-slip) | `include/mowgli_hardware/dig_detector.hpp` (`WorstCommandedTyreSpeed`, `DigDecide`, `DigTrustSigma`, `DigEscapeStep`); node glue `dig_monitor_tick()`, `on_dig_detected()`, `publish_dig_event()`, `on_filtered_map_odom()` |
+| Repeat-dig escalation + operator clear override | `include/mowgli_hardware/dig_escalation.hpp` (`ShouldEscalate`, `CanClearDigEscalation`); node glue `note_dig_for_escalation()` (sets `dig_escalation_{x,y}_`), `on_clear_dig_escalation()` (`~/clear_dig_escalation`, distance-gated), docking clear (`dig_escalated_` doc comment) |
 | `cmd_vel` path to the wire | `on_cmd_vel()` (:2828) → `include/mowgli_hardware/cmd_vel_slew.hpp` → `send_cmd_vel_packet()` (:3265); merged-command slew cap, `min_linear_vel` clamp, NULL→AUTONOMOUS fallback; exact encoded command published on `~/cmd_vel_applied` |
 | Blade enable / dry-run inhibit | `on_mower_control()` (:2958) + `include/mowgli_hardware/blade_gate.hpp` (`blade_enable_allowed`) → `send_blade_command()` (:2192) |
 | Emergency stop service / heartbeat bits | `on_emergency_stop()` (:2987), `send_heartbeat()` (:2154) (`emergency_requested` / `emergency_release_requested`) |
@@ -177,6 +178,8 @@ Layering at launch (`mowgli.launch.py` :194–254, later entries override earlie
 | `imu_cal_samples` | :623 | **launch dict from template :172 (200)** overrides `hardware_bridge.yaml` :21 (1000) | see Pitfalls |
 | `imu_cal_persist_path`, `imu_cal_auto_rest_sec`, `imu_cal_periodic_recal_sec` | :631–655 | template :173–175 via launch | periodic recal effective 600 s (template), not the code's 60 |
 | `dig_detect_enabled`, `dig_window_s`, `dig_min_cmd_speed`, `dig_min_wheel_dist`, `dig_progress_fraction`, `dig_max_pos_sigma`, `dig_gnss_timeout_s`, `dig_max_yaw_rate`, `dig_gyro_timeout_s`, `dig_reverse_speed`, `dig_reverse_dist`, `dig_reverse_timeout_s`, `dig_monitor_rate`, `dig_pose_timeout_s` | :671–689 | `hardware_bridge.yaml` :44–103 | not in the template / GUI; constants `dig_rearm_delay_s_` 2 s (:3038) and `dig_cmd_timeout_s_` 0.5 s (:3054) are not params |
+| `dig_escalate_radius_m` (0.50), `dig_escalate_window_s` (60.0), `dig_escalate_count` (3) | ~:786–788 | not in the template / GUI | `mowgli_hardware/dig_escalation.hpp` `ShouldEscalate`/`DigNearbyLatchCount` — clusters LATCHES into "the same spot" to decide whether to raise `dig_escalated_` at all (issue #500) |
+| `dig_escalate_clear_distance_m` (0.50, floored at 0.30 regardless of config) | ~:796 | not in the template / GUI | independent of `dig_escalate_radius_m` above — how far past the escalation anchor (`dig_escalation_{x,y}_`) `~/clear_dig_escalation` requires before accepting an operator override (`CanClearDigEscalation`); published live as `Status.dig_escalated_distance_m` / `.dig_escalated_required_distance_m` |
 
 ### TF frames
 

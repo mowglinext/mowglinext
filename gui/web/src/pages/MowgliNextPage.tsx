@@ -32,6 +32,7 @@ import {LiveMapMini} from "../concept/components/LiveMapMini.tsx";
 import type {MiniArea, MiniProgress} from "../concept/components/LiveMapMini.tsx";
 import {ProgressRibbon} from "../concept/components/ProgressRibbon.tsx";
 import {SoilWetBanner} from "../components/dashboard/SoilWetBanner.tsx";
+import {DigEscalationBanner} from "../components/dashboard/DigEscalationBanner.tsx";
 import {WeatherChip} from "../concept/components/WeatherChip.tsx";
 import {useWeather} from "../hooks/useWeather.ts";
 import {NoiseTexture} from "../concept/components/NoiseTexture.tsx";
@@ -330,6 +331,10 @@ export const MowgliNextPage = () => {
             label={data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
           />
         </motion.header>
+
+        {/* Repeat-dig escalation: hardware_bridge halted the mission — the
+            operator needs to know why nothing is moving and how to clear it */}
+        <DigEscalationBanner variants={riseFade}/>
 
         {/* IrriSense: the garden is wet — warn before anyone starts a mow */}
         <SoilWetBanner variants={riseFade}/>

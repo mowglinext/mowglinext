@@ -219,4 +219,29 @@ inline bool ShouldEscalate(
   return ShouldEscalate(history, x, y, t, cfg.radius_m, cfg.window_s, cfg.min_count);
 }
 
+// ── Operator override (issue reported 2026-09-14) ───────────────────────────
+// Reaching the charger is the unconditional clear (see dig_escalated_'s doc
+// comment on the bridge) because docking is proof the robot is no longer AT
+// the obstruction, and DigEscalationClearedByDisplacement() above releases
+// the latch on its own at kDigEscalationClearFactor x radius_m — but the dock
+// may be far away, unreachable from the escalated position (mowing is
+// stopped, so nothing drives it there), or the operator may have freed the
+// chassis by hand and want to resume from just outside the spot, before the
+// automatic release distance. CanClearDigEscalation() is that narrower,
+// operator-confirmed proof: the current position is no longer within
+// radius_m of the escalation anchor (the bridge passes its configurable
+// dig_escalate_clear_distance_m, floored at 0.30 m, as radius_m).
+// Anything closer means the robot could still be sitting against — or have
+// only nudged a few cm from — the object that would have been the 4th latch;
+// clearing there would defeat the guard ShouldEscalate exists to raise.
+inline bool CanClearDigEscalation(
+    double anchor_x, double anchor_y, double x, double y, double radius_m)
+{
+  if (radius_m <= 0.0)
+  {
+    return true;  // escalation itself is disabled at this threshold; never block a clear
+  }
+  return std::hypot(x - anchor_x, y - anchor_y) > radius_m;
+}
+
 }  // namespace mowgli_hardware

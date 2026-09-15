@@ -811,7 +811,11 @@
     "firmwareFlashCta": "Flash firmware",
     "coverageToday": "Coverage today · {{pct}} %",
     "soilWetTitle": "Careful: the garden is wet (IrriSense)",
-    "soilWetBlocking": "scheduled mows are suspended"
+    "soilWetBlocking": "scheduled mows are suspended",
+    "digEscalationTitle": "Mowing halted — repeat dig detected",
+    "digEscalationBody": "The mower couldn't free itself and stopped {{distance}} m from the spot (needs {{required}} m to clear). Move it further away, then try again.",
+    "digEscalationReady": "Moved {{distance}} m from the spot — ready to clear.",
+    "digEscalationClear": "Clear & resume"
   },
   "onboardingPage": {
     "preview": "Preview",
