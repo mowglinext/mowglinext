@@ -113,6 +113,7 @@
     "diagnostics": "Diagnostics",
     "diagShort": "Diag",
     "stats": "Stats",
+    "fleet": "Fleet",
     "settings": "Settings",
     "parameters": "Parameters",
     "logs": "Logs",
@@ -136,6 +137,9 @@
     "statistics": {
       "title": "Statistics",
       "subtitle": "Long-term history"
+    },
+    "fleet": {
+      "subtitle": "Every mower on the network"
     },
     "settings": {
       "subtitle": "Robot configuration"
@@ -832,6 +836,8 @@
     "getStarted": "Get Started",
     "robotModelTitle": "Choose Your Robot",
     "robotModelIntro": "Select your mower model. This pre-fills hardware parameters like wheel size, battery voltage, and blade dimensions.",
+    "robotNameLabel": "Robot name",
+    "robotNameTooltip": "Shown in the GUI and in the fleet view. Give every mower on your network a different name.",
     "customConfigTitle": "Custom configuration",
     "customConfigDesc": "You can fine-tune all hardware parameters in Settings after completing onboarding.",
     "wheelRadiusLabel": "Wheel Radius",
@@ -2120,6 +2126,8 @@
   "settingsHardware": {
     "robotModel": "Robot Model",
     "robotModelDescription": "Select your mower to auto-fill hardware dimensions.",
+    "robotName": "Robot Name",
+    "robotNameTooltip": "Shown in the GUI and in the fleet view; unique per mower",
     "wheelsAndBlade": "Wheels & Blade",
     "wheelRadius": "Wheel Radius",
     "wheelRadiusTooltip": "Drive wheel radius in metres",
@@ -3561,5 +3569,42 @@
     "componentsToUpdate": "Components",
     "backupHelp": "Settings and maps are backed up before installation. Mainboard firmware is unchanged.",
     "unavailableHelp": "Automatic updates need the host updater installed. Advanced contains installed versions and manual image comparisons."
+  },
+  "fleetPage": {
+    "thisRobot": "this robot",
+    "openGui": "Open this robot's GUI",
+    "removeConfirm": "Remove {{robot}} from the fleet? It will forget this robot too.",
+    "peerAdded": "Robot added to the fleet",
+    "peerRemoved": "Robot removed from the fleet",
+    "pollError": "Fleet snapshot unavailable",
+    "apiMismatch": "Different software version",
+    "battery": "Battery",
+    "gps": "GPS",
+    "mowingArea": "Mowing area {{area}} · {{pct}} %",
+    "lastSeen": "Last seen {{when}}",
+    "play": "Play",
+    "pause": "Pause",
+    "home": "Home",
+    "homeConfirm": "Send {{robot}} back to its dock?",
+    "sent": "{{action}} sent to {{robot}}",
+    "positions": "Positions",
+    "noPositions": "No robot has a GPS fix yet",
+    "addPeerTitle": "Add a mower",
+    "addPeerHelp": "Enter the address of the other mower's GUI (IP or hostname, port 4006 by default). Both robots will know each other afterwards.",
+    "add": "Add",
+    "requirements": "Requirements",
+    "reqName": "Each mower needs its own name (Settings → Hardware → Robot Name).",
+    "reqNetwork": "Both mowers must be reachable on the same network.",
+    "reqSymmetric": "Adding a mower here also adds this robot on the other one.",
+    "phase": {
+      "offline": "Offline",
+      "idle": "Idle",
+      "charging": "Charging",
+      "mowing": "Mowing",
+      "returning": "Returning home",
+      "recording": "Recording",
+      "manual": "Manual",
+      "emergency": "Emergency"
+    }
   }
 }

@@ -146,7 +146,7 @@ CALIBRATION_OUTPUT = {
 # them in via line-splice, so the lines must exist even while still holding the
 # default value — exempt from the padded-default check below.
 INSTALL_SEED = {
-    "mower_model", "lidar_enabled", "use_lidar",
+    "mower_model", "robot_name", "lidar_enabled", "use_lidar",
     "gnss_receiver_family", "gnss_serial_device", "gnss_serial_baud",
     "datum_lat", "datum_lon", "datum_alt",
     "ntrip_enabled", "ntrip_host", "ntrip_port",

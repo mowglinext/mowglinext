@@ -113,6 +113,7 @@
     "diagnostics": "Diagnostic",
     "diagShort": "Diag",
     "stats": "Stats",
+    "fleet": "Flotte",
     "settings": "Réglages",
     "parameters": "Paramètres",
     "logs": "Logs",
@@ -136,6 +137,9 @@
     "statistics": {
       "title": "Statistiques",
       "subtitle": "Historique long terme"
+    },
+    "fleet": {
+      "subtitle": "Toutes les tondeuses du réseau"
     },
     "settings": {
       "subtitle": "Configuration robot"
@@ -832,6 +836,8 @@
     "getStarted": "Commencer",
     "robotModelTitle": "Choisissez votre robot",
     "robotModelIntro": "Sélectionnez votre modèle de tondeuse. Cela préremplit les paramètres matériels comme la taille des roues, la tension de la batterie et les dimensions de la lame.",
+    "robotNameLabel": "Nom du robot",
+    "robotNameTooltip": "Affiché dans l'interface et dans la vue flotte. Donnez un nom différent à chaque tondeuse de votre réseau.",
     "customConfigTitle": "Configuration personnalisée",
     "customConfigDesc": "Vous pourrez affiner tous les paramètres matériels dans les Réglages après l'onboarding.",
     "wheelRadiusLabel": "Rayon de roue",
@@ -2116,6 +2122,8 @@
   "settingsHardware": {
     "robotModel": "Modèle de robot",
     "robotModelDescription": "Sélectionnez votre tondeuse pour pré-remplir les dimensions matérielles.",
+    "robotName": "Nom du robot",
+    "robotNameTooltip": "Affiché dans l'interface et dans la vue flotte ; unique par tondeuse",
     "wheelsAndBlade": "Roues et lame",
     "wheelRadius": "Rayon de roue",
     "wheelRadiusTooltip": "Rayon de la roue motrice en mètres",
@@ -3561,5 +3569,42 @@
     "componentsToUpdate": "Composants",
     "backupHelp": "Les réglages et les cartes sont sauvegardés avant l’installation. Le firmware de la carte principale reste inchangé.",
     "unavailableHelp": "Les mises à jour automatiques nécessitent le service de mise à jour hôte. Le mode Avancé affiche les versions installées et les comparaisons manuelles."
+  },
+  "fleetPage": {
+    "thisRobot": "ce robot",
+    "openGui": "Ouvrir l'interface de ce robot",
+    "removeConfirm": "Retirer {{robot}} de la flotte ? Il oubliera aussi ce robot.",
+    "peerAdded": "Robot ajouté à la flotte",
+    "peerRemoved": "Robot retiré de la flotte",
+    "pollError": "État de la flotte indisponible",
+    "apiMismatch": "Version logicielle différente",
+    "battery": "Batterie",
+    "gps": "GPS",
+    "mowingArea": "Tonte zone {{area}} · {{pct}} %",
+    "lastSeen": "Vu pour la dernière fois {{when}}",
+    "play": "Lecture",
+    "pause": "Pause",
+    "home": "Base",
+    "homeConfirm": "Renvoyer {{robot}} à sa base ?",
+    "sent": "{{action}} envoyé à {{robot}}",
+    "positions": "Positions",
+    "noPositions": "Aucun robot n'a encore de position GPS",
+    "addPeerTitle": "Ajouter une tondeuse",
+    "addPeerHelp": "Saisissez l'adresse de l'interface de l'autre tondeuse (IP ou nom d'hôte, port 4006 par défaut). Les deux robots se connaîtront ensuite.",
+    "add": "Ajouter",
+    "requirements": "Prérequis",
+    "reqName": "Chaque tondeuse doit avoir son propre nom (Réglages → Matériel → Nom du robot).",
+    "reqNetwork": "Les deux tondeuses doivent être joignables sur le même réseau.",
+    "reqSymmetric": "Ajouter une tondeuse ici l'ajoute aussi sur l'autre.",
+    "phase": {
+      "offline": "Hors ligne",
+      "idle": "Inactif",
+      "charging": "En charge",
+      "mowing": "En tonte",
+      "returning": "Retour à la base",
+      "recording": "Enregistrement",
+      "manual": "Manuel",
+      "emergency": "Urgence"
+    }
   }
 }

@@ -20,6 +20,7 @@ const PAGES = [
     {route: "/settings", heading: /Réglages|Settings/i},
     {route: "/parameters", heading: /Paramètres|Parameters/i},
     {route: "/logs", heading: /Logs/i},
+    {route: "/fleet", heading: /Flotte|Fleet/i},
 ];
 
 for (const scenario of SCENARIOS) {

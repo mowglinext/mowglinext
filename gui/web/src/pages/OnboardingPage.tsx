@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import {
     App,
     Button, Card, Col, Row, Steps, Typography, Select, Space, Alert,
-    InputNumber, Switch, Form, Divider, Tag,
+    Input, InputNumber, Switch, Form, Divider, Tag,
 } from "antd";
 import {
     RocketOutlined, SettingOutlined, GlobalOutlined,
@@ -173,6 +173,22 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
             <Paragraph type="secondary">
                 {t("onboardingPage.robotModelIntro")}
             </Paragraph>
+
+            <Form layout="vertical" style={{ marginBottom: 16 }}>
+                <Form.Item
+                    label={t("onboardingPage.robotNameLabel")}
+                    tooltip={t("onboardingPage.robotNameTooltip")}
+                    style={{ marginBottom: 0 }}
+                >
+                    <Input
+                        value={values.robot_name ?? ""}
+                        onChange={(e) => onChange("robot_name", e.target.value)}
+                        maxLength={32}
+                        placeholder="mowgli"
+                        style={{ maxWidth: 320 }}
+                    />
+                </Form.Item>
+            </Form>
 
             <Row gutter={[12, 12]} role="radiogroup" aria-label={t("onboardingPage.robotModelTitle")}>
                 {MOWER_MODELS.map((model) => {
