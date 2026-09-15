@@ -67,6 +67,9 @@ var topicMap = map[string]topicDef{
 	// mag_yaw_publisher.py in mowgli_localization.
 	"cogHeading": {"/imu/cog_heading", "sensor_msgs/msg/Imu"},
 	"magYaw":     {"/imu/mag_yaw", "sensor_msgs/msg/Imu"},
+	// 1 Hz per-session coverage sets (completed / attempted / excluded areas)
+	// for the fleet coordinator on every member's GUI (docs/MULTI_ROBOT.md).
+	"coverageSession": {"/behavior_tree_node/coverage_session", "mowgli_interfaces/msg/CoverageSession"},
 }
 
 // ---------------------------------------------------------------------------

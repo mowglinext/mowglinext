@@ -626,6 +626,24 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
+    # 12b. Fleet peer obstacles — other mowers as local-costmap points
+    # ------------------------------------------------------------------
+    # The GUI fleet coordinator publishes the other fleet members' poses on
+    # /fleet/peers (PoseArray, map frame) through foxglove clientPublish;
+    # this node turns them into a continuously published PointCloud2 on
+    # /fleet/peer_obstacles that the local costmap marks (see the
+    # fleet_peers source / fleet_layer in the Nav2 overlays). Always launched:
+    # it publishes an EMPTY cloud when the robot is alone, so the costmap
+    # source never goes stale. docs/MULTI_ROBOT.md.
+    fleet_peer_obstacles_node = Node(
+        package="mowgli_bringup",
+        executable="fleet_peer_obstacles.py",
+        name="fleet_peer_obstacles",
+        output="screen",
+        parameters=[{"use_sim_time": use_sim_time}],
+    )
+
+    # ------------------------------------------------------------------
     # 13. Obstacle tracker — persistent LiDAR obstacle detection
     # ------------------------------------------------------------------
     obstacle_tracker_params = os.path.join(
@@ -773,6 +791,7 @@ def generate_launch_description() -> LaunchDescription:
             foxglove_bridge_node,
             led_ring_node,
             cmd_vel_relay_node,
+            fleet_peer_obstacles_node,
             # Dock heading is published by hardware_bridge at 1 Hz while
             # charging (~/dock_heading → /gnss/heading via mowgli.launch.py
             # remapping). No separate launch action needed.

@@ -1024,3 +1024,175 @@ TEST_F(GetNextUnmowedAreaTest, OrientationQueueIsBoundedAndDestructionRepliesToD
             rclcpp::FutureReturnCode::SUCCESS);
   EXPECT_FALSE(futures.front().get()->success);
 }
+
+// ---------------------------------------------------------------------------
+// Fleet coordination (docs/MULTI_ROBOT.md): areas assigned to another fleet
+// member are skipped, the scan can start at a preferred index and wrap, a
+// yielded pass is not charged, and FollowStrip yields when its area is taken.
+// ---------------------------------------------------------------------------
+
+TEST_F(GetNextUnmowedAreaTest, FleetExcludedAreaIsSkippedLikeACompletedOne)
+{
+  areas[0] = {"north", false};
+  areas[1] = {"south", false};
+  waitForService();
+  ctx->fleet_excluded_areas = {0u};
+
+  auto tree = makeTree(/*max_areas=*/5);
+  ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  uint32_t selected = 99;
+  ASSERT_TRUE(blackboard->get("area_index", selected));
+  EXPECT_EQ(selected, 1u) << "area 0 belongs to another robot";
+  EXPECT_FALSE(ctx->coverage_all_complete);
+}
+
+TEST_F(GetNextUnmowedAreaTest, OnlyExcludedAreasLeftEndsAsMowingComplete)
+{
+  areas[0] = {"north", false};
+  waitForService();
+  ctx->fleet_excluded_areas = {0u};
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::FAILURE);
+  EXPECT_TRUE(ctx->coverage_all_complete)
+      << "nothing left for THIS robot is a clean completion (dock), not a config error";
+}
+
+TEST_F(GetNextUnmowedAreaTest, FleetPreferredStartRotatesTheScanAndWraps)
+{
+  areas[0] = {"a", false};
+  areas[1] = {"b", false};
+  areas[2] = {"c", false};
+  waitForService();
+  ctx->fleet_preferred_start = 2u;
+
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+    uint32_t selected = 99;
+    ASSERT_TRUE(blackboard->get("area_index", selected));
+    EXPECT_EQ(selected, 2u) << "the scan starts at the preferred index";
+  }
+  ctx->completed_areas.insert(2u);
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+    uint32_t selected = 99;
+    ASSERT_TRUE(blackboard->get("area_index", selected));
+    EXPECT_EQ(selected, 0u) << "past the last area the scan wraps to the lower indices";
+  }
+  ctx->completed_areas.insert(0u);
+  ctx->completed_areas.insert(1u);
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::FAILURE);
+    EXPECT_TRUE(ctx->coverage_all_complete) << "everything done after the wrap";
+  }
+}
+
+TEST_F(GetNextUnmowedAreaTest, FleetPreferredStartBeyondTheLastAreaWrapsToZero)
+{
+  areas[0] = {"a", false};
+  areas[1] = {"b", false};
+  waitForService();
+  ctx->fleet_preferred_start = 3u;  // rank 3 in a fleet larger than the lawn
+
+  auto tree = makeTree(/*max_areas=*/5);
+  ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  uint32_t selected = 99;
+  ASSERT_TRUE(blackboard->get("area_index", selected));
+  EXPECT_EQ(selected, 0u);
+}
+
+TEST_F(GetNextUnmowedAreaTest, TargetedRunIgnoresTheFleetRotation)
+{
+  areas[0] = {"a", false};
+  areas[1] = {"b", false};
+  areas[2] = {"c", false};
+  waitForService();
+  ctx->fleet_preferred_start = 2u;
+  ctx->target_area_index = 1;
+
+  auto tree = makeTree(/*max_areas=*/5);
+  ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  uint32_t selected = 99;
+  ASSERT_TRUE(blackboard->get("area_index", selected));
+  EXPECT_EQ(selected, 1u) << "'mow only this area' wins over the fleet rotation";
+}
+
+TEST_F(GetNextUnmowedAreaTest, FleetYieldedPassIsNotChargedToTheNoProgressBudget)
+{
+  areas[0] = {"lawn", false};
+  waitForService();
+
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+    ASSERT_EQ(ctx->area_attempt_count[0u], 1u);
+  }
+  // FollowStrip yielded area 0 to a peer, and the peer has since released it.
+  ctx->fleet_yielded_areas.insert(0u);
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->current_area, 0);
+  EXPECT_EQ(ctx->area_attempt_count[0u], 1u) << "a yielded pass never had a chance to progress";
+  EXPECT_EQ(ctx->area_guard_halt_count[0u], 1u) << "it rides the guard-halt exemption";
+  EXPECT_TRUE(ctx->fleet_yielded_areas.empty()) << "consumed by the dispatch";
+}
+
+TEST_F(GetNextUnmowedAreaTest, EndSessionClearsFleetYieldsButKeepsExclusions)
+{
+  ctx->fleet_yielded_areas.insert(3u);
+  ctx->fleet_excluded_areas.insert(4u);
+
+  auto end = makeEndSessionTree();
+  ASSERT_EQ(end.tickOnce(), BT::NodeStatus::SUCCESS);
+
+  EXPECT_TRUE(ctx->fleet_yielded_areas.empty());
+  EXPECT_EQ(ctx->fleet_excluded_areas.count(4u), 1u)
+      << "exclusions are owned by the fleet coordinator, not by the session";
+}
+
+TEST_F(GetNextUnmowedAreaTest, FollowStripYieldsWhenItsAreaIsAssignedToAPeer)
+{
+  using Follow = mowgli_behavior::FollowStrip::Nav2FollowPath;
+  auto action = rclcpp_action::create_server<Follow>(
+      server_node,
+      "/follow_path",
+      [](const auto&, const auto&)
+      {
+        return rclcpp_action::GoalResponse::REJECT;
+      },
+      [](const auto&)
+      {
+        return rclcpp_action::CancelResponse::ACCEPT;
+      },
+      [](const auto&) {});
+  ctx->current_area = 2;
+  ctx->tf_buffer = std::make_shared<tf2_ros::Buffer>(ctx->node->get_clock());
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  path.poses.resize(2);
+  path.poses[1].pose.position.x = 1.0;
+  ctx->current_strip_subpaths = {path};
+  factory.registerNodeType<mowgli_behavior::FollowStrip>("FollowStrip");
+  auto tree = factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Test\"><FollowStrip/></BehaviorTree></root>",
+      blackboard);
+
+  // A normal pass starts (RUNNING), then the coordinator hands area 2 to a peer.
+  ASSERT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  ctx->fleet_excluded_areas = {2u};
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS) << "the pass ends, it is not a failure";
+  EXPECT_EQ(ctx->fleet_yielded_areas.count(2u), 1u);
+  EXPECT_EQ(ctx->completed_areas.count(2u), 0u) << "yielding never completes an area";
+
+  // Already excluded before the pass starts: no goal is sent at all.
+  ctx->fleet_yielded_areas.clear();
+  auto tree2 = factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Test\"><FollowStrip/></BehaviorTree></root>",
+      blackboard);
+  EXPECT_EQ(tree2.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->fleet_yielded_areas.count(2u), 1u);
+}

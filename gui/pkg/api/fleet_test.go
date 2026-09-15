@@ -41,10 +41,11 @@ func newFleetRobot(t *testing.T, name string) *fleetRobot {
 	ros := types.NewMockRosProvider()
 	fleet := providers.NewFleetProvider(db, ros)
 
+	coord := providers.NewFleetCoordinator(db, ros, fleet)
 	r := gin.New()
 	group := r.Group("/api")
 	MowgliNextRoutes(group, ros)
-	FleetRoutes(group, fleet)
+	FleetRoutes(group, fleet, coord)
 	srv := httptest.NewServer(r)
 	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
 	require.NoError(t, err)
@@ -54,6 +55,7 @@ func newFleetRobot(t *testing.T, name string) *fleetRobot {
 	require.NoError(t, err)
 	rb := &fleetRobot{name: name, db: db, ros: ros, fleet: fleet, srv: srv, addr: srv.Listener.Addr().String(), id: id.ID}
 	t.Cleanup(func() {
+		coord.Close()
 		fleet.Close()
 		srv.Close()
 	})

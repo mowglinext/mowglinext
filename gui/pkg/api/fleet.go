@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,8 +19,12 @@ import (
 const fleetCallTimeout = 12 * time.Second
 
 // FleetRoutes registers /fleet/* on the API group.
-func FleetRoutes(r *gin.RouterGroup, fleet *providers.FleetProvider) {
+func FleetRoutes(r *gin.RouterGroup, fleet *providers.FleetProvider, coord *providers.FleetCoordinator) {
 	g := r.Group("/fleet")
+	g.GET("/coordination", func(c *gin.Context) { getFleetCoordination(c, coord) })
+	g.PUT("/coordination", func(c *gin.Context) { putFleetCoordination(c, coord) })
+	g.POST("/coordination/reset", func(c *gin.Context) { postFleetCoordinationReset(c, fleet, coord) })
+	g.POST("/map/push", func(c *gin.Context) { postFleetMapPush(c, fleet) })
 	g.GET("/identity", func(c *gin.Context) { getFleetIdentity(c, fleet) })
 	g.GET("/robots", func(c *gin.Context) { getFleetRobots(c, fleet) })
 	g.GET("/peers", func(c *gin.Context) { c.JSON(http.StatusOK, fleet.Peers()) })
@@ -197,4 +202,97 @@ func postFleetCall(c *gin.Context, fleet *providers.FleetProvider) {
 		return
 	}
 	c.Data(status, "application/json", resp)
+}
+
+// FleetCoordinationResponse bundles the coordinator settings and live state.
+type FleetCoordinationResponse struct {
+	Settings providers.CoordinatorSettings `json:"settings"`
+	Status   providers.CoordinatorStatus   `json:"status"`
+}
+
+// getFleetCoordination returns coordinated-mowing settings + status.
+//
+// @Summary coordinated mowing settings and status
+// @Tags fleet
+// @Produce json
+// @Success 200 {object} FleetCoordinationResponse
+// @Router /fleet/coordination [get]
+func getFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
+	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status()})
+}
+
+// putFleetCoordination updates coordinated-mowing settings.
+//
+// @Summary update coordinated mowing settings
+// @Tags fleet
+// @Accept json
+// @Produce json
+// @Param body body providers.CoordinatorSettings true "settings"
+// @Success 200 {object} FleetCoordinationResponse
+// @Failure 400 {object} ErrorResponse
+// @Router /fleet/coordination [put]
+func putFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
+	var s providers.CoordinatorSettings
+	if err := c.BindJSON(&s); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+	if err := coord.SetSettings(s); err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status()})
+}
+
+// postFleetCoordinationReset forgets the fleet session's completed areas and
+// clears every member's coverage resume ("start fresh" for the whole fleet).
+//
+// @Summary fleet-wide start fresh
+// @Tags fleet
+// @Produce json
+// @Success 200 {object} OkResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /fleet/coordination/reset [post]
+func postFleetCoordinationReset(c *gin.Context, fleet *providers.FleetProvider, coord *providers.FleetCoordinator) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), fleetCallTimeout)
+	defer cancel()
+	rows, err := fleet.Robots()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+		return
+	}
+	var failures []string
+	for _, r := range rows {
+		if !r.Online {
+			continue
+		}
+		if _, _, err := fleet.Call(ctx, r.Identity.ID, "coverage_clear_resume", json.RawMessage(`{}`)); err != nil {
+			failures = append(failures, r.Identity.Name+": "+err.Error())
+		}
+	}
+	if err := coord.Reset(); err != nil {
+		failures = append(failures, "coordinator: "+err.Error())
+	}
+	if len(failures) > 0 {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "start fresh incomplete — " + strings.Join(failures, "; ")})
+		return
+	}
+	c.JSON(http.StatusOK, OkResponse{})
+}
+
+// postFleetMapPush copies this robot's map onto every peer.
+//
+// @Summary push this robot's map to the fleet
+// @Tags fleet
+// @Produce json
+// @Success 200 {object} providers.MapPushResult
+// @Failure 400 {object} ErrorResponse
+// @Router /fleet/map/push [post]
+func postFleetMapPush(c *gin.Context, fleet *providers.FleetProvider) {
+	res, err := fleet.PushMap(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }

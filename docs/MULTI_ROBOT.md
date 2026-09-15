@@ -153,7 +153,39 @@ difference, so fleet members must share one datum. Docks stay per robot
   5.0 m for 3 s it is sent `COMMAND_START`, which resumes at its saved cursor.
   A yielded robot reports IDLE, so the other never sees it as a competitor.
 
-## Status
+## Status (2026-09-15)
 
-See the "Fleet" section of the Fleet page and `docs/claude/codemaps/
-gui_backend.md` for the file map. Field-test status is tracked in the PR.
+All three phases are implemented on this branch and unit-tested; **none has
+been field-tested with two real mowers yet**.
+
+| Piece | Where | Verified by |
+|-------|-------|-------------|
+| `robot_name` identity, `robot_id` | template / seed / schema / onboarding / `fleet_identity.go` | `TestSchemaDefaultsMatchTemplate`, `check_config_drift.py`, `fleet_test.go` |
+| Fleet view (registry, mirror, proxy, `/fleet` page) | `gui/pkg/providers/fleet*.go`, `gui/pkg/api/fleet.go`, `gui/web/src/pages/FleetPage.tsx` | two in-process robots in `gui/pkg/api/fleet_test.go` (handshake, live WebSocket mirror, proxy, removal); vitest `utils/fleet.test.ts` |
+| BT area assignment + yield | `mowgli_behavior` (`~/set_fleet_assignment`, `~/coverage_session`, `GetNextUnmowedArea`, `FollowStrip`) | 8 new gtests in `test_get_next_unmowed_area.cpp` (497/497 behavior tests green on Lyrical) |
+| Peer obstacles | `fleet_peer_obstacles.py`, Nav2 overlays | `test_fleet_peer_obstacles.py`, `test_nav2_params.py` (fleet source placement) |
+| Coordinator (exclusions, completed memory, peer poses, yield rule, map push) | `fleet_coordinator*.go`, `fleet_map.go` | `fleet_coordinator_test.go` (pure rules + `tick()` against the ROS mock) |
+
+Field checks still owed before calling it done:
+
+1. Two mowers, one map, coordination ON: each picks a different area (rotation),
+   neither re-enters an area the other finished (completed memory), and the
+   run ends with both docked and MOWING_COMPLETE.
+2. Force a same-area pick (`~/start_in_area` on both): the greater-id robot
+   yields mid-pass, saves its cursor and moves on; the other keeps mowing.
+3. Drive the two within 3 m on transit: the lower-priority one holds
+   (`COMMAND_STOP`), the local costmap shows the peer ring, and it resumes
+   after the 5 m / 3 s hysteresis.
+4. `/fleet/peers` actually reaches `fleet_peer_obstacles.py` through
+   foxglove `clientPublish` (JSON encoding of `geometry_msgs/PoseArray`).
+
+Known limits: partitioning is per AREA (a single-area lawn is not split);
+priority is the lexical order of the generated `robot_id`, not configurable;
+the yield rule needs a GPS fix on both robots; a peer that goes offline keeps
+its last completed areas in the memory until the 12 h TTL or "Start fresh".
+
+Fleet node parameters (`fleet_peer_obstacles.py`: `peer_radius_m` 0.6,
+`ring_points` 24, `publish_rate_hz` 5, `peer_timeout_s` 5, `point_height_m`
+0.30) are node defaults only, not template keys — change them in the launch
+file if a site needs to. Coordinator knobs live in the GUI DB
+(`fleet.coordination`) and on the Fleet page.

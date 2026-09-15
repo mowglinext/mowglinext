@@ -37,5 +37,6 @@ func main() {
 	irriSenseProvider := providers.NewIrriSenseProvider(dbProvider)
 	providers.NewSchedulerProvider(rosProvider, dbProvider, irriSenseProvider)
 	fleetProvider := providers.NewFleetProvider(dbProvider, rosProvider)
-	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider, irriSenseProvider, fleetProvider)
+	fleetCoordinator := providers.NewFleetCoordinator(dbProvider, rosProvider, fleetProvider)
+	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider, irriSenseProvider, fleetProvider, fleetCoordinator)
 }

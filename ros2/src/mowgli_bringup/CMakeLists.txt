@@ -25,6 +25,7 @@ install(
     scripts/wait_for_tf.py
     scripts/empty_static_map_pub.py
     scripts/cmd_vel_ws_relay.py
+    scripts/fleet_peer_obstacles.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -73,6 +74,11 @@ if(BUILD_TESTING)
     TIMEOUT 30
   )
   ament_add_pytest_test(test_cmd_vel_ws_relay test/test_cmd_vel_ws_relay.py
+    TIMEOUT 30
+  )
+  # Pure helpers of the fleet peer → costmap point-cloud node
+  # (docs/MULTI_ROBOT.md): ring geometry, staleness, PointCloud2 packing.
+  ament_add_pytest_test(test_fleet_peer_obstacles test/test_fleet_peer_obstacles.py
     TIMEOUT 30
   )
 

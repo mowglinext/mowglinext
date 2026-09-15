@@ -29,6 +29,15 @@ type CoveragePath struct {
 	Path                      nav.Path                       `json:"path"`
 }
 
+// CoverageSession matches mowgli_interfaces/msg/CoverageSession.
+type CoverageSession struct {
+	SessionActive             bool                           `json:"session_active"`
+	CurrentArea               int16                          `json:"current_area"`
+	CompletedAreas            []uint32                       `json:"completed_areas"`
+	AttemptedAreas            []uint32                       `json:"attempted_areas"`
+	ExcludedAreas             []uint32                       `json:"excluded_areas"`
+}
+
 // DigEvent matches mowgli_interfaces/msg/DigEvent.
 type DigEvent struct {
 	Header                    geometry.Header                `json:"header"`

@@ -62,6 +62,7 @@ type MockRosProvider struct {
 	ServiceErr       error
 	ServiceResponder func(service string, req any, res any)
 	PublishErr       error
+	Publishes        []PublishCall
 	SubscribeErr     error
 	// Parameters returned by GetParameters; SetParams records set calls.
 	Parameters []RosParameter
@@ -72,6 +73,12 @@ type MockRosProvider struct {
 type ServiceCall struct {
 	Service string
 	Req     any
+}
+
+type PublishCall struct {
+	Topic   string
+	MsgType string
+	Msg     any
 }
 
 func NewMockRosProvider() *MockRosProvider {
@@ -112,7 +119,10 @@ func (m *MockRosProvider) UnSubscribe(topic string, id string) {
 	}
 }
 
-func (m *MockRosProvider) Publish(_ string, _ string, _ interface{}) error {
+func (m *MockRosProvider) Publish(topic string, msgType string, msg interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Publishes = append(m.Publishes, PublishCall{Topic: topic, MsgType: msgType, Msg: msg})
 	return m.PublishErr
 }
 

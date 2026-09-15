@@ -1,0 +1,29 @@
+# SetFleetAssignment — tell the behavior tree which areas belong to OTHER
+# fleet members right now, and where this robot should start looking.
+#
+# Called by the GUI fleet coordinator (docs/MULTI_ROBOT.md) every couple of
+# seconds while coordinated mowing is enabled, and once with an empty list
+# when it is switched off. Robots never call it on each other directly.
+#
+# Effects on the tree:
+#   * GetNextUnmowedArea skips every index in excluded_areas, exactly as it
+#     skips areas already completed or attempted this session. When nothing
+#     but excluded areas remains the run ends as MOWING_COMPLETE and the
+#     robot docks — the fleet's other members own the rest.
+#   * A FollowStrip pass whose area becomes excluded mid-mow (two robots
+#     picked the same area; the coordinator's tie-break told this one to
+#     yield) saves its resume cursor, stops the blade and ends the pass; the
+#     area is not charged to its no-progress budget.
+#   * preferred_start_index rotates the ascending area scan so idle fleet
+#     members do not all race for area 0: the scan starts there and wraps to
+#     the lower indices afterwards. -1 keeps the plain ascending order. It is
+#     ignored during a targeted run (~/start_in_area).
+#
+# The write is deferred to the BT tick thread like ~/clear_coverage_resume,
+# so the request is acknowledged before it is applied.
+uint32[] excluded_areas
+int32 preferred_start_index
+string reason
+---
+bool success
+string message

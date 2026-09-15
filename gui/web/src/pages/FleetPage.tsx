@@ -1,6 +1,6 @@
 import {useMemo, useState} from "react";
-import {Alert, App, Button, Card, Col, Input, Popconfirm, Progress, Row, Space, Tag, Tooltip, Typography} from "antd";
-import {DeleteOutlined, ExportOutlined, HomeOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined} from "@ant-design/icons";
+import {Alert, App, Button, Card, Col, Input, InputNumber, Popconfirm, Progress, Row, Space, Switch, Tag, Tooltip, Typography} from "antd";
+import {CloudUploadOutlined, DeleteOutlined, ExportOutlined, HomeOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, RedoOutlined} from "@ant-design/icons";
 import {useTranslation} from "react-i18next";
 import {useFleet} from "../hooks/useFleet.ts";
 import {useSettings} from "../hooks/useSettings.ts";
@@ -46,6 +46,7 @@ export default function FleetPage() {
     const {colors} = useThemeMode();
     const {settings} = useSettings();
     const fleet = useFleet();
+    const coordination = fleet.coordination;
     const [address, setAddress] = useState("");
     const [busy, setBusy] = useState<string | null>(null);
 
@@ -186,6 +187,87 @@ export default function FleetPage() {
 
             <Card size="small" title={t("fleetPage.positions")}>
                 <FleetMapMini dots={dots} emptyLabel={t("fleetPage.noPositions")}/>
+            </Card>
+
+            <Card
+                size="small"
+                title={t("fleetPage.coordinationTitle")}
+                extra={
+                    <Switch
+                        checked={coordination.settings.enabled}
+                        checkedChildren={t("fleetPage.coordinationOn")}
+                        unCheckedChildren={t("fleetPage.coordinationOff")}
+                        loading={busy === "coord"}
+                        disabled={rows.length < 2}
+                        onChange={(enabled) => run("coord", () => fleet.setCoordination({...coordination.settings, enabled}))}
+                    />
+                }
+            >
+                <Space direction="vertical" size={10} style={{width: "100%"}}>
+                    <Text type="secondary">{t("fleetPage.coordinationHelp")}</Text>
+                    {rows.length < 2 && <Text type="secondary" style={{fontSize: 12}}>{t("fleetPage.coordinationNeedsPeer")}</Text>}
+                    {coordination.status.last_error && (
+                        <Alert type="warning" showIcon message={coordination.status.last_error}/>
+                    )}
+                    {coordination.settings.enabled && (
+                        <Space wrap size={[6, 6]}>
+                            <Tag color={coordination.status.yielded ? "gold" : "green"}>
+                                {coordination.status.yielded ? t("fleetPage.yielding") : t("fleetPage.coordinating")}
+                            </Tag>
+                            <Text type="secondary" style={{fontSize: 12}}>
+                                {t("fleetPage.excludedAreas", {areas: coordination.status.excluded_areas.length ? coordination.status.excluded_areas.join(", ") : "—"})}
+                            </Text>
+                            <Text type="secondary" style={{fontSize: 12}}>
+                                {t("fleetPage.fleetCompleted", {areas: coordination.status.completed_areas.length ? coordination.status.completed_areas.join(", ") : "—"})}
+                            </Text>
+                        </Space>
+                    )}
+                    <Row gutter={[12, 8]}>
+                        <Col xs={12} md={6}>
+                            <Text type="secondary" style={{fontSize: 11}}>{t("fleetPage.yieldDistance")}</Text>
+                            <InputNumber
+                                min={1} max={20} step={0.5} addonAfter="m" style={{width: "100%"}}
+                                value={coordination.settings.yield_distance_m}
+                                onChange={(v) => v != null && run("coord", () => fleet.setCoordination({...coordination.settings, yield_distance_m: v}))}
+                            />
+                        </Col>
+                        <Col xs={12} md={6}>
+                            <Text type="secondary" style={{fontSize: 11}}>{t("fleetPage.resumeDistance")}</Text>
+                            <InputNumber
+                                min={2} max={30} step={0.5} addonAfter="m" style={{width: "100%"}}
+                                value={coordination.settings.resume_distance_m}
+                                onChange={(v) => v != null && run("coord", () => fleet.setCoordination({...coordination.settings, resume_distance_m: v}))}
+                            />
+                        </Col>
+                    </Row>
+                    <Space wrap>
+                        <Popconfirm
+                            title={t("fleetPage.pushMapConfirm")}
+                            onConfirm={() => run("push", async () => {
+                                const res = await fleet.pushMap();
+                                const failed = res.peers.filter(p => !p.ok);
+                                if (failed.length) return failed.map(p => `${p.name}: ${p.error ?? "?"}`).join(" · ");
+                                return undefined;
+                            }, t("fleetPage.mapPushed"))}
+                        >
+                            <Button icon={<CloudUploadOutlined/>} loading={busy === "push"} disabled={rows.length < 2}>
+                                {t("fleetPage.pushMap")}
+                            </Button>
+                        </Popconfirm>
+                        <Popconfirm
+                            title={t("fleetPage.startFreshConfirm")}
+                            onConfirm={() => run("fresh", () => fleet.startFresh(), t("fleetPage.startFreshDone"))}
+                        >
+                            <Button icon={<RedoOutlined/>} loading={busy === "fresh"}>{t("fleetPage.startFresh")}</Button>
+                        </Popconfirm>
+                    </Space>
+                    <ul style={{margin: 0, paddingLeft: 18, color: colors.textSecondary, fontSize: 12}}>
+                        <li>{t("fleetPage.coordRuleAreas")}</li>
+                        <li>{t("fleetPage.coordRuleYield")}</li>
+                        <li>{t("fleetPage.coordRuleMap")}</li>
+                        <li>{t("fleetPage.coordRuleOneArea")}</li>
+                    </ul>
+                </Space>
             </Card>
 
             <Card size="small" title={t("fleetPage.addPeerTitle")}>

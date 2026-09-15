@@ -91,7 +91,26 @@ local_costmap:
         # post_undock_blank_sec after charging drops. With that filter
         # owning the dock-mask logic, obstacle_min_range can drop to a
         # near-LiDAR floor and the 0.10–0.65 m mowing blind ring closes.
-        observation_sources: scan_filtered
+        # fleet_peers: the other fleet members' footprints, rings of points
+        # from fleet_peer_obstacles.py (docs/MULTI_ROBOT.md). LOCAL costmap
+        # only: anything lethal in the GLOBAL costmap is treated by FTC's
+        # zone mask as "not an obstacle", which would hide a peer from the
+        # coverage controller. Marking only — the cloud has no sensor origin
+        # to raytrace from; it is republished at 5 Hz (empty when alone) and
+        # its 1 s persistence lets a peer that goes offline fade out.
+        observation_sources: scan_filtered fleet_peers
+        fleet_peers:
+          topic: /fleet/peer_obstacles
+          data_type: "PointCloud2"
+          marking: true
+          clearing: false
+          observation_persistence: 1.0
+          min_obstacle_height: 0.12
+          max_obstacle_height: 1.5
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.0
+          raytrace_min_range: 0.0
         scan_filtered:
           topic: /scan_costmap
           # Same height band as the global obstacle_layer — filter ground

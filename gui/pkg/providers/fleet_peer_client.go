@@ -281,11 +281,16 @@ func fetchPeerIdentity(ctx context.Context, client *http.Client, address string)
 
 // postPeerJSON posts a JSON body to a peer GUI and returns status + body.
 func postPeerJSON(ctx context.Context, client *http.Client, address, path string, body any) (int, []byte, error) {
+	return requestPeerJSON(ctx, client, http.MethodPost, address, path, body)
+}
+
+// requestPeerJSON sends a JSON body to a peer GUI with the given method.
+func requestPeerJSON(ctx context.Context, client *http.Client, method, address, path string, body any) (int, []byte, error) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return 0, nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+address+path, bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+address+path, bytes.NewReader(buf))
 	if err != nil {
 		return 0, nil, err
 	}
