@@ -22,6 +22,7 @@ find_package(rclcpp REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
 
@@ -84,6 +85,7 @@ target_link_libraries(mowgli_monitoring_core
   ${diagnostic_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   ${nav_msgs_TARGETS}
+  ${nav2_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${mowgli_interfaces_TARGETS}
 )
@@ -112,6 +114,7 @@ target_link_libraries(diagnostics_node
   ${diagnostic_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   ${nav_msgs_TARGETS}
+  ${nav2_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${mowgli_interfaces_TARGETS}
 )
@@ -133,6 +136,7 @@ target_link_libraries(mqtt_bridge_node
   ${diagnostic_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   ${nav_msgs_TARGETS}
+  ${nav2_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${mowgli_interfaces_TARGETS}
 )
@@ -186,7 +190,17 @@ if(BUILD_TESTING)
     ${diagnostic_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${nav2_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+  )
+
+  # ROS-free: exercises the shared reduction header on its own.
+  ament_add_gtest(test_path_tracking_stats
+    test/test_path_tracking_stats.cpp
+  )
+
+  target_link_libraries(test_path_tracking_stats
     ${mowgli_interfaces_TARGETS}
   )
 
@@ -203,6 +217,7 @@ if(BUILD_TESTING)
     ${diagnostic_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${nav2_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${mowgli_interfaces_TARGETS}
   )

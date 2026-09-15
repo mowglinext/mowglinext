@@ -1077,3 +1077,128 @@ def test_lidar_map_anchor_flag_is_plumbed_end_to_end() -> None:
     assert re.search(r'DeclareLaunchArgument\(\s*"lidar_anchor_shadow_mode"', fg)
     assert re.search(r'"lidar_anchor_shadow_mode":\s*lidar_anchor_shadow_mode', fg)
     assert template.get("lidar_anchor_shadow_mode") is False
+
+
+# ---------------------------------------------------------------------------
+# ROS 2 Lyrical / Nav2 1.5.1 additions
+# ---------------------------------------------------------------------------
+
+
+def test_transit_dwpp_is_off_by_default_in_both_variants() -> None:
+    """Dynamic Window Pure Pursuit changes how EVERY transit, dock approach and
+    HOME leg is driven. It ships OFF so an upgrade never silently re-tunes the
+    transit lane; the operator turns it on for a supervised field test through
+    `transit_dynamic_window` in mowgli_robot.yaml."""
+    for loader in (_load_params, _load_no_lidar_params):
+        primary = _controller_section(loader())["FollowPath"]["primary_controller"]
+        assert primary["use_dynamic_window"] is False, (
+            "FollowPath.primary_controller.use_dynamic_window must ship false — "
+            "enabling DWPP by default re-tunes transit without a field test."
+        )
+
+
+def test_transit_dwpp_window_is_forward_only_and_within_chassis_limits() -> None:
+    """The DWPP window bounds must agree with the rest of the transit config:
+    no reverse (allow_reversing is false — a reversing transit drags the deck
+    over ground the robot cannot see), and no yaw rate above what the firmware
+    yaw loop holds (FTC clamps at max_cmd_vel_ang 0.8)."""
+    for loader in (_load_params, _load_no_lidar_params):
+        primary = _controller_section(loader())["FollowPath"]["primary_controller"]
+        assert primary["allow_reversing"] is False
+        assert primary["min_linear_vel"] == 0.0, (
+            "min_linear_vel must be 0.0 so the dynamic window cannot select a "
+            "reverse velocity on a controller configured allow_reversing: false."
+        )
+        assert primary["max_angular_vel"] <= 0.8, (
+            "max_angular_vel above 0.8 rad/s lets DWPP command a yaw rate the "
+            "firmware yaw loop cannot hold (FTC's own clamp is 0.8)."
+        )
+        assert primary["min_angular_vel"] == -primary["max_angular_vel"]
+        # Nav2 expects the deceleration limits NEGATIVE; a positive value here
+        # makes the window collapse instead of widening.
+        assert primary["max_linear_decel"] < 0.0
+        assert primary["max_angular_decel"] < 0.0
+        assert primary["max_linear_accel"] > 0.0
+
+
+def test_navigation_launch_injects_transit_dynamic_window() -> None:
+    """The template knob must actually reach RPP. An orphan knob is worse than
+    no knob: the GUI shows a toggle that changes nothing (issue #192 class)."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(
+        r"fp\[.primary_controller.\]\[.use_dynamic_window.\]\s*=.*transit_dynamic_window",
+        src, re.DOTALL), (
+        "navigation.launch.py must inject transit_dynamic_window into "
+        "FollowPath.primary_controller.use_dynamic_window."
+    )
+    template = _template_robot_params()
+    assert template["transit_dynamic_window"] is False, (
+        "the template default must stay false — see the base.yaml rationale."
+    )
+
+
+def test_coverage_stays_on_ftc_when_dwpp_is_available() -> None:
+    """DWPP is a lookahead-carrot method: it cuts the R = 0.20 m turn-around
+    arcs of an F2C route exactly as any pure pursuit does. The coverage slot is
+    FTCController (CLAUDE.md Invariant 8) and DWPP must never appear under it."""
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        assert fcp["plugin"] == "mowgli_nav2_plugins/FTCController"
+        assert "use_dynamic_window" not in fcp
+
+
+def test_axis_goal_checker_is_declared_but_not_selected() -> None:
+    """The stock Lyrical AxisGoalChecker is available for a field comparison,
+    but the default stays PathProgressGoalChecker: only a progress gate survives
+    a closed headland ring whose start and end coincide."""
+    for loader in (_load_params, _load_no_lidar_params):
+        cfg = _controller_section(loader())
+        assert "coverage_axis_goal_checker" in cfg["goal_checker_plugins"]
+        axis = cfg["coverage_axis_goal_checker"]
+        assert axis["plugin"] == "nav2_controller::AxisGoalChecker"
+        # Bounded by the FeasiblePathHandler's prune_distance: the checker only
+        # ever sees the LOCAL plan, so a tolerance near 2.0 m unlocks instantly.
+        prune_distance = cfg["PathHandler"].get("prune_distance", 2.0)
+        assert axis["path_length_tolerance"] < prune_distance, (
+            "path_length_tolerance must stay below the path handler's "
+            f"prune_distance ({prune_distance} m) or the goal is 'reached' from "
+            "the first tick of every segment."
+        )
+        # FTC parks max_goal_distance_error short of the final pose by design.
+        park = _base_ftc_max_goal_distance_error()
+        assert axis["along_path_tolerance"] >= park, (
+            f"along_path_tolerance {axis['along_path_tolerance']} is tighter than "
+            f"FTC's park distance {park} — the goal could never be reached."
+        )
+    template = _template_robot_params()
+    assert template["coverage_goal_checker_id"] == "coverage_goal_checker"
+
+
+def test_behavior_tree_gets_the_coverage_goal_checker_id() -> None:
+    """The BT dispatches coverage goals with this id; it must be wired from the
+    robot config, not hardcoded in the node."""
+    src = _read_text("launch/full_system.launch.py")
+    assert "coverage_goal_checker_id" in src, (
+        "full_system.launch.py must pass coverage_goal_checker_id to "
+        "behavior_tree_node."
+    )
+
+
+def test_custom_inscribed_radius_is_opt_in_and_becomes_the_floor() -> None:
+    """local_inflation_inscribed_radius defaults to -1.0 (derive from the
+    footprint, Nav2's own behaviour). When set, it MUST also become the
+    inflation floor — otherwise the chassis-derived floor raises the radius
+    straight back up and the override is inert."""
+    template = _template_robot_params()
+    assert template["local_inflation_inscribed_radius"] == -1.0
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(
+        r"lc_infl\[.custom_inscribed_radius.\]\s*=\s*local_inflation_inscribed_radius",
+        src), "navigation.launch.py must inject custom_inscribed_radius."
+    assert re.search(
+        r"if\s+local_inflation_inscribed_radius\s*>=\s*0\.0:.*?"
+        r"infl_floor\s*=\s*local_inflation_inscribed_radius",
+        src, re.DOTALL), (
+        "when set, local_inflation_inscribed_radius must replace the "
+        "chassis-derived inflation floor."
+    )
