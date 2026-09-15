@@ -1,8 +1,8 @@
 # Codemap: mowgli_monitoring
 
 > Health aggregation for the robot: `diagnostics_node` folds hardware-bridge, emergency, battery, IMU,
-> LiDAR, GPS, wheel-odom, fused-pose and motor telemetry into one `/diagnostics` `DiagnosticArray`
-> (1 Hz), and the optional `mqtt_bridge_node` mirrors status/power/emergency/high_level_status/gps/
+> LiDAR, GPS, wheel-odom, fused-pose, motor telemetry and Nav2 path-tracking error into one
+> `/diagnostics` `DiagnosticArray` (1 Hz), and the optional `mqtt_bridge_node` mirrors status/power/emergency/high_level_status/gps/
 > diagnostics/availability to an MQTT broker as JSON — the documented external integration surface
 > (see [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md)), e.g. for Home Assistant. Nothing here owns
 > TF, blades, or motion; it is read-only except for the MQTT → `HighLevelControl` command path.
@@ -13,6 +13,7 @@
 ## Where to look
 | Task | Start here |
 |------|------------|
+| Path-tracking error ("Path Tracking" status: lateral/heading error while a FollowPath goal runs) | `check_path_tracking()` in `ros2/src/mowgli_monitoring/src/diagnostics_node.cpp`; the reduction itself is `mowgli_interfaces/path_tracking_stats.hpp` (shared with the BT's `FollowStrip`), fed from `/controller_server/tracking_feedback` (`nav2_msgs/TrackingFeedback`, ROS 2 Lyrical). Thresholds in `config/diagnostics.yaml` (`path_tracking_warn_m` / `path_tracking_error_m` / `path_tracking_idle_sec`). Silence = OK "Idle": a docked robot has no goal. See [`NAV2_LYRICAL_CONTROLLER_REVIEW.md`](../../NAV2_LYRICAL_CONTROLLER_REVIEW.md) |
 | Add / change a health check (one `DiagnosticStatus`) | `ros2/src/mowgli_monitoring/src/diagnostics_node.cpp` — the `check_*()` block (:327–667); add the call in `publish_diagnostics()` (:303–321); declare it in `ros2/src/mowgli_monitoring/include/mowgli_monitoring/diagnostics_node.hpp:166–174`; extend `expected_names` in `ros2/src/mowgli_monitoring/test/test_diagnostics.cpp:227–236` |
 | Change WARN/ERROR thresholds (freshness, battery %, motor °C) | `ros2/src/mowgli_monitoring/config/diagnostics.yaml` (defaults) ↔ `declare_parameters()` `diagnostics_node.cpp:127–146` (code defaults must match) |
 | Subscribe to a new input topic | `create_subscriptions()` `diagnostics_node.cpp:148–218`; add the snapshot fields to `DiagnosticsState` `diagnostics_node.hpp:66–103` |

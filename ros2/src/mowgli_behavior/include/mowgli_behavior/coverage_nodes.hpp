@@ -33,6 +33,7 @@
 #include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
+#include "mowgli_interfaces/path_tracking_stats.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
@@ -241,6 +242,9 @@ private:
   bool sendCurrentSwath(const std::shared_ptr<BTContext>& ctx);
   // Send the FollowPath goal for the current segment (no gap check).
   bool sendFollowGoal(const std::shared_ptr<BTContext>& ctx);
+  /// Log the path-tracking summary of the segment that just finished, then arm
+  /// a fresh episode. `outcome` names why it finished ("completed", "aborted").
+  void logSegmentTracking(const std::shared_ptr<BTContext>& ctx, const char* outcome);
   // Robot distance to the current segment's first pose (TF map→base_footprint);
   // returns a large value if TF is unavailable (forces the safe transit path).
   double distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx) const;
@@ -300,6 +304,20 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr coverage_plan_pub_;
   std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
   FollowGoalHandle::SharedPtr follow_handle_;
+  // Path-tracking error of the segment currently being driven, reduced from the
+  // FollowPath action feedback that ROS 2 Lyrical's controller_server fills in
+  // for whichever controller runs (FTC here). Logged once per segment so a field
+  // bag carries the mowing-quality number next to the segment it belongs to.
+  //
+  // shared_ptr-owned for the same reason as transit_result_ below: a feedback
+  // callback that lands after this node was destroyed must not write through a
+  // dangling `this`. The mutex guards it against the action client's thread.
+  struct TrackingFeedbackSlot
+  {
+    std::mutex mutex;
+    mowgli_interfaces::path_tracking::Summary summary;
+  };
+  std::shared_ptr<TrackingFeedbackSlot> tracking_slot_;
   // Inter-segment transit (NavigateToPose) state.
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;

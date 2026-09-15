@@ -16,3 +16,16 @@
     # ESC / motor temperature thresholds.
     motor_temp_warn_c: 60.0   # °C — above this → WARN
     motor_temp_error_c: 80.0  # °C — above this → ERROR
+
+    # Path-tracking error thresholds, applied to the MAXIMUM |lateral error|
+    # seen during the FollowPath goal that is currently running.
+    # Reference points: FTC tracks coverage paths to 8-16 mm, and adjacent F2C
+    # swaths deliberately overlap by `swath_overlap` (0.02 m) — so a sustained
+    # lateral error above ~0.10 m is already leaving an uncut band, while 0.25 m
+    # is half a swath off and means the controller is not tracking at all.
+    path_tracking_warn_m: 0.10   # m — above this → WARN
+    path_tracking_error_m: 0.25  # m — above this → ERROR
+    # Silence longer than this means no FollowPath goal is running (parked,
+    # docked, planning). Reported as OK with the previous goal's summary — a
+    # docked robot is not a fault.
+    path_tracking_idle_sec: 2.0  # seconds
