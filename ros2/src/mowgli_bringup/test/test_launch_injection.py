@@ -377,3 +377,21 @@ def test_cross_hatch_setting_reaches_behavior_tree() -> None:
     for config, expected in [({}, False), ({"mow_cross_hatch": True}, True)]:
         assert eval(expression, {"__builtins__": {}, "bool": bool},
                     {"robot_params": config}) is expected
+
+
+def test_full_system_launches_fleet_peer_obstacles_unconditionally() -> None:
+    """docs/MULTI_ROBOT.md: the peer → costmap point-cloud node is ALWAYS
+    launched (no condition=) so the Nav2 fleet source never goes stale — it
+    publishes an empty cloud when the robot is alone. It must also be an
+    installed program of mowgli_bringup or the launch fails at runtime."""
+    call = _find_node_call(_parse("full_system.launch.py"), "fleet_peer_obstacles.py")
+    assert call is not None, "full_system.launch.py no longer launches fleet_peer_obstacles.py"
+    assert not any(kw.arg == "condition" for kw in call.keywords), (
+        "fleet_peer_obstacles must be unconditional: the costmap fleet source relies on "
+        "its continuous (possibly empty) cloud"
+    )
+    cmake = os.path.join(os.path.dirname(__file__), "..", "CMakeLists.txt")
+    with open(cmake, encoding="utf-8") as fh:
+        assert "scripts/fleet_peer_obstacles.py" in fh.read(), (
+            "fleet_peer_obstacles.py is launched but not installed by CMakeLists.txt"
+        )

@@ -21,6 +21,7 @@ const SchedulePage     = React.lazy(() => import("./pages/SchedulePage.tsx"));
 const DiagnosticsPage  = React.lazy(() => import("./pages/DiagnosticsPage.tsx"));
 const StatisticsPage   = React.lazy(() => import("./pages/StatisticsPage.tsx"));
 const ParametersPage   = React.lazy(() => import("./pages/ParametersPage.tsx"));
+const FleetPage        = React.lazy(() => import("./pages/FleetPage.tsx"));
 const ConceptRoot      = React.lazy(() => import("./concept/ConceptRoot.tsx"));
 
 const router = createHashRouter([
@@ -69,6 +70,10 @@ const router = createHashRouter([
             {
                 element: <ParametersPage/>,
                 path: "/parameters",
+            },
+            {
+                element: <FleetPage/>,
+                path: "/fleet",
             }
         ]
     },

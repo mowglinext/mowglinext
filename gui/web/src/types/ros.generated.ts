@@ -159,6 +159,14 @@ export type CoveragePath = {
   path?: Path;
 };
 
+export type CoverageSession = {
+  session_active?: boolean;
+  current_area?: number;
+  completed_areas?: number[];
+  attempted_areas?: number[];
+  excluded_areas?: number[];
+};
+
 export type DigEvent = {
   header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
   position?: Point;

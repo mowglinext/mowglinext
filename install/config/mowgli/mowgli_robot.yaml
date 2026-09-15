@@ -26,6 +26,7 @@ mowgli:
         # and is intentionally ABSENT from the template — its presence here is
         # what tells the launch files an explicit operator choice was made.
         mower_model: YardForce500
+        robot_name: mowgli
         lidar_enabled: true
 
         # GNSS receiver + serial link.

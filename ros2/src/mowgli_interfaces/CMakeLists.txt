@@ -30,6 +30,7 @@ set(msg_files
   "msg/TrackedObstacle.msg"
   "msg/DockCalibrationStatus.msg"
   "msg/DigEvent.msg"
+  "msg/CoverageSession.msg"
 )
 
 # Declare service files
@@ -48,6 +49,7 @@ set(srv_files
   "srv/GetRecoveryPoint.srv"
   "srv/StartInArea.srv"
   "srv/CoverageOrientation.srv"
+  "srv/SetFleetAssignment.srv"
   "srv/PromoteObstacle.srv"
 )
 

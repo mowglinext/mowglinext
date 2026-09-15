@@ -224,6 +224,14 @@ public:
 
 private:
   void setBladeEnabled(bool enabled);
+  // Cancel every in-flight follow / transit goal, reset the transit state
+  // machine and switch the blade off. Shared by onHalted() and yieldToFleet().
+  void abortActiveGoals(const std::shared_ptr<BTContext>& ctx);
+  // Fleet coordination: the area this pass is mowing was handed to another
+  // fleet member (BTContext::fleet_excluded_areas). Save the resume cursor when
+  // a path is in flight, stop everything, record the yield so the next
+  // dispatch is not charged to the no-progress budget, and end the pass.
+  BT::NodeStatus yieldToFleet(const std::shared_ptr<BTContext>& ctx, bool mid_pass);
   // Detour-and-continue: on a FollowCoveragePath obstacle-abort, try to salvage
   // the REST of the current segment instead of abandoning it. Confirms (via the
   // latest global costmap) that a lethal cell really lies ahead, searches FORWARD
@@ -576,6 +584,16 @@ private:
   // "all areas complete"). Re-probe up to kMaxProbeRetries before failing.
   uint32_t probe_retries_{0};
   static constexpr uint32_t kMaxProbeRetries = 3;
+  // Fleet rotation (BTContext::fleet_preferred_start): the scan starts at the
+  // preferred index and, once the upper range is exhausted (probe returned
+  // success=false), wraps ONCE to [0, preferred). Reset per onStart().
+  bool fleet_wrap_pending_{false};
+  uint32_t fleet_wrap_limit_{0};
+  // Indices the skip loops passed over before the first probe of a range.
+  // "success=false with nothing queried" is a CONFIG error (no areas at all)
+  // only when nothing was skipped; with skips it is genuine completion (every
+  // defined area is done, retired or assigned to another fleet member).
+  uint32_t skipped_before_probe_{0};
 };
 
 // ---------------------------------------------------------------------------

@@ -31,7 +31,7 @@ planner_server:
 global_costmap:
   global_costmap:
     ros__parameters:
-      plugins: ["static_layer", "keepout_filter", "inflation_layer"]
+      plugins: ["static_layer", "fleet_layer", "keepout_filter", "inflation_layer"]
 
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -39,12 +39,40 @@ global_costmap:
         map_topic: "/no_lidar_static_map"
         subscribe_to_updates: false
         transform_tolerance: 0.5
+
+      # fleet_layer: the other fleet members' footprints as lethal cells
+      # (docs/MULTI_ROBOT.md). Without a LiDAR nothing else on this robot can
+      # see a peer, so BOTH costmaps carry it: Smac routes transit around a
+      # peer and the local lane refuses to drive into one. (The LiDAR variant
+      # keeps the source on the LOCAL obstacle_layer only because FTC's zone
+      # mask treats global-lethal cells as non-obstacles; FTC's obstacle flags
+      # are pinned off in this variant so that mask is moot here.) A distinct
+      # layer name on purpose: CI forbids obstacle_layer + static_layer in one
+      # costmap. Marking only; the cloud is republished at 5 Hz, empty when the
+      # robot is alone, so the source never goes stale. Keep the two copies
+      # identical (test_nav2_params.py checks both).
+      fleet_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: fleet_peers
+        fleet_peers:
+          topic: /fleet/peer_obstacles
+          data_type: "PointCloud2"
+          marking: true
+          clearing: false
+          observation_persistence: 1.0
+          min_obstacle_height: 0.0
+          max_obstacle_height: 1.5
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.0
+          raytrace_min_range: 0.0
 
 
 local_costmap:
   local_costmap:
     ros__parameters:
-      plugins: ["static_layer", "inflation_layer"]
+      plugins: ["static_layer", "fleet_layer", "inflation_layer"]
 
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -52,6 +80,34 @@ local_costmap:
         map_topic: "/no_lidar_static_map"
         subscribe_to_updates: false
         transform_tolerance: 0.5
+
+      # fleet_layer: the other fleet members' footprints as lethal cells
+      # (docs/MULTI_ROBOT.md). Without a LiDAR nothing else on this robot can
+      # see a peer, so BOTH costmaps carry it: Smac routes transit around a
+      # peer and the local lane refuses to drive into one. (The LiDAR variant
+      # keeps the source on the LOCAL obstacle_layer only because FTC's zone
+      # mask treats global-lethal cells as non-obstacles; FTC's obstacle flags
+      # are pinned off in this variant so that mask is moot here.) A distinct
+      # layer name on purpose: CI forbids obstacle_layer + static_layer in one
+      # costmap. Marking only; the cloud is republished at 5 Hz, empty when the
+      # robot is alone, so the source never goes stale. Keep the two copies
+      # identical (test_nav2_params.py checks both).
+      fleet_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: fleet_peers
+        fleet_peers:
+          topic: /fleet/peer_obstacles
+          data_type: "PointCloud2"
+          marking: true
+          clearing: false
+          observation_persistence: 1.0
+          min_obstacle_height: 0.0
+          max_obstacle_height: 1.5
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.0
+          raytrace_min_range: 0.0
 
 
 collision_monitor:

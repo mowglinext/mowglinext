@@ -16,6 +16,11 @@ mowgli:
     # Hardware / Physical
     # -----------------------------------------------------------------
     mower_model: "YardForce500"
+    # Robot identity. Shown in the GUI and used by the fleet view to tell
+    # several mowers apart (docs/MULTI_ROBOT.md). Choose a name that is unique
+    # within your fleet; the GUI onboarding wizard sets it. The generated
+    # robot_id (GUI DB, fleet.robot_id) is the stable key, so renaming is safe.
+    robot_name: "mowgli"
 
     # Chassis dimensions (metres) — physically measured on the actual
     # YardForce 500. Earlier the runtime YAML had 0.54 m which silently

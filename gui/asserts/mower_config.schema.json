@@ -20,6 +20,12 @@
           "default": "YardForce500",
           "description": "The type of mower you are using."
         },
+        "robot_name": {
+          "type": "string",
+          "title": "Robot Name",
+          "default": "mowgli",
+          "description": "Name of this mower, shown in the GUI and in the fleet view. Use a different name for every mower on your network."
+        },
         "wheel_radius": {
           "type": "number",
           "title": "Wheel Radius",

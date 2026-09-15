@@ -256,6 +256,29 @@ struct BTContext
   static constexpr uint32_t kMaxGuardHaltedPasses = 200;
 
   // -----------------------------------------------------------------------
+  // Fleet coordination (docs/MULTI_ROBOT.md)
+  // -----------------------------------------------------------------------
+  /// Areas that currently belong to ANOTHER fleet member (another robot is
+  /// mowing them, or finished them this fleet session). Written ONLY on the
+  /// tick thread from the deferred ~/set_fleet_assignment handling in
+  /// tickTree(), read by GetNextUnmowedArea (skipped like completed /
+  /// attempted areas) and by FollowStrip (a pass whose area becomes excluded
+  /// mid-mow yields). Deliberately NOT cleared by EndSession: the GUI fleet
+  /// coordinator owns its lifetime and sends an empty list when it stops.
+  std::set<uint32_t> fleet_excluded_areas;
+  /// Where the ascending area scan should START (it wraps to the lower
+  /// indices afterwards), so idle fleet members do not all race for area 0.
+  /// nullopt = plain ascending order. Ignored during a targeted run.
+  std::optional<uint32_t> fleet_preferred_start;
+  /// Areas whose most recent FollowStrip pass ended because the area became
+  /// excluded mid-mow (fleet yield, resume cursor saved). Consumed per area by
+  /// the next GetNextUnmowedArea dispatch of that area, which exempts the pass
+  /// from the no-progress budget exactly like a guard halt (bounded by
+  /// kMaxGuardHaltedPasses through area_guard_halt_count). Cleared by
+  /// EndSession and by ~/clear_coverage_resume.
+  std::set<uint32_t> fleet_yielded_areas;
+
+  // -----------------------------------------------------------------------
   // Start-pose escape motion (issue #487, follow-up to the above)
   // -----------------------------------------------------------------------
   //

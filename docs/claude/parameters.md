@@ -51,6 +51,7 @@ still require operator acceptance to persist. Save and restart ROS2 to apply.
 | Key (L) | Default | Consumer · where read | GUI | Life |
 |---|---|---|---|---|
 | `mower_model` (L18) | `YardForce500` | no ROS consumer; `ros2/scripts/compute_nav2_params.py:293` picks the motor-spec row; installer hardware presets | Hardware | sidecar |
+| `robot_name` (L23) | `mowgli` | no ROS consumer; GUI backend `gui/pkg/providers/fleet_identity.go` reads it for `/api/fleet/identity`, the HomeKit accessory name and the fleet view (`docs/MULTI_ROBOT.md`) | Hardware (+ onboarding step 1) | sidecar |
 | `chassis_length` (L24) | 0.60 | xacro `mowgli.launch.py:94`; Nav2 footprint `navigation.launch.py:304` | Hardware | launch |
 | `chassis_width` (L25) | 0.40 | xacro `mowgli.launch.py:95`; footprint `navigation.launch.py:305`; `map_server.chassis_width` `full_system.launch.py:389`; `coverage_server.robot_width` `navigation.launch.py:930` | Hardware | launch |
 | `chassis_height` (L26) | 0.19 | xacro `mowgli.launch.py:96` | Hardware | launch |
@@ -335,7 +336,7 @@ These fall back to a literal hardcoded in the launch file. Each is allow-listed 
 
 **Bucket A — install-time choices.** The installer or onboarding wizard picks them; there is no sensible versioned default a maintainer could bump for everyone.
 
-- `mower_model`, `lidar_enabled` (L28–29). `lidar_enabled` is the special case: it is **deliberately absent from the template**, so its *presence* is what proves an explicit operator choice was made. Absent ⇒ `DEFAULT_LIDAR_ENABLED = False` plus a multi-line startup warning naming the file and key (`robot_config_util.py:144–214`). The value must equal the GUI schema default (`false`), or the backend's sparse-prune would delete every "turn LiDAR on" write and the toggle would be inert in the ON direction forever.
+- `mower_model`, `robot_name`, `lidar_enabled` (L28–30). `lidar_enabled` is the special case: it is **deliberately absent from the template**, so its *presence* is what proves an explicit operator choice was made. Absent ⇒ `DEFAULT_LIDAR_ENABLED = False` plus a multi-line startup warning naming the file and key (`robot_config_util.py:144–214`). The value must equal the GUI schema default (`false`), or the backend's sparse-prune would delete every "turn LiDAR on" write and the toggle would be inert in the ON direction forever.
 - GNSS transport: `gnss_receiver_family`, `gnss_serial_device`, `gnss_serial_baud` (L32–34) and receiver-profile auto-apply `gnss_config_apply_enabled`, `gnss_config_profile`, `gnss_signal_profile` (L43–45, consumed by `sensors/gps/start_gps.sh:304,320`).
 - Datum `datum_lat` / `datum_lon` (L49–50) — 0/0 means "not set" and disables datum migration entirely.
 - NTRIP `ntrip_enabled`, `ntrip_host`, `ntrip_port`, `ntrip_user`, `ntrip_password`, `ntrip_mountpoint` (L54–59) — **credentials; never commit real values.**

@@ -1077,3 +1077,61 @@ def test_lidar_map_anchor_flag_is_plumbed_end_to_end() -> None:
     assert re.search(r'DeclareLaunchArgument\(\s*"lidar_anchor_shadow_mode"', fg)
     assert re.search(r'"lidar_anchor_shadow_mode":\s*lidar_anchor_shadow_mode', fg)
     assert template.get("lidar_anchor_shadow_mode") is False
+
+
+# ── fleet peer obstacles (docs/MULTI_ROBOT.md) ──────────────────────────────
+
+_FLEET_TOPIC = "/fleet/peer_obstacles"
+
+
+def _fleet_sources(params: dict) -> list:
+    """Every observation source in this costmap that reads the fleet cloud."""
+    found = []
+    for layer in params.get("plugins", []):
+        cfg = params.get(layer, {})
+        for src in str(cfg.get("observation_sources", "")).split():
+            if cfg.get(src, {}).get("topic") == _FLEET_TOPIC:
+                found.append((layer, src, cfg[src]))
+    return found
+
+
+def test_lidar_variant_marks_fleet_peers_in_the_local_costmap_only() -> None:
+    """With a LiDAR the peer cloud goes on the LOCAL obstacle_layer and NOT the
+    global one: FTC treats a cell that is lethal in the global costmap as
+    'not an obstacle' (zone mask), which would hide a peer from the coverage
+    controller. Marking only — the cloud has no sensor origin to raytrace from.
+    """
+    merged = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml("nav2_params_lidar.yaml"))
+    local = _fleet_sources(merged["local_costmap"]["local_costmap"]["ros__parameters"])
+    glob = _fleet_sources(merged["global_costmap"]["global_costmap"]["ros__parameters"])
+    assert len(local) == 1, "lidar local costmap must carry exactly one fleet source"
+    assert glob == [], "lidar global costmap must NOT carry the fleet source (FTC zone mask)"
+    layer, _, src = local[0]
+    assert layer == "obstacle_layer"
+    assert src["data_type"] == "PointCloud2"
+    assert src["marking"] is True and src["clearing"] is False
+    assert src["min_obstacle_height"] < 0.30 < src["max_obstacle_height"], (
+        "fleet_peer_obstacles.py publishes its ring at z=0.30 m; it must sit inside the band"
+    )
+
+
+def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
+    """Without a LiDAR nothing else can see a peer, so a dedicated fleet_layer
+    (an ObstacleLayer under a name CI's obstacle/static disjointness guard does
+    not police) feeds BOTH costmaps."""
+    merged = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml("nav2_params_no_lidar.yaml"))
+    for cm in ("local_costmap", "global_costmap"):
+        params = merged[cm][cm]["ros__parameters"]
+        found = _fleet_sources(params)
+        assert len(found) == 1, f"{cm}: expected exactly one fleet source"
+        layer, _, src = found[0]
+        assert layer == "fleet_layer"
+        assert params[layer]["plugin"] == "nav2_costmap_2d::ObstacleLayer"
+        assert src["marking"] is True and src["clearing"] is False
+        plugins = params["plugins"]
+        assert plugins.index("fleet_layer") < plugins.index("inflation_layer"), (
+            f"{cm}: fleet_layer must be inflated (listed before inflation_layer)"
+        )
+    local = merged["local_costmap"]["local_costmap"]["ros__parameters"]["fleet_layer"]
+    glob = merged["global_costmap"]["global_costmap"]["ros__parameters"]["fleet_layer"]
+    assert local == glob, "the two fleet_layer copies in nav2_params_no_lidar.yaml drifted apart"
