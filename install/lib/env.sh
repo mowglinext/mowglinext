@@ -164,7 +164,15 @@ sync_gnss_env_contract_values() {
     GNSS_DEVICE_GID="$(stat -Lc '%g' -- "$GNSS_DEVICE")"
   fi
 
-  GNSS_NTRIP_ENABLED="${CONFIG_NTRIP_ENABLED:-true}"
+  if [[ "${CONFIG_NTRIP_ENABLED_EXPLICIT:-false}" == "true" ]]; then
+    if [[ "${CONFIG_NTRIP_ENABLED_EXPLICIT:-false}" == "true" ]]; then
+    GNSS_NTRIP_ENABLED="${CONFIG_NTRIP_ENABLED:-true}"
+  else
+    : "${GNSS_NTRIP_ENABLED:=${CONFIG_NTRIP_ENABLED:-true}}"
+  fi
+  else
+    : "${GNSS_NTRIP_ENABLED:=${CONFIG_NTRIP_ENABLED:-true}}"
+  fi
   : "${GNSS_NTRIP_HOST:=${CONFIG_NTRIP_HOST:-crtk.net}}"
   : "${GNSS_NTRIP_PORT:=${CONFIG_NTRIP_PORT:-2101}}"
   GNSS_NTRIP_USERNAME="${GNSS_NTRIP_USERNAME:-${CONFIG_NTRIP_USER:-}}"
