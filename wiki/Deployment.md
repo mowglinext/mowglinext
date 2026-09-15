@@ -22,6 +22,7 @@ The installer selects fragments from `install/compose/` based on hardware choice
 | `mowgli-gui` | Web UI |
 | `mowgli-mqtt` | MQTT broker |
 | `mowgli-mavros` | Pixhawk backend only (`HARDWARE_BACKEND=mavros`), which forces `GNSS_STACK=disabled` and replaces `mowgli-gps`. There is no standalone `mowgli-ntrip` container any more (removed 2026-09-19) |
+| `mowgli-openmower` | OpenMower v1 electronics backend only (`HARDWARE_BACKEND=openmower`): bridges the stock LowLevel board + xESC controllers (firmware untouched) and replaces `mowgli-ros2`'s `hardware_bridge_node`; `mowgli-gps` stays. See `sensors/openmower/README.md`. |
 
 ## GNSS Deployment Shape
 

@@ -94,8 +94,8 @@ MSG_UPDATER_STACK_BACKEND="Managed release updates support the Mowgli hardware b
 MSG_UPDATE_MANUAL_UPDATER="The host updater is installed. This manual update regenerates docker-compose.yaml from this checkout and lets the images follow the .env tags instead of the updater's pinned release; Settings > Updates will report the installation as drifted until the next managed release, which adopts the result."
 MSG_UPDATE_MANUAL_PINS="Updater image pins (docker/update-images.json) set aside as a dated copy; images now follow docker/.env."
 MSG_UPDATER_DIRECTORY_MISMATCH="The host updater is configured for another checkout directory than this run. Run the installer from the same path the updater was installed with (MOWGLI_HOME=<that path>), or re-register it with --only=updater."
-MSG_UPDATER_HARDWARE_LEGACY="These hardware choices require the existing installer path (MAVROS, TF-Luna or VESC). Keeping their selected containers; coordinated release updates are not enabled."
-MSG_UPDATER_HARDWARE_MANAGED="This installation already uses managed updates. MAVROS, TF-Luna and VESC selections require an explicit stack migration; runtime files have not been regenerated."
+MSG_UPDATER_HARDWARE_LEGACY="These hardware choices require the existing installer path (MAVROS, OpenMower, TF-Luna or VESC). Keeping their selected containers; coordinated release updates are not enabled."
+MSG_UPDATER_HARDWARE_MANAGED="This installation already uses managed updates. MAVROS, OpenMower, TF-Luna and VESC selections require an explicit stack migration; runtime files have not been regenerated."
 MSG_UPDATER_STACK_REVIEW="Saved hardware choices. Review Software updates to apply container changes; the installed release definition has been retained."
 
 # Compose baseline / legacy adoption (install/lib/compose.sh)

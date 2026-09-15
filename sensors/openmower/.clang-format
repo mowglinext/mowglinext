@@ -1,0 +1,64 @@
+---
+# Mowgli ROS2 clang-format configuration
+# Based on Google style with project-specific adjustments.
+BasedOnStyle: Google
+
+# Line length — generous for ROS2 verbose template types
+ColumnLimit: 100
+
+# Indentation
+IndentWidth: 2
+ContinuationIndentWidth: 4
+ConstructorInitializerIndentWidth: 4
+AccessModifierOffset: -2
+
+# Braces — Allman (each brace on its own line) for clarity in robotics code
+BreakBeforeBraces: Allman
+
+# Functions — never collapse onto one line; bodies are always visible
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortLambdasOnASingleLine: Empty
+
+# Return type — keep on same line as function name
+AlwaysBreakAfterReturnType: None
+AlwaysBreakAfterDefinitionReturnType: None
+
+# Templates
+AlwaysBreakTemplateDeclarations: Yes
+
+# Include sorting — group by: system, ROS2, project
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # ROS2 and ament headers
+  - Regex: '^<(rclcpp|rclcpp_action|rclcpp_lifecycle|nav2|nav_msgs|sensor_msgs|geometry_msgs|std_msgs|tf2|behaviortree_cpp|ament).*>'
+    Priority: 2
+  # Project headers
+  - Regex: '^"mowgli_'
+    Priority: 3
+  # C++ standard library
+  - Regex: '^<[a-z_]+>'
+    Priority: 1
+
+# Spacing
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpacesInAngles: Never
+SpacesInContainerLiterals: false
+
+# Pointer alignment
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Comment alignment — do not force alignment of trailing comments
+AlignTrailingComments: false
+
+# Bin-packing — do not pack function parameters onto a single line if they don't all fit
+BinPackArguments: false
+BinPackParameters: false
+
+# Penalty tuning — prefer breaking before binary operators
+PenaltyBreakBeforeFirstCallParameter: 100
+PenaltyReturnTypeOnItsOwnLine: 200

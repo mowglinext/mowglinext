@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mowgli_openmower_bridge</name>
+  <version>0.1.0</version>
+  <description>
+    Hardware bridge for stock OpenMower (v1 mainboard) electronics: speaks the
+    OpenMower LowLevel (Pico) COBS protocol and the xESC 2040 / xESC mini
+    (VESC) motor-controller protocols, and publishes the exact
+    hardware_bridge ROS2 contract MowgliNext expects (status, emergency,
+    power, battery, IMU, wheel odometry, blade and e-stop services). Runs as
+    its own sidecar container next to mowgli-ros2 when
+    HARDWARE_BACKEND=openmower; the OpenMower firmware is left untouched.
+  </description>
+  <maintainer email="cedric@mowgli.dev">Cedric</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>mowgli_interfaces</depend>
+  <depend>mowgli_hardware</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

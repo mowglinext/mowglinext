@@ -221,7 +221,7 @@ run_install() {
 
   # Image refs are tied to the install script version — never inherit
   # stale paths from older installs (e.g. mowgli-docker, openmower-gui).
-  unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE GUI_IMAGE
+  unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE OPENMOWER_IMAGE GUI_IMAGE
 
   # Image tag selection is independent from the selected repository branch.
   select_image_channel
@@ -289,7 +289,7 @@ run_update() {
   select_repo_branch
   sync_repo_branch_to_selected_branch
 
-  unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE GUI_IMAGE
+  unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE OPENMOWER_IMAGE GUI_IMAGE
   select_image_channel
 
   # Manual mode: the checkout's fragments and .env image tags decide, not the
@@ -326,7 +326,7 @@ run_repair() {
   NON_INTERACTIVE=true
   export MOWGLI_REGENERATE_STACK=true
   load_install_state
-  unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE GUI_IMAGE
+  unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE OPENMOWER_IMAGE GUI_IMAGE
   recompute_image_defaults
 
   progress_run 1 "$TOTAL_STEPS" "Installing Docker" \

@@ -10,6 +10,7 @@ Dockerized ROS2 drivers for each supported sensor. Each subdirectory contains a 
 | LDRobot LD19 | 2D LiDAR | [`lidar-ldlidar/`](lidar-ldlidar/) | `/scan` (LaserScan) | UART 230400 (hardcoded in `ldlidar.yaml`) |
 | LDRobot STL27L | 2D LiDAR | [`lidar-stl27l/`](lidar-stl27l/) | `/scan` (LaserScan) | UART, `LIDAR_BAUD` (921600) |
 | Slamtec RPLiDAR A1/A2/A3/S1/S2/S3/C1 | 2D LiDAR | [`lidar-rplidar/`](lidar-rplidar/) | `/scan` (LaserScan) | UART, `LIDAR_BAUD` |
+| OpenMower v1 electronics (LowLevel board + xESC) | Hardware bridge | [`openmower/`](openmower/) | the full `/hardware_bridge` contract (status, emergency, power, `/battery_state`, `/imu/data`, `/wheel_odom`, blade + e-stop services) | UART ×4, `OPENMOWER_*` (only with `HARDWARE_BACKEND=openmower`) |
 
 Exactly one LiDAR container is composed, selected by `LIDAR_TYPE=ldlidar|rplidar|stl27l` in `docker/.env` (`install/lib/compose.sh`). `LIDAR_ENABLED` there only decides whether that container runs — the ROS-side LiDAR mode is `lidar_enabled` in `mowgli_robot.yaml`.
 
@@ -35,7 +36,7 @@ To add support for a different GPS or LiDAR model:
 
 ## Building
 
-Each image has its own CI caller (`.github/workflows/sensors-{gps,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`), all delegating to the reusable `.github/workflows/_sensor-docker.yml`, which builds `linux/amd64` and `linux/arm64` and pushes a merged multi-arch manifest to GHCR.
+Each image has its own CI caller (`.github/workflows/sensors-{gps,openmower,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`), all delegating to the reusable `.github/workflows/_sensor-docker.yml`, which builds `linux/amd64` and `linux/arm64` and pushes a merged multi-arch manifest to GHCR.
 
 To build locally:
 

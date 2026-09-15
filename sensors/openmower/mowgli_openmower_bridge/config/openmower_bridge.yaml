@@ -1,0 +1,97 @@
+# Defaults for the OpenMower hardware bridge (mowgli_openmower_bridge).
+# Device paths, ESC type and the per-robot kinematics are injected on top of
+# these by launch/openmower_bridge.launch.py from the OPENMOWER_* container
+# environment and the sparse /config/mowgli_robot.yaml.
+hardware_bridge:
+  ros__parameters:
+    # ── LowLevel (Pico) board ─────────────────────────────────────────────
+    ll_serial_port: "/dev/ttyAMA0"
+    ll_baud_rate: 115200
+    ll_rx_timeout_s: 2.0      # reopen the port after this long without bytes
+    ll_read_rate: 100.0       # Hz — serial read tick
+
+    # ── motor controllers ─────────────────────────────────────────────────
+    xesc_type: "xesc_mini"    # xesc_mini (VESC protocol) | xesc_2040
+    left_xesc_port: "/dev/ttyAMA5"
+    right_xesc_port: "/dev/ttyAMA3"
+    mow_xesc_port: "/dev/ttyAMA4"
+    mow_xesc_enabled: true
+    # OpenMower wires the right ESC mirrored; mower_comms_v1 negates it too.
+    left_motor_inverted: false
+    right_motor_inverted: true
+    motor_pole_pairs: 4       # xesc_mini only — eRPM → shaft rpm
+    control_rate: 50.0        # Hz — duty commands + odometry
+    heartbeat_rate: 25.0      # Hz — LowLevel keep-alive (board times out at 500 ms;
+                              # mower_comms_v1 sends at 50 Hz, 5 B per packet)
+    high_level_rate: 2.0      # Hz — mode + GPS quality for the LEDs
+
+    # xESC 2040 settings (ignored for xesc_mini). YardForce 500 values from
+    # open_mower_ros comms_xesc_2040_params.yaml.
+    drive_xesc_hall_table: [255, 5, 3, 4, 1, 6, 2, 255]
+    drive_xesc_motor_current_limit: 0.5
+    drive_xesc_acceleration: 20.0
+    drive_xesc_has_motor_temp: false
+    drive_xesc_min_motor_temp: 0.0
+    drive_xesc_max_motor_temp: 0.0
+    drive_xesc_min_pcb_temp: 0.0
+    drive_xesc_max_pcb_temp: 60.0
+    mow_xesc_hall_table: [255, 3, 1, 2, 5, 4, 6, 255]
+    mow_xesc_motor_current_limit: 1.0
+    mow_xesc_acceleration: 5.0
+    mow_xesc_has_motor_temp: true
+    mow_xesc_min_motor_temp: 0.0
+    mow_xesc_max_motor_temp: 60.0
+    mow_xesc_min_pcb_temp: 0.0
+    mow_xesc_max_pcb_temp: 60.0
+
+    # ── kinematics (overridden from mowgli_robot.yaml by the launch file) ──
+    ticks_per_meter: 1600.0   # OpenMower YardForce default (OM_WHEEL_TICKS_PER_M)
+    wheel_track: 0.325
+    max_mps: 0.5
+    max_radps: 2.0
+    min_linear_vel: 0.05
+
+    # ── command shaping (same numbers as hardware_bridge.yaml) ────────────
+    cmd_vel_timeout_s: 1.0
+    # Blade watchdog on the behaviour tree: no HighLevelStatus for this long
+    # → blade off, whatever the last mode said.
+    high_level_status_timeout_s: 5.0
+    cmd_vel_linear_accel_limit: 0.30
+    cmd_vel_linear_decel_limit: 0.60
+    cmd_vel_angular_accel_limit: 1.0
+    cmd_vel_angular_decel_limit: 2.0
+
+    # ── host-side wheel velocity loop ─────────────────────────────────────
+    # The xESC only takes a duty cycle. OpenMower's own comms maps m/s → duty
+    # 1:1 open loop; MowgliNext's controllers expect tracked velocities, so a
+    # PI closes on the tachometer. wheel_loop_enabled: false reverts to the
+    # OpenMower mapping (feed-forward only).
+    wheel_loop_enabled: true
+    wheel_duty_per_mps: 1.0
+    wheel_kp: 0.5
+    wheel_ki: 2.0
+    wheel_integral_limit: 0.3
+    wheel_max_duty: 1.0
+
+    # ── blade ─────────────────────────────────────────────────────────────
+    blade_duty: 1.0
+    mowing_enabled: true
+
+    # ── IMU ───────────────────────────────────────────────────────────────
+    imu_frame_id: "imu_link"
+    imu_cal_samples: 200
+    imu_cal_auto_rest_sec: 15.0
+
+    # ── LowLevel config packet (charge / battery protection, hall inputs) ──
+    max_charge_voltage: 29.4
+    max_charge_current: 1.2
+    battery_cutoff_voltage: 29.0
+    battery_empty_voltage: 24.0
+    battery_full_voltage: 28.0
+    both_wheels_lift_emergency_ms: 1000
+    one_wheel_lift_emergency_ms: 2000
+    ignore_charging_current: false
+    ll_language: "en"
+    # OpenMower OM_EMERGENCY_INPUT_CONFIG, e.g. "!L,!L,S,S". Empty keeps the
+    # board's compiled hall configuration.
+    emergency_input_config: ""

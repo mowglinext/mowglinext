@@ -103,6 +103,7 @@ procedure. It supersedes Kilted-specific build details in the September 3 codema
 | [`ros2/src/mowgli_leds/README.md`](../../ros2/src/mowgli_leds/README.md) | contributor/operator | WS2812 ring: wiring, SPI overlay, display semantics, encoding. Self-flagged **NOT hardware-verified**. |
 | [`tools/motor/README.md`](../../tools/motor/README.md) | contributor/operator | `mowgli_tools` sidecar — the `tune_drive_pid` drive-PID assistant. |
 | [`sensors/README.md`](../../sensors/README.md) | contributor | Supported sensor drivers, the Universal GNSS contract, how to add a sensor. |
+| [`sensors/openmower/README.md`](../../sensors/openmower/README.md) | contributor/operator | The `HARDWARE_BACKEND=openmower` bridge: OpenMower LowLevel + xESC protocols, ports/config keys, host-side wheel loop, **safety model** and known gaps. |
 | [`firmware/README.md`](../../firmware/README.md) | contributor | Firmware tree layout, safety warning (remove blades), supported hardware. |
 | [`TODO-runtime-backups.md`](../../TODO-runtime-backups.md) | maintainer | **Still open**, not historical: `migrate_runtime_paths()` still backs up `.env` + `docker-compose.yaml` on every run and `install/lib/deploy.sh:276` points back at this file. None of its "future improvements" (rotation, `--no-backup`) exist yet. |
 

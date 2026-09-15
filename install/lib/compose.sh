@@ -60,6 +60,11 @@ build_compose_stack() {
   local gnss_stack
   local gnss_service
 
+  if ! is_supported_hardware_backend "${HARDWARE_BACKEND:-mowgli}"; then
+    error "Unknown HARDWARE_BACKEND: ${HARDWARE_BACKEND:-unset} (expected mowgli, mavros or openmower)"
+    return 1
+  fi
+
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.base.yml")
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.gui.yml")
   # The mosquitto broker only matters to operators integrating Home Assistant
@@ -145,6 +150,11 @@ build_compose_stack() {
 
   [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]] && \
     COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.mavros.yml")
+
+  # OpenMower v1 electronics: the bridge sidecar replaces mowgli-ros2's
+  # hardware_bridge_node (gated in mowgli.launch.py); GNSS stays universal.
+  [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]] && \
+    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.openmower.yml")
 
   info "Selected compose fragments:"
   for f in "${COMPOSE_FILES[@]}"; do
