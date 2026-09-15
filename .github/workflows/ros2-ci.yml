@@ -350,6 +350,12 @@ jobs:
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
           source /opt/lyrical_vendor/local_setup.bash
           sudo apt-get update
+          # libmosquitto has no rosdep key (see ros2/Dockerfile). Without it
+          # mowgli_monitoring silently compiles the StubMqttClient instead of
+          # the shipped MosquittoMqttClient, which is how PR #604 passed CI
+          # while the image build failed. -DMOWGLI_REQUIRE_MOSQUITTO=ON below
+          # turns that silent fallback into a configure error.
+          sudo apt-get install -y --no-install-recommends libmosquitto-dev
           rosdep update --rosdistro ${{ env.ROS_DISTRO }}
           # skip-keys:
           # - grid_map, Beluga and Smac come from /opt/lyrical_vendor
@@ -382,6 +388,7 @@ jobs:
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_STANDARD=20 \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DMOWGLI_REQUIRE_MOSQUITTO=ON \
             --parallel-workers $(nproc) \
             --event-handlers console_cohesion+
 

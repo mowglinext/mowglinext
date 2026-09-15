@@ -102,7 +102,13 @@ bool StubMqttClient::is_connected() const noexcept
 struct MosquittoMqttClient::Impl
 {
   Config config;
-  rclcpp::Logger logger;
+  // rclcpp::Logger has no public default constructor; without an initializer
+  // Impl's default constructor is deleted and make_unique<Impl>() fails to
+  // compile. The constructor overwrites this with the node's logger.
+  rclcpp::Logger logger{rclcpp::get_logger("mqtt_bridge_node")};
+  // Throttle clock for the spin loop warning (a temporary cannot be bound by
+  // the RCLCPP_*_THROTTLE macros).
+  rclcpp::Clock throttle_clock{RCL_STEADY_TIME};
   mosquitto* mosq{nullptr};
   bool connected{false};
 
@@ -393,7 +399,7 @@ void MosquittoMqttClient::spin_once() noexcept
   if (rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN)
   {
     RCLCPP_WARN_THROTTLE(impl_->logger,
-                         rclcpp::Clock{},
+                         impl_->throttle_clock,
                          10000,
                          "mosquitto_loop error: %s — attempting reconnect",
                          mosquitto_strerror(rc));

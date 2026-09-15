@@ -452,6 +452,7 @@ RUN --mount=type=cache,id=mowgli-ros2-lyrical-${TARGETARCH},target=/home/ubuntu/
  && MAKEFLAGS=-j3 colcon build --parallel-workers 2 \
       --cmake-args -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTING=OFF \
       -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DMOWGLI_REQUIRE_MOSQUITTO=ON \
       -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache \
       --event-handlers console_cohesion+'
 

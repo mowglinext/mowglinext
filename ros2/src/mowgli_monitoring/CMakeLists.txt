@@ -32,6 +32,10 @@ find_package(mowgli_interfaces REQUIRED)
 # MosquittoMqttClient implementation in mqtt_bridge_node.cpp.
 # ---------------------------------------------------------------------------
 
+option(MOWGLI_REQUIRE_MOSQUITTO
+  "Fail the configure step when libmosquitto is missing instead of falling back to StubMqttClient (CI and the release image set this so the shipped client is what gets compiled)"
+  OFF)
+
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
   pkg_check_modules(MOSQUITTO QUIET libmosquitto)
@@ -48,6 +52,11 @@ endif()
 
 if(MOSQUITTO_FOUND)
   message(STATUS "libmosquitto found — MosquittoMqttClient will be compiled.")
+elseif(MOWGLI_REQUIRE_MOSQUITTO)
+  message(FATAL_ERROR
+    "libmosquitto NOT found and MOWGLI_REQUIRE_MOSQUITTO=ON — the real "
+    "MosquittoMqttClient would be silently replaced by StubMqttClient and "
+    "never compiled. Install with: sudo apt-get install libmosquitto-dev")
 else()
   message(STATUS
     "libmosquitto NOT found — mqtt_bridge_node will use StubMqttClient. "
