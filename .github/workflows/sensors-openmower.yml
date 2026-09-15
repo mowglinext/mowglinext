@@ -1,0 +1,154 @@
+name: Sensors — OpenMower bridge
+
+on:
+  push:
+    tags: ['v*.*.*']
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
+    paths:
+      - 'sensors/openmower/**'
+      - 'ros2/src/mowgli_interfaces'
+      - 'ros2/src/mowgli_interfaces/**'
+      - 'ros2/src/mowgli_hardware/**'
+      - '.github/workflows/sensors-openmower.yml'
+      - '.github/workflows/_sensor-docker.yml'
+  workflow_dispatch:
+    inputs:
+      no-cache:
+        description: 'Build without Docker layer cache'
+        type: boolean
+        default: false
+
+concurrency:
+  group: sensors-openmower-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/_sensor-docker.yml
+    with:
+      image: openmower
+      context: .
+      dockerfile: sensors/openmower/Dockerfile
+      smoke-test: |
+        set -euo pipefail
+        set +u
+        source /opt/ros/lyrical/setup.bash
+        source /opt/openmower_bridge/setup.bash
+        set -u
+        ros2 pkg list | grep -x mowgli_interfaces
+        ros2 pkg list | grep -x mowgli_openmower_bridge
+        ros2 pkg executables mowgli_openmower_bridge | grep -x "mowgli_openmower_bridge openmower_bridge_node"
+        test -f "$(ros2 pkg prefix mowgli_openmower_bridge)/share/mowgli_openmower_bridge/launch/openmower_bridge.launch.py"
+        test -f "$(ros2 pkg prefix mowgli_openmower_bridge)/share/mowgli_openmower_bridge/config/openmower_bridge.yaml"
+        test -x /start_openmower.sh
+        python3 - <<'PY'
+        from mowgli_interfaces.msg import Status, Emergency, Power, WheelTick
+        from mowgli_interfaces.srv import MowerControl, EmergencyStop
+        assert hasattr(Status, "firmware_compatible")
+        assert hasattr(WheelTick, "WHEEL_VALID_RL")
+        PY
+        # Installed executables must not retain links into the deleted build tree.
+        ldd "$(ros2 pkg prefix mowgli_openmower_bridge)/lib/mowgli_openmower_bridge/openmower_bridge_node" | grep -v "not found"
+        ! ldd "$(ros2 pkg prefix mowgli_openmower_bridge)/lib/mowgli_openmower_bridge/openmower_bridge_node" | grep -q "not found"
+      no-cache: ${{ inputs.no-cache == true }}
+
+  # ---------------------------------------------------------------------------
+  # mowgli_openmower_bridge lives in sensors/openmower/, OUTSIDE the ros2/
+  # colcon workspace, so "ROS2 — CI" never sees it, and the image builds with
+  # -DBUILD_TESTING=OFF. This job is the only thing that compiles and runs its
+  # gtests. Keep the package set in lockstep with the Dockerfile builder stage.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test mowgli_openmower_bridge
+    runs-on: ubuntu-latest
+    container: ros:lyrical-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            python3-colcon-common-extensions \
+            ros-lyrical-ament-cmake \
+            ros-lyrical-ament-cmake-gtest \
+            ros-lyrical-ament-lint-auto \
+            ros-lyrical-ament-lint-common \
+            ros-lyrical-geometry-msgs \
+            ros-lyrical-nav-msgs \
+            ros-lyrical-rclcpp \
+            ros-lyrical-rosidl-default-generators \
+            ros-lyrical-rosidl-default-runtime \
+            ros-lyrical-sensor-msgs \
+            ros-lyrical-std-msgs \
+            ros-lyrical-std-srvs
+
+      - name: Assemble the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /ws/src
+          cp -r ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces
+          cp -r ros2/src/mowgli_hardware /ws/src/mowgli_hardware
+          cp -r sensors/openmower/mowgli_openmower_bridge /ws/src/mowgli_openmower_bridge
+          chown -R ubuntu:ubuntu /ws
+
+      - name: Build dependencies
+        shell: bash
+        run: |
+          runuser -u ubuntu -- bash <<'BUILD'
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          cd /ws
+          colcon build \
+            --packages-skip mowgli_openmower_bridge \
+            --packages-up-to mowgli_openmower_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTING=OFF -Wno-dev \
+            --event-handlers console_cohesion+
+          BUILD
+
+      - name: Build and test mowgli_openmower_bridge
+        shell: bash
+        run: |
+          runuser -u ubuntu -- bash <<'BUILD'
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          cd /ws
+          source install/setup.bash
+          colcon build \
+            --packages-select mowgli_openmower_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTING=ON -Wno-dev \
+            --event-handlers console_cohesion+
+          colcon test \
+            --packages-select mowgli_openmower_bridge \
+            --return-code-on-test-failure \
+            --event-handlers console_cohesion+
+          colcon test-result --verbose
+          BUILD
+
+      - name: Assert the gtests actually ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          results=/ws/build/mowgli_openmower_bridge/test_results/mowgli_openmower_bridge
+          test -d "$results" || { echo "no test_results directory"; exit 1; }
+          shopt -s nullglob
+          gtest_xml=("$results"/*.gtest.xml)
+          if [ ${#gtest_xml[@]} -eq 0 ]; then
+            echo "no *.gtest.xml produced — the gtests were not registered"
+            ls -la "$results" || true
+            exit 1
+          fi
+          n=$(grep -ho 'tests="[0-9]*"' "${gtest_xml[@]}" | grep -o '[0-9]*' \
+              | awk '{s+=$1} END {print s+0}')
+          echo "gtest binaries: ${#gtest_xml[@]}, gtest cases executed: $n"
+          test "$n" -gt 0 || { echo "mowgli_openmower_bridge ran ZERO gtest cases"; exit 1; }

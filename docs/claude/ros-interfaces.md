@@ -14,6 +14,8 @@ Nav2 / `opennav_docking` / `twist_mux` / GNSS-sidecar endpoints are included whe
 
 Sorted by resolved name. Mowgli-owned message definitions live in `ros2/src/mowgli_interfaces/msg/` (`AbsolutePose`, `CoveragePath`, `DigEvent`, `DockCalibrationStatus`, `Emergency`, `ESCStatus`, `GnssStatus`, `HighLevelStatus`, `ImuRaw`, `MapArea`, `MapObstacleInfo`, `ObstacleArray`, `Power`, `Status`, `TrackedObstacle`, `WheelTick`); everything else is upstream `sensor_msgs` / `nav_msgs` / `nav2_msgs` / `std_msgs`. Rows marked *sim* exist only under `sim_full_system.launch.py`.
 
+> **Hardware backends.** Every `hardware_bridge` row below names the STM32 bridge (`mowgli_hardware/src/hardware_bridge_node.cpp`). With `HARDWARE_BACKEND=openmower` the SAME topics, services and remaps are served by `sensors/openmower/mowgli_openmower_bridge` (`openmower_bridge_node`, node name `hardware_bridge`, container `mowgli-openmower`) and `mowgli.launch.py` does not start the STM32 bridge. Differences: no `~/dig_event`, `~/dig_escalated` is always `false`, `~/dock_heading` is not published, and `reboot_board` / `set_firmware_debug` answer `success=false`.
+
 | Topic | Type | Publisher (node · file) | Subscribers (node · file) | Notes |
 |---|---|---|---|---|
 | `/battery_state` | `sensor_msgs/BatteryState` | `hardware_bridge` · `mowgli_hardware/src/hardware_bridge_node.cpp:721`; sim: `fake_hardware_bridge` · `mowgli_simulation/src/fake_hardware_bridge_node.cpp:101` | `docking_server` (`SimpleChargingDock.battery_topic`, `mowgli_bringup/config/nav2_params_base.yaml:1088`) | QoS(10). Carries `abs(charging_current)` while charging, `0.0` otherwise (Inv 12). |

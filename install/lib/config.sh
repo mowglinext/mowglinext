@@ -46,6 +46,7 @@ recompute_image_defaults() {
   LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
   MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
+  OPENMOWER_IMAGE_DEFAULT="${prefix}/openmower:${IMAGE_TAG}"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
   # Universal GNSS is a separately released runtime. Never derive it from
   # MowgliNext IMAGE_TAG; the integration targets ROS 2 Lyrical.
@@ -357,13 +358,10 @@ compose_restart_services_for_backend() {
   local gnss_stack
   local gnss_service
 
-  case "$backend" in
-    mowgli|mavros) ;;
-    *)
-      error "Unknown hardware backend: $backend (expected mowgli or mavros)"
-      return 1
-      ;;
-  esac
+  if ! is_supported_hardware_backend "$backend"; then
+    error "Unknown hardware backend: $backend (expected ${SUPPORTED_HARDWARE_BACKENDS// /, })"
+    return 1
+  fi
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
   gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
@@ -374,6 +372,10 @@ compose_restart_services_for_backend() {
 
   if [[ "$backend" == "mavros" ]]; then
     services+=(mavros)
+  fi
+  # The OpenMower bridge reads mowgli_robot.yaml too, so it restarts with it.
+  if [[ "$backend" == "openmower" ]]; then
+    services+=(openmower)
   fi
   services+=(mowgli)
 
@@ -838,8 +840,12 @@ parse_args() {
           mavros)
             HARDWARE_BACKEND="mavros"
             ;;
+          openmower)
+            HARDWARE_BACKEND="openmower"
+            MAVROS_BY_ID=""
+            ;;
           *)
-            error "Unknown hardware backend: $backend_spec (expected mowgli or mavros)"
+            error "Unknown hardware backend: $backend_spec (expected mowgli, mavros or openmower)"
             exit 1
             ;;
         esac
@@ -1259,6 +1265,18 @@ EOF
   local lidar_on="false"
   [[ "${LIDAR_ENABLED:-false}" == "true" ]] && lidar_on="true"
   _yaml_patch_key "$yaml_file" lidar_enabled "$lidar_on" || return 1
+
+  # OpenMower v1 electronics count wheel ticks on the xESC hall sensors
+  # (OM_WHEEL_TICKS_PER_M, 1600/m on a YardForce 500), not on the Mowgli STM32
+  # encoders the seed's 399.0 describes. This path only runs when the file is
+  # being CREATED (an existing one returned early above), so it is a first-
+  # install seed: an operator's later calibration is never overwritten. A robot
+  # switched to this backend on an existing file keeps its value and must check
+  # it by hand (sensors/openmower/README.md).
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    _yaml_patch_key "$yaml_file" ticks_per_meter "1600.0" || return 1
+    info "OpenMower backend: seeded ticks_per_meter=1600.0 (xESC hall ticks)"
+  fi
 
   # The Universal GNSS sidecar reads mowgli_robot.yaml itself (see
   # install/compose/docker-compose.gps.yml): no derived parameter file.
