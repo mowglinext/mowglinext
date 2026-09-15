@@ -47,17 +47,10 @@ configure_mavros_backend_details() {
   fi
 }
 
-# Every backend the installer knows. Keep in lockstep with
-# SUPPORTED_HARDWARE_BACKENDS in ros2/src/mowgli_bringup/launch/mowgli.launch.py
-# and the composer in docs/index.html.
-SUPPORTED_HARDWARE_BACKENDS="mowgli mavros openmower"
-
-is_supported_hardware_backend() {
-  case "${1:-}" in
-    mowgli|mavros|openmower) return 0 ;;
-    *) return 1 ;;
-  esac
-}
+# SUPPORTED_HARDWARE_BACKENDS and is_supported_hardware_backend live in
+# config.sh, with the other shared predicates — compose.sh needs them and
+# docker/stack.sh does not source this file. This file owns only the
+# interactive selection flow.
 
 # OpenMower v1 electronics: LowLevel (Pico) board + three xESC controllers on
 # the Pi's hardware UARTs. The bridge runs in the mowgli-openmower sidecar;
