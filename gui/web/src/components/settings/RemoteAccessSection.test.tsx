@@ -18,8 +18,8 @@ const defaultSettings: RemoteAccessSettings = {
     authKeySet: false,
     authKeyMasked: "",
     serveHttps: true,
-    image: "tailscale/tailscale:v1.102.4",
-    defaultImage: "tailscale/tailscale:v1.102.4",
+    image: "tailscale/tailscale:v1.102.3",
+    defaultImage: "tailscale/tailscale:v1.102.3",
     containerName: "mowgli-remote",
 };
 

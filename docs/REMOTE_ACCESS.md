@@ -7,8 +7,9 @@ default; nothing is installed or exposed until the operator enables it.
 
 ## What it does
 
-- Runs one extra container, `mowgli-remote` (`tailscale/tailscale`, pinned
-  version), on the host network in **userspace networking** mode: no
+- Runs one extra container, `mowgli-remote` (`tailscale/tailscale`, pinned to
+  a tag published on Docker Hub — the image lags the GitHub release, so check
+  hub.docker.com/r/tailscale/tailscale/tags before bumping the pin), on the host network in **userspace networking** mode: no
   `/dev/net/tun`, no `NET_ADMIN`, not privileged, and every Linux capability dropped. Inbound tailnet connections
   are forwarded to the same port on localhost, which on the host network is the
   GUI on `:4006`.
@@ -58,7 +59,7 @@ default; nothing is installed or exposed until the operator enables it.
 | `remoteAccess.hostname` | `mowgli` | Tailnet node name (DNS label) |
 | `remoteAccess.authKey` | unset | Pre-authorised key, write-only; passed to the container as a file (`TS_AUTHKEY=file:…`), never as a plain env var |
 | `remoteAccess.serveHttps` | `true` | Apply a Tailscale Serve config (443 → `http://127.0.0.1:<gui-port>`) |
-| `remoteAccess.image` | `tailscale/tailscale:v1.102.4` | Sidecar image, restricted to the official `tailscale/tailscale` repository (any tag or sha256 digest) because the API is unauthenticated and the container runs on the host network; blank in the GUI resets to the default |
+| `remoteAccess.image` | `tailscale/tailscale:v1.102.3` | Sidecar image, restricted to the official `tailscale/tailscale` repository (any tag or sha256 digest) because the API is unauthenticated and the container runs on the host network; blank in the GUI resets to the default |
 
 The GUI port comes from `system.api.addr`, so a non-default listen port is
 proxied correctly.
@@ -86,6 +87,10 @@ the container and projects `BackendState`, `AuthURL`, `Self.DNSName`,
 
 - **Stuck at "Downloading"**: the Pi is pulling `tailscale/tailscale` from
   Docker Hub; check `docker logs mowgli-remote` and the robot's uplink.
+- **"manifest unknown" on pull**: the pinned tag is not on Docker Hub (the
+  image publication lags the GitHub release). Set the image field to a tag
+  listed at hub.docker.com/r/tailscale/tailscale/tags, e.g.
+  `tailscale/tailscale:v1.102.3`, and Save.
 - **"Login required" never turns into Connected**: approve the device in the
   admin console; if the tailnet requires device approval, an admin must accept
   it there too.

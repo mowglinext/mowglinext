@@ -116,6 +116,29 @@ func TestRemoteAccessConfigDefaultsWhenDBIsEmpty(t *testing.T) {
 	assert.Equal(t, DefaultRemoteAccessImage, loaded.Image)
 }
 
+func TestRemoteAccessConfigDefaultImageIsNotPersistedAsAnOverride(t *testing.T) {
+	db := types.NewMockDBProvider()
+	explicit := enabledRemoteConfig()
+	explicit.Image = "tailscale/tailscale:v1.98.10"
+	require.NoError(t, SaveRemoteAccessConfig(db, explicit))
+	_, err := db.Get(remoteAccessKeyImage)
+	require.NoError(t, err, "an explicit image is an override and is stored")
+
+	require.NoError(t, SaveRemoteAccessConfig(db, enabledRemoteConfig()))
+
+	_, err = db.Get(remoteAccessKeyImage)
+	assert.Error(t, err, "the default image must not be pinned in the DB")
+	assert.Equal(t, DefaultRemoteAccessImage, LoadRemoteAccessConfig(db).Image)
+}
+
+func TestRemoteAccessConfigRetiredImageFallsBackToTheDefault(t *testing.T) {
+	// v1.102.4 was shipped as the default but Docker Hub never published it.
+	db := types.NewMockDBProvider()
+	require.NoError(t, db.Set(remoteAccessKeyImage, []byte("tailscale/tailscale:v1.102.4")))
+
+	assert.Equal(t, DefaultRemoteAccessImage, LoadRemoteAccessConfig(db).Image)
+}
+
 func TestRemoteAccessConfigClearingAuthKeyDeletesTheDBEntry(t *testing.T) {
 	db := types.NewMockDBProvider()
 	require.NoError(t, SaveRemoteAccessConfig(db, enabledRemoteConfig()))
@@ -159,7 +182,7 @@ func TestRemoteAccessConfigValidatePinsTheImageToTheTailscaleRepository(t *testi
 	// The API is unauthenticated and the container runs on the host network:
 	// any other repository would be remote code execution in one request.
 	for _, bad := range []string{
-		"docker.io/attacker/evil:latest", "tailscale/tailscaled:v1", "ghcr.io/tailscale/tailscale:v1.102.4",
+		"docker.io/attacker/evil:latest", "tailscale/tailscaled:v1", "ghcr.io/tailscale/tailscale:v1.102.3",
 		"tailscale/tailscale:", "tailscale/tailscale@sha256:short", "tailscale/tailscale:v1;rm",
 	} {
 		cfg := DefaultRemoteAccessConfig()
@@ -167,7 +190,7 @@ func TestRemoteAccessConfigValidatePinsTheImageToTheTailscaleRepository(t *testi
 		assert.Error(t, cfg.Validate(), "image %q should be rejected", bad)
 	}
 	for _, good := range []string{
-		"tailscale/tailscale", "tailscale/tailscale:v1.102.4", "docker.io/tailscale/tailscale:latest",
+		"tailscale/tailscale", "tailscale/tailscale:v1.102.3", "docker.io/tailscale/tailscale:latest",
 		"tailscale/tailscale@sha256:" + strings.Repeat("ab", 32),
 	} {
 		cfg := DefaultRemoteAccessConfig()

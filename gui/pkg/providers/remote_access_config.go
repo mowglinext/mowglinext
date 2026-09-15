@@ -25,8 +25,17 @@ const (
 	DefaultRemoteAccessHostname = "mowgli"
 	// DefaultRemoteAccessImage is pinned: the sidecar has no health contract
 	// with the updater, so a moving tag would change behaviour silently.
-	DefaultRemoteAccessImage = "tailscale/tailscale:v1.102.4"
+	// Pin to a tag that EXISTS ON DOCKER HUB (hub.docker.com/r/tailscale/tailscale/tags),
+	// not to the GitHub release: the image publication lags the release and
+	// v1.102.4 never got an image ("manifest unknown" on the robot, 2026-09-15).
+	DefaultRemoteAccessImage = "tailscale/tailscale:v1.102.3"
 )
+
+// retiredRemoteAccessImages are former defaults that turned out unusable; a
+// robot that persisted one of them is moved to the current default on load.
+var retiredRemoteAccessImages = map[string]bool{
+	"tailscale/tailscale:v1.102.4": true,
+}
 
 var remoteAccessHostnamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
@@ -112,6 +121,9 @@ func LoadRemoteAccessConfig(db types.IDBProvider) RemoteAccessConfig {
 	cfg.AuthKey = dbString(db, remoteAccessKeyAuthKey, "")
 	cfg.ServeHTTPS = dbBool(db, remoteAccessKeyServeHTTPS, cfg.ServeHTTPS)
 	cfg.Image = dbString(db, remoteAccessKeyImage, cfg.Image)
+	if retiredRemoteAccessImages[cfg.Image] {
+		cfg.Image = DefaultRemoteAccessImage
+	}
 	return cfg
 }
 
@@ -125,12 +137,20 @@ func SaveRemoteAccessConfig(db types.IDBProvider, cfg RemoteAccessConfig) error 
 		{remoteAccessKeyEnabled, strconv.FormatBool(cfg.Enabled)},
 		{remoteAccessKeyHostname, cfg.Hostname},
 		{remoteAccessKeyServeHTTPS, strconv.FormatBool(cfg.ServeHTTPS)},
-		{remoteAccessKeyImage, cfg.Image},
 	}
 	for _, w := range writes {
 		if err := db.Set(w.key, []byte(w.value)); err != nil {
 			return fmt.Errorf("persist %s: %w", w.key, err)
 		}
+	}
+	// The image is stored only as an explicit override, so a robot on the
+	// default follows the software's pin when a release moves it.
+	if cfg.Image == DefaultRemoteAccessImage {
+		if err := db.Delete(remoteAccessKeyImage); err != nil {
+			return fmt.Errorf("clear remote-access image override: %w", err)
+		}
+	} else if err := db.Set(remoteAccessKeyImage, []byte(cfg.Image)); err != nil {
+		return fmt.Errorf("persist %s: %w", remoteAccessKeyImage, err)
 	}
 	if cfg.AuthKey == "" {
 		if err := db.Delete(remoteAccessKeyAuthKey); err != nil {
