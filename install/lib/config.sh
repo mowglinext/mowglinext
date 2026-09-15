@@ -592,6 +592,26 @@ gnss_connection_from_serial_device() {
   printf 'uart\n'
 }
 
+# Every hardware backend the installer can select. Lives HERE, next to the
+# other shared predicates, and NOT in backend_choice.sh (which owns only the
+# interactive selection flow): docker/stack.sh sources common/config/docker/
+# deploy/compose and then calls build_compose_stack, so a guard that compose.sh
+# needs must be defined in a lib stack.sh actually sources. When this lived in
+# backend_choice.sh, `stack.sh regen` died with "command not found" and — since
+# `! <missing command>` is TRUE — reported "Unknown HARDWARE_BACKEND" for every
+# backend including the default one.
+# Keep in lockstep with SUPPORTED_HARDWARE_BACKENDS in
+# ros2/src/mowgli_bringup/launch/mowgli.launch.py (pinned by
+# test_hardware_backend_launch.py) and the composer in docs/index.html.
+SUPPORTED_HARDWARE_BACKENDS="mowgli mavros openmower"
+
+is_supported_hardware_backend() {
+  case "${1:-}" in
+    mowgli|mavros|openmower) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 list_supported_gnss_backends() {
   printf 'universal disabled\n'
 }
