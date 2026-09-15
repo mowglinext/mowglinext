@@ -5,7 +5,7 @@
   <version>0.1.0</version>
   <description>
     C++ port of the Universal GNSS topic bridge ("topic manager"). Subscribes to
-    the internal universal_gnss_ros2 status/RTCM topics plus /diagnostics and
+    the internal Universal GNSS status/RTCM topics plus /diagnostics and
     republishes them onto the public Mowgli GNSS contract (mowgli_interfaces/GnssStatus
     and rtcm_msgs/Message). Behaviour-exact replacement for the Python
     universal_gnss_topic_bridge.py, moved into rclcpp to cut per-message
@@ -22,7 +22,7 @@
   <depend>diagnostic_msgs</depend>
   <depend>rtcm_msgs</depend>
   <depend>mowgli_interfaces</depend>
-  <depend>universal_gnss_ros2</depend>
+  <depend>universal_gnss_msgs</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>

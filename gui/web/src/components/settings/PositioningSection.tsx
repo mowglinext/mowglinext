@@ -9,14 +9,12 @@ import { GnssLiveStatusSummaryCard } from "../gnss/GnssLiveStatusSummaryCard.tsx
 import {
     GNSS_BAUD_OPTIONS,
     GNSS_ACTION_SETTINGS_KEYS,
-    GNSS_EXECUTION_BAUD_OPTIONS,
     GNSS_PROFILE_OPTIONS,
     GNSS_PROFILE_RATE_OPTIONS,
     GNSS_RECEIVER_FAMILY_OPTIONS,
     GNSS_SIGNAL_PROFILE_OPTIONS,
     GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT,
     normalizeGnssProfile,
-    normalizeGnssString,
     normalizeGnssSignalProfile,
 } from "./gnssConfig.ts";
 import { GnssSignalProfileHelp } from "./GnssSignalProfileHelp.tsx";
@@ -56,10 +54,6 @@ export const PositioningSection: React.FC<Props> = ({
     const gpsStatus = deriveGpsStatus(gnssStatus);
     const detectedReceiver = gnssReceiverLabel(gnssStatus);
     const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
-    const selectedExecutionBaud = (() => {
-        const value = normalizeGnssString(values.gnss_execution_baud).toLowerCase();
-        return value === "" || value === "auto" ? "auto" : normalizeGnssString(values.gnss_execution_baud);
-    })();
     const statusType: "success" | "warning" | "info" = gpsStatus.fixType === "RTK_FIX"
         ? "success"
         : gpsStatus.fixType === "NO_FIX"
@@ -94,11 +88,7 @@ export const PositioningSection: React.FC<Props> = ({
         }
         return onPersistGnssSettings(partial);
     };
-    // The sidecar runtime baud and the target receiver config baud should stay
-    // aligned for normal operation. The separate execution/probing baud lives
-    // in expert mode and is only used by the one-shot configurator flow.
     const handleBaudChange = (v: number) => {
-        onChange("gnss_serial_baud", v);
         onChange("gnss_config_baud", v);
     };
 
@@ -210,7 +200,7 @@ export const PositioningSection: React.FC<Props> = ({
                                 tooltip={t("settingsPositioning.baudTooltip")}
                             >
                                 <Select
-                                    value={values.gnss_serial_baud ?? 921600}
+                                    value={values.gnss_config_baud ?? 921600}
                                     onChange={handleBaudChange}
                                     options={GNSS_BAUD_OPTIONS.map((option) => ({
                                         value: option.value,
@@ -300,24 +290,6 @@ export const PositioningSection: React.FC<Props> = ({
                                 </Col>
                             </Row>
                             <Row gutter={[16, 0]}>
-                                <Col xs={24} sm={12}>
-                                    <Form.Item
-                                        label={t("settingsPositioning.executionBaudLabel")}
-                                        tooltip={t("settingsPositioning.executionBaudTooltip")}
-                                        extra={t("settingsPositioning.executionBaudHelpText")}
-                                    >
-                                        <Select
-                                            value={selectedExecutionBaud}
-                                            onChange={(value) => onChange("gnss_execution_baud", value)}
-                                            options={GNSS_EXECUTION_BAUD_OPTIONS.map((option) => ({
-                                                value: option.value,
-                                                label: option.value === "auto" ? t(option.label) : option.label,
-                                            }))}
-                                        />
-                                    </Form.Item>
-                                </Col>
-                            </Row>
-                            <Row gutter={[16, 0]}>
                                 <Col xs={12} sm={6}>
                                     <Form.Item label={t("settingsPositioning.rtkWaitAfterUndockLabel")}>
                                         <InputNumber
@@ -375,6 +347,8 @@ export const PositioningSection: React.FC<Props> = ({
                     onSave={onSave}
                     onSaveAndRestartGps={onSaveAndRestartGps}
                     onPersistBeforeAction={persistCurrentGnssSettings}
+                    manualCurrentBaud={values.gnss_execution_baud}
+                    onManualCurrentBaudChange={(value) => onChange("gnss_execution_baud", value)}
                     showSaveButtons
                 />
             )}

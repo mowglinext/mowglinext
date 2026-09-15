@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	types2 "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	docker "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	types2 "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
 	"io"
 	"strings"
@@ -124,6 +124,15 @@ func (i *DockerProvider) ContainerRun(ctx context.Context, spec types2.Container
 		return types2.ContainerRunResult{}, errors.New("container command is required")
 	}
 
+	devices := make([]container.DeviceMapping, 0, len(spec.Devices))
+	for _, device := range spec.Devices {
+		devices = append(devices, container.DeviceMapping{
+			PathOnHost:        device.PathOnHost,
+			PathInContainer:   device.PathInContainer,
+			CgroupPermissions: device.CgroupPermissions,
+		})
+	}
+
 	created, err := i.client.ContainerCreate(
 		ctx,
 		&container.Config{
@@ -135,7 +144,11 @@ func (i *DockerProvider) ContainerRun(ctx context.Context, spec types2.Container
 			Tty:          false,
 		},
 		&container.HostConfig{
-			Binds:      append([]string(nil), spec.Binds...),
+			Binds: append([]string(nil), spec.Binds...),
+			Resources: container.Resources{
+				Devices: devices,
+			},
+			GroupAdd:   append([]string(nil), spec.GroupAdd...),
 			Privileged: spec.Privileged,
 			AutoRemove: spec.AutoRemove,
 		},

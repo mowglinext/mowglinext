@@ -79,25 +79,47 @@ if harness_run; then
 else
   fail "mavros backend: harness_run succeeds"
 fi
-assert_eq "mavros backend: HARDWARE_BACKEND=mavros" "mavros"   "$(env_value "$mavros_repo" HARDWARE_BACKEND)"
-assert_eq "mavros backend: GNSS_BACKEND=disabled"   "disabled" "$(env_value "$mavros_repo" GNSS_BACKEND)"
-assert_eq "mavros backend: GNSS_STACK=disabled"     "disabled" "$(env_value "$mavros_repo" GNSS_STACK)"
-assert_eq "mavros backend: MAVROS_ENABLED=true"     "true"     "$(env_value "$mavros_repo" MAVROS_ENABLED)"
+assert_eq "mavros backend: HARDWARE_BACKEND=mavros" "mavros" "$(env_value "$mavros_repo" HARDWARE_BACKEND)"
+assert_eq "mavros backend: GNSS_BACKEND remains universal" "universal" "$(env_value "$mavros_repo" GNSS_BACKEND)"
+assert_eq "mavros backend: GNSS_STACK remains universal" "universal" "$(env_value "$mavros_repo" GNSS_STACK)"
+assert_eq "mavros backend: GNSS_STATUS_SOURCE remains universal" "universal" "$(env_value "$mavros_repo" GNSS_STATUS_SOURCE)"
+assert_eq "mavros backend: MAVROS_ENABLED=true" "true" "$(env_value "$mavros_repo" MAVROS_ENABLED)"
 
 mavros_fragments=$(selected_fragments_in_current_run)
-for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.mavros.yml docker-compose.lidar-ldlidar.yml; do
+for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.gps.yml docker-compose.mavros.yml docker-compose.lidar-ldlidar.yml; do
   case "$mavros_fragments" in
     *"$required"*) pass "mavros backend: fragment $required present" ;;
     *)             fail "mavros backend: fragment $required present" ;;
   esac
 done
 case "$mavros_fragments" in
-  *docker-compose.gps.yml*)
-    fail "mavros backend: no direct GNSS fragment" "direct GNSS fragment leaked into mavros compose selection"
-    ;;
-  *)
-    pass "mavros backend: no direct GNSS fragment"
-    ;;
+  *docker-compose.gps.yml*) pass "mavros backend: independent Universal GNSS fragment present" ;;
+  *) fail "mavros backend: independent Universal GNSS fragment present" ;;
+esac
+
+section "HARDWARE_BACKEND=mavros + GNSS_STACK=disabled"
+
+mavros_no_gnss_repo="$SANDBOX/repo_mavros_no_gnss"
+sandbox_repo "$mavros_no_gnss_repo"
+harness_init "$mavros_no_gnss_repo"
+harness_set_preset backend=mavros gnss=disabled lidar=none tfluna=none
+if harness_run; then
+  pass "mavros + disabled GNSS: harness_run succeeds"
+else
+  fail "mavros + disabled GNSS: harness_run succeeds"
+fi
+assert_eq "mavros + disabled GNSS: GNSS_BACKEND=disabled" "disabled" "$(env_value "$mavros_no_gnss_repo" GNSS_BACKEND)"
+assert_eq "mavros + disabled GNSS: GNSS_STACK=disabled" "disabled" "$(env_value "$mavros_no_gnss_repo" GNSS_STACK)"
+assert_eq "mavros + disabled GNSS: MAVROS_ENABLED=true" "true" "$(env_value "$mavros_no_gnss_repo" MAVROS_ENABLED)"
+
+mavros_no_gnss_fragments=$(selected_fragments_in_current_run)
+case "$mavros_no_gnss_fragments" in
+  *docker-compose.mavros.yml*) pass "mavros + disabled GNSS: MAVROS fragment present" ;;
+  *) fail "mavros + disabled GNSS: MAVROS fragment present" ;;
+esac
+case "$mavros_no_gnss_fragments" in
+  *docker-compose.gps.yml*) fail "mavros + disabled GNSS: GPS fragment absent" ;;
+  *) pass "mavros + disabled GNSS: GPS fragment absent" ;;
 esac
 
 test_summary

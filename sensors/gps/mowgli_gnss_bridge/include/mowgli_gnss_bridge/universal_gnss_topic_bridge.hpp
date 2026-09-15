@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0
 //
 // C++ port of sensors/gps/universal_gnss_topic_bridge.py.
-// Bridges the internal universal_gnss_ros2 topics onto the public Mowgli GNSS
+// Bridges the internal Universal GNSS topics onto the public Mowgli GNSS
 // contract. Behaviour-exact with the Python node it replaces.
 
 #ifndef MOWGLI_GNSS_BRIDGE__UNIVERSAL_GNSS_TOPIC_BRIDGE_HPP_
@@ -18,15 +18,15 @@
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rtcm_msgs/msg/message.hpp"
-#include "universal_gnss_ros2/msg/gnss_status.hpp"
-#include "universal_gnss_ros2/msg/rtcm_frame.hpp"
+#include "universal_gnss_msgs/msg/gnss_status.hpp"
+#include "universal_gnss_msgs/msg/rtcm_frame.hpp"
 
 namespace mowgli_gnss_bridge
 {
 
 using PublicGnssStatus = mowgli_interfaces::msg::GnssStatus;
-using UniversalGnssStatus = universal_gnss_ros2::msg::GnssStatus;
-using RtcmFrame = universal_gnss_ros2::msg::RtcmFrame;
+using UniversalGnssStatus = universal_gnss_msgs::msg::GnssStatus;
+using RtcmFrame = universal_gnss_msgs::msg::RtcmFrame;
 using PublicRtcmMessage = rtcm_msgs::msg::Message;
 
 /// Node that republishes Universal GNSS status/RTCM onto the public contract.

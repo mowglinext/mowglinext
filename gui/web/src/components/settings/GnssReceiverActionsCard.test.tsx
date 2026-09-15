@@ -53,7 +53,7 @@ describe("GnssReceiverActionsCard", () => {
                 executions: [
                     {
                         tool: "gnss_config_plan",
-                        command: ["/opt/gnss_sidecar/bin/gnss_config_plan", "--json", "unicore", "rover_high_precision"],
+                        command: ["gnss_config_plan", "--json", "unicore", "rover_high_precision"],
                         exit_code: 0,
                         stdout: "preview output",
                         success: true,
@@ -93,7 +93,7 @@ describe("GnssReceiverActionsCard", () => {
                 executions: [
                     {
                         tool: "gnss_config_apply",
-                        command: ["/opt/gnss_sidecar/bin/gnss_config_apply", "--confirm"],
+                        command: ["gnss_config_apply", "--confirm"],
                         exit_code: 2,
                         stderr: "device rejected command",
                         success: false,
@@ -122,19 +122,21 @@ describe("GnssReceiverActionsCard", () => {
         expect(failureMessages.length).toBeGreaterThan(0);
     });
 
-    it("renders execution, detected, runtime, and target baud fields separately", async () => {
+    it("renders detected, target, and verified active baud fields separately", async () => {
         requestMock.mockResolvedValue({
             data: {
                 success: true,
                 message: "GNSS profile apply succeeded",
                 execution_baud: "auto",
                 detected_baud: "115200",
-                runtime_baud: "115200",
+                target_baud: "921600",
+                active_verified_baud: "921600",
+                runtime_baud: "921600",
                 config_baud: "921600",
                 executions: [
                     {
                         tool: "gnss_config_apply",
-                        command: ["/opt/gnss_sidecar/bin/gnss_config_apply", "--baud", "auto"],
+                        command: ["gnss_config_apply", "--baud", "auto"],
                         exit_code: 0,
                         success: true,
                     },
@@ -151,7 +153,27 @@ describe("GnssReceiverActionsCard", () => {
         expect(await screen.findByText(en.settingsGnssReceiver.fieldExecutionBaud)).toBeInTheDocument();
         expect(screen.getByText(en.settingsGnssReceiver.executionBaudAuto)).toBeInTheDocument();
         expect(screen.getByText(en.settingsGnssReceiver.fieldDetectedBaud)).toBeInTheDocument();
+        expect(screen.getByText(en.settingsGnssReceiver.fieldTargetBaud)).toBeInTheDocument();
+        expect(screen.getByText(en.settingsGnssReceiver.fieldActiveVerifiedBaud)).toBeInTheDocument();
         expect(screen.getByText(en.settingsGnssReceiver.fieldRuntimeBaud)).toBeInTheDocument();
         expect(screen.getByText(en.settingsGnssReceiver.fieldConfigBaud)).toBeInTheDocument();
+    });
+
+    it("shows the manual current baud selector only after autodetection fails", async () => {
+        requestMock.mockResolvedValue({
+            data: {
+                success: false,
+                manual_baud_required: true,
+                message: "GNSS baud autodetection failed",
+            },
+            error: null,
+        });
+        const onManualCurrentBaudChange = vi.fn();
+        const user = userEvent.setup();
+        renderCard({ manualCurrentBaud: "115200", onManualCurrentBaudChange });
+
+        expect(screen.queryByText(en.settingsGnssReceiver.manualCurrentBaudTitle)).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: new RegExp(en.settingsGnssReceiver.actionPlan, "i") }));
+        expect(await screen.findByText(en.settingsGnssReceiver.manualCurrentBaudTitle)).toBeInTheDocument();
     });
 });

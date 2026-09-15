@@ -342,6 +342,13 @@
           "default": 921600,
           "description": "Persisted target baud for future receiver-side profile application."
         },
+        "gnss_execution_baud": {
+          "type": "string",
+          "title": "Manual Current Baud Fallback",
+          "enum": ["auto", "115200", "230400", "460800", "921600"],
+          "default": "auto",
+          "description": "Auto by default. A manual current baud is used only after autodetection fails and is validated by Universal GNSS before apply."
+        },
         "gnss_signal_group": {
           "type": "string",
           "title": "Raw Signal Group",
