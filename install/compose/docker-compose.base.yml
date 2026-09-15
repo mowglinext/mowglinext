@@ -17,6 +17,10 @@ x-ros2-env: &ros2-env
   # whether the mowgli-lidar CONTAINER is composed in (install/lib/compose.sh).
   ENABLE_FOXGLOVE: ${ENABLE_FOXGLOVE:-true}
   HARDWARE_BACKEND: ${HARDWARE_BACKEND:-mowgli}
+  # GNSS_STACK selects the contract adapter in mowgli-ros2.  It is deliberately
+  # independent of HARDWARE_BACKEND: MAVROS robots can still use the Universal
+  # GNSS sidecar.
+  GNSS_STACK: ${GNSS_STACK:-universal}
   # full_system.launch.py reads these to pick the GNSS adapter; without them
   # the main container always saw the gps/UBX defaults, so unicore/NMEA installs
   # parsed the wrong backend in navsat_to_absolute_pose / gnss status.

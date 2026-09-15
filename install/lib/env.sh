@@ -140,23 +140,16 @@ load_gnss_ntrip_runtime_defaults() {
 }
 
 sync_gnss_env_contract_values() {
-  local normalized_status_source
-
   load_gnss_ntrip_runtime_defaults
 
   GNSS_STACK="$(effective_gnss_stack 2>/dev/null || default_gnss_stack)"
-  normalized_status_source="$(normalize_gnss_status_source "${GNSS_STATUS_SOURCE:-$(default_gnss_status_source)}")"
 
   case "$GNSS_STACK" in
     disabled)
       GNSS_STATUS_SOURCE="external"
       ;;
     *)
-      if [[ "$normalized_status_source" == "external" && "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-        GNSS_STATUS_SOURCE="external"
-      else
-        GNSS_STATUS_SOURCE="universal"
-      fi
+      GNSS_STATUS_SOURCE="universal"
       ;;
   esac
 
@@ -165,8 +158,21 @@ sync_gnss_env_contract_values() {
   GNSS_SERIAL_DEVICE="$(gnss_serial_device_from_state)"
   GNSS_SERIAL_BAUD="$(gnss_serial_baud_from_state)"
   GNSS_FRAME_ID="${GNSS_FRAME_ID:-gps_link}"
+  GNSS_DEVICE="${GNSS_SERIAL_DEVICE}"
+  : "${GNSS_DEVICE_GID:=20}"
+  if [[ -n "$GNSS_DEVICE" && -e "$GNSS_DEVICE" ]]; then
+    GNSS_DEVICE_GID="$(stat -Lc '%g' -- "$GNSS_DEVICE")"
+  fi
 
-  : "${GNSS_NTRIP_ENABLED:=${CONFIG_NTRIP_ENABLED:-true}}"
+  if [[ "${CONFIG_NTRIP_ENABLED_EXPLICIT:-false}" == "true" ]]; then
+    if [[ "${CONFIG_NTRIP_ENABLED_EXPLICIT:-false}" == "true" ]]; then
+    GNSS_NTRIP_ENABLED="${CONFIG_NTRIP_ENABLED:-true}"
+  else
+    : "${GNSS_NTRIP_ENABLED:=${CONFIG_NTRIP_ENABLED:-true}}"
+  fi
+  else
+    : "${GNSS_NTRIP_ENABLED:=${CONFIG_NTRIP_ENABLED:-true}}"
+  fi
   : "${GNSS_NTRIP_HOST:=${CONFIG_NTRIP_HOST:-crtk.net}}"
   : "${GNSS_NTRIP_PORT:=${CONFIG_NTRIP_PORT:-2101}}"
   GNSS_NTRIP_USERNAME="${GNSS_NTRIP_USERNAME:-${CONFIG_NTRIP_USER:-}}"
@@ -196,6 +202,8 @@ write_gnss_env_contract_keys() {
   upsert_env_key "$env_file" "GNSS_SERIAL_DEVICE" "$GNSS_SERIAL_DEVICE"
   upsert_env_key "$env_file" "GNSS_SERIAL_BAUD" "$GNSS_SERIAL_BAUD"
   upsert_env_key "$env_file" "GNSS_FRAME_ID" "$GNSS_FRAME_ID"
+  upsert_env_key "$env_file" "GNSS_DEVICE" "$GNSS_DEVICE"
+  upsert_env_key "$env_file" "GNSS_DEVICE_GID" "$GNSS_DEVICE_GID"
   upsert_env_key "$env_file" "GNSS_NTRIP_ENABLED" "$GNSS_NTRIP_ENABLED"
   upsert_env_key "$env_file" "GNSS_NTRIP_HOST" "$GNSS_NTRIP_HOST"
   upsert_env_key "$env_file" "GNSS_NTRIP_PORT" "$GNSS_NTRIP_PORT"
@@ -230,6 +238,8 @@ setup_env() {
   : "${GNSS_SERIAL_DEVICE:=}"
   : "${GNSS_SERIAL_BAUD:=}"
   : "${GNSS_FRAME_ID:=gps_link}"
+  : "${GNSS_DEVICE:=}"
+  : "${GNSS_DEVICE_GID:=20}"
   : "${GNSS_NTRIP_ENABLED:=}"
   : "${GNSS_NTRIP_HOST:=}"
   : "${GNSS_NTRIP_PORT:=}"
@@ -278,7 +288,9 @@ setup_env() {
 
   # Images — select LiDAR image based on type
   : "${MOWGLI_ROS2_IMAGE:=${MOWGLI_ROS2_IMAGE_DEFAULT}}"
-  : "${GPS_IMAGE:=${GPS_IMAGE_DEFAULT}}"
+  : "${UNIVERSAL_GNSS_IMAGE:=${UNIVERSAL_GNSS_IMAGE_DEFAULT}}"
+  : "${UNIVERSAL_GNSS_LOG_DIR:=./docker/logs/universal_gnss}"
+  : "${UNIVERSAL_GNSS_EXPORT_DIR:=./docker/data/universal_gnss/export}"
   : "${GUI_IMAGE:=${GUI_IMAGE_DEFAULT}}"
   : "${MAVROS_IMAGE:=${MAVROS_IMAGE_DEFAULT}}"
   if [[ -z "${LIDAR_IMAGE:-}" ]]; then
@@ -299,11 +311,7 @@ setup_env() {
   : "${MAVROS_TGT_SYSTEM:=1}"
   : "${MAVROS_TGT_COMPONENT:=1}"
 
-  # Si MAVROS → GNSS backend désactivé
-  if [[ "$HARDWARE_BACKEND" == "mavros" ]]; then
-    GNSS_BACKEND="disabled"
-    GNSS_STACK="disabled"
-  elif [[ "${GNSS_BACKEND:-universal}" == "nmea" ]]; then
+  if [[ "${GNSS_BACKEND:-universal}" == "nmea" ]]; then
     warn_legacy_nmea_backend_once
     GNSS_BACKEND="universal"
     GNSS_RECEIVER_FAMILY="nmea"
@@ -351,7 +359,9 @@ setup_env() {
   upsert_env_key "$env_file" "TFLUNA_EDGE_BAUD" "$TFLUNA_EDGE_BAUD"
 
   upsert_env_key "$env_file" "MOWGLI_ROS2_IMAGE" "$MOWGLI_ROS2_IMAGE"
-  upsert_env_key "$env_file" "GPS_IMAGE" "$GPS_IMAGE"
+  upsert_env_key "$env_file" "UNIVERSAL_GNSS_IMAGE" "$UNIVERSAL_GNSS_IMAGE"
+  upsert_env_key "$env_file" "UNIVERSAL_GNSS_LOG_DIR" "$UNIVERSAL_GNSS_LOG_DIR"
+  upsert_env_key "$env_file" "UNIVERSAL_GNSS_EXPORT_DIR" "$UNIVERSAL_GNSS_EXPORT_DIR"
   upsert_env_key "$env_file" "LIDAR_IMAGE" "$LIDAR_IMAGE"
   upsert_env_key "$env_file" "MAVROS_IMAGE" "$MAVROS_IMAGE"
   upsert_env_key "$env_file" "GUI_IMAGE" "$GUI_IMAGE"
@@ -367,6 +377,7 @@ setup_env() {
   upsert_env_key "$env_file" "MAVROS_AUTOPILOT" "$MAVROS_AUTOPILOT"
 
   remove_legacy_gnss_env_keys "$env_file"
+  remove_env_key "$env_file" "GPS_IMAGE"
   remove_env_key "$env_file" "NMEA_IMAGE"
   
   info "Backend selection : HARDWARE_BACKEND=$HARDWARE_BACKEND GNSS_BACKEND=$GNSS_BACKEND GNSS_STACK=$GNSS_STACK"

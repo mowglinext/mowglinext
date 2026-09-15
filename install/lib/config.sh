@@ -43,12 +43,14 @@ recompute_image_defaults() {
   prefix="$(_ghcr_prefix)"
 
   MOWGLI_ROS2_IMAGE_DEFAULT="${prefix}/mowgli-ros2:${IMAGE_TAG}"
-  GPS_IMAGE_DEFAULT="${prefix}/gps:${IMAGE_TAG}"
   LIDAR_LDLIDAR_IMAGE_DEFAULT="${prefix}/lidar-ldlidar:${IMAGE_TAG}"
   LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
   MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
+  # Universal GNSS is a separately released runtime. Never derive it from
+  # MowgliNext IMAGE_TAG; the integration targets ROS 2 Lyrical.
+  UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2"
 }
 
 is_release_image_channel() {
@@ -317,22 +319,29 @@ rerun_check_command() {
 compose_restart_services_for_backend() {
   local backend="${1:-${HARDWARE_BACKEND:-mowgli}}"
   local services=()
+  local gnss_backend
+  local gnss_stack
+  local gnss_service
+
+  case "$backend" in
+    mowgli|mavros) ;;
+    *)
+      error "Unknown hardware backend: $backend (expected mowgli or mavros)"
+      return 1
+      ;;
+  esac
+
+  gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
+  if [[ "$gnss_stack" != "disabled" ]] && is_supported_gnss_backend "$gnss_backend"; then
+    gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
+    [ -n "$gnss_service" ] && services+=("$gnss_service")
+  fi
 
   if [[ "$backend" == "mavros" ]]; then
-    services+=(mavros ntrip mowgli)
-  else
-    local gnss_backend
-    local gnss_stack
-    local gnss_service
-
-    gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
-    gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
-    if [[ "$gnss_stack" != "disabled" ]] && is_supported_gnss_backend "$gnss_backend"; then
-      gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
-      [ -n "$gnss_service" ] && services+=("$gnss_service")
-    fi
-    services+=(mowgli)
+    services+=(mavros)
   fi
+  services+=(mowgli)
 
   printf '%s\n' "${services[@]}"
 }
@@ -502,19 +511,11 @@ normalize_gnss_status_source() {
 }
 
 default_gnss_status_source() {
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-    printf 'external\n'
-  else
-    printf 'universal\n'
-  fi
+  printf 'universal\n'
 }
 
 default_gnss_stack() {
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-    printf 'disabled\n'
-  else
-    printf 'universal\n'
-  fi
+  printf 'universal\n'
 }
 
 normalize_gnss_stack() {
@@ -581,24 +582,15 @@ gnss_connection_from_serial_device() {
 }
 
 list_supported_gnss_backends() {
-  local backends="universal"
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-    printf '%s disabled\n' "$backends"
-  else
-    printf '%s\n' "$backends"
-  fi
+  printf 'universal disabled\n'
 }
 
 is_supported_gnss_backend() {
   local backend="${1:-}"
 
   case "${backend,,}" in
-    universal)
+    universal|disabled)
       return 0
-      ;;
-    disabled)
-      [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]
-      return
       ;;
     *)
       return 1
@@ -613,7 +605,7 @@ effective_gnss_backend() {
   backend="$(normalize_gnss_backend "$backend")"
   stack="$(effective_gnss_stack 2>/dev/null || true)"
 
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" || "$backend" == "disabled" || "$stack" == "disabled" ]]; then
+  if [[ "$backend" == "disabled" || "$stack" == "disabled" ]]; then
     printf 'disabled\n'
     return 0
   fi
@@ -629,7 +621,7 @@ effective_gnss_stack() {
 
   raw_backend="$(normalize_gnss_backend "${GNSS_BACKEND:-}")"
 
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" || "$raw_backend" == "disabled" ]]; then
+  if [[ "$raw_backend" == "disabled" ]]; then
     printf 'disabled\n'
     return 0
   fi
@@ -1097,6 +1089,7 @@ load_existing_config() {
   PREV_GNSS_TRANSPORT="$(existing_yaml_value gnss_transport "$yaml_file")"
   PREV_GNSS_SERIAL_DEVICE="$(existing_yaml_value gnss_serial_device "$yaml_file")"
   PREV_GNSS_SERIAL_BAUD="$(existing_yaml_value gnss_serial_baud "$yaml_file")"
+  PREV_GNSS_CONFIG_BAUD="$(existing_yaml_value gnss_config_baud "$yaml_file")"
   PREV_GNSS_FRAME_ID="$(existing_yaml_value gnss_frame_id "$yaml_file")"
   PREV_GNSS_NTRIP_GGA_ENABLED="$(existing_yaml_value gnss_ntrip_gga_enabled "$yaml_file")"
   PREV_GNSS_NTRIP_GGA_INTERVAL_S="$(existing_yaml_value gnss_ntrip_gga_interval_s "$yaml_file")"
@@ -1324,11 +1317,91 @@ PY
   fi
 }
 
+universal_gnss_yaml_scalar() {
+  local value="${1:-}"
+  value="${value//\'/\'\'}"
+  printf "'%s'" "$value"
+}
+
+write_universal_gnss_parameters() {
+  local target="$DOCKER_DIR/config/universal_gnss/parameters.yaml"
+  local receiver_family="$1" transport="$2" serial_baud="$3" frame_id="$4"
+  local ntrip_enabled="$5" ntrip_host="$6" ntrip_port="$7" ntrip_user="$8"
+  local ntrip_password="$9" ntrip_mountpoint="${10}" ntrip_gga_enabled="${11}"
+  local ntrip_gga_interval_s="${12}"
+
+  mkdir -p "$(dirname "$target")"
+  {
+    printf '%s\n' '# Generated by MowgliNext. Do not edit: update mowgli_robot.yaml or rerun the installer.'
+    printf '%s\n' '/universal_gnss_receiver:' '  ros__parameters:'
+    printf '    receiver_family: %s\n' "$(universal_gnss_yaml_scalar "$receiver_family")"
+    printf '    transport: %s\n' "$(universal_gnss_yaml_scalar "$transport")"
+    printf '%s\n' '    serial_device: /dev/gnss-receiver'
+    printf '    serial_baud: %s\n' "$serial_baud"
+    printf '%s\n' '    publish_rate_hz: 5.0'
+    printf '    frame_id: %s\n' "$(universal_gnss_yaml_scalar "$frame_id")"
+    printf '%s\n' '/universal_gnss_ntrip:' '  ros__parameters:'
+    printf '    caster_host: %s\n' "$(universal_gnss_yaml_scalar "$ntrip_host")"
+    printf '    caster_port: %s\n' "$ntrip_port"
+    printf '    mountpoint: %s\n' "$(universal_gnss_yaml_scalar "$ntrip_mountpoint")"
+    printf '    username: %s\n' "$(universal_gnss_yaml_scalar "$ntrip_user")"
+    printf '    password: %s\n' "$(universal_gnss_yaml_scalar "$ntrip_password")"
+    printf '    gga_enabled: %s\n' "$ntrip_gga_enabled"
+    printf '    gga_interval_s: %s\n' "$ntrip_gga_interval_s"
+    printf '%s\n' '    tls_enabled: false'
+  } > "$target"
+  info "Wrote $target"
+}
+
+write_mavros_runtime_config() {
+  local source="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
+  local target="$DOCKER_DIR/config/mavros/mowgli_robot.yaml"
+
+  mkdir -p "$(dirname "$target")"
+  cp "$source" "$target"
+  # Universal GNSS is the sole NTRIP owner.
+  _yaml_patch_key "$target" ntrip_enabled false
+}
+
+runtime_gnss_config_value() {
+  local yaml_file="${1:?runtime_gnss_config_value: missing yaml file}"
+  local key="${2:?runtime_gnss_config_value: missing key}"
+  local default_value="${3:-}"
+  local value
+
+  value="$(existing_yaml_value "$key" "$yaml_file")"
+  printf '%s\n' "${value:-$default_value}"
+}
+
+regenerate_sidecar_runtime_configs() {
+  local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
+
+  if [ ! -f "$yaml_file" ]; then
+    error "Cannot regenerate GNSS runtime config: missing source $yaml_file"
+    return 1
+  fi
+
+  write_universal_gnss_parameters \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_receiver_family auto)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_transport serial)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_serial_baud 921600)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_frame_id gps_link)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_enabled true)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_host crtk.net)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_port 2101)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_user centipede)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_password centipede)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_mountpoint NEAR)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_ntrip_gga_enabled true)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_ntrip_gga_interval_s 10)"
+  write_mavros_runtime_config
+}
+
 write_config() {
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local template="$INSTALL_DIR/config/mowgli/mowgli_robot.yaml"
   local resolved_receiver_family resolved_transport resolved_serial_device
-  local resolved_serial_baud resolved_frame_id resolved_ntrip_enabled
+  local resolved_serial_baud resolved_config_baud resolved_frame_id resolved_ntrip_enabled
   local resolved_ntrip_host resolved_ntrip_port resolved_ntrip_user
   local resolved_ntrip_password resolved_ntrip_mountpoint
   local resolved_ntrip_gga_enabled resolved_ntrip_gga_interval_s
@@ -1375,6 +1448,7 @@ EOF
   resolved_serial_baud="$(preserved_gnss_value \
     "$(if gnss_installer_key_is_explicit GNSS_SERIAL_BAUD; then printf 'true'; else printf 'false'; fi)" \
     "${GNSS_SERIAL_BAUD}" "${PREV_GNSS_SERIAL_BAUD:-}" "921600")"
+  resolved_config_baud="${PREV_GNSS_CONFIG_BAUD:-$resolved_serial_baud}"
   resolved_frame_id="$(preserved_gnss_value \
     "$(if gnss_installer_key_is_explicit GNSS_FRAME_ID; then printf 'true'; else printf 'false'; fi)" \
     "${GNSS_FRAME_ID}" "${PREV_GNSS_FRAME_ID:-}" "gps_link")"
@@ -1404,6 +1478,7 @@ EOF
   _yaml_patch_key "$yaml_file" gnss_transport "\"$resolved_transport\""
   _yaml_patch_key "$yaml_file" gnss_serial_device "\"$resolved_serial_device\""
   _yaml_patch_key "$yaml_file" gnss_serial_baud "$resolved_serial_baud"
+  _yaml_patch_key "$yaml_file" gnss_config_baud "$resolved_config_baud"
   _yaml_patch_key "$yaml_file" gnss_frame_id "\"$resolved_frame_id\""
   _yaml_patch_key "$yaml_file" ntrip_enabled   "$resolved_ntrip_enabled"
   _yaml_patch_key "$yaml_file" ntrip_host      "\"$resolved_ntrip_host\""
@@ -1413,6 +1488,15 @@ EOF
   _yaml_patch_key "$yaml_file" ntrip_mountpoint "\"$resolved_ntrip_mountpoint\""
   _yaml_patch_key "$yaml_file" gnss_ntrip_gga_enabled "$resolved_ntrip_gga_enabled"
   _yaml_patch_key "$yaml_file" gnss_ntrip_gga_interval_s "$resolved_ntrip_gga_interval_s"
+
+  # Universal GNSS consumes a derived image-specific parameter file while
+  # mowgli_robot.yaml remains the operator-facing source of truth.
+  write_universal_gnss_parameters \
+    "$resolved_receiver_family" "$resolved_transport" "$resolved_serial_baud" "$resolved_frame_id" \
+    "$resolved_ntrip_enabled" "$resolved_ntrip_host" "$resolved_ntrip_port" "$resolved_ntrip_user" \
+    "$resolved_ntrip_password" "$resolved_ntrip_mountpoint" "$resolved_ntrip_gga_enabled" \
+    "$resolved_ntrip_gga_interval_s"
+  write_mavros_runtime_config
 
   # LiDAR hardware availability gates obstacle detection and scan-to-map localization.
   local lidar_on="false"
@@ -1492,18 +1576,18 @@ auto_detect_position() {
     return
   fi
 
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-    warn "GPS datum auto-detect is not available for MAVROS on this branch"
-    add_issue "Set datum_lat and datum_lon manually in docker/config/mowgli/mowgli_robot.yaml"
-    return
-  fi
-
   local gnss_backend
   local gnss_stack
   local restart_services=()
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
   gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
+
+  if [[ "$gnss_backend" == "disabled" || "$gnss_stack" == "disabled" ]]; then
+    warn "GNSS is disabled — GPS datum auto-detect is unavailable"
+    add_issue "Enable GNSS_STACK=universal or set datum_lat and datum_lon manually in docker/config/mowgli/mowgli_robot.yaml"
+    return
+  fi
 
   if ! docker_cmd inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
     warn "mowgli-ros2 container not running — cannot auto-detect"

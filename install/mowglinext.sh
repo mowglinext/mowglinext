@@ -120,7 +120,7 @@ main() {
 
     # Image refs are tied to the install script version — never inherit
     # stale paths from older installs (e.g. mowgli-docker, openmower-gui).
-    unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE GUI_IMAGE
+    unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE GUI_IMAGE
 
     # Image tag selection is independent from the selected repository branch.
     select_image_channel
@@ -197,6 +197,7 @@ main() {
   check_generated_gps_yaml_alignment
   check_containers
   check_firmware || true
+  check_mavros || true
   check_gps || true
   check_lidar || true
   check_rangefinders || true

@@ -24,6 +24,10 @@ ensure_default_configs() {
 
   mkdir -p "$DOCKER_DIR/config/mqtt"
   mkdir -p "$DOCKER_DIR/config/mowgli"
+  mkdir -p "$DOCKER_DIR/config/mavros"
+  mkdir -p "$DOCKER_DIR/config/universal_gnss"
+  mkdir -p "$DOCKER_DIR/logs/universal_gnss"
+  mkdir -p "$DOCKER_DIR/data/universal_gnss/export"
   mkdir -p "$DOCKER_DIR/config/om"
   mkdir -p "$DOCKER_DIR/config/db"
 
@@ -36,6 +40,8 @@ ensure_default_configs() {
   # stack self-heals, not just the full installer's migrate_runtime_paths.
   fix_path_type_conflict "$DOCKER_DIR/config/mqtt/mosquitto.conf" "file"
   fix_path_type_conflict "$DOCKER_DIR/config/cyclonedds.xml" "file"
+  fix_path_type_conflict "$DOCKER_DIR/config/universal_gnss/parameters.yaml" "file"
+  fix_path_type_conflict "$DOCKER_DIR/config/mavros/mowgli_robot.yaml" "file"
 
   if [ ! -f "$DOCKER_DIR/config/mqtt/mosquitto.conf" ]; then
     cp "$defaults/mqtt/mosquitto.conf" "$DOCKER_DIR/config/mqtt/mosquitto.conf"
@@ -79,6 +85,14 @@ build_compose_stack() {
   esac
 
   if [[ "$gnss_stack" != "disabled" && "$gnss_backend" != "disabled" ]]; then
+    if [[ -z "${UNIVERSAL_GNSS_IMAGE:-}" ]]; then
+      error "UNIVERSAL_GNSS_IMAGE is required when GNSS_STACK=universal"
+      return 1
+    fi
+    if [[ -z "${GNSS_DEVICE:-}" ]]; then
+      error "GNSS_DEVICE is required when GNSS_STACK=universal"
+      return 1
+    fi
     gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
     case "$gnss_service" in
       gps)
@@ -90,7 +104,7 @@ build_compose_stack() {
         ;;
     esac
     if [[ "$gnss_stack" == "universal" ]]; then
-      info "Universal GNSS selected: GNSS runs in the mowgli-gps sidecar."
+      info "Universal GNSS selected: GNSS runs in the external Universal GNSS sidecar."
     fi
   fi
 

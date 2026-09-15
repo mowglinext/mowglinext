@@ -870,7 +870,13 @@ func applyUniversalGnssCompatibility(flat map[string]any, schemaDefaults map[str
 	setGnssIntIfNeeded(flat, "gnss_config_baud", compat["GNSS_CONFIG_BAUD"], schemaDefaults)
 	setGnssStringIfNeeded(flat, "gnss_profile", compat["GNSS_PROFILE"], schemaDefaults)
 	setGnssStringIfNeeded(flat, "gnss_signal_profile", compat["GNSS_SIGNAL_PROFILE"], schemaDefaults)
-	if _, exists := flat["gnss_receiver_model"]; exists {
+	if compat["GNSS_RECEIVER_FAMILY"] == "ublox" || compat["GNSS_RECEIVER_FAMILY"] == "nmea" {
+		// These are Unicore-only expert overrides. Keep a stale value from a
+		// previous receiver selection from becoming effective for u-blox/NMEA.
+		delete(flat, "gnss_receiver_model")
+		delete(flat, "gnss_signal_group")
+		delete(flat, "gnss_rover_dynamic_mode")
+	} else if _, exists := flat["gnss_receiver_model"]; exists {
 		if model := normalizeGnssReceiverModel(flat["gnss_receiver_model"]); model != "" {
 			flat["gnss_receiver_model"] = model
 		} else {
@@ -881,7 +887,16 @@ func applyUniversalGnssCompatibility(flat map[string]any, schemaDefaults map[str
 		}
 	}
 	setGnssIntIfNeeded(flat, "gnss_profile_rate_hz", compat["GNSS_PROFILE_RATE_HZ"], schemaDefaults)
-	setGnssStringIfNeeded(flat, "gnss_signal_group", normalizeGnssSignalGroup(flat["gnss_signal_group"]), schemaDefaults)
+	if compat["GNSS_RECEIVER_FAMILY"] == "unicore" {
+		setGnssStringIfNeeded(flat, "gnss_signal_group", normalizeGnssSignalGroup(flat["gnss_signal_group"]), schemaDefaults)
+		if _, exists := flat["gnss_rover_dynamic_mode"]; exists {
+			if mode := normalizeGnssRoverDynamicMode(flat["gnss_rover_dynamic_mode"]); mode != "" {
+				flat["gnss_rover_dynamic_mode"] = mode
+			} else {
+				delete(flat, "gnss_rover_dynamic_mode")
+			}
+		}
+	}
 	delete(flat, "gnss_rate_hz")
 
 	return compat
