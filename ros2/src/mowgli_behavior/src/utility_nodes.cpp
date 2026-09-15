@@ -58,6 +58,21 @@ BT::NodeStatus SetMowerEnabled::tick()
   }
   const bool enabled = res.value();
 
+  // Throttle unchanged requests (mower_enable_throttle.hpp). IdleSequence
+  // ticks SetMowerEnabled(false) every BT tick, so a parked robot re-sent the
+  // identical service request ~7.9x/s. A CHANGED value and the first call of
+  // the session always go out immediately; only a repeat inside the refresh
+  // window is skipped. The blade stays fire-and-forget, so the same value is
+  // still re-sent every kMowerRefreshPeriodSec in case a request was lost.
+  const auto now = std::chrono::steady_clock::now();
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    if (!ShouldSendMowerEnable(ctx->mower_enable_throttle, enabled, now))
+    {
+      return BT::NodeStatus::SUCCESS;
+    }
+  }
+
   if (!client_)
   {
     client_ = ctx->node->create_client<mowgli_interfaces::srv::MowerControl>(
@@ -67,6 +82,8 @@ BT::NodeStatus SetMowerEnabled::tick()
   if (!waitForService(client_, ctx->node))
   {
     // In simulation, no hardware bridge is running — proceed gracefully.
+    // Deliberately NOT recorded as a send: nothing reached the wire, so the
+    // next tick must retry rather than be suppressed by the throttle.
     RCLCPP_WARN(ctx->node->get_logger(),
                 "SetMowerEnabled: hardware service unavailable, continuing (simulation mode)");
     return BT::NodeStatus::SUCCESS;
@@ -82,6 +99,13 @@ BT::NodeStatus SetMowerEnabled::tick()
   auto future = client_->async_send_request(request);
   (void)future;
 
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    RecordMowerEnableSent(ctx->mower_enable_throttle, enabled, now);
+  }
+
+  // Logged only on an actual send — at the BT tick rate this line alone was
+  // ~4800 entries per 5 idle minutes.
   RCLCPP_INFO(ctx->node->get_logger(),
               "SetMowerEnabled: requested mow_enabled=%s",
               enabled ? "true" : "false");

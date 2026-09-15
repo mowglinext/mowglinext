@@ -3500,6 +3500,7 @@ private:
     // Dry-run inhibit (issue #195). Suppresses an ENABLE only; a DISABLE always
     // passes through in either state, so a stop can never be swallowed. The
     // firmware stays the sole blade safety authority — this is NOT an interlock.
+    const bool previous_enable = mow_enabled_;
     mow_enabled_ = blade_enable_allowed(requested_enable, mowing_enabled_);
 
     if (requested_enable && !mow_enabled_)
@@ -3509,10 +3510,23 @@ private:
                   "Set mowing_enabled: true in mowgli_robot.yaml and restart ROS2 to mow.");
     }
 
-    RCLCPP_INFO(get_logger(),
-                "MowerControl: mow_enabled=%s mow_direction=%u",
-                mow_enabled_ ? "true" : "false",
-                req->mow_direction);
+    // Log only on an EFFECTIVE change (plus the very first call, so the
+    // startup state is always on record). The BT re-sends the same blade
+    // command periodically by design (fire-and-forget, see
+    // mower_enable_throttle.hpp), and logging every repeat put ~2400 INFO
+    // lines per 5 minutes into the journal of a robot parked on its dock.
+    // The command itself is still forwarded to the STM32 every call — the
+    // firmware is the safety authority and must keep seeing the refresh.
+    if (!mow_control_logged_ || mow_enabled_ != previous_enable ||
+        req->mow_direction != last_mow_direction_)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "MowerControl: mow_enabled=%s mow_direction=%u",
+                  mow_enabled_ ? "true" : "false",
+                  req->mow_direction);
+      mow_control_logged_ = true;
+    }
+    last_mow_direction_ = req->mow_direction;
 
     // Send blade command to STM32
     send_blade_command(mow_enabled_ ? 1u : 0u, req->mow_direction);
@@ -3809,6 +3823,11 @@ private:
   double min_linear_vel_{0.05};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr min_lin_vel_cb_handle_;
   bool mow_enabled_{false};
+  // MowerControl INFO-log dedup (see on_mower_control): the BT refreshes the
+  // same blade command periodically, so only an effective change — or the
+  // first call after startup — is worth a log line.
+  bool mow_control_logged_{false};
+  uint8_t last_mow_direction_{0};
   bool is_charging_{false};
   uint8_t current_mode_{0};
   std::string current_mode_state_name_{"UNSET"};
