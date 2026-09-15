@@ -180,7 +180,7 @@ ships; the full installer writes many more (`GNSS_*`, `LIDAR_TYPE`,
 | Variable | Default | Description |
 |---|---|---|
 | `COMPOSE_PROJECT_NAME` | `install` | Compose project name — prefixes the `mowgli_maps` named volume. Keep it stable; renaming it orphans the persisted map data |
-| `ENABLE_MQTT` | `false` | Compose the `mowgli-mqtt` broker. Honoured by `stack.sh` only — the full installer always includes it |
+| `ENABLE_MQTT` | `false` | Compose the `mowgli-mqtt` broker container. Honoured by `stack.sh` only — the full installer always includes it. This only controls whether the *bundled* broker is present; it does NOT start `mqtt_bridge_node` (the ROS2-side bridge) — that is GUI Settings → MQTT's `mqtt_enabled` toggle (`mowgli_robot.yaml`, deliberately independent so the bridge can point at an external broker without the bundled one running at all). See [`docs/MQTT_CONTROL.md`](../docs/MQTT_CONTROL.md) |
 | `ENABLE_WATCHTOWER` | `false` | Compose `mowgli-watchtower`. `stack.sh` only, same as above |
 | `ROS_DOMAIN_ID` | `0` | DDS domain ID — must be the same across all containers |
 | `MOWER_IP` | `10.0.0.161` | Informational only — printed by the login MOTD, read by nothing else |

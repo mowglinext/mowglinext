@@ -974,3 +974,36 @@ mowgli:
     led_spi_speed_hz: 2400000      # 3 SPI bits per WS2812 bit = 1.25 us. Do NOT retune
                                    # without re-reading ws2812_encoder.hpp — the symbol
                                    # table is derived from this exact clock.
+
+    # -----------------------------------------------------------------
+    # MQTT bridge (mowgli_monitoring/mqtt_bridge_node)
+    # -----------------------------------------------------------------
+    # Optional read-only monitoring + high-level command bridge to an MQTT
+    # broker, for external consumers such as Home Assistant (see
+    # docs/MQTT_CONTROL.md for the full topic/JSON contract). Read-only
+    # w.r.t. the robot except for <mqtt_topic_prefix>/command, which relays
+    # a decimal HighLevelControl command code to the same
+    # /behavior_tree_node/high_level_control service the GUI's buttons use
+    # — an open/reachable broker is remote control of the mower.
+    #
+    # OFF by default, matching led_enabled/lidar_enabled above: opt-in,
+    # since enabling it means the robot dials out to a broker. The broker
+    # can be the bundled `mowgli-mqtt` container (docker/.env ENABLE_MQTT)
+    # OR any external broker already running elsewhere on the operator's
+    # network — set mqtt_host/mqtt_port/mqtt_username/mqtt_password below
+    # to point at it. These are read by full_system.launch.py and override
+    # mowgli_monitoring/config/mqtt_bridge.yaml's package defaults, so
+    # changing them is a GUI Settings edit, not a file edit inside the image.
+    mqtt_enabled: false            # master switch; false = node is not launched
+    mqtt_host: "localhost"         # "localhost" reaches the bundled mowgli-mqtt
+                                   # container too — the mowgli service runs
+                                   # network_mode: host. Point this at an
+                                   # external broker's hostname/IP instead.
+    mqtt_port: 1883
+    mqtt_username: ""              # empty = no auth (matches the bundled broker's
+                                   # anonymous-access default — LAN-only, no TLS
+                                   # unless mqtt_use_ssl is also set)
+    mqtt_password: ""
+    mqtt_topic_prefix: "mowgli"    # all topics are "<mqtt_topic_prefix>/<name>"
+    mqtt_use_ssl: false            # TLS against the system CA store only (no
+                                   # custom CA/client-cert param exists yet)

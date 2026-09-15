@@ -916,6 +916,56 @@
         }
       }
     },
+    "mqtt_settings": {
+      "title": "MQTT / Home Assistant",
+      "type": "object",
+      "properties": {
+        "mqtt_enabled": {
+          "type": "boolean",
+          "title": "Enable MQTT Bridge",
+          "default": false,
+          "description": "Launch mowgli_monitoring/mqtt_bridge_node, which publishes status/power/emergency/high_level_status/gps/diagnostics to an MQTT broker and relays <mqtt_topic_prefix>/command to HighLevelControl (see docs/MQTT_CONTROL.md). Default false MUST stay false and MUST equal the mowgli_bringup template value, because the settings backend prunes any value equal to its schema default -- with a default of true, switching the bridge ON would be pruned away and the toggle would never persist (this is the same lidar_enabled bug fixed in #508)."
+        },
+        "mqtt_host": {
+          "type": "string",
+          "title": "Broker Host",
+          "default": "localhost",
+          "description": "Hostname or IP of the MQTT broker. \"localhost\" also reaches the bundled mowgli-mqtt container (the robot's ROS2 service runs network_mode: host) -- point this at an external broker (e.g. one already running on your own server) instead."
+        },
+        "mqtt_port": {
+          "type": "integer",
+          "title": "Broker Port",
+          "default": 1883,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "TCP port of the MQTT broker."
+        },
+        "mqtt_username": {
+          "type": "string",
+          "title": "Username",
+          "default": "",
+          "description": "Empty means no authentication, matching the bundled broker's anonymous-access default."
+        },
+        "mqtt_password": {
+          "type": "string",
+          "title": "Password",
+          "default": "",
+          "description": "MQTT broker password. Sent in the clear unless Use TLS is also enabled."
+        },
+        "mqtt_topic_prefix": {
+          "type": "string",
+          "title": "Topic Prefix",
+          "default": "mowgli",
+          "description": "All topics are published as \"<prefix>/<name>\", e.g. \"mowgli/status\"."
+        },
+        "mqtt_use_ssl": {
+          "type": "boolean",
+          "title": "Use TLS",
+          "default": false,
+          "description": "Connect over TLS, verified against the system CA store only (no custom CA/client-certificate option exists yet). If TLS setup fails the bridge refuses to connect rather than silently falling back to plaintext."
+        }
+      }
+    },
     "nav_settings": {
       "title": "Navigation",
       "type": "object",

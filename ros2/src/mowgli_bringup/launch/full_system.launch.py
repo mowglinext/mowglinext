@@ -99,6 +99,11 @@ def generate_launch_description() -> LaunchDescription:
     # writing to a /dev/spidev it may not own until the operator opts in.
     _early_led_enabled = "true" if bool(_rp.get("led_enabled", False)) else "false"
 
+    # Same pre-read for the MQTT bridge (mowgli_monitoring/mqtt_bridge_node).
+    # Defaults FALSE in the in-package template — opt-in, since it means
+    # dialing out to a broker (bundled or the operator's own external one).
+    _early_mqtt_enabled = "true" if bool(_rp.get("mqtt_enabled", False)) else "false"
+
     # ------------------------------------------------------------------
     # Declared arguments
     # ------------------------------------------------------------------
@@ -116,8 +121,10 @@ def generate_launch_description() -> LaunchDescription:
 
     enable_mqtt_arg = DeclareLaunchArgument(
         "enable_mqtt",
-        default_value="false",
-        description="Launch the MQTT bridge node when true.",
+        default_value=_early_mqtt_enabled,
+        description="Launch the MQTT bridge node when true. Default read from "
+        "mowgli_robot.yaml.mqtt_enabled (GUI Settings → MQTT); CLI/compose "
+        "override wins.",
     )
 
     enable_foxglove_arg = DeclareLaunchArgument(
@@ -566,8 +573,26 @@ def generate_launch_description() -> LaunchDescription:
         name="mqtt_bridge_node",
         output="screen",
         parameters=[
+            # Base layer: package defaults for knobs not exposed on the GUI
+            # (mqtt_client_id, publish_rate). Injected dict below is applied
+            # AFTER this file, so it wins for any key both define (see
+            # ros2/CLAUDE.md's "param order matters" gotcha).
             mqtt_params,
-            {"use_sim_time": use_sim_time},
+            {
+                "use_sim_time": use_sim_time,
+                # Broker connection is an operator/site choice (Invariant 15,
+                # GUI Settings → MQTT) — same mowgli_robot.yaml single source
+                # of truth as tool_width/lidar_enabled/ntrip_host, not a
+                # package-share default. "localhost" still reaches the
+                # bundled mowgli-mqtt container: the mowgli service runs
+                # network_mode: host.
+                "mqtt_host": str(robot_params.get("mqtt_host", "localhost")),
+                "mqtt_port": int(robot_params.get("mqtt_port", 1883)),
+                "mqtt_username": str(robot_params.get("mqtt_username", "")),
+                "mqtt_password": str(robot_params.get("mqtt_password", "")),
+                "mqtt_topic_prefix": str(robot_params.get("mqtt_topic_prefix", "mowgli")),
+                "use_ssl": bool(robot_params.get("mqtt_use_ssl", False)),
+            },
         ],
     )
 

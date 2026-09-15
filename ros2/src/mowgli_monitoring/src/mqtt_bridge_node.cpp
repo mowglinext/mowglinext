@@ -102,7 +102,13 @@ bool StubMqttClient::is_connected() const noexcept
 struct MosquittoMqttClient::Impl
 {
   Config config;
-  rclcpp::Logger logger;
+  // rclcpp::Logger has no public default constructor; without an initializer
+  // Impl's default constructor is deleted and make_unique<Impl>() fails to
+  // compile. The constructor overwrites this with the node's logger.
+  rclcpp::Logger logger{rclcpp::get_logger("mqtt_bridge_node")};
+  // Throttle clock for the spin loop warning (a temporary cannot be bound by
+  // the RCLCPP_*_THROTTLE macros).
+  rclcpp::Clock throttle_clock{RCL_STEADY_TIME};
   mosquitto* mosq{nullptr};
   bool connected{false};
 
@@ -125,17 +131,36 @@ struct MosquittoMqttClient::Impl
       // broker drops subscription state on every (re)connect. Without
       // re-subscribing here the MQTT->ROS command path never received a
       // message. Safe to call from the connect callback (mosquitto loop ctx).
-      std::lock_guard<std::mutex> lock(self->callbacks_mutex);
-      for (const auto& [topic, _cb] : self->callbacks)
       {
-        const int sub_rc = mosquitto_subscribe(self->mosq, nullptr, topic.c_str(), 1 /* QoS */);
-        if (sub_rc != MOSQ_ERR_SUCCESS)
+        std::lock_guard<std::mutex> lock(self->callbacks_mutex);
+        for (const auto& [topic, _cb] : self->callbacks)
         {
-          RCLCPP_WARN(self->logger,
-                      "MQTT re-subscribe on '%s' failed: %s",
-                      topic.c_str(),
-                      mosquitto_strerror(sub_rc));
+          const int sub_rc = mosquitto_subscribe(self->mosq, nullptr, topic.c_str(), 1 /* QoS */);
+          if (sub_rc != MOSQ_ERR_SUCCESS)
+          {
+            RCLCPP_WARN(self->logger,
+                        "MQTT re-subscribe on '%s' failed: %s",
+                        topic.c_str(),
+                        mosquitto_strerror(sub_rc));
+          }
         }
+      }
+
+      // Announce availability now that we're actually connected. The LWT
+      // (set once, pre-connect, in the constructor below) covers an
+      // ungraceful disconnect; this covers the happy path AND every
+      // reconnect, so a broker that watched us go offline sees us come
+      // back — a retained "online" that only fired once at startup would
+      // stay stale in that case.
+      if (!self->config.availability_topic.empty())
+      {
+        mosquitto_publish(self->mosq,
+                          nullptr,
+                          self->config.availability_topic.c_str(),
+                          6,
+                          "online",
+                          1 /* QoS */,
+                          true /* retain */);
       }
     }
     else
@@ -192,6 +217,28 @@ MosquittoMqttClient::MosquittoMqttClient(Config config, rclcpp::Logger logger)
   {
     RCLCPP_ERROR(logger, "Failed to create mosquitto instance.");
     return;
+  }
+
+  if (!impl_->config.availability_topic.empty())
+  {
+    // Last Will and Testament: the broker publishes this retained "offline"
+    // on our behalf if we vanish without a clean disconnect (crash, network
+    // loss). Must be set here, before connect() — mosquitto_will_set() is a
+    // pre-connect-only call. The clean disconnect path (offline published
+    // explicitly, then disconnect()) and the reconnect "online" publish live
+    // in disconnect() and on_connect_cb() respectively.
+    const int will_rc = mosquitto_will_set(impl_->mosq,
+                                           impl_->config.availability_topic.c_str(),
+                                           7,
+                                           "offline",
+                                           1 /* QoS */,
+                                           true /* retain */);
+    if (will_rc != MOSQ_ERR_SUCCESS)
+    {
+      RCLCPP_WARN(logger,
+                  "mosquitto_will_set failed: %s — availability will not be reported.",
+                  mosquitto_strerror(will_rc));
+    }
   }
 
   if (impl_->config.use_ssl)
@@ -267,6 +314,21 @@ void MosquittoMqttClient::disconnect() noexcept
 {
   if (impl_->mosq && impl_->connected)
   {
+    // A clean disconnect does NOT trigger our own LWT (that only fires on an
+    // ungraceful drop) — publish "offline" explicitly first so a normal
+    // shutdown is reported too, not just a crash.
+    if (!impl_->config.availability_topic.empty())
+    {
+      mosquitto_publish(impl_->mosq,
+                        nullptr,
+                        impl_->config.availability_topic.c_str(),
+                        7,
+                        "offline",
+                        1 /* QoS */,
+                        true /* retain */);
+      // Let it actually leave the socket before we tear the connection down.
+      mosquitto_loop(impl_->mosq, 100, 1);
+    }
     mosquitto_disconnect(impl_->mosq);
   }
 }
@@ -337,7 +399,7 @@ void MosquittoMqttClient::spin_once() noexcept
   if (rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN)
   {
     RCLCPP_WARN_THROTTLE(impl_->logger,
-                         rclcpp::Clock{},
+                         impl_->throttle_clock,
                          10000,
                          "mosquitto_loop error: %s — attempting reconnect",
                          mosquitto_strerror(rc));
@@ -409,6 +471,7 @@ void MqttBridgeNode::create_mqtt_client()
   cfg.password = mqtt_password_;
   cfg.client_id = mqtt_client_id_;
   cfg.use_ssl = use_ssl_;
+  cfg.availability_topic = full_topic("available");
 
   mqtt_client_ = std::make_unique<MosquittoMqttClient>(std::move(cfg), get_logger());
   RCLCPP_INFO(get_logger(), "Using MosquittoMqttClient → %s:%d", mqtt_host_.c_str(), mqtt_port_);
@@ -473,6 +536,26 @@ void MqttBridgeNode::create_subscriptions()
         on_diagnostics(msg);
       });
 
+  // Control-plane state (BT high-level status), not raw sensor data — reliable
+  // QoS(10) like status/power/emergency above, not SensorDataQoS.
+  sub_high_level_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
+      "/behavior_tree_node/high_level_status",
+      10,
+      [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
+      {
+        on_high_level_status(msg);
+      });
+
+  // Raw GPS fix (lat/lon/alt) for external map/device_tracker consumers.
+  // SensorDataQoS per .claude/rules/ros2.md: GPS drivers publish BEST_EFFORT.
+  sub_gps_fix_ = create_subscription<sensor_msgs::msg::NavSatFix>(
+      "/gps/fix",
+      sensor_qos,
+      [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
+      {
+        on_gps_fix(msg);
+      });
+
   // Subscribe to MQTT command topic.
   mqtt_client_->subscribe(full_topic("command"),
                           [this](const std::string& topic, const std::string& payload)
@@ -527,22 +610,50 @@ void MqttBridgeNode::on_diagnostics(diagnostic_msgs::msg::DiagnosticArray::Const
   mqtt_client_->publish(full_topic("diagnostics"), serialise_diagnostics(*msg), /*retain=*/false);
 }
 
+void MqttBridgeNode::on_high_level_status(
+    mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
+{
+  mqtt_client_->publish(full_topic("high_level_status"),
+                        serialise_high_level_status(*msg),
+                        /*retain=*/true);
+}
+
+void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
+{
+  // Store the latest fix; the timer will rate-limit publication (same
+  // pattern as on_odom/pending_odom_ above).
+  pending_gps_ = *msg;
+}
+
 // ---------------------------------------------------------------------------
 // MQTT command callback → ROS2 service call
 // ---------------------------------------------------------------------------
 
-void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/, const std::string& payload)
+bool MqttBridgeNode::parse_command_payload(const std::string& payload, uint8_t& out_command)
 {
-  // Expected payload: a single decimal integer matching HighLevelControl command codes.
-  // E.g.: "1" → COMMAND_START, "2" → COMMAND_HOME, "254" → COMMAND_RESET_EMERGENCY.
   int command_int = -1;
   if (std::sscanf(payload.c_str(), "%d", &command_int) != 1 || command_int < 0 || command_int > 255)
+  {
+    return false;
+  }
+  out_command = static_cast<uint8_t>(command_int);
+  return true;
+}
+
+void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/, const std::string& payload)
+{
+  // Expected payload: a single ASCII decimal integer matching HighLevelControl
+  // command codes — NOT a raw byte. E.g.: "1" → COMMAND_START,
+  // "2" → COMMAND_HOME, "254" → COMMAND_RESET_EMERGENCY.
+  uint8_t command_uint = 0;
+  if (!parse_command_payload(payload, command_uint))
   {
     RCLCPP_WARN(get_logger(),
                 "MQTT command payload '%s' is not a valid uint8 command code. Ignored.",
                 payload.c_str());
     return;
   }
+  const int command_int = static_cast<int>(command_uint);
 
   if (!srv_high_level_->service_is_ready())
   {
@@ -551,7 +662,7 @@ void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/, const std::st
   }
 
   auto request = std::make_shared<mowgli_interfaces::srv::HighLevelControl::Request>();
-  request->command = static_cast<uint8_t>(command_int);
+  request->command = command_uint;
 
   // Fire-and-forget async call — we do not block the ROS2 executor.
   srv_high_level_->async_send_request(
@@ -605,6 +716,21 @@ void MqttBridgeNode::on_timer()
                             /*retain=*/false);
       last_odom_publish_ = t;
       pending_odom_.reset();
+    }
+  }
+
+  // Rate-limited GPS publish (same window as position above).
+  if (pending_gps_.has_value())
+  {
+    const rclcpp::Time t = now();
+    const double elapsed = (t - last_gps_publish_).seconds();
+    const double min_interval = 1.0 / publish_rate_;
+
+    if (elapsed >= min_interval)
+    {
+      mqtt_client_->publish(full_topic("gps"), serialise_gps(*pending_gps_), /*retain=*/false);
+      last_gps_publish_ = t;
+      pending_gps_.reset();
     }
   }
 }
@@ -734,6 +860,64 @@ std::string MqttBridgeNode::serialise_diagnostics(const diagnostic_msgs::msg::Di
   }
   json += ']';
   return json;
+}
+
+std::string MqttBridgeNode::serialise_high_level_status(
+    const mowgli_interfaces::msg::HighLevelStatus& msg)
+{
+  char buf[768];
+  std::snprintf(buf,
+                sizeof(buf),
+                "{"
+                "\"state\":%u,"
+                "\"state_name\":\"%s\","
+                "\"sub_state_name\":\"%s\","
+                "\"current_area\":%d,"
+                "\"current_path\":%d,"
+                "\"current_path_index\":%d,"
+                "\"total_swaths\":%d,"
+                "\"completed_swaths\":%d,"
+                "\"skipped_swaths\":%d,"
+                "\"coverage_percent\":%.1f,"
+                "\"gps_quality_percent\":%.1f,"
+                "\"battery_percent\":%.1f,"
+                "\"is_charging\":%s,"
+                "\"emergency\":%s"
+                "}",
+                static_cast<unsigned>(msg.state),
+                json_escape(msg.state_name).c_str(),
+                json_escape(msg.sub_state_name).c_str(),
+                static_cast<int>(msg.current_area),
+                static_cast<int>(msg.current_path),
+                static_cast<int>(msg.current_path_index),
+                static_cast<int>(msg.total_swaths),
+                static_cast<int>(msg.completed_swaths),
+                static_cast<int>(msg.skipped_swaths),
+                static_cast<double>(msg.coverage_percent),
+                static_cast<double>(msg.gps_quality_percent),
+                static_cast<double>(msg.battery_percent),
+                msg.is_charging ? "true" : "false",
+                msg.emergency ? "true" : "false");
+  return std::string{buf};
+}
+
+std::string MqttBridgeNode::serialise_gps(const sensor_msgs::msg::NavSatFix& msg)
+{
+  // status.status is STATUS_NO_FIX(-1)/STATUS_FIX(0)/STATUS_SBAS_FIX(1)/
+  // STATUS_GBAS_FIX(2); this is a raw NavSatFix relay, not the richer
+  // universal_gnss RTK-quality summary the GUI/BT use elsewhere — a
+  // consumer wanting Fixed-vs-Float should not read this field as that.
+  char buf[192];
+  std::snprintf(buf,
+                sizeof(buf),
+                "{\"latitude\":%.8f,\"longitude\":%.8f,\"altitude\":%.3f,"
+                "\"status\":%d,\"service\":%u}",
+                msg.latitude,
+                msg.longitude,
+                msg.altitude,
+                static_cast<int>(msg.status.status),
+                static_cast<unsigned>(msg.status.service));
+  return std::string{buf};
 }
 
 // ---------------------------------------------------------------------------

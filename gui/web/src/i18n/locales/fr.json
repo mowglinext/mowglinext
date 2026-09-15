@@ -3136,6 +3136,107 @@
   "asyncButton": {
     "errorOccurred": "Une erreur est survenue"
   },
+  "settingsNotifications": {
+    "title_section": "Notifications push",
+    "description": "Recevez un message sur votre téléphone quand le robot démarre ou termine une zone, se retrouve bloqué, déclenche l'arrêt d'urgence ou rentre pour cause de pluie ou de batterie.",
+    "channel": "Canal d'envoi",
+    "channelLabel": "Canal",
+    "channelTooltip": "Telegram passe par un bot créé avec @BotFather. Pushover est l'appli push payante (achat unique). ntfy est gratuit, sans compte. Webhook envoie un POST JSON à n'importe quelle URL (Home Assistant, Node-RED, n8n).",
+    "channelPushover": "Pushover",
+    "pushoverHelp": "Créez une application sur pushover.net/apps pour obtenir son jeton API ; votre clé utilisateur est sur le tableau de bord Pushover.",
+    "pushoverAppToken": "Jeton API de l'application",
+    "pushoverAppTokenTooltip": "Le jeton de l'application Pushover que vous avez créée. Stocké sur le robot et jamais réaffiché.",
+    "pushoverUserKey": "Clé utilisateur",
+    "pushoverUserKeyTooltip": "Votre clé utilisateur Pushover (ou une clé de groupe).",
+    "channelNtfy": "ntfy (appli, sans compte)",
+    "channelTelegram": "Bot Telegram",
+    "channelWebhook": "Webhook (POST JSON)",
+    "title": "Nom de l'expéditeur",
+    "titleTooltip": "Affiché comme titre de la notification, par ex. le nom de votre robot.",
+    "language": "Langue des messages",
+    "languageTooltip": "Langue du texte des notifications.",
+    "ntfyHelp": "Installez l'appli ntfy, abonnez-vous à un nom de sujet de votre choix et saisissez le même sujet ici. Quiconque connaît le sujet peut le lire : choisissez un nom difficile à deviner.",
+    "ntfyServer": "Serveur ntfy",
+    "ntfyServerTooltip": "https://ntfy.sh ou votre instance auto-hébergée.",
+    "ntfyTopic": "Sujet",
+    "ntfyTopicTooltip": "Lettres, chiffres, '-' et '_' uniquement. Doit correspondre au sujet auquel vous êtes abonné dans l'appli.",
+    "ntfyToken": "Jeton d'accès (optionnel)",
+    "ntfyTokenTooltip": "Seulement pour un sujet protégé ou un serveur auto-hébergé avec authentification. Stocké sur le robot et jamais réaffiché.",
+    "telegramHelp": "Créez un bot avec @BotFather pour obtenir son jeton, envoyez un message au bot, puis lisez votre identifiant de discussion sur https://api.telegram.org/bot<jeton>/getUpdates.",
+    "telegramBotToken": "Jeton du bot",
+    "telegramBotTokenTooltip": "Le jeton fourni par @BotFather. Stocké sur le robot et jamais réaffiché.",
+    "telegramChatId": "Identifiant de discussion",
+    "telegramChatIdTooltip": "Votre identifiant utilisateur ou de groupe : un nombre entier, négatif pour un groupe.",
+    "webhookHelp": "Chaque événement est envoyé en POST JSON : title, body, kind, message, priority, tags, params, at.",
+    "webhookUrl": "URL du webhook",
+    "webhookUrlTooltip": "URL http(s) absolue acceptant un POST JSON.",
+    "secretPlaceholder": "Collez une nouvelle valeur…",
+    "secretApply": "Définir",
+    "secretClear": "Effacer",
+    "secretSet": "Stocké ({{masked}})",
+    "secretNotSet": "Non stocké",
+    "secretPending": "Sera stocké à l'enregistrement",
+    "secretCleared": "Sera supprimé à l'enregistrement",
+    "sendTest": "Envoyer une notification de test",
+    "testOk": "Notification de test envoyée",
+    "testFailed": "Échec de la notification de test",
+    "events": "Événements",
+    "eventsDescription": "Choisissez ce qui mérite une alerte. Les répétitions d'un même événement en moins d'une minute sont ignorées, et une attente GPS n'est signalée qu'après deux minutes.",
+    "event": {
+      "mowStarted": {
+        "label": "Tonte démarrée",
+        "description": "Le robot quitte la station pour tondre."
+      },
+      "zoneStarted": {
+        "label": "Zone démarrée",
+        "description": "Une nouvelle zone commence (fusionné avec « zone terminée » si les deux sont actifs)."
+      },
+      "zoneFinished": {
+        "label": "Zone terminée",
+        "description": "Une zone est finie, avec sa couverture."
+      },
+      "mowComplete": {
+        "label": "Tonte terminée",
+        "description": "Toutes les zones sont faites, plus le retour à la station."
+      },
+      "mowStopped": {
+        "label": "Tonte arrêtée",
+        "description": "La tonte s'est arrêtée pour une raison non couverte ci-dessus, y compris un arrêt manuel."
+      },
+      "blocked": {
+        "label": "Bloqué / coincé",
+        "description": "Roues qui creusent, échec d'accostage ou de navigation : le robot a besoin de vous."
+      },
+      "emergency": {
+        "label": "Arrêt d'urgence",
+        "description": "Le verrou d'urgence du firmware s'est déclenché."
+      },
+      "battery": {
+        "label": "Batterie",
+        "description": "Retour à la station sur batterie faible, et reprise une fois chargé."
+      },
+      "rain": {
+        "label": "Pluie",
+        "description": "Pluie détectée, reprise après la pluie, délai d'attente dépassé."
+      },
+      "waitingForRtk": {
+        "label": "En attente de GPS",
+        "description": "Pas de fix RTK depuis plus de deux minutes, et son retour."
+      }
+    },
+    "status": "État des envois",
+    "statusUnknown": "Pas encore d'état",
+    "stateNotConfigured": "Canal non configuré",
+    "stateDisabled": "Configuré, notifications désactivées",
+    "stateArmed": "Actif",
+    "counts": "Envoyées : {{sent}} · Échouées : {{failed}}",
+    "lastSent": "Dernier envoi {{when}} : {{message}}",
+    "lastError": "Dernière erreur : {{error}}",
+    "refresh": "Actualiser",
+    "saved": "Paramètres de notification enregistrés",
+    "saveFailed": "Échec de l'enregistrement des paramètres de notification",
+    "loadFailed": "Échec du chargement des paramètres de notification"
+  },
   "settingsIrriSense": {
     "title": "Humidité du sol IrriSense Cloud",
     "description": "Lit le déficit hydrique des zones de votre service d'arrosage pour que le planificateur ne lance pas de tonte sur herbe mouillée.",
@@ -3186,6 +3287,66 @@
     "saved": "Réglages IrriSense enregistrés",
     "saveFailed": "Échec de l'enregistrement des réglages IrriSense",
     "loadFailed": "Échec du chargement des réglages IrriSense"
+  },
+  "settingsRemoteAccess": {
+    "title": "Accès distant (Tailscale)",
+    "description": "Lance un nœud Tailscale à côté du robot pour que l'interface soit accessible depuis votre téléphone ou ordinateur, sans ouvrir de port sur votre box.",
+    "scopeTitle": "Réseau privé uniquement",
+    "scopeBody": "Seuls les appareils connectés à votre tailnet peuvent joindre le robot ; rien n'est publié sur Internet. L'interface n'a pas d'identifiants propres : toute personne invitée sur le tailnet peut piloter la tondeuse — réservez-le à des personnes de confiance et utilisez les ACL Tailscale si vous le partagez.",
+    "connection": "Connexion",
+    "hostname": "Nom du nœud",
+    "hostnameTooltip": "Nom du robot sur le tailnet : lettres minuscules, chiffres et tirets. Avec MagicDNS il devient https://<nom>.<tailnet>.ts.net.",
+    "key": "Clé d'authentification (optionnelle)",
+    "keyTooltip": "Clé pré-autorisée depuis la console d'administration Tailscale (Settings → Keys). Laissez vide pour vous connecter en ouvrant le lien affiché ci-dessous au démarrage du nœud. La clé est stockée sur le robot et n'est jamais réaffichée.",
+    "keyPlaceholder": "Collez une nouvelle clé tskey-auth-…",
+    "keyApply": "Définir",
+    "keyClear": "Effacer",
+    "keySet": "Clé stockée ({{masked}})",
+    "keyNotSet": "Aucune clé — connexion interactive",
+    "keyPending": "La nouvelle clé sera stockée à l'enregistrement",
+    "keyCleared": "La clé sera supprimée à l'enregistrement",
+    "serveHttps": "Publier en HTTPS",
+    "serveHttpsTooltip": "Utilise Tailscale Serve pour exposer l'interface en https://<nom>.<tailnet>.ts.net avec un certificat automatique. Nécessite MagicDNS et les certificats HTTPS activés dans la console Tailscale (page DNS). L'adresse http://<ip-tailnet>:4006 fonctionne toujours.",
+    "serveHttpsHint": "https://<nom>.<tailnet>.ts.net (HTTPS doit être activé sur votre tailnet)",
+    "image": "Image du conteneur",
+    "imageTooltip": "Image Tailscale épinglée pour le sidecar. Seul le dépôt officiel tailscale/tailscale est accepté (n'importe quel tag ou digest sha256). Ne la changez que si vous savez pourquoi ; videz le champ pour revenir à la valeur par défaut.",
+    "status": "État",
+    "refresh": "Actualiser",
+    "retry": "Réessayer",
+    "phase": {
+      "disabled": "Sidecar arrêté",
+      "pulling": "Téléchargement de l'image Tailscale…",
+      "starting": "Démarrage du sidecar…",
+      "running": "Sidecar en marche",
+      "error": "Sidecar en échec",
+      "unknown": "État inconnu"
+    },
+    "verdict": {
+      "off": "Désactivé",
+      "working": "En cours…",
+      "needsLogin": "Connexion requise",
+      "connected": "Connecté",
+      "error": "Erreur"
+    },
+    "backendState": "Tailscale : {{state}}",
+    "errorTitle": "L'accès distant n'a pas pu démarrer",
+    "needsLoginTitle": "Approuvez ce robot sur votre tailnet",
+    "needsLoginBody": "Ouvrez le lien, connectez-vous à Tailscale et approuvez l'appareil. Cette page se met à jour toute seule une fois le nœud connecté.",
+    "openLogin": "Ouvrir la connexion Tailscale",
+    "workingHint": "En attente du nœud… le premier démarrage télécharge l'image, ce qui peut prendre une minute sur une connexion lente.",
+    "reachableAt": "Depuis n'importe quel appareil de votre tailnet, ouvrez :",
+    "noHttpsHint": "Pas encore d'adresse HTTPS : activez MagicDNS et les certificats HTTPS dans la console Tailscale (page DNS), ou utilisez l'adresse http://.",
+    "noMagicDnsHint": "MagicDNS est désactivé sur votre tailnet, seules les adresses IP sont résolues.",
+    "healthTitle": "Tailscale signale",
+    "logout": "Quitter le tailnet",
+    "logoutConfirmTitle": "Retirer ce robot du tailnet ?",
+    "logoutConfirmBody": "La clé du nœud est supprimée et le sidecar redémarre. Il faudra l'approuver à nouveau (ou stocker une clé d'authentification avant).",
+    "saveToStart": "Enregistrez pour démarrer le sidecar.",
+    "saved": "Réglages d'accès distant enregistrés",
+    "saveFailed": "Échec de l'enregistrement des réglages d'accès distant",
+    "loadFailed": "Échec du chargement des réglages d'accès distant",
+    "retryFailed": "Nouvelle tentative échouée",
+    "logoutFailed": "Déconnexion échouée"
   },
   "settingsLeds": {
     "statusRing": "Anneau d'état WS2812",
@@ -3250,6 +3411,25 @@
     "modeIdle": "Au repos",
     "modeIdleDescription": "Tout l'anneau en blanc atténué, sans mouvement. Alimenté et éveillé, sans activité."
   },
+  "settingsMqtt": {
+    "bridge": "Passerelle MQTT",
+    "bridgeDescription": "Publie l'état, la batterie et l'état de tonte vers un broker MQTT (par ex. pour une intégration Home Assistant) et accepte en retour les commandes démarrer/pause/retour dock. Lecture seule, sauf le topic de commande — le même canal que les boutons de l'interface.",
+    "securityTitle": "Aucune authentification par défaut",
+    "securityDescription": "Le broker fourni autorise les connexions anonymes et le topic de commande accepte n'importe quelle commande de haut niveau — traitez ceci comme n'importe quelle autre surface de contrôle sur votre réseau local, pas comme quelque chose à exposer sur internet.",
+    "broker": "Broker",
+    "host": "Hôte",
+    "hostTooltip": "Nom d'hôte ou IP du broker MQTT. \"localhost\" atteint aussi le broker fourni — pointez plutôt vers le broker de votre propre serveur si vous en avez un.",
+    "port": "Port",
+    "useSsl": "TLS",
+    "useSslTooltip": "Se connecter en TLS, vérifié via le magasin de certificats CA du système. Si le certificat du broker n'est pas approuvé au niveau du système, la passerelle refuse de se connecter plutôt que de revenir en clair.",
+    "username": "Nom d'utilisateur",
+    "usernameTooltip": "Laissez vide pour un broker en accès anonyme (par défaut).",
+    "password": "Mot de passe",
+    "topicPrefix": "Préfixe des topics",
+    "topicPrefixTooltip": "Tous les topics sont publiés sous la forme \"<préfixe>/<nom>\".",
+    "topicsTitle": "Topics",
+    "topicsDescription": "Le schéma JSON complet et les codes de commande sont documentés dans docs/MQTT_CONTROL.md."
+  },
   "settingsSections": {
     "updates": {"label": "Mises à jour", "description": "Versions installées, sources des mises à jour et récupération"},
     "appearance": {
@@ -3308,13 +3488,22 @@
       "label": "Pluie",
       "description": "Comportement de détection de pluie et délai"
     },
+    "notifications": {"label": "Notifications", "description": "Messages push sur votre téléphone : début/fin de zone, blocage, urgence, pluie, batterie"},
     "irrisense": {
       "label": "IrriSense",
       "description": "Humidité du sol depuis votre jardin IrriSense Cloud : suspend les tontes planifiées sur herbe mouillée"
     },
+    "remote_access": {
+      "label": "Accès distant",
+      "description": "Accéder au robot depuis n'importe où via votre réseau Tailscale privé"
+    },
     "leds": {
       "label": "LED d'état",
       "description": "Anneau d'état WS2812 : ce qu'il affiche et sa luminosité"
+    },
+    "mqtt": {
+      "label": "MQTT / Home Assistant",
+      "description": "Relie l'état et les commandes à un broker MQTT"
     },
     "advanced": {
       "label": "Avancé",

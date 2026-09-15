@@ -3140,6 +3140,107 @@
   "asyncButton": {
     "errorOccurred": "An error occured"
   },
+  "settingsNotifications": {
+    "title_section": "Push notifications",
+    "description": "Get a message on your phone when the robot starts or finishes a zone, gets stuck, hits an emergency stop or heads home for rain or battery.",
+    "channel": "Delivery channel",
+    "channelLabel": "Channel",
+    "channelTooltip": "Telegram uses a bot you create with @BotFather. Pushover is the paid push app (one-off purchase). ntfy is free with no account. Webhook POSTs JSON to any URL (Home Assistant, Node-RED, n8n).",
+    "channelPushover": "Pushover",
+    "pushoverHelp": "Create an application at pushover.net/apps to get its API token; your user key is on the Pushover dashboard.",
+    "pushoverAppToken": "Application API token",
+    "pushoverAppTokenTooltip": "The token of the Pushover application you created. Stored on the robot and never shown again.",
+    "pushoverUserKey": "User key",
+    "pushoverUserKeyTooltip": "Your Pushover user key (or a group key).",
+    "channelNtfy": "ntfy (app, no account)",
+    "channelTelegram": "Telegram bot",
+    "channelWebhook": "Webhook (JSON POST)",
+    "title": "Sender name",
+    "titleTooltip": "Shown as the notification title, e.g. your robot's name.",
+    "language": "Message language",
+    "languageTooltip": "Language of the notification text.",
+    "ntfyHelp": "Install the ntfy app, subscribe to a topic name of your choice, and enter the same topic here. Anyone who knows the topic can read it, so pick something hard to guess.",
+    "ntfyServer": "ntfy server",
+    "ntfyServerTooltip": "https://ntfy.sh or your self-hosted instance.",
+    "ntfyTopic": "Topic",
+    "ntfyTopicTooltip": "Letters, digits, '-' and '_' only. Must match the topic you subscribed to in the app.",
+    "ntfyToken": "Access token (optional)",
+    "ntfyTokenTooltip": "Only for protected topics or a self-hosted server with authentication. Stored on the robot and never shown again.",
+    "telegramHelp": "Create a bot with @BotFather to get its token, send the bot a message, then read your chat id from https://api.telegram.org/bot<token>/getUpdates.",
+    "telegramBotToken": "Bot token",
+    "telegramBotTokenTooltip": "The token @BotFather gave you. Stored on the robot and never shown again.",
+    "telegramChatId": "Chat id",
+    "telegramChatIdTooltip": "Your user or group chat id: a whole number, negative for groups.",
+    "webhookHelp": "Each event is POSTed as JSON: title, body, kind, message, priority, tags, params, at.",
+    "webhookUrl": "Webhook URL",
+    "webhookUrlTooltip": "Absolute http(s) URL that accepts a JSON POST.",
+    "secretPlaceholder": "Paste a new value…",
+    "secretApply": "Set",
+    "secretClear": "Clear",
+    "secretSet": "Stored ({{masked}})",
+    "secretNotSet": "Not stored",
+    "secretPending": "Will be stored on save",
+    "secretCleared": "Will be removed on save",
+    "sendTest": "Send test notification",
+    "testOk": "Test notification sent",
+    "testFailed": "Test notification failed",
+    "events": "Events",
+    "eventsDescription": "Choose what is worth a buzz. Repeats of the same event within a minute are dropped, and a GPS wait is only reported after two minutes.",
+    "event": {
+      "mowStarted": {
+        "label": "Mowing started",
+        "description": "The robot leaves the dock for a mow."
+      },
+      "zoneStarted": {
+        "label": "Zone started",
+        "description": "A new zone begins (merged with 'zone finished' when both are on)."
+      },
+      "zoneFinished": {
+        "label": "Zone finished",
+        "description": "A zone is done, with its coverage."
+      },
+      "mowComplete": {
+        "label": "Mowing complete",
+        "description": "All zones done, plus the return to the dock."
+      },
+      "mowStopped": {
+        "label": "Mowing stopped",
+        "description": "The mow ended for any reason not covered above, including a manual stop."
+      },
+      "blocked": {
+        "label": "Stuck / blocked",
+        "description": "Dig obstruction, docking or navigation failure: the robot needs you."
+      },
+      "emergency": {
+        "label": "Emergency stop",
+        "description": "The firmware emergency latch tripped."
+      },
+      "battery": {
+        "label": "Battery",
+        "description": "Low battery return to the dock, and the resume once charged."
+      },
+      "rain": {
+        "label": "Rain",
+        "description": "Rain detected, resume after rain, rain wait timeout."
+      },
+      "waitingForRtk": {
+        "label": "Waiting for GPS",
+        "description": "No RTK fix for more than two minutes, and its recovery."
+      }
+    },
+    "status": "Delivery status",
+    "statusUnknown": "No status yet",
+    "stateNotConfigured": "Channel not configured",
+    "stateDisabled": "Configured, notifications off",
+    "stateArmed": "Active",
+    "counts": "Sent: {{sent}} · Failed: {{failed}}",
+    "lastSent": "Last sent {{when}}: {{message}}",
+    "lastError": "Last error: {{error}}",
+    "refresh": "Refresh",
+    "saved": "Notification settings saved",
+    "saveFailed": "Failed to save notification settings",
+    "loadFailed": "Failed to load notification settings"
+  },
   "settingsIrriSense": {
     "title": "IrriSense Cloud soil moisture",
     "description": "Read your irrigation service's zone deficits so the scheduler does not start a mow on wet grass.",
@@ -3190,6 +3291,66 @@
     "saved": "IrriSense settings saved",
     "saveFailed": "Failed to save IrriSense settings",
     "loadFailed": "Failed to load IrriSense settings"
+  },
+  "settingsRemoteAccess": {
+    "title": "Remote access (Tailscale)",
+    "description": "Runs a Tailscale node next to the robot so the interface is reachable from your phone or laptop anywhere, without opening a port on your router.",
+    "scopeTitle": "Private network only",
+    "scopeBody": "Only devices signed in to your tailnet can reach the robot; nothing is published to the public internet. The interface has no login of its own, so anyone you invite to the tailnet can drive the mower — keep it to people you trust and use Tailscale ACLs if you share it.",
+    "connection": "Connection",
+    "hostname": "Node name",
+    "hostnameTooltip": "Name of the robot on the tailnet: lowercase letters, digits and hyphens. With MagicDNS this becomes https://<name>.<tailnet>.ts.net.",
+    "key": "Auth key (optional)",
+    "keyTooltip": "Pre-authorised key from the Tailscale admin console (Settings → Keys). Leave empty to log in by opening the link shown below once the node starts. The key is stored on the robot and never shown again.",
+    "keyPlaceholder": "Paste a new tskey-auth-… key",
+    "keyApply": "Set",
+    "keyClear": "Clear",
+    "keySet": "Auth key stored ({{masked}})",
+    "keyNotSet": "No auth key — interactive login",
+    "keyPending": "New auth key will be stored on save",
+    "keyCleared": "Auth key will be removed on save",
+    "serveHttps": "Publish over HTTPS",
+    "serveHttpsTooltip": "Uses Tailscale Serve to expose the interface as https://<name>.<tailnet>.ts.net with an automatic certificate. Requires MagicDNS and HTTPS certificates enabled in the Tailscale admin console (DNS page). The plain http://<tailnet-ip>:4006 address always works.",
+    "serveHttpsHint": "https://<name>.<tailnet>.ts.net (needs HTTPS enabled in your tailnet)",
+    "image": "Container image",
+    "imageTooltip": "Pinned Tailscale image for the sidecar. Only the official tailscale/tailscale repository is accepted (any tag or sha256 digest). Leave as-is unless you know why you need another version; clear the field to return to the default.",
+    "status": "Status",
+    "refresh": "Refresh",
+    "retry": "Retry",
+    "phase": {
+      "disabled": "Sidecar stopped",
+      "pulling": "Downloading the Tailscale image…",
+      "starting": "Starting the sidecar…",
+      "running": "Sidecar running",
+      "error": "Sidecar failed",
+      "unknown": "Status unknown"
+    },
+    "verdict": {
+      "off": "Off",
+      "working": "Working…",
+      "needsLogin": "Login required",
+      "connected": "Connected",
+      "error": "Error"
+    },
+    "backendState": "Tailscale: {{state}}",
+    "errorTitle": "Remote access could not be started",
+    "needsLoginTitle": "Approve this robot on your tailnet",
+    "needsLoginBody": "Open the link, sign in to Tailscale and approve the device. This page updates by itself once the node is connected.",
+    "openLogin": "Open Tailscale login",
+    "workingHint": "Waiting for the node to come up… the first start downloads the image, which can take a minute on a slow connection.",
+    "reachableAt": "From any device on your tailnet, open:",
+    "noHttpsHint": "No HTTPS address yet: enable MagicDNS and HTTPS certificates in the Tailscale admin console (DNS page), or use the http:// address.",
+    "noMagicDnsHint": "MagicDNS is off in your tailnet, so only the IP addresses resolve.",
+    "healthTitle": "Tailscale reports",
+    "logout": "Log out of tailnet",
+    "logoutConfirmTitle": "Remove this robot from the tailnet?",
+    "logoutConfirmBody": "The node key is discarded and the sidecar restarts. You will need to approve it again (or store an auth key first).",
+    "saveToStart": "Save to start the sidecar.",
+    "saved": "Remote access settings saved",
+    "saveFailed": "Failed to save remote access settings",
+    "loadFailed": "Failed to load remote access settings",
+    "retryFailed": "Retry failed",
+    "logoutFailed": "Logout failed"
   },
   "settingsLeds": {
     "statusRing": "WS2812 status ring",
@@ -3254,6 +3415,25 @@
     "modeIdle": "Idle",
     "modeIdleDescription": "Whole ring dim white, not moving. Powered and awake, doing nothing."
   },
+  "settingsMqtt": {
+    "bridge": "MQTT bridge",
+    "bridgeDescription": "Publish status, battery and mow state to an MQTT broker (e.g. for a Home Assistant integration) and accept start/pause/dock commands back. Read-only monitoring, except for the command topic — the same channel the GUI's own buttons use.",
+    "securityTitle": "No authentication on the wire by default",
+    "securityDescription": "The bundled broker allows anonymous connections and the command topic accepts any high-level command — treat this like any other control surface on your local network, not something to expose to the internet.",
+    "broker": "Broker",
+    "host": "Host",
+    "hostTooltip": "Hostname or IP of the MQTT broker. \"localhost\" reaches the bundled broker too — point this at your own server's broker instead if you have one.",
+    "port": "Port",
+    "useSsl": "TLS",
+    "useSslTooltip": "Connect over TLS, verified against the system CA store. If the broker's certificate isn't trusted system-wide, the bridge refuses to connect rather than fall back to plaintext.",
+    "username": "Username",
+    "usernameTooltip": "Leave empty for a broker with anonymous access (the bundled default).",
+    "password": "Password",
+    "topicPrefix": "Topic prefix",
+    "topicPrefixTooltip": "All topics are published as \"<prefix>/<name>\".",
+    "topicsTitle": "Topics",
+    "topicsDescription": "Full JSON schema and command codes are documented in docs/MQTT_CONTROL.md."
+  },
   "settingsSections": {
     "updates": {"label": "Updates", "description": "Installed versions, update sources and recovery"},
     "appearance": {
@@ -3312,13 +3492,22 @@
       "label": "Rain",
       "description": "Rain detection behavior and delay"
     },
+    "notifications": {"label": "Notifications", "description": "Push messages to your phone: zone start/finish, stuck, emergency, rain, battery"},
     "irrisense": {
       "label": "IrriSense",
       "description": "Soil moisture from your IrriSense Cloud garden: skip scheduled mows on wet grass"
     },
+    "remote_access": {
+      "label": "Remote access",
+      "description": "Reach the robot from anywhere over your private Tailscale network"
+    },
     "leds": {
       "label": "Status LEDs",
       "description": "WS2812 status ring: what it shows and how bright"
+    },
+    "mqtt": {
+      "label": "MQTT / Home Assistant",
+      "description": "Bridge status and commands to an MQTT broker"
     },
     "advanced": {
       "label": "Advanced",

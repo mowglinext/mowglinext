@@ -15,6 +15,112 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/notifications/test": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "send a test notification",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/status": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "notification delivery status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.NotifyDeliveryStatus"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/settings": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "notification settings",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.NotificationSettingsResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "update notification settings",
+                "parameters": [
+                    {
+                        "description": "partial settings",
+                        "name": "settings",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.NotificationSettingsUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.NotificationSettingsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/config/envs": {
             "get": {
                 "description": "get config env from backend",
@@ -341,6 +447,127 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.IrriSenseSettingsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/remote-access/settings": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "Remote access settings",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.RemoteAccessSettingsResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "update remote access settings",
+                "parameters": [
+                    {
+                        "description": "partial settings",
+                        "name": "settings",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.RemoteAccessSettingsUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.RemoteAccessSettingsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/remote-access/status": {
+            "get": {
+                "description": "container phase, tailscaled login state, login URL while waiting, reachable URLs once connected",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "Remote access status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.RemoteAccessStatus"
+                        }
+                    }
+                }
+            }
+        },
+        "/remote-access/apply": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "Retry applying remote access settings",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/remote-access/logout": {
+            "post": {
+                "description": "the node key is discarded; the sidecar restarts and logs in again (interactively or with the stored auth key)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "Log the robot out of the tailnet",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
                         }
                     },
                     "400": {
@@ -1276,6 +1503,162 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "providers.NotifyDeliveryStatus": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string"
+                },
+                "configured": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "failedCount": {
+                    "type": "integer"
+                },
+                "lastError": {
+                    "type": "string"
+                },
+                "lastErrorAt": {
+                    "type": "string"
+                },
+                "lastMessage": {
+                    "type": "string"
+                },
+                "lastSentAt": {
+                    "type": "string"
+                },
+                "sentCount": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.NotificationSettingsUpdate": {
+            "type": "object",
+            "properties": {
+                "pushoverAppToken": {
+                    "type": "string"
+                },
+                "clearPushoverAppToken": {
+                    "type": "boolean"
+                },
+                "pushoverUserKey": {
+                    "type": "string"
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "clearNtfyToken": {
+                    "type": "boolean"
+                },
+                "clearTelegramBotToken": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "events": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "boolean"
+                    }
+                },
+                "language": {
+                    "type": "string"
+                },
+                "ntfyServer": {
+                    "type": "string"
+                },
+                "ntfyToken": {
+                    "type": "string"
+                },
+                "ntfyTopic": {
+                    "type": "string"
+                },
+                "telegramBotToken": {
+                    "type": "string"
+                },
+                "telegramChatId": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "webhookUrl": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.NotificationSettingsResponse": {
+            "type": "object",
+            "properties": {
+                "pushoverAppTokenMasked": {
+                    "type": "string"
+                },
+                "pushoverAppTokenSet": {
+                    "type": "boolean"
+                },
+                "pushoverUserKey": {
+                    "type": "string"
+                },
+                "channels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "eventKinds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "events": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "boolean"
+                    }
+                },
+                "language": {
+                    "type": "string"
+                },
+                "ntfyServer": {
+                    "type": "string"
+                },
+                "ntfyTokenMasked": {
+                    "type": "string"
+                },
+                "ntfyTokenSet": {
+                    "type": "boolean"
+                },
+                "ntfyTopic": {
+                    "type": "string"
+                },
+                "telegramBotTokenMasked": {
+                    "type": "string"
+                },
+                "telegramBotTokenSet": {
+                    "type": "boolean"
+                },
+                "telegramChatId": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "webhookUrl": {
+                    "type": "string"
+                }
+            }
+        },
         "api.Container": {
             "type": "object",
             "properties": {
@@ -1574,6 +1957,58 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "api.RemoteAccessSettingsResponse": {
+            "type": "object",
+            "properties": {
+                "authKeyMasked": {
+                    "type": "string"
+                },
+                "authKeySet": {
+                    "type": "boolean"
+                },
+                "containerName": {
+                    "type": "string"
+                },
+                "defaultImage": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "serveHttps": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "api.RemoteAccessSettingsUpdate": {
+            "type": "object",
+            "properties": {
+                "authKey": {
+                    "type": "string"
+                },
+                "clearAuthKey": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "serveHttps": {
+                    "type": "boolean"
                 }
             }
         },
@@ -1932,6 +2367,85 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "label": {
+                    "type": "string"
+                }
+            }
+        },
+        "providers.RemoteAccessPhase": {
+            "type": "string",
+            "enum": [
+                "disabled",
+                "pulling",
+                "starting",
+                "running",
+                "error"
+            ],
+            "x-enum-varnames": [
+                "RemoteAccessDisabled",
+                "RemoteAccessPulling",
+                "RemoteAccessStarting",
+                "RemoteAccessRunning",
+                "RemoteAccessError"
+            ]
+        },
+        "providers.RemoteAccessStatus": {
+            "type": "object",
+            "properties": {
+                "backendState": {
+                    "description": "BackendState mirrors tailscaled: NoState, NeedsLogin, NeedsMachineAuth,\nStopped, Starting, Running.",
+                    "type": "string"
+                },
+                "checkedAt": {
+                    "type": "string"
+                },
+                "containerState": {
+                    "description": "ContainerState is Docker's state string, or \"absent\".",
+                    "type": "string"
+                },
+                "dnsName": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "health": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "httpUrls": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "httpsUrl": {
+                    "type": "string"
+                },
+                "loginUrl": {
+                    "description": "LoginUrl is set while the node waits for an interactive login.",
+                    "type": "string"
+                },
+                "magicDnsEnabled": {
+                    "type": "boolean"
+                },
+                "phase": {
+                    "$ref": "#/definitions/providers.RemoteAccessPhase"
+                },
+                "tailscaleIps": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "version": {
                     "type": "string"
                 }
             }

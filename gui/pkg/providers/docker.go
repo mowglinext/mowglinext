@@ -19,7 +19,7 @@ type DockerProvider struct {
 	client *docker.Client
 }
 
-func NewDockerProvider() types2.IDockerProvider {
+func NewDockerProvider() *DockerProvider {
 	client, err := docker.NewClientWithOpts(docker.FromEnv)
 	if err != nil {
 		logrus.Error(err)
@@ -99,6 +99,10 @@ func (i *DockerProvider) ContainerInspect(ctx context.Context, containerID strin
 		// must be demultiplexed with stdcopy; a TTY stream is raw and would be
 		// corrupted by stdcopy. Mirrors what the docker CLI does.
 		details.Tty = inspected.Config.Tty
+		details.Labels = make(map[string]string, len(inspected.Config.Labels))
+		for k, v := range inspected.Config.Labels {
+			details.Labels[k] = v
+		}
 	}
 	if inspected.ContainerJSONBase != nil && inspected.ContainerJSONBase.State != nil {
 		details.State = inspected.ContainerJSONBase.State.Status
