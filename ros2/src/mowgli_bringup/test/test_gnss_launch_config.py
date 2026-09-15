@@ -50,7 +50,7 @@ def test_full_system_no_longer_includes_internal_universal_launch() -> None:
     assert all(not location.endswith("universal_gnss.launch.py") for location in included_locations)
     assert all(
         not (
-            isinstance(entity, Node) and entity.package == "universal_gnss_ros2"
+            isinstance(entity, Node) and entity.node_package == "universal_gnss_ros2"
         )
         for entity in launch_description.entities
     )
@@ -61,8 +61,8 @@ def _bridge_nodes(launch_description):
         entity
         for entity in launch_description.entities
         if isinstance(entity, Node)
-        and entity.package == "mowgli_gnss_bridge"
-        and entity.executable == "universal_gnss_topic_bridge"
+        and entity.node_package == "mowgli_gnss_bridge"
+        and entity.node_executable == "universal_gnss_topic_bridge"
     ]
 
 
