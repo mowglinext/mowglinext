@@ -132,6 +132,11 @@ procedure. It supersedes Kilted-specific build details in the September 3 codema
 | [`FAQ.md`](../../wiki/FAQ.md) | General / deployment / navigation / development Q&A. | **stale localizer + sim answers** — see historical table |
 | [`Simulation.md`](../../wiki/Simulation.md) | Operator-facing sim guide — still Gazebo-era. | superseded — see historical table |
 
+Current firmware feature reference: [`BLADE-REVERSE.md`](../../firmware/stm32/ros_usbnode/BLADE-REVERSE.md)
+— blade command frames, reversal guard, software tests and the outstanding
+coast-down measurement with a dedicated 500 validation image. Audience: contributor,
+operator and maintainer. Status: current; physical guard acceptance remains pending.
+
 ## Historical / superseded — do NOT treat as current
 
 | Doc | Last touched | Why it is not current | Superseded by |
