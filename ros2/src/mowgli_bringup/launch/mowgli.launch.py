@@ -218,14 +218,20 @@ def generate_launch_description() -> LaunchDescription:
             {"ticks_per_meter": float(robot_params.get("ticks_per_meter", 300.0))},
             # Drive-motor wheel-velocity PID + feedforward, pushed to the STM32
             # firmware so the GUI can retune the per-wheel loop without
-            # reflashing. Fallback defaults match the mowgli_bringup template.
-            {"wheel_pid_kp": float(robot_params.get("wheel_pid_kp", 0.2))},
-            {"wheel_pid_ki": float(robot_params.get("wheel_pid_ki", 0.092))},
-            {"wheel_pid_kd": float(robot_params.get("wheel_pid_kd", 0.01))},
+            # reflashing. Fallback defaults match the mowgli_bringup template
+            # (firmware PWM units, field-validated 2026-09-15; guarded by
+            # test_drive_pid_defaults.py together with the bridge's declared
+            # defaults).
+            {"wheel_pid_kp": float(robot_params.get("wheel_pid_kp", 10.0))},
+            {"wheel_pid_ki": float(robot_params.get("wheel_pid_ki", 2000.0))},
+            {"wheel_pid_kd": float(robot_params.get("wheel_pid_kd", 0.0))},
             {"wheel_pid_integral_limit": float(robot_params.get(
-                "wheel_pid_integral_limit", 15.0))},
+                "wheel_pid_integral_limit", 45.0))},
             {"wheel_pid_pwm_per_mps": float(robot_params.get(
                 "wheel_pid_pwm_per_mps", 282.135))},
+            # Motor stiction estimate the wheel_pid_* set must be able to
+            # bridge; hardware_bridge refuses to push a set that cannot.
+            {"deadband_pwm": float(robot_params.get("deadband_pwm", 40.0))},
             # IMU calibration tuning (operator-tunable via the GUI).
             {"imu_cal_samples": int(robot_params.get("imu_cal_samples", 200))},
             {"imu_cal_persist_path": str(robot_params.get(

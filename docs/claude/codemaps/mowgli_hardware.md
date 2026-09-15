@@ -61,6 +61,7 @@
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/imu_liveness.hpp` | 127 | Pure: `IsImuSampleDead`, `UpdateImuLiveness`, `IsCalibrationPlausible`, `IsDeadSensorCovariance`; `kMinPlausibleAccelMps2`=3, `kImuDeadSampleThreshold`=45 |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/blade_gate.hpp` | 49 | Pure: `blade_enable_allowed(requested, mowing_enabled)` — suppresses ENABLE only |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/cmd_vel_slew.hpp` | 42 | Pure final-command slew limiter: immediate exact stop, bounded deceleration through zero before reversal, separate acceleration/deceleration rates |
+| `ros2/src/mowgli_hardware/include/mowgli_hardware/drive_gain_sanity.hpp` | 45 | Pure: `DriveGainsBridgePwm` / `DriveGainsBridgeDeadband(kp, integral_limit, pwm_per_mps, deadband_pwm)` — can the firmware wheel PI (unscaled PWM units) push a wheel through the stiction deadband at 0.03 m/s? Gate for `send_drive_pid()` and the `wheel_pid_*` set-parameters path (2026-09-15 stiction lock) |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/odometry_publisher.hpp` | 126 | `OdometryPublisher` API (`handle_packet`, `reset`, `wheels_stationary`, `tyre_travelled`) |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/clock_fit.hpp` | 121 | `HostFirmwareClockFit` (window 100 samples, reset gap 5000 ms defaults) |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/packet_handler.hpp` | 172 | `PacketHandler` API + counters (`rx_ok`, `rx_crc_errors`, `rx_overflow`, `rx_cobs_errors`) |
@@ -77,6 +78,7 @@
 | `ros2/src/mowgli_hardware/test/test_serial_port.cpp` | 67 | `write_all` over a pty (links `util`), closed-port failure |
 | `ros2/src/mowgli_hardware/test/test_blade_gate.cpp` | 43 | ENABLE suppressed only when `mowing_enabled=false`; DISABLE always passes; constexpr |
 | `ros2/src/mowgli_hardware/test/test_cmd_vel_slew.cpp` | 44 | Ramp/deceleration limits, immediate stop, bounded reversal using the measured field sample, no overshoot |
+| `ros2/src/mowgli_hardware/test/test_drive_gain_sanity.cpp` | 73 | Template defaults pass, the old 0.2/15 set fails, inclusive boundary, integral-limit-only bridging, non-finite inputs never pass |
 | **`firmware/`** (C reference copy for the STM32 side — not built by colcon) | | |
 | `ros2/src/mowgli_hardware/firmware/mowgli_protocol.h` | 535 | `PKT_ID_*`, `HL_MODE_*`, `pkt_*_t` structs — **at `MOWGLI_PROTOCOL_VERSION 3`, stale vs v6** |
 | `ros2/src/mowgli_hardware/firmware/mowgli_comms.c` / `.h` | 312 / 249 | `mowgli_comms_init/process_rx/register_handler/send_*`, 512 B rx buf, 8 handlers |
@@ -165,7 +167,8 @@ Layering at launch (`mowgli.launch.py` :194–254, later entries override earlie
 | `wheel_track`, `ticks_per_meter` | :357, :370 | template `mowgli_robot.yaml` :32, :43 (399.0) | `ticks_per_meter` range 50–5000, pushed in `LlSetDrivePid`; `wheel_track` pushed as `wheel_base` in `LlSetKinematics` |
 | `max_mps` | :379 | code default 0.5 (template :49 is **not forwarded** by `mowgli.launch.py`) | range 0.01–0.5; `LlSetKinematics`; firmware can only lower its compiled cap |
 | `max_charge_voltage`, `max_charge_current`, `one_wheel_lift_emergency_ms`, `both_wheels_lift_emergency_ms`, `tilt_emergency_ms`, `stop_button_emergency_ms`, `play_button_clear_emergency_ms` | :386–392 | code defaults (template :57–63 is **not forwarded** by `mowgli.launch.py`) | `LlSetSafetyLimits`; firmware clamps so the wire can only tighten |
-| `wheel_pid_kp/ki/kd/integral_limit/pwm_per_mps` | :401–408 | template :72–76 via launch | bounds `kMin/MaxRuntimeWheel*` / `*PwmPerMps` (:82–91) mirror firmware clamps |
+| `wheel_pid_kp/ki/kd/integral_limit/pwm_per_mps` | `declare_parameters()` (`bounded_double`) | template :137–141 via launch (10 / 2000 / 0 / 45 / 282.135, firmware PWM units) | bounds `kMin/MaxRuntimeWheel*` / `*PwmPerMps` mirror firmware clamps; declared defaults = `kTemplateWheelPid*`, pinned to the template by `mowgli_bringup/test/test_drive_pid_defaults.py` |
+| `deadband_pwm` | `declare_parameters()` (`startup_double`, read-only) | template :145 via launch (40.0) | stiction gate: if `DriveGainsBridgeDeadband()` fails at startup the bridge logs ERROR, sets `drive_gains_below_deadband_` and `send_drive_pid()` substitutes the template gains (`kTemplateWheelPid*`) on the wire while keeping the configured `ticks_per_meter`/`pwm_per_mps` (throttled ERROR on every send); a live `wheel_pid_*`/`ticks_per_meter` change that would fail the gate is rejected with a reason, one that passes clears the flag |
 | `yaw_kp`, `yaw_ki`, `yaw_trim_limit_mps`, `yaw_loop_enabled`, `yaw_gyro_sign` | :422–429 | template :84–91 via launch | `LlSetYawPid`; `gyro_bias_radps` comes from the IMU cal, not a param |
 | `min_linear_vel` | :433 | code (0.05) | sub-deadband |vx| → 0 in `on_cmd_vel` |
 | `cmd_vel_linear_accel_limit`, `cmd_vel_linear_decel_limit`, `cmd_vel_angular_accel_limit`, `cmd_vel_angular_decel_limit` | :480–497 | `hardware_bridge.yaml` | startup-only 0.30 / 0.60 m/s² and 1.0 / 2.0 rad/s²; zero stops immediately, reversals decelerate through zero |

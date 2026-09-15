@@ -2,7 +2,7 @@
 
 Complete guide to all configuration files and parameters in the Mowgli ROS2 system.
 
-This documentation is for ROS2 Kilted. The simulator is Webots — see [Simulation](Simulation).
+This documentation is for ROS2 Lyrical (Ubuntu 26.04 containers). The simulator is Webots — see [Simulation](Simulation).
 
 [CLAUDE.md](https://github.com/mowglinext/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference. If any section here contradicts it, CLAUDE.md wins.
 
@@ -377,8 +377,8 @@ bt_navigator:
     default_nav_to_pose_bt_xml: ""
     default_nav_through_poses_bt_xml: ""
 
-    enable_stamped_cmd_vel: true           # Kilted: all Nav2 nodes use TwistStamped
-    # Kilted auto-loads plugins; no manual registration needed
+    enable_stamped_cmd_vel: true           # since Kilted: all Nav2 nodes use TwistStamped
+    # Nav2 auto-loads plugins; no manual registration needed
 ```
 
 #### controller_server Configuration
@@ -387,7 +387,7 @@ bt_navigator:
 controller_server:
   ros__parameters:
     use_sim_time: false
-    enable_stamped_cmd_vel: true           # Kilted requirement
+    enable_stamped_cmd_vel: true           # required since Kilted
 
     # Velocity feedback for the controllers. MUST be set: Nav2 defaults to
     # "odom", which NOTHING publishes on this robot, so RPP/FTC would get zero
@@ -778,7 +778,7 @@ Access diagnostics at `http://<mower-ip>:4006/#/diagnostics` → Localization / 
 ```yaml
 twist_mux:
   ros__parameters:
-    # Kilted Kaiju: all Nav2 nodes use TwistStamped
+    # since Kilted: all Nav2 nodes use TwistStamped
     use_stamped: true
 
     # Input topics (velocity sources)

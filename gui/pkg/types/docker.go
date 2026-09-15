@@ -20,6 +20,8 @@ type ContainerDetails struct {
 	Running    bool
 	Privileged bool
 	Binds      []string
+	// Labels are the container's config labels (empty map when none).
+	Labels map[string]string
 }
 
 type ContainerRunSpec struct {

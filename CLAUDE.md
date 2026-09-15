@@ -53,6 +53,7 @@ One index per source area: a "Where to look" task table, every file with its pur
 | [`docs/claude/high-level-api.md`](docs/claude/high-level-api.md) | Touching `HighLevelControl`/`HighLevelStatus`, BT states, area recording, or manual mowing |
 | [`docs/claude/ros2-specifics.md`](docs/claude/ros2-specifics.md) | Working on the localizer, navigation, coverage, GPS fusion, IMU calibration, or Nav2 tuning (detail behind the invariants) |
 | [`docs/WEBOTS_SIM.md`](docs/WEBOTS_SIM.md) | Touching the Webots world, the MowgliMower PROTO, or `kinematic_drive.py` (ODE quirks that WILL bite you) |
+| [`docs/MQTT_CONTROL.md`](docs/MQTT_CONTROL.md) | Touching `mqtt_bridge_node`, or integrating an external tool (Home Assistant, a mobile app) over MQTT — the topic/JSON/command contract |
 | [`docs/claude/commands.md`](docs/claude/commands.md) | Building/testing, or after changing `.msg`/`.srv` files (code-generation workflow) |
 | [`docs/claude/session-monitoring.md`](docs/claude/session-monitoring.md) | Running a mowing/tuning test — record the JSONL session timeline in parallel |
 | [`docs/claude/contributing.md`](docs/claude/contributing.md) | Code style, commit conventions, git/branch workflow, recommended skills/agents |

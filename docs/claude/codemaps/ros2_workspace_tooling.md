@@ -27,7 +27,7 @@
 | Foxglove panels for the sim | `ros2/foxglove/mowgli_sim.json` (copied to `/ros2_ws/foxglove/` in the simulation stage, Dockerfile L552) |
 | Bare-metal (non-Docker) robot deploy | `ros2/systemd/mowgli.service` + `make deploy` / `make backup-maps` (`ROBOT_HOST`, `ROBOT_USER`) |
 | Submodule pins | `.gitmodules` (`universal-gnss` → `mowglinext` fork, branch `main`; `opennav_coverage` → upstream `main`) |
-| Container startup env | `ros2/scripts/ros2_entrypoint.sh` (sources kilted + `/opt/ublox_msgs` + `/ros2_ws/install`) |
+| Container startup env | `ros2/scripts/ros2_entrypoint.sh` (sources lyrical + `/opt/ublox_msgs` + `/ros2_ws/install`) |
 
 ## Files
 | File | Lines | Purpose |
@@ -36,7 +36,7 @@
 | `ros2/README.md` | 912 | Stack reference for the ROS2 workspace (architecture, packages, TF tree, topic/service table, build + Docker + launch docs) |
 | `ros2/Makefile` | 179 | Devcontainer entry: build/test/sim/e2e/docker/lint/format/deploy targets; `DEV_PACKAGES` default L9 |
 | `ros2/Dockerfile` | 559 | Production multi-stage image (10 stages, see Runtime surface); build context = **repo root** |
-| `ros2/Dockerfile.dev` | 173 | Orphaned dev image (header says Jazzy/Gazebo, installs `ros-kilted-slam-toolbox` L47 + `ros-kilted-ros-gz-sim` L71); context = `ros2/`; no compose/CI consumer |
+| `ros2/Dockerfile.dev` | — | Removed in the Lyrical migration (#602); the development image is `.devcontainer/Dockerfile` |
 | `ros2/CPPLINT.cfg` | 3 | cpplint filters (`-whitespace/newline,-runtime/string,-build/namespaces,-build/include_order`), linelength 100 |
 | `.gitmodules` | 15 | Two submodule pins + the issue #395 fork rationale comment |
 | `ros2/systemd/mowgli.service` | 54 | Bare-metal unit: `User=pi`, `WorkingDirectory=/opt/mowgli_ros2`, `ExecStart=/opt/mowgli_ros2/scripts/ros2_entrypoint.sh ros2 launch mowgli_bringup mowgli.launch.py`, `ROS_DOMAIN_ID=42`, `KillSignal=SIGINT` |
@@ -49,7 +49,7 @@
 | `ros2/scripts/build.sh` | 98 | `colcon build --symlink-install` over `sync_workspace_packages.sh --print-base-paths`; cwd fixed to `/ros2_ws` |
 | `ros2/scripts/test.sh` | 80 | `colcon test --return-code-on-test-failure` + `colcon test-result --verbose` |
 | `ros2/scripts/sync_workspace_packages.sh` | 201 | Symlinks package roots into `/ros2_ws/src`; `INCLUDE_OPENNAV_COVERAGE_STACK=1`, `UNIVERSAL_GNSS_PATH`, `MONOREPO_ROOT`, `WORKSPACE_ROOT` env |
-| `ros2/scripts/ros2_entrypoint.sh` | 35 | Image ENTRYPOINT; hardcodes `/opt/ros/kilted/setup.bash` (L15) |
+| `ros2/scripts/ros2_entrypoint.sh` | 35 | Image ENTRYPOINT; hardcodes `/opt/ros/lyrical/setup.bash` (L15) |
 | `ros2/scripts/start_vnc.sh` | 64 | TigerVNC `:1` + noVNC `6080` + `sim_full_system.launch.py headless:=false`; compose `simulation-gui` command |
 | `ros2/scripts/start_dev_sim.sh` | 79 | `Dockerfile.dev`-only entry: first-run `build.sh`, VNC, `LAUNCH_FILE`/`LAUNCH_ARGS` env; echoes non-existent `make dev-*` targets (L63-66) |
 | `ros2/scripts/sim-stop.sh` | 66 | Graceful-then-SIGKILL stop of `ros2 launch`, Webots, listed node executables; DDS shm + Webots IPC cleanup |
@@ -106,7 +106,7 @@
 ### Docker image stages (`ros2/Dockerfile`, context = repo root; compose files use `context: ..`, CI uses `context: .`)
 | Stage | Line | From | Contents |
 |-------|------|------|----------|
-| `gtsam-builder` | 13 | `ros:kilted-ros-base` | GTSAM 4.3a1 from source → `/opt/gtsam` |
+| `gtsam-builder` | 13 | `ros:lyrical-ros-base` | GTSAM 4.3a1 from source → `/opt/gtsam` |
 | `fields2cover-builder` | 50 | ros base | F2C v2.0.0 → `/opt/fields2cover-200` (kept on disk as revert fallback, NOT ldconfig'd) |
 | `fields2cover-v3-builder` | 91 | ros base | F2C v3 @ `884d895b…` + `<iomanip>` patch → `/opt/fields2cover-300` |
 | `ublox-msgs-builder` | 142 | ros base | `ublox_ubx_msgs` + `ublox_ubx_interfaces` from `cedbossneo/ublox_dgnss` (`UBLOX_DGNSS_SHA=5e1d0cf…`) → `/opt/ublox_msgs` (schema resolution for foxglove_bridge only) |
@@ -115,7 +115,7 @@
 | `build-interfaces` | 357 | deps | `mowgli_interfaces` only (cache layer) |
 | `build` | 374 | build-interfaces | COPY `ros2/src/` + `tools/motor/`; `touch` COLCON_IGNORE in the 5 upstream `opennav_coverage` subpackages (L387-392); `colcon build -DBUILD_TESTING=OFF --parallel-workers 2` (L404-410); `colcon test -L gtest … \|\| true` (non-blocking, L416-419) |
 | `runtime` | 425 | base | `install/` from build, `/opt/ublox_msgs`, launch+config dirs re-COPYed, `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, entrypoint (L466), `mow_session_monitor.py` → `/ros2_ws/scripts/` (L471); `CMD ros2 launch mowgli_bringup mowgli.launch.py` (L475) |
-| `simulation` | 487 | runtime | Webots R2025a (amd64 only, `TARGETARCH` guard), xvfb, TigerVNC/noVNC/openbox, `ros-kilted-webots-ros2`, `is_wsl()` patch, CRLF fix, `start_vnc.sh`, `foxglove/`; `EXPOSE 8765 6080`; `CMD sim_full_system.launch.py headless:=true use_rviz:=false` (L559) |
+| `simulation` | 487 | runtime | Webots R2025a (amd64 only, `TARGETARCH` guard), xvfb, TigerVNC/noVNC/openbox, `webots_ros2` built from a pinned source revision, `is_wsl()` patch, CRLF fix, `start_vnc.sh`, `foxglove/`; `EXPOSE 8765 6080`; `CMD sim_full_system.launch.py headless:=true use_rviz:=false` (L559) |
 
 ### Who runs what
 - `install/compose/docker-compose.base.yml` service `mowgli` (container `mowgli-ros2`, image `${MOWGLI_ROS2_IMAGE}`) overrides CMD with `ros2 launch mowgli_bringup full_system.launch.py enable_foxglove:=${ENABLE_FOXGLOVE:-true}`; mounts `mowgli_maps:/ros2_ws/maps`, `./docker/config/mowgli:/ros2_ws/config`.
@@ -167,7 +167,7 @@ docker build -f ros2/Dockerfile --target runtime -t mowgli-ros2 .    # from repo
 docker compose -f docker/docker-compose.simulation.yaml up dev-sim   # then: exec dev-sim bash -c "source /ros2_ws/install/setup.bash && python3 /ros2_ws/src/e2e_test.py"
 ```
 - Test files in this area: `ros2/scripts/test_check_config_drift.py` (pytest; pins the three drift checks + that the committed yaml pair is clean). The E2E harnesses are not colcon tests; nothing in CI runs them. Package unit tests live in each package (`colcon test`, run by `Build & Test (ROS2 kilted)`); the Docker `build` stage runs them non-blocking.
-- Diagnostic scripts on the real robot: `docker cp ros2/scripts/diagnostics/X.py mowgli-ros2:/tmp/ && docker exec mowgli-ros2 bash -c 'source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && python3 /tmp/X.py'` (`ros2/scripts/diagnostics/README.md`).
+- Diagnostic scripts on the real robot: `docker cp ros2/scripts/diagnostics/X.py mowgli-ros2:/tmp/ && docker exec mowgli-ros2 bash -c 'source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && python3 /tmp/X.py'` (`ros2/scripts/diagnostics/README.md`).
 
 ## Change coupling — "if you change X, also update Y"
 - **GTSAM / F2C v3 pin or cmake flags** in `ros2/Dockerfile` ↔ the same recipe + cache keys (`gtsam-4.3a1-…`, `f2c-3.0.0-884d895-…`) in `.github/workflows/ros2-ci.yml`, and `.devcontainer/Dockerfile` (mirrors stage 0). F2C install prefix ↔ `ros2/src/mowgli_coverage/CMakeLists.txt:42` (`find_package(Fields2Cover 3.0.0 … PATHS /opt/fields2cover-300)`).
@@ -184,13 +184,13 @@ docker compose -f docker/docker-compose.simulation.yaml up dev-sim   # then: exe
 
 ## Pitfalls
 - `make docker` / `make docker-sim` build with context `ros2/` (`docker build … .`, Makefile L133-143) but `ros2/Dockerfile` COPYs `ros2/src/…` and `tools/motor/…` relative to the **repo root** — they fail; build from the root (`-f ros2/Dockerfile .`) as `ros2-docker.yml` and the compose files do. Consequently `ros2/.dockerignore` is inert (no root `.dockerignore` exists) — `build/`, `install/`, `.git` are sent in the context.
-- `ros2/Dockerfile.dev` uses context `ros2/` (`COPY scripts/…`, L156-161), advertises Jazzy/Gazebo and `make dev-*` targets that do not exist in `ros2/Makefile`, and pulls `ros-kilted-slam-toolbox` + `ros-kilted-ros-gz-*`; no compose service or workflow builds it. Do not treat it as the devcontainer (that is `.devcontainer/Dockerfile`).
+- `ros2/Dockerfile.dev` no longer exists (removed in the Lyrical migration, #602); anything that still references it should point at `.devcontainer/Dockerfile`.
 - `ros2/Dockerfile` L178 (`Acquire::ForceIPv4`) is labelled "LOCAL-ONLY (do not commit)" (L175) yet is committed and reaches every CI/ghcr image.
 - `make sim` / `make e2e-test` export `DISPLAY=:99` but do not start Xvfb (compose does: `Xvfb :99 … &`); run Xvfb yourself in the devcontainer or Webots fails to open a display.
 - `make e2e-test` is **self-contained** (kills any running sim first, rebuilds, waits a fixed 90 s). `src/e2e_test.py` still drives Gazebo (`gz service /world/garden/…`, L561/577; "garden.sdf" L1447) although the sim is Webots (`sim_full_system.launch.py:20`, `worlds_webots/mowgli_garden.wbt`), and subscribes topics nothing publishes (`/coverage_planner_node/coverage_path` L179, `/gps_degradation_sim/status` L195, `/cmd_vel_smoothed` L203); `e2e_test_no_lidar.py` subscribes `/mowgli/coverage/path` (L102) and its docstring/comments (L12, L458) still say robot_localization dual EKF (see CLAUDE.md Invariant 1). Expect path-deviation and map criteria to report no data until these are re-pointed.
 - `src/precision_monitor.py` subscribes `/gps/pose_sim` (L109) — no publisher in the tree; the `/precision/*` topics stay at their defaults. Neither `precision_monitor.py` copy is in any image.
 - `ros2/scripts/e2e_test.py` and `ros2/scripts/precision_monitor.py` are stale duplicates of the `ros2/src/` versions (the scripts copy still references `/pose`, SLAM map growth, `/ros2_ws/src/scripts/e2e_test.py`); edit the `ros2/src/` files.
-- `systemd/mowgli.service` sets `ROS_DISTRO=jazzy` (L36) and its comment (L19) says jazzy, while `ros2_entrypoint.sh` hardcodes `/opt/ros/kilted/setup.bash` (L15); `make deploy` rsyncs only `install/` to `/opt/mowgli_ros2/install/` but the unit's `ExecStart` needs `/opt/mowgli_ros2/scripts/ros2_entrypoint.sh` (never synced). The unit `Documentation=` URL points at `cedricziel/mowgli-ros2`. The supported deployment is the Docker installer (`install/mowglinext.sh`); treat the unit as unmaintained.
+- `systemd/mowgli.service` sets `ROS_DISTRO=jazzy` (L36) and its comment (L19) says jazzy, while `ros2_entrypoint.sh` hardcodes `/opt/ros/lyrical/setup.bash` (L15); `make deploy` rsyncs only `install/` to `/opt/mowgli_ros2/install/` but the unit's `ExecStart` needs `/opt/mowgli_ros2/scripts/ros2_entrypoint.sh` (never synced). The unit `Documentation=` URL points at `cedricziel/mowgli-ros2`. The supported deployment is the Docker installer (`install/mowglinext.sh`); treat the unit as unmaintained.
 - `make backup-maps` help text says "Pull SLAM maps" (L48) and pulls `/opt/mowgli_ros2/maps/*` — the Docker deployment keeps maps in the `mowgli_maps` volume mounted at `/ros2_ws/maps`; there is no SLAM (CLAUDE.md "Do NOT re-introduce slam_toolbox"). Same for `sim-stop.sh` L63-64 (`garden_map.posegraph`), `robot_monitor.sh` L120/L209-212 ("SLAM" labels on `map→odom` and `/map`), and `mow_session_monitor.py` comments mentioning `ekf_map_node` (L118) — labels only, harmless.
 - `Makefile` `lint`/`format`/`format-check` glob all of `src/` **including** `opennav_coverage` submodule sources (Makefile L145-166) — use `./scripts/format.sh --check` (excludes it, L27) to match CI; `make format` will rewrite submodule files.
 - `format.sh` warns (does not fail) on clang-format ≠ 18; CI pins 18 and the pre-commit hook pins v18.1.8 — a brew clang-format 22 silently produces diffs CI rejects.

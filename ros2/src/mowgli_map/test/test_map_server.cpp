@@ -1679,6 +1679,39 @@ TEST_F(DockCalibrationCaptureTest, RejectsWhenTooFewAntennaSamples)
   EXPECT_FALSE(node_->docking_pose_set_for_test());
 }
 
+// dock_set_gps_avg_min_samples/_window_s were hardcoded C++ defaults with no
+// declare_parameter call until the #497 field rejection ("only 3 RTK-Fixed
+// /gps/fix samples in 3.0 s") showed the pair could be mathematically
+// unreachable at a 1 Hz gnss_profile_rate_hz — see the call site in
+// map_server_node.cpp. This proves the override actually reaches the gate
+// instead of being silently ignored.
+TEST_F(DockCalibrationCaptureTest, AvgMinSamplesIsConfigurable)
+{
+  rclcpp::NodeOptions opts;
+  opts.append_parameter_override("resolution", 0.1);
+  opts.append_parameter_override("map_size_x", 10.0);
+  opts.append_parameter_override("map_size_y", 10.0);
+  opts.append_parameter_override("map_frame", "map");
+  opts.append_parameter_override("tool_width", 0.2);
+  opts.append_parameter_override("map_file_path", "");
+  opts.append_parameter_override("publish_rate", 1.0);
+  opts.append_parameter_override("dock_set_gps_avg_min_samples", 3);
+  node_.reset();
+  node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
+
+  arm_gates_one_through_three();
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+  push_antenna_samples(1.0, 2.0, /*count=*/3);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->use_gps_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::PRESERVE;
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_TRUE(res->success);
+}
+
 TEST_F(DockCalibrationCaptureTest, RejectsWhenLeverArmNotYetResolved)
 {
   arm_gates_one_through_three();

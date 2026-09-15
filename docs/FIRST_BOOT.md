@@ -1,5 +1,7 @@
 # First Boot Checklist
 
+> Building the mower from scratch? Start with the illustrated [build manual](https://mowgli.garden/build/) — this checklist is its post-install chapter in short form.
+
 After `mowglinext.sh` finishes and the containers come up, walk through this once per new install. Most of it is docked-only, but two steps do drive the mower a short, supervised distance — the IMU yaw calibration (§4) and the optional drive tuning (§6). Do those only when you are physically at the robot and ready to catch it.
 
 > **After the onboarding wizard is not the same as "ready to mow."** Finishing the GUI wizard writes your install choices and (if it ran on the dock) the IMU-yaw + dock pose, then restarts ROS2. It does **not** by itself record a mowing area, run drive tuning, or guarantee an RTK-Fixed datum. Use this checklist to close those gaps before the first autonomous mow.

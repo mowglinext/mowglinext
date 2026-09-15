@@ -6,6 +6,7 @@ import {
     BgColorsOutlined,
     BulbOutlined,
     CloudOutlined,
+    BellOutlined,
     CloudSyncOutlined,
     CodeOutlined,
     CompassOutlined,
@@ -41,6 +42,7 @@ const SECTION_ICONS: Record<string, React.ReactNode> = {
     compass: <CompassOutlined />,
     cloud: <CloudOutlined />,
     "cloud-sync": <CloudSyncOutlined />,
+    bell: <BellOutlined />,
     code: <CodeOutlined />,
 };
 

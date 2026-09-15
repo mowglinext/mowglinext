@@ -110,19 +110,40 @@ mowgli:
     tilt_emergency_ms: 500            # [ms] tilt trip (mechanical + accelerometer)
     stop_button_emergency_ms: 100     # [ms] stop-button trip
     play_button_clear_emergency_ms: 2000 # [ms] hold-PLAY-to-clear-emergency
-    # Drive-motor wheel-velocity PID + feedforward (consumed by
+    # Drive-motor wheel-velocity PI + feedforward (consumed by
     # hardware_bridge_node, pushed to the STM32 firmware over the serial link so
-    # the GUI can retune the per-wheel loop without reflashing). These are the
-    # pre-calibration field defaults (surfaced in the GUI as "PID de vitesse des
-    # roues" / "Anticipation"); a per-robot auto-tune result overrides them in the
-    # sparse installed config. The firmware re-validates and clamps every value on
-    # receipt (kp 0-200, ki 0-20000, kd 0-500, integral_limit 0-255,
-    # pwm_per_mps 50-600).
-    wheel_pid_kp: 0.2            # proportional gain [PWM per m/s]
-    wheel_pid_ki: 0.092         # integral gain [PWM per (m/s·s)]
-    wheel_pid_kd: 0.01          # derivative gain [PWM per (m/s²)] (0 = off)
-    wheel_pid_integral_limit: 15.0   # anti-windup clamp on the integral term [PWM]
+    # the GUI can retune the per-wheel loop without reflashing). The firmware
+    # applies these UNSCALED in PWM units: kp is PWM per m/s of speed error, ki
+    # is PWM per (m/s · s) of integrated error, integral_limit clamps the
+    # integrator in PWM (motor max 255). Why these numbers (field-validated
+    # 2026-09-15, one-wheel-stalled samples 15.6 % → 5.4 %, no dig latches):
+    #   * The motors have a ~40 PWM static-friction deadband. At the 0.03 m/s
+    #     the inner wheel of a 0.20 m arc is commanded to, feedforward gives
+    #     only ~8.5 PWM, so the integrator must be ALLOWED to reach
+    #     40 − 8.5 ≈ 32 PWM: integral_limit 45 (the old 15 could never break
+    #     stiction and the inner wheel simply did not turn).
+    #   * ki 2000 winds from 0 to the deadband in ~0.5 s at a 0.03 m/s error
+    #     (2000 × 0.03 × 0.5 s = 30 PWM); the old 0.092 moved 0.0028 PWM/s.
+    #   * kp 10 keeps the P term ≤ 3 PWM at a 0.3 m/s step, so tracking
+    #     stiffness comes from the integrator, not a jerky P response.
+    #   * kd 0: the 50 Hz tick-quantised wheel speed makes a D term pure noise.
+    # A per-robot auto-tune result overrides these in the sparse installed
+    # config. The firmware re-validates and clamps every value on receipt
+    # (kp 0-200, ki 0-20000, kd 0-500, integral_limit 0-255,
+    # pwm_per_mps 50-600). hardware_bridge_node replaces, on the wire, any gain
+    # set whose integral_limit + kp·0.03 + pwm_per_mps·0.03 stays below
+    # deadband_pwm with these template gains (and logs an ERROR naming the
+    # offending values; the file is not modified); the GUI tuner floors its
+    # proposals at kp 2 / ki 200 / integral_limit 32 for the same reason.
+    wheel_pid_kp: 10.0           # proportional gain [PWM per m/s]
+    wheel_pid_ki: 2000.0         # integral gain [PWM per (m/s·s)]
+    wheel_pid_kd: 0.0            # derivative gain [PWM per (m/s²)] (0 = off)
+    wheel_pid_integral_limit: 45.0   # anti-windup clamp on the integral term [PWM]
     wheel_pid_pwm_per_mps: 282.135   # open-loop feedforward velocity→PWM scale
+    # Static-friction deadband estimate of the drive motors [PWM]. Only a sanity
+    # gate: hardware_bridge_node checks that the wheel_pid_* set above can
+    # bridge it (see the comment there) and never sends it to the firmware.
+    deadband_pwm: 40.0
     # Firmware gyro yaw-rate loop (Option C, 2026-07-17, task #33/#34 —
     # replaces the removed host-side angular_rate_* PI). Consumed by
     # hardware_bridge_node, pushed to the STM32 over PACKET_ID_LL_SET_YAW_PID
@@ -948,3 +969,36 @@ mowgli:
     led_spi_speed_hz: 2400000      # 3 SPI bits per WS2812 bit = 1.25 us. Do NOT retune
                                    # without re-reading ws2812_encoder.hpp — the symbol
                                    # table is derived from this exact clock.
+
+    # -----------------------------------------------------------------
+    # MQTT bridge (mowgli_monitoring/mqtt_bridge_node)
+    # -----------------------------------------------------------------
+    # Optional read-only monitoring + high-level command bridge to an MQTT
+    # broker, for external consumers such as Home Assistant (see
+    # docs/MQTT_CONTROL.md for the full topic/JSON contract). Read-only
+    # w.r.t. the robot except for <mqtt_topic_prefix>/command, which relays
+    # a decimal HighLevelControl command code to the same
+    # /behavior_tree_node/high_level_control service the GUI's buttons use
+    # — an open/reachable broker is remote control of the mower.
+    #
+    # OFF by default, matching led_enabled/lidar_enabled above: opt-in,
+    # since enabling it means the robot dials out to a broker. The broker
+    # can be the bundled `mowgli-mqtt` container (docker/.env ENABLE_MQTT)
+    # OR any external broker already running elsewhere on the operator's
+    # network — set mqtt_host/mqtt_port/mqtt_username/mqtt_password below
+    # to point at it. These are read by full_system.launch.py and override
+    # mowgli_monitoring/config/mqtt_bridge.yaml's package defaults, so
+    # changing them is a GUI Settings edit, not a file edit inside the image.
+    mqtt_enabled: false            # master switch; false = node is not launched
+    mqtt_host: "localhost"         # "localhost" reaches the bundled mowgli-mqtt
+                                   # container too — the mowgli service runs
+                                   # network_mode: host. Point this at an
+                                   # external broker's hostname/IP instead.
+    mqtt_port: 1883
+    mqtt_username: ""              # empty = no auth (matches the bundled broker's
+                                   # anonymous-access default — LAN-only, no TLS
+                                   # unless mqtt_use_ssl is also set)
+    mqtt_password: ""
+    mqtt_topic_prefix: "mowgli"    # all topics are "<mqtt_topic_prefix>/<name>"
+    mqtt_use_ssl: false            # TLS against the system CA store only (no
+                                   # custom CA/client-cert param exists yet)

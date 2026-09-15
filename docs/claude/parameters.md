@@ -83,13 +83,16 @@ still require operator acceptance to persist. Save and restart ROS2 to apply.
 
 ### Drive loops (both close in FIRMWARE — CLAUDE.md preamble, Option C)
 
+The five `wheel_pid_*` defaults are pinned in lockstep across template ↔ `mowgli.launch.py` fallback ↔ `hardware_bridge_node.cpp` declared default by `mowgli_bringup/test/test_drive_pid_defaults.py` (field-validated 2026-09-15: the previous 0.2 / 0.092 / 0.01 / 15 set capped the firmware loop at ~24 PWM, under the motor stiction deadband). The GUI drive tuner floors its proposals at kp 2 / ki 200 / integral_limit 32 (`tools/motor/mowgli_tools/drive_pid_math.py`) and the feed-forward calibration persists only `ticks_per_meter` + `wheel_pid_pwm_per_mps` (`gui/pkg/api/drive_tuning.go` `feedForwardPersistedParamKeys`).
+
 | Key (L) | Default | Consumer · where read | GUI | Life |
 |---|---|---|---|---|
-| `wheel_pid_kp` (L72) | 0.2 | `hardware_bridge` `mowgli.launch.py:214` → STM32 `SET_DRIVE_PID` | Hardware | launch |
-| `wheel_pid_ki` (L73) | 0.092 | `mowgli.launch.py:215` | Hardware | launch |
-| `wheel_pid_kd` (L74) | 0.01 | `mowgli.launch.py:216` | Hardware | launch |
-| `wheel_pid_integral_limit` (L75) | 15.0 | `mowgli.launch.py:217` | Hardware | launch |
-| `wheel_pid_pwm_per_mps` (L76) | 282.135 | `mowgli.launch.py:219` (open-loop feedforward) | Hardware | launch |
+| `wheel_pid_kp` (L137) | 10.0 | `hardware_bridge` `mowgli.launch.py:225` → STM32 `SET_DRIVE_PID`; firmware applies it UNSCALED in PWM per m/s | Hardware | launch |
+| `wheel_pid_ki` (L138) | 2000.0 | `mowgli.launch.py:226`; PWM per (m/s·s) — reaches the ~40 PWM deadband from a 0.03 m/s error in ~0.5 s | Hardware | launch |
+| `wheel_pid_kd` (L139) | 0.0 | `mowgli.launch.py:227`; 0 because the 50 Hz tick-quantised speed makes D noise | Hardware | launch |
+| `wheel_pid_integral_limit` (L140) | 45.0 | `mowgli.launch.py:228`; PWM — must reach deadband − feedforward(0.03 m/s) ≈ 32 PWM or the slow inner arc wheel never turns | Hardware | launch |
+| `wheel_pid_pwm_per_mps` (L141) | 282.135 | `mowgli.launch.py:230` (open-loop feedforward) | Hardware | launch |
+| `deadband_pwm` (L145) | 40.0 | `mowgli.launch.py:234` → `hardware_bridge` startup-only gate (`mowgli_hardware/drive_gain_sanity.hpp`): if `integral_limit + kp·0.03 + pwm_per_mps·0.03 < deadband_pwm` the bridge logs ERROR and sends the TEMPLATE gains in `SET_DRIVE_PID` instead of the configured ones (`ticks_per_meter`/`pwm_per_mps` unchanged, file untouched); the same check rejects a live `wheel_pid_*` param set that would fail. Never sent to the firmware itself | Hardware | launch |
 | `yaw_kp` (L84) | 0.12 | `mowgli.launch.py:247` → firmware gyro yaw-rate loop | no | launch |
 | `yaw_ki` (L85) | 0.40 | `mowgli.launch.py:248` | no | launch |
 | `yaw_trim_limit_mps` (L86) | 0.15 | `mowgli.launch.py:249` | no | launch |

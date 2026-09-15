@@ -104,7 +104,6 @@ The map is a Mapbox satellite layer with the robot icon, dock marker (`DOCK`), a
 
 While an area recording is in progress, **Start** / **Home** are replaced by **Finish recording** and **Cancel recording**.
 
-![More menu](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/map/02-more-menu.png)
 
 The **More** menu contains everything that doesn't fit on the bottom bar:
 
@@ -128,7 +127,6 @@ Click **Edit Map** and the bottom bar is replaced by a vertical toolbar with: sa
 
 If you try to leave edit mode with unsaved changes you get a confirmation:
 
-![Discard unsaved changes](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/map/04-save-confirmation-modal.png)
 
 **Common tasks**
 
@@ -163,7 +161,6 @@ Three panels:
 > **Operator tip:** the dock should be physically positioned where you want the map origin. Stand the robot on the dock, wait for "RTK FIX" in the Diagnostics page, and only *then* click **Use current GPS position**.
 
 #### Step 3 — Sensors
-![Sensor placement](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/04-sensors.png)
 
 Visual robot editor (`gui/web/src/components/RobotComponentEditor.tsx`) with drag-to-place LiDAR / IMU / GPS markers on a top-down rectangle representing your chassis. Numeric inputs on the right side give precision for X (forward), Y (left), Z (height), Yaw.
 

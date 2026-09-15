@@ -4,6 +4,8 @@
 
 ## Hardware
 
+> **Building the robot?** The illustrated, step-by-step **[build manual](https://mowgli.garden/build/)** (EN/FR) covers parts, wiring, the compute board, IMU, RTK GNSS, LiDAR, firmware flashing, the installer and the first mow. This page is the reference summary.
+
 ### Compute Board
 
 Any 64-bit Linux board with Docker support (the installer supports `arm64` and `amd64`):

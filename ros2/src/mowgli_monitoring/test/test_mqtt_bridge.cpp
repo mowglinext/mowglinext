@@ -1,0 +1,298 @@
+// Copyright 2026 Mowgli Project
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// SPDX-License-Identifier: GPL-3.0
+/**
+ * @file test_mqtt_bridge.cpp
+ * @brief Unit tests for MqttBridgeNode's JSON serialisers and command parsing.
+ *
+ * All `serialise_*` functions and `parse_command_payload`/`json_escape` are
+ * pure static methods (mqtt_bridge_node.hpp's "exposed for testing" section),
+ * so they're tested directly with no ROS2 middleware, broker, or node
+ * construction required — same isolation strategy as test_diagnostics.cpp's
+ * classify_*() tests.
+ */
+
+#include <cstdint>
+#include <string>
+
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
+#include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/high_level_status.hpp"
+#include "mowgli_interfaces/msg/power.hpp"
+#include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_monitoring/mqtt_bridge_node.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include "sensor_msgs/msg/nav_sat_fix.hpp"
+#include "sensor_msgs/msg/nav_sat_status.hpp"
+#include <gtest/gtest.h>
+
+using mowgli_monitoring::MqttBridgeNode;
+
+// ===========================================================================
+// json_escape
+// ===========================================================================
+
+TEST(JsonEscape, PassesThroughPlainText)
+{
+  EXPECT_EQ(MqttBridgeNode::json_escape("hello world"), "hello world");
+  EXPECT_EQ(MqttBridgeNode::json_escape(""), "");
+}
+
+TEST(JsonEscape, EscapesQuotesAndBackslashes)
+{
+  EXPECT_EQ(MqttBridgeNode::json_escape(R"(say "hi")"), R"(say \"hi\")");
+  EXPECT_EQ(MqttBridgeNode::json_escape(R"(a\b)"), R"(a\\b)");
+}
+
+TEST(JsonEscape, EscapesControlCharacters)
+{
+  EXPECT_EQ(MqttBridgeNode::json_escape("a\nb\rc\td"), "a\\nb\\rc\\td");
+}
+
+// ===========================================================================
+// serialise_status
+// ===========================================================================
+
+TEST(SerialiseStatus, ProducesExpectedJson)
+{
+  mowgli_interfaces::msg::Status msg{};
+  msg.mower_status = 1;
+  msg.raspberry_pi_power = true;
+  msg.is_charging = false;
+  msg.esc_power = true;
+  msg.rain_detected = false;
+  msg.sound_module_available = true;
+  msg.sound_module_busy = false;
+  msg.ui_board_available = true;
+  msg.mow_enabled = false;
+  msg.mower_esc_status = 2;
+  msg.mower_esc_temperature = 45.5f;
+  msg.mower_esc_current = 1.25f;
+  msg.mower_motor_temperature = 60.75f;
+  msg.mower_motor_rpm = 3000.5f;
+
+  const std::string json = MqttBridgeNode::serialise_status(msg);
+
+  EXPECT_EQ(json,
+            "{\"mower_status\":1,\"raspberry_pi_power\":true,\"is_charging\":false,"
+            "\"esc_power\":true,\"rain_detected\":false,\"sound_module_available\":true,"
+            "\"sound_module_busy\":false,\"ui_board_available\":true,\"mow_enabled\":false,"
+            "\"mower_esc_status\":2,\"mower_esc_temperature\":45.50,"
+            "\"mower_esc_current\":1.250,\"mower_motor_temperature\":60.75,"
+            "\"mower_motor_rpm\":3000.5}");
+}
+
+// ===========================================================================
+// serialise_power
+// ===========================================================================
+
+TEST(SerialisePower, ProducesExpectedJsonAndDerivesBatteryPercent)
+{
+  mowgli_interfaces::msg::Power msg{};
+  msg.v_charge = 16.5f;
+  msg.v_battery = 14.4f;  // midpoint of the 12.0-16.8V 4S LiPo range -> 50.0%
+  msg.charge_current = 0.75f;
+  msg.charger_enabled = true;
+  msg.charger_status = "bulk";
+
+  const std::string json = MqttBridgeNode::serialise_power(msg);
+
+  EXPECT_EQ(json,
+            "{\"v_charge\":16.500,\"v_battery\":14.400,\"charge_current\":0.750,"
+            "\"charger_enabled\":true,\"charger_status\":\"bulk\",\"battery_pct\":50.0}");
+}
+
+TEST(SerialisePower, ClampsBatteryPercentToZeroAndHundred)
+{
+  mowgli_interfaces::msg::Power below{};
+  below.v_battery = 5.0f;  // below kVEmpty (12.0)
+  EXPECT_NE(MqttBridgeNode::serialise_power(below).find("\"battery_pct\":0.0"), std::string::npos);
+
+  mowgli_interfaces::msg::Power above{};
+  above.v_battery = 20.0f;  // above kVFull (16.8)
+  EXPECT_NE(MqttBridgeNode::serialise_power(above).find("\"battery_pct\":100.0"),
+            std::string::npos);
+}
+
+TEST(SerialisePower, EscapesChargerStatusString)
+{
+  mowgli_interfaces::msg::Power msg{};
+  msg.charger_status = "fault: \"overcurrent\"";
+  const std::string json = MqttBridgeNode::serialise_power(msg);
+  EXPECT_NE(json.find(R"("charger_status":"fault: \"overcurrent\"")"), std::string::npos);
+}
+
+// ===========================================================================
+// serialise_emergency
+// ===========================================================================
+
+TEST(SerialiseEmergency, ProducesExpectedJson)
+{
+  mowgli_interfaces::msg::Emergency msg{};
+  msg.active_emergency = true;
+  msg.latched_emergency = true;
+  msg.reason = "lift detected";
+
+  EXPECT_EQ(MqttBridgeNode::serialise_emergency(msg),
+            "{\"active_emergency\":true,\"latched_emergency\":true,\"reason\":\"lift detected\"}");
+}
+
+// ===========================================================================
+// serialise_position
+// ===========================================================================
+
+TEST(SerialisePosition, ExtractsXyAndYawFromOdometry)
+{
+  nav_msgs::msg::Odometry msg{};
+  msg.pose.pose.position.x = 1.2345;
+  msg.pose.pose.position.y = -6.789;
+  msg.pose.pose.orientation.z = 0.0;
+  msg.pose.pose.orientation.w = 1.0;  // identity quaternion -> theta = 0
+
+  EXPECT_EQ(MqttBridgeNode::serialise_position(msg),
+            "{\"x\":1.2345,\"y\":-6.7890,\"theta\":0.0000}");
+}
+
+// ===========================================================================
+// serialise_diagnostics
+// ===========================================================================
+
+TEST(SerialiseDiagnostics, EmptyArrayIsEmptyJsonArray)
+{
+  diagnostic_msgs::msg::DiagnosticArray msg{};
+  EXPECT_EQ(MqttBridgeNode::serialise_diagnostics(msg), "[]");
+}
+
+TEST(SerialiseDiagnostics, MultipleEntriesAndEscaping)
+{
+  diagnostic_msgs::msg::DiagnosticArray msg{};
+  diagnostic_msgs::msg::DiagnosticStatus a;
+  a.name = "GPS";
+  a.level = 0;
+  a.message = "OK";
+  diagnostic_msgs::msg::DiagnosticStatus b;
+  b.name = "LiDAR";
+  b.level = 2;
+  b.message = "No \"scan\" received";
+  msg.status = {a, b};
+
+  EXPECT_EQ(MqttBridgeNode::serialise_diagnostics(msg),
+            "[{\"name\":\"GPS\",\"level\":0,\"message\":\"OK\"},"
+            "{\"name\":\"LiDAR\",\"level\":2,\"message\":\"No \\\"scan\\\" received\"}]");
+}
+
+// ===========================================================================
+// serialise_high_level_status
+// ===========================================================================
+
+TEST(SerialiseHighLevelStatus, ProducesExpectedJson)
+{
+  mowgli_interfaces::msg::HighLevelStatus msg{};
+  msg.state = mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS;
+  msg.state_name = "AUTONOMOUS";
+  msg.sub_state_name = "MOWING";
+  msg.current_area = 2;
+  msg.current_path = -1;  // -1 = no active sub-path (e.g. mid blade-off transit)
+  msg.current_path_index = 0;
+  msg.total_swaths = 40;
+  msg.completed_swaths = 12;
+  msg.skipped_swaths = 1;
+  msg.coverage_percent = 42.5f;
+  msg.gps_quality_percent = 99.0f;
+  msg.battery_percent = 73.5f;
+  msg.is_charging = false;
+  msg.emergency = false;
+
+  const std::string json = MqttBridgeNode::serialise_high_level_status(msg);
+
+  EXPECT_EQ(json,
+            "{\"state\":2,\"state_name\":\"AUTONOMOUS\",\"sub_state_name\":\"MOWING\","
+            "\"current_area\":2,\"current_path\":-1,\"current_path_index\":0,"
+            "\"total_swaths\":40,\"completed_swaths\":12,\"skipped_swaths\":1,"
+            "\"coverage_percent\":42.5,\"gps_quality_percent\":99.0,"
+            "\"battery_percent\":73.5,\"is_charging\":false,\"emergency\":false}");
+}
+
+TEST(SerialiseHighLevelStatus, EscapesSubStateName)
+{
+  mowgli_interfaces::msg::HighLevelStatus msg{};
+  msg.sub_state_name = "DIG_OBSTRUCTION";
+  const std::string json = MqttBridgeNode::serialise_high_level_status(msg);
+  EXPECT_NE(json.find("\"sub_state_name\":\"DIG_OBSTRUCTION\""), std::string::npos);
+}
+
+// ===========================================================================
+// serialise_gps
+// ===========================================================================
+
+TEST(SerialiseGps, ProducesExpectedJson)
+{
+  sensor_msgs::msg::NavSatFix msg{};
+  msg.latitude = 52.12345678;
+  msg.longitude = -6.98765432;
+  msg.altitude = 12.345;
+  msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
+  msg.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
+
+  EXPECT_EQ(MqttBridgeNode::serialise_gps(msg),
+            "{\"latitude\":52.12345678,\"longitude\":-6.98765432,\"altitude\":12.345,"
+            "\"status\":0,\"service\":1}");
+}
+
+TEST(SerialiseGps, NoFixStatusIsNegative)
+{
+  sensor_msgs::msg::NavSatFix msg{};
+  msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
+  EXPECT_NE(MqttBridgeNode::serialise_gps(msg).find("\"status\":-1"), std::string::npos);
+}
+
+// ===========================================================================
+// parse_command_payload
+// ===========================================================================
+
+TEST(ParseCommandPayload, AcceptsBoundaryValues)
+{
+  uint8_t out = 0;
+  EXPECT_TRUE(MqttBridgeNode::parse_command_payload("0", out));
+  EXPECT_EQ(out, 0);
+  EXPECT_TRUE(MqttBridgeNode::parse_command_payload("255", out));
+  EXPECT_EQ(out, 255);
+  EXPECT_TRUE(MqttBridgeNode::parse_command_payload("1", out));
+  EXPECT_EQ(out, 1);
+  EXPECT_TRUE(MqttBridgeNode::parse_command_payload("254", out));
+  EXPECT_EQ(out, 254);
+}
+
+TEST(ParseCommandPayload, RejectsOutOfRangeAndNonNumeric)
+{
+  uint8_t out = 0;
+  EXPECT_FALSE(MqttBridgeNode::parse_command_payload("256", out));
+  EXPECT_FALSE(MqttBridgeNode::parse_command_payload("-1", out));
+  EXPECT_FALSE(MqttBridgeNode::parse_command_payload("abc", out));
+  EXPECT_FALSE(MqttBridgeNode::parse_command_payload("", out));
+}
+
+TEST(ParseCommandPayload, TrailingGarbageAfterANumberIsTolerated)
+{
+  // sscanf("%d") stops at the first non-digit and still reports one
+  // successful conversion — pre-existing behaviour, preserved by the
+  // parse_command_payload refactor rather than tightened, to avoid
+  // silently changing what a real broker's already-flowing commands do.
+  uint8_t out = 0;
+  EXPECT_TRUE(MqttBridgeNode::parse_command_payload("1abc", out));
+  EXPECT_EQ(out, 1);
+}

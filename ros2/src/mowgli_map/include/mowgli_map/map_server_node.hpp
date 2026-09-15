@@ -950,7 +950,11 @@ private:
   /// reintroduce it.
   std::deque<std::tuple<rclcpp::Time, double, double>> recent_gps_antenna_enu_;
   mutable std::mutex recent_gps_antenna_mutex_;
-  double dock_set_gps_avg_window_s_{3.0};
+  /// 12 s comfortably fills min_samples_ at a sustained ~1 Hz RTK-Fixed
+  /// stream (the lowest `gnss_profile_rate_hz` the GUI offers) with margin
+  /// for the occasional non-Fixed epoch; see the declare_parameter call site
+  /// for why this needed widening from the 3 s it inherited pre-#446.
+  double dock_set_gps_avg_window_s_{12.0};
   size_t dock_set_gps_avg_min_samples_{10};
 
   /// GPS lever arm (base_footprint→gps_link, body frame), resolved lazily

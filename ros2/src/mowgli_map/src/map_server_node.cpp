@@ -299,6 +299,22 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // in the header for why this replaced averaging /gps/pose_cov's already
   // lever-arm-corrected position (issue #446). RTK-Fixed only, same
   // threshold navsat_to_absolute_pose_node's own on_set_datum uses.
+  //
+  // dock_set_gps_avg_window_s_ / _min_samples_ were inherited unchanged from
+  // the pre-#446 /gps/pose_cov averager (44377d1c), which pushed EVERY
+  // incoming message regardless of RTK status — 10 samples in 3 s was easily
+  // reached at the receiver's raw publish rate. This callback instead keeps
+  // only RTK-Fixed epochs, so the same window now demands a sustained
+  // Fixed rate of >= min_samples/window_s (3.3 Hz at the old 3.0 s/10
+  // default) — unreachable at a 1 Hz `gnss_profile_rate_hz` (a supported
+  // GUI option) even under a perfect Fixed solution, and marginal at 5 Hz
+  // with any epoch-level flicker. Widened so a sustained ~1 Hz Fixed stream
+  // can still fill it with margin to spare.
+  dock_set_gps_avg_window_s_ =
+      declare_parameter<double>("dock_set_gps_avg_window_s", dock_set_gps_avg_window_s_);
+  dock_set_gps_avg_min_samples_ =
+      static_cast<size_t>(declare_parameter<int>("dock_set_gps_avg_min_samples",
+                                                 static_cast<int>(dock_set_gps_avg_min_samples_)));
   gps_fix_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
       "/gps/fix",
       rclcpp::SensorDataQoS(),

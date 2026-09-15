@@ -1,5 +1,8 @@
 # Build artifacts
 build/
+# docs/build/ is the published build manual (mowgli.garden/build/), not a build artefact
+!docs/build/
+!docs/build/**
 log/
 *.pyc
 __pycache__/

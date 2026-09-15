@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-labelledby="t">
+  <title id="t">Powering the Raspberry Pi: battery 29 V from J3 or J18 pin 8 into a DC-DC buck converter set to 5.1 V, output to the Pi header pins 4 and 6</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#facc15"/>
+    </marker>
+  </defs>
+  <rect width="900" height="560" fill="#0f172a"/>
+  <text x="450" y="40" text-anchor="middle" fill="#f8fafc" font-size="22" font-weight="700">Powering the compute board</text>
+
+  <!-- source -->
+  <rect x="60" y="150" width="220" height="150" rx="12" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+  <text x="170" y="180" text-anchor="middle" fill="#f8fafc" font-size="15" font-weight="700">Mainboard VBat tap</text>
+  <g font-size="12" fill="#e2e8f0">
+    <text x="80" y="210">J3 — battery after the power button</text>
+    <text x="80" y="232">   (Pi goes off with the mower)</text>
+    <text x="80" y="258">or J18 pin 8 — VBat, 2 A max</text>
+    <text x="80" y="280">GND: J3 GND or J18 pin 1</text>
+  </g>
+
+  <!-- wires to DCDC -->
+  <path d="M280,205 L360,205" stroke="#facc15" stroke-width="3" marker-end="url(#arr)"/>
+  <text x="320" y="196" text-anchor="middle" fill="#facc15" font-size="12">≈ 29 V +</text>
+  <path d="M280,265 L360,265" stroke="#94a3b8" stroke-width="3"/>
+  <text x="320" y="286" text-anchor="middle" fill="#94a3b8" font-size="12">GND −</text>
+
+  <!-- DC-DC -->
+  <rect x="360" y="150" width="200" height="150" rx="12" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <text x="460" y="180" text-anchor="middle" fill="#f8fafc" font-size="15" font-weight="700">DC-DC buck</text>
+  <text x="460" y="200" text-anchor="middle" fill="#94a3b8" font-size="11">LM2596 (3 A) · XL4015 (5 A)</text>
+  <g font-size="12" fill="#e2e8f0">
+    <text x="380" y="235">IN+ / IN−  ← 29 V</text>
+    <text x="380" y="258">OUT+ / OUT− → 5.1 V</text>
+    <text x="380" y="284" fill="#facc15">Set with a multimeter BEFORE</text>
+    <text x="380" y="300" fill="#facc15">connecting the Pi!</text>
+  </g>
+
+  <!-- to Pi -->
+  <path d="M560,205 L640,205" stroke="#facc15" stroke-width="3" marker-end="url(#arr)"/>
+  <text x="600" y="196" text-anchor="middle" fill="#facc15" font-size="12">5.1 V +</text>
+  <path d="M560,265 L640,265" stroke="#94a3b8" stroke-width="3"/>
+  <text x="600" y="286" text-anchor="middle" fill="#94a3b8" font-size="12">GND −</text>
+
+  <!-- Pi -->
+  <rect x="640" y="150" width="200" height="150" rx="12" fill="#1e293b" stroke="#22c55e" stroke-width="2.5"/>
+  <text x="740" y="180" text-anchor="middle" fill="#f8fafc" font-size="15" font-weight="700">Raspberry Pi</text>
+  <g font-size="12" fill="#e2e8f0">
+    <text x="660" y="212">Header pin 4 (5 V)  ← OUT+</text>
+    <text x="660" y="236">Header pin 6 (GND) ← OUT−</text>
+    <text x="660" y="266" fill="#94a3b8">or a USB-C plug wired to</text>
+    <text x="660" y="284" fill="#94a3b8">OUT+/OUT− (keeps the fuse)</text>
+  </g>
+
+  <g font-size="13" fill="#94a3b8">
+    <text x="60" y="370">• A Pi 5 wants 5 V / 5 A with USB devices attached (GNSS, ST-Link, LiDAR); a Pi 4 needs 3 A. Size the converter for 5 A.</text>
+    <text x="60" y="396">• Twist the 5 V pair, keep it short, and keep the GNSS USB cable away from the wheel-motor leads (EMI causes RTK dropouts).</text>
+    <text x="60" y="422">• If the Pi reboots when the wheels spin, add a 470–1000 µF electrolytic capacitor across OUT+/OUT− near the Pi.</text>
+    <text x="60" y="448">• Never power the Pi from the mainboard's USB (J14): it only carries data, and back-feeding 5 V there can damage the STM32.</text>
+    <text x="60" y="474">• Feed the converter from J3 (after the power button) so the whole robot really is off when you switch it off.</text>
+  </g>
+</svg>

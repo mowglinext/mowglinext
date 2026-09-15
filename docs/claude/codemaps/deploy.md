@@ -134,7 +134,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `sensors/gps/Dockerfile` | 91 | Universal GNSS sidecar image — **build context = repo root**; builds `mowgli_interfaces`, `universal_gnss_ros2`, `mowgli_gnss_bridge` + the `gnss_tools` CLI into `/opt/gnss_sidecar` |
 | `sensors/gps/start_gps.sh` | 599 | Image CMD: resolves config (YAML → env → default), applies the receiver profile, then runs `receiver_node` + topic bridge + optional `ntrip_node` |
 | `sensors/gps/universal_gnss_topic_bridge.py` | 406 | Retained Python bridge (`GNSS_BRIDGE_IMPL=python`) |
-| `sensors/gps/ros2_entrypoint.sh` | 12 | Sources `/opt/ros/kilted` + `/opt/gnss_sidecar` |
+| `sensors/gps/ros2_entrypoint.sh` | 12 | Sources `/opt/ros/lyrical` + `/opt/gnss_sidecar` |
 | `sensors/gps/mowgli_gnss_bridge/src/universal_gnss_topic_bridge.cpp` | 489 | Default C++ bridge: universal→public enum/capability projection + diagnostics merge |
 | `sensors/gps/mowgli_gnss_bridge/include/mowgli_gnss_bridge/universal_gnss_topic_bridge.hpp` | 78 | Node class, pub/sub members, QoS contract |
 | `sensors/gps/mowgli_gnss_bridge/src/main.cpp` | 16 | `rclcpp::spin` entry |

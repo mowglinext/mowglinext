@@ -20,9 +20,11 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/mowglinext/mowglinext/releases/latest">
+    <img src="https://img.shields.io/github/v/release/mowglinext/mowglinext?label=release&color=22c55e" alt="Latest release">
+  </a>
   <img src="https://img.shields.io/badge/stability-beta-orange" alt="Beta">
   <img src="https://img.shields.io/badge/license-GPLv3%20%2B%20Commercial-green" alt="License">
-
 </p>
 
 <p align="center">
@@ -37,6 +39,10 @@
   <img src="https://img.shields.io/badge/Coverage_Planning-✓-brightgreen">
   <img src="https://img.shields.io/badge/Obstacle_Avoidance-WIP-orange">
   <img src="https://img.shields.io/badge/LiDAR_Correction-✓-brightgreen">
+  <img src="https://img.shields.io/badge/In--GUI_Updates-✓-brightgreen">
+  <img src="https://img.shields.io/badge/Home_Assistant_(MQTT)-✓-brightgreen">
+  <img src="https://img.shields.io/badge/Push_Notifications-✓-brightgreen">
+  <img src="https://img.shields.io/badge/Remote_Access-Tailscale-blue">
   <img src="https://img.shields.io/badge/Hardware_Backend-Mowgli%20%7C%20MAVROS-blue">
 </p>
 
@@ -66,11 +72,24 @@
 
 ---
 
+## What's New in v1.4.0
+
+The mower now looks after itself. Full notes: [v1.4.0 release](https://github.com/mowglinext/mowglinext/releases/tag/v1.4.0).
+
+| | |
+|---|---|
+| 🔄 **Update from the GUI** | **Settings → Updates** checks for releases daily, notifies you in the bell, and installs a reviewed update with backup, verification and rollback — only while the mower is idle, stationary and blade-off. No more `mowgli-pull && mowgli-up`. |
+| 🏠 **Home Assistant over MQTT** | The MQTT bridge is real now: retained status, GPS position, online/offline availability and a command topic, configured from **Settings → MQTT / Home Assistant**. Contract in [`docs/MQTT_CONTROL.md`](docs/MQTT_CONTROL.md). |
+| 📲 **Push notifications** | Telegram, Pushover, ntfy or a webhook: mowing started, zone finished, complete, stuck, e-stop, battery, rain, GPS wait. In English or French. |
+| 🌍 **Remote access** | An optional, hardened Tailscale sidecar makes the GUI reachable from anywhere on your private tailnet — never public. [`docs/REMOTE_ACCESS.md`](docs/REMOTE_ACCESS.md). |
+| ✂️ **Cross-hatch mowing** | Alternate the stripe angle by 90° every session, per area, with a next-direction override. |
+| 🐢 **ROS 2 Lyrical** | Every image rebuilt on ROS 2 Lyrical / Ubuntu 26.04 with pinned source dependencies. The host OS does not change. |
+
 ## What It Does
 
 A fully autonomous mowing stack running on real hardware: undock, navigate to zones, mow strip-by-strip with sub-centimeter accuracy, avoid obstacles, dock to charge, and resume.
 
-**Core:** GTSAM iSAM2 factor-graph localizer (`fusion_graph`) — sole map+odom localizer (GPS + IMU + wheels + optional LiDAR scan-matching + loop-closure, REP-105 map/odom) · Nav2 navigation · BehaviorTree.CPP v4 · multi-area continuous-subpath coverage
+**Core:** GTSAM iSAM2 factor-graph localizer (`fusion_graph`) — sole map+odom localizer (GPS + IMU + wheels, REP-105 map/odom, with an optional LiDAR map anchor that carries the pose through GNSS outages) · Nav2 navigation · BehaviorTree.CPP v4 · multi-area continuous-subpath coverage
 
 **Hardware:** YardForce chassis · ARM64 SBC (RK3566/RK3588, RPi 4/5) · RTK-GNSS via the Universal GNSS runtime (u-blox F9P, Unicore UM98x, or generic NMEA) · LiDAR (LDRobot LD19 / STL27L, RPLIDAR A1) · STM32 firmware
 
@@ -79,7 +98,7 @@ See the **[Architecture wiki page](https://github.com/mowglinext/mowglinext/wiki
 ## Dashboard
 
 <p align="center">
-  <img src="docs/screenshots/dashboard-mowing.png" alt="Dashboard — mowing state" width="720">
+  <img src="docs/screenshots/dashboard-idle.png" alt="Dashboard — robot idle on the dock" width="720">
 </p>
 
 State-adaptive hero card with a live mini-map, telemetry tiles, health checks, and contextual actions. Weekly schedule grid, statistics with bar charts, and full Mapbox map editor. Dark-only theme with Visual / Balanced / Efficient display modes, responsive mobile layout.
@@ -97,6 +116,18 @@ curl -sSL https://mowgli.garden/install.sh | bash
 The website composer and bootstrap installer now target the Universal GNSS runtime only for direct GNSS setups.
 
 GUI at `http://<mower-ip>:4006` · See **[Getting Started](https://github.com/mowglinext/mowglinext/wiki/Getting-Started)** for full setup.
+
+### Updating
+
+Since v1.4.0 the mower updates itself from the web interface. **Settings → Updates** checks for published releases every 24 hours, shows a notice in the bell, and installs the release you review with a backup, a health check and automatic rollback. Nothing is ever installed without your confirmation, and never while the robot is mowing.
+
+Mowers installed before v1.4.0 enable it by rerunning the installer once (same answers as the first time):
+
+```bash
+curl -sSL https://mowgli.garden/install.sh | bash     # or: cd ~/mowglinext && git pull && ./install/mowglinext.sh
+```
+
+Check `docker volume ls | grep mowgli_maps` first: if your map volume is not prefixed `install_`, set `COMPOSE_PROJECT_NAME=<your prefix>` in `docker/.env` before rerunning so the stack keeps its data. The legacy `mowgli-pull && mowgli-up` helpers still work but are no longer the recommended path. Details, tracks, pins and recovery: [`docs/UPDATES.md`](docs/UPDATES.md).
 
 ### Local Webots simulation
 

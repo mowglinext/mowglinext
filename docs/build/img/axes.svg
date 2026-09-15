@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-labelledby="t">
+  <title id="t">Robot body frame seen from above: origin at the rear wheel axle centre, X forward, Y to the left; example offsets of the GNSS antenna, IMU and LiDAR</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f8fafc"/>
+    </marker>
+  </defs>
+  <rect width="900" height="560" fill="#0f172a"/>
+  <text x="450" y="40" text-anchor="middle" fill="#f8fafc" font-size="22" font-weight="700">Sensor offsets — where you measure from (top view)</text>
+  <text x="450" y="64" text-anchor="middle" fill="#94a3b8" font-size="13">Origin = centre of the rear drive-wheel axle (base_link). X positive = forward, Y positive = LEFT, Z positive = up.</text>
+
+  <!-- chassis: rear at left, front at right -->
+  <g transform="translate(130,120)">
+    <rect x="0" y="40" width="600" height="300" rx="70" fill="#1e293b" stroke="#475569" stroke-width="3"/>
+    <text x="300" y="330" text-anchor="middle" fill="#64748b" font-size="12">YardForce 500 chassis ≈ 0.60 × 0.45 m</text>
+    <!-- rear wheels -->
+    <rect x="60" y="6" width="60" height="34" rx="8" fill="#0f172a" stroke="#94a3b8" stroke-width="2"/>
+    <rect x="60" y="340" width="60" height="34" rx="8" fill="#0f172a" stroke="#94a3b8" stroke-width="2"/>
+    <line x1="90" y1="40" x2="90" y2="340" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="90" y="395" text-anchor="middle" fill="#94a3b8" font-size="12">rear axle (wheel_track 0.325 m)</text>
+    <!-- casters -->
+    <circle cx="520" cy="90" r="12" fill="#0f172a" stroke="#94a3b8" stroke-width="2"/>
+    <circle cx="520" cy="290" r="12" fill="#0f172a" stroke="#94a3b8" stroke-width="2"/>
+    <!-- blade -->
+    <circle cx="240" cy="190" r="54" fill="none" stroke="#475569" stroke-width="2" stroke-dasharray="4 4"/>
+    <text x="240" y="194" text-anchor="middle" fill="#64748b" font-size="11">blade Ø 0.18</text>
+
+    <!-- origin + axes -->
+    <circle cx="90" cy="190" r="7" fill="#f8fafc"/>
+    <text x="70" y="215" fill="#f8fafc" font-size="13" font-weight="700">base_link (0, 0)</text>
+    <line x1="90" y1="190" x2="380" y2="190" stroke="#f8fafc" stroke-width="3" marker-end="url(#arr)"/>
+    <text x="390" y="180" fill="#f8fafc" font-size="16" font-weight="700">+X forward</text>
+    <line x1="90" y1="190" x2="90" y2="70" stroke="#f8fafc" stroke-width="3" marker-end="url(#arr)"/>
+    <text x="100" y="80" fill="#f8fafc" font-size="16" font-weight="700">+Y left</text>
+
+    <!-- GNSS antenna: gps_x 0.3, gps_y 0 -->
+    <circle cx="390" cy="190" r="16" fill="#0f172a" stroke="#38bdf8" stroke-width="3"/>
+    <text x="390" y="195" text-anchor="middle" fill="#38bdf8" font-size="11" font-weight="700">GNSS</text>
+    <text x="390" y="230" text-anchor="middle" fill="#38bdf8" font-size="12">gps_x 0.30 · gps_y 0.00 · gps_z 0.20</text>
+    <line x1="90" y1="250" x2="390" y2="250" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="240" y="266" text-anchor="middle" fill="#38bdf8" font-size="11">0.30 m</text>
+
+    <!-- IMU: imu_x 0.187, imu_y -0.195 (right side) -->
+    <rect x="265" y="290" width="26" height="26" rx="4" fill="#0f172a" stroke="#22c55e" stroke-width="3"/>
+    <text x="278" y="308" text-anchor="middle" fill="#22c55e" font-size="10" font-weight="700">IMU</text>
+    <text x="330" y="312" fill="#22c55e" font-size="12">imu_x 0.187 · imu_y −0.195 (right)</text>
+
+    <!-- LiDAR: lidar_x 0, lidar_y 0.025, lidar_z 0.30 -->
+    <circle cx="90" cy="165" r="14" fill="#0f172a" stroke="#facc15" stroke-width="3"/>
+    <text x="90" y="169" text-anchor="middle" fill="#facc15" font-size="9" font-weight="700">LiDAR</text>
+    <text x="118" y="150" fill="#facc15" font-size="12">lidar_x 0.00 · lidar_y 0.025 · lidar_z 0.30</text>
+  </g>
+
+  <g font-size="13" fill="#94a3b8">
+    <text x="60" y="500">Values shown are the YardForce 500 preset. Measure YOUR mount to the antenna's phase centre (the centre of its top) and enter the result in Settings → Sensors.</text>
+    <text x="60" y="524">A sensor on the right-hand side has a NEGATIVE Y. The IMU's heading offset (imu_yaw) is not measured: the calibration drive solves it.</text>
+  </g>
+</svg>

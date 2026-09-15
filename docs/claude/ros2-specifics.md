@@ -4,7 +4,7 @@
 >
 > Machine-generated indexes, refreshed with the code — prefer them over growing this file: [`codemaps/`](codemaps/) (per-area file lists, runtime surface, pitfalls), [`ros-interfaces.md`](ros-interfaces.md) (every topic/service/action/TF and its publisher), [`parameters.md`](parameters.md) (every config key, default and consumer), [`testing-ci.md`](testing-ci.md), [`doc-index.md`](doc-index.md) (authoritative vs historical docs).
 
-- **Distro:** Kilted
+- **Distro:** Lyrical (Ubuntu 26.04 containers; migration record and pinned source deps in `docs/ROS2_LYRICAL_MIGRATION.md`)
 - **DDS:** Cyclone DDS (all containers share `docker/config/cyclonedds.xml`)
 - **Topics:** Mowgli-specific topics under `/mowgli/` namespace
 - **Frames:** `map` (global, GPS-anchored via fixed datum), `odom` (continuous local, dead-reckoning only — never jumps), `base_footprint` (robot frame for Nav2), `base_link` (rear axle), `lidar_link`, `imu_link`

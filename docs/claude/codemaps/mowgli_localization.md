@@ -153,7 +153,7 @@ Cross-package tests that exercise these executables (`ros2/src/mowgli_bringup/CM
 - `test/test_navsat_status_universal.launch.py` — navsat advertises `/gps/absolute_pose` + `/gps/pose_cov`, never publishes `/gps/status`, never subscribes `/diagnostics`.
 - `test/test_tf_ownership.py` — `wheel_odometry.yaml` ships `publish_tf: false` and no launch file overrides it.
 
-CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) — `colcon build` L338 + `colcon test` L347 over the whole workspace (ROS_DISTRO kilted).
+CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) — `colcon build` L338 + `colcon test` L347 over the whole workspace (ROS_DISTRO lyrical).
 
 ## Change coupling — "if you change X, also update Y"
 - **Datum**: `navsat` and `map_server_node` must receive the same `datum_lat/lon` (`full_system.launch.py` L431–434 comment; Invariant 4). `cog_to_imu` gets its own copy (`navigation.launch.py` L1121–1122) and `navsat_to_absolute_pose_node.cpp` L440 re-implements the equirectangular math instead of using `mowgli_interfaces/wgs84_projection.hpp` — change all three together.

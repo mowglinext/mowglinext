@@ -1,0 +1,218 @@
+# MQTT control & monitoring
+
+`mowgli_monitoring/mqtt_bridge_node` (`ros2/src/mowgli_monitoring/`) bridges a handful of ROS2
+topics to a plain MQTT broker, so external tools — a Home Assistant integration, a mobile app, a
+Node-RED flow — can watch the mower and issue high-level commands without talking ROS2 directly.
+It is read-only monitoring, except for one inbound command topic that relays straight through to
+the same `HighLevelControl` service the GUI's own buttons use.
+
+This is the stable, versioned contract external integrations should build against — not the GUI's
+internal REST/WebSocket API on `:4006` (unauthenticated, unversioned, an implementation detail of
+the bundled frontend) and not the GUI's own separate embedded MQTT broker
+(`gui/pkg/providers/mqtt.go`, a different prefix/payload shape used by the web UI).
+
+## Enabling it
+
+1. Set the broker connection in the GUI: **Settings → MQTT / Home Assistant**. Toggling it on
+   writes `mqtt_enabled: true` (plus host/port/credentials/prefix/TLS) into the installed
+   `mowgli_robot.yaml` — see root `CLAUDE.md` Invariant 15. There is no file to hand-edit, and this
+   toggle alone is enough to start `mqtt_bridge_node` — no `.env` change needed.
+2. Point `mqtt_host` at either the bundled broker (`localhost` — the `mowgli-mqtt` container from
+   `install/compose/docker-compose.mqtt.yml`, composed in when `ENABLE_MQTT=true` in `.env`) or any
+   external broker already running on your network (e.g. one on your Home Assistant server). These
+   are independent switches on purpose: `ENABLE_MQTT` only decides whether the *bundled* broker
+   container exists, `mqtt_enabled` only decides whether the bridge *node* runs — pointing the node
+   at an external broker needs no bundled broker at all.
+3. Restart the ROS2 stack for the new params to take effect (`mqtt_bridge_node`'s parameters are
+   read once at startup, like every other node here).
+
+## Security
+
+The bundled broker (`install/config/mqtt/mosquitto.conf`) allows **anonymous connections on both
+1883 (TCP) and 9001 (WebSocket), with no TLS**. `<mqtt_topic_prefix>/command` accepts any
+high-level command from anyone who can reach the broker — treat it exactly like the GUI's own
+unauthenticated `:4006` API (`gui/CLAUDE.md`): fine on a trusted LAN, never expose it to the
+internet. Set `mqtt_username`/`mqtt_password`/`mqtt_use_ssl` if your own broker enforces auth/TLS.
+
+## Topics
+
+All topics are `<mqtt_topic_prefix>/<name>` (default prefix `mowgli`). Every payload is UTF-8 JSON
+unless noted otherwise. QoS 1 throughout.
+
+| Topic | Direction | Retained | Source | Rate |
+|-------|-----------|----------|--------|------|
+| `<prefix>/status` | out | yes | `/hardware_bridge/status` | on change |
+| `<prefix>/power` | out | yes | `/hardware_bridge/power` | on change |
+| `<prefix>/emergency` | out | yes | `/hardware_bridge/emergency` | on change |
+| `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | on change |
+| `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | `publish_rate` Hz |
+| `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | `publish_rate` Hz |
+| `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
+| `<prefix>/available` | out | yes | connection state (LWT) | on connect/disconnect |
+| `<prefix>/command` | **in** | — | → `/behavior_tree_node/high_level_control` | — |
+
+### `<prefix>/high_level_status` — the primary "is it mowing?" topic
+
+This is the one most integrations want first — it's the same state machine the GUI's dashboard
+reads. Every field of `mowgli_interfaces/msg/HighLevelStatus.msg`:
+
+```json
+{
+  "state": 2,
+  "state_name": "AUTONOMOUS",
+  "sub_state_name": "MOWING",
+  "current_area": 2,
+  "current_path": 3,
+  "current_path_index": 0,
+  "total_swaths": 40,
+  "completed_swaths": 12,
+  "skipped_swaths": 1,
+  "coverage_percent": 42.5,
+  "gps_quality_percent": 99.0,
+  "battery_percent": 73.5,
+  "is_charging": false,
+  "emergency": false
+}
+```
+
+`state` values (`mowgli_interfaces/msg/HighLevelStatus.msg`):
+
+| Value | Name | Meaning |
+|-------|------|---------|
+| 0 | `NULL` | Emergency / transitional |
+| 1 | `IDLE` | Docked, charging, stop-hold, rain-wait, or mow complete — check `is_charging` and `sub_state_name` to tell these apart |
+| 2 | `AUTONOMOUS` | Undocking, transit, mowing, recovering, **or returning to the dock** — driving home is state 2, not 1 |
+| 3 | `RECORDING` | Recording an area boundary |
+| 4 | `MANUAL_MOWING` | Manual/teleop mowing |
+
+See [`docs/claude/high-level-api.md`](claude/high-level-api.md) for the full behaviour behind each
+state and every `sub_state_name`.
+
+### `<prefix>/status`
+
+```json
+{
+  "mower_status": 0,
+  "raspberry_pi_power": true,
+  "is_charging": false,
+  "esc_power": true,
+  "rain_detected": false,
+  "sound_module_available": true,
+  "sound_module_busy": false,
+  "ui_board_available": true,
+  "mow_enabled": false,
+  "mower_esc_status": 0,
+  "mower_esc_temperature": 34.50,
+  "mower_esc_current": 0.120,
+  "mower_motor_temperature": 32.10,
+  "mower_motor_rpm": 0.0
+}
+```
+
+### `<prefix>/power`
+
+```json
+{
+  "v_charge": 16.500,
+  "v_battery": 15.800,
+  "charge_current": 0.000,
+  "charger_enabled": false,
+  "charger_status": "idle",
+  "battery_pct": 90.9
+}
+```
+
+`battery_pct` is derived from `v_battery` over the 12.0–16.8 V 4S LiPo range and clamped to
+[0, 100] — the same formula `diagnostics_node` uses. `<prefix>/high_level_status.battery_percent`
+is the BT's own estimate and is the one the GUI dashboard shows; the two normally agree closely.
+
+### `<prefix>/emergency`
+
+```json
+{"active_emergency": false, "latched_emergency": false, "reason": ""}
+```
+
+### `<prefix>/position` (odom frame — NOT for a map)
+
+```json
+{"x": 1.2345, "y": -6.7890, "theta": 0.0000}
+```
+
+Local `x`/`y` in metres from `/wheel_odom`'s origin, not georeferenced. Use `<prefix>/gps` instead
+for anything that needs a real-world location (e.g. a Home Assistant `device_tracker`).
+
+### `<prefix>/gps`
+
+```json
+{"latitude": 52.12345678, "longitude": -6.98765432, "altitude": 45.230, "status": 0, "service": 1}
+```
+
+Raw relay of `sensor_msgs/msg/NavSatFix` — `status` is `NavSatStatus.status`
+(-1 `NO_FIX`, 0 `FIX`, 1 `SBAS_FIX`, 2 `GBAS_FIX`); it does **not** distinguish RTK Fixed from
+Float the way the GUI's `universal_gnss/summary` does, so don't read it as an RTK-quality signal —
+`<prefix>/high_level_status.gps_quality_percent` is the field for that.
+
+### `<prefix>/diagnostics`
+
+```json
+[
+  {"name": "GPS", "level": 0, "message": "OK"},
+  {"name": "LiDAR", "level": 1, "message": "No LiDAR scan received"}
+]
+```
+
+`level`: 0 OK, 1 WARN, 2 ERROR (standard `diagnostic_msgs/DiagnosticStatus` levels).
+
+### `<prefix>/available` (Last Will and Testament)
+
+Retained `"online"` (published once connected, and again on every reconnect) or `"offline"`
+(published by the broker on an ungraceful disconnect via LWT, or explicitly by the bridge on a
+clean shutdown). Plain text, not JSON. Subscribe to this to distinguish "mower offline" from "mower
+online but silently stuck" — the latter still updates `<prefix>/diagnostics`/`<prefix>/status`.
+
+### `<prefix>/command` (inbound)
+
+Payload is an **ASCII decimal integer string**, e.g. `"1"` — **not a raw byte**. This is the single
+most common mistake integrating against this topic: publish the string `"1"`, not the byte `0x01`.
+
+| Code | Constant | Effect |
+|------|----------|--------|
+| 1 | `COMMAND_START` | Start/resume mowing (or manual-resume from a charging hold above `battery_manual_resume_percent`) |
+| 2 | `COMMAND_HOME` | Return to dock |
+| 3 | `COMMAND_RECORD_AREA` / `COMMAND_S1` | Begin recording an area boundary |
+| 5 | `COMMAND_RECORD_FINISH` | Finish recording, save the area |
+| 6 | `COMMAND_RECORD_CANCEL` | Cancel recording, discard |
+| 7 | `COMMAND_MANUAL_MOW` | Enter manual/teleop mowing |
+| 8 | `COMMAND_STOP` | Pause in place (mower off, holds position — does **not** dock) |
+| 254 | `COMMAND_RESET_EMERGENCY` | Declared but not wired on this channel — see below |
+| 255 | `COMMAND_DELETE_MAPS` | Declared but not wired on this channel — see below |
+
+Full semantics (e.g. what "start" does depending on current state): see
+[`docs/claude/high-level-api.md`](claude/high-level-api.md). `4` (`COMMAND_S2`) is normalised
+server-side to `COMMAND_START`.
+
+The call is fire-and-forget: an unrecognised or out-of-range payload is logged and dropped with no
+error published back to MQTT, and a valid command is dropped silently if
+`/behavior_tree_node/high_level_control` isn't available (still starting up, or the BT node is
+down). There is no ack/result topic — poll `<prefix>/high_level_status` after sending a command to
+confirm it took effect.
+
+`RESET_EMERGENCY` (254) and `DELETE_MAPS` (255) are declared constants in
+`HighLevelControl.srv` but have **no BT guard on this channel** in practice — the GUI re-arms an
+emergency via the separate `/hardware_bridge/emergency_stop` service and clears maps via
+`/map_server_node/clear_map`, not through `HighLevelControl`. Don't rely on sending 254/255 over
+MQTT to do either.
+
+## Parameters
+
+Read once at startup (`ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt_bridge_node.hpp`):
+
+| Param | Default | Set via |
+|-------|---------|---------|
+| `mqtt_host` | `localhost` | GUI Settings → MQTT (`mowgli_robot.yaml: mqtt_host`) |
+| `mqtt_port` | `1883` | `mqtt_port` |
+| `mqtt_username` / `mqtt_password` | `""` / `""` | `mqtt_username` / `mqtt_password` |
+| `mqtt_topic_prefix` | `mowgli` | `mqtt_topic_prefix` |
+| `use_ssl` | `false` | `mqtt_use_ssl` |
+| `mqtt_client_id` | `mowgli_ros2` | package-share `mqtt_bridge.yaml` only (not on the GUI) |
+| `publish_rate` | `1.0` Hz | package-share `mqtt_bridge.yaml` only — also the position/gps rate limit and the MQTT network-loop tick period |
