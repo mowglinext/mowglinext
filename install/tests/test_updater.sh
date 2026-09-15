@@ -26,6 +26,12 @@ source "$ROOT/install/lib/compose.sh"
 effective_gnss_backend() { echo disabled; }
 effective_gnss_stack() { echo disabled; }
 is_supported_gnss_backend() { return 0; }
+# Same reason as the GNSS stub above: this file exercises compose.sh in
+# isolation, so every collaborator it calls has to be provided here. The real
+# definition lives in config.sh — the stack.sh source-set guard at the bottom
+# is what checks that compose.sh's dependencies are actually reachable in
+# production.
+is_supported_hardware_backend() { case "${1:-}" in mowgli|mavros|openmower) return 0;; *) return 1;; esac; }
 LIDAR_ENABLED=false
 MSG_UPDATER_HARDWARE_MANAGED='unsupported managed hardware'
 MSG_UPDATER_HARDWARE_LEGACY='preserving legacy hardware selection'
@@ -79,3 +85,51 @@ grep -q 'MOWGLI_UPDATE_MAINTENANCE' "$ROOT/install/compose/docker-compose.update
 grep -q 'MSG_UPDATER_UNSUPPORTED=' "$ROOT/install/locale/en.sh"
 grep -q 'MSG_UPDATER_UNSUPPORTED=' "$ROOT/install/locale/fr.sh"
 printf 'Updater installer contract passed\n'
+
+# ---------------------------------------------------------------------------
+# docker/stack.sh sources a NARROWER lib set than the installer: common.sh,
+# config.sh, docker.sh, deploy.sh, compose.sh — and notably NOT
+# backend_choice.sh. Anything build_compose_stack calls must therefore be
+# defined in one of those. A guard that lived in backend_choice.sh once made
+# `stack.sh regen` fail for EVERY backend, because `! <missing command>`
+# evaluates TRUE and the "Unknown HARDWARE_BACKEND" branch fired on the
+# default install too.
+#
+# Runs in a FRESH bash, not a subshell: a subshell inherits the stubs defined
+# above (that is precisely how the first version of this guard passed while
+# the regression was still present), which would mask the very definitions it
+# is here to prove exist.
+# ---------------------------------------------------------------------------
+MOWGLI_TEST_ROOT="$ROOT" bash -euo pipefail -s <<'STACK_SOURCE_GUARD'
+ROOT="$MOWGLI_TEST_ROOT"
+stack_sandbox="$(mktemp -d)"
+trap 'rm -rf -- "$stack_sandbox"' EXIT
+export MOWGLI_HOME="$ROOT"
+# Exactly what docker/stack.sh sources, in its order.
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/common.sh"
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/config.sh"
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/docker.sh"
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/deploy.sh"
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/compose.sh"
+DOCKER_DIR="$stack_sandbox"
+LIDAR_ENABLED=false
+for backend in mowgli mavros openmower; do
+  HARDWARE_BACKEND="$backend"
+  if ! build_compose_stack >/dev/null 2>&1; then
+    echo "build_compose_stack failed for HARDWARE_BACKEND=$backend with stack.sh's source set" >&2
+    exit 1
+  fi
+  [[ ${#COMPOSE_FILES[@]} -gt 0 ]]
+done
+# An unknown backend must still be rejected, not silently composed.
+HARDWARE_BACKEND=definitely-not-a-backend
+if build_compose_stack >/dev/null 2>&1; then
+  echo "build_compose_stack accepted an unknown HARDWARE_BACKEND" >&2
+  exit 1
+fi
+STACK_SOURCE_GUARD
