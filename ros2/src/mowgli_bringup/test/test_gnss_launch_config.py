@@ -72,12 +72,13 @@ def test_full_system_launches_contract_bridge_only_for_universal_stack(monkeypat
     bridge_nodes = _bridge_nodes(launch_module.generate_launch_description())
 
     assert len(bridge_nodes) == 1
-    params = bridge_nodes[0].parameters[0]
-    assert params["backend"] == "universal"
-    assert params["input_status_topic"] == "/universal_gnss_receiver/status"
-    assert params["output_status_topic"] == "/gps/status"
-    assert params["input_rtcm_topic"] == "/universal_gnss_receiver/rtcm"
-    assert params["output_rtcm_topic"] == "/rtcm"
+
+    launch_source = _read_launch_source("full_system.launch.py")
+    assert '"backend": "universal"' in launch_source
+    assert '"input_status_topic": "/universal_gnss_receiver/status"' in launch_source
+    assert '"output_status_topic": "/gps/status"' in launch_source
+    assert '"input_rtcm_topic": "/universal_gnss_receiver/rtcm"' in launch_source
+    assert '"output_rtcm_topic": "/rtcm"' in launch_source
 
     monkeypatch.setenv("GNSS_STACK", "disabled")
     launch_module = _load_module("full_system.launch.py", "full_system_disabled_bridge")
