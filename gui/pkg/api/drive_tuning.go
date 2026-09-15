@@ -934,7 +934,10 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 	}
 
 	nested := nestToROS2YAML(existing, nodeMappings, existingYAML)
-	out, err := yaml.Marshal(nested)
+	// Same writer contract as PostSettingsYAML: a plain yaml.Marshal here
+	// demotes every integral float (wheel_pid_kp: 1.0 -> 1) and bricks the
+	// ROS2 nodes that declare those parameters as double.
+	out, err := marshalROS2YAML(nested, newYAMLTypeHints(schema, existingYAML))
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}

@@ -46,6 +46,7 @@ npx playwright test -g "emergency-latched"
 
 # Codegen (from gui/)
 LC_ALL=C ./generate_go_msgs.sh && LC_ALL=C ./generate_ts_types.sh
+go run ./cmd/gen-template-types   # asserts/ros2_template_types.json from the ROS2 template
 cd web && yarn generate:api     # src/api/Api.ts from ../docs/swagger.json
 ```
 
@@ -53,15 +54,17 @@ cd web && yarn generate:api     # src/api/Api.ts from ../docs/swagger.json
 
 - **Go:** stock `gofmt`; declare routes in a `*Routes(...)` fn registered from `pkg/api/api.go`, and annotate them with swaggo `// @Router` comments.
 - **TypeScript:** eslint flat config (`web/eslint.config.js`) — the hard gate is **0 errors**; `--max-warnings 900` is a debt ratchet (lowering it is the point; raising needs a written reason). There is no prettier config in-repo despite `contributing.md`.
-- **Never hand-edit:** `pkg/msgs/**/*_generated.go`, `web/src/types/ros.generated.ts` (`web/src/types/ros.ts` is the 1-line re-export every consumer imports), `web/src/api/Api.ts`, `gui/docs/{docs.go,swagger.json,swagger.yaml}`, `asserts/board.h` (the `.template` is the source). Re-run the generator instead.
+- **Never hand-edit:** `pkg/msgs/**/*_generated.go`, `web/src/types/ros.generated.ts` (`web/src/types/ros.ts` is the 1-line re-export every consumer imports), `web/src/api/Api.ts`, `gui/docs/{docs.go,swagger.json,swagger.yaml}`, `asserts/board.h` (the `.template` is the source), `asserts/ros2_template_types.json` (the ROS2 template is the source). Re-run the generator instead.
 - **`.msg`/`.srv` change** → both `generate_*.sh` here **and** `firmware/scripts/sync_ros_lib.py`; commit all three or `msg-codegen-drift.yml` fails. Use `LC_ALL=C` on macOS or sort order fabricates ~20 lines of phantom drift.
 - **Swagger:** nothing in the repo runs `swag` — regenerate `gui/docs/` by hand after route changes, then `yarn generate:api` so `Api.ts` matches. Hand-written `guiApi.request({path})` calls (`/params`, `/settings/yaml/defaults`, `/tools/*`, `/irrisense/*`, `/remote-access/*`) bypass the generated client entirely.
 - **i18n:** every string goes into `web/src/i18n/locales/en.json` **and** `fr.json` in lockstep — `locales.test.ts` asserts exact key parity in both directions.
 - **Defaults:** a new `mowgli_robot.yaml` template default must be mirrored into `asserts/mower_config.schema.json` (or allowlisted in `pkg/api/schema_template_parity_test.go`), else `TestSchemaDefaultsMatchTemplate` fails and the Settings "at default" dot lies.
+- **Number types:** the settings writer decides each scalar's YAML type from schema → `asserts/ros2_template_types.json` → the type already on disk (`pkg/api/settings_yaml_types.go`). Adding, removing or retyping a NUMBER in the ROS2 template means re-running `go run ./cmd/gen-template-types`, else `TestTemplateTypesAssetMatchesTemplate` fails. Writing `5` where a node declares `double` aborts it at startup — that is how a settings save bricked the robot on 2026-09-15.
 
 ## Component-specific gotchas
 
 - `getSchema` opens `asserts/mower_config.schema.json` **relative to the process CWD** (`pkg/api/settings.go`) — run the binary from `gui/` or every settings route 500s. Tests call `chdirToGuiRoot`.
+- The backend **cannot read the ROS2 template at runtime**: the image is built with `context: ./gui` and ships only `/app/web`, `/app/mowglinext`, `/app/asserts`. Anything the GUI needs from `ros2/` has to be generated into `asserts/` and pinned by a parity test.
 - A yaml key with **no schema default is never pruned** once written (`sparsifyFlat`, `pkg/api/settings.go`) — that is why `retiredParamKeys` exists. Retired ICP parameters are scrubbed on save; `use_magnetometer` is written straight through.
 - `writePreservingPerms` keeps the yaml's uid/gid/mode so the ROS-side line-splice writers (root Invariant 6: dock pose, calibration, drive-tuning rollback) can still write it. Do not replace it with a plain `os.WriteFile`.
 - A new browser topic needs **three** edits: `topicMap` (`pkg/providers/ros.go`), `topicSubscribeInterval` (`pkg/api/mowglinext.go`), and a `useTopic` wrapper. `dockingSensor` and MQTT's `mowingPath` are listed downstream but missing from `topicMap` — they silently never deliver.

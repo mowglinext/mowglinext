@@ -839,7 +839,7 @@ func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string)
 
 	nested := nestToROS2YAML(doc.Flat, doc.NodeMappings, doc.ExistingYAML)
 	pruneNestedKeys(nested, prunedKeys)
-	out, err := marshalROS2YAMLWithGeoPrecision(nested)
+	out, err := marshalROS2YAML(nested, loadYAMLTypeHints(dbProvider, doc.ExistingYAML))
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}

@@ -523,33 +523,16 @@ func serializeShellSettingValue(key string, value any) string {
 	return fmt.Sprintf("%#v", value)
 }
 
-func applyFixedPrecisionGeoScalars(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		for key, child := range typed {
-			if fixedPrecisionYAMLKeys[key] {
-				if f, ok := asFloat64(child); ok {
-					out[key] = fixedPrecisionFloat(f)
-					continue
-				}
-			}
-			out[key] = applyFixedPrecisionGeoScalars(child)
-		}
-		return out
-	case []any:
-		out := make([]any, len(typed))
-		for i, child := range typed {
-			out[i] = applyFixedPrecisionGeoScalars(child)
-		}
-		return out
-	default:
-		return value
+// loadYAMLTypeHints builds the number-type hints for one write of the
+// installed mowgli_robot.yaml: JSON-schema types first, the types already on
+// disk second. See settings_yaml_types.go for why every writer needs them.
+func loadYAMLTypeHints(dbProvider types.IDBProvider, existingYAML map[string]any) yamlTypeHints {
+	schema, err := getSchema(dbProvider)
+	if err != nil {
+		log.Printf("settings: schema unavailable for YAML type hints (%v); falling back to on-disk types", err)
+		schema = nil
 	}
-}
-
-func marshalROS2YAMLWithGeoPrecision(nested map[string]any) ([]byte, error) {
-	return yaml.Marshal(applyFixedPrecisionGeoScalars(nested))
+	return newYAMLTypeHints(schema, existingYAML)
 }
 
 func stringValue(value any, defaultValue string) string {
@@ -1451,8 +1434,10 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		nested := nestToROS2YAML(existing, nodeMappings, existingYAML)
 		pruneNestedKeys(nested, prunedKeys)
 
-		// Marshal with YAML comments header
-		out, err := marshalROS2YAMLWithGeoPrecision(nested)
+		// Marshal with YAML comments header. The hints are built from the
+		// document as it was READ, before nesting, so a key the schema does
+		// not cover keeps the float-vs-int type it already had on disk.
+		out, err := marshalROS2YAML(nested, newYAMLTypeHints(schema, existingYAML))
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: "failed to marshal YAML: " + err.Error()})
 			return
