@@ -1326,9 +1326,10 @@ universal_gnss_yaml_scalar() {
 write_universal_gnss_parameters() {
   local target="$DOCKER_DIR/config/universal_gnss/parameters.yaml"
   local receiver_family="$1" transport="$2" serial_baud="$3" frame_id="$4"
-  local ntrip_enabled="$5" ntrip_host="$6" ntrip_port="$7" ntrip_user="$8"
-  local ntrip_password="$9" ntrip_mountpoint="${10}" ntrip_gga_enabled="${11}"
-  local ntrip_gga_interval_s="${12}"
+  local publish_rate_hz="$5"
+  local ntrip_enabled="$6" ntrip_host="$7" ntrip_port="$8" ntrip_user="$9"
+  local ntrip_password="${10}" ntrip_mountpoint="${11}" ntrip_gga_enabled="${12}"
+  local ntrip_gga_interval_s="${13}"
 
   mkdir -p "$(dirname "$target")"
   {
@@ -1338,7 +1339,7 @@ write_universal_gnss_parameters() {
     printf '    transport: %s\n' "$(universal_gnss_yaml_scalar "$transport")"
     printf '%s\n' '    serial_device: /dev/gnss-receiver'
     printf '    serial_baud: %s\n' "$serial_baud"
-    printf '%s\n' '    publish_rate_hz: 5.0'
+    printf '    publish_rate_hz: %s\n' "$publish_rate_hz"
     printf '    frame_id: %s\n' "$(universal_gnss_yaml_scalar "$frame_id")"
     printf '%s\n' '/universal_gnss_ntrip:' '  ros__parameters:'
     printf '    caster_host: %s\n' "$(universal_gnss_yaml_scalar "$ntrip_host")"
@@ -1386,6 +1387,7 @@ regenerate_sidecar_runtime_configs() {
     "$(runtime_gnss_config_value "$yaml_file" gnss_transport serial)" \
     "$(runtime_gnss_config_value "$yaml_file" gnss_serial_baud 921600)" \
     "$(runtime_gnss_config_value "$yaml_file" gnss_frame_id gps_link)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_profile_rate_hz 5.0)" \
     "$(runtime_gnss_config_value "$yaml_file" ntrip_enabled true)" \
     "$(runtime_gnss_config_value "$yaml_file" ntrip_host crtk.net)" \
     "$(runtime_gnss_config_value "$yaml_file" ntrip_port 2101)" \
