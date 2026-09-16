@@ -1403,7 +1403,7 @@ write_config() {
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local template="$INSTALL_DIR/config/mowgli/mowgli_robot.yaml"
   local resolved_receiver_family resolved_transport resolved_serial_device
-  local resolved_serial_baud resolved_config_baud resolved_frame_id resolved_ntrip_enabled
+  local resolved_serial_baud resolved_config_baud resolved_frame_id resolved_profile_rate_hz resolved_ntrip_enabled
   local resolved_ntrip_host resolved_ntrip_port resolved_ntrip_user
   local resolved_ntrip_password resolved_ntrip_mountpoint
   local resolved_ntrip_gga_enabled resolved_ntrip_gga_interval_s
@@ -1454,6 +1454,8 @@ EOF
   resolved_frame_id="$(preserved_gnss_value \
     "$(if gnss_installer_key_is_explicit GNSS_FRAME_ID; then printf 'true'; else printf 'false'; fi)" \
     "${GNSS_FRAME_ID}" "${PREV_GNSS_FRAME_ID:-}" "gps_link")"
+  resolved_profile_rate_hz="$(runtime_gnss_config_value \
+    "$yaml_file" gnss_profile_rate_hz 5.0)"
   resolved_ntrip_enabled="$(preserved_gnss_value \
     "${CONFIG_NTRIP_ENABLED_EXPLICIT:-false}" "${CONFIG_NTRIP_ENABLED:-}" "${PREV_NTRIP_ENABLED:-}" "true")"
   resolved_ntrip_host="$(preserved_gnss_value \
@@ -1495,6 +1497,7 @@ EOF
   # mowgli_robot.yaml remains the operator-facing source of truth.
   write_universal_gnss_parameters \
     "$resolved_receiver_family" "$resolved_transport" "$resolved_serial_baud" "$resolved_frame_id" \
+    "$resolved_profile_rate_hz" \
     "$resolved_ntrip_enabled" "$resolved_ntrip_host" "$resolved_ntrip_port" "$resolved_ntrip_user" \
     "$resolved_ntrip_password" "$resolved_ntrip_mountpoint" "$resolved_ntrip_gga_enabled" \
     "$resolved_ntrip_gga_interval_s"

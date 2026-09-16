@@ -93,7 +93,16 @@ export const restartGps = async (api: GuiApi): Promise<void> => {
     });
 
     if (res.error) {
-        throw new Error((res.error as any).error ?? "Failed to reconcile GNSS service");
+        const apiError: unknown = res.error;
+        const message =
+            typeof apiError === "object" &&
+            apiError !== null &&
+            "error" in apiError &&
+            typeof apiError.error === "string"
+                ? apiError.error
+                : "Failed to reconcile GNSS service";
+
+        throw new Error(message);
     }
 };
 
