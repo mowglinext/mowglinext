@@ -57,11 +57,13 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `gui/tygo.yaml` | 26 | tygo config from the OpenMower era (references `pkg/msgs/mower_msgs`, `xbot_msgs`, `dynamic_reconfigure` — none exist); unused by the scripts |
 | `gui/generate_go_msgs.sh` | 558 | Bash generator: embeds std ROS msgs, parses `ros2/src/mowgli_interfaces/{msg,srv}` → `pkg/msgs/{geometry,nav,sensor,std,visualization,mowgli}` |
 | `gui/generate_ts_types.sh` | 331 | Same parser → `gui/web/src/types/ros.generated.ts` (snake_case fields) |
+| `gui/cmd/gen-template-types/main.go` | 35 | Regenerates `asserts/ros2_template_types.json` from the ROS2 template (`go run ./cmd/gen-template-types`) |
 | `gui/README.md` | 157 | Dev/deploy notes; MQTT + env sections are OpenMower-era and stale (see § Pitfalls) |
 | `gui/.env`, `gui/.env.dist` | 10 / 5 | Local-dev env loaded by `godotenv.Load()` in `main.go` (`DB_PATH`, `WEB_DIR`, `DOCKER_HOST`, `MQTT_ENABLED`, …) |
 | `gui/.devcontainer/{devcontainer.json,Dockerfile}` | 17 / 16 | VS Code / WebStorm devcontainer used by `make deps` + `make run-*` |
 | **asserts/** | | |
 | `gui/asserts/mower_config.schema.json` | 838 | Settings JSON Schema = GUI's default source (12 groups: `sensor_extrinsics` plus `{hardware,gps,docking,mowing,battery,safety,obstacle,mapping,rain,led,nav}_settings`). No `x-yaml-node` entries → every key nests under `mowgli.ros__parameters` |
+| `gui/asserts/ros2_template_types.json` | 151 | GENERATED number types (`number`/`integer`) for all 145 numeric params in the ROS2 template — the settings writer's 2nd type source, so an integral float is never written as an int (Invariant 15 / 2026-09-15 incident) |
 | `gui/asserts/board.h.template` | 340 | Go `text/template` for the STM32 `board.h` (custom firmware build) |
 | `gui/asserts/board.h` | 330 | Rendered example of the template (not consumed by code) |
 | **pkg/api/** (gin handlers) | | |
@@ -241,6 +243,7 @@ Tests (what each pins):
 ## Change coupling — "if you change X, also update Y"
 - `.msg`/`.srv` in `ros2/src/mowgli_interfaces` → run `gui/generate_go_msgs.sh` **and** `gui/generate_ts_types.sh`, commit both (`msg-codegen-drift.yml` fails otherwise); also `firmware/scripts/sync_ros_lib.py` (see `docs/claude/commands.md`).
 - New parameter default in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` → add the same `default` to `gui/asserts/mower_config.schema.json` (or allowlist it in `schema_template_parity_test.go`), else `TestSchemaDefaultsMatchTemplate` fails and the GUI's "at default" dot lies (Invariant 15).
+- Adding/removing/retyping a NUMBER in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` → `cd gui && go run ./cmd/gen-template-types` and commit `asserts/ros2_template_types.json`, else `TestTemplateTypesAssetMatchesTemplate` fails. The GUI image cannot read the template (build `context: ./gui`), so this asset is how the settings writer knows a key is a `double`.
 - New browser topic → `topicMap` (`ros.go`) + `topicSubscribeInterval` (`mowglinext.go`) + `TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics` + the frontend hook.
 - Container names are hardcoded: `mowgli-gps` (`gnss.go:19`), `mowgli-ros2` (`rosbag.go:44`, `drive_tuning.go:24`); renaming them in `install/compose/*.yml` breaks those tools. `mowgli-remote` (`providers/remote_access.go`) is GUI-created, not a compose service.
 - Paths shared with the ROS2 container: `/ros2_ws/maps` (rosbags, calibration files; `mowgli_maps` volume mounted in both), `/ros2_ws/config/mowgli_robot.yaml` (drive tuning passes it to `tune_drive_pid`), `/ros2_ws/config/drive_tuning`.
