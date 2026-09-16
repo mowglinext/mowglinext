@@ -570,8 +570,8 @@
         "chassis_safety_inset": {
           "type": "number",
           "title": "Chassis Safety Inset",
-          "default": 0.275,
-          "description": "Pre-shrink the operator polygon, and grow obstacle holes, by this many metres before F2C plans anything. Defaults to the body half-width (chassis_width / 2 + costmap margin) so the plan never routes the centreline closer to an obstacle than the chassis reaches. Values below that half-width are RAISED to it at launch: a plan inside the body is in collision before any tracking error."
+          "default": 0,
+          "description": "How far INSIDE the recorded perimeter the outermost mowing pass sits. 0 means the outermost ring rides on the line you drove — that line is the reachable limit by definition, so the blade mows to the edge and the chassis straddles it. Every centimetre here is a band that never gets cut. Raise it only if your recorded perimeter is not actually drivable. Obstacle clearance is a separate setting (Drawn Obstacle Margin)."
         },
         "min_turning_radius": {
           "type": "number",
@@ -710,8 +710,8 @@
         "obstacle_margin": {
           "type": "number",
           "title": "Drawn Obstacle Margin",
-          "default": 0.2,
-          "description": "Extra margin (m) around obstacles drawn on the map, applied to both coverage and transit planning. Draw a tree trunk and set this to cover its roots (invisible to the 2D LiDAR)."
+          "default": 0.275,
+          "description": "Margin (m) grown around obstacles drawn on the map, applied to both coverage and transit planning. This is the ONLY obstacle clearance the coverage plan has, so it is floored at the body half-width (chassis_width / 2 + costmap margin) — lower values are raised at launch. Raise it to cover what the drawn polygon does not: a tree's root flare and low branches are invisible to the 2D LiDAR."
         },
         "obstacle_slowdown_ratio": {
           "type": "number",
