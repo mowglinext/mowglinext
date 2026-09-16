@@ -557,14 +557,28 @@ mowgli:
     # exactly on the line. The safety stop is the LETHAL band the keepout mask
     # places OUTSIDE the line (0.40 m out, enforce_boundary_margin_m), not an
     # inward inset. Raise this to keep the chassis further inside (e.g.
-    # chassis_width/2 = 0.20 to keep the WHOLE chassis inside, the old behaviour,
+    # chassis_width/2 + costmap margin to keep the WHOLE chassis inside,
     # at the cost of a ~0.20 m uncut perimeter band). This keep-inside guarantee
     # now holds through TURNS as well: the turn-around connectors are clipped to
     # the outermost-ring centerline (recorded line minus this inset), so a U-turn
     # arc's chassis no longer bulges ~op_width/2 past the perimeter ring the way it
     # did before (that outward bulge grew with the turn radius). Read LIVE by
     # coverage_server (ros2-param-set-tunable).
-    chassis_safety_inset: 0.2       # 2026-07-23: field-validated default (was 0.0) — keep whole chassis inside the boundary, un-wedges the outermost ring
+    # 0.275 = chassis_width/2 + 0.05 costmap margin on the shipped chassis, i.e.
+    # exactly how far the BODY reaches sideways — the same half-width the Nav2
+    # footprint, collision_monitor and FTC's footprint clearance all measure
+    # against. navigation.launch.py FLOORS this value at that DERIVED number, so
+    # editing chassis_width in the GUI moves the floor with it and a value below
+    # it is raised (with a warning) rather than silently obeyed.
+    #
+    # WHY THE FLOOR EXISTS (2026-09-16): this used to be 0.2, chosen when the
+    # chassis was 0.40 m wide. The chassis became 0.45 m, the Nav2 footprint
+    # followed, this literal did not — so every plan routed the centreline
+    # 0.20 m from obstacles and the recorded line while the body reached
+    # 0.225 m. A plan 2.5 cm inside the robot is in collision before any
+    # tracking error, and FTC (holding 2 cm) drove precisely there: it hit a
+    # MAPPED tree, wheels spinning, until the dig detector hard-stopped it.
+    chassis_safety_inset: 0.275
     # NOTE: path_spacing was REMOVED here on 2026-09-05. It had already been
     # marked DEPRECATED in this file and hidden by the GUI
     # (useSettingsManager.ts:134); grep confirms no ROS2 node, no launch file
@@ -853,7 +867,14 @@ mowgli:
     # 0.05 (was 0.10): the footprint already models the true body edge, so the
     # old margin — sized to cover the line model's centerline-miss gap — is now
     # double what's needed; halved to keep skirts tight while still clearing.
-    obstacle_clearance_margin: 0.2         # 2026-07-23: field-validated default (was 0.05) — wider sideways room past obstacles
+    # 0.05 since 2026-09-16, back from 0.2. Under the LINE model this knob was
+    # not slack: it stood in for the 0.155 m of body the 0.12 m half-width left
+    # out (0.12 + 0.20 ~= the real 0.275 m half-width). FTC now samples the real
+    # chassis polygon (use_footprint_clearance: true), which already carries the
+    # full body plus the costmap margin — so this is once again what its name
+    # says, genuine extra room, and 0.20 m of it on top of the true body is what
+    # kept the robot half a metre off every hedge.
+    obstacle_clearance_margin: 0.05
     # How long (s) FTC holds zero velocity on a blocked or over-max deviation
     # before aborting the strip and handing back to the BT. Debounces transient
     # LiDAR returns (a person crossing) so they don't burn a BT retry.
