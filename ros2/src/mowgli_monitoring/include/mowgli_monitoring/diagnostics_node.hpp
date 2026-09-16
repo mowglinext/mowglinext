@@ -29,7 +29,7 @@
  *   - Odometry          (freshness of /wheel_odom)
  *   - EKF Map           (/odometry/filtered_map: rate, position, orientation, z-drift, flat check)
  *   - Motors            (ESC temperatures from /status)
- *   - Path Tracking     (/controller_server/tracking_feedback: lateral error while a
+ *   - Path Tracking     (/tracking_feedback: lateral error while a
  *                        FollowPath goal runs — mowing-quality measure, ROS 2 Lyrical)
  */
 

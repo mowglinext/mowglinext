@@ -223,8 +223,15 @@ void DiagnosticsNode::create_subscriptions()
   // is driving (FTC on coverage, RotationShim+RPP on transit). Reliable, depth 10:
   // this is a low-rate status stream, not sensor data, and a dropped sample at the
   // very moment the robot swings wide is exactly the one worth keeping.
+  //
+  // ROOT namespace, NOT `/controller_server/tracking_feedback`: Nav2 creates this
+  // publisher with a RELATIVE name, which resolves against the node's namespace
+  // (empty) rather than its name — exactly like the server's `/lookahead_point`
+  // and `/transformed_global_plan`. Verified on the robot 2026-09-17; the
+  // node-prefixed guess subscribes to a topic nobody publishes and the status
+  // sits at "Idle" forever.
   sub_tracking_ = create_subscription<nav2_msgs::msg::TrackingFeedback>(
-      "/controller_server/tracking_feedback",
+      "/tracking_feedback",
       10,
       [this](nav2_msgs::msg::TrackingFeedback::ConstSharedPtr msg)
       {
