@@ -446,9 +446,17 @@ def test_obstacle_template_defaults_match_static_yaml() -> None:
         f"template obstacle_slowdown_ratio={rp['obstacle_slowdown_ratio']} != "
         f"lidar overlay PolygonSlow.slowdown_ratio={slow}."
     )
-    assert float(rp["obstacle_margin"]) == 0.2, (
-        "template obstacle_margin must default to 0.2 m — 2026-07-23 "
-        "field-validated wider buffer around drawn obstacles (was 0.15)."
+    # obstacle_margin is DERIVED, not pinned to a literal: it must be at least
+    # the body half-width, which follows chassis_width. It was a literal 0.2
+    # (2026-07-23) until 2026-09-16, when the chassis had grown to 0.45 m and
+    # the literal no longer covered the body. The exact-equality check lives in
+    # test_boundary_inset_and_obstacle_margin_are_separate_knobs.
+    from robot_config_util import chassis_half_width as _chassis_half_width
+
+    assert float(rp["obstacle_margin"]) >= _chassis_half_width(rp), (
+        f"template obstacle_margin={rp['obstacle_margin']} is inside the body "
+        f"half-width {_chassis_half_width(rp):.3f} — the launch floor would "
+        "silently override it and the yaml would lie to whoever reads it."
     )
 
 
@@ -1236,33 +1244,47 @@ def test_navigation_launch_derives_chassis_width_from_the_config() -> None:
     )
 
 
-def test_chassis_safety_inset_is_floored_at_the_body_half_width() -> None:
-    """The coverage planner may never route the centreline closer to an obstacle
-    or the recorded line than the chassis physically reaches."""
+def test_obstacle_margin_is_floored_at_the_body_half_width() -> None:
+    """obstacle_margin is the ONLY obstacle clearance the coverage plan has once
+    chassis_safety_inset is 0: putting the outermost ring on the recorded line
+    expands the planning field OUTWARD, and that expansion leaves the holes
+    untouched. Below the body half-width the plan routes the centreline closer
+    to an obstacle than the chassis reaches — in collision before any tracking
+    error."""
     src = _read_text("launch/navigation.launch.py")
-    assert re.search(r"inset_floor\s*=\s*chassis_half_width\(", src), (
-        "the inset floor must be DERIVED via robot_config_util.chassis_half_width(), "
-        "not hardcoded — a literal goes stale when the operator edits the chassis."
+    assert re.search(r"margin_floor\s*=\s*chassis_half_width\(", src), (
+        "the obstacle-margin floor must be DERIVED via "
+        "robot_config_util.chassis_half_width(), not hardcoded — a literal goes "
+        "stale when the operator edits the chassis in the GUI."
     )
     assert re.search(
-        r"chassis_safety_inset\s*<\s*inset_floor.*?chassis_safety_inset\s*=\s*inset_floor",
+        r"obstacle_margin\s*<\s*margin_floor.*?obstacle_margin\s*=\s*margin_floor",
         src, re.DOTALL), (
         "an operator value below the floor must be RAISED to it, not obeyed."
     )
 
 
-def test_template_safety_inset_matches_the_shipped_chassis() -> None:
-    """The template default must equal the derived floor for the shipped chassis.
-    If it drifts below, the floor silently overrides it at launch and the yaml
-    lies to whoever reads it — which is how 0.2 survived a 0.40 -> 0.45 m
-    chassis change unnoticed."""
+def test_boundary_inset_and_obstacle_margin_are_separate_knobs() -> None:
+    """The two used to be one value with opposite requirements, which is why no
+    setting satisfied both: 0 put the ring on the recorded line but left the
+    obstacle holes raw, while a body-sized value cleared obstacles and refused
+    to mow a 27 cm band along every hedge."""
     from robot_config_util import chassis_half_width as _chassis_half_width
 
     template = _template_robot_params()
     derived = _chassis_half_width(template)
-    assert template["chassis_safety_inset"] == pytest.approx(derived, abs=1e-9), (
-        f"template chassis_safety_inset {template['chassis_safety_inset']} != "
-        f"derived body half-width {derived:.3f} for the shipped chassis."
+
+    # Boundary: the recorded perimeter was DRIVEN by the operator, so it is the
+    # reachable limit — the outermost pass rides on it.
+    assert template["chassis_safety_inset"] == 0.0, (
+        "chassis_safety_inset is boundary-only; any inset is a band that never "
+        "gets cut. Obstacle clearance belongs to obstacle_margin."
+    )
+    # Obstacles: body-sized, and equal to the derived floor so the yaml does not
+    # lie to whoever reads it (0.2 survived a 0.40 -> 0.45 m chassis unnoticed).
+    assert template["obstacle_margin"] == pytest.approx(derived, abs=1e-9), (
+        f"template obstacle_margin {template['obstacle_margin']} != derived body "
+        f"half-width {derived:.3f} for the shipped chassis."
     )
 
 

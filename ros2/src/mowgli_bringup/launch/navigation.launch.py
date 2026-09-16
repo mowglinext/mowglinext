@@ -646,33 +646,18 @@ def generate_launch_description() -> LaunchDescription:
         # Operator override wins; otherwise fall back to 0.0 (below).
         if "chassis_safety_inset" in rt_rp:
             chassis_safety_inset = float(rt_rp["chassis_safety_inset"])
-    # FLOOR the inset at the body half-width, DERIVED from the live chassis
-    # geometry (chassis_half_width == chassis_width/2 + costmap margin — the
-    # exact half-width the Nav2 footprint, collision_monitor and FTC's footprint
-    # clearance model all measure against).
+    # chassis_safety_inset is a BOUNDARY-ONLY knob: how far inside the RECORDED
+    # LINE the outermost driven pass sits. It is NOT the obstacle clearance —
+    # that is obstacle_margin, floored at the body half-width below.
     #
-    # coverage_server reads chassis_safety_inset as "how far inside the recorded
-    # line / outside an obstacle hole the outermost ring centerline sits". Any
-    # value below the body half-width therefore plans a centreline the chassis
-    # cannot follow without touching — the plan itself is in collision, before a
-    # single millimetre of tracking error. That is what put the robot 2.5 cm
-    # into a mapped tree on 2026-09-16 while FTC was holding the line to 2 cm.
-    #
-    # An operator may ask for MORE clearance; never less. Same shape as the
-    # obstacle_inflation_radius floor below — and derived for the same reason:
-    # the chassis is editable in the GUI, so a literal goes stale silently.
-    inset_floor = chassis_half_width(rp)
+    # Default 0.0, and that is a semantic choice, not a tuning one: the operator
+    # recorded that perimeter by DRIVING it, so it is the reachable limit by
+    # definition. The outermost ring rides ON it, the blade mows to the edge and
+    # the chassis straddles the line — which is what mowing an edge means. Any
+    # inset here is a band the robot refuses to cut; 0.2 m of it was the
+    # "it stays too far from the hedges" complaint.
     if chassis_safety_inset is None:
-        chassis_safety_inset = inset_floor
-    elif chassis_safety_inset < inset_floor:
-        print(
-            "[navigation.launch] chassis_safety_inset "
-            f"{chassis_safety_inset:.3f} m is inside the body half-width "
-            f"{inset_floor:.3f} m — raising it to the floor. The coverage plan "
-            "may not route the centreline closer to an obstacle than the "
-            "chassis reaches."
-        )
-        chassis_safety_inset = inset_floor
+        chassis_safety_inset = 0.0
 
     # Compute BT XML paths from installed package shares (not hardcoded).
     bt_nav_to_pose_xml = os.path.join(
@@ -1045,6 +1030,33 @@ def generate_launch_description() -> LaunchDescription:
         # swath planning — keeps the robot off root zones the 2D LiDAR cannot
         # see. map_server applies the SAME key to its keepout mask
         # (full_system.launch.py) so planner and keepout stay consistent.
+        # FLOORED at the body half-width, DERIVED from the live chassis
+        # (chassis_half_width == chassis_width/2 + costmap margin — the exact
+        # half-width the Nav2 footprint, collision_monitor and FTC's footprint
+        # clearance all measure against).
+        #
+        # This is the ONLY obstacle clearance once chassis_safety_inset is 0:
+        # with the outermost ring on the recorded line the planning field is
+        # expanded OUTWARD, and expandCellOutward preserves the holes untouched,
+        # so the field offset contributes nothing to them. A margin below the
+        # body half-width would then plan a centreline the chassis cannot follow
+        # without touching the obstacle — a plan in collision before a single
+        # millimetre of tracking error.
+        #
+        # An operator may ask for MORE room around obstacles; never less. Same
+        # shape as the obstacle_inflation_radius floor below, and derived for the
+        # same reason: the chassis is editable in the GUI, so a literal goes
+        # stale silently (that is how `cw = 0.40` survived a 0.45 m chassis).
+        margin_floor = chassis_half_width(rp)
+        if obstacle_margin < margin_floor:
+            print(
+                "[navigation.launch] obstacle_margin "
+                f"{obstacle_margin:.3f} m is inside the body half-width "
+                f"{margin_floor:.3f} m — raising it to the floor. The coverage "
+                "plan may not route the centreline closer to a mapped obstacle "
+                "than the chassis reaches."
+            )
+            obstacle_margin = margin_floor
         cov_params["obstacle_margin"] = min(1.0, max(0.0, obstacle_margin))
         # Hard floor on the continuous path's turn-around / fillet arcs so no
         # turn is ever tighter than the robot can track (clamp to the tuned
