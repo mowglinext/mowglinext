@@ -97,6 +97,15 @@ func newYAMLTypeHints(schema map[string]any, existingYAML map[string]any) yamlTy
 	}
 }
 
+// withSchema returns a copy of the hints with the JSON-schema source filled in.
+// It exists so a caller can capture the on-disk types at the moment the file is
+// read — before anything merges into the document — and add the schema later,
+// once it has been loaded.
+func (h yamlTypeHints) withSchema(schema map[string]any) yamlTypeHints {
+	h.schema = schemaNumberKinds(schema)
+	return h
+}
+
 // kindFor resolves one key. The two DECLARED sources (schema, then template)
 // win over the on-disk observation, so a file an earlier save already demoted
 // is repaired on the next write for every key either of them knows about. The

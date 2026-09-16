@@ -274,20 +274,42 @@ func flattenROS2YAML(yamlData map[string]any) map[string]any {
 	return flat
 }
 
+// cloneNestedMaps returns a copy of node with its direct child maps copied too
+// (one level deeper than a shallow copy), so a caller can write into the result
+// without touching the source document.
+func cloneNestedMaps(node map[string]any) map[string]any {
+	cloned := make(map[string]any, len(node))
+	for key, value := range node {
+		if child, isMap := value.(map[string]any); isMap {
+			clonedChild := make(map[string]any, len(child))
+			for childKey, childValue := range child {
+				clonedChild[childKey] = childValue
+			}
+			cloned[key] = clonedChild
+			continue
+		}
+		cloned[key] = value
+	}
+	return cloned
+}
+
 // nestToROS2YAML takes a flat param map and node mappings, and produces
 // nested ROS2 YAML structure. It preserves any existing YAML content that
 // is not covered by the schema.
 func nestToROS2YAML(flat map[string]any, nodeMappings map[string]string, existingYAML map[string]any) map[string]any {
 	result := map[string]any{}
 
-	// Preserve existing top-level structure
+	// Preserve existing top-level structure. The nested maps (ros__parameters)
+	// are CLONED, not aliased: the merge below writes the payload's values into
+	// them, and sharing them with the caller silently rewrote the document the
+	// caller still holds. That is what made the write-time number-type hints
+	// read an "on-disk" document that had already been overwritten with the
+	// payload's float64s, so every key neither the schema nor the template
+	// declares came out as a float (lidar_map_radius_tiles: 3 -> 3.0, which
+	// aborts a declare_parameter<int> node).
 	for nodeName, nodeData := range existingYAML {
 		if nodeMap, ok := nodeData.(map[string]any); ok {
-			cloned := map[string]any{}
-			for k, v := range nodeMap {
-				cloned[k] = v
-			}
-			result[nodeName] = cloned
+			result[nodeName] = cloneNestedMaps(nodeMap)
 		}
 	}
 
@@ -1385,6 +1407,11 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			_ = yaml.Unmarshal(file, &existingYAML)
 		}
 
+		// Number-type hints must be captured from the document as it was READ,
+		// BEFORE the payload is merged in — they are what keeps a key neither
+		// the schema nor the template declares at the type it already has.
+		typeHints := newYAMLTypeHints(nil, existingYAML)
+
 		// Flatten existing to get current values
 		existing := flattenROS2YAML(existingYAML)
 
@@ -1400,6 +1427,7 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 				}
 			}
 			nodeMappings = extractNodeMappings(schema)
+			typeHints = typeHints.withSchema(schema)
 		}
 
 		// Merge payload on top. A null value is an explicit delete request
@@ -1434,10 +1462,9 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		nested := nestToROS2YAML(existing, nodeMappings, existingYAML)
 		pruneNestedKeys(nested, prunedKeys)
 
-		// Marshal with YAML comments header. The hints are built from the
-		// document as it was READ, before nesting, so a key the schema does
-		// not cover keeps the float-vs-int type it already had on disk.
-		out, err := marshalROS2YAML(nested, newYAMLTypeHints(schema, existingYAML))
+		// Marshal with YAML comments header, using the hints captured from the
+		// document as it was read.
+		out, err := marshalROS2YAML(nested, typeHints)
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: "failed to marshal YAML: " + err.Error()})
 			return

@@ -911,6 +911,9 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 		_ = yaml.Unmarshal(file, &existingYAML)
 	}
 
+	// Hints from the document as READ, before the payload merges into it.
+	typeHints := newYAMLTypeHints(nil, existingYAML)
+
 	existing := flattenROS2YAML(existingYAML)
 	schema, err := getSchema(dbProvider)
 	nodeMappings := map[string]string{}
@@ -923,6 +926,7 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 			}
 		}
 		nodeMappings = extractNodeMappings(schema)
+		typeHints = typeHints.withSchema(schema)
 	}
 
 	for key, value := range payload {
@@ -937,7 +941,7 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 	// Same writer contract as PostSettingsYAML: a plain yaml.Marshal here
 	// demotes every integral float (wheel_pid_kp: 1.0 -> 1) and bricks the
 	// ROS2 nodes that declare those parameters as double.
-	out, err := marshalROS2YAML(nested, newYAMLTypeHints(schema, existingYAML))
+	out, err := marshalROS2YAML(nested, typeHints)
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}

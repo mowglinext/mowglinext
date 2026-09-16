@@ -837,9 +837,13 @@ func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string)
 	// the same way PostSettingsYAML does.
 	prunedKeys := sparsifyFlat(doc.Flat, defaults)
 
+	// Capture the number-type hints BEFORE nesting: nestToROS2YAML merges the
+	// live values into the document, and hints read afterwards would describe
+	// the payload rather than what is on disk.
+	typeHints := loadYAMLTypeHints(dbProvider, doc.ExistingYAML)
 	nested := nestToROS2YAML(doc.Flat, doc.NodeMappings, doc.ExistingYAML)
 	pruneNestedKeys(nested, prunedKeys)
-	out, err := marshalROS2YAML(nested, loadYAMLTypeHints(dbProvider, doc.ExistingYAML))
+	out, err := marshalROS2YAML(nested, typeHints)
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}

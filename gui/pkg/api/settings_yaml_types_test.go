@@ -56,6 +56,42 @@ func decodeParams(t *testing.T, content string) map[string]any {
 	return flattenROS2YAML(doc)
 }
 
+// getThenPostSettingsYAML performs the exact operation the GUI performs when a
+// user opens Settings and presses Save without changing anything: GET the flat
+// settings, POST the same body straight back. It is the round trip that
+// regressed while the marshal unit tests stayed green, because GET returns JSON
+// and every number comes back as a float64.
+func getThenPostSettingsYAML(t *testing.T, existing string) string {
+	t.Helper()
+	yamlFile := createTempYAMLFileAtGuiRoot(t, existing)
+	envFile := createTempConfigFileAtGuiRoot(t, "")
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+	router := setupSettingsRouter(db)
+
+	getRec := httptest.NewRecorder()
+	getReq, err := http.NewRequest("GET", "/api/settings/yaml", nil)
+	require.NoError(t, err)
+	router.ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(getRec.Body.Bytes(), &payload))
+
+	postRec := httptest.NewRecorder()
+	postReq, err := http.NewRequest("POST", "/api/settings/yaml", bytes.NewReader(getRec.Body.Bytes()))
+	require.NoError(t, err)
+	postReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(postRec, postReq)
+	require.Equal(t, http.StatusOK, postRec.Code)
+
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	return string(content)
+}
+
 // TestPostSettingsYAML_SchemaNumberKeepsDecimalPoint covers rule (a) for
 // "number": an integral value under a schema number key must stay a float.
 func TestPostSettingsYAML_SchemaNumberKeepsDecimalPoint(t *testing.T) {
@@ -266,6 +302,167 @@ func loadTemplateNumberKindsAtGuiRoot(t *testing.T) map[string]yamlNumberKind {
 	kinds := loadTemplateNumberKinds()
 	require.NotEmpty(t, kinds, "the generated template-types asset should have loaded")
 	return kinds
+}
+
+// TestPostSettingsYAML_NoChangeSaveKeepsUnknownKeyTypes is the regression guard
+// for the bug this file's unit tests did NOT catch: nestToROS2YAML aliased the
+// caller's ros__parameters map and merged the payload into it, so hints read
+// afterwards described the payload's float64s rather than the file. Every key
+// neither the schema nor the template declares came out as a float —
+// lidar_map_radius_tiles: 3 became 3.0, which aborts
+// declare_parameter<int>("lidar_map_radius_tiles") in fusion_graph_node exactly
+// the way the original int-for-double bug aborted it.
+func TestPostSettingsYAML_NoChangeSaveKeepsUnknownKeyTypes(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	// None of these four is in the JSON schema or the ROS2 template, so only
+	// the on-disk type can decide how they are written back.
+	existing := `mowgli:
+  ros__parameters:
+    lidar_map_radius_tiles: 3
+    automatic_mode: 0
+    gps_baudrate: 921600
+    lidar_map_tile_size_m: 5.0
+`
+	content := getThenPostSettingsYAML(t, existing)
+	params := decodeParams(t, content)
+
+	assert.Contains(t, content, "lidar_map_radius_tiles: 3\n")
+	assert.NotContains(t, content, "lidar_map_radius_tiles: 3.0")
+	assert.IsType(t, 0, params["lidar_map_radius_tiles"],
+		"declare_parameter<int>(\"lidar_map_radius_tiles\") aborts fusion_graph_node on a float")
+
+	assert.Contains(t, content, "automatic_mode: 0\n")
+	assert.NotContains(t, content, "automatic_mode: 0.0")
+	assert.IsType(t, 0, params["automatic_mode"])
+
+	assert.Contains(t, content, "gps_baudrate: 921600\n")
+	assert.NotContains(t, content, "gps_baudrate: 921600.0")
+	assert.IsType(t, 0, params["gps_baudrate"])
+
+	// The float-on-disk direction of the same rule.
+	assert.Contains(t, content, "lidar_map_tile_size_m: 5.0")
+	assert.IsType(t, float64(0), params["lidar_map_tile_size_m"])
+}
+
+// TestPostSettingsYAML_NoChangeSaveKeepsKnownKeyTypes pins the declared sources
+// through the same round trip: the template repairs a demoted float, a template
+// int and a schema int stay ints, and lat/lon keep their fixed precision.
+func TestPostSettingsYAML_NoChangeSaveKeepsKnownKeyTypes(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	existing := `mowgli:
+  ros__parameters:
+    tick_rate: 10
+    imu_cal_auto_rest_sec: 15
+    battery_full_percent: 90
+    imu_cal_samples: 200
+    gnss_config_baud: 460800
+    datum_lat: 48.123456789
+`
+	content := getThenPostSettingsYAML(t, existing)
+	params := decodeParams(t, content)
+
+	// Template says double; the file held the demoted int.
+	assert.Contains(t, content, "tick_rate: 10.0")
+	assert.Contains(t, content, "imu_cal_auto_rest_sec: 15.0")
+	assert.IsType(t, float64(0), params["tick_rate"])
+	// Schema says number.
+	assert.Contains(t, content, "battery_full_percent: 90.0")
+	// Template int and schema integer.
+	assert.Contains(t, content, "imu_cal_samples: 200\n")
+	assert.Contains(t, content, "gnss_config_baud: 460800\n")
+	assert.IsType(t, 0, params["imu_cal_samples"])
+	assert.IsType(t, 0, params["gnss_config_baud"])
+	// Geo precision.
+	assert.Contains(t, content, "datum_lat: 48.123456789")
+}
+
+// TestNestToROS2YAML_DoesNotMutateExisting is the root-cause guard: the nester
+// must not write into the document it was handed. Aliasing it is what corrupted
+// the type hints, and it would corrupt anything else a caller reads afterwards.
+func TestNestToROS2YAML_DoesNotMutateExisting(t *testing.T) {
+	existingYAML := map[string]any{
+		"mowgli": map[string]any{
+			"ros__parameters": map[string]any{
+				"lidar_map_radius_tiles": 3,
+				"keep_me":                "original",
+			},
+		},
+	}
+
+	nested := nestToROS2YAML(
+		map[string]any{"lidar_map_radius_tiles": 9.0, "keep_me": "payload"},
+		map[string]string{},
+		existingYAML,
+	)
+
+	source := existingYAML["mowgli"].(map[string]any)["ros__parameters"].(map[string]any)
+	assert.Equal(t, 3, source["lidar_map_radius_tiles"], "the source document must still hold the on-disk value")
+	assert.Equal(t, "original", source["keep_me"])
+
+	written := nested["mowgli"].(map[string]any)["ros__parameters"].(map[string]any)
+	assert.Equal(t, 9.0, written["lidar_map_radius_tiles"], "the result must carry the merged value")
+	assert.Equal(t, "payload", written["keep_me"])
+}
+
+// TestPersistGNSSRuntimeBaud_KeepsUnknownKeyTypes and
+// TestPersistRobotYamlUpdates_KeepsUnknownKeyTypes cover the other two writers
+// of mowgli_robot.yaml. Both build the same nest-then-marshal pipeline, so both
+// could regress the same way; the hints must come from the document as read.
+func TestPersistGNSSRuntimeBaud_KeepsUnknownKeyTypes(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	yamlFile := createTempYAMLFileAtGuiRoot(t, `mowgli:
+  ros__parameters:
+    lidar_map_radius_tiles: 3
+    lidar_map_tile_size_m: 5.0
+    tick_rate: 10
+`)
+	envFile := createTempConfigFileAtGuiRoot(t, "")
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+
+	require.NoError(t, persistGNSSRuntimeBaud(db, "115200"))
+
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "lidar_map_radius_tiles: 3\n")
+	assert.NotContains(t, string(content), "lidar_map_radius_tiles: 3.0")
+	assert.Contains(t, string(content), "lidar_map_tile_size_m: 5.0")
+	assert.Contains(t, string(content), "tick_rate: 10.0")
+}
+
+func TestPersistRobotYamlUpdates_KeepsUnknownKeyTypes(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	yamlFile := createTempYAMLFileAtGuiRoot(t, `mowgli:
+  ros__parameters:
+    lidar_map_radius_tiles: 3
+    lidar_map_tile_size_m: 5.0
+    tick_rate: 10
+`)
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+
+	require.NoError(t, persistRobotYamlUpdates(db, map[string]any{"wheel_pid_kp": 12.0}))
+
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "lidar_map_radius_tiles: 3\n")
+	assert.NotContains(t, string(content), "lidar_map_radius_tiles: 3.0")
+	assert.Contains(t, string(content), "lidar_map_tile_size_m: 5.0")
+	assert.Contains(t, string(content), "tick_rate: 10.0")
+	assert.Contains(t, string(content), "wheel_pid_kp: 12.0")
 }
 
 // --- unit level -----------------------------------------------------------
