@@ -1904,6 +1904,18 @@
       "label": "Obstacle wait timeout",
       "description": "How long the robot holds still trying to skirt a blocked obstacle before giving up on the strip. Longer values ride out transient blockages (e.g. a person passing); shorter values abandon a stuck strip sooner."
     },
+    "transit_dynamic_window": {
+      "label": "Transit dynamic window (DWPP)",
+      "description": "Let point-to-point navigation pick the speed and turn rate it can actually reach right now, instead of applying the path curvature to a regulated speed. It slows into sharp turns on its own. Does not affect mowing, which uses its own controller."
+    },
+    "coverage_goal_checker_id": {
+      "label": "Coverage arrival test",
+      "description": "How a mowing pass is judged finished. The default requires 95% of the planned poses to have been driven — the only test that works on a closed perimeter ring, where the start and the end are the same point."
+    },
+    "local_inflation_inscribed_radius": {
+      "label": "Obstacle inscribed radius override",
+      "description": "Advanced. -1 derives it from the robot footprint, which keeps obstacle inflation above the chassis diagonal and can make a narrow gap unplannable. Set it to the real half-width plus margin only if a gap the robot physically fits through is refused."
+    },
     "obstacle_clearance_margin": {
       "label": "Obstacle clearance margin",
       "description": "Extra sideways room left beyond the chassis when skirting an obstacle while mowing. Raise if the robot goes around obstacles but shaves past them. Costmap inflation cannot provide this margin — the skirting check reads only lethal/inscribed cells."

@@ -567,6 +567,25 @@
           "minimum": 0,
           "description": "How many of the Headland Passes rings a turn-around may cross, counted from the inner field outward. 0 = unlimited (turns may use the whole headland apron, out to the outermost ring). Set it below Headland Passes (e.g. 2 with 3 passes configured) to keep the outermost ring(s) a no-turn zone, so U-turns stay further from the recorded boundary and clear of nearby objects — at the cost of more straight/blade-off connector fallbacks where the remaining apron is too narrow for a turn-around arc to fit."
         },
+        "transit_dynamic_window": {
+          "type": "boolean",
+          "title": "Transit Dynamic Window (DWPP)",
+          "default": false,
+          "description": "Use Dynamic Window Pure Pursuit for point-to-point navigation (transits, dock approach, return home). The controller then picks the speed and turn rate it can actually reach this instant, instead of applying the path curvature to a regulated speed — it slows into sharp turns on its own. Does NOT affect mowing, which uses its own controller. Off by default: it changes how every transit is driven, so try it on a supervised run."
+        },
+        "coverage_goal_checker_id": {
+          "type": "string",
+          "enum": ["coverage_goal_checker", "coverage_axis_goal_checker"],
+          "title": "Coverage Arrival Test",
+          "default": "coverage_goal_checker",
+          "description": "How the robot decides a mowing pass is finished. 'coverage_goal_checker' requires it to have actually driven 95% of the planned poses — the only test that survives a closed perimeter ring, whose start and end are the same point. 'coverage_axis_goal_checker' is the stock Nav2 alternative (along-path and cross-track tolerances). Leave the default unless you are comparing the two."
+        },
+        "local_inflation_inscribed_radius": {
+          "type": "number",
+          "title": "Obstacle Inscribed Radius Override",
+          "default": -1,
+          "description": "Advanced. -1 derives the costmap's inscribed radius from the robot footprint, which is what forces the obstacle inflation radius to stay above the chassis diagonal (~0.6 m) and can make narrow gaps between areas unplannable. Setting it to the real half-width plus margin lets the inflation radius come down without breaking obstacle detection. Leave at -1 unless a gap the robot physically fits through is refused."
+        },
         "chassis_safety_inset": {
           "type": "number",
           "title": "Chassis Safety Inset",
