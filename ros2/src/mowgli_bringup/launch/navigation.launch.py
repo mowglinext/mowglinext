@@ -1047,17 +1047,22 @@ def generate_launch_description() -> LaunchDescription:
         # shape as the obstacle_inflation_radius floor below, and derived for the
         # same reason: the chassis is editable in the GUI, so a literal goes
         # stale silently (that is how `cw = 0.40` survived a 0.45 m chassis).
+        # NOTE: `effective_margin` is a NEW local on purpose. Assigning to
+        # `obstacle_margin` here would make it local to this closure, and the
+        # read above it would raise UnboundLocalError — which is exactly what
+        # crash-looped the stack on the robot before this was caught.
         margin_floor = chassis_half_width(rp)
-        if obstacle_margin < margin_floor:
+        effective_margin = obstacle_margin
+        if effective_margin < margin_floor:
             print(
                 "[navigation.launch] obstacle_margin "
-                f"{obstacle_margin:.3f} m is inside the body half-width "
+                f"{effective_margin:.3f} m is inside the body half-width "
                 f"{margin_floor:.3f} m — raising it to the floor. The coverage "
                 "plan may not route the centreline closer to a mapped obstacle "
                 "than the chassis reaches."
             )
-            obstacle_margin = margin_floor
-        cov_params["obstacle_margin"] = min(1.0, max(0.0, obstacle_margin))
+            effective_margin = margin_floor
+        cov_params["obstacle_margin"] = min(1.0, max(0.0, effective_margin))
         # Hard floor on the continuous path's turn-around / fillet arcs so no
         # turn is ever tighter than the robot can track (clamp to the tuned
         # [0.10, 0.50] band; sub-0.10 loops are untrackable, >0.50 bulges OOB).
