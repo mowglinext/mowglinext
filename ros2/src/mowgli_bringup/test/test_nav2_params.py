@@ -1305,3 +1305,28 @@ def test_ftc_uses_the_real_footprint_for_clearance() -> None:
             "body-sized, not slack-sized: on top of the real footprint it puts "
             "the robot back half a metre from every hedge."
         )
+
+
+def test_collision_monitor_polygons_follow_the_chassis() -> None:
+    """The collision monitor is the last line of defence; its polygons may not be
+    narrower than the body. They shipped as literals sized for the 0.40 m chassis
+    (PolygonStopNarrow ±0.20, PolygonStop ±0.18) against a body reaching ±0.275,
+    so 7.5-9.5 cm of carriage on each side sat OUTSIDE the polygon meant to stop
+    before touching. FootprintApproach is exempt: it reads
+    /local_costmap/published_footprint and already follows the real geometry."""
+    src = _read_text("launch/navigation.launch.py")
+    for polygon in ("PolygonStopNarrow", "PolygonStop"):
+        assert re.search(
+            rf'cm_params\["{polygon}"\]\["points"\]\s*=\s*_poly\(', src), (
+            f"{polygon}.points must be DERIVED from the chassis footprint at "
+            "launch, not left as a literal in the overlay yaml."
+        )
+    assert re.search(r"_poly\(\s*fp_f \+ 0\.12,\s*fp_f - 0\.02,\s*fp_hw\)", src)
+    assert re.search(r"_poly\(\s*fp_f \+ 0\.05,\s*fp_r - 0\.05,\s*fp_hw\)", src)
+    # The footprint triple must be bound unconditionally — reading it from the
+    # injection closure when only an `if rp:` branch assigned it is the
+    # UnboundLocalError class that crash-looped the stack on 2026-09-16.
+    assert re.search(r"^    fp_f, fp_r, fp_hw = chassis_footprint\(rp or \{\}\)", src,
+                     re.MULTILINE), (
+        "fp_f/fp_r/fp_hw must be bound at function scope, not only inside `if rp:`."
+    )

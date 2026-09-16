@@ -284,6 +284,11 @@ def generate_launch_description() -> LaunchDescription:
     # frame; it is 0 on this stack but kept general.
     lidar_height_m = 0.30
     lidar_mount_yaw = 0.0
+    # Bound unconditionally: the `if rp:` below is not guaranteed to run, and
+    # these are read later from inside _inject_dock_pose_and_speeds. Leaving them
+    # to the branch is the UnboundLocalError that crash-looped the stack once
+    # already (see the obstacle_margin note in that closure).
+    fp_f, fp_r, fp_hw = chassis_footprint(rp or {})
     if rp:
         lidar_height_m = float(rp.get("lidar_z", lidar_height_m))
         lidar_mount_yaw = float(rp.get("lidar_yaw", 0.0)) - float(rp.get("imu_yaw", 0.0))
@@ -954,6 +959,33 @@ def generate_launch_description() -> LaunchDescription:
         if "PolygonSlow" in cm_params:
             cm_params["PolygonSlow"]["slowdown_ratio"] = min(
                 1.0, max(0.05, obstacle_slowdown_ratio))
+
+        # Collision-monitor polygon WIDTHS follow the chassis, like the costmap
+        # footprint above. They were static literals sized for the 0.40 m
+        # chassis: PolygonStopNarrow at ±0.20 and PolygonStop at ±0.18 against a
+        # body that reaches ±0.275, so 7.5 and 9.5 cm of carriage on each side
+        # sat OUTSIDE the polygon that is supposed to stop before touching it.
+        # An obstacle met by the corner of the robot simply missed them.
+        #
+        # FootprintApproach is not in this list on purpose: it reads
+        # /local_costmap/published_footprint, so it already follows the derived
+        # geometry. Only the hand-written polygons need rewriting.
+        #
+        # Longitudinal extents stay RELATIVE to the derived footprint so the
+        # shapes keep their meaning: a narrow band straddling the front edge,
+        # and a body-plus-margin box.
+        def _poly(front, rear, half):
+            return (f"[[{front:.3f}, {half:.3f}], [{front:.3f}, {-half:.3f}], "
+                    f"[{rear:.3f}, {-half:.3f}], [{rear:.3f}, {half:.3f}]]")
+
+        if "PolygonStopNarrow" in cm_params:
+            # Band from just behind the front edge to 0.12 m ahead of it.
+            cm_params["PolygonStopNarrow"]["points"] = _poly(
+                fp_f + 0.12, fp_f - 0.02, fp_hw)
+        if "PolygonStop" in cm_params:
+            # Whole body plus 0.05 m fore and aft.
+            cm_params["PolygonStop"]["points"] = _poly(
+                fp_f + 0.05, fp_r - 0.05, fp_hw)
 
         # Goal-checker tolerances. Two checkers live under
         # controller_server: stopped_goal_checker (used by FollowPath /
