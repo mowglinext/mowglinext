@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"strings"
+	"time"
+
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	docker "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	types2 "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
-	"io"
-	"strings"
-	"time"
 )
 
 type DockerProvider struct {
@@ -192,9 +193,22 @@ func (i *DockerProvider) ContainerRun(ctx context.Context, spec types2.Container
 	statusCh, errCh := i.client.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
 
 	var exitCode int64
+	cleanupTimedOutContainer := func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+
+		_ = i.client.ContainerRemove(
+			cleanupCtx,
+			created.ID,
+			types.ContainerRemoveOptions{Force: true},
+		)
+	}
 	select {
 	case waitErr := <-errCh:
 		if waitErr != nil {
+			if ctx.Err() != nil {
+				cleanupTimedOutContainer()
+			}
 			return types2.ContainerRunResult{}, waitErr
 		}
 	case waitResult := <-statusCh:
