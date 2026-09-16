@@ -747,3 +747,27 @@ def test_dig_keepout_toggle_reaches_map_server(override):
                         {"robot_params": merged, "bool": bool},
                     )
     assert injected["dig_obstacle_enabled"] is expected
+
+
+def test_chassis_half_width_tracks_the_configured_chassis() -> None:
+    """The body half-width every collision check measures against must FOLLOW the
+    operator's chassis_width. A consumer that snapshots it into a literal is the
+    2026-09-16 collision: the chassis grew 0.40 -> 0.45 m, the Nav2 footprint
+    followed, the coverage planner's hardcoded copy did not, and the plan ended
+    up 2.5 cm inside the robot."""
+    narrow = _util.chassis_half_width({"chassis_width": 0.40})
+    shipped = _util.chassis_half_width({"chassis_width": 0.45})
+
+    # chassis_width/2 + the costmap footprint margin — the same number
+    # chassis_footprint() puts in the Nav2 footprint.
+    assert narrow == pytest.approx(0.20 + _util.CHASSIS_FOOTPRINT_MARGIN_M)
+    assert shipped == pytest.approx(0.225 + _util.CHASSIS_FOOTPRINT_MARGIN_M)
+    assert shipped > narrow, "a wider chassis must widen the half-width"
+
+    # It IS the footprint's half-width, not an independent computation.
+    _front, _rear, footprint_half = _util.chassis_footprint({"chassis_width": 0.45})
+    assert shipped == pytest.approx(footprint_half)
+
+    # A sparse config falls back to the shipped chassis, never to zero.
+    assert _util.chassis_half_width({}) == pytest.approx(
+        _util.DEFAULT_CHASSIS_WIDTH_M / 2.0 + _util.CHASSIS_FOOTPRINT_MARGIN_M)

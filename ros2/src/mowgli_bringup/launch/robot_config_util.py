@@ -107,6 +107,26 @@ def chassis_footprint(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     )
 
 
+def chassis_half_width(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
+    """Half-width of the Nav2 footprint, i.e. how far the BODY reaches sideways.
+
+    This is the distance every collision check in the stack measures against:
+    the costmap footprint, collision_monitor's polygons and FTC's footprint
+    clearance model all use `chassis_width / 2 + margin`. The coverage planner
+    must inset obstacles and the recorded boundary by at least this much, or it
+    plans a centreline the body cannot follow without touching.
+
+    DERIVED, never a literal: `chassis_width` is operator-editable in the GUI.
+    A hardcoded copy is exactly what broke on 2026-09-16 — the chassis went
+    0.40 m -> 0.45 m, the footprint followed, and `coverage_server.robot_width`
+    stayed at a hardcoded 0.40, so every plan routed the centre 0.20 m from
+    obstacles while the body reached 0.225 m. The robot then drove 2.5 cm into
+    a mapped tree while tracking its path to within 2 cm.
+    """
+    _front, _rear, half_width = chassis_footprint(params, margin)
+    return half_width
+
+
 def chassis_circumscribed_radius(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     """Radius of the smallest circle centred on base_link enclosing the footprint.
 

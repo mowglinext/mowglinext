@@ -1202,3 +1202,84 @@ def test_custom_inscribed_radius_is_opt_in_and_becomes_the_floor() -> None:
         "when set, local_inflation_inscribed_radius must replace the "
         "chassis-derived inflation floor."
     )
+
+
+# ---------------------------------------------------------------------------
+# Chassis geometry consistency (2026-09-16 collision)
+# ---------------------------------------------------------------------------
+#
+# The robot's width is consumed by four independent things: the Nav2 footprint,
+# the inflation floor, the coverage planner's inset, and FTC's clearance model.
+# On 2026-09-16 the chassis went 0.40 m -> 0.45 m; the first two followed
+# (they DERIVE it), the coverage planner did not (it carried a hardcoded 0.40),
+# so every plan routed the centreline 0.20 m from obstacles while the body
+# reached 0.225 m. FTC tracked that plan to within 2 cm and drove 2.5 cm into a
+# mapped tree. These tests exist so a chassis edit can never again move some
+# consumers and not others.
+
+
+def test_navigation_launch_derives_chassis_width_from_the_config() -> None:
+    """`cw` feeds coverage_server.robot_width AND the safety-inset floor. It must
+    come from the merged robot config, never from a literal — chassis_width is
+    operator-editable in the GUI."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(r"cw\s*=\s*float\(\s*rp\.get\(\s*[\"']chassis_width[\"']", src), (
+        "navigation.launch.py must read the chassis width from the merged robot "
+        "config (rp), not hardcode it — the hardcoded 0.40 is what put the "
+        "coverage plan inside the robot."
+    )
+    assert not re.search(r"^\s*cw\s*=\s*0\.\d+\s*$", src, re.MULTILINE), (
+        "a bare numeric `cw = <literal>` is the exact regression this guards."
+    )
+    assert re.search(r"cov_params\[[\"']robot_width[\"']\]\s*=\s*cw", src), (
+        "coverage_server.robot_width must be the real chassis width."
+    )
+
+
+def test_chassis_safety_inset_is_floored_at_the_body_half_width() -> None:
+    """The coverage planner may never route the centreline closer to an obstacle
+    or the recorded line than the chassis physically reaches."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(r"inset_floor\s*=\s*chassis_half_width\(", src), (
+        "the inset floor must be DERIVED via robot_config_util.chassis_half_width(), "
+        "not hardcoded — a literal goes stale when the operator edits the chassis."
+    )
+    assert re.search(
+        r"chassis_safety_inset\s*<\s*inset_floor.*?chassis_safety_inset\s*=\s*inset_floor",
+        src, re.DOTALL), (
+        "an operator value below the floor must be RAISED to it, not obeyed."
+    )
+
+
+def test_template_safety_inset_matches_the_shipped_chassis() -> None:
+    """The template default must equal the derived floor for the shipped chassis.
+    If it drifts below, the floor silently overrides it at launch and the yaml
+    lies to whoever reads it — which is how 0.2 survived a 0.40 -> 0.45 m
+    chassis change unnoticed."""
+    from robot_config_util import chassis_half_width as _chassis_half_width
+
+    template = _template_robot_params()
+    derived = _chassis_half_width(template)
+    assert template["chassis_safety_inset"] == pytest.approx(derived, abs=1e-9), (
+        f"template chassis_safety_inset {template['chassis_safety_inset']} != "
+        f"derived body half-width {derived:.3f} for the shipped chassis."
+    )
+
+
+def test_ftc_uses_the_real_footprint_for_clearance() -> None:
+    """The line model's 0.12 m half-width is not this robot: the body reaches
+    0.275 m. With the footprint model the geometry is honest and the margin is
+    real slack rather than a stand-in for missing body."""
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        assert fcp["use_footprint_clearance"] is True, (
+            "FTC must sample the real chassis polygon; the line model under-states "
+            "the body by 0.155 m per side and needs a compensating margin."
+        )
+        # Slack on top of a real body — not a body substitute. The old 0.20 m
+        # value existed only to make 0.12 + margin reach the true half-width.
+        assert fcp["obstacle_clearance_margin"] <= 0.10, (
+            f"obstacle_clearance_margin {fcp['obstacle_clearance_margin']} is "
+            "body-sized, not slack-sized: on top of the real footprint it puts "
+            "the robot back half a metre from every hedge."
+        )

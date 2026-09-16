@@ -75,6 +75,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (
     chassis_circumscribed_radius,
     chassis_footprint,  # noqa: E402
+    chassis_half_width,
+    DEFAULT_CHASSIS_WIDTH_M,
     DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO,
     DEFAULT_BLADE_LOAD_RPM_FULL,
     DEFAULT_BLADE_LOAD_RPM_MIN,
@@ -261,11 +263,18 @@ def generate_launch_description() -> LaunchDescription:
     # installed config omits the dimensions (they are not install-decided).
     rp = load_robot_params(bringup_dir, "/ros2_ws/config/mowgli_robot.yaml")
     footprint_str = ""
-    # Physical chassis width default — overwritten from the robot config below
-    # when present. Hoisted here so it is always defined for the chassis_safety_inset
-    # fallback AND the coverage_server.robot_width injection (both read it via the
-    # _inject_dock_pose_and_speeds closure), even on a fresh checkout with no config.
-    cw = 0.40
+    # Physical chassis width, READ FROM THE MERGED CONFIG. Feeds the
+    # chassis_safety_inset floor AND coverage_server.robot_width (both via the
+    # _inject_dock_pose_and_speeds closure).
+    #
+    # This used to be a hardcoded `cw = 0.40` whose comment claimed it was
+    # "overwritten from the robot config below" — an assignment that never
+    # existed. When the chassis went 0.40 m -> 0.45 m the Nav2 footprint
+    # followed (half-width 0.275 m) and the coverage planner did not: it kept
+    # insetting obstacles and the recorded boundary by 0.20 m, i.e. 2.5 cm
+    # INSIDE the body, and FTC — tracking to within 2 cm — drove exactly there.
+    # `chassis_width` is operator-editable in the GUI, so this must be derived.
+    cw = float(rp.get("chassis_width", DEFAULT_CHASSIS_WIDTH_M))
     # LIDAR mount geometry for the costmap_scan_filter ground filter.
     # lidar_height = lidar_z (above base_link); lidar_mount_yaw rotates a
     # beam's index angle into the IMU/base frame before the gravity
@@ -637,15 +646,33 @@ def generate_launch_description() -> LaunchDescription:
         # Operator override wins; otherwise fall back to 0.0 (below).
         if "chassis_safety_inset" in rt_rp:
             chassis_safety_inset = float(rt_rp["chassis_safety_inset"])
+    # FLOOR the inset at the body half-width, DERIVED from the live chassis
+    # geometry (chassis_half_width == chassis_width/2 + costmap margin — the
+    # exact half-width the Nav2 footprint, collision_monitor and FTC's footprint
+    # clearance model all measure against).
+    #
+    # coverage_server reads chassis_safety_inset as "how far inside the recorded
+    # line / outside an obstacle hole the outermost ring centerline sits". Any
+    # value below the body half-width therefore plans a centreline the chassis
+    # cannot follow without touching — the plan itself is in collision, before a
+    # single millimetre of tracking error. That is what put the robot 2.5 cm
+    # into a mapped tree on 2026-09-16 while FTC was holding the line to 2 cm.
+    #
+    # An operator may ask for MORE clearance; never less. Same shape as the
+    # obstacle_inflation_radius floor below — and derived for the same reason:
+    # the chassis is editable in the GUI, so a literal goes stale silently.
+    inset_floor = chassis_half_width(rp)
     if chassis_safety_inset is None:
-        # Default 0.0: the outermost headland ring rides ON the recorded line
-        # (the perimeter the operator drove), so the blade mows to the edge and
-        # the chassis is allowed to straddle the boundary. coverage_server treats
-        # chassis_safety_inset as "how far inside the recorded line the outermost
-        # ring centerline sits" and applies the op_width/2 outward expansion
-        # itself. An operator who wants the whole chassis kept inside can set
-        # chassis_safety_inset = chassis_width/2 in mowgli_robot.yaml.
-        chassis_safety_inset = 0.0
+        chassis_safety_inset = inset_floor
+    elif chassis_safety_inset < inset_floor:
+        print(
+            "[navigation.launch] chassis_safety_inset "
+            f"{chassis_safety_inset:.3f} m is inside the body half-width "
+            f"{inset_floor:.3f} m — raising it to the floor. The coverage plan "
+            "may not route the centreline closer to an obstacle than the "
+            "chassis reaches."
+        )
+        chassis_safety_inset = inset_floor
 
     # Compute BT XML paths from installed package shares (not hardcoded).
     bt_nav_to_pose_xml = os.path.join(
