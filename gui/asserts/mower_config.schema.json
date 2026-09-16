@@ -570,8 +570,8 @@
         "chassis_safety_inset": {
           "type": "number",
           "title": "Chassis Safety Inset",
-          "default": 0.2,
-          "description": "Pre-shrink the operator polygon by this many metres before F2C plans anything. Defaults to chassis_width / 2 so the chassis edge stays inside the polygon under perfect FTC tracking."
+          "default": 0.275,
+          "description": "Pre-shrink the operator polygon, and grow obstacle holes, by this many metres before F2C plans anything. Defaults to the body half-width (chassis_width / 2 + costmap margin) so the plan never routes the centreline closer to an obstacle than the chassis reaches. Values below that half-width are RAISED to it at launch: a plan inside the body is in collision before any tracking error."
         },
         "min_turning_radius": {
           "type": "number",
@@ -680,8 +680,8 @@
         "obstacle_clearance_margin": {
           "type": "number",
           "title": "Obstacle Clearance Margin",
-          "default": 0.2,
-          "description": "Sideways room (m) left beyond the chassis when skirting an obstacle while mowing. Raise this if the robot goes around obstacles but shaves past them. Clamped to [0.0, 0.5] at launch."
+          "default": 0.05,
+          "description": "Sideways room (m) left beyond the chassis when skirting an obstacle while mowing. This is genuine slack on top of the real chassis footprint — raise it if the robot goes around obstacles but shaves past them, lower it to mow closer to hedges. Clamped to [0.0, 0.5] at launch."
         },
         "obstacle_detection_range_m": {
           "type": "number",
