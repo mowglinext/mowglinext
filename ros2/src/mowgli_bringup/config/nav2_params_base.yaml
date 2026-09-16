@@ -558,7 +558,26 @@ controller_server:
       # (below) skirts those obstacles cleanly. Re-enable only after the
       # footprint sweep is made less conservative (probe the front of the
       # footprint, not its full length) and field-validated.
-      use_footprint_clearance: false
+      # TRUE since 2026-09-16: sample the REAL chassis polygon against true lethal
+      # cells (254) instead of a +/-obstacle_body_half_width line against the
+      # inscribed band (253).
+      #
+      # The line model was never a model of this robot: its half-width is 0.12 m
+      # while the body reaches 0.275 m, and obstacle_clearance_margin had to grow
+      # to 0.20 m to stand in for the missing 0.155 m. On top of that, thresholding
+      # at 253 grows every obstacle by the inscribed radius (0.17 m) before FTC
+      # even looks at it — so the controller demanded 0.12 + 0.20 + 0.17 = 0.49 m
+      # of room from any lethal cell, including the hedge it was supposed to mow
+      # along. Tuning the margin down to get closer to hedges then removed the
+      # only thing compensating for the coverage planner's too-small inset, and
+      # the robot drove into a mapped tree (2026-09-16).
+      #
+      # With the footprint model the geometry is honest: the body is the body, the
+      # margin below is real slack, and neither depends on the inflation radius.
+      # Simulated on a synthetic costmap (the edge-of-zone scene): it clears the
+      # same obstacles with 0.40 m of lateral deviation where the line model needs
+      # 0.65 m — 0.25 m of usable room recovered, with MORE body protection.
+      use_footprint_clearance: true
       # Front-clip length (m) for the SKIRT clearance footprint when
       # use_footprint_clearance is true (OBSTACLE_WEDGE_RECOVERY_SPEC.md Part A
       # middle ground). Only the leading 0.30 m of the 0.60 m chassis is probed
