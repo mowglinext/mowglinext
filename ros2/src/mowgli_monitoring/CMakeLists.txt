@@ -204,6 +204,15 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
   )
 
+  # ROS-free: path-space divergence detector.
+  ament_add_gtest(test_path_divergence
+    test/test_path_divergence.cpp
+  )
+
+  target_link_libraries(test_path_divergence
+    ${mowgli_interfaces_TARGETS}
+  )
+
   ament_add_gtest(test_mqtt_bridge
     test/test_mqtt_bridge.cpp
   )
