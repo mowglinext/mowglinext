@@ -415,7 +415,7 @@ def test_navigation_launch_injects_coverage_obstacle_margin() -> None:
     keepout twin is injected by full_system.launch.py into map_server."""
     src = _read_text("launch/navigation.launch.py")
     assert re.search(
-        r"cov_params\[.obstacle_margin.\]\s*=.*obstacle_margin", src), (
+        r"cov_params\[.obstacle_margin.\]\s*=.*(obstacle|effective)_margin", src), (
         "navigation.launch.py must inject obstacle_margin into coverage_server — "
         "drawn-obstacle margins would otherwise only apply to transit (keepout), "
         "not to the swath plan."
@@ -1258,7 +1258,7 @@ def test_obstacle_margin_is_floored_at_the_body_half_width() -> None:
         "stale when the operator edits the chassis in the GUI."
     )
     assert re.search(
-        r"obstacle_margin\s*<\s*margin_floor.*?obstacle_margin\s*=\s*margin_floor",
+        r"effective_margin\s*<\s*margin_floor.*?effective_margin\s*=\s*margin_floor",
         src, re.DOTALL), (
         "an operator value below the floor must be RAISED to it, not obeyed."
     )
