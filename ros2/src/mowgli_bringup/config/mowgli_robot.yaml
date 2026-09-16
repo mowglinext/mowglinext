@@ -564,21 +564,20 @@ mowgli:
     # arc's chassis no longer bulges ~op_width/2 past the perimeter ring the way it
     # did before (that outward bulge grew with the turn radius). Read LIVE by
     # coverage_server (ros2-param-set-tunable).
-    # 0.275 = chassis_width/2 + 0.05 costmap margin on the shipped chassis, i.e.
-    # exactly how far the BODY reaches sideways — the same half-width the Nav2
-    # footprint, collision_monitor and FTC's footprint clearance all measure
-    # against. navigation.launch.py FLOORS this value at that DERIVED number, so
-    # editing chassis_width in the GUI moves the floor with it and a value below
-    # it is raised (with a warning) rather than silently obeyed.
+    # chassis_safety_inset is a BOUNDARY-ONLY knob: how far inside the RECORDED
+    # LINE the outermost driven pass sits. Obstacle clearance is obstacle_margin,
+    # which is a different number for a different reason (see it below).
     #
-    # WHY THE FLOOR EXISTS (2026-09-16): this used to be 0.2, chosen when the
-    # chassis was 0.40 m wide. The chassis became 0.45 m, the Nav2 footprint
-    # followed, this literal did not — so every plan routed the centreline
-    # 0.20 m from obstacles and the recorded line while the body reached
-    # 0.225 m. A plan 2.5 cm inside the robot is in collision before any
-    # tracking error, and FTC (holding 2 cm) drove precisely there: it hit a
-    # MAPPED tree, wheels spinning, until the dig detector hard-stopped it.
-    chassis_safety_inset: 0.275
+    # 0.0 is a semantic choice, not a tuning one: the operator recorded that
+    # perimeter by DRIVING it, so it IS the reachable limit. The outermost ring
+    # rides on it, the blade mows to the edge, and the chassis straddles the line
+    # — which is what mowing an edge means. Every centimetre here is a band the
+    # robot refuses to cut, and the 0.2 m this carried from 2026-07-23 to
+    # 2026-09-16 is exactly the "it stays too far from the hedges" complaint.
+    #
+    # Raise it only if your recorded perimeter is NOT drivable (traced wide, or a
+    # hedge has grown into it since). Read LIVE by coverage_server.
+    chassis_safety_inset: 0.0
     # NOTE: path_spacing was REMOVED here on 2026-09-05. It had already been
     # marked DEPRECATED in this file and hidden by the GUI
     # (useSettingsManager.ts:134); grep confirms no ROS2 node, no launch file
@@ -912,7 +911,21 @@ mowgli:
     # root zones: draw the tree trunk as an obstacle and set the margin to
     # cover the roots (the 2D LiDAR cannot see them — they are below the
     # scan plane). Clamped to [0.0, 1.0].
-    obstacle_margin: 0.2                    # 2026-07-23: field-validated default (was 0.15) — wider buffer around drawn obstacles
+    # Buffer grown around every drawn map obstacle before planning. With
+    # chassis_safety_inset at 0 this is the ONLY obstacle clearance the plan
+    # has: the planning field is expanded OUTWARD to put the ring on the
+    # recorded line, and that expansion leaves the holes untouched.
+    #
+    # 0.275 = the body half-width (chassis_width/2 + costmap margin) on the
+    # shipped chassis. navigation.launch.py FLOORS it at that DERIVED value, so
+    # editing chassis_width in the GUI moves the floor with it. Below the floor
+    # the plan would route the centreline closer to an obstacle than the chassis
+    # reaches — in collision before any tracking error.
+    #
+    # Raise it to cover what the map polygon does not: a tree's root flare at
+    # ground level and its low branches are both invisible to a 2D LiDAR fixed
+    # at 0.20 m, and a trunk drawn as a 0.25 m circle is smaller than the tree.
+    obstacle_margin: 0.275
 
     # -----------------------------------------------------------------
     # Transit boundary clearance (mowgli_map / map_server_node)
