@@ -90,6 +90,7 @@
     "loc_sigma_pause_persist_s": "number",
     "loc_sigma_resume_m": "number",
     "loc_sigma_resume_persist_s": "number",
+    "local_inflation_inscribed_radius": "number",
     "mag_yaw_variance": "number",
     "max_charge_current": "number",
     "max_charge_voltage": "number",
