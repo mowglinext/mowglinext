@@ -1264,6 +1264,31 @@ def test_obstacle_margin_is_floored_at_the_body_half_width() -> None:
     )
 
 
+def test_enforce_boundary_margin_is_floored_at_the_body_half_width() -> None:
+    """The outside-slack band is the room the BODY has to overhang the recorded
+    line. chassis_safety_inset is 0, so the outermost coverage pass rides ON that
+    line and the whole half-width hangs over it; a band narrower than the body
+    ends the pass with the chassis over LETHAL keepout cells. The 0.40 m literal
+    was sized for a 0.40 m chassis — the widest GUI preset is 0.535 m wide."""
+    src = _read_text("launch/full_system.launch.py")
+    assert re.search(r"boundary_margin_floor\s*=\s*chassis_half_width\(", src), (
+        "the enforce_boundary_margin_m floor must be DERIVED via "
+        "robot_config_util.chassis_half_width(), not hardcoded — a literal goes "
+        "stale when the operator edits the chassis in the GUI."
+    )
+    assert re.search(
+        r"enforce_boundary_margin_m\s*<\s*boundary_margin_floor.*?"
+        r"enforce_boundary_margin_m\s*=\s*boundary_margin_floor",
+        src, re.DOTALL), (
+        "an operator value below the floor must be RAISED to it, not obeyed."
+    )
+    assert re.search(
+        r'\{"enforce_boundary_margin_m":\s*enforce_boundary_margin_m\}', src), (
+        "map_server must receive the FLOORED value, not a fresh read of the "
+        "robot config."
+    )
+
+
 def test_boundary_inset_and_obstacle_margin_are_separate_knobs() -> None:
     """The two used to be one value with opposite requirements, which is why no
     setting satisfied both: 0 put the ring on the recorded line but left the
