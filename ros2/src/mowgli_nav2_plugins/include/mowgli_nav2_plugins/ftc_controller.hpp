@@ -464,6 +464,8 @@ private:
     double max_goal_angle_error{10.0};
     double goal_timeout{5.0};
     double max_follow_distance{1.0};
+    /// Max longitudinal carrot lead (m); <= 0 derives it (ftc_carrot_lead.hpp).
+    double carrot_max_lead{-1.0};
 
     // Options
     bool forward_only{true};

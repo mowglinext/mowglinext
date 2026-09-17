@@ -29,6 +29,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_nav2_plugins/ftc_carrot_lead.hpp"
 #include "mowgli_nav2_plugins/ftc_obstacle_wait.hpp"
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include "mowgli_nav2_plugins/ftc_start_index.hpp"
@@ -238,6 +239,8 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.max_goal_angle_error = declare_double("max_goal_angle_error", 10.0);
   config_.goal_timeout = declare_double("goal_timeout", 5.0);
   config_.max_follow_distance = declare_double("max_follow_distance", 1.0);
+  // <= 0 derives the cap from speed_fast / kp_lon (ftc_carrot_lead.hpp).
+  config_.carrot_max_lead = declare_double("carrot_max_lead", -1.0);
 
   // Options
   config_.forward_only = declare_bool("forward_only", true);
@@ -536,6 +539,12 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 0.01, 50.0))
         break;
       config_.max_follow_distance = p.as_double();
+    }
+    else if (key == "carrot_max_lead")
+    {
+      if (reject_invalid(key, p.as_double(), -1.0, 5.0))
+        break;
+      config_.carrot_max_lead = p.as_double();
     }
     else if (key == "forward_only")
     {
@@ -1315,12 +1324,14 @@ void FTCController::update_control_point(double dt)
         break;
       }
 
-      // Don't advance the carrot if it's already too far ahead of the robot.
-      // This prevents the carrot from running away when an external component
-      // (e.g. collision_monitor) slows the robot below the carrot's speed.
-      const double carrot_dist = local_control_point_.translation().norm();
-      const double carrot_max_lead = 1.0;  // max metres the carrot may lead
-      if (carrot_dist > carrot_max_lead)
+      // Don't advance the carrot once it leads the robot by more than the
+      // longitudinal loop needs. Something the controller cannot see may be
+      // holding the chassis (dig hard-stop + reverse, collision_monitor
+      // slowdown); a far carrot is then steered at along a chord that cuts the
+      // INSIDE of a curved path. The cap is derived, see ftc_carrot_lead.hpp.
+      const double carrot_max_lead =
+          CarrotMaxLead(config_.carrot_max_lead, config_.speed_fast, config_.kp_lon);
+      if (CarrotLeadExceeded(local_control_point_.translation().x(), carrot_max_lead))
       {
         break;  // skip advancement, let robot catch up
       }

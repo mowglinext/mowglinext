@@ -522,6 +522,12 @@ controller_server:
       max_goal_angle_error: 30.0
       goal_timeout: 10.0
       max_follow_distance: 2.0
+      # carrot_max_lead is deliberately NOT set: FTC derives the longitudinal
+      # carrot lead cap as 1.5 x speed_fast / kp_lon (0.30 m here, see
+      # ftc_carrot_lead.hpp). It was a 1.0 m literal until 2026-09-17, when a dig
+      # hard-stop let the carrot run 0.95 m ahead on the ring around a drawn
+      # obstacle and the robot cut the curve 0.41 m INWARDS, into the keepout
+      # band. Set a positive value here only as an explicit override.
       # forward_only=true: FTC never drives a path segment in reverse — it
       # skirts obstacles forward and rejoins the path ahead (MPPI-style), which
       # is the field-preferred behaviour. The earlier ±180° pirouette deadlock
