@@ -101,6 +101,13 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // the legacy keepout_nav_margin_ free band governs. See the field note on the
   // 0.32 m concave-boundary excursion (project_coverage_boundary_excursion).
   lethal_outside_areas_ = declare_parameter<bool>("lethal_outside_areas", true);
+  // INJECTED by full_system.launch.py, which floors it at the live chassis
+  // half-width (robot_config_util.chassis_half_width) — the band is the room
+  // the BODY has to overhang the recorded line, and chassis_safety_inset is 0,
+  // so the outermost coverage pass rides ON that line with the whole half-width
+  // outside it. The literal below is only the standalone-run fallback; it was
+  // sized when the chassis was 0.40 m wide and does NOT track the GUI's chassis
+  // presets (up to 0.535 m wide) on its own.
   enforce_boundary_margin_m_ = declare_parameter<double>("enforce_boundary_margin_m", 0.40);
   // Two-tier boundary: if the robot is outside every defined area, we
   // publish /boundary_violation (BT attempts a recovery back inside). If
