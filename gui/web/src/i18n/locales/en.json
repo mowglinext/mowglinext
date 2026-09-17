@@ -1686,6 +1686,26 @@
     "noContainingArea": "No containing area",
     "promoteTooltip": "Promote to permanent keepout"
   },
+  "mapObstacleProposals": {
+    "header": "Obstacle proposals ({{count}})",
+    "hint": "Nothing is blocked until you accept. The robot skips these spots for the current session only.",
+    "digLabel": "Dig proposal #{{id}}",
+    "genericLabel": "Proposal #{{id}}",
+    "areaFallback": "area {{index}}",
+    "accept": "Accept",
+    "acceptTooltip": "Make this a permanent keepout",
+    "acceptConfirmTitle": "Accept this obstacle proposal?",
+    "acceptConfirmBody": "This adds a permanent keepout in {{area}}: the robot will plan and mow around it from now on (until you remove it from the area).",
+    "acceptedSuccess": "Proposal accepted as a keepout in {{area}}",
+    "acceptFailed": "Failed to accept the proposal",
+    "reject": "Reject",
+    "rejectTooltip": "Drop this proposal",
+    "rejectConfirmTitle": "Reject this obstacle proposal?",
+    "rejectConfirmBody": "The proposal is dropped and the map is left unchanged. The robot still skips the spot until the end of the current mowing session.",
+    "rejectedSuccess": "Proposal rejected",
+    "rejectFailed": "Failed to reject the proposal",
+    "cancel": "Cancel"
+  },
   "mapEditing": {
     "unableToMatchAreaForObstacle": "Unable to match an area for this obstacle",
     "splitTargetNotValidPolygon": "Split target is not a valid polygon",
@@ -2517,8 +2537,8 @@
   },
   "settingsObstacles": {
     "digKeepouts": "Dig obstacles",
-    "digAutoPromotion": "Automatically create dig keepouts",
-    "digKeepoutsDescription": "Create a temporary keepout when wheel slip is detected in a mowing area. Accept the proposal on the map to keep it permanently. When disabled, no dig keepouts are created; dig detection, stopping and recovery remain active. Save and restart ROS2 to apply.",
+    "digAutoPromotion": "Propose an obstacle where the robot dug in",
+    "digKeepoutsDescription": "When wheel slip is detected in a mowing area, add a proposal to the map page. Nothing is blocked until you accept it there: accepting turns it into a permanent keepout, rejecting drops it. Meanwhile the robot simply skips that spot for the rest of the mowing session. When disabled, no proposals are created; dig detection, stopping and recovery remain active. Save and restart ROS2 to apply.",
     "rootZoneHintTitle": "Trees with large roots?",
     "rootZoneHintDescription": "The 2D LiDAR cannot see roots below its scan plane (~10–20 cm). Draw the tree as an obstacle in the map editor and raise the drawn obstacle margin so mowing and transit keep off the root zone.",
     "avoidanceMargins": "Avoidance Margins",

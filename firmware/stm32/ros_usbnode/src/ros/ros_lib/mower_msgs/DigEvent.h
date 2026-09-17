@@ -45,7 +45,7 @@ namespace mower_msgs
     }
 
     virtual const char * getType() override { return "mower_msgs/DigEvent"; };
-    virtual const char * getMD5() override { return "8173fc6e99badce3a4906de55228b7b8"; };
+    virtual const char * getMD5() override { return "329b03297e712cd20c9cbdebe39f8d18"; };
 
   };
 

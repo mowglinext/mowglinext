@@ -389,6 +389,8 @@ export type MapArea = {
   obstacles?: Polygon[];
   is_navigation_area?: boolean;
   obstacle_info?: MapObstacleInfo[];
+  proposed_obstacles?: Polygon[];
+  proposed_obstacle_info?: MapObstacleInfo[];
 };
 
 export const enum MapObstacleInfoConstants {

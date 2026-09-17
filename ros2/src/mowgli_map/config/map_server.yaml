@@ -13,32 +13,32 @@ map_server_node:
     # coverage_server.operation_width.)
     tool_width: 0.18
 
-    # ── Wheel-slip dig keepout ────────────────────────────────────────────
+    # ── Wheel-slip dig proposal ───────────────────────────────────────────
     # hardware_bridge_node detects the robot digging a hole (wheels turning,
     # GNSS-anchored pose not moving), hard-stops and reverses out, then
-    # publishes /hardware_bridge/dig_event. We stamp that location as a
-    # PENDING keepout through the same path the GUI's "promote obstacle"
-    # uses, so the NEXT coverage pass plans around the churned patch instead
-    # of driving back in and digging it deeper.
+    # publishes /hardware_bridge/dig_event. We record that location as a
+    # PENDING PROPOSAL for the operator.
     #
-    # PENDING means: live in the keepout mask + classification layer for this
-    # session, but NOT written to areas.dat. A single inferred dig is weaker
-    # evidence than a repeatedly-observed tracker obstacle, and those already
-    # need operator sign-off (auto_promote_persistent_obstacles: false), so
-    # the operator accepts the proposal (map_server_node/promote_obstacle with
-    # pending_id) or drops it (map_server_node/discard_obstacle).
+    # PENDING means INERT: NOT in the keepout mask, NOT a NO_GO cell, NOT a
+    # coverage hole (get_mowing_area lists it under proposed_obstacles only)
+    # and NOT written to areas.dat. It used to be stamped into the mask for
+    # the session; the robot stands ~0.2-0.3 m from a fresh dig, so every
+    # plan from its own pose was refused with START_OCCUPIED and the mission
+    # died mid-lawn (2026-09-10, 2026-09-17). Keeping the robot out of the
+    # same patch for the rest of the session is FollowStrip's job now
+    # (mowgli_behavior/dig_skip.hpp). The operator accepts the proposal
+    # (map_server_node/promote_obstacle with pending_id — that applies AND
+    # persists it) or drops it (map_server_node/discard_obstacle).
     #
     # A dig outside every mowing area (transit / docking) is logged but NOT
-    # stamped — there is no area to attach it to, and coverage never plans
-    # there anyway.
+    # proposed — there is no area to attach it to.
     # Overridden from mowgli_robot.yaml by full_system.launch.py; exposed in
     # GUI Settings → Obstacles. False leaves dig detection/recovery active.
     dig_obstacle_enabled: true
-    # Side of the square keepout stamped at the dig [m]. One chassis LENGTH
-    # (the Nav2 footprint is 0.60 × 0.40 m). It used to be one tool width
-    # (0.18 m) — NARROWER THAN THE BODY, so "route around it" still dragged
-    # the chassis over the hole; issue #500 recorded 3 dig latches in 18.4 s
-    # inside 0.13 m.
+    # Side of the keepout an ACCEPTED dig proposal becomes [m]. One chassis
+    # LENGTH (the Nav2 footprint is 0.60 × 0.40 m). It used to be one tool
+    # width (0.18 m) — NARROWER THAN THE BODY, so "route around it" still
+    # dragged the chassis over the hole.
     dig_obstacle_size: 0.60
     map_file_path: ""
     areas_file_path: "/ros2_ws/maps/areas.dat"

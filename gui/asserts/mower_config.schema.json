@@ -723,8 +723,8 @@
         "dig_obstacle_enabled": {
           "type": "boolean",
           "default": true,
-          "title": "Automatically create dig keepouts",
-          "description": "Create temporary keepout proposals for detected wheel-slip digs. Disabling this leaves dig detection and recovery active. Restart ROS2 to apply."
+          "title": "Propose an obstacle where the robot dug in",
+          "description": "Record a wheel-slip dig as an obstacle proposal on the map page. A proposal blocks nothing until you accept it; the robot skips the spot for the rest of the session either way. Disabling this leaves dig detection and recovery active. Restart ROS2 to apply."
         },
         "obstacle_margin": {
           "type": "number",

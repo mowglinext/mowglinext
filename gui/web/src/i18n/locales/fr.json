@@ -1682,6 +1682,26 @@
     "noContainingArea": "Aucune zone englobante",
     "promoteTooltip": "Promouvoir en exclusion permanente"
   },
+  "mapObstacleProposals": {
+    "header": "Propositions d’obstacles ({{count}})",
+    "hint": "Rien n’est bloqué tant que vous n’acceptez pas. Le robot évite ces endroits pour la session en cours uniquement.",
+    "digLabel": "Proposition de patinage n°{{id}}",
+    "genericLabel": "Proposition n°{{id}}",
+    "areaFallback": "zone {{index}}",
+    "accept": "Accepter",
+    "acceptTooltip": "En faire une zone d’exclusion permanente",
+    "acceptConfirmTitle": "Accepter cette proposition d’obstacle ?",
+    "acceptConfirmBody": "Ceci ajoute une zone d’exclusion permanente dans {{area}} : le robot planifiera et tondra autour dès maintenant (jusqu’à ce que vous la retiriez de la zone).",
+    "acceptedSuccess": "Proposition acceptée comme zone d’exclusion dans {{area}}",
+    "acceptFailed": "Échec de l’acceptation de la proposition",
+    "reject": "Refuser",
+    "rejectTooltip": "Supprimer cette proposition",
+    "rejectConfirmTitle": "Refuser cette proposition d’obstacle ?",
+    "rejectConfirmBody": "La proposition est supprimée et la carte reste inchangée. Le robot évite encore cet endroit jusqu’à la fin de la session de tonte en cours.",
+    "rejectedSuccess": "Proposition refusée",
+    "rejectFailed": "Échec du refus de la proposition",
+    "cancel": "Annuler"
+  },
   "mapEditing": {
     "unableToMatchAreaForObstacle": "Impossible d'associer une zone à cet obstacle",
     "splitTargetNotValidPolygon": "La cible de la découpe n'est pas un polygone valide",
@@ -2513,8 +2533,8 @@
   },
   "settingsObstacles": {
     "digKeepouts": "Obstacles de patinage",
-    "digAutoPromotion": "Créer automatiquement des zones d’exclusion de patinage",
-    "digKeepoutsDescription": "Crée une zone d’exclusion temporaire lorsqu’un patinage est détecté dans une zone de tonte. Acceptez la proposition sur la carte pour la conserver. Si désactivé, aucune zone d’exclusion de patinage n’est créée ; la détection, l’arrêt et la récupération restent actifs. Enregistrez et redémarrez ROS2 pour appliquer.",
+    "digAutoPromotion": "Proposer un obstacle là où le robot a patiné",
+    "digKeepoutsDescription": "Lorsqu’un patinage est détecté dans une zone de tonte, ajoute une proposition sur la page Carte. Rien n’est bloqué tant que vous ne l’acceptez pas : accepter en fait une zone d’exclusion permanente, refuser la supprime. En attendant, le robot évite simplement cet endroit jusqu’à la fin de la session de tonte. Si désactivé, aucune proposition n’est créée ; la détection, l’arrêt et la récupération restent actifs. Enregistrez et redémarrez ROS2 pour appliquer.",
     "rootZoneHintTitle": "Arbres avec de grosses racines ?",
     "rootZoneHintDescription": "Le LiDAR 2D ne voit pas les racines sous son plan de scan (~10–20 cm). Dessinez l'arbre comme obstacle dans l'éditeur de carte et augmentez la marge des obstacles dessinés pour que la tonte et les transits restent hors de la zone de racines.",
     "avoidanceMargins": "Marges d'évitement",

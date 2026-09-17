@@ -146,8 +146,10 @@ public:
                                         const geometry_msgs::msg::Polygon& polygon,
                                         const std::string& name = {})
   {
-    return apply_promoted_obstacle(
-        area_index, polygon, name, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER, false);
+    return apply_promoted_obstacle(area_index,
+                                   polygon,
+                                   name,
+                                   mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER);
   }
 
   /// Test-only: directly invoke the promote / discard service handlers.
@@ -186,21 +188,6 @@ public:
   {
     on_dig_event(std::move(msg));
   }
-  /// Test-only: stand in for on_odom's TF-derived pose latch (tests have no
-  /// TF tree), so the footprint-relative dig discard can be exercised.
-  void set_robot_pose_for_test(double x, double y, double yaw)
-  {
-    last_robot_x_ = x;
-    last_robot_y_ = y;
-    last_robot_yaw_ = yaw;
-    have_robot_heading_ = true;
-  }
-  /// Test-only: run the DIG_OBSTRUCTION exit helper directly.
-  [[nodiscard]] std::size_t discard_dig_keepouts_near_robot_for_test()
-  {
-    return discard_dig_keepouts_near_robot();
-  }
-
   /// Test-only: stand in for on_odom's TF-derived heading latch (tests have no
   /// TF tree), so the dig keepout orientation can be asserted.
   void set_robot_heading_for_test(double yaw)
@@ -342,10 +329,12 @@ private:
     std::string name;
     /// MapObstacleInfo::SOURCE_USER / _TRACKER / _DIG.
     uint8_t source{mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER};
-    /// True while this is only a PROPOSAL: live in the keepout mask for this
-    /// session (so coverage cannot drive back into the hole) but deliberately
-    /// NOT written to areas.dat. Cleared by ~/promote_obstacle{pending_id};
-    /// dropped by ~/discard_obstacle.
+    /// True while this is only a PROPOSAL: INERT — skipped by the keepout
+    /// mask, the classification layer, get_mowing_area's `obstacles` (coverage
+    /// holes) and areas.dat; listed only in MapArea.proposed_obstacles.
+    /// Cleared (and the polygon applied) by ~/promote_obstacle{pending_id};
+    /// dropped by ~/discard_obstacle. Every consumer of AreaEntry::obstacles
+    /// MUST skip pending entries.
     bool pending{false};
     /// Session-scoped handle for those two services. 0 = loaded from disk.
     uint32_t id{0};
@@ -449,21 +438,9 @@ private:
   void on_promote_obstacle(const mowgli_interfaces::srv::PromoteObstacle::Request::SharedPtr req,
                            mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res);
 
-  /// Reject a pending proposal (currently: wheel-slip dig keepouts) by its
-  /// MapObstacleInfo.id. Removes it from the live mask; nothing was ever
-  /// persisted, so it cannot come back after a restart either.
-  /// DIG_OBSTRUCTION exit (~/discard_dig_keepouts_near_robot, std_srvs/Trigger):
-  /// drop every PENDING dig proposal whose polygon contains, or lies within
-  /// kDigDiscardClearanceM of, the robot's latest map-frame position. Three
-  /// same-spot latches leave up to three 0.60 m keepouts stamped around the
-  /// robot, so the HOME dock transit's plan starts in a lethal cell
-  /// (START_OCCUPIED) and never moves; the tree calls this before planning
-  /// home. Accepted (persisted) keepouts and proposals farther away are kept.
-  void on_discard_dig_keepouts_near_robot(const std_srvs::srv::Trigger::Request::SharedPtr req,
-                                          std_srvs::srv::Trigger::Response::SharedPtr res);
-  /// @return how many pending dig proposals were dropped (0 = nothing touched).
-  std::size_t discard_dig_keepouts_near_robot();
-
+  /// Reject a pending proposal (currently: wheel-slip dig reports) by its
+  /// MapObstacleInfo.id. A proposal was never applied nor persisted, so this
+  /// only drops it from the list the GUI shows.
   void on_discard_obstacle(const mowgli_interfaces::srv::ClearObstacle::Request::SharedPtr req,
                            mowgli_interfaces::srv::ClearObstacle::Response::SharedPtr res);
 
@@ -499,15 +476,12 @@ private:
   /// Check if the robot is outside all allowed polygons and publish violation.
   void check_boundary_violation(double x, double y);
 
-  /// Append a polygon as a keepout for an area. Called by the
-  /// ~/promote_obstacle service and by the dig-report path. Updates
+  /// Append a polygon as an APPLIED keepout for an area. Called by the
+  /// ~/promote_obstacle service (operator action) and the tracker
+  /// auto-promotion opt-in — never by the dig-report path. Updates
   /// obstacle_polygons_, re-runs apply_area_classifications so cells become
   /// NO_GO_ZONE, marks masks_dirty_, and triggers a replan. Manages
   /// map_mutex_ internally — caller must NOT hold it.
-  ///
-  /// `pending` decides PERSISTENCE, not liveness: a pending keepout is just
-  /// as lethal for this session, but save_areas_to_file skips it, so it never
-  /// reaches areas.dat until the operator accepts it.
   ///
   /// @return false if the polygon has fewer than 3 points or area_index
   ///         is out of range / a navigation area.
@@ -515,24 +489,32 @@ private:
       size_t area_index,
       const geometry_msgs::msg::Polygon& polygon,
       const std::string& name = {},
-      uint8_t source = mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER,
-      bool pending = false);
+      uint8_t source = mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER);
+
+  /// Record an INERT proposal for an area: listed for the operator
+  /// (MapArea.proposed_obstacles) and nothing else — no keepout mask, no
+  /// NO_GO cells, no coverage hole, no replan, no areas.dat. Manages
+  /// map_mutex_ internally.
+  /// @return the proposal's session id, or nullopt when the area is invalid /
+  ///         a navigation area, the polygon is degenerate, or an obstacle or
+  ///         proposal already sits at that spot.
+  [[nodiscard]] std::optional<uint32_t> add_obstacle_proposal(
+      size_t area_index,
+      const geometry_msgs::msg::Polygon& polygon,
+      const std::string& name,
+      uint8_t source);
 
   /// Accept the pending obstacle carrying `pending_id`: clear its pending
-  /// flag (optionally renaming it) so the next save writes it to areas.dat.
+  /// flag (optionally renaming it) and APPLY it — keepout mask, NO_GO cells,
+  /// replan — so the next save also writes it to areas.dat.
   /// @return the area index it belongs to, or nullopt when no pending
   ///         obstacle has that id.
   [[nodiscard]] std::optional<size_t> accept_pending_obstacle(uint32_t pending_id,
                                                               const std::string& name);
 
-  /// Drop the pending obstacle carrying `pending_id` from the area list, the
-  /// flat obstacle_polygons_ store and the classification layer.
+  /// Drop the pending obstacle carrying `pending_id` from its area's list.
   /// @return false when no PENDING obstacle has that id.
   bool discard_pending_obstacle(uint32_t pending_id);
-
-  /// Remove `polygon` from obstacle_polygons_ by centroid match (the same
-  /// epsilon the dedup guard uses). Caller must hold map_mutex_.
-  void erase_obstacle_polygon_locked(const geometry_msgs::msg::Polygon& polygon);
 
   /// Save areas.dat if a path is configured, logging (not throwing) on
   /// failure: the live state is already updated, so the next save retries.
@@ -547,21 +529,25 @@ private:
 
   /// has_duplicate_obstacle() (internal_helpers.hpp) over an area's
   /// ObstacleEntry list — same centroid-epsilon rule, different element type.
+  /// `include_pending=false` ignores inert proposals: an APPLIED keepout is
+  /// never a duplicate of something that was not applied.
   [[nodiscard]] static bool has_duplicate_obstacle_entry(
       const std::vector<ObstacleEntry>& existing,
       const geometry_msgs::msg::Polygon& candidate,
-      double eps);
+      double eps,
+      bool include_pending = true);
 
   /// Handle a wheel-slip dig report from hardware_bridge_node.
   ///
-  /// The bridge has already hard-stopped and reversed out; our job is to make
-  /// sure coverage does not send the robot straight back to the same patch on
-  /// the next pass. Resolves which mowing area contains the dig point, builds
-  /// a square keepout around it, and applies it through the SAME path the GUI
-  /// uses (apply_promoted_obstacle) so it becomes a NO_GO_ZONE and lands in
-  /// the keepout mask Smac/Nav2 read — but marked PENDING, so it is NOT
-  /// written to areas.dat. One inferred dig protects the spot for this
-  /// session; only the operator makes it permanent.
+  /// The bridge has already hard-stopped and reversed out. Resolves which
+  /// mowing area contains the dig point, builds the heading-biased polygon the
+  /// keepout WOULD have, and records it as an inert PROPOSAL
+  /// (add_obstacle_proposal). It must never apply anything: the robot stands
+  /// ~0.2-0.3 m from the point, and a keepout there refused every plan from
+  /// its own pose (START_OCCUPIED, 2026-09-10 and 2026-09-17). Issue #500's
+  /// re-dig loop is prevented by FollowStrip's dig skip zone
+  /// (mowgli_behavior/dig_skip.hpp); only the operator turns a proposal into
+  /// a keepout (~/promote_obstacle{pending_id}).
   void on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPtr msg);
 
   /// Index of the first mowing (non-navigation) area whose polygon contains
@@ -621,9 +607,9 @@ private:
   double map_size_y_;
   std::string map_frame_;
   double tool_width_;
-  /// Auto-promote wheel-slip dig locations to permanent keepouts.
+  /// Record wheel-slip dig locations as operator-reviewable proposals.
   bool dig_obstacle_enabled_{true};
-  /// Side length of the square keepout stamped at a dig location [m].
+  /// Side length of the keepout a dig proposal becomes once accepted [m].
   double dig_obstacle_size_{0.0};
   std::string map_file_path_;
   std::string areas_file_path_;
@@ -1069,7 +1055,6 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::GetRecoveryPoint>::SharedPtr get_recovery_point_srv_;
   rclcpp::Service<mowgli_interfaces::srv::PromoteObstacle>::SharedPtr promote_obstacle_srv_;
   rclcpp::Service<mowgli_interfaces::srv::ClearObstacle>::SharedPtr discard_obstacle_srv_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr discard_dig_keepouts_near_robot_srv_;
 
   // ── TF ────────────────────────────────────────────────────────────────────
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

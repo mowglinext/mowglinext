@@ -145,7 +145,10 @@ void MapServerNode::publish_keepout_mask()
     accumulate_polygon(area.polygon);
     for (const auto& obs : area.obstacles)
     {
-      accumulate_polygon(obs.polygon);
+      if (!obs.pending)  // a proposal is not part of any mask, not even its extent
+      {
+        accumulate_polygon(obs.polygon);
+      }
     }
   }
   for (const auto& obs : obstacle_polygons_)
@@ -337,7 +340,11 @@ void MapServerNode::publish_keepout_mask()
       {
         for (const auto& obs : areas_[a].obstacles)
         {
-          if (cell_hits_obstacle(pt, obs.polygon))
+          // PENDING proposals (wheel-slip dig reports) are NEVER lethal: the
+          // robot stands ~0.2-0.3 m from a fresh dig point, and a keepout
+          // there refused every plan from its own pose (START_OCCUPIED,
+          // 2026-09-10 and 2026-09-17). Only an operator accept applies one.
+          if (!obs.pending && cell_hits_obstacle(pt, obs.polygon))
           {
             lethal = true;
             break;

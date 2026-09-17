@@ -102,7 +102,7 @@ namespace mower_msgs
     }
 
     virtual const char * getType() override { return "mower_msgs/MapObstacleInfo"; };
-    virtual const char * getMD5() override { return "83d92c71b77c2e4abf9faf4a4ee11b52"; };
+    virtual const char * getMD5() override { return "de651c5dd265e41a5b168fa319facc21"; };
 
   };
 

@@ -773,9 +773,12 @@ mowgli:
     # -----------------------------------------------------------------
     # Obstacles (GUI: Settings → Obstacles)
     # -----------------------------------------------------------------
-    # Automatically create session-only PENDING keepouts from dig events.
-    # False disables map proposals, not hardware dig detection or recovery.
-    # Permanent persistence still requires operator acceptance. Restart ROS2.
+    # Record wheel-slip dig events as PENDING obstacle PROPOSALS (GUI map
+    # page: accept or reject). A proposal is INERT — no keepout, no coverage
+    # hole, nothing saved — until the operator accepts it; the anti re-dig
+    # protection is FollowStrip's session dig skip zone, not the map.
+    # False disables the proposals only, not hardware dig detection, recovery
+    # or the skip zone. Restart ROS2.
     dig_obstacle_enabled: true
     # How far the robot may deviate laterally from its path to skirt an
     # obstacle. ONE knob, TWO consumers (injected at launch):

@@ -272,8 +272,7 @@ void MapServerNode::on_get_recovery_point(
 bool MapServerNode::apply_promoted_obstacle(size_t area_index,
                                             const geometry_msgs::msg::Polygon& polygon,
                                             const std::string& name,
-                                            uint8_t source,
-                                            bool pending)
+                                            uint8_t source)
 {
   // Validate + mutate areas_/obstacle_polygons_ under map_mutex_, then
   // release before calling apply_area_classifications (which locks
@@ -296,7 +295,10 @@ bool MapServerNode::apply_promoted_obstacle(size_t area_index,
     // near-identical centroid already exists — a true no-op (no reclassify, no
     // replan trigger). One promote → exactly one permanent obstacle.
     if (has_duplicate_obstacle(obstacle_polygons_, polygon, kObstacleDedupEpsilonM) ||
-        has_duplicate_obstacle_entry(areas_[area_index].obstacles, polygon, kObstacleDedupEpsilonM))
+        has_duplicate_obstacle_entry(areas_[area_index].obstacles,
+                                     polygon,
+                                     kObstacleDedupEpsilonM,
+                                     /*include_pending=*/false))
     {
       const auto c = polygon_centroid(polygon);
       RCLCPP_INFO(get_logger(),
@@ -306,7 +308,7 @@ bool MapServerNode::apply_promoted_obstacle(size_t area_index,
       return true;
     }
 
-    areas_[area_index].obstacles.push_back(make_obstacle_entry(polygon, name, source, pending));
+    areas_[area_index].obstacles.push_back(make_obstacle_entry(polygon, name, source, false));
     obstacle_polygons_.push_back(polygon);
     masks_dirty_ = true;
   }

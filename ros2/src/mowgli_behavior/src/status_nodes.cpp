@@ -231,6 +231,15 @@ BT::NodeStatus EndSession::tick()
   ctx->start_blocked_escape_armed = false;
   ctx->last_motion_valid = false;
   ctx->last_motion_cmd_vx = 0.0;
+  // Dig skip zones are SESSION state (dig_skip.hpp): a patch that made the
+  // wheels slip on wet grass today deserves another try next session, and the
+  // operator has the proposal in the GUI if it is a real hole. Written by a
+  // subscriber callback, hence the lock. dig_event_count is NOT reset — it is
+  // a monotonic edge counter, not session state.
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->session_dig_points.clear();
+  }
   // Swath-completion model (replaces the cell coverage grid): clear the
   // per-area completed-swath sets, swath counts, and the completed-area set so
   // the next COMMAND_START re-plans and re-mows every area from swath 0.

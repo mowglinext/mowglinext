@@ -265,6 +265,27 @@ def keepout_obstacle_margin(
     return min(OBSTACLE_MARGIN_MAX_M, max(0.0, half_width, follow))
 
 
+def dig_skip_radius(params):
+    """behavior_tree_node.dig_skip_radius_m: coverage poses skipped around a dig.
+
+    A wheel-slip dig is NOT stamped into the keepout mask any more — a keepout
+    under the robot refused every plan from its own pose (START_OCCUPIED,
+    2026-09-10 and 2026-09-17). What keeps the robot from re-digging the same
+    hole (issue #500) is FollowStrip skipping every coverage pose within this
+    radius of a recorded dig point for the rest of the session
+    (mowgli_behavior/dig_skip.hpp).
+
+    = chassis circumscribed radius: for a base_link pose inside that circle
+    SOME part of the body — a drive wheel, or a front caster that then blocks
+    the robot — can be over the hole, whatever the heading. DERIVED, never a
+    literal (chassis_length / chassis_width / chassis_center_x are
+    operator-editable). It deliberately ignores map_server.dig_obstacle_size:
+    that is the geometry of the keepout an operator may ACCEPT, which is a
+    different question from "which poses put the chassis over the hole".
+    """
+    return chassis_circumscribed_radius(params)
+
+
 
 def deep_merge(base, override):
     """Recursively merge ``override`` into a copy of ``base`` (override wins).

@@ -634,6 +634,22 @@ def test_circumscribed_radius_grows_with_a_wider_chassis():
     assert narrow == pytest.approx(0.5860, abs=1e-4)
 
 
+def test_dig_skip_radius_covers_the_whole_chassis_at_shipped_dimensions():
+    # FollowStrip skips coverage poses this close to a wheel-slip dig. Inside
+    # the circumscribed radius some part of the body can be over the hole.
+    assert _util.dig_skip_radius({}) == pytest.approx(0.5971, abs=1e-4)
+
+
+def test_dig_skip_radius_follows_an_operator_edited_chassis():
+    # chassis_* are GUI-editable: a literal would go stale exactly like the
+    # hardcoded cw = 0.40 that routed coverage 2.5 cm inside the body.
+    shipped = _util.dig_skip_radius({})
+    longer = _util.dig_skip_radius({"chassis_length": 0.80})
+    assert longer > shipped
+    front, rear, half_width = _util.chassis_footprint({"chassis_length": 0.80})
+    assert longer >= math.hypot(max(abs(front), abs(rear)), half_width) - 1e-9
+
+
 def test_circumscribed_radius_encloses_every_footprint_corner():
     params = {"chassis_length": 0.72, "chassis_width": 0.51, "chassis_center_x": 0.22}
     front, rear, half_width = _util.chassis_footprint(params)
