@@ -279,11 +279,46 @@ def dig_skip_radius(params):
     SOME part of the body — a drive wheel, or a front caster that then blocks
     the robot — can be over the hole, whatever the heading. DERIVED, never a
     literal (chassis_length / chassis_width / chassis_center_x are
-    operator-editable). It deliberately ignores map_server.dig_obstacle_size:
-    that is the geometry of the keepout an operator may ACCEPT, which is a
-    different question from "which poses put the chassis over the hole".
+    operator-editable). It is deliberately NOT dig_proposal_radius(): that is
+    the size of the HOLE an operator may accept; this is "which poses put the
+    chassis over that hole" — a body-sized question.
     """
     return chassis_circumscribed_radius(params)
+
+
+DEFAULT_WHEEL_RADIUS_M = 0.10
+DEFAULT_WHEEL_WIDTH_M = 0.04
+
+
+def dig_proposal_radius(params):
+    """map_server.dig_proposal_radius: size of a wheel-slip dig PROPOSAL.
+
+    The proposal is the PHYSICAL dig, not the chassis. What digs is the two
+    drive wheels: one rut under each tyre, at the dig point (base_link = the
+    drive-axle centre) +/- wheel_track/2. The detector reports neither which
+    wheel slipped nor the heading, so the proposal is the smallest disc centred
+    on the dig point that covers BOTH contact patches whatever the heading:
+
+        lateral reach = wheel_track/2 + wheel_width/2   (outer tyre edge)
+        along reach   = wheel_radius/2                  (contact-patch half
+                        chord of a tyre sunk ~13 % of its radius into the rut)
+        radius        = hypot(lateral, along)           -> 0.189 m shipped
+
+    map_server then adds half the DigEvent's map_distance (the chassis crept
+    that far while slipping, so the ruts are that much longer) and floors the
+    result (kMinDigProposalRadiusM) so the hole stays selectable in the GUI.
+
+    It must NOT contain the body: when an accepted proposal is applied the
+    keepout band (chassis half-width) and coverage obstacle_margin are added
+    around it — the body counted exactly once. The old 0.60 m chassis-length
+    box only existed because the polygon used to be stamped as a session
+    keepout; it blanked out a large patch of lawn on every accept.
+    """
+    params = params or {}
+    track = float(params.get("wheel_track", DEFAULT_WHEEL_TRACK_M))
+    width = float(params.get("wheel_width", DEFAULT_WHEEL_WIDTH_M))
+    radius = float(params.get("wheel_radius", DEFAULT_WHEEL_RADIUS_M))
+    return math.hypot(track / 2.0 + width / 2.0, radius / 2.0)
 
 
 

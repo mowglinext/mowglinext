@@ -61,17 +61,18 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   tool_width_ = declare_parameter<double>("tool_width", 0.18);
   // Wheel-slip dig proposal (see on_dig_event). A dig is recorded as a PENDING
   // proposal only - not in the mask, not a coverage hole, not in areas.dat -
-  // until the operator accepts it. The size below is the keepout it becomes
-  // on acceptance.
+  // until the operator accepts it.
   //
-  // Size: it used to default to one tool width (0.18 m), which is NARROWER
-  // THAN THE CHASSIS (0.60 m x 0.40 m footprint). Issue #500 recorded the
-  // consequence: 3 dig latches in 18.4 s within 0.13 m - the escape reverses
-  // and the controller drives the body straight back over a keepout the body
-  // does not fit around. Default is now kDefaultDigKeepoutSizeM, one chassis
-  // length, so routing around the patch actually clears it.
+  // dig_proposal_radius: the proposal is sized to the PHYSICAL dig (the two
+  // drive-wheel ruts), not to the chassis — see internal_helpers.hpp. DERIVED
+  // from the wheel geometry by full_system.launch.py
+  // (robot_config_util.dig_proposal_radius); the default here only serves
+  // tests and ad-hoc runs. It replaces `dig_obstacle_size` (0.60 m, one chassis
+  // length), which existed only because the polygon used to be stamped as a
+  // session keepout and therefore had to contain the body.
   dig_obstacle_enabled_ = declare_parameter<bool>("dig_obstacle_enabled", true);
-  dig_obstacle_size_ = declare_parameter<double>("dig_obstacle_size", kDefaultDigKeepoutSizeM);
+  dig_proposal_radius_m_ =
+      declare_parameter<double>("dig_proposal_radius", kFallbackDigProposalRadiusM);
   yaw_convergence_threshold_rad_ =
       declare_parameter<double>("yaw_convergence_threshold_rad", 0.00873);  // 0.5°
   yaw_convergence_window_s_ = declare_parameter<double>("yaw_convergence_window_s", 5.0);
@@ -748,8 +749,7 @@ void MapServerNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr /*msg*/)
   // centroid when the robot is inside the area).
   last_robot_x_ = x;
   last_robot_y_ = y;
-  last_robot_yaw_ = yaw;
-  have_robot_heading_ = true;
+  have_robot_pose_ = true;
 
   const rclcpp::Time now_t = now();
   const bool telemetry_fresh =

@@ -40,67 +40,73 @@ namespace mowgli_map
 /// deduped. See apply_promoted_obstacle() and the area-load paths.
 constexpr double kObstacleDedupEpsilonM = 0.10;
 
-/// Default side of the square keepout stamped at a wheel-slip dig [m].
-/// One chassis LENGTH (the Nav2 robot_footprint is 0.60 m x 0.40 m). The
-/// previous default was one tool width (0.18 m) - narrower than the body,
-/// so "route around the dig" still dragged the chassis across it and issue
-/// #500 saw the robot re-latch a dig 3x in 18.4 s inside 0.13 m.
-constexpr double kDefaultDigKeepoutSizeM = 0.60;
+// ── Wheel-slip dig PROPOSAL geometry ─────────────────────────────────────────
+//
+// A dig proposal is sized to the PHYSICAL dig, not to the chassis. The old
+// polygon was one chassis length (0.60 m) and biased ahead of the heading for
+// one reason only: it was stamped as a session KEEPOUT the moment the dig
+// happened, so it had to contain the body and must not reach back under the
+// reversed robot. A dig is an operator proposal now and nothing is stamped,
+// so that reason is gone — and a 0.60 m box made every accepted dig blank out
+// a big patch of lawn (keepout band and coverage obstacle_margin are added ON
+// TOP of the polygon: the body is counted exactly once, by them, never by the
+// polygon itself).
+//
+// What digs is the drive wheels: two ruts, one under each tyre, at the dig
+// point (base_link = the drive axle centre) +/- wheel_track/2. The detector
+// does not say which wheel slipped nor which way the robot faced, so the
+// proposal is the smallest REGULAR shape centred on the dig point that covers
+// both contact patches whatever the heading: a disc of radius
+//   hypot(wheel_track/2 + wheel_width/2, wheel_radius/2)
+// (robot_config_util.dig_proposal_radius, injected as `dig_proposal_radius`;
+// 0.189 m for the shipped robot), grown by half the distance the chassis crept
+// during the slip window (DigEvent.map_distance) — the ruts are that much
+// longer.
 
-/// Hard floor for the dig keepout, whatever dig_obstacle_size is set to.
-/// Below one costmap cell the keepout cannot be represented at all.
-constexpr double kMinDigKeepoutSizeM = 0.05;
+/// Fallback for `dig_proposal_radius` when no launch file injects it (tests,
+/// ad-hoc runs). The real value is DERIVED from the wheel geometry of the
+/// merged robot config.
+constexpr double kFallbackDigProposalRadiusM = 0.19;
 
-/// How far BEHIND the dig point (against the robot's heading) the LETHAL
-/// band of the dig keepout may reach [m] - polygon plus the
-/// keepout_obstacle_margin band the mask paints around every obstacle polygon
-/// (NOT inflated downstream: inflation_layer runs before keepout_filter, so
-/// this band is the whole lethal region Smac sees). The hole is under the
-/// wheels, i.e. at the dig point itself, and the bridge reverses the robot
-/// out of it by dig_reverse_dist (0.30 m commanded, ~0.20 m real on a
-/// slipping tyre - 2026-09-10 bag). A square centred on the dig plus the
-/// 0.15 m margin reached 0.45 m behind it, so the reversed robot was still
-/// standing INSIDE its own keepout: Smac answered START_OCCUPIED to every
-/// transit and the mission looped until an operator stopped it (twice on
-/// 2026-09-10). 0.10 m still covers the tyre contact patch; everything the
-/// robot needs to route around (the hole and the ground it was pushing into)
-/// lies AHEAD of the dig point.
-constexpr double kDigKeepoutBehindM = 0.10;
+/// Lower bound of the proposal radius [m]. Two reasons, both about a polygon
+/// that is too small to be useful: at the 0.10 m map resolution a smaller disc
+/// can fall between cell centres (an ACCEPTED proposal would then stamp no
+/// NO_GO cell at all), and the operator must be able to see and click the hole
+/// in the GUI map.
+constexpr double kMinDigProposalRadiusM = 0.10;
 
-/// Dig keepout polygon (map frame).
-///
-/// With a known heading: a rectangle `size` wide (lateral, centred on the dig
-/// point) spanning `size` ahead of the dig point along the heading, and whose
-/// rear edge is placed so that polygon + `lethal_margin` (the mask's
-/// keepout_obstacle_margin band) reaches exactly kDigKeepoutBehindM behind the dig
-/// point, whatever the configured margin. Without a heading (no TF yet): the
-/// legacy square of side `size` centred on the dig point, the only
-/// orientation-free choice.
-inline geometry_msgs::msg::Polygon dig_keepout_polygon(
-    double x, double y, double yaw, bool have_heading, double size, double lethal_margin)
+/// Upper bound of what DigEvent.map_distance may add to the radius [m]. The
+/// detector latches when the map moved LESS than a fraction of the wheel
+/// travel, so a large value here is a stale/garbage report, not a long rut.
+constexpr double kMaxDigSlipGrowthM = 0.10;
+
+/// Vertices of the regular polygon approximating the disc.
+constexpr int kDigProposalVertices = 8;
+
+/// Radius of the proposal for one dig report.
+inline double dig_proposal_radius(double base_radius_m, double map_distance_m)
 {
-  const double s = std::max(size, kMinDigKeepoutSizeM);
-  const double half = s * 0.5;
-  double along_min = -half, along_max = half, cy = 1.0, sy = 0.0;
-  if (have_heading)
-  {
-    along_max = s;
-    along_min = std::min(std::max(lethal_margin, 0.0) - kDigKeepoutBehindM,
-                         along_max - kMinDigKeepoutSizeM);
-    cy = std::cos(yaw);
-    sy = std::sin(yaw);
-  }
-  // Corners in the dig frame (along, lateral), CCW.
-  const double corners[4][2] = {{along_min, -half},
-                                {along_max, -half},
-                                {along_max, half},
-                                {along_min, half}};
+  const double base = std::isfinite(base_radius_m) ? base_radius_m : 0.0;
+  const double creep = std::isfinite(map_distance_m) ? map_distance_m : 0.0;
+  const double growth = std::min(std::max(creep * 0.5, 0.0), kMaxDigSlipGrowthM);
+  return std::max(base + growth, kMinDigProposalRadiusM);
+}
+
+/// Regular polygon CIRCUMSCRIBING the disc of `radius` centred on (x, y), map
+/// frame, CCW, NOT closed (ROS polygon convention). Circumscribed so the whole
+/// disc is inside it; orientation-free, so no heading is needed.
+inline geometry_msgs::msg::Polygon dig_proposal_polygon(double x, double y, double radius)
+{
+  const double r = std::max(radius, kMinDigProposalRadiusM);
+  const double step = 2.0 * M_PI / static_cast<double>(kDigProposalVertices);
+  const double vertex_r = r / std::cos(step * 0.5);
   geometry_msgs::msg::Polygon poly;
-  for (const auto& c : corners)
+  for (int i = 0; i < kDigProposalVertices; ++i)
   {
+    const double a = step * (static_cast<double>(i) + 0.5);
     geometry_msgs::msg::Point32 p;
-    p.x = static_cast<float>(x + c[0] * cy - c[1] * sy);
-    p.y = static_cast<float>(y + c[0] * sy + c[1] * cy);
+    p.x = static_cast<float>(x + vertex_r * std::cos(a));
+    p.y = static_cast<float>(y + vertex_r * std::sin(a));
     poly.points.push_back(p);
   }
   return poly;
