@@ -225,6 +225,19 @@ private:
   /// max_lateral_deviation to find clearance.
   void updateLateralDeviation(double dt);
 
+  /// Whole-profile avoidance (ftc_offset_lattice.hpp): plans the lateral offset
+  /// over the horizon and sets target_lateral_deviation_. Returns false when it
+  /// engaged the reverse-escape / wait fallback and the caller must return.
+  bool planOffsetLattice(std::size_t carrot_idx,
+                         const BoundaryGuard& guard,
+                         const std::vector<geometry_msgs::msg::Point>& footprint,
+                         double dt);
+
+  /// Plan poses [first, last) expressed in the local costmap frame.
+  bool planWindowInCostmapFrame(std::size_t first,
+                                std::size_t last,
+                                std::vector<geometry_msgs::msg::PoseStamped>& out);
+
   /// Apply lateral_deviation_ to current_control_point_ in-place.
   void applyLateralDeviationToCarrot();
 
@@ -308,6 +321,8 @@ private:
   /// own followable-duration counter because a valid offset path may exist
   /// while the nominal path remains blocked.
   std::optional<rclcpp::Time> avoidance_clear_start_;
+  /// Since when the lattice has been asking for a SMALLER offset than applied.
+  std::optional<rclcpp::Time> lattice_return_start_;
 
   // ── Oscillation detection ─────────────────────────────────────────────────
 
@@ -588,6 +603,12 @@ private:
     /// (works with the half-width line model AND the footprint model). Default
     /// true. Set false to restore the prior skirt-anything behaviour.
     bool require_clear_exit{true};
+    /// Whole-profile avoidance planner instead of the single-offset search.
+    bool use_offset_lattice{false};
+    /// How far ahead of the carrot the offset profile is planned (m).
+    double avoidance_horizon_m{2.5};
+    /// Steepest lateral change per metre of path the profile may ask for.
+    double avoidance_max_slope{1.0};
 
     /// Bounded reverse-escape for the WEDGED case (both sides of an obstacle
     /// blocked, or the skirt needed exceeds max_lateral_deviation). Before

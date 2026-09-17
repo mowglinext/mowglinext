@@ -643,6 +643,24 @@ controller_server:
       # clamped [0.5, 10.0]) here — the same knob that drives
       # map_server.bypass_max_length. The static value below only governs
       # isolated runs/tests that load this yaml directly.
+      # Avoidance PLANNER. true = whole-profile lattice (ftc_offset_lattice.hpp):
+      # a (station x lateral offset) lattice over the next avoidance_horizon_m of
+      # path, searched by dynamic programming against separate critics — real
+      # footprint vs raw lethal LOCAL cells and the zone (hard), un-mowed area,
+      # smoothness, side stability, return to the line (soft). DWB/MPPI-style
+      # trajectory scoring, but in PATH space: FTC's PID still does the tracking,
+      # so none of the corner-cutting that got MPPI reverted. false = the legacy
+      # search (ONE offset for the whole window, side picked from a single pose and
+      # latched), kept as a live rollback: `ros2 param set /controller_server
+      # FollowCoveragePath.use_offset_lattice false`.
+      # Replay of bag carrot-1500 (2026-09-17), same costmap, same 110 s: legacy
+      # 117 x WEDGED "needed > max_lateral_deviation" 2.5 m before the obstacle;
+      # lattice 0 WEDGED, a 0.20-0.30 m skirt. max_lateral_deviation and
+      # deviation_step size the lattice; obstacle_clear_hold_s debounces the
+      # return; require_clear_exit / min_lateral_deviation are legacy-only.
+      use_offset_lattice: true
+      avoidance_horizon_m: 2.5     # = obstacle_layer obstacle_max_range
+      avoidance_max_slope: 1.0     # lateral m per m of path (45 deg)
       max_lateral_deviation: 1.5
       deviation_step: 0.05
       deviation_blend_rate: 0.5

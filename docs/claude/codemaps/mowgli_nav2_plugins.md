@@ -53,6 +53,9 @@
 | `ftc_blade_load.hpp` | 105 | Pure `BladeLoadScale()` / `BladeLoadDecision()` — linear RPM→speed ramp, inactive/stale/degenerate gates fail OPEN, `stall_crawl_speed` floor |
 | `ftc_reverse_escape.hpp` | 83 | Pure `ReverseEscapeDecide()` / `ReverseEscapeAdvance()` — opt-in, budget cap, rear-clear gate |
 | `ftc_start_index.hpp` | 80 | Pure `ChooseStartIndex()` — idx 0 by default; legacy nearest snap breaks ties to the earlier index |
+| `ftc_offset_lattice.hpp` | — | Whole-profile avoidance planner (pure, costmap-free): (station x lateral offset) lattice + DP, hard critics (blocked node, slope) and soft critics (un-mowed area, smoothness, side stability, return to line). Selected by `use_offset_lattice`; wired in `FTCController::planOffsetLattice()`. Tests: `test_ftc_offset_lattice.cpp` |
+| `ftc_carrot_lead.hpp` | — | Derived longitudinal carrot lead cap (1.5 x `speed_fast` / `kp_lon`) |
+| `ftc_resync.hpp` | — | Carrot resync bounded to a PATH-LENGTH window (never jumps to a neighbouring ring) |
 | `obstacle_deviation.hpp` | 236 | `BoundaryGuard` (zone guard + zone mask) and `ObstacleDeviation` static helpers; thresholds `kLethalThreshold=253`, `kLethalOnlyThreshold=254` |
 | `oscillation_detector.hpp` | 113 | `FailureDetector` — rolling (v, ω) window, mean + zero-crossing test |
 | `path_progress_goal_checker.hpp` | 122 | `PathProgressGoalChecker` — progress-gated goal checker state + params |

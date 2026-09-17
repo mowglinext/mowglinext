@@ -1502,6 +1502,25 @@ def test_ftc_uses_the_real_footprint_for_clearance() -> None:
         )
 
 
+def test_ftc_plans_avoidance_as_a_whole_profile() -> None:
+    """The lattice planner needs the real chassis polygon (it falls back to the
+    legacy single-offset search without one) and a horizon the LiDAR can fill."""
+    fcp = _controller_section(_load_params())["FollowCoveragePath"]
+    assert fcp["use_offset_lattice"] is True
+    assert fcp["use_footprint_clearance"] is True, (
+        "use_offset_lattice silently degrades to the legacy search when FTC has "
+        "no footprint polygon to sample."
+    )
+    assert 0.5 <= fcp["avoidance_horizon_m"] <= 3.0, (
+        "Beyond the obstacle layer's marking range the lattice plans over cells "
+        "nothing can ever mark; too short and a skirt cannot ramp in."
+    )
+    # A lattice step per station at the steepest slope: finer lateral steps than
+    # the local costmap resolution buy nothing.
+    assert fcp["deviation_step"] >= 0.05
+    assert fcp["avoidance_max_slope"] > 0.0
+
+
 def test_collision_monitor_polygons_follow_the_chassis() -> None:
     """The collision monitor is the last line of defence; its polygons may not be
     narrower than the body. They shipped as literals sized for the 0.40 m chassis
