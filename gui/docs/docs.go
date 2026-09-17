@@ -2335,6 +2335,9 @@ const docTemplate = `{
                 "use_gps_position": {
                     "type": "boolean"
                 },
+                "use_pending_antenna": {
+                    "type": "boolean"
+                },
                 "yaw_rad": {
                     "type": "number"
                 },

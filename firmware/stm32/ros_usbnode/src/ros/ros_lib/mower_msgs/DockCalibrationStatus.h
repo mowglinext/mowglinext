@@ -29,6 +29,7 @@ namespace mower_msgs
       enum { PHASE_PERSIST = 5 };
       enum { PHASE_IDLE = 6      # no run has started this session };
       enum { PHASE_DONE = 7      # a run finished (see success/retry_reason) };
+      enum { PHASE_CAPTURE_POSITION = 8  # on the dock, RTK-Fixed: averaging the raw antenna position };
 
     DockCalibrationStatus():
       phase(0),
@@ -83,7 +84,7 @@ namespace mower_msgs
     }
 
     virtual const char * getType() override { return "mower_msgs/DockCalibrationStatus"; };
-    virtual const char * getMD5() override { return "f12dbe5df5c1d2f216567b1a66b20229"; };
+    virtual const char * getMD5() override { return "7c7bfec2a9443d62dfc4af1599a7793c"; };
 
   };
 

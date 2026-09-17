@@ -286,6 +286,7 @@ export interface MowgliSetDockingPointReq {
   docking_pose?: GeometryPose;
   preserve_position?: boolean;
   use_gps_position?: boolean;
+  use_pending_antenna?: boolean;
   yaw_rad?: number;
   yaw_source?: number;
 }
