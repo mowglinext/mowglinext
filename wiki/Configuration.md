@@ -537,7 +537,6 @@ controller_server:
       require_clear_exit: true             # cul-de-sac guard: never skirt into a pocket
       obstacle_body_half_width: 0.12
       obstacle_clearance_margin: 0.05      # overridden at launch from obstacle_clearance_margin
-      ignore_obstacles_outside_zone: true  # keepout-masked cells are not obstacles (issue #517)
       enable_obstacle_deviation: true      # false in the no-LiDAR overlay
       max_lateral_deviation: 1.5           # overridden at launch from max_obstacle_avoidance_distance
       deviation_step: 0.05

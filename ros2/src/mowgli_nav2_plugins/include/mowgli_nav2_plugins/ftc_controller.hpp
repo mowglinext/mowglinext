@@ -555,18 +555,6 @@ private:
     /// (near-edge swaths legitimately run inside the keepout margin). When
     /// false, behaves exactly as before.
     bool confine_deviation_to_zone{true};
-    /// Zone-MASK the obstacle DETECTION checks (issue #517): a lethal cell in
-    /// the local obstacle costmap that is ALSO lethal in the global keepout
-    /// costmap (out-of-zone / keepout hole) is NOT an obstacle for the
-    /// deviation logic — the coverage path was planned to pass beside it and
-    /// never enters it. Field 2026-09-02: 71 "lateral deviation needed > max"
-    /// strip aborts per mow, all at row ends against the hedge the boundary
-    /// was recorded along / the tree in a keepout hole. Only effective when
-    /// confine_deviation_to_zone is true AND the global costmap has been
-    /// received (the same BoundaryGuard is reused); otherwise the old
-    /// behaviour. In-zone obstacles are unaffected; collision_monitor stays
-    /// the real-time guard.
-    bool ignore_obstacles_outside_zone{true};
 
     /// Model the robot as its actual rectangular chassis FOOTPRINT (from
     /// costmap_ros_->getRobotFootprint()) for obstacle detection and the

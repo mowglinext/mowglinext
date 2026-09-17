@@ -618,24 +618,19 @@ controller_server:
       # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml's obstacle_clearance_margin,
       # clamped [0.0, 0.50] — see navigation.launch.py.
       obstacle_clearance_margin: 0.05
-      # Zone-MASK obstacle detection (issue #517). A lethal cell in the LOCAL
-      # obstacle costmap that is ALSO lethal in the GLOBAL keepout costmap
-      # (outside the mowing area, or inside a keepout hole) is NOT an obstacle
-      # for the deviation logic — the coverage path was planned to pass beside
-      # it and never enters it. 2026-09-02 FIELD (LiDAR mow #2, 73 min): 71
-      # "lateral deviation needed > max_lateral_deviation" strip aborts, in two
-      # clusters — 35 on the diagonal area boundary (the hedge it was recorded
-      # along) and 33 beside a ~1.5 m keepout island (a tree) — with scan_min
-      # 0.80–0.86 m at the abort rows vs 0 beams within 1 m elsewhere: the
-      # object was real, the path ends chassis_safety_inset (0.20 m) short of
-      # the boundary and U-turns there, so the 0.50 m-long lookahead footprints
-      # reached it at every row end. Each abort cost obstacle_wait_timeout_s +
-      # a reverse escape + a re-dispatch and skipped 0.80 m of path (the
-      # resume-cursor step). Reuses the confine_deviation_to_zone boundary
-      # costmap, so it is inert until that costmap arrives (old behaviour);
-      # in-zone obstacles keep the exact current behaviour and collision_monitor
-      # remains the real-time guard for anything the mask drops.
-      ignore_obstacles_outside_zone: true
+      # NOTE: there is no ignore_obstacles_outside_zone knob any more (removed
+      # 2026-09-17). It zone-MASKED detection: a lethal cell in the LOCAL
+      # obstacle costmap that was ALSO lethal in the GLOBAL keepout costmap did
+      # not count as an obstacle, on the theory that the plan was routed around
+      # it. But keepout_filter stamps every DRAWN map obstacle lethal globally,
+      # so the mask deleted exactly the obstacles the operator had taken the
+      # trouble to map: on 2026-09-16 FTC logged "AVOIDANCE complete (path clear
+      # for 3.7s), back on path" and hit the same mapped tree twice, nine
+      # seconds later, with the trunk lethal in the local costmap throughout.
+      # Detection is now the plain local-costmap test. The global costmap keeps
+      # its OTHER role (confine_deviation_to_zone, plugin default true, no key
+      # here) — refusing a SKIRT that would leave the zone — which is sound
+      # because it only ever removes candidate offsets, never obstacles.
       enable_obstacle_deviation: true
       # OVERRIDDEN AT LAUNCH: navigation.launch.py injects
       # mowgli_robot.yaml.max_obstacle_avoidance_distance (default 2.0,

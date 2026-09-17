@@ -52,20 +52,19 @@ inline void offsetLateral(const geometry_msgs::msg::PoseStamped& pose,
 }
 
 /// Is the sample point (x, y) blocked? True if the LOCAL (obstacle) costmap
-/// cell is an OBSTACLE — at/above `local_threshold` and not masked out by
-/// `mask` (out-of-zone lethal, see ObstacleDeviation::isObstacleCell) — OR,
-/// when a boundary guard is supplied, if the point projected into the guard
-/// costmap's frame lands on a lethal cell (out-of-zone). Used for both the
-/// lateral-offset line samples and the footprint-interior samples so the skirt
-/// never leaves the mowing zone.
+/// cell is an OBSTACLE — at/above `local_threshold`, with nothing subtracted
+/// from it (see ObstacleDeviation::isObstacleCell) — OR, when a boundary guard
+/// is supplied, if the point projected into the guard costmap's frame lands on
+/// a lethal cell (out-of-zone). Callers pass the guard for lateral-OFFSET
+/// samples only, so the skirt never leaves the mowing zone; detection passes no
+/// guard (the outermost pass rides ON the recorded line by design).
 bool cellBlocked(const nav2_costmap_2d::Costmap2D& local,
                  double x,
                  double y,
                  const ObstacleDeviation::BoundaryGuard& g,
-                 unsigned char local_threshold,
-                 const ObstacleDeviation::BoundaryGuard& mask)
+                 unsigned char local_threshold)
 {
-  if (ObstacleDeviation::isObstacleCell(sampleCell(local, x, y), mask, x, y, local_threshold))
+  if (ObstacleDeviation::isObstacleCell(sampleCell(local, x, y), local_threshold))
   {
     return true;
   }
@@ -86,8 +85,7 @@ bool bodyBlocked(const nav2_costmap_2d::Costmap2D& local,
                  const geometry_msgs::msg::PoseStamped& pose,
                  double center_dev,
                  double half_width,
-                 const ObstacleDeviation::BoundaryGuard& g,
-                 const ObstacleDeviation::BoundaryGuard& mask)
+                 const ObstacleDeviation::BoundaryGuard& g)
 {
   int n = 1;
   if (half_width > 0.0)
@@ -106,7 +104,7 @@ bool bodyBlocked(const nav2_costmap_2d::Costmap2D& local,
     double x = 0.0;
     double y = 0.0;
     offsetLateral(pose, dev, x, y);
-    if (cellBlocked(local, x, y, g, ObstacleDeviation::kLethalThreshold, mask))
+    if (cellBlocked(local, x, y, g, ObstacleDeviation::kLethalThreshold))
     {
       return true;
     }
@@ -147,15 +145,14 @@ bool regionBlocked(const nav2_costmap_2d::Costmap2D& local,
                    double center_dev,
                    double half_width,
                    const ObstacleDeviation::Footprint& footprint,
-                   const ObstacleDeviation::BoundaryGuard& g,
-                   const ObstacleDeviation::BoundaryGuard& mask = {})
+                   const ObstacleDeviation::BoundaryGuard& g)
 {
   if (!footprint.empty())
   {
     return ObstacleDeviation::footprintBlocked(
-        local, pose, center_dev, footprint, g, ObstacleDeviation::kLethalOnlyThreshold, mask);
+        local, pose, center_dev, footprint, g, ObstacleDeviation::kLethalOnlyThreshold);
   }
-  return bodyBlocked(local, pose, center_dev, half_width, g, mask);
+  return bodyBlocked(local, pose, center_dev, half_width, g);
 }
 
 }  // namespace
@@ -171,20 +168,20 @@ bool BoundaryGuard::isLethalAt(double x, double y) const
   return sampleCell(*costmap, bx, by) >= ObstacleDeviation::kLethalThreshold;
 }
 
-bool ObstacleDeviation::isObstacleCell(unsigned char local_cost,
-                                       const BoundaryGuard& zone_mask,
-                                       double x,
-                                       double y,
-                                       unsigned char threshold)
+bool ObstacleDeviation::isObstacleCell(unsigned char local_cost, unsigned char threshold)
 {
-  if (local_cost < threshold)
-  {
-    return false;  // free / inflation gradient — never an obstacle
-  }
-  // Lethal locally. It is an obstacle only if the mowing zone actually
-  // contains it; a lethal that is also keepout/out-of-zone is something the
-  // planned path already stays clear of.
-  return !zone_mask.isLethalAt(x, y);
+  // Lethal in the LOCAL costmap is an obstacle, full stop. Anything below the
+  // threshold is free space or inflation gradient and never is.
+  //
+  // This used to subtract the global keepout costmap ("lethal, but the map
+  // already knows about it, so the path must be planned around it"). That
+  // erased every DRAWN obstacle from FTC's view — keepout_filter stamps them
+  // lethal globally — and on 2026-09-16 the robot drove into the same mapped
+  // tree twice while its trunk sat lethal in the local costmap. A plan that
+  // routes around an obstacle is not a guarantee that the robot is on that
+  // plan; the local costmap is the only thing that reports where the body
+  // actually is relative to the object.
+  return local_cost >= threshold;
 }
 
 bool ObstacleDeviation::footprintBlocked(const nav2_costmap_2d::Costmap2D& costmap,
@@ -192,8 +189,7 @@ bool ObstacleDeviation::footprintBlocked(const nav2_costmap_2d::Costmap2D& costm
                                          double center_dev,
                                          const Footprint& footprint,
                                          const BoundaryGuard& guard,
-                                         unsigned char threshold,
-                                         const BoundaryGuard& zone_mask)
+                                         unsigned char threshold)
 {
   if (footprint.size() < 3)
   {
@@ -248,8 +244,7 @@ bool ObstacleDeviation::footprintBlocked(const nav2_costmap_2d::Costmap2D& costm
       double cx = 0.0;
       double cy = 0.0;
       costmap.mapToWorld(static_cast<unsigned int>(mx), static_cast<unsigned int>(my), cx, cy);
-      if (pointInPolygon(world_poly, cx, cy) &&
-          cellBlocked(costmap, cx, cy, guard, threshold, zone_mask))
+      if (pointInPolygon(world_poly, cx, cy) && cellBlocked(costmap, cx, cy, guard, threshold))
       {
         return true;
       }
@@ -321,8 +316,7 @@ bool ObstacleDeviation::hasClearExit(const nav2_costmap_2d::Costmap2D& costmap,
                                      std::size_t start_idx,
                                      int lookahead_count,
                                      double half_width,
-                                     const Footprint& footprint,
-                                     const BoundaryGuard& zone_mask)
+                                     const Footprint& footprint)
 {
   if (lookahead_count <= 0 || path.empty())
   {
@@ -333,10 +327,9 @@ bool ObstacleDeviation::hasClearExit(const nav2_costmap_2d::Costmap2D& costmap,
   bool obstacle_seen = false;
   for (std::size_t i = start_idx; i < end_idx; ++i)
   {
-    // Nominal (zero-deviation) body sample — no zone guard (see doc comment),
-    // but zone-MASKED so an out-of-zone lethal is not "an obstacle".
+    // Nominal (zero-deviation) body sample — no zone guard (see doc comment).
     const bool blocked =
-        regionBlocked(costmap, path[i], 0.0, half_width, footprint, BoundaryGuard{}, zone_mask);
+        regionBlocked(costmap, path[i], 0.0, half_width, footprint, BoundaryGuard{});
     if (blocked)
     {
       obstacle_seen = true;
@@ -358,8 +351,7 @@ int ObstacleDeviation::findFirstObstacleIndex(
     std::size_t start_idx,
     int lookahead_count,
     double half_width,
-    const Footprint& footprint,
-    const BoundaryGuard& zone_mask)
+    const Footprint& footprint)
 {
   if (lookahead_count <= 0 || path.empty())
   {
@@ -369,11 +361,11 @@ int ObstacleDeviation::findFirstObstacleIndex(
       std::min(path.size(), start_idx + static_cast<std::size_t>(lookahead_count));
   for (std::size_t i = start_idx; i < end_idx; ++i)
   {
-    // Detection scans the NOMINAL path body (no zone guard — the guard only
-    // rejects skirting OUT of zone, which is meaningless for "is there an
-    // obstacle ahead"). The zone MASK is the other direction: an out-of-zone
-    // lethal is not an obstacle to detect (issue #517).
-    if (regionBlocked(costmap, path[i], 0.0, half_width, footprint, BoundaryGuard{}, zone_mask))
+    // Detection scans the NOMINAL path body against the LOCAL costmap only (no
+    // zone guard — the guard only rejects skirting OUT of zone, which is
+    // meaningless for "is there an obstacle ahead", and the outermost coverage
+    // pass rides ON the recorded line with the body overhanging it).
+    if (regionBlocked(costmap, path[i], 0.0, half_width, footprint, BoundaryGuard{}))
     {
       return static_cast<int>(i);
     }
@@ -423,8 +415,7 @@ bool ObstacleDeviation::isPathClearWithDeviation(
     double deviation,
     const BoundaryGuard& guard,
     double half_width,
-    const Footprint& footprint,
-    const BoundaryGuard& zone_mask)
+    const Footprint& footprint)
 {
   if (lookahead_count <= 0 || path.empty())
   {
@@ -436,7 +427,7 @@ bool ObstacleDeviation::isPathClearWithDeviation(
   {
     // Body must clear at the offset `deviation` — sample the full footprint (or
     // the ±half_width span), not just the offset centerline.
-    if (regionBlocked(costmap, path[i], deviation, half_width, footprint, guard, zone_mask))
+    if (regionBlocked(costmap, path[i], deviation, half_width, footprint, guard))
     {
       return false;
     }

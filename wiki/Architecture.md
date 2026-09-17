@@ -1099,7 +1099,6 @@ FollowCoveragePath:                         # coverage
   obstacle_footprint: true
   use_footprint_clearance: false            # field: full-footprint sweep too conservative
   require_clear_exit: true                  # cul-de-sac guard — do not skirt a wall
-  ignore_obstacles_outside_zone: true
   enable_obstacle_deviation: true
   max_lateral_deviation: 1.5                # overridden from max_obstacle_avoidance_distance
   obstacle_wait_timeout_s: 2.5
