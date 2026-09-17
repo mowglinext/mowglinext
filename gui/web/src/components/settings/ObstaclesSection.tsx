@@ -20,8 +20,8 @@ type Props = {
  *     obstacles (trunks, legs, walls),
  *   - max_obstacle_avoidance_distance: max lateral detour for coverage
  *     skirting + bypass give-up threshold (one knob, two consumers),
- *   - obstacle_margin: extra margin grown around DRAWN map obstacles in both
- *     coverage and transit planning (root zones the 2D LiDAR cannot see),
+ *   - obstacle_margin: coverage-plan clearance around DRAWN map obstacles (the
+ *     transit keepout band is derived from the chassis and follows it up),
  *   - obstacle_slowdown_ratio: collision_monitor approach slowdown factor.
  * All keys live in mowgli_robot.yaml (sparse over template) and are injected
  * into map server/Nav2/coverage params at launch — changes need a ROS2 restart.

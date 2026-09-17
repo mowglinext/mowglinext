@@ -411,8 +411,10 @@ private:
   static constexpr double kDetourMaxSearchM = 8.0;
   // OccupancyGrid cost at/above which a cell is lethal for the clearance test.
   // MUST be 100 (TRUE lethal only): the published /global_costmap/costmap maps
-  // LETHAL(254)->100 and INSCRIBED(253)->99, and the inscribed band extends
-  // inflation_radius (0.20 m) from every keepout wall BY DESIGN. The outer
+  // LETHAL(254)->100 and INSCRIBED(253)->99. (Historical: until 2026-09-17 the
+  // keepout wall was inflated and its inscribed band reached ~0.20 m inward;
+  // the global costmap now inflates BEFORE keepout_filter, so only LiDAR marks
+  // carry a 99 band. The threshold stays at TRUE lethal either way.) The outer
   // headland ring rides ON the recorded line (chassis_safety_inset 0), i.e.
   // permanently within 0.20 m of the boundary band — a 90 threshold counted
   // those 99-cells as lethal, so EVERY outer-ring abort was "obstacle

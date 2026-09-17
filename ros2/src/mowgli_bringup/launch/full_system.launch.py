@@ -55,6 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
     chassis_circumscribed_radius,
+    keepout_obstacle_margin,
     load_robot_params,
     resolve_lidar_enabled,
     warn_lidar_key_absent,
@@ -212,20 +213,22 @@ def generate_launch_description() -> LaunchDescription:
     # onboarding presets set per mower model (widths 0.39 m to 0.535 m).
     #
     # TRADE-OFF, watch it in the field: this band is also the region Smac will
-    # accept to plan THROUGH outside the recorded perimeter (the cells are
-    # mid-cost, not free, and keepout_filter is listed before inflation_layer so
-    # the lethal wall is still inflated inward) — the narrow value existed to
-    # fix a 0.32 m concave-boundary excursion. It also now exceeds
-    # map_server's lethal_boundary_margin_m (0.5 m), so the planner wall no
-    # longer engages strictly before that e-stop tripwire.
+    # accept to plan THROUGH outside the recorded perimeter. The cells are
+    # mid-cost (kSoftPenaltyMaskCost), not free, so A* only uses them when the
+    # inside is worse — but the global costmap lists inflation_layer BEFORE
+    # keepout_filter, so the lethal wall is NOT inflated inward any more and the
+    # whole band, right up to the wall, is plannable for Smac's point check.
+    # The narrow value existed to fix a 0.32 m concave-boundary excursion. The
+    # band also exceeds map_server's lethal_boundary_margin_m (0.5 m), so the
+    # planner wall no longer engages strictly before that e-stop tripwire.
     #
-    # NOT a complete fix for FTC's row-end wedge: FTC's confine_deviation_to_zone
-    # guard reads the GLOBAL costmap at >= inscribed, and with keepout_filter
-    # ahead of inflation_layer that wall is inflated 0.20 m INWARD, so the
-    # guard-lethal set still starts at (margin - inflation_radius) outside the
-    # line — 0.40 m here, short of the 0.53 m forward reach. The global
-    # obstacle_layer's own LiDAR marks (a hedge past the line) are lethal to
-    # that guard regardless of this band.
+    # FTC's confine_deviation_to_zone guard reads the same GLOBAL costmap at
+    # >= inscribed and samples the full footprint against it. With the wall
+    # un-inflated the guard-lethal set starts at the full band width (0.597 m
+    # shipped) outside the line, which now covers the 0.53 m forward reach at a
+    # row end — the old order inflated it 0.20 m inward and left 0.40 m, short
+    # of it. The global obstacle_layer's own LiDAR marks (a hedge past the line)
+    # ARE still inflated and stay lethal to that guard regardless of this band.
     boundary_margin_floor = chassis_circumscribed_radius(robot_params)
     enforce_boundary_margin_m = float(
         robot_params.get("enforce_boundary_margin_m", 0.40))
@@ -239,6 +242,8 @@ def generate_launch_description() -> LaunchDescription:
             "cells."
         )
         enforce_boundary_margin_m = boundary_margin_floor
+
+    keepout_obstacle_margin_m = keepout_obstacle_margin(robot_params)
 
     # ------------------------------------------------------------------
     # 1. mowgli.launch.py — hardware bridge, RSP, twist_mux
@@ -477,12 +482,16 @@ def generate_launch_description() -> LaunchDescription:
             # remain owned by hardware_bridge regardless of this map setting.
             {"dig_obstacle_enabled": bool(
                 robot_params.get("dig_obstacle_enabled", True))},
-            # Extra LETHAL margin grown around drawn obstacle polygons in the
-            # keepout mask — mirrors coverage_server.obstacle_margin (injected
-            # by navigation.launch.py) so the transit planner and the swath
-            # planner keep the same distance from a drawn tree/root zone.
-            {"obstacle_margin": min(1.0, max(0.0, float(
-                robot_params.get("obstacle_margin", 0.15))))},
+            # LETHAL band grown around drawn obstacle polygons in the keepout
+            # mask. DERIVED (robot_config_util.keepout_obstacle_margin), and
+            # deliberately NOT coverage_server.obstacle_margin any more: the
+            # mask's consumer is Smac 2D, a POINT check with no body model, and
+            # the global costmap lists inflation_layer BEFORE keepout_filter so
+            # the mask is not inflated. The band is therefore the WHOLE body
+            # half-width, counted once — and it follows an operator-RAISED
+            # obstacle_margin, always one rasterisation slack inside the
+            # coverage line so a robot on that line stays plannable.
+            {"keepout_obstacle_margin": keepout_obstacle_margin_m},
             # Hard area-boundary enforcement (operator intent: "lethal area
             # where there is no navigation or mowing area"). When true (default)
             # the keepout mask marks every cell outside the union of all areas

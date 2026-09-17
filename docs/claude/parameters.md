@@ -279,7 +279,8 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `obstacle_reverse_enabled` (L651) | `true` | `FTC.obstacle_reverse_enabled` L844 | no | dynamic (FTC param callback, `ftc_controller.cpp:260`) |
 | `obstacle_reverse_max_dist_m` (L654) | 0.30 | clamp(0.0, 1.0) L845 | no | dynamic |
 | `obstacle_reverse_speed_mps` (L657) | 0.15 | clamp(0.0, 0.30) L847 | no | dynamic |
-| `obstacle_margin` (L665) | 0.2 | `coverage_server.obstacle_margin` = clamp(0.0, 1.0) L940 **and** `map_server.obstacle_margin` `full_system.launch.py:405` (planner + keepout stay consistent) | Obstacles | launch |
+| `obstacle_margin` | 0.389 (= the derived floor on the shipped chassis, pinned by `test_nav2_params.py`) | `coverage_server.obstacle_margin` = `robot_config_util.planning_obstacle_margin` — clamp [floor, 1.0], floor = max(`chassis_half_width` + clamped `obstacle_clearance_margin` + `FTC_TRACKING_SLACK_M` 0.05, `chassis_half_width` + global-cell diagonal) rounded up to the mm. **NOT** sent to map_server any more | Obstacles | launch |
+| *(derived, no key)* `map_server.keepout_obstacle_margin` | 0.276 shipped | `robot_config_util.keepout_obstacle_margin` = max(`chassis_half_width`, planned `obstacle_margin` − global-cell diagonal), injected by `full_system.launch.py`. The WHOLE body for Smac 2D (point check, mask not inflated); follows an operator-raised `obstacle_margin` | — | launch |
 | `obstacle_slowdown_ratio` (L669) | 0.7 | `collision_monitor.PolygonSlow.slowdown_ratio` = clamp(0.05, 1.0) L866 — **only written when the merged doc has `PolygonSlow`**, i.e. the LiDAR variant | Obstacles | launch |
 
 ### Nav2 goal tolerances / progress (`navigation.launch.py:870–912`)
@@ -406,7 +407,7 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 
 | Difference | LiDAR overlay | No-LiDAR overlay |
 |---|---|---|
-| Global costmap `plugins` | `[obstacle_layer, keepout_filter, inflation_layer]` (L18) | `[static_layer, keepout_filter, inflation_layer]` (L33) fed by `/no_lidar_static_map` |
+| Global costmap `plugins` | `[obstacle_layer, inflation_layer, keepout_filter]` | `[static_layer, inflation_layer, keepout_filter]` fed by `/no_lidar_static_map`. **Inflation BEFORE keepout in both** — the keepout mask already carries the body and must not be inflated (pinned by `test_global_costmap_inflates_before_the_keepout_filter`) |
 | Local costmap `plugins` | `[obstacle_layer, inflation_layer]` (L75) | `[static_layer, inflation_layer]` (L46) |
 | `FollowPath.primary_controller.use_collision_detection` | `true` (L13) | `false` (L11) |
 | `FollowCoveragePath` obstacle flags | from base (`check_obstacles: true`, `enable_obstacle_deviation: true`) | `check_obstacles: false`, `enable_obstacle_deviation: false` (L20–21) |

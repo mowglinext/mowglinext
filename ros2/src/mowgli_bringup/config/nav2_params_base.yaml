@@ -873,8 +873,9 @@ global_costmap:
       # FREE (0), area obstacle holes are LETHAL. The operator draws navigation
       # areas as the transit/dock corridors, so the dock + approach fall inside
       # an allowed (free) region; the dock corridor is also explicitly carved
-      # back to free in map_server. enforce_boundary_margin_m (default 0.40 m)
-      # leaves a small free slack outside each edge for RTK drift; disable the
+      # back to free in map_server. enforce_boundary_margin_m (floored at launch
+      # at the chassis circumscribed radius, 0.597 m shipped) leaves a mid-cost,
+      # non-lethal band outside each edge for the body to overhang; disable the
       # whole hard boundary via map_server lethal_outside_areas:=false if a
       # site has no navigation area over the dock (legacy wide keepout_nav_margin
       # free band). The standalone /boundary_violation topic remains as a
@@ -882,27 +883,50 @@ global_costmap:
       # filter-free (see local_costmap below) so coverage swaths near the edge
       # don't trip MPPI/RPP "collision ahead" and Nav2 local recoveries (spin,
       # backup) still function near edges.
-      # inflation_layer is listed AFTER keepout so keepout lethals are inflated
-      # by inflation_radius (0.20 m) only — wall 0.40 m outside the centre line
-      # → the inflated band ends 0.20 m OUTSIDE it, so a robot riding the
-      # outer headland ring (centerline ON the recorded line) keeps its centre
-      # cell clear of the inscribed-cost band and Smac transits no longer
-      # sporadically fail "Start occupied" at the boundary.
+      # PLUGIN ORDER (set in the lidar / no-lidar overlays): inflation_layer is
+      # listed BEFORE keepout_filter, so the keepout mask is stamped onto an
+      # already-inflated master grid and is NOT inflated itself. Only real
+      # sensor marks (obstacle_layer) get the inflation band.
+      #
+      # Why: SmacPlanner2D is a POINT check — a pose collides when its centre
+      # cell cost is >= INSCRIBED. It never tests the footprint polygon, so its
+      # ONLY body model is whatever was grown around a lethal cell beforehand.
+      # map_server already grows the body into the mask, once and explicitly:
+      #   * drawn obstacles: + keepout_obstacle_margin = chassis_half_width
+      #     (robot_config_util.keepout_obstacle_margin, injected by
+      #     full_system.launch.py);
+      #   * recorded boundary: the lethal wall starts enforce_boundary_margin_m
+      #     (floored at the chassis circumscribed radius) OUTSIDE the line.
+      # Inflating the mask on top counted the body a second time. With the old
+      # order (keepout, then inflation) a robot ON its coverage line next to a
+      # drawn obstacle sat inside the inscribed band: detour transits timed out
+      # (37 s, "nav2 UNKNOWN (code 0)", a whole first headland skipped) and
+      # transits answered START_OCCUPIED. Field 2026-09-17, this order
+      # hand-applied on the robot: a 17-minute mow with zero START_OCCUPIED and
+      # zero boundary emergency stops.
+      #
+      # The coverage line is planned >= chassis_half_width + the mask->costmap
+      # rasterisation slack from a drawn obstacle (planning_obstacle_margin in
+      # navigation.launch.py), so "on the line" is plannable by construction.
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
-        # 0.20 m (was 0.40). With keepout_nav_margin=0.3 m and robot
-        # footprint ±0.20 m lateral, 0.40 m inflation made the footprint
-        # corners land inside the inflated zone whenever the robot was
-        # within ~0.44 m of the polygon edge — Smac reported "Start
-        # 0.20 m (reverted from 0.30): with a 9×6 m polygon and
-        # auto-promoted obstacles in the middle, 0.30 m inflation
-        # blocked all transit paths between cells — robot got stuck
-        # in TRANSIT for 9+ min unable to reach any headland start.
-        # Smac's "Inflation layer ... not set sufficiently" warning
-        # is performance, not correctness — planner falls back to
-        # per-footprint checking. collision_monitor PolygonStop
-        # remains the runtime safety guard.
+        # Applies to obstacle_layer (LiDAR) marks ONLY — see the order note
+        # above. The band Smac refuses (cost >= INSCRIBED) is
+        # min(inscribed radius of the footprint, inflation_radius), NOT the
+        # whole inflation_radius: beyond the inscribed radius the cost decays
+        # below 253 and is only a traversal penalty.
+        #
+        # 0.20 m (was 0.40, then 0.30). History, all from when the keepout was
+        # still inflated: 0.40 m put a robot within ~0.44 m of the polygon
+        # edge inside the inflated zone (Smac "Start occupied"); 0.30 m, with
+        # a 9x6 m polygon and auto-promoted obstacles in the middle, blocked
+        # every transit between cells (9+ min stuck in TRANSIT).
+        # Smac's "Inflation layer ... not set sufficiently" warning is about
+        # its heuristic, not correctness. It does NOT fall back to a
+        # per-footprint check: SmacPlanner2D has no footprint check at all
+        # (that exists only in the Hybrid-A*/Lattice planners). The runtime
+        # body guard is collision_monitor's PolygonStop, not the planner.
         inflation_radius: 0.20
 
       keepout_filter:

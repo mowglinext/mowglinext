@@ -729,8 +729,8 @@
         "obstacle_margin": {
           "type": "number",
           "title": "Drawn Obstacle Margin",
-          "default": 0.275,
-          "description": "Margin (m) grown around obstacles drawn on the map, applied to both coverage and transit planning. This is the ONLY obstacle clearance the coverage plan has, so it is floored at the body half-width (chassis_width / 2 + costmap margin) — lower values are raised at launch. Raise it to cover what the drawn polygon does not: a tree's root flare and low branches are invisible to the 2D LiDAR."
+          "default": 0.389,
+          "description": "How far (m) the coverage plan keeps its centreline from obstacles drawn on the map. It is the ONLY obstacle clearance the coverage plan has, so it is floored at launch at a value derived from the chassis: the larger of body half-width + obstacle clearance margin + tracking slack (what the coverage controller demands of its own line) and body half-width + one costmap cell diagonal (so the robot stays plannable on its line). Lower values are raised. The transit keepout band is derived separately (body half-width) and follows this value when you raise it. Raise it to cover what the drawn polygon does not: a tree's root flare and low branches are invisible to the 2D LiDAR."
         },
         "obstacle_slowdown_ratio": {
           "type": "number",

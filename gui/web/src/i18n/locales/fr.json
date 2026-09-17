@@ -2524,7 +2524,7 @@
     "maxDetourDistance": "Distance max de détour",
     "maxDetourDistanceTooltip": "Détour latéral maximal autour d'un obstacle avant d'abandonner — pilote l'évitement en tonte et le seuil d'abandon du contournement",
     "drawnObstacleMargin": "Marge des obstacles dessinés",
-    "drawnObstacleMarginTooltip": "Marge supplémentaire autour des obstacles dessinés sur la carte, appliquée à la tonte et aux transits. À utiliser pour les zones de racines invisibles au LiDAR.",
+    "drawnObstacleMarginTooltip": "Distance que le plan de tonte garde avec les obstacles dessinés sur la carte. Un plancher dérivé du châssis est appliqué au lancement ; la bande interdite des transits est dérivée séparément et suit cette valeur quand vous l'augmentez. À augmenter pour les zones de racines invisibles au LiDAR.",
     "clearanceMargin": "Marge de dégagement",
     "clearanceMarginTooltip": "Espace latéral laissé au-delà du châssis lors du contournement d'un obstacle pendant la tonte. Augmentez si le robot contourne les obstacles en les frôlant. Le rayon d'inflation ne fait PAS cela.",
     "detectionRange": "Portée de détection",

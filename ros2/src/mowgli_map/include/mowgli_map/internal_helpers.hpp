@@ -52,8 +52,10 @@ constexpr double kDefaultDigKeepoutSizeM = 0.60;
 constexpr double kMinDigKeepoutSizeM = 0.05;
 
 /// How far BEHIND the dig point (against the robot's heading) the LETHAL
-/// band of the dig keepout may reach [m] - polygon plus the obstacle_margin
-/// the mask paints around every obstacle polygon. The hole is under the
+/// band of the dig keepout may reach [m] - polygon plus the
+/// keepout_obstacle_margin band the mask paints around every obstacle polygon
+/// (NOT inflated downstream: inflation_layer runs before keepout_filter, so
+/// this band is the whole lethal region Smac sees). The hole is under the
 /// wheels, i.e. at the dig point itself, and the bridge reverses the robot
 /// out of it by dig_reverse_dist (0.30 m commanded, ~0.20 m real on a
 /// slipping tyre - 2026-09-10 bag). A square centred on the dig plus the
@@ -70,7 +72,7 @@ constexpr double kDigKeepoutBehindM = 0.10;
 /// With a known heading: a rectangle `size` wide (lateral, centred on the dig
 /// point) spanning `size` ahead of the dig point along the heading, and whose
 /// rear edge is placed so that polygon + `lethal_margin` (the mask's
-/// obstacle_margin band) reaches exactly kDigKeepoutBehindM behind the dig
+/// keepout_obstacle_margin band) reaches exactly kDigKeepoutBehindM behind the dig
 /// point, whatever the configured margin. Without a heading (no TF yet): the
 /// legacy square of side `size` centred on the dig point, the only
 /// orientation-free choice.

@@ -139,6 +139,132 @@ def chassis_circumscribed_radius(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     return math.hypot(max(abs(front), abs(rear)), half_width)
 
 
+# --- Obstacle margins: count the body EXACTLY ONCE per consumer --------------
+#
+# A drawn map obstacle is kept away from by three consumers, and each one has
+# its OWN body model. Growing the obstacle by "the body" for a consumer that
+# already models the body counts it twice; that is what made the robot
+# un-plannable on its own coverage line (37 s transit timeouts, a whole first
+# headland skipped, START_OCCUPIED next to drawn obstacles, 2026-09-16/17).
+#
+#   consumer                     its body model             so the obstacle grows by
+#   ---------------------------  -------------------------  --------------------------
+#   Smac 2D (transit planner)    NONE. Point check: the     keepout_obstacle_margin()
+#                                centre cell >= INSCRIBED.  = the WHOLE half-width,
+#                                The global plugin order    painted into the keepout
+#                                is [.., inflation_layer,   mask by map_server, and
+#                                keepout_filter], so the    NOT inflated on top.
+#                                keepout mask is NOT
+#                                inflated.
+#   coverage_server (F2C)        NONE. It plans a           planning_obstacle_margin()
+#                                CENTRELINE.                (the two demands below).
+#   FTC (coverage controller)    the footprint polygon,     nothing: it reads the raw
+#                                expanded laterally by      LOCAL-costmap lethal cells.
+#                                obstacle_clearance_margin.
+#
+# Both margins are DERIVED from the live chassis (operator-editable in the GUI);
+# a literal copy is exactly what went stale on 2026-09-16.
+
+# How far FTC is allowed to wander off its line in steady state. Field
+# 2026-09-16: FTC tracks the coverage path to +/-0.02 m; 0.05 m leaves margin
+# for a transient without FTC's own clearance model tripping on the plan.
+FTC_TRACKING_SLACK_M = 0.05
+
+# FTC clamps obstacle_clearance_margin to this band (navigation.launch.py
+# injects the clamped value); the planning floor must use the SAME number FTC
+# will actually run with.
+FTC_CLEARANCE_MARGIN_MIN_M = 0.0
+FTC_CLEARANCE_MARGIN_MAX_M = 0.50
+DEFAULT_FTC_CLEARANCE_MARGIN_M = 0.05
+
+# global_costmap.resolution in nav2_params_base.yaml. Single-sourced here
+# because full_system.launch.py (map_server) does not load the Nav2 params;
+# test_nav2_params.py pins the yaml equal to this so the two cannot drift.
+GLOBAL_COSTMAP_RESOLUTION_M = 0.08
+
+# Both obstacle margins are clamped to this by their consumers
+# (coverage_server and map_server re-clamp to the same band).
+OBSTACLE_MARGIN_MAX_M = 1.0
+
+
+def ftc_obstacle_clearance_margin(params):
+    """obstacle_clearance_margin as FTC will actually run it (clamped)."""
+    requested = float((params or {}).get(
+        "obstacle_clearance_margin", DEFAULT_FTC_CLEARANCE_MARGIN_M))
+    return min(FTC_CLEARANCE_MARGIN_MAX_M,
+               max(FTC_CLEARANCE_MARGIN_MIN_M, requested))
+
+
+def keepout_raster_slack(global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
+    """Worst-case distance the keepout band gains when Smac reads it.
+
+    map_server marks a MASK cell lethal when its centre is within the margin;
+    KeepoutFilter copies the mask cell under each GLOBAL cell centre; Smac then
+    tests the global cell the robot's centre falls in. The robot can therefore
+    be blocked up to half a global-cell diagonal + half a mask-cell diagonal
+    beyond the nominal band. One full global-cell diagonal bounds that for any
+    mask no coarser than the global costmap (mask 0.05 m, global 0.08 m).
+    """
+    return float(global_resolution) * math.sqrt(2.0)
+
+
+def planning_obstacle_margin_floor(
+        params, global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
+    """Least distance coverage may plan its CENTRELINE from a drawn obstacle.
+
+    The max of two derived demands:
+      * the controller: FTC demands footprint half-width +
+        obstacle_clearance_margin between its line and any lethal cell, and it
+        tracks to within FTC_TRACKING_SLACK_M. A plan closer than that makes
+        FTC fight its own plan along every obstacle (field: WEDGED bursts of 70
+        and 160 per minute exactly along obstacles, zero elsewhere).
+      * transit plannability: a robot standing ON its coverage line must not
+        read as START_OCCUPIED, so the line must clear the keepout band's base
+        (the body half-width — the keepout is not inflated) by the
+        rasterisation slack.
+    """
+    half_width = chassis_half_width(params)
+    controller_demand = (
+        half_width + ftc_obstacle_clearance_margin(params) + FTC_TRACKING_SLACK_M)
+    transit_demand = half_width + keepout_raster_slack(global_resolution)
+    # Rounded UP to the millimetre so the template / GUI-schema default can be
+    # written exactly (the transit demand carries a sqrt(2)); the 1e-9 guards
+    # a value that is already a whole millimetre against float noise.
+    floor = max(controller_demand, transit_demand)
+    return math.ceil(floor * 1000.0 - 1e-9) / 1000.0
+
+
+def planning_obstacle_margin(
+        params, global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
+    """coverage_server.obstacle_margin: the operator's value, floored + clamped.
+
+    An operator may ask for MORE room around obstacles, never less than the
+    floor.
+    """
+    floor = planning_obstacle_margin_floor(params, global_resolution)
+    requested = float((params or {}).get("obstacle_margin", floor))
+    return min(OBSTACLE_MARGIN_MAX_M, max(floor, requested))
+
+
+def keepout_obstacle_margin(
+        params, global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
+    """map_server.keepout_obstacle_margin: lethal band around drawn obstacles.
+
+    Base = chassis_half_width: the WHOLE body for Smac 2D, which models none of
+    it and (with inflation_layer ahead of keepout_filter) gets no inflation on
+    top of the mask. Counted once.
+
+    When the operator RAISES obstacle_margin (a root zone the LiDAR cannot see)
+    the keepout follows it, so transits keep off the same ground — but always
+    one rasterisation slack inside the coverage line, so a robot on that line
+    stays plannable by construction.
+    """
+    half_width = chassis_half_width(params)
+    follow = (planning_obstacle_margin(params, global_resolution)
+              - keepout_raster_slack(global_resolution))
+    return min(OBSTACLE_MARGIN_MAX_M, max(0.0, half_width, follow))
+
+
 
 def deep_merge(base, override):
     """Recursively merge ``override`` into a copy of ``base`` (override wins).

@@ -676,9 +676,9 @@ private:
   /// keepout_nav_margin_ regression that let transit detours drift outside.
   /// Only kSoftPenaltyMaskCost (mid-cost, never free) keeps the planner off
   /// it; watch /boundary_violation in the field.
-  /// Inflation of the lethal boundary is also bounded by listing
-  /// keepout_filter BEFORE inflation_layer in the costmap plugins so the wall
-  /// is not inflated inward (see nav2_params_*.yaml).
+  /// The lethal boundary is NOT inflated: the global costmap lists
+  /// inflation_layer BEFORE keepout_filter (see nav2_params_*.yaml), because
+  /// this band already is the body's room.
   double enforce_boundary_margin_m_{0.40};
   /// Distance past the nearest allowed-area edge at which a boundary
   /// violation is classified as "lethal" (emergency stop) rather than
@@ -754,12 +754,19 @@ private:
   /// has been set).
   double dock_inner_margin_exempt_radius_m_{2.5};
 
-  /// Extra LETHAL margin grown around drawn obstacle polygons in the keepout
-  /// mask (mowgli_robot.yaml.obstacle_margin, GUI: Settings → Obstacles).
-  /// Mirrors coverage_server.obstacle_margin — the coverage planner buffers
-  /// its F2C holes by the same value — so transit and swath planning keep an
-  /// identical distance from a drawn tree/root zone. 0 = polygon edge only.
-  double obstacle_margin_m_{0.0};
+  /// LETHAL band grown around drawn / dig / promoted obstacle polygons in the
+  /// keepout mask (parameter keepout_obstacle_margin). It is the WHOLE body
+  /// model of the mask's consumer: SmacPlanner2D is a point check, and the
+  /// global costmap lists inflation_layer BEFORE keepout_filter so the mask is
+  /// not inflated on top. full_system.launch.py injects
+  /// robot_config_util.keepout_obstacle_margin = the footprint half-width,
+  /// raised to follow an operator-raised obstacle_margin.
+  ///
+  /// NOT coverage_server.obstacle_margin: that one offsets a CENTRELINE and
+  /// also carries FTC's clearance + tracking slack, so it is deliberately
+  /// larger — a robot on its coverage line must stay outside this band or
+  /// every transit from there is START_OCCUPIED. 0 = polygon edge only.
+  double keepout_obstacle_margin_m_{0.0};
 
   /// How far inside the polygon strip endpoints must sit. Applied when the
   /// coverage planner generates strips: the axis-aligned bounding-box

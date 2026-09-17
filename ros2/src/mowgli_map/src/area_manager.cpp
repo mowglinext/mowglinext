@@ -1207,12 +1207,12 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
   // under the wheels and the bridge has just reversed the robot ~0.2-0.3 m out
   // of it, so the keepout must not reach back over the spot the robot now
   // stands on or every transit from there is START_OCCUPIED
-  // (kDigKeepoutBehindM, net of the mask's obstacle_margin band). The heading is the last one
-  // latched by on_odom; a dig with no heading yet falls back to the centred square.
+  // (kDigKeepoutBehindM, net of the mask's keepout_obstacle_margin band). The heading is the last
+  // one latched by on_odom; a dig with no heading yet falls back to the centred square.
   const bool have_heading = have_robot_heading_;
   const double yaw = last_robot_yaw_;
   const geometry_msgs::msg::Polygon poly =
-      dig_keepout_polygon(x, y, yaw, have_heading, dig_obstacle_size_, obstacle_margin_m_);
+      dig_keepout_polygon(x, y, yaw, have_heading, dig_obstacle_size_, keepout_obstacle_margin_m_);
 
   // The name IS the proposal's evidence: it is what the operator reads in the
   // GUI when deciding whether this inferred dig deserves a permanent hole in
