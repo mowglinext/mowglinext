@@ -85,9 +85,11 @@ from robot_config_util import (
     TRUE_TOKENS,
     check_turn_geometry,
     deep_merge,
+    ftc_obstacle_clearance_margin,
     derive_blade_load_params,
     derive_turn_speed,
     load_robot_params,
+    planning_obstacle_margin,
     resolve_lidar_enabled,
     warn_lidar_key_absent,
 )
@@ -537,7 +539,9 @@ def generate_launch_description() -> LaunchDescription:
     obstacle_reverse_enabled = False
     obstacle_reverse_max_dist_m = 0.30
     obstacle_reverse_speed_mps = 0.10
-    obstacle_margin = 0.15
+    # 0.0 = "no operator request": the closure floors it at the DERIVED
+    # planning_obstacle_margin_floor, so no literal copy of that number lives here.
+    obstacle_margin = 0.0
     obstacle_slowdown_ratio = 0.5
     enable_mag_cal = False
     mag_cal_path = "/ros2_ws/maps/mag_calibration.yaml"
@@ -893,8 +897,11 @@ def generate_launch_description() -> LaunchDescription:
         # obstacle_body_half_width. Capped at 0.50: beyond that the widened
         # sweep starts colliding with the zone guard on headland rings that
         # hug the boundary, turning avoidance into "deviation > max" holds.
-        fcp["obstacle_clearance_margin"] = min(
-            0.50, max(0.0, obstacle_clearance_margin))
+        # The clamp lives in robot_config_util so the coverage planning floor
+        # below is computed from the SAME value FTC runs with.
+        clamped_clearance_margin = ftc_obstacle_clearance_margin(
+            {"obstacle_clearance_margin": obstacle_clearance_margin})
+        fcp["obstacle_clearance_margin"] = clamped_clearance_margin
         # obstacle_wait_timeout_s: how long FTC holds zero velocity on a
         # blocked/over-max deviation before aborting the strip. Previously
         # present in the GUI param catalog but never injected here, so the
@@ -1059,42 +1066,50 @@ def generate_launch_description() -> LaunchDescription:
         cov_params["connector_max_headland_passes"] = connector_max_headland_passes
         cov_params["chassis_safety_inset"] = chassis_safety_inset
         # Extra buffer grown around drawn map-obstacle polygons (holes) before
-        # swath planning — keeps the robot off root zones the 2D LiDAR cannot
-        # see. map_server applies the SAME key to its keepout mask
-        # (full_system.launch.py) so planner and keepout stay consistent.
-        # FLOORED at the body half-width, DERIVED from the live chassis
-        # (chassis_half_width == chassis_width/2 + costmap margin — the exact
-        # half-width the Nav2 footprint, collision_monitor and FTC's footprint
-        # clearance all measure against).
+        # swath planning: how far the coverage CENTRELINE stays from a drawn
+        # obstacle. F2C has no body model, so this carries the whole body — and
+        # it is the ONLY obstacle clearance once chassis_safety_inset is 0 (the
+        # planning field is expanded OUTWARD and expandCellOutward leaves the
+        # holes untouched).
         #
-        # This is the ONLY obstacle clearance once chassis_safety_inset is 0:
-        # with the outermost ring on the recorded line the planning field is
-        # expanded OUTWARD, and expandCellOutward preserves the holes untouched,
-        # so the field offset contributes nothing to them. A margin below the
-        # body half-width would then plan a centreline the chassis cannot follow
-        # without touching the obstacle — a plan in collision before a single
-        # millimetre of tracking error.
+        # FLOORED, by robot_config_util.planning_obstacle_margin_floor, at the
+        # MAX of two DERIVED demands (nothing here is a literal — the chassis is
+        # GUI-editable and a literal is what went stale on 2026-09-16):
+        #   * controller: chassis_half_width + FTC's clamped
+        #     obstacle_clearance_margin + FTC_TRACKING_SLACK_M. FTC's footprint
+        #     clearance model refuses a line closer than half-width + clearance
+        #     to a lethal cell; a plan at the bare half-width made FTC fight its
+        #     own plan along every obstacle (WEDGED bursts of 70 and 160 / min).
+        #   * transit plannability: chassis_half_width (= the un-inflated
+        #     keepout band map_server paints, keepout_obstacle_margin) + the
+        #     mask->global-costmap rasterisation slack, so a robot standing ON
+        #     its coverage line is never START_OCCUPIED for Smac.
+        # map_server does NOT get this value any more: its keepout band is
+        # keepout_obstacle_margin (full_system.launch.py). One shared number for
+        # a centreline planner and a mask read by a point-check planner is what
+        # counted the body twice.
         #
-        # An operator may ask for MORE room around obstacles; never less. Same
-        # shape as the obstacle_inflation_radius floor below, and derived for the
-        # same reason: the chassis is editable in the GUI, so a literal goes
-        # stale silently (that is how `cw = 0.40` survived a 0.45 m chassis).
-        # NOTE: `effective_margin` is a NEW local on purpose. Assigning to
-        # `obstacle_margin` here would make it local to this closure, and the
-        # read above it would raise UnboundLocalError — which is exactly what
-        # crash-looped the stack on the robot before this was caught.
-        margin_floor = chassis_half_width(rp)
-        effective_margin = obstacle_margin
-        if effective_margin < margin_floor:
+        # An operator may ask for MORE room around obstacles; never less.
+        # NOTE: `requested_margin` / `planned_margin` are NEW locals on purpose.
+        # Assigning to `obstacle_margin` here would make it local to this
+        # closure, and the read would raise UnboundLocalError at LAUNCH time —
+        # exactly what crash-looped the stack on the robot on 2026-09-16.
+        requested_margin = obstacle_margin
+        planned_margin = planning_obstacle_margin({
+            **(rp or {}),
+            "obstacle_margin": requested_margin,
+            "obstacle_clearance_margin": clamped_clearance_margin,
+        })
+        if requested_margin < planned_margin:
             print(
                 "[navigation.launch] obstacle_margin "
-                f"{effective_margin:.3f} m is inside the body half-width "
-                f"{margin_floor:.3f} m — raising it to the floor. The coverage "
-                "plan may not route the centreline closer to a mapped obstacle "
-                "than the chassis reaches."
+                f"{requested_margin:.3f} m is below the derived floor "
+                f"{planned_margin:.3f} m (body half-width "
+                f"{chassis_half_width(rp):.3f} m + what FTC's clearance model "
+                "and the transit keepout band demand) — raising it to the "
+                "floor."
             )
-            effective_margin = margin_floor
-        cov_params["obstacle_margin"] = min(1.0, max(0.0, effective_margin))
+        cov_params["obstacle_margin"] = planned_margin
         # Hard floor on the continuous path's turn-around / fillet arcs so no
         # turn is ever tighter than the robot can track (clamp to the tuned
         # [0.10, 0.50] band; sub-0.10 loops are untrackable, >0.50 bulges OOB).

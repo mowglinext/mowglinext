@@ -166,7 +166,8 @@ void MapServerNode::publish_keepout_mask()
   int c1 = ny - 1;
   if (bx_max >= bx_min)  // at least one polygon vertex accumulated
   {
-    const double margin_expand = std::max(outside_free_margin, obstacle_margin_m_) + resolution_;
+    const double margin_expand =
+        std::max(outside_free_margin, keepout_obstacle_margin_m_) + resolution_;
     const double cx = map_.getPosition().x();
     const double cy = map_.getPosition().y();
     const double hx = map_.getLength().x() * 0.5;
@@ -290,11 +291,12 @@ void MapServerNode::publish_keepout_mask()
   // Two sources share this pass: obstacle_polygons_ (dynamic LiDAR-promoted)
   // and every area's DRAWN entry.obstacles (whose interiors are also lethal
   // via the classification NO_GO_ZONE overlay below — the polygon pass here
-  // is what carries the margin band). obstacle_margin_m_
-  // (mowgli_robot.yaml.obstacle_margin) additionally marks cells within that
-  // distance OUTSIDE each polygon — the transit-side twin of
-  // coverage_server's F2C hole buffering, so both planners keep the same
-  // distance from a drawn tree/root zone.
+  // is what carries the margin band). keepout_obstacle_margin_m_ additionally
+  // marks cells within that distance OUTSIDE each polygon: the body half-width,
+  // because the mask's consumer (Smac 2D) is a point check and the mask is not
+  // inflated downstream — polygon + this band IS the lethal region, the body
+  // counted exactly once. It is deliberately smaller than coverage_server's
+  // obstacle_margin so a robot on its coverage line is never START_OCCUPIED.
   const auto cell_hits_obstacle =
       [this](const geometry_msgs::msg::Point32& pt, const geometry_msgs::msg::Polygon& obs)
   {
@@ -302,9 +304,9 @@ void MapServerNode::publish_keepout_mask()
     {
       return true;
     }
-    return obstacle_margin_m_ > 0.0 &&
+    return keepout_obstacle_margin_m_ > 0.0 &&
            point_to_polygon_distance(static_cast<double>(pt.x), static_cast<double>(pt.y), obs) <=
-               obstacle_margin_m_;
+               keepout_obstacle_margin_m_;
   };
   for (int r = r0; r <= r1; ++r)
   {

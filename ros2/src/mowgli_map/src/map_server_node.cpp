@@ -184,10 +184,18 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   chassis_width_m_ = declare_parameter<double>("chassis_width", 0.40);
   bypass_safety_margin_m_ = declare_parameter<double>("bypass_safety_margin_m", 0.05);
   bypass_max_length_m_ = declare_parameter<double>("max_obstacle_avoidance_distance", 2.0);
-  // Extra LETHAL band around drawn obstacle polygons in the keepout mask.
-  // Same key drives coverage_server's F2C hole buffering (injected at launch
-  // from mowgli_robot.yaml.obstacle_margin) — keep the two in lockstep.
-  obstacle_margin_m_ = std::clamp(declare_parameter<double>("obstacle_margin", 0.15), 0.0, 1.0);
+  // LETHAL band around obstacle polygons in the keepout mask = the body model
+  // of the mask's point-check consumer (Smac 2D), counted ONCE: the mask is not
+  // inflated downstream. full_system.launch.py injects the derived value
+  // (robot_config_util.keepout_obstacle_margin). Negative = "derive": an
+  // isolated run falls back to this node's own chassis_width / 2 rather than
+  // to a literal that goes stale when the chassis is edited.
+  // It is NOT coverage_server.obstacle_margin (see the member's comment).
+  const double keepout_margin_param = declare_parameter<double>("keepout_obstacle_margin", -1.0);
+  keepout_obstacle_margin_m_ =
+      std::clamp(keepout_margin_param < 0.0 ? chassis_width_m_ * 0.5 : keepout_margin_param,
+                 0.0,
+                 1.0);
 
   // Dock body (physical structure the robot cannot drive into). Cells
   // inside are marked OBSTACLE_PERMANENT — F2C strips stop at the body

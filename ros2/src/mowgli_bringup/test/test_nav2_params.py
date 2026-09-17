@@ -411,19 +411,31 @@ def test_navigation_launch_guards_polygon_slow_write() -> None:
 
 
 def test_navigation_launch_injects_coverage_obstacle_margin() -> None:
-    """obstacle_margin must reach coverage_server (F2C hole buffering). Its
-    keepout twin is injected by full_system.launch.py into map_server."""
+    """obstacle_margin must reach coverage_server (F2C hole buffering). The
+    keepout band is a DIFFERENT, derived number (keepout_obstacle_margin),
+    injected by full_system.launch.py into map_server."""
     src = _read_text("launch/navigation.launch.py")
     assert re.search(
-        r"cov_params\[.obstacle_margin.\]\s*=.*(obstacle|effective)_margin", src), (
-        "navigation.launch.py must inject obstacle_margin into coverage_server — "
-        "drawn-obstacle margins would otherwise only apply to transit (keepout), "
-        "not to the swath plan."
+        r"cov_params\[.obstacle_margin.\]\s*=\s*planned_margin", src), (
+        "navigation.launch.py must inject the FLOORED obstacle_margin into "
+        "coverage_server."
     )
     fs_src = _read_text("launch/full_system.launch.py")
-    assert re.search(r"obstacle_margin", fs_src), (
-        "full_system.launch.py must forward obstacle_margin to map_server so the "
-        "keepout mask keeps the same distance as the coverage plan."
+    assert re.search(
+        r'\{"keepout_obstacle_margin":\s*keepout_obstacle_margin_m\}', fs_src), (
+        "full_system.launch.py must inject the DERIVED keepout band into "
+        "map_server."
+    )
+    assert re.search(
+        r"keepout_obstacle_margin_m\s*=\s*keepout_obstacle_margin\(robot_params\)",
+        fs_src), (
+        "the keepout band must come from robot_config_util."
+        "keepout_obstacle_margin(), not a literal and not obstacle_margin."
+    )
+    assert not re.search(r'\{"obstacle_margin":', fs_src), (
+        "map_server must NOT receive coverage's obstacle_margin: one number for "
+        "a centreline planner and a mask read by a point-check planner counts "
+        "the body twice (START_OCCUPIED on the coverage line, 2026-09-16/17)."
     )
 
 
@@ -447,7 +459,8 @@ def test_obstacle_template_defaults_match_static_yaml() -> None:
         f"lidar overlay PolygonSlow.slowdown_ratio={slow}."
     )
     # obstacle_margin is DERIVED, not pinned to a literal: it must be at least
-    # the body half-width, which follows chassis_width. It was a literal 0.2
+    # the body half-width, which follows chassis_width (the full derived floor
+    # is checked in test_boundary_inset_and_obstacle_margin_are_separate_knobs). It was a literal 0.2
     # (2026-07-23) until 2026-09-16, when the chassis had grown to 0.45 m and
     # the literal no longer covered the body. The exact-equality check lives in
     # test_boundary_inset_and_obstacle_margin_are_separate_knobs.
@@ -1246,22 +1259,129 @@ def test_navigation_launch_derives_chassis_width_from_the_config() -> None:
 
 def test_obstacle_margin_is_floored_at_the_body_half_width() -> None:
     """obstacle_margin is the ONLY obstacle clearance the coverage plan has once
-    chassis_safety_inset is 0: putting the outermost ring on the recorded line
-    expands the planning field OUTWARD, and that expansion leaves the holes
-    untouched. Below the body half-width the plan routes the centreline closer
-    to an obstacle than the chassis reaches — in collision before any tracking
-    error."""
+    chassis_safety_inset is 0. Its floor is the MAX of two derived demands:
+
+      * controller: chassis_half_width + FTC's clamped obstacle_clearance_margin
+        + FTC_TRACKING_SLACK_M — FTC's footprint clearance model refuses a line
+        closer than half-width + clearance to a lethal cell, so a plan at the
+        bare half-width made FTC fight its own plan along every obstacle;
+      * transit plannability: chassis_half_width (the un-inflated keepout band)
+        + the mask->global-costmap rasterisation slack, so a robot ON its
+        coverage line is never START_OCCUPIED.
+    """
+    import math
+
+    import robot_config_util as rcu
+
     src = _read_text("launch/navigation.launch.py")
-    assert re.search(r"margin_floor\s*=\s*chassis_half_width\(", src), (
+    assert re.search(r"planned_margin\s*=\s*planning_obstacle_margin\(", src), (
         "the obstacle-margin floor must be DERIVED via "
-        "robot_config_util.chassis_half_width(), not hardcoded — a literal goes "
-        "stale when the operator edits the chassis in the GUI."
+        "robot_config_util.planning_obstacle_margin(), not hardcoded — a literal "
+        "goes stale when the operator edits the chassis in the GUI."
     )
     assert re.search(
-        r"effective_margin\s*<\s*margin_floor.*?effective_margin\s*=\s*margin_floor",
-        src, re.DOTALL), (
-        "an operator value below the floor must be RAISED to it, not obeyed."
+        r'"obstacle_clearance_margin":\s*clamped_clearance_margin', src), (
+        "the floor must be computed from the SAME clamped clearance margin "
+        "that is injected into FTC."
     )
+    assert re.search(
+        r'fcp\["obstacle_clearance_margin"\]\s*=\s*clamped_clearance_margin', src)
+
+    rp = _template_robot_params()
+    hw = rcu.chassis_half_width(rp)
+    controller = (hw + rcu.ftc_obstacle_clearance_margin(rp)
+                  + rcu.FTC_TRACKING_SLACK_M)
+    transit = hw + rcu.GLOBAL_COSTMAP_RESOLUTION_M * math.sqrt(2.0)
+    floor = rcu.planning_obstacle_margin_floor(rp)
+    assert max(controller, transit) <= floor < max(controller, transit) + 1e-3, (
+        "the floor is max(controller, transit) rounded UP to the millimetre."
+    )
+    # An operator value below the floor is RAISED; above it, obeyed; capped.
+    assert rcu.planning_obstacle_margin({**rp, "obstacle_margin": 0.0}) == floor
+    assert rcu.planning_obstacle_margin({**rp, "obstacle_margin": 0.6}) == 0.6
+    assert rcu.planning_obstacle_margin({**rp, "obstacle_margin": 5.0}) == 1.0
+    # It follows the chassis and FTC's clearance margin — nothing is a literal.
+    wide = {**rp, "chassis_width": float(rp["chassis_width"]) + 0.10}
+    assert rcu.planning_obstacle_margin_floor(wide) == pytest.approx(
+        floor + 0.05, abs=1.1e-3)
+    roomy = {**rp, "obstacle_clearance_margin": 0.20}
+    assert rcu.planning_obstacle_margin_floor(roomy) == pytest.approx(
+        hw + 0.20 + rcu.FTC_TRACKING_SLACK_M, abs=1.1e-3)
+    # FTC clamps the clearance margin; the floor must use the clamped value.
+    silly = {**rp, "obstacle_clearance_margin": 9.0}
+    assert rcu.ftc_obstacle_clearance_margin(silly) == rcu.FTC_CLEARANCE_MARGIN_MAX_M
+
+
+def test_keepout_margin_counts_the_body_exactly_once() -> None:
+    """The keepout mask's consumer is SmacPlanner2D — a POINT check with no
+    footprint test — and the mask is NOT inflated (plugin order pinned below).
+    So the band map_server paints around a drawn obstacle must be the WHOLE body
+    half-width, once: not coverage's obstacle_margin (a centreline offset that
+    also carries FTC's slack), and with no inflation band on top."""
+    import robot_config_util as rcu
+
+    rp = _template_robot_params()
+    hw = rcu.chassis_half_width(rp)
+    keepout = rcu.keepout_obstacle_margin(rp)
+    assert hw <= keepout < hw + 1e-3, (
+        f"keepout band {keepout:.4f} must be the body half-width {hw:.3f} on "
+        "the shipped config."
+    )
+    # By construction a robot ON its coverage line is plannable: the line
+    # clears the band by the worst-case rasterisation slack, for ANY operator
+    # obstacle_margin and any chassis.
+    for override in ({}, {"obstacle_margin": 0.6}, {"obstacle_margin": 5.0},
+                     {"chassis_width": 0.535}, {"chassis_width": 0.39},
+                     {"obstacle_clearance_margin": 0.3}):
+        params = {**rp, **override}
+        line = rcu.planning_obstacle_margin(params)
+        band = rcu.keepout_obstacle_margin(params)
+        assert band >= rcu.chassis_half_width(params) - 1e-12, override
+        assert line - band >= rcu.keepout_raster_slack() - 1e-9, (
+            f"{override}: coverage line {line:.3f} is within the raster slack "
+            f"of the keepout band {band:.3f} — START_OCCUPIED on the line."
+        )
+    # An operator-RAISED obstacle_margin (root zone) pulls the transit band up
+    # with it; it is never silently coverage-only.
+    raised = rcu.keepout_obstacle_margin({**rp, "obstacle_margin": 0.6})
+    assert raised == pytest.approx(0.6 - rcu.keepout_raster_slack())
+
+
+def test_global_costmap_inflates_before_the_keepout_filter() -> None:
+    """inflation_layer BEFORE keepout_filter in BOTH variants: the keepout mask
+    (recorded boundary + drawn obstacles) already carries the body, so inflating
+    it counted the body twice. Hand-applied on the robot 2026-09-17 (17-minute
+    mow, zero START_OCCUPIED, zero boundary e-stops); an image deploy would have
+    silently discarded it. keepout_obstacle_margin's derivation ASSUMES this
+    order — flipping it back makes every coverage line next to a drawn obstacle
+    un-plannable again."""
+    for loader, first in ((_load_params, "obstacle_layer"),
+                          (_load_no_lidar_params, "static_layer")):
+        gc = loader()["global_costmap"]["global_costmap"]["ros__parameters"]
+        assert gc["plugins"] == [first, "inflation_layer", "keepout_filter"], (
+            f"global costmap plugin order is {gc['plugins']}"
+        )
+        lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
+        assert "keepout_filter" not in lc["plugins"]  # Invariant 5
+
+
+def test_global_costmap_resolution_matches_the_launch_constant() -> None:
+    """full_system.launch.py does not load the Nav2 params, so the global
+    costmap resolution used by the margin derivations is single-sourced in
+    robot_config_util — and pinned here so the two cannot drift."""
+    import robot_config_util as rcu
+
+    for loader in (_load_params, _load_no_lidar_params):
+        gc = loader()["global_costmap"]["global_costmap"]["ros__parameters"]
+        assert float(gc["resolution"]) == rcu.GLOBAL_COSTMAP_RESOLUTION_M
+    # The raster-slack bound assumes the mask is no coarser than the costmap.
+    map_yaml = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "mowgli_map",
+        "config", "map_server.yaml")
+    with open(map_yaml) as fh:
+        map_doc = yaml.safe_load(fh)
+    (node_params,) = [v["ros__parameters"] for v in map_doc.values()]
+    assert float(node_params["resolution"]) <= rcu.GLOBAL_COSTMAP_RESOLUTION_M
 
 
 def test_enforce_boundary_margin_is_floored_at_the_circumscribed_radius() -> None:
@@ -1316,10 +1436,10 @@ def test_boundary_inset_and_obstacle_margin_are_separate_knobs() -> None:
     setting satisfied both: 0 put the ring on the recorded line but left the
     obstacle holes raw, while a body-sized value cleared obstacles and refused
     to mow a 27 cm band along every hedge."""
-    from robot_config_util import chassis_half_width as _chassis_half_width
+    from robot_config_util import planning_obstacle_margin_floor
 
     template = _template_robot_params()
-    derived = _chassis_half_width(template)
+    derived = planning_obstacle_margin_floor(template)
 
     # Boundary: the recorded perimeter was DRIVEN by the operator, so it is the
     # reachable limit — the outermost pass rides on it.
@@ -1327,12 +1447,40 @@ def test_boundary_inset_and_obstacle_margin_are_separate_knobs() -> None:
         "chassis_safety_inset is boundary-only; any inset is a band that never "
         "gets cut. Obstacle clearance belongs to obstacle_margin."
     )
-    # Obstacles: body-sized, and equal to the derived floor so the yaml does not
-    # lie to whoever reads it (0.2 survived a 0.40 -> 0.45 m chassis unnoticed).
+    # Obstacles: equal to the DERIVED floor (body half-width + what FTC and the
+    # transit keepout demand) so the yaml does not lie to whoever reads it (0.2
+    # survived a 0.40 -> 0.45 m chassis unnoticed). The GUI schema default must
+    # be the same number, or the settings backend's prune-equal-to-default
+    # would diverge from the template.
     assert template["obstacle_margin"] == pytest.approx(derived, abs=1e-9), (
-        f"template obstacle_margin {template['obstacle_margin']} != derived body "
-        f"half-width {derived:.3f} for the shipped chassis."
+        f"template obstacle_margin {template['obstacle_margin']} != derived "
+        f"floor {derived:.3f} for the shipped chassis/template."
     )
+    schema_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..",
+        "gui", "asserts", "mower_config.schema.json")
+    if os.path.isfile(schema_path):  # absent in a ros2-only checkout/container
+        import json
+
+        with open(schema_path) as fh:
+            schema_text = json.load(fh)
+
+        def _find(node, key):
+            if isinstance(node, dict):
+                if key in node and isinstance(node[key], dict):
+                    return node[key]
+                for value in node.values():
+                    found = _find(value, key)
+                    if found is not None:
+                        return found
+            return None
+
+        prop = _find(schema_text, "obstacle_margin")
+        assert prop is not None
+        assert prop["default"] == pytest.approx(derived, abs=1e-9)
+        assert "transit planning" not in prop["description"].split(".")[0], (
+            "obstacle_margin no longer drives the transit keepout band directly."
+        )
 
 
 def test_ftc_uses_the_real_footprint_for_clearance() -> None:

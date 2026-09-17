@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <memory>
@@ -24,6 +25,7 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
 #include "mowgli_map/map_types.hpp"
 #include <gtest/gtest.h>
@@ -480,7 +482,7 @@ TEST_F(AreaTypeTest, RepeatedDigsAtTheSameSpotDoNotStack)
 
 // Field regression 2026-09-10 (twice in one day): the dig keepout was a
 // 0.60 m square CENTRED on the dig point (0.45 m behind it once the mask's
-// 0.15 m obstacle_margin is painted), but the bridge only reverses the robot
+// then-0.15 m obstacle margin band is painted), but the bridge only reverses the robot
 // ~0.2-0.3 m out of the hole, so the robot ended up standing INSIDE the
 // keepout it had just proposed. Smac refused every transit from there
 // (START_OCCUPIED) and the mission looped, blade cycling, until an operator
@@ -514,7 +516,8 @@ TEST_F(AreaTypeTest, DigKeepoutIsBiasedAheadOfTheHeadingSoTheReversedRobotIsFree
   EXPECT_EQ(mask_at(mask, x, y), 0)
       << "the reversed robot (0.2-0.3 m behind the dig) must NOT stand on its own keepout";
   along(0.95, 0.0, x, y);
-  EXPECT_EQ(mask_at(mask, x, y), 0) << "the keepout must stay bounded ahead (0.60 + 0.15 margin)";
+  EXPECT_EQ(mask_at(mask, x, y), 0)
+      << "the keepout must stay bounded ahead (0.60 + the 0.20 default band)";
 }
 
 // Without a heading (no TF yet) the only orientation-free keepout is the
@@ -819,10 +822,12 @@ TEST_F(BoundaryInnerMarginTest, ZeroBoundaryMarginDisablesThePenaltyEntirely)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Drawn-obstacle margin (mowgli_robot.yaml.obstacle_margin) — the keepout
-// twin of coverage_server's F2C hole buffering. A drawn obstacle (a tree)
-// must project a LETHAL band obstacle_margin wide around its polygon so
-// transit paths keep off root zones the 2D LiDAR cannot see.
+// Drawn-obstacle keepout band (keepout_obstacle_margin, DERIVED at launch by
+// robot_config_util.keepout_obstacle_margin). A drawn obstacle (a tree) must
+// project a LETHAL band that wide around its polygon. The band is the body
+// model of the mask's consumer — SmacPlanner2D is a point check and the mask
+// is not inflated downstream — so it is the body half-width, counted ONCE,
+// and deliberately NOT coverage_server.obstacle_margin.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class ObstacleMarginTest : public AreaTypeTest
@@ -839,7 +844,7 @@ protected:
     opts.append_parameter_override("map_file_path", "");
     opts.append_parameter_override("areas_file_path", "");
     opts.append_parameter_override("publish_rate", 1.0);
-    opts.append_parameter_override("obstacle_margin", 0.3);
+    opts.append_parameter_override("keepout_obstacle_margin", 0.3);
     node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
   }
 
@@ -868,15 +873,17 @@ TEST_F(ObstacleMarginTest, DrawnObstacleGetsLethalMarginBand)
   // Inside the drawn obstacle → LETHAL (classification NO_GO overlay).
   EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100) << "inside drawn obstacle must be lethal";
   // 0.2 m outside the polygon edge, within the 0.3 m margin → LETHAL.
-  EXPECT_EQ(mask_at(mask, 0.75, 0.0), 100) << "cell inside the obstacle_margin band must be lethal";
+  EXPECT_EQ(mask_at(mask, 0.75, 0.0), 100)
+      << "cell inside the keepout_obstacle_margin band must be lethal";
   // Well outside the margin band (edge + 0.3 m + slack) → FREE lawn.
   EXPECT_EQ(mask_at(mask, 1.5, 0.0), 0) << "lawn beyond the margin band must stay free";
 }
 
-TEST_F(AreaTypeTest, DrawnObstacleWithDefaultMarginIsEdgeTight)
+TEST_F(AreaTypeTest, DrawnObstacleWithDefaultMarginDerivesFromTheChassis)
 {
-  // Default node (obstacle_margin = 0.15): the drawn obstacle is lethal and
-  // projects a 0.15 m margin band.
+  // Default node: keepout_obstacle_margin is the -1 "derive" sentinel, which
+  // falls back to this node's chassis_width / 2 (0.40 / 2 = 0.20 m) — never a
+  // free-standing literal.
   auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
   req->area.name = "lawn_with_tree";
   req->area.area = make_rect(-4, -4, 4, 4);
@@ -890,8 +897,124 @@ TEST_F(AreaTypeTest, DrawnObstacleWithDefaultMarginIsEdgeTight)
   ASSERT_FALSE(mask.data.empty());
 
   EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100) << "inside drawn obstacle must be lethal";
-  EXPECT_EQ(mask_at(mask, 0.75, 0.0), 0)
-      << "without obstacle_margin the band outside the polygon stays free";
+  EXPECT_EQ(mask_at(mask, 0.65, 0.0), 100) << "0.15 m out is inside the chassis/2 = 0.20 m band";
+  EXPECT_EQ(mask_at(mask, 0.85, 0.0), 0) << "0.35 m out is beyond the chassis/2 band";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "Count the body exactly once per consumer."
+//
+// The mask's consumer is SmacPlanner2D: a POINT check (centre cell >=
+// INSCRIBED) with no footprint test, reading a global costmap whose plugin
+// order is [.., inflation_layer, keepout_filter] — the mask is NOT inflated.
+// So the lethal region of a drawn obstacle must be polygon + the body
+// half-width and nothing more. Before 2026-09-17 it was polygon +
+// coverage's obstacle_margin (0.275) + the inflation band (~0.2) on top: a
+// robot ON its coverage line 0.275 m from the obstacle read as occupied, and
+// detour transits timed out / answered START_OCCUPIED.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class KeepoutBodyOnceTest : public AreaTypeTest
+{
+protected:
+  // The shipped chassis: chassis_width 0.45 / 2 + 0.05 costmap margin.
+  static constexpr double kBodyHalfWidthM = 0.275;
+  static constexpr double kResolutionM = 0.05;
+
+  void SetUp() override
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", kResolutionM);
+    opts.append_parameter_override("map_size_x", 10.0);
+    opts.append_parameter_override("map_size_y", 10.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    opts.append_parameter_override("areas_file_path", "");
+    opts.append_parameter_override("publish_rate", 1.0);
+    opts.append_parameter_override("keepout_obstacle_margin", kBodyHalfWidthM);
+    node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+};
+
+TEST_F(KeepoutBodyOnceTest, LethalRegionIsPolygonPlusBodyHalfWidthAndNothingMore)
+{
+  auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+  req->area.name = "lawn_with_tree";
+  req->area.area = make_rect(-4, -4, 4, 4);
+  req->area.obstacles.push_back(make_rect(-0.5, -0.5, 0.5, 0.5));
+  req->is_navigation_area = false;
+  auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+  node_->add_area_for_test(req, res);
+  ASSERT_TRUE(res->success);
+
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+
+  // Walk outward from the polygon edge (x = 0.5) along +x and find where the
+  // lethal region ends. A cell is lethal when its CENTRE is within the band.
+  double last_lethal = 0.0;
+  double first_free = 0.0;
+  for (double d = 0.0; d < 1.0; d += kResolutionM / 5.0)
+  {
+    if (mask_at(mask, 0.5 + d, 0.0) == 100)
+    {
+      last_lethal = d;
+    }
+    else if (first_free == 0.0)
+    {
+      first_free = d;
+    }
+  }
+  EXPECT_GT(first_free, 0.0);
+  EXPECT_LT(last_lethal, first_free) << "the lethal band must be one contiguous ring";
+  // The band ends at the body half-width, to within one mask cell — NOT at
+  // half-width + coverage's margin, and NOT at half-width + an inflation band.
+  EXPECT_GE(last_lethal, kBodyHalfWidthM - kResolutionM);
+  EXPECT_LE(last_lethal, kBodyHalfWidthM + kResolutionM);
+
+  // A robot ON its coverage line: the shipped planning floor puts the
+  // centreline 0.389 m from the polygon (robot_config_util). That pose, and
+  // anything within the worst-case mask->global-costmap rasterisation slack
+  // inside it (0.08 m * sqrt 2 = 0.113 m), must be FREE for Smac's point check.
+  constexpr double kCoverageLineM = 0.389;
+  constexpr double kRasterSlackM = 0.1132;
+  EXPECT_EQ(mask_at(mask, 0.5 + kCoverageLineM, 0.0), 0)
+      << "a robot on its coverage line must never be START_OCCUPIED";
+  EXPECT_EQ(mask_at(mask, 0.5 + kCoverageLineM - kRasterSlackM + kResolutionM, 0.0), 0);
+}
+
+TEST(DigKeepoutPolygon, RearLethalEdgeIsAlwaysTenCentimetresBehindTheDigPoint)
+{
+  // polygon rear edge + the mask's keepout band must land exactly
+  // kDigKeepoutBehindM behind the dig point WHATEVER the band is — it follows
+  // keepout_obstacle_margin. If it kept following coverage's obstacle_margin
+  // while the mask painted a different band, the 2026-09-10 "robot stands
+  // inside its own keepout" trap would return.
+  for (const double margin : {0.0, 0.15, 0.20, 0.275, 0.40})
+  {
+    const auto poly = mowgli_map::dig_keepout_polygon(0.0, 0.0, 0.0, true, 0.60, margin);
+    double rear = 1e9;
+    for (const auto& p : poly.points)
+    {
+      rear = std::min(rear, static_cast<double>(p.x));
+    }
+    EXPECT_NEAR(rear - margin, -mowgli_map::kDigKeepoutBehindM, 1e-6) << "margin " << margin;
+  }
+}
+
+TEST_F(KeepoutBodyOnceTest, DigKeepoutLeavesTheReversedRobotFreeWithTheBodyWideBand)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
+  node_->set_robot_heading_for_test(0.0);
+  node_->on_dig_event_for_test(make_dig_event(0.0, 0.0));
+  ASSERT_EQ(node_->area_obstacle_count_for_test(0), 1u);
+
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 0.025, 0.0), 100) << "the hole itself must be lethal";
+  EXPECT_EQ(mask_at(mask, -0.225, 0.0), 0)
+      << "0.2-0.3 m behind the dig (where the bridge reverses the robot to) must stay free";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

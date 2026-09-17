@@ -904,28 +904,36 @@ mowgli:
     # Straight reverse speed (m/s). Must clear the firmware ~0.05 deadband to
     # move at all. Clamped [0.0, 0.30] by navigation.launch.py.
     obstacle_reverse_speed_mps: 0.15       # 2026-07-23: field-validated default (was 0.10) — clears firmware deadband to actually move
-    # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
-    # BOTH the coverage planner (F2C holes are buffered outward before swath
-    # planning) and the keepout mask (cells within the margin of an obstacle
-    # polygon are LETHAL for transit planning). Use it to keep the robot off
-    # root zones: draw the tree trunk as an obstacle and set the margin to
-    # cover the roots (the 2D LiDAR cannot see them — they are below the
-    # scan plane). Clamped to [0.0, 1.0].
-    # Buffer grown around every drawn map obstacle before planning. With
-    # chassis_safety_inset at 0 this is the ONLY obstacle clearance the plan
-    # has: the planning field is expanded OUTWARD to put the ring on the
-    # recorded line, and that expansion leaves the holes untouched.
+    # How far (m) the COVERAGE plan keeps its centreline from every DRAWN map
+    # obstacle: F2C holes are buffered outward by this before swath planning.
+    # With chassis_safety_inset at 0 it is the ONLY obstacle clearance the plan
+    # has (the planning field is expanded OUTWARD to put the ring on the
+    # recorded line, and that expansion leaves the holes untouched).
+    # Clamped to [floor, 1.0].
     #
-    # 0.275 = the body half-width (chassis_width/2 + costmap margin) on the
-    # shipped chassis. navigation.launch.py FLOORS it at that DERIVED value, so
-    # editing chassis_width in the GUI moves the floor with it. Below the floor
-    # the plan would route the centreline closer to an obstacle than the chassis
-    # reaches — in collision before any tracking error.
+    # It is NOT the transit keepout band any more. map_server's lethal band
+    # around a drawn obstacle is keepout_obstacle_margin, DERIVED at launch
+    # (robot_config_util.keepout_obstacle_margin, no key here): the body
+    # half-width — Smac 2D is a point check and the keepout mask is not
+    # inflated, so the mask carries the whole body, once. It follows this key
+    # when you RAISE it (always one costmap-rasterisation slack inside the
+    # coverage line, so a robot on its line stays plannable for transits).
+    #
+    # 0.389 = the DERIVED floor on the shipped chassis, the larger of
+    #   * what FTC demands of its own line: body half-width 0.275
+    #     (chassis_width/2 + costmap margin) + obstacle_clearance_margin 0.05
+    #     + 0.05 tracking slack = 0.375;
+    #   * what keeps a robot on the line plannable: body half-width 0.275 +
+    #     one global-costmap cell diagonal (0.08 * sqrt 2 = 0.113) = 0.388,
+    # rounded up to the millimetre. navigation.launch.py FLOORS the value at
+    # robot_config_util.planning_obstacle_margin_floor, so editing
+    # chassis_width or obstacle_clearance_margin in the GUI moves the floor
+    # with it; test_nav2_params.py pins this default equal to the derivation.
     #
     # Raise it to cover what the map polygon does not: a tree's root flare at
     # ground level and its low branches are both invisible to a 2D LiDAR fixed
     # at 0.20 m, and a trunk drawn as a 0.25 m circle is smaller than the tree.
-    obstacle_margin: 0.275
+    obstacle_margin: 0.389
 
     # -----------------------------------------------------------------
     # Transit boundary clearance (mowgli_map / map_server_node)

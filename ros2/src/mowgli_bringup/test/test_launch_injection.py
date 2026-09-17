@@ -377,3 +377,40 @@ def test_cross_hatch_setting_reaches_behavior_tree() -> None:
     for config, expected in [({}, False), ({"mow_cross_hatch": True}, True)]:
         assert eval(expression, {"__builtins__": {}, "bool": bool},
                     {"robot_params": config}) is expected
+
+
+@pytest.mark.parametrize(
+    "launch_file", ["navigation.launch.py", "full_system.launch.py"])
+def test_no_closure_rebinds_a_name_of_its_enclosing_function(
+        launch_file: str) -> None:
+    """A nested function that ASSIGNS a name its enclosing function also owns
+    makes that name local to the closure, so any read of it there raises
+    UnboundLocalError — at LAUNCH time, not import time. That is what
+    crash-looped the stack on the robot on 2026-09-16 (`obstacle_margin`
+    re-assigned inside `_inject_dock_pose_and_speeds`), and no regex or yaml
+    test can see it. The symbol table can: a closure must use FRESH local names.
+    """
+    import symtable
+
+    with open(_launch_path(launch_file)) as fh:
+        table = symtable.symtable(fh.read(), launch_file, "exec")
+
+    offenders = []
+
+    def _walk(scope) -> None:
+        for child in scope.get_children():
+            if scope.get_type() == "function" and child.get_type() == "function":
+                outer = {sym.get_name() for sym in scope.get_symbols()
+                         if sym.is_local() or sym.is_parameter()}
+                offenders.extend(
+                    f"{scope.get_name()} -> {child.get_name()}: {sym.get_name()}"
+                    for sym in child.get_symbols()
+                    if sym.is_local() and not sym.is_parameter()
+                    and sym.get_name() in outer)
+            _walk(child)
+
+    _walk(table)
+    assert not offenders, (
+        "closure re-binds a name of its enclosing function (UnboundLocalError "
+        f"at launch): {offenders}"
+    )

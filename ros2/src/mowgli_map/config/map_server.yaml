@@ -115,9 +115,10 @@ map_server_node:
     # only ~5 cm between its centre cell and the inscribed-cost band — under
     # one 0.08 m cell — so Smac transits sporadically failed "Start occupied"
     # and FollowStrip skipped whole sub-paths (headland rings). The global
-    # costmap lists keepout_filter BEFORE inflation_layer, so this lethal wall
-    # is inflated inward by only inflation_radius (0.20 m), never biting inside
-    # the ring. TRADE-OFF: the injected floor is ABOVE lethal_boundary_margin_m
+    # costmap now lists inflation_layer BEFORE keepout_filter, so this lethal
+    # wall is NOT inflated at all (it used to be, inward, by inflation_radius
+    # 0.20 m): the band already IS the body's room, and inflating it counted
+    # the body twice. TRADE-OFF: the injected floor is ABOVE lethal_boundary_margin_m
     # (0.5), so the planner wall no longer engages strictly before that e-stop
     # tripwire — only the mid-cost (never free) band keeps the planner off it.
     enforce_boundary_margin_m: 0.40
