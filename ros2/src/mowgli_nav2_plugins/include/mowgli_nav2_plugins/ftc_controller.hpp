@@ -323,6 +323,8 @@ private:
   std::optional<rclcpp::Time> avoidance_clear_start_;
   /// Since when the lattice has been asking for a SMALLER offset than applied.
   std::optional<rclcpp::Time> lattice_return_start_;
+  /// Since when the free plan has been asking for the side opposite to the committed one.
+  std::optional<rclcpp::Time> lattice_switch_start_;
 
   // ── Oscillation detection ─────────────────────────────────────────────────
 
