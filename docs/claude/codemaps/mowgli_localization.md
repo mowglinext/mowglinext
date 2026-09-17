@@ -18,7 +18,7 @@
 | LiDAR scan smeared while rotating (deskew, IMU buffer, "no scans" watchdog) | `ros2/src/mowgli_localization/src/scan_deskew_node.cpp` `on_scan()` L342, `on_scan_watchdog()` L311 |
 | Dock/chassis self-return blanking, gravity ground filter, `/scan_collision` split | `ros2/src/mowgli_localization/src/costmap_scan_filter_node.cpp` `filter_scan()` L217, `apply_ground_filter()` L250, `is_blank_active()` L437 |
 | Docking goes to the wrong spot / `detected_dock_pose` geometry, Δ (map→odom yaw) gate | `ros2/src/mowgli_localization/src/gps_dock_detection_node.cpp` header doc L17–105, `apply_delta_sample()` L344, `on_timer()` L399; gate in `include/.../delta_gate.hpp` |
-| One-click dock calibration (CalibrateDock action / GUI start service / status topic) | `ros2/src/mowgli_localization/src/calibrate_imu_yaw_node.cpp` `run_dock_calibration_core()` L1197, `persist_dock_via_map_server()` L1148, `dock_start_cb()` L1107 |
+| One-click dock calibration (CalibrateDock action / GUI start service / status topic) | `ros2/src/mowgli_localization/src/calibrate_imu_yaw_node.cpp` `run_dock_calibration_core()`, `persist_dock_via_map_server()`, `dock_start_cb()`; the two `set_docking_point` requests + operator messages are pure in `include/mowgli_localization/dock_persist_plan.hpp` (`test_dock_persist_plan`) |
 | COG-coherence gate for the dock reverse leg | `ros2/src/mowgli_localization/include/mowgli_localization/dock_cog_gate.hpp` `evaluate_dock_cog_gate()` |
 | Legacy blocking IMU-yaw / pitch-roll / mag figure-8 calibration service | `calibrate_imu_yaw_node.cpp` `calibrate_cb()` L1679, legacy dock pre-phase `run_dock_yaw_drive()` L568 (writes yaml directly at L723) |
 | Where dock_pose_x/y/yaw get written to `mowgli_robot.yaml` | `ros2/src/mowgli_interfaces/include/mowgli_interfaces/robot_yaml_scalar.hpp` (`UpdateDockPose`); callers: `mowgli_map/src/area_manager.cpp:916,1673`, `calibrate_imu_yaw_node.cpp:723` |
@@ -104,9 +104,9 @@
 |------|------|------|--------|
 | `/navsat_to_absolute_pose/set_datum` | `std_srvs/Trigger` | server (L144): sets in-memory datum from `last_fix_`; requires `NavSatFix.status >= STATUS_GBAS_FIX` (L165); returns `"lat,lon"` | GUI `gui/pkg/api/mowglinext.go:601` |
 | `/calibrate_imu_yaw_node/calibrate` | `mowgli_interfaces/srv/CalibrateImuYaw` | server (L252): blocking IMU-yaw drive cycles; `mag_only=true` → figure-8 mag pass; dock pre-phase if charging | GUI `gui/pkg/api/calibration.go:129,197` |
-| `/calibrate_imu_yaw_node/calibrate_dock` | `mowgli_interfaces/action/CalibrateDock` | action server (L314): WAIT_RTK → REVERSING → CHECK_COG → REDOCKING → VERIFY_CHARGE → PERSIST | (no GUI client; GUI uses the façade below) |
+| `/calibrate_imu_yaw_node/calibrate_dock` | `mowgli_interfaces/action/CalibrateDock` | action server (L314): WAIT_RTK → REVERSING → CHECK_COG → PERSIST (yaw only, robot OFF the dock) → REDOCKING → VERIFY_CHARGE → PERSIST (position, after a 15 s standstill dwell on the dock). Every terminal outcome is logged (`finish`), not only published on the volatile status topic | (no GUI client; GUI uses the façade below) |
 | `/calibrate_imu_yaw_node/dock_calibration/start` | `std_srvs/Trigger` | server (L337): non-blocking start of the same core, progress on the status topic | GUI `calibration.go:84` |
-| `/map_server_node/set_docking_point` | `mowgli_interfaces/srv/SetDockingPoint` | **client** (L310): `use_gps_position=true`, `yaw_source=MOTION` | one-click persist path (L1148) |
+| `/map_server_node/set_docking_point` | `mowgli_interfaces/srv/SetDockingPoint` | **client** (L310), TWO calls per run: (1) off the dock `preserve_position=true, yaw_source=MOTION` (yaw only — a GPS position capture is rejected there, robot not charging); (2) after the verified re-dock `use_gps_position=true, yaw_source=PRESERVE` | one-click persist path (`persist_dock_via_map_server`, `dock_persist_plan.hpp`) |
 | `/behavior_tree_node/high_level_control` | `mowgli_interfaces/srv/HighLevelControl` | client (L244): HOME / RECORD_AREA / STOP during calibration | — |
 
 ### Parameters

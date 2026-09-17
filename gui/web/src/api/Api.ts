@@ -284,6 +284,7 @@ export interface MowgliReplaceMapReq {
 
 export interface MowgliSetDockingPointReq {
   docking_pose?: GeometryPose;
+  preserve_position?: boolean;
   use_gps_position?: boolean;
   yaw_rad?: number;
   yaw_source?: number;

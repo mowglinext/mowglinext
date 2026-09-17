@@ -37,11 +37,12 @@ export const DockCalibrationCard: React.FC = () => {
                     </Text>
                     <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
                         Robot on the dock (charging) with RTK-Fixed. It reverses in a straight
-                        line, checks the GPS course heading, saves the dock pose, then re-docks
-                        as a live confirmation pass. If the saved heading is a big change from
-                        before, that confirmation may fail — the pose is already saved either
-                        way, but the navigation stack needs a restart to steer by it. The blade
-                        stays off the whole time.
+                        line, checks the GPS course heading and saves the dock heading right
+                        there, then re-docks and, once charging is confirmed, saves the dock
+                        position. If the new heading is a big change from before, the re-dock
+                        may fail — the heading is already saved either way, but the position
+                        is not, and the navigation stack needs a restart to steer by the new
+                        heading. The blade stays off the whole time.
                     </Paragraph>
                 </div>
 

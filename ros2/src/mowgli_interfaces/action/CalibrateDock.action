@@ -10,20 +10,32 @@
 #      (blade OFF, collision_monitor active), monitoring COG.
 #   3. Gate COG coherence (circular std + bearing match + min displacement);
 #      derive the dock chassis yaw from the reverse leg.
-#   4. Persist the dock pose via map_server /set_docking_point (the single
-#      canonical writer): averaged GPS x/y + the motion-derived yaw.
-#   5. Drive FORWARD along the same line as a live CONFIRMATION pass, until
-#      the firmware reports charging (re-dock), or fail.
+#   4. Persist the dock YAW via map_server /set_docking_point (the single
+#      canonical writer): preserve_position + yaw_source=MOTION. The robot is
+#      OFF the dock here, so this is a yaw-ONLY write — the stored x/y is kept.
+#   5. Re-dock through the production docking pipeline until the firmware
+#      reports charging, or fail.
+#   6. Seated and charging: persist the dock POSITION (use_gps_position +
+#      yaw_source=PRESERVE — averaged GPS x/y, lever-arm-corrected with the
+#      yaw of step 4).
 #
-# The dock pose is persisted as soon as step 3's coherence gate passes, NOT
+# The persistence is split because the two halves are only measurable in two
+# places: the yaw by driving OFF the dock, the position by sitting ON it. A
+# single request doing both at step 4 (the first version of this ordering) is
+# rejected by map_server's is_charging gate on every run.
+#
+# The yaw is persisted as soon as step 3's coherence gate passes, NOT
 # after step 5. It used to be the other way round, but docking_server and
 # gps_dock_detection_node only read dock_pose_x/y/yaw as ROS parameters at
 # container startup — a same-session step-5 re-dock always steers on the OLD
 # heading no matter when the write happens, so deferring it just discarded a
 # good measurement whenever the old heading was too far off for that live
-# approach to land. Step 5 failing does not mean the pose was not saved —
-# check `message` / `retry_reason`; RETRY_NO_CHARGE_ON_REDOCK means it WAS
-# saved but needs a mowgli-ros2 restart before the live approach reflects it.
+# approach to land. Step 5 failing does not mean nothing was saved —
+# check `message` / `retry_reason`; RETRY_NO_CHARGE_ON_REDOCK means the YAW
+# was saved (the position was NOT, and the robot is off the dock) and needs a
+# mowgli-ros2 restart before the live approach reflects it.
+# RETRY_PERSIST_FAILED covers both steps: `message` says whether the yaw
+# (step 4, nothing changed) or the position (step 6, yaw saved) was refused.
 
 # ── Goal ──────────────────────────────────────────────────────────────────
 bool include_imu_yaw     # also solve the IMU mounting-yaw offset from the straight legs
@@ -36,7 +48,7 @@ uint8 RETRY_NONE=0
 uint8 RETRY_NO_RTK=1                # never reached RTK-Fixed within the timeout
 uint8 RETRY_COG_INCOHERENT=2       # COG std too high / bearing mismatch / RTK not truly fixed
 uint8 RETRY_INSUFFICIENT_DISPLACEMENT=3  # reverse leg did not travel far enough for a yaw fit
-uint8 RETRY_NO_CHARGE_ON_REDOCK=4  # forward re-dock did not re-engage the charger
+uint8 RETRY_NO_CHARGE_ON_REDOCK=4  # re-dock did not re-engage the charger (yaw saved, position not)
 uint8 RETRY_EMERGENCY=5            # emergency latched / triggered mid-sequence
 uint8 RETRY_WRONG_STATE=6          # robot not on dock at start, or in AUTONOMOUS/mowing
 uint8 RETRY_PERSIST_FAILED=7       # set_docking_point rejected or file not writable
@@ -45,7 +57,8 @@ bool success
 uint8 retry_reason
 string message
 
-# Persisted dock pose (valid only when success == true)
+# Persisted dock pose (x/y valid only when success == true; the yaw is
+# persisted whenever the run got past step 4 — see `message`)
 float64 dock_pose_x            # ENU map-frame x of the dock contact (m)
 float64 dock_pose_y            # ENU map-frame y of the dock contact (m)
 float64 dock_pose_yaw_rad      # chassis heading when docked (ENU, rad)
