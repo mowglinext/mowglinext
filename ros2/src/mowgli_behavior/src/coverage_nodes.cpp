@@ -24,6 +24,7 @@
 
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
+#include "mowgli_behavior/unit_resume.hpp"
 #include "tf2/exceptions.hpp"
 
 namespace mowgli_behavior
@@ -401,6 +402,7 @@ BT::NodeStatus FollowStrip::onStart()
     getInput<double>("detour_footprint_radius_m", detour_footprint_radius_m_);
   }
   detours_used_ = 0;
+  unit_resumes_without_progress_ = 0;
   if (!follow_client_->wait_for_action_server(std::chrono::seconds(5)))
   {
     RCLCPP_ERROR(ctx->node->get_logger(), "FollowStrip: follow_path not available");
@@ -831,6 +833,7 @@ BT::NodeStatus FollowStrip::onRunning()
     resume_start_idx_ = 0;
     // The detour budget is per-segment — a fresh unit gets its own full budget.
     detours_used_ = 0;
+    unit_resumes_without_progress_ = 0;
     // Skip any swaths already mowed in an earlier pass (resume).
     const auto& done = ctx->area_completed_swaths[area_idx_];
     while (swath_idx_ < swaths_.size() && done.count(swath_idx_) > 0)
@@ -1246,6 +1249,38 @@ BT::NodeStatus FollowStrip::onRunning()
     // still-progressing area.
     persistResumeCursor(ctx);
     follow_handle_.reset();
+
+    // Re-dispatch the REST of this unit from the stepped cursor instead of moving
+    // on: the cursor is one scalar over all units, so completing a later unit
+    // would book everything left behind here as mowed (unit_resume.hpp).
+    if (swath_idx_ < swaths_.size())
+    {
+      const std::size_t unit_poses = swaths_[swath_idx_].poses.size();
+      const UnitResumeDecision resume = DecideUnitResume(unit_poses,
+                                                         reached_idx,
+                                                         path_progress_idx_,
+                                                         unit_resumes_without_progress_);
+      unit_resumes_without_progress_ = resume.consecutive;
+      if (resume.resume)
+      {
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "FollowStrip: resuming the rest of unit %zu/%zu from pose %zu/%zu "
+                    "(no-progress resumes: %zu)",
+                    swath_idx_ + 1,
+                    swaths_.size(),
+                    path_progress_idx_,
+                    unit_poses,
+                    unit_resumes_without_progress_);
+        trimUnitAt(ctx, path_progress_idx_);
+        swath_goal_sent_ = false;
+        transit_pending_ = false;
+        transit_active_ = false;
+        if (sendCurrentSwath(ctx))
+        {
+          return BT::NodeStatus::RUNNING;
+        }
+      }
+    }
     ++swaths_skipped_;
     return advance();
   }
@@ -1368,6 +1403,27 @@ void FollowStrip::setBladeEnabled(bool enabled)
   blade_client_->async_send_request(req);
 }
 
+void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx)
+{
+  // Trim the current unit to [idx, end). Fold idx into resume_start_idx_ so the
+  // absolute cursor (swath_base + resume_start_idx + progress) stays a consistent
+  // index into the concatenation.
+  const auto& poses = swaths_[swath_idx_].poses;
+  resume_start_idx_ += idx;
+  nav_msgs::msg::Path remainder;
+  remainder.header = swaths_[swath_idx_].header;
+  remainder.poses.assign(poses.begin() + static_cast<std::ptrdiff_t>(idx), poses.end());
+  swaths_[swath_idx_] = std::move(remainder);
+  path_progress_idx_ = 0;
+
+  // Persist the moved cursor now: onHalted cannot persist during the transit to
+  // the new first pose (follow_handle_ is null then), so a preempt mid-transit
+  // must still resume PAST the skipped span rather than back at the stuck pose.
+  const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
+  ctx->area_resume_pose_index[area_idx_] = base + resume_start_idx_;
+  saveCoverageResumeState(*ctx);
+}
+
 bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
 {
   // Budget: never loop forever detouring obstacle after obstacle on one segment.
@@ -1437,24 +1493,10 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
   }
   const std::size_t idx = *d.resume_idx;
 
-  // Trim the current unit to [idx, end): poses [stuck..idx) span the obstacle gap
-  // and are left un-mowed this pass (physically unreachable). Fold idx into
-  // resume_start_idx_ so the absolute cursor (swath_base + resume_start_idx +
-  // progress) stays a consistent index into the concatenation.
-  resume_start_idx_ += idx;
-  nav_msgs::msg::Path remainder;
-  remainder.header = swaths_[swath_idx_].header;
-  remainder.poses.assign(poses.begin() + static_cast<std::ptrdiff_t>(idx), poses.end());
-  swaths_[swath_idx_] = std::move(remainder);
-  path_progress_idx_ = 0;
+  // Poses [stuck..idx) span the obstacle gap and are left un-mowed this pass
+  // (physically unreachable).
   ++detours_used_;
-
-  // Persist the moved cursor now: onHalted cannot persist during the detour
-  // transit (follow_handle_ is null then), so a preempt mid-detour must still
-  // resume PAST the obstacle rather than back at the stuck pose.
-  const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
-  ctx->area_resume_pose_index[area_idx_] = base + resume_start_idx_;
-  saveCoverageResumeState(*ctx);
+  trimUnitAt(ctx, idx);
 
   RCLCPP_WARN(ctx->node->get_logger(),
               "FollowStrip: obstacle blocked unit %zu/%zu — DETOUR %zu/%zu: blade-off transit "
