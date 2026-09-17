@@ -290,6 +290,7 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.avoidance_horizon_m = declare_double("avoidance_horizon_m", 2.5);
   config_.avoidance_max_slope = declare_double("avoidance_max_slope", 1.0);
   config_.avoidance_reaction_m = declare_double("avoidance_reaction_m", 0.5);
+  config_.avoidance_min_horizon_m = declare_double("avoidance_min_horizon_m", 1.0);
   config_.obstacle_reverse_enabled = declare_bool("obstacle_reverse_enabled", false);
   config_.obstacle_reverse_max_dist_m = declare_double("obstacle_reverse_max_dist_m", 0.30);
   config_.obstacle_reverse_speed_mps = declare_double("obstacle_reverse_speed_mps", 0.10);
@@ -674,6 +675,12 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 0.3, 5.0))
         break;
       config_.avoidance_horizon_m = p.as_double();
+    }
+    else if (key == "avoidance_min_horizon_m")
+    {
+      if (reject_invalid(key, p.as_double(), 0.2, 5.0))
+        break;
+      config_.avoidance_min_horizon_m = p.as_double();
     }
     else if (key == "avoidance_reaction_m")
     {
@@ -2720,26 +2727,61 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
   // it — we are already closer than we would like; (3) ignoring the stations the
   // body already covers (the robot is where it is, exactly like station 0) so
   // the profile still steers AWAY. Only when all three fail is the robot wedged.
+  //
+  // The HORIZON degrades too, and first: a column of the lattice that is blocked
+  // at every offset 2 m ahead (the hedge where the ring turns, a scan that paints
+  // a wall for one tick) makes the whole problem infeasible, but it is not a
+  // reason to stop NOW — field 2026-09-17: WEDGED + reverse-escape with the
+  // obstacle still 2.4 m away, flipping with a feasible plan every other tick.
+  // Only a blockage inside avoidance_min_horizon_m counts as wedged; beyond it
+  // the robot keeps driving on the longest prefix it can plan and looks again.
   OffsetLatticeResult plan;
   int plan_level = 0;
-  for (const auto& [ahead, grace] : {std::pair<std::size_t, std::size_t>{reaction, 0},
-                                     std::pair<std::size_t, std::size_t>{0, 0},
-                                     std::pair<std::size_t, std::size_t>{0, stations_in(lead)}})
+  std::size_t planned_stations = stations.size();
+  const std::size_t min_stations =
+      std::min(stations.size(),
+               std::max<std::size_t>(2, stations_in(config_.avoidance_min_horizon_m) + 1));
+  const std::size_t shrink = std::max<std::size_t>(1, stations_in(0.25));
+  for (std::size_t n = stations.size(); !plan.feasible;
+       n = (n > min_stations + shrink) ? n - shrink : min_stations)
   {
-    ++plan_level;
-    plan = PlanOffsetProfile(
-        stations,
-        lateral_deviation_,
-        preferred,
-        [&, ahead = ahead, grace = grace](std::size_t station, double offset)
-        {
-          return span_blocked(station, offset, ahead, grace);
-        },
-        cfg);
-    if (plan.feasible)
+    const std::vector<double> prefix(stations.begin(),
+                                     stations.begin() + static_cast<std::ptrdiff_t>(n));
+    plan_level = 0;
+    for (const auto& [ahead, grace] : {std::pair<std::size_t, std::size_t>{reaction, 0},
+                                       std::pair<std::size_t, std::size_t>{0, 0},
+                                       std::pair<std::size_t, std::size_t>{0, stations_in(lead)}})
+    {
+      ++plan_level;
+      plan = PlanOffsetProfile(
+          prefix,
+          lateral_deviation_,
+          preferred,
+          [&, ahead = ahead, grace = grace](std::size_t station, double offset)
+          {
+            return span_blocked(station, offset, ahead, grace);
+          },
+          cfg);
+      if (plan.feasible)
+      {
+        break;
+      }
+    }
+    planned_stations = n;
+    if (n == min_stations)
     {
       break;
     }
+  }
+  if (plan.feasible && planned_stations < stations.size())
+  {
+    RCLCPP_INFO_THROTTLE(logger_,
+                         *clock_,
+                         2000,
+                         "FTCController: lattice horizon cut to %.2fm of %.2fm (blocked across the "
+                         "whole lattice further on) — continuing",
+                         stations[planned_stations - 1],
+                         stations.back());
   }
   if (plan.feasible && plan_level > 1)
   {
@@ -2781,9 +2823,15 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
                          target_lateral_deviation_);
   }
 
-  // Offset to hold NOW: the profile one station ahead of the carrot (the blend
-  // rate below turns it into a smooth lateral move).
-  const double wanted = plan.offsets.size() > 1 ? plan.offsets[1] : plan.offsets.front();
+  // Offset to hold NOW: the profile previewed one carrot LEAD ahead. Taking it
+  // at the carrot itself starts every skirt at the last station that still
+  // clears — the plan is then only ever executed from its "no slack" fallback
+  // (replay 2026-09-17). Previewing by the distance the chassis trails the
+  // carrot makes the body, not the carrot, follow the profile; the blend rate
+  // below turns the step into a smooth lateral move.
+  const std::size_t preview =
+      std::min(plan.offsets.size() - 1, std::max<std::size_t>(1, stations_in(lead)));
+  const double wanted = plan.offsets[preview];
 
   // Moving AWAY from the line is applied at once. Coming BACK is debounced: the
   // costmap keeps no memory (observation_persistence 0), so an obstacle that

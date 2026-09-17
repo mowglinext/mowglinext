@@ -664,6 +664,9 @@ controller_server:
       # The skirt must be in place this far BEFORE the obstacle: the requested
       # offset is only reached after blend + lateral loop + chassis lag.
       avoidance_reaction_m: 0.5
+      # A blockage across the WHOLE lattice further ahead than this is not a
+      # reason to stop now: the horizon is cut and the robot keeps driving.
+      avoidance_min_horizon_m: 1.0
       max_lateral_deviation: 1.5
       deviation_step: 0.05
       deviation_blend_rate: 0.5

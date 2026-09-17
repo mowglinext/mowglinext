@@ -611,6 +611,8 @@ private:
     double avoidance_max_slope{1.0};
     /// Path length by which a skirt must be in place BEFORE the obstacle (m).
     double avoidance_reaction_m{0.5};
+    /// Only a blockage closer than this makes the robot WEDGED (m).
+    double avoidance_min_horizon_m{1.0};
 
     /// Bounded reverse-escape for the WEDGED case (both sides of an obstacle
     /// blocked, or the skirt needed exceeds max_lateral_deviation). Before
