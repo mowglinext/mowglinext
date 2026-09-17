@@ -102,12 +102,23 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // 0.32 m concave-boundary excursion (project_coverage_boundary_excursion).
   lethal_outside_areas_ = declare_parameter<bool>("lethal_outside_areas", true);
   // INJECTED by full_system.launch.py, which floors it at the live chassis
-  // half-width (robot_config_util.chassis_half_width) — the band is the room
-  // the BODY has to overhang the recorded line, and chassis_safety_inset is 0,
-  // so the outermost coverage pass rides ON that line with the whole half-width
-  // outside it. The literal below is only the standalone-run fallback; it was
-  // sized when the chassis was 0.40 m wide and does NOT track the GUI's chassis
-  // presets (up to 0.535 m wide) on its own.
+  // CIRCUMSCRIBED RADIUS (robot_config_util.chassis_circumscribed_radius,
+  // 0.597 m on the shipped chassis) — the band is the room the BODY has to
+  // overhang the recorded line, and chassis_safety_inset is 0, so the outermost
+  // coverage pass rides ON that line: the CENTRE is on the line and the
+  // footprint reaches up to that radius outside it in any orientation. Sideways
+  // that is only the half-width (0.275), but at a row END the body noses
+  // chassis_center_x + chassis_length/2 + margin = 0.53 m past the line.
+  // The literal below is only the standalone-run fallback; it was sized when
+  // the chassis was 0.40 m wide and does NOT track the GUI's chassis presets
+  // (up to 0.535 m wide) on its own.
+  //
+  // TRADE-OFF (watch it): a wider band is also a wider region the planner will
+  // route through OUTSIDE the recorded perimeter — the small value below is
+  // what fixed the 0.32 m concave-boundary excursion noted under
+  // lethal_outside_areas_ above. The injected floor also exceeds
+  // lethal_boundary_margin_m_ (0.5 m), so the planner's lethal wall no longer
+  // sits strictly inside that e-stop tripwire.
   enforce_boundary_margin_m_ = declare_parameter<double>("enforce_boundary_margin_m", 0.40);
   // Two-tier boundary: if the robot is outside every defined area, we
   // publish /boundary_violation (BT attempts a recovery back inside). If

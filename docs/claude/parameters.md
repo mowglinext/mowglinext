@@ -328,7 +328,7 @@ These fall back to a literal hardcoded in the launch file. Each is allow-listed 
 | `fusion_graph_node_period_s` | 0.04 (`navigation.launch.py:139`) | `fusion_graph_node.node_period_s` (overrides `fusion_graph.yaml:23`'s 0.02) |
 | `dock_body_length_m` / `dock_body_width_m` | 0.80 / 0.55 (`full_system.launch.py:383–384`) | `map_server` dock polygon |
 | `lethal_outside_areas` | `true` (`full_system.launch.py:416`) | `map_server` (also a static default in `map_server.yaml:96`) |
-| `enforce_boundary_margin_m` | 0.40 (`full_system.launch.py:418`) | `map_server` (static default `map_server.yaml:112`) |
+| `enforce_boundary_margin_m` | 0.40, then **floored at `robot_config_util.chassis_circumscribed_radius(rp)`** = 0.597 m shipped (`full_system.launch.py`) | `map_server` (static default `map_server.yaml`, standalone runs only). The band must hold the whole footprint overhanging the recorded line — `chassis_safety_inset` is 0, so the CENTRE rides on the line and the body reaches 0.275 m sideways but **0.53 m forward** at a row end. Floor raised from `chassis_half_width` (a no-op: 0.275 < 0.40) 2026-09-17. **Trade-off:** the band is also how far outside the perimeter Smac will route, and it now exceeds `lethal_boundary_margin_m` (0.5) |
 | `lift_recovery_mode` / `lift_blade_resume_delay_sec` | `false` / 1.0 (`mowgli.launch.py:230–232`) | `hardware_bridge` — GUI section *Safety* |
 | `imu_roll` / `imu_pitch` | 0.0 (`mowgli.launch.py:115–116`) | xacro |
 

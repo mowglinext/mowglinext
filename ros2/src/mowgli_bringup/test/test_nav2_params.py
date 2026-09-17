@@ -1264,17 +1264,28 @@ def test_obstacle_margin_is_floored_at_the_body_half_width() -> None:
     )
 
 
-def test_enforce_boundary_margin_is_floored_at_the_body_half_width() -> None:
+def test_enforce_boundary_margin_is_floored_at_the_circumscribed_radius() -> None:
     """The outside-slack band is the room the BODY has to overhang the recorded
-    line. chassis_safety_inset is 0, so the outermost coverage pass rides ON that
-    line and the whole half-width hangs over it; a band narrower than the body
-    ends the pass with the chassis over LETHAL keepout cells. The 0.40 m literal
-    was sized for a 0.40 m chassis — the widest GUI preset is 0.535 m wide."""
+    line. chassis_safety_inset is 0, so the outermost coverage pass puts the
+    robot's CENTRE on that line and the footprint then reaches up to the
+    CIRCUMSCRIBED radius outside it in any orientation — only 0.275 m sideways,
+    but chassis_center_x + chassis_length/2 + margin = 0.53 m forward at a row
+    end. That is why the 0.40 m literal (sized for a 0.40 m chassis) and the
+    0.275 m half-width floor that replaced it both left the front of the chassis
+    over LETHAL keepout cells."""
     src = _read_text("launch/full_system.launch.py")
-    assert re.search(r"boundary_margin_floor\s*=\s*chassis_half_width\(", src), (
+    assert re.search(
+        r"boundary_margin_floor\s*=\s*chassis_circumscribed_radius\(", src), (
         "the enforce_boundary_margin_m floor must be DERIVED via "
-        "robot_config_util.chassis_half_width(), not hardcoded — a literal goes "
-        "stale when the operator edits the chassis in the GUI."
+        "robot_config_util.chassis_circumscribed_radius(), not hardcoded and "
+        "not the half-width — the half-width only covers the SIDEWAYS overhang, "
+        "and a literal goes stale when the operator edits the chassis in the "
+        "GUI."
+    )
+    assert not re.search(
+        r"boundary_margin_floor\s*=\s*chassis_half_width\(", src), (
+        "the half-width floor was a no-op (0.275 < the 0.40 fallback) and does "
+        "not cover the 0.53 m forward reach of the footprint."
     )
     assert re.search(
         r"enforce_boundary_margin_m\s*<\s*boundary_margin_floor.*?"
@@ -1286,6 +1297,17 @@ def test_enforce_boundary_margin_is_floored_at_the_body_half_width() -> None:
         r'\{"enforce_boundary_margin_m":\s*enforce_boundary_margin_m\}', src), (
         "map_server must receive the FLOORED value, not a fresh read of the "
         "robot config."
+    )
+    # The floor must actually clear the forward reach on the shipped chassis —
+    # the whole point of moving off the half-width.
+    from robot_config_util import chassis_footprint as _chassis_footprint
+
+    template = _load_yaml("mowgli_robot.yaml")["mowgli"]["ros__parameters"]
+    front, _rear, half_width = _chassis_footprint(template)
+    floor = _chassis_circumscribed_radius(template)
+    assert floor >= front > half_width, (
+        "the derived floor must cover the FORWARD footprint reach, which is "
+        f"what the half-width ({half_width:.3f} m) misses ({front:.3f} m)."
     )
 
 

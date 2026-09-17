@@ -100,17 +100,26 @@ map_server_node:
     # Free slack (m) left OUTSIDE each area edge even when lethal_outside_areas
     # is on. Absorbs RTK/pose drift so a start pose a few cm past the recorded
     # CENTRE line is not rejected as "Start occupied", and lets the footprint
-    # overhang the line. 0.40 = chassis half-width (0.225) + one global-costmap
-    # cell (0.08) + drift headroom: at the previous 0.25 (~robot radius), a
-    # robot riding the outer headland ring (centerline ON the recorded line)
-    # kept only ~5 cm between its centre cell and the inscribed-cost band —
-    # under one 0.08 m cell — so Smac transits sporadically failed "Start
-    # occupied" and FollowStrip skipped whole sub-paths (headland rings). The
-    # global costmap lists keepout_filter BEFORE inflation_layer, so this
-    # lethal wall is inflated inward by only inflation_radius (0.20 m): wall at
-    # 0.40 m outside the centre line → the inflated band now ends 0.20 m
-    # OUTSIDE it, no bite inside the ring. Stays under lethal_boundary_margin_m
-    # (0.5) so the planner wall engages before the e-stop tripwire.
+    # overhang the line.
+    #
+    # THIS VALUE IS ONLY THE STANDALONE-RUN FALLBACK. On the robot,
+    # full_system.launch.py injects it and FLOORS it at the live chassis
+    # circumscribed radius (robot_config_util.chassis_circumscribed_radius =
+    # 0.597 m on the shipped chassis), because chassis_safety_inset is 0: the
+    # outermost coverage pass puts the CENTRE on the recorded line, so the
+    # footprint reaches up to that radius outside it — 0.275 m sideways, but
+    # 0.53 m forward at a row end.
+    #
+    # 0.40 itself replaced a 0.25 (~robot radius) value under which a robot
+    # riding the outer headland ring (centerline ON the recorded line) kept
+    # only ~5 cm between its centre cell and the inscribed-cost band — under
+    # one 0.08 m cell — so Smac transits sporadically failed "Start occupied"
+    # and FollowStrip skipped whole sub-paths (headland rings). The global
+    # costmap lists keepout_filter BEFORE inflation_layer, so this lethal wall
+    # is inflated inward by only inflation_radius (0.20 m), never biting inside
+    # the ring. TRADE-OFF: the injected floor is ABOVE lethal_boundary_margin_m
+    # (0.5), so the planner wall no longer engages strictly before that e-stop
+    # tripwire — only the mid-cost (never free) band keeps the planner off it.
     enforce_boundary_margin_m: 0.40
 
     # /local_costmap published values are 0–100 (OccupancyGrid units, with
