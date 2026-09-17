@@ -190,6 +190,15 @@ if(BUILD_TESTING)
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+
+  ament_add_gtest(test_ftc_carrot_lead
+    test/test_ftc_carrot_lead.cpp
+  )
+
+  target_include_directories(test_ftc_carrot_lead
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
 endif()
 
 # ---------------------------------------------------------------------------
