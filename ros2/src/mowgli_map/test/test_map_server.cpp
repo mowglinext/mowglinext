@@ -1087,7 +1087,10 @@ TEST_F(KeepoutBodyOnceTest, AcceptedDigIsTheRutDiscPlusTheBodyBandAndNothingMore
 
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <sstream>
+
+#include <unistd.h>
 
 namespace
 {
@@ -1811,6 +1814,16 @@ protected:
   // only initializes docking_pose_ when at least one of the three is nonzero.
   void construct_node_with_dock_yaw(double initial_dock_yaw_rad)
   {
+    construct_node_with_dock_pose(0.0, 0.0, initial_dock_yaw_rad);
+  }
+
+  // Full stored dock pose (+ optionally a real file to persist into) — what
+  // the yaw-only preserve_position write has to leave untouched.
+  void construct_node_with_dock_pose(double dock_x,
+                                     double dock_y,
+                                     double initial_dock_yaw_rad,
+                                     const std::string& robot_yaml_path = "")
+  {
     rclcpp::NodeOptions opts;
     opts.append_parameter_override("resolution", 0.1);
     opts.append_parameter_override("map_size_x", 10.0);
@@ -1820,6 +1833,12 @@ protected:
     opts.append_parameter_override("map_file_path", "");
     opts.append_parameter_override("publish_rate", 1.0);
     opts.append_parameter_override("dock_pose_yaw", initial_dock_yaw_rad);
+    opts.append_parameter_override("dock_pose_x", dock_x);
+    opts.append_parameter_override("dock_pose_y", dock_y);
+    if (!robot_yaml_path.empty())
+    {
+      opts.append_parameter_override("robot_yaml_path", robot_yaml_path);
+    }
     node_.reset();  // destroy the SetUp()-constructed node before building the replacement
     node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
   }
@@ -2027,4 +2046,188 @@ TEST_F(DockCalibrationCaptureTest, ManualPositionSetIsUnaffectedByAntennaAveragi
 
   EXPECT_TRUE(res->success);
   EXPECT_NEAR(node_->docking_pose_for_test().position.x, 5.0, 1e-6);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Two-step persistence of the one-click dock calibration (2026-09-17).
+//
+// The calibration measures the dock yaw by REVERSING OFF the dock, so when the
+// yaw exists the robot is ~1.5 m from the charger. Step 1 writes that yaw ONLY
+// (preserve_position) and must therefore pass WITHOUT is_charging; step 2
+// captures X/Y after the re-dock, through every gate. Before this, step 1 was
+// a use_gps_position=true capture and gate (1) rejected it every single time.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+double yaw_of(const geometry_msgs::msg::Pose& pose)
+{
+  return 2.0 * std::atan2(pose.orientation.z, pose.orientation.w);
+}
+}  // namespace
+
+TEST_F(DockCalibrationCaptureTest, YawOnlyMotionWriteSucceedsOffDockAndKeepsStoredPosition)
+{
+  // Arrange — a stored dock pose, robot OFF the dock, fused yaw never settled
+  // (no convergence samples at all), RTK good.
+  construct_node_with_dock_pose(6.029, 3.067, -0.85);
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  const double motion_yaw = -0.9346;
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->preserve_position = true;
+  req->use_gps_position = false;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
+  req->yaw_rad = motion_yaw;
+  // docking_pose is left zero-initialised: it must NOT zero the stored dock.
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+
+  // Act
+  node_->set_docking_point_for_test(req, res);
+
+  // Assert
+  ASSERT_TRUE(res->success) << res->message;
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 6.029, 1e-9);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.y, 3.067, 1e-9);
+  EXPECT_NEAR(yaw_of(node_->docking_pose_for_test()), motion_yaw, 1e-9);
+}
+
+TEST_F(DockCalibrationCaptureTest, YawOnlyMotionWritePersistsYawAndLeavesXyInTheYamlFile)
+{
+  const std::string path = "/tmp/mowgli_test_dock_yaw_only_" + std::to_string(::getpid()) + ".yaml";
+  {
+    std::ofstream out(path);
+    out << "mowgli:\n  ros__parameters:\n    dock_pose_x: 6.029\n"
+           "    dock_pose_y: 3.067\n    dock_pose_yaw: -0.85\n";
+  }
+  construct_node_with_dock_pose(6.029, 3.067, -0.85, path);
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->preserve_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
+  req->yaw_rad = -0.9346;
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  ASSERT_TRUE(res->success) << res->message;
+  EXPECT_TRUE(res->message.empty()) << "file write must have succeeded: " << res->message;
+  std::ifstream in(path);
+  const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  EXPECT_NE(content.find("dock_pose_x: 6.029"), std::string::npos) << content;
+  EXPECT_NE(content.find("dock_pose_y: 3.067"), std::string::npos) << content;
+  EXPECT_NE(content.find("dock_pose_yaw: -0.9346"), std::string::npos) << content;
+  std::remove(path.c_str());
+}
+
+TEST_F(DockCalibrationCaptureTest, YawOnlyMotionWriteStillRequiresRtkAccuracy)
+{
+  construct_node_with_dock_pose(6.029, 3.067, -0.85);
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.30);  // RTK-Float-grade sigma
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->preserve_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
+  req->yaw_rad = 1.0;
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_FALSE(res->message.empty());
+  EXPECT_NEAR(yaw_of(node_->docking_pose_for_test()), -0.85, 1e-9);
+}
+
+TEST_F(DockCalibrationCaptureTest, YawOnlyMotionWriteIsRejectedWhenNoDockPositionIsStored)
+{
+  // SetUp() built a node with NO dock pose: preserving (0, 0) would publish a
+  // phantom dock (and its lethal body polygon) at the datum.
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->preserve_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
+  req->yaw_rad = 1.0;
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_FALSE(node_->docking_pose_set_for_test());
+}
+
+TEST_F(DockCalibrationCaptureTest, GpsPositionCaptureIsStillRejectedOffDock)
+{
+  // The regression's exact request (MOTION + use_gps_position off the dock):
+  // it must STAY rejected — the charging gate was right, the caller was wrong.
+  construct_node_with_dock_pose(6.029, 3.067, -0.85);
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  node_->push_converged_yaw_for_test(0.0, 20);
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+  push_antenna_samples(1.0, 2.0);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->use_gps_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
+  req->yaw_rad = 1.0;
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_NE(res->message.find("not detected on dock"), std::string::npos) << res->message;
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 6.029, 1e-9);
+}
+
+TEST_F(DockCalibrationCaptureTest, PreservePositionCannotBeCombinedWithAPositionCapture)
+{
+  construct_node_with_dock_pose(6.029, 3.067, -0.85);
+  arm_gates_one_through_three();
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->preserve_position = true;
+  req->use_gps_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_NE(res->message.find("invalid request"), std::string::npos) << res->message;
+}
+
+TEST_F(DockCalibrationCaptureTest, PositionCaptureAfterRedockUsesTheYawWrittenByTheYawOnlyStep)
+{
+  // The full two-step sequence: step 1 off the dock (yaw only), step 2 on the
+  // dock (X/Y, PRESERVE). Step 2's lever-arm correction must use the FRESH
+  // yaw from step 1, not the stale one the node booted with.
+  const double stale_yaw = 0.0;
+  const double fresh_yaw = M_PI / 2.0;
+  construct_node_with_dock_pose(9.0, 9.0, stale_yaw);
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  auto yaw_req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  yaw_req->preserve_position = true;
+  yaw_req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
+  yaw_req->yaw_rad = fresh_yaw;
+  auto yaw_res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(yaw_req, yaw_res);
+  ASSERT_TRUE(yaw_res->success) << yaw_res->message;
+
+  arm_gates_one_through_three(stale_yaw);
+  // True base (2, 5), chassis facing +Y: the antenna sits 0.30 m further north.
+  push_antenna_samples(2.0, 5.30);
+  auto pos_req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  pos_req->use_gps_position = true;
+  pos_req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::PRESERVE;
+  auto pos_res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(pos_req, pos_res);
+
+  ASSERT_TRUE(pos_res->success) << pos_res->message;
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 2.0, 1e-6);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.y, 5.0, 1e-6);
+  EXPECT_NEAR(yaw_of(node_->docking_pose_for_test()), fresh_yaw, 1e-9);
 }
