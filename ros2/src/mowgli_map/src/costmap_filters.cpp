@@ -96,8 +96,10 @@ void MapServerNode::publish_keepout_mask()
   //
   // outside_free_margin selects the boundary policy:
   //   * lethal_outside_areas_ = true  (default, operator intent): use the
-  //     small enforce_boundary_margin_m_ (0.40 m — chassis half-width plus
-  //     costmap-cell/drift headroom). Everything beyond
+  //     small enforce_boundary_margin_m_ (0.40 m by default, and FLOORED at the
+  //     live chassis half-width by full_system.launch.py — the band has to hold
+  //     the body overhanging the recorded line, which it does by design now
+  //     that chassis_safety_inset is 0). Everything beyond
   //     that slack is LETHAL, so the planner never routes outside the union
   //     of areas and MPPI never steers the robot out of the authorised zone
   //     (fixes the 0.32 m concave-boundary excursion). The dock corridor

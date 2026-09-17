@@ -54,6 +54,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
+    chassis_half_width,
     load_robot_params,
     resolve_lidar_enabled,
     warn_lidar_key_absent,
@@ -189,6 +190,30 @@ def generate_launch_description() -> LaunchDescription:
     # key the installed config omits falls through to its versioned template
     # default (single source of truth).
     robot_params = load_robot_params(bringup_dir, _runtime_cfg_path)
+
+    # Free slack left OUTSIDE every area polygon before the keepout mask turns
+    # lethal (map_server paints that band at the non-lethal kSoftPenaltyMaskCost
+    # so a pose in it is never "Start occupied"). It is the room the BODY has to
+    # overhang the recorded line, so it is FLOORED at the chassis half-width,
+    # DERIVED from the live chassis_* params — same shape and same reason as
+    # navigation.launch.py's obstacle_margin floor. The literal it replaces
+    # ("chassis half-width plus headroom", 0.40) was sized for a 0.40 m chassis:
+    # the widest GUI preset is 0.535 m wide, i.e. a half-width of 0.3175 m, so
+    # 0.40 left 8 cm of headroom rather than the 12.5 cm the comment assumed —
+    # and chassis_safety_inset is now 0, so the outermost pass rides ON the
+    # recorded line and the whole half-width hangs over it.
+    boundary_margin_floor = chassis_half_width(robot_params)
+    enforce_boundary_margin_m = float(
+        robot_params.get("enforce_boundary_margin_m", 0.40))
+    if enforce_boundary_margin_m < boundary_margin_floor:
+        print(
+            "[full_system.launch] enforce_boundary_margin_m "
+            f"{enforce_boundary_margin_m:.3f} m is inside the body half-width "
+            f"{boundary_margin_floor:.3f} m — raising it to the floor. A band "
+            "narrower than the body makes the outermost coverage pass end with "
+            "the chassis over LETHAL keepout cells."
+        )
+        enforce_boundary_margin_m = boundary_margin_floor
 
     # ------------------------------------------------------------------
     # 1. mowgli.launch.py — hardware bridge, RSP, twist_mux
@@ -443,8 +468,7 @@ def generate_launch_description() -> LaunchDescription:
             # left outside each edge for RTK drift is enforce_boundary_margin_m.
             {"lethal_outside_areas": bool(
                 robot_params.get("lethal_outside_areas", True))},
-            {"enforce_boundary_margin_m": float(
-                robot_params.get("enforce_boundary_margin_m", 0.40))},
+            {"enforce_boundary_margin_m": enforce_boundary_margin_m},
             # Transit boundary clearance: a SOFT mid-cost nudge (never lethal)
             # in the GLOBAL costmap that biases point-to-point TRANSIT
             # planning away from the recorded edge when an alternative
