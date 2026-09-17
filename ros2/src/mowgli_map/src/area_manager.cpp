@@ -38,6 +38,7 @@
 
 #include "mowgli_interfaces/robot_yaml_scalar.hpp"
 #include "mowgli_interfaces/wgs84_projection.hpp"
+#include "mowgli_map/dock_antenna_capture.hpp"
 #include "mowgli_map/dock_set_gates.hpp"
 #include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
@@ -657,10 +658,195 @@ static_assert(kDockYawSourceMotion == SetDockReqConsts::MOTION);
 }
 }  // namespace
 
+std::optional<std::string> MapServerNode::dock_charging_gate_rejection()
+{
+  // is_charging gate. Refuse if the last /hardware_bridge/status was not
+  // charging or is older than dock_set_status_max_age_s_.
+  const double max_age = get_parameter("dock_set_status_max_age_s").as_double();
+  const double status_age = (last_status_time_.nanoseconds() == 0)
+                                ? std::numeric_limits<double>::infinity()
+                                : (now() - last_status_time_).seconds();
+  if (status_age > max_age || !last_is_charging_)
+  {
+    return FormatRejection(
+        "robot not detected on dock "
+        "(is_charging=%s, status_age=%.1fs, max=%.1fs). "
+        "Drive onto the dock and wait for the firmware to report "
+        "charging before retrying.",
+        last_is_charging_ ? "true" : "false",
+        status_age,
+        max_age);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> MapServerNode::dock_gps_accuracy_gate_rejection()
+{
+  // GPS accuracy gate. RTK-Fixed reports σ ≈ 3 mm; RTK-Float is 10-50 cm.
+  // Reject when σ(xx) or σ(yy) breaches the threshold, or when /gps/pose_cov
+  // is stale (driver dead, USB unplugged, datum unset). Only the COVARIANCE
+  // and the age of that topic are read — never its position, which is
+  // lever-arm-corrected with the (on the dock: pinned) fused yaw.
+  const double max_acc = get_parameter("dock_set_gps_accuracy_max_m").as_double();
+  const double max_age = get_parameter("dock_set_gps_max_age_s").as_double();
+  geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr gps_snap;
+  rclcpp::Time gps_time{0, 0, RCL_ROS_TIME};
+  {
+    std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
+    gps_snap = last_gps_pose_cov_;
+    gps_time = last_gps_pose_cov_time_;
+  }
+  if (!gps_snap)
+  {
+    return std::string(
+        "no /gps/pose_cov sample yet "
+        "(navsat_to_absolute_pose_node not running, or no GPS fix).");
+  }
+  const double gps_age = (now() - gps_time).seconds();
+  if (gps_age > max_age)
+  {
+    return FormatRejection(
+        "/gps/pose_cov stale (age %.2fs > %.2fs). "
+        "Wait for the GPS feed to refresh.",
+        gps_age,
+        max_age);
+  }
+  const double sigma_xx = std::sqrt(std::max(gps_snap->pose.covariance[0], 0.0));
+  const double sigma_yy = std::sqrt(std::max(gps_snap->pose.covariance[7], 0.0));
+  const double sigma_max = std::max(sigma_xx, sigma_yy);
+  if (sigma_max > max_acc)
+  {
+    return FormatRejection(
+        "GPS not accurate enough (σ_max=%.3f m > %.3f m). "
+        "Achieve RTK-Fixed before retrying.",
+        sigma_max,
+        max_acc);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> MapServerNode::average_recent_dock_antenna(Enu& mean,
+                                                                      size_t& sample_count)
+{
+  std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
+  // Prune by age HERE too, not only when a new sample arrives: the
+  // subscription only trims the window as it pushes, and it only pushes
+  // RTK-Fixed epochs. Under the dock canopy the receiver can sit at Float, so
+  // nothing is pushed, nothing is trimmed, and the deque would otherwise keep
+  // serving samples that are minutes old.
+  const rclcpp::Time t_now = now();
+  while (!recent_gps_antenna_enu_.empty() &&
+         (t_now - std::get<0>(recent_gps_antenna_enu_.front())).seconds() >
+             dock_set_gps_avg_window_s_)
+  {
+    recent_gps_antenna_enu_.pop_front();
+  }
+  if (recent_gps_antenna_enu_.size() < dock_set_gps_avg_min_samples_)
+  {
+    return FormatRejection(
+        "only %zu RTK-Fixed /gps/fix sample(s) taken on the dock in the "
+        "last %.1f s (need >= %zu) to average the dock antenna position. "
+        "Wait for more RTK-Fixed GPS updates.",
+        recent_gps_antenna_enu_.size(),
+        dock_set_gps_avg_window_s_,
+        dock_set_gps_avg_min_samples_);
+  }
+  mean = Enu{};
+  for (const auto& [t, east, north] : recent_gps_antenna_enu_)
+  {
+    (void)t;
+    mean.east += east;
+    mean.north += north;
+  }
+  sample_count = recent_gps_antenna_enu_.size();
+  const double n = static_cast<double>(sample_count);
+  mean.east /= n;
+  mean.north /= n;
+  return std::nullopt;
+}
+
+std::optional<std::string> MapServerNode::resolve_gps_lever_arm()
+{
+  // Resolve the GPS lever arm from TF — mirrors navsat_to_absolute_pose_node's
+  // own resolution, which this node cannot reach into (separate process).
+  // Retried on every capture until URDF/TF is up. Fail closed rather than
+  // silently treat an unresolved lever arm as (0, 0): that would apply NO
+  // correction at all and store the ANTENNA position as the dock.
+  if (lever_arm_known_)
+  {
+    return std::nullopt;
+  }
+  try
+  {
+    auto tf = tf_buffer_->lookupTransform("base_footprint", "gps_link", tf2::TimePointZero);
+    lever_arm_x_ = tf.transform.translation.x;
+    lever_arm_y_ = tf.transform.translation.y;
+    lever_arm_known_ = true;
+    return std::nullopt;
+  }
+  catch (const tf2::TransformException& ex)
+  {
+    return FormatRejection(
+        "GPS lever arm not yet resolved from TF "
+        "(base_footprint→gps_link: %s). Wait for robot_state_publisher "
+        "to come up and retry.",
+        ex.what());
+  }
+}
+
+void MapServerNode::on_capture_dock_antenna(const std_srvs::srv::Trigger::Request::SharedPtr,
+                                            std_srvs::srv::Trigger::Response::SharedPtr res)
+{
+  // Step 1 of the dock calibration's persistence: take the RAW antenna mean
+  // while the robot is seated on the dock, charging and RTK-Fixed — the one
+  // moment all three hold. Nothing is written: the mean waits in memory for
+  // the motion yaw (set_docking_point use_pending_antenna), because without a
+  // trustworthy yaw the antenna cannot be turned into a base_footprint
+  // position. No yaw is involved here, hence no fused-yaw gate.
+  auto reject = [&](const std::string& why)
+  {
+    res->success = false;
+    res->message = why;
+    RCLCPP_WARN(get_logger(), "capture_dock_antenna rejected: %s", why.c_str());
+  };
+  if (const auto why = dock_charging_gate_rejection())
+  {
+    reject(*why);
+    return;
+  }
+  if (const auto why = dock_gps_accuracy_gate_rejection())
+  {
+    reject(*why);
+    return;
+  }
+  Enu mean;
+  size_t sample_count = 0;
+  if (const auto why = average_recent_dock_antenna(mean, sample_count))
+  {
+    reject(*why);
+    return;
+  }
+  pending_antenna_.valid = true;
+  pending_antenna_.antenna = mean;
+  pending_antenna_.sample_count = sample_count;
+  pending_antenna_.stamp_s = now().seconds();
+  res->success = true;
+  res->message = FormatRejection(
+      "dock antenna captured: (%.3f, %.3f) over %zu RTK-Fixed "
+      "sample(s); pending for %.0f s",
+      mean.east,
+      mean.north,
+      sample_count,
+      dock_antenna_capture_ttl_s_);
+  RCLCPP_INFO(get_logger(), "%s (not persisted — waiting for a motion yaw).", res->message.c_str());
+}
+
 void MapServerNode::on_set_docking_point(
     const mowgli_interfaces::srv::SetDockingPoint::Request::SharedPtr req,
     mowgli_interfaces::srv::SetDockingPoint::Response::SharedPtr res)
 {
+  // Whatever happens, tell the caller what is stored NOW.
+  res->stored_pose = docking_pose_;
   auto reject = [&](const std::string& why)
   {
     res->success = false;
@@ -669,11 +855,14 @@ void MapServerNode::on_set_docking_point(
   };
 
   // Which gates apply depends on WHAT is being written — see
-  // dock_set_gates.hpp. Everything that captures or sets a POSITION keeps all
-  // three; only the dock calibration's yaw-only MOTION write (preserve_position,
-  // robot necessarily OFF the dock) skips the charging + fused-yaw gates.
-  const DockSetGates gates =
-      ResolveDockSetGates(req->use_gps_position, req->preserve_position, req->yaw_source);
+  // dock_set_gates.hpp. Everything that captures a position NOW or takes one
+  // from the caller keeps all three; only the dock calibration's two MOTION
+  // writes (robot necessarily OFF the dock) skip the charging + fused-yaw
+  // gates, and neither of those lets the caller supply a position.
+  const DockSetGates gates = ResolveDockSetGates(req->use_gps_position,
+                                                 req->preserve_position,
+                                                 req->use_pending_antenna,
+                                                 req->yaw_source);
   if (gates.kind == DockSetKind::INVALID)
   {
     reject(FormatRejection("invalid request: %s", gates.invalid_reason));
@@ -686,6 +875,28 @@ void MapServerNode::on_set_docking_point(
         "preserve. Capture the dock position on the dock first.");
     return;
   }
+  if (gates.require_pending_antenna)
+  {
+    const double now_s = now().seconds();
+    switch (ClassifyPendingAntenna(pending_antenna_, now_s, dock_antenna_capture_ttl_s_))
+    {
+      case PendingAntennaState::ABSENT:
+        reject(
+            "use_pending_antenna: no dock antenna capture is pending "
+            "(~/capture_dock_antenna never succeeded, or its result was already used).");
+        return;
+      case PendingAntennaState::EXPIRED:
+        reject(
+            FormatRejection("use_pending_antenna: the dock antenna capture is %.0f s old "
+                            "(max %.0f s) — the robot may have been moved since.",
+                            now_s - pending_antenna_.stamp_s,
+                            dock_antenna_capture_ttl_s_));
+        pending_antenna_ = PendingAntennaCapture{};
+        return;
+      case PendingAntennaState::USABLE:
+        break;
+    }
+  }
 
   // Sequence of gates protecting dock_pose accuracy. The operator forces
   // the EKF to dock_pose at boot via the fusion_graph gauge reset, so a
@@ -694,71 +905,20 @@ void MapServerNode::on_set_docking_point(
   //   (1) firmware reports is_charging=true (robot physically on dock)
   //   (2) GPS sample fresh and σ(xy) ≤ dock_set_gps_accuracy_max_m_
   //   (3) EKF yaw converged on the recent rolling window
-  // (the yaw-only MOTION write keeps (2) only — see dock_set_gates.hpp)
-  //
-  // (1) — is_charging gate. Refuse if the last /hardware_bridge/status was
-  // not charging or is older than dock_set_status_max_age_s_.
+  // (the two off-dock MOTION writes keep (2) only — see dock_set_gates.hpp)
   if (gates.require_charging)
   {
-    const double max_age = get_parameter("dock_set_status_max_age_s").as_double();
-    const double status_age = (last_status_time_.nanoseconds() == 0)
-                                  ? std::numeric_limits<double>::infinity()
-                                  : (now() - last_status_time_).seconds();
-    if (status_age > max_age || !last_is_charging_)
+    if (const auto why = dock_charging_gate_rejection())
     {
-      reject(
-          FormatRejection("robot not detected on dock "
-                          "(is_charging=%s, status_age=%.1fs, max=%.1fs). "
-                          "Drive onto the dock and wait for the firmware to report "
-                          "charging before retrying.",
-                          last_is_charging_ ? "true" : "false",
-                          status_age,
-                          max_age));
+      reject(*why);
       return;
     }
   }
-
-  // (2) — GPS accuracy gate. RTK-Fixed reports σ ≈ 3 mm; RTK-Float is
-  // 10-50 cm. Reject when σ(xx) or σ(yy) breaches the threshold, or when
-  // /gps/pose_cov is stale (driver dead, USB unplugged, datum unset).
   if (gates.require_gps_accuracy)
   {
-    const double max_acc = get_parameter("dock_set_gps_accuracy_max_m").as_double();
-    const double max_age = get_parameter("dock_set_gps_max_age_s").as_double();
-    geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr gps_snap;
-    rclcpp::Time gps_time{0, 0, RCL_ROS_TIME};
+    if (const auto why = dock_gps_accuracy_gate_rejection())
     {
-      std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
-      gps_snap = last_gps_pose_cov_;
-      gps_time = last_gps_pose_cov_time_;
-    }
-    if (!gps_snap)
-    {
-      reject(
-          "no /gps/pose_cov sample yet "
-          "(navsat_to_absolute_pose_node not running, or no GPS fix).");
-      return;
-    }
-    const double gps_age = (now() - gps_time).seconds();
-    if (gps_age > max_age)
-    {
-      reject(
-          FormatRejection("/gps/pose_cov stale (age %.2fs > %.2fs). "
-                          "Wait for the GPS feed to refresh.",
-                          gps_age,
-                          max_age));
-      return;
-    }
-    const double sigma_xx = std::sqrt(std::max(gps_snap->pose.covariance[0], 0.0));
-    const double sigma_yy = std::sqrt(std::max(gps_snap->pose.covariance[7], 0.0));
-    const double sigma_max = std::max(sigma_xx, sigma_yy);
-    if (sigma_max > max_acc)
-    {
-      reject(
-          FormatRejection("GPS not accurate enough (σ_max=%.3f m > %.3f m). "
-                          "Achieve RTK-Fixed before retrying.",
-                          sigma_max,
-                          max_acc));
+      reject(*why);
       return;
     }
   }
@@ -818,8 +978,8 @@ void MapServerNode::on_set_docking_point(
   // Position capture mode, selected by req->use_gps_position:
   //   true  — "capture current robot position": the robot is physically
   //           seated on the dock, so take the dock POSITION from the averaged
-  //           independent GPS projection (/gps/pose_cov, GPS-vs-datum +
-  //           lever-arm), NOT from req->docking_pose (which the GUI fills from
+  //           RAW antenna projection (/gps/fix vs datum, lever-arm-corrected
+  //           once below), NOT from req->docking_pose (which the GUI fills from
   //           the fused /odometry/filtered_map). While charging, fusion_graph
   //           gauge-resets the fused pose onto the EXISTING dock_pose, so
   //           capturing it would just re-store the old value — a calibration
@@ -852,25 +1012,23 @@ void MapServerNode::on_set_docking_point(
   // (manual map-drag / settings edit — never circular). MOTION takes the
   // RTK-gated, COG-derived yaw_rad from the one-click dock-calibration action
   // — the ONLY non-circular way to correct a stale dock heading (task #45).
+  //
+  // The new pose is assembled in a LOCAL and committed only once nothing can
+  // reject any more. It used to be written straight into docking_pose_ before
+  // the antenna checks: a rejected GPS capture then left the in-memory dock
+  // position at the request's (0, 0) — unpublished and unpersisted, but the
+  // next yaw-only write would have "preserved" and persisted exactly that.
   using SetDockReq = mowgli_interfaces::srv::SetDockingPoint::Request;
-  const auto preserved_orientation = docking_pose_.orientation;
-  const auto preserved_position = docking_pose_.position;
-  docking_pose_ = req->docking_pose;  // request position (+ request orientation for REQUEST)
-  if (req->preserve_position)
-  {
-    // Yaw-only MOTION write: the stored X/Y stays exactly as it is. The
-    // position is kept HERE, on the server that owns it, rather than echoed
-    // back by the caller.
-    docking_pose_.position = preserved_position;
-  }
+  const geometry_msgs::msg::Pose stored_pose = docking_pose_;
+  geometry_msgs::msg::Pose new_pose = req->docking_pose;  // manual: position (+ REQUEST yaw)
   const char* yaw_src_desc = "request";
   switch (req->yaw_source)
   {
     case SetDockReq::MOTION:
-      docking_pose_.orientation.x = 0.0;
-      docking_pose_.orientation.y = 0.0;
-      docking_pose_.orientation.z = std::sin(req->yaw_rad * 0.5);
-      docking_pose_.orientation.w = std::cos(req->yaw_rad * 0.5);
+      new_pose.orientation.x = 0.0;
+      new_pose.orientation.y = 0.0;
+      new_pose.orientation.z = std::sin(req->yaw_rad * 0.5);
+      new_pose.orientation.w = std::cos(req->yaw_rad * 0.5);
       yaw_src_desc = "motion (COG-derived)";
       break;
     case SetDockReq::REQUEST:
@@ -879,139 +1037,85 @@ void MapServerNode::on_set_docking_point(
       break;
     case SetDockReq::PRESERVE:
     default:
-      docking_pose_.orientation = preserved_orientation;
+      new_pose.orientation = stored_pose.orientation;
       yaw_src_desc = "preserved (existing dock_pose_yaw)";
       break;
   }
+  const double final_yaw = 2.0 * std::atan2(new_pose.orientation.z, new_pose.orientation.w);
 
-  if (req->use_gps_position)
+  if (req->use_gps_position || req->use_pending_antenna)
   {
-    // Capture the dock POSITION from the averaged RAW (yaw-independent) GPS
-    // antenna position, then lever-arm-correct it ONCE using docking_pose_'s
-    // yaw — the switch above has already set that to whatever THIS call is
-    // about to persist (PRESERVE: the existing dock_pose_yaw; REQUEST: the
-    // manually-specified yaw; MOTION: req->yaw_rad, a fresh independently-
-    // measured heading). See recent_gps_antenna_enu_'s doc comment in the
-    // header for why this averages the raw antenna position rather than
-    // /gps/pose_cov's already lever-arm-corrected one (issue #446): that
-    // correction is applied with whatever the FUSED yaw is at each sample,
-    // so a stable-but-biased fused yaw (e.g. a settled-wrong magnetometer
-    // lock) silently biased the averaged position with nothing to catch it
-    // after the fact. Correcting once with THIS call's own final yaw makes
-    // the result correct regardless of what the fused yaw was doing during
-    // capture — in particular, MOTION mode's fresh req->yaw_rad fixes a
-    // stale stored yaw even though every /gps/fix sample in the window was
-    // received before that fresh yaw was known.
-    double antenna_east_mean = 0.0;
-    double antenna_north_mean = 0.0;
+    // The dock POSITION comes from the averaged RAW (yaw-independent) GPS
+    // antenna position, lever-arm-corrected ONCE with final_yaw — whatever
+    // THIS call is about to persist (PRESERVE: the existing dock_pose_yaw;
+    // REQUEST: the manually-specified yaw; MOTION: req->yaw_rad, a fresh
+    // independently-measured heading). It is never taken from the fused pose,
+    // /gps/absolute_pose or /gps/pose_cov: on the dock the fused pose is
+    // gauge-pinned onto the STORED dock pose, and those topics are
+    // lever-arm-corrected per sample with that pinned yaw (issue #446), so
+    // they would re-save the old value or bias it silently. Correcting once
+    // with THIS call's own final yaw makes the result right regardless of
+    // what the fused yaw was doing during capture — in particular a fresh
+    // MOTION yaw fixes a stale stored yaw even though every /gps/fix sample
+    // was received before that yaw was known.
+    //
+    //   use_gps_position    — average the on-dock samples NOW (robot seated).
+    //   use_pending_antenna — use the mean ~/capture_dock_antenna took while
+    //                         the robot WAS seated; the robot is off the dock
+    //                         now, which is the only place the yaw exists.
+    Enu antenna_mean;
     size_t antenna_sample_count = 0;
+    if (req->use_pending_antenna)
     {
-      std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
-      // Prune by age HERE too, not only when a new sample arrives: the
-      // subscription only trims the window as it pushes, and it only pushes
-      // RTK-Fixed epochs. Under the dock canopy the receiver can sit at Float,
-      // so nothing is pushed, nothing is trimmed, and the deque would still
-      // hold the Fixed samples of the APPROACH — a full window of positions
-      // taken while the robot was driving in, averaged as "the dock".
-      const rclcpp::Time t_now = now();
-      while (!recent_gps_antenna_enu_.empty() &&
-             (t_now - std::get<0>(recent_gps_antenna_enu_.front())).seconds() >
-                 dock_set_gps_avg_window_s_)
-      {
-        recent_gps_antenna_enu_.pop_front();
-      }
-      if (recent_gps_antenna_enu_.size() < dock_set_gps_avg_min_samples_)
-      {
-        reject(
-            FormatRejection("only %zu RTK-Fixed /gps/fix sample(s) in the last %.1f s "
-                            "(need >= %zu) to average the dock antenna position. "
-                            "Wait for more GPS updates.",
-                            recent_gps_antenna_enu_.size(),
-                            dock_set_gps_avg_window_s_,
-                            dock_set_gps_avg_min_samples_));
-        return;
-      }
-      for (const auto& [t, east, north] : recent_gps_antenna_enu_)
-      {
-        (void)t;
-        antenna_east_mean += east;
-        antenna_north_mean += north;
-      }
-      antenna_sample_count = recent_gps_antenna_enu_.size();
-      const double n = static_cast<double>(antenna_sample_count);
-      antenna_east_mean /= n;
-      antenna_north_mean /= n;
+      antenna_mean = pending_antenna_.antenna;
+      antenna_sample_count = pending_antenna_.sample_count;
+    }
+    else if (const auto why = average_recent_dock_antenna(antenna_mean, antenna_sample_count))
+    {
+      reject(*why);
+      return;
+    }
+    if (const auto why = resolve_gps_lever_arm())
+    {
+      reject(*why);
+      return;
     }
 
-    // Resolve the GPS lever arm from TF — mirrors
-    // navsat_to_absolute_pose_node's own resolution, which this node cannot
-    // reach into (separate process). Retried on every capture until
-    // URDF/TF is up. Fail closed rather than silently treat an unresolved
-    // lever arm as (0, 0): that would apply NO correction at all and
-    // quietly re-introduce the yaw-bias error this capture path exists to
-    // avoid, only now unconditionally instead of only when the fused yaw
-    // happened to be wrong.
-    if (!lever_arm_known_)
-    {
-      try
-      {
-        auto tf = tf_buffer_->lookupTransform("base_footprint", "gps_link", tf2::TimePointZero);
-        lever_arm_x_ = tf.transform.translation.x;
-        lever_arm_y_ = tf.transform.translation.y;
-        lever_arm_known_ = true;
-      }
-      catch (const tf2::TransformException& ex)
-      {
-        reject(
-            FormatRejection("GPS lever arm not yet resolved from TF "
-                            "(base_footprint→gps_link: %s). Wait for robot_state_publisher "
-                            "to come up and retry.",
-                            ex.what()));
-        return;
-      }
-    }
-
-    // antenna_enu = base_enu + R(yaw)·lever_arm_body
-    //   -> base_enu = antenna_enu - R(yaw)·lever_arm_body
-    // Same formula navsat_to_absolute_pose_node applies per-sample with the
-    // LIVE fused yaw; here it is applied once with the FINAL yaw this call
-    // persists.
-    const double final_yaw =
-        2.0 * std::atan2(docking_pose_.orientation.z, docking_pose_.orientation.w);
-    const double cos_yaw = std::cos(final_yaw);
-    const double sin_yaw = std::sin(final_yaw);
-    const double base_x = antenna_east_mean - (cos_yaw * lever_arm_x_ - sin_yaw * lever_arm_y_);
-    const double base_y = antenna_north_mean - (sin_yaw * lever_arm_x_ + cos_yaw * lever_arm_y_);
-
-    docking_pose_.position.x = base_x;
-    docking_pose_.position.y = base_y;
-    docking_pose_.position.z = 0.0;
+    const Enu base = DockBaseFromAntenna(antenna_mean, final_yaw, lever_arm_x_, lever_arm_y_);
+    new_pose.position.x = base.east;
+    new_pose.position.y = base.north;
+    new_pose.position.z = 0.0;
     RCLCPP_INFO(get_logger(),
-                "Docking point captured: raw antenna GPS averaged to (%.3f, %.3f) over "
+                "Docking point captured (%s): raw antenna GPS averaged to (%.3f, %.3f) over "
                 "%zu sample(s), lever-arm-corrected with yaw=%.3f rad (source: %s) to "
-                "base position (%.3f, %.3f); request fused position was (%.3f, %.3f) — "
+                "base position (%.3f, %.3f); previously stored (%.3f, %.3f) — "
                 "Δ=(%.3f, %.3f) m.",
-                antenna_east_mean,
-                antenna_north_mean,
+                req->use_pending_antenna ? "pending on-dock capture" : "live on-dock capture",
+                antenna_mean.east,
+                antenna_mean.north,
                 antenna_sample_count,
                 final_yaw,
                 yaw_src_desc,
-                base_x,
-                base_y,
-                req->docking_pose.position.x,
-                req->docking_pose.position.y,
-                req->docking_pose.position.x - base_x,
-                req->docking_pose.position.y - base_y);
+                base.east,
+                base.north,
+                stored_pose.position.x,
+                stored_pose.position.y,
+                base.east - stored_pose.position.x,
+                base.north - stored_pose.position.y);
   }
   else if (req->preserve_position)
   {
+    // Yaw-only MOTION write: the stored X/Y stays exactly as it is. The
+    // position is kept HERE, on the server that owns it, rather than echoed
+    // back by the caller.
+    new_pose.position = stored_pose.position;
     RCLCPP_INFO(get_logger(),
                 "Docking point YAW-ONLY update: stored position (%.3f, %.3f) preserved, "
                 "yaw %.3f -> %.3f rad (source: %s).",
-                docking_pose_.position.x,
-                docking_pose_.position.y,
-                2.0 * std::atan2(preserved_orientation.z, preserved_orientation.w),
-                2.0 * std::atan2(docking_pose_.orientation.z, docking_pose_.orientation.w),
+                new_pose.position.x,
+                new_pose.position.y,
+                2.0 * std::atan2(stored_pose.orientation.z, stored_pose.orientation.w),
+                final_yaw,
                 yaw_src_desc);
   }
   else
@@ -1019,9 +1123,16 @@ void MapServerNode::on_set_docking_point(
     RCLCPP_INFO(get_logger(),
                 "Docking point set from request position (manual): (%.3f, %.3f). "
                 "Orientation source: %s.",
-                docking_pose_.position.x,
-                docking_pose_.position.y,
+                new_pose.position.x,
+                new_pose.position.y,
                 yaw_src_desc);
+  }
+
+  // Commit. A pending antenna capture is single-use.
+  docking_pose_ = new_pose;
+  if (req->use_pending_antenna)
+  {
+    pending_antenna_ = PendingAntennaCapture{};
   }
   docking_pose_set_ = true;
 
@@ -1099,6 +1210,7 @@ void MapServerNode::on_set_docking_point(
 
   res->success = true;
   res->message = persist_warning;
+  res->stored_pose = docking_pose_;
 }
 void MapServerNode::on_save_areas(const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
                                   std_srvs::srv::Trigger::Response::SharedPtr res)

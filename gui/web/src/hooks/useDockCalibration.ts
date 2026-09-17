@@ -5,7 +5,7 @@ import { useWS } from "./useWS.ts";
 // mirror CalibrateDock.action). The GUI has no ROS-action support (foxglove
 // transport), so the one-click dock calibration is driven via a non-blocking
 // start service + this live status topic.
-export type DockCalibrationPhase = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type DockCalibrationPhase = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 export interface DockCalibrationStatus {
     phase: DockCalibrationPhase;
@@ -28,6 +28,7 @@ export const PHASE_LABELS: Record<number, string> = {
     5: "Saving dock pose",
     6: "Idle",
     7: "Done",
+    8: "Capturing the dock position (on the dock, RTK-Fixed)",
 };
 
 export const RETRY_LABELS: Record<number, string> = {
@@ -35,10 +36,10 @@ export const RETRY_LABELS: Record<number, string> = {
     1: "No RTK-Fixed — wait for a fix and retry.",
     2: "COG incoherent (RTK not truly fixed / GPS noisy) — retry.",
     3: "Reverse leg too short for a heading fit — retry.",
-    4: "Re-dock failed — the heading is already saved, the position was NOT updated and the robot is off the dock. Restart mowgli-ros2, dock the robot, then run the calibration again.",
+    4: "The robot is NOT on the dock — the confirmation re-dock did not reach the charger (it still steers by the old dock pose). Restart mowgli-ros2, then send HOME or place the robot on the dock.",
     5: "Emergency active — clear it and retry.",
     6: "Robot not on the dock, or mowing — dock it / send HOME, then retry.",
-    7: "Could not save the dock pose — see the reason above, then retry.",
+    7: "The dock pose was not (fully) saved — see above for what was, then retry.",
 };
 
 interface StartResponse {
