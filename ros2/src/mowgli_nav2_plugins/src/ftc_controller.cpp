@@ -289,6 +289,7 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.use_offset_lattice = declare_bool("use_offset_lattice", false);
   config_.avoidance_horizon_m = declare_double("avoidance_horizon_m", 2.5);
   config_.avoidance_max_slope = declare_double("avoidance_max_slope", 1.0);
+  config_.avoidance_reaction_m = declare_double("avoidance_reaction_m", 0.5);
   config_.obstacle_reverse_enabled = declare_bool("obstacle_reverse_enabled", false);
   config_.obstacle_reverse_max_dist_m = declare_double("obstacle_reverse_max_dist_m", 0.30);
   config_.obstacle_reverse_speed_mps = declare_double("obstacle_reverse_speed_mps", 0.10);
@@ -673,6 +674,12 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 0.3, 5.0))
         break;
       config_.avoidance_horizon_m = p.as_double();
+    }
+    else if (key == "avoidance_reaction_m")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 2.0))
+        break;
+      config_.avoidance_reaction_m = p.as_double();
     }
     else if (key == "avoidance_max_slope")
     {
@@ -2673,11 +2680,25 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
     }
     return cell == 1;
   };
-  const auto blocked = [&](std::size_t station, double offset)
+  // A node is tested over a SPAN of poses, not one:
+  //   behind — the robot trails the carrot by `lead` (see above);
+  //   ahead  — `reaction`: the offset the profile asks for is only REACHED after
+  //            the blend, the lateral loop and the chassis have caught up, and
+  //            an obstacle grows as the LiDAR gets a closer look at it. Without
+  //            it the cheapest profile ramps at the last possible station with
+  //            zero slack (field 2026-09-17: a -0.30 m skirt planned for 13 s,
+  //            never started, then "no profile" 0.5 m from the obstacle).
+  const auto span_blocked =
+      [&](std::size_t station, double offset, std::size_t ahead, std::size_t grace)
   {
+    if (station <= grace)
+    {
+      return false;
+    }
     const std::size_t at = carrot_pos + station;
     const std::size_t from = at > carrot_pos ? at - carrot_pos : 0;
-    for (std::size_t pose = from; pose <= at; ++pose)
+    const std::size_t to = std::min(poses.size() - 1, at + ahead);
+    for (std::size_t pose = from; pose <= to; ++pose)
     {
       if (pose_blocked(pose, offset))
       {
@@ -2686,10 +2707,49 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
     }
     return false;
   };
+  const double mean_ds =
+      stations.size() > 1 ? stations.back() / static_cast<double>(stations.size() - 1) : ds;
+  const auto stations_in = [&](double metres)
+  {
+    return static_cast<std::size_t>(std::ceil(std::max(0.0, metres) / std::max(1e-3, mean_ds)));
+  };
+  const std::size_t reaction = stations_in(config_.avoidance_reaction_m);
 
   const int preferred = is_avoiding_ ? (avoid_sign_ >= 0.0 ? 1 : -1) : 0;
-  const OffsetLatticeResult plan =
-      PlanOffsetProfile(stations, lateral_deviation_, preferred, blocked, cfg);
+  // Degrade in steps rather than give up: (1) with the reaction slack; (2) without
+  // it — we are already closer than we would like; (3) ignoring the stations the
+  // body already covers (the robot is where it is, exactly like station 0) so
+  // the profile still steers AWAY. Only when all three fail is the robot wedged.
+  OffsetLatticeResult plan;
+  int plan_level = 0;
+  for (const auto& [ahead, grace] : {std::pair<std::size_t, std::size_t>{reaction, 0},
+                                     std::pair<std::size_t, std::size_t>{0, 0},
+                                     std::pair<std::size_t, std::size_t>{0, stations_in(lead)}})
+  {
+    ++plan_level;
+    plan = PlanOffsetProfile(
+        stations,
+        lateral_deviation_,
+        preferred,
+        [&, ahead = ahead, grace = grace](std::size_t station, double offset)
+        {
+          return span_blocked(station, offset, ahead, grace);
+        },
+        cfg);
+    if (plan.feasible)
+    {
+      break;
+    }
+  }
+  if (plan.feasible && plan_level > 1)
+  {
+    RCLCPP_WARN_THROTTLE(logger_,
+                         *clock_,
+                         2000,
+                         "FTCController: lattice profile found only at fallback level %d (%s)",
+                         plan_level,
+                         plan_level == 2 ? "no reaction slack" : "ignoring cells under the body");
+  }
 
   if (!plan.feasible)
   {

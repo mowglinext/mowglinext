@@ -661,6 +661,9 @@ controller_server:
       use_offset_lattice: true
       avoidance_horizon_m: 2.5     # = obstacle_layer obstacle_max_range
       avoidance_max_slope: 1.0     # lateral m per m of path (45 deg)
+      # The skirt must be in place this far BEFORE the obstacle: the requested
+      # offset is only reached after blend + lateral loop + chassis lag.
+      avoidance_reaction_m: 0.5
       max_lateral_deviation: 1.5
       deviation_step: 0.05
       deviation_blend_rate: 0.5
