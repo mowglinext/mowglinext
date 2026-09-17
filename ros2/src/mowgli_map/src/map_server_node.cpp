@@ -328,16 +328,10 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         double north = 0.0;
         mowgli_interfaces::wgs84::ToEnu(
             msg->latitude, msg->longitude, datum_lat_, datum_lon_, east, north);
-        const rclcpp::Time t = now();
-        std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
-        recent_gps_antenna_enu_.emplace_back(t, east, north);
-        while (!recent_gps_antenna_enu_.empty() &&
-               (t - std::get<0>(recent_gps_antenna_enu_.front())).seconds() >
-                   dock_set_gps_avg_window_s_)
-        {
-          recent_gps_antenna_enu_.pop_front();
-        }
+        push_dock_antenna_sample(east, north);
       });
+  dock_antenna_capture_ttl_s_ =
+      declare_parameter<double>("dock_antenna_capture_ttl_s", dock_antenna_capture_ttl_s_);
 
   // ── Services ─────────────────────────────────────────────────────────────
   save_map_srv_ = create_service<std_srvs::srv::Trigger>(
@@ -378,6 +372,14 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
              mowgli_interfaces::srv::GetMowingArea::Response::SharedPtr res)
       {
         on_get_mowing_area(req, res);
+      });
+
+  capture_dock_antenna_srv_ = create_service<std_srvs::srv::Trigger>(
+      "~/capture_dock_antenna",
+      [this](const std_srvs::srv::Trigger::Request::SharedPtr req,
+             std_srvs::srv::Trigger::Response::SharedPtr res)
+      {
+        on_capture_dock_antenna(req, res);
       });
 
   set_docking_point_srv_ = create_service<mowgli_interfaces::srv::SetDockingPoint>(
@@ -678,8 +680,38 @@ void MapServerNode::on_mower_status(mowgli_interfaces::msg::Status::ConstSharedP
   mow_blade_active_ = msg->mower_esc_status != 0U;
   mow_blade_rpm_ = msg->mower_motor_rpm;
   mow_blade_telemetry_time_ = rclcpp::Time(msg->blade_status_stamp);
-  last_is_charging_ = msg->is_charging;
+  update_charging_status(msg->is_charging);
+}
+
+void MapServerNode::update_charging_status(bool charging)
+{
+  last_is_charging_ = charging;
   last_status_time_ = now();
+  if (!charging)
+  {
+    // The antenna window exists for ONE purpose — averaging the dock position
+    // — so it must only ever hold samples taken ON the dock. Dropping it the
+    // moment the robot is not charging means a capture right after a (re-)dock
+    // can never average in the samples of the approach.
+    std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
+    recent_gps_antenna_enu_.clear();
+  }
+}
+
+void MapServerNode::push_dock_antenna_sample(double east, double north)
+{
+  if (!last_is_charging_)
+  {
+    return;
+  }
+  const rclcpp::Time t = now();
+  std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
+  recent_gps_antenna_enu_.emplace_back(t, east, north);
+  while (!recent_gps_antenna_enu_.empty() &&
+         (t - std::get<0>(recent_gps_antenna_enu_.front())).seconds() > dock_set_gps_avg_window_s_)
+  {
+    recent_gps_antenna_enu_.pop_front();
+  }
 }
 
 void MapServerNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr /*msg*/)

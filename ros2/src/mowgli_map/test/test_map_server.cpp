@@ -2039,3 +2039,274 @@ TEST_F(DockCalibrationCaptureTest, PositionCaptureAfterRedockUsesTheYawWrittenBy
   EXPECT_NEAR(node_->docking_pose_for_test().position.y, 5.0, 1e-6);
   EXPECT_NEAR(yaw_of(node_->docking_pose_for_test()), fresh_yaw, 1e-9);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pending on-dock antenna capture (field test 2026-09-17).
+//
+// Capturing the position AFTER the re-dock was circular: the re-dock steers on
+// the STORED pose, so a wrong stored position makes the robot stop short of
+// the contacts, never charge, and never reach the capture. The antenna is
+// therefore captured at the START — on the dock, charging, RTK-Fixed — held
+// in memory, and joined with the motion yaw in ONE off-dock write.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+std::shared_ptr<std_srvs::srv::Trigger::Response> trigger_response()
+{
+  return std::make_shared<std_srvs::srv::Trigger::Response>();
+}
+
+std::shared_ptr<mowgli_interfaces::srv::SetDockingPoint::Request> pending_antenna_request(
+    double motion_yaw)
+{
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->use_pending_antenna = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
+  req->yaw_rad = motion_yaw;
+  return req;
+}
+}  // namespace
+
+TEST_F(DockCalibrationCaptureTest, CaptureDockAntennaIsRejectedOffTheDock)
+{
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  push_antenna_samples(1.0, 2.0);
+
+  auto res = trigger_response();
+  node_->capture_dock_antenna_for_test(res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_NE(res->message.find("not detected on dock"), std::string::npos) << res->message;
+  EXPECT_FALSE(node_->pending_antenna_for_test().valid);
+}
+
+TEST_F(DockCalibrationCaptureTest, CaptureDockAntennaIsRejectedUntilTheWindowHasEnoughSamples)
+{
+  node_->set_charging_status_for_test(true);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  push_antenna_samples(1.0, 2.0, kMinAntennaSamples - 1);
+
+  auto res = trigger_response();
+  node_->capture_dock_antenna_for_test(res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_FALSE(node_->pending_antenna_for_test().valid);
+}
+
+TEST_F(DockCalibrationCaptureTest, CaptureDockAntennaNeedsNoConvergedYawAndPersistsNothing)
+{
+  // No push_converged_yaw_for_test(): no yaw is involved in the capture.
+  construct_node_with_dock_pose(9.0, 9.0, 0.3);
+  node_->set_charging_status_for_test(true);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  push_antenna_samples(4.0, 7.0);
+
+  auto res = trigger_response();
+  node_->capture_dock_antenna_for_test(res);
+
+  ASSERT_TRUE(res->success) << res->message;
+  EXPECT_TRUE(node_->pending_antenna_for_test().valid);
+  EXPECT_NEAR(node_->pending_antenna_for_test().antenna.east, 4.0, 1e-9);
+  EXPECT_NEAR(node_->pending_antenna_for_test().antenna.north, 7.0, 1e-9);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 9.0, 1e-9);  // stored pose untouched
+}
+
+TEST_F(DockCalibrationCaptureTest, PendingAntennaAndMotionYawWriteXyAndYawTogetherOffTheDock)
+{
+  // The 2026-09-17 field geometry: stored position 0.35 m short, stale yaw.
+  const double fresh_yaw = -54.0 * M_PI / 180.0;
+  const double true_base_x = 6.263;
+  const double true_base_y = 2.811;
+  construct_node_with_dock_pose(6.029, 3.067, -0.85);
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+
+  // On the dock: capture the raw antenna (0.30 m ahead of the base).
+  node_->set_charging_status_for_test(true);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  push_antenna_samples(true_base_x + 0.30 * std::cos(fresh_yaw),
+                       true_base_y + 0.30 * std::sin(fresh_yaw));
+  auto cap = trigger_response();
+  node_->capture_dock_antenna_for_test(cap);
+  ASSERT_TRUE(cap->success) << cap->message;
+
+  // Off the dock, fused yaw unsettled: ONE write with the motion yaw.
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(pending_antenna_request(fresh_yaw), res);
+
+  ASSERT_TRUE(res->success) << res->message;
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, true_base_x, 1e-6);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.y, true_base_y, 1e-6);
+  EXPECT_NEAR(yaw_of(node_->docking_pose_for_test()), fresh_yaw, 1e-9);
+  EXPECT_NEAR(res->stored_pose.position.x, true_base_x, 1e-6);
+  EXPECT_FALSE(node_->pending_antenna_for_test().valid) << "a capture is single-use";
+}
+
+TEST_F(DockCalibrationCaptureTest, PendingAntennaWriteWorksOnAFreshInstallWithNoStoredPose)
+{
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+  node_->set_charging_status_for_test(true);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  push_antenna_samples(2.30, 5.0);
+  auto cap = trigger_response();
+  node_->capture_dock_antenna_for_test(cap);
+  ASSERT_TRUE(cap->success) << cap->message;
+  node_->set_charging_status_for_test(false);
+
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(pending_antenna_request(0.0), res);
+
+  ASSERT_TRUE(res->success) << res->message;
+  EXPECT_TRUE(node_->docking_pose_set_for_test());
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 2.0, 1e-6);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.y, 5.0, 1e-6);
+}
+
+TEST_F(DockCalibrationCaptureTest, PendingAntennaWritePersistsXyAndYawToTheYamlFile)
+{
+  const std::string path = "/tmp/mowgli_test_dock_pending_" + std::to_string(::getpid()) + ".yaml";
+  {
+    std::ofstream out(path);
+    out << "mowgli:\n  ros__parameters:\n    dock_pose_x: 6.029\n"
+           "    dock_pose_y: 3.067\n    dock_pose_yaw: -0.85\n";
+  }
+  construct_node_with_dock_pose(6.029, 3.067, -0.85, path);
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+  node_->set_charging_status_for_test(true);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  push_antenna_samples(2.30, 5.0);
+  auto cap = trigger_response();
+  node_->capture_dock_antenna_for_test(cap);
+  ASSERT_TRUE(cap->success) << cap->message;
+  node_->set_charging_status_for_test(false);
+
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(pending_antenna_request(0.0), res);
+
+  ASSERT_TRUE(res->success) << res->message;
+  EXPECT_TRUE(res->message.empty()) << res->message;
+  std::ifstream in(path);
+  const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  EXPECT_NE(content.find("dock_pose_x: 2.000000"), std::string::npos) << content;
+  EXPECT_NE(content.find("dock_pose_y: 5.000000"), std::string::npos) << content;
+  EXPECT_NE(content.find("dock_pose_yaw: 0.000000"), std::string::npos) << content;
+  std::remove(path.c_str());
+}
+
+TEST_F(DockCalibrationCaptureTest, PendingAntennaWriteIsRejectedWhenNothingWasCaptured)
+{
+  construct_node_with_dock_pose(6.029, 3.067, -0.85);
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(pending_antenna_request(1.0), res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_NE(res->message.find("no dock antenna capture is pending"), std::string::npos)
+      << res->message;
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 6.029, 1e-9);
+  EXPECT_NEAR(yaw_of(node_->docking_pose_for_test()), -0.85, 1e-9);
+  EXPECT_NEAR(res->stored_pose.position.x, 6.029, 1e-9);
+}
+
+TEST_F(DockCalibrationCaptureTest, ExpiredPendingAntennaIsRejectedAndDropped)
+{
+  construct_node_with_dock_pose(6.029, 3.067, -0.85);
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+  node_->set_charging_status_for_test(true);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  push_antenna_samples(2.30, 5.0);
+  auto cap = trigger_response();
+  node_->capture_dock_antenna_for_test(cap);
+  ASSERT_TRUE(cap->success) << cap->message;
+  node_->set_charging_status_for_test(false);
+  node_->age_pending_antenna_for_test(301.0);  // default TTL 300 s
+
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(pending_antenna_request(0.0), res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_NE(res->message.find("old"), std::string::npos) << res->message;
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 6.029, 1e-9);
+  EXPECT_FALSE(node_->pending_antenna_for_test().valid);
+}
+
+TEST_F(DockCalibrationCaptureTest, PendingAntennaWriteStillRequiresRtkAccuracyAndKeepsTheCapture)
+{
+  construct_node_with_dock_pose(6.029, 3.067, -0.85);
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+  node_->set_charging_status_for_test(true);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  push_antenna_samples(2.30, 5.0);
+  auto cap = trigger_response();
+  node_->capture_dock_antenna_for_test(cap);
+  ASSERT_TRUE(cap->success) << cap->message;
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.30);  // momentary RTK-Float
+
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(pending_antenna_request(0.0), res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_TRUE(node_->pending_antenna_for_test().valid) << "a retry must still find it";
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 6.029, 1e-9);
+}
+
+TEST_F(DockCalibrationCaptureTest, AntennaSamplesAreOnlyKeptWhileCharging)
+{
+  // Approach: RTK-Fixed samples arrive while the robot drives in — not kept.
+  node_->set_charging_status_for_test(false);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  for (size_t i = 0; i < kMinAntennaSamples; ++i)
+  {
+    node_->on_fixed_antenna_sample_for_test(1.0 + 0.1 * static_cast<double>(i), 2.0);
+  }
+  node_->set_charging_status_for_test(true);
+
+  auto res = trigger_response();
+  node_->capture_dock_antenna_for_test(res);
+
+  EXPECT_FALSE(res->success) << "approach samples must not count as on-dock samples";
+}
+
+TEST_F(DockCalibrationCaptureTest, LeavingTheDockDropsTheOnDockAntennaSamples)
+{
+  node_->set_charging_status_for_test(true);
+  node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+  for (size_t i = 0; i < kMinAntennaSamples; ++i)
+  {
+    node_->on_fixed_antenna_sample_for_test(1.0, 2.0);
+  }
+  node_->set_charging_status_for_test(false);  // undocked (or contact lost)
+  node_->set_charging_status_for_test(true);  // re-docked, possibly somewhere else
+
+  auto res = trigger_response();
+  node_->capture_dock_antenna_for_test(res);
+
+  EXPECT_FALSE(res->success);
+}
+
+TEST_F(DockCalibrationCaptureTest, RejectedGpsCaptureLeavesTheStoredPoseUntouchedInMemory)
+{
+  // The request's zero-initialised docking_pose used to be copied into
+  // docking_pose_ BEFORE the antenna-sample check could reject — leaving the
+  // in-memory dock at (0, 0) for the next yaw-only write to "preserve".
+  construct_node_with_dock_pose(6.029, 3.067, -0.85);
+  arm_gates_one_through_three();
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+  push_antenna_samples(1.0, 2.0, kMinAntennaSamples - 1);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->use_gps_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::PRESERVE;
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  ASSERT_FALSE(res->success);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 6.029, 1e-9);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.y, 3.067, 1e-9);
+}

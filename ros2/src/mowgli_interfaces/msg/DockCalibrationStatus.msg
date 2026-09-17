@@ -14,6 +14,7 @@ uint8 PHASE_VERIFY_CHARGE=4
 uint8 PHASE_PERSIST=5
 uint8 PHASE_IDLE=6      # no run has started this session
 uint8 PHASE_DONE=7      # a run finished (see success/retry_reason)
+uint8 PHASE_CAPTURE_POSITION=8  # on the dock, RTK-Fixed: averaging the raw antenna position
 
 uint8 phase
 float32 progress          # 0.0 .. 1.0 over the whole sequence
@@ -23,6 +24,10 @@ bool charging             # latest firmware charging state
 bool running              # true while a calibration is in progress
 
 # Terminal fields — meaningful once phase == PHASE_DONE (running == false).
+# success == "the dock pose (yaw AND position) was saved". It can come WITH a
+# non-zero retry_reason (RETRY_NO_CHARGE_ON_REDOCK): saved, but the confirmation
+# re-dock did not reach the charger and the robot is NOT on the dock — render
+# that as a warning, not as a failure. `message` always says what was saved.
 bool success
 uint8 retry_reason        # mirrors CalibrateDock.action RETRY_* (0 == none)
 string message

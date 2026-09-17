@@ -43,6 +43,7 @@
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_map/dock_antenna_capture.hpp"
 #include "mowgli_map/map_types.hpp"
 #include "mowgli_map/mow_progress.hpp"
 #include <grid_map_core/GridMap.hpp>
@@ -257,11 +258,35 @@ public:
     on_set_docking_point(req, res);
   }
 
-  /// Test-only: satisfy on_set_docking_point's gate (1) (is_charging).
+  /// Test-only: satisfy on_set_docking_point's gate (1) (is_charging). Goes
+  /// through the same update as the real /hardware_bridge/status callback, so
+  /// leaving the dock drops the on-dock antenna samples here too.
   void set_charging_status_for_test(bool charging)
   {
-    last_is_charging_ = charging;
-    last_status_time_ = now();
+    update_charging_status(charging);
+  }
+
+  /// Test-only: directly invoke the ~/capture_dock_antenna handler.
+  void capture_dock_antenna_for_test(std_srvs::srv::Trigger::Response::SharedPtr res)
+  {
+    on_capture_dock_antenna(std::make_shared<std_srvs::srv::Trigger::Request>(), res);
+  }
+
+  /// Test-only: inspect / age the pending on-dock antenna capture.
+  const PendingAntennaCapture& pending_antenna_for_test() const
+  {
+    return pending_antenna_;
+  }
+  void age_pending_antenna_for_test(double seconds)
+  {
+    pending_antenna_.stamp_s -= seconds;
+  }
+
+  /// Test-only: what the real /gps/fix callback does with one RTK-Fixed
+  /// sample — it is kept ONLY while the robot is charging.
+  void on_fixed_antenna_sample_for_test(double east, double north)
+  {
+    push_dock_antenna_sample(east, north);
   }
 
   /// Test-only: satisfy gate (2) (freshness/accuracy) with one fresh
@@ -434,6 +459,26 @@ private:
 
   void on_get_mowing_area(const mowgli_interfaces::srv::GetMowingArea::Request::SharedPtr req,
                           mowgli_interfaces::srv::GetMowingArea::Response::SharedPtr res);
+
+  /// ~/capture_dock_antenna: average the RAW antenna position while seated on
+  /// the dock (charging + RTK gates) and hold it, unpersisted, for the
+  /// set_docking_point use_pending_antenna write. See dock_antenna_capture.hpp.
+  void on_capture_dock_antenna(const std_srvs::srv::Trigger::Request::SharedPtr req,
+                               std_srvs::srv::Trigger::Response::SharedPtr res);
+
+  /// Dock-pose gates shared by ~/set_docking_point and ~/capture_dock_antenna.
+  /// Each returns the rejection text, or nullopt when the gate passes.
+  std::optional<std::string> dock_charging_gate_rejection();
+  std::optional<std::string> dock_gps_accuracy_gate_rejection();
+  std::optional<std::string> average_recent_dock_antenna(Enu& mean, size_t& sample_count);
+  std::optional<std::string> resolve_gps_lever_arm();
+
+  /// Single place the charging state changes. Leaving the dock CLEARS the
+  /// antenna window: it must only ever hold samples taken ON the dock.
+  void update_charging_status(bool charging);
+
+  /// Keep one RTK-Fixed raw antenna sample — only while charging.
+  void push_dock_antenna_sample(double east, double north);
 
   void on_set_docking_point(const mowgli_interfaces::srv::SetDockingPoint::Request::SharedPtr req,
                             mowgli_interfaces::srv::SetDockingPoint::Response::SharedPtr res);
@@ -957,6 +1002,13 @@ private:
   double dock_set_gps_avg_window_s_{12.0};
   size_t dock_set_gps_avg_min_samples_{10};
 
+  /// Raw antenna mean taken on the dock by ~/capture_dock_antenna, waiting for
+  /// the motion yaw (set_docking_point use_pending_antenna). Memory only,
+  /// single-use, expires after dock_antenna_capture_ttl_s_ (the robot may have
+  /// been moved since). Services run on the node's single-threaded executor.
+  PendingAntennaCapture pending_antenna_{};
+  double dock_antenna_capture_ttl_s_{300.0};
+
   /// GPS lever arm (base_footprint→gps_link, body frame), resolved lazily
   /// from TF the same way navsat_to_absolute_pose_node resolves its own copy
   /// — this node runs as a separate process and cannot read that one's
@@ -1049,6 +1101,7 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::AddMowingArea>::SharedPtr add_area_srv_;
   rclcpp::Service<mowgli_interfaces::srv::GetMowingArea>::SharedPtr get_mowing_area_srv_;
   rclcpp::Service<mowgli_interfaces::srv::SetDockingPoint>::SharedPtr set_docking_point_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr capture_dock_antenna_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_areas_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr load_areas_srv_;
   rclcpp::Service<mowgli_interfaces::srv::GetRecoveryPoint>::SharedPtr get_recovery_point_srv_;
