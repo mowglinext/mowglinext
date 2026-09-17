@@ -237,6 +237,8 @@ private:
   // RUNNING); false when it should fall back to the abort-to-next path (no
   // costmap, abort not obstacle-related, no clear resume, or budget exhausted).
   bool tryStartDetour(const std::shared_ptr<BTContext>& ctx);
+  /// Trim the current unit to [idx, end) and persist the moved resume cursor.
+  void trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx);
   // Dispatch swaths_[swath_idx_]. The first unit transits when it is farther
   // than kSegmentTransitGap; every later sub-path always transits blade-off so
   // a planned discontinuity is reoriented safely before FollowPath starts.
@@ -397,6 +399,8 @@ private:
   // Blade-off detours taken on the CURRENT segment (unit). Reset to 0 per unit
   // (onStart and on advance() to the next unit). Bounded by max_detours_per_segment_.
   std::size_t detours_used_ = 0;
+  /// Consecutive same-unit resumes that made no real progress (unit_resume.hpp).
+  std::size_t unit_resumes_without_progress_ = 0;
   // Ports read once in onStart.
   std::size_t max_detours_per_segment_ = 5;
   double detour_footprint_radius_m_ = 0.25;
