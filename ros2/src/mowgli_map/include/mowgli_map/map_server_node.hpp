@@ -658,16 +658,24 @@ private:
   /// lethal_outside_areas_ is on. Absorbs RTK/pose drift at the boundary so
   /// the planner does not refuse a start pose that sits a few cm past the
   /// recorded line (the recorded outline IS the robot's CENTRE path, so the
-  /// footprint legitimately overhangs it). 0.40 m = the chassis half-width
-  /// (0.225) + one global-costmap cell (0.08) + drift headroom: with the 0.25
-  /// (~robot radius) value, a robot riding the outer headland ring (centerline
-  /// ON the recorded line) had only ~5 cm between its centre cell and the
-  /// inscribed-cost band (lethal wall 0.25 out, inflation 0.20 in) — under one
-  /// 0.08 m cell, so Smac transits sporadically failed "Start occupied" and
-  /// FollowStrip skipped whole sub-paths (headland rings) on no-LiDAR/GPS-only
-  /// installs. Still below lethal_boundary_margin_m_ (0.5) so the planner wall
-  /// engages before the e-stop tripwire, and still far under the 0.45 m
+  /// footprint legitimately overhangs it). The 0.40 m literal below is only
+  /// the standalone-run fallback; full_system.launch.py FLOORS the injected
+  /// value at the live chassis CIRCUMSCRIBED RADIUS
+  /// (robot_config_util.chassis_circumscribed_radius = 0.597 m shipped),
+  /// because chassis_safety_inset is 0: the outermost coverage pass puts the
+  /// CENTRE on the recorded line and the footprint then reaches up to that
+  /// radius outside it in any orientation — 0.275 m sideways but 0.53 m
+  /// forward at a row end. 0.40 itself replaced a 0.25 (~robot radius) value
+  /// under which a robot riding the outer headland ring had only ~5 cm between
+  /// its centre cell and the inscribed-cost band — under one 0.08 m cell — so
+  /// Smac transits sporadically failed "Start occupied" and FollowStrip
+  /// skipped whole sub-paths (headland rings) on no-LiDAR/GPS-only installs.
+  /// TRADE-OFF: the injected floor is ABOVE lethal_boundary_margin_m_ (0.5),
+  /// so the planner's lethal wall no longer engages strictly inside that
+  /// e-stop tripwire, and the traversable band is wider than the 0.45 m
   /// keepout_nav_margin_ regression that let transit detours drift outside.
+  /// Only kSoftPenaltyMaskCost (mid-cost, never free) keeps the planner off
+  /// it; watch /boundary_violation in the field.
   /// Inflation of the lethal boundary is also bounded by listing
   /// keepout_filter BEFORE inflation_layer in the costmap plugins so the wall
   /// is not inflated inward (see nav2_params_*.yaml).
