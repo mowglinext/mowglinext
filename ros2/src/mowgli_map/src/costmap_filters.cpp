@@ -40,10 +40,15 @@ namespace mowgli_map
 // Smac's INSCRIBED(253) validity cutoff, so a start/goal pose in either band
 // never fails "Start occupied" and A* only routes THROUGH the band when the
 // alternative is much longer. This is deliberately NEVER a lethal value for
-// either band: a lethal outside band would invite corner-cutting transits up
-// to enforce_boundary_margin_m (0.40 m) outside the polygon — past the
+// either band: a free outside band would invite corner-cutting transits up
+// to enforce_boundary_margin_m outside the polygon — past the
 // 0.30 m soft_boundary_margin_m deadband — firing spurious
-// /boundary_violation recoveries mid-transit; a lethal inside band very
+// /boundary_violation recoveries mid-transit. That pressure GREW when the
+// launch-injected floor went from the chassis half-width to the chassis
+// circumscribed radius (0.40 -> 0.597 m on the shipped chassis, 2026-09-17):
+// the band now reaches past lethal_boundary_margin_m (0.5 m) too, so the
+// mid-cost value is the only thing keeping the planner off it. Watch
+// /boundary_violation in the field. A lethal inside band very
 // nearly stranded the robot near the dock once already (map_server_node.hpp)
 // and, independently, collides with chassis_safety_inset — the outermost
 // coverage ring is planned exactly chassis_safety_inset inside the line
@@ -96,10 +101,12 @@ void MapServerNode::publish_keepout_mask()
   //
   // outside_free_margin selects the boundary policy:
   //   * lethal_outside_areas_ = true  (default, operator intent): use the
-  //     small enforce_boundary_margin_m_ (0.40 m by default, and FLOORED at the
-  //     live chassis half-width by full_system.launch.py — the band has to hold
-  //     the body overhanging the recorded line, which it does by design now
-  //     that chassis_safety_inset is 0). Everything beyond
+  //     enforce_boundary_margin_m_ band (0.40 m standalone default, and FLOORED
+  //     at the live chassis CIRCUMSCRIBED RADIUS — 0.597 m shipped — by
+  //     full_system.launch.py: the band has to hold the whole body overhanging
+  //     the recorded line, which it does by design now that
+  //     chassis_safety_inset is 0, and at a row END the footprint noses 0.53 m
+  //     past the line, not just the 0.275 m half-width). Everything beyond
   //     that slack is LETHAL, so the planner never routes outside the union
   //     of areas and MPPI never steers the robot out of the authorised zone
   //     (fixes the 0.32 m concave-boundary excursion). The dock corridor

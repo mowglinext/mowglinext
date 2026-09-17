@@ -54,7 +54,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
-    chassis_half_width,
+    chassis_circumscribed_radius,
     load_robot_params,
     resolve_lidar_enabled,
     warn_lidar_key_absent,
@@ -194,24 +194,49 @@ def generate_launch_description() -> LaunchDescription:
     # Free slack left OUTSIDE every area polygon before the keepout mask turns
     # lethal (map_server paints that band at the non-lethal kSoftPenaltyMaskCost
     # so a pose in it is never "Start occupied"). It is the room the BODY has to
-    # overhang the recorded line, so it is FLOORED at the chassis half-width,
-    # DERIVED from the live chassis_* params — same shape and same reason as
-    # navigation.launch.py's obstacle_margin floor. The literal it replaces
-    # ("chassis half-width plus headroom", 0.40) was sized for a 0.40 m chassis:
-    # the widest GUI preset is 0.535 m wide, i.e. a half-width of 0.3175 m, so
-    # 0.40 left 8 cm of headroom rather than the 12.5 cm the comment assumed —
-    # and chassis_safety_inset is now 0, so the outermost pass rides ON the
-    # recorded line and the whole half-width hangs over it.
-    boundary_margin_floor = chassis_half_width(robot_params)
+    # overhang the recorded line, so it is FLOORED at the chassis CIRCUMSCRIBED
+    # RADIUS, DERIVED from the live chassis_* params — the same helper
+    # navigation.launch.py already floors the local-costmap inflation_radius at.
+    #
+    # Why the circumscribed radius and not the half-width: chassis_safety_inset
+    # is 0, so the outermost coverage pass rides ON the recorded line — the
+    # robot's CENTRE sits on it and the footprint can reach, in ANY orientation,
+    # up to that radius outside it. Sideways that is only the half-width
+    # (0.275 m shipped), but at a ROW END the body noses
+    # chassis_center_x + chassis_length/2 + margin = 0.53 m forward past the
+    # line, which is why both 0.40 (the old literal, sized for a 0.40 m chassis)
+    # and 0.275 (the half-width floor this replaces, a no-op because 0.40 was
+    # already above it) leave the front of the chassis over LETHAL keepout
+    # cells. hypot(0.53, 0.275) = 0.597 m on the shipped chassis, and it follows
+    # chassis_width / chassis_length / chassis_center_x, which the GUI
+    # onboarding presets set per mower model (widths 0.39 m to 0.535 m).
+    #
+    # TRADE-OFF, watch it in the field: this band is also the region Smac will
+    # accept to plan THROUGH outside the recorded perimeter (the cells are
+    # mid-cost, not free, and keepout_filter is listed before inflation_layer so
+    # the lethal wall is still inflated inward) — the narrow value existed to
+    # fix a 0.32 m concave-boundary excursion. It also now exceeds
+    # map_server's lethal_boundary_margin_m (0.5 m), so the planner wall no
+    # longer engages strictly before that e-stop tripwire.
+    #
+    # NOT a complete fix for FTC's row-end wedge: FTC's confine_deviation_to_zone
+    # guard reads the GLOBAL costmap at >= inscribed, and with keepout_filter
+    # ahead of inflation_layer that wall is inflated 0.20 m INWARD, so the
+    # guard-lethal set still starts at (margin - inflation_radius) outside the
+    # line — 0.40 m here, short of the 0.53 m forward reach. The global
+    # obstacle_layer's own LiDAR marks (a hedge past the line) are lethal to
+    # that guard regardless of this band.
+    boundary_margin_floor = chassis_circumscribed_radius(robot_params)
     enforce_boundary_margin_m = float(
         robot_params.get("enforce_boundary_margin_m", 0.40))
     if enforce_boundary_margin_m < boundary_margin_floor:
         print(
             "[full_system.launch] enforce_boundary_margin_m "
-            f"{enforce_boundary_margin_m:.3f} m is inside the body half-width "
-            f"{boundary_margin_floor:.3f} m — raising it to the floor. A band "
-            "narrower than the body makes the outermost coverage pass end with "
-            "the chassis over LETHAL keepout cells."
+            f"{enforce_boundary_margin_m:.3f} m is inside the chassis "
+            f"circumscribed radius {boundary_margin_floor:.3f} m — raising it "
+            "to the floor. A band narrower than the body's reach makes the "
+            "outermost coverage pass end with the chassis over LETHAL keepout "
+            "cells."
         )
         enforce_boundary_margin_m = boundary_margin_floor
 
