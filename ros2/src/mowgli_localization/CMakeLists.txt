@@ -370,6 +370,17 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
+  # ---- test_dock_persist_plan ----
+  # Pure C++ test of the dock calibration's two-step persistence
+  # (dock_persist_plan.hpp): the yaw step (robot OFF the dock) must never be a
+  # GPS position capture; the position step runs after the verified re-dock.
+  ament_add_gtest(test_dock_persist_plan
+    test/test_dock_persist_plan.cpp
+  )
+  target_include_directories(test_dock_persist_plan PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
   # ---- test_delta_gate ----
   # Pure C++ test of the map→odom yaw (Δ) stabilisation gate used by
   # gps_dock_detection (delta_gate.hpp): jump-reject + EMA, and the issue #390
