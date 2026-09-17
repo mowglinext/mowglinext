@@ -403,11 +403,25 @@ BT::NodeStatus FollowStrip::onStart()
   }
   detours_used_ = 0;
   unit_resumes_without_progress_ = 0;
+  // Dig skip zones (dig_skip.hpp). Only digs that happen from NOW on interrupt
+  // a goal of ours; the ones already recorded this session just shape what is
+  // dispatched.
+  truncated_at_.reset();
+  unit_exhausted_by_dig_ = false;
+  dig_recovery_active_ = false;
+  dig_cancel_sent_ = false;
+  dig_events_seen_ = snapshotDigs(ctx).event_count;
   if (!follow_client_->wait_for_action_server(std::chrono::seconds(5)))
   {
     RCLCPP_ERROR(ctx->node->get_logger(), "FollowStrip: follow_path not available");
     return BT::NodeStatus::FAILURE;
   }
+
+  // Move the first unit's front past any dig zone BEFORE the spin-up decision
+  // below, so a front that must now be reached by a transit does not spin the
+  // blade up just to cut it again. A unit with nothing drivable left is
+  // booked by the first onRunning tick (unit_exhausted_by_dig_).
+  unit_exhausted_by_dig_ = !skipUnitFrontPastDigZones(ctx);
 
   // Spin the blade up now ONLY if the first unit is mowed from where the robot
   // stands. A unit that must first be reached by a blade-off transit gets its
@@ -415,7 +429,7 @@ BT::NodeStatus FollowStrip::onStart()
   // cut it again in sendCurrentSwath cycled the blade on every retry of a
   // START_OCCUPIED pass (2026-09-10).
   const double first_gap = distanceToSegmentStart(ctx);
-  blade_spinup_pending_ = bladeSpinupBeforeFirstUnit(first_gap);
+  blade_spinup_pending_ = !unit_exhausted_by_dig_ && bladeSpinupBeforeFirstUnit(first_gap);
   // The coverage ATTEMPT begins here whether the blade spins up now or only
   // after a blade-off transit: the cross-hatch phase is consumed by trying, not
   // by physical rotation, so record it before the spin-up decision below.
@@ -591,6 +605,19 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   {
     return false;
   }
+
+  // Dig skip zones: drive only the run BEFORE the next zone. sendCurrentSwath
+  // already moved the front past any zone, so run.start is 0 here — unless a
+  // dig was recorded while the transit to this front was in flight, in which
+  // case the front is re-trimmed and reached by a fresh transit instead.
+  const DigSnapshot digs = snapshotDigs(ctx);
+  const DrivableRun run = nextDrivableRun(swaths_[swath_idx_].poses, 0, digs.points, digs.radius_m);
+  if (run.start != 0)
+  {
+    swath_goal_sent_ = false;
+    return sendCurrentSwath(ctx);
+  }
+
   // Mowing resumes on this segment — make sure the blade is on (it may have
   // been switched off for a preceding inter-segment transit) — unless the
   // scan stream is currently down: the scan pause owns the blade until the
@@ -602,6 +629,22 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
 
   Nav2FollowPath::Goal goal;
   goal.path = swaths_[swath_idx_];
+  truncated_at_.reset();
+  if (run.end < goal.path.poses.size())
+  {
+    // A dig zone lies ahead on this unit: FTC gets the path up to it and no
+    // further. The SUCCEEDED handler trims the unit there and re-dispatches
+    // past the zone — the unit is not done.
+    goal.path.poses.resize(run.end);
+    truncated_at_ = run.end;
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: segment %zu/%zu crosses a dig skip zone — mowing poses 0..%zu of "
+                "%zu, then a blade-off transit past the zone",
+                swath_idx_ + 1,
+                swaths_.size(),
+                run.end,
+                swaths_[swath_idx_].poses.size());
+  }
   goal.controller_id = "FollowCoveragePath";
   goal.goal_checker_id = ctx->coverage_goal_checker_id;
 
@@ -692,6 +735,14 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
 {
   if (swath_idx_ >= swaths_.size())
   {
+    return false;
+  }
+  // Dig skip zones: never dispatch (nor transit to) a pose inside one. With
+  // nothing drivable left, the next onRunning tick books the unit and moves on
+  // — this function cannot advance().
+  if (!skipUnitFrontPastDigZones(ctx))
+  {
+    unit_exhausted_by_dig_ = true;
     return false;
   }
   // A distant start and every boundary between planner-produced sub-paths must
@@ -834,6 +885,7 @@ BT::NodeStatus FollowStrip::onRunning()
     // The detour budget is per-segment — a fresh unit gets its own full budget.
     detours_used_ = 0;
     unit_resumes_without_progress_ = 0;
+    truncated_at_.reset();
     // Skip any swaths already mowed in an earlier pass (resume).
     const auto& done = ctx->area_completed_swaths[area_idx_];
     while (swath_idx_ < swaths_.size() && done.count(swath_idx_) > 0)
@@ -931,6 +983,37 @@ BT::NodeStatus FollowStrip::onRunning()
     goal_sent_ = true;
     sendCurrentSwath(ctx);
     return BT::NodeStatus::RUNNING;
+  }
+
+  // The last dispatch found nothing drivable left in this unit: what remained
+  // of it lies inside dig skip zones. Book it and move on — it will not become
+  // mowable this session, and leaving it open would make the area re-plan and
+  // re-try it on every pass.
+  if (unit_exhausted_by_dig_)
+  {
+    unit_exhausted_by_dig_ = false;
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: nothing left to mow on unit %zu/%zu outside the dig skip zones "
+                "(area %u) — booking it and moving on",
+                swath_idx_ + 1,
+                swaths_.size(),
+                area_idx_);
+    follow_handle_.reset();
+    markCurrentUnitMowed(ctx);
+    return advance();
+  }
+
+  // A dig while a goal of ours is active: cancel it, let the bridge finish its
+  // bounded reverse, resume the same unit past the hole (dig_skip.hpp).
+  switch (stepDigRecovery(ctx))
+  {
+    case DigRecoveryStep::kBusy:
+      return BT::NodeStatus::RUNNING;
+    case DigRecoveryStep::kUnitGivenUp:
+      ++swaths_skipped_;
+      return advance();
+    case DigRecoveryStep::kIdle:
+      break;
   }
 
   // Short LiDAR dropout while a coverage goal is active: cut the blade, keep
@@ -1143,15 +1226,45 @@ BT::NodeStatus FollowStrip::onRunning()
   // secondary readout.
   ctx->coverage_percent = livePercent();
 
+  // The goal in flight was cut short at a dig skip zone and the robot has
+  // reached that cut (SUCCEEDED, or FTC parked short of it and the progress
+  // checker aborted — the same kPathCompleteFraction rule as a full unit). The
+  // unit is NOT done: trim it at the cut and re-dispatch; sendCurrentSwath
+  // moves the front past the zone and reaches it blade-off.
+  const bool ended = status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED ||
+                     status == action_msgs::msg::GoalStatus::STATUS_ABORTED ||
+                     status == action_msgs::msg::GoalStatus::STATUS_CANCELED;
+  if (ended && truncated_at_.has_value())
+  {
+    const std::size_t cut = *truncated_at_;
+    const bool reached_cut =
+        status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED ||
+        static_cast<double>(path_progress_idx_) >= kPathCompleteFraction * static_cast<double>(cut);
+    if (reached_cut)
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowStrip: segment %zu/%zu mowed up to the dig skip zone (pose %zu) — "
+                  "crossing it blade-off, then resuming the same unit",
+                  swath_idx_ + 1,
+                  swaths_.size(),
+                  cut);
+      logSegmentTracking(ctx, "paused at a dig skip zone");
+      follow_handle_.reset();
+      trimUnitAt(ctx, std::min(cut, swaths_[swath_idx_].poses.size()));
+      swath_goal_sent_ = false;
+      transit_pending_ = false;
+      transit_active_ = false;
+      sendCurrentSwath(ctx);
+      return BT::NodeStatus::RUNNING;
+    }
+  }
+
   if (status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
   {
     // Whole path done — clear the resume cursor so a later re-selection doesn't
-    // trim from a stale mid-path index.
-    ctx->area_resume_pose_index.erase(area_idx_);
-    // Record this segment as mowed for the area (survives a resume re-plan).
-    ctx->area_completed_swaths[area_idx_].insert(swath_idx_);
-    ++swaths_mowed_this_pass_;
-    saveCoverageResumeState(*ctx);
+    // trim from a stale mid-path index, and record this segment as mowed for the
+    // area (survives a resume re-plan).
+    markCurrentUnitMowed(ctx);
     RCLCPP_INFO(ctx->node->get_logger(),
                 "FollowStrip: segment %zu/%zu completed (area %u)",
                 swath_idx_ + 1,
@@ -1191,10 +1304,7 @@ BT::NodeStatus FollowStrip::onRunning()
                   swaths_.size(),
                   100.0 * frac,
                   area_idx_);
-      ctx->area_resume_pose_index.erase(area_idx_);
-      ctx->area_completed_swaths[area_idx_].insert(swath_idx_);
-      ++swaths_mowed_this_pass_;
-      saveCoverageResumeState(*ctx);
+      markCurrentUnitMowed(ctx);
       follow_handle_.reset();
       return advance();
     }
@@ -1332,6 +1442,10 @@ void FollowStrip::onHalted()
   transit_abort_seen_ = false;
   transit_result_.reset();
   scan_pause_ = ScanPauseState{};
+  truncated_at_.reset();
+  unit_exhausted_by_dig_ = false;
+  dig_recovery_active_ = false;
+  dig_cancel_sent_ = false;
   setBladeEnabled(false);
 }
 
@@ -1415,6 +1529,7 @@ void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t 
   remainder.poses.assign(poses.begin() + static_cast<std::ptrdiff_t>(idx), poses.end());
   swaths_[swath_idx_] = std::move(remainder);
   path_progress_idx_ = 0;
+  truncated_at_.reset();  // it indexed the untrimmed unit
 
   // Persist the moved cursor now: onHalted cannot persist during the transit to
   // the new first pose (follow_handle_ is null then), so a preempt mid-transit
@@ -1422,6 +1537,223 @@ void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t 
   const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
   ctx->area_resume_pose_index[area_idx_] = base + resume_start_idx_;
   saveCoverageResumeState(*ctx);
+}
+
+void FollowStrip::markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx)
+{
+  ctx->area_resume_pose_index.erase(area_idx_);
+  ctx->area_completed_swaths[area_idx_].insert(swath_idx_);
+  ++swaths_mowed_this_pass_;
+  saveCoverageResumeState(*ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Dig skip zones + dig recovery (dig_skip.hpp)
+// ---------------------------------------------------------------------------
+
+FollowStrip::DigSnapshot FollowStrip::snapshotDigs(const std::shared_ptr<BTContext>& ctx)
+{
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  return {ctx->session_dig_points, ctx->dig_event_count, ctx->dig_skip_radius_m};
+}
+
+bool FollowStrip::skipUnitFrontPastDigZones(const std::shared_ptr<BTContext>& ctx)
+{
+  if (swath_idx_ >= swaths_.size())
+  {
+    return false;
+  }
+  const DigSnapshot digs = snapshotDigs(ctx);
+  const auto& poses = swaths_[swath_idx_].poses;
+  const DrivableRun run = nextDrivableRun(poses, 0, digs.points, digs.radius_m);
+  if (run.empty())
+  {
+    return false;
+  }
+  if (run.start > 0)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: unit %zu/%zu starts inside a dig skip zone (%.2f m around %zu dig "
+                "point(s)) — skipping its first %zu poses",
+                swath_idx_ + 1,
+                swaths_.size(),
+                digs.radius_m,
+                digs.points.size(),
+                run.start);
+    trimUnitAt(ctx, run.start);
+  }
+  return true;
+}
+
+FollowStrip::DigRecoveryStep FollowStrip::stepDigRecovery(const std::shared_ptr<BTContext>& ctx)
+{
+  const auto now = std::chrono::steady_clock::now();
+  const DigSnapshot digs = snapshotDigs(ctx);
+
+  if (digs.event_count != dig_events_seen_)
+  {
+    dig_events_seen_ = digs.event_count;
+    const bool goal_of_ours_active = swath_goal_sent_ || transit_pending_ || transit_active_;
+    if (goal_of_ours_active || dig_recovery_active_)
+    {
+      if (!dig_recovery_active_)
+      {
+        // A follow goal is "in flight" from the moment it is sent, even before
+        // its handle arrives; a transit is flagged by transit_active_/pending_.
+        dig_recovery_was_following_ = !transit_active_ && !transit_pending_;
+        if (dig_recovery_was_following_)
+        {
+          updateProgress(ctx);  // freeze the cursor where the dig happened
+        }
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "FollowStrip: DIG reported while %s unit %zu/%zu — cancelling the goal "
+                    "(the controller must not keep pushing through the hole), blade OFF, "
+                    "waiting for the bridge's reverse to settle",
+                    dig_recovery_was_following_ ? "mowing" : "transiting to",
+                    swath_idx_ + 1,
+                    swaths_.size());
+        setBladeEnabled(false);
+      }
+      // A second dig during the wait restarts the settle clock: the bridge is
+      // reversing again.
+      dig_recovery_active_ = true;
+      dig_cancel_sent_ = false;
+      dig_settle_ = DigSettleState{};
+      dig_settle_last_tick_ = now;
+    }
+  }
+
+  if (!dig_recovery_active_)
+  {
+    return DigRecoveryStep::kIdle;
+  }
+
+  // Cancel whatever is in flight, once its goal handle is known.
+  if (!dig_cancel_sent_)
+  {
+    const auto ready = [](const auto& future)
+    {
+      return future.valid() &&
+             future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+    };
+    if (dig_recovery_was_following_ && !follow_handle_ && ready(follow_future_))
+    {
+      follow_handle_ = follow_future_.get();
+    }
+    if (!dig_recovery_was_following_ && transit_active_ && !nav_handle_ && ready(nav_future_))
+    {
+      nav_handle_ = nav_future_.get();
+    }
+    try
+    {
+      if (dig_recovery_was_following_ && follow_handle_ && follow_client_)
+      {
+        follow_client_->async_cancel_goal(follow_handle_);
+        dig_cancel_sent_ = true;
+      }
+      else if (!dig_recovery_was_following_ && nav_handle_ && nav_client_)
+      {
+        nav_client_->async_cancel_goal(nav_handle_);
+        dig_cancel_sent_ = true;
+      }
+    }
+    catch (const std::exception& ex)
+    {
+      // Already terminal (the controller aborted on its own): nothing to cancel.
+      dig_cancel_sent_ = true;
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowStrip: goal was already gone while cancelling for a dig: %s",
+                  ex.what());
+    }
+  }
+
+  // Wait for the bridge's bounded reverse. It owns the wire meanwhile, so a
+  // goal dispatched now would not move the robot anyway — and the transit
+  // below must start from where the robot ends up.
+  double rx = 0.0;
+  double ry = 0.0;
+  bool have_pose = false;
+  try
+  {
+    const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    rx = tf.transform.translation.x;
+    ry = tf.transform.translation.y;
+    have_pose = true;
+  }
+  catch (const tf2::TransformException&)
+  {
+    // no pose this tick: the settle wait is still bounded by max_wait_s
+  }
+  const double dt = std::chrono::duration<double>(now - dig_settle_last_tick_).count();
+  dig_settle_last_tick_ = now;
+  if (!DigSettleStep(dig_settle_, DigSettleCfg{}, dt, have_pose, rx, ry))
+  {
+    return DigRecoveryStep::kBusy;
+  }
+
+  // Settled. Drop the interrupted goal's state and resume the SAME unit past
+  // the dig zone.
+  dig_recovery_active_ = false;
+  dig_cancel_sent_ = false;
+  follow_handle_.reset();
+  nav_handle_.reset();
+  transit_active_ = false;
+  transit_pending_ = false;
+  transit_abort_seen_ = false;
+  transit_result_.reset();
+  scan_pause_ = ScanPauseState{};
+  swath_goal_sent_ = false;
+  if (swath_idx_ >= swaths_.size())
+  {
+    return DigRecoveryStep::kUnitGivenUp;
+  }
+
+  const auto& poses = swaths_[swath_idx_].poses;
+  const std::size_t unit_poses = poses.size();
+  const std::size_t reached = dig_recovery_was_following_ ? path_progress_idx_ : 0;
+  const DrivableRun run = nextDrivableRun(poses, reached, digs.points, digs.radius_m);
+  if (run.empty())
+  {
+    // What is left of the unit lies inside dig zones: the same fact, booked the
+    // same way, as when a dispatch finds nothing drivable (next tick).
+    unit_exhausted_by_dig_ = true;
+    return DigRecoveryStep::kBusy;
+  }
+  // The same no-progress budget as any other same-unit resume: a dig that
+  // repeats without the robot getting anywhere ends the unit, it does not loop.
+  const UnitResumeDecision resume =
+      DecideUnitResume(unit_poses, reached, run.start, unit_resumes_without_progress_);
+  unit_resumes_without_progress_ = resume.consecutive;
+  if (!resume.resume)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: not resuming unit %zu/%zu after the dig (%zu poses left past the "
+                "skip zone, %zu resumes without progress) — skipping it",
+                swath_idx_ + 1,
+                swaths_.size(),
+                unit_poses - std::min(run.start, unit_poses),
+                unit_resumes_without_progress_);
+    // Leave the cursor PAST the zone, so a later pass does not resume into it.
+    path_progress_idx_ = std::min(run.start, unit_poses > 0 ? unit_poses - 1 : 0);
+    persistResumeCursor(ctx);
+    return DigRecoveryStep::kUnitGivenUp;
+  }
+
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "FollowStrip: reverse settled after %.1fs — resuming unit %zu/%zu at pose %zu/%zu, "
+              "past the %.2f m dig skip zone (no-progress resumes: %zu)",
+              dig_settle_.elapsed_s,
+              swath_idx_ + 1,
+              swaths_.size(),
+              run.start,
+              unit_poses,
+              digs.radius_m,
+              unit_resumes_without_progress_);
+  trimUnitAt(ctx, run.start);
+  // A follow goal has been sent on this unit, so sendCurrentSwath takes the
+  // structural blade-off transit to the new front (coverageTransitRequired).
+  sendCurrentSwath(ctx);
+  return DigRecoveryStep::kBusy;
 }
 
 bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)

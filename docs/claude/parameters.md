@@ -22,7 +22,7 @@
 | `ros2/src/mowgli_bringup/config/twist_mux.yaml` (53 L) | 5 cmd_vel lanes + priorities; deliberately **no `locks:`** | `mowgli.launch.py:271` | maintainer |
 | `ros2/src/mowgli_bringup/config/foxglove_bridge.yaml` (11 L) | Foxglove params + GNSS-internal topic whitelist — **not referenced by any launch file** | nothing | maintainer |
 | `ros2/src/fusion_graph/config/fusion_graph.yaml` (480 L) | 76 of the localizer's 133 declared params | `fusion_graph/launch/fusion_graph.launch.py:137` | maintainer |
-| `ros2/src/mowgli_map/config/map_server.yaml` (176 L) | grid resolution/size, keepout margins, mow-progress gating, dig keepout | `full_system.launch.py:173` | maintainer (operator keys are injected over it) |
+| `ros2/src/mowgli_map/config/map_server.yaml` (176 L) | grid resolution/size, keepout margins, mow-progress gating, dig proposal | `full_system.launch.py:173` | maintainer (operator keys are injected over it) |
 | `ros2/src/mowgli_map/config/obstacle_tracker.yaml` (18 L) | LiDAR cluster→obstacle promotion thresholds | `full_system.launch.py` obstacle_tracker node | maintainer |
 | `ros2/src/mowgli_behavior/config/behavior_tree.yaml` (11 L) | `tree_file`, `tick_rate`, legacy `battery_*_pct` **aliases that no longer match the node's param names** | `full_system.launch.py:172` | maintainer |
 | `ros2/src/mowgli_localization/config/wheel_odometry.yaml` (18 L) | `wheel_distance`, `ticks_per_meter`, `publish_tf: false` (Invariant 2 guard) | **no launch file** — `wheel_odometry_node` is not launched; the file is only read by `test_tf_ownership.py:81` | maintainer |
@@ -42,9 +42,16 @@ All 171 template keys. `L###` = line in `ros2/src/mowgli_bringup/config/mowgli_r
 |---|---|---|---|---|
 | `dig_obstacle_enabled` | true | `full_system.launch.py` → `map_server_node` subscription gate | Obstacles | launch |
 
-Disabling automatic dig keepouts prevents new session-only map proposals. Hardware dig
-stopping, bounded reverse and repeat-dig escalation remain active. Enabled proposals
-still require operator acceptance to persist. Save and restart ROS2 to apply.
+Disabling dig proposals prevents new session-only map PROPOSALS (GUI map page: accept /
+reject). A proposal is inert — no keepout, no coverage hole, nothing saved — until the
+operator accepts it. Hardware dig stopping, bounded reverse, repeat-dig escalation and
+FollowStrip's session dig skip zone remain active either way. Save and restart ROS2 to apply.
+
+`dig_skip_radius_m` (`behavior_tree_node`) has NO yaml key: `full_system.launch.py` injects
+`robot_config_util.dig_skip_radius(robot_params)` = the chassis circumscribed radius (0.597 m
+shipped), so it follows a GUI edit of `chassis_length` / `chassis_width` / `chassis_center_x`.
+It is the radius around a session dig point inside which FollowStrip skips coverage poses
+(`mowgli_behavior/dig_skip.hpp`); the node default (0.60) only serves ad-hoc launches and the sim.
 
 ### Chassis, wheels, encoder — feed the URDF and the Nav2 footprint
 

@@ -55,6 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
     chassis_circumscribed_radius,
+    dig_skip_radius,
     keepout_obstacle_margin,
     load_robot_params,
     resolve_lidar_enabled,
@@ -320,6 +321,13 @@ def generate_launch_description() -> LaunchDescription:
                     robot_params.get("coverage_goal_checker_id", "coverage_goal_checker")
                 )
             },
+            # Session dig skip zones (mowgli_behavior/dig_skip.hpp): coverage
+            # poses this close to a wheel-slip dig are skipped for the rest of
+            # the session. DERIVED from the chassis (circumscribed radius), so
+            # it follows a GUI edit of chassis_length / chassis_width; it
+            # replaces the pending dig KEEPOUT, which blocked planning from the
+            # robot's own pose (START_OCCUPIED, 2026-09-17).
+            {"dig_skip_radius_m": dig_skip_radius(robot_params)},
             # Area-recording boundary resolution. Both were hardcoded in
             # main_tree.xml (0.2 m Douglas-Peucker tolerance, 2 Hz sampling),
             # which cost a field recording all but 24 vertices of a 38 m

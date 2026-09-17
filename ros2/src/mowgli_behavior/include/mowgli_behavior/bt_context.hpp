@@ -28,6 +28,7 @@
 
 #include "geometry_msgs/msg/point32.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
+#include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
@@ -428,6 +429,24 @@ struct BTContext
   /// what stops the mission. Cleared by the bridge when the robot reaches the
   /// charger.
   bool dig_escalated{false};
+
+  /// Dig points reported by /hardware_bridge/dig_event during THIS session
+  /// (map frame). FollowStrip skips every coverage pose within
+  /// dig_skip_radius_m of one (dig_skip.hpp) — the anti re-dig protection of
+  /// issue #500, which lives here instead of in the keepout mask so that it
+  /// can never block planning from the robot's own pose. Written by the
+  /// subscriber callback under context_mutex; cleared by EndSession.
+  std::vector<DigPoint> session_dig_points;
+  /// Monotonic count of dig events received since the node started. NOT reset
+  /// by EndSession: FollowStrip compares it with the value it last saw to
+  /// notice a dig that happened while its goal was active. Guarded by
+  /// context_mutex.
+  std::uint64_t dig_event_count{0};
+  /// Skip radius around a dig point [m]. Injected by full_system.launch.py
+  /// from robot_config_util.dig_skip_radius() (chassis circumscribed radius:
+  /// inside it some part of the body is over the hole); <= 0 disables the
+  /// skip zones. Set once at startup.
+  double dig_skip_radius_m{kDefaultDigSkipRadiusM};
 
   /// Set to true when the robot is outside all allowed polygons by more
   /// than lethal_boundary_margin_m. Escalates the BoundaryGuard from

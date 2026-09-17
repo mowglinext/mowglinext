@@ -59,9 +59,10 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   map_size_y_ = declare_parameter<double>("map_size_y", 20.0);
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
   tool_width_ = declare_parameter<double>("tool_width", 0.18);
-  // Wheel-slip dig keepout (see on_dig_event). The keepout is stamped as a
-  // PENDING proposal - live in the mask for this session, never written to
-  // areas.dat until the operator accepts it.
+  // Wheel-slip dig proposal (see on_dig_event). A dig is recorded as a PENDING
+  // proposal only - not in the mask, not a coverage hole, not in areas.dat -
+  // until the operator accepts it. The size below is the keepout it becomes
+  // on acceptance.
   //
   // Size: it used to default to one tool width (0.18 m), which is NARROWER
   // THAN THE CHASSIS (0.60 m x 0.40 m footprint). Issue #500 recorded the
@@ -466,12 +467,13 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 
   // ── Wheel-slip dig reports (hardware_bridge_node) ─────────────────────
   // The bridge detects the robot digging a hole (wheels turning, GNSS pose
-  // not moving), hard-stops and reverses out. We stamp a PENDING keepout at
-  // that location so the next coverage pass routes around it instead of
-  // driving back into the same patch; making it permanent is the operator's
-  // call (~/promote_obstacle{pending_id}). TRANSIENT_LOCAL matches the
-  // bridge's publisher so a dig that happened while we were restarting
-  // still lands.
+  // not moving), hard-stops and reverses out. We record an INERT proposal at
+  // that location (no keepout, no coverage hole, nothing saved); applying it
+  // is the operator's call (~/promote_obstacle{pending_id}). Keeping the
+  // robot out of the same patch for the rest of the session is FollowStrip's
+  // job (mowgli_behavior/dig_skip.hpp), which cannot block planning.
+  // TRANSIENT_LOCAL matches the bridge's publisher so a dig that happened
+  // while we were restarting still lands.
   if (dig_obstacle_enabled_)
   {
     dig_event_sub_ = create_subscription<mowgli_interfaces::msg::DigEvent>(
@@ -489,14 +491,6 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
              mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res)
       {
         on_promote_obstacle(req, res);
-      });
-
-  discard_dig_keepouts_near_robot_srv_ = create_service<std_srvs::srv::Trigger>(
-      "~/discard_dig_keepouts_near_robot",
-      [this](const std_srvs::srv::Trigger::Request::SharedPtr req,
-             std_srvs::srv::Trigger::Response::SharedPtr res)
-      {
-        on_discard_dig_keepouts_near_robot(req, res);
       });
 
   discard_obstacle_srv_ = create_service<mowgli_interfaces::srv::ClearObstacle>(

@@ -31,13 +31,23 @@ namespace mower_msgs
       typedef mower_msgs::MapObstacleInfo _obstacle_info_type;
       _obstacle_info_type st_obstacle_info;
       _obstacle_info_type * obstacle_info;
+      uint32_t proposed_obstacles_length;
+      typedef geometry_msgs::Polygon _proposed_obstacles_type;
+      _proposed_obstacles_type st_proposed_obstacles;
+      _proposed_obstacles_type * proposed_obstacles;
+      uint32_t proposed_obstacle_info_length;
+      typedef mower_msgs::MapObstacleInfo _proposed_obstacle_info_type;
+      _proposed_obstacle_info_type st_proposed_obstacle_info;
+      _proposed_obstacle_info_type * proposed_obstacle_info;
 
     MapArea():
       name(""),
       area(),
       obstacles_length(0), st_obstacles(), obstacles(nullptr),
       is_navigation_area(0),
-      obstacle_info_length(0), st_obstacle_info(), obstacle_info(nullptr)
+      obstacle_info_length(0), st_obstacle_info(), obstacle_info(nullptr),
+      proposed_obstacles_length(0), st_proposed_obstacles(), proposed_obstacles(nullptr),
+      proposed_obstacle_info_length(0), st_proposed_obstacle_info(), proposed_obstacle_info(nullptr)
     {
     }
 
@@ -72,6 +82,22 @@ namespace mower_msgs
       offset += sizeof(this->obstacle_info_length);
       for( uint32_t i = 0; i < obstacle_info_length; i++){
         offset += this->obstacle_info[i].serialize(outbuffer + offset);
+      }
+      *(outbuffer + offset + 0) = (this->proposed_obstacles_length >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (this->proposed_obstacles_length >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (this->proposed_obstacles_length >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (this->proposed_obstacles_length >> (8 * 3)) & 0xFF;
+      offset += sizeof(this->proposed_obstacles_length);
+      for( uint32_t i = 0; i < proposed_obstacles_length; i++){
+        offset += this->proposed_obstacles[i].serialize(outbuffer + offset);
+      }
+      *(outbuffer + offset + 0) = (this->proposed_obstacle_info_length >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (this->proposed_obstacle_info_length >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (this->proposed_obstacle_info_length >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (this->proposed_obstacle_info_length >> (8 * 3)) & 0xFF;
+      offset += sizeof(this->proposed_obstacle_info_length);
+      for( uint32_t i = 0; i < proposed_obstacle_info_length; i++){
+        offset += this->proposed_obstacle_info[i].serialize(outbuffer + offset);
       }
       return offset;
     }
@@ -119,11 +145,33 @@ namespace mower_msgs
       for( uint32_t i = 0; i < obstacle_info_length; i++){
         offset += this->obstacle_info[i].deserialize(inbuffer + offset);
       }
+      uint32_t proposed_obstacles_lengthT = ((uint32_t) (*(inbuffer + offset)));
+      proposed_obstacles_lengthT |= ((uint32_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      proposed_obstacles_lengthT |= ((uint32_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      proposed_obstacles_lengthT |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      offset += sizeof(this->proposed_obstacles_length);
+      if(proposed_obstacles_lengthT > proposed_obstacles_length)
+        this->proposed_obstacles = (geometry_msgs::Polygon*)realloc(this->proposed_obstacles, proposed_obstacles_lengthT * sizeof(geometry_msgs::Polygon));
+      proposed_obstacles_length = proposed_obstacles_lengthT;
+      for( uint32_t i = 0; i < proposed_obstacles_length; i++){
+        offset += this->proposed_obstacles[i].deserialize(inbuffer + offset);
+      }
+      uint32_t proposed_obstacle_info_lengthT = ((uint32_t) (*(inbuffer + offset)));
+      proposed_obstacle_info_lengthT |= ((uint32_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      proposed_obstacle_info_lengthT |= ((uint32_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      proposed_obstacle_info_lengthT |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      offset += sizeof(this->proposed_obstacle_info_length);
+      if(proposed_obstacle_info_lengthT > proposed_obstacle_info_length)
+        this->proposed_obstacle_info = (mower_msgs::MapObstacleInfo*)realloc(this->proposed_obstacle_info, proposed_obstacle_info_lengthT * sizeof(mower_msgs::MapObstacleInfo));
+      proposed_obstacle_info_length = proposed_obstacle_info_lengthT;
+      for( uint32_t i = 0; i < proposed_obstacle_info_length; i++){
+        offset += this->proposed_obstacle_info[i].deserialize(inbuffer + offset);
+      }
      return offset;
     }
 
     virtual const char * getType() override { return "mower_msgs/MapArea"; };
-    virtual const char * getMD5() override { return "4056a28cabd849eb7f1a46e4686e606d"; };
+    virtual const char * getMD5() override { return "e15950d3c4da76bcf8980c695fa20d7f"; };
 
   };
 

@@ -22,10 +22,12 @@
  * keepouts stamped under the robot) and, once lifted clear, Play did nothing
  * (the escalation latch only cleared at the charger).
  *
- * The tree-side contract pinned here: the HOME branch must drop the dig
- * keepouts under the robot, gated on IsDigEscalated, BEFORE its DockRobot,
- * and the hold itself must keep publishing state=1 (the firmware hard stop
- * is what keeps a wedged robot from grinding on).
+ * Both causes are gone at the root: a dig no longer stamps a keepout at all
+ * (map_server records an inert proposal), and the bridge clears the latch on
+ * displacement. The tree-side contract pinned here: HOME bypasses the hold
+ * and needs no keepout clean-up step, and the hold itself keeps publishing
+ * state=1 (the firmware hard stop is what keeps a wedged robot from grinding
+ * on).
  */
 #include <fstream>
 #include <regex>
@@ -46,25 +48,35 @@ std::string readMainTree()
 }
 }  // namespace
 
-TEST(DigObstructionRecovery, HomeDropsTheDigKeepoutsUnderTheRobotBeforeDocking)
+// HOME out of a DIG_OBSTRUCTION hold needs no keepout clean-up any more: a dig
+// is only a PROPOSAL in map_server and is never stamped into the keepout mask,
+// so the dock transit can always plan from the robot's pose. The clean-up node
+// and its map_server service were removed; nothing may call them again (an XML
+// tag with no registered node makes the whole tree fail to load).
+TEST(DigObstructionRecovery, HomeNeedsNoDigKeepoutCleanUpBeforeDocking)
 {
   const std::string tree = readMainTree();
+  EXPECT_EQ(tree.find("<DiscardNearbyDigKeepouts"), std::string::npos)
+      << "DiscardNearbyDigKeepouts was removed together with the dig keepouts it dropped";
+
   const auto home = tree.find("name=\"HomeSequence\"");
   ASSERT_NE(home, std::string::npos) << "HomeSequence not found";
   const auto dock = tree.find("<DockRobot", home);
-  ASSERT_NE(dock, std::string::npos) << "HomeSequence has no DockRobot";
-  const std::string between = tree.substr(home, dock - home);
+  ASSERT_NE(dock, std::string::npos) << "HomeSequence must still dock";
+}
 
-  const auto gate = between.find("<IsDigEscalated/>");
-  const auto discard = between.find("<DiscardNearbyDigKeepouts/>");
-  EXPECT_NE(gate, std::string::npos)
-      << "HomeSequence must gate the keepout discard on IsDigEscalated";
-  EXPECT_NE(discard, std::string::npos)
-      << "HomeSequence must call DiscardNearbyDigKeepouts before DockRobot";
-  EXPECT_LT(gate, discard) << "the gate must precede the discard";
-  // The pair must be wrapped so a non-escalated robot goes home unchanged.
-  const auto force = between.rfind("<ForceSuccess>", gate);
-  EXPECT_NE(force, std::string::npos) << "FreeDigKeepoutsIfEscalated must sit under ForceSuccess";
+// HOME and the manual modes are how the operator recovers a held robot: the
+// guard must let them through, or the hold has no exit but lifting the robot.
+TEST(DigObstructionRecovery, GuardExemptsHomeSoTheOperatorCanRecallTheRobot)
+{
+  const std::string tree = readMainTree();
+  const auto guard = tree.find("name=\"DigObstructionGuard\"");
+  ASSERT_NE(guard, std::string::npos) << "DigObstructionGuard not found";
+  const auto gate = tree.find("<IsDigEscalated/>", guard);
+  ASSERT_NE(gate, std::string::npos) << "the guard must still read the escalation latch";
+  const std::string exemptions = tree.substr(guard, gate - guard);
+  EXPECT_NE(exemptions.find("<IsCommand command=\"2\"/>"), std::string::npos)
+      << "COMMAND_HOME must bypass the DIG_OBSTRUCTION hold";
 }
 
 TEST(DigObstructionRecovery, HoldKeepsPublishingIdleSoTheFirmwareHardStops)

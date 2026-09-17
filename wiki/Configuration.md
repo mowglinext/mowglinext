@@ -273,7 +273,7 @@ hardware_bridge:
 
 Wheel-slip **dig** detection lives in `hardware_bridge_node` (`mowgli_hardware/dig_detector.hpp`) because `~/cmd_vel` is twist_mux's *merged* output — one check therefore covers every motion lane (coverage, transit, docking, teleop).
 
-It is the only wheel-**independent** stuck check on the robot: it compares the encoders' claimed travel against the GNSS-anchored fused pose (`/odometry/filtered_map`) over `dig_window_s`, and on a mismatch hard-stops on the wire and drives a bounded reverse that `on_cmd_vel` cannot override. The bridge then publishes `~/dig_event`, and `map_server` promotes the spot to a permanent keepout so coverage routes around it next pass.
+It is the only wheel-**independent** stuck check on the robot: it compares the encoders' claimed travel against the GNSS-anchored fused pose (`/odometry/filtered_map`) over `dig_window_s`, and on a mismatch hard-stops on the wire and drives a bounded reverse that `on_cmd_vel` cannot override. The bridge then publishes `~/dig_event`. `map_server` records the spot as a **proposal** you can accept or reject on the GUI map page — nothing is blocked until you accept it — and the behavior tree skips that spot on the coverage path for the rest of the mowing session so the robot does not dig the same hole again.
 
 | Parameter | Default | Notes |
 |---|---|---|

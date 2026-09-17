@@ -16,6 +16,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <future>
 #include <limits>
 #include <memory>
@@ -29,6 +30,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/detour_resume.hpp"
+#include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/scan_pause.hpp"
 #include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
@@ -239,6 +241,35 @@ private:
   bool tryStartDetour(const std::shared_ptr<BTContext>& ctx);
   /// Trim the current unit to [idx, end) and persist the moved resume cursor.
   void trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx);
+
+  // --- Dig skip zones + dig recovery (dig_skip.hpp) --------------------------
+  // The session's dig points never reach a costmap (a keepout under the robot
+  // refused every plan from its own pose, 2026-09-10 / 2026-09-17). What keeps
+  // the robot out of a hole it dug is decided HERE, on the path it follows.
+  struct DigSnapshot
+  {
+    std::vector<DigPoint> points;
+    std::uint64_t event_count{0};
+    double radius_m{0.0};
+  };
+  /// Copy of the session dig state, taken under ctx->context_mutex (it is
+  /// written by a subscriber callback).
+  static DigSnapshot snapshotDigs(const std::shared_ptr<BTContext>& ctx);
+  /// Trim the front of the current unit to the first drivable run outside
+  /// every dig zone. Returns false when nothing drivable is left in the unit.
+  bool skipUnitFrontPastDigZones(const std::shared_ptr<BTContext>& ctx);
+  enum class DigRecoveryStep
+  {
+    kIdle,  ///< no dig being handled — run the normal handlers
+    kBusy,  ///< cancelling / waiting for the reverse / re-dispatched: return RUNNING
+    kUnitGivenUp,  ///< the no-progress budget is spent: caller skips the unit
+  };
+  /// Notice a new dig event while a goal of ours is active, cancel that goal,
+  /// wait for the bridge's bounded reverse to settle, then resume the SAME unit
+  /// past the dig zone through the existing blade-off transit.
+  DigRecoveryStep stepDigRecovery(const std::shared_ptr<BTContext>& ctx);
+  /// Book the current unit as mowed (shared by the success paths).
+  void markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx);
   // Dispatch swaths_[swath_idx_]. The first unit transits when it is farther
   // than kSegmentTransitGap; every later sub-path always transits blade-off so
   // a planned discontinuity is reoriented safely before FollowPath starts.
@@ -401,6 +432,23 @@ private:
   std::size_t detours_used_ = 0;
   /// Consecutive same-unit resumes that made no real progress (unit_resume.hpp).
   std::size_t unit_resumes_without_progress_ = 0;
+
+  /// The FollowCoveragePath goal in flight was cut short at this index of the
+  /// current unit because a dig zone starts there. When it succeeds the unit
+  /// is NOT done: it is trimmed here and re-dispatched past the zone.
+  std::optional<std::size_t> truncated_at_;
+  /// sendCurrentSwath found nothing drivable left in the unit (its remainder
+  /// lies inside dig zones). Consumed at the top of the next onRunning tick,
+  /// which books the unit and advances — sendCurrentSwath itself cannot.
+  bool unit_exhausted_by_dig_{false};
+  /// dig_event_count value already handled.
+  std::uint64_t dig_events_seen_{0};
+  bool dig_recovery_active_{false};
+  /// The interrupted goal was a FollowCoveragePath (vs a blade-off transit).
+  bool dig_recovery_was_following_{false};
+  bool dig_cancel_sent_{false};
+  DigSettleState dig_settle_;
+  std::chrono::steady_clock::time_point dig_settle_last_tick_{};
   // Ports read once in onStart.
   std::size_t max_detours_per_segment_ = 5;
   double detour_footprint_radius_m_ = 0.25;

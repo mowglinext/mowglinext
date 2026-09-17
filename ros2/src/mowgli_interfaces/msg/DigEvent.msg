@@ -6,14 +6,18 @@
 # already hard-stopped and begun a bounded reverse by the time this is
 # published; consumers act on the LOCATION, not the motion.
 #
-# map_server subscribes and stamps a PENDING keepout at the spot: live in
-# the keepout mask for the current session, so coverage routes around it on
-# the next pass instead of returning to dig the same hole again, but NOT
-# written to areas.dat. A single inferred dig is a proposal, not a permanent
-# change to the operator's map - they accept it with
-# map_server_node/promote_obstacle{pending_id} or drop it with
-# map_server_node/discard_obstacle. The evidence below is folded into the
-# proposal's name so the operator can judge it.
+# Two consumers, neither of which may ever block the robot's own pose:
+#  * map_server records a PENDING PROPOSAL (MapArea.proposed_obstacles,
+#    SOURCE_DIG). Nothing is stamped into the keepout mask, the coverage
+#    plan or areas.dat - a single inferred dig is a proposal, not a change to
+#    the operator's map. They accept it with
+#    map_server_node/promote_obstacle{pending_id} (applied + persisted) or
+#    drop it with map_server_node/discard_obstacle. The evidence below is
+#    folded into the proposal's name so the operator can judge it.
+#  * behavior_tree_node keeps the session's dig points; FollowStrip cancels
+#    the active coverage goal, resumes the same unit past the spot and skips
+#    the path poses inside the dig skip zone for the rest of the session
+#    (mowgli_behavior/dig_skip.hpp) - the anti re-dig protection of #500.
 
 std_msgs/Header header
 
