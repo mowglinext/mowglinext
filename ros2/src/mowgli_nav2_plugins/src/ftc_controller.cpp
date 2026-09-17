@@ -31,6 +31,7 @@
 
 #include "mowgli_nav2_plugins/ftc_carrot_lead.hpp"
 #include "mowgli_nav2_plugins/ftc_obstacle_wait.hpp"
+#include "mowgli_nav2_plugins/ftc_resync.hpp"
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include "mowgli_nav2_plugins/ftc_start_index.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
@@ -1158,19 +1159,22 @@ FTCController::PlannerState FTCController::update_planner_state()
           const double rx = base_to_map.transform.translation.x;
           const double ry = base_to_map.transform.translation.y;
 
-          double best_dist = std::numeric_limits<double>::max();
-          uint32_t best_idx = current_index_;
-          for (uint32_t i = 0; i < global_plan_.size(); ++i)
+          // Bounded to a window of PATH LENGTH around the carrot: the nearest
+          // pose of the whole plan is, on concentric rings 0.16 m apart, a pose
+          // on a NEIGHBOURING ring tens of metres further on (ftc_resync.hpp).
+          std::vector<std::pair<double, double>> plan_xy;
+          plan_xy.reserve(global_plan_.size());
+          for (const auto& ps : global_plan_)
           {
-            const double dx = global_plan_[i].pose.position.x - rx;
-            const double dy = global_plan_[i].pose.position.y - ry;
-            const double d = std::sqrt(dx * dx + dy * dy);
-            if (d < best_dist)
-            {
-              best_dist = d;
-              best_idx = i;
-            }
+            plan_xy.emplace_back(ps.pose.position.x, ps.pose.position.y);
           }
+          const ResyncResult resync = FindResyncIndex(
+              plan_xy, current_index_, rx, ry, kResyncWindowFactor * config_.max_follow_distance);
+          const double best_dist = resync.distance_m;
+          // The carrot interpolates towards index + 1, so never anchor on the
+          // very last pose.
+          const uint32_t best_idx = static_cast<uint32_t>(
+              std::min(resync.index, global_plan_.size() >= 2 ? global_plan_.size() - 2 : 0));
           if (best_dist < config_.max_follow_distance)
           {
             RCLCPP_WARN(logger_,
@@ -1313,6 +1317,27 @@ void FTCController::update_control_point(double dt)
 
     case PlannerState::FOLLOWING:
     {
+      // Rebuild the carrot from the plan (SLERP between the two bounding poses).
+      // EVERY exit of this case must go through it: applyLateralDeviationToCarrot
+      // shifts current_control_point_ in place, so a tick that leaves the
+      // previous value standing re-applies the skirt offset on top of itself.
+      const auto interpolate_carrot = [this]()
+      {
+        Eigen::Affine3d currentPose, nextPose;
+        tf2::fromMsg(global_plan_[current_index_].pose, currentPose);
+        tf2::fromMsg(global_plan_[current_index_ + 1].pose, nextPose);
+
+        const Eigen::Quaternion<double> rot1(currentPose.linear());
+        const Eigen::Quaternion<double> rot2(nextPose.linear());
+        const Eigen::Vector3d trans1 = currentPose.translation();
+        const Eigen::Vector3d trans2 = nextPose.translation();
+
+        Eigen::Affine3d result;
+        result.translation() = (1.0 - current_progress_) * trans1 + current_progress_ * trans2;
+        result.linear() = rot1.slerp(current_progress_, rot2).toRotationMatrix();
+        current_control_point_ = result;
+      };
+
       // A zero-velocity obstacle hold owns the output. Keep the virtual carrot
       // fixed as well; otherwise it walks away from the stationary robot and
       // creates a catch-up surge as soon as one scan looks clear.
@@ -1321,6 +1346,7 @@ void FTCController::update_control_point(double dt)
         current_movement_speed_ = 0.0;
         stall_time_ = 0.0;
         is_stalled_ = false;
+        interpolate_carrot();
         break;
       }
 
@@ -1329,12 +1355,17 @@ void FTCController::update_control_point(double dt)
       // holding the chassis (dig hard-stop + reverse, collision_monitor
       // slowdown); a far carrot is then steered at along a chord that cuts the
       // INSIDE of a curved path. The cap is derived, see ftc_carrot_lead.hpp.
+      //
+      // HOLDING the carrot must not skip the interpolation at the bottom of this
+      // case: current_control_point_ still carries LAST tick's lateral deviation
+      // (applyLateralDeviationToCarrot shifts it in place), so leaving it
+      // untouched made the skirt offset accumulate tick after tick — 0.45 m per
+      // 100 ms — until the carrot sat > max_follow_distance away and the resync
+      // re-anchored on a neighbouring ring (2026-09-17: 96 m of plan skipped).
       const double carrot_max_lead =
           CarrotMaxLead(config_.carrot_max_lead, config_.speed_fast, config_.kp_lon);
-      if (CarrotLeadExceeded(local_control_point_.translation().x(), carrot_max_lead))
-      {
-        break;  // skip advancement, let robot catch up
-      }
+      const bool hold_carrot =
+          CarrotLeadExceeded(local_control_point_.translation().x(), carrot_max_lead);
 
       // Compute target speed based on how much straight path lies ahead.
       const double straight_dist = distanceLookahead();
@@ -1397,7 +1428,7 @@ void FTCController::update_control_point(double dt)
       // robot isn't moving, so advancing the carrot would only grow lon_error
       // ahead of the chassis and make the lon PID push harder into the
       // obstruction — the runaway that dug holes.
-      if (is_stalled_)
+      if (is_stalled_ || hold_carrot)
       {
         distance_to_move = 0.0;
         angle_to_move = 0.0;
@@ -1453,20 +1484,7 @@ void FTCController::update_control_point(double dt)
         }
       }
 
-      // SLERP interpolation between the two bounding path points.
-      tf2::fromMsg(global_plan_[current_index_].pose, currentPose);
-      tf2::fromMsg(global_plan_[current_index_ + 1].pose, nextPose);
-
-      const Eigen::Quaternion<double> rot1(currentPose.linear());
-      const Eigen::Quaternion<double> rot2(nextPose.linear());
-      const Eigen::Vector3d trans1 = currentPose.translation();
-      const Eigen::Vector3d trans2 = nextPose.translation();
-
-      Eigen::Affine3d result;
-      result.translation() = (1.0 - current_progress_) * trans1 + current_progress_ * trans2;
-      result.linear() = rot1.slerp(current_progress_, rot2).toRotationMatrix();
-
-      current_control_point_ = result;
+      interpolate_carrot();
     }
     break;
 
