@@ -199,6 +199,15 @@ if(BUILD_TESTING)
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+
+  ament_add_gtest(test_ftc_resync
+    test/test_ftc_resync.cpp
+  )
+
+  target_include_directories(test_ftc_resync
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
 endif()
 
 # ---------------------------------------------------------------------------
