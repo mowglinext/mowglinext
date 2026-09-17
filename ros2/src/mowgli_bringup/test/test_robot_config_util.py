@@ -650,6 +650,26 @@ def test_dig_skip_radius_follows_an_operator_edited_chassis():
     assert longer >= math.hypot(max(abs(front), abs(rear)), half_width) - 1e-9
 
 
+def test_dig_proposal_radius_is_the_wheel_ruts_not_the_chassis():
+    # hypot(0.325/2 + 0.04/2, 0.10/2) = hypot(0.1825, 0.05)
+    radius = _util.dig_proposal_radius({})
+    assert radius == pytest.approx(0.1892, abs=1e-4)
+    # Covers the outer edge of both tyres ...
+    assert radius >= 0.325 / 2.0 + 0.04 / 2.0
+    # ... and is nowhere near the 0.60 m chassis-length box it replaces, nor
+    # the body-sized skip radius: the body is added ONCE, by the keepout band.
+    assert 2.0 * radius < 0.60
+    assert radius < _util.chassis_half_width({})
+    assert radius < _util.dig_skip_radius({})
+
+
+def test_dig_proposal_radius_follows_the_configured_wheels():
+    wide = _util.dig_proposal_radius({"wheel_track": 0.50, "wheel_width": 0.08})
+    big_wheels = _util.dig_proposal_radius({"wheel_radius": 0.20})
+    assert wide == pytest.approx(math.hypot(0.29, 0.05))
+    assert big_wheels > _util.dig_proposal_radius({})
+
+
 def test_circumscribed_radius_encloses_every_footprint_corner():
     params = {"chassis_length": 0.72, "chassis_width": 0.51, "chassis_center_x": 0.22}
     front, rear, half_width = _util.chassis_footprint(params)

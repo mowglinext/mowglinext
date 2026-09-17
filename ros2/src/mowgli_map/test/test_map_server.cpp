@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <geometry_msgs/msg/point32.hpp>
@@ -454,7 +455,6 @@ TEST_F(AreaTypeTest, DigEventLeavesTheKeepoutMaskAndTheCoverageHolesUntouched)
 {
   // Arrange
   ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
-  node_->set_robot_heading_for_test(125.0 * M_PI / 180.0);
   const auto mask_before = node_->build_keepout_mask_for_test();
   ASSERT_FALSE(mask_before.data.empty());
 
@@ -534,16 +534,15 @@ void accept_first_proposal(mowgli_map::MapServerNode& node)
 }
 }  // namespace
 
-// The geometry of an ACCEPTED dig keepout is unchanged from the 2026-09-10
-// fix: it covers the hole and the ground ahead of it and does NOT reach back
-// over the spot the bridge reversed the robot to (0.2-0.3 m behind the dig).
-TEST_F(AreaTypeTest, AcceptedDigProposalBecomesTheHeadingBiasedKeepout)
+// The proposal is sized to the PHYSICAL dig (the two drive-wheel ruts), not to
+// the chassis: the old 0.60 m heading-biased box only existed because it was
+// stamped as a session keepout, and it blanked out a large patch of lawn on
+// every accept. An accepted proposal = compact disc + the mask band, the body
+// counted exactly once (by the band).
+TEST_F(AreaTypeTest, AcceptedDigProposalIsACompactHoleTheSizeOfTheWheelRuts)
 {
   ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
-  const double yaw = 125.0 * M_PI / 180.0;  // heading at the 11:18 dig
-  const double cx = 0.0, cy = 0.0;
-  node_->set_robot_heading_for_test(yaw);
-  node_->on_dig_event_for_test(make_dig_event(cx, cy));
+  node_->on_dig_event_for_test(make_dig_event(0.0, 0.0));  // map_distance 0.02
   ASSERT_EQ(node_->area_obstacle_count_for_test(0), 1u);
 
   accept_first_proposal(*node_);
@@ -552,40 +551,65 @@ TEST_F(AreaTypeTest, AcceptedDigProposalBecomesTheHeadingBiasedKeepout)
   EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 1u);
   const auto mask = node_->build_keepout_mask_for_test();
   ASSERT_FALSE(mask.data.empty());
-  auto along = [&](double d, double lateral, double& x, double& y)
+  // radius 0.19 + 0.01 slip growth = 0.20; default band 0.20 -> lethal to ~0.40.
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100) << "the hole itself must be lethal once accepted";
+  EXPECT_EQ(mask_at(mask, 0.16, 0.0), 100) << "a wheel rut (half a track away) must be lethal";
+  EXPECT_EQ(mask_at(mask, 0.0, 0.16), 100) << "whatever the heading was";
+  const std::vector<std::pair<double, double>> outside{{0.65, 0.0},
+                                                       {-0.65, 0.0},
+                                                       {0.0, 0.65},
+                                                       {0.0, -0.65}};
+  for (const auto& [x, y] : outside)
   {
-    x = cx + d * std::cos(yaw) - lateral * std::sin(yaw);
-    y = cy + d * std::sin(yaw) + lateral * std::cos(yaw);
-  };
-  double x, y;
-  along(0.0, 0.0, x, y);
-  EXPECT_EQ(mask_at(mask, x, y), 100) << "the hole itself must be lethal once accepted";
-  along(0.45, 0.0, x, y);
-  EXPECT_EQ(mask_at(mask, x, y), 100) << "ground ahead of the dig must be lethal";
-  along(0.2, 0.2, x, y);
-  EXPECT_EQ(mask_at(mask, x, y), 100) << "lateral tyre track must be lethal";
-  along(-0.25, 0.0, x, y);
-  EXPECT_EQ(mask_at(mask, x, y), 0) << "the keepout must not reach back behind the dig";
-  along(0.95, 0.0, x, y);
-  EXPECT_EQ(mask_at(mask, x, y), 0)
-      << "the keepout must stay bounded ahead (0.60 + the 0.20 default band)";
+    EXPECT_EQ(mask_at(mask, x, y), 0)
+        << "the old chassis-sized box reached here (" << x << ", " << y << "); the hole must not";
+  }
 }
 
-// Without a heading (no TF yet) the only orientation-free polygon is the
-// centred square: lethal at the dig once accepted, still bounded.
-TEST_F(AreaTypeTest, AcceptedDigProposalWithoutHeadingIsTheCentredSquare)
+// Accepting while the robot still stands next to the dig would re-create the
+// 2026-09-10 / 2026-09-17 strand with one click: polygon + band becomes lethal
+// under the robot and every plan from its pose is START_OCCUPIED. The accept
+// is REFUSED (not deferred) with a message the GUI shows as-is.
+TEST_F(AreaTypeTest, AcceptIsRefusedWhileTheRobotStandsInsideTheResultingKeepout)
 {
+  // Arrange: the bridge reversed the robot 0.25 m out of the dig.
   ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
   node_->on_dig_event_for_test(make_dig_event(0.0, 0.0));
+  node_->set_robot_position_for_test(-0.25, 0.0);
+  const auto mask_before = node_->build_keepout_mask_for_test();
+  auto req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  req->pending_id = node_->obstacle_info_for_test(0, 0).id;
 
-  accept_first_proposal(*node_);
+  // Act
+  auto refused = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(req, refused);
 
-  const auto mask = node_->build_keepout_mask_for_test();
-  ASSERT_FALSE(mask.data.empty());
-  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100);
-  EXPECT_EQ(mask_at(mask, 0.30, 0.0), 100);
-  EXPECT_EQ(mask_at(mask, -0.30, 0.0), 100) << "centred square reaches behind (legacy)";
-  EXPECT_EQ(mask_at(mask, 0.70, 0.0), 0) << "bounded: 0.30 half-side + 0.15 margin";
+  // Assert: nothing applied, the proposal is still there to accept later.
+  EXPECT_FALSE(refused->success);
+  EXPECT_NE(refused->message.find("robot is standing"), std::string::npos) << refused->message;
+  EXPECT_TRUE(node_->obstacle_info_for_test(0, 0).pending);
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 0u);
+  EXPECT_EQ(node_->build_keepout_mask_for_test().data, mask_before.data);
+
+  // Once the robot has driven away the same request goes through, and the
+  // robot's cell is not lethal afterwards.
+  node_->set_robot_position_for_test(-1.0, 0.0);
+  auto accepted = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(req, accepted);
+  ASSERT_TRUE(accepted->success) << accepted->message;
+  EXPECT_EQ(mask_at(node_->build_keepout_mask_for_test(), -1.0, 0.0), 0);
+}
+
+// Issue #500: three latches inside 0.13 m are ONE hole. The centroid dedup
+// (0.10 m) alone would have listed two.
+TEST_F(AreaTypeTest, DigInsideAnExistingProposalIsTheSameHole)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
+
+  node_->on_dig_event_for_test(make_dig_event(1.00, 1.00));
+  node_->on_dig_event_for_test(make_dig_event(1.13, 1.00));
+
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 1u);
 }
 
 // A proposal sitting at a spot must not make a real promotion there a no-op:
@@ -593,7 +617,7 @@ TEST_F(AreaTypeTest, AcceptedDigProposalWithoutHeadingIsTheCentredSquare)
 TEST_F(AreaTypeTest, PromotingAPolygonOverAProposalStillAppliesIt)
 {
   ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
-  node_->on_dig_event_for_test(make_dig_event(1.0, 1.0));  // centred square, no heading
+  node_->on_dig_event_for_test(make_dig_event(1.0, 1.0));  // disc centred on (1, 1)
   ASSERT_EQ(node_->obstacle_polygon_count_for_test(), 0u);
 
   EXPECT_TRUE(node_->apply_promoted_obstacle_for_test(0, make_rect(0.7, 0.7, 1.3, 1.3)));
@@ -1001,29 +1025,46 @@ TEST_F(KeepoutBodyOnceTest, LethalRegionIsPolygonPlusBodyHalfWidthAndNothingMore
   EXPECT_EQ(mask_at(mask, 0.5 + kCoverageLineM - kRasterSlackM + kResolutionM, 0.0), 0);
 }
 
-TEST(DigKeepoutPolygon, RearLethalEdgeIsAlwaysTenCentimetresBehindTheDigPoint)
+TEST(DigProposalPolygon, IsARegularPolygonCentredOnTheDigThatContainsTheWholeDisc)
 {
-  // polygon rear edge + the mask's keepout band must land exactly
-  // kDigKeepoutBehindM behind the dig point WHATEVER the band is — it follows
-  // keepout_obstacle_margin. If it kept following coverage's obstacle_margin
-  // while the mask painted a different band, the 2026-09-10 "robot stands
-  // inside its own keepout" trap would return.
-  for (const double margin : {0.0, 0.15, 0.20, 0.275, 0.40})
+  const double r = 0.19;
+  const auto poly = mowgli_map::dig_proposal_polygon(-3.23, 11.01, r);
+
+  ASSERT_EQ(poly.points.size(), static_cast<std::size_t>(mowgli_map::kDigProposalVertices));
+  const auto c = mowgli_map::polygon_centroid(poly);
+  EXPECT_NEAR(c.x, -3.23, 1e-4);
+  EXPECT_NEAR(c.y, 11.01, 1e-4);
+  // Circumscribed: every vertex is outside the disc, every edge touches it.
+  for (const auto& p : poly.points)
   {
-    const auto poly = mowgli_map::dig_keepout_polygon(0.0, 0.0, 0.0, true, 0.60, margin);
-    double rear = 1e9;
-    for (const auto& p : poly.points)
-    {
-      rear = std::min(rear, static_cast<double>(p.x));
-    }
-    EXPECT_NEAR(rear - margin, -mowgli_map::kDigKeepoutBehindM, 1e-6) << "margin " << margin;
+    EXPECT_NEAR(std::hypot(p.x + 3.23, p.y - 11.01), r / std::cos(M_PI / 8.0), 1e-4);
   }
+  EXPECT_NEAR(mowgli_map::point_to_polygon_distance(-3.23, 11.01, poly), r, 1e-4);
+  // Not closed (ROS convention) and not degenerate: a GUI that drops the last
+  // vertex of an unclosed ring must still be left with a real shape.
+  EXPECT_NE(poly.points.front(), poly.points.back());
 }
 
-TEST_F(KeepoutBodyOnceTest, AcceptedDigKeepoutLeavesTheReversedRobotFreeWithTheBodyWideBand)
+TEST(DigProposalPolygon, RadiusGrowsWithTheSlipCreepAndIsBoundedBothWays)
+{
+  using mowgli_map::dig_proposal_radius;
+  EXPECT_NEAR(dig_proposal_radius(0.189, 0.0), 0.189, 1e-9);
+  EXPECT_NEAR(dig_proposal_radius(0.189, 0.04), 0.209, 1e-9) << "ruts are half the creep longer";
+  EXPECT_NEAR(dig_proposal_radius(0.189, 5.0), 0.189 + mowgli_map::kMaxDigSlipGrowthM, 1e-9)
+      << "a garbage map_distance must not blank out the lawn";
+  EXPECT_NEAR(dig_proposal_radius(0.189, -1.0), 0.189, 1e-9);
+  EXPECT_NEAR(dig_proposal_radius(0.0, 0.0), mowgli_map::kMinDigProposalRadiusM, 1e-9)
+      << "the hole must stay selectable in the GUI and cover at least one map cell";
+  EXPECT_NEAR(dig_proposal_radius(std::nan(""), std::nan("")),
+              mowgli_map::kMinDigProposalRadiusM,
+              1e-9);
+}
+
+// Body counted exactly once: with the body-wide band (0.275) an accepted dig
+// is lethal out to polygon + band and NOT a chassis length further.
+TEST_F(KeepoutBodyOnceTest, AcceptedDigIsTheRutDiscPlusTheBodyBandAndNothingMore)
 {
   ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
-  node_->set_robot_heading_for_test(0.0);
   node_->on_dig_event_for_test(make_dig_event(0.0, 0.0));
   ASSERT_EQ(node_->area_obstacle_count_for_test(0), 1u);
   accept_first_proposal(*node_);
@@ -1031,8 +1072,9 @@ TEST_F(KeepoutBodyOnceTest, AcceptedDigKeepoutLeavesTheReversedRobotFreeWithTheB
   const auto mask = node_->build_keepout_mask_for_test();
   ASSERT_FALSE(mask.data.empty());
   EXPECT_EQ(mask_at(mask, 0.025, 0.0), 100) << "the hole itself must be lethal";
-  EXPECT_EQ(mask_at(mask, -0.225, 0.0), 0)
-      << "0.2-0.3 m behind the dig (where the bridge reverses the robot to) must stay free";
+  EXPECT_EQ(mask_at(mask, 0.40, 0.0), 100) << "disc 0.20 + band 0.275 reaches here";
+  EXPECT_EQ(mask_at(mask, 0.65, 0.0), 0) << "the body must not be counted a second time";
+  EXPECT_EQ(mask_at(mask, -0.65, 0.0), 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

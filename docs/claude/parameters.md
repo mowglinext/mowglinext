@@ -47,6 +47,13 @@ reject). A proposal is inert — no keepout, no coverage hole, nothing saved —
 operator accepts it. Hardware dig stopping, bounded reverse, repeat-dig escalation and
 FollowStrip's session dig skip zone remain active either way. Save and restart ROS2 to apply.
 
+`dig_proposal_radius` (`map_server_node`) has NO robot-yaml key either: `full_system.launch.py` injects
+`robot_config_util.dig_proposal_radius(robot_params)` = hypot(`wheel_track`/2 + `wheel_width`/2,
+`wheel_radius`/2) = 0.189 m shipped — the PHYSICAL dig (both wheel ruts), not the chassis. It replaces
+`dig_obstacle_size` (0.60). Do not confuse it with the skip radius below: one is the size of the HOLE an
+operator may accept (the body is added once, by the keepout band), the other is which POSES put the
+chassis over that hole.
+
 `dig_skip_radius_m` (`behavior_tree_node`) has NO yaml key: `full_system.launch.py` injects
 `robot_config_util.dig_skip_radius(robot_params)` = the chassis circumscribed radius (0.597 m
 shipped), so it follows a GUI edit of `chassis_length` / `chassis_width` / `chassis_center_x`.

@@ -55,6 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
     chassis_circumscribed_radius,
+    dig_proposal_radius,
     dig_skip_radius,
     keepout_obstacle_margin,
     load_robot_params,
@@ -490,6 +491,11 @@ def generate_launch_description() -> LaunchDescription:
             # remain owned by hardware_bridge regardless of this map setting.
             {"dig_obstacle_enabled": bool(
                 robot_params.get("dig_obstacle_enabled", True))},
+            # Size of a dig PROPOSAL = the physical dig (the two drive-wheel
+            # ruts), DERIVED from wheel_track / wheel_width / wheel_radius —
+            # never a chassis-sized box: the body clearance is added once, by
+            # the keepout band + obstacle_margin, when a proposal is accepted.
+            {"dig_proposal_radius": dig_proposal_radius(robot_params)},
             # LETHAL band grown around drawn obstacle polygons in the keepout
             # mask. DERIVED (robot_config_util.keepout_obstacle_margin), and
             # deliberately NOT coverage_server.obstacle_margin any more: the

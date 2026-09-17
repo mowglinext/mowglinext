@@ -34,7 +34,7 @@ import {EditAreaModal} from "./map/components/EditAreaModal.tsx";
 import {AreasListPanel} from "./map/components/AreasListPanel.tsx";
 import {TrackedObstaclesPanel} from "./map/components/TrackedObstaclesPanel.tsx";
 import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.tsx";
-import {extractObstacleProposals} from "./map/utils/obstacleProposals.ts";
+import {extractObstacleProposals, isDigProposal} from "./map/utils/obstacleProposals.ts";
 import {MapOffsetPanel} from "./map/components/MapOffsetPanel.tsx";
 import {MapToolbar} from "./map/components/MapToolbar.tsx";
 import {MapToolbarMobile} from "./map/components/MapToolbarMobile.tsx";
@@ -471,6 +471,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // PENDING obstacle proposals (wheel-slip dig reports). map_server lists
     // them apart from each area's applied obstacles: they block nothing on the
     // robot until the operator accepts one in ObstacleProposalsPanel. Drawn as a
+    // filled hole of their REAL polygon, like any obstacle, labelled with their
+    // provenance ("DIG #7"), but with a
     // dashed outline so they never read as a real keepout, and kept OUT of the
     // editable feature set so a map save cannot persist one by accident.
     const obstacleProposals = useMemo(() => extractObstacleProposals(map), [map]);
@@ -482,14 +484,14 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 type: "Feature" as const,
                 id: proposal.id,
                 geometry: {type: "Polygon" as const, coordinates: [[...ring, ring[0]]]},
-                properties: {proposal_id: proposal.id, proposal_label: `?${proposal.id}`},
+                properties: {proposal_id: proposal.id, proposal_label: `${isDigProposal(proposal) ? t('mapObstacleProposals.digMapLabel') : '?'} #${proposal.id}`},
             };
         }),
-    }), [obstacleProposals, offsetX, offsetY, datum]);
+    }), [obstacleProposals, offsetX, offsetY, datum, t]);
     const renderProposalLayers = () => (
         <Source type={"geojson"} id={"obstacle-proposals"} data={proposalCollection}>
             <Layer type={"fill"} id={"obstacle-proposal-fill"}
-                paint={{'fill-color': '#d48806', 'fill-opacity': ['case', ['==', ['get', 'proposal_id'], selectedProposalId ?? -1], 0.35, 0.12]}}/>
+                paint={{'fill-color': '#bf0000', 'fill-opacity': ['case', ['==', ['get', 'proposal_id'], selectedProposalId ?? -1], 0.75, 0.5]}}/>
             <Layer type={"line"} id={"obstacle-proposal-outline"}
                 paint={{'line-color': '#d48806', 'line-width': 2, 'line-dasharray': [2, 2]}}/>
             <Layer type={"symbol"} id={"obstacle-proposal-label"}

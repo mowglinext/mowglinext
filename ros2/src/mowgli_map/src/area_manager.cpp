@@ -1079,6 +1079,32 @@ void MapServerNode::on_promote_obstacle(
   // that APPLIES it (mask + classification + replan) and persists it.
   if (req->pending_id != 0)
   {
+    // REFUSE while the robot stands where the resulting keepout would be.
+    // Accepting turns polygon + keepout_obstacle_margin into LETHAL cells, and
+    // right after a dig the robot is only ~0.2-0.3 m from the dig point: the
+    // keepout would sit under it and every plan from its own pose would be
+    // START_OCCUPIED — the 2026-09-10 / 2026-09-17 strand, re-created by one
+    // click. Refused rather than deferred: a deferred accept is hidden state
+    // that applies itself later, mid-mission, when nobody is looking; a refusal
+    // tells the operator exactly what to do and changes nothing.
+    if (const auto blocked_m = robot_inside_accepted_band(req->pending_id); blocked_m.has_value())
+    {
+      std::ostringstream why;
+      why << std::fixed << std::setprecision(2)
+          << "the robot is standing on this proposal: accepting it now would put the robot "
+             "INSIDE the new keepout ("
+          << *blocked_m << " m from its edge, " << accept_clearance_m()
+          << " m needed) and no path could be planned from there. Let the robot drive away "
+             "or send it home, then accept again.";
+      res->success = false;
+      res->message = why.str();
+      RCLCPP_WARN(get_logger(),
+                  "promote_obstacle: pending %u refused - %s",
+                  req->pending_id,
+                  res->message.c_str());
+      return;
+    }
+
     const auto area_index = accept_pending_obstacle(req->pending_id, req->name);
     if (!area_index.has_value())
     {
@@ -1207,16 +1233,37 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
     return;
   }
 
-  // Geometry the keepout WOULD have if the operator accepts it:
-  // dig_obstacle_size_ wide (one chassis length by default, see
-  // kDefaultDigKeepoutSizeM), biased AHEAD of the robot's heading so polygon +
-  // keepout_obstacle_margin band reaches only kDigKeepoutBehindM behind the dig
-  // point. The heading is the last one latched by on_odom; a dig with no
-  // heading yet falls back to the centred square.
-  const bool have_heading = have_robot_heading_;
-  const double yaw = last_robot_yaw_;
-  const geometry_msgs::msg::Polygon poly =
-      dig_keepout_polygon(x, y, yaw, have_heading, dig_obstacle_size_, keepout_obstacle_margin_m_);
+  // A dig INSIDE a hole that already exists there (accepted, or still
+  // proposed) is the same hole: the centroid dedup below only catches reports
+  // within kObstacleDedupEpsilonM, and issue #500's three latches spanned
+  // 0.13 m.
+  {
+    geometry_msgs::msg::Point32 dig_pt;
+    dig_pt.x = static_cast<float>(x);
+    dig_pt.y = static_cast<float>(y);
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    for (const auto& obs : areas_[*area_index].obstacles)
+    {
+      if (point_in_polygon(dig_pt, obs.polygon))
+      {
+        RCLCPP_INFO(get_logger(),
+                    "Dig at (%.2f, %.2f) lies inside obstacle/proposal %u ('%s') - no new "
+                    "proposal.",
+                    x,
+                    y,
+                    obs.id,
+                    obs.name.c_str());
+        return;
+      }
+    }
+  }
+
+  // The proposal is sized to the PHYSICAL dig — the two drive-wheel ruts —
+  // not to the chassis (internal_helpers.hpp). The body clearance is added
+  // separately, and exactly once, when an accepted proposal is applied
+  // (keepout band, coverage obstacle_margin).
+  const double radius = dig_proposal_radius(dig_proposal_radius_m_, msg->map_distance);
+  const geometry_msgs::msg::Polygon poly = dig_proposal_polygon(x, y, radius);
 
   // The name IS the proposal's evidence: it is what the operator reads in the
   // GUI when deciding whether this inferred dig deserves a permanent hole in
@@ -1249,12 +1296,11 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
   }
 
   RCLCPP_WARN(get_logger(),
-              "Dig proposal %u (%.2f m wide, %s) recorded for area %zu at (%.2f, %.2f). It is "
-              "NOT applied: no keepout, no coverage hole, nothing saved. Accept or reject it in "
-              "the GUI.",
+              "Dig proposal %u (radius %.2f m, the wheel ruts) recorded for area %zu at (%.2f, "
+              "%.2f). It is NOT applied: no keepout, no coverage hole, nothing saved. Accept or "
+              "reject it in the GUI.",
               *proposal_id,
-              std::max(dig_obstacle_size_, kMinDigKeepoutSizeM),
-              have_heading ? "ahead of the heading" : "centred square, no heading yet",
+              radius,
               *area_index,
               x,
               y);
@@ -1283,6 +1329,44 @@ std::optional<uint32_t> MapServerNode::add_obstacle_proposal(
   // that a planner or a controller can see.
   areas_[area_index].obstacles.push_back(make_obstacle_entry(polygon, name, source, true));
   return areas_[area_index].obstacles.back().id;
+}
+
+double MapServerNode::accept_clearance_m() const
+{
+  // The lethal region of an accepted obstacle is polygon + the mask band
+  // (Smac 2D is a point check, the mask is not inflated); one cell of slack
+  // for the rasterisation.
+  return std::max(keepout_obstacle_margin_m_, 0.0) + resolution_;
+}
+
+std::optional<double> MapServerNode::robot_inside_accepted_band(uint32_t pending_id)
+{
+  if (!have_robot_pose_)
+  {
+    return std::nullopt;  // no pose yet: nothing to protect, do not block the operator
+  }
+  const double rx = last_robot_x_;
+  const double ry = last_robot_y_;
+  geometry_msgs::msg::Point32 robot;
+  robot.x = static_cast<float>(rx);
+  robot.y = static_cast<float>(ry);
+
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  for (const auto& area : areas_)
+  {
+    for (const auto& obs : area.obstacles)
+    {
+      if (obs.id != pending_id || !obs.pending)
+      {
+        continue;
+      }
+      const double dist = point_in_polygon(robot, obs.polygon)
+                              ? 0.0
+                              : point_to_polygon_distance(rx, ry, obs.polygon);
+      return dist <= accept_clearance_m() ? std::optional<double>(dist) : std::nullopt;
+    }
+  }
+  return std::nullopt;  // unknown id: accept_pending_obstacle reports it
 }
 
 std::optional<size_t> MapServerNode::accept_pending_obstacle(uint32_t pending_id,

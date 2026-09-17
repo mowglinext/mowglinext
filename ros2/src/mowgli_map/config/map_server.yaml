@@ -35,11 +35,15 @@ map_server_node:
     # Overridden from mowgli_robot.yaml by full_system.launch.py; exposed in
     # GUI Settings → Obstacles. False leaves dig detection/recovery active.
     dig_obstacle_enabled: true
-    # Side of the keepout an ACCEPTED dig proposal becomes [m]. One chassis
-    # LENGTH (the Nav2 footprint is 0.60 × 0.40 m). It used to be one tool
-    # width (0.18 m) — NARROWER THAN THE BODY, so "route around it" still
-    # dragged the chassis over the hole.
-    dig_obstacle_size: 0.60
+    # Radius of a dig proposal [m]: the disc covering both drive-wheel contact
+    # patches — the PHYSICAL dig, not the chassis. Overridden by
+    # full_system.launch.py with robot_config_util.dig_proposal_radius()
+    # (hypot(wheel_track/2 + wheel_width/2, wheel_radius/2) = 0.189 m shipped);
+    # map_server grows it by half the DigEvent's map_distance (rut length) and
+    # floors it at 0.10 m. The body clearance of an ACCEPTED proposal is added
+    # separately (keepout band, coverage obstacle_margin) — the polygon must
+    # not contain the body a second time. Replaces dig_obstacle_size (0.60 m).
+    dig_proposal_radius: 0.19
     map_file_path: ""
     areas_file_path: "/ros2_ws/maps/areas.dat"
     publish_rate: 1.0

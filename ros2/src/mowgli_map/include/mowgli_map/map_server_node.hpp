@@ -188,12 +188,14 @@ public:
   {
     on_dig_event(std::move(msg));
   }
-  /// Test-only: stand in for on_odom's TF-derived heading latch (tests have no
-  /// TF tree), so the dig keepout orientation can be asserted.
-  void set_robot_heading_for_test(double yaw)
+  /// Test-only: stand in for on_odom's TF-derived position latch (tests have
+  /// no TF tree), so the "robot stands on the proposal" accept guard can be
+  /// exercised.
+  void set_robot_position_for_test(double x, double y)
   {
-    last_robot_yaw_ = yaw;
-    have_robot_heading_ = true;
+    last_robot_x_ = x;
+    last_robot_y_ = y;
+    have_robot_pose_ = true;
   }
 
   /// Test-only: forward to the private mowing_area_containing.
@@ -512,6 +514,17 @@ private:
   [[nodiscard]] std::optional<size_t> accept_pending_obstacle(uint32_t pending_id,
                                                               const std::string& name);
 
+  /// Distance the robot CENTRE must keep from a proposal's polygon for an
+  /// accept to be safe: the mask band that becomes lethal around it + one cell.
+  [[nodiscard]] double accept_clearance_m() const;
+
+  /// Accept guard. Returns the robot's distance to the pending polygon (0 when
+  /// inside it) when accepting `pending_id` NOW would leave the robot inside
+  /// the resulting lethal region — i.e. unable to plan from its own pose
+  /// (START_OCCUPIED). nullopt = safe to accept (or unknown id / no pose yet).
+  /// Manages map_mutex_ internally.
+  [[nodiscard]] std::optional<double> robot_inside_accepted_band(uint32_t pending_id);
+
   /// Drop the pending obstacle carrying `pending_id` from its area's list.
   /// @return false when no PENDING obstacle has that id.
   bool discard_pending_obstacle(uint32_t pending_id);
@@ -540,8 +553,9 @@ private:
   /// Handle a wheel-slip dig report from hardware_bridge_node.
   ///
   /// The bridge has already hard-stopped and reversed out. Resolves which
-  /// mowing area contains the dig point, builds the heading-biased polygon the
-  /// keepout WOULD have, and records it as an inert PROPOSAL
+  /// mowing area contains the dig point, builds a compact regular polygon the
+  /// size of the PHYSICAL dig (the wheel ruts — dig_proposal_polygon, never a
+  /// chassis-sized box), and records it as an inert PROPOSAL
   /// (add_obstacle_proposal). It must never apply anything: the robot stands
   /// ~0.2-0.3 m from the point, and a keepout there refused every plan from
   /// its own pose (START_OCCUPIED, 2026-09-10 and 2026-09-17). Issue #500's
@@ -609,8 +623,9 @@ private:
   double tool_width_;
   /// Record wheel-slip dig locations as operator-reviewable proposals.
   bool dig_obstacle_enabled_{true};
-  /// Side length of the keepout a dig proposal becomes once accepted [m].
-  double dig_obstacle_size_{0.0};
+  /// Radius of a dig proposal before the per-event slip growth [m]: the disc
+  /// covering both drive-wheel contact patches (internal_helpers.hpp).
+  double dig_proposal_radius_m_{0.0};
   std::string map_file_path_;
   std::string areas_file_path_;
 
@@ -838,11 +853,8 @@ private:
   /// Most recent map-frame robot position (latched in on_odom).
   double last_robot_x_{0.0};
   double last_robot_y_{0.0};
-  /// Most recent map-frame robot heading (latched in on_odom); orients the
-  /// dig keepout ahead of the robot (dig_keepout_polygon). False until the
-  /// first TF lookup succeeds, in which case the dig falls back to a square.
-  double last_robot_yaw_{0.0};
-  bool have_robot_heading_{false};
+  /// False until the first TF lookup in on_odom succeeds.
+  bool have_robot_pose_{false};
 
   /// Pre-defined areas (mowing zones + navigation corridors).
   /// Any cell inside ANY area polygon is free in the keepout mask;
