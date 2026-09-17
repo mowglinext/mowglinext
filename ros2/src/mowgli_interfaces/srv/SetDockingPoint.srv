@@ -10,6 +10,23 @@
 #   false — use docking_pose.position as given (manual map-drag / settings
 #           edit, where the operator specifies the location directly).
 #
+# preserve_position keeps the STORED dock X/Y untouched and writes the yaw
+# only. It exists for ONE caller: the one-click dock calibration, which
+# measures the dock heading by REVERSING OFF the dock — so when the yaw is
+# known the robot is ~1.5 m away from the charger, where a position capture is
+# meaningless and the is_charging gate can never pass. The position is kept on
+# the SERVER side (map_server owns it) rather than echoed back by the caller,
+# so a stale or never-received /map_server_node/docking_pose on the caller can
+# never overwrite it with (0, 0).
+#   true  — REQUIRES use_gps_position=false AND yaw_source=MOTION (any other
+#           combination is rejected) and a dock position already stored. The
+#           is_charging and fused-yaw-convergence gates do NOT apply (the yaw
+#           is motion-derived off the dock; the fused yaw is neither written
+#           nor read). The RTK accuracy gate still does.
+#   false — default; position handled per use_gps_position, ALL gates apply.
+# The calibration then captures X/Y in a SECOND call once it has re-docked and
+# verified charging: use_gps_position=true, yaw_source=PRESERVE.
+#
 # yaw_source selects how the ORIENTATION (yaw) is captured, INDEPENDENTLY of
 # the position source. Callers MUST set it explicitly; PRESERVE (0) is the
 # safe default (never corrupts a good stored yaw):
@@ -33,5 +50,11 @@ geometry_msgs/Pose docking_pose
 bool use_gps_position
 uint8 yaw_source
 float64 yaw_rad          # ENU map-frame chassis yaw (rad); used only when yaw_source == MOTION
+bool preserve_position   # yaw-only write, keep the stored X/Y (see above); default false
 ---
 bool success
+# message: on failure, WHY the request was rejected (which gate, with the
+# numbers). On success it is empty — unless the pose was applied in memory but
+# could NOT be written to mowgli_robot.yaml, in which case it says so (a caller
+# whose point is persistence must treat that as a failure).
+string message

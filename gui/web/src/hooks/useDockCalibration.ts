@@ -35,10 +35,10 @@ export const RETRY_LABELS: Record<number, string> = {
     1: "No RTK-Fixed — wait for a fix and retry.",
     2: "COG incoherent (RTK not truly fixed / GPS noisy) — retry.",
     3: "Reverse leg too short for a heading fit — retry.",
-    4: "Re-dock could not be verified live — the yaw is already saved; restart mowgli-ros2, then run calibration again to confirm.",
+    4: "Re-dock failed — the heading is already saved, the position was NOT updated and the robot is off the dock. Restart mowgli-ros2, dock the robot, then run the calibration again.",
     5: "Emergency active — clear it and retry.",
     6: "Robot not on the dock, or mowing — dock it / send HOME, then retry.",
-    7: "Could not save the dock pose (RTK/charging gate) — retry.",
+    7: "Could not save the dock pose — see the reason above, then retry.",
 };
 
 interface StartResponse {

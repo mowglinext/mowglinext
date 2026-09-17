@@ -74,7 +74,7 @@
 | `HighLevelControl.srv` | 18 | `COMMAND_*` (1-8, 254, 255) → `success` |
 | `MowerControl.srv` | 4 | `mow_enabled`, `mow_direction` → `success` |
 | `PromoteObstacle.srv` | 59 | `area_index`, `obstacle_id` \| `polygon` \| `pending_id`, `name` → `success`, `message` |
-| `SetDockingPoint.srv` | 37 | `docking_pose`, `use_gps_position`, `yaw_source` (`PRESERVE/REQUEST/MOTION`), `yaw_rad` → `success` |
+| `SetDockingPoint.srv` | 56 | `docking_pose`, `use_gps_position`, `yaw_source` (`PRESERVE/REQUEST/MOTION`), `yaw_rad`, `preserve_position` (yaw-only MOTION write, the one request exempt from the charging gate) → `success`, `message` |
 | `StartInArea.srv` | 13 | `area` (uint8 index) → `success` |
 | `TriggerReplan.srv` | 4 | `reason` → `success`, `message` — no ROS server |
 | **`action/`** | | |
