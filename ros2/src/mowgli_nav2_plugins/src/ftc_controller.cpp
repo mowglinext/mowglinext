@@ -2738,41 +2738,113 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
   OffsetLatticeResult plan;
   int plan_level = 0;
   std::size_t planned_stations = stations.size();
-  const std::size_t min_stations =
-      std::min(stations.size(),
-               std::max<std::size_t>(2, stations_in(config_.avoidance_min_horizon_m) + 1));
-  const std::size_t shrink = std::max<std::size_t>(1, stations_in(0.25));
-  for (std::size_t n = stations.size(); !plan.feasible;
-       n = (n > min_stations + shrink) ? n - shrink : min_stations)
+  // `only_side` != 0 forbids every offset on the other side (hard), used below
+  // to ask "is the side we committed to still passable?".
+  const auto solve = [&](int only_side)
   {
-    const std::vector<double> prefix(stations.begin(),
-                                     stations.begin() + static_cast<std::ptrdiff_t>(n));
-    plan_level = 0;
-    for (const auto& [ahead, grace] : {std::pair<std::size_t, std::size_t>{reaction, 0},
-                                       std::pair<std::size_t, std::size_t>{0, 0},
-                                       std::pair<std::size_t, std::size_t>{0, stations_in(lead)}})
+    plan = OffsetLatticeResult{};
+    const std::size_t min_stations =
+        std::min(stations.size(),
+                 std::max<std::size_t>(2, stations_in(config_.avoidance_min_horizon_m) + 1));
+    const std::size_t shrink = std::max<std::size_t>(1, stations_in(0.25));
+    for (std::size_t n = stations.size(); !plan.feasible;
+         n = (n > min_stations + shrink) ? n - shrink : min_stations)
     {
-      ++plan_level;
-      plan = PlanOffsetProfile(
-          prefix,
-          lateral_deviation_,
-          preferred,
-          [&, ahead = ahead, grace = grace](std::size_t station, double offset)
-          {
-            return span_blocked(station, offset, ahead, grace);
-          },
-          cfg);
-      if (plan.feasible)
+      const std::vector<double> prefix(stations.begin(),
+                                       stations.begin() + static_cast<std::ptrdiff_t>(n));
+      plan_level = 0;
+      for (const auto& [ahead, grace] : {std::pair<std::size_t, std::size_t>{reaction, 0},
+                                         std::pair<std::size_t, std::size_t>{0, 0},
+                                         std::pair<std::size_t, std::size_t>{0, stations_in(lead)}})
+      {
+        ++plan_level;
+        plan = PlanOffsetProfile(
+            prefix,
+            lateral_deviation_,
+            preferred,
+            [&, ahead = ahead, grace = grace, only_side](std::size_t station, double offset)
+            {
+              return (only_side != 0 && offset * static_cast<double>(only_side) < -1e-9) ||
+                     span_blocked(station, offset, ahead, grace);
+            },
+            cfg);
+        if (plan.feasible)
+        {
+          break;
+        }
+      }
+      planned_stations = n;
+      if (n == min_stations)
       {
         break;
       }
     }
-    planned_stations = n;
-    if (n == min_stations)
+  };
+  solve(0);
+
+  // COMMITTED SIDE. The soft latch inside the DP only holds if the preference it
+  // is given is itself stable; following the plan's side tick by tick makes it
+  // free to flip. With someone stepping in front of the robot — two thin legs,
+  // moving, re-marked from scratch every scan, left and right equally cheap —
+  // the side flipped at 10 Hz: the robot stopped and wagged left-right before
+  // one side finally won (operator report 2026-09-17). Once engaged the side is
+  // kept for as long as it stays passable; the other side is only adopted when
+  // the committed one is closed, or after the free plan has asked for it
+  // continuously for obstacle_clear_hold_s.
+  if (plan.feasible && is_avoiding_)
+  {
+    double free_extreme = 0.0;
+    for (const double o : plan.offsets)
     {
-      break;
+      free_extreme = std::fabs(o) > std::fabs(free_extreme) ? o : free_extreme;
+    }
+    const int committed = avoid_sign_ >= 0.0 ? 1 : -1;
+    const bool wants_other_side = free_extreme * static_cast<double>(committed) < -1e-6;
+    if (!wants_other_side)
+    {
+      lattice_switch_start_.reset();
+    }
+    else
+    {
+      if (!lattice_switch_start_.has_value())
+      {
+        lattice_switch_start_ = clock_->now();
+      }
+      const bool debounced = (clock_->now() - lattice_switch_start_.value()).seconds() >=
+                             config_.obstacle_clear_hold_s;
+      if (!debounced)
+      {
+        const OffsetLatticeResult free_plan = plan;
+        const int free_level = plan_level;
+        const std::size_t free_stations = planned_stations;
+        solve(committed);
+        if (!plan.feasible)
+        {
+          // The committed side is closed: switching is not a preference any more.
+          plan = free_plan;
+          plan_level = free_level;
+          planned_stations = free_stations;
+          lattice_switch_start_.reset();
+          avoid_sign_ = -avoid_sign_;
+          RCLCPP_INFO(logger_, "FTCController: lattice committed side is closed — switching side.");
+        }
+      }
+      else
+      {
+        lattice_switch_start_.reset();
+        avoid_sign_ = -avoid_sign_;
+        RCLCPP_INFO(
+            logger_,
+            "FTCController: lattice switching side (the other side stayed cheaper for %.1fs).",
+            config_.obstacle_clear_hold_s);
+      }
     }
   }
+  else if (!is_avoiding_)
+  {
+    lattice_switch_start_.reset();
+  }
+
   if (plan.feasible && planned_stations < stations.size())
   {
     RCLCPP_INFO_THROTTLE(logger_,
@@ -2875,7 +2947,9 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
         (clock_->now() - avoidance_clear_start_.value()).seconds() < config_.obstacle_clear_hold_s;
   }
 
-  if (std::fabs(extreme) > 1e-6)
+  // The side is committed when the avoidance ENGAGES; afterwards only the block
+  // above may change it.
+  if (!is_avoiding_ && std::fabs(extreme) > 1e-6)
   {
     avoid_sign_ = (extreme >= 0.0) ? 1.0 : -1.0;
   }
