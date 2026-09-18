@@ -173,16 +173,20 @@ void OdometryPublisher::handle_packet(const LlOdometry& pkt,
 
   wheels_stationary_ = (acc_d_left == 0 && acc_d_right == 0);
 
-  // Debug: log the aggregated window periodically.
+  // Debug: log the aggregated window periodically. DEBUG, not INFO — at every
+  // 10th tick this fired ~1.6x/s forever, including on a robot parked on its
+  // dock with both wheels stopped, which is pure journal and CPU cost. Enable
+  // it with `--ros-args --log-level hardware_bridge_node:=debug` when chasing
+  // an encoder problem.
   if (++odom_debug_count_ % 10 == 0)
   {
-    RCLCPP_INFO(node_.get_logger(),
-                "Odom: acc_dL=%d acc_dR=%d acc_dt=%u ms  (cum L=%d R=%d)",
-                acc_d_left,
-                acc_d_right,
-                acc_dt_ms,
-                pkt.left_ticks,
-                pkt.right_ticks);
+    RCLCPP_DEBUG(node_.get_logger(),
+                 "Odom: acc_dL=%d acc_dR=%d acc_dt=%u ms  (cum L=%d R=%d)",
+                 acc_d_left,
+                 acc_d_right,
+                 acc_dt_ms,
+                 pkt.left_ticks,
+                 pkt.right_ticks);
   }
 
   const double dt_sec = static_cast<double>(acc_dt_ms) / 1000.0;

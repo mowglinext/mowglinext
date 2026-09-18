@@ -28,6 +28,7 @@
 
 #include "geometry_msgs/msg/point32.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
+#include "mowgli_behavior/mower_enable_throttle.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
@@ -459,6 +460,15 @@ struct BTContext
   /// authority. Only meaningful when the idle_nav2_suspend feature flag is
   /// enabled; stays false otherwise. Protected by context_mutex.
   bool nav2_suspended{false};
+
+  /// Last blade request SetMowerEnabled actually put on the wire, so an
+  /// unchanged value is not re-sent at the BT tick rate. Kept here rather than
+  /// on the BT node instance because a tree halt/rebuild destroys the node and
+  /// would reset the throttle. IdleSequence ticks SetMowerEnabled(false)
+  /// unconditionally, which cost 7.9 service calls/s (~5 % of one core across
+  /// behavior_tree_node + hardware_bridge_node) on a docked Orange Pi 5B.
+  /// See mower_enable_throttle.hpp. Protected by context_mutex.
+  MowerEnableThrottleState mower_enable_throttle{};
 
   /// Operator-configured drive speeds (m/s), sourced from mowgli_robot.yaml
   /// by behavior_tree_node and applied to the live controllers by SetNavMode:

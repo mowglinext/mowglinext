@@ -187,7 +187,7 @@ All declared in `behavior_tree_node.cpp` with `declare_parameter`, read ONCE at 
 | `coverage_resume_path` | `/ros2_ws/maps/coverage_resume.txt` (:92) | — | `coverage_persistence.cpp`; "" disables |
 | `undock_speed` / `undock_distance` | 0.15 / 1.0 (:853-855) | :433 / :432 | `{undock_speed}` `{undock_distance}` in XML BackUps (Invariant 10) |
 | `transit_speed` / `mowing_speed` | 0.2 / 0.2 (:873-874) | :310 / :309 | `SetNavMode` → controller params |
-| `idle_nav2_suspend` | false (:864) | :170 | `SetNav2Lifecycle` |
+| `idle_nav2_suspend` | true (:1007) | :170 | `SetNav2Lifecycle` |
 | `rain_mode` / `rain_debounce_sec` / `rain_delay_minutes` | 2 / 0.0 / 30 (:877-891) | :508-510 | `IsNewRain`, `IsRainModeAtLeast` (`rain_delay_sec` blackboard key has no consumer) |
 | `battery_full_voltage` / `battery_empty_voltage` | 28.0 / 24.0 (:906-908) | :288-289 | `batteryPercentFromVoltage` |
 | `battery_low_percent` / `battery_critical_percent` / `battery_full_percent` / `battery_critical_voltage` / `battery_critical_recovery_percent` | 20 / 10 / 95 / 0 / 30 (:913-925) | :290-294 | XML `{battery_low_pct}` `{battery_critical_pct}` `{battery_full_pct}` `{battery_critical_voltage}`; `battery_critical_recovery_pct` is seeded but unused by XML (CriticalBatteryDock resumes at `{battery_full_pct}`, `main_tree.xml` :394) |
