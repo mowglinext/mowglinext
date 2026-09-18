@@ -703,12 +703,6 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     std::lock_guard<std::mutex> lk(slot->mutex);
     slot->summary.Add(
         {error_m, static_cast<double>(fb->tracking_feedback.heading_tracking_error), index});
-    // steady_clock, not the ROS clock: the detector only needs a monotonic
-    // stride, and this callback runs on the action client's thread with no node
-    // handle of its own.
-    const double now_s =
-        std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    slot->divergence.Update(error_m, index, now_s);
     slot->last_error_m = error_m;
     slot->last_index = index;
   };
@@ -1212,44 +1206,15 @@ BT::NodeStatus FollowStrip::onRunning()
   // so an abort/halt can persist an accurate resume cursor.
   updateProgress(ctx);
 
-  // Path-space divergence: the robot is leaving its line while no longer
-  // advancing along it — the signature of being held by something. Cancel the
-  // strip so the blade stops and the existing obstacle recovery takes over,
-  // rather than letting the wheels grind until the dig detector notices (and it
-  // stands down entirely under RTK Float, in a turn, or on a stale pose).
-  if (tracking_slot_)
-  {
-    bool diverged = false;
-    double growth = 0.0;
-    double error_m = 0.0;
-    std::uint32_t index = 0;
-    {
-      std::lock_guard<std::mutex> lk(tracking_slot_->mutex);
-      diverged = tracking_slot_->divergence.Triggered();
-      error_m = tracking_slot_->last_error_m;
-      index = tracking_slot_->last_index;
-      growth = tracking_slot_->divergence.GrowthM(std::fabs(error_m));
-      if (diverged)
-      {
-        tracking_slot_->divergence.Reset();  // act once per episode
-      }
-    }
-    if (diverged && follow_handle_ && follow_client_)
-    {
-      RCLCPP_WARN(ctx->node->get_logger(),
-                  "FollowStrip: PATH DIVERGENCE on segment %zu/%zu — lateral error grew %.2f m "
-                  "to %.2f m while the path index stayed at %u. Cancelling the strip: the robot "
-                  "is leaving its line without advancing along it.",
-                  swath_idx_ + 1,
-                  swaths_.size(),
-                  growth,
-                  error_m,
-                  index);
-      follow_client_->async_cancel_goal(follow_handle_);
-      return BT::NodeStatus::RUNNING;  // the CANCELED status is handled below
-    }
-  }
-
+  // NOTE: a path-space divergence guard used to cancel the strip here when the
+  // lateral error grew while the path index stopped advancing. It was added when
+  // FTC had no recovery of its own; it now fires on FTC's OWN recovery — the
+  // bounded reverse-escape moves the robot backwards, which is exactly "error
+  // grows, index frozen". Field 2026-09-18: 5 cancels, 0 saves, each one 14 s
+  // into a WEDGED burst FTC was already working through, and each one classified
+  // "not obstacle-related" because by then FTC had reversed clear of the lethal
+  // cell. FTC bounds its own escape and aborts the goal with the right reason
+  // when it runs out, so the guard was pure duplication arriving first.
   // Smooth live coverage percent for the GUI, refreshed on every following tick
   // (not only on abort/pass-end). Monotonic within the area; reset per area by
   // the onStart seed. This is the PRIMARY GUI %; the swath X/Y counters remain a
