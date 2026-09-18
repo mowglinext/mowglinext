@@ -64,3 +64,28 @@ TEST(TransitTree, OnlyTheGoalCheckerDiffers)
   transit = std::regex_replace(transit, std::regex("default_goal_checker=\"[a-z_]+\""), "GC");
   EXPECT_EQ(base, transit) << "navigate_to_pose_transit.xml drifted from navigate_to_pose.xml";
 }
+
+// The recovery RoundRobin must try BackUp BEFORE the other actions. A transit
+// fails when the robot's own footprint is over a lethal cell (RPP checks the
+// current pose first and then refuses to move), and backing up is the only
+// action that changes that; field 2026-09-18 the watchdog cancelled the transit
+// before the stock order ever reached it.
+TEST(TransitTree, RecoveryBacksUpBeforeAnythingElse)
+{
+  const std::string xml = stripHeaderComment(readFile(MOWGLI_TRANSIT_TREE_PATH));
+  const auto round_robin = xml.find("RecoveryActions");
+  ASSERT_NE(round_robin, std::string::npos) << "no recovery RoundRobin in the transit tree";
+
+  const auto backup = xml.find("<BackUp", round_robin);
+  const auto clearing = xml.find("ClearingActions", round_robin);
+  const auto spin = xml.find("<Spin", round_robin);
+  const auto wait = xml.find("<Wait", round_robin);
+  ASSERT_NE(backup, std::string::npos);
+  ASSERT_NE(clearing, std::string::npos);
+  ASSERT_NE(spin, std::string::npos);
+  ASSERT_NE(wait, std::string::npos);
+
+  EXPECT_LT(backup, clearing) << "BackUp must come before clearing the costmaps";
+  EXPECT_LT(backup, spin) << "BackUp must come before Spin";
+  EXPECT_LT(backup, wait) << "BackUp must come before Wait";
+}
