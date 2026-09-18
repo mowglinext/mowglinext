@@ -414,3 +414,33 @@ def test_no_closure_rebinds_a_name_of_its_enclosing_function(
         "closure re-binds a name of its enclosing function (UnboundLocalError "
         f"at launch): {offenders}"
     )
+
+
+def test_foxglove_bridge_respawns() -> None:
+    """The bridge is the GUI's ONLY link to ROS (gui/pkg/providers/ros.go dials
+    ws://localhost:8765). On 2026-09-18 it segfaulted seconds after the GUI
+    backend connected and was never restarted, so the web UI showed no robot on
+    the map and "no GPS" for a whole run while the robot was RTK-Fixed and
+    mowing. It is outside the motion path, so respawning it can only restore
+    observability."""
+    tree = ast.parse(open(_launch_path("foxglove_bridge.launch.py")).read())
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or getattr(node.func, "id", None) != "Node":
+            continue
+        kwargs = {kw.arg: kw.value for kw in node.keywords}
+        name = kwargs.get("name")
+        if not isinstance(name, ast.Constant) or name.value != "foxglove_bridge":
+            continue
+        respawn = kwargs.get("respawn")
+        assert isinstance(respawn, ast.Constant) and respawn.value is True, (
+            "foxglove_bridge must respawn: without it a single crash leaves the "
+            "operator blind with no indication that the robot is fine."
+        )
+        delay = kwargs.get("respawn_delay")
+        assert isinstance(delay, ast.Constant) and delay.value > 0, (
+            "respawn_delay bounds a crash loop."
+        )
+        return
+
+    pytest.fail("no foxglove_bridge Node found in foxglove_bridge.launch.py")
