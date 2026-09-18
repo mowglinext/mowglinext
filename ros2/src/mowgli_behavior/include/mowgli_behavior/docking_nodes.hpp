@@ -22,6 +22,7 @@
 
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/bt_factory.h"
+#include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "nav2_msgs/action/dock_robot.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
@@ -86,6 +87,11 @@ private:
   /// entry into WAIT_FOR_CHARGE rather than at the feedback rate. Written from
   /// the action feedback callback, read from the BT tick thread.
   std::atomic<uint16_t> last_feedback_state_{DockAction::Feedback::NONE};
+
+  /// Terminal verdict from the result callback. A goal the server finishes in
+  /// the same instant it accepts it can lose its status message, leaving the
+  /// polled handle stuck on ACCEPTED forever (action_outcome.hpp).
+  std::shared_ptr<ActionOutcomeSlot> outcome_ = std::make_shared<ActionOutcomeSlot>();
 };
 
 // ---------------------------------------------------------------------------
@@ -120,6 +126,9 @@ private:
   rclcpp_action::Client<UndockAction>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
+
+  /// See DockRobot::outcome_ — same race, same guard (action_outcome.hpp).
+  std::shared_ptr<ActionOutcomeSlot> outcome_ = std::make_shared<ActionOutcomeSlot>();
 };
 
 // ---------------------------------------------------------------------------
