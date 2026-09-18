@@ -63,14 +63,29 @@
         </Fallback>
         <ReactiveFallback name="RecoveryFallback">
           <GoalUpdated/>
+          <!-- BackUp FIRST, unlike the stock Nav2 order. A coverage transit that
+               fails almost always fails because the robot's OWN footprint sits on
+               a lethal cell: RPP's isCollisionImminent tests the current pose
+               before it projects anything, so it refuses to emit any command at
+               all and reports "collision ahead" at its control rate. Backing up
+               0.30 m is the only action here that changes that. Clearing the
+               costmaps only hides a REAL obstacle until the next scan re-marks
+               it, spinning keeps the footprint exactly where it is (and is itself
+               refused for the same reason), and waiting does nothing.
+               Field 2026-09-18: a 2.13 m transit at the start of the first ring
+               spent its whole 36 s budget on 164 "collision ahead" reports and one
+               useless spin, and FollowStrip's watchdog cancelled it before the
+               RoundRobin ever reached the BackUp that would have freed it.
+               The blade is provably OFF for every coverage transit (structural gap
+               guard in FollowStrip), and the move stays bounded at 0.30 m. -->
           <RoundRobin name="RecoveryActions" wrap_around="true">
+            <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
             <Sequence name="ClearingActions">
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
             </Sequence>
             <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
             <Wait wait_duration="5.0"/>
-            <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
           </RoundRobin>
         </ReactiveFallback>
       </Sequence>
