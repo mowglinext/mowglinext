@@ -36,7 +36,6 @@
 #include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
-#include "mowgli_interfaces/path_divergence.hpp"
 #include "mowgli_interfaces/path_tracking_stats.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
@@ -357,11 +356,6 @@ private:
   {
     std::mutex mutex;
     mowgli_interfaces::path_tracking::Summary summary;
-    /// Second, independent family of evidence for "held by an obstacle": the
-    /// lateral error grows while the path index stops advancing. Unlike the
-    /// hardware_bridge dig detector it reads nothing but the path, so none of
-    /// that detector's stand-downs (RTK Float, turning, stale pose) apply.
-    mowgli_interfaces::path_divergence::Detector divergence;
     /// Signed error and index of the last sample, for the log line.
     double last_error_m{0.0};
     std::uint32_t last_index{0};
