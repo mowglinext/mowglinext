@@ -40,7 +40,7 @@ and the 500B (STM32F401VC), and provides:
 - Battery voltage, the CC/CV charge envelope and charging state
 - Rain sensor, stop buttons, wheel-lift and tilt emergency sensors
 - USB-CDC link to ROS2's `hardware_bridge_node` — COBS-framed and CRC-16 checked
-  (`include/mowgli_protocol.h`, protocol version 6)
+  (`include/mowgli_protocol.h`, protocol version 7)
 
 ### Building
 
@@ -67,6 +67,14 @@ The GUI setup page is the recommended path. Its default ("prebuilt") downloads t
 your board from the latest GitHub release manifest, verifies its sha256, flashes it and then
 re-reads the protocol version from the board — no toolchain, no compile. The "custom" option is the
 expert path: it clones a branch, renders `board.h.template` and runs `platformio run -t upload`.
+
+For an F401 board already running firmware that advertises the USB-DFU
+capability, the GUI offers **Update via USB** for verified prebuilt release
+artifacts. Existing F401 installations need one final ST-Link flash to gain
+that capability. F103 remains ST-Link-only, and ST-Link remains the advanced
+and final recovery path. This implementation is experimental and not hardware
+validated; follow [the USB-DFU architecture and HIL procedure](../docs/STM32F4_USB_DFU.md)
+before making any field-readiness claim.
 
 With an ST-Link directly:
 
@@ -96,9 +104,9 @@ otherwise every already-flashed board reports "incompatible, reflash".
 `build_src_filter`) and included by no source file — it exists only to satisfy the CI drift gate;
 the live wire is `pkt_*_t` only.
 
-There are no firmware-side unit tests. Behaviour is pinned by the host mirror
-`ros2/src/mowgli_hardware/test/test_protocol.cpp`, the three guards above, and
-`gui/pkg/providers/firmware_test.go`.
+Native firmware safety tests run with `pio test -e native`; both MCU targets
+must also compile. Behaviour is additionally pinned by the host protocol/gate
+tests, the guards above, and the Go updater fault-injection tests.
 
 ## Supported Hardware
 

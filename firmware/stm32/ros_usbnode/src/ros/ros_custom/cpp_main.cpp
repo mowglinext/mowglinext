@@ -41,6 +41,8 @@
 #include "mowgli_comms.h"
 #include "mowgli_protocol.h"
 #include "cmd_vel_safety.hpp"
+#include "dfu_boot.h"
+#include "dfu_transition.hpp"
 
 // Math
 #include <cmath>
@@ -297,6 +299,13 @@ static inline bool any_physical_emergency(void) {
  * ---------------------------------------------------------------------------*/
 static bool reboot_flag = false;
 
+/* The USB packet callback runs in IRQ context. It may only latch Requested;
+ * all safety shutdown and reset work happens in the normal main loop. */
+static volatile mowgli_dfu::Phase dfu_phase = mowgli_dfu::Phase::Idle;
+#if BOARD_YARDFORCE500_VARIANT_B
+static uint32_t dfu_stop_start_tick = 0u;
+#endif
+
 /* ---------------------------------------------------------------------------
  * Non-blocking timers
  * ---------------------------------------------------------------------------*/
@@ -410,6 +419,10 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
   }
 
   const pkt_cmd_vel_t *pkt = reinterpret_cast<const pkt_cmd_vel_t *>(data);
+
+  if (mowgli_dfu::inputs_are_locked(dfu_phase)) {
+    return;
+  }
 
   const float vx = pkt->linear_x;
   const float wz = pkt->angular_z;
@@ -621,6 +634,10 @@ static void on_hl_state(const uint8_t *data, size_t len) {
 
   const pkt_hl_state_t *pkt = reinterpret_cast<const pkt_hl_state_t *>(data);
 
+  if (mowgli_dfu::inputs_are_locked(dfu_phase)) {
+    return;
+  }
+
   hl_current_mode = pkt->current_mode;
   hl_gps_quality = pkt->gps_quality;
 
@@ -674,6 +691,10 @@ static void on_cmd_blade(const uint8_t *data, size_t len) {
   }
 
   const pkt_cmd_blade_t *pkt = reinterpret_cast<const pkt_cmd_blade_t *>(data);
+  if (mowgli_dfu::inputs_are_locked(dfu_phase)) {
+    target_blade_on_off = 0u;
+    return;
+  }
   /* Defense-in-depth: never arm the blade target while IDLE/docked. The
    * authoritative gate is in motors_handler (which zeroes blade_on_off in
    * IDLE every tick), but refusing to latch the target here keeps state
@@ -696,11 +717,27 @@ static void on_reboot(const uint8_t *data, size_t len) {
     return;
   }
   const pkt_reboot_t *pkt = reinterpret_cast<const pkt_reboot_t *>(data);
-  if (pkt->magic == PKT_REBOOT_MAGIC) {
+  if (!mowgli_dfu::inputs_are_locked(dfu_phase) &&
+      pkt->magic == PKT_REBOOT_MAGIC) {
     debug_printf("reboot requested by host\r\n");
     reboot_flag = true;
   }
 }
+
+/* F1 deliberately does not compile a handler registration or an entry path. */
+#if BOARD_YARDFORCE500_VARIANT_B
+static void on_enter_dfu(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_enter_dfu_t) - 2u) {
+    return;
+  }
+  const pkt_enter_dfu_t *pkt = reinterpret_cast<const pkt_enter_dfu_t *>(data);
+  if (mowgli_dfu::request_is_accepted(
+          true, main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, pkt->magic,
+          PKT_ENTER_DFU_MAGIC, dfu_phase)) {
+    dfu_phase = mowgli_dfu::Phase::Requested;
+  }
+}
+#endif
 
 /* Host -> Firmware config/version request. Replies with this firmware's
  * wire-protocol version (the compatibility key the host checks) and its
@@ -719,6 +756,9 @@ static void on_config_req(const uint8_t *data, size_t len) {
   rsp.type = PKT_ID_CONFIG_RSP;
   rsp.protocol_version = MOWGLI_PROTOCOL_VERSION;
   rsp.active_flags = g_firmware_debug_enabled != 0u ? CONFIG_FLAG_FIRMWARE_DEBUG : 0u;
+#if BOARD_YARDFORCE500_VARIANT_B
+  rsp.active_flags |= CONFIG_CAP_USB_DFU;
+#endif
   rsp.fw_version_major = MOWGLI_FW_VERSION_MAJOR;
   rsp.fw_version_minor = MOWGLI_FW_VERSION_MINOR;
   rsp.fw_version_patch = MOWGLI_FW_VERSION_PATCH;
@@ -1147,6 +1187,45 @@ extern "C" void motors_handler() {
   }
 }
 
+extern "C" void DFU_Transition_Handler() {
+#if BOARD_YARDFORCE500_VARIANT_B
+  if (dfu_phase == mowgli_dfu::Phase::Idle) {
+    return;
+  }
+
+  if (dfu_phase == mowgli_dfu::Phase::Requested) {
+    /* Consume the ISR latch once. From this point no packet can re-enable
+     * motion or blade operation, even if the host had queued it already. */
+    __disable_irq();
+    dfu_phase = mowgli_dfu::Phase::Stopping;
+    main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
+    left_target_mps = 0.0f;
+    right_target_mps = 0.0f;
+    cmd_wz = 0.0f;
+    target_blade_on_off = 0u;
+    __enable_irq();
+    left_wheel_pid.resetIntegral();
+    left_wheel_pid.resetDerivative();
+    right_wheel_pid.resetIntegral();
+    right_wheel_pid.resetDerivative();
+    yaw_pid.resetIntegral();
+    yaw_pid.resetDerivative();
+    left_pwm_signed = 0;
+    right_pwm_signed = 0;
+    blade_on_off = 0u;
+    dfu_stop_start_tick = HAL_GetTick();
+  }
+
+  /* Reissue normal drive and blade stops while their UART loops run. This gives
+   * the controllers a bounded 500 ms opportunity to receive stop frames. */
+  DRIVEMOTOR_SetSpeedSigned(0, 0);
+  BLADEMOTOR_Set(0u, 0u);
+  if (mowgli_dfu::ready_to_reset(dfu_stop_start_tick, HAL_GetTick())) {
+    DFU_ArmAndReset();
+  }
+#endif
+}
+
 /* ---------------------------------------------------------------------------
  * Panel handler — button presses generate UI events over COBS
  * ---------------------------------------------------------------------------*/
@@ -1467,6 +1546,9 @@ extern "C" void init_ROS() {
   mowgli_comms_register_handler(PKT_ID_HL_STATE, on_hl_state);
   mowgli_comms_register_handler(PKT_ID_CMD_BLADE, on_cmd_blade);
   mowgli_comms_register_handler(PKT_ID_REBOOT, on_reboot);
+#if BOARD_YARDFORCE500_VARIANT_B
+  mowgli_comms_register_handler(PKT_ID_ENTER_DFU, on_enter_dfu);
+#endif
   mowgli_comms_register_handler(PKT_ID_SET_DRIVE_PID, on_set_drive_pid);
   mowgli_comms_register_handler(PKT_ID_SET_YAW_PID, on_set_yaw_pid);
   mowgli_comms_register_handler(PKT_ID_SET_KINEMATICS, on_set_kinematics);

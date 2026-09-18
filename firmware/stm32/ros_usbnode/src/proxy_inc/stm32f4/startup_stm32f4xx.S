@@ -59,6 +59,7 @@ defined in linker script */
   .type  Reset_Handler, %function
 Reset_Handler:
   ldr   sp, =_estack      /* set stack pointer */
+  bl    DFU_PreRuntime    /* consume one-shot marker before C runtime init */
 
 /* Copy the data segment initializers from flash to SRAM */
   ldr r0, =_sdata

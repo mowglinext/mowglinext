@@ -58,6 +58,10 @@ namespace mower_msgs
       _firmware_protocol_version_type firmware_protocol_version;
       typedef bool _firmware_compatible_type;
       _firmware_compatible_type firmware_compatible;
+      typedef uint32_t _firmware_capabilities_type;
+      _firmware_capabilities_type firmware_capabilities;
+      typedef uint32_t _firmware_connection_generation_type;
+      _firmware_connection_generation_type firmware_connection_generation;
       enum { MOWER_STATUS_INITIALIZING = 0 };
       enum { MOWER_STATUS_OK = 255 };
       enum { RESET_CAUSE_UNKNOWN = 0 };
@@ -68,6 +72,7 @@ namespace mower_msgs
       enum { RESET_CAUSE_IWDG = 5 };
       enum { RESET_CAUSE_WWDG = 6 };
       enum { RESET_CAUSE_LPWR = 7 };
+      enum { FIRMWARE_CAP_USB_DFU = 1 };
 
     Status():
       stamp(),
@@ -90,7 +95,9 @@ namespace mower_msgs
       blade_status_stamp(),
       firmware_version(""),
       firmware_protocol_version(0),
-      firmware_compatible(0)
+      firmware_compatible(0),
+      firmware_capabilities(0),
+      firmware_connection_generation(0)
     {
     }
 
@@ -220,6 +227,26 @@ namespace mower_msgs
       u_firmware_compatible.real = this->firmware_compatible;
       *(outbuffer + offset + 0) = (u_firmware_compatible.base >> (8 * 0)) & 0xFF;
       offset += sizeof(this->firmware_compatible);
+      union {
+        uint32_t real;
+        uint32_t base;
+      } u_firmware_capabilities;
+      u_firmware_capabilities.real = this->firmware_capabilities;
+      *(outbuffer + offset + 0) = (u_firmware_capabilities.base >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (u_firmware_capabilities.base >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (u_firmware_capabilities.base >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (u_firmware_capabilities.base >> (8 * 3)) & 0xFF;
+      offset += sizeof(this->firmware_capabilities);
+      union {
+        uint32_t real;
+        uint32_t base;
+      } u_firmware_connection_generation;
+      u_firmware_connection_generation.real = this->firmware_connection_generation;
+      *(outbuffer + offset + 0) = (u_firmware_connection_generation.base >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (u_firmware_connection_generation.base >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (u_firmware_connection_generation.base >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (u_firmware_connection_generation.base >> (8 * 3)) & 0xFF;
+      offset += sizeof(this->firmware_connection_generation);
       return offset;
     }
 
@@ -370,11 +397,33 @@ namespace mower_msgs
       u_firmware_compatible.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
       this->firmware_compatible = u_firmware_compatible.real;
       offset += sizeof(this->firmware_compatible);
+      union {
+        uint32_t real;
+        uint32_t base;
+      } u_firmware_capabilities;
+      u_firmware_capabilities.base = 0;
+      u_firmware_capabilities.base |= ((uint32_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      u_firmware_capabilities.base |= ((uint32_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      u_firmware_capabilities.base |= ((uint32_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      u_firmware_capabilities.base |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      this->firmware_capabilities = u_firmware_capabilities.real;
+      offset += sizeof(this->firmware_capabilities);
+      union {
+        uint32_t real;
+        uint32_t base;
+      } u_firmware_connection_generation;
+      u_firmware_connection_generation.base = 0;
+      u_firmware_connection_generation.base |= ((uint32_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      u_firmware_connection_generation.base |= ((uint32_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      u_firmware_connection_generation.base |= ((uint32_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      u_firmware_connection_generation.base |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      this->firmware_connection_generation = u_firmware_connection_generation.real;
+      offset += sizeof(this->firmware_connection_generation);
      return offset;
     }
 
     virtual const char * getType() override { return "mower_msgs/Status"; };
-    virtual const char * getMD5() override { return "9a901b50f1a0e90ccf2bcb6988acc325"; };
+    virtual const char * getMD5() override { return "734af7d5ad894ac0f5a354894f8bc2c1"; };
 
   };
 

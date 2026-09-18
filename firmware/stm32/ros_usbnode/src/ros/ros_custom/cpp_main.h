@@ -17,6 +17,7 @@ extern "C" {
 void init_ROS(void);
 void spinOnce(void);
 void chatter_handler(void);
+void DFU_Transition_Handler(void);
 void motors_handler(void);
 void panel_handler(void);
 void broadcast_handler(void);

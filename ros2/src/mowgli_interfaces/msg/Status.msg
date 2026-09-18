@@ -8,6 +8,7 @@ uint8 RESET_CAUSE_SFTRST=4
 uint8 RESET_CAUSE_IWDG=5
 uint8 RESET_CAUSE_WWDG=6
 uint8 RESET_CAUSE_LPWR=7
+uint32 FIRMWARE_CAP_USB_DFU=1
 
 builtin_interfaces/Time stamp
 uint8 mower_status
@@ -43,3 +44,11 @@ builtin_interfaces/Time blade_status_stamp
 string firmware_version
 uint8 firmware_protocol_version
 bool firmware_compatible
+# Capability bits come from the firmware CONFIG_RSP handshake. A zero value
+# means unsupported or not yet known; bit FIRMWARE_CAP_USB_DFU authorizes the
+# explicit ENTER_DFU service on firmware that actually implements it.
+uint32 firmware_capabilities
+# Incremented only after the serial device is successfully opened. USB update
+# verification requires a generation newer than the pre-update baseline so a
+# cached same-version status cannot masquerade as a post-flash handshake.
+uint32 firmware_connection_generation

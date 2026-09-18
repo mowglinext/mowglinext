@@ -4,9 +4,9 @@
 Phase 1 of the precompiled-firmware plan: after CI has run `pio run` for each
 default permutation, this collects the resulting `firmware.bin` / `firmware.elf`,
 stamps each with a stable, self-describing name, checksums it, and emits a
-`manifest.json` mapping every permutation to {file, url, sha256, protocol_version,
-fw_version}. Onboarding (Phase 2, not yet wired) reads the manifest to pick and
-flash the right binary WITHOUT compiling.
+`manifest.json` mapping every permutation to the exact board/MCU/flash contract,
+file size, URL, SHA-256, protocol version and firmware version. The GUI reads
+the manifest to pick and flash the right binary WITHOUT compiling.
 
 The binaries themselves are the exact artifacts CI already builds today (the
 committed board.h, unchanged) — this script does not render, re-tune, or alter
@@ -51,12 +51,20 @@ PERMUTATIONS = [
         "env": "Yardforce500",
         "board": "BOARD_YARDFORCE500",
         "panel": "PANEL_TYPE_YARDFORCE_500_CLASSIC",
+        "mcu": "STM32F103VC",
+        "flash_address": "0x08000000",
+        "flash_size": 262144,
+        "usb_dfu": False,
     },
     {
         "key": "yardforce500b",
         "env": "Yardforce500B",
         "board": "BOARD_YARDFORCE500B",
         "panel": "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+        "mcu": "STM32F401VC",
+        "flash_address": "0x08000000",
+        "flash_size": 262144,
+        "usb_dfu": True,
     },
 ]
 
@@ -146,11 +154,17 @@ def main():
         if elf_src.exists():
             (out_dir / f"{stem}.elf").write_bytes(elf_src.read_bytes())
         digest = sha256_file(out_dir / bin_name)
+        artifact_size = (out_dir / bin_name).stat().st_size
 
         permutations[perm["key"]] = {
             "env": env,
             "board": perm["board"],
             "panel": perm["panel"],
+            "mcu": perm["mcu"],
+            "flash_address": perm["flash_address"],
+            "flash_size": perm["flash_size"],
+            "size": artifact_size,
+            "usb_dfu": perm["usb_dfu"],
             "file": bin_name,
             "url": (
                 f"https://github.com/{args.repo}/releases/download/"
@@ -162,6 +176,7 @@ def main():
         }
 
     manifest = {
+        "schema": 2,
         "tag": args.tag,
         "protocol_version": protocol,
         "fw_version": version,

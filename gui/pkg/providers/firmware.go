@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,7 +26,8 @@ type FirmwareProvider struct {
 	// flash it subscribes to /hardware_bridge/status to read the firmware's
 	// reported protocol/version handshake. May be nil (e.g. in unit tests), in
 	// which case the live check is skipped with a warning.
-	ros types.IRosProvider
+	ros        types.IRosProvider
+	usbUpdater *FirmwareUSBUpdater
 }
 
 func NewFirmwareProvider(db types.IDBProvider, ros types.IRosProvider) *FirmwareProvider {
@@ -33,7 +35,44 @@ func NewFirmwareProvider(db types.IDBProvider, ros types.IRosProvider) *Firmware
 		db:  db,
 		ros: ros,
 	}
+	// The USB updater is deliberately independent from the legacy ST-Link
+	// implementation below. A nil ROS provider (common in existing unit tests)
+	// keeps the HTTP surface available but rejects USB starts safely.
+	if ros != nil {
+		bridge := &ROSUSBBridge{ROS: ros}
+		if updater, err := NewFirmwareUSBUpdater(FirmwareUSBDependencies{
+			Readiness:       ROSFirmwareReadiness{ROS: ros},
+			Bridge:          bridge,
+			USBObserver:     &LinuxUSBObserver{},
+			DFUTool:         DFUUtilTool{},
+			RuntimeVerifier: bridge,
+			ArtifactSource:  ManifestUSBArtifactSource{},
+		}); err == nil {
+			u.usbUpdater = updater
+		}
+	}
 	return u
+}
+
+// StartFirmwareUSBUpdate makes FirmwareProvider the optional USB-update API
+// provider while retaining IFirmwareProvider's stable ST-Link contract.
+func (fp *FirmwareProvider) StartFirmwareUSBUpdate(ctx context.Context, request types.FirmwareUpdateRequest) (types.FirmwareUpdateSnapshot, bool, error) {
+	if fp.usbUpdater == nil {
+		return types.FirmwareUpdateSnapshot{}, false, xerrors.New("USB DFU is unavailable: ROS bridge is not configured")
+	}
+	return fp.usbUpdater.StartFirmwareUSBUpdate(ctx, request)
+}
+func (fp *FirmwareProvider) FirmwareUSBUpdateSnapshot(id string) (types.FirmwareUpdateSnapshot, bool) {
+	if fp.usbUpdater == nil {
+		return types.FirmwareUpdateSnapshot{}, false
+	}
+	return fp.usbUpdater.FirmwareUSBUpdateSnapshot(id)
+}
+func (fp *FirmwareProvider) CancelFirmwareUSBUpdate(id string) (types.FirmwareUpdateSnapshot, error) {
+	if fp.usbUpdater == nil {
+		return types.FirmwareUpdateSnapshot{}, xerrors.New("USB DFU is unavailable: ROS bridge is not configured")
+	}
+	return fp.usbUpdater.CancelFirmwareUSBUpdate(id)
 }
 
 // BuildBoardHeader Open file ../../setup/board.h, apply go template to it with config and return the result

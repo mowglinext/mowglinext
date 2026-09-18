@@ -21,7 +21,7 @@ RUN yarn && VITE_BUILD_REVISION="$BUILD_REVISION" VITE_BUILD_VERSION="$BUILD_VER
       -size +1024c -exec gzip -9 -k {} +
 
 FROM ubuntu:22.04 AS deps
-RUN apt-get update && apt-get install -y ca-certificates curl python3 python3-pip python3-venv libjim-dev util-linux\
+RUN apt-get update && apt-get install -y ca-certificates curl python3 python3-pip python3-venv libjim-dev util-linux dfu-util \
                                       git build-essential unzip wget autoconf automake pkg-config texinfo libtool libftdi-dev libusb-1.0-0-dev
 RUN apt-get install -y rpi.gpio-common  || true
 # openocd recursively pulls its libjaylink submodule from gitlab.zapb.de, which

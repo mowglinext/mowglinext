@@ -589,6 +589,7 @@ int main(void)
   {
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CHATTER);
     chatter_handler();
+    DFU_Transition_Handler();
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_MOTORS);
     motors_handler();
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_PANEL);

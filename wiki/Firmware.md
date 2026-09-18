@@ -14,6 +14,11 @@ The Mowgli firmware lives in this repository at [`firmware/stm32/ros_usbnode/`](
 truth for the wire format is
 [`include/mowgli_protocol.h`](https://github.com/mowglinext/mowglinext/blob/main/firmware/stm32/ros_usbnode/include/mowgli_protocol.h).
 
+The experimental STM32F401 routine-update path, one-time ST-Link migration,
+USB Recovery boundary and hardware test procedure are documented in
+[`docs/STM32F4_USB_DFU.md`](https://github.com/mowglinext/mowglinext/blob/dev/docs/STM32F4_USB_DFU.md).
+It remains **not hardware validated** until the recorded HIL procedure passes.
+
 ## Overview
 
 **rosserial → COBS, and why:**
@@ -188,7 +193,7 @@ through a handler table. `mowgli_comms_send()` does the reverse: fill the CRC, C
 frame, enqueue on the CDC TX queue.
 
 **Registering a handler.** Each Host→Firmware packet gets a `static void on_*()` callback
-registered in `init_ROS()` with `mowgli_comms_register_handler()`. There are 10
+registered in `init_ROS()` with `mowgli_comms_register_handler()`. There are 11
 registrations against a `MOWGLI_COMMS_MAX_HANDLERS` cap of 16 — registrations past the cap
 are silently dropped and show up as "firmware incompatible" forever, so check the cap when
 adding one.
@@ -237,7 +242,7 @@ for the runtime-tuning packets, on every field offset). The C++ mirror on the ho
 `ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp`; the two must be
 changed together.
 
-Current wire version: `MOWGLI_PROTOCOL_VERSION` **6**.
+Current wire version: `MOWGLI_PROTOCOL_VERSION` **7**.
 
 ### Firmware → Host
 

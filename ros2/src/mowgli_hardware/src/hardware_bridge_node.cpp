@@ -39,6 +39,8 @@
  *   ~/mower_control  mowgli_interfaces/srv/MowerControl
  *   ~/emergency_stop mowgli_interfaces/srv/EmergencyStop
  *   ~/reboot_board    std_srvs/srv/Trigger
+ *   ~/firmware_update_maintenance std_srvs/srv/SetBool
+ *   ~/enter_dfu       std_srvs/srv/Trigger
  *   ~/set_firmware_debug std_srvs/srv/SetBool
  *
  * Parameters:
@@ -75,6 +77,7 @@
 #include "mowgli_hardware/dig_detector.hpp"
 #include "mowgli_hardware/dig_escalation.hpp"
 #include "mowgli_hardware/drive_gain_sanity.hpp"
+#include "mowgli_hardware/firmware_update_gate.hpp"
 #include "mowgli_hardware/gnss_hardware_status.hpp"
 #include "mowgli_hardware/imu_liveness.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
@@ -1040,6 +1043,29 @@ private:
         rclcpp::QoS(10),
         [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
         {
+          if (firmware_update_active_)
+          {
+            current_mode_ = HL_MODE_IDLE;
+            current_mode_state_name_ = "firmware_update";
+            return;
+          }
+          if (firmware_update_stop_latched_ && msg->state != HL_MODE_IDLE)
+          {
+            current_mode_ = HL_MODE_IDLE;
+            current_mode_state_name_ = "firmware_update_stop_latched";
+            RCLCPP_WARN_THROTTLE(get_logger(),
+                                 *get_clock(),
+                                 5000,
+                                 "Ignoring non-IDLE high-level state after firmware update; "
+                                 "publish IDLE before commanding a new operation.");
+            return;
+          }
+          if (firmware_update_stop_latched_ && msg->state == HL_MODE_IDLE)
+          {
+            firmware_update_stop_latched_ = false;
+            RCLCPP_INFO(get_logger(),
+                        "Firmware-update stop latch cleared by a fresh IDLE high-level state.");
+          }
           const uint8_t previous_mode = current_mode_;
           const std::string previous_state_name = current_mode_state_name_;
           current_mode_ = msg->state;
@@ -1099,6 +1125,22 @@ private:
           on_reboot_board(req, res);
         });
 
+    srv_firmware_update_maintenance_ = create_service<std_srvs::srv::SetBool>(
+        "~/firmware_update_maintenance",
+        [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+               std::shared_ptr<std_srvs::srv::SetBool::Response> res)
+        {
+          on_firmware_update_maintenance(req, res);
+        });
+
+    srv_enter_dfu_ = create_service<std_srvs::srv::Trigger>(
+        "~/enter_dfu",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+               std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+        {
+          on_enter_dfu(req, res);
+        });
+
     srv_set_firmware_debug_ = create_service<std_srvs::srv::SetBool>(
         "~/set_firmware_debug",
         [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
@@ -1144,6 +1186,7 @@ private:
     }
     else
     {
+      ++firmware_connection_generation_;
       RCLCPP_INFO(get_logger(),
                   "Opened serial port '%s' at %d baud.",
                   serial_port_path_.c_str(),
@@ -1173,7 +1216,8 @@ private:
                             // On startup, send emergency release for the first few
                             // heartbeats to clear any watchdog-latched emergency
                             // from the container restart gap.
-                            if (startup_release_count_ > 0)
+                            if (!firmware_update_active_ && !firmware_update_stop_latched_ &&
+                                startup_release_count_ > 0)
                             {
                               emergency_release_pending_ = true;
                               --startup_release_count_;
@@ -1185,7 +1229,8 @@ private:
                             // firmware (which has no config persistence)
                             // gets the host's gains even if one packet is
                             // lost during USB re-enumeration.
-                            if (pid_resend_count_ > 0 && serial_->is_open())
+                            if (!firmware_update_active_ && pid_resend_count_ > 0 &&
+                                serial_->is_open())
                             {
                               send_drive_pid();
                               send_yaw_pid();
@@ -1263,6 +1308,7 @@ private:
       {
         return;  // Still not open; will retry next tick.
       }
+      ++firmware_connection_generation_;
       last_serial_rx_time_ = now();
       reset_serial_dependent_state();
       reset_cause_log_pending_ = true;
@@ -1329,6 +1375,26 @@ private:
 
   bool send_raw_packet(const uint8_t* data, std::size_t len)
   {
+    if (len == 0u)
+    {
+      return false;
+    }
+    if (firmware_update_active_ &&
+        !mowgli_hardware::firmware_update_packet_allowed(data[0],
+                                                         PACKET_ID_LL_HEARTBEAT,
+                                                         PACKET_ID_LL_HIGH_LEVEL_STATE,
+                                                         PACKET_ID_LL_CMD_VEL,
+                                                         PACKET_ID_LL_CMD_BLADE,
+                                                         PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ,
+                                                         PACKET_ID_LL_ENTER_DFU))
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           5000,
+                           "Firmware update maintenance blocked packet 0x%02X.",
+                           data[0]);
+      return false;
+    }
     if (!serial_->is_open())
     {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Cannot send: serial port not open.");
@@ -1575,6 +1641,8 @@ private:
       msg.firmware_version = fw_version_str_;
       msg.firmware_protocol_version = fw_protocol_version_;
       msg.firmware_compatible = fw_compatible_;
+      msg.firmware_capabilities = fw_capabilities_;
+      msg.firmware_connection_generation = firmware_connection_generation_;
       pub_status_->publish(msg);
     }
 
@@ -2434,7 +2502,12 @@ private:
     LlHeartbeat pkt{};
     pkt.type = PACKET_ID_LL_HEARTBEAT;
     pkt.emergency_requested = emergency_active_ ? 1u : 0u;
-    pkt.emergency_release_requested = emergency_release_pending_ ? 1u : 0u;
+    pkt.emergency_release_requested =
+        mowgli_hardware::firmware_update_may_release_emergency(firmware_update_active_ ||
+                                                                   firmware_update_stop_latched_,
+                                                               emergency_release_pending_)
+            ? 1u
+            : 0u;
 
     // Consume the one-shot release flag.
     emergency_release_pending_ = false;
@@ -2480,7 +2553,8 @@ private:
   {
     LlHighLevelState pkt{};
     pkt.type = PACKET_ID_LL_HIGH_LEVEL_STATE;
-    pkt.current_mode = current_mode_;
+    pkt.current_mode = mowgli_hardware::firmware_update_high_level_mode(
+        firmware_update_active_ || firmware_update_stop_latched_, current_mode_, HL_MODE_IDLE);
     pkt.gps_quality = GnssQualityForFirmware(gnssObservationFresh(), gps_quality_);
 
     if (last_sent_mode_ != current_mode_ || last_sent_mode_state_name_ != current_mode_state_name_)
@@ -2502,7 +2576,8 @@ private:
 
   void send_blade_command(uint8_t on, uint8_t dir)
   {
-    if (mowgli_interfaces::updateMaintenanceActive())
+    if (mowgli_interfaces::updateMaintenanceActive() || firmware_update_active_ ||
+        firmware_update_stop_latched_)
     {
       on = 0;
       mow_enabled_ = false;
@@ -2521,6 +2596,15 @@ private:
     pkt.type = PACKET_ID_LL_REBOOT;
     pkt.magic = kLlRebootMagic;
     send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlReboot) - sizeof(uint16_t));
+  }
+
+  bool send_enter_dfu_command()
+  {
+    LlEnterDfu pkt{};
+    pkt.type = PACKET_ID_LL_ENTER_DFU;
+    pkt.magic = kLlEnterDfuMagic;
+    return send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                           sizeof(LlEnterDfu) - sizeof(uint16_t));
   }
 
   // Push the drive-motor runtime tuning to the firmware. The board has no
@@ -2714,6 +2798,112 @@ private:
     res->message = "reboot request sent; board will reset within ~1 s";
   }
 
+  void on_firmware_update_maintenance(const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+                                      std::shared_ptr<std_srvs::srv::SetBool::Response> res)
+  {
+    if (!req->data)
+    {
+      firmware_update_active_ = false;
+      firmware_update_stop_latched_ = true;
+      firmware_dfu_request_sent_ = false;
+      mow_enabled_ = false;
+      emergency_release_pending_ = false;
+      startup_release_count_ = 0;
+      pid_resend_count_ = 5;
+      res->success = true;
+      res->message = "firmware update maintenance disabled; mower remains stopped";
+      return;
+    }
+
+    if (firmware_update_active_)
+    {
+      res->success = true;
+      res->message = "firmware update maintenance already active";
+      return;
+    }
+
+    const bool serial_open = serial_ && serial_->is_open();
+    const bool usb_dfu_capable =
+        (fw_capabilities_ & mowgli_hardware::kFirmwareCapabilityUsbDfu) != 0u;
+    const bool motion_commanded = have_cmd_vel_ &&
+                                  (now() - last_cmd_vel_time_).seconds() < dig_cmd_timeout_s_ &&
+                                  (std::abs(last_cmd_vx_) > 1e-6 || std::abs(last_cmd_wz_) > 1e-6);
+    if (!mowgli_hardware::firmware_update_can_begin(serial_open,
+                                                    fw_compatible_,
+                                                    usb_dfu_capable,
+                                                    motion_commanded,
+                                                    mow_enabled_,
+                                                    current_mode_,
+                                                    HL_MODE_IDLE))
+    {
+      res->success = false;
+      res->message =
+          "requires open compatible USB-DFU firmware in IDLE with no active motion/blade command";
+      return;
+    }
+
+    firmware_update_active_ = true;
+    firmware_update_stop_latched_ = false;
+    firmware_dfu_request_sent_ = false;
+    mow_enabled_ = false;
+    emergency_release_pending_ = false;
+    startup_release_count_ = 0;
+    have_shaped_cmd_vel_ = false;
+    last_shaped_cmd_vx_ = 0.0;
+    last_shaped_cmd_wz_ = 0.0;
+    have_cmd_vel_ = false;
+    last_cmd_vx_ = 0.0;
+    last_cmd_wz_ = 0.0;
+    dig_escaping_ = false;
+    dig_escape_state_ = DigEscapeState{};
+    dig_invalidate_baselines();
+
+    // Establish a stopped wire state before ENTER_DFU. The firmware repeats
+    // and enforces the physical stop itself; these host packets are an
+    // additional precondition, never the safety authority.
+    send_cmd_vel_packet(0.0, 0.0);
+    send_blade_command(0u, 0u);
+    send_high_level_state();
+
+    res->success = true;
+    res->message = "firmware update maintenance active; motion and blade commands inhibited";
+  }
+
+  void on_enter_dfu(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                    std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+  {
+    const bool serial_open = serial_ && serial_->is_open();
+    const bool usb_dfu_capable =
+        (fw_capabilities_ & mowgli_hardware::kFirmwareCapabilityUsbDfu) != 0u;
+    if (!firmware_update_active_ || firmware_dfu_request_sent_ ||
+        !mowgli_hardware::firmware_update_can_begin(serial_open,
+                                                    fw_compatible_,
+                                                    usb_dfu_capable,
+                                                    false,
+                                                    mow_enabled_,
+                                                    current_mode_,
+                                                    HL_MODE_IDLE))
+    {
+      res->success = false;
+      res->message =
+          "DFU entry rejected: maintenance ownership, capability, IDLE, or serial "
+          "precondition failed";
+      return;
+    }
+
+    const bool first_sent = send_enter_dfu_command();
+    const bool second_sent = send_enter_dfu_command();
+    if (!first_sent && !second_sent)
+    {
+      res->success = false;
+      res->message = "DFU entry packet could not be written";
+      return;
+    }
+    firmware_dfu_request_sent_ = true;
+    res->success = true;
+    res->message = "DFU entry request written; waiting for firmware safe-stop and USB transition";
+  }
+
   void on_set_firmware_debug(const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
                              std::shared_ptr<std_srvs::srv::SetBool::Response> res)
   {
@@ -2798,6 +2988,9 @@ private:
 
     fw_protocol_version_ = pkt.protocol_version;
     firmware_debug_enabled_ = (pkt.active_flags & CONFIG_FLAG_FIRMWARE_DEBUG) != 0u;
+    fw_capabilities_ = (pkt.active_flags & CONFIG_CAP_USB_DFU) != 0u
+                           ? mowgli_hardware::kFirmwareCapabilityUsbDfu
+                           : 0u;
     firmware_debug_requested_ = firmware_debug_enabled_;
     config_control_resend_count_ = 0;
     fw_version_major_ = pkt.fw_version_major;
@@ -2861,6 +3054,7 @@ private:
     fw_handshake_done_ = false;
     fw_compatible_ = false;
     fw_protocol_version_ = 0u;
+    fw_capabilities_ = 0u;
     fw_version_str_.clear();
     config_req_resend_count_ = 5;
     config_control_resend_count_ = 0;
@@ -2981,6 +3175,12 @@ private:
           "Rejecting non-finite cmd_vel (linear.x=%f, angular.z=%f); command discarded.",
           vx,
           wz);
+      return;
+    }
+
+    if (firmware_update_active_ || firmware_update_stop_latched_)
+    {
+      send_cmd_vel_packet(0.0, 0.0);
       return;
     }
 
@@ -3445,11 +3645,10 @@ private:
   /// Single point where a velocity command reaches the firmware.
   void send_cmd_vel_packet(double vx, double wz)
   {
-    if (mowgli_interfaces::updateMaintenanceActive())
-    {
-      vx = 0.0;
-      wz = 0.0;
-    }
+    const bool update_active = mowgli_interfaces::updateMaintenanceActive() ||
+                               firmware_update_active_ || firmware_update_stop_latched_;
+    vx = mowgli_hardware::firmware_update_motion_component(update_active, vx);
+    wz = mowgli_hardware::firmware_update_motion_component(update_active, wz);
     // Keep this final construction boundary defensive as well: callers such
     // as the bounded dig escape pass doubles.  Check float32 representability
     // before narrowing: converting an out-of-range double is not a safe way
@@ -3497,6 +3696,13 @@ private:
                         std::shared_ptr<mowgli_interfaces::srv::MowerControl::Response> res)
   {
     const bool requested_enable = (req->mow_enabled != 0u);
+    if ((firmware_update_active_ || firmware_update_stop_latched_) && requested_enable)
+    {
+      mow_enabled_ = false;
+      send_blade_command(0u, req->mow_direction);
+      res->success = false;
+      return;
+    }
     // Dry-run inhibit (issue #195). Suppresses an ENABLE only; a DISABLE always
     // passes through in either state, so a stop can never be swallowed. The
     // firmware stays the sole blade safety authority — this is NOT an interlock.
@@ -3532,6 +3738,11 @@ private:
     }
     else
     {
+      if (firmware_update_active_ || firmware_update_stop_latched_)
+      {
+        res->success = false;
+        return;
+      }
       RCLCPP_INFO(get_logger(), "Emergency release requested via service.");
       emergency_active_ = false;
       emergency_release_pending_ = true;
@@ -3677,6 +3888,8 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr srv_mower_control_;
   rclcpp::Service<mowgli_interfaces::srv::EmergencyStop>::SharedPtr srv_emergency_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reboot_board_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_firmware_update_maintenance_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_enter_dfu_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_set_firmware_debug_;
 
   // Client (not server, unlike the srv_* members above): calls
@@ -3799,6 +4012,11 @@ private:
   double fw_handshake_timeout_s_{5.0};
   bool firmware_debug_requested_{false};
   bool firmware_debug_enabled_{false};
+  uint32_t fw_capabilities_{0u};
+  uint32_t firmware_connection_generation_{0u};
+  bool firmware_update_active_{false};
+  bool firmware_update_stop_latched_{false};
+  bool firmware_dfu_request_sent_{false};
 
   // Host-side sub-deadband forward-velocity clamp (on_cmd_vel): any |vx| below
   // this is zeroed before reaching the firmware. Lowered from the legacy 0.15

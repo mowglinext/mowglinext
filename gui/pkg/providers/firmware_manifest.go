@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"golang.org/x/xerrors"
 )
 
@@ -36,10 +38,72 @@ type firmwareManifestEntry struct {
 	Sha256          string `json:"sha256"`
 	ProtocolVersion int    `json:"protocol_version"`
 	FwVersion       string `json:"fw_version"`
+	MCU             string `json:"mcu"`
+	FlashAddress    string `json:"flash_address"`
+	FlashSize       int    `json:"flash_size"`
+	Size            int    `json:"size"`
+	USBDFU          bool   `json:"usb_dfu"`
+}
+
+// ManifestUSBArtifactSource is deliberately stricter than the legacy ST-Link
+// resolver. USB DFU accepts only a release manifest that explicitly declares
+// the F401's flash contract and USB-DFU support.
+type ManifestUSBArtifactSource struct {
+	ManifestURL string
+	Client      *http.Client
+}
+
+func (s ManifestUSBArtifactSource) Resolve(ctx context.Context, request types.FirmwareUpdateRequest) (FirmwareArtifact, error) {
+	url := s.ManifestURL
+	if url == "" {
+		url = DefaultFirmwareManifestURL
+	}
+	client := s.Client
+	if client == nil {
+		client = &http.Client{Timeout: manifestDownloadTimeout}
+	}
+	m, err := fetchFirmwareManifestWithClient(ctx, url, client)
+	if err != nil {
+		return FirmwareArtifact{}, err
+	}
+	if m.Schema != 2 {
+		return FirmwareArtifact{}, xerrors.Errorf("USB manifest schema must be 2")
+	}
+	e, err := resolveManifestEntry(m, request.Board, request.Panel)
+	if err != nil {
+		return FirmwareArtifact{}, err
+	}
+	if e.Board != request.Board || e.Env != request.Environment || e.Panel != request.Panel || e.ProtocolVersion != m.ProtocolVersion || e.FwVersion != m.FwVersion {
+		return FirmwareArtifact{}, xerrors.Errorf("USB manifest top-level and entry metadata disagree")
+	}
+	if e.URL == "" || e.File == "" || e.Size <= 0 || e.FlashSize != maxDFUImage || e.FlashAddress != "0x08000000" || !e.USBDFU {
+		return FirmwareArtifact{}, xerrors.Errorf("USB manifest entry is incomplete or not DFU-approved")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.URL, nil)
+	if err != nil {
+		return FirmwareArtifact{}, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return FirmwareArtifact{}, xerrors.Errorf("downloading USB artifact: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return FirmwareArtifact{}, xerrors.Errorf("USB artifact returned HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDFUImage+1))
+	if err != nil {
+		return FirmwareArtifact{}, err
+	}
+	if len(data) != e.Size {
+		return FirmwareArtifact{}, xerrors.Errorf("USB artifact size mismatch")
+	}
+	return FirmwareArtifact{Board: e.Board, Environment: e.Env, Panel: e.Panel, MCU: e.MCU, FlashAddress: e.FlashAddress, FlashSize: e.FlashSize, USBDfu: e.USBDFU, ProtocolVersion: e.ProtocolVersion, FirmwareVersion: e.FwVersion, SHA256: e.Sha256, Size: e.Size, Bytes: data}, nil
 }
 
 // firmwareManifest is the top-level manifest.json document.
 type firmwareManifest struct {
+	Schema          int                              `json:"schema"`
 	Tag             string                           `json:"tag"`
 	ProtocolVersion int                              `json:"protocol_version"`
 	FwVersion       string                           `json:"fw_version"`
@@ -50,7 +114,15 @@ type firmwareManifest struct {
 // fetchFirmwareManifest downloads and parses the release manifest.
 func fetchFirmwareManifest(url string) (*firmwareManifest, error) {
 	client := &http.Client{Timeout: manifestDownloadTimeout}
-	resp, err := client.Get(url)
+	return fetchFirmwareManifestWithClient(context.Background(), url, client)
+}
+
+func fetchFirmwareManifestWithClient(ctx context.Context, url string, client *http.Client) (*firmwareManifest, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, xerrors.Errorf("creating firmware manifest request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, xerrors.Errorf("fetching firmware manifest: %w", err)
 	}

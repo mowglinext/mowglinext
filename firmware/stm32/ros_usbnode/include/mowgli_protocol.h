@@ -54,9 +54,11 @@ extern "C" {
  * host and firmware MUST match. The compat gate (MOWGLI_PROTOCOL_VERSION) blocks
  * mowing on a mismatch, and the CRC over the grown body means a v5 firmware fed
  * a 21-byte packet fails the CRC and safely drops it rather than misapplying it.
+ * v7 adds the F401-only ENTER_DFU packet (0x53). The config response advertises
+ * CONFIG_CAP_USB_DFU only on boards that implement the guarded ROM-DFU path.
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 6u
+#define MOWGLI_PROTOCOL_VERSION 7u
 
 /* ---------------------------------------------------------------------------
  * Firmware version (semantic version of THIS firmware build).
@@ -139,6 +141,10 @@ extern "C" {
  *  (e.g. IMU emitting NaN) without a manual power-cycle. */
 #define PKT_ID_REBOOT 0x52u
 #define PKT_REBOOT_MAGIC 0xB0u
+
+/** F401-only request to enter the STM32 ROM USB DFU bootloader. */
+#define PKT_ID_ENTER_DFU 0x53u
+#define PKT_ENTER_DFU_MAGIC 0xD3u
 
 /** Drive-motor PID/feedforward gains (Host -> Firmware). Lets the ROS 2 host
  *  retune the per-wheel velocity loop at runtime without reflashing. The
@@ -284,6 +290,7 @@ extern "C" {
 
 /** Optional firmware diagnostics / fine-grained breadcrumbs enabled. */
 #define CONFIG_FLAG_FIRMWARE_DEBUG (1u << 0u)
+#define CONFIG_CAP_USB_DFU 0x80u
 
 /* ---------------------------------------------------------------------------
  * Packed wire-format structs
@@ -471,6 +478,13 @@ typedef struct {
   uint8_t magic; /**< Must equal PKT_REBOOT_MAGIC (0xB0) */
   uint16_t crc;  /**< CRC-16 CCITT over preceding bytes */
 } pkt_reboot_t;
+
+/** Explicit F401-only ROM-DFU entry request. Wire size: 4 bytes. */
+typedef struct {
+  uint8_t type;  /**< PKT_ID_ENTER_DFU */
+  uint8_t magic; /**< Must equal PKT_ENTER_DFU_MAGIC */
+  uint16_t crc;  /**< CRC-16 CCITT over preceding bytes */
+} pkt_enter_dfu_t;
 
 /**
  * @brief Drive-motor runtime tuning packet — Host -> Firmware
@@ -698,6 +712,8 @@ _Static_assert(sizeof(pkt_heartbeat_t) == 5u,
 _Static_assert(sizeof(pkt_hl_state_t) == 5u,
                "pkt_hl_state_t layout unexpected");
 _Static_assert(sizeof(pkt_cmd_vel_t) == 11u, "pkt_cmd_vel_t layout unexpected");
+_Static_assert(sizeof(pkt_enter_dfu_t) == 4u,
+               "pkt_enter_dfu_t layout unexpected");
 _Static_assert(sizeof(pkt_config_req_t) == 4u,
                "pkt_config_req_t layout unexpected");
 _Static_assert(sizeof(pkt_config_rsp_t) == 8u,

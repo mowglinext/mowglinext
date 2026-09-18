@@ -48,7 +48,7 @@ namespace mowgli_hardware
 // formats and the operator must reflash. Bump this in lockstep with
 // MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h when an incompatible wire
 // change requires a hard compatibility break.
-static constexpr uint8_t kMowgliProtocolVersion = 6u;
+static constexpr uint8_t kMowgliProtocolVersion = 7u;
 
 // ---------------------------------------------------------------------------
 // Packet type identifiers
@@ -70,6 +70,7 @@ enum PacketId : uint8_t
   PACKET_ID_LL_BLADE_STATUS = 0x05,  ///< STM32 → Pi: blade motor status
   PACKET_ID_LL_CMD_BLADE = 0x51,  ///< Pi → STM32: blade motor control
   PACKET_ID_LL_REBOOT = 0x52,  ///< Pi → STM32: reboot the board (NVIC_SystemReset)
+  PACKET_ID_LL_ENTER_DFU = 0x53,  ///< Pi → STM32: guarded F401 ROM-DFU transition
   PACKET_ID_LL_SET_DRIVE_PID =
       0x54,  ///< Pi → STM32: drive-motor runtime tuning (PID/FF + ticks_per_meter)
   PACKET_ID_LL_SET_YAW_PID = 0x55,  ///< Pi → STM32: firmware yaw-rate loop tuning (Option C)
@@ -81,6 +82,10 @@ enum PacketId : uint8_t
 /// byte prevents a corrupt/misframed packet from accidentally rebooting the
 /// board (the consequence is a full firmware restart).
 static constexpr uint8_t kLlRebootMagic = 0xB0;
+
+/// Confirmation byte required by LlEnterDfu. The firmware also requires the
+/// mower to be idle and advertises support before the bridge sends it.
+static constexpr uint8_t kLlEnterDfuMagic = 0xD3;
 
 // ---------------------------------------------------------------------------
 // Status bitmask constants (ll_status::status_bitmask)
@@ -180,6 +185,7 @@ constexpr std::size_t LL_USS_SENSOR_COUNT = 5u;
 // ---------------------------------------------------------------------------
 
 constexpr uint8_t CONFIG_FLAG_FIRMWARE_DEBUG = (1u << 0u);
+constexpr uint8_t CONFIG_CAP_USB_DFU = (1u << 7u);
 
 // ---------------------------------------------------------------------------
 // Wire-format structs — all fields packed with no padding
@@ -328,6 +334,19 @@ struct LlReboot
 {
   uint8_t type;  ///< Must equal PACKET_ID_LL_REBOOT
   uint8_t magic;  ///< Must equal kLlRebootMagic (0xB0)
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+/**
+ * @brief F401-only request for the guarded ROM USB-DFU transition.
+ *
+ * The firmware accepts this only while idle, then performs its bounded
+ * make-safe sequence before setting a one-shot SRAM marker and resetting.
+ */
+struct LlEnterDfu
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_ENTER_DFU
+  uint8_t magic;  ///< Must equal kLlEnterDfuMagic (0xD3)
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 
@@ -527,6 +546,8 @@ static_assert(sizeof(LlHeartbeat) == 5u, "LlHeartbeat layout mismatch");
 static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch");
 static_assert(sizeof(LlCmdVel) == 11u, "LlCmdVel layout mismatch");
 static_assert(sizeof(LlCmdBlade) == 5u, "LlCmdBlade layout mismatch");
+static_assert(sizeof(LlReboot) == 4u, "LlReboot layout mismatch");
+static_assert(sizeof(LlEnterDfu) == 4u, "LlEnterDfu layout mismatch");
 static_assert(sizeof(LlBladeStatus) == 16u, "LlBladeStatus layout mismatch");
 static_assert(sizeof(LlConfigReq) == 4u, "LlConfigReq layout mismatch");
 static_assert(sizeof(LlConfigRsp) == 8u, "LlConfigRsp layout mismatch");

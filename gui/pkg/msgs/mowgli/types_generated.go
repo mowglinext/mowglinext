@@ -217,6 +217,8 @@ type Status struct {
 	FirmwareVersion           string                         `json:"firmware_version"`
 	FirmwareProtocolVersion   uint8                          `json:"firmware_protocol_version"`
 	FirmwareCompatible        bool                           `json:"firmware_compatible"`
+	FirmwareCapabilities      uint32                         `json:"firmware_capabilities"`
+	FirmwareConnectionGeneration uint32                         `json:"firmware_connection_generation"`
 }
 
 // TrackedObstacle matches mowgli_interfaces/msg/TrackedObstacle.

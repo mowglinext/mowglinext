@@ -198,6 +198,17 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  # ---- test_firmware_update_gate ----
+  # Header-only policy used by the final serial transmit boundary and the
+  # firmware-update service handlers.
+  ament_add_gtest(test_firmware_update_gate
+    test/test_firmware_update_gate.cpp
+  )
+  target_include_directories(test_firmware_update_gate
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
   # ---- test_heartbeat_emergency_policy ----
   # The firmware's pure heartbeat safety policy is compiled here directly so
   # all stop/release combinations are verified without physical hardware.

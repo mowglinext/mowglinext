@@ -8,6 +8,9 @@ export interface FirmwareStatus {
      */
     firmwareCompatible: boolean | null;
     firmwareVersion: string;
+    firmwareProtocolVersion: number;
+    firmwareCapabilities: number;
+    firmwareConnectionGeneration: number;
 }
 
 /**
@@ -21,5 +24,8 @@ export const useFirmwareStatus = (): FirmwareStatus => {
     return {
         firmwareCompatible: status.firmware_compatible ?? null,
         firmwareVersion: status.firmware_version ?? "",
+        firmwareProtocolVersion: status.firmware_protocol_version ?? 0,
+        firmwareCapabilities: status.firmware_capabilities ?? 0,
+        firmwareConnectionGeneration: status.firmware_connection_generation ?? 0,
     };
 };

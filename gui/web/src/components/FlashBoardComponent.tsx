@@ -1,4 +1,4 @@
-import {Alert, App, Button, Col, Collapse, Row, Typography} from "antd";
+import {Alert, App, Button, Checkbox as AntCheckbox, Col, Collapse, Radio, Row, Space, Tag, Typography} from "antd";
 import {useEffect, useMemo, useRef, useState} from "react";
 import {fetchEventSource} from "@microsoft/fetch-event-source";
 import {createSchemaField} from "@formily/react";
@@ -19,6 +19,7 @@ import {createForm, onFieldValueChange} from "@formily/core";
 import {useApi} from "../hooks/useApi.ts";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
+import {useFirmwareStatus} from "../hooks/useFirmwareStatus.ts";
 import {
     applyFirmwareModelDefaults,
     manualOverridesFromProvenance,
@@ -80,10 +81,53 @@ const PREBUILT_BOARDS = new Set<string>([
     "BOARD_YARDFORCE500B",
 ]);
 
+const F401_BOARD = "BOARD_YARDFORCE500B";
+const USB_DFU_CAPABILITY = 1;
+const USB_OPERATION_STORAGE_KEY = "mowgli.firmware.usb.operation";
+
+type FlashMethod = "usb" | "stlink";
+type USBUpdateState =
+    | "validating"
+    | "checking_readiness"
+    | "requesting_dfu"
+    | "waiting_dfu"
+    | "flashing"
+    | "verifying_flash"
+    | "leaving_dfu"
+    | "waiting_application"
+    | "verifying_application"
+    | "succeeded"
+    | "rejected"
+    | "failed_recoverable"
+    | "failed_requires_stlink"
+    | "cancelled_before_entry";
+
+type USBUpdateSnapshot = {
+    id: string;
+    idempotencyKey: string;
+    state: USBUpdateState;
+    error?: {code: string; message: string; recoverable: boolean};
+    cancellable: boolean;
+    updatedAt: string;
+};
+
+const USB_TERMINAL_STATES = new Set<USBUpdateState>([
+    "succeeded",
+    "rejected",
+    "failed_recoverable",
+    "failed_requires_stlink",
+    "cancelled_before_entry",
+]);
+
 export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: string }) => {
     const isMobile = useIsMobile();
     const {colors} = useThemeMode();
     const {t} = useTranslation();
+    const {
+        firmwareCompatible,
+        firmwareCapabilities,
+        firmwareVersion,
+    } = useFirmwareStatus();
     const applyingModelDefaultsRef = useRef(false);
     const manualOverridesRef = useRef<Partial<Record<keyof FirmwareSelection, boolean>>>({});
     const initializedModelRef = useRef(false);
@@ -94,11 +138,19 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
     const [selectedBoard, setSelectedBoard] = useState("");
     const [selectedPanel, setSelectedPanel] = useState("");
     const [isExpert, setIsExpert] = useState(false);
+    const [flashMethod, setFlashMethod] = useState<FlashMethod>("stlink");
+    const flashMethodTouchedRef = useRef(false);
+    const [usbRecovery, setUsbRecovery] = useState(false);
+    const [usbRecoveryConfirmed, setUsbRecoveryConfirmed] = useState(false);
+    const [recoverySuggested, setRecoverySuggested] = useState(false);
     const form = useMemo(() => createForm({
         validateFirst: true,
         effects: (form) => {
             onFieldValueChange('boardType', (field) => {
                 setSelectedBoard(String(field.value));
+                flashMethodTouchedRef.current = false;
+                setUsbRecovery(false);
+                setUsbRecoveryConfirmed(false);
                 if (initializedModelRef.current && !applyingModelDefaultsRef.current) {
                     manualOverridesRef.current.boardType = true;
                     form.setValues({boardTypeOrigin: 'manual'});
@@ -122,6 +174,9 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 // the expert compile-and-flash path: "custom" compiles from
                 // source, every other value flashes the prebuilt binary.
                 setIsExpert(field.value === "custom");
+                if (field.value === "custom") {
+                    setFlashMethod("stlink");
+                }
             })
         },
     }), [])
@@ -132,11 +187,31 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
     const [isFlashing, setIsFlashing] = useState(false);
     const [flashDone, setFlashDone] = useState(false);
     const [flashError, setFlashError] = useState<string | null>(null);
+    const [usbSnapshot, setUsbSnapshot] = useState<USBUpdateSnapshot | null>(null);
+    const usbStateRef = useRef<USBUpdateState | null>(null);
     const terminalRef = useRef<HTMLDivElement>(null);
+    const usbPollTimerRef = useRef<number | null>(null);
+    const usbPollAbortRef = useRef<AbortController | null>(null);
+    const usbIdempotencyRef = useRef<string | null>(null);
+
+    const isF401Target = selectedBoard === F401_BOARD;
+    const usbCapable = isF401Target && firmwareCompatible === true &&
+        (firmwareCapabilities & USB_DFU_CAPABILITY) !== 0;
+    const usbEligible = usbCapable && !isExpert;
 
     useEffect(() => {
         mowerModelRef.current = props.mowerModel;
     }, [props.mowerModel]);
+
+    useEffect(() => {
+        if (!usbEligible) {
+            setFlashMethod("stlink");
+            return;
+        }
+        if (!flashMethodTouchedRef.current) {
+            setFlashMethod("usb");
+        }
+    }, [usbEligible]);
 
     useEffect(() => {
         let disposed = false;
@@ -215,6 +290,10 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
             if (abortControllerRef.current) {
                 abortControllerRef.current.abort();
             }
+            if (usbPollTimerRef.current !== null) {
+                window.clearTimeout(usbPollTimerRef.current);
+            }
+            usbPollAbortRef.current?.abort();
         };
     }, []);
 
@@ -326,6 +405,145 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
         }
     };
 
+    const rememberUSBOperation = (snapshot: USBUpdateSnapshot) => {
+        try {
+            sessionStorage.setItem(USB_OPERATION_STORAGE_KEY, JSON.stringify({
+                id: snapshot.id,
+                idempotencyKey: snapshot.idempotencyKey,
+            }));
+        } catch {
+            // Session storage is a reconnect convenience, not a safety gate.
+        }
+    };
+
+    const forgetUSBOperation = () => {
+        try {
+            sessionStorage.removeItem(USB_OPERATION_STORAGE_KEY);
+        } catch {
+            // The backend remains authoritative when storage is unavailable.
+        }
+    };
+
+    const applyUSBSnapshot = (snapshot: USBUpdateSnapshot) => {
+        if (usbStateRef.current !== snapshot.state) {
+            setData((lines) => [...(lines ?? []), t(`flashBoard.usbState.${snapshot.state}`)]);
+            usbStateRef.current = snapshot.state;
+        }
+        setUsbSnapshot(snapshot);
+        if (!USB_TERMINAL_STATES.has(snapshot.state)) {
+            rememberUSBOperation(snapshot);
+            return false;
+        }
+
+        setIsFlashing(false);
+        forgetUSBOperation();
+        if (snapshot.state === "succeeded") {
+            setFlashDone(true);
+            setFlashError(null);
+        } else {
+            const message = snapshot.error?.message ?? t('flashBoard.usbUnknownFailure');
+            setFlashError(message);
+            if (snapshot.error?.code === "readiness_rejected") {
+                setRecoverySuggested(true);
+            }
+        }
+        return true;
+    };
+
+    const pollUSBUpdate = async (operationID: string) => {
+        usbPollAbortRef.current?.abort();
+        const controller = new AbortController();
+        usbPollAbortRef.current = controller;
+        try {
+            const response = await fetch(`/api/setup/firmware-update/${encodeURIComponent(operationID)}`, {
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                throw new Error(`${t('flashBoard.usbStatusUnavailable')} (HTTP ${response.status})`);
+            }
+            const snapshot = await response.json() as USBUpdateSnapshot;
+            if (snapshot.id !== operationID || applyUSBSnapshot(snapshot)) return;
+            usbPollTimerRef.current = window.setTimeout(() => pollUSBUpdate(operationID), 750);
+        } catch (error) {
+            if (controller.signal.aborted) return;
+            // A GET failure cannot safely infer whether flashing stopped. Keep
+            // the operation ID and offer a deliberate status reconnect.
+            setIsFlashing(false);
+            setFlashError(error instanceof Error ? error.message : String(error));
+        }
+    };
+
+    const startUSBUpdate = async (values: Config) => {
+        if (isFlashing || !usbEligible) return;
+        const idempotencyKey = usbIdempotencyRef.current ??
+            (globalThis.crypto?.randomUUID?.() ?? `usb-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+        usbIdempotencyRef.current = idempotencyKey;
+        try {
+            sessionStorage.setItem(USB_OPERATION_STORAGE_KEY, JSON.stringify({
+                idempotencyKey,
+            }));
+        } catch {
+            // The in-memory key still prevents duplicate POSTs in this mount.
+        }
+        setData([]);
+        setFlashDone(false);
+        setFlashError(null);
+        setUsbSnapshot(null);
+        usbStateRef.current = null;
+        setIsFlashing(true);
+        try {
+            const response = await fetch("/api/setup/firmware-update", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    idempotencyKey,
+                    board: values.boardType,
+                    environment: "Yardforce500B",
+                    panel: values.panelType,
+                    recovery: usbRecovery,
+                    recoveryConfirmed: usbRecovery && usbRecoveryConfirmed,
+                }),
+            });
+            const body = await response.json() as {
+                operation?: USBUpdateSnapshot;
+                error?: string;
+            };
+            if (!response.ok || !body.operation) {
+                throw new Error(body.error ?? `${t('flashBoard.usbStartFailed')} (HTTP ${response.status})`);
+            }
+            applyUSBSnapshot(body.operation);
+            await pollUSBUpdate(body.operation.id);
+        } catch (error) {
+            setIsFlashing(false);
+            setFlashError(error instanceof Error ? error.message : String(error));
+        }
+    };
+
+    const cancelUSBUpdate = async () => {
+        if (!usbSnapshot?.cancellable) return;
+        const response = await fetch(
+            `/api/setup/firmware-update/${encodeURIComponent(usbSnapshot.id)}/cancel`,
+            {method: "POST"},
+        );
+        const snapshot = await response.json() as USBUpdateSnapshot & {operation?: USBUpdateSnapshot};
+        applyUSBSnapshot(snapshot.operation ?? snapshot);
+    };
+
+    useEffect(() => {
+        try {
+            const saved = JSON.parse(sessionStorage.getItem(USB_OPERATION_STORAGE_KEY) ?? "null") as
+                {id?: string; idempotencyKey?: string} | null;
+            if (!saved) return;
+            usbIdempotencyRef.current = saved.idempotencyKey ?? null;
+            if (!saved.id) return;
+            setData([]);
+            setIsFlashing(true);
+            void pollUSBUpdate(saved.id);
+        } catch {
+            forgetUSBOperation();
+        }
+    }, []);
+
     const flashFirmware = (values: Config) => {
         if (!values.boardType || !values.panelType) {
             notification.error({
@@ -365,6 +583,14 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 </ul>
                 <p style={{color: colors.danger}}><strong>{t('flashBoard.confirmWrongValuesWarning')}</strong></p>
             </div>
+        ) : flashMethod === "usb" ? (
+            <div>
+                <p>{t('flashBoard.confirmUSBDesc')}</p>
+                <p style={{color: colors.danger}}><strong>{t('flashBoard.confirmUSBWarning')}</strong></p>
+                {usbRecovery && (
+                    <p style={{color: colors.warning}}><strong>{t('flashBoard.confirmUSBRecovery')}</strong></p>
+                )}
+            </div>
         ) : (
             <div>
                 <p>{t('flashBoard.confirmPrebuiltDesc')}</p>
@@ -379,7 +605,11 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
             cancelText: t('flashBoard.cancel'),
             onOk: () => {
                 confirmModal.destroy();
-                doFlashFirmware(payload);
+                if (flashMethod === "usb" && !isCustomBuild) {
+                    void startUSBUpdate(payload);
+                } else {
+                    void doFlashFirmware(payload);
+                }
             },
         });
     };
@@ -389,9 +619,12 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
         return (
             <Row gutter={[0, 16]}>
                 <Col span={24}>
-                    <Typography.Title level={5} style={{margin: 0}}>
-                        {isFlashing ? t('flashBoard.flashingFirmware') : flashError ? t('flashBoard.flashFailed') : t('flashBoard.flashComplete')}
-                    </Typography.Title>
+                    <Space wrap>
+                        <Typography.Title level={5} style={{margin: 0}}>
+                            {isFlashing ? t('flashBoard.flashingFirmware') : flashError ? t('flashBoard.flashFailed') : t('flashBoard.flashComplete')}
+                        </Typography.Title>
+                        {usbSnapshot && <Tag>{t(`flashBoard.usbState.${usbSnapshot.state}`)}</Tag>}
+                    </Space>
                 </Col>
                 <Col span={24}>
                     <div ref={terminalRef} style={{height: isMobile ? "30vh" : "35vh", overflowY: "auto"}}>
@@ -425,19 +658,35 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     zIndex: 50,
                 }}>
                     <FormButtonGroup>
-                        {flashError && (
+                        {usbSnapshot?.cancellable && !flashError && (
+                            <Button danger onClick={() => void cancelUSBUpdate()}>
+                                {t('flashBoard.cancelUSBUpdate')}
+                            </Button>
+                        )}
+                        {flashError && usbSnapshot && !USB_TERMINAL_STATES.has(usbSnapshot.state) && (
+                            <Button type="primary" onClick={() => {
+                                setFlashError(null);
+                                setIsFlashing(true);
+                                void pollUSBUpdate(usbSnapshot.id);
+                            }}>{t('flashBoard.reconnectUSBStatus')}</Button>
+                        )}
+                        {flashError && (!usbSnapshot || USB_TERMINAL_STATES.has(usbSnapshot.state)) && (
                             <Button onClick={() => {
                                 setData(undefined);
                                 setFlashError(null);
+                                setUsbSnapshot(null);
+                                usbStateRef.current = null;
+                                if (usbSnapshot && USB_TERMINAL_STATES.has(usbSnapshot.state)) {
+                                    usbIdempotencyRef.current = null;
+                                }
                             }}>{t('flashBoard.backToConfig')}</Button>
                         )}
-                        <Button
+                        {flashDone && <Button
                             type="primary"
-                            disabled={isFlashing}
                             onClick={props.onNext}
                         >
-                            {isFlashing ? t('flashBoard.flashingShort') : t('flashBoard.next')}
-                        </Button>
+                            {t('flashBoard.next')}
+                        </Button>}
                     </FormButtonGroup>
                 </Col>
             </Row>
@@ -509,6 +758,108 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                         message={t('flashBoard.prebuiltInfoTitle')}
                         description={t('flashBoard.prebuiltInfoDesc')}
                     />
+
+                    <Typography.Title level={5} style={{marginTop: 20, marginBottom: 8}}>
+                        {t('flashBoard.updateMethodTitle')}
+                    </Typography.Title>
+                    <Radio.Group
+                        value={flashMethod}
+                        onChange={(event) => {
+                            flashMethodTouchedRef.current = true;
+                            setFlashMethod(event.target.value as FlashMethod);
+                        }}
+                        style={{display: "grid", gap: 8, marginBottom: 12}}
+                    >
+                        <Radio value="usb" disabled={!usbEligible} style={{alignItems: "flex-start"}}>
+                            <Space direction="vertical" size={0} style={{whiteSpace: "normal"}}>
+                                <Space wrap size={6}>
+                                    <Typography.Text strong>{t('flashBoard.methodUSBTitle')}</Typography.Text>
+                                    {usbEligible && <Tag color="green">{t('flashBoard.recommended')}</Tag>}
+                                </Space>
+                                <Typography.Text type="secondary">
+                                    {t('flashBoard.methodUSBDesc')}
+                                </Typography.Text>
+                            </Space>
+                        </Radio>
+                        <Radio value="stlink" style={{alignItems: "flex-start"}}>
+                            <Space direction="vertical" size={0} style={{whiteSpace: "normal"}}>
+                                <Typography.Text strong>{t('flashBoard.methodSTLinkTitle')}</Typography.Text>
+                                <Typography.Text type="secondary">
+                                    {t('flashBoard.methodSTLinkDesc')}
+                                </Typography.Text>
+                            </Space>
+                        </Radio>
+                    </Radio.Group>
+
+                    {selectedBoard && !isF401Target && (
+                        <Alert
+                            type="info"
+                            showIcon
+                            style={{marginBottom: 12}}
+                            message={t('flashBoard.usbUnsupportedTitle')}
+                            description={t('flashBoard.usbUnsupportedDesc')}
+                        />
+                    )}
+                    {isF401Target && !usbCapable && (
+                        <Alert
+                            type="warning"
+                            showIcon
+                            style={{marginBottom: 12}}
+                            message={t('flashBoard.usbMigrationTitle')}
+                            description={firmwareCompatible === null
+                                ? t('flashBoard.usbCapabilityUnknownDesc')
+                                : t('flashBoard.usbMigrationDesc', {version: firmwareVersion || t('flashBoard.unknownVersion')})}
+                        />
+                    )}
+                    {isF401Target && isExpert && (
+                        <Alert
+                            type="info"
+                            showIcon
+                            style={{marginBottom: 12}}
+                            message={t('flashBoard.usbPrebuiltOnlyTitle')}
+                            description={t('flashBoard.usbPrebuiltOnlyDesc')}
+                        />
+                    )}
+
+                    {usbCapable && !isExpert && (
+                        <Collapse
+                            ghost
+                            activeKey={recoverySuggested ? ["usb-recovery"] : undefined}
+                            onChange={() => setRecoverySuggested(false)}
+                            style={{marginBottom: 8}}
+                            items={[{
+                                key: "usb-recovery",
+                                label: (
+                                    <Typography.Text strong style={{color: colors.warning}}>
+                                        {t('flashBoard.usbRecoveryTitle')}
+                                    </Typography.Text>
+                                ),
+                                children: (
+                                    <Space direction="vertical" size={10} style={{width: "100%"}}>
+                                        <Alert
+                                            type="warning"
+                                            showIcon
+                                            message={t('flashBoard.usbRecoveryWarningTitle')}
+                                            description={t('flashBoard.usbRecoveryWarningDesc')}
+                                        />
+                                        <AntCheckbox
+                                            checked={usbRecovery}
+                                            onChange={(event) => {
+                                                setUsbRecovery(event.target.checked);
+                                                if (!event.target.checked) setUsbRecoveryConfirmed(false);
+                                            }}
+                                        >{t('flashBoard.enableUSBRecovery')}</AntCheckbox>
+                                        {usbRecovery && (
+                                            <AntCheckbox
+                                                checked={usbRecoveryConfirmed}
+                                                onChange={(event) => setUsbRecoveryConfirmed(event.target.checked)}
+                                            >{t('flashBoard.confirmStationary')}</AntCheckbox>
+                                        )}
+                                    </Space>
+                                ),
+                            }]}
+                        />
+                    )}
 
                     {/* Expert disclosure: everything inside flashes a CUSTOM,
                         compiled-from-source build (expertBuild=true) instead of the
@@ -760,7 +1111,9 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     <FormButtonGroup>
                         <Button
                             type="primary"
-                            disabled={!selectedBoard || !selectedPanel || (!isExpert && !PREBUILT_BOARDS.has(selectedBoard))}
+                            disabled={!selectedBoard || !selectedPanel ||
+                                (!isExpert && !PREBUILT_BOARDS.has(selectedBoard)) ||
+                                (flashMethod === "usb" && (!usbEligible || (usbRecovery && !usbRecoveryConfirmed)))}
                             onClick={() => {
                                 form.submit(flashFirmware).catch((err: unknown) => {
                                     if (err instanceof Error) {
@@ -770,7 +1123,9 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                                         });
                                     }
                                 });
-                            }}>{t('flashBoard.flashFirmware')}</Button>
+                            }}>{flashMethod === "usb" && !isExpert
+                                ? t('flashBoard.updateViaUSB')
+                                : t('flashBoard.flashViaSTLink')}</Button>
                         <Button onClick={props.onNext}>{t('flashBoard.skip')}</Button>
                     </FormButtonGroup>
                 </div>

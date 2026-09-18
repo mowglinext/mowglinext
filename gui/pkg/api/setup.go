@@ -2,14 +2,51 @@ package api
 
 import (
 	"bufio"
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"io"
 )
 
 func SetupRoutes(r *gin.RouterGroup, provider types.IFirmwareProvider) {
 	group := r.Group("/setup")
 	FlashBoard(group, provider)
+	// USB DFU is optional until the appliance wires its physical USB/runtime
+	// dependencies.  This preserves the established ST-Link endpoint.
+	if updater, ok := provider.(types.IFirmwareUSBUpdater); ok {
+		FirmwareUSBUpdateRoutes(group, updater)
+	}
+}
+
+func FirmwareUSBUpdateRoutes(r *gin.RouterGroup, updater types.IFirmwareUSBUpdater) {
+	r.POST("/firmware-update", func(c *gin.Context) {
+		var request types.FirmwareUpdateRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(400, ErrorResponse{Error: err.Error()})
+			return
+		}
+		snapshot, attached, err := updater.StartFirmwareUSBUpdate(c.Request.Context(), request)
+		if err != nil {
+			c.JSON(409, ErrorResponse{Error: err.Error()})
+			return
+		}
+		c.JSON(202, gin.H{"operation": snapshot, "attached": attached})
+	})
+	r.GET("/firmware-update/:id", func(c *gin.Context) {
+		snapshot, ok := updater.FirmwareUSBUpdateSnapshot(c.Param("id"))
+		if !ok {
+			c.JSON(404, ErrorResponse{Error: "firmware update not found"})
+			return
+		}
+		c.JSON(200, snapshot)
+	})
+	r.POST("/firmware-update/:id/cancel", func(c *gin.Context) {
+		snapshot, err := updater.CancelFirmwareUSBUpdate(c.Param("id"))
+		if err != nil {
+			c.JSON(409, gin.H{"operation": snapshot, "error": err.Error()})
+			return
+		}
+		c.JSON(200, snapshot)
+	})
 }
 
 // FlashBoard flash the mower board with the given config

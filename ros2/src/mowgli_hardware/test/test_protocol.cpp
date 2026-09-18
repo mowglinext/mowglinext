@@ -116,6 +116,11 @@ TEST(ProtocolSizes, RebootPacketSize)
   EXPECT_EQ(sizeof(LlReboot), 4u);  // type(1) + magic(1) + crc(2)
 }
 
+TEST(ProtocolSizes, EnterDfuPacketSize)
+{
+  EXPECT_EQ(sizeof(LlEnterDfu), 4u);  // type(1) + magic(1) + crc(2)
+}
+
 TEST(ProtocolSizes, SetDrivePidPacketSize)
 {
   // type(1) + ticks_per_meter/kp/ki/kd/integral_limit/pwm_per_mps(6*4=24)
@@ -176,7 +181,15 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_CMD_VEL, 0x50);
   EXPECT_EQ(PACKET_ID_LL_CMD_BLADE, 0x51);
   EXPECT_EQ(PACKET_ID_LL_REBOOT, 0x52);
+  EXPECT_EQ(PACKET_ID_LL_ENTER_DFU, 0x53);
   EXPECT_EQ(PACKET_ID_LL_SET_DRIVE_PID, 0x54);
+}
+
+TEST(ProtocolIds, EnterDfuConstants)
+{
+  EXPECT_EQ(kMowgliProtocolVersion, 7u);
+  EXPECT_EQ(kLlEnterDfuMagic, 0xD3u);
+  EXPECT_EQ(CONFIG_CAP_USB_DFU, 0x80u);
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +379,15 @@ TEST(ProtocolRoundtrip, CmdVelPacket)
   pkt.type = PACKET_ID_LL_CMD_VEL;
   pkt.linear_x = 0.35f;
   pkt.angular_z = -0.15f;
+
+  roundtrip_struct(pkt);
+}
+
+TEST(ProtocolRoundtrip, EnterDfuPacket)
+{
+  LlEnterDfu pkt{};
+  pkt.type = PACKET_ID_LL_ENTER_DFU;
+  pkt.magic = kLlEnterDfuMagic;
 
   roundtrip_struct(pkt);
 }
