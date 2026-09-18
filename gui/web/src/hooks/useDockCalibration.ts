@@ -32,7 +32,7 @@ export const PHASE_LABELS: Record<number, string> = {
 
 export const RETRY_LABELS: Record<number, string> = {
     0: "",
-    1: "No RTK-Fixed — wait for a fix and retry.",
+    1: "No RTK-Fixed, or not steady enough to average a position — wait for a fix and retry.",
     2: "COG incoherent (RTK not truly fixed / GPS noisy) — retry.",
     3: "Reverse leg too short for a heading fit — retry.",
     4: "Re-dock could not be verified live — the yaw is already saved; restart mowgli-ros2, then run calibration again to confirm.",

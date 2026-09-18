@@ -88,6 +88,11 @@ struct AreaEntry
 {
   std::string name;
   bool is_navigation_area;
+  // mowglinext#637 phase 2: the stable id the fake server reports for this
+  // index. 0 (the default) matches what a real freshly-added area never has
+  // (map_server mints ids from 1), but is fine for tests that don't care
+  // about identity — only the id-reconciliation tests below set this.
+  uint32_t id = 0;
 };
 
 class GetNextUnmowedAreaTest : public ::testing::Test
@@ -128,6 +133,7 @@ protected:
           }
           resp->area.name = it->second.name;
           resp->area.is_navigation_area = it->second.is_navigation_area;
+          resp->area.id = it->second.id;
           resp->success = true;
         });
 
@@ -267,6 +273,112 @@ TEST_F(GetNextUnmowedAreaTest, SelectsMowingAreaAtIndexZero)
   ASSERT_TRUE(blackboard->get("area_index", selected));
   EXPECT_EQ(selected, 0u);
   EXPECT_EQ(ctx->current_area, 0);
+}
+
+// ---------------------------------------------------------------------------
+// mowglinext#637 phase 2 — an index whose id no longer matches the last
+// observed one must not inherit stale per-index state (completed, attempted,
+// swath progress, resume cursor, cross-hatch history). This is what the GUI's
+// area edit/delete flow can trigger live, mid-session (area_manager.cpp
+// on_add_area rebuilds the whole list), and what a stale coverage_resume.txt
+// can trigger across a restart.
+// ---------------------------------------------------------------------------
+
+// The area under index 0 changed identity (id 100 -> 200) since it was marked
+// complete. The new area must be selected, not silently skipped as "done".
+TEST_F(GetNextUnmowedAreaTest, IdMismatchClearsStaleCompletedFlagSoTheNewAreaIsMowed)
+{
+  areas[0] = {"new_back_lawn", /*is_navigation_area=*/false, /*id=*/200};
+  waitForService();
+  ctx->area_ids[0] = 100;  // observed for the OLD occupant of index 0
+  ctx->completed_areas.insert(0u);
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS)
+      << "a re-indexed area must never be skipped as already-complete";
+  EXPECT_EQ(ctx->current_area, 0);
+  EXPECT_EQ(ctx->completed_areas.count(0u), 0u)
+      << "the stale completed flag for the OLD occupant must be discarded";
+  EXPECT_EQ(ctx->area_ids[0], 200u) << "the id must be refreshed to the new occupant";
+}
+
+// Same, but the stale flag is attempted_areas (an area that gave up this
+// session) rather than completed_areas: the new area must be reconsidered.
+TEST_F(GetNextUnmowedAreaTest, IdMismatchClearsStaleAttemptedFlagSoTheNewAreaIsReconsidered)
+{
+  areas[0] = {"new_side_strip", /*is_navigation_area=*/false, /*id=*/200};
+  waitForService();
+  ctx->area_ids[0] = 100;
+  ctx->attempted_areas.insert(0u);
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS)
+      << "a re-indexed area must never be skipped as already-attempted";
+  EXPECT_EQ(ctx->current_area, 0);
+  EXPECT_EQ(ctx->attempted_areas.count(0u), 0u);
+}
+
+// An id mismatch must also drop swath progress, the resume cursor and
+// cross-hatch history recorded for the OLD occupant of the index — none of
+// it describes the area now standing there.
+TEST_F(GetNextUnmowedAreaTest, IdMismatchDropsSwathAndCrossHatchHistoryForTheOldOccupant)
+{
+  areas[0] = {"new_area", /*is_navigation_area=*/false, /*id=*/200};
+  waitForService();
+  ctx->area_ids[0] = 100;
+  ctx->area_completed_swaths[0] = {0u, 1u};
+  ctx->area_resume_pose_index[0] = 5u;
+  ctx->area_path_pose_count[0] = 40u;
+  ctx->area_plan_fingerprint[0] = 0xdeadbeef;
+  ctx->cross_hatch[0].begin(true);
+  ctx->cross_hatch[0].used = true;
+  ctx->area_attempt_count[0] = 3u;
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+  EXPECT_EQ(ctx->area_resume_pose_index.count(0u), 0u);
+  EXPECT_EQ(ctx->area_path_pose_count.count(0u), 0u);
+  EXPECT_EQ(ctx->area_plan_fingerprint.count(0u), 0u);
+  EXPECT_EQ(ctx->cross_hatch.count(0u), 0u);
+  // The dispatch attempt counter (this probe's own SUCCESS) is the ONLY
+  // thing allowed to still be present — reconciliation clears the OLD value
+  // (3) before this dispatch's normal accounting runs, so it lands at 1.
+  EXPECT_EQ(ctx->area_attempt_count[0u], 1u);
+}
+
+// Control: a MATCHING id changes nothing — an already-completed area stays
+// skipped exactly as before this change.
+TEST_F(GetNextUnmowedAreaTest, MatchingIdKeepsAnAlreadyCompletedAreaSkipped)
+{
+  areas[0] = {"done_lawn", /*is_navigation_area=*/false, /*id=*/100};
+  areas[1] = {"pending_lawn", /*is_navigation_area=*/false, /*id=*/101};
+  waitForService();
+  ctx->area_ids[0] = 100;  // same id the fake server still reports
+  ctx->completed_areas.insert(0u);
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->current_area, 1) << "area 0 must still be skipped as complete";
+  EXPECT_GT(ctx->completed_areas.count(0u), 0u);
+}
+
+// Control: the FIRST probe of an index this process has never seen before
+// (no ctx->area_ids entry — e.g. a coverage_resume.txt written before this
+// field existed) must not be treated as a mismatch. completed_areas alone
+// (no recorded id) is trusted exactly as before this change.
+TEST_F(GetNextUnmowedAreaTest, NoRecordedIdMeansNoReconciliationOnFirstProbe)
+{
+  areas[0] = {"done_lawn", /*is_navigation_area=*/false, /*id=*/100};
+  areas[1] = {"pending_lawn", /*is_navigation_area=*/false, /*id=*/101};
+  waitForService();
+  ctx->completed_areas.insert(0u);  // no ctx->area_ids[0] recorded
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->current_area, 1) << "an unrecorded id must not itself trigger reconciliation";
+  EXPECT_GT(ctx->completed_areas.count(0u), 0u);
+  EXPECT_EQ(ctx->area_ids[0u], 100u) << "the probe still records the id going forward";
 }
 
 // ---------------------------------------------------------------------------

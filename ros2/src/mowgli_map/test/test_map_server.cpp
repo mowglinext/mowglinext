@@ -15,6 +15,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -255,17 +256,32 @@ protected:
     return p;
   }
 
+  // id=0 (default) mints a fresh one, matching every pre-#637 call site
+  // below; pass a non-zero value to exercise the round-trip-preserve path
+  // (mowglinext#637).
   bool add_area(const std::string& name,
                 const geometry_msgs::msg::Polygon& poly,
-                bool is_navigation)
+                bool is_navigation,
+                uint32_t id = 0)
   {
     auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
     req->area.name = name;
     req->area.area = poly;
     req->is_navigation_area = is_navigation;
+    req->area.id = id;
     auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
     node_->add_area_for_test(req, res);
     return res->success;
+  }
+
+  // Fetch a single area's response (name/geometry/id/...) by index.
+  mowgli_interfaces::srv::GetMowingArea::Response::SharedPtr get_area(uint32_t index)
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+    req->index = index;
+    auto res = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Response>();
+    node_->get_mowing_area_for_test(req, res);
+    return res;
   }
 
   std::shared_ptr<mowgli_map::MapServerNode> node_;
@@ -359,6 +375,131 @@ TEST_F(AreaTypeTest, NavigationAreaSurvivesSaveLoadRoundTrip)
   ASSERT_TRUE(res1->success);
   EXPECT_EQ(res1->area.name, "nav_corridor");
   EXPECT_TRUE(res1->area.is_navigation_area) << "navigation flag lost across save/load round trip";
+
+  std::remove(tmp_path.c_str());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stable per-area id (mowglinext#637). The positional index GetMowingArea/
+// StartInArea use is fragile — the GUI's edit/delete flow rebuilds the WHOLE
+// area list (clear_map + add_area per area) on any single-area change, which
+// can reassign every index at once. This id is meant to survive that.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_F(AreaTypeTest, NewAreaGetsANonZeroId)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-2, -2, 2, 2), /*is_navigation=*/false));
+  EXPECT_NE(get_area(0)->area.id, 0u)
+      << "a freshly added area must never keep the msg default id=0";
+}
+
+TEST_F(AreaTypeTest, TwoNewAreasGetDistinctIds)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 0, 0), /*is_navigation=*/false));
+  ASSERT_TRUE(add_area("nav", make_rect(0, 0, 3, 3), /*is_navigation=*/true));
+  const uint32_t id0 = get_area(0)->area.id;
+  const uint32_t id1 = get_area(1)->area.id;
+  EXPECT_NE(id0, 0u);
+  EXPECT_NE(id1, 0u);
+  EXPECT_NE(id0, id1) << "two areas added in the same session must not share an id";
+}
+
+TEST_F(AreaTypeTest, AreaIdSurvivesSaveLoadRoundTrip)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-2, -2, 2, 2), /*is_navigation=*/false));
+  const uint32_t id_before = get_area(0)->area.id;
+  ASSERT_NE(id_before, 0u);
+
+  const std::string tmp_path =
+      std::string(std::getenv("TEST_TMPDIR") ? std::getenv("TEST_TMPDIR") : "/tmp") +
+      "/mowgli_areas_id_roundtrip.dat";
+  node_->save_areas_for_test(tmp_path);
+  node_->load_areas_for_test(tmp_path);
+
+  EXPECT_EQ(get_area(0)->area.id, id_before) << "id must not change across a save/load round trip";
+  std::remove(tmp_path.c_str());
+}
+
+TEST_F(AreaTypeTest, ReAddingAnAreaWithAnExplicitIdPreservesIt)
+{
+  // Simulates the GUI's edit/delete flow: clear_map, then re-add every area
+  // in whatever order the client holds them, round-tripping each one's
+  // existing id so an edit to ONE area does not disturb the others'.
+  constexpr uint32_t kPreservedId = 4242;
+  ASSERT_TRUE(add_area("lawn", make_rect(-2, -2, 2, 2), /*is_navigation=*/false, kPreservedId));
+  EXPECT_EQ(get_area(0)->area.id, kPreservedId)
+      << "a caller-supplied id must be honored, not silently overwritten by a fresh mint";
+}
+
+TEST_F(AreaTypeTest, PreservingAHighIdAdvancesTheCounterPastIt)
+{
+  // Round-trip an id far above whatever this fresh node's counter starts
+  // at, then add a genuinely NEW area (id left 0) in the same session — it
+  // must not collide with the preserved one.
+  constexpr uint32_t kPreservedId = 999;
+  ASSERT_TRUE(
+      add_area("preserved", make_rect(-3, -3, 0, 0), /*is_navigation=*/false, kPreservedId));
+  ASSERT_TRUE(add_area("fresh", make_rect(0, 0, 3, 3), /*is_navigation=*/false));
+
+  EXPECT_EQ(get_area(0)->area.id, kPreservedId);
+  const uint32_t fresh_id = get_area(1)->area.id;
+  EXPECT_NE(fresh_id, 0u);
+  EXPECT_NE(fresh_id, kPreservedId)
+      << "a freshly minted id collided with a round-tripped one — next_area_id_ did not advance";
+}
+
+TEST_F(AreaTypeTest, LegacyAreasFileWithoutIdsGetsIdsAssignedAndReSaved)
+{
+  // Exactly the pre-#637 on-disk format — no area_N_id / next_area_id
+  // lines, mirroring LegacyAreasFileWithoutObstacleIdentityStillLoads
+  // (DigProposalTest) for the analogous #502 obstacle-identity migration.
+  const std::string tmp_path =
+      std::string(std::getenv("TEST_TMPDIR") ? std::getenv("TEST_TMPDIR") : "/tmp") +
+      "/mowgli_areas_legacy_no_id.dat";
+  {
+    std::ofstream out(tmp_path);
+    out << "# Mowgli ROS2 - Persisted areas and docking point\n\n";
+    out << "area_count: 2\n\n";
+    out << "area_0_name: lawn\n";
+    out << "area_0_polygon: -3,-3;3,-3;3,3;-3,3\n";
+    out << "area_0_is_navigation: 0\n";
+    out << "area_0_obstacle_count: 0\n\n";
+    out << "area_1_name: corridor\n";
+    out << "area_1_polygon: -1,-1;1,-1;1,1;-1,1\n";
+    out << "area_1_is_navigation: 1\n";
+    out << "area_1_obstacle_count: 0\n\n";
+  }
+
+  node_->load_areas_for_test(tmp_path);
+
+  const uint32_t id0 = get_area(0)->area.id;
+  const uint32_t id1 = get_area(1)->area.id;
+  EXPECT_NE(id0, 0u) << "a legacy area with no id line must still end up with a real one";
+  EXPECT_NE(id1, 0u);
+  EXPECT_NE(id0, id1);
+
+  // The migration must have re-saved the file — a second, independent load
+  // (a fresh node, exactly what happens across a real container restart)
+  // must see the SAME ids, not a fresh mint every time, which would defeat
+  // the whole point: an external caller that cached id0 would silently
+  // start pointing at a different area after the robot restarts.
+  rclcpp::NodeOptions opts2;
+  opts2.append_parameter_override("resolution", 0.1);
+  opts2.append_parameter_override("map_size_x", 10.0);
+  opts2.append_parameter_override("map_size_y", 10.0);
+  opts2.append_parameter_override("map_frame", "map");
+  opts2.append_parameter_override("tool_width", 0.2);
+  opts2.append_parameter_override("map_file_path", "");
+  opts2.append_parameter_override("areas_file_path", "");
+  opts2.append_parameter_override("publish_rate", 1.0);
+  auto node2 = std::make_shared<mowgli_map::MapServerNode>(opts2);
+  node2->load_areas_for_test(tmp_path);
+  auto req0 = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+  req0->index = 0;
+  auto res0 = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Response>();
+  node2->get_mowing_area_for_test(req0, res0);
+  ASSERT_TRUE(res0->success);
+  EXPECT_EQ(res0->area.id, id0) << "areas.dat was not actually re-saved with the assigned id";
 
   std::remove(tmp_path.c_str());
 }

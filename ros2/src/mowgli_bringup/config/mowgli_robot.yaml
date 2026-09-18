@@ -671,6 +671,15 @@ mowgli:
     # would trip on noise. ~20° still catches a dead/stale COG feed.
     dock_calib_cog_bearing_match_max_rad: 0.35
     dock_calib_min_baseline_displacement_m: 0.5      # (d) min reverse displacement for a fit
+    # Pre-reverse dock-position capture (mowglinext#446): averaged over recent
+    # RTK-Fixed /gps/fix samples while still confirmed on the dock, BEFORE the
+    # reverse leg starts — the same technique map_server_node's own
+    # dock_set_gps_avg_window_s/_min_samples uses for the live on-dock GUI
+    # capture, relocated here so the average isn't contaminated by the
+    # reverse leg's own motion by the time it gets persisted. Same defaults
+    # as map_server_node's, kept independently tunable.
+    dock_calib_position_avg_window_s: 12.0
+    dock_calib_position_avg_min_samples: 10
 
     # -----------------------------------------------------------------
     # Rain

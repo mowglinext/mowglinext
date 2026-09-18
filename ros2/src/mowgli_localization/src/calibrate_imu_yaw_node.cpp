@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -44,6 +45,7 @@
 #include "mowgli_interfaces/srv/calibrate_imu_yaw.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/set_docking_point.hpp"
+#include "mowgli_interfaces/wgs84_projection.hpp"
 #include "mowgli_localization/dock_cog_gate.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/callback_group.hpp"
@@ -53,6 +55,8 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/magnetic_field.hpp"
+#include "sensor_msgs/msg/nav_sat_fix.hpp"
+#include "sensor_msgs/msg/nav_sat_status.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include <yaml-cpp/yaml.h>
 
@@ -293,6 +297,19 @@ public:
     dc_min_baseline_disp_m_ =
         declare_parameter<double>("dock_calib_min_baseline_displacement_m", 0.5);
 
+    // Datum for projecting raw /gps/fix WGS84 samples into map-frame ENU —
+    // see raw_gps_fix_cb()/wait_for_dock_position() below (mowglinext#446).
+    datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
+    datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
+    // Pre-reverse dock-position capture window — same defaults as
+    // map_server_node's dock_set_gps_avg_window_s/_min_samples (the same
+    // averaging technique, relocated here so it runs BEFORE the reverse leg
+    // instead of after; see wait_for_dock_position()).
+    dc_dock_position_avg_window_s_ =
+        declare_parameter<double>("dock_calib_position_avg_window_s", 12.0);
+    dc_dock_position_avg_min_samples_ =
+        static_cast<size_t>(declare_parameter<int>("dock_calib_position_avg_min_samples", 10));
+
     // COG body-heading feed (already lever-arm-corrected + reverse-aware —
     // Resolution A: consume as-is, NO +pi). Sampled only while the reverse
     // leg is active (collecting_cog_).
@@ -395,6 +412,88 @@ private:
     gps_have_ = true;
   }
 
+  // RTK-Fixed-only, RAW (yaw-independent) antenna position — mirrors
+  // map_server_node's recent_gps_antenna_enu_ exactly (mowglinext#446):
+  // averaging the already lever-arm-corrected /gps/absolute_pose (gps_cb
+  // above) would apply that correction with whatever the fused yaw is at
+  // each sample, silently biasing the average by a stale/wrong stored
+  // dock_pose_yaw — precisely the circularity this whole calibration exists
+  // to break. Feeds wait_for_dock_position()'s pre-reverse capture, NOT the
+  // reverse-displacement tracking in run_dock_calibration_core (that stays
+  // on the cheaper single-sample latest_gps_x_/y_, since it only needs a
+  // relative distance, not an absolute position).
+  void raw_gps_fix_cb(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
+  {
+    if (msg->status.status < sensor_msgs::msg::NavSatStatus::STATUS_GBAS_FIX)
+      return;
+    double east = 0.0;
+    double north = 0.0;
+    mowgli_interfaces::wgs84::ToEnu(
+        msg->latitude, msg->longitude, datum_lat_, datum_lon_, east, north);
+    const rclcpp::Time t = now();
+    std::lock_guard<std::mutex> lk(dock_antenna_lock_);
+    recent_dock_antenna_enu_.emplace_back(t, east, north);
+    while (!recent_dock_antenna_enu_.empty() &&
+           (t - std::get<0>(recent_dock_antenna_enu_.front())).seconds() >
+               dc_dock_position_avg_window_s_)
+    {
+      recent_dock_antenna_enu_.pop_front();
+    }
+  }
+
+  // Average the raw RTK-Fixed antenna window into a single (east, north).
+  // persist_dock_via_map_server() sends this frozen snapshot explicitly
+  // (use_gps_position=false) instead of letting map_server average its OWN
+  // live window at persist time — by then it would be contaminated by the
+  // very reverse leg this snapshot is captured BEFORE (mowglinext#446).
+  bool try_average_dock_position(double& out_east, double& out_north, std::string& err)
+  {
+    std::lock_guard<std::mutex> lk(dock_antenna_lock_);
+    if (recent_dock_antenna_enu_.size() < dc_dock_position_avg_min_samples_)
+    {
+      err = "only " + std::to_string(recent_dock_antenna_enu_.size()) +
+            " RTK-Fixed /gps/fix sample(s) in the last " +
+            std::to_string(static_cast<int>(dc_dock_position_avg_window_s_)) +
+            "s (need >= " + std::to_string(dc_dock_position_avg_min_samples_) + ")";
+      return false;
+    }
+    double east_sum = 0.0;
+    double north_sum = 0.0;
+    for (const auto& [t, e, n] : recent_dock_antenna_enu_)
+    {
+      (void)t;
+      east_sum += e;
+      north_sum += n;
+    }
+    const double count = static_cast<double>(recent_dock_antenna_enu_.size());
+    out_east = east_sum / count;
+    out_north = north_sum / count;
+    return true;
+  }
+
+  // Poll try_average_dock_position() until it succeeds or timeout_sec
+  // elapses, checking cancel/emergency between polls. Called BEFORE the
+  // reverse leg — the robot is stationary throughout this wait.
+  bool wait_for_dock_position(double& out_east,
+                              double& out_north,
+                              std::string& err,
+                              double timeout_sec,
+                              const std::function<bool()>& is_canceled)
+  {
+    const double deadline = monotonic() + timeout_sec;
+    while (rclcpp::ok())
+    {
+      if (is_canceled() || emergency_active_)
+        return false;
+      if (try_average_dock_position(out_east, out_north, err))
+        return true;
+      if (monotonic() >= deadline)
+        return false;
+      sleep_for(1.0 / CMD_RATE_HZ);
+    }
+    return false;
+  }
+
   void activate_sensor_subs()
   {
     if (imu_sub_)
@@ -433,6 +532,23 @@ private:
           odom_cb(msg);
         },
         sub_opts);
+    // Raw antenna position for the pre-reverse dock-position capture
+    // (mowglinext#446) — see raw_gps_fix_cb()'s doc comment for why this is
+    // separate from gps_sub_/gps_cb() above. Cleared alongside the other
+    // per-run sensor subs on deactivate so a stale window from a previous
+    // run never leaks into the next one.
+    {
+      std::lock_guard<std::mutex> lk(dock_antenna_lock_);
+      recent_dock_antenna_enu_.clear();
+    }
+    raw_gps_fix_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
+        "/gps/fix",
+        rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
+        {
+          raw_gps_fix_cb(msg);
+        },
+        sub_opts);
   }
 
   void deactivate_sensor_subs()
@@ -441,6 +557,7 @@ private:
     mag_sub_.reset();
     gps_sub_.reset();
     odom_sub_.reset();
+    raw_gps_fix_sub_.reset();
   }
 
   // ── Drive primitives ────────────────────────────────────────────────
@@ -1147,7 +1264,7 @@ private:
     res->message = "Dock calibration started — watch ~/dock_calibration/status.";
   }
 
-  bool persist_dock_via_map_server(double yaw_rad, std::string& err)
+  bool persist_dock_via_map_server(double yaw_rad, double east, double north, std::string& err)
   {
     if (!set_dock_client_->wait_for_service(std::chrono::seconds(3)))
     {
@@ -1155,7 +1272,18 @@ private:
       return false;
     }
     auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
-    req->use_gps_position = true;  // average on-dock GPS for x/y (independent of fusion)
+    // Position captured BEFORE reversing (averaged RTK-Fixed antenna window
+    // — see wait_for_dock_position() above), NOT map_server's own live
+    // average: by the time this call fires the robot has already reversed
+    // off the dock, so map_server's use_gps_position=true window would be
+    // contaminated by that motion (mowglinext#446). yaw_source=MOTION +
+    // use_gps_position=false together are the one combination
+    // on_set_docking_point's is_charging gate exempts, precisely because
+    // this position was already captured under verified on-dock conditions.
+    req->use_gps_position = false;
+    req->docking_pose.position.x = east;
+    req->docking_pose.position.y = north;
+    req->docking_pose.position.z = 0.0;
     req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
     req->yaw_rad = yaw_rad;  // COG-derived chassis heading (Resolution A)
     auto fut = set_dock_client_->async_send_request(req);
@@ -1312,6 +1440,71 @@ private:
                       nullptr);
       }
       need_exit_recording = true;
+    }
+
+    // ── (2b) Capture the dock POSITION now, averaged over recent RTK-Fixed
+    //    /gps/fix samples, while still confirmed on the dock — BEFORE
+    //    reversing (mowglinext#446). persist_dock_via_map_server() sends
+    //    this frozen snapshot explicitly; letting map_server average its
+    //    OWN live window at persist time (the old use_gps_position=true
+    //    path) would blend in this very reverse leg's motion by then. Abort
+    //    here — rather than reverse, measure yaw, and fail at persist
+    //    anyway — if a solid position can't be established: continuing has
+    //    no point.
+    if (!is_charging_)
+    {
+      return finish(false,
+                    CalibrateDock::Result::RETRY_WRONG_STATE,
+                    "Robot left the dock before the position could be captured. Dock it, "
+                    "then retry.",
+                    false,
+                    nullptr,
+                    nullptr);
+    }
+    double dock_east = 0.0;
+    double dock_north = 0.0;
+    {
+      // No dedicated phase code for this step (kept off the .action schema —
+      // see mowglinext#446/#621's "no codegen needed" discipline); reusing
+      // PHASE_WAIT_RTK's number here is a display nicety only, `message` is
+      // what the GUI actually shows underneath (DockCalibrationCard.tsx).
+      publish_status(DockStatus::PHASE_WAIT_RTK,
+                     0.25f,
+                     0.0f,
+                     true,
+                     false,
+                     0,
+                     "averaging dock position (on dock)");
+      std::string perr;
+      if (!wait_for_dock_position(
+              dock_east, dock_north, perr, dc_dock_position_avg_window_s_, is_canceled))
+      {
+        if (is_canceled())
+        {
+          return finish(false,
+                        CalibrateDock::Result::RETRY_WRONG_STATE,
+                        "Canceled while capturing the dock position.",
+                        true,
+                        nullptr,
+                        nullptr);
+        }
+        if (emergency_active_)
+        {
+          return finish(false,
+                        CalibrateDock::Result::RETRY_EMERGENCY,
+                        "Emergency while capturing the dock position.",
+                        false,
+                        nullptr,
+                        nullptr);
+        }
+        return finish(false,
+                      CalibrateDock::Result::RETRY_NO_RTK,
+                      "Could not establish an averaged dock position before reversing (" + perr +
+                          "). Wait for a steadier RTK-Fixed signal, then retry.",
+                      false,
+                      nullptr,
+                      nullptr);
+      }
     }
 
     // ── (3) Straight reverse, collecting COG (+ IMU/odom accel if folding) ──
@@ -1472,7 +1665,7 @@ private:
         }
         if (is_canceled() || emergency_active_)
           break;
-        if (persist_dock_via_map_server(gate.dock_yaw_rad, perr))
+        if (persist_dock_via_map_server(gate.dock_yaw_rad, dock_east, dock_north, perr))
         {
           persisted = true;
           break;
@@ -2327,6 +2520,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr mag_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr raw_gps_fix_sub_;
   rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedPtr hlc_client_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
   rclcpp::Service<mowgli_interfaces::srv::CalibrateImuYaw>::SharedPtr srv_;
@@ -2341,6 +2535,17 @@ private:
   double dc_cog_std_max_rad_{0.0524};
   double dc_cog_bearing_match_max_rad_{0.1047};
   double dc_min_baseline_disp_m_{0.5};
+
+  // Datum for raw_gps_fix_cb()'s WGS84->ENU projection (mowglinext#446).
+  double datum_lat_{0.0};
+  double datum_lon_{0.0};
+
+  // Pre-reverse dock-position capture (mowglinext#446) — see
+  // raw_gps_fix_cb()/try_average_dock_position()/wait_for_dock_position().
+  double dc_dock_position_avg_window_s_{12.0};
+  size_t dc_dock_position_avg_min_samples_{10};
+  std::mutex dock_antenna_lock_;
+  std::deque<std::tuple<rclcpp::Time, double, double>> recent_dock_antenna_enu_;
 
   std::mutex cog_lock_;
   std::vector<double> cog_samples_;

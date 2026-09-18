@@ -31,13 +31,16 @@ namespace mower_msgs
       typedef mower_msgs::MapObstacleInfo _obstacle_info_type;
       _obstacle_info_type st_obstacle_info;
       _obstacle_info_type * obstacle_info;
+      typedef uint32_t _id_type;
+      _id_type id;
 
     MapArea():
       name(""),
       area(),
       obstacles_length(0), st_obstacles(), obstacles(nullptr),
       is_navigation_area(0),
-      obstacle_info_length(0), st_obstacle_info(), obstacle_info(nullptr)
+      obstacle_info_length(0), st_obstacle_info(), obstacle_info(nullptr),
+      id(0)
     {
     }
 
@@ -73,6 +76,16 @@ namespace mower_msgs
       for( uint32_t i = 0; i < obstacle_info_length; i++){
         offset += this->obstacle_info[i].serialize(outbuffer + offset);
       }
+      union {
+        uint32_t real;
+        uint32_t base;
+      } u_id;
+      u_id.real = this->id;
+      *(outbuffer + offset + 0) = (u_id.base >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (u_id.base >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (u_id.base >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (u_id.base >> (8 * 3)) & 0xFF;
+      offset += sizeof(this->id);
       return offset;
     }
 
@@ -119,11 +132,22 @@ namespace mower_msgs
       for( uint32_t i = 0; i < obstacle_info_length; i++){
         offset += this->obstacle_info[i].deserialize(inbuffer + offset);
       }
+      union {
+        uint32_t real;
+        uint32_t base;
+      } u_id;
+      u_id.base = 0;
+      u_id.base |= ((uint32_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      u_id.base |= ((uint32_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      u_id.base |= ((uint32_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      u_id.base |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      this->id = u_id.real;
+      offset += sizeof(this->id);
      return offset;
     }
 
     virtual const char * getType() override { return "mower_msgs/MapArea"; };
-    virtual const char * getMD5() override { return "4056a28cabd849eb7f1a46e4686e606d"; };
+    virtual const char * getMD5() override { return "0533bb4ff38770d7a9a3de27c20b1761"; };
 
   };
 

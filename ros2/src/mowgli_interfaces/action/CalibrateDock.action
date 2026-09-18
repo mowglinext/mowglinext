@@ -6,22 +6,28 @@
 # the map_server /set_docking_point "capture from robot" button):
 #
 #   1. Wait for RTK-Fixed (σ(xy) gate on /gps/pose_cov).
-#   2. Reverse in a STRAIGHT line under RTK-Fixed on /cmd_vel_docking
+#   2. Capture the dock POSITION now, averaged over a short window of
+#      RTK-Fixed /gps/fix samples, while still confirmed on the dock — BEFORE
+#      reversing (mowglinext#446). Aborts here if this can't be established;
+#      there is no point reversing and measuring yaw for nothing.
+#   3. Reverse in a STRAIGHT line under RTK-Fixed on /cmd_vel_docking
 #      (blade OFF, collision_monitor active), monitoring COG.
-#   3. Gate COG coherence (circular std + bearing match + min displacement);
+#   4. Gate COG coherence (circular std + bearing match + min displacement);
 #      derive the dock chassis yaw from the reverse leg.
-#   4. Persist the dock pose via map_server /set_docking_point (the single
-#      canonical writer): averaged GPS x/y + the motion-derived yaw.
-#   5. Drive FORWARD along the same line as a live CONFIRMATION pass, until
+#   5. Persist the dock pose via map_server /set_docking_point (the single
+#      canonical writer): the position frozen in step 2 + the motion-derived
+#      yaw from step 4 — NOT map_server's own live GPS average, which by now
+#      would be contaminated by step 3's reverse leg.
+#   6. Drive FORWARD along the same line as a live CONFIRMATION pass, until
 #      the firmware reports charging (re-dock), or fail.
 #
-# The dock pose is persisted as soon as step 3's coherence gate passes, NOT
-# after step 5. It used to be the other way round, but docking_server and
+# The dock pose is persisted as soon as step 4's coherence gate passes, NOT
+# after step 6. It used to be the other way round, but docking_server and
 # gps_dock_detection_node only read dock_pose_x/y/yaw as ROS parameters at
-# container startup — a same-session step-5 re-dock always steers on the OLD
+# container startup — a same-session step-6 re-dock always steers on the OLD
 # heading no matter when the write happens, so deferring it just discarded a
 # good measurement whenever the old heading was too far off for that live
-# approach to land. Step 5 failing does not mean the pose was not saved —
+# approach to land. Step 6 failing does not mean the pose was not saved —
 # check `message` / `retry_reason`; RETRY_NO_CHARGE_ON_REDOCK means it WAS
 # saved but needs a mowgli-ros2 restart before the live approach reflects it.
 

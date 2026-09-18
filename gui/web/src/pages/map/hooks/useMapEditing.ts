@@ -98,6 +98,35 @@ export function inside(
 }
 
 /**
+ * Pick the best parent for an obstacle ring among candidate mowing areas:
+ * every area whose polygon contains it (per `inside`), preferring the
+ * SMALLEST (most specific) one. Two areas that touch or slightly overlap at
+ * a shared edge (e.g. the result of splitting one area in two) can both
+ * legitimately contain the same point — silently taking "whichever area
+ * happens first in iteration order" (the previous behaviour at every call
+ * site below) mis-parents the obstacle with no warning: it still renders at
+ * its real coordinates, so it visually looks correct sitting inside the
+ * OTHER area, while map_server records it under this one. Returns undefined
+ * when no candidate contains the ring.
+ */
+export function findContainingArea(
+    ringCoordinates: Position[], candidates: MowingAreaFeature[]
+): MowingAreaFeature | undefined {
+    let best: MowingAreaFeature | undefined;
+    let bestSize = Infinity;
+    for (const candidate of candidates) {
+        const areaCoordinates = candidate.geometry.coordinates[0];
+        if (!areaCoordinates || !inside(ringCoordinates, areaCoordinates)) continue;
+        const size = Math.abs(turfArea(candidate));
+        if (size < bestSize) {
+            bestSize = size;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+/**
  * Returns a new unique ID for a feature of the given `type` / `component`.
  * Pass `index` to pin the area slot; pass `null` to auto-detect the next slot.
  */
@@ -308,6 +337,9 @@ export function useMapEditing({
                 centroidPt.properties.title =
                     feature.getLabel() + `\n${areaLabel}`;
                 centroidPt.properties.index = feature.properties.source_working_area_index;
+                // Stable id (mowglinext#637) — see MowingFeatureBase.properties
+                // in types/map.ts for why callers should prefer this over index.
+                centroidPt.properties.id = feature.properties.source_working_area_id;
             }
             centroidPt.id = feature.id;
             return [centroidPt];
@@ -352,18 +384,17 @@ export function useMapEditing({
                 const currentLayerCoordinates = (
                     currentFeature as Feature<Polygon>
                 ).geometry.coordinates[0];
-                const area = Object.values<MowingFeature>(features).find((f) => {
-                    if (!(f instanceof MowingAreaFeature)) return false;
-                    const areaCoordinates = f.geometry.coordinates[0];
-                    return inside(currentLayerCoordinates, areaCoordinates);
-                });
+                const candidates = Object.values<MowingFeature>(features).filter(
+                    (f): f is MowingAreaFeature => f instanceof MowingAreaFeature
+                );
+                const area = findContainingArea(currentLayerCoordinates, candidates);
                 if (!area) {
                     notification.info({
                         message: t('mapEditing.unableToMatchAreaForObstacle'),
                     });
                     return null;
                 }
-                return new ObstacleFeature(id, area as MowingAreaFeature);
+                return new ObstacleFeature(id, area);
             },
             new_feature
         );
@@ -523,12 +554,15 @@ export function useMapEditing({
                             break;
                         case "obstacle": {
                             type = "area";
-                            const parentArea = Object.values<MowingFeature>(
+                            const candidates = Object.values<MowingFeature>(
                                 next
-                            ).find(
+                            ).filter(
                                 (f): f is MowingAreaFeature =>
                                     f instanceof MowingAreaFeature
                             );
+                            // The new fragment gets geomB (below) — parent it by
+                            // where THAT half actually sits, not just any area.
+                            const parentArea = findContainingArea(polyBCoords, candidates);
                             if (!parentArea) {
                                 notification.error({
                                     message: t('mapEditing.noParentAreaForObstacleSplit'),
@@ -554,6 +588,34 @@ export function useMapEditing({
                         newFeat.setGeometry(geomB);
                         next[newId] = newFeat;
                         sortFeatures(next);
+                    }
+
+                    // Splitting a WORKAREA in two leaves every obstacle that
+                    // belonged to it still pointing at the same object
+                    // reference (origFeat, now holding geomA) — nothing above
+                    // re-evaluates which half an obstacle's actual coordinates
+                    // now fall in. An obstacle that geometrically ends up in
+                    // the new half (geomB) would silently stay recorded under
+                    // the OLD half: it still renders at its real coordinates,
+                    // so it visually looks correctly placed while map_server
+                    // persists it under the wrong area. Re-parent every
+                    // formerly-attached obstacle by where it actually sits now.
+                    if (areaType === "workarea" && origFeat instanceof MowingAreaFeature &&
+                        newFeat instanceof MowingAreaFeature) {
+                        const halves = [origFeat, newFeat];
+                        for (const feat of Object.values(next)) {
+                            if (!(feat instanceof ObstacleFeature)) continue;
+                            if (feat.getMowingArea() !== origFeat) continue;
+                            const obstacleRing = feat.geometry.coordinates[0] ?? [];
+                            const winner = findContainingArea(obstacleRing, halves);
+                            // No match (e.g. the cut line ran through the
+                            // obstacle itself) → leave it on the original half
+                            // rather than guess; that is the pre-split status
+                            // quo, not a new misattribution.
+                            if (winner) {
+                                feat.mowing_area = winner;
+                            }
+                        }
                     }
 
                     return next;
@@ -681,16 +743,12 @@ export function useMapEditing({
                         type = "area";
                         const currentLayerCoordinates =
                             mergedFeature.geometry.coordinates[0];
-                        const area = Object.values<MowingFeature>(
+                        const candidates = Object.values<MowingFeature>(
                             newFeatures
-                        ).find((f) => {
-                            if (!(f instanceof MowingAreaFeature)) return false;
-                            const areaCoordinates = f.geometry.coordinates[0];
-                            return inside(
-                                currentLayerCoordinates,
-                                areaCoordinates
-                            );
-                        });
+                        ).filter(
+                            (f): f is MowingAreaFeature => f instanceof MowingAreaFeature
+                        );
+                        const area = findContainingArea(currentLayerCoordinates, candidates);
                         if (!area) {
                             notification.info({
                                 message: t('mapEditing.unableToMatchAreaForObstacle'),
@@ -698,7 +756,7 @@ export function useMapEditing({
                             return features; // revert
                         }
                         constructFn = (id) =>
-                            new ObstacleFeature(id, area as MowingAreaFeature);
+                            new ObstacleFeature(id, area);
                         break;
                     }
                     default:
@@ -1067,10 +1125,11 @@ export function useMapEditing({
                     replacement.setGeometry(geometry);
                     break;
                 case "obstacle": {
-                    const parentArea = Object.values(newFeatures).find(
+                    const candidates = Object.values(newFeatures).filter(
                         (f): f is MowingAreaFeature =>
                             f instanceof MowingAreaFeature
                     );
+                    const parentArea = findContainingArea(geometry.coordinates[0] ?? [], candidates);
                     if (!parentArea) return;
                     replacement = new ObstacleFeature(newId, parentArea);
                     replacement.setGeometry(geometry);

@@ -358,6 +358,14 @@ private:
     geometry_msgs::msg::Polygon polygon;
     std::vector<ObstacleEntry> obstacles;
     bool is_navigation_area{false};
+    /// Stable, persistent identifier (mowglinext#637) — see MapArea.msg's
+    /// `id` field doc comment for the full contract. 0 only transiently,
+    /// in-memory, before this entry is first saved; NEVER the same thing
+    /// as this entry's position in `areas_` (that shifts on any rebuild,
+    /// this does not). Unlike ObstacleEntry::id above, this one is
+    /// PERSISTED and must stay stable across a restart — see
+    /// next_area_id_'s doc comment for how it survives one.
+    uint32_t id{0};
   };
 
   // ── ROS callbacks ────────────────────────────────────────────────────────
@@ -847,6 +855,16 @@ private:
   /// Any cell inside ANY area polygon is free in the keepout mask;
   /// everything outside is lethal.
   std::vector<AreaEntry> areas_;
+
+  /// Next id to mint for a new area (mowglinext#637). UNLIKE
+  /// next_obstacle_id_ below, this one is PERSISTED (areas.dat's
+  /// `next_area_id:` line) and must survive a restart — recovered on load
+  /// as max(loaded area ids) + 1, mirroring obstacle_tracker_node's own
+  /// next_id_ recovery pattern for its (also-persisted) tracked-obstacle
+  /// ids. Never reset by ~/clear_map: an id must never be reused for a
+  /// different area, even across a clear, in case something external
+  /// still holds a reference to the old one.
+  uint32_t next_area_id_{1};
 
   /// Obstacle polygons: regions within the allowed areas that are off-limits
   /// (trees, flower beds, etc.). Marked as lethal in the keepout mask.

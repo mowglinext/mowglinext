@@ -1677,22 +1677,15 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
                 current_area_idx_);
   }
 
-  // Skip any area that has already burned its attempt budget this
-  // session (BTContext::kMaxAreaAttempts dispatches of PlanCoverageArea
-  // + FollowStrip). An area is added to attempted_areas only after
-  // either completing successfully (strips_remaining == 0) or
-  // exhausting its budget — so a single boundary-recovery preemption
-  // does NOT permanently disable the area. attempted_areas is cleared
-  // by EndSession at session end.
-  while (current_area_idx_ < max_areas_ && (ctx->attempted_areas.count(current_area_idx_) > 0 ||
-                                            ctx->completed_areas.count(current_area_idx_) > 0))
-  {
-    RCLCPP_INFO(ctx->node->get_logger(),
-                "GetNextUnmowedArea: area %u already %s this session, skipping",
-                current_area_idx_,
-                ctx->completed_areas.count(current_area_idx_) > 0 ? "completed" : "attempted");
-    current_area_idx_++;
-  }
+  // Completed/attempted/nav-only skipping happens AFTER each probe
+  // (processResponse), never before it. mowglinext#637 phase 2: a
+  // synchronous pre-filter would skip an index on the strength of
+  // completed_areas/attempted_areas alone, without ever confirming the area
+  // now AT that index is still the one that state describes — and the GUI's
+  // area edit/delete flow can shift index→area identity live, mid-session
+  // (area_manager.cpp on_add_area), not only across a restart. Every probe
+  // response is reconciled by id first (see processResponse), so the skip
+  // decision below is always made against a freshly-verified area.
   if (current_area_idx_ >= max_areas_)
   {
     if (ctx->single_area_target.has_value())
@@ -1766,18 +1759,14 @@ BT::NodeStatus GetNextUnmowedArea::onRunning()
   return processResponse();
 }
 
-// Advance current_area_idx_ past any already-completed/attempted areas and
-// fire the next existence probe. Returns RUNNING (probe in flight) or FAILURE
-// (no candidate area remains).
+// Advance current_area_idx_ to the next index and fire its existence probe.
+// Returns RUNNING (probe in flight) or FAILURE (no candidate area remains).
+// Completed/attempted skipping is decided in processResponse, per-probe, not
+// here — see the mowglinext#637 phase 2 note in onStart().
 BT::NodeStatus GetNextUnmowedArea::advanceAndProbe()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   current_area_idx_++;
-  while (current_area_idx_ < max_areas_ && (ctx->attempted_areas.count(current_area_idx_) > 0 ||
-                                            ctx->completed_areas.count(current_area_idx_) > 0))
-  {
-    current_area_idx_++;
-  }
   if (current_area_idx_ >= max_areas_)
   {
     RCLCPP_INFO(ctx->node->get_logger(),
@@ -1827,6 +1816,45 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
 
   areas_queried_++;
 
+  // mowglinext#637 phase 2: reconcile this index's identity against the id
+  // last observed for it (loaded from disk at boot, or recorded by an
+  // earlier probe this session — see ctx->area_ids). The GUI's area
+  // edit/delete flow rebuilds the WHOLE area list (map_server's on_add_area,
+  // area_manager.cpp: clear_map + one add_area per surviving area), which
+  // can shift what area a given index refers to, live and mid-session, not
+  // only across a restart. Every per-index map below is keyed by index, so
+  // trusting it without this check would either silently skip a genuinely
+  // unmowed area (it inherited the old occupant's "completed" flag) or hand
+  // it the old occupant's swath/cross-hatch history. A mismatch — or the
+  // first time this index has ever been probed — just resets this slot's
+  // per-index state to "never seen": at worst that re-verifies or re-mows an
+  // area, it never causes one to be skipped or misattributed.
+  if (const auto it = ctx->area_ids.find(current_area_idx_);
+      it != ctx->area_ids.end() && it->second != response->area.id)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "GetNextUnmowedArea: area index %u now refers to a different area "
+                "(id %u -> %u) — the area list changed since this progress was recorded; "
+                "discarding stale per-index state for this index",
+                current_area_idx_,
+                it->second,
+                response->area.id);
+    ctx->completed_areas.erase(current_area_idx_);
+    ctx->attempted_areas.erase(current_area_idx_);
+    ctx->area_completed_swaths.erase(current_area_idx_);
+    ctx->area_resume_pose_index.erase(current_area_idx_);
+    ctx->area_path_pose_count.erase(current_area_idx_);
+    ctx->area_plan_fingerprint.erase(current_area_idx_);
+    ctx->area_swath_count.erase(current_area_idx_);
+    ctx->cross_hatch.erase(current_area_idx_);
+    ctx->base_orientation_areas.erase(current_area_idx_);
+    ctx->area_attempt_count.erase(current_area_idx_);
+    ctx->area_last_coverage.erase(current_area_idx_);
+    ctx->area_start_blocked_count.erase(current_area_idx_);
+    ctx->area_guard_halt_count.erase(current_area_idx_);
+  }
+  ctx->area_ids[current_area_idx_] = response->area.id;
+
   // Navigation-only areas are transit corridors, NOT mowing targets — they
   // carry is_navigation_area=true and must never be selected for coverage (the
   // blades would run inside a zone the operator marked nav-only). map_server
@@ -1843,10 +1871,22 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     return advanceAndProbe();
   }
 
+  // Skip an area that already burned its attempt budget this session
+  // (BTContext::kMaxAreaAttempts dispatches of PlanCoverageArea + FollowStrip,
+  // or a nav-only classification above). Decided here, per-probe, rather than
+  // by a synchronous pre-filter — see the mowglinext#637 phase 2 note above.
+  // attempted_areas is cleared by EndSession at session end.
+  if (ctx->attempted_areas.count(current_area_idx_) > 0)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "GetNextUnmowedArea: area %u already attempted this session, skipping",
+                current_area_idx_);
+    return advanceAndProbe();
+  }
+
   // Completion is now the swath-completion model: an area is done when
   // FollowStrip has mowed every swath F2C produced for it (recorded in
-  // ctx->completed_areas). The onStart/advance skip-loops already exclude
-  // completed_areas, so reaching here normally means "has remaining work" —
+  // ctx->completed_areas). Reaching here normally means "has remaining work" —
   // but re-check in case it completed between probes. Unlocked (see the
   // context_mutex doc comment in bt_context.hpp): this used to take
   // context_mutex here and release it before calling advanceAndProbe()

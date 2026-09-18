@@ -2264,6 +2264,9 @@ const docTemplate = `{
                 "area": {
                     "$ref": "#/definitions/geometry.Polygon"
                 },
+                "id": {
+                    "type": "integer"
+                },
                 "is_navigation_area": {
                     "type": "boolean"
                 },

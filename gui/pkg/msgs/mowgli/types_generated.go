@@ -167,6 +167,7 @@ type MapArea struct {
 	Obstacles                 []geometry.Polygon             `json:"obstacles"`
 	IsNavigationArea          bool                           `json:"is_navigation_area"`
 	ObstacleInfo              []MapObstacleInfo              `json:"obstacle_info"`
+	Id                        uint32                         `json:"id"`
 }
 
 // MapObstacleInfo matches mowgli_interfaces/msg/MapObstacleInfo.

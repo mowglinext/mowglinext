@@ -33,7 +33,11 @@ namespace
 {
 // Bump when the on-disk layout changes incompatibly; an unrecognised header is
 // treated as "no state" (start fresh) rather than a parse error.
-constexpr const char* kHeader = "mowgli_coverage_resume v2";
+// v3 (mowglinext#637 phase 2): the "area" row gained an `id` column between
+// the index and the pose count. Bumped rather than made optional because an
+// old v2 row parsed against the new column layout would silently read the
+// pose count into the id field and shift every field after it.
+constexpr const char* kHeader = "mowgli_coverage_resume v3";
 // The phase-only snapshot never carries a command or cursor, so it cannot
 // auto-start the mower. Older readers ignore these optional rows.
 void writeCrossHatch(std::ostream& out, const std::map<uint32_t, CrossHatch>& areas)
@@ -126,6 +130,14 @@ bool saveCoverageResumeState(const BTContext& ctx)
     areas.insert(idx);
   for (uint32_t idx : ctx.completed_areas)
     areas.insert(idx);
+  // Also cover an index whose only resume-relevant state is cross-hatch
+  // orientation history (written separately below by writeCrossHatch) — it
+  // has an observed id but none of the maps above, e.g. a crash between
+  // beginCoverageOrientation and the first swath. Folding area_ids in here
+  // guarantees every index we have ever probed this process gets its id
+  // persisted, mowglinext#637 phase 2.
+  for (const auto& [idx, _] : ctx.area_ids)
+    areas.insert(idx);
 
   std::ostringstream out;
   out << kHeader << '\n';
@@ -153,6 +165,13 @@ bool saveCoverageResumeState(const BTContext& ctx)
   out << '\n';
   for (uint32_t idx : areas)
   {
+    // Last-observed stable area id for this index (0 = never probed this
+    // process — e.g. an old completed_areas entry restored from an even
+    // older file). mowglinext#637 phase 2: this is what lets a future load
+    // detect that the area list changed since this row was written.
+    uint32_t id = 0;
+    if (auto it = ctx.area_ids.find(idx); it != ctx.area_ids.end())
+      id = it->second;
     std::size_t pose_count = 0;
     if (auto it = ctx.area_path_pose_count.find(idx); it != ctx.area_path_pose_count.end())
       pose_count = it->second;
@@ -167,7 +186,7 @@ bool saveCoverageResumeState(const BTContext& ctx)
     if (auto it = ctx.area_resume_pose_index.find(idx); it != ctx.area_resume_pose_index.end())
       resume = static_cast<int64_t>(it->second);
 
-    out << "area " << idx << ' ' << pose_count << ' ' << fingerprint << ' ' << resume
+    out << "area " << idx << ' ' << id << ' ' << pose_count << ' ' << fingerprint << ' ' << resume
         << " completed";
     if (auto it = ctx.area_completed_swaths.find(idx); it != ctx.area_completed_swaths.end())
       for (std::size_t s : it->second)
@@ -268,13 +287,22 @@ bool loadCoverageResumeState(BTContext& ctx)
     else if (tag == "area")
     {
       uint32_t idx;
+      uint32_t id;
       std::size_t pose_count;
       uint64_t fingerprint;
       int64_t resume;
       std::string completed_tag;
-      if (!(ls >> idx >> pose_count >> fingerprint >> resume >> completed_tag))
+      if (!(ls >> idx >> id >> pose_count >> fingerprint >> resume >> completed_tag))
       {
         continue;  // malformed row — skip, don't abort the whole load
+      }
+      // mowglinext#637 phase 2: seed the last-observed id so the first probe
+      // of this index this session can detect the area list having changed
+      // since this file was written. 0 = never recorded (leave unset so a
+      // legitimate first probe is not treated as a mismatch against nothing).
+      if (id != 0)
+      {
+        ctx.area_ids[idx] = id;
       }
       ctx.area_path_pose_count[idx] = pose_count;
       if (fingerprint != 0)

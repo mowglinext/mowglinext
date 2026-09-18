@@ -491,6 +491,22 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
   entry.name = req->area.name;
   entry.polygon = polygon_msg;
   entry.is_navigation_area = req->is_navigation_area;
+  // mowglinext#637: preserve a caller-supplied id when re-adding an area
+  // that already had one — the GUI's edit/delete flow rebuilds the WHOLE
+  // area list (clear_map + add_area per area) even when the operator only
+  // touched ONE of them, so round-tripping every untouched area's existing
+  // id here is what keeps its identity stable across that rebuild. A
+  // genuinely new area (id absent, i.e. 0 — the MapArea.msg default for a
+  // request that never set it) gets a freshly minted one instead.
+  entry.id = (req->area.id != 0) ? req->area.id : next_area_id_++;
+  if (entry.id >= next_area_id_)
+  {
+    // A round-tripped id can be >= our current counter (e.g. this session
+    // already minted past it via some other insert before the client's
+    // cached copy was fetched) — advance past it so the NEXT freshly
+    // minted id in this session can never collide with it.
+    next_area_id_ = entry.id + 1;
+  }
 
   // Store obstacle polygons from the MapArea message.
   // Only store in the area entry (static), NOT in obstacle_polygons_
@@ -575,6 +591,7 @@ void MapServerNode::on_get_mowing_area(
     res->area.name = entry.name;
     res->area.area = entry.polygon;
     res->area.is_navigation_area = entry.is_navigation_area;
+    res->area.id = entry.id;  // mowglinext#637 — see MapArea.msg's doc comment
 
     // Start with the area's own obstacles. `obstacle_info` is index-aligned
     // with `obstacles` (MapObstacleInfo.msg) and carries the name/provenance
@@ -630,12 +647,32 @@ void MapServerNode::on_set_docking_point(
   // the EKF to dock_pose at boot via the fusion_graph gauge reset, so a
   // bad calibration leaks straight into the map-frame anchor for every
   // subsequent session. Reject unless ALL conditions hold:
-  //   (1) firmware reports is_charging=true (robot physically on dock)
+  //   (1) firmware reports is_charging=true (robot physically on dock) —
+  //       EXCEPT for a MOTION-sourced call with an explicit (not
+  //       GPS-averaged) position, see below
   //   (2) GPS sample fresh and σ(xy) ≤ dock_set_gps_accuracy_max_m_
   //   (3) EKF yaw converged on the recent rolling window
-  //
+  using SetDockReq = mowgli_interfaces::srv::SetDockingPoint::Request;
+
   // (1) — is_charging gate. Refuse if the last /hardware_bridge/status was
-  // not charging or is older than dock_set_status_max_age_s_.
+  // not charging or is older than dock_set_status_max_age_s_ — UNLESS this
+  // is a MOTION-sourced call carrying an explicit position
+  // (use_gps_position=false). That exact combination is how the one-click
+  // dock calibration's pre-reverse capture persists (mowglinext#446): it
+  // deliberately fires AFTER the robot has already reversed off the dock to
+  // measure a fresh COG-derived yaw, so requiring is_charging=true here
+  // would reject every such call unconditionally (which is exactly what
+  // happened before this carve-out existed). The position itself was
+  // already captured under VERIFIED on-dock conditions earlier in that same
+  // run (calibrate_imu_yaw_node's wait_for_dock_position(), averaged over
+  // recent RTK-Fixed samples while still on the dock) — this call is not
+  // reading anything live off the (now absent) physical dock contact, so
+  // the on-dock check has nothing left to protect here. Every OTHER
+  // combination — use_gps_position=true's live on-dock GPS averaging,
+  // PRESERVE, manual REQUEST — keeps this gate exactly as before.
+  const bool is_motion_with_explicit_position =
+      req->yaw_source == SetDockReq::MOTION && !req->use_gps_position;
+  if (!is_motion_with_explicit_position)
   {
     const double max_age = get_parameter("dock_set_status_max_age_s").as_double();
     const double status_age = (last_status_time_.nanoseconds() == 0)
@@ -794,7 +831,7 @@ void MapServerNode::on_set_docking_point(
   // (manual map-drag / settings edit — never circular). MOTION takes the
   // RTK-gated, COG-derived yaw_rad from the one-click dock-calibration action
   // — the ONLY non-circular way to correct a stale dock heading (task #45).
-  using SetDockReq = mowgli_interfaces::srv::SetDockingPoint::Request;
+  // (SetDockReq aliased once, above gate (1).)
   const auto preserved_orientation = docking_pose_.orientation;
   docking_pose_ = req->docking_pose;  // request position (+ request orientation for REQUEST)
   const char* yaw_src_desc = "request";
@@ -1523,7 +1560,11 @@ void MapServerNode::save_areas_to_file(const std::string& path)
     out << std::setprecision(6);
   }
 
-  out << "area_count: " << areas_.size() << "\n\n";
+  out << "area_count: " << areas_.size() << "\n";
+  // mowglinext#637: next_area_id_ is written unconditionally (never
+  // optional-on-read like the per-area id line below) so a reader always
+  // knows where to resume minting, even for a file with zero areas.
+  out << "next_area_id: " << next_area_id_ << "\n\n";
 
   for (std::size_t i = 0; i < areas_.size(); ++i)
   {
@@ -1531,6 +1572,12 @@ void MapServerNode::save_areas_to_file(const std::string& path)
     out << "area_" << i << "_name: " << area.name << "\n";
     out << "area_" << i << "_polygon: " << polygon_to_string(area.polygon) << "\n";
     out << "area_" << i << "_is_navigation: " << (area.is_navigation_area ? 1 : 0) << "\n";
+    // Always written (unlike the obstacle _name/_source lines above, this
+    // is never legitimately absent by the time save runs — on_add_area and
+    // load's migration below both guarantee area.id != 0 first). The
+    // *reader* still treats it as optional (see load_areas_from_file) so a
+    // pre-#637 file written by an older binary keeps loading.
+    out << "area_" << i << "_id: " << area.id << "\n";
     // PENDING obstacles (wheel-slip dig proposals) are deliberately NOT
     // written: they protect the spot for this session only, and become
     // permanent solely when the operator accepts them through
@@ -1646,6 +1693,12 @@ void MapServerNode::load_areas_from_file(const std::string& path)
     entry.name = get_str(prefix + "_name");
     entry.polygon = parse_polygon_string(get_str(prefix + "_polygon"));
     entry.is_navigation_area = (get_int(prefix + "_is_navigation", 0) != 0);
+    // Optional on read (mowglinext#637): absent in any file saved before
+    // this field existed. Left at 0 here; the migration block below mints
+    // real ids for every area still at 0 once the whole file is loaded, so
+    // it can recover next_area_id_ from the highest id ACTUALLY present
+    // first, rather than one area at a time.
+    entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));
 
     const int obs_count = get_int(prefix + "_obstacle_count", 0);
     for (int j = 0; j < obs_count; ++j)
@@ -1681,6 +1734,50 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   // Dock pose is loaded from mowgli_robot.yaml at construction, never
   // from areas.dat. Old areas.dat files may still contain dock_x/dock_qw
   // keys — they are ignored on purpose.
+
+  // Area-id migration (mowglinext#637): recover next_area_id_ as
+  // max(loaded ids) + 1 — same recovery shape obstacle_tracker_node uses
+  // for its own persisted next_id_ — then mint fresh ids for any area
+  // still at 0: either a pre-#637 file, or (defensively) a legacy in-memory
+  // entry that reached here some other way. Re-save immediately so the
+  // file is stamped from here on, the same "adopt on first load" shape
+  // migrate_areas_datum uses below for the datum stamp.
+  {
+    uint32_t max_id = 0;
+    bool any_unassigned = false;
+    for (const auto& area : areas_)
+    {
+      max_id = std::max(max_id, area.id);
+      any_unassigned = any_unassigned || (area.id == 0);
+    }
+    next_area_id_ = static_cast<uint32_t>(get_int("next_area_id", 0));
+    next_area_id_ = std::max(next_area_id_, max_id + 1);
+    if (any_unassigned)
+    {
+      for (auto& area : areas_)
+      {
+        if (area.id == 0)
+        {
+          area.id = next_area_id_++;
+        }
+      }
+      RCLCPP_INFO(get_logger(),
+                  "areas file %s has area(s) with no stable id (mowglinext#637) — "
+                  "assigning and re-saving.",
+                  path.c_str());
+      try
+      {
+        save_areas_to_file(path);
+      }
+      catch (const std::exception& ex)
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Could not re-save %s with area ids: %s",
+                    path.c_str(),
+                    ex.what());
+      }
+    }
+  }
 
   // Datum-change migration (issue #216): if the file was recorded against a
   // different datum than the one this node was launched with, re-project the

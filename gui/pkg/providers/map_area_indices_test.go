@@ -15,3 +15,14 @@ func TestSplitMapAreasPreservesROSIndices(t *testing.T) {
 	assert.Equal(t, "Back", working[1].Name)
 	assert.Equal(t, "Passage", navigation[0].Name)
 }
+
+// mowglinext#637: the stable id must survive the split untouched, alongside
+// (not instead of) the ROS array index — the frontend needs both.
+func TestSplitMapAreasPreservesStableId(t *testing.T) {
+	working, navigation, _ := splitMapAreas([]mowgli.MapArea{
+		{Name: "Front", Id: 501}, {Name: "Passage", IsNavigationArea: true, Id: 502}, {Name: "Back", Id: 503},
+	})
+	assert.Equal(t, uint32(501), working[0].Id)
+	assert.Equal(t, uint32(503), working[1].Id)
+	assert.Equal(t, uint32(502), navigation[0].Id)
+}
