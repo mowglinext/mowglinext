@@ -30,6 +30,26 @@
 
 namespace mowgli_behavior
 {
+namespace
+{
+
+/// rclcpp_action's result code -> our ROS-free outcome (action_outcome.hpp).
+GoalOutcome OutcomeFromResultCode(const rclcpp_action::ResultCode code)
+{
+  switch (code)
+  {
+    case rclcpp_action::ResultCode::SUCCEEDED:
+      return GoalOutcome::kSucceeded;
+    case rclcpp_action::ResultCode::CANCELED:
+      return GoalOutcome::kCanceled;
+    case rclcpp_action::ResultCode::ABORTED:
+    case rclcpp_action::ResultCode::UNKNOWN:
+    default:
+      return GoalOutcome::kAborted;
+  }
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -304,6 +324,12 @@ BT::NodeStatus NavigateToPose::onStart()
   goal_msg.pose = target_pose;
 
   auto send_goal_options = rclcpp_action::Client<Nav2Goal>::SendGoalOptions{};
+  // Also ask for the result — see action_outcome.hpp for the lost-status race.
+  outcome_->Reset();
+  send_goal_options.result_callback = [slot = outcome_](const GoalHandle::WrappedResult& result)
+  {
+    slot->Record(OutcomeFromResultCode(result.code));
+  };
 
   goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
   goal_handle_.reset();
@@ -337,7 +363,7 @@ BT::NodeStatus NavigateToPose::onRunning()
     }
   }
 
-  const auto status = goal_handle_->get_status();
+  const auto status = ResolveGoalStatus(goal_handle_->get_status(), outcome_->Get());
 
   switch (status)
   {

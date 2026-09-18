@@ -28,6 +28,7 @@
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/detour_resume.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
@@ -338,6 +339,12 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr coverage_plan_pub_;
   std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
   FollowGoalHandle::SharedPtr follow_handle_;
+
+  /// Terminal verdicts from the result callbacks. Polling a goal handle is not
+  /// enough: a goal the server finishes in the same instant it accepts it can
+  /// lose its status message and leave the poll stuck (action_outcome.hpp).
+  std::shared_ptr<ActionOutcomeSlot> transit_outcome_ = std::make_shared<ActionOutcomeSlot>();
+  std::shared_ptr<ActionOutcomeSlot> follow_outcome_ = std::make_shared<ActionOutcomeSlot>();
   // Path-tracking error of the segment currently being driven, reduced from the
   // FollowPath action feedback that ROS 2 Lyrical's controller_server fills in
   // for whichever controller runs (FTC here). Logged once per segment so a field
@@ -563,6 +570,10 @@ private:
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
+
+  /// Terminal verdict from the result callback: a goal finished in the same
+  /// instant it is accepted can lose its status message (action_outcome.hpp).
+  std::shared_ptr<ActionOutcomeSlot> nav_outcome_ = std::make_shared<ActionOutcomeSlot>();
 };
 
 // ---------------------------------------------------------------------------
@@ -605,6 +616,10 @@ private:
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
+
+  /// Terminal verdict from the result callback: a goal finished in the same
+  /// instant it is accepted can lose its status message (action_outcome.hpp).
+  std::shared_ptr<ActionOutcomeSlot> nav_outcome_ = std::make_shared<ActionOutcomeSlot>();
 };
 
 // ---------------------------------------------------------------------------

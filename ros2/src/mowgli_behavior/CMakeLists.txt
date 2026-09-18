@@ -541,6 +541,16 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  # ---- test_action_outcome ----
+  ament_add_gtest(test_action_outcome
+    test/test_action_outcome.cpp
+  )
+
+  target_include_directories(test_action_outcome PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_detour_resume ----
   # Unit tests for the pure detour-and-continue resume-pose search
   # (detour_resume.hpp): when FTC is blocked by an un-skirtable obstacle,

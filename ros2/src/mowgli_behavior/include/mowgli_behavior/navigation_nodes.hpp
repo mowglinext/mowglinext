@@ -24,6 +24,7 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_interfaces/srv/get_recovery_point.hpp"
 #include "nav2_msgs/action/back_up.hpp"
@@ -190,6 +191,11 @@ private:
   rclcpp_action::Client<Nav2Goal>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
+
+  /// Terminal verdict from the result callback — a NavigateToPose goal to a
+  /// pose the robot already occupies finishes instantly and its status
+  /// message can be lost (action_outcome.hpp).
+  std::shared_ptr<ActionOutcomeSlot> outcome_ = std::make_shared<ActionOutcomeSlot>();
 
   /// Lazily creates the action client once and reuses it across ticks.
   void ensureActionClient(const rclcpp::Node::SharedPtr& node);

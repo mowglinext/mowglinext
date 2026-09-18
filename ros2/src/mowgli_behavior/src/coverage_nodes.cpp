@@ -29,6 +29,26 @@
 
 namespace mowgli_behavior
 {
+namespace
+{
+
+/// rclcpp_action's result code -> our ROS-free outcome (action_outcome.hpp).
+GoalOutcome OutcomeFromResultCode(const rclcpp_action::ResultCode code)
+{
+  switch (code)
+  {
+    case rclcpp_action::ResultCode::SUCCEEDED:
+      return GoalOutcome::kSucceeded;
+    case rclcpp_action::ResultCode::CANCELED:
+      return GoalOutcome::kCanceled;
+    case rclcpp_action::ResultCode::ABORTED:
+    case rclcpp_action::ResultCode::UNKNOWN:
+    default:
+      return GoalOutcome::kAborted;
+  }
+}
+
+}  // namespace
 
 namespace
 {
@@ -663,6 +683,13 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   // its error into this one's summary.
   tracking_slot_ = std::make_shared<TrackingFeedbackSlot>();
   rclcpp_action::Client<Nav2FollowPath>::SendGoalOptions follow_opts;
+  // The coverage goal needs a result callback too — see action_outcome.hpp.
+  follow_outcome_->Reset();
+  follow_opts.result_callback =
+      [slot = follow_outcome_](const FollowGoalHandle::WrappedResult& result)
+  {
+    slot->Record(OutcomeFromResultCode(result.code));
+  };
   follow_opts.feedback_callback =
       [slot = tracking_slot_](FollowGoalHandle::SharedPtr,
                               const std::shared_ptr<const Nav2FollowPath::Feedback> fb)
@@ -793,9 +820,12 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
     // options carry a result callback. The slot is shared_ptr-owned so a late
     // callback can never write through a dangling `this`.
     resetTransitResult();
+    transit_outcome_->Reset();
     rclcpp_action::Client<Nav2Navigate>::SendGoalOptions send_opts;
-    send_opts.result_callback = [slot = transit_result_](const NavGoalHandle::WrappedResult& r)
+    send_opts.result_callback =
+        [slot = transit_result_, outcome = transit_outcome_](const NavGoalHandle::WrappedResult& r)
     {
+      outcome->Record(OutcomeFromResultCode(r.code));
       if (!slot)
       {
         return;
@@ -1073,7 +1103,7 @@ BT::NodeStatus FollowStrip::onRunning()
       }
       return BT::NodeStatus::RUNNING;
     }
-    const auto nav_status = nav_handle_->get_status();
+    const auto nav_status = ResolveGoalStatus(nav_handle_->get_status(), transit_outcome_->Get());
     if (nav_status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
     {
       transit_active_ = false;
@@ -1176,7 +1206,7 @@ BT::NodeStatus FollowStrip::onRunning()
     }
   }
 
-  auto status = follow_handle_->get_status();
+  auto status = ResolveGoalStatus(follow_handle_->get_status(), follow_outcome_->Get());
 
   // Track how far along the continuous path the robot has driven, every tick,
   // so an abort/halt can persist an accurate resume cursor.
@@ -1890,7 +1920,17 @@ BT::NodeStatus TransitToStrip::onStart()
   goal.behavior_tree = ctx->transit_tree_xml;
 
   nav_handle_.reset();
-  nav_future_ = nav_client_->async_send_goal(goal);
+  // Also ask for the result: a transit to a pose the robot already occupies
+  // finishes in the same instant it is accepted, and its terminal status
+  // message can be dropped before the client registers the handle
+  // (action_outcome.hpp).
+  nav_outcome_->Reset();
+  auto send_opts = rclcpp_action::Client<Nav2Navigate>::SendGoalOptions{};
+  send_opts.result_callback = [slot = nav_outcome_](const NavGoalHandle::WrappedResult& result)
+  {
+    slot->Record(OutcomeFromResultCode(result.code));
+  };
+  nav_future_ = nav_client_->async_send_goal(goal, send_opts);
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "TransitToStrip: navigating to (%.2f, %.2f)",
@@ -1916,7 +1956,7 @@ BT::NodeStatus TransitToStrip::onRunning()
     }
   }
 
-  auto status = nav_handle_->get_status();
+  auto status = ResolveGoalStatus(nav_handle_->get_status(), nav_outcome_->Get());
 
   if (status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
   {
@@ -2021,7 +2061,14 @@ BT::NodeStatus DetourAroundObstacle::onStart()
   nav_goal.behavior_tree = ctx->transit_tree_xml;
 
   nav_handle_.reset();
-  nav_future_ = nav_client_->async_send_goal(nav_goal);
+  // See TransitToStrip::onStart (action_outcome.hpp).
+  nav_outcome_->Reset();
+  auto send_opts = rclcpp_action::Client<Nav2Navigate>::SendGoalOptions{};
+  send_opts.result_callback = [slot = nav_outcome_](const NavGoalHandle::WrappedResult& result)
+  {
+    slot->Record(OutcomeFromResultCode(result.code));
+  };
+  nav_future_ = nav_client_->async_send_goal(nav_goal, send_opts);
 
   return BT::NodeStatus::RUNNING;
 }
@@ -2042,7 +2089,7 @@ BT::NodeStatus DetourAroundObstacle::onRunning()
     }
   }
 
-  const auto status = nav_handle_->get_status();
+  const auto status = ResolveGoalStatus(nav_handle_->get_status(), nav_outcome_->Get());
   if (status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
   {
     RCLCPP_INFO(ctx->node->get_logger(), "DetourAroundObstacle: detour complete");
