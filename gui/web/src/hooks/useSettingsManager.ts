@@ -70,7 +70,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "tool",
         description: "settingsSections.hardware.description",
         keys: [
-            "mower_model", "wheel_radius", "wheel_track", "wheel_width",
+            "robot_name", "mower_model", "wheel_radius", "wheel_track", "wheel_width",
             "wheel_x_offset", "chassis_center_x", "chassis_length", "chassis_width",
             "chassis_height", "chassis_mass_kg", "caster_radius", "caster_track",
             "ticks_per_meter", "tool_width", "blade_radius",

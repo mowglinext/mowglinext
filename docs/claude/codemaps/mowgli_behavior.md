@@ -89,7 +89,7 @@
 | `test_obstacle_recovery.cpp` | 305 | 13 tests: `IsObstacleStuck` timing/cap/cooldown against latched collision state |
 | `test_docking_boundary_exempt.cpp` | 232 | 8 tests: `IsDocking` + BoundaryGuard blade-off dock-transit exemption |
 | `test_set_nav2_lifecycle.cpp` | 243 | 7 tests: `SetNav2Lifecycle` gating + fake `manage_nodes` transition |
-| `test_get_next_unmowed_area.cpp` | ~640 | 17 tests: nav-only areas skipped, START_OCCUPIED + guard-halted (`MarkGuardHalt`) passes exempt from the no-progress budget, targeted (`~/start_in_area`) runs stay clipped, `EndSession` boundary |
+| `test_get_next_unmowed_area.cpp` | ~1200 | 34 tests: nav-only areas skipped, START_OCCUPIED + guard-halted (`MarkGuardHalt`) passes exempt from the no-progress budget, targeted (`~/start_in_area`) runs stay clipped, `EndSession` boundary, fleet coordination (excluded areas skipped, preferred-start rotation + wrap, yielded pass exempt, `FollowStrip` yields mid-pass) |
 | `test_start_occupied_retry.cpp` | 348 | 13 tests: `classifyTransitFailure`, consume-once `IsCoverageStartBlocked`, structural check of `StartPoseBlockedRetry` in `main_tree.xml` |
 | `test_coverage_persistence.cpp` | 248 | 10 tests: round-trip, header/version, malformed rows, `current_command` restore |
 | `test_gnss_status_authority.cpp` | 56 | 2 tests: `mowgli_interfaces::gnss_status_utils` fix-type mapping the BT relies on |
@@ -139,7 +139,7 @@ Blackboard: `"context"` = `std::shared_ptr<BTContext>`; keys seeded at startup (
 | `/cmd_vel_nav` | `geometry_msgs/msg/TwistStamped` | pub | 10 | `EscapeStartBlocked` (`escape_nodes.cpp` :160) — lowest twist_mux lane, through collision_monitor |
 
 ### Services & actions
-Served (`behavior_tree_node.cpp` :547-638): `~/high_level_control` (`mowgli_interfaces/srv/HighLevelControl`), `~/start_in_area` (`mowgli_interfaces/srv/StartInArea`), `~/clear_coverage_resume` (`std_srvs/srv/Trigger`, applied at the top of `tickTree` :1004). GUI callers: `gui/pkg/api/mowglinext.go` :564/:594/:691, `gui/pkg/providers/scheduler.go` :166, `homekit.go` :44, `mqtt.go` :118.
+Served (`behavior_tree_node.cpp` :547-638): `~/high_level_control` (`mowgli_interfaces/srv/HighLevelControl`), `~/start_in_area` (`mowgli_interfaces/srv/StartInArea`), `~/clear_coverage_resume` (`std_srvs/srv/Trigger`, applied at the top of `tickTree` :1004), `~/set_fleet_assignment` (`mowgli_interfaces/srv/SetFleetAssignment`, deferred to the tick thread the same way; fills `BTContext::fleet_excluded_areas` / `fleet_preferred_start`, docs/MULTI_ROBOT.md). Also publishes `~/coverage_session` (`mowgli_interfaces/msg/CoverageSession`, 1 Hz) for the fleet coordinator. GUI callers: `gui/pkg/api/mowglinext.go` :564/:594/:691, `gui/pkg/providers/scheduler.go` :166, `homekit.go` :44, `mqtt.go` :118.
 
 Clients (node → file:line):
 | Target | Type | Used by |

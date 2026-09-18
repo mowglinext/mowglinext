@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -41,11 +42,13 @@
 #include "mowgli_interfaces/gnss_observation_freshness.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
+#include "mowgli_interfaces/msg/coverage_session.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
+#include "mowgli_interfaces/srv/set_fleet_assignment.hpp"
 #include "mowgli_interfaces/srv/start_in_area.hpp"
 #include "mowgli_interfaces/update_maintenance.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
@@ -736,6 +739,36 @@ private:
           resp->message = "coverage resume clear queued for the next behavior-tree tick";
         });
 
+    // ~/set_fleet_assignment: the GUI fleet coordinator tells this tree which
+    // areas belong to OTHER fleet members right now (docs/MULTI_ROBOT.md).
+    // Deferred to the tick thread for the same reason as
+    // ~/clear_coverage_resume: fleet_excluded_areas is read unlocked by
+    // GetNextUnmowedArea and FollowStrip on the tick thread.
+    using SetFleetAssignment = mowgli_interfaces::srv::SetFleetAssignment;
+    set_fleet_assignment_srv_ = create_service<SetFleetAssignment>(
+        "~/set_fleet_assignment",
+        [this](const SetFleetAssignment::Request::SharedPtr req,
+               SetFleetAssignment::Response::SharedPtr resp)
+        {
+          {
+            std::lock_guard<std::mutex> lock(fleet_assignment_mutex_);
+            pending_fleet_assignment_.excluded.assign(req->excluded_areas.begin(),
+                                                      req->excluded_areas.end());
+            pending_fleet_assignment_.preferred_start = req->preferred_start_index;
+            pending_fleet_assignment_.reason = req->reason;
+          }
+          fleet_assignment_requested_.store(true);
+          resp->success = true;
+          resp->message = "fleet assignment queued for the next behavior-tree tick";
+        });
+
+    // What this robot has finished / been told to leave alone this session —
+    // read by the fleet coordinator on every member's GUI, 1 Hz (see
+    // setupHighLevelStatusRepublish).
+    coverage_session_pub_ =
+        create_publisher<mowgli_interfaces::msg::CoverageSession>("~/coverage_session",
+                                                                  rclcpp::QoS(1).transient_local());
+
     // Latched signal the GUI reads to decide whether to offer "Resume vs Start
     // fresh". True when a prior session left recoverable progress.
     resume_available_pub_ = create_publisher<std_msgs::msg::Bool>("~/coverage_resume_available",
@@ -818,7 +851,31 @@ private:
                                                  [this]()
                                                  {
                                                    republishHighLevelStatus();
+                                                   publishCoverageSession();
                                                  });
+  }
+
+  // 1 Hz snapshot of the per-session coverage sets for the fleet coordinator
+  // (docs/MULTI_ROBOT.md). The coverage sets are tick-thread state; this timer
+  // shares the node's MutuallyExclusive callback group with the tick, so the
+  // read is serialized against every writer (see bt_context.hpp).
+  void publishCoverageSession()
+  {
+    if (!coverage_session_pub_)
+    {
+      return;
+    }
+    mowgli_interfaces::msg::CoverageSession msg;
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      msg.session_active = context_->current_command == 1;  // COMMAND_START
+    }
+    msg.current_area = static_cast<int16_t>(context_->current_area);
+    msg.completed_areas.assign(context_->completed_areas.begin(), context_->completed_areas.end());
+    msg.attempted_areas.assign(context_->attempted_areas.begin(), context_->attempted_areas.end());
+    msg.excluded_areas.assign(context_->fleet_excluded_areas.begin(),
+                              context_->fleet_excluded_areas.end());
+    coverage_session_pub_->publish(msg);
   }
 
   // Re-publish the last state identity with the LIVE context fields folded in.
@@ -1166,6 +1223,39 @@ private:
       updateLocalizationHealthLocked();
     }
 
+    // Apply a pending fleet assignment on the tick thread (see the
+    // ~/set_fleet_assignment registration comment).
+    if (fleet_assignment_requested_.exchange(false))
+    {
+      FleetAssignment req;
+      {
+        std::lock_guard<std::mutex> lock(fleet_assignment_mutex_);
+        req = pending_fleet_assignment_;
+      }
+      std::set<uint32_t> excluded(req.excluded.begin(), req.excluded.end());
+      std::optional<uint32_t> preferred;
+      if (req.preferred_start >= 0)
+      {
+        preferred = static_cast<uint32_t>(req.preferred_start);
+      }
+      if (excluded != context_->fleet_excluded_areas ||
+          preferred != context_->fleet_preferred_start)
+      {
+        std::string list;
+        for (uint32_t idx : excluded)
+        {
+          list += (list.empty() ? "" : ",") + std::to_string(idx);
+        }
+        RCLCPP_INFO(get_logger(),
+                    "Fleet assignment applied: excluded areas [%s], preferred start %d (%s)",
+                    list.c_str(),
+                    req.preferred_start,
+                    req.reason.c_str());
+      }
+      context_->fleet_excluded_areas = std::move(excluded);
+      context_->fleet_preferred_start = preferred;
+    }
+
     // Apply a pending "Start fresh" clear BEFORE ticking, on the tick thread —
     // every coverage-map mutation stays on this thread (see the service
     // registration comment). Between ticks no BT node holds a reference into
@@ -1187,6 +1277,7 @@ private:
       context_->area_start_blocked_count.clear();
       context_->guard_halted_reason.reset();
       context_->area_guard_halt_count.clear();
+      context_->fleet_yielded_areas.clear();
       // Disarm the #487 escape motion too — see EndSession for why.
       context_->start_blocked_escape_armed = false;
       if (clearCoverageResumeState(*context_))
@@ -1276,6 +1367,19 @@ private:
   // Set by the ~/clear_coverage_resume service, consumed by tickTree() so the
   // actual map clearing happens on the BT tick thread (see the service comment).
   std::atomic<bool> clear_resume_requested_{false};
+  // ~/set_fleet_assignment payload, handed to the tick thread through
+  // fleet_assignment_requested_ (same deferral as clear_resume_requested_).
+  struct FleetAssignment
+  {
+    std::vector<uint32_t> excluded;
+    int32_t preferred_start{-1};
+    std::string reason;
+  };
+  std::mutex fleet_assignment_mutex_;
+  FleetAssignment pending_fleet_assignment_;
+  std::atomic<bool> fleet_assignment_requested_{false};
+  rclcpp::Service<mowgli_interfaces::srv::SetFleetAssignment>::SharedPtr set_fleet_assignment_srv_;
+  rclcpp::Publisher<mowgli_interfaces::msg::CoverageSession>::SharedPtr coverage_session_pub_;
   // Only touched from this node's mutually-exclusive callback group (timer +
   // service + init), so plain bools would work today — atomic future-proofs
   // them against a Reentrant-group conversion, same rationale as the deferral.

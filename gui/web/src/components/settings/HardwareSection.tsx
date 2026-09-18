@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { App, Card, Col, Form, InputNumber, Row, Space, Tag, Typography } from "antd";
+import { App, Card, Col, Form, Input, InputNumber, Row, Space, Tag, Typography } from "antd";
 import { ToolOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
@@ -64,6 +64,25 @@ export const HardwareSection: React.FC<Props> = ({
 
     return (
         <div>
+            {/* Identity: the name the fleet view and the GUI show for this mower */}
+            <Card size="small" style={{ marginBottom: 16 }}>
+                <Form layout="vertical" size="small">
+                    <Form.Item
+                        label={fieldLabel("robot_name", t("settingsHardware.robotName"))}
+                        tooltip={t("settingsHardware.robotNameTooltip")}
+                        style={{ marginBottom: 0 }}
+                    >
+                        <Input
+                            value={values.robot_name ?? ""}
+                            onChange={(e) => onChange("robot_name", e.target.value)}
+                            maxLength={32}
+                            placeholder="mowgli"
+                            style={{ maxWidth: 320 }}
+                        />
+                    </Form.Item>
+                </Form>
+            </Card>
+
             {/* Model selection */}
             <Card size="small" style={{ marginBottom: 16 }}>
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>

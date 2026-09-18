@@ -37,7 +37,9 @@ func (hc *HomeKitProvider) Init() {
 }
 
 func (hc *HomeKitProvider) registerAccessories() *accessory.A {
-	hc.mower = accessory.NewSwitch(accessory.Info{Name: "MowgliNext"})
+	// The accessory carries the operator-chosen robot_name so two mowers in
+	// one home show up as distinct switches.
+	hc.mower = accessory.NewSwitch(accessory.Info{Name: ReadRobotName(hc.db)})
 	hc.mower.Switch.On.OnValueRemoteUpdate(func(on bool) {
 		var err error
 		if on {

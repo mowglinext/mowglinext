@@ -43,6 +43,8 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | Live ROS param read/write (no restart) | `gui/pkg/api/params.go` → `ros.go:555-570` → `foxglove/parameters.go` |
 | MQTT / HomeKit bridge | `gui/pkg/providers/mqtt.go` (embedded mochi broker, `<prefix>/<key>` + `<prefix>/call<service>`), `gui/pkg/providers/homekit.go` (hap switch, `:8000`, pin `system.homekit.pincode`) |
 | Static bundle / gzip sidecars / SPA fallback | `gui/pkg/api/web_static.go` (`registerWebUI`), gzip produced in `gui/Dockerfile:10-12` |
+| Fleet: identity, peer registry, peer mirror, command proxy, map push | `gui/pkg/providers/fleet_identity.go` (`robot_name` from yaml, `fleet.robot_id`), `fleet.go` (`fleet.peers`, symmetric add/remove, `Robots()` snapshot, `Call()` proxy allowlist), `fleet_peer_client.go` (WebSocket mirror of a peer's multiplex), `fleet_map.go` (`PushMap`); routes `gui/pkg/api/fleet.go`; two-robot in-process tests `gui/pkg/api/fleet_test.go` |
+| Coordinated mowing (area assignment, completed memory, peer poses, yield rule) | `gui/pkg/providers/fleet_coordinator_logic.go` (pure: `computeAssignment`, `updateCompletedMemory`, `decideYield`), `fleet_coordinator.go` (2 s loop, DB keys `fleet.coordination` / `fleet.session.completed`, pushes `~/set_fleet_assignment`, publishes `/fleet/peers`); design in `docs/MULTI_ROBOT.md` |
 | Regenerate Go/TS msg types after a `.msg`/`.srv` change | `gui/generate_go_msgs.sh` → `gui/pkg/msgs/*/…_generated.go`; `gui/generate_ts_types.sh` → `gui/web/src/types/ros.generated.ts`; drift gate `.github/workflows/msg-codegen-drift.yml` |
 
 ## Files

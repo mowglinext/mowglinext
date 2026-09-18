@@ -119,6 +119,6 @@ The board re-enumerates cleanly (`dmesg` shows `Product: Mowgli`, no -62) and
 
 ## Not yet supported
 
-MowgliNext is in its first public beta, so expect gaps. Notably absent today: 3D slope-aware planning, per-schedule mowing time *windows* (a schedule fires at one start time on the days you pick, for one area), a live behavior-tree viewer in the GUI, fleet management across several mowers, and a mobile app. Headland passes ARE shipped — the coverage server plans concentric headland rings before the serpentine swaths (§8).
+MowgliNext is in its first public beta, so expect gaps. Notably absent today: 3D slope-aware planning, per-schedule mowing time *windows* (a schedule fires at one start time on the days you pick, for one area), a live behavior-tree viewer in the GUI, and a mobile app. Fleet management across several mowers (a Fleet page that lists, monitors and commands other mowers, plus coordinated mowing of one shared map) shipped as a beta — see [`docs/MULTI_ROBOT.md`](MULTI_ROBOT.md). Headland passes ARE shipped — the coverage server plans concentric headland rings before the serpentine swaths (§8).
 
 There is no maintained roadmap page; check the [issue tracker](https://github.com/mowglinext/mowglinext/issues) and [discussions](https://github.com/mowglinext/mowglinext/discussions) for what is being worked on.

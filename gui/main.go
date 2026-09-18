@@ -45,5 +45,7 @@ func main() {
 	} else {
 		log.Printf("notifications: ROS provider %T cannot feed status events", rosProvider)
 	}
-	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider, irriSenseProvider, remoteAccessProvider, notificationProvider)
+	fleetProvider := providers.NewFleetProvider(dbProvider, rosProvider)
+	fleetCoordinator := providers.NewFleetCoordinator(dbProvider, rosProvider, fleetProvider)
+	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider, irriSenseProvider, remoteAccessProvider, notificationProvider, fleetProvider, fleetCoordinator)
 }
