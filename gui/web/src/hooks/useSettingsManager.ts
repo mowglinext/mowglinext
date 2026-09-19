@@ -151,7 +151,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // coverage_server, and the BT hardcodes mow_angle_deg=-1.0 "auto"),
             // so they were dead controls. swath_overlap (a real coverage_server
             // param) is surfaced here instead.
-            "mowing_enabled", "mowing_speed", "transit_speed",
+            "mowing_enabled", "blade_auto_reverse", "mowing_speed", "transit_speed",
             // Blade-load slowdown (FollowCoveragePath.blade_load_*, injected by
             // navigation.launch.py): slow the feed when the blade RPM sags.
             "blade_load_slowdown_enabled", "blade_load_rpm_full",

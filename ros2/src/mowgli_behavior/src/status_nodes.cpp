@@ -196,6 +196,7 @@ BT::NodeStatus EndSession::tick()
               ctx->undock_start_recorded ? "true" : "false",
               ctx->obstacle_backoff_count);
   ctx->yaw_seeded_this_session = false;
+  ctx->blade_direction.endSession();
   ctx->skipped_swaths = 0;
   ctx->undock_start_recorded = false;
   ctx->obstacle_backoff_count = 0;

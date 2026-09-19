@@ -30,6 +30,19 @@ type AreaRecordingRes struct {
 	Polygon                   geometry.Polygon               `json:"polygon"`
 }
 
+// BladeControlReq for mowgli_interfaces/srv/BladeControl request.
+type BladeControlReq struct {
+	MowEnabled                uint8                          `json:"mow_enabled"`
+	MowDirection              uint8                          `json:"mow_direction"`
+}
+
+// BladeControlRes for mowgli_interfaces/srv/BladeControl response.
+type BladeControlRes struct {
+	Success                   bool                           `json:"success"`
+	Forwarded                 bool                           `json:"forwarded"`
+	Message                   string                         `json:"message"`
+}
+
 // CalibrateImuYawReq for mowgli_interfaces/srv/CalibrateImuYaw request.
 type CalibrateImuYawReq struct {
 	DurationSec               float64                        `json:"duration_sec"`

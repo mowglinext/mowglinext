@@ -112,6 +112,56 @@ if(BUILD_TESTING)
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 
+  # Real production service/timer wiring, including multithreaded ownership.
+  get_target_property(blade_service_sources behavior_tree_node SOURCES)
+  list(REMOVE_ITEM blade_service_sources src/behavior_tree_node.cpp)
+  ament_add_gtest(test_blade_services test/test_blade_services.cpp ${blade_service_sources})
+  target_include_directories(test_blade_services PUBLIC include)
+  target_link_libraries(test_blade_services
+    ${ament_index_cpp_TARGETS}
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
+  )
+
+  ament_add_gtest(test_blade_direction
+    test/test_blade_direction.cpp
+    src/utility_nodes.cpp
+    src/coverage_nodes.cpp
+    src/coverage_persistence.cpp
+    src/status_nodes.cpp
+    src/status_snapshot.cpp
+  )
+  target_include_directories(test_blade_direction PUBLIC include)
+  target_link_libraries(test_blade_direction
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
+  )
+
   # ---- test_recording_nodes ----
   ament_add_gtest(test_recording_nodes
     test/test_recording_nodes.cpp

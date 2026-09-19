@@ -58,6 +58,8 @@ namespace mower_msgs
       _mower_motor_rpm_type mower_motor_rpm;
       typedef ros::Time _blade_status_stamp_type;
       _blade_status_stamp_type blade_status_stamp;
+      typedef const char* _blade_requested_direction_type;
+      _blade_requested_direction_type blade_requested_direction;
       typedef const char* _firmware_version_type;
       _firmware_version_type firmware_version;
       typedef uint8_t _firmware_protocol_version_type;
@@ -97,6 +99,7 @@ namespace mower_msgs
       mower_motor_temperature(0),
       mower_motor_rpm(0),
       blade_status_stamp(),
+      blade_requested_direction(""),
       firmware_version(""),
       firmware_protocol_version(0),
       firmware_compatible(0)
@@ -242,6 +245,11 @@ namespace mower_msgs
       *(outbuffer + offset + 3) = (u_mower_motor_rpm.base >> (8 * 3)) & 0xFF;
       offset += sizeof(this->mower_motor_rpm);
       offset += this->blade_status_stamp.serialize(outbuffer + offset);
+      uint32_t length_blade_requested_direction = strlen(this->blade_requested_direction);
+      varToArr(outbuffer + offset, length_blade_requested_direction);
+      offset += 4;
+      memcpy(outbuffer + offset, this->blade_requested_direction, length_blade_requested_direction);
+      offset += length_blade_requested_direction;
       uint32_t length_firmware_version = strlen(this->firmware_version);
       varToArr(outbuffer + offset, length_firmware_version);
       offset += 4;
@@ -417,6 +425,15 @@ namespace mower_msgs
       this->mower_motor_rpm = u_mower_motor_rpm.real;
       offset += sizeof(this->mower_motor_rpm);
       offset += this->blade_status_stamp.deserialize(inbuffer + offset);
+      uint32_t length_blade_requested_direction;
+      arrToVar(length_blade_requested_direction, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_blade_requested_direction; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_blade_requested_direction-1]=0;
+      this->blade_requested_direction = (char *)(inbuffer + offset-1);
+      offset += length_blade_requested_direction;
       uint32_t length_firmware_version;
       arrToVar(length_firmware_version, (inbuffer + offset));
       offset += 4;
@@ -440,7 +457,7 @@ namespace mower_msgs
     }
 
     virtual const char * getType() override { return "mower_msgs/Status"; };
-    virtual const char * getMD5() override { return "746a7fa1b08970aca234773165ad6a27"; };
+    virtual const char * getMD5() override { return "340a96533a4012ff998a746671c9c333"; };
 
   };
 
