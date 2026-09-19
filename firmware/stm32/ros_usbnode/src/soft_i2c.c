@@ -245,6 +245,81 @@ static uint8_t i2c_bus_is_idle(void)
     return (uint8_t)(SW_I2C_ReadVal_SDA() && SW_I2C_ReadVal_SCL());
 }
 
+/* Runtime bus clear for the external IMU (PB3/PB4), not the onboard tilt bus.
+ * Keep this with the LFP patches when rebasing: an interrupted read can leave
+ * a slave holding SDA low, and the old idle check then failed forever.
+ * NXP UM10204 section 3.1.16: at most nine SCL pulses with SDA released.
+ * All callers run synchronously in the main loop; never call from USB/IRQ or
+ * manipulate these pins concurrently through SWD. No HAL_Delay, logging,
+ * sensor reset, or 20-second IMU_Init here: control/watchdogs must keep running.
+ */
+#define I2C_RECOVERY_RETRY_MS 1000u
+#define I2C_RECOVERY_SCL_POLLS 16u
+static uint32_t i2c_recovery_last_tick;
+static uint8_t i2c_recovery_attempted;
+/* RAM-only evidence; no periodic debugger connection is required or advised. */
+static volatile struct {
+    uint32_t attempts;
+    uint32_t successes;
+    uint32_t failures;
+} sw_i2c_recovery_diag;
+
+static uint8_t i2c_recovery_wait_scl(void)
+{
+    /* Open drain: high releases the wire, it never drives against a slave.
+     * Bound clock stretching even if SysTick stops advancing. */
+    for (uint8_t n = 0; n < I2C_RECOVERY_SCL_POLLS; ++n) {
+        TIMER__Wait_us(SW_I2C_WAIT_TIME);
+        if (SW_I2C_ReadVal_SCL()) return TRUE;
+    }
+    return FALSE;
+}
+
+static uint8_t i2c_prepare_transaction(void)
+{
+    i2c_port_initial();
+    TIMER__Wait_us(SW_I2C_WAIT_TIME); /* allow the released lines to rise */
+    if (i2c_bus_is_idle()) return TRUE;
+
+    const uint32_t now = HAL_GetTick();
+    if (i2c_recovery_attempted &&
+        (uint32_t)(now - i2c_recovery_last_tick) < I2C_RECOVERY_RETRY_MS) {
+        return FALSE;
+    }
+    i2c_recovery_attempted = TRUE;
+    i2c_recovery_last_tick = now;
+    ++sw_i2c_recovery_diag.attempts;
+    sda_out_mode();
+    sda_high();
+    if (!i2c_recovery_wait_scl()) goto failed;
+
+    for (uint8_t n = 0; n < 9 && !SW_I2C_ReadVal_SDA(); ++n) {
+        scl_low();
+        TIMER__Wait_us(SW_I2C_WAIT_TIME);
+        scl_high();
+        if (!i2c_recovery_wait_scl()) goto failed;
+    }
+    if (!SW_I2C_ReadVal_SDA()) goto failed;
+
+    /* Finish with STOP and leave BOTH lines released. The legacy transaction
+     * STOP helper parks SCL low, so cannot serve as a recovery idle check. */
+    scl_low();
+    sda_low();
+    TIMER__Wait_us(SW_I2C_WAIT_TIME);
+    scl_high();
+    if (!i2c_recovery_wait_scl()) goto failed;
+    sda_high();
+    TIMER__Wait_us(SW_I2C_WAIT_TIME);
+    if (!i2c_bus_is_idle()) goto failed;
+    ++sw_i2c_recovery_diag.successes;
+    return TRUE;
+
+failed:
+    i2c_port_initial();
+    ++sw_i2c_recovery_diag.failures;
+    return FALSE; /* caller discards this read; a later attempt can recover */
+}
+
 static void i2c_abort_transaction(void)
 {
     sda_out_mode();
@@ -373,6 +448,7 @@ uint8_t SW_I2C_WriteControl_8Bit(uint8_t IICID, uint8_t regaddr, uint8_t data)
 {
     uint8_t   returnack = TRUE;
 
+    if (!i2c_prepare_transaction()) return FALSE;
     i2c_start_condition();
 
     i2c_slave_address(IICID, WRITE_CMD);
@@ -546,8 +622,7 @@ uint8_t SW_I2C_ReadControl_8Bit(uint8_t IICID, uint8_t regaddr)
 {
     uint8_t  readdata = 0;
 
-    i2c_port_initial();
-    if (!i2c_bus_is_idle()) return 0x80;
+    if (!i2c_prepare_transaction()) return 0x80;
 
     i2c_start_condition();
 
@@ -616,8 +691,7 @@ uint8_t SW_I2C_ReadnControl_8Bit(uint8_t IICID, uint8_t regaddr, uint8_t rcnt, u
         return FALSE;
     }
 
-    i2c_port_initial();
-    if (!i2c_bus_is_idle()) return FALSE;
+    if (!i2c_prepare_transaction()) return FALSE;
 
     i2c_start_condition();
 
@@ -658,8 +732,7 @@ uint8_t SW_I2C_Multi_ReadnControl_8Bit(uint8_t IICID, uint8_t regaddr, uint8_t r
         return FALSE;
     }
 
-    i2c_port_initial();
-    if (!i2c_bus_is_idle()) return FALSE;
+    if (!i2c_prepare_transaction()) return FALSE;
 
     i2c_start_condition();
 
