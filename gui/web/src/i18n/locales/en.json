@@ -3459,6 +3459,8 @@
   "settingsMqtt": {
     "bridge": "MQTT bridge",
     "bridgeDescription": "Publish status, battery and mow state to an MQTT broker (e.g. for a Home Assistant integration) and accept start/pause/dock commands back. Read-only monitoring, except for the command topic — the same channel the GUI's own buttons use.",
+    "homeAssistantDiscovery": "Home Assistant auto-discovery",
+    "homeAssistantDiscoveryDescription": "Automatically add this mower and its controls, battery, location and diagnostic sensors to Home Assistant. Uses the standard homeassistant discovery topic. Restart required.",
     "securityTitle": "No authentication on the wire by default",
     "securityDescription": "The bundled broker allows anonymous connections and the command topic accepts any high-level command — treat this like any other control surface on your local network, not something to expose to the internet.",
     "broker": "Broker",

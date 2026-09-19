@@ -26,6 +26,26 @@ the bundled frontend) and not the GUI's own separate embedded MQTT broker
 3. Restart the ROS2 stack for the new params to take effect (`mqtt_bridge_node`'s parameters are
    read once at startup, like every other node here).
 
+### Home Assistant auto-discovery
+
+Turn on **Home Assistant auto-discovery** in the same settings section to publish one retained
+device discovery record at `homeassistant/device/<derived-id>/config`. Home Assistant then creates
+a single MowgliNext device containing:
+
+- lawn-mower state and the standard start, pause and dock controls;
+- battery, coverage, GPS quality, RTK state and GPS location;
+- charging, emergency and rain indicators;
+- blade speed/current, battery voltage and charge current.
+
+The bridge republishes the record whenever it reconnects and whenever Home Assistant announces
+`online` on `homeassistant/status`. Turning the option off publishes an empty retained record for
+the current topic prefix, which removes the discovered device. Home Assistant's default discovery
+prefix (`homeassistant`) is used. Give each mower connected to one broker a distinct
+`mqtt_topic_prefix`; that prefix also supplies its stable Home Assistant device and entity IDs.
+
+Changing a mower's topic prefix changes its discovery ID. Turn discovery off and restart once
+before changing the prefix if the old retained device should be removed automatically.
+
 ## Security
 
 The bundled broker (`install/config/mqtt/mosquitto.conf`) allows **anonymous connections on both
@@ -328,5 +348,6 @@ Read once at startup (`ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt
 | `mqtt_username` / `mqtt_password` | `""` / `""` | `mqtt_username` / `mqtt_password` |
 | `mqtt_topic_prefix` | `mowgli` | `mqtt_topic_prefix` |
 | `use_ssl` | `false` | `mqtt_use_ssl` |
+| `home_assistant_discovery_enabled` | `false` | `mqtt_home_assistant_discovery_enabled` |
 | `mqtt_client_id` | `mowgli_ros2` | package-share `mqtt_bridge.yaml` only (not on the GUI) |
 | `publish_rate` | `1.0` Hz | package-share `mqtt_bridge.yaml` only — also the position/gps rate limit and the MQTT network-loop tick period |

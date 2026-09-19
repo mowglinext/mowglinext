@@ -378,6 +378,17 @@ The installer also removes retired localization keys such as `use_scan_matching`
 | `use_sim_time` | `false` | Gazebo/Webots clock |
 | `serial_port` | `/dev/mowgli` | hardware_bridge serial device (overrides `hardware_bridge.yaml`) |
 | `enable_mqtt` | `false` | launch the MQTT bridge |
+
+### MQTT / Home Assistant (`mowgli_robot.yaml`, GUI Settings → MQTT)
+
+| Key | Default | Consumer | Life |
+|---|---|---|---|
+| `mqtt_enabled` | `false` | gates `mqtt_bridge_node` in `full_system.launch.py` | launch |
+| `mqtt_host` / `mqtt_port` | `localhost` / `1883` | `mqtt_bridge_node` broker connection | launch |
+| `mqtt_username` / `mqtt_password` | `""` / `""` | broker authentication | launch |
+| `mqtt_topic_prefix` | `mowgli` | data, availability and command topic namespace; also identifies the Home Assistant device | launch |
+| `mqtt_use_ssl` | `false` | broker TLS using the system CA store | launch |
+| `mqtt_home_assistant_discovery_enabled` | `false` | retained `homeassistant/device/<derived-id>/config` device discovery | launch |
 | `enable_foxglove` | `true` | launch `foxglove_bridge` |
 | `foxglove_port` | `8765` | Foxglove WebSocket port |
 | `use_lidar` (L135) | `mowgli_robot.yaml:lidar_enabled`, else `false` + warning | gates LiDAR nodes, the Nav2 overlay choice, and the fusion_graph LiDAR map anchor. **`LIDAR_ENABLED` in `.env` is NOT consulted** (removed 2026-08-31) |

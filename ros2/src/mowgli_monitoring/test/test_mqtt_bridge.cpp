@@ -26,7 +26,9 @@
  */
 
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
@@ -46,6 +48,75 @@
 
 using mowgli_monitoring::IMqttClient;
 using mowgli_monitoring::MqttBridgeNode;
+
+namespace
+{
+
+class RecordingMqttClient : public IMqttClient
+{
+public:
+  struct Publication
+  {
+    std::string topic;
+    std::string payload;
+    bool retained;
+  };
+
+  bool connect() noexcept override
+  {
+    connected = true;
+    return true;
+  }
+  void disconnect() noexcept override
+  {
+    connected = false;
+  }
+  bool publish(const std::string& topic,
+               const std::string& payload,
+               bool retained) noexcept override
+  {
+    publications.push_back({topic, payload, retained});
+    return true;
+  }
+  bool subscribe(const std::string& topic, MessageCallback callback) noexcept override
+  {
+    subscriptions[topic] = std::move(callback);
+    return true;
+  }
+  void spin_once() noexcept override
+  {
+  }
+  bool is_connected() const noexcept override
+  {
+    return connected;
+  }
+
+  bool connected{true};
+  std::vector<Publication> publications;
+  std::unordered_map<std::string, MessageCallback> subscriptions;
+};
+
+class HomeAssistantDiscoveryNodeTest : public ::testing::Test
+{
+protected:
+  static void SetUpTestSuite()
+  {
+    if (!rclcpp::ok())
+    {
+      rclcpp::init(0, nullptr);
+    }
+  }
+
+  static void TearDownTestSuite()
+  {
+    if (rclcpp::ok())
+    {
+      rclcpp::shutdown();
+    }
+  }
+};
+
+}  // namespace
 
 // ===========================================================================
 // MQTT callback metadata
@@ -89,6 +160,65 @@ TEST(JsonEscape, EscapesQuotesAndBackslashes)
 TEST(JsonEscape, EscapesControlCharacters)
 {
   EXPECT_EQ(MqttBridgeNode::json_escape("a\nb\rc\td"), "a\\nb\\rc\\td");
+}
+
+// ===========================================================================
+// Home Assistant MQTT device discovery
+// ===========================================================================
+
+TEST(HomeAssistantDiscovery, DerivesBrokerSafeStableDeviceTopic)
+{
+  EXPECT_EQ(MqttBridgeNode::home_assistant_device_id("garden/front mower"),
+            "mowglinext_garden_front_mower");
+  EXPECT_EQ(MqttBridgeNode::home_assistant_discovery_topic("garden/front mower"),
+            "homeassistant/device/mowglinext_garden_front_mower/config");
+  EXPECT_EQ(MqttBridgeNode::home_assistant_device_id(""), "mowglinext_mowgli");
+}
+
+TEST(HomeAssistantDiscovery, PublishesOneDeviceWithControlsAndTelemetry)
+{
+  const std::string json = MqttBridgeNode::serialise_home_assistant_discovery("garden");
+
+  EXPECT_NE(json.find(R"("identifiers":["mowglinext_garden"])"), std::string::npos);
+  EXPECT_NE(json.find(R"("origin":{"name":"MowgliNext MQTT bridge")"), std::string::npos);
+  EXPECT_NE(json.find(R"("availability_topic":"garden/available")"), std::string::npos);
+  EXPECT_NE(json.find(R"("platform":"lawn_mower")"), std::string::npos);
+  EXPECT_NE(json.find(R"("activity_state_topic":"garden/high_level_status")"), std::string::npos);
+  EXPECT_NE(json.find(R"("start_mowing_command_template":"1")"), std::string::npos);
+  EXPECT_NE(json.find(R"("pause_command_template":"8")"), std::string::npos);
+  EXPECT_NE(json.find(R"("dock_command_template":"2")"), std::string::npos);
+  EXPECT_NE(json.find(R"("platform":"device_tracker")"), std::string::npos);
+  EXPECT_NE(json.find(R"("json_attributes_topic":"garden/gps")"), std::string::npos);
+  EXPECT_NE(json.find(R"("unique_id":"mowglinext_garden_battery")"), std::string::npos);
+  EXPECT_NE(json.find("value_json.state_name"), std::string::npos);
+}
+
+TEST(HomeAssistantDiscovery, EmptyPrefixFallsBackToMowgliDataTopics)
+{
+  const std::string json = MqttBridgeNode::serialise_home_assistant_discovery("");
+  EXPECT_NE(json.find(R"("state_topic":"mowgli/power")"), std::string::npos);
+  EXPECT_NE(json.find(R"("availability_topic":"mowgli/available")"), std::string::npos);
+}
+
+TEST_F(HomeAssistantDiscoveryNodeTest, RepublishesDiscoveryWhenHomeAssistantComesOnline)
+{
+  auto client = std::make_unique<RecordingMqttClient>();
+  RecordingMqttClient* recording = client.get();
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({
+      rclcpp::Parameter("mqtt_topic_prefix", "back_garden"),
+      rclcpp::Parameter("home_assistant_discovery_enabled", true),
+  });
+  auto node = std::make_shared<MqttBridgeNode>(std::move(client), options);
+
+  ASSERT_EQ(recording->subscriptions.count("homeassistant/status"), 1U);
+  recording->subscriptions.at("homeassistant/status")("homeassistant/status", "online", false);
+
+  ASSERT_EQ(recording->publications.size(), 1U);
+  EXPECT_EQ(recording->publications[0].topic, "homeassistant/device/mowglinext_back_garden/config");
+  EXPECT_TRUE(recording->publications[0].retained);
+  EXPECT_NE(recording->publications[0].payload.find(R"("platform":"lawn_mower")"),
+            std::string::npos);
 }
 
 // ===========================================================================
