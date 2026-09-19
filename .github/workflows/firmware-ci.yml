@@ -23,7 +23,7 @@ jobs:
   # firmware (what CI builds / what prebuilt binaries ship) and the GUI-rendered
   # firmware can never silently drift apart on a safety value.
   defaults-parity:
-    name: Board defaults and blade reversal regressions
+    name: Board defaults, blade reversal and sensor recovery
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -35,6 +35,11 @@ jobs:
 
       - name: Test blade direction and stopped reversal on both board variants
         run: python3 firmware/scripts/test_blade_reverse.py
+
+      - name: Test external IMU and onboard tilt sensor recovery
+        run: |
+          python3 firmware/scripts/test_soft_i2c_recovery.py
+          python3 firmware/scripts/test_onboard_i2c_recovery.py
 
   build:
     runs-on: ubuntu-latest

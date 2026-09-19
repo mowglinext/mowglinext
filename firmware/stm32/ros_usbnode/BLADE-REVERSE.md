@@ -238,3 +238,7 @@ The separate [ROS2/GUI PR #558](https://github.com/mowglinext/mowglinext/pull/55
 adds opt-in, random direction selection per mowing session. This firmware change
 also supports existing explicit direction requests without that PR. Do not port
 the upstream bench build's automatic blade-start override into normal operation.
+
+## Sensor recovery alongside the blade guard
+
+This branch also includes external IMU bus recovery and foreground onboard tilt-sensor recovery. Invalid onboard sensor status inhibits motion; successful recovery does not clear a sensor-fault emergency. See [I2C-RECOVERY.md](I2C-RECOVERY.md) for behavior, tests and the separate hardware acceptance procedure. These changes do not establish the ESC speed word as a physical stop detector.
