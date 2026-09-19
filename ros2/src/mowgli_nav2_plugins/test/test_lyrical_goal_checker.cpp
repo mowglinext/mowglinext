@@ -38,7 +38,7 @@ protected:
       pose.pose.orientation.w = 1.0;
       path->poses.push_back(pose);
     }
-    checker_.onPath(path);
+    setPath(path);
     goal_.position.x = 10.0;
     goal_.orientation.w = 1.0;
   }
@@ -53,6 +53,11 @@ protected:
     }
   }
 
+  void setPath(const nav_msgs::msg::Path::SharedPtr& path)
+  {
+    checker_.onPath(path);
+  }
+
   std::shared_ptr<nav2::LifecycleNode> node_;
   PathProgressGoalChecker checker_;
   geometry_msgs::msg::Pose goal_;
@@ -65,6 +70,48 @@ TEST_F(PathProgressGoalCheckerTest, GoalProximityDoesNotSkipFullPath)
   local.poses.resize(1);
   EXPECT_FALSE(checker_.isGoalReached(goal_, goal_, {}, local));
   EXPECT_FALSE(checker_.isGoalXYReached(goal_, goal_, {}, local));
+}
+
+TEST_F(PathProgressGoalCheckerTest, NearEndReplayNeedsProgressBeforeProximityCompletes)
+{
+  // The shared replay length exceeds the proximity-only exception and keeps
+  // the first bounded progress scan below the 95% threshold at the goal.
+  auto replay = std::make_shared<nav_msgs::msg::Path>();
+  replay->header.frame_id = "map";
+  for (std::size_t i = 0; i < mowgli_interfaces::kCoverageResumeReplayPoses; ++i)
+  {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = 100.0 + 0.1 * static_cast<double>(i);
+    pose.pose.orientation.w = 1.0;
+    replay->poses.push_back(pose);
+  }
+  setPath(replay);
+
+  auto replay_goal = goal_;
+  replay_goal.position.x = 1.1;
+  for (int tick = 0; tick < 20; ++tick)
+  {
+    EXPECT_FALSE(checker_.isGoalReached(replay_goal, replay_goal, {}, {})) << "tick " << tick;
+  }
+  for (int tick = 0; tick < 20; ++tick)
+  {
+    auto jittered_goal = replay_goal;
+    jittered_goal.position.x += (tick % 2 == 0) ? 0.006 : -0.006;
+    EXPECT_FALSE(checker_.isGoalReached(jittered_goal, replay_goal, {}, {}))
+        << "endpoint correction " << tick;
+  }
+
+  // On a fresh replay, actual forward motion is still required before normal
+  // progress-gated completion can occur.
+  checker_.reset();
+  setPath(replay);
+  for (std::size_t i = 0; i + 1 < replay->poses.size(); ++i)
+  {
+    auto replay_pose = replay_goal;
+    replay_pose.position.x = 0.1 * static_cast<double>(i);
+    EXPECT_FALSE(checker_.isGoalReached(replay_pose, replay_goal, {}, {})) << "pose " << i;
+  }
+  EXPECT_TRUE(checker_.isGoalReached(replay_goal, replay_goal, {}, {}));
 }
 
 TEST_F(PathProgressGoalCheckerTest, ProgressUsesMapToOdomTransform)

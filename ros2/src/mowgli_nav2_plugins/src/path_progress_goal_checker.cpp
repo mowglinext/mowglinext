@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 
+#include "mowgli_interfaces/coverage_path_invariants.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/utils.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -60,7 +61,9 @@ void PathProgressGoalChecker::initialize(
   // Short paths (<= this many poses) complete on proximity, not progress —
   // per-swath DISCONTINUOUS coverage feeds short swaths + tiny turn-connectors
   // that the 95%-progress gate can't reliably register (stall). See header.
-  short_path_poses_ = static_cast<size_t>(declare("short_path_poses", 10).as_int());
+  short_path_poses_ = static_cast<size_t>(
+      declare("short_path_poses", static_cast<int>(mowgli_interfaces::kCoverageShortPathPoses))
+          .as_int());
 
   // Which controller's republished plan to track. Default matches the
   // FollowCoveragePath FTC slot from nav2_params.yaml. If you have a
@@ -94,6 +97,7 @@ void PathProgressGoalChecker::reset()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   max_reached_index_ = 0;
+  last_progress_query_.reset();
   empty_path_first_call_.reset();
 }
 
@@ -136,6 +140,7 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
     last_path_first_x_ = fx;
     last_path_first_y_ = fy;
     max_reached_index_ = 0;
+    last_progress_query_.reset();
     RCLCPP_INFO(logger_,
                 "PathProgressGoalChecker: new path with %zu poses, "
                 "start=(%.2f,%.2f), end=(%.2f,%.2f) — reset progress",
@@ -264,24 +269,47 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
       return false;
     }
   }
-  const size_t start = std::min(max_reached_index_, n - 1);
-  const size_t end_exclusive = std::min(start + max_idx_advance_per_call_ + 1, n);
-  double best_d2 = std::numeric_limits<double>::infinity();
-  size_t best_idx = max_reached_index_;
-  for (size_t i = start; i < end_exclusive; ++i)
+
+  // Controller-server can call us many times with an unchanged pose while it
+  // waits at the endpoint. Without this gate each call advances the bounded
+  // search window, turning callback frequency into fake path progress.
+  bool query_moved = !last_progress_query_.has_value();
+  if (!query_moved)
   {
-    const double dx = path_poses_[i].pose.position.x - progress_pose.position.x;
-    const double dy = path_poses_[i].pose.position.y - progress_pose.position.y;
-    const double d2 = dx * dx + dy * dy;
-    if (d2 < best_d2)
-    {
-      best_d2 = d2;
-      best_idx = i;
-    }
+    query_moved =
+        std::hypot(progress_pose.position.x - last_progress_query_->x,
+                   progress_pose.position.y - last_progress_query_->y) >= kMinProgressQueryMotionM;
   }
-  if (best_idx > max_reached_index_)
+  if (query_moved)
   {
-    max_reached_index_ = best_idx;
+    last_progress_query_ = progress_pose.position;
+    const size_t start = std::min(max_reached_index_, n - 1);
+    const size_t end_exclusive = std::min(start + max_idx_advance_per_call_ + 1, n);
+    double best_d2 = std::numeric_limits<double>::infinity();
+    size_t best_idx = max_reached_index_;
+    for (size_t i = start; i < end_exclusive; ++i)
+    {
+      const double dx = path_poses_[i].pose.position.x - progress_pose.position.x;
+      const double dy = path_poses_[i].pose.position.y - progress_pose.position.y;
+      const double d2 = dx * dx + dy * dy;
+      if (d2 < best_d2)
+      {
+        best_d2 = d2;
+        best_idx = i;
+      }
+    }
+    // A query at the goal can be closest to this call's artificial search
+    // boundary even when the robot never traversed the intervening path. Do
+    // not turn that cap into progress; only the real final path index may be
+    // accepted at a window boundary. Normal ordered tracking finds interior
+    // matches until it genuinely reaches the final pose.
+    const size_t search_boundary = end_exclusive - 1;
+    const bool boundary_is_final_path_pose = (search_boundary == n - 1);
+    if (best_idx > max_reached_index_ &&
+        (best_idx != search_boundary || boundary_is_final_path_pose))
+    {
+      max_reached_index_ = best_idx;
+    }
   }
 
   const double progress = static_cast<double>(max_reached_index_) / static_cast<double>(n - 1);

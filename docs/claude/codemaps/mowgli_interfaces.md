@@ -2,7 +2,7 @@
 
 > The rosidl package that owns every MowgliNext `.msg` / `.srv` / `.action` definition plus five
 > header-only helpers shared by several packages (WGS84↔ENU projection, `mowgli_robot.yaml`
-> scalar splicing, GNSS status helpers, GPS motion-yaw fit, the coverage transit-gap constant).
+> scalar splicing, GNSS status helpers, GPS motion-yaw fit, and coverage-path constants).
 > Ten ROS packages depend on it, and three out-of-tree generators (firmware `sync_ros_lib.py`,
 > GUI `generate_go_msgs.sh` / `generate_ts_types.sh`) read its `msg/` and `srv/` directories.
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
@@ -22,6 +22,7 @@
 | Persist `dock_pose_x/y/yaw` into `mowgli_robot.yaml` without losing comments | `include/mowgli_interfaces/robot_yaml_scalar.hpp` (`UpdateDockPose`, `PersistScalar`, `SpliceScalar`) |
 | Straight-line heading fit from GPS samples (dock-yaw calibration) | `include/mowgli_interfaces/motion_yaw_fit.hpp` (`FitMotionYaw`) |
 | Blade-off transit vs blade-on join threshold (FollowStrip execution side) | `include/mowgli_interfaces/coverage_geometry.hpp:26` (`kSegmentTransitGapM = 0.6`) |
+| Coverage resume replay vs goal-checker short-path threshold | `include/mowgli_interfaces/coverage_path_invariants.hpp` (`kCoverageShortPathPoses`, `kCoverageResumeReplayPoses`) |
 | Coverage plan payload (`segments`, `drivable_subpaths`, `full_path`) | `ros2/src/mowgli_interfaces/action/PlanCoverage.action`; server `ros2/src/mowgli_coverage/src/coverage_server.cpp:110`; client `ros2/src/mowgli_behavior/src/coverage_nodes.cpp:1914` |
 | One-click dock calibration contract | `action/CalibrateDock.action` (server `ros2/src/mowgli_localization/src/calibrate_imu_yaw_node.cpp:316`) + its GUI façade `msg/DockCalibrationStatus.msg` (publisher `:335`, Trigger `~/dock_calibration/start` `:338`) |
 | Dig detector event → inert map proposal + BT dig skip zone | `msg/DigEvent.msg` (pub `ros2/src/mowgli_hardware/src/hardware_bridge_node.cpp`, subs `ros2/src/mowgli_map/src/map_server_node.cpp` and `ros2/src/mowgli_behavior/src/behavior_tree_node.cpp`); proposals travel in `msg/MapArea.msg` `proposed_obstacles` / `proposed_obstacle_info` (never in `obstacles`); accept/discard via `srv/PromoteObstacle.srv` / `srv/ClearObstacle.srv` |
@@ -41,6 +42,7 @@
 | `package.xml` | 30 | Deps: `builtin_interfaces`, `std_msgs`, `geometry_msgs`, `nav_msgs`; member of `rosidl_interface_packages` |
 | **`include/mowgli_interfaces/`** | | |
 | `coverage_geometry.hpp` | 28 | `kSegmentTransitGapM` — FollowStrip's transit-vs-drive-through threshold for gaps between `drivable_subpaths` (the planner includes the header but no longer splits on it) |
+| `coverage_path_invariants.hpp` | 22 | Shared short-path and minimum resume-replay pose counts; prevents an interrupted near-end replay from taking the goal checker's proximity-only path |
 | `gnss_status_utils.hpp` | 153 | `HasCapability/HasValue`, `IsRtkFixed/Float`, `AbsolutePoseFlags`, `BehaviorTreeFixType`, `NormalizedQuality`, `HardwareQualityPercent`, `BehaviorTreeRtkFixed` |
 | `motion_yaw_fit.hpp` | 102 | `FitMotionYaw(samples) → (yaw, sigma)` total-least-squares line fit, ±π resolved chronologically |
 | `robot_yaml_scalar.hpp` | 151 | `SpliceScalar`, `FormatScalar` (6 dp), `ReadEditWrite` (tmp+rename), `UpdateDockPose`, `PersistScalar` |

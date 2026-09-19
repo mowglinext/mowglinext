@@ -269,6 +269,40 @@ TEST_F(GetNextUnmowedAreaTest, SelectsMowingAreaAtIndexZero)
   EXPECT_EQ(ctx->current_area, 0);
 }
 
+// A saved cursor near the end of a path is recovery state, not evidence that a
+// swath was mowed. Ordinary re-dispatches with no completed swaths must still
+// consume the no-progress budget so a repeatedly aborted near-end resume
+// cannot keep selecting the area forever.
+TEST_F(GetNextUnmowedAreaTest, NearEndResumeWithoutSwathsRetiresAtAttemptCap)
+{
+  areas[0] = {"lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  constexpr std::size_t kPathPoseCount = 1000;
+  constexpr std::size_t kNearEndCursor = 990;
+  ctx->area_path_pose_count[0u] = kPathPoseCount;
+  ctx->area_resume_pose_index[0u] = kNearEndCursor;
+  ctx->area_completed_swaths[0u] = {};
+
+  for (uint32_t attempt = 1; attempt < BTContext::kMaxAreaAttempts; ++attempt)
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS) << "dispatch " << attempt;
+    EXPECT_EQ(ctx->area_attempt_count[0u], attempt);
+    EXPECT_EQ(ctx->area_resume_pose_index.at(0u), kNearEndCursor);
+    EXPECT_TRUE(ctx->area_completed_swaths.at(0u).empty());
+    EXPECT_EQ(ctx->attempted_areas.count(0u), 0u);
+  }
+
+  // The cap retires this area, then the service has no further area to select.
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(ctx->area_attempt_count[0u], BTContext::kMaxAreaAttempts);
+  EXPECT_EQ(ctx->attempted_areas.count(0u), 1u);
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0u), kNearEndCursor);
+}
+
 // ---------------------------------------------------------------------------
 // Issue #487 — a START_OCCUPIED pass must not retire the area.
 //

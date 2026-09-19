@@ -38,6 +38,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -159,6 +160,12 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex_);
     handles_.at(i)->succeed(std::make_shared<typename ActionT::Result>());
+  }
+
+  void abort(std::size_t i)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    handles_.at(i)->abort(std::make_shared<typename ActionT::Result>());
   }
 
 private:
@@ -448,6 +455,68 @@ TEST_F(FollowStripDigTest, UnitLyingEntirelyInsideADigZoneIsBookedWithoutAnyGoal
   EXPECT_EQ(navigate->goalCount(), 0u);
   EXPECT_EQ(ctx->area_completed_swaths[0].count(0), 1u)
       << "an un-mowable unit must not keep the area open forever";
+}
+
+// A controller ABORT is not evidence that the final unverified tail was mowed.
+// In particular, the 95%-progress goal checker must not make this terminal
+// result look like SUCCESS. The existing forward skip leaves a cursor at the
+// final pose; resolveResumeLocation replays its small tail on the next pass.
+TEST_F(FollowStripDigTest, NearEndAbortPreservesResumeWithoutCompleting)
+{
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+
+  // 9.5 m is 190/200 path intervals (95%). The non-obstacle abort skip reaches
+  // the final pose but must still leave the unit and area uncompleted.
+  setRobot(9.5, 0.0);
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  follow->abort(0);
+
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                5.0),
+            BT::NodeStatus::FAILURE);
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 200u);
+  EXPECT_LT(ctx->coverage_percent, 100.0f);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+  EXPECT_TRUE(ctx->completed_areas.empty());
+}
+
+// The contrasting terminal result remains the only ordinary completion path:
+// it clears an old resume cursor, records the unit, and retires a one-unit area.
+TEST_F(FollowStripDigTest, SuccessClearsResumeAndCompletesArea)
+{
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+
+  ctx->area_resume_pose_index[0] = 42;
+  follow->succeed(0);
+
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                5.0),
+            BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->area_resume_pose_index.count(0), 0u);
+  EXPECT_EQ(ctx->area_completed_swaths[0], (std::set<std::size_t>{0}));
+  EXPECT_EQ(ctx->completed_areas.count(0), 1u);
 }
 
 TEST_F(FollowStripDigTest, EndSessionForgetsTheDigPointsButKeepsTheEventCounter)

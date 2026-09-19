@@ -113,10 +113,10 @@ struct ResumeLocation
 
 /// Map an absolute resume cursor (index into the sub-path concatenation) to the
 /// sub-path unit and local offset at which mowing resumes. Applies the guards
-/// FollowStrip uses: a cursor of 0 (or within 2 poses of the very end) is not
-/// resumable, and a landing offset is only trimmed mid-unit when it is strictly
-/// interior (local > 0 and at least 2 poses before the unit end) — otherwise the
-/// resume snaps to the unit's front. `total_poses` is the sum of unit sizes.
+/// FollowStrip uses: a cursor of 0 or past the end is not resumable. A cursor
+/// near the end replays a short suffix rather than inferring completion; a
+/// landing at a unit boundary resumes at that next unit's front.
+/// `total_poses` is the sum of unit sizes.
 ResumeLocation resolveResumeLocation(const std::vector<nav_msgs::msg::Path>& units,
                                      std::size_t cursor,
                                      std::size_t total_poses);
@@ -146,6 +146,15 @@ void refreshSwathProgress(BTContext& ctx, uint32_t area_idx, std::size_t unit_co
 // total_poses == 0 yields 0. Pure/free so it is unit-testable without ROS.
 // ---------------------------------------------------------------------------
 float coveragePercentFromCursor(std::size_t absolute_cursor, std::size_t total_poses);
+
+// Record progress when a coverage execution is interrupted. This deliberately
+// does NOT alter completed swaths or completed areas; completion is decided by
+// the terminal path-handling logic. Kept separate from disk I/O so the
+// invariant is regression-testable without ROS action servers.
+void recordInterruptedCoverageProgress(BTContext& ctx,
+                                       uint32_t area_idx,
+                                       std::size_t absolute_cursor,
+                                       std::size_t total_poses);
 
 // ---------------------------------------------------------------------------
 // forwardSkipIndex — smallest index > `from` whose cumulative path arc-length
@@ -523,16 +532,9 @@ private:
   bool goal_sent_ = false;
   bool follow_goal_ever_sent_ = false;
 
-  // A FollowCoveragePath goal that ABORTS at or beyond this fraction of the
-  // path is treated as COMPLETE rather than skipped. FTC zeroes linear.x once
-  // it leaves FOLLOWING and parks up to max_goal_distance_error (~0.5 m) short
-  // of the final pose; the PathProgressGoalChecker then can't fire (robot
-  // stopped just outside xy tolerance) and the progress_checker aborts the goal
-  // with err 105 at ~100 % tracked. Without this, that abort was scored as a
-  // skip, the near-100 % resume cursor was discarded (resume+2 >= size), the
-  // area was never marked complete, and GetNextUnmowedArea re-mowed it from
-  // scratch — an endless re-mow loop. Matches the goal-checker progress_threshold
-  // (0.95): reaching >=95 % of poses means the area is mowed.
+  // This threshold applies only while handling a dig-truncated goal: reaching
+  // the truncation point lets the unit continue past that dig zone. It is never
+  // evidence that an interrupted coverage unit or area is complete.
   static constexpr double kPathCompleteFraction = 0.95;
 };
 

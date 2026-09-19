@@ -38,6 +38,7 @@
 
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "mowgli_interfaces/coverage_path_invariants.hpp"
 #include "nav2_core/goal_checker.hpp"
 #include "nav2_ros_common/lifecycle_node.hpp"
 #include "nav_msgs/msg/path.hpp"
@@ -96,7 +97,7 @@ private:
   // semantics (fire on xy+yaw proximity to the goal pose), same as the n<=1
   // degenerate guard. Long coverage paths keep the progress gate (the reason
   // this plugin exists — see header). 0 disables (only n<=1 uses proximity).
-  size_t short_path_poses_{10};
+  size_t short_path_poses_{mowgli_interfaces::kCoverageShortPathPoses};
   // Bound on the forward search window in isGoalReached. Prevents
   // boustrophedon paths from letting max_reached_index_ kangaroo past
   // a loop-back point. Tuned at 10 poses (≥10× the per-call physical
@@ -108,6 +109,11 @@ private:
   std::mutex mutex_;
   std::vector<geometry_msgs::msg::PoseStamped> path_poses_;
   size_t max_reached_index_{0};
+  // A controller may ask isGoalReached repeatedly without moving. Do not let
+  // those callback ticks consume the bounded forward-search window as fake
+  // path progress.
+  std::optional<geometry_msgs::msg::Point> last_progress_query_;
+  static constexpr double kMinProgressQueryMotionM = 0.005;
   // Detect a fresh path so we can reset the max-reached index. Use the
   // pose count + first-pose XY as a cheap fingerprint (header.stamp is
   // unreliable when controller_server forwards a stale plan).
