@@ -20,7 +20,12 @@ fi
 set -u
 
 cd /ros2_ws
-
+# Dev Containers may recreate /ros2_ws/src as root:root when mounting the
+# workspace, even though the image owns /ros2_ws as ubuntu.
+if [ ! -w /ros2_ws/src ]; then
+    echo "Fixing /ros2_ws/src ownership..."
+    sudo chown "$(id -u):$(id -g)" /ros2_ws/src
+fi
 echo "Cleaning stale workspace artifacts..."
 
 # Never let generated colcon artifacts inside src/ be discovered as packages.

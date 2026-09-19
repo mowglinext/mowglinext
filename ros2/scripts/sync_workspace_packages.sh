@@ -181,15 +181,37 @@ if [ -f "${MONOREPO_ROOT}/tools/motor/package.xml" ]; then
 fi
 
 if universal_gnss_repo="$(find_universal_gnss_repo)"; then
+    universal_gnss_msgs_dir="${universal_gnss_repo}/universal_gnss_msgs"
     universal_gnss_ros2_dir="${universal_gnss_repo}/gnss_ros2"
+
+    universal_gnss_msgs_xml="${universal_gnss_msgs_dir}/package.xml"
     universal_gnss_ros2_xml="${universal_gnss_ros2_dir}/package.xml"
-    universal_pkg_name="$(package_name_from_xml "${universal_gnss_ros2_xml}")"
-    if [ "${universal_pkg_name}" != "universal_gnss_ros2" ]; then
-        warn "Universal GNSS package name mismatch at ${universal_gnss_ros2_xml}: ${universal_pkg_name}"
+
+    if [ ! -f "${universal_gnss_msgs_xml}" ]; then
+        warn "Universal GNSS messages package not found at ${universal_gnss_msgs_xml}"
         exit 1
     fi
 
-    link_workspace_package "${universal_gnss_ros2_dir}" "${universal_pkg_name}"
+    if [ ! -f "${universal_gnss_ros2_xml}" ]; then
+        warn "Universal GNSS ROS 2 package not found at ${universal_gnss_ros2_xml}"
+        exit 1
+    fi
+
+    msgs_pkg_name="$(package_name_from_xml "${universal_gnss_msgs_xml}")"
+    ros2_pkg_name="$(package_name_from_xml "${universal_gnss_ros2_xml}")"
+
+    if [ "${msgs_pkg_name}" != "universal_gnss_msgs" ]; then
+        warn "Universal GNSS package name mismatch at ${universal_gnss_msgs_xml}: ${msgs_pkg_name}"
+        exit 1
+    fi
+
+    if [ "${ros2_pkg_name}" != "universal_gnss_ros2" ]; then
+        warn "Universal GNSS package name mismatch at ${universal_gnss_ros2_xml}: ${ros2_pkg_name}"
+        exit 1
+    fi
+
+    link_workspace_package "${universal_gnss_msgs_dir}" "${msgs_pkg_name}"
+    link_workspace_package "${universal_gnss_ros2_dir}" "${ros2_pkg_name}"
 else
     warn "Universal GNSS source not found. Checked vendored submodule at ${VENDORED_UNIVERSAL_GNSS_PATH} and fallback mount at ${LEGACY_MOUNTED_UNIVERSAL_GNSS_PATH}${UNIVERSAL_GNSS_PATH:+, plus UNIVERSAL_GNSS_PATH=${UNIVERSAL_GNSS_PATH}}."
 fi
