@@ -179,3 +179,5 @@ operator and maintainer. Status: current; physical guard acceptance remains pend
 | [`firmware/stm32/panel_firmware/README.md`](../../firmware/stm32/panel_firmware/README.md) | vendored | Upstream panel-firmware backup/restore procedure (JP3 SWD header). |
 | [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md) | template | Rendered into every PR body; not prose to read. |
 | `docs/index.html`, `docs/style.css`, `docs/install.sh` | hand-authored site | The mowgli.garden landing page + one-line install composer published by `.github/workflows/pages.yml` (guarded by `docs/test_install.sh` + `docs/test_web_composer.sh`) — not Markdown, listed here so `docs/` is not mistaken for a pure Markdown tree. |
+
+Current sensor recovery reference: [I2C-RECOVERY.md](../../firmware/stm32/ros_usbnode/I2C-RECOVERY.md) — external IMU bus clear, onboard tilt sensor recovery, safety gating and hardware acceptance limits.

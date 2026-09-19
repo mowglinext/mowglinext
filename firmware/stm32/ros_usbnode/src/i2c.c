@@ -13,255 +13,319 @@
   ******************************************************************************
   */
 
-#include <stdio.h>
+#include <math.h>
 #include <string.h>
-
 #include "board.h"
 #include "main.h"
+#include "i2c.h"
+#include "emergency.h"
 #include "imu/imu.h"
 #include "stm32f_board_hal.h"
 #include "i2c_lis3dh.h"
 
-I2C_HandleTypeDef I2C_Handle;
+/* I2C1/PB6/PB7 serves the onboard LIS3DH, NOT the external IMU.
+ * Only the foreground may transact. USB callbacks consume snapshots below.
+ * Busy is checked before HAL (which otherwise has a fixed 25 ms busy wait).
+ * Each service pass requests at most one transaction (2 ms HAL timeout) or
+ * one GPIO edge. This is not a hard wall-time guarantee for the vendor HAL.
+ */
+#define SENSOR_IO_MS 2u
+#define SENSOR_POLL_MS 10u
+#define SENSOR_FRESH_MS 100u
+#define SENSOR_RETRY_MS 1000u
+#define SENSOR_EDGE_MS 1u
 
-/**
-  * @brief I2C Initialization Function
-  * @param None
-  * @retval None
-  */ 
+I2C_HandleTypeDef I2C_Handle;
+static volatile uint8_t sensor_valid, sensor_tilt;
+static volatile uint32_t sensor_sample_tick;
+static uint32_t state_tick, poll_tick, audit_tick;
+static uint8_t audit_index;
+static uint8_t last_was_poll;
+static uint8_t pulse_count, config_index;
+static enum { SENSOR_ID, SENSOR_WRITE, SENSOR_VERIFY, SENSOR_POLL,
+              SENSOR_COOLDOWN, SENSOR_RELEASE, SENSOR_CLOCK_LOW,
+              SENSOR_CLOCK_HIGH, SENSOR_STOP_LOW, SENSOR_STOP_CLOCK,
+              SENSOR_STOP_DATA, SENSOR_RESTORE } sensor_state;
+/* RAM-only diagnostics. Faults also assert the existing emergency indication. */
+static volatile struct { uint32_t faults, attempts, recoveries, samples; } onboard_i2c_diag;
+static uint8_t recovering;
+
+/* Restore the existing safety configuration, with INT1 routing enabled last.
+ * See LIS3DH register definitions: 100 Hz XYZ, +/-2g HR/BDU, temperature ADC,
+ * Z-low threshold/duration, pulsed active-high INT1 and bypass FIFO.
+ */
+static const struct { uint8_t reg, value; } sensor_config[] = {
+    {LIS3DH_CTRL_REG3, 0x00},
+    {LIS3DH_CTRL_REG1, 0x57},
+    {LIS3DH_CTRL_REG2, 0x00},
+    {LIS3DH_CTRL_REG4, 0x88},
+    {LIS3DH_TEMP_CFG_REG, 0xc0},
+    {LIS3DH_CTRL_REG5, 0x00},
+    {LIS3DH_INT1_THS, IMU_ONBOARD_INCLINATION_THRESHOLD},
+    {LIS3DH_INT1_DURATION, 0x01},
+    {LIS3DH_INT1_CFG, 0x10},
+    {LIS3DH_CTRL_REG6, 0x00},
+    {LIS3DH_FIFO_CTRL_REG, 0x00},
+    {LIS3DH_CTRL_REG3, 0x40},
+};
+
+static void sensor_fault(void)
+{
+    sensor_valid = 0;
+    Emergency_OnboardSensorFault();
+    ++onboard_i2c_diag.faults;
+    debug_printf("Onboard tilt sensor unavailable; motion inhibited, recovery pending\r\n");
+    sensor_state = SENSOR_COOLDOWN;
+    state_tick = HAL_GetTick();
+}
+
+static uint8_t sensor_bus_init(void)
+{
+    GPIO_InitTypeDef gpio = {0};
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_I2C1_CLK_ENABLE();
+    __HAL_RCC_I2C1_FORCE_RESET();
+    __HAL_RCC_I2C1_RELEASE_RESET();
+    gpio.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+    gpio.Mode = GPIO_MODE_AF_OD;
+    gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+#if BOARD_YARDFORCE500_VARIANT_B
+    gpio.Alternate = GPIO_AF4_I2C1;
+#endif
+    HAL_GPIO_Init(GPIOB, &gpio);
+    memset(&I2C_Handle, 0, sizeof(I2C_Handle));
+    I2C_Handle.Instance = I2C1;
+    I2C_Handle.Init.ClockSpeed = 400000;
+    I2C_Handle.Init.DutyCycle = I2C_DUTYCYCLE_2;
+    I2C_Handle.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    I2C_Handle.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    I2C_Handle.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    I2C_Handle.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    return HAL_I2C_Init(&I2C_Handle) == HAL_OK;
+}
+
 void I2C_Init(void)
 {
-   GPIO_InitTypeDef GPIO_InitStruct = {0};
-   GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
-   GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-#if BOARD_YARDFORCE500_VARIANT_B
-   GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
-#endif
-   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-   /* Peripheral clock enable */
-   __HAL_RCC_I2C1_CLK_DISABLE();
-   __HAL_RCC_I2C1_CLK_ENABLE();
-
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
-  I2C_Handle.Instance = I2C1;
-  I2C_Handle.Init.ClockSpeed = 400000;
-  I2C_Handle.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  I2C_Handle.Init.OwnAddress1 = 0;
-  I2C_Handle.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  I2C_Handle.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  I2C_Handle.Init.OwnAddress2 = 0;
-  I2C_Handle.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  I2C_Handle.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&I2C_Handle) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2C1_Init 2 */
-
-  /* USER CODE END I2C1_Init 2 */
+    sensor_valid = 0;
+    sensor_tilt = 0;
+    recovering = 0;
+    config_index = audit_index = 0;
+    last_was_poll = 0;
+    audit_tick = HAL_GetTick();
+    sensor_state = SENSOR_ID;
+    if (!sensor_bus_init()) sensor_fault();
 }
 
-/*
- * I2C send function
- */
-int32_t I2C_platform_write(void *handle, uint8_t reg, const uint8_t *bufp, uint16_t len)
+static uint8_t sensor_can_transact(void *handle)
 {
-  reg |= 0x80;
-  HAL_I2C_Mem_Write(handle, LIS3DH_I2C_ADD_L, reg, I2C_MEMADD_SIZE_8BIT, (uint8_t*) bufp, len, 1000);
-  return 0;
+    return __get_IPSR() == 0 && handle == &I2C_Handle &&
+        (sensor_state == SENSOR_ID || sensor_state == SENSOR_WRITE ||
+         sensor_state == SENSOR_VERIFY || sensor_state == SENSOR_POLL) &&
+        HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6) == GPIO_PIN_SET &&
+        HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET &&
+        __HAL_I2C_GET_FLAG(&I2C_Handle, I2C_FLAG_BUSY) == RESET;
 }
 
-/*
- * I2C receive function
- */
-int32_t I2C_platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t len)
+int32_t I2C_platform_read(void *handle, uint8_t reg, uint8_t *buf, uint16_t len)
 {
-  /* Read multiple command */
-  reg |= 0x80;
-  HAL_I2C_Mem_Read(handle, LIS3DH_I2C_ADD_L, reg, I2C_MEMADD_SIZE_8BIT, bufp, len, 1000);
-  return 0;
-}
-
-/*
- * read onboard acclerometer values
- */
-void I2C_ReadAccelerometer(float *x, float *y, float *z)
-{
-    uint8_t max_tries = 3;
-
-    stmdev_ctx_t dev_ctx;
-    dev_ctx.write_reg = I2C_platform_write;
-    dev_ctx.read_reg = I2C_platform_read;
-    dev_ctx.handle = &I2C_Handle;
-
-    lis3dh_reg_t reg;        
-
-    lis3dh_xl_data_ready_get(&dev_ctx, &reg.byte);        
-    while (!reg.byte && max_tries) {            
-      lis3dh_xl_data_ready_get(&dev_ctx, &reg.byte);        
-      HAL_Delay(1);
-      max_tries--;
-    }    
-    if (reg.byte) {            
-            int16_t data_raw_acceleration[3];
-            memset(data_raw_acceleration, 0x00, 3 * sizeof(int16_t));
-            lis3dh_acceleration_raw_get(&dev_ctx, data_raw_acceleration);
-            *x = lis3dh_from_fs2_hr_to_mg(data_raw_acceleration[0]) / 1000.0 * MS2_PER_G;
-            *y = lis3dh_from_fs2_hr_to_mg(data_raw_acceleration[1]) / 1000.0 * MS2_PER_G;
-            *z = lis3dh_from_fs2_hr_to_mg(data_raw_acceleration[2]) / 1000.0 * MS2_PER_G;
-           // debug_printf("Acceleration [ms^2]: X=%4.2f\tY=%4.2f\tZ=%4.2f\r\n", *x, *y, *z);  
-    }    
-    else
-    {
-        //debug_printf("\e[01;31mWARNING: timeout while waiting for I2C onboard acceleration sensor !\e[0m");
-        I2C_Init();
-        *z = 0;
-        *y = 0;
-        *z = 0;        
+    if (__get_IPSR() != 0) return -1;
+    if (!sensor_can_transact(handle) ||
+        HAL_I2C_Mem_Read(handle, LIS3DH_I2C_ADD_L, reg | 0x80,
+                         I2C_MEMADD_SIZE_8BIT, buf, len, SENSOR_IO_MS) != HAL_OK) {
+        sensor_fault();
+        return -1;
     }
+    return 0;
 }
 
-/*
- * read onboard acclerometer temperature value
- */
-float I2C_ReadAccelerometerTemp(void)
-{        
-
-    stmdev_ctx_t dev_ctx;    
-    dev_ctx.write_reg = I2C_platform_write;
-    dev_ctx.read_reg = I2C_platform_read;
-    dev_ctx.handle = &I2C_Handle;
-
-    static int16_t data_raw_temperature;
-    lis3dh_reg_t reg;  
-
-    lis3dh_temp_data_ready_get(&dev_ctx, &reg.byte);
-
-    // Read temperature data 
-    if (reg.byte)
-    {
-        float temperature_degC;
-        memset(&data_raw_temperature, 0x00, sizeof(int16_t));
-        lis3dh_temperature_raw_get(&dev_ctx, &data_raw_temperature);
-        temperature_degC =lis3dh_from_lsb_hr_to_celsius(data_raw_temperature);            
-        // debug_printf("Temperature [degC]:%6.2f\r\n", temperature_degC);
-        return(temperature_degC);    
-    }
-    else
-    {
-        //debug_printf("\e[01;31mWARNING: timeout while waiting for I2C onboard temp sensor !\e[0m");
-        I2C_Init();
-        return(0);
-    }
-}
-
-/*
- * test if we can talk to the LIS3DH accelerometer onboard the GForce board
- */
-uint8_t I2C_Acclerometer_TestDevice(void)
+int32_t I2C_platform_write(void *handle, uint8_t reg, const uint8_t *buf, uint16_t len)
 {
-    stmdev_ctx_t dev_ctx;
-    lis3dh_reg_t reg;
-
-    dev_ctx.write_reg = I2C_platform_write;
-    dev_ctx.read_reg = I2C_platform_read;
-    dev_ctx.handle = &I2C_Handle;
-    HAL_Delay(50);   // wait for bootup
-    /* Check device ID */
-    lis3dh_device_id_get(&dev_ctx, &reg.byte);    
-    if (reg.byte != LIS3DH_ID) {
-        return(0);        
-    }    
-    return(1);
+    if (__get_IPSR() != 0) return -1;
+    if (!sensor_can_transact(handle) ||
+        HAL_I2C_Mem_Write(handle, LIS3DH_I2C_ADD_L, reg | 0x80,
+                          I2C_MEMADD_SIZE_8BIT, (uint8_t *)buf, len, SENSOR_IO_MS) != HAL_OK) {
+        sensor_fault();
+        return -1;
+    }
+    return 0;
 }
 
-/*
- * INT1 will latch if triggered
- * this function will return its state and unlatch the INT
+/* Snapshot age is delivery liveness, not proof of a new physical measurement.
+ * Only a successful INT1_SRC transaction publishes this snapshot, and every
+ * transaction/configuration failure invalidates it before starting recovery.
  */
+static uint8_t sensor_snapshot(uint8_t *tilt)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    uint8_t valid = sensor_valid;
+    uint32_t tick = sensor_sample_tick;
+    *tilt = sensor_tilt;
+    __set_PRIMASK(primask);
+    return valid && (uint32_t)(HAL_GetTick() - tick) <= SENSOR_FRESH_MS;
+}
+
+uint8_t I2C_OnboardHealthy(void)
+{
+    uint8_t tilt;
+    return sensor_snapshot(&tilt);
+}
+
 uint8_t I2C_TestZLowINT(void)
 {
-    stmdev_ctx_t dev_ctx;
-
-    dev_ctx.write_reg = I2C_platform_write;
-    dev_ctx.read_reg = I2C_platform_read;
-    dev_ctx.handle = &I2C_Handle;
-
-    lis3dh_int1_src_t int1_src;
-    lis3dh_int1_gen_source_get(&dev_ctx, &int1_src); 
-    
-    return(int1_src.zl && int1_src.ia);
+    uint8_t tilt;
+    return !sensor_snapshot(&tilt) || tilt;
 }
 
-/*
- * Setup Accelerometer and configure the "tilt protection"
- * "tilt protection" works via hardware INT1 that will stop the blade motor if triggered (see Kicad) 
- */
-void I2C_Accelerometer_Setup(void)
+void I2C_Onboard_Service(void)
 {
-    stmdev_ctx_t dev_ctx;
-
-    dev_ctx.write_reg = I2C_platform_write;
-    dev_ctx.read_reg = I2C_platform_read;
-    dev_ctx.handle = &I2C_Handle;
-
-    /* Reboot - reset all settings */
-    lis3dh_boot_set(&dev_ctx, 1);
-    HAL_Delay(50);
-
-    /* Enable Block Data Update. */
-    lis3dh_block_data_update_set(&dev_ctx, PROPERTY_ENABLE);
-    
-    /* Set Output Data Rate to 1Hz. */
-    lis3dh_data_rate_set(&dev_ctx, LIS3DH_ODR_100Hz);
-    
-    /* Set full scale to 2g. */
-    lis3dh_full_scale_set(&dev_ctx, LIS3DH_2g);
-    
-    /* Enable temperature sensor. */
-    lis3dh_aux_adc_set(&dev_ctx, LIS3DH_AUX_ON_TEMPERATURE);
-    
-    /* Set device in continuous mode with 12 bit resol. */
-    lis3dh_operating_mode_set(&dev_ctx, LIS3DH_HR_12bit);
-                
-    /* Set INT1 threshold */
-    /* triggers below 0.928g (16mg x 0x3A) - stock firmware uses 0x2C (0.71g) */
-    lis3dh_int1_gen_threshold_set(&dev_ctx, IMU_ONBOARD_INCLINATION_THRESHOLD);
-    
-    /* Set INT1 minimum duration (0xFF = 2.55 sec) */
-    lis3dh_int1_gen_duration_set(&dev_ctx, 0x1);   // 10ms
-
-    /* PULSE INT1 */
-    /* we have to read INT1_SRC (bit 6) to check the status of the INT */
-    lis3dh_int1_pin_notification_mode_set(&dev_ctx, LIS3DH_INT1_PULSED);
-
-    /*  Enable interrupt generation on Z low event or on Direction recognition. */
-    lis3dh_int1_cfg_t int1_cfg;
-    memset(&int1_cfg, 0, 1); // clear all flags
-    int1_cfg.zlie = 1; // enable Z low interrupt
-    lis3dh_int1_gen_conf_set(&dev_ctx, &int1_cfg);
-
-    /* INT Polarity (active-high) */
-    lis3dh_ctrl_reg6_t ctrl_reg6;
-    memset(&ctrl_reg6, 0, 1); // clear all flags means active high for INT_POLARITY
-    lis3dh_pin_int2_config_set(&dev_ctx, &ctrl_reg6); 
-
-    /* Enable INT1 */    
-    lis3dh_ctrl_reg3_t ctrl_reg3;
-    memset(&ctrl_reg3, 0, 1); // clear all flags
-    ctrl_reg3.i1_ia1 = 1;   // enable INT1
-    lis3dh_pin_int1_config_set(&dev_ctx, &ctrl_reg3); 
-
-    /* FIFO control */    
-    lis3dh_fifo_mode_set(&dev_ctx, 0);
-    lis3dh_fifo_trigger_event_set(&dev_ctx, 0);
-    lis3dh_fifo_watermark_set(&dev_ctx, 0x0);
+    if (__get_IPSR() != 0) return;
+    uint32_t now = HAL_GetTick();
+    uint8_t value = 0;
+    if (sensor_valid && !I2C_OnboardHealthy()) { sensor_fault(); return; }
+    switch (sensor_state) {
+    case SENSOR_ID:
+        if (I2C_platform_read(&I2C_Handle, LIS3DH_WHO_AM_I, &value, 1)) return;
+        if (value != LIS3DH_ID) { sensor_fault(); return; }
+        config_index = 0;
+        audit_index = 0;
+        audit_tick = now;
+        last_was_poll = 0;
+        sensor_state = SENSOR_WRITE;
+        return;
+    case SENSOR_WRITE:
+        if (I2C_platform_write(&I2C_Handle, sensor_config[config_index].reg,
+                               &sensor_config[config_index].value, 1)) return;
+        sensor_state = SENSOR_VERIFY;
+        return;
+    case SENSOR_VERIFY:
+        if (I2C_platform_read(&I2C_Handle, sensor_config[config_index].reg, &value, 1)) return;
+        if (value != sensor_config[config_index].value) { sensor_fault(); return; }
+        if (++config_index == sizeof(sensor_config) / sizeof(sensor_config[0])) {
+            sensor_state = SENSOR_POLL;
+            poll_tick = now - SENSOR_POLL_MS;
+        } else sensor_state = SENSOR_WRITE;
+        return;
+    case SENSOR_POLL:
+        /* Audit identity/configuration a register at a time between polls.
+         * This detects a powered-but-reset sensor whose INT source reads zero.
+         * Skip the initial routing-disable entry; final CTRL3 is 0x40. */
+        if (last_was_poll && (uint32_t)(now - audit_tick) >= 1000u) {
+            last_was_poll = 0;
+            uint8_t reg = audit_index ? sensor_config[audit_index].reg : LIS3DH_WHO_AM_I;
+            uint8_t expected = audit_index ? sensor_config[audit_index].value : LIS3DH_ID;
+            if (I2C_platform_read(&I2C_Handle, reg, &value, 1)) return;
+            if (value != expected) { sensor_fault(); return; }
+            if (++audit_index == sizeof(sensor_config) / sizeof(sensor_config[0])) {
+                audit_index = 0;
+                audit_tick = now;
+            }
+            return;
+        }
+        if ((uint32_t)(now - poll_tick) < SENSOR_POLL_MS) return;
+        poll_tick = now;
+        if (I2C_platform_read(&I2C_Handle, LIS3DH_INT1_SRC, &value, 1)) return;
+        /* Publish validity last; a preempting USB reader sees invalid until all
+         * fields belong to this successful transaction. */
+        sensor_valid = 0;
+        sensor_tilt = (value & 0x50) == 0x50;
+        sensor_sample_tick = HAL_GetTick();
+        sensor_valid = 1;
+        ++onboard_i2c_diag.samples;
+        last_was_poll = 1;
+        if (recovering) { ++onboard_i2c_diag.recoveries; recovering = 0; }
+        return;
+    case SENSOR_COOLDOWN:
+        if ((uint32_t)(now - state_tick) < SENSOR_RETRY_MS) return;
+        ++onboard_i2c_diag.attempts;
+        recovering = 1;
+        /* Stop the peripheral before taking GPIO ownership. Never drive high. */
+        __HAL_RCC_I2C1_FORCE_RESET();
+        __HAL_RCC_I2C1_RELEASE_RESET();
+        {
+            GPIO_InitTypeDef gpio = {0};
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_SET);
+            gpio.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+            gpio.Mode = GPIO_MODE_OUTPUT_OD;
+            gpio.Pull = GPIO_PULLUP;
+            gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+            HAL_GPIO_Init(GPIOB, &gpio);
+        }
+        pulse_count = 0;
+        state_tick = now;
+        sensor_state = SENSOR_RELEASE;
+        return;
+    case SENSOR_RELEASE:
+    case SENSOR_CLOCK_HIGH:
+        if ((uint32_t)(now - state_tick) < SENSOR_EDGE_MS) return;
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6) != GPIO_PIN_SET) goto bus_failed;
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET) {
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+            sensor_state = SENSOR_STOP_LOW;
+        } else if (pulse_count < 9) {
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+            sensor_state = SENSOR_CLOCK_LOW;
+        } else goto bus_failed;
+        state_tick = now;
+        return;
+    case SENSOR_CLOCK_LOW:
+        if ((uint32_t)(now - state_tick) < SENSOR_EDGE_MS) return;
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+        ++pulse_count;
+        sensor_state = SENSOR_CLOCK_HIGH;
+        state_tick = now;
+        return;
+    case SENSOR_STOP_LOW:
+        if ((uint32_t)(now - state_tick) < SENSOR_EDGE_MS) return;
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+        sensor_state = SENSOR_STOP_CLOCK;
+        state_tick = now;
+        return;
+    case SENSOR_STOP_CLOCK:
+        if ((uint32_t)(now - state_tick) < SENSOR_EDGE_MS) return;
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6) != GPIO_PIN_SET) goto bus_failed;
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+        sensor_state = SENSOR_STOP_DATA;
+        state_tick = now;
+        return;
+    case SENSOR_STOP_DATA:
+        if ((uint32_t)(now - state_tick) < SENSOR_EDGE_MS) return;
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6) != GPIO_PIN_SET ||
+            HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) != GPIO_PIN_SET) goto bus_failed;
+        sensor_state = SENSOR_RESTORE;
+        return;
+    case SENSOR_RESTORE:
+        if (!sensor_bus_init()) { sensor_fault(); return; }
+        sensor_state = SENSOR_ID;
+        return;
+    }
+    return;
+bus_failed:
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_SET);
+    sensor_fault();
 }
+
+/* Legacy foreground diagnostic API. No reinitialization or fabricated sample
+ * on failure; runtime safety reads only the service's qualified snapshot. */
+void I2C_ReadAccelerometer(float *x, float *y, float *z)
+{
+    uint8_t bytes[6];
+    *x = *y = *z = NAN;
+    if (!I2C_OnboardHealthy() || __get_IPSR() != 0) return;
+    if (I2C_platform_read(&I2C_Handle, LIS3DH_OUT_X_L, bytes, sizeof(bytes))) return;
+    *x = lis3dh_from_fs2_hr_to_mg((int16_t)(bytes[0] | bytes[1] << 8)) / 1000.0f * MS2_PER_G;
+    *y = lis3dh_from_fs2_hr_to_mg((int16_t)(bytes[2] | bytes[3] << 8)) / 1000.0f * MS2_PER_G;
+    *z = lis3dh_from_fs2_hr_to_mg((int16_t)(bytes[4] | bytes[5] << 8)) / 1000.0f * MS2_PER_G;
+}
+
+float I2C_ReadAccelerometerTemp(void)
+{
+    uint8_t bytes[2];
+    if (!I2C_OnboardHealthy() || __get_IPSR() != 0) return NAN;
+    if (I2C_platform_read(&I2C_Handle, LIS3DH_OUT_ADC3_L, bytes, sizeof(bytes))) return NAN;
+    return lis3dh_from_lsb_hr_to_celsius((int16_t)(bytes[0] | bytes[1] << 8));
+}
+
+uint8_t I2C_Acclerometer_TestDevice(void) { return I2C_OnboardHealthy(); }
+void I2C_Accelerometer_Setup(void) { /* I2C_Onboard_Service owns setup. */ }

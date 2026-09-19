@@ -368,7 +368,7 @@ static void on_heartbeat(const uint8_t *data, size_t len) {
   const bool emergency_release_requested =
       pkt->emergency_release_requested != 0u;
   const bool watchdog_latch_active =
-      heartbeat_only_latch && Emergency_State();
+      heartbeat_only_latch && Emergency_State() == 1u;
   /* A STOP request needs no sensor read: it always wins. This preserves the
    * previous sensor-read conditions for all other inputs. */
   const bool physical_emergency =

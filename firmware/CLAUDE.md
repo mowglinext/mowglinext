@@ -86,3 +86,7 @@ This tree **is** the safety authority described in the root CLAUDE.md § *Safety
 - `I_DONT_NEED_MY_FINGERS` (`include/board.h`, template `{{.DisableEmergency}}`) compiles `EmergencyController()` out entirely. It is a bench-only switch; `board_defaults.h` never sets it.
 - Weakening `ANTIDIG_*` to compensate for the host dig detector is explicitly banned by the root "What NOT to Do" — the two cover different failures.
 - **Remove the blades** before any bench work: the custom firmware has no tilt sensing on the bench harness, and a flash reboots the board with motors powered.
+
+## Sensor recovery ownership
+
+Onboard LIS3DH I2C1 transactions and recovery belong to I2C_Onboard_Service in the main loop. Interrupt callbacks use health/tilt snapshots only. Failed/stale readings inhibit motion and detected faults stay latched after recovery until explicit release. See [I2C-RECOVERY.md](stm32/ros_usbnode/I2C-RECOVERY.md); test both recovery paths with firmware/scripts/test_soft_i2c_recovery.py and test_onboard_i2c_recovery.py. The external IMU uses a separate software-I2C bus.

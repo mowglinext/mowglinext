@@ -514,17 +514,7 @@ int main(void)
 
   I2C_Init();
   DB_TRACE(" * Hard I2C initialized\r\n");
-  if (I2C_Acclerometer_TestDevice())
-  {
-    I2C_Accelerometer_Setup();
-  }
-  else
-  {
-    chirp(3);
-    DB_TRACE("\e[01;31m * WARNING: initalization of onboard accelerometer for tilt protection failed !\e[0m\r\n");
-  }
-
-  DB_TRACE(" * Accelerometer (onboard/tilt safety) initialized\r\n");
+  // Onboard setup/recovery is serviced without blocking the main loop.
   SW_I2C_Init();
   DB_TRACE(" * Soft I2C (J18) initialized\r\n");
   DB_TRACE(" * Testing supported IMUs:\r\n");
@@ -588,6 +578,7 @@ int main(void)
   while (1)
   {
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CHATTER);
+    I2C_Onboard_Service();
     chatter_handler();
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_MOTORS);
     motors_handler();

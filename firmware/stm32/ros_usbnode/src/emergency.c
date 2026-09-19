@@ -96,7 +96,7 @@ void emergency_set_timeouts(uint32_t one_wheel_lift_ms,
  */
 uint8_t Emergency_State(void)
 {
-    return(emergency_state);
+    return emergency_state | (I2C_OnboardHealthy() ? 0u : 0x40u);
 }
 
 /**
@@ -111,7 +111,11 @@ uint8_t Emergency_State(void)
  */
 void  Emergency_SetState(uint8_t new_emergency_state)
 {
-    emergency_state = (new_emergency_state != 0) ? 1u : 0u;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    if (new_emergency_state != 0) emergency_state |= 1u;
+    else if (I2C_OnboardHealthy() && !I2C_TestZLowINT()) emergency_state = 0;
+    __set_PRIMASK(primask);
 }
 
 /**
@@ -121,9 +125,17 @@ void  Emergency_SetState(uint8_t new_emergency_state)
  */
 static void emergency_set_bits(uint8_t bits)
 {
+    uint32_t primask = __get_PRIMASK();
     __disable_irq();
     emergency_state |= bits;
-    __enable_irq();
+    __set_PRIMASK(primask);
+}
+
+/* Recovery never clears this bit: an explicit release is required once the
+ * sensor is healthy. It cannot be mistaken for a pure communications latch. */
+void Emergency_OnboardSensorFault(void)
+{
+    emergency_set_bits(0x40u);
 }
 
 /**
@@ -325,7 +337,7 @@ void EmergencyController(void)
         else
         {
             if (now - play_button_started >= g_play_clear_ms) {
-                emergency_state = 0;
+                Emergency_SetState(0);
                 debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - manual reset\r\n");
 				StatusLEDUpdate();
                 do_chirp=1;
@@ -337,7 +349,7 @@ void EmergencyController(void)
         play_button_started = 0;
     }
     /* play buzzer when emergency every 5s*/
-    if(emergency_state  && ((HAL_GetTick()-l_u32timestamp) > 5000)){
+    if(Emergency_State() && ((HAL_GetTick()-l_u32timestamp) > 5000)){
         l_u32timestamp = HAL_GetTick();
         do_chirp=5;
     }

@@ -4,6 +4,10 @@
 #include <stdint.h>
 
 void I2C_Init(void);
+/* Foreground-only owner of onboard sensor transactions and bus recovery. */
+void I2C_Onboard_Service(void);
+/* Interrupt-safe snapshots; neither accessor touches the bus. */
+uint8_t I2C_OnboardHealthy(void);
 uint8_t I2C_Acclerometer_TestDevice(void);
 void I2C_Accelerometer_Setup(void);
 void I2C_ReadAccelerometer(float *x, float *y, float *z);
