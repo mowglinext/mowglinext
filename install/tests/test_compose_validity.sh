@@ -91,7 +91,10 @@ GPS_SERVICE_BLOCK="$(awk '
 ' "$COMPOSE_FILE")"
 
 for required in   "UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:"   "./docker/config/mowgli:/config:ro"   "device_cgroup_rules:"   "universal_gnss_launcher"   "fix_topic:=/gps/fix"   "status_topic:=/universal_gnss_receiver/status"   "rtcm_topic:=/universal_gnss_receiver/rtcm"   "ntrip_enabled:"; do
-  if printf '%s' "$GPS_SERVICE_BLOCK" | grep -q "$required"; then
+  # Here-string, not a pipe: under `pipefail`, grep -q exits on its first match
+  # and a still-writing printf dies of SIGPIPE, failing the check at random
+  # once the service block is long.
+  if grep -qF -- "$required" <<<"$GPS_SERVICE_BLOCK"; then
     pass "compose contains sidecar env: $required"
   else
     fail "compose contains sidecar env: $required" "missing from generated gps service"
