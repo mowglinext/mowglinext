@@ -23,8 +23,9 @@ selection, compatible per-service overrides and pin controls. Advanced separates
 manual per-image comparisons and deployment history also live here. The view
 switch changes presentation only: it does not check remotely, install anything
 or change policy. Unsaved source edits must be saved or reset before review.
-Simple always reviews the latest published deployment and preserves an existing
-pin; switching back from Advanced cannot install a hidden older selection.
+Simple lets the operator choose Production, Development or a named custom branch,
+then reviews the latest published deployment from that source and preserves an
+existing pin; switching back from Advanced cannot install a hidden older selection.
 Production selects the highest `vMAJOR.MINOR.PATCH`, so a later-published backport
 does not replace a newer version. Development and custom snapshots use publication
 time. Older compatible versions remain selectable explicitly in Advanced.
@@ -38,12 +39,14 @@ Advanced fields stack into one column on narrow screens.
 
 ### Selecting another branch or fork
 
-1. Open **Advanced** and choose **Production**, **Development** or **Custom branch**.
-2. Choose an enabled repository. For Custom branch, type the full name, for
-   example `feat/settings-updates`; slashes are preserved. This is a branch-name
-   field, not a list of every GitHub branch.
-3. Click **Save and check**. Choose Latest or a retained deployment, then Review
-   installation. Selecting a source alone never replaces containers.
+1. In **Simple**, choose **Production**, **Development** or **Custom branch**.
+   The same controls also remain under **Advanced → Update settings**.
+2. Choose an enabled repository when more than one is configured. For Custom
+   branch, type the full name, for example `feat/settings-updates`; slashes are
+   preserved. This is a branch-name field, not a list of every GitHub branch.
+3. Click **Check for updates** in Simple, or **Save settings** in Advanced. Choose
+   Latest or a retained deployment, then Review installation. Selecting a source
+   alone never replaces containers.
 
 An administrator enables a fork by adding it to the existing host config's list
 (preserve the other settings), for example:
