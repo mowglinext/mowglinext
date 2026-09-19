@@ -42,6 +42,8 @@ extern "C" {
 *******************************************************************************/
 // global variables used by ROS
 extern bool BLADEMOTOR_bActivated;
+/* Raw ESC bytes 7..8 under the legacy RPM name. On the tested 500 this holds
+ * the last nonzero report after OFF, then clears; it is not live coast RPM. */
 extern uint16_t BLADEMOTOR_u16RPM;
 extern uint16_t BLADEMOTOR_u16Power;
 extern uint32_t BLADEMOTOR_u32Error;

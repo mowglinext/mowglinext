@@ -28,8 +28,9 @@
 *******************************************************************************/
 #define BLADEMOTOR_LENGTH_INIT_MSG 22
 #define BLADEMOTOR_LENGTH_RQST_MSG 7
-/* Reversal is allowed only after an accepted OFF transmission and fresh
- * stopped feedback. These are minimum guards, not a mechanical stop-time model. */
+/* Reversal requires an accepted OFF transmission and qualifying ESC reports.
+ * The tested 500 holds its speed word after OFF, then clears it; it reports no
+ * progressive coast-down curve. These guards are not a mechanical stop model. */
 #define BLADEMOTOR_REVERSE_OFF_MS 1000u
 #define BLADEMOTOR_ZERO_CONFIRM_MS 300u
 #define BLADEMOTOR_FEEDBACK_MAX_AGE_MS 300u
@@ -87,12 +88,13 @@ static uint8_t blademotor_trace_command;
 
 typedef struct {
     uint32_t seq, tick, zero_epoch;
-    uint16_t rpm;
+    uint16_t reported_speed;
     uint8_t valid, activated, error;
 } blademotor_feedback_t;
 /* Updated only after RX completion; snapshot with IRQs masked in the foreground.
- * Never use the public cached RPM alone: startup zero or a stale reply is not
- * evidence that it is safe to reverse. Invalid replies break qualification. */
+ * seq/tick identify UART replies, not new physical speed measurements inside the
+ * ESC. Never infer deceleration from a held word or use public cached RPM alone.
+ * Invalid replies break qualification. Hardware evidence is in BLADE-REVERSE.md. */
 static volatile blademotor_feedback_t blademotor_feedback;
 
 const uint8_t blademotor_pcu8Preamble[5]  = {0x55,0xAA,0x0A,0x2,0xD0};
@@ -105,7 +107,7 @@ const uint8_t blademotor_pcu8InitMsg[BLADEMOTOR_LENGTH_INIT_MSG] =  { 0x55, 0xaa
 *  Public Functions
 *******************************************************************************/
 
-static bool blademotor_stopped_for_reverse(uint32_t now)
+static bool blademotor_feedback_qualified_for_reverse(uint32_t now)
 {
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
@@ -120,23 +122,25 @@ static bool blademotor_stopped_for_reverse(uint32_t now)
         blademotor_zero_epoch = feedback.zero_epoch;
     }
     if (!blademotor_off_sent || !feedback.valid || feedback.activated ||
-        feedback.error || feedback.rpm != 0 ||
+        feedback.error || feedback.reported_speed != 0 ||
         (uint32_t)(now - feedback.tick) > BLADEMOTOR_FEEDBACK_MAX_AGE_MS)
     {
         blademotor_zero_seen = false;
         blademotor_last_feedback_seq = feedback.seq;
         return false;
     }
-    if (feedback.seq != blademotor_last_feedback_seq)
+    /* Release only while consuming a new reply. The minimum OFF dwell must
+     * not expire into an enable using the same cached zero as the last pass. */
+    if (feedback.seq == blademotor_last_feedback_seq)
+        return false;
+    blademotor_last_feedback_seq = feedback.seq;
+    if (!blademotor_zero_seen)
     {
-        blademotor_last_feedback_seq = feedback.seq;
-        if (!blademotor_zero_seen)
-        {
-            blademotor_zero_since = feedback.tick;
-            blademotor_zero_seen = true;
-        }
+        blademotor_zero_since = feedback.tick;
+        blademotor_zero_seen = true;
     }
-    /* Use the span of received zero-RPM samples, not time since one old zero. */
+    /* A latched nonzero word never contributes to this zero-report interval.
+     * A direct nonzero-to-zero transition needs the full confirmation window. */
     /* The bench image must never reverse, even when the ESC reports zero.
      * Its purpose is to compare that report with independent rotor observation. */
     return !BLADEMOTOR_COASTDOWN_VALIDATION && blademotor_zero_seen &&
@@ -163,13 +167,13 @@ void blademotor_prepareMsg(void)
             blademotor_off_sent = blademotor_zero_seen = false;
             blademotor_pending_since = blademotor_pending_report_tick = HAL_GetTick();
         }
-        if (!blademotor_reverse_pending || blademotor_stopped_for_reverse(HAL_GetTick()))
+        if (!blademotor_reverse_pending || blademotor_feedback_qualified_for_reverse(HAL_GetTick()))
             command = blademotor_u8Direction ? 0xC0 : 0x80;
     }
     /* Adapted from jeremysalwen/Mowgli dd6c01b6: decide direction here, where
      * every transmitted frame is built, rather than overwrite it after Set().
      * crcCalc is an additive checksum: reverse 0xC0 needs 0x62, NOT 0xE2.
-     * Feedback during physical coast-down remains unverified; see BLADE-REVERSE.md. */
+     * Controller feedback semantics and hardware evidence: BLADE-REVERSE.md. */
     blademotor_pu8RqstMessage[5] = command;
     blademotor_pu8RqstMessage[6] = crcCalc(blademotor_pu8RqstMessage, BLADEMOTOR_LENGTH_RQST_MSG - 1);
 }
@@ -321,7 +325,8 @@ void  BLADEMOTOR_App(void){
             blademotor_off_sent = blademotor_zero_seen = false;
             BLADEMOTOR_u32Error++;
         }
-        /* RX re-arm and error handling must continue even while TX is busy. */
+        /* Polling continues after OFF, including while the speed word is held.
+         * RX re-arm and error handling must continue even while TX is busy. */
         HAL_UART_Receive_DMA(&BLADEMOTOR_USART_Handler, blademotor_pu8ReceivedData, BLADEMOTOR_LENGTH_RECEIVED_MSG);
 
         if (blademotor_reverse_pending &&
@@ -342,11 +347,11 @@ void  BLADEMOTOR_App(void){
         if (trace.seq != blademotor_trace_seq)
         {
             blademotor_trace_seq = trace.seq;
-            debug_printf("blade coast t=%lu tx=%02x tx_t=%lu seq=%lu rx_t=%lu valid=%u active=%u rpm=%u err=%u\r\n",
+            debug_printf("blade coast t=%lu tx=%02x tx_t=%lu seq=%lu rx_t=%lu valid=%u active=%u speed_word=%u err=%u\r\n",
                 (unsigned long)HAL_GetTick(), (unsigned)blademotor_trace_command,
                 (unsigned long)blademotor_trace_tx_tick, (unsigned long)trace.seq,
                 (unsigned long)trace.tick, (unsigned)trace.valid, (unsigned)trace.activated,
-                (unsigned)trace.rpm, (unsigned)trace.error);
+                (unsigned)trace.reported_speed, (unsigned)trace.error);
         }
 #endif
         /* Do not rewrite a request buffer still owned by the UART DMA. */
@@ -414,9 +419,11 @@ void BLADEMOTOR_ReceiveIT(void)
             else{
                 BLADEMOTOR_bActivated = false;
             }
+            /* Legacy public RPM field: raw ESC speed word, held after OFF on
+             * the tested 500. A new UART reply need not contain a new estimate. */
             BLADEMOTOR_u16RPM = blademotor_pu8ReceivedData[7] + (blademotor_pu8ReceivedData[8]<<8);
             BLADEMOTOR_u16Power = blademotor_pu8ReceivedData[9] + (blademotor_pu8ReceivedData[10]<<8) ;           
-            blademotor_feedback.rpm = BLADEMOTOR_u16RPM;
+            blademotor_feedback.reported_speed = BLADEMOTOR_u16RPM;
             blademotor_feedback.activated = BLADEMOTOR_bActivated;
             blademotor_feedback.error = blademotor_pu8ReceivedData[6];
             blademotor_feedback.valid = 1;
@@ -425,7 +432,7 @@ void BLADEMOTOR_ReceiveIT(void)
     }
     uint32_t now = HAL_GetTick();
     if (!blademotor_feedback.valid || blademotor_feedback.activated ||
-        blademotor_feedback.error || blademotor_feedback.rpm != 0 ||
+        blademotor_feedback.error || blademotor_feedback.reported_speed != 0 ||
         (uint32_t)(now - blademotor_feedback.tick) > BLADEMOTOR_FEEDBACK_MAX_AGE_MS)
         blademotor_feedback.zero_epoch++;
     blademotor_feedback.tick = now;

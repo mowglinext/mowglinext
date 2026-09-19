@@ -31,8 +31,10 @@ That bench auto-start/drive-reset code is not included here.
 
 - A change from the last transmitted running direction first sends OFF.
 - Wait at least 1000 ms after UART accepts that OFF transmission, and require
-  fresh, checksum-valid responses showing inactive, zero RPM and no error over
-  at least 300 ms. Feedback older than 300 ms cannot qualify.
+  newly received, checksum-valid responses showing inactive, a zero speed word
+  and no error over at least 300 ms. Feedback older than 300 ms cannot qualify.
+  Release must consume a new reply; a cached zero cannot release reversal when
+  the OFF dwell expires. The nonzero hold does not count toward confirmation.
 - Startup/cached zero RPM, a single old zero, malformed replies, active/nonzero
   replies and feedback gaps cannot release reversal. RX tracks interruptions
   even if a later good reply replaces them before the foreground checks.
@@ -54,14 +56,15 @@ That bench auto-start/drive-reset code is not included here.
   battery-chemistry, ADC, temperature, wheel-control or protocol changes.
 
 The first requested reverse start also requires the stop confirmation.
-On the recorded standard 500 bench baseline below, the controller did not clear
-the reported RPM when OFF was requested. It continued returning fresh replies,
-held the last nonzero value while the rotor coasted, and changed to zero only
-after the operator observed that the rotor had stopped. The value did not decay
-progressively, so it is better described as a controller stop indication than a
-live coast-down tachometer. This rules out the specific early-zero failure on
-that exact 500 baseline. It does not establish a loaded mechanical stop time or
-extend the evidence to the 500B controller.
+On the recorded standard 500 bench baseline below, the ESC held its last nonzero
+speed word after OFF and later cleared it. The operator reported that the rotor
+had stopped before zero was reported. This is consistent with conservative
+feedback in that run, but does not establish how the ESC decides to clear the
+word. In particular, a fresh UART reply is not proof of a new speed measurement
+inside the ESC. The guard neither estimates deceleration nor assumes a falling
+RPM curve. The 1000 ms dwell is not a validated worst-case mechanical stop time.
+Whether zero reliably follows physical stopping across operating conditions
+remains `HARDWARE_REQUIRED`, including equivalent evidence for 500B.
 
 ## Software validation
 
@@ -74,7 +77,11 @@ guard boundaries, invalid/stale feedback, overwritten bad
 replies, cancellation, TX failure/busy, RX re-arm/error handling while TX is busy,
 throttled pending diagnostics, IRQ-mask preservation and tick wrap. The bench
 configuration is also tested for no auto-start, no reversal despite qualifying
-feedback, and timestamped completed-sample tracing.
+feedback, and timestamped completed-sample tracing. Regressions also replay the
+observed inactive/nonzero hold followed by abrupt zero in both directions,
+extend the hold past the diagnostic threshold, interrupt zero confirmation with
+a held nonzero report, verify polling continues after OFF, and reject reuse of
+a cached zero when the minimum OFF dwell expires.
 
 | Build | MCU | Blade UART | RX / TX DMA | Feedback length |
 | --- | --- | --- | --- | --- |
@@ -125,11 +132,9 @@ environment below intentionally supports the original 500 only.
 - Host: `mowgli-ros2-local:resume-f33f183d`, OCI revision
   `f33f183d6171152401438d051cef0769d00eef2e`, image SHA256
   `ce1f5dfe442babfac575d3e9bbb867fe0f9a4f310fd978ee7c496bf99ace47dc`.
-- Hardware: Yardforce original 500 / STM32F103 mainboard and PAC5223 blade
-  controller. The exact controller PCB revision was not recorded. Wheels were
-  raised and the rotating assembly was clear. Cutting-blade removal was not
-  explicitly recorded, and the observation was visual rather than an optical
-  tachometer; do not generalise this result into a worst-case stopping time.
+- Hardware: Yardforce original 500 / STM32F103 and PAC5223; exact controller PCB
+  revision was not recorded. Stop observation was visual rather than a
+  synchronized optical tachometer. This is not a worst-case stop-time test.
 - After the host's OFF state latched, completed checksum-valid replies continued
   about every 100 ms with no ESC error. `active` cleared on the first post-OFF
   sample. The reported word held at 3494 through fresh replies, then changed
@@ -147,15 +152,24 @@ environment below intentionally supports the original 500 only.
 - A second validation image exposed the remaining response words. Bytes 9..10
   likewise held their final nonzero value after OFF and then changed to zero at
   about 2.02 s; bytes 11..14 remained zero. No alternative progressive coast
-  signal was present in the 16-byte controller response.
-- The board was restored after the capture to the normal reversal-enabled
-  `Yardforce500` image from `962ce210`, displayed version `1.10.231`, SHA256
-  `be4a2aa83d12e2983e3a340cb37b6d80771d1cafc295b0526809551ac6be57b5`.
+  signal was observed in those words during this capture.
 
-This is a conservative result for the guard on this baseline: fresh nonzero
-feedback persists longer than physical motion, so the 300 ms zero-confirmation
-window cannot begin while the observed rotor is still moving. It is not evidence
-that bytes 7..8 are calibrated RPM, nor does it justify shortening any guard.
+These results show why the speed word cannot be presented as measured coast-down
+RPM. They do not distinguish a controller timeout from a physical stop detector,
+prove that bytes 7..8 are calibrated RPM, or justify shortening any guard. The
+software freshness checks concern reply delivery only.
+
+### Remaining physical acceptance (`HARDWARE_REQUIRED`)
+
+For the firmware revision proposed for deployment, record the exact image and
+controller baseline and follow the procedure below. A synchronized independent
+motion record must show whether the ESC can hold inactive/zero reports for the
+qualifying interval while the rotor still turns. Repeat across relevant operating
+conditions; the observed ~2 s telemetry hold must not become a guessed universal
+stopping delay. Equivalent 500B evidence is still missing. The automated replay
+tests validate the guard's handling of the trace, not physical safety.
+
+### Procedure
 
 Build `pio run -e Yardforce500_COASTDOWN_VALIDATION`. This uses the standard
 non-LFP Yardforce500 configuration plus `BLADEMOTOR_COASTDOWN_VALIDATION=1`.
@@ -180,14 +194,17 @@ not distinguish this environment from a standard image built at the same commit.
    Repeat several times on this same recorded baseline.
 4. Compare `tx=00` / `tx_t` (latest accepted UART command transition, **not** ESC
    acknowledgment) with `rx_t`, `seq`, `valid`, `active`, `rpm` and `err` from
-   completed ESC replies. `t` is the foreground log time. Invalid samples are
+   completed ESC replies (`speed_word` in the current trace; `rpm` in older
+   traces). `t` is the foreground log time. Invalid samples are
    marked `valid=0`; their other fields are cached and must be ignored. Repeated
    foreground reads do not create samples. Sequence gaps expose overwritten
    samples or best-effort debug loss; a gap around OFF/zero makes the run
    inconclusive and requires another capture, not interpolation.
-5. **Pass for the feedback assumption:** valid RPM follows independently observed
-   motion during coast-down and does not report a qualifying zero interval while
-   rotation continues. The activated bit may describe enable state; assess it
+5. **Pass for the feedback assumption:** the ESC does not report a qualifying
+   inactive/zero interval while independently observed rotation continues.
+   A progressive decay is not required; a held value must be assessed against
+   the independent motion record too. The activated bit describes enable state
+   in the recorded 500 run; assess it
    separately rather than assuming it measures motion. **Fail:** zero/inactive
    reports persist while the tachometer still shows rotation. Missing/ambiguous
    evidence is inconclusive. Retain the raw trace and synchronized tachometer
