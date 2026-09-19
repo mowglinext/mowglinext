@@ -77,6 +77,21 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                 <Typography.Text type="secondary">{t('hostUpdater.checkingSource')}: {t(`hostUpdater.tracks.${data.state.policy.source.track}`)}
                     {(data.state.policy.source.track === 'custom' || data.state.policy.source.repository !== 'mowglinext/mowglinext') && <> · {data.state.policy.source.repository} / {data.state.policy.source.branch}</>}
                 </Typography.Text>
+                {!advanced && <Form layout="vertical" className="simple-source-picker">
+                    <Form.Item label={t('hostUpdater.source')}>
+                        <Select aria-label={t('hostUpdater.source')} value={policy.source.track} disabled={pending || busy}
+                            options={['stable', 'dev', 'custom'].map(value => ({value, label: t(`hostUpdater.tracks.${value}`)}))}
+                            onChange={track => setPolicy({...policy, source: {...policy.source, track, branch: track === 'stable' ? 'main' : track === 'dev' ? 'dev' : policy.source.branch}})}/>
+                    </Form.Item>
+                    {data.trusted_repositories.length > 1 && <Form.Item label={t('hostUpdater.repository')}>
+                        <Select aria-label={t('hostUpdater.repository')} value={policy.source.repository} disabled={pending || busy}
+                            options={data.trusted_repositories.map(value => ({value, label: value}))} onChange={repository => setPolicy({...policy, source: {...policy.source, repository}})}/>
+                    </Form.Item>}
+                    {policy.source.track === 'custom' && <Form.Item label={t('hostUpdater.branch')}>
+                        <Input aria-label={t('hostUpdater.branch')} placeholder="feat/my-branch" value={policy.source.branch} disabled={pending || busy}
+                            onChange={e => setPolicy({...policy, source: {...policy.source, branch: e.target.value}})}/>
+                    </Form.Item>}
+                </Form>}
                 {runtime?.selection_pending && <Alert type="info" showIcon message={t('hostUpdater.selectionPending')}/>}
                 {data.state.check_error && <Alert type="warning" showIcon message={t('hostUpdater.checkFailed')} description={advanced ? data.state.check_error : undefined}/>}
                 {!custom && (target ? <div>

@@ -22,6 +22,7 @@ const DEFAULT_REST: Record<string, unknown> = {
     "/api/schedules": {schedules: []},
     "/api/containers": {containers: []},
     "/api/system/updates": {channel: 'dev', state: 'not_checked', components: []},
+    "/api/system/updates/changelog": {features: [], fixes: [], other: 0, total: 0, truncated: false, url: "https://github.com/mowglinext/mowglinext/compare"},
     "/api/params": {parameters: []},
     "/api/settings/gnss/runtime-config": {device: "", baud: 0},
 };

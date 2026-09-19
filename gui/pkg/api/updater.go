@@ -113,6 +113,7 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 	var statusAt, stateAt, odomAt time.Time
 	var gpsAt, lidarAt time.Time
 	var linear, angular float64
+	var gnss receiverProbe
 	ros.Subscribe("status", "updater-readiness", 0, func(data []byte) {
 		var s mowgli.Status
 		if json.Unmarshal(data, &s) == nil {
@@ -165,9 +166,18 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 	}
 	r.GET("/system/update-readiness", func(c *gin.Context) {
 		mu.Lock()
-		defer mu.Unlock()
+		needsReceiverProbe := !updateSampleFresh(gpsAt, time.Now())
+		mu.Unlock()
+		var receiverFresh bool
+		var receiverReason string
+		if needsReceiverProbe {
+			receiverFresh, receiverReason = gnss.check(c.Request.Context(), ros)
+		}
+		// Evaluate the motion/firmware gate after the bounded service call, so a
+		// slow receiver cannot return an earlier, now-stale safety verdict.
+		mu.Lock()
 		now := time.Now()
-		fresh := func(t time.Time) bool { return !t.IsZero() && now.Sub(t) < 3*time.Second && now.Sub(t) > -time.Second }
+		fresh := func(t time.Time) bool { return updateSampleFresh(t, now) }
 		result := updater.Readiness{Maintenance: updateMaintenance(), FirmwareProtocol: int(status.FirmwareProtocolVersion)}
 		result.GPSFresh = fresh(gpsAt)
 		result.LidarFresh = fresh(lidarAt)
@@ -185,8 +195,15 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 		default:
 			result.Ready = true
 		}
+		mu.Unlock()
+		if !result.GPSFresh {
+			result.GPSReceiverFresh, result.GPSReason = receiverFresh, receiverReason
+		}
 		c.JSON(200, result)
 	})
+}
+func updateSampleFresh(stamp, now time.Time) bool {
+	return !stamp.IsZero() && now.Sub(stamp) < 3*time.Second && now.Sub(stamp) > -time.Second
 }
 func stampTime(s geometry.Stamp) time.Time { return time.Unix(int64(s.Sec), int64(s.Nanosec)) }
 
