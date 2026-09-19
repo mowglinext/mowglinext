@@ -29,9 +29,13 @@ services:
     environment:
       <<: *ros2-env
       UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION: "1"
-      # Inside the log volume: that directory is owned by the image's runtime
-      # user, so no host directory has to be created and chowned beforehand.
-      UNIVERSAL_GNSS_EXPORT_DIR: /var/log/universal_gnss/export
+      # Logs and exports live in the tmpfs below, NOT in a volume: the host
+      # updater refuses a release that adds writable storage ("explicit
+      # data/layout migration required" — there is no backup contract for it),
+      # and nothing here needs to outlive the container. Node output already
+      # goes to stdout, i.e. the rotated json-file log.
+      ROS_LOG_DIR: /run/universal_gnss/log
+      UNIVERSAL_GNSS_EXPORT_DIR: /run/universal_gnss/export
     # mowgli_robot.yaml is the ONE GNSS configuration (receiver, serial port,
     # NTRIP), edited in the GUI. There is deliberately no derived parameters
     # file on the host and no GNSS_* variable in .env: both went stale the
@@ -42,12 +46,12 @@ services:
     volumes:
       - ./docker/config/mowgli:/config:ro
       - /dev:/dev
-      - universal_gnss_logs:/var/log/universal_gnss
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
     tmpfs:
-      # Holds the generated ROS parameter file (NTRIP password inside): memory
-      # only, private to the runtime user, gone with the container.
-      - /run/universal_gnss:uid=1000,gid=1000,mode=0700
+      # Holds the generated ROS parameter file (NTRIP password inside), the
+      # launch logs and the exports: memory only, bounded, private to the
+      # runtime user, gone with the container.
+      - /run/universal_gnss:uid=1000,gid=1000,mode=0700,size=64m
     device_cgroup_rules:
       - "c 166:* rw"   # ttyACM*  (USB CDC receivers)
       - "c 188:* rw"   # ttyUSB*  (USB-serial adapters)
@@ -172,6 +176,3 @@ services:
       options:
         max-file: "3"
         max-size: 5m
-
-volumes:
-  universal_gnss_logs:

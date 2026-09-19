@@ -28,7 +28,13 @@ assert_contains "sidecar reads mowgli_robot.yaml itself" \
 assert_not_contains "no derived parameter file is bind-mounted from the host" \
   'parameters.yaml:/etc/universal_gnss' "$compose_content"
 assert_contains "generated ROS parameters live in memory only" \
-  '/run/universal_gnss:uid=1000,gid=1000,mode=0700' "$compose_content"
+  '/run/universal_gnss:uid=1000,gid=1000,mode=0700,size=64m' "$compose_content"
+# The host updater refuses a release that ADDS writable storage (stack.go
+# validateStackMounts): /dev was already mounted by the previous gps service,
+# everything else must be read-only or tmpfs.
+writable_mounts="$(awk '/^    volumes:/{v=1;next} v&&/^    [a-z_]+:/{v=0} v&&/^      - /{print}' "$compose_file" | grep -v ':ro$' | grep -v -- '- /dev:/dev$' || true)"
+assert_eq "gps fragment adds no writable storage" "" "$writable_mounts"
+assert_not_contains "gps fragment declares no named volume" 'universal_gnss_logs' "$compose_content"
 assert_contains "receiver port comes from gnss_serial_device" \
   '"serial_device": str(p["gnss_serial_device"])' "$compose_content"
 assert_not_contains "sidecar is not privileged" 'privileged: true' "$compose_content"
