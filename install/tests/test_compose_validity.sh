@@ -90,7 +90,7 @@ GPS_SERVICE_BLOCK="$(awk '
   in_service { print }
 ' "$COMPOSE_FILE")"
 
-for required in   "UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:"   "GNSS_NTRIP_ENABLED:"   "/dev/gnss-receiver"   "parameters_file:=/etc/universal_gnss/parameters.yaml"   "fix_topic:=/gps/fix"   "status_topic:=/universal_gnss_receiver/status"   "rtcm_topic:=/universal_gnss_receiver/rtcm"   "ntrip_enabled:"; do
+for required in   "UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:"   "./docker/config/mowgli:/config:ro"   "device_cgroup_rules:"   "universal_gnss_launcher"   "fix_topic:=/gps/fix"   "status_topic:=/universal_gnss_receiver/status"   "rtcm_topic:=/universal_gnss_receiver/rtcm"   "ntrip_enabled:"; do
   if printf '%s' "$GPS_SERVICE_BLOCK" | grep -q "$required"; then
     pass "compose contains sidecar env: $required"
   else
@@ -167,10 +167,10 @@ if real_docker_compose_available; then
       "$(printf '%s' "$EXPANDED" | grep -n 'UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:' | head -1)"
   fi
 
-  if printf '%s' "$EXPANDED" | grep -qE 'target: /dev/gnss-receiver$'; then
-    pass "stable GNSS device mapping present"
+  if printf '%s' "$EXPANDED" | grep -qE 'c 166:\* rw'; then
+    pass "GNSS sidecar may open tty devices (cgroup rules, not privileged)"
   else
-    fail "stable GNSS device mapping present" "/dev/gnss-receiver mapping missing"
+    fail "GNSS sidecar may open tty devices (cgroup rules, not privileged)" "device_cgroup_rules missing"
   fi
 
   # Foxglove environment toggle present in expanded mowgli service env
@@ -191,10 +191,10 @@ if real_docker_compose_available; then
   fi
 else
   pass "no unresolved \${VAR} in image: (skipped; docker unavailable)"
-  if grep -q '/dev/gnss-receiver' "$COMPOSE_FILE"; then
-    pass "stable GNSS device mapping present (fallback compose)"
+  if grep -q 'c 166:\* rw' "$COMPOSE_FILE"; then
+    pass "GNSS tty cgroup rules present (fallback compose)"
   else
-    fail "stable GNSS device mapping present (fallback compose)" "GNSS mapping missing"
+    fail "GNSS tty cgroup rules present (fallback compose)" "device_cgroup_rules missing"
   fi
   if grep -q 'ENABLE_FOXGLOVE' "$COMPOSE_FILE"; then
     pass "ENABLE_FOXGLOVE env var wired into mowgli service"

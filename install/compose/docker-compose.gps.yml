@@ -19,45 +19,146 @@ services:
     container_name: mowgli-gps
     labels:
       garden.mowgli.update.image: gps
-    image: ${UNIVERSAL_GNSS_IMAGE}
+    # Pinned by digest here too, so a robot that reaches this fragment through
+    # the updater (no installer run, no UNIVERSAL_GNSS_IMAGE in its .env) still
+    # resolves an image. Must match install/lib/config.sh + install/deployment.json
+    # (test_gnss_external_sidecar_contract.sh).
+    image: ${UNIVERSAL_GNSS_IMAGE:-ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2@sha256:24ea6c1c0553463207a4c33b803e920a974989f5891f2f107e8c35cce56f7a95}
     network_mode: host
     ipc: host
     environment:
       <<: *ros2-env
       UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION: "1"
-      UNIVERSAL_GNSS_EXPORT_DIR: /var/lib/universal_gnss/export
-      GNSS_NTRIP_ENABLED: ${GNSS_NTRIP_ENABLED:-true}
-    devices:
-      - "${GNSS_DEVICE}:/dev/gnss-receiver"
-    group_add:
-      - "${GNSS_DEVICE_GID:-20}"
+      # Inside the log volume: that directory is owned by the image's runtime
+      # user, so no host directory has to be created and chowned beforehand.
+      UNIVERSAL_GNSS_EXPORT_DIR: /var/log/universal_gnss/export
+    # mowgli_robot.yaml is the ONE GNSS configuration (receiver, serial port,
+    # NTRIP), edited in the GUI. There is deliberately no derived parameters
+    # file on the host and no GNSS_* variable in .env: both went stale the
+    # moment the operator changed a setting, and a robot updated through the
+    # GUI never had them at all. The receiver's port is whatever
+    # gnss_serial_device names, hence /dev + the tty cgroup rules rather than a
+    # single device mapped at `up` time. NOT privileged.
     volumes:
-      - ./docker/config/universal_gnss/parameters.yaml:/etc/universal_gnss/parameters.yaml:ro
-      - type: bind
-        source: ${UNIVERSAL_GNSS_LOG_DIR}
-        target: /var/log/universal_gnss
-      - type: bind
-        source: ${UNIVERSAL_GNSS_EXPORT_DIR}
-        target: /var/lib/universal_gnss/export
+      - ./docker/config/mowgli:/config:ro
+      - /dev:/dev
+      - universal_gnss_logs:/var/log/universal_gnss
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
-    # Universal GNSS v0.1.4-rc2 owns receiver and NTRIP. Its combined
-    # launch exposes native topic arguments; the Mowgli bridge consumes the
-    # two internal Universal GNSS topics unchanged.
+    tmpfs:
+      # Holds the generated ROS parameter file (NTRIP password inside): memory
+      # only, private to the runtime user, gone with the container.
+      - /run/universal_gnss:uid=1000,gid=1000,mode=0700
+    device_cgroup_rules:
+      - "c 166:* rw"   # ttyACM*  (USB CDC receivers)
+      - "c 188:* rw"   # ttyUSB*  (USB-serial adapters)
+      - "c 204:* rw"   # ttyAMA*  (Pi PL011 UARTs)
+      - "c 4:* rw"     # ttyS*    (8250 UARTs)
+    group_add:
+      - "${GNSS_DEVICE_GID:-20}"   # dialout
     command:
-      - ros2
-      - launch
-      - universal_gnss_ros2
-      - receiver_and_ntrip.launch.py
-      - parameters_file:=/etc/universal_gnss/parameters.yaml
-      - fix_topic:=/gps/fix
-      - status_topic:=/universal_gnss_receiver/status
-      - rtcm_topic:=/universal_gnss_receiver/rtcm
-      - ntrip_enabled:=${GNSS_NTRIP_ENABLED:-true}
+      - python3
+      - -c
+      - |
+        # Universal GNSS launcher: mowgli_robot.yaml -> ROS parameters.
+        # The installed file is SPARSE, so every key needs a default here; they
+        # mirror the mowgli_bringup template (test_gnss_sidecar_launcher.py).
+        import os
+        import sys
+        import yaml
+
+        DEFAULTS = {
+            "gnss_receiver_family": "auto",
+            "gnss_transport": "serial",
+            "gnss_serial_device": "/dev/ttyAMA4",
+            "gnss_serial_baud": 921600,
+            "gnss_profile_rate_hz": 5,
+            "gnss_frame_id": "gps_link",
+            "ntrip_enabled": False,
+            "ntrip_host": "",
+            "ntrip_port": 2101,
+            "ntrip_user": "",
+            "ntrip_password": "",
+            "ntrip_mountpoint": "",
+            "gnss_ntrip_gga_enabled": True,
+            "gnss_ntrip_gga_interval_s": 10,
+        }
+        CONFIG = os.environ.get("MOWGLI_ROBOT_CONFIG", "/config/mowgli_robot.yaml")
+        RUN_DIR = os.environ.get("UNIVERSAL_GNSS_RUN_DIR", "/run/universal_gnss")
+
+
+        def truthy(value):
+            if isinstance(value, bool):
+                return value
+            return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
+        def build(config):
+            p = dict(DEFAULTS)
+            p.update({k: v for k, v in config.items() if k in DEFAULTS and v is not None})
+            host = str(p["ntrip_host"]).strip()
+            mountpoint = str(p["ntrip_mountpoint"]).strip()
+            ntrip = truthy(p["ntrip_enabled"]) and bool(host) and bool(mountpoint)
+            if truthy(p["ntrip_enabled"]) and not ntrip:
+                print("universal_gnss_launcher event=ntrip_disabled reason=host_or_mountpoint_empty",
+                      file=sys.stderr)
+            params = {
+                "/universal_gnss_receiver": {"ros__parameters": {
+                    "receiver_family": str(p["gnss_receiver_family"]),
+                    "transport": str(p["gnss_transport"]),
+                    "serial_device": str(p["gnss_serial_device"]),
+                    "serial_baud": int(p["gnss_serial_baud"]),
+                    "publish_rate_hz": float(p["gnss_profile_rate_hz"]),
+                    "frame_id": str(p["gnss_frame_id"]),
+                }},
+                "/universal_gnss_ntrip": {"ros__parameters": {
+                    "caster_host": host,
+                    "caster_port": int(p["ntrip_port"]),
+                    "mountpoint": mountpoint,
+                    "username": str(p["ntrip_user"]),
+                    "password": str(p["ntrip_password"]),
+                    "gga_enabled": truthy(p["gnss_ntrip_gga_enabled"]),
+                    "gga_interval_s": int(p["gnss_ntrip_gga_interval_s"]),
+                    "tls_enabled": False,
+                }},
+            }
+            return params, ntrip
+
+
+        def main():
+            with open(CONFIG, "r", encoding="utf-8") as handle:
+                document = yaml.safe_load(handle) or {}
+            config = (document.get("mowgli") or {}).get("ros__parameters") or {}
+            params, ntrip = build(config)
+            path = os.path.join(RUN_DIR, "parameters.yaml")
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(params, handle, default_flow_style=False)
+            flag = os.path.join(RUN_DIR, "ntrip_enabled")
+            if ntrip:
+                open(flag, "w").close()
+            elif os.path.exists(flag):
+                os.remove(flag)
+            print("universal_gnss_launcher event=start device=%s family=%s ntrip=%s" % (
+                params["/universal_gnss_receiver"]["ros__parameters"]["serial_device"],
+                params["/universal_gnss_receiver"]["ros__parameters"]["receiver_family"],
+                str(ntrip).lower()), file=sys.stderr)
+            os.execvp("ros2", [
+                "ros2", "launch", "universal_gnss_ros2", "receiver_and_ntrip.launch.py",
+                "parameters_file:=" + path,
+                "fix_topic:=/gps/fix",
+                "status_topic:=/universal_gnss_receiver/status",
+                "rtcm_topic:=/universal_gnss_receiver/rtcm",
+                "ntrip_enabled:=" + ("true" if ntrip else "false"),
+            ])
+
+
+        if __name__ == "__main__":
+            main()
     healthcheck:
       test:
         - CMD-SHELL
         - >-
-          if [ "$${GNSS_NTRIP_ENABLED}" = "true" ]; then
+          if [ -f /run/universal_gnss/ntrip_enabled ]; then
           /usr/local/bin/universal-gnss-healthcheck --timeout 2;
           else timeout 4 ros2 service call /universal_gnss_receiver/get_health
           std_srvs/srv/Trigger '{}' | grep -q 'success: true'; fi
@@ -71,3 +172,6 @@ services:
       options:
         max-file: "3"
         max-size: 5m
+
+volumes:
+  universal_gnss_logs:

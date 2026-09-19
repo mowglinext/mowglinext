@@ -537,7 +537,6 @@ func syncGNSSDeviceRuntimeEnv(cfg gnssSavedConfig) error {
 	}
 	return writeRuntimeEnvFile(cfg.RuntimeEnvPath, map[string]string{
 		"GNSS_SERIAL_DEVICE": cfg.SerialDevice,
-		"GNSS_DEVICE":        cfg.SerialDevice,
 		"GNSS_DEVICE_GID":    deviceGID,
 	})
 }

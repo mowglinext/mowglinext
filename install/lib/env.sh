@@ -158,10 +158,11 @@ sync_gnss_env_contract_values() {
   GNSS_SERIAL_DEVICE="$(gnss_serial_device_from_state)"
   GNSS_SERIAL_BAUD="$(gnss_serial_baud_from_state)"
   GNSS_FRAME_ID="${GNSS_FRAME_ID:-gps_link}"
-  GNSS_DEVICE="${GNSS_SERIAL_DEVICE}"
+  # The sidecar opens whatever gnss_serial_device names in mowgli_robot.yaml;
+  # compose only needs the GROUP that owns that tty (dialout, normally 20).
   : "${GNSS_DEVICE_GID:=20}"
-  if [[ -n "$GNSS_DEVICE" && -e "$GNSS_DEVICE" ]]; then
-    GNSS_DEVICE_GID="$(stat -Lc '%g' -- "$GNSS_DEVICE")"
+  if [[ -n "$GNSS_SERIAL_DEVICE" && -e "$GNSS_SERIAL_DEVICE" ]]; then
+    GNSS_DEVICE_GID="$(stat -Lc '%g' -- "$GNSS_SERIAL_DEVICE")"
   fi
 
   if [[ "${CONFIG_NTRIP_ENABLED_EXPLICIT:-false}" == "true" ]]; then
@@ -202,7 +203,6 @@ write_gnss_env_contract_keys() {
   upsert_env_key "$env_file" "GNSS_SERIAL_DEVICE" "$GNSS_SERIAL_DEVICE"
   upsert_env_key "$env_file" "GNSS_SERIAL_BAUD" "$GNSS_SERIAL_BAUD"
   upsert_env_key "$env_file" "GNSS_FRAME_ID" "$GNSS_FRAME_ID"
-  upsert_env_key "$env_file" "GNSS_DEVICE" "$GNSS_DEVICE"
   upsert_env_key "$env_file" "GNSS_DEVICE_GID" "$GNSS_DEVICE_GID"
   upsert_env_key "$env_file" "GNSS_NTRIP_ENABLED" "$GNSS_NTRIP_ENABLED"
   upsert_env_key "$env_file" "GNSS_NTRIP_HOST" "$GNSS_NTRIP_HOST"
@@ -238,7 +238,6 @@ setup_env() {
   : "${GNSS_SERIAL_DEVICE:=}"
   : "${GNSS_SERIAL_BAUD:=}"
   : "${GNSS_FRAME_ID:=gps_link}"
-  : "${GNSS_DEVICE:=}"
   : "${GNSS_DEVICE_GID:=20}"
   : "${GNSS_NTRIP_ENABLED:=}"
   : "${GNSS_NTRIP_HOST:=}"
@@ -289,8 +288,6 @@ setup_env() {
   # Images — select LiDAR image based on type
   : "${MOWGLI_ROS2_IMAGE:=${MOWGLI_ROS2_IMAGE_DEFAULT}}"
   : "${UNIVERSAL_GNSS_IMAGE:=${UNIVERSAL_GNSS_IMAGE_DEFAULT}}"
-  : "${UNIVERSAL_GNSS_LOG_DIR:=./docker/logs/universal_gnss}"
-  : "${UNIVERSAL_GNSS_EXPORT_DIR:=./docker/data/universal_gnss/export}"
   : "${GUI_IMAGE:=${GUI_IMAGE_DEFAULT}}"
   : "${MAVROS_IMAGE:=${MAVROS_IMAGE_DEFAULT}}"
   if [[ -z "${LIDAR_IMAGE:-}" ]]; then
@@ -360,8 +357,6 @@ setup_env() {
 
   upsert_env_key "$env_file" "MOWGLI_ROS2_IMAGE" "$MOWGLI_ROS2_IMAGE"
   upsert_env_key "$env_file" "UNIVERSAL_GNSS_IMAGE" "$UNIVERSAL_GNSS_IMAGE"
-  upsert_env_key "$env_file" "UNIVERSAL_GNSS_LOG_DIR" "$UNIVERSAL_GNSS_LOG_DIR"
-  upsert_env_key "$env_file" "UNIVERSAL_GNSS_EXPORT_DIR" "$UNIVERSAL_GNSS_EXPORT_DIR"
   upsert_env_key "$env_file" "LIDAR_IMAGE" "$LIDAR_IMAGE"
   upsert_env_key "$env_file" "MAVROS_IMAGE" "$MAVROS_IMAGE"
   upsert_env_key "$env_file" "GUI_IMAGE" "$GUI_IMAGE"

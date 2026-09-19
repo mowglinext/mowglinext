@@ -63,6 +63,11 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gnss_launch_config test/test_gnss_launch_config.py
     TIMEOUT 30
   )
+  # The GNSS sidecar's embedded launcher (install/compose/docker-compose.gps.yml)
+  # keeps its defaults equal to the template and needs no host-side config.
+  ament_add_pytest_test(test_gnss_sidecar_launcher test/test_gnss_sidecar_launcher.py
+    TIMEOUT 30
+  )
   # Verifies the sparse-installed-config deep-merge (robot_config_util):
   # template-only defaults, sparse overrides + fall-through, reset-to-default,
   # and full-config backward compat.
