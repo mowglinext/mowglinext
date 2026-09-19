@@ -373,6 +373,11 @@ write shared managed data. New persistence or application-health contracts requi
 an explicit updater implementation and recovery tests; labels are not arbitrary
 backup paths or executable hooks. External image declarations do not expand these storage or health contracts.
 
+The Universal GNSS sidecar therefore keeps its generated parameters and optional
+diagnostic exports in bounded `tmpfs` mounts. Its Docker `json-file` log remains
+bounded and available through the normal container log view. Making GNSS exports
+persistent would require a separate layout migration and backup/rollback contract.
+
 `install/deployment.json` also declares `component_compatibility` per image family.
 These are maintainer-reviewed drop-in compatibility promises covering **all consumed
 and provided interfaces**, ROS messages/services/topic semantics, configuration and

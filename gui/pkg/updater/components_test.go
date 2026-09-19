@@ -60,6 +60,28 @@ func TestInvalidServiceContractsFailClosed(t *testing.T) {
 	}
 }
 
+func TestGNSSSidecarCanJoinPreUniversalStackWithoutStorageMigration(t *testing.T) {
+	// A robot installed before the Universal GNSS sidecar has only the core
+	// services. Adding gps is valid while its writable paths remain tmpfs or in
+	// the disposable container layer; a named/bind volume needs a migration.
+	current := composeConfig{Services: map[string]serviceConfig{}}
+	old := map[string]managedService{}
+	next := map[string]managedService{"gps": {}}
+	target := composeConfig{Services: map[string]serviceConfig{
+		"gps": {ContainerName: "mowgli-gps"},
+	}}
+	if err := validateStackMounts(current, target, old, next); err != nil {
+		t.Fatal("ephemeral GNSS storage blocked a pre-sidecar update:", err)
+	}
+	target.Services["gps"] = serviceConfig{
+		ContainerName: "mowgli-gps",
+		Volumes:       []composeVolume{{Type: "volume", Source: "universal_gnss_logs", Target: "/var/log/universal_gnss"}},
+	}
+	if err := validateStackMounts(current, target, old, next); err == nil || !strings.Contains(err.Error(), "explicit data/layout migration required") {
+		t.Fatal("persistent GNSS storage bypassed the layout-1 migration guard:", err)
+	}
+}
+
 func TestAdditionalFirstPartyImageValidation(t *testing.T) {
 	d := fixture()
 	image := d.Images["gps"]

@@ -29,6 +29,10 @@ assert_not_contains "no derived parameter file is bind-mounted from the host" \
   'parameters.yaml:/etc/universal_gnss' "$compose_content"
 assert_contains "generated ROS parameters live in memory only" \
   '/run/universal_gnss:uid=1000,gid=1000,mode=0700' "$compose_content"
+assert_contains "GNSS diagnostic exports use bounded disposable storage" \
+  '/var/log/universal_gnss:uid=1000,gid=1000,mode=0750,size=64m' "$compose_content"
+assert_not_contains "GNSS update does not introduce a persistent log volume" \
+  'universal_gnss_logs' "$compose_content"
 assert_contains "receiver port comes from gnss_serial_device" \
   '"serial_device": str(p["gnss_serial_device"])' "$compose_content"
 assert_not_contains "sidecar is not privileged" 'privileged: true' "$compose_content"
