@@ -18,7 +18,9 @@
 | High-level command handling (`COMMAND_*`, `~/start_in_area`) | `behavior_tree_node.cpp` :547-608 (`COMMAND_S2`→`COMMAND_START` normalisation :561) |
 | `HighLevelStatus` publish + 1 Hz republish with live fields | `src/status_nodes.cpp` (`PublishHighLevelStatus`), `src/status_snapshot.cpp` (`withLiveStatusFields`), `behavior_tree_node.cpp` :694-721 |
 | Coverage loop (area iteration, plan, follow, resume) | `src/coverage_nodes.cpp`: `GetNextUnmowedArea` :1461+, `PlanCoverageArea` :1888+, `FollowStrip` :147-1240, `TransitToStrip` :1247+ |
-| Resume cursor / restart persistence | `src/coverage_persistence.cpp` (`saveCoverageResumeState` / `loadCoverageResumeState` / `clearCoverageResumeState`, file header `mowgli_coverage_resume v2`) + `behavior_tree_node.cpp` :91-118 (auto-continue on boot) |
+| Resume cursor / restart persistence | `src/coverage_persistence.cpp` (`saveCoverageResumeState` / `loadCoverageResumeState` / `clearCoverageResumeState`, file header `mowgli_coverage_resume v3`) + `behavior_tree_node.cpp` :91-118 (auto-continue on boot) |
+| Area re-index safety (mowglinext#637 phase 2) | `src/coverage_nodes.cpp` `GetNextUnmowedArea::processResponse()` id-reconciliation block + `isSkipVerified()` (anonymous namespace, gates `onStart()`/`advanceAndProbe()`'s synchronous fast-skip); `bt_context.hpp` `area_ids` / `current_area_list_generation` / `area_verified_generation`; live generation from `map_server_node`'s `~/area_list_generation` (`std_msgs/UInt64`, transient_local, bumped on every `~/add_area`). Field-confirmed 2026-09-19 this does NOT by itself protect `single_area_target` (see next row) |
+| Targeted single-area run identity (mowglinext#637) | `src/coverage_nodes.cpp` `GetNextUnmowedArea::processResponse()`, the `single_area_target`/`single_area_target_id` block right after the id-reconciliation above; `bt_context.hpp` `single_area_target_id`. `single_area_target` is an INDEX (set from `~/start_in_area`'s one-shot `target_area_index`), which the per-index reconciliation does not protect — a live reorder while paused can leave it pointing at a DIFFERENT area than the one the operator selected, and the reconciliation above would happily discard the old occupant's stale state and let the wrong area dispatch. `single_area_target_id` locks in the target's stable id on the first successful probe and is checked on every later probe of that index; a mismatch ends the run (FAILURE, `coverage_all_complete` left false) instead of silently mowing the wrong area — no scan-and-relocate, by design |
 | Blade on/off during coverage & transit gap guard | `src/coverage_nodes.cpp` `FollowStrip::sendCurrentSwath` :600-690 (`kSegmentTransitGap` from `mowgli_interfaces/coverage_geometry.hpp:26`), `setBladeEnabled` :1118 |
 | Obstacle detour inside a sub-path | `include/mowgli_behavior/detour_resume.hpp` (`decideDetour`, `footprintClear`) + `FollowStrip::tryStartDetour` `src/coverage_nodes.cpp` :1133+ |
 | LocalizationGuard signal (`WAITING_FOR_RTK`) | `include/mowgli_behavior/localization_health.hpp` (`LocalizationHealthMonitor`, `PersistentLatch`) + `behavior_tree_node.cpp` :285-295, :330-340, :427-474, `updateLocalizationHealthLocked` :658 |
@@ -67,7 +69,7 @@
 | `detour_resume.hpp` | 233 | Header-only costmap footprint test + resume-pose search (`DetourCostmap`, `decideDetour`) |
 | `dig_skip.hpp` | ~245 | Header-only session dig skip zones (Invariant 16, the issue-#500 re-dig protection): `DigPoint`, `recordDigPoint`, `insideDigZone`, `nextDrivableRun` (drivable run outside every zone, by arc length), `DigSettleStep` (wait for the bridge's bounded reverse). Driven by `FollowStrip::stepDigRecovery` / `skipUnitFrontPastDigZones` |
 | `dock_alignment.hpp` | 129 | Header-only along/cross-track dock delta + `EvaluateDockYawDrift` (`kDockStagingRunwayM=1.5`, σ floor 0.035 rad) |
-| `coverage_persistence.hpp` | 59 | save/load/clear resume-state API |
+| `coverage_persistence.hpp` | 73 | save/load/clear resume-state API |
 | `battery_filter.hpp` | 108 | `BatteryVoltageFilter` (τ=2 s, min valid 10 V), `batteryPercentFromVoltage` |
 | `status_snapshot.hpp` | 55 | `withLiveStatusFields(base, ctx)` |
 | **`src/`** | | |
@@ -83,16 +85,16 @@
 | `status_nodes.cpp` | 240 | Status publish, `EndSession` (session-scoped clears :159-215), `ClearCommand` |
 | `status_snapshot.cpp` | 58 | Tree-owned vs live field split for `HighLevelStatus` |
 | `utility_nodes.cpp` | 267 | Blade service, waits, `SaveObstacles`, `ResetEmergency` |
-| `coverage_persistence.cpp` | 219 | Text file `coverage_resume.txt` (atomic tmp+rename): `current_command`, `single_area_target`, `current_area`, `completed_areas`, per-`area` rows (pose_count, fingerprint, resume, completed swaths) |
+| `coverage_persistence.cpp` | 353 | Text file `coverage_resume.txt` (atomic tmp+rename): `current_command`, `single_area_target`, `current_area`, `completed_areas`, per-`area` rows (id, pose_count, fingerprint, resume, completed swaths) |
 | `battery_filter.cpp` | 85 | Rate-independent low-pass on `v_battery` |
 | **`test/`** (gtest; all registered in `CMakeLists.txt`) | | |
 | `test_recording_nodes.cpp` | 561 | 21 tests: DP simplification, spacing gate, area math, save/cancel paths of `RecordArea` |
 | `test_obstacle_recovery.cpp` | 305 | 13 tests: `IsObstacleStuck` timing/cap/cooldown against latched collision state |
 | `test_docking_boundary_exempt.cpp` | 232 | 8 tests: `IsDocking` + BoundaryGuard blade-off dock-transit exemption |
 | `test_set_nav2_lifecycle.cpp` | 243 | 7 tests: `SetNav2Lifecycle` gating + fake `manage_nodes` transition |
-| `test_get_next_unmowed_area.cpp` | ~640 | 17 tests: nav-only areas skipped, START_OCCUPIED + guard-halted (`MarkGuardHalt`) passes exempt from the no-progress budget, targeted (`~/start_in_area`) runs stay clipped, `EndSession` boundary |
+| `test_get_next_unmowed_area.cpp` | ~1.2k | 32 tests: nav-only areas skipped, START_OCCUPIED + guard-halted (`MarkGuardHalt`) passes exempt from the no-progress budget, targeted (`~/start_in_area`) runs stay clipped, `EndSession` boundary, mowglinext#637 phase 2 id-reconciliation + fast-skip generation gating |
 | `test_start_occupied_retry.cpp` | 348 | 13 tests: `classifyTransitFailure`, consume-once `IsCoverageStartBlocked`, structural check of `StartPoseBlockedRetry` in `main_tree.xml` |
-| `test_coverage_persistence.cpp` | 248 | 10 tests: round-trip, header/version, malformed rows, `current_command` restore |
+| `test_coverage_persistence.cpp` | 552 | 22 tests: round-trip (incl. `area_ids`, mowglinext#637 phase 2), header/version, malformed rows, `current_command` restore |
 | `test_gnss_status_authority.cpp` | 56 | 2 tests: `mowgli_interfaces::gnss_status_utils` fix-type mapping the BT relies on |
 | `test_coverage_transit_gap.cpp` | 50 | Transit threshold wiring plus mandatory blade-off transit at every later sub-path boundary |
 | `test_coverage_resume_location.cpp` | 192 | 11 tests: `resolveResumeLocation` shared by `FollowStrip` and `PlanCoverageArea` |

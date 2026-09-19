@@ -467,6 +467,27 @@ TEST_F(AreaTypeTest, PreservingAHighIdAdvancesTheCounterPastIt)
       << "a freshly minted id collided with a round-tripped one — next_area_id_ did not advance";
 }
 
+// mowglinext#637 phase 2: GetNextUnmowedArea's synchronous fast-skip path
+// needs to know, independently of its own probe cadence, whether the area
+// list has been rebuilt since it last verified an index. add_area is the
+// only mutation the GUI's edit/delete/save flow (clear_map + one add_area
+// per surviving area) drives, so every successful call — including one that
+// merely round-trips an untouched area's existing id — must bump and
+// publish the generation. A fresh node starts at generation 0 (SetUp
+// constructs it, which itself does not add any area, so nothing has bumped
+// it yet).
+TEST_F(AreaTypeTest, AddAreaBumpsTheGenerationCounter)
+{
+  EXPECT_EQ(node_->area_list_generation_for_test(), 0u);
+  ASSERT_TRUE(add_area("lawn", make_rect(-2, -2, 2, 2), /*is_navigation=*/false));
+  EXPECT_EQ(node_->area_list_generation_for_test(), 1u);
+  ASSERT_TRUE(add_area("nav", make_rect(0, 0, 3, 3), /*is_navigation=*/true));
+  EXPECT_EQ(node_->area_list_generation_for_test(), 2u)
+      << "every successful add_area bumps it, navigation areas included — the "
+         "GUI's rebuild flow re-adds every surviving area on ANY edit, not "
+         "just the one the operator touched";
+}
+
 TEST_F(AreaTypeTest, LegacyAreasFileWithoutIdsGetsIdsAssignedAndReSaved)
 {
   // Exactly the pre-#637 on-disk format — no area_N_id / next_area_id

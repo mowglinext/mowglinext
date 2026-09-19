@@ -602,6 +602,22 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
   }
 
   res->success = true;
+  // mowglinext#637 phase 2: the area list changed (one entry added — this is
+  // also how the GUI's clear+re-add edit/delete flow adds every SURVIVING
+  // area back, so an untouched area's own re-add counts as a change too, not
+  // just the one the operator actually touched). Announce it so a consumer
+  // that caches per-index state (GetNextUnmowedArea's fast-skip path) can
+  // tell its cache might now describe a different area, without having to
+  // poll or re-probe speculatively.
+  bump_area_list_generation();
+}
+
+void MapServerNode::bump_area_list_generation()
+{
+  ++area_list_generation_;
+  std_msgs::msg::UInt64 msg;
+  msg.data = area_list_generation_;
+  area_list_generation_pub_->publish(msg);
 }
 
 void MapServerNode::on_get_mowing_area(
