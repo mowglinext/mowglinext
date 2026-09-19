@@ -54,12 +54,14 @@ That bench auto-start/drive-reset code is not included here.
   battery-chemistry, ADC, temperature, wheel-control or protocol changes.
 
 The first requested reverse start also requires the stop confirmation.
-**Merge blocker:** it is not yet established that ESC RPM continues to measure
-rotor motion after OFF. If the ESC immediately reports inactive/zero while the
-rotor coasts, the guard can release after only 1000 ms. That delay is not a
-validated mechanical stopping time. Successful direction tests do not answer
-this question; do not claim the guard is physically validated until the
-independent coast-down measurement below is complete on each controller type.
+On the recorded standard 500 bench baseline below, the controller did not clear
+the reported RPM when OFF was requested. It continued returning fresh replies,
+held the last nonzero value while the rotor coasted, and changed to zero only
+after the operator observed that the rotor had stopped. The value did not decay
+progressively, so it is better described as a controller stop indication than a
+live coast-down tachometer. This rules out the specific early-zero failure on
+that exact 500 baseline. It does not establish a loaded mechanical stop time or
+extend the evidence to the 500B controller.
 
 ## Software validation
 
@@ -94,7 +96,7 @@ Protocol version remains 6: the existing direction byte and packet layout are
 unchanged. The eventual upstream merge gets its own build identity, so match
 artifacts by commit as well as the displayed version.
 
-## HARDWARE_REQUIRED before claiming reverse support
+## Hardware evidence scope
 
 On the exact mower/controller being evaluated, in a supervised blades-removed
 test, separately request each direction with a stop between starts. Confirm the
@@ -102,15 +104,58 @@ shaft/disc actually rotates in opposite directions; unsigned RPM or an accepted
 UART response is insufficient evidence. Check that missing feedback leaves it
 off and that the normal emergency/stop path cancels pending reversal. Earlier
 operator-reported opposite-direction operation is recorded with its exact 500
-and combined 500B baselines in [PR #559](https://github.com/mowglinext/mowglinext/pull/559).
-It does not validate coast-down feedback, and it does not extend to this revision.
+and combined 500B baselines in
+[PR #559](https://github.com/mowglinext/mowglinext/pull/559). The standard 500
+coast-down capture below is separate evidence for the reversal guard. Equivalent
+500B coast-down evidence remains `HARDWARE_REQUIRED`.
 
 ## Coast-down validation image and procedure
 
-`HARDWARE_PENDING` on the standard 500 bench unit: software instrumentation and
-procedure are supplied; the physical run and controller identity are outstanding.
-The equivalent 500B coast-down evidence remains `HARDWARE_REQUIRED`; the UART
-bench environment below intentionally supports the original 500 only.
+The standard 500 physical run is complete for the exact baseline below. The
+equivalent 500B coast-down evidence remains `HARDWARE_REQUIRED`; the UART bench
+environment below intentionally supports the original 500 only.
+
+### Recorded standard 500 result (2026-09-19)
+
+- Firmware source: commit `962ce210eac6930c1c0e10814c12f3accbc4127f`,
+  `Yardforce500_COASTDOWN_VALIDATION`, displayed version `129.10.231` because
+  the USB-only evidence instrumentation was an uncommitted bench patch. The
+  first capture image SHA256 was
+  `c4a490f11ce5fc5547275af8b32c204267bae2c6f7778fd3e57c7e0bdb2cea37`.
+- Host: `mowgli-ros2-local:resume-f33f183d`, OCI revision
+  `f33f183d6171152401438d051cef0769d00eef2e`, image SHA256
+  `ce1f5dfe442babfac575d3e9bbb867fe0f9a4f310fd978ee7c496bf99ace47dc`.
+- Hardware: Yardforce original 500 / STM32F103 mainboard and PAC5223 blade
+  controller. The exact controller PCB revision was not recorded. Wheels were
+  raised and the rotating assembly was clear. Cutting-blade removal was not
+  explicitly recorded, and the observation was visual rather than an optical
+  tachometer; do not generalise this result into a worst-case stopping time.
+- After the host's OFF state latched, completed checksum-valid replies continued
+  about every 100 ms with no ESC error. `active` cleared on the first post-OFF
+  sample. The reported word held at 3494 through fresh replies, then changed
+  directly to zero about 2.26 s after OFF. The operator confirmed that the rotor
+  had stopped before that zero transition. The reply sequence advanced from 508
+  to 530 across the interval and sample ages remained below 100 ms, ruling out a
+  cached host value or stopped polling.
+
+  | Time from host OFF | RX sequence | Active | Bytes 7..8 | Valid / error | Sample age |
+  | ---: | ---: | ---: | ---: | --- | ---: |
+  | 0.000 s | 508 | 1 | 3520 | 1 / 0 | 54 ms |
+  | 0.249 s | 511 | 0 | 3494 | 1 / 0 | 7 ms |
+  | 2.259 s | 530 | 0 | 0 | 1 / 0 | 85 ms |
+
+- A second validation image exposed the remaining response words. Bytes 9..10
+  likewise held their final nonzero value after OFF and then changed to zero at
+  about 2.02 s; bytes 11..14 remained zero. No alternative progressive coast
+  signal was present in the 16-byte controller response.
+- The board was restored after the capture to the normal reversal-enabled
+  `Yardforce500` image from `962ce210`, displayed version `1.10.231`, SHA256
+  `be4a2aa83d12e2983e3a340cb37b6d80771d1cafc295b0526809551ac6be57b5`.
+
+This is a conservative result for the guard on this baseline: fresh nonzero
+feedback persists longer than physical motion, so the 300 ms zero-confirmation
+window cannot begin while the observed rotor is still moving. It is not evidence
+that bytes 7..8 are calibrated RPM, nor does it justify shortening any guard.
 
 Build `pio run -e Yardforce500_COASTDOWN_VALIDATION`. This uses the standard
 non-LFP Yardforce500 configuration plus `BLADEMOTOR_COASTDOWN_VALIDATION=1`.
