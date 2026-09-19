@@ -3642,6 +3642,18 @@
     }
   },
   "hostUpdater": {
+    "changelog": {
+      "title": "What's in this update",
+      "features": "New features",
+      "fixes": "Fixes",
+      "breaking": "Breaking",
+      "other_one": "Plus {{count}} maintenance change.",
+      "other_other": "Plus {{count}} maintenance changes.",
+      "truncated": "Only the most recent changes are listed.",
+      "full": "Full list of changes",
+      "maintenanceOnly": "No new features or fixes — maintenance changes only.",
+      "unavailable": "The summary of changes could not be loaded (no internet access, or GitHub refused the request)."
+    },
     "standardStack": "Standard deployment",
     "customMix": "Custom mix",
     "imageMode": "Image selection",

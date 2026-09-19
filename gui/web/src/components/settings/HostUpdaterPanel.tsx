@@ -4,6 +4,7 @@ import {useEffect, useState} from 'react';
 import {Alert, Button, Card, Checkbox, Form, Input, Modal, Select, Segmented, Space, Tag, Typography} from 'antd';
 import {useTranslation} from 'react-i18next';
 import {type Deployment, type UpdatePlan, type UpdatePolicy, componentCompatibility, updaterRequest, useHostUpdater} from '../../hooks/useHostUpdater';
+import {UpdateChangelog} from './UpdateChangelog';
 
 export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?: boolean; inventory?: ApiInstalledComponent[]}) {
     const {t} = useTranslation();
@@ -232,6 +233,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                     </div>)}</div>
                     {plan.stack.changes.some(change => change.action === 'remove') && <Typography.Text type="secondary">{t('hostUpdater.retainedData')}</Typography.Text>}
                 </> : <Typography.Text>{t('hostUpdater.componentsToUpdate')}: {Object.keys(plan.images).map(component).join(', ')}</Typography.Text>}
+                {!plan.custom_images && <UpdateChangelog repository={plan.target.source.repository} installed={data?.state.active?.revision} available={plan.target.revision}/>}
                 <Alert type="warning" showIcon message={t('hostUpdater.interruption')}/>
                 <Typography.Text>{t('hostUpdater.backupHelp')}</Typography.Text>
                 <details><summary>{t('hostUpdater.imageDetails')}</summary>

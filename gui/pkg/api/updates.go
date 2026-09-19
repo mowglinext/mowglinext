@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -207,6 +208,55 @@ func UpdatesRoutes(r *gin.RouterGroup, provider types.IDockerProvider) {
 	}
 	source := remoteUpdates{Registry: updates.NewRegistry(), revisions: map[string]string{}}
 	registerUpdatesRoutes(r, provider, repo, source)
+	registerChangelogRoute(r, source.Client)
+}
+
+// changelogRoute godoc
+//
+// @Summary What changed between two source revisions
+// @Description Features and fixes read from the commit subjects between the installed and the candidate revision.
+// @Tags system
+// @Produce json
+// @Param repository query string true "owner/name"
+// @Param installed query string true "Installed 40-hex revision"
+// @Param available query string true "Candidate 40-hex revision"
+// @Success 200 {object} updates.Changelog
+// @Failure 400 {object} ErrorResponse
+// @Failure 502 {object} ErrorResponse
+// @Router /system/updates/changelog [get]
+func registerChangelogRoute(r *gin.RouterGroup, client *http.Client) {
+	var lock sync.Mutex
+	cache := map[string]updates.Changelog{} // immutable revision pairs
+	r.GET("/system/updates/changelog", func(c *gin.Context) {
+		repo, installed, available := c.Query("repository"), c.Query("installed"), c.Query("available")
+		key := repo + "/" + installed + "..." + available
+		c.Header("Cache-Control", "no-store")
+		lock.Lock()
+		cached, ok := cache[key]
+		lock.Unlock()
+		if ok {
+			c.JSON(200, cached)
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+		defer cancel()
+		log, err := updates.ReadChangelog(ctx, client, repo, installed, available)
+		if err != nil {
+			status := 502
+			if log.URL == "" {
+				status = 400 // rejected before any request was made
+			}
+			c.JSON(status, ErrorResponse{Error: "changelog unavailable: " + err.Error()})
+			return
+		}
+		lock.Lock()
+		if len(cache) >= 64 {
+			clear(cache)
+		}
+		cache[key] = log
+		lock.Unlock()
+		c.JSON(200, log)
+	})
 }
 
 func registerUpdatesRoutes(r *gin.RouterGroup, provider types.IDockerProvider, repo string, source updateSource) {

@@ -3642,6 +3642,18 @@
     }
   },
   "hostUpdater": {
+    "changelog": {
+      "title": "Contenu de cette mise à jour",
+      "features": "Nouveautés",
+      "fixes": "Correctifs",
+      "breaking": "Incompatible",
+      "other_one": "Plus {{count}} changement de maintenance.",
+      "other_other": "Plus {{count}} changements de maintenance.",
+      "truncated": "Seuls les changements les plus récents sont listés.",
+      "full": "Liste complète des changements",
+      "maintenanceOnly": "Ni nouveauté ni correctif : uniquement des changements de maintenance.",
+      "unavailable": "Le résumé des changements n'a pas pu être chargé (pas d'accès internet, ou requête refusée par GitHub)."
+    },
     "standardStack": "Installation standard",
     "customMix": "Combinaison personnalisée",
     "imageMode": "Sélection des images",
