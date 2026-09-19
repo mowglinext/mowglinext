@@ -2541,6 +2541,14 @@
     "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited on the Parameters page."
   },
   "settingsObstacles": {
+    "digSensitivity": "Wheel-slip (dig) sensitivity",
+    "digSensitivityHelp": "How readily spinning wheels count as a dig (stop, short reverse; repeated digs at one spot stop the mission as DIG_OBSTRUCTION). Choose Low on tall or wet grass and on sandy or loose soil, where a healthy robot slips a lot. Off disables the detector on the computer; the firmware protection against blocked wheels stays active. Save and restart ROS2 to apply.",
+    "digSensitivityLevels": {
+      "off": "Off",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High"
+    },
     "digKeepouts": "Dig obstacles",
     "digAutoPromotion": "Propose an obstacle where the robot dug in",
     "digKeepoutsDescription": "When wheel slip is detected in a mowing area, add a proposal to the map page. Nothing is blocked until you accept it there: accepting turns it into a permanent keepout, rejecting drops it. Meanwhile the robot simply skips that spot for the rest of the mowing session. When disabled, no proposals are created; dig detection, stopping and recovery remain active. Save and restart ROS2 to apply.",

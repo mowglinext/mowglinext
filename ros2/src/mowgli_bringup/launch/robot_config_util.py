@@ -286,6 +286,72 @@ def dig_skip_radius(params):
     return chassis_circumscribed_radius(params)
 
 
+DEFAULT_DIG_SENSITIVITY = "medium"
+
+# hardware_bridge wheel-slip dig detector presets (mowgli_hardware/dig_detector.hpp
+# + dig_escalation.hpp). ONE operator knob instead of five coupled numbers: what
+# counts as a dig depends on the ground — tall or wet grass and sandy soil make
+# a healthy robot slip far more than a short dry lawn does, and the detector
+# then stops, reverses and finally escalates to DIG_OBSTRUCTION on ground the
+# robot was in fact crossing.
+#
+#   window_s            sustained evidence needed before latching
+#   min_wheel_dist      worst-wheel travel the window must contain [m]
+#   progress_fraction   latch when observed travel < this fraction of it
+#   escalate_count      same-spot latches that stop the mission
+#
+# "medium" IS the compiled default of every one of those parameters
+# (test_robot_config_util.py pins that against hardware_bridge_node.cpp), so a
+# robot that never touches the knob behaves exactly as before it existed.
+# "low" still catches every dig on record (0.33-0.40 m of tyre for 0.01-0.03 m
+# of chassis in 1.2 s, i.e. under 10 % progress, sustained) but no longer
+# latches on a slipping pivot or a slow push through thick grass. "off" stops
+# the HOST detector only: the firmware anti-dig (blocked wheels) is untouched.
+DIG_SENSITIVITY_PRESETS = {
+    "off": {"enabled": False},
+    "low": {"enabled": True, "window_s": 2.5, "min_wheel_dist": 0.35,
+            "progress_fraction": 0.15, "escalate_count": 5},
+    "medium": {"enabled": True, "window_s": 1.2, "min_wheel_dist": 0.15,
+               "progress_fraction": 0.35, "escalate_count": 3},
+    "high": {"enabled": True, "window_s": 0.8, "min_wheel_dist": 0.10,
+             "progress_fraction": 0.50, "escalate_count": 3},
+}
+
+
+def resolve_dig_sensitivity(params):
+    """The configured dig_sensitivity level, normalised; unknown -> the default.
+
+    YAML 1.1 reads a bare `off` as boolean False (and `on` as True), so a
+    hand-edited `dig_sensitivity: off` must still mean "off" rather than fall
+    back to the default and silently keep the detector running.
+    """
+    raw = params.get("dig_sensitivity", DEFAULT_DIG_SENSITIVITY)
+    if raw is False:
+        return "off"
+    level = str(raw).strip().lower()
+    if level not in DIG_SENSITIVITY_PRESETS:
+        print(
+            f"[robot_config_util] WARNING: dig_sensitivity={raw!r} is not one of "
+            f"{sorted(DIG_SENSITIVITY_PRESETS)}; using {DEFAULT_DIG_SENSITIVITY!r}."
+        )
+        return DEFAULT_DIG_SENSITIVITY
+    return level
+
+
+def dig_detector_params(params):
+    """hardware_bridge parameters for the configured dig_sensitivity level."""
+    preset = DIG_SENSITIVITY_PRESETS[resolve_dig_sensitivity(params)]
+    if not preset["enabled"]:
+        return {"dig_detect_enabled": False}
+    return {
+        "dig_detect_enabled": True,
+        "dig_window_s": float(preset["window_s"]),
+        "dig_min_wheel_dist": float(preset["min_wheel_dist"]),
+        "dig_progress_fraction": float(preset["progress_fraction"]),
+        "dig_escalate_count": int(preset["escalate_count"]),
+    }
+
+
 DEFAULT_WHEEL_RADIUS_M = 0.10
 DEFAULT_WHEEL_WIDTH_M = 0.04
 

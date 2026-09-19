@@ -46,7 +46,7 @@ from launch_ros.substitutions import FindPackageShare
 # file). Deep-merges the SPARSE installed mowgli_robot.yaml over the in-package
 # template defaults, so a missing key falls through to its versioned default.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from robot_config_util import load_robot_params  # noqa: E402
+from robot_config_util import dig_detector_params, load_robot_params  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -209,6 +209,10 @@ def generate_launch_description() -> LaunchDescription:
             {"dock_pose_y": float(robot_params.get("dock_pose_y", 0.0))},
             {"dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0))},
             {"imu_yaw": float(robot_params.get("imu_yaw", 0.0))},
+            # Wheel-slip dig detector: ONE operator knob (dig_sensitivity:
+            # off|low|medium|high) expanded into the detector + escalation
+            # parameters by robot_config_util; "medium" == the compiled defaults.
+            dig_detector_params(robot_params),
             # Wheel odometry kinematics — single source of truth in
             # mowgli_robot.yaml. hardware_bridge uses ticks_per_meter for
             # host-side odometry and also re-sends it to the STM32 so the

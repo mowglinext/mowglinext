@@ -41,6 +41,7 @@ All 171 template keys. `L###` = line in `ros2/src/mowgli_bringup/config/mowgli_r
 | Key | Default | Consumer · where read | GUI | Life |
 |---|---|---|---|---|
 | `dig_obstacle_enabled` | true | `full_system.launch.py` → `map_server_node` subscription gate | Obstacles | launch |
+| `dig_sensitivity` | `medium` | `mowgli.launch.py` → `hardware_bridge` via `robot_config_util.dig_detector_params` (expands `off\|low\|medium\|high` into `dig_detect_enabled`, `dig_window_s`, `dig_min_wheel_dist`, `dig_progress_fraction`, `dig_escalate_count`; `medium` == `hardware_bridge.yaml`) | Obstacles | launch |
 
 Disabling dig proposals prevents new session-only map PROPOSALS (GUI map page: accept /
 reject). A proposal is inert — no keepout, no coverage hole, nothing saved — until the

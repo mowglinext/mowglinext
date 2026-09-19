@@ -786,6 +786,15 @@ mowgli:
     # False disables the proposals only, not hardware dig detection, recovery
     # or the skip zone. Restart ROS2.
     dig_obstacle_enabled: true
+    # How readily spinning wheels count as a DIG (hard stop + short reverse;
+    # three at one spot stop the mission as DIG_OBSTRUCTION).
+    #   "off"    host detection disabled (firmware anti-dig still active)
+    #   "low"    tall / wet grass, sandy or loose soil: only gross, sustained
+    #            slip latches, and it takes 5 same-spot latches to stop
+    #   "medium" default
+    #   "high"   short dry lawn you want protected from the slightest scuff
+    # Quote the value: a bare  off  is a YAML boolean. Restart ROS2.
+    dig_sensitivity: "medium"
     # How far the robot may deviate laterally from its path to skirt an
     # obstacle. ONE knob, TWO consumers (injected at launch):
     #   - FTCController max_lateral_deviation (coverage-time skirting)

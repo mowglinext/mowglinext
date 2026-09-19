@@ -2537,6 +2537,14 @@
     "temperatureThresholdsNote": "La température du moteur de lame est uniquement mesurée et rapportée — aucune couche de la pile n’arrête la lame en fonction de la température. Les seuils d’alerte et d’erreur utilisés par les diagnostics (motor_temp_warn_c et motor_temp_error_c, dans mowgli_monitoring/config/diagnostics.yaml) se modifient sur la page Paramètres."
   },
   "settingsObstacles": {
+    "digSensitivity": "Sensibilité au patinage (dig)",
+    "digSensitivityHelp": "À quel point des roues qui patinent sont considérées comme un dig (arrêt, courte marche arrière ; des digs répétés au même endroit arrêtent la mission en DIG_OBSTRUCTION). Choisissez Faible sur herbe haute ou mouillée et sur sol sableux ou meuble, où un robot sain patine beaucoup. Off désactive la détection côté ordinateur ; la protection du firmware contre les roues bloquées reste active. Enregistrez puis redémarrez ROS2.",
+    "digSensitivityLevels": {
+      "off": "Off",
+      "low": "Faible",
+      "medium": "Moyen",
+      "high": "Haut"
+    },
     "digKeepouts": "Obstacles de patinage",
     "digAutoPromotion": "Proposer un obstacle là où le robot a patiné",
     "digKeepoutsDescription": "Lorsqu’un patinage est détecté dans une zone de tonte, ajoute une proposition sur la page Carte. Rien n’est bloqué tant que vous ne l’acceptez pas : accepter en fait une zone d’exclusion permanente, refuser la supprime. En attendant, le robot évite simplement cet endroit jusqu’à la fin de la session de tonte. Si désactivé, aucune proposition n’est créée ; la détection, l’arrêt et la récupération restent actifs. Enregistrez et redémarrez ROS2 pour appliquer.",

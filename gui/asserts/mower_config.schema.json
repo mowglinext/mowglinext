@@ -749,6 +749,18 @@
           "title": "Propose an obstacle where the robot dug in",
           "description": "Record a wheel-slip dig as an obstacle proposal on the map page. A proposal blocks nothing until you accept it; the robot skips the spot for the rest of the session either way. Disabling this leaves dig detection and recovery active. Restart ROS2 to apply."
         },
+        "dig_sensitivity": {
+          "type": "string",
+          "title": "Wheel-slip (dig) sensitivity",
+          "enum": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "medium",
+          "description": "How readily spinning wheels count as a dig (hard stop, short reverse; repeated digs at one spot stop the mission as DIG_OBSTRUCTION). Choose Low on tall or wet grass and on sandy or loose soil, where a healthy robot slips a lot: only gross, sustained slip is then treated as a dig and it takes 5 repeats to stop the mission. High protects a short dry lawn from the slightest scuff. Off disables the detector on the computer; the firmware protection against blocked wheels stays active. Restart ROS2 to apply."
+        },
         "obstacle_margin": {
           "type": "number",
           "title": "Drawn Obstacle Margin",
