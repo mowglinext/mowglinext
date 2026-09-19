@@ -156,28 +156,28 @@ if real_docker_compose_available; then
   # After `docker compose config` fully expands ${VAR} references, no `${`
   # placeholder should remain. `image:` is the most common breakage point.
   EXPANDED=$(HOME="$ORIG_HOME" docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config 2>/dev/null)
-  if printf '%s' "$EXPANDED" | grep -qE 'image:.*\$\{'  ; then
+  if grep -qE 'image:.*\$\{' <<<"$EXPANDED"; then
     fail "no unresolved \${VAR} in image:" \
       "$(printf '%s' "$EXPANDED" | grep -E 'image:.*\$\{'  | head -1)"
   else
     pass "no unresolved \${VAR} in image:"
   fi
 
-  if printf '%s' "$EXPANDED" | grep -qE 'UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION: "?1"?$'; then
+  if grep -qE 'UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION: "?1"?$' <<<"$EXPANDED"; then
     pass "Universal GNSS sidecar uses schema version 1"
   else
     fail "Universal GNSS sidecar uses schema version 1" \
       "$(printf '%s' "$EXPANDED" | grep -n 'UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:' | head -1)"
   fi
 
-  if printf '%s' "$EXPANDED" | grep -qE 'c 166:\* rw'; then
+  if grep -qE 'c 166:\* rw' <<<"$EXPANDED"; then
     pass "GNSS sidecar may open tty devices (cgroup rules, not privileged)"
   else
     fail "GNSS sidecar may open tty devices (cgroup rules, not privileged)" "device_cgroup_rules missing"
   fi
 
   # Foxglove environment toggle present in expanded mowgli service env
-  if printf '%s' "$EXPANDED" | grep -qE 'ENABLE_FOXGLOVE'; then
+  if grep -qE 'ENABLE_FOXGLOVE' <<<"$EXPANDED"; then
     pass "ENABLE_FOXGLOVE env var wired into mowgli service"
   else
     fail "ENABLE_FOXGLOVE env var wired into mowgli service" "not found in expanded compose"
@@ -187,7 +187,7 @@ if real_docker_compose_available; then
 
   # mowgli_maps is the bind-mount that persists garden_map + fusion_graph
   # files across container restarts.
-  if printf '%s' "$EXPANDED" | grep -qE '^\s+mowgli_maps:'; then
+  if grep -qE '^\s+mowgli_maps:' <<<"$EXPANDED"; then
     pass "named volume mowgli_maps declared"
   else
     fail "named volume mowgli_maps declared" "missing — maps would be lost on restart"
