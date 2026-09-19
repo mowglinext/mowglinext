@@ -50,7 +50,10 @@ recompute_image_defaults() {
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
   # Universal GNSS is a separately released runtime. Never derive it from
   # MowgliNext IMAGE_TAG; the integration targets ROS 2 Lyrical.
-  UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2"
+  # Pinned by DIGEST, not only by tag: this container owns the GNSS serial
+  # port and runs privileged-adjacent on every robot, and a tag on a third-party
+  # registry can be re-pushed. Must match install/deployment.json (test-gated).
+  UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2@sha256:24ea6c1c0553463207a4c33b803e920a974989f5891f2f107e8c35cce56f7a95"
 }
 
 is_release_image_channel() {
@@ -1493,6 +1496,9 @@ EOF
   _yaml_patch_key "$yaml_file" gnss_serial_baud "$resolved_serial_baud"
   _yaml_patch_key "$yaml_file" gnss_config_baud "$resolved_config_baud"
   _yaml_patch_key "$yaml_file" gnss_frame_id "\"$resolved_frame_id\""
+  # The ROS2 launch reads the stack from the robot config only (no env
+  # fallback), so the install-time choice has to land in the yaml.
+  _yaml_patch_key "$yaml_file" gnss_stack "\"${GNSS_STACK:-universal}\""
   _yaml_patch_key "$yaml_file" ntrip_enabled   "$resolved_ntrip_enabled"
   _yaml_patch_key "$yaml_file" ntrip_host      "\"$resolved_ntrip_host\""
   _yaml_patch_key "$yaml_file" ntrip_port      "$resolved_ntrip_port"

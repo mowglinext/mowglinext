@@ -66,9 +66,24 @@ def _bridge_nodes(launch_description):
     ]
 
 
+def _load_full_system_with(monkeypatch, module_name: str, **overrides):
+    """Load full_system.launch.py with robot-config keys overridden.
+
+    The GNSS stack is chosen by the merged robot config, never by the process
+    environment, so the tests drive it the same way: through load_robot_params.
+    """
+    launch_module = _load_module("full_system.launch.py", module_name)
+    real_load = launch_module.load_robot_params
+
+    def _patched(*args, **kwargs):
+        return {**real_load(*args, **kwargs), **overrides}
+
+    monkeypatch.setattr(launch_module, "load_robot_params", _patched)
+    return launch_module
+
+
 def test_full_system_launches_contract_bridge_only_for_universal_stack(monkeypatch) -> None:
-    monkeypatch.delenv("GNSS_STACK", raising=False)
-    launch_module = _load_module("full_system.launch.py", "full_system_default_bridge")
+    launch_module = _load_full_system_with(monkeypatch, "full_system_default_bridge")
     bridge_nodes = _bridge_nodes(launch_module.generate_launch_description())
 
     assert len(bridge_nodes) == 1
@@ -80,15 +95,27 @@ def test_full_system_launches_contract_bridge_only_for_universal_stack(monkeypat
     assert '"input_rtcm_topic": "/universal_gnss_receiver/rtcm"' in launch_source
     assert '"output_rtcm_topic": "/rtcm"' in launch_source
 
-    monkeypatch.setenv("GNSS_STACK", "disabled")
-    launch_module = _load_module("full_system.launch.py", "full_system_disabled_bridge")
+    launch_module = _load_full_system_with(
+        monkeypatch, "full_system_disabled_bridge", gnss_stack="disabled"
+    )
     assert not _bridge_nodes(launch_module.generate_launch_description())
 
 
+def test_gnss_stack_is_not_read_from_the_environment(monkeypatch) -> None:
+    # Same rule as lidar_enabled (root CLAUDE.md Invariant 15): an env var that
+    # outranks the yaml silently overrides what the operator set in the GUI.
+    monkeypatch.setenv("GNSS_STACK", "disabled")
+    launch_module = _load_full_system_with(monkeypatch, "full_system_env_ignored")
+
+    assert len(_bridge_nodes(launch_module.generate_launch_description())) == 1
+    assert "os.environ" not in _read_launch_source("full_system.launch.py")
+
+
 def test_universal_bridge_does_not_depend_on_hardware_backend(monkeypatch) -> None:
-    monkeypatch.setenv("GNSS_STACK", "universal")
     monkeypatch.setenv("HARDWARE_BACKEND", "mavros")
-    launch_module = _load_module("full_system.launch.py", "full_system_mavros_universal_bridge")
+    launch_module = _load_full_system_with(
+        monkeypatch, "full_system_mavros_universal_bridge", gnss_stack="universal"
+    )
 
     assert len(_bridge_nodes(launch_module.generate_launch_description())) == 1
 

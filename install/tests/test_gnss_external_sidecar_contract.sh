@@ -37,7 +37,12 @@ assert_contains "bridge RTCM topic stays internal to Universal GNSS" \
 
 config_content="$(<"$config_file")"
 assert_contains "MowgliNext pins RC2 Lyrical image independently" \
-  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2"' "$config_content"
+  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2@sha256:24ea6c1c0553463207a4c33b803e920a974989f5891f2f107e8c35cce56f7a95"' "$config_content"
+# The installer default and the deployment descriptor name the SAME image; the
+# digest is what makes the pin real, so a bump must touch both or fail here.
+descriptor_digest="$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json" 2>/dev/null || true)"
+assert_contains "installer default is pinned to the deployment descriptor digest" \
+  "@${descriptor_digest:-MISSING-DIGEST}\"" "$config_content"
 assert_contains "derived receiver config uses stable device path" \
   'serial_device: /dev/gnss-receiver' "$config_content"
 assert_contains "runtime config regeneration writes Universal GNSS parameters" \
@@ -49,6 +54,6 @@ assert_contains "stack regen rebuilds sidecar runtime config" \
 
 env_example_content="$(<"$env_example")"
 assert_contains "example uses RC2 Lyrical image" \
-  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2' "$env_example_content"
+  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2@sha256:24ea6c1c0553463207a4c33b803e920a974989f5891f2f107e8c35cce56f7a95' "$env_example_content"
 
 test_summary

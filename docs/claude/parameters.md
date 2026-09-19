@@ -189,7 +189,9 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 
 | Key (L) | Default | GUI | Life |
 |---|---|---|---|
+| `gnss_stack` | `universal` | GPS / Positioning | `full_system.launch.py` (launches the GNSS topic bridge; config only, no `GNSS_STACK` env fallback) |
 | `gnss_receiver_family` (L269) | `auto` | GPS / Positioning | sidecar |
+| `gnss_frame_id` | `gps_link` | GPS / Positioning | `full_system.launch.py` → bridge `frame_id`; sidecar |
 | `gnss_serial_device` (L270) | `/dev/ttyAMA4` | GPS / Positioning | sidecar |
 | `gnss_serial_baud` (L271) | 921600 | GPS / Positioning | sidecar |
 | `ntrip_enabled` (L278) | `false` | GPS / Positioning | sidecar |

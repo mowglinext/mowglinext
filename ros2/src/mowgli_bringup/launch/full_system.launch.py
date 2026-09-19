@@ -194,27 +194,7 @@ def generate_launch_description() -> LaunchDescription:
     # default (single source of truth).
     robot_params = load_robot_params(bringup_dir, _runtime_cfg_path)
 
-    # The Universal GNSS receiver runtime stays in the gps sidecar.  This
-    # process owns only its public-topic contract adapter.  GNSS_STACK is an
-    # independent compose concern: a MAVROS hardware backend can still use a
-    # Universal GNSS receiver.
-    gnss_stack = os.environ.get("GNSS_STACK", "universal").strip().lower()
-    gnss_bridge_node = None
-    if gnss_stack == "universal":
-        gnss_bridge_node = Node(
-            package="mowgli_gnss_bridge",
-            executable="universal_gnss_topic_bridge",
-            name="universal_gnss_topic_bridge",
-            output="screen",
-            parameters=[
-                {
-                    "backend": "universal",
-                    "receiver_family": str(
-                        robot_params.get(
-                            "gnss_receiver_family",
-                            os.environ.get("GNSS_RECEIVER_FAMILY", "auto"),
-                        )
-                    ),# Free slack left OUTSIDE every area polygon before the keepout mask turns
+    # Free slack left OUTSIDE every area polygon before the keepout mask turns
     # lethal (map_server paints that band at the non-lethal kSoftPenaltyMaskCost
     # so a pose in it is never "Start occupied"). It is the room the BODY has to
     # overhang the recorded line, so it is FLOORED at the chassis CIRCUMSCRIBED
