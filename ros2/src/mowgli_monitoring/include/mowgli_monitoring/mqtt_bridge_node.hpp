@@ -362,6 +362,8 @@ public:
     std::string name{};
   };
 
+  static std::string serialise_home_assistant_discovery(const std::string& topic_prefix,
+                                                        const std::vector<AreaSummary>& areas);
   static std::string serialise_areas(const std::vector<AreaSummary>& areas);
 
   /**
@@ -472,7 +474,7 @@ private:
   void on_home_assistant_status(const std::string& topic,
                                 const std::string& payload,
                                 bool retained);
-  void publish_home_assistant_discovery();
+  bool publish_home_assistant_discovery();
 
   // ---- Area list: periodic poll of GetMowingArea + publish ------------------
 
@@ -530,6 +532,9 @@ private:
 
   // Tracks MQTT connection edges so discovery is refreshed after reconnect.
   bool mqtt_was_connected_{false};
+  // Set by MQTT callbacks and consumed by on_timer() after spin_once() has
+  // fully returned. This avoids publishing from within the MQTT receive path.
+  bool home_assistant_discovery_publish_pending_{false};
 
   // ---- Rate-limiting state --------------------------------------------------
 
@@ -559,6 +564,7 @@ private:
   rclcpp::Time last_areas_poll_{0, 0, RCL_ROS_TIME};
   bool areas_poll_in_flight_{false};
   std::string last_areas_json_{};
+  std::vector<AreaSummary> last_areas_{};
 
   // ---- Area boundary polling state -------------------------------------------
 

@@ -33,15 +33,24 @@ device discovery record at `homeassistant/device/<derived-id>/config`. Home Assi
 a single MowgliNext device containing:
 
 - lawn-mower state and the standard start, pause and dock controls;
+- one explicit **Mow &lt;area name&gt;** button for every current mowable area;
 - battery, coverage, GPS quality, RTK state and GPS location;
 - charging, emergency and rain indicators;
 - blade speed/current, battery voltage and charge current.
 
 The bridge republishes the record whenever it reconnects and whenever Home Assistant announces
-`online` on `homeassistant/status`. Turning the option off publishes an empty retained record for
-the current topic prefix, which removes the discovered device. Home Assistant's default discovery
-prefix (`homeassistant`) is used. Give each mower connected to one broker a distinct
-`mqtt_topic_prefix`; that prefix also supplies its stable Home Assistant device and entity IDs.
+`online` on `homeassistant/status`. It also refreshes discovery when the polled mowable-area list
+changes, so area buttons appear, rename and disappear with the map. A button press publishes the
+area's current positional index to `<prefix>/start_area`; changing a map can reassign those indices,
+so each button's discovery identity includes both its index and name. Home Assistant replaces the
+button rather than silently leaving an existing automation aimed at a different physical area.
+
+An area is an explicit button instead of a select entity because changing an MQTT select sends its
+command immediately; choosing an item in a dropdown must not unexpectedly start a physical mower.
+Turning discovery off publishes an empty retained record for the current topic prefix, which removes
+the discovered device. Home Assistant's default discovery prefix (`homeassistant`) is used. Give
+each mower connected to one broker a distinct `mqtt_topic_prefix`; that prefix also supplies its
+stable Home Assistant device and entity IDs.
 
 Changing a mower's topic prefix changes its discovery ID. Turn discovery off and restart once
 before changing the prefix if the old retained device should be removed automatically.

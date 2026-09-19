@@ -25,9 +25,11 @@
  * classify_*() tests.
  */
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -200,6 +202,22 @@ TEST(HomeAssistantDiscovery, EmptyPrefixFallsBackToMowgliDataTopics)
   EXPECT_NE(json.find(R"("availability_topic":"mowgli/available")"), std::string::npos);
 }
 
+TEST(HomeAssistantDiscovery, AddsExplicitMowButtonForEachCurrentArea)
+{
+  const std::vector<MqttBridgeNode::AreaSummary> areas{
+      {2, "Back \"Garden\""},
+      {7, "Side lawn"},
+  };
+  const std::string json = MqttBridgeNode::serialise_home_assistant_discovery("garden", areas);
+
+  EXPECT_NE(json.find(R"("platform":"button","name":"Mow Back \"Garden\"")"), std::string::npos);
+  EXPECT_NE(json.find(R"("command_topic":"garden/start_area","payload_press":"2")"),
+            std::string::npos);
+  EXPECT_NE(json.find(R"("platform":"button","name":"Mow Side lawn")"), std::string::npos);
+  EXPECT_NE(json.find(R"("payload_press":"7")"), std::string::npos);
+  EXPECT_NE(json.find("mow_area_2_mowglinext_Back__Garden_"), std::string::npos);
+}
+
 TEST_F(HomeAssistantDiscoveryNodeTest, RepublishesDiscoveryWhenHomeAssistantComesOnline)
 {
   auto client = std::make_unique<RecordingMqttClient>();
@@ -208,11 +226,20 @@ TEST_F(HomeAssistantDiscoveryNodeTest, RepublishesDiscoveryWhenHomeAssistantCome
   options.parameter_overrides({
       rclcpp::Parameter("mqtt_topic_prefix", "back_garden"),
       rclcpp::Parameter("home_assistant_discovery_enabled", true),
+      rclcpp::Parameter("publish_rate", 0.1),
   });
   auto node = std::make_shared<MqttBridgeNode>(std::move(client), options);
 
   ASSERT_EQ(recording->subscriptions.count("homeassistant/status"), 1U);
   recording->subscriptions.at("homeassistant/status")("homeassistant/status", "online", false);
+  EXPECT_TRUE(recording->publications.empty());
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  // MQTT servicing is independent of a deliberately slow telemetry rate.
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  executor.spin_some();
+  executor.remove_node(node);
 
   ASSERT_EQ(recording->publications.size(), 1U);
   EXPECT_EQ(recording->publications[0].topic, "homeassistant/device/mowglinext_back_garden/config");
