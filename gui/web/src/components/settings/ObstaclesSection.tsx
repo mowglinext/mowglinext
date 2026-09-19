@@ -16,7 +16,8 @@ export type DigSensitivity = (typeof DIG_SENSITIVITY_LEVELS)[number];
  */
 export const normalizeDigSensitivity = (raw: unknown): DigSensitivity => {
     if (raw === false) return "off";
-    const level = String(raw ?? "").trim().toLowerCase();
+    if (typeof raw !== "string") return "medium";
+    const level = raw.trim().toLowerCase();
     return (DIG_SENSITIVITY_LEVELS as readonly string[]).includes(level)
         ? (level as DigSensitivity)
         : "medium";
