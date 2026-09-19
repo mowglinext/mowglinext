@@ -8,7 +8,7 @@ At minimum: YardForce Classic 500, ARM64 SBC (Pi 4+), u-blox ZED-F9P GPS, and th
 
 ### Is this compatible with OpenMower?
 
-MowgliNext is a complete ROS2 rewrite inspired by OpenMower. It uses the same hardware but a completely different software stack (ROS2 Kilted vs ROS1 Noetic).
+MowgliNext is a complete ROS2 rewrite inspired by OpenMower. It uses the same hardware but a completely different software stack (ROS2 Lyrical vs ROS1 Noetic).
 
 ### Do I need an NTRIP service for RTK?
 
@@ -90,7 +90,7 @@ See [Simulation](Simulation) for full details.
 
 ### Can I develop in the cloud without local setup?
 
-Yes! MowgliNext supports **GitHub Codespaces** with a pre-configured devcontainer. Click **Code → Codespaces** on the repo page to get a full ROS2 Kilted development environment with Nav2, GTSAM, the GUI toolchain and the linters — no local installation needed. 8-core machine recommended. Note that the devcontainer does **not** ship Webots, so it is a build/test environment rather than a simulation one; run the sim through `docker-compose.simulation.yaml` instead. See [Getting Started](Getting-Started#development-with-github-codespaces--devcontainer).
+Yes! MowgliNext supports **GitHub Codespaces** with a pre-configured devcontainer. Click **Code → Codespaces** on the repo page to get a full ROS2 Lyrical development environment with Nav2, GTSAM, the GUI toolchain and the linters — no local installation needed. 8-core machine recommended. Note that the devcontainer does **not** ship Webots, so it is a build/test environment rather than a simulation one; run the sim through `docker-compose.simulation.yaml` instead. See [Getting Started](Getting-Started#development-with-github-codespaces--devcontainer).
 
 ### How do I add support for a different LiDAR?
 

@@ -19,6 +19,7 @@
 geometry_msgs/Polygon outer_boundary
 geometry_msgs/Polygon[] obstacles      # interior holes (>= 3 points each)
 float64 mow_angle_deg                  # swath heading in the map frame; < 0 = auto (minimise swath count)
+bool perpendicular                    # rotate resolved AUTO/fixed swaths 90 degrees; boundary rings unchanged
 ---
 # Result
 uint8 SEGMENT_RING=0    # densified closed headland loop

@@ -176,6 +176,7 @@ export const enum DockCalibrationStatusConstants {
   PHASE_PERSIST = 5,
   PHASE_IDLE = 6,
   PHASE_DONE = 7,
+  PHASE_CAPTURE_POSITION = 8,
 };
 
 export type DockCalibrationStatus = {
@@ -389,6 +390,9 @@ export type MapArea = {
   obstacles?: Polygon[];
   is_navigation_area?: boolean;
   obstacle_info?: MapObstacleInfo[];
+  proposed_obstacles?: Polygon[];
+  proposed_obstacle_info?: MapObstacleInfo[];
+  id?: number;
 };
 
 export const enum MapObstacleInfoConstants {
@@ -445,6 +449,9 @@ export type Status = {
   ui_board_available?: boolean;
   mow_enabled?: boolean;
   firmware_debug_enabled?: boolean;
+  dig_escalated?: boolean;
+  dig_escalated_distance_m?: number;
+  dig_escalated_required_distance_m?: number;
   mower_esc_status?: number;
   mower_esc_temperature?: number;
   mower_esc_current?: number;
@@ -506,6 +513,7 @@ export type Map = {
   map_center_y?: number;
   navigation_areas?: MapArea[];
   working_area?: MapArea[];
+  working_area_indices?: number[];
   dock_x?: number;
   dock_y?: number;
   dock_heading?: number;

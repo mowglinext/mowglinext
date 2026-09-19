@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-labelledby="t">
+  <title id="t">MowgliNext system overview: mainboard, compute board, sensors and how they connect</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+  <rect width="900" height="560" fill="#0f172a"/>
+
+  <!-- Mower chassis outline -->
+  <rect x="40" y="40" width="820" height="480" rx="26" fill="none" stroke="#334155" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="60" y="70" fill="#64748b" font-size="14">YardForce chassis</text>
+
+  <!-- Mainboard -->
+  <rect x="80" y="300" width="300" height="170" rx="12" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <text x="230" y="330" text-anchor="middle" fill="#f8fafc" font-size="18" font-weight="700">Stock mainboard (STM32)</text>
+  <text x="230" y="352" text-anchor="middle" fill="#94a3b8" font-size="12">Mowgli firmware — motors · blade · IMU · battery · safety</text>
+  <g font-size="11" fill="#e2e8f0">
+    <rect x="96" y="372" width="60" height="26" rx="5" fill="#0f172a" stroke="#475569"/><text x="126" y="389" text-anchor="middle">J14 USB</text>
+    <rect x="166" y="372" width="60" height="26" rx="5" fill="#0f172a" stroke="#475569"/><text x="196" y="389" text-anchor="middle">J18 IMU</text>
+    <rect x="236" y="372" width="60" height="26" rx="5" fill="#0f172a" stroke="#475569"/><text x="266" y="389" text-anchor="middle">J9 SWD</text>
+    <rect x="306" y="372" width="60" height="26" rx="5" fill="#0f172a" stroke="#475569"/><text x="336" y="389" text-anchor="middle">J3 VBat</text>
+  </g>
+  <g font-size="11" fill="#94a3b8">
+    <text x="96" y="428">Wheel motors · blade motor · charger</text>
+    <text x="96" y="448">Stop buttons · lift · tilt · rain · panel</text>
+  </g>
+
+  <!-- IMU -->
+  <rect x="80" y="200" width="120" height="60" rx="10" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <text x="140" y="226" text-anchor="middle" fill="#f8fafc" font-size="14" font-weight="700">IMU</text>
+  <text x="140" y="246" text-anchor="middle" fill="#94a3b8" font-size="11">WT901 / MPU6050 · I²C</text>
+  <path d="M170,260 L196,372" stroke="#94a3b8" stroke-width="2" fill="none"/>
+
+  <!-- ST-Link -->
+  <rect x="330" y="200" width="120" height="60" rx="10" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <text x="390" y="226" text-anchor="middle" fill="#f8fafc" font-size="14" font-weight="700">ST-Link V2</text>
+  <text x="390" y="246" text-anchor="middle" fill="#94a3b8" font-size="11">flashing · SWD</text>
+  <path d="M340,260 L266,372" stroke="#94a3b8" stroke-width="2" fill="none"/>
+
+  <!-- DC-DC -->
+  <rect x="420" y="380" width="130" height="70" rx="10" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <text x="485" y="406" text-anchor="middle" fill="#f8fafc" font-size="14" font-weight="700">DC-DC 5 V</text>
+  <text x="485" y="426" text-anchor="middle" fill="#94a3b8" font-size="11">29 V → 5.1 V · ≥ 3 A</text>
+  <path d="M366,415 L420,415" stroke="#facc15" stroke-width="2.5" fill="none" marker-end="url(#arr)"/>
+  <text x="393" y="408" text-anchor="middle" fill="#facc15" font-size="10">29 V</text>
+
+  <!-- Compute board -->
+  <rect x="600" y="300" width="240" height="170" rx="12" fill="#1e293b" stroke="#22c55e" stroke-width="2.5"/>
+  <text x="720" y="330" text-anchor="middle" fill="#f8fafc" font-size="18" font-weight="700">Raspberry Pi 5 / Orange Pi 5B</text>
+  <text x="720" y="352" text-anchor="middle" fill="#94a3b8" font-size="12">NVMe SSD · Docker · ROS 2 · GUI :4006</text>
+  <g font-size="11" fill="#e2e8f0">
+    <rect x="616" y="372" width="64" height="26" rx="5" fill="#0f172a" stroke="#475569"/><text x="648" y="389" text-anchor="middle">USB ×4</text>
+    <rect x="690" y="372" width="64" height="26" rx="5" fill="#0f172a" stroke="#475569"/><text x="722" y="389" text-anchor="middle">GPIO UART</text>
+    <rect x="764" y="372" width="64" height="26" rx="5" fill="#0f172a" stroke="#475569"/><text x="796" y="389" text-anchor="middle">Wi-Fi</text>
+  </g>
+  <path d="M550,415 L600,415" stroke="#facc15" stroke-width="2.5" fill="none" marker-end="url(#arr)"/>
+  <text x="575" y="408" text-anchor="middle" fill="#facc15" font-size="10">5 V</text>
+
+  <!-- USB link mainboard <-> Pi -->
+  <path d="M126,372 C126,250 500,250 640,372" stroke="#38bdf8" stroke-width="2.5" fill="none" marker-end="url(#arr)" marker-start="url(#arr)"/>
+  <text x="400" y="278" text-anchor="middle" fill="#38bdf8" font-size="12" font-weight="600">USB A↔A (COBS protocol, /dev/mowgli)</text>
+
+  <!-- GPS -->
+  <rect x="600" y="100" width="150" height="80" rx="10" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <text x="675" y="128" text-anchor="middle" fill="#f8fafc" font-size="14" font-weight="700">RTK GNSS</text>
+  <text x="675" y="148" text-anchor="middle" fill="#94a3b8" font-size="11">ZED-F9P / UM980-982</text>
+  <text x="675" y="166" text-anchor="middle" fill="#94a3b8" font-size="11">USB or UART · NTRIP</text>
+  <path d="M660,180 L648,372" stroke="#94a3b8" stroke-width="2" fill="none"/>
+  <!-- antenna -->
+  <circle cx="675" cy="60" r="16" fill="#0f172a" stroke="#38bdf8" stroke-width="2"/>
+  <path d="M675,76 L675,100" stroke="#38bdf8" stroke-width="2"/>
+  <text x="700" y="64" fill="#38bdf8" font-size="11">antenna, clear sky</text>
+
+  <!-- LiDAR -->
+  <rect x="470" y="100" width="110" height="80" rx="10" fill="#1e293b" stroke="#475569" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="525" y="128" text-anchor="middle" fill="#f8fafc" font-size="14" font-weight="700">LiDAR</text>
+  <text x="525" y="148" text-anchor="middle" fill="#94a3b8" font-size="11">LD19 · optional</text>
+  <text x="525" y="166" text-anchor="middle" fill="#94a3b8" font-size="11">UART 230400</text>
+  <path d="M560,180 L722,372" stroke="#94a3b8" stroke-width="2" fill="none"/>
+
+  <!-- Wi-Fi to phone -->
+  <path d="M796,372 C840,330 860,240 860,200" stroke="#22c55e" stroke-width="2" fill="none" stroke-dasharray="5 4"/>
+  <text x="830" y="190" text-anchor="end" fill="#22c55e" font-size="12">web GUI on your phone / PC</text>
+
+  <!-- Battery -->
+  <rect x="80" y="100" width="120" height="60" rx="10" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <text x="140" y="126" text-anchor="middle" fill="#f8fafc" font-size="14" font-weight="700">Battery 28 V</text>
+  <text x="140" y="146" text-anchor="middle" fill="#94a3b8" font-size="11">stock pack + dock</text>
+  <path d="M200,130 C300,130 336,300 336,372" stroke="#facc15" stroke-width="2.5" fill="none"/>
+</svg>

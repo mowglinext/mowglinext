@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MowgliNext — Build manual (printable)</title>
+  <link rel="icon" type="image/svg+xml" href="../icon.svg">
+  <link rel="stylesheet" href="manual.css">
+</head>
+<body class="print-page">
+<header class="manual-header">
+  <div class="header-left">
+    <a href="./" class="logo-link"><img src="../icon.svg" alt="" width="26" height="26">Mowgli<span>Next</span></a>
+    <span class="header-sep" aria-hidden="true">/</span>
+    <span id="manual-title" class="manual-name">Build manual</span>
+  </div>
+  <div class="header-right">
+    <a class="header-link" href="./" id="back-link">Interactive version</a>
+    <button type="button" class="header-link as-button" onclick="window.print()" id="print-button">Print</button>
+  </div>
+</header>
+<main class="print-body" id="print-body"></main>
+<script src="manual-data.js"></script>
+<script src="content/01-intro.js"></script>
+<script src="content/02-parts.js"></script>
+<script src="content/03-open.js"></script>
+<script src="content/04-compute.js"></script>
+<script src="content/05-imu.js"></script>
+<script src="content/06-gnss.js"></script>
+<script src="content/07-lidar.js"></script>
+<script src="content/08-firmware.js"></script>
+<script src="content/09-install.js"></script>
+<script src="content/10-onboarding.js"></script>
+<script src="content/11-calibration.js"></script>
+<script src="content/12-first-mow.js"></script>
+<script src="content/13-troubleshooting.js"></script>
+<script src="content/14-credits.js"></script>
+<script src="manual.js"></script>
+<script>
+(function () {
+  var data = window.MOWGLI_MANUAL, M = window.MowgliManual;
+  var q = new URLSearchParams(window.location.search);
+  var lang = q.get("lang");
+  if (!lang || M.langs.indexOf(lang) < 0) {
+    lang = (navigator.language || "en").slice(0, 2);
+    if (M.langs.indexOf(lang) < 0) lang = "en";
+  }
+  document.documentElement.lang = lang;
+  function tx(o) { return o == null ? "" : (typeof o === "string" ? o : (o[lang] || o.en || "")); }
+  var ui = M.ui[lang] || M.ui.en;
+  document.getElementById("manual-title").textContent = tx(data.title) + " — " + ui.printTitle;
+  document.getElementById("back-link").href = "./?lang=" + lang;
+  document.getElementById("print-button").textContent = ui.print;
+  document.title = tx(data.title) + " — " + ui.printTitle;
+
+  var html = "<h1>" + M.escapeHtml(tx(data.title)) + "</h1>";
+  html += '<p class="print-note">' + M.inline(tx(data.printNote)) + "</p>";
+  data.chapters.forEach(function (ch, ci) {
+    html += '<section class="print-chapter"><h2>' + (ci + 1) + ". " + ch.icon + " " + M.escapeHtml(tx(ch.title)) + "</h2>";
+    ch.steps.forEach(function (s, si) {
+      html += '<section class="print-step"><h3>' + (ci + 1) + "." + (si + 1) + " " + M.escapeHtml(tx(s.title)) + "</h3>";
+      if (s.when) {
+        var conds = Object.keys(s.when).map(function (k) {
+          var g = data.profile[k];
+          return s.when[k].map(function (id) {
+            var o = g.options.filter(function (x) { return x.id === id; })[0];
+            return o ? tx(o.label) : id;
+          }).join(" / ");
+        });
+        html += '<p class="print-when">' + M.escapeHtml(ui.profile) + ": " + M.escapeHtml(conds.join(" · ")) + "</p>";
+      }
+      var media = s.media;
+      if (media && media.type !== "video") {
+        html += '<figure><img src="' + media.src + '" alt="' + M.escapeHtml(tx(media.alt)) + '" loading="lazy">';
+        if (media.caption) html += "<figcaption>" + M.inline(tx(media.caption)) + "</figcaption>";
+        html += "</figure>";
+      }
+      html += M.markdown(tx(s.body));
+      if (s.parts && s.parts.length) {
+        html += "<h4>" + M.escapeHtml(ui.parts) + "</h4><ul>" + s.parts.map(function (p) {
+          return "<li>" + (p.qty ? p.qty + "× " : "") + M.inline(tx(p.name || p)) + "</li>";
+        }).join("") + "</ul>";
+      }
+      html += "</section>";
+    });
+    html += "</section>";
+  });
+  document.getElementById("print-body").innerHTML = html;
+})();
+</script>
+</body>
+</html>

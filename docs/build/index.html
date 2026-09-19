@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MowgliNext — Build manual</title>
+  <meta name="description" content="Step-by-step manual to turn a YardForce 500 / 500B robot mower into an autonomous RTK-GPS mower with MowgliNext: parts, wiring, firmware, software install and first mow.">
+  <link rel="icon" type="image/svg+xml" href="../icon.svg">
+  <link rel="stylesheet" href="manual.css">
+</head>
+<body>
+
+<header class="manual-header">
+  <div class="header-left">
+    <button id="menu-button" class="menu-button" aria-expanded="false" aria-controls="sidebar">☰</button>
+    <a href="../" class="logo-link"><img src="../icon.svg" alt="" width="26" height="26">Mowgli<span>Next</span></a>
+    <span class="header-sep" aria-hidden="true">/</span>
+    <span id="manual-title" class="manual-name">Build manual</span>
+  </div>
+  <div class="header-right">
+    <a id="print-link" class="header-link" href="print.html">Print / PDF</a>
+    <a id="wiki-link" class="header-link" href="https://github.com/mowglinext/mowglinext/wiki" target="_blank" rel="noopener">Wiki</a>
+    <a id="github-link" class="header-link" href="https://github.com/mowglinext/mowglinext" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</header>
+
+<div class="layout">
+  <div id="menu-backdrop" class="menu-backdrop"></div>
+
+  <aside id="sidebar" class="sidebar">
+    <section class="sidebar-section">
+      <h2 id="lang-heading" class="sidebar-heading">Language</h2>
+      <div class="lang-switch">
+        <button type="button" id="lang-en" class="lang-option" aria-pressed="false">English</button>
+        <button type="button" id="lang-fr" class="lang-option" aria-pressed="false">Français</button>
+      </div>
+    </section>
+
+    <section class="sidebar-section">
+      <h2 id="profile-heading" class="sidebar-heading">Your build</h2>
+      <p id="profile-hint" class="sidebar-hint"></p>
+      <div id="profile-form"></div>
+    </section>
+
+    <section class="sidebar-section">
+      <h2 id="chapters-heading" class="sidebar-heading">Chapters</h2>
+      <ol id="chapter-list" class="chapter-list"></ol>
+    </section>
+  </aside>
+
+  <main class="content">
+    <div id="media" class="media"></div>
+
+    <article id="instructions" class="instructions">
+      <p id="chapter-kicker" class="kicker"></p>
+      <h1 id="step-title">Step</h1>
+      <div id="step-body" class="step-body"></div>
+      <aside id="parts" class="parts" hidden></aside>
+      <button type="button" id="done-toggle" class="done-toggle">Mark as done</button>
+      <div id="chapter-tail" class="chapter-tail" hidden></div>
+    </article>
+  </main>
+</div>
+
+<footer class="manual-footer">
+  <div class="nav-controls">
+    <button type="button" id="prev-step" class="nav-button" aria-label="Previous">
+      <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+    </button>
+    <div class="step-selector">
+      <input type="number" id="step-input" min="1" value="1" aria-label="Step number">
+      <span id="step-total">/ 1</span>
+    </div>
+    <button type="button" id="next-step" class="nav-button" aria-label="Next">
+      <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+    </button>
+  </div>
+</footer>
+
+<script src="manual-data.js"></script>
+<script src="content/01-intro.js"></script>
+<script src="content/02-parts.js"></script>
+<script src="content/03-open.js"></script>
+<script src="content/04-compute.js"></script>
+<script src="content/05-imu.js"></script>
+<script src="content/06-gnss.js"></script>
+<script src="content/07-lidar.js"></script>
+<script src="content/08-firmware.js"></script>
+<script src="content/09-install.js"></script>
+<script src="content/10-onboarding.js"></script>
+<script src="content/11-calibration.js"></script>
+<script src="content/12-first-mow.js"></script>
+<script src="content/13-troubleshooting.js"></script>
+<script src="content/14-credits.js"></script>
+<script src="manual.js"></script>
+</body>
+</html>

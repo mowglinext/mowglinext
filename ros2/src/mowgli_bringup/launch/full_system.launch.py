@@ -54,6 +54,10 @@ from launch_ros.parameter_descriptions import ParameterValue
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
+    chassis_circumscribed_radius,
+    dig_proposal_radius,
+    dig_skip_radius,
+    keepout_obstacle_margin,
     load_robot_params,
     resolve_lidar_enabled,
     warn_lidar_key_absent,
@@ -99,6 +103,11 @@ def generate_launch_description() -> LaunchDescription:
     # writing to a /dev/spidev it may not own until the operator opts in.
     _early_led_enabled = "true" if bool(_rp.get("led_enabled", False)) else "false"
 
+    # Same pre-read for the MQTT bridge (mowgli_monitoring/mqtt_bridge_node).
+    # Defaults FALSE in the in-package template — opt-in, since it means
+    # dialing out to a broker (bundled or the operator's own external one).
+    _early_mqtt_enabled = "true" if bool(_rp.get("mqtt_enabled", False)) else "false"
+
     # ------------------------------------------------------------------
     # Declared arguments
     # ------------------------------------------------------------------
@@ -116,8 +125,10 @@ def generate_launch_description() -> LaunchDescription:
 
     enable_mqtt_arg = DeclareLaunchArgument(
         "enable_mqtt",
-        default_value="false",
-        description="Launch the MQTT bridge node when true.",
+        default_value=_early_mqtt_enabled,
+        description="Launch the MQTT bridge node when true. Default read from "
+        "mowgli_robot.yaml.mqtt_enabled (GUI Settings → MQTT); CLI/compose "
+        "override wins.",
     )
 
     enable_foxglove_arg = DeclareLaunchArgument(
@@ -182,6 +193,89 @@ def generate_launch_description() -> LaunchDescription:
     # key the installed config omits falls through to its versioned template
     # default (single source of truth).
     robot_params = load_robot_params(bringup_dir, _runtime_cfg_path)
+
+    # Free slack left OUTSIDE every area polygon before the keepout mask turns
+    # lethal (map_server paints that band at the non-lethal kSoftPenaltyMaskCost
+    # so a pose in it is never "Start occupied"). It is the room the BODY has to
+    # overhang the recorded line, so it is FLOORED at the chassis CIRCUMSCRIBED
+    # RADIUS, DERIVED from the live chassis_* params — the same helper
+    # navigation.launch.py already floors the local-costmap inflation_radius at.
+    #
+    # Why the circumscribed radius and not the half-width: chassis_safety_inset
+    # is 0, so the outermost coverage pass rides ON the recorded line — the
+    # robot's CENTRE sits on it and the footprint can reach, in ANY orientation,
+    # up to that radius outside it. Sideways that is only the half-width
+    # (0.275 m shipped), but at a ROW END the body noses
+    # chassis_center_x + chassis_length/2 + margin = 0.53 m forward past the
+    # line, which is why both 0.40 (the old literal, sized for a 0.40 m chassis)
+    # and 0.275 (the half-width floor this replaces, a no-op because 0.40 was
+    # already above it) leave the front of the chassis over LETHAL keepout
+    # cells. hypot(0.53, 0.275) = 0.597 m on the shipped chassis, and it follows
+    # chassis_width / chassis_length / chassis_center_x, which the GUI
+    # onboarding presets set per mower model (widths 0.39 m to 0.535 m).
+    #
+    # TRADE-OFF, watch it in the field: this band is also the region Smac will
+    # accept to plan THROUGH outside the recorded perimeter. The cells are
+    # mid-cost (kSoftPenaltyMaskCost), not free, so A* only uses them when the
+    # inside is worse — but the global costmap lists inflation_layer BEFORE
+    # keepout_filter, so the lethal wall is NOT inflated inward any more and the
+    # whole band, right up to the wall, is plannable for Smac's point check.
+    # The narrow value existed to fix a 0.32 m concave-boundary excursion. The
+    # band also exceeds map_server's lethal_boundary_margin_m (0.5 m), so the
+    # planner wall no longer engages strictly before that e-stop tripwire.
+    #
+    # FTC's confine_deviation_to_zone guard reads the same GLOBAL costmap at
+    # >= inscribed and samples the full footprint against it. With the wall
+    # un-inflated the guard-lethal set starts at the full band width (0.597 m
+    # shipped) outside the line, which now covers the 0.53 m forward reach at a
+    # row end — the old order inflated it 0.20 m inward and left 0.40 m, short
+    # of it. The global obstacle_layer's own LiDAR marks (a hedge past the line)
+    # ARE still inflated and stay lethal to that guard regardless of this band.
+    boundary_margin_floor = chassis_circumscribed_radius(robot_params)
+    enforce_boundary_margin_m = float(
+        robot_params.get("enforce_boundary_margin_m", 0.40)
+    )
+    if enforce_boundary_margin_m < boundary_margin_floor:
+        print(
+            "[full_system.launch] enforce_boundary_margin_m "
+            f"{enforce_boundary_margin_m:.3f} m is inside the chassis "
+            f"circumscribed radius {boundary_margin_floor:.3f} m — raising it "
+            "to the floor. A band narrower than the body's reach makes the "
+            "outermost coverage pass end with the chassis over LETHAL keepout "
+            "cells."
+        )
+        enforce_boundary_margin_m = boundary_margin_floor
+
+    keepout_obstacle_margin_m = keepout_obstacle_margin(robot_params)
+
+    # The Universal GNSS receiver runtime stays in the gps sidecar.
+    # This process owns only its public-topic contract adapter.
+    gnss_stack = str(robot_params.get("gnss_stack", "universal")).strip().lower()
+
+    gnss_bridge_node = None
+    if gnss_stack == "universal":
+        gnss_bridge_node = Node(
+            package="mowgli_gnss_bridge",
+            executable="universal_gnss_topic_bridge",
+            name="universal_gnss_topic_bridge",
+            output="screen",
+            parameters=[
+                {
+                    "backend": "universal",
+                    "receiver_family": str(
+                        robot_params.get("gnss_receiver_family", "auto")
+                    ),
+                    "frame_id": str(
+                        robot_params.get("gnss_frame_id", "gps_link")
+                    ),
+                    "input_status_topic": "/universal_gnss_receiver/status",
+                    "output_status_topic": "/gps/status",
+                    "input_diagnostics_topic": "/diagnostics",
+                    "input_rtcm_topic": "/universal_gnss_receiver/rtcm",
+                    "output_rtcm_topic": "/rtcm",
+                }
+            ],
+        )
 
     # ------------------------------------------------------------------
     # 1. mowgli.launch.py — hardware bridge, RSP, twist_mux
@@ -248,6 +342,23 @@ def generate_launch_description() -> LaunchDescription:
             # fixed swath angle in degrees. Read by PlanCoverageArea::buildGoal
             # off the BT blackboard into the plan_coverage action goal.
             {"mow_angle_deg": float(robot_params.get("mow_angle_deg", -1.0))},
+            {"mow_cross_hatch": bool(robot_params.get("mow_cross_hatch", False))},
+            # Goal-checker instance the coverage FollowPath goals carry. Default
+            # is mowgli_nav2_plugins' PathProgressGoalChecker; Lyrical's stock
+            # AxisGoalChecker is declared alongside it in nav2_params_base.yaml
+            # as "coverage_axis_goal_checker" for a field comparison.
+            {
+                "coverage_goal_checker_id": str(
+                    robot_params.get("coverage_goal_checker_id", "coverage_goal_checker")
+                )
+            },
+            # Session dig skip zones (mowgli_behavior/dig_skip.hpp): coverage
+            # poses this close to a wheel-slip dig are skipped for the rest of
+            # the session. DERIVED from the chassis (circumscribed radius), so
+            # it follows a GUI edit of chassis_length / chassis_width; it
+            # replaces the pending dig KEEPOUT, which blocked planning from the
+            # robot's own pose (START_OCCUPIED, 2026-09-17).
+            {"dig_skip_radius_m": dig_skip_radius(robot_params)},
             # Area-recording boundary resolution. Both were hardcoded in
             # main_tree.xml (0.2 m Douglas-Peucker tolerance, 2 Hz sampling),
             # which cost a field recording all but 24 vertices of a 38 m
@@ -410,12 +521,21 @@ def generate_launch_description() -> LaunchDescription:
             # remain owned by hardware_bridge regardless of this map setting.
             {"dig_obstacle_enabled": bool(
                 robot_params.get("dig_obstacle_enabled", True))},
-            # Extra LETHAL margin grown around drawn obstacle polygons in the
-            # keepout mask — mirrors coverage_server.obstacle_margin (injected
-            # by navigation.launch.py) so the transit planner and the swath
-            # planner keep the same distance from a drawn tree/root zone.
-            {"obstacle_margin": min(1.0, max(0.0, float(
-                robot_params.get("obstacle_margin", 0.15))))},
+            # Size of a dig PROPOSAL = the physical dig (the two drive-wheel
+            # ruts), DERIVED from wheel_track / wheel_width / wheel_radius —
+            # never a chassis-sized box: the body clearance is added once, by
+            # the keepout band + obstacle_margin, when a proposal is accepted.
+            {"dig_proposal_radius": dig_proposal_radius(robot_params)},
+            # LETHAL band grown around drawn obstacle polygons in the keepout
+            # mask. DERIVED (robot_config_util.keepout_obstacle_margin), and
+            # deliberately NOT coverage_server.obstacle_margin any more: the
+            # mask's consumer is Smac 2D, a POINT check with no body model, and
+            # the global costmap lists inflation_layer BEFORE keepout_filter so
+            # the mask is not inflated. The band is therefore the WHOLE body
+            # half-width, counted once — and it follows an operator-RAISED
+            # obstacle_margin, always one rasterisation slack inside the
+            # coverage line so a robot on that line stays plannable.
+            {"keepout_obstacle_margin": keepout_obstacle_margin_m},
             # Hard area-boundary enforcement (operator intent: "lethal area
             # where there is no navigation or mowing area"). When true (default)
             # the keepout mask marks every cell outside the union of all areas
@@ -426,8 +546,7 @@ def generate_launch_description() -> LaunchDescription:
             # left outside each edge for RTK drift is enforce_boundary_margin_m.
             {"lethal_outside_areas": bool(
                 robot_params.get("lethal_outside_areas", True))},
-            {"enforce_boundary_margin_m": float(
-                robot_params.get("enforce_boundary_margin_m", 0.40))},
+            {"enforce_boundary_margin_m": enforce_boundary_margin_m},
             # Transit boundary clearance: a SOFT mid-cost nudge (never lethal)
             # in the GLOBAL costmap that biases point-to-point TRANSIT
             # planning away from the recorded edge when an alternative
@@ -565,8 +684,26 @@ def generate_launch_description() -> LaunchDescription:
         name="mqtt_bridge_node",
         output="screen",
         parameters=[
+            # Base layer: package defaults for knobs not exposed on the GUI
+            # (mqtt_client_id, publish_rate). Injected dict below is applied
+            # AFTER this file, so it wins for any key both define (see
+            # ros2/CLAUDE.md's "param order matters" gotcha).
             mqtt_params,
-            {"use_sim_time": use_sim_time},
+            {
+                "use_sim_time": use_sim_time,
+                # Broker connection is an operator/site choice (Invariant 15,
+                # GUI Settings → MQTT) — same mowgli_robot.yaml single source
+                # of truth as tool_width/lidar_enabled/ntrip_host, not a
+                # package-share default. "localhost" still reaches the
+                # bundled mowgli-mqtt container: the mowgli service runs
+                # network_mode: host.
+                "mqtt_host": str(robot_params.get("mqtt_host", "localhost")),
+                "mqtt_port": int(robot_params.get("mqtt_port", 1883)),
+                "mqtt_username": str(robot_params.get("mqtt_username", "")),
+                "mqtt_password": str(robot_params.get("mqtt_password", "")),
+                "mqtt_topic_prefix": str(robot_params.get("mqtt_topic_prefix", "mowgli")),
+                "use_ssl": bool(robot_params.get("mqtt_use_ssl", False)),
+            },
         ],
     )
 
@@ -746,8 +883,7 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # LaunchDescription
     # ------------------------------------------------------------------
-    return LaunchDescription(
-        [
+    launch_entities = [
             # Arguments
             use_sim_time_arg,
             serial_port_arg,
@@ -776,4 +912,6 @@ def generate_launch_description() -> LaunchDescription:
             # charging (~/dock_heading → /gnss/heading via mowgli.launch.py
             # remapping). No separate launch action needed.
         ]
-    )
+    if gnss_bridge_node is not None:
+        launch_entities.append(gnss_bridge_node)
+    return LaunchDescription(launch_entities)

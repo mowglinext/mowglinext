@@ -2,7 +2,7 @@
 
 Comprehensive technical documentation of the Mowgli ROS2 system design, including package organization, data flow, communication protocols, and integration points.
 
-Built on **ROS2 Kilted** with **Webots** simulation, this architecture spans 12 focused packages providing complete autonomous lawn mower functionality. [CLAUDE.md](https://github.com/mowglinext/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference and the place to check first if any page on the wiki looks out of date.
+Built on **ROS2 Lyrical** with **Webots** simulation, this architecture spans 12 focused packages providing complete autonomous lawn mower functionality. [CLAUDE.md](https://github.com/mowglinext/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference and the place to check first if any page on the wiki looks out of date.
 
 Machine-generated indexes of the same code live in the repo and are refreshed with it — useful when you need file/line precision rather than prose: [`docs/claude/codemaps/`](https://github.com/mowglinext/mowglinext/tree/main/docs/claude/codemaps) (one per package), [`docs/claude/ros-interfaces.md`](https://github.com/mowglinext/mowglinext/blob/main/docs/claude/ros-interfaces.md) (every topic/service/action/TF and who publishes it), [`docs/claude/parameters.md`](https://github.com/mowglinext/mowglinext/blob/main/docs/claude/parameters.md), [`docs/claude/testing-ci.md`](https://github.com/mowglinext/mowglinext/blob/main/docs/claude/testing-ci.md), and [`docs/claude/doc-index.md`](https://github.com/mowglinext/mowglinext/blob/main/docs/claude/doc-index.md) (which document is authoritative vs historical). Each top-level directory also carries a short `CLAUDE.md` pointer file.
 
@@ -231,7 +231,7 @@ Application layer
 - **ObstacleArray.msg** – Collection of tracked obstacles from obstacle_tracker_node
 - **TrackedObstacle.msg** – Individual persistent obstacle with position, age, and observation count
 - **MapObstacleInfo.msg** – Per-area obstacle identity/state returned by `~/get_mowing_area`
-- **DigEvent.msg** – Wheel-slip dig report from `hardware_bridge_node`'s dig detector (`~/dig_event`), promoted to a keepout by `map_server_node`
+- **DigEvent.msg** – Wheel-slip dig report from `hardware_bridge_node`'s dig detector (`~/dig_event`); `map_server_node` records it as an operator-reviewable proposal (never an automatic keepout) and `behavior_tree_node` turns it into a session dig skip zone for `FollowStrip`
 - **GnssStatus.msg** – Authoritative receiver status from the GNSS sidecar (`/gps/status`)
 - **DockCalibrationStatus.msg** – Progress/result feed for the one-click dock calibration
 
@@ -1099,7 +1099,6 @@ FollowCoveragePath:                         # coverage
   obstacle_footprint: true
   use_footprint_clearance: false            # field: full-footprint sweep too conservative
   require_clear_exit: true                  # cul-de-sac guard — do not skirt a wall
-  ignore_obstacles_outside_zone: true
   enable_obstacle_deviation: true
   max_lateral_deviation: 1.5                # overridden from max_obstacle_avoidance_distance
   obstacle_wait_timeout_s: 2.5
@@ -1750,7 +1749,7 @@ Simulation Stack (webots_ros2_driver + ros2_control)
 | `ros2 launch mowgli_simulation webots_minimal.launch.py` | Webots + the world + ros2_control only, no Nav2 stack. `world:=` selects a file inside `worlds_webots/` |
 | `cd ros2 && make e2e-test` | Self-contained: `sim-stop`, build, launch the sim, wait, run `src/e2e_test.py`, stop the sim |
 
-**Container:** the `simulation` Docker stage (`ros2/Dockerfile`) extends `runtime` with Xvfb, TigerVNC + noVNC for GUI access, `ros-kilted-webots-ros2`, and the Webots release `.deb`. Cyberbotics publishes that `.deb` for **linux/amd64 only**, and the stage asserts `TARGETARCH = amd64`, so the simulation image cannot be built on ARM (Apple Silicon or a Raspberry Pi needs emulation or an x86 host). The `runtime` image stays architecture-neutral.
+**Container:** the `simulation` Docker stage (`ros2/Dockerfile`) extends `runtime` with Xvfb, TigerVNC + noVNC for GUI access, `webots_ros2` built from a pinned source revision, and the Webots release `.deb`. Cyberbotics publishes that `.deb` for **linux/amd64 only**, and the stage asserts `TARGETARCH = amd64`, so the simulation image cannot be built on ARM (Apple Silicon or a Raspberry Pi needs emulation or an x86 host). The `runtime` image stays architecture-neutral.
 
 **After any crash, run `make sim-stop` before relaunching** — a stale Webots IPC socket or leftover Cyclone DDS shared memory hangs the next launch in a retry loop.
 
@@ -2088,7 +2087,7 @@ The one sim-only addition is `/sim/ground_truth_pose`, published by the `kinemat
    - **Infrastructure:** mowgli_bringup (launch files, the config template, Nav2 params, and the URDF/xacro — there is no separate `mowgli_description` package)
    - **Third-party:** `opennav_coverage` git submodule for the `_msgs` action definitions only — that is the sole subpackage `ros2/scripts/sync_workspace_packages.sh` symlinks into the workspace, so colcon never sees the upstream servers (there are no `COLCON_IGNORE` files).
 
-2. **ROS2 Kilted + Webots R2025a:** Modern robotics stack with lifecycle management, and a simulator that runs the identical ROS2 stack (see [§9](#9-mowgli_simulation)).
+2. **ROS2 Lyrical + Webots R2025a:** Modern robotics stack with lifecycle management, and a simulator that runs the identical ROS2 stack (see [§9](#9-mowgli_simulation)).
 
 3. **Decoupled Communication:** ROS2 pub/sub (topics), services, and actions isolate packages. Easy to substitute, test, or extend components independently.
 

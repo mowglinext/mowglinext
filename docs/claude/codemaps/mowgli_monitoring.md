@@ -1,16 +1,23 @@
 # Codemap: mowgli_monitoring
 
 > Health aggregation for the robot: `diagnostics_node` folds hardware-bridge, emergency, battery, IMU,
-> LiDAR, GPS, wheel-odom, fused-pose and motor telemetry into one `/diagnostics` `DiagnosticArray`
-> (1 Hz), and the optional `mqtt_bridge_node` mirrors a handful of ROS topics to/from an MQTT broker as
-> JSON. Nothing here owns TF, blades, or motion; it is read-only except for the MQTT → `HighLevelControl`
-> command path. "BT visualization" and Foxglove publishing are NOT in this package (see Pitfalls).
+> LiDAR, GPS, wheel-odom, fused-pose, motor telemetry and Nav2 path-tracking error into one
+> `/diagnostics` `DiagnosticArray` (1 Hz), and the optional `mqtt_bridge_node` mirrors
+> status/power/emergency/high_level_status/gps/diagnostics/availability/areas to an MQTT broker as
+> JSON — the documented external integration surface (see
+> [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md)), e.g. for Home Assistant. Nothing here owns TF,
+> blades, or motion; it is read-only except for the MQTT → `HighLevelControl` and
+> MQTT → `StartInArea` command paths. The area list (`<prefix>/areas`) is an **interim,
+> index-based** contract pending a stable per-area id (mowglinext#637) — see the "INTERIM
+> CONTRACT" note in `mqtt_bridge_node.hpp`.
+> "BT visualization" and Foxglove publishing are NOT in this package (see Pitfalls).
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
 ## Where to look
 | Task | Start here |
 |------|------------|
+| Path-tracking error ("Path Tracking" status: lateral/heading error while a FollowPath goal runs) | `check_path_tracking()` in `ros2/src/mowgli_monitoring/src/diagnostics_node.cpp`; the reduction itself is `mowgli_interfaces/path_tracking_stats.hpp` (shared with the BT's `FollowStrip`), fed from `/tracking_feedback` (`nav2_msgs/TrackingFeedback`, ROS 2 Lyrical — ROOT namespace: Nav2 creates that publisher with a relative name, so it is NOT under `/controller_server/`). Thresholds in `config/diagnostics.yaml` (`path_tracking_warn_m` / `path_tracking_error_m` / `path_tracking_idle_sec`). Silence = OK "Idle": a docked robot has no goal. See [`NAV2_LYRICAL_CONTROLLER_REVIEW.md`](../../NAV2_LYRICAL_CONTROLLER_REVIEW.md) |
 | Add / change a health check (one `DiagnosticStatus`) | `ros2/src/mowgli_monitoring/src/diagnostics_node.cpp` — the `check_*()` block (:327–667); add the call in `publish_diagnostics()` (:303–321); declare it in `ros2/src/mowgli_monitoring/include/mowgli_monitoring/diagnostics_node.hpp:166–174`; extend `expected_names` in `ros2/src/mowgli_monitoring/test/test_diagnostics.cpp:227–236` |
 | Change WARN/ERROR thresholds (freshness, battery %, motor °C) | `ros2/src/mowgli_monitoring/config/diagnostics.yaml` (defaults) ↔ `declare_parameters()` `diagnostics_node.cpp:127–146` (code defaults must match) |
 | Subscribe to a new input topic | `create_subscriptions()` `diagnostics_node.cpp:148–218`; add the snapshot fields to `DiagnosticsState` `diagnostics_node.hpp:66–103` |
@@ -20,13 +27,15 @@
 | Battery % formula (4S LiPo 12.0–16.8 V) | `check_battery()` `diagnostics_node.cpp:407–414`; duplicated in `serialise_power()` `mqtt_bridge_node.cpp:656–661` |
 | Which GUI code depends on a status `name` | `gui/web/src/utils/gpsStatus.ts:257` (exact `"GPS"`), `gui/web/src/components/settings/LocalizationSection.tsx:67–76` (regex `/lidar|laser ?scan/i` at :71), `gui/web/src/pages/DiagnosticsPage.tsx:219–225` (alerts = `level >= 1`), merge-by-name in `gui/web/src/hooks/useDiagnostics.ts` |
 | Add a field to an MQTT JSON payload | `serialise_status/power/emergency/position/diagnostics` `ros2/src/mowgli_monitoring/src/mqtt_bridge_node.cpp:616–737` — fixed `snprintf` buffers (512/256/256/128/512 B), strings must go through `json_escape()` :748 |
-| Add an outbound MQTT topic | `create_subscriptions()` `mqtt_bridge_node.cpp:431–482`; `full_topic()` :743; update the topic list comment in `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml:14–17` |
+| Add an outbound MQTT topic | `create_subscriptions()` `mqtt_bridge_node.cpp:431–482` (or the ROS2-side timer for a rate-limited one, see `on_timer()`); add a `serialise_*()` (public, in the "exposed for testing" section of `mqtt_bridge_node.hpp`) + a unit test in `test/test_mqtt_bridge.cpp`; `full_topic()` builds `<prefix>/<name>`; update the topic list comment in `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml:14–17` and [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md) |
+| Recorded-area list / "mow this area" over MQTT | `<prefix>/areas` (out, retained, ~10s poll) and `<prefix>/start_area` (in) — `poll_areas()`/`poll_areas_step()`/`publish_areas_if_changed()` walk `/map_server_node/get_mowing_area` (`mowgli_interfaces/srv/GetMowingArea`) index-by-index, same pattern as the GUI backend's `pollMap()`; `on_mqtt_start_area()` relays to `/behavior_tree_node/start_in_area` (`StartInArea.srv`), reusing `parse_command_payload()`. **Interim, index-based** — areas have no stable id yet ([mowglinext#637](https://github.com/mowglinext/mowglinext/issues/637)); see the "INTERIM CONTRACT" note in `mqtt_bridge_node.hpp`'s file doc comment and [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md) |
+| Configure the broker (host/port/credentials the bridge connects TO) | GUI Settings → MQTT (`gui/web/src/components/settings/MqttSection.tsx`) writes `mqtt_enabled`/`mqtt_host`/`mqtt_port`/`mqtt_username`/`mqtt_password`/`mqtt_topic_prefix`/`mqtt_use_ssl` into the installed `mowgli_robot.yaml` (Invariant 15); `full_system.launch.py` injects them into the node's `parameters=[...]`, layered after the package-share `mqtt_bridge.yaml` defaults (`mqtt_client_id`, `publish_rate`, not GUI-exposed) |
 | Inbound MQTT command → BT | `on_mqtt_command()` `mqtt_bridge_node.cpp:534–572` (payload = decimal uint8 matching `ros2/src/mowgli_interfaces/srv/HighLevelControl.srv` codes); client created at :484–488 |
 | Broker host/auth/TLS, reconnect behaviour | `MosquittoMqttClient` ctor `mqtt_bridge_node.cpp:179–234` (clean-session :188, TLS :197–221, user/pw :223–229), `connect()` :247 (keepalive 60 s), `spin_once()` :329–346 (reconnect), `on_timer()` :578–592; defaults in `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml` |
 | Build with / without libmosquitto | `ros2/src/mowgli_monitoring/CMakeLists.txt:35–55` (pkg-config then `find_library`), `MOWGLI_HAS_MOSQUITTO` define :83; `#ifdef` islands in `mqtt_bridge_node.hpp:161–199` and `mqtt_bridge_node.cpp:100–353`, `:404–420` |
 | Unit-test a check function | `ros2/src/mowgli_monitoring/test/test_diagnostics.cpp` — fixture + `make_node()` :48–69; parameter-override example :310–313 |
 | Which launch file starts what | `full_system.launch.py:520–534` (diagnostics, always) and `:539–549` (mqtt, `IfCondition(enable_mqtt)`); `sim_full_system.launch.py:238–250`; `ros2/src/mowgli_bringup/test/test_nodes_startup.launch.py:79–85` |
-| Enable the MQTT bridge on a real deployment | launch arg `enable_mqtt` `full_system.launch.py:117–121`; the compose command passes only `enable_foxglove` (`install/compose/docker-compose.base.yml:42–44`); `ENABLE_MQTT` in `docker/.env` (template `docker/.env.example:10`) only gates the broker container (`docker/stack.sh:93–94`) |
+| Enable the MQTT bridge on a real deployment | GUI Settings → MQTT `mqtt_enabled` toggle is the single source of truth: it writes `mowgli_robot.yaml`, which `full_system.launch.py`'s `_early_mqtt_enabled` pre-read turns into the `enable_mqtt` launch arg's **default** (same pattern as `lidar_enabled`/`led_enabled`). The launch arg itself (`full_system.launch.py:117–121`) still exists for a CLI/CI override (`ros2 launch ... enable_mqtt:=true`), but `docker-compose.base.yml` does NOT pass it — deliberately, so it doesn't clobber the yaml-derived default on every compose run. `ENABLE_MQTT` in `docker/.env` is a SEPARATE toggle: it only gates whether the bundled `mowgli-mqtt` broker *container* is composed in (`docker/stack.sh:93–94`) — it has no effect on whether `mqtt_bridge_node` itself launches, so a broker can run with the bridge off, or the bridge can point at an external broker with the bundled one absent |
 | Lint / format settings for this package | `ros2/src/mowgli_monitoring/CMakeLists.txt:158–162` (copyright, cpplint, uncrustify skipped; clang-format via `ros2/.clang-format`) |
 
 ## Files
@@ -38,10 +47,10 @@
 | `ros2/src/mowgli_monitoring/config/diagnostics.yaml` | 18 | `/**` defaults for `diagnostics_node` (rate + 6 thresholds; `lidar_enabled` is NOT here — launch injects it) |
 | `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml` | 26 | `/**` defaults for `mqtt_bridge_node` (broker, creds, client id, prefix, rate, ssl) |
 | `ros2/src/mowgli_monitoring/include/mowgli_monitoring/diagnostics_node.hpp` | 246 | `DiagnosticsState` snapshot struct, pure classifiers, `DiagnosticsNode` (check_* public for tests) |
-| `ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt_bridge_node.hpp` | 310 | `IMqttClient` interface, `StubMqttClient`, `MosquittoMqttClient` (ifdef), `MqttBridgeNode` (+ client-injection ctor) |
+| `ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt_bridge_node.hpp` | ~425 | `IMqttClient` interface, `StubMqttClient`, `MosquittoMqttClient` (ifdef), `MqttBridgeNode` (+ client-injection ctor), `AreaSummary` |
 | `ros2/src/mowgli_monitoring/src/diagnostics_node.cpp` | 689 | Classifiers, subscriptions, 1 Hz aggregation, 9 `check_*()` functions |
 | `ros2/src/mowgli_monitoring/src/diagnostics_main.cpp` | 31 | `rclcpp::spin(DiagnosticsNode)` |
-| `ros2/src/mowgli_monitoring/src/mqtt_bridge_node.cpp` | 779 | Stub + mosquitto clients, ROS→MQTT JSON serialisers, MQTT→`HighLevelControl` command path |
+| `ros2/src/mowgli_monitoring/src/mqtt_bridge_node.cpp` | ~1240 | Stub + mosquitto clients, ROS→MQTT JSON serialisers, MQTT→`HighLevelControl`/`StartInArea` command paths, area-list poll |
 | `ros2/src/mowgli_monitoring/src/mqtt_bridge_main.cpp` | 31 | `rclcpp::spin(MqttBridgeNode)` |
 | `ros2/src/mowgli_monitoring/test/test_diagnostics.cpp` | 352 | gtest: classifier boundaries, status names/hardware_ids/levels, LiDAR gating |
 | **Wiring outside the package (read-only context)** | | |
@@ -70,11 +79,18 @@
 | `/scan` | `sensor_msgs/msg/LaserScan` | sub (diag) :185 | `SensorDataQoS` | LiDAR driver container (`sensors/lidar-*`) |
 | `/wheel_odom` | `nav_msgs/msg/Odometry` | sub (both) :193 / :459 | `SensorDataQoS` | `hardware_bridge` `~/wheel_odom` (`ros2/src/mowgli_hardware/src/odometry_publisher.cpp:35`) remapped `mowgli.launch.py:260` — `mowgli_localization/wheel_odometry_node` is deliberately NOT launched (`full_system.launch.py:438–446`) |
 | `/odometry/filtered_map` | `nav_msgs/msg/Odometry` | sub (diag) :202 | `SensorDataQoS` | `fusion_graph_node` (`ros2/src/fusion_graph/src/fusion_graph_node_setup_comms.cpp:35`) |
-| `/gps/fix` | `sensor_msgs/msg/NavSatFix` | sub (diag) :211 | `SensorDataQoS` | GNSS sidecar (not in `ros2/src`); sim relay `sim_full_system.launch.py:321–322` |
-| MQTT `<prefix>/status`, `/power`, `/emergency` | JSON (retain=true) | out `mqtt_bridge_node.cpp:504–517` | QoS 1 | any broker client |
-| MQTT `<prefix>/position` | JSON `{x,y,theta}` from `/wheel_odom` (odom frame), rate-limited to `publish_rate` | out :594–609 | QoS 1, retain=false | — |
-| MQTT `<prefix>/diagnostics` | JSON `[{name,level,message},…]` | out :525–528 | QoS 1, retain=false | — |
-| MQTT `<prefix>/command` | decimal uint8 payload | in :477–481 → `on_mqtt_command` :534 | QoS 1 | any broker client |
+| `/gps/fix` | `sensor_msgs/msg/NavSatFix` | sub (diag) :211; also sub (mqtt_bridge) `SensorDataQoS` | `SensorDataQoS` | GNSS sidecar (not in `ros2/src`); sim relay `sim_full_system.launch.py:321–322` |
+| `/behavior_tree_node/high_level_status` | `mowgli_interfaces/msg/HighLevelStatus` | sub (mqtt_bridge), QoS 10 | reliable, depth 10 | `behavior_tree_node.cpp:815–841` (republished ~1 Hz) |
+| `/gps/status` | `mowgli_interfaces/msg/GnssStatus` | sub (mqtt_bridge) :569 | reliable, depth 10 | `mowgli_localization` GNSS status node — also read by the LED ring and GUI GPS % card |
+| `/map_server_node/get_mowing_area` | `mowgli_interfaces/srv/GetMowingArea` | client (mqtt_bridge) :589, polled by `maybe_poll_area_boundaries()` :769 | service | `map_server_node` — same service the BT's `PlanCoverageArea` calls |
+| MQTT `<prefix>/status`, `/power`, `/emergency`, `/high_level_status` | JSON (retain=true) | out `mqtt_bridge_node.cpp` `on_status`/`on_power`/`on_emergency`/`on_high_level_status` | QoS 1 | any broker client — see [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md) for schemas |
+| MQTT `<prefix>/position` | JSON `{x,y,theta}` from `/wheel_odom` (odom frame, NOT georeferenced), rate-limited to `publish_rate` | out | QoS 1, retain=false | — |
+| MQTT `<prefix>/gps` | JSON `{latitude,longitude,altitude,status,service}` from `/gps/fix`, rate-limited to `publish_rate` | out | QoS 1, retain=false | for a map/`device_tracker`-style consumer — `<prefix>/position` cannot serve that role |
+| MQTT `<prefix>/rtk_status` | JSON `{fix_type,fix_type_name,rtk_mode,rtk_mode_name,fix_valid,quality_percent}` from `/gps/status` | out (retain=true) | QoS 1 | `quality_percent` is `gnss_status_utils::HardwareQualityPercent()`, not the raw msg field |
+| MQTT `<prefix>/area_boundary` | JSON `{datum_lat,datum_lon,areas:[{index,name,boundary,obstacles}]}`, map-frame `[x,y]` metre offsets | out (retain=true), polled every 10 s via `on_timer()` | QoS 1 | `serialise_area_boundaries()`; only republished when the geometry changes — see [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md) |
+| MQTT `<prefix>/diagnostics` | JSON `[{name,level,message},…]` | out | QoS 1, retain=false | — |
+| MQTT `<prefix>/available` | plain text `"online"`/`"offline"` (LWT) | out — set pre-connect via `mosquitto_will_set`, republished on every (re)connect | QoS 1, retain=true | lets a consumer tell "offline" apart from "online but stuck" |
+| MQTT `<prefix>/command` | decimal **ASCII string** uint8 payload (e.g. `"1"`, not a raw byte) | in → `parse_command_payload()` → `on_mqtt_command()` | QoS 1 | any broker client |
 
 Published `DiagnosticStatus.name` / `hardware_id` pairs (order = array order, `diagnostics_node.cpp:310–318`):
 `Hardware Bridge`/`mowgli/hardware_bridge` (:331), `Emergency System`/`mowgli/emergency` (:357), `Battery`/`mowgli/battery` (:395),
@@ -85,8 +101,10 @@ Published `DiagnosticStatus.name` / `hardware_id` pairs (order = array order, `d
 | Name | Type | Role | Where |
 |------|------|------|-------|
 | `/behavior_tree_node/high_level_control` | `mowgli_interfaces/srv/HighLevelControl` | **client** (mqtt_bridge_node); fire-and-forget `async_send_request`, dropped if `!service_is_ready()` | `mqtt_bridge_node.cpp:484–488`, `:547–571`; server in `ros2/src/mowgli_behavior/src/behavior_tree_node.cpp:548` |
+| `/behavior_tree_node/start_in_area` | `mowgli_interfaces/srv/StartInArea` | **client** (mqtt_bridge_node, `on_mqtt_start_area()`); same fire-and-forget pattern as above | `mqtt_bridge_node.cpp` `create_service_client()`/`on_mqtt_start_area()`; server in `behavior_tree_node.cpp` |
+| `/map_server_node/get_mowing_area` | `mowgli_interfaces/srv/GetMowingArea` | **client** (mqtt_bridge_node, `poll_areas_step()`); polled index-by-index every ~10s, chained via `async_send_request` callbacks | `mqtt_bridge_node.cpp` `create_service_client()`/`poll_areas()`/`poll_areas_step()`; server in `ros2/src/mowgli_map/src/area_manager.cpp` |
 
-No services or actions are served by this package. No actions used.
+No actions used.
 
 ### Parameters (all read once in the constructor; none dynamic)
 | Node | Param | Default (code / yaml) | Code | YAML |
@@ -96,12 +114,17 @@ No services or actions are served by this package. No actions used.
 | diagnostics | `battery_warn_pct` / `battery_error_pct` | 20 / 10 % (`<=` comparisons) | :132–133 | :13–14 |
 | diagnostics | `motor_temp_warn_c` / `motor_temp_error_c` | 60 / 80 °C (`>=`, worst of ESC + motor) | :134–135 | :17–18 |
 | diagnostics | `lidar_enabled` | `false` — **not in yaml**; launch sets it from `use_lidar` | :136 | `full_system.launch.py:531` |
-| mqtt | `mqtt_host` / `mqtt_port` | `"localhost"` / 1883 | `mqtt_bridge_node.cpp:386–387` | `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml:4–5` |
-| mqtt | `mqtt_username` / `mqtt_password` | `""` / `""` (empty user → no auth) | :388–389 | :8–9 |
-| mqtt | `mqtt_client_id` | `"mowgli_ros2"` | :390 | :12 |
-| mqtt | `mqtt_topic_prefix` | `"mowgli"` | :391 | :18 |
-| mqtt | `publish_rate` | 1.0 Hz (clamped to [0.01,100]); also the MQTT network-loop period | :392, :395 | :22 |
-| mqtt | `use_ssl` | `false` (TLS against `/etc/ssl/certs`; setup failure → refuses to connect) | :393, :197–216 | :26 |
+| mqtt | `mqtt_host` / `mqtt_port` | `"localhost"` / 1883 | `mqtt_bridge_node.cpp:386–387` | `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml:4–5` **overridden** by `mowgli_robot.yaml.mqtt_host`/`mqtt_port` via `full_system.launch.py` (GUI Settings → MQTT) |
+| mqtt | `mqtt_username` / `mqtt_password` | `""` / `""` (empty user → no auth) | :388–389 | :8–9 — **overridden** by `mowgli_robot.yaml.mqtt_username`/`mqtt_password` |
+| mqtt | `mqtt_client_id` | `"mowgli_ros2"` | :390 | :12 — package default only, not GUI-exposed |
+| mqtt | `mqtt_topic_prefix` | `"mowgli"` | :391 | :18 — **overridden** by `mowgli_robot.yaml.mqtt_topic_prefix` |
+| mqtt | `publish_rate` | 1.0 Hz (clamped to [0.01,100]); also the MQTT network-loop period and the position/gps rate limit | :392, :395 | :22 — package default only, not GUI-exposed |
+| mqtt | `use_ssl` | `false` (TLS against `/etc/ssl/certs`; setup failure → refuses to connect) | :393, :197–216 | :26 — **overridden** by `mowgli_robot.yaml.mqtt_use_ssl` |
+
+`mqtt_enabled` (new, `mowgli_robot.yaml` only — no node parameter): gates whether `mqtt_bridge_node`
+is launched at all (`full_system.launch.py`'s `enable_mqtt` `IfCondition`), read via the same
+`_early_*` pre-read pattern as `lidar_enabled`/`led_enabled`. Default `false` in the in-package
+template; set from GUI Settings → MQTT.
 
 Both YAMLs use the `/**:` wildcard, so they apply to any node name they are passed to.
 
@@ -130,8 +153,7 @@ Tests:
 |------|--------------|
 | `ros2/src/mowgli_monitoring/test/test_diagnostics.cpp` (`ament_add_gtest(test_diagnostics)`, `ros2/src/mowgli_monitoring/CMakeLists.txt:167–182`) | `classify_freshness` OK/WARN/ERROR incl. exact boundaries and `never=true`; `classify_battery` `<=` boundaries; `classify_temperature`; `level_name` incl. `UNKNOWN`; the 8 status names (`:227–236` — **omits `EKF Map`**) and non-empty `hardware_id`; levels ≤ STALE; `Hardware Bridge` = ERROR with no status; `lidar_enabled=false` → OK "LiDAR disabled", `true` → ERROR "No LiDAR scan received" |
 | `ros2/src/mowgli_bringup/test/test_nodes_startup.launch.py` (`add_launch_test`, `ros2/src/mowgli_bringup/CMakeLists.txt:46`) | `diagnostics_node` survives a 5 s soak, advertises `/diagnostics` within 10 s, exits 0 |
-
-No test covers `MqttBridgeNode` (serialisers, `json_escape`, command parsing, rate limiting) even though the client-injection ctor (`mqtt_bridge_node.hpp:223`) exists for it.
+| `ros2/src/mowgli_monitoring/test/test_mqtt_bridge.cpp` (`ament_add_gtest(test_mqtt_bridge)`) | Every `serialise_*()` function's exact JSON shape, `json_escape` edge cases, MQTT retained metadata/control rejection, and strict `parse_command_payload` boundaries (0/255/256/-1/non-numeric/whitespace/trailing garbage) — no broker or live node required, same pure-function isolation as `test_diagnostics.cpp` |
 
 CI: `.github/workflows/ros2-ci.yml` — "Build workspace" (:335–341, whole-workspace `colcon build`) and "Run tests" (:343–350, `colcon test --return-code-on-test-failure`); "Formatting (clang-format)" job (:405–445) diffs changed lines with clang-format 18. `ament_lint_auto` runs the remaining `ament_lint_common` linters (cppcheck, lint_cmake, xmllint …) because only copyright/cpplint/uncrustify are marked found (`ros2/src/mowgli_monitoring/CMakeLists.txt:158–162`).
 
@@ -143,13 +165,15 @@ CI: `.github/workflows/ros2-ci.yml` — "Build workspace" (:335–341, whole-wor
 - **Input topic names** are remap outputs of `mowgli.launch.py:257–264` (`/hardware_bridge/*`, `/imu/data`); changing a remap there silently starves the corresponding check (ERROR/WARN "No … received").
 - **`mowgli_interfaces` fields** used here: `Status.{mower_status,is_charging,mow_enabled,mower_esc_status,mower_esc_temperature,mower_esc_current,mower_motor_temperature,mower_motor_rpm,raspberry_pi_power,esc_power,rain_detected,sound_module_available,sound_module_busy,ui_board_available}`, `Emergency.{active_emergency,latched_emergency,reason}`, `Power.{v_charge,v_battery,charge_current,charger_enabled,charger_status}`. Removing/renaming any of these breaks `diagnostics_node.cpp:347–349,385–387,419–425,635–664` and `serialise_*` in `mqtt_bridge_node.cpp:616–697`; `.msg` edits also require the GUI codegen step (`docs/claude/commands.md`).
 - **`HighLevelControl` command codes** (`ros2/src/mowgli_interfaces/srv/HighLevelControl.srv`) are what MQTT `<prefix>/command` payloads mean; the comment at `mqtt_bridge_node.cpp:536–537` lists examples and must track the `.srv`.
+- **`MapArea.name`/`is_navigation_area`** (`ros2/src/mowgli_interfaces/msg/MapArea.msg`) are what `<prefix>/areas` echoes; `is_navigation_area` filtering in `poll_areas_step()` must keep matching the GUI's own `splitMapAreas` split (`gui/pkg/providers/ros.go`) or the two "which areas are mowable" views diverge.
 - **Battery % formula** (16.8/12.0 V) is duplicated in `diagnostics_node.cpp:409–410` and `mqtt_bridge_node.cpp:657–658`; change both.
-- **MQTT topic list** in `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml:14–17` and `mqtt_bridge_node.hpp:29–37` is documentation only — the truth is `full_topic()` call sites in `mqtt_bridge_node.cpp:477,506,511,516,527,603`.
+- **MQTT topic list** in `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml:14–17`, `mqtt_bridge_node.hpp`'s doc comment, and [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md) is documentation only — the truth is the `full_topic()` call sites in `mqtt_bridge_node.cpp`. Keep all of them in sync when adding a topic.
 - **`motor_temp_warn_c` / `motor_temp_error_c`** are referenced as the ONLY temperature surface by `install/scripts/migrate_openmower.py:117–122` and the template comment `ros2/src/mowgli_bringup/config/mowgli_robot.yaml:515–521`; do not move them into `mowgli_robot.yaml` without updating both.
 - **Adding a dependency**: `ros2/src/mowgli_monitoring/CMakeLists.txt` (find_package + the four `ament_target_dependencies` lists :73–80, :101–108, :122–129, :175–182) AND `ros2/src/mowgli_monitoring/package.xml`.
 
 ## Pitfalls
-- `mqtt_bridge_node` is a **stub in every shipped image**: `ros2/Dockerfile` never installs `libmosquitto-dev` (0 hits), `ros2/src/mowgli_monitoring/package.xml` has no rosdep key for it, and CI does not apt-install it, so `MOWGLI_HAS_MOSQUITTO` is unset and `StubMqttClient` only logs at DEBUG (`mqtt_bridge_node.cpp:415–419`). The compose stack also never passes `enable_mqtt:=true` (`install/compose/docker-compose.base.yml:42–44`); `ENABLE_MQTT=true` in `docker/.env` (template `docker/.env.example:10`) starts only the `eclipse-mosquitto` broker (`install/compose/docker-compose.mqtt.yml`, `docker/stack.sh:93–94`). The GUI has its own embedded MQTT server (`gui/pkg/providers/mqtt.go`, settings `system.mqtt.*` in `gui/web/src/hooks/useSettings.ts:86–105`) — that is a different code path.
+- `ros2/Dockerfile` installs `libmosquitto1` (runtime) in the `base` stage and `libmosquitto-dev` (build) directly in the `deps` stage — **not** via a `package.xml` `<depend>`, because `libmosquitto-dev` has no rosdep key (checked against `ros/rosdistro`'s `rosdep/base.yaml` — absent). If a future rosdep database update ever adds one, a plain `<depend>` would also work, but don't assume it does without checking; `rosdep install` fails hard on an unknown key.
+- The GUI has its own, separate embedded MQTT server (`gui/pkg/providers/mqtt.go`, settings `system.mqtt.*` in `gui/web/src/hooks/useSettings.ts:86–105`) — different broker, different topic prefix (`/gui` default vs `mowgli`), different payload shapes (raw generated-msg JSON vs this package's flat JSON), different command style (`<prefix>/call<service>` JSON body vs this package's bare decimal `<prefix>/command`). The two are not interoperable and not meant to be — [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md) is the one to point external integrations at.
 - **`EKF Map` / `robot_localization/filtered_map`** (`diagnostics_node.cpp:548–549`) and the header comments `diagnostics_node.hpp:30, :90` predate Invariant 1; the data actually comes from `fusion_graph_node`. Do not read this name as evidence an EKF exists.
 - `diagnostics_node.hpp:26` says the IMU input is `/imu/data_raw`; the code subscribes `/imu/data` (`diagnostics_node.cpp:178`).
 - **STALE is never emitted.** `classify_freshness` returns OK/WARN/ERROR only (`:47–58`); "never received" is ERROR for HW bridge/IMU/LiDAR/odom/fusion and WARN for emergency/battery/GPS/motors. `level_name()` maps STALE for logging only. The GUI exports a 30 s staleness helper (`useDiagnostics.ts:22–28` `DIAGNOSTIC_STALE_MS` / `isDiagnosticStale`) but no component calls it yet, so a stopped entry keeps showing its last value.
@@ -159,8 +183,11 @@ CI: `.github/workflows/ros2-ci.yml` — "Build workspace" (:335–341, whole-wor
 - `publish_rate` is also the **MQTT network-loop period** (`on_timer()` `mqtt_bridge_node.cpp:578–581`): at the 1 Hz default an inbound command can wait up to 1 s, and `spin_once` uses `mosquitto_loop(…, 0, 1)` (non-blocking, :336).
 - `<prefix>/position` is built from `/wheel_odom` (odom frame, `mqtt_bridge_node.cpp:459–466, :699–711`), not the map-frame fused pose; `theta = 2·atan2(qz,qw)` assumes a planar quaternion (:706).
 - MQTT subscriptions are re-issued in `on_connect_cb` (`:122–139`) because the client is clean-session; a `subscribe()` call before the async connect completes would otherwise be lost. Keep that loop if you touch `Impl`.
-- `on_mqtt_command` accepts any integer 0–255 and forwards it (`:539`); unknown codes are rejected by the BT server, not here. The service call goes straight to `HighLevelControl` — the same channel as the GUI buttons — so an open broker = remote control of the mower (blade safety remains firmware-side, root `CLAUDE.md` Safety section).
-- `snprintf` payload buffers are fixed (`:618, :663, :685, :708, :726`); a long `Emergency.reason` or status message is truncated, not escaped into invalid JSON, but adding fields to `serialise_status` can overflow the 512 B budget silently.
+- `on_mqtt_command` accepts any integer 0–255 and forwards it (`:539`); unknown codes are rejected by the BT server, not here. The service call goes straight to `HighLevelControl` — the same channel as the GUI buttons — so an open broker = remote control of the mower (blade safety remains firmware-side, root `CLAUDE.md` Safety section). `on_mqtt_start_area` is the same shape, one level more specific: it picks WHERE the mower starts, ahead of the normal area queue.
+- `snprintf` payload buffers are fixed (`:618, :663, :685, :708, :726`); a long `Emergency.reason` or status message is truncated, not escaped into invalid JSON, but adding fields to `serialise_status` can overflow the 512 B budget silently. `serialise_areas()` deliberately does NOT use this pattern — area names are unbounded operator text, so it builds the JSON with `std::string` concatenation instead.
+- `<prefix>/areas`' `index` field is `map_server_node`'s raw, positional `areas_` vector index (same space `GetMowingArea`/`StartInArea` use) — there is no stable per-area id yet ([mowglinext#637](https://github.com/mowglinext/mowglinext/issues/637)). The GUI's own area editor rebuilds the whole list on any single-area add/edit/delete (`gui/pkg/api/mowglinext.go` `replaceMapInternal`), which can reassign every index — a client that caches an index across a session can end up targeting the wrong area with `<prefix>/start_area`. This is a known, deliberate limitation of the current contract, not an oversight — see the "INTERIM CONTRACT" note in `mqtt_bridge_node.hpp`.
+- `poll_areas_step()` recurses via chained `async_send_request` callbacks (not native call-stack recursion — each step's lambda returns immediately after scheduling the next request), capped at `kMaxAreasPoll` (100, matching the GUI backend's own `pollMap()` cap) so a corrupted/huge `areas_` vector can't poll forever.
+- `<prefix>/high_level_status` subscription watchdog ([mowglinext#644](https://github.com/mowglinext/mowglinext/issues/644)): field-observed staleness (30+ min) with the ROS topic itself fresh and this node otherwise alive/connected. `on_timer()` calls `is_high_level_status_stale()` (pure, unit-tested) and recreates just `sub_high_level_status_` via `create_high_level_status_subscription()` after `kHighLevelStatusStaleAfterS` (5 s) of silence — behavior_tree_node republishes unconditionally at least once a second, so silence beyond that is the subscription, not the publisher. Root cause unconfirmed (leading theory: a stuck long-lived DDS reader, root `ros2/CLAUDE.md`'s Cyclone-DDS-on-ARM caveat) — this is a recovery mechanism, not a fix for whatever causes it.
 - `test_diagnostics.cpp:207–244` enumerates only 8 categories; `check_fusion` ("EKF Map") is untested and can be renamed without a test failing.
 - The two `/**:` YAMLs are loaded from the **package share** path (`full_system.launch.py:176–177`); there is no `/ros2_ws/config/diagnostics.yaml` or `mqtt_bridge.yaml` override lookup (the only runtime-config read in the launch files is `mowgli_robot.yaml`).
 - "BT visualization" lives elsewhere: `/behavior_tree_log` is Nav2's `nav2_msgs/msg/BehaviorTreeLog` consumed by the GUI (`gui/pkg/providers/ros.go:43`, `gui/web/src/hooks/useBTLog.ts`); no node in `ros2/src` publishes it and `mowgli_interfaces` has no such msg. Foxglove publishing is `foxglove_bridge` in `full_system.launch.py:557–583` / `ros2/src/mowgli_bringup/config/foxglove_bridge.yaml`; the ad-hoc `ros2/src/precision_monitor.py` script publishes `/precision/*` Float64s for Foxglove plots. Localizer-specific health is `/fusion_graph/diagnostics` from `fusion_graph_node` (root `CLAUDE.md` Invariant 1), not this package.

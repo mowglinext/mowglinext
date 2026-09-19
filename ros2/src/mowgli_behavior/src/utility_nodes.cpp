@@ -204,43 +204,6 @@ void WaitForGpsFix::onHalted()
 }
 
 // ---------------------------------------------------------------------------
-// DiscardNearbyDigKeepouts
-// ---------------------------------------------------------------------------
-BT::NodeStatus DiscardNearbyDigKeepouts::tick()
-{
-  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-  if (!client_)
-  {
-    // helper_node is spun by its own executor, so waiting on the future here
-    // does not deadlock the tree's node (same pattern as Nav2Active).
-    client_ = ctx->helper_node->create_client<std_srvs::srv::Trigger>(
-        "/map_server_node/discard_dig_keepouts_near_robot");
-  }
-  // No service_is_ready() gate: it is unreliable on Cyclone/ARM (see
-  // NavigateInsideBoundary). Send, then bound the wait on the reply.
-  auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
-  auto future = client_->async_send_request(request);
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::duration<double>(kAckTimeoutSec);
-  while (std::chrono::steady_clock::now() < deadline)
-  {
-    if (future.wait_for(std::chrono::milliseconds(20)) == std::future_status::ready)
-    {
-      auto resp = future.get();
-      RCLCPP_INFO(ctx->node->get_logger(),
-                  "DiscardNearbyDigKeepouts: %s",
-                  resp ? resp->message.c_str() : "(null response)");
-      return BT::NodeStatus::SUCCESS;
-    }
-  }
-  RCLCPP_WARN(ctx->node->get_logger(),
-              "DiscardNearbyDigKeepouts: no reply from map_server within %.1f s - going home "
-              "with the dig keepouts still in place",
-              kAckTimeoutSec);
-  return BT::NodeStatus::SUCCESS;
-}
-
-// ---------------------------------------------------------------------------
 // SaveObstacles
 // ---------------------------------------------------------------------------
 

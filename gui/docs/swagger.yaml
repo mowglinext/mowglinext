@@ -1,5 +1,108 @@
 basePath: /api
 definitions:
+  providers.NotifyDeliveryStatus:
+    type: object
+    properties:
+      channel:
+        type: string
+      configured:
+        type: boolean
+      enabled:
+        type: boolean
+      failedCount:
+        type: integer
+      lastError:
+        type: string
+      lastErrorAt:
+        type: string
+      lastMessage:
+        type: string
+      lastSentAt:
+        type: string
+      sentCount:
+        type: integer
+  api.NotificationSettingsUpdate:
+    type: object
+    properties:
+      pushoverAppToken:
+        type: string
+      clearPushoverAppToken:
+        type: boolean
+      pushoverUserKey:
+        type: string
+      channel:
+        type: string
+      clearNtfyToken:
+        type: boolean
+      clearTelegramBotToken:
+        type: boolean
+      enabled:
+        type: boolean
+      events:
+        type: object
+        additionalProperties:
+          type: boolean
+      language:
+        type: string
+      ntfyServer:
+        type: string
+      ntfyToken:
+        type: string
+      ntfyTopic:
+        type: string
+      telegramBotToken:
+        type: string
+      telegramChatId:
+        type: string
+      title:
+        type: string
+      webhookUrl:
+        type: string
+  api.NotificationSettingsResponse:
+    type: object
+    properties:
+      pushoverAppTokenMasked:
+        type: string
+      pushoverAppTokenSet:
+        type: boolean
+      pushoverUserKey:
+        type: string
+      channels:
+        type: array
+        items:
+          type: string
+      channel:
+        type: string
+      enabled:
+        type: boolean
+      eventKinds:
+        type: array
+        items:
+          type: string
+      events:
+        type: object
+        additionalProperties:
+          type: boolean
+      language:
+        type: string
+      ntfyServer:
+        type: string
+      ntfyTokenMasked:
+        type: string
+      ntfyTokenSet:
+        type: boolean
+      ntfyTopic:
+        type: string
+      telegramBotTokenMasked:
+        type: string
+      telegramBotTokenSet:
+        type: boolean
+      telegramChatId:
+        type: string
+      title:
+        type: string
+      webhookUrl:
+        type: string
   api.Container:
     properties:
       id:
@@ -203,6 +306,40 @@ definitions:
         items:
           type: string
         type: array
+    type: object
+  api.RemoteAccessSettingsResponse:
+    properties:
+      authKeyMasked:
+        type: string
+      authKeySet:
+        type: boolean
+      containerName:
+        type: string
+      defaultImage:
+        type: string
+      enabled:
+        type: boolean
+      hostname:
+        type: string
+      image:
+        type: string
+      serveHttps:
+        type: boolean
+    type: object
+  api.RemoteAccessSettingsUpdate:
+    properties:
+      authKey:
+        type: string
+      clearAuthKey:
+        type: boolean
+      enabled:
+        type: boolean
+      hostname:
+        type: string
+      image:
+        type: string
+      serveHttps:
+        type: boolean
     type: object
   api.OkResponse:
     properties:
@@ -412,7 +549,11 @@ definitions:
     properties:
       docking_pose:
         $ref: '#/definitions/geometry.Pose'
+      preserve_position:
+        type: boolean
       use_gps_position:
+        type: boolean
+      use_pending_antenna:
         type: boolean
       yaw_rad:
         type: number
@@ -437,6 +578,64 @@ definitions:
       id:
         type: string
       label:
+        type: string
+    type: object
+  providers.RemoteAccessPhase:
+    enum:
+    - disabled
+    - pulling
+    - starting
+    - running
+    - error
+    type: string
+    x-enum-varnames:
+    - RemoteAccessDisabled
+    - RemoteAccessPulling
+    - RemoteAccessStarting
+    - RemoteAccessRunning
+    - RemoteAccessError
+  providers.RemoteAccessStatus:
+    properties:
+      backendState:
+        description: |-
+          BackendState mirrors tailscaled: NoState, NeedsLogin, NeedsMachineAuth,
+          Stopped, Starting, Running.
+        type: string
+      checkedAt:
+        type: string
+      containerState:
+        description: "ContainerState is Docker's state string, or \"absent\"."
+        type: string
+      dnsName:
+        type: string
+      enabled:
+        type: boolean
+      error:
+        type: string
+      health:
+        items:
+          type: string
+        type: array
+      hostname:
+        type: string
+      httpUrls:
+        items:
+          type: string
+        type: array
+      httpsUrl:
+        type: string
+      loginUrl:
+        description: LoginUrl is set while the node waits for an interactive login.
+        type: string
+      magicDnsEnabled:
+        type: boolean
+      phase:
+        $ref: '#/definitions/providers.RemoteAccessPhase'
+      tailscaleIps:
+        items:
+          type: string
+        type: array
+      version:
         type: string
     type: object
   types.FirmwareConfig:
@@ -568,6 +767,74 @@ info:
   title: MowgliNext GUI API
   version: "1.0"
 paths:
+  /notifications/test:
+    post:
+      produces:
+        - application/json
+      tags:
+        - notifications
+      summary: send a test notification
+      responses:
+        200:
+          description: "OK"
+          schema:
+            $ref: "#/definitions/api.OkResponse"
+        400:
+          description: Bad Request
+          schema:
+            $ref: "#/definitions/api.ErrorResponse"
+        502:
+          description: Bad Gateway
+          schema:
+            $ref: "#/definitions/api.ErrorResponse"
+  /notifications/status:
+    get:
+      produces:
+        - application/json
+      tags:
+        - notifications
+      summary: notification delivery status
+      responses:
+        200:
+          description: "OK"
+          schema:
+            $ref: "#/definitions/providers.NotifyDeliveryStatus"
+  /notifications/settings:
+    get:
+      produces:
+        - application/json
+      tags:
+        - notifications
+      summary: notification settings
+      responses:
+        200:
+          description: "OK"
+          schema:
+            $ref: "#/definitions/api.NotificationSettingsResponse"
+    put:
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      tags:
+        - notifications
+      summary: update notification settings
+      parameters:
+        - description: partial settings
+          name: settings
+          in: body
+          required: true
+          schema:
+            $ref: "#/definitions/api.NotificationSettingsUpdate"
+      responses:
+        200:
+          description: "OK"
+          schema:
+            $ref: "#/definitions/api.NotificationSettingsResponse"
+        400:
+          description: Bad Request
+          schema:
+            $ref: "#/definitions/api.ErrorResponse"
   /config/envs:
     get:
       description: get config env from backend
@@ -807,6 +1074,84 @@ paths:
       summary: IrriSense soil status
       tags:
       - irrisense
+  /remote-access/apply:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+      summary: Retry applying remote access settings
+      tags:
+      - remote-access
+  /remote-access/logout:
+    post:
+      description: the node key is discarded; the sidecar restarts and logs in again (interactively or with the stored auth key)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Log the robot out of the tailnet
+      tags:
+      - remote-access
+  /remote-access/settings:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.RemoteAccessSettingsResponse'
+      summary: Remote access settings
+      tags:
+      - remote-access
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: partial settings
+        in: body
+        name: settings
+        required: true
+        schema:
+          $ref: '#/definitions/api.RemoteAccessSettingsUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.RemoteAccessSettingsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: update remote access settings
+      tags:
+      - remote-access
+  /remote-access/status:
+    get:
+      description: "container phase, tailscaled login state, login URL while waiting, reachable URLs once connected"
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/providers.RemoteAccessStatus'
+      summary: Remote access status
+      tags:
+      - remote-access
   /mowglinext/call/{command}:
     post:
       consumes:

@@ -84,20 +84,36 @@ export const restartMowgliStack = async (api: GuiApi): Promise<void> => {
     if (gui?.id) void api.containers.containersCreate(gui.id, "restart");
 };
 
-/** Restart the GNSS receiver container (picks up new NTRIP / serial config) */
-export const restartGps = (api: GuiApi) =>
-    containerAction(api, { name: "gps" }, "restart");
+/** Reconcile the GNSS sidecar after serial/NTRIP configuration changes. */
+export const restartGps = async (api: GuiApi): Promise<void> => {
+    const res = await api.request({
+        path: "/settings/gnss/restart",
+        method: "POST",
+        format: "json",
+    });
+
+    if (res.error) {
+        const apiError: unknown = res.error;
+        const message =
+            typeof apiError === "object" &&
+            apiError !== null &&
+            "error" in apiError &&
+            typeof apiError.error === "string"
+                ? apiError.error
+                : "Failed to reconcile GNSS service";
+
+        throw new Error(message);
+    }
+};
 
 /**
- * Settings keys whose values are consumed directly by the GNSS receiver
- * container on a plain restart. The vendor-neutral profile/signal-profile
- * keys are intentionally excluded: a container restart only re-launches the
- * driver with new serial/NTRIP transport — it never re-flashes the receiver.
- * The signal profile is a receiver-flash setting that only reaches the
- * receiver through the Expert-mode Plan & Apply flow (POST /settings/gnss/apply,
- * which runs gnss_config_apply --signal-profile). Saving from the basic view
- * persists intent for that next apply; only serial/NTRIP transport changes
- * require an immediate mowgli-gps restart.
+ * Settings keys whose changes require the GNSS sidecar to be reconciled.
+ * Reconciliation regenerates the derived Universal GNSS runtime config and
+ * recreates mowgli-gps so serial mappings, environment and NTRIP settings
+ * match the newly persisted configuration.
+ *
+ * Profile/signal-profile keys stay excluded: those require the explicit
+ * Expert-mode Plan & Apply flow because they modify receiver configuration.
  */
 export const GPS_RESTART_KEYS = new Set<string>([
     "gnss_receiver_family",

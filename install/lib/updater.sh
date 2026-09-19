@@ -19,6 +19,16 @@ check_updater_hardware() {
 install_host_updater() (
   local arch repo revision stage binary expected state_dir="/var/lib/mowgli-updater"
   check_updater_hardware || return 1
+  # Every other lib file that uses $SUDO sets it itself before first use
+  # (docker.sh, motd.sh, udev.sh, uart.sh, ...). This function historically
+  # relied on an EARLIER step in main()'s full flow (e.g. install_docker,
+  # step 2) having already called require_root_for as a side effect, leaving
+  # $SUDO set as a global for the rest of the script by the time step 14
+  # reached this function. That implicit ordering dependency broke under
+  # `--only=updater` (issue #632's standalone-step runner), which calls this
+  # function with nothing having set $SUDO yet: "SUDO: unbound variable"
+  # under `set -u`.
+  require_root_for "host updater"
   if ! updater_hardware_supported; then
     warn "$MSG_UPDATER_HARDWARE_LEGACY"
     return 0

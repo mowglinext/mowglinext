@@ -52,6 +52,8 @@ assert_match "gnss_serial_device=/dev/ttyAMA4" \
   '^[[:space:]]+gnss_serial_device:[[:space:]]+"?/dev/ttyAMA4"?[[:space:]]*$' "$CONTENT"
 assert_match "gnss_serial_baud=921600" \
   '^[[:space:]]+gnss_serial_baud:[[:space:]]+921600[[:space:]]*$' "$CONTENT"
+assert_match "gnss_config_baud=921600 is a distinct canonical target" \
+  '^[[:space:]]+gnss_config_baud:[[:space:]]+921600[[:space:]]*$' "$CONTENT"
 assert_match "gnss_transport=serial" \
   '^[[:space:]]+gnss_transport:[[:space:]]+"?serial"?[[:space:]]*$' "$CONTENT"
 assert_match "gnss_frame_id=gps_link" \

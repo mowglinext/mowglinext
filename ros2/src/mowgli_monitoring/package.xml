@@ -18,8 +18,17 @@
   <depend>diagnostic_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>mowgli_interfaces</depend>
+
+  <!--
+    libmosquitto-dev is NOT a registered rosdep key (checked against
+    ros/rosdistro rosdep/base.yaml) — a plain <depend> here would make
+    `rosdep install` fail with "Cannot locate rosdep definition". It is
+    installed directly via apt-get in ros2/Dockerfile instead (base stage:
+    runtime libmosquitto1, deps stage: libmosquitto-dev for the build).
+  -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

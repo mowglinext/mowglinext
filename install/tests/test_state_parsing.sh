@@ -167,6 +167,8 @@ GNSS_TRANSPORT=serial
 GNSS_SERIAL_DEVICE=/dev/ttyAMA4
 GNSS_SERIAL_BAUD=921600
 GNSS_FRAME_ID=gps_link
+GNSS_DEVICE=/dev/ttyAMA4
+GNSS_DEVICE_GID=20
 GNSS_NTRIP_ENABLED=true
 GNSS_NTRIP_HOST=crtk.net
 GNSS_NTRIP_PORT=2101
@@ -192,7 +194,9 @@ TFLUNA_EDGE_PORT=/dev/tfluna_edge
 TFLUNA_EDGE_UART_DEVICE=/dev/ttyAMA2
 TFLUNA_EDGE_BAUD=115200
 MOWGLI_ROS2_IMAGE=${MOWGLI_ROS2_IMAGE_DEFAULT}
-GPS_IMAGE=${GPS_IMAGE_DEFAULT}
+UNIVERSAL_GNSS_IMAGE=${UNIVERSAL_GNSS_IMAGE_DEFAULT}
+UNIVERSAL_GNSS_LOG_DIR=./docker/logs/universal_gnss
+UNIVERSAL_GNSS_EXPORT_DIR=./docker/data/universal_gnss/export
 LIDAR_IMAGE=${LIDAR_LDLIDAR_IMAGE_DEFAULT}
 MAVROS_IMAGE=${MAVROS_IMAGE_DEFAULT}
 GUI_IMAGE=${GUI_IMAGE_DEFAULT}
@@ -207,12 +211,15 @@ MAVROS_TGT_COMPONENT=1
 MAVROS_AUTOPILOT=ardupilot
 EOF
 
-unset MAVROS_GCS_URL GUI_IMAGE HARDWARE_BACKEND GNSS_SERIAL_DEVICE 2>/dev/null || true
+unset MAVROS_GCS_URL GUI_IMAGE HARDWARE_BACKEND GNSS_SERIAL_DEVICE UNIVERSAL_GNSS_IMAGE GNSS_DEVICE GNSS_DEVICE_GID 2>/dev/null || true
 assert_exit_zero "current .env loads cleanly" load_env_defaults_file "$SANDBOX_REPO/docker/.env"
 assert_eq "current .env keeps MAVROS_GCS_URL" "udp-b://@255.255.255.255:14550" "${MAVROS_GCS_URL:-}"
 assert_eq "current .env keeps GUI_IMAGE" "${GUI_IMAGE_DEFAULT}" "${GUI_IMAGE:-}"
 assert_eq "current .env keeps HARDWARE_BACKEND" "mowgli" "${HARDWARE_BACKEND:-}"
 assert_eq "current .env keeps GNSS_SERIAL_DEVICE" "/dev/ttyAMA4" "${GNSS_SERIAL_DEVICE:-}"
+assert_eq "current .env keeps GNSS_DEVICE" "/dev/ttyAMA4" "${GNSS_DEVICE:-}"
+assert_eq "current .env keeps GNSS_DEVICE_GID" "20" "${GNSS_DEVICE_GID:-}"
+assert_eq "current .env keeps Universal GNSS image" "${UNIVERSAL_GNSS_IMAGE_DEFAULT}" "${UNIVERSAL_GNSS_IMAGE:-}"
 assert_eq "current .env keeps GNSS_STATUS_SOURCE" "universal" "${GNSS_STATUS_SOURCE:-}"
 
 test_summary

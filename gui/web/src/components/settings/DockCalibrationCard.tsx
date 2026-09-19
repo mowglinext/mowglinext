@@ -36,9 +36,14 @@ export const DockCalibrationCard: React.FC = () => {
                         Dock calibration (one-click)
                     </Text>
                     <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                        Robot on the dock (charging) with RTK-Fixed. It reverses in a straight
-                        line, checks the GPS course heading, then re-docks and saves the dock
-                        pose. The blade stays off the whole time.
+                        Robot on the dock (charging) with RTK-Fixed. It first captures the
+                        dock position right there from the raw GPS antenna, then reverses in a
+                        straight line, measures the heading from the GPS course and saves
+                        position + heading together. The re-dock that follows is only a
+                        confirmation: it still steers by the OLD dock pose (the navigation
+                        stack loads the new one at its next restart), so if the old pose was
+                        wrong it may stop short of the charger — the calibration is saved
+                        either way. The blade stays off the whole time.
                     </Paragraph>
                 </div>
 
@@ -65,6 +70,13 @@ export const DockCalibrationCard: React.FC = () => {
                     <div>
                         <Text style={{ color: colors.text }}>{PHASE_LABELS[phase] ?? "…"}</Text>
                         <Progress percent={progressPct} status={running ? "active" : "normal"} />
+                        {status?.message && (
+                            <div>
+                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                    {status.message}
+                                </Text>
+                            </div>
+                        )}
                         {status && (
                             <Text type="secondary" style={{ fontSize: 12 }}>
                                 COG σ {status.cog_std_deg.toFixed(2)}° · moved{" "}
@@ -75,11 +87,19 @@ export const DockCalibrationCard: React.FC = () => {
                     </div>
                 )}
 
-                {showResult && success && (
+                {showResult && success && retry === 0 && (
                     <Alert
                         type="success"
                         showIcon
                         message="Dock calibrated"
+                        description={status?.message}
+                    />
+                )}
+                {showResult && success && retry !== 0 && (
+                    <Alert
+                        type="warning"
+                        showIcon
+                        message="Dock calibrated — but the robot is NOT on the dock"
                         description={status?.message}
                     />
                 )}

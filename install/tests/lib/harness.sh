@@ -33,6 +33,7 @@ harness_init() {
   unset GNSS_BACKEND GNSS_STATUS_SOURCE GNSS_STACK GNSS_RECEIVER_FAMILY \
         GNSS_TRANSPORT GNSS_SERIAL_DEVICE GNSS_SERIAL_BAUD GNSS_FRAME_ID \
         GNSS_CONNECTION_HINT GNSS_RTCM_FORWARDING \
+        GNSS_DEVICE GNSS_DEVICE_GID \
         GNSS_NTRIP_ENABLED GNSS_NTRIP_HOST GNSS_NTRIP_PORT \
         GNSS_NTRIP_MOUNTPOINT GNSS_NTRIP_USERNAME GNSS_NTRIP_PASSWORD \
         GNSS_NTRIP_GGA_ENABLED GNSS_NTRIP_GGA_INTERVAL_S \
@@ -43,7 +44,8 @@ harness_init() {
         IMAGE_TAG \
         LIDAR_ENABLED LIDAR_TYPE LIDAR_MODEL LIDAR_CONNECTION \
         LIDAR_PORT LIDAR_UART_DEVICE LIDAR_BAUD LIDAR_IMAGE \
-        MOWGLI_ROS2_IMAGE GPS_IMAGE MAVROS_IMAGE GUI_IMAGE \
+        MOWGLI_ROS2_IMAGE GPS_IMAGE UNIVERSAL_GNSS_IMAGE \
+        UNIVERSAL_GNSS_LOG_DIR UNIVERSAL_GNSS_EXPORT_DIR MAVROS_IMAGE GUI_IMAGE \
         TFLUNA_FRONT_ENABLED TFLUNA_FRONT_PORT TFLUNA_FRONT_UART_DEVICE \
         TFLUNA_FRONT_BAUD TFLUNA_EDGE_ENABLED TFLUNA_EDGE_PORT \
         TFLUNA_EDGE_UART_DEVICE TFLUNA_EDGE_BAUD \
@@ -182,9 +184,7 @@ harness_set_preset() {
       backend)
         HARDWARE_BACKEND="$val"
         if [ "$val" = "mavros" ]; then
-          # NOTE: env.sh::setup_env() flips GNSS_BACKEND to "disabled" when
-          # HARDWARE_BACKEND=mavros — do NOT pre-set it here, otherwise
-          # configure_gps's preset validator rejects "disabled".
+          # Hardware backend selection is independent from GNSS ownership.
           export MAVROS_BY_ID="${MAVROS_BY_ID:-/dev/serial/by-id/usb-Pixhawk-stub}"
           export MAVROS_PORT="${MAVROS_PORT:-/dev/mavros}"
           export MAVROS_BAUD="${MAVROS_BAUD:-921600}"

@@ -27,14 +27,42 @@ const (
 	driveTuningBackupFile        = driveTuningContainerDir + "/drive_pid_last_backup.yaml"
 	driveTuningYamlHeader        = "# Mowgli Robot Configuration — managed by mowglinext-gui\n# This file is the single source of truth for robot parameters.\n# Changes made here are picked up on container restart.\n\n"
 	maxDriveTuningLogBytes       = 128 * 1024
-	// Feed-forward/odometry runs need a stable closed-loop wheel baseline so
-	// the very first pass does not inherit whatever live gains happen to be
-	// loaded in hardware_bridge.
-	driveTuningFFDefaultWheelKp            = 0.2
-	driveTuningFFDefaultWheelKi            = 0.100
-	driveTuningFFDefaultWheelKd            = 0.010
-	driveTuningFFDefaultWheelIntegralLimit = 15.0
 )
+
+// feedForwardPersistedParamKeys is the allowlist of report.ProposedParams keys
+// the feed-forward calibration is allowed to write into mowgli_robot.yaml. The
+// FF run only measures the odometry scale and the open-loop feedforward; the
+// tuner still echoes the wheel PID gains it ran with in proposed_params, and
+// persisting those silently overwrote the operator's (or the template's)
+// wheel_pid_kp/ki/kd/integral_limit with whatever the run happened to use —
+// the 2026-09-15 stiction-locked gains got onto the robot exactly that way.
+// The GUI copy ("ticks_per_meter and wheel_pid_pwm_per_mps will be saved")
+// has always described this narrower behaviour.
+var feedForwardPersistedParamKeys = map[string]struct{}{
+	"ticks_per_meter":       {},
+	"wheel_pid_pwm_per_mps": {},
+}
+
+// persistedParamsForMode returns the subset of proposed params a tuning mode
+// may persist: the FF allowlist above for feed-forward runs, everything for
+// the PID pass (which genuinely tunes the gains). A new map is returned; the
+// input is never mutated.
+func persistedParamsForMode(mode driveTuningMode, proposed map[string]float64) map[string]float64 {
+	if mode != driveTuningModeFeedForward {
+		out := make(map[string]float64, len(proposed))
+		for key, value := range proposed {
+			out[key] = value
+		}
+		return out
+	}
+	out := make(map[string]float64, len(feedForwardPersistedParamKeys))
+	for key, value := range proposed {
+		if _, allowed := feedForwardPersistedParamKeys[key]; allowed {
+			out[key] = value
+		}
+	}
+	return out
+}
 
 type driveTuningMode string
 
@@ -574,7 +602,8 @@ func (m *driveTuningManager) runJob(job *driveTuningJob, commandArgs []string) {
 	job.appendLog("\nSaved report: " + job.reportPath + "\n")
 
 	if job.apply {
-		if err := persistRobotYamlUpdates(m.dbProvider, floatMapToAnyMap(report.ProposedParams)); err != nil {
+		toPersist := persistedParamsForMode(job.mode, report.ProposedParams)
+		if err := persistRobotYamlUpdates(m.dbProvider, floatMapToAnyMap(toPersist)); err != nil {
 			job.appendLog("\nYAML persistence error: " + err.Error() + "\n")
 			job.finish(driveTuningRunWarning, &exitCode, "drive tuning applied live, but mowgli_robot.yaml persistence failed")
 			return
@@ -778,11 +807,11 @@ func buildFeedForwardCommand(req driveFFCalibrationStartRequest) ([]string, stri
 		"--turn-direction", req.TurnDirection,
 		"--output", reportPath,
 		"--backup-file", driveTuningBackupFile,
-		"--custom-kp", formatFloat(driveTuningFFDefaultWheelKp),
-		"--custom-ki", formatFloat(driveTuningFFDefaultWheelKi),
-		"--custom-kd", formatFloat(driveTuningFFDefaultWheelKd),
-		"--custom-integral-limit", formatFloat(driveTuningFFDefaultWheelIntegralLimit),
 	}
+	// Deliberately NO --custom-kp/ki/kd/integral-limit: the FF run drives on
+	// the live hardware_bridge gains (template defaults unless the operator
+	// overrode them). Force-seeding a "stable baseline" here is what put the
+	// stiction-locked 0.2/0.1/0.01/15 set onto the robot (2026-09-15).
 	if req.AutoTurn != nil && *req.AutoTurn {
 		args = append(args, "--auto-turn")
 	}
@@ -882,6 +911,9 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 		_ = yaml.Unmarshal(file, &existingYAML)
 	}
 
+	// Hints from the document as READ, before the payload merges into it.
+	typeHints := newYAMLTypeHints(nil, existingYAML)
+
 	existing := flattenROS2YAML(existingYAML)
 	schema, err := getSchema(dbProvider)
 	nodeMappings := map[string]string{}
@@ -894,6 +926,7 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 			}
 		}
 		nodeMappings = extractNodeMappings(schema)
+		typeHints = typeHints.withSchema(schema)
 	}
 
 	for key, value := range payload {
@@ -905,7 +938,10 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 	}
 
 	nested := nestToROS2YAML(existing, nodeMappings, existingYAML)
-	out, err := yaml.Marshal(nested)
+	// Same writer contract as PostSettingsYAML: a plain yaml.Marshal here
+	// demotes every integral float (wheel_pid_kp: 1.0 -> 1) and bricks the
+	// ROS2 nodes that declare those parameters as double.
+	out, err := marshalROS2YAML(nested, typeHints)
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}

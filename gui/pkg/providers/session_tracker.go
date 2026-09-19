@@ -30,15 +30,15 @@ type MowingSessionRecord struct {
 // SessionTracker monitors the BT high-level status and automatically
 // records mowing sessions in the database.
 type SessionTracker struct {
-	dbProvider   types.IDBProvider
-	mu           sync.Mutex
-	currentState string
-	sessionStart time.Time
-	inSession    bool
-	// paused is set while the robot has docked to recharge mid-session and the
-	// BT is expected to auto-resume mowing once topped up. A paused session is
-	// kept OPEN (not finalized) so a recharge no longer produces a spurious
-	// "aborted" record. pauseCount tallies the recharge cycles for the record.
+	dbProvider    types.IDBProvider
+	mu            sync.Mutex
+	currentState  string
+	currentMowing bool
+	sessionStart  time.Time
+	inSession     bool
+	// paused is set while the robot is in a resumable recharge or rain hold. A
+	// paused session stays OPEN so the hold cannot create a spurious "aborted"
+	// record. pauseCount tallies only recharge cycles for the stored record.
 	paused     bool
 	pauseCount int
 	// Live coverage/strip counters captured from the status stream while mowing.
@@ -197,8 +197,9 @@ func (s *SessionTracker) OnHighLevelStatus(msg []byte) {
 	// the dock after a finished mow (the firmware hard-stops the wheels on IDLE), but
 	// that return trip is not part of the mowing session — counting it would inflate
 	// the session distance/duration and turn a failed docking into an "error" session.
-	isMowing := status.State == 2 && status.StateName != "MOWING_COMPLETE"
-	wasMowing := prevState == "MOWING" || prevState == "TRANSIT" || prevState == "RECOVERING" || prevState == "RESUMING_AFTER_RAIN" || prevState == "RESUMING_UNDOCKING"
+	isMowing := isActiveMowingSessionStatus(status.State, status.StateName)
+	wasMowing := s.currentMowing
+	s.currentMowing = isMowing
 
 	// Start session
 	if isMowing && !s.inSession {
@@ -221,23 +222,26 @@ func (s *SessionTracker) OnHighLevelStatus(msg []byte) {
 		s.captureProgress(status.CoveragePercent, status.CompletedSwaths, status.SkippedSwaths)
 	}
 
-	// Resume after a recharge pause: mowing came back on the SAME session.
+	// Resume after a resumable pause: mowing came back on the SAME session.
 	if isMowing && s.inSession && s.paused {
 		s.paused = false
-		log.Printf("SessionTracker: mowing session resumed after recharge")
+		log.Printf("SessionTracker: mowing session resumed after pause")
 		return
 	}
 
-	// Pause for recharge: the robot docked to charge mid-session (low battery)
-	// and the BT auto-resumes once topped up. Keep the session OPEN instead of
-	// finalizing it as "aborted" — the recharge is a pause, not an end. A
+	// Pause for a resumable recharge or rain hold. Keep the session OPEN instead
+	// of finalizing it as "aborted" because the BT will resume the same mow. A
 	// genuine end-of-mow that happens to charge (prevState MOWING_COMPLETE) is
 	// excluded so it still finalizes as "completed" below.
-	if s.inSession && !isMowing && status.StateName == "CHARGING" && prevState != "MOWING_COMPLETE" {
+	if s.inSession && !isMowing && isResumableMowingPause(status.StateName) && prevState != "MOWING_COMPLETE" {
 		if !s.paused {
 			s.paused = true
-			s.pauseCount++
-			log.Printf("SessionTracker: mowing session paused for recharge (pause #%d)", s.pauseCount)
+			if isRechargeMowingPause(status.StateName) {
+				s.pauseCount++
+				log.Printf("SessionTracker: mowing session paused for recharge (pause #%d)", s.pauseCount)
+			} else {
+				log.Printf("SessionTracker: mowing session paused for rain")
+			}
 		}
 		return
 	}

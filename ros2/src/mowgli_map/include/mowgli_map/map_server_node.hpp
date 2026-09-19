@@ -37,11 +37,13 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <tf2/exceptions.hpp>
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_map/dock_antenna_capture.hpp"
 #include "mowgli_map/map_types.hpp"
 #include "mowgli_map/mow_progress.hpp"
 #include <grid_map_core/GridMap.hpp>
@@ -145,8 +147,10 @@ public:
                                         const geometry_msgs::msg::Polygon& polygon,
                                         const std::string& name = {})
   {
-    return apply_promoted_obstacle(
-        area_index, polygon, name, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER, false);
+    return apply_promoted_obstacle(area_index,
+                                   polygon,
+                                   name,
+                                   mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER);
   }
 
   /// Test-only: directly invoke the promote / discard service handlers.
@@ -185,27 +189,14 @@ public:
   {
     on_dig_event(std::move(msg));
   }
-  /// Test-only: stand in for on_odom's TF-derived pose latch (tests have no
-  /// TF tree), so the footprint-relative dig discard can be exercised.
-  void set_robot_pose_for_test(double x, double y, double yaw)
+  /// Test-only: stand in for on_odom's TF-derived position latch (tests have
+  /// no TF tree), so the "robot stands on the proposal" accept guard can be
+  /// exercised.
+  void set_robot_position_for_test(double x, double y)
   {
     last_robot_x_ = x;
     last_robot_y_ = y;
-    last_robot_yaw_ = yaw;
-    have_robot_heading_ = true;
-  }
-  /// Test-only: run the DIG_OBSTRUCTION exit helper directly.
-  [[nodiscard]] std::size_t discard_dig_keepouts_near_robot_for_test()
-  {
-    return discard_dig_keepouts_near_robot();
-  }
-
-  /// Test-only: stand in for on_odom's TF-derived heading latch (tests have no
-  /// TF tree), so the dig keepout orientation can be asserted.
-  void set_robot_heading_for_test(double yaw)
-  {
-    last_robot_yaw_ = yaw;
-    have_robot_heading_ = true;
+    have_robot_pose_ = true;
   }
 
   /// Test-only: forward to the private mowing_area_containing.
@@ -248,6 +239,98 @@ public:
     return docking_pose_set_;
   }
 
+  /// Test-only: directly invoke the set_docking_point service handler.
+  void set_docking_point_for_test(
+      const mowgli_interfaces::srv::SetDockingPoint::Request::SharedPtr req,
+      mowgli_interfaces::srv::SetDockingPoint::Response::SharedPtr res)
+  {
+    on_set_docking_point(req, res);
+  }
+
+  /// Test-only: satisfy on_set_docking_point's gate (1) (is_charging). Goes
+  /// through the same update as the real /hardware_bridge/status callback, so
+  /// leaving the dock drops the on-dock antenna samples here too.
+  void set_charging_status_for_test(bool charging)
+  {
+    update_charging_status(charging);
+  }
+
+  /// Test-only: directly invoke the ~/capture_dock_antenna handler.
+  void capture_dock_antenna_for_test(std_srvs::srv::Trigger::Response::SharedPtr res)
+  {
+    on_capture_dock_antenna(std::make_shared<std_srvs::srv::Trigger::Request>(), res);
+  }
+
+  /// Test-only: inspect / age the pending on-dock antenna capture.
+  const PendingAntennaCapture& pending_antenna_for_test() const
+  {
+    return pending_antenna_;
+  }
+  void age_pending_antenna_for_test(double seconds)
+  {
+    pending_antenna_.stamp_s -= seconds;
+  }
+
+  /// Test-only: what the real /gps/fix callback does with one RTK-Fixed
+  /// sample — it is kept ONLY while the robot is charging.
+  void on_fixed_antenna_sample_for_test(double east, double north)
+  {
+    push_dock_antenna_sample(east, north);
+  }
+
+  /// Test-only: satisfy gate (2) (freshness/accuracy) with one fresh
+  /// /gps/pose_cov-shaped sample. Since the #446 fix this no longer feeds
+  /// the position-averaging window itself — that now draws from the raw
+  /// antenna samples pushed via push_gps_antenna_for_test() below, which are
+  /// immune to the fused-yaw bias /gps/pose_cov's lever-arm correction can
+  /// carry (see on_set_docking_point's use_gps_position block).
+  void push_gps_pose_cov_for_test(double x, double y, double sigma_m)
+  {
+    auto msg = std::make_shared<geometry_msgs::msg::PoseWithCovarianceStamped>();
+    msg->pose.pose.position.x = x;
+    msg->pose.pose.position.y = y;
+    msg->pose.covariance[0] = sigma_m * sigma_m;
+    msg->pose.covariance[7] = sigma_m * sigma_m;
+    const rclcpp::Time t = now();
+    std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
+    last_gps_pose_cov_ = msg;
+    last_gps_pose_cov_time_ = t;
+  }
+
+  /// Test-only: satisfy gate (3) (yaw convergence) with `count` identical,
+  /// tightly-converged yaw samples at `yaw_rad`.
+  void push_converged_yaw_for_test(double yaw_rad, size_t count)
+  {
+    std::lock_guard<std::mutex> lk(recent_yaws_mutex_);
+    const rclcpp::Time t = now();
+    for (size_t i = 0; i < count; ++i)
+    {
+      recent_yaws_.emplace_back(t, yaw_rad);
+    }
+  }
+
+  /// Test-only: push one raw (yaw-independent) antenna ENU sample into the
+  /// window on_set_docking_point's use_gps_position path averages — bypasses
+  /// the real /gps/fix subscription + RTK-status gate + wgs84 projection, the
+  /// same way push_gps_pose_cov_for_test() bypasses /gps/pose_cov. Call
+  /// repeatedly to build up dock_set_gps_avg_min_samples_ samples.
+  void push_gps_antenna_for_test(double east, double north)
+  {
+    std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
+    recent_gps_antenna_enu_.emplace_back(now(), east, north);
+  }
+
+  /// Test-only: inject a known GPS lever arm (base_footprint→gps_link, body
+  /// frame) so on_set_docking_point's antenna re-projection has something to
+  /// apply without a live TF tree — mirrors how the real node resolves it
+  /// from URDF-published TF (see lever_arm_known_ below).
+  void set_gps_lever_arm_for_test(double lever_arm_x, double lever_arm_y)
+  {
+    lever_arm_known_ = true;
+    lever_arm_x_ = lever_arm_x;
+    lever_arm_y_ = lever_arm_y;
+  }
+
   /// Test-only: build the keepout mask and return a copy. Exercises
   /// publish_keepout_mask() (which caches into cached_keepout_mask_) without
   /// a live ROS subscriber. Takes map_mutex_ internally — caller must NOT
@@ -273,10 +356,12 @@ private:
     std::string name;
     /// MapObstacleInfo::SOURCE_USER / _TRACKER / _DIG.
     uint8_t source{mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER};
-    /// True while this is only a PROPOSAL: live in the keepout mask for this
-    /// session (so coverage cannot drive back into the hole) but deliberately
-    /// NOT written to areas.dat. Cleared by ~/promote_obstacle{pending_id};
-    /// dropped by ~/discard_obstacle.
+    /// True while this is only a PROPOSAL: INERT — skipped by the keepout
+    /// mask, the classification layer, get_mowing_area's `obstacles` (coverage
+    /// holes) and areas.dat; listed only in MapArea.proposed_obstacles.
+    /// Cleared (and the polygon applied) by ~/promote_obstacle{pending_id};
+    /// dropped by ~/discard_obstacle. Every consumer of AreaEntry::obstacles
+    /// MUST skip pending entries.
     bool pending{false};
     /// Session-scoped handle for those two services. 0 = loaded from disk.
     uint32_t id{0};
@@ -289,6 +374,14 @@ private:
     geometry_msgs::msg::Polygon polygon;
     std::vector<ObstacleEntry> obstacles;
     bool is_navigation_area{false};
+    /// Stable, persistent identifier (mowglinext#637) — see MapArea.msg's
+    /// `id` field doc comment for the full contract. 0 only transiently,
+    /// in-memory, before this entry is first saved; NEVER the same thing
+    /// as this entry's position in `areas_` (that shifts on any rebuild,
+    /// this does not). Unlike ObstacleEntry::id above, this one is
+    /// PERSISTED and must stay stable across a restart — see
+    /// next_area_id_'s doc comment for how it survives one.
+    uint32_t id{0};
   };
 
   // ── ROS callbacks ────────────────────────────────────────────────────────
@@ -366,6 +459,26 @@ private:
   void on_get_mowing_area(const mowgli_interfaces::srv::GetMowingArea::Request::SharedPtr req,
                           mowgli_interfaces::srv::GetMowingArea::Response::SharedPtr res);
 
+  /// ~/capture_dock_antenna: average the RAW antenna position while seated on
+  /// the dock (charging + RTK gates) and hold it, unpersisted, for the
+  /// set_docking_point use_pending_antenna write. See dock_antenna_capture.hpp.
+  void on_capture_dock_antenna(const std_srvs::srv::Trigger::Request::SharedPtr req,
+                               std_srvs::srv::Trigger::Response::SharedPtr res);
+
+  /// Dock-pose gates shared by ~/set_docking_point and ~/capture_dock_antenna.
+  /// Each returns the rejection text, or nullopt when the gate passes.
+  std::optional<std::string> dock_charging_gate_rejection();
+  std::optional<std::string> dock_gps_accuracy_gate_rejection();
+  std::optional<std::string> average_recent_dock_antenna(Enu& mean, size_t& sample_count);
+  std::optional<std::string> resolve_gps_lever_arm();
+
+  /// Single place the charging state changes. Leaving the dock CLEARS the
+  /// antenna window: it must only ever hold samples taken ON the dock.
+  void update_charging_status(bool charging);
+
+  /// Keep one RTK-Fixed raw antenna sample — only while charging.
+  void push_dock_antenna_sample(double east, double north);
+
   void on_set_docking_point(const mowgli_interfaces::srv::SetDockingPoint::Request::SharedPtr req,
                             mowgli_interfaces::srv::SetDockingPoint::Response::SharedPtr res);
 
@@ -380,21 +493,9 @@ private:
   void on_promote_obstacle(const mowgli_interfaces::srv::PromoteObstacle::Request::SharedPtr req,
                            mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res);
 
-  /// Reject a pending proposal (currently: wheel-slip dig keepouts) by its
-  /// MapObstacleInfo.id. Removes it from the live mask; nothing was ever
-  /// persisted, so it cannot come back after a restart either.
-  /// DIG_OBSTRUCTION exit (~/discard_dig_keepouts_near_robot, std_srvs/Trigger):
-  /// drop every PENDING dig proposal whose polygon contains, or lies within
-  /// kDigDiscardClearanceM of, the robot's latest map-frame position. Three
-  /// same-spot latches leave up to three 0.60 m keepouts stamped around the
-  /// robot, so the HOME dock transit's plan starts in a lethal cell
-  /// (START_OCCUPIED) and never moves; the tree calls this before planning
-  /// home. Accepted (persisted) keepouts and proposals farther away are kept.
-  void on_discard_dig_keepouts_near_robot(const std_srvs::srv::Trigger::Request::SharedPtr req,
-                                          std_srvs::srv::Trigger::Response::SharedPtr res);
-  /// @return how many pending dig proposals were dropped (0 = nothing touched).
-  std::size_t discard_dig_keepouts_near_robot();
-
+  /// Reject a pending proposal (currently: wheel-slip dig reports) by its
+  /// MapObstacleInfo.id. A proposal was never applied nor persisted, so this
+  /// only drops it from the list the GUI shows.
   void on_discard_obstacle(const mowgli_interfaces::srv::ClearObstacle::Request::SharedPtr req,
                            mowgli_interfaces::srv::ClearObstacle::Response::SharedPtr res);
 
@@ -430,15 +531,12 @@ private:
   /// Check if the robot is outside all allowed polygons and publish violation.
   void check_boundary_violation(double x, double y);
 
-  /// Append a polygon as a keepout for an area. Called by the
-  /// ~/promote_obstacle service and by the dig-report path. Updates
+  /// Append a polygon as an APPLIED keepout for an area. Called by the
+  /// ~/promote_obstacle service (operator action) and the tracker
+  /// auto-promotion opt-in — never by the dig-report path. Updates
   /// obstacle_polygons_, re-runs apply_area_classifications so cells become
   /// NO_GO_ZONE, marks masks_dirty_, and triggers a replan. Manages
   /// map_mutex_ internally — caller must NOT hold it.
-  ///
-  /// `pending` decides PERSISTENCE, not liveness: a pending keepout is just
-  /// as lethal for this session, but save_areas_to_file skips it, so it never
-  /// reaches areas.dat until the operator accepts it.
   ///
   /// @return false if the polygon has fewer than 3 points or area_index
   ///         is out of range / a navigation area.
@@ -446,24 +544,43 @@ private:
       size_t area_index,
       const geometry_msgs::msg::Polygon& polygon,
       const std::string& name = {},
-      uint8_t source = mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER,
-      bool pending = false);
+      uint8_t source = mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER);
+
+  /// Record an INERT proposal for an area: listed for the operator
+  /// (MapArea.proposed_obstacles) and nothing else — no keepout mask, no
+  /// NO_GO cells, no coverage hole, no replan, no areas.dat. Manages
+  /// map_mutex_ internally.
+  /// @return the proposal's session id, or nullopt when the area is invalid /
+  ///         a navigation area, the polygon is degenerate, or an obstacle or
+  ///         proposal already sits at that spot.
+  [[nodiscard]] std::optional<uint32_t> add_obstacle_proposal(
+      size_t area_index,
+      const geometry_msgs::msg::Polygon& polygon,
+      const std::string& name,
+      uint8_t source);
 
   /// Accept the pending obstacle carrying `pending_id`: clear its pending
-  /// flag (optionally renaming it) so the next save writes it to areas.dat.
+  /// flag (optionally renaming it) and APPLY it — keepout mask, NO_GO cells,
+  /// replan — so the next save also writes it to areas.dat.
   /// @return the area index it belongs to, or nullopt when no pending
   ///         obstacle has that id.
   [[nodiscard]] std::optional<size_t> accept_pending_obstacle(uint32_t pending_id,
                                                               const std::string& name);
 
-  /// Drop the pending obstacle carrying `pending_id` from the area list, the
-  /// flat obstacle_polygons_ store and the classification layer.
+  /// Distance the robot CENTRE must keep from a proposal's polygon for an
+  /// accept to be safe: the mask band that becomes lethal around it + one cell.
+  [[nodiscard]] double accept_clearance_m() const;
+
+  /// Accept guard. Returns the robot's distance to the pending polygon (0 when
+  /// inside it) when accepting `pending_id` NOW would leave the robot inside
+  /// the resulting lethal region — i.e. unable to plan from its own pose
+  /// (START_OCCUPIED). nullopt = safe to accept (or unknown id / no pose yet).
+  /// Manages map_mutex_ internally.
+  [[nodiscard]] std::optional<double> robot_inside_accepted_band(uint32_t pending_id);
+
+  /// Drop the pending obstacle carrying `pending_id` from its area's list.
   /// @return false when no PENDING obstacle has that id.
   bool discard_pending_obstacle(uint32_t pending_id);
-
-  /// Remove `polygon` from obstacle_polygons_ by centroid match (the same
-  /// epsilon the dedup guard uses). Caller must hold map_mutex_.
-  void erase_obstacle_polygon_locked(const geometry_msgs::msg::Polygon& polygon);
 
   /// Save areas.dat if a path is configured, logging (not throwing) on
   /// failure: the live state is already updated, so the next save retries.
@@ -478,21 +595,26 @@ private:
 
   /// has_duplicate_obstacle() (internal_helpers.hpp) over an area's
   /// ObstacleEntry list — same centroid-epsilon rule, different element type.
+  /// `include_pending=false` ignores inert proposals: an APPLIED keepout is
+  /// never a duplicate of something that was not applied.
   [[nodiscard]] static bool has_duplicate_obstacle_entry(
       const std::vector<ObstacleEntry>& existing,
       const geometry_msgs::msg::Polygon& candidate,
-      double eps);
+      double eps,
+      bool include_pending = true);
 
   /// Handle a wheel-slip dig report from hardware_bridge_node.
   ///
-  /// The bridge has already hard-stopped and reversed out; our job is to make
-  /// sure coverage does not send the robot straight back to the same patch on
-  /// the next pass. Resolves which mowing area contains the dig point, builds
-  /// a square keepout around it, and applies it through the SAME path the GUI
-  /// uses (apply_promoted_obstacle) so it becomes a NO_GO_ZONE and lands in
-  /// the keepout mask Smac/Nav2 read — but marked PENDING, so it is NOT
-  /// written to areas.dat. One inferred dig protects the spot for this
-  /// session; only the operator makes it permanent.
+  /// The bridge has already hard-stopped and reversed out. Resolves which
+  /// mowing area contains the dig point, builds a compact regular polygon the
+  /// size of the PHYSICAL dig (the wheel ruts — dig_proposal_polygon, never a
+  /// chassis-sized box), and records it as an inert PROPOSAL
+  /// (add_obstacle_proposal). It must never apply anything: the robot stands
+  /// ~0.2-0.3 m from the point, and a keepout there refused every plan from
+  /// its own pose (START_OCCUPIED, 2026-09-10 and 2026-09-17). Issue #500's
+  /// re-dig loop is prevented by FollowStrip's dig skip zone
+  /// (mowgli_behavior/dig_skip.hpp); only the operator turns a proposal into
+  /// a keepout (~/promote_obstacle{pending_id}).
   void on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPtr msg);
 
   /// Index of the first mowing (non-navigation) area whose polygon contains
@@ -552,10 +674,11 @@ private:
   double map_size_y_;
   std::string map_frame_;
   double tool_width_;
-  /// Auto-promote wheel-slip dig locations to permanent keepouts.
+  /// Record wheel-slip dig locations as operator-reviewable proposals.
   bool dig_obstacle_enabled_{true};
-  /// Side length of the square keepout stamped at a dig location [m].
-  double dig_obstacle_size_{0.0};
+  /// Radius of a dig proposal before the per-event slip growth [m]: the disc
+  /// covering both drive-wheel contact patches (internal_helpers.hpp).
+  double dig_proposal_radius_m_{0.0};
   std::string map_file_path_;
   std::string areas_file_path_;
 
@@ -589,19 +712,27 @@ private:
   /// lethal_outside_areas_ is on. Absorbs RTK/pose drift at the boundary so
   /// the planner does not refuse a start pose that sits a few cm past the
   /// recorded line (the recorded outline IS the robot's CENTRE path, so the
-  /// footprint legitimately overhangs it). 0.40 m = the chassis half-width
-  /// (0.225) + one global-costmap cell (0.08) + drift headroom: with the 0.25
-  /// (~robot radius) value, a robot riding the outer headland ring (centerline
-  /// ON the recorded line) had only ~5 cm between its centre cell and the
-  /// inscribed-cost band (lethal wall 0.25 out, inflation 0.20 in) — under one
-  /// 0.08 m cell, so Smac transits sporadically failed "Start occupied" and
-  /// FollowStrip skipped whole sub-paths (headland rings) on no-LiDAR/GPS-only
-  /// installs. Still below lethal_boundary_margin_m_ (0.5) so the planner wall
-  /// engages before the e-stop tripwire, and still far under the 0.45 m
+  /// footprint legitimately overhangs it). The 0.40 m literal below is only
+  /// the standalone-run fallback; full_system.launch.py FLOORS the injected
+  /// value at the live chassis CIRCUMSCRIBED RADIUS
+  /// (robot_config_util.chassis_circumscribed_radius = 0.597 m shipped),
+  /// because chassis_safety_inset is 0: the outermost coverage pass puts the
+  /// CENTRE on the recorded line and the footprint then reaches up to that
+  /// radius outside it in any orientation — 0.275 m sideways but 0.53 m
+  /// forward at a row end. 0.40 itself replaced a 0.25 (~robot radius) value
+  /// under which a robot riding the outer headland ring had only ~5 cm between
+  /// its centre cell and the inscribed-cost band — under one 0.08 m cell — so
+  /// Smac transits sporadically failed "Start occupied" and FollowStrip
+  /// skipped whole sub-paths (headland rings) on no-LiDAR/GPS-only installs.
+  /// TRADE-OFF: the injected floor is ABOVE lethal_boundary_margin_m_ (0.5),
+  /// so the planner's lethal wall no longer engages strictly inside that
+  /// e-stop tripwire, and the traversable band is wider than the 0.45 m
   /// keepout_nav_margin_ regression that let transit detours drift outside.
-  /// Inflation of the lethal boundary is also bounded by listing
-  /// keepout_filter BEFORE inflation_layer in the costmap plugins so the wall
-  /// is not inflated inward (see nav2_params_*.yaml).
+  /// Only kSoftPenaltyMaskCost (mid-cost, never free) keeps the planner off
+  /// it; watch /boundary_violation in the field.
+  /// The lethal boundary is NOT inflated: the global costmap lists
+  /// inflation_layer BEFORE keepout_filter (see nav2_params_*.yaml), because
+  /// this band already is the body's room.
   double enforce_boundary_margin_m_{0.40};
   /// Distance past the nearest allowed-area edge at which a boundary
   /// violation is classified as "lethal" (emergency stop) rather than
@@ -677,12 +808,19 @@ private:
   /// has been set).
   double dock_inner_margin_exempt_radius_m_{2.5};
 
-  /// Extra LETHAL margin grown around drawn obstacle polygons in the keepout
-  /// mask (mowgli_robot.yaml.obstacle_margin, GUI: Settings → Obstacles).
-  /// Mirrors coverage_server.obstacle_margin — the coverage planner buffers
-  /// its F2C holes by the same value — so transit and swath planning keep an
-  /// identical distance from a drawn tree/root zone. 0 = polygon edge only.
-  double obstacle_margin_m_{0.0};
+  /// LETHAL band grown around drawn / dig / promoted obstacle polygons in the
+  /// keepout mask (parameter keepout_obstacle_margin). It is the WHOLE body
+  /// model of the mask's consumer: SmacPlanner2D is a point check, and the
+  /// global costmap lists inflation_layer BEFORE keepout_filter so the mask is
+  /// not inflated on top. full_system.launch.py injects
+  /// robot_config_util.keepout_obstacle_margin = the footprint half-width,
+  /// raised to follow an operator-raised obstacle_margin.
+  ///
+  /// NOT coverage_server.obstacle_margin: that one offsets a CENTRELINE and
+  /// also carries FTC's clearance + tracking slack, so it is deliberately
+  /// larger — a robot on its coverage line must stay outside this band or
+  /// every transit from there is START_OCCUPIED. 0 = polygon edge only.
+  double keepout_obstacle_margin_m_{0.0};
 
   /// How far inside the polygon strip endpoints must sit. Applied when the
   /// coverage planner generates strips: the axis-aligned bounding-box
@@ -768,16 +906,23 @@ private:
   /// Most recent map-frame robot position (latched in on_odom).
   double last_robot_x_{0.0};
   double last_robot_y_{0.0};
-  /// Most recent map-frame robot heading (latched in on_odom); orients the
-  /// dig keepout ahead of the robot (dig_keepout_polygon). False until the
-  /// first TF lookup succeeds, in which case the dig falls back to a square.
-  double last_robot_yaw_{0.0};
-  bool have_robot_heading_{false};
+  /// False until the first TF lookup in on_odom succeeds.
+  bool have_robot_pose_{false};
 
   /// Pre-defined areas (mowing zones + navigation corridors).
   /// Any cell inside ANY area polygon is free in the keepout mask;
   /// everything outside is lethal.
   std::vector<AreaEntry> areas_;
+
+  /// Next id to mint for a new area (mowglinext#637). UNLIKE
+  /// next_obstacle_id_ below, this one is PERSISTED (areas.dat's
+  /// `next_area_id:` line) and must survive a restart — recovered on load
+  /// as max(loaded area ids) + 1, mirroring obstacle_tracker_node's own
+  /// next_id_ recovery pattern for its (also-persisted) tracked-obstacle
+  /// ids. Never reset by ~/clear_map: an id must never be reused for a
+  /// different area, even across a clear, in case something external
+  /// still holds a reference to the old one.
+  uint32_t next_area_id_{1};
 
   /// Obstacle polygons: regions within the allowed areas that are off-limits
   /// (trees, flower beds, etc.). Marked as lethal in the keepout mask.
@@ -849,20 +994,60 @@ private:
   rclcpp::Time last_gps_pose_cov_time_{0, 0, RCL_ROS_TIME};
   mutable std::mutex last_gps_pose_cov_mutex_;
 
-  /// Rolling window of recent /gps/pose_cov (x, y) map-frame positions, used
-  /// by on_set_docking_point to AVERAGE the docked position. The dock pose
-  /// MUST be captured from the independent GPS-vs-datum projection, NOT the
-  /// fused /odometry/filtered_map: when the robot is charging, fusion_graph
-  /// gauge-resets the fused pose onto the *existing* dock_pose, so capturing
-  /// the fused pose just re-stores the old (possibly wrong) value — a
-  /// calibration that can never correct itself. /gps/pose_cov is the raw
-  /// lever-arm-corrected GPS position and is free of that circularity.
-  /// Averaging over a few seconds beats the ~1-3 cm single-sample RTK jitter
-  /// (the systematic dock_pose error we are fixing was ~5 cm, so an unaveraged
-  /// sample would trade one error for another).
-  std::deque<std::tuple<rclcpp::Time, double, double>> recent_gps_xy_;
-  double dock_set_gps_avg_window_s_{3.0};
+  /// Rolling window of recent RAW (yaw-independent) GPS antenna positions —
+  /// /gps/fix projected straight through wgs84_projection.hpp, RTK-Fixed
+  /// samples only — used by on_set_docking_point to AVERAGE the antenna
+  /// position, then lever-arm-correct it ONCE with whatever yaw this call is
+  /// about to persist (see the use_gps_position block). The dock pose MUST
+  /// be captured independently of the fused /odometry/filtered_map: while
+  /// charging, fusion_graph gauge-resets the fused pose onto the *existing*
+  /// dock_pose, so capturing it would just re-store the old (possibly wrong)
+  /// value — a calibration that can never correct itself.
+  ///
+  /// This averages the RAW antenna position rather than /gps/pose_cov's
+  /// lever-arm-corrected one on purpose (issue #446): /gps/pose_cov applies
+  /// the correction with whatever the FUSED yaw is AT EACH SAMPLE, so a
+  /// stable-but-biased fused yaw (e.g. a settled-wrong magnetometer lock)
+  /// silently corrupted the averaged position by
+  /// lever_arm_length * sin(yaw_bias) with no way to detect it after the
+  /// fact — issue #446's reported ~10 cm lateral dock-position error is
+  /// consistent with exactly this (~19 degrees of bias at the default 0.3 m
+  /// forward GPS offset). Averaging the yaw-independent raw antenna position
+  /// and correcting with the call's OWN final yaw (which for yaw_source ==
+  /// MOTION is a fresh, independently-measured heading, not the possibly-
+  /// stale one used to correct earlier /gps/pose_cov samples) makes the
+  /// result correct regardless of what the fused yaw happened to be during
+  /// capture — an earlier revision instead cross-checked the fused yaw
+  /// against /imu/cog_heading and REJECTED on disagreement, but on the dock
+  /// a fresh COG sample is essentially never available (cog_to_imu_node's
+  /// stationary latch inflates σ well past any usable threshold within
+  /// seconds of the last forward motion), so that gate rejected the MOTION
+  /// call that is the only non-circular way to fix a stale yaw. Do not
+  /// reintroduce it.
+  std::deque<std::tuple<rclcpp::Time, double, double>> recent_gps_antenna_enu_;
+  mutable std::mutex recent_gps_antenna_mutex_;
+  /// 12 s comfortably fills min_samples_ at a sustained ~1 Hz RTK-Fixed
+  /// stream (the lowest `gnss_profile_rate_hz` the GUI offers) with margin
+  /// for the occasional non-Fixed epoch; see the declare_parameter call site
+  /// for why this needed widening from the 3 s it inherited pre-#446.
+  double dock_set_gps_avg_window_s_{12.0};
   size_t dock_set_gps_avg_min_samples_{10};
+
+  /// Raw antenna mean taken on the dock by ~/capture_dock_antenna, waiting for
+  /// the motion yaw (set_docking_point use_pending_antenna). Memory only,
+  /// single-use, expires after dock_antenna_capture_ttl_s_ (the robot may have
+  /// been moved since). Services run on the node's single-threaded executor.
+  PendingAntennaCapture pending_antenna_{};
+  double dock_antenna_capture_ttl_s_{300.0};
+
+  /// GPS lever arm (base_footprint→gps_link, body frame), resolved lazily
+  /// from TF the same way navsat_to_absolute_pose_node resolves its own copy
+  /// — this node runs as a separate process and cannot read that one's
+  /// cached value. Retried on each use_gps_position capture until available;
+  /// see the resolve call in on_set_docking_point.
+  bool lever_arm_known_{false};
+  double lever_arm_x_{0.0};
+  double lever_arm_y_{0.0};
 
   /// Thresholds for the on_set_docking_point gates beyond yaw convergence.
   double dock_set_gps_accuracy_max_m_{0.04};  ///< 4 cm
@@ -920,6 +1105,7 @@ private:
   rclcpp::Subscription<mowgli_interfaces::msg::ObstacleArray>::SharedPtr obstacle_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gps_pose_cov_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr gps_fix_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::DigEvent>::SharedPtr dig_event_sub_;
 
   /// Latest Nav2 costmap (global by default — same frame as map_), guarded
@@ -946,12 +1132,12 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::AddMowingArea>::SharedPtr add_area_srv_;
   rclcpp::Service<mowgli_interfaces::srv::GetMowingArea>::SharedPtr get_mowing_area_srv_;
   rclcpp::Service<mowgli_interfaces::srv::SetDockingPoint>::SharedPtr set_docking_point_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr capture_dock_antenna_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_areas_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr load_areas_srv_;
   rclcpp::Service<mowgli_interfaces::srv::GetRecoveryPoint>::SharedPtr get_recovery_point_srv_;
   rclcpp::Service<mowgli_interfaces::srv::PromoteObstacle>::SharedPtr promote_obstacle_srv_;
   rclcpp::Service<mowgli_interfaces::srv::ClearObstacle>::SharedPtr discard_obstacle_srv_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr discard_dig_keepouts_near_robot_srv_;
 
   // ── TF ────────────────────────────────────────────────────────────────────
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

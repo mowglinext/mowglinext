@@ -245,6 +245,17 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  # ---- test_drive_gain_sanity ----
+  # Pure header: the wheel-gain deadband gate hardware_bridge applies before
+  # pushing wheel_pid_* to the firmware (stiction-locked gains, 2026-09-15).
+  ament_add_gtest(test_drive_gain_sanity
+    test/test_drive_gain_sanity.cpp
+  )
+  target_include_directories(test_drive_gain_sanity
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
   # ---- test_hardware_bridge_parameters ----
   # Includes the node implementation to exercise ROS's actual read-only
   # parameter contract while a missing serial device keeps the test hardware-free.

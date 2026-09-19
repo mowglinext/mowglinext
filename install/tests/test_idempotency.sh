@@ -71,16 +71,35 @@ assert_eq ".env stable across runs" "$ENV1" "$ENV2"
 assert_eq "docker-compose.yaml stable across runs" "$COMPOSE1_HASH" "$COMPOSE2_HASH"
 assert_eq "mowgli_robot.yaml stable across runs" "$ROBOT_YAML1" "$ROBOT_YAML2"
 
-section "Backup files were created during second run"
+section "No backup files linger after an unchanged second run"
 
-# migrate_runtime_paths backs up .env and docker-compose.yaml on each run.
+# migrate_runtime_paths backs up .env and docker-compose.yaml unconditionally
+# up front on every run, but prune_backup_if_unchanged() (install/lib/deploy.sh,
+# called from setup_env() and write_compose_merged()) removes that backup
+# again once the regenerated file turns out byte-identical to it. Phrased as
+# an implication of the "stable across runs" assertions above (rather than
+# assuming they always hold) so this stays correct even where they don't —
+# e.g. GNSS_NTRIP_ENABLED has a separate, pre-existing flake in some
+# environments that can make ENV1 != ENV2 for reasons unrelated to backup
+# pruning. See TODO-runtime-backups.md #1/#6 and
+# install/tests/test_backup_pruning.sh for the pure-logic unit tests.
 backup_count=$(find "$SANDBOX_REPO/docker" -maxdepth 1 -name '.env.old.*' | wc -l | tr -d ' ')
-[ "$backup_count" -ge 1 ] && pass "at least one .env.old.* backup created" \
-  || fail "at least one .env.old.* backup created" "found $backup_count"
+if [ "$ENV1" = "$ENV2" ]; then
+  [ "$backup_count" -eq 0 ] && pass "no .env.old.* backup left behind (content was unchanged)" \
+    || fail "no .env.old.* backup left behind (content was unchanged)" "found $backup_count"
+else
+  [ "$backup_count" -ge 1 ] && pass ".env.old.* backup kept (content actually differed)" \
+    || fail ".env.old.* backup kept (content actually differed)" "found $backup_count"
+fi
 
 compose_backup_count=$(find "$SANDBOX_REPO/docker" -maxdepth 1 -name 'docker-compose.yaml.old.*' | wc -l | tr -d ' ')
-[ "$compose_backup_count" -ge 1 ] && pass "at least one docker-compose.yaml.old.* backup created" \
-  || fail "at least one docker-compose.yaml.old.* backup created" "found $compose_backup_count"
+if [ "$COMPOSE1_HASH" = "$COMPOSE2_HASH" ]; then
+  [ "$compose_backup_count" -eq 0 ] && pass "no docker-compose.yaml.old.* backup left behind (content was unchanged)" \
+    || fail "no docker-compose.yaml.old.* backup left behind (content was unchanged)" "found $compose_backup_count"
+else
+  [ "$compose_backup_count" -ge 1 ] && pass "docker-compose.yaml.old.* backup kept (content actually differed)" \
+    || fail "docker-compose.yaml.old.* backup kept (content actually differed)" "found $compose_backup_count"
+fi
 
 # Idempotency negative check: live config files still parse after a re-run
 section "Generated files still valid after re-run"
@@ -171,6 +190,10 @@ new_family=$(grep -E "^GNSS_RECEIVER_FAMILY=" "$SANDBOX_REPO/docker/.env" | cut 
 new_device=$(grep -E "^GNSS_SERIAL_DEVICE=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
 new_baud=$(grep -E "^GNSS_SERIAL_BAUD=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
 new_lidar=$(grep -E "^LIDAR_TYPE=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
+
+fourth_run_backup_count=$(find "$SANDBOX_REPO/docker" -maxdepth 1 -name '.env.old.*' | wc -l | tr -d ' ')
+[ "$fourth_run_backup_count" -ge 1 ] && pass "fourth run: .env.old.* backup KEPT (content genuinely changed)" \
+  || fail "fourth run: .env.old.* backup KEPT (content genuinely changed)" "found $fourth_run_backup_count"
 
 assert_eq "fourth run: GNSS_RECEIVER_FAMILY switched to nmea" "nmea" "$new_family"
 assert_eq "fourth run: GNSS_SERIAL_DEVICE switches to the explicit UART fallback" "/dev/ttyAMA4" "$new_device"

@@ -6,26 +6,36 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 )
 
+// The Universal GNSS image entrypoint sources its install setup before it
+// executes an override command. These PATH-resolved CLI names are the RC4
+// image contract; the install prefix is deliberately not a MowgliNext API.
 const (
 	gnssContainerName       = "mowgli-gps"
-	gnssConfigPlanBinary    = "/opt/gnss_sidecar/bin/gnss_config_plan"
-	gnssConfigApplyBinary   = "/opt/gnss_sidecar/bin/gnss_config_apply"
+	gnssConfigPlanCommand   = "gnss_config_plan"
+	gnssConfigApplyCommand  = "gnss_config_apply"
 	gnssApplyModeRuntime    = "runtime-only"
 	gnssApplyModeFactory    = "factory-reset"
 	gnssBaudAuto            = "auto"
 	gnssApplyTimeoutMs      = "5000"
 	gnssRouteCommandTimeout = 2 * time.Minute
 	gnssSettingsHeader      = "# Mowgli Robot Configuration — managed by mowglinext-gui\n# This file is the single source of truth for robot parameters.\n# Changes made here are picked up on container restart.\n\n"
+	gnssRuntimeConfigMount  = "/runtime_config"
 )
+
+var runGNSSRuntimeRegen = regenerateGNSSRuntimeConfigs
+var runGNSSRuntimeReconcile = reconcileGNSSRuntimeService
+var gnssSerialDeviceAccess = serialDeviceAccess
 
 var allowedGNSSBauds = map[string]bool{
 	"9600":   true,
@@ -38,18 +48,18 @@ var allowedGNSSBauds = map[string]bool{
 }
 
 type gnssSavedConfig struct {
-	ConfigPath     string
-	RuntimeEnvPath string
-	ExistingYAML   map[string]any
-	NodeMappings   map[string]string
-	Flat           map[string]any
-	ReceiverFamily string
-	SerialDevice   string
-	RuntimeBaud    string
-	ConfigBaud     string
-	ExecutionBaud  string
-	Profile        string
-	SignalProfile  string
+	ConfigPath       string
+	RuntimeEnvPath   string
+	ExistingYAML     map[string]any
+	NodeMappings     map[string]string
+	Flat             map[string]any
+	ReceiverFamily   string
+	SerialDevice     string
+	RuntimeBaud      string
+	ConfigBaud       string
+	ExecutionBaud    string
+	Profile          string
+	SignalProfile    string
 	SignalGroup      string
 	ReceiverModel    string
 	RoverDynamicMode string
@@ -78,6 +88,9 @@ type GNSSActionResponse struct {
 	SerialDevice                 string                 `json:"serial_device,omitempty"`
 	ExecutionBaud                string                 `json:"execution_baud,omitempty"`
 	DetectedBaud                 string                 `json:"detected_baud,omitempty"`
+	TargetBaud                   string                 `json:"target_baud,omitempty"`
+	ActiveVerifiedBaud           string                 `json:"active_verified_baud,omitempty"`
+	ManualBaudRequired           bool                   `json:"manual_baud_required,omitempty"`
 	RuntimeBaud                  string                 `json:"runtime_baud,omitempty"`
 	ConfigBaud                   string                 `json:"config_baud,omitempty"`
 	RuntimeBaudDiffersFromConfig bool                   `json:"runtime_baud_differs_from_config"`
@@ -127,7 +140,7 @@ func postGNSSPlan(dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDock
 			return
 		}
 
-		execution, err := runGNSSTool(c.Request.Context(), dockerProvider, containerDetails, false, buildGNSSPlanCommand(cfg))
+		execution, err := runGNSSTool(c.Request.Context(), dockerProvider, containerDetails, false, "", buildGNSSPlanCommand(cfg))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 			return
@@ -224,24 +237,24 @@ func postGNSSRestart(dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.ID
 
 		response := newGNSSActionResponse("restart", cfg, containerDetails)
 		addGNSSConfigWarnings(&response, cfg, false)
+		if err := syncGNSSDeviceRuntimeEnv(cfg); err != nil {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+			return
+		}
+		if err := runGNSSRuntimeReconcile(c.Request.Context()); err != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+			return
+		}
 
-		actionErr := dockerProvider.ContainerStart(c.Request.Context(), containerDetails.ID)
-		if containerDetails.Running {
-			actionErr = dockerProvider.ContainerRestart(c.Request.Context(), containerDetails.ID)
-		}
 		response.RestartAttempted = true
-		response.RestartSucceeded = actionErr == nil
-		response.Success = actionErr == nil
-		if actionErr != nil {
-			response.RestartError = actionErr.Error()
-			response.Message = "Failed to restart mowgli-gps"
-		}
+		response.RestartSucceeded = true
+		response.Success = true
 
 		c.JSON(http.StatusOK, response)
 	}
 }
 
-func runApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDockerProvider, cfg gnssSavedConfig) (GNSSActionResponse, int, error) {
+func runApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDockerProvider, cfg gnssSavedConfig) (response GNSSActionResponse, httpStatus int, returnErr error) {
 	if err := validateGNSSSerialDeviceExists(cfg.SerialDevice); err != nil {
 		return GNSSActionResponse{}, http.StatusBadRequest, err
 	}
@@ -251,21 +264,56 @@ func runApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, do
 		return GNSSActionResponse{}, http.StatusInternalServerError, err
 	}
 
-	response := newGNSSActionResponse("apply", cfg, containerDetails)
+	response = newGNSSActionResponse("apply", cfg, containerDetails)
 	addGNSSConfigWarnings(&response, cfg, true)
+	if err := syncGNSSDeviceRuntimeEnv(cfg); err != nil {
+		return GNSSActionResponse{}, http.StatusBadRequest, err
+	}
+	if err := runGNSSRuntimeRegen(parentCtx); err != nil {
+		return GNSSActionResponse{}, http.StatusInternalServerError, err
+	}
 
 	if containerDetails.Running {
 		response.StopAttempted = true
 		if err := dockerProvider.ContainerStop(parentCtx, containerDetails.ID); err != nil {
 			return GNSSActionResponse{}, http.StatusInternalServerError, fmt.Errorf("failed to stop %s: %w", gnssContainerName, err)
 		}
+		defer restoreStoppedGNSSService(parentCtx, &response, &returnErr, "GNSS apply succeeded")
 	}
 
-	execution, err := runGNSSTool(parentCtx, dockerProvider, containerDetails, true, buildGNSSApplyCommand(cfg, cfg.Profile))
+	detection, err := runGNSSTool(parentCtx, dockerProvider, containerDetails, true, cfg.SerialDevice, buildGNSSDetectCommand(cfg))
 	if err != nil {
 		return GNSSActionResponse{}, http.StatusInternalServerError, err
 	}
-	response.Executions = []GNSSCommandExecution{execution}
+	response.Executions = []GNSSCommandExecution{detection}
+	response.Success = detection.Success
+	detectionReport := applyGNSSCommandReport(&response, detection.Stdout)
+	if !detection.Success || detectionReport.DetectedBaud == "" {
+		manualBaud := normalizeGNSSExecutionBaudDisplay(cfg.ExecutionBaud)
+		if manualBaud == gnssBaudAuto {
+			response.ManualBaudRequired = true
+			response.Message = "GNSS baud autodetection failed; select the current baud manually and retry"
+			return response, http.StatusOK, nil
+		}
+
+		manualDetection, runErr := runGNSSTool(parentCtx, dockerProvider, containerDetails, true, cfg.SerialDevice, buildGNSSDetectCommand(cfg, manualBaud))
+		if runErr != nil {
+			return GNSSActionResponse{}, http.StatusInternalServerError, runErr
+		}
+		response.Executions = append(response.Executions, manualDetection)
+		response.Success = manualDetection.Success
+		detectionReport = applyGNSSCommandReport(&response, manualDetection.Stdout)
+		if !manualDetection.Success || detectionReport.DetectedBaud == "" {
+			response.Message = "The selected current baud was not validated by VERSIONA"
+			return response, http.StatusOK, nil
+		}
+	}
+
+	execution, err := runGNSSTool(parentCtx, dockerProvider, containerDetails, true, cfg.SerialDevice, buildGNSSApplyCommand(cfg, cfg.Profile, detectionReport.DetectedBaud))
+	if err != nil {
+		return GNSSActionResponse{}, http.StatusInternalServerError, err
+	}
+	response.Executions = append(response.Executions, execution)
 	response.Success = execution.Success
 	report := applyGNSSCommandReport(&response, execution.Stdout)
 	if !execution.Success {
@@ -275,9 +323,12 @@ func runApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, do
 		return response, http.StatusOK, nil
 	}
 
-	resolvedRuntimeBaud := cfg.ConfigBaud
-	if report.TransportBaud != "" {
-		resolvedRuntimeBaud = report.TransportBaud
+	resolvedRuntimeBaud := report.ActiveVerifiedBaud
+	if resolvedRuntimeBaud == "" {
+		response.Success = false
+		response.PartialFailure = true
+		response.Message = "GNSS apply completed without a verified active baud"
+		return response, http.StatusOK, nil
 	}
 
 	if cfg.RuntimeBaud != resolvedRuntimeBaud {
@@ -294,17 +345,13 @@ func runApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, do
 	response.RuntimeBaud = resolvedRuntimeBaud
 	response.RuntimeBaudDiffersFromConfig = resolvedRuntimeBaud != cfg.ConfigBaud
 
-	if containerDetails.Running {
-		response.RestartAttempted = true
-		if err := dockerProvider.ContainerStart(parentCtx, containerDetails.ID); err != nil {
+	if !containerDetails.Running {
+		if err := runGNSSRuntimeRegen(parentCtx); err != nil {
 			response.Success = false
 			response.PartialFailure = true
-			response.RestartSucceeded = false
-			response.RestartError = err.Error()
-			response.Message = "GNSS apply succeeded but mowgli-gps failed to restart"
+			response.Message = "GNSS apply succeeded but runtime configuration regeneration failed"
 			return response, http.StatusOK, nil
 		}
-		response.RestartSucceeded = true
 	}
 
 	response.Success = true
@@ -312,7 +359,7 @@ func runApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, do
 	return response, http.StatusOK, nil
 }
 
-func runFactoryResetApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDockerProvider, cfg gnssSavedConfig) (GNSSActionResponse, int, error) {
+func runFactoryResetApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDockerProvider, cfg gnssSavedConfig) (response GNSSActionResponse, httpStatus int, returnErr error) {
 	if err := validateGNSSFactoryResetRecoveryPolicy(cfg); err != nil {
 		return GNSSActionResponse{}, http.StatusBadRequest, err
 	}
@@ -325,18 +372,22 @@ func runFactoryResetApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDB
 		return GNSSActionResponse{}, http.StatusInternalServerError, err
 	}
 
-	response := newGNSSActionResponse("factory_reset_apply", cfg, containerDetails)
+	response = newGNSSActionResponse("factory_reset_apply", cfg, containerDetails)
 	addGNSSConfigWarnings(&response, cfg, true)
 	addGNSSFactoryResetRecoveryWarning(&response, cfg)
+	if err := syncGNSSDeviceRuntimeEnv(cfg); err != nil {
+		return GNSSActionResponse{}, http.StatusBadRequest, err
+	}
 
 	if containerDetails.Running {
 		response.StopAttempted = true
 		if err := dockerProvider.ContainerStop(parentCtx, containerDetails.ID); err != nil {
 			return GNSSActionResponse{}, http.StatusInternalServerError, fmt.Errorf("failed to stop %s: %w", gnssContainerName, err)
 		}
+		defer restoreStoppedGNSSService(parentCtx, &response, &returnErr, "Factory reset + apply succeeded")
 	}
 
-	resetExecution, err := runGNSSTool(parentCtx, dockerProvider, containerDetails, true, buildGNSSApplyCommand(cfg, "factory_reset"))
+	resetExecution, err := runGNSSTool(parentCtx, dockerProvider, containerDetails, true, cfg.SerialDevice, buildGNSSApplyCommand(cfg, "factory_reset"))
 	if err != nil {
 		return GNSSActionResponse{}, http.StatusInternalServerError, err
 	}
@@ -350,7 +401,7 @@ func runFactoryResetApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDB
 		return response, http.StatusOK, nil
 	}
 
-	applyExecution, err := runGNSSTool(parentCtx, dockerProvider, containerDetails, true, buildGNSSApplyCommand(cfg, cfg.Profile))
+	applyExecution, err := runGNSSTool(parentCtx, dockerProvider, containerDetails, true, cfg.SerialDevice, buildGNSSApplyCommand(cfg, cfg.Profile))
 	if err != nil {
 		return GNSSActionResponse{}, http.StatusInternalServerError, err
 	}
@@ -383,17 +434,13 @@ func runFactoryResetApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDB
 	response.RuntimeBaud = resolvedRuntimeBaud
 	response.RuntimeBaudDiffersFromConfig = resolvedRuntimeBaud != cfg.ConfigBaud
 
-	if containerDetails.Running {
-		response.RestartAttempted = true
-		if err := dockerProvider.ContainerStart(parentCtx, containerDetails.ID); err != nil {
+	if !containerDetails.Running {
+		if err := runGNSSRuntimeRegen(parentCtx); err != nil {
 			response.Success = false
 			response.PartialFailure = true
-			response.RestartSucceeded = false
-			response.RestartError = err.Error()
-			response.Message = "Factory reset + apply succeeded but mowgli-gps failed to restart"
+			response.Message = "Factory reset + apply succeeded but runtime configuration regeneration failed"
 			return response, http.StatusOK, nil
 		}
-		response.RestartSucceeded = true
 	}
 
 	response.Success = true
@@ -401,7 +448,34 @@ func runFactoryResetApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDB
 	return response, http.StatusOK, nil
 }
 
-func runGNSSTool(parentCtx context.Context, dockerProvider pkgtypes.IDockerProvider, containerDetails pkgtypes.ContainerDetails, needsSerial bool, command []string) (GNSSCommandExecution, error) {
+// restoreStoppedGNSSService is deferred immediately after a successful stop:
+// every later apply outcome must make a best-effort reconciliation attempt.
+// A tool/configuration error remains the returned error; a restore failure is
+// reported on the action response only when there is no earlier error to hide.
+func restoreStoppedGNSSService(parentCtx context.Context, response *GNSSActionResponse, originalErr *error, action string) {
+	response.RestartAttempted = true
+	// This is cleanup for a service we stopped ourselves. Do not let an HTTP
+	// request cancellation strand mowgli-gps, but retain the normal command
+	// timeout so cleanup cannot wait indefinitely.
+	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(parentCtx), gnssRouteCommandTimeout)
+	defer cancel()
+	if err := runGNSSRuntimeReconcile(restoreCtx); err != nil {
+		response.RestartSucceeded = false
+		response.RestartError = err.Error()
+		if *originalErr == nil {
+			wasSuccessful := response.Success
+			response.Success = false
+			response.PartialFailure = true
+			if strings.TrimSpace(response.Message) == "" || wasSuccessful {
+				response.Message = action + " but mowgli-gps failed to restart"
+			}
+		}
+		return
+	}
+	response.RestartSucceeded = true
+}
+
+func runGNSSTool(parentCtx context.Context, dockerProvider pkgtypes.IDockerProvider, containerDetails pkgtypes.ContainerDetails, needsSerial bool, serialDevice string, command []string) (GNSSCommandExecution, error) {
 	ctx, cancel := context.WithTimeout(parentCtx, gnssRouteCommandTimeout)
 	defer cancel()
 
@@ -411,7 +485,17 @@ func runGNSSTool(parentCtx context.Context, dockerProvider pkgtypes.IDockerProvi
 		AutoRemove: true,
 	}
 	if needsSerial {
+		deviceGID, resolvedDevice, err := gnssSerialDeviceAccess(serialDevice)
+		if err != nil {
+			return GNSSCommandExecution{}, err
+		}
 		spec.Binds = []string{deviceBind(containerDetails.Binds)}
+		spec.Devices = []pkgtypes.ContainerDevice{{
+			PathOnHost:        resolvedDevice,
+			PathInContainer:   resolvedDevice,
+			CgroupPermissions: "rwm",
+		}}
+		spec.GroupAdd = []string{deviceGID}
 		spec.Privileged = containerDetails.Privileged
 	}
 
@@ -430,6 +514,34 @@ func runGNSSTool(parentCtx context.Context, dockerProvider pkgtypes.IDockerProvi
 	}, nil
 }
 
+func serialDeviceAccess(device string) (string, string, error) {
+	info, err := gnssPathStat(device)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot stat GNSS serial device %q: %w", device, err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", "", fmt.Errorf("cannot determine group ID for GNSS serial device %q", device)
+	}
+	resolvedDevice, err := gnssPathEvalLink(device)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot resolve GNSS serial device %q: %w", device, err)
+	}
+	return strconv.FormatUint(uint64(stat.Gid), 10), resolvedDevice, nil
+}
+
+func syncGNSSDeviceRuntimeEnv(cfg gnssSavedConfig) error {
+	deviceGID, _, err := gnssSerialDeviceAccess(cfg.SerialDevice)
+	if err != nil {
+		return err
+	}
+	return writeRuntimeEnvFile(cfg.RuntimeEnvPath, map[string]string{
+		"GNSS_SERIAL_DEVICE": cfg.SerialDevice,
+		"GNSS_DEVICE":        cfg.SerialDevice,
+		"GNSS_DEVICE_GID":    deviceGID,
+	})
+}
+
 func newGNSSActionResponse(action string, cfg gnssSavedConfig, containerDetails pkgtypes.ContainerDetails) GNSSActionResponse {
 	return GNSSActionResponse{
 		Action:                       action,
@@ -441,6 +553,7 @@ func newGNSSActionResponse(action string, cfg gnssSavedConfig, containerDetails 
 		ExecutionBaud:                normalizeGNSSExecutionBaudDisplay(cfg.ExecutionBaud),
 		RuntimeBaud:                  cfg.RuntimeBaud,
 		ConfigBaud:                   cfg.ConfigBaud,
+		TargetBaud:                   cfg.ConfigBaud,
 		RuntimeBaudDiffersFromConfig: cfg.RuntimeBaud != cfg.ConfigBaud,
 		GPSContainer:                 containerDetails.Name,
 		GPSImage:                     containerDetails.Image,
@@ -452,7 +565,7 @@ func addGNSSConfigWarnings(response *GNSSActionResponse, cfg gnssSavedConfig, li
 	if cfg.RuntimeBaud != cfg.ConfigBaud {
 		warning := "Configured receiver baud differs from runtime baud."
 		if liveApply {
-			warning += " After a successful apply, the backend will persist whichever baud Universal GNSS reports as still live. That is usually the configured baud, but Unicore runtime-only apply may keep the previously detected baud active until a save/reboot workflow makes the new baud live."
+			warning += " Apply will first detect and verify the current baud, request the target baud, and persist only the active baud Universal GNSS verifies after configuration."
 		} else {
 			warning += " A live apply will re-check which baud is actually live before restarting mowgli-gps."
 		}
@@ -494,7 +607,7 @@ func validateGNSSFactoryResetRecoveryPolicy(cfg gnssSavedConfig) error {
 
 func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
 	command := []string{
-		gnssConfigPlanBinary,
+		gnssConfigPlanCommand,
 		"--json",
 		"--config-baud", cfg.ConfigBaud,
 		"--rate-hz", cfg.ProfileRateHz,
@@ -502,7 +615,7 @@ func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
 	if cfg.SignalProfile != "" {
 		command = append(command, "--signal-profile", cfg.SignalProfile)
 	}
-	if cfg.ReceiverModel != "" {
+	if shouldPassGNSSReceiverModel(cfg) {
 		command = append(command, "--model", cfg.ReceiverModel)
 	}
 	if shouldPassGNSSSignalGroup(cfg) {
@@ -515,15 +628,42 @@ func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
 	return command
 }
 
-func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string) []string {
+func buildGNSSDetectCommand(cfg gnssSavedConfig, manualBaud ...string) []string {
+	baud := gnssBaudAuto
+	if len(manualBaud) > 0 && strings.TrimSpace(manualBaud[0]) != "" {
+		baud = manualBaud[0]
+	}
+	command := []string{
+		gnssConfigApplyCommand, "--json",
+		"--family", cfg.ReceiverFamily,
+		"--device", cfg.SerialDevice,
+		"--baud", baud,
+		"--profile", "runtime_only",
+		"--apply-mode", "dry-run",
+	}
+	if baud == gnssBaudAuto {
+		if probeBauds := buildGNSSProbeBaudCandidates(cfg); len(probeBauds) > 0 {
+			command = append(command, "--probe-bauds", strings.Join(probeBauds, ","))
+		}
+	}
+	if shouldPassGNSSReceiverModel(cfg) {
+		command = append(command, "--model", cfg.ReceiverModel)
+	}
+	return command
+}
+
+func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string, verifiedCurrentBaud ...string) []string {
 	applyMode := gnssApplyModeRuntime
 	if canonicalProfile, ok := canonicalGNSSProfile(profile); ok && canonicalProfile == "factory_reset" {
 		applyMode = gnssApplyModeFactory
 	}
 	executionBaud := normalizeGNSSExecutionBaudDisplay(cfg.ExecutionBaud)
+	if len(verifiedCurrentBaud) > 0 && strings.TrimSpace(verifiedCurrentBaud[0]) != "" {
+		executionBaud = verifiedCurrentBaud[0]
+	}
 
 	command := []string{
-		gnssConfigApplyBinary,
+		gnssConfigApplyCommand,
 		"--json",
 		"--family", cfg.ReceiverFamily,
 		"--device", cfg.SerialDevice,
@@ -546,7 +686,7 @@ func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string) []string {
 		command = append(command, "--signal-profile", cfg.SignalProfile)
 	}
 
-	if cfg.ReceiverModel != "" {
+	if shouldPassGNSSReceiverModel(cfg) {
 		command = append(command, "--model", cfg.ReceiverModel)
 	}
 
@@ -558,6 +698,10 @@ func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string) []string {
 	}
 
 	return command
+}
+
+func shouldPassGNSSReceiverModel(cfg gnssSavedConfig) bool {
+	return cfg.ReceiverFamily == "unicore" && strings.TrimSpace(cfg.ReceiverModel) != ""
 }
 
 func shouldPassGNSSSignalGroup(cfg gnssSavedConfig) bool {
@@ -623,6 +767,51 @@ func deviceBind(existingBinds []string) string {
 	return "/dev:/dev"
 }
 
+// runGNSSStackCommand invokes the checkout's stack.sh through the host init
+// mount namespace. The GUI has /runtime_config bind-mounted from the host's
+// docker directory; mountinfo preserves that host source inside the container.
+func runGNSSStackCommand(parentCtx context.Context, action string) error {
+	dockerDir, err := hostBindSourceForMount(gnssRuntimeConfigMount)
+	if err != nil {
+		return fmt.Errorf("cannot locate the Mowgli runtime config bind: %w", err)
+	}
+	if filepath.Base(dockerDir) != "docker" {
+		return fmt.Errorf("unexpected Mowgli runtime config bind source %q", dockerDir)
+	}
+
+	stackScript := filepath.Join(filepath.Dir(dockerDir), "docker", "stack.sh")
+	ctx, cancel := context.WithTimeout(parentCtx, gnssRouteCommandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--", stackScript, action)
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("GNSS stack action %s failed: %w: %s", action, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func regenerateGNSSRuntimeConfigs(parentCtx context.Context) error {
+	return runGNSSStackCommand(parentCtx, "regen")
+}
+
+func reconcileGNSSRuntimeService(parentCtx context.Context) error {
+	return runGNSSStackCommand(parentCtx, "reconcile-gps")
+}
+
+func hostBindSourceForMount(mountPoint string) (string, error) {
+	content, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 || fields[4] != mountPoint {
+			continue
+		}
+		return strings.ReplaceAll(fields[3], "\\040", " "), nil
+	}
+	return "", fmt.Errorf("mount point %s not found", mountPoint)
+}
+
 func loadSavedGNSSConfig(dbProvider pkgtypes.IDBProvider) (gnssSavedConfig, error) {
 	doc, err := loadGNSSSettingsDocument(dbProvider)
 	if err != nil {
@@ -669,18 +858,18 @@ func loadSavedGNSSConfig(dbProvider pkgtypes.IDBProvider) (gnssSavedConfig, erro
 	}
 
 	return gnssSavedConfig{
-		ConfigPath:     doc.ConfigPath,
-		RuntimeEnvPath: doc.RuntimeEnvPath,
-		ExistingYAML:   doc.ExistingYAML,
-		NodeMappings:   doc.NodeMappings,
-		Flat:           doc.Flat,
-		ReceiverFamily: receiverFamily,
-		SerialDevice:   serialDevice,
-		RuntimeBaud:    runtimeBaud,
-		ConfigBaud:     configBaud,
-		ExecutionBaud:  executionBaud,
-		Profile:        profile,
-		SignalProfile:  normalizeGnssSignalProfile(doc.Flat["gnss_signal_profile"], "balanced"),
+		ConfigPath:       doc.ConfigPath,
+		RuntimeEnvPath:   doc.RuntimeEnvPath,
+		ExistingYAML:     doc.ExistingYAML,
+		NodeMappings:     doc.NodeMappings,
+		Flat:             doc.Flat,
+		ReceiverFamily:   receiverFamily,
+		SerialDevice:     serialDevice,
+		RuntimeBaud:      runtimeBaud,
+		ConfigBaud:       configBaud,
+		ExecutionBaud:    executionBaud,
+		Profile:          profile,
+		SignalProfile:    normalizeGnssSignalProfile(doc.Flat["gnss_signal_profile"], "balanced"),
 		SignalGroup:      signalGroup,
 		ReceiverModel:    normalizeGnssReceiverModel(doc.Flat["gnss_receiver_model"]),
 		RoverDynamicMode: normalizeGnssRoverDynamicMode(doc.Flat["gnss_rover_dynamic_mode"]),
@@ -718,7 +907,10 @@ type gnssToolJSONOutput struct {
 		Baud any `json:"baud"`
 	} `json:"discovery"`
 	Transport struct {
-		Baud any `json:"baud"`
+		Baud               any `json:"baud"`
+		CurrentBaud        any `json:"current_baud"`
+		TargetBaud         any `json:"target_baud"`
+		ActiveVerifiedBaud any `json:"active_verified_baud"`
 	} `json:"transport"`
 	ExecutionSummary struct {
 		FinalStatus string `json:"final_status"`
@@ -726,11 +918,14 @@ type gnssToolJSONOutput struct {
 }
 
 type gnssToolReport struct {
-	Warnings      []string
-	ErrorMessage  string
-	FinalStatus   string
-	DetectedBaud  string
-	TransportBaud string
+	Warnings           []string
+	ErrorMessage       string
+	FinalStatus        string
+	DetectedBaud       string
+	TransportBaud      string
+	CurrentBaud        string
+	TargetBaud         string
+	ActiveVerifiedBaud string
 }
 
 func extractGNSSReport(stdout string) gnssToolReport {
@@ -753,11 +948,14 @@ func extractGNSSReport(stdout string) gnssToolReport {
 		warnings = append(warnings, normalized)
 	}
 	return gnssToolReport{
-		Warnings:      warnings,
-		ErrorMessage:  strings.TrimSpace(output.ErrorMessage),
-		FinalStatus:   strings.TrimSpace(output.ExecutionSummary.FinalStatus),
-		DetectedBaud:  normalizeGNSSReportBaud(output.Discovery.Baud),
-		TransportBaud: normalizeGNSSReportBaud(output.Transport.Baud),
+		Warnings:           warnings,
+		ErrorMessage:       strings.TrimSpace(output.ErrorMessage),
+		FinalStatus:        strings.TrimSpace(output.ExecutionSummary.FinalStatus),
+		DetectedBaud:       normalizeGNSSReportBaud(output.Discovery.Baud),
+		TransportBaud:      normalizeGNSSReportBaud(output.Transport.Baud),
+		CurrentBaud:        normalizeGNSSReportBaud(output.Transport.CurrentBaud),
+		TargetBaud:         normalizeGNSSReportBaud(output.Transport.TargetBaud),
+		ActiveVerifiedBaud: normalizeGNSSReportBaud(output.Transport.ActiveVerifiedBaud),
 	}
 }
 
@@ -772,6 +970,14 @@ func applyGNSSCommandReport(response *GNSSActionResponse, stdout string) gnssToo
 	if report.TransportBaud != "" {
 		response.RuntimeBaud = report.TransportBaud
 		response.RuntimeBaudDiffersFromConfig = report.TransportBaud != response.ConfigBaud
+	}
+	if report.TargetBaud != "" {
+		response.TargetBaud = report.TargetBaud
+	}
+	if report.ActiveVerifiedBaud != "" {
+		response.ActiveVerifiedBaud = report.ActiveVerifiedBaud
+		response.RuntimeBaud = report.ActiveVerifiedBaud
+		response.RuntimeBaudDiffersFromConfig = report.ActiveVerifiedBaud != response.ConfigBaud
 	}
 	if !response.Success && report.ErrorMessage != "" {
 		switch report.FinalStatus {
@@ -837,9 +1043,13 @@ func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string)
 	// the same way PostSettingsYAML does.
 	prunedKeys := sparsifyFlat(doc.Flat, defaults)
 
+	// Capture the number-type hints BEFORE nesting: nestToROS2YAML merges the
+	// live values into the document, and hints read afterwards would describe
+	// the payload rather than what is on disk.
+	typeHints := loadYAMLTypeHints(dbProvider, doc.ExistingYAML)
 	nested := nestToROS2YAML(doc.Flat, doc.NodeMappings, doc.ExistingYAML)
 	pruneNestedKeys(nested, prunedKeys)
-	out, err := marshalROS2YAMLWithGeoPrecision(nested)
+	out, err := marshalROS2YAML(nested, typeHints)
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}

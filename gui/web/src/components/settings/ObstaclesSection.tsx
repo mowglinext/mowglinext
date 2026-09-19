@@ -1,10 +1,27 @@
 import React from "react";
-import { Alert, Card, Col, Form, InputNumber, Row, Switch, Typography } from "antd";
+import { Alert, Card, Col, Form, InputNumber, Row, Segmented, Switch, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { parseBoolish } from "../../utils/settingsValues.ts";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Paragraph } = Typography;
+
+export const DIG_SENSITIVITY_LEVELS = ["off", "low", "medium", "high"] as const;
+export type DigSensitivity = (typeof DIG_SENSITIVITY_LEVELS)[number];
+
+/**
+ * The yaml may hold a bare `off`, which YAML 1.1 parses as boolean false — the
+ * launch side reads that as "off" too (robot_config_util.resolve_dig_sensitivity).
+ * Anything unknown shows as the shipped default.
+ */
+export const normalizeDigSensitivity = (raw: unknown): DigSensitivity => {
+    if (raw === false) return "off";
+    if (typeof raw !== "string") return "medium";
+    const level = raw.trim().toLowerCase();
+    return (DIG_SENSITIVITY_LEVELS as readonly string[]).includes(level)
+        ? (level as DigSensitivity)
+        : "medium";
+};
 
 type Props = {
     values: Record<string, any>;
@@ -20,8 +37,8 @@ type Props = {
  *     obstacles (trunks, legs, walls),
  *   - max_obstacle_avoidance_distance: max lateral detour for coverage
  *     skirting + bypass give-up threshold (one knob, two consumers),
- *   - obstacle_margin: extra margin grown around DRAWN map obstacles in both
- *     coverage and transit planning (root zones the 2D LiDAR cannot see),
+ *   - obstacle_margin: coverage-plan clearance around DRAWN map obstacles (the
+ *     transit keepout band is derived from the chassis and follows it up),
  *   - obstacle_slowdown_ratio: collision_monitor approach slowdown factor.
  * All keys live in mowgli_robot.yaml (sparse over template) and are injected
  * into map server/Nav2/coverage params at launch — changes need a ROS2 restart.
@@ -59,6 +76,20 @@ export const ObstaclesSection: React.FC<Props> = ({
                     {t("settingsObstacles.digKeepoutsDescription")}
                 </Paragraph>
                 <Form layout="vertical" size="small">
+                    <Form.Item
+                        label={fieldLabel("dig_sensitivity", t("settingsObstacles.digSensitivity"))}
+                        extra={t("settingsObstacles.digSensitivityHelp")}
+                    >
+                        <Segmented
+                            aria-label={t("settingsObstacles.digSensitivity")}
+                            value={normalizeDigSensitivity(values.dig_sensitivity)}
+                            onChange={(level) => onChange("dig_sensitivity", level)}
+                            options={DIG_SENSITIVITY_LEVELS.map((level) => ({
+                                value: level,
+                                label: t(`settingsObstacles.digSensitivityLevels.${level}`),
+                            }))}
+                        />
+                    </Form.Item>
                     <Form.Item label={fieldLabel("dig_obstacle_enabled", t("settingsObstacles.digAutoPromotion"))}>
                         <Switch
                             aria-label={t("settingsObstacles.digAutoPromotion")}

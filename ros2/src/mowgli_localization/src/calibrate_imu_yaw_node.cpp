@@ -40,11 +40,11 @@
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
-#include "mowgli_interfaces/robot_yaml_scalar.hpp"
 #include "mowgli_interfaces/srv/calibrate_imu_yaw.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/set_docking_point.hpp"
 #include "mowgli_localization/dock_cog_gate.hpp"
+#include "mowgli_localization/dock_persist_plan.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/callback_group.hpp"
 #include "rclcpp/executors/multi_threaded_executor.hpp"
@@ -89,10 +89,12 @@ void sleep_for(double sec)
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(sec)));
 }
 
-// dock_pose_x/y/yaw writeback moved to mowgli_interfaces::robot_yaml_scalar
-// (task #42) — was a byte-for-byte-identical copy of the same splice logic
-// duplicated across this file, mowgli_map/area_manager.cpp, and
-// mowgli_behavior/calibration_nodes.cpp.
+// This node does NOT write dock_pose_x/y/yaw itself any more: every dock-pose
+// write goes through map_server's ~/set_docking_point (Invariant 6 — ONE
+// writer), for both the one-click calibration and the legacy ~/calibrate dock
+// pre-phase. The pre-phase used to splice mowgli_robot.yaml directly with a
+// position read from /gps/absolute_pose, a source that is pinned to the stored
+// dock yaw while charging.
 
 std::string utc_iso8601_now()
 {
@@ -180,14 +182,16 @@ public:
   static constexpr double REDOCK_WZ_MAX = 0.10;  // rad/s clamp on the steer output
   // Give the firmware's charge-detection debounce a chance after an attempt.
   static constexpr double REDOCK_CHARGE_SETTLE_SEC = 8.0;
-  // Persist retries: map_server's yaw-convergence gate (0.5° window-std over
-  // 5 s by default) needs the fused yaw to settle after the drive.
+  // Persist retries: the write is RTK-accuracy gated, and a momentary
+  // Fixed→Float flicker right after the reverse leg must not lose the run.
   static constexpr int PERSIST_MAX_ATTEMPTS = 8;
   static constexpr double PERSIST_RETRY_DELAY_SEC = 5.0;
-  // Runtime mowgli_robot.yaml — bind-mounted, persists across redeploys.
-  // Calibration writes the dock pose back here so the same file the launch
-  // system reads at startup also carries the latest measured values.
-  static constexpr const char* MOWGLI_ROBOT_YAML_PATH = "/ros2_ws/config/mowgli_robot.yaml";
+  // On-dock antenna capture: map_server wants N RTK-Fixed samples taken WHILE
+  // CHARGING inside its averaging window, and under the dock the receiver
+  // alternates Fixed/Float. The robot is stationary on the dock, so waiting is
+  // free — but bounded: after this the run continues yaw-only and says so.
+  static constexpr double ANTENNA_CAPTURE_TIMEOUT_SEC = 90.0;
+  static constexpr double ANTENNA_CAPTURE_RETRY_SEC = 2.0;
 
   // --- Mag calibration ---
   static constexpr double MAG_FIG8_LINEAR_M_S = 0.20;
@@ -310,6 +314,13 @@ public:
         create_client<mowgli_interfaces::srv::SetDockingPoint>("/map_server_node/set_docking_point",
                                                                rclcpp::ServicesQoS(),
                                                                cb_group_);
+
+    // On-dock RAW antenna capture (held in map_server memory until the motion
+    // yaw exists). map_server owns the measurement AND its gates.
+    capture_antenna_client_ =
+        create_client<std_srvs::srv::Trigger>("/map_server_node/capture_dock_antenna",
+                                              rclcpp::ServicesQoS(),
+                                              cb_group_);
 
     dock_action_ = rclcpp_action::create_server<CalibrateDock>(
         this,
@@ -585,8 +596,37 @@ private:
                    "aborting.");
       return std::nullopt;
     }
+    // x0/y0 (from /gps/absolute_pose) only anchor the reverse leg's
+    // displacement + line fit. They are NOT the dock position: that topic is
+    // lever-arm-corrected with the fused yaw, which on the dock is gauge-pinned
+    // to the STORED dock_pose_yaw (and silently degrades to the raw antenna if
+    // TF is late) — a circular, unflagged source. The position comes from
+    // map_server's raw-antenna capture, taken here while still on the dock.
     const double x0 = latest_gps_x_;
     const double y0 = latest_gps_y_;
+    const auto should_abort = [this]()
+    {
+      return emergency_active_.load();
+    };
+    std::string capture_err;
+    const bool have_capture = capture_dock_antenna_with_wait(
+        should_abort,
+        [this](const std::string& why)
+        {
+          RCLCPP_INFO_THROTTLE(get_logger(),
+                               *get_clock(),
+                               10000,
+                               "Dock yaw calibration: waiting for the on-dock antenna capture: %s",
+                               why.c_str());
+        },
+        capture_err);
+    if (!have_capture)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "Dock yaw calibration: no on-dock antenna capture (%s) — the dock POSITION "
+                  "will not be updated (yaw only).",
+                  capture_err.c_str());
+    }
 
     // Minimum displacement threshold: 75 % of the configured target so a
     // short undock_distance (e.g. 0.8 m) does not make the check trivially
@@ -710,9 +750,31 @@ private:
       sigma_yaw_rad = std::atan2(2.0 * sigma_pos, displacement);
     }
 
+    // Persist through map_server — the ONE dock-pose writer (Invariant 6). This
+    // node used to splice mowgli_robot.yaml itself with x0/y0; see the note at
+    // x0 for why that position source had to go.
+    std::string persist_err;
+    const DockSavedPose saved = persist_dock_pose(
+        dock_yaw,
+        have_capture,
+        capture_err,
+        should_abort,
+        [this](const std::string& what)
+        {
+          RCLCPP_INFO(get_logger(), "Dock yaw calibration: %s", what.c_str());
+        },
+        persist_err);
+    if (saved.saved == DockSaved::NOTHING)
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "Dock yaw calibration: dock pose NOT saved: %s",
+                   persist_err.c_str());
+      return std::nullopt;
+    }
+
     DockYawResult result;
-    result.dock_pose_x = x0;
-    result.dock_pose_y = y0;
+    result.dock_pose_x = saved.x;
+    result.dock_pose_y = saved.y;
     result.dock_pose_yaw_rad = dock_yaw;
     result.dock_pose_yaw_deg = dock_yaw * 180.0 / M_PI;
     result.undock_displacement_m = displacement;
@@ -720,22 +782,10 @@ private:
     result.yaw_sigma_deg = sigma_yaw_rad * 180.0 / M_PI;
     result.speed_ms = dock_undock_speed_;
 
-    if (!mowgli_interfaces::robot_yaml_scalar::UpdateDockPose(MOWGLI_ROBOT_YAML_PATH,
-                                                              result.dock_pose_x,
-                                                              result.dock_pose_y,
-                                                              result.dock_pose_yaw_rad))
-    {
-      RCLCPP_ERROR(get_logger(),
-                   "Failed to persist dock pose to %s — file missing or "
-                   "not writable.",
-                   MOWGLI_ROBOT_YAML_PATH);
-      return std::nullopt;
-    }
-
     RCLCPP_INFO(get_logger(),
-                "Dock yaw calibration: start=(%+.3f, %+.3f) end=(%+.3f, "
-                "%+.3f) displacement=%.3f m method=%s (n=%zu) dock_yaw=%+.2f° "
-                "(σ=%.2f°). Saved to %s.",
+                "Dock yaw calibration: reverse start=(%+.3f, %+.3f) end=(%+.3f, %+.3f) "
+                "displacement=%.3f m method=%s (n=%zu) dock_yaw=%+.2f° (σ=%.2f°). Saved via "
+                "map_server: %s%s%s.%s",
                 x0,
                 y0,
                 x1,
@@ -745,7 +795,10 @@ private:
                 samples.size(),
                 result.dock_pose_yaw_deg,
                 result.yaw_sigma_deg,
-                MOWGLI_ROBOT_YAML_PATH);
+                DescribeDockSaved(saved).c_str(),
+                saved.saved == DockSaved::YAW_ONLY ? " — position NOT updated: " : "",
+                saved.saved == DockSaved::YAW_ONLY ? saved.position_skip_reason.c_str() : "",
+                DockRestartNote());
     return result;
   }
 
@@ -951,11 +1004,13 @@ private:
   // ═══ One-click dock calibration (CalibrateDock action, Resolution A) ═══
   // The dock yaw is circular_mean(/imu/cog_heading over the reverse leg) with
   // NO +pi (the topic is already the reverse-aware BODY heading). The sequence
-  // reverses on /cmd_vel_docking, gates COG coherence, re-docks forward until
-  // charging, then persists via map_server's set_docking_point (yaw_source=
-  // MOTION) — the single canonical writer. Blade is never commanded; every
-  // drive loop zero-vels on emergency/cancel; the dock pose is persisted ONLY
-  // after a verified re-dock+charge.
+  // reverses on /cmd_vel_docking, gates COG coherence, persists via
+  // map_server's set_docking_point (yaw_source=MOTION) — the single canonical
+  // writer — then attempts a supervised re-dock forward as a CONFIRMATION
+  // pass (see the persist block's comment for why the write can no longer
+  // wait on that pass: docking_server only reads dock_pose at container
+  // startup, so a same-session re-dock always steers on the OLD heading).
+  // Blade is never commanded; every drive loop zero-vels on emergency/cancel.
   using CalibrateDock = mowgli_interfaces::action::CalibrateDock;
   using DockGoalHandle = rclcpp_action::ServerGoalHandle<CalibrateDock>;
   using DockStatus = mowgli_interfaces::msg::DockCalibrationStatus;
@@ -991,6 +1046,7 @@ private:
     DockCogGateResult gate{};
     bool imu_valid{false};
     ComputeResult imu{};
+    DockSavedPose saved{};
   };
 
   void cog_cb(sensor_msgs::msg::Imu::ConstSharedPtr msg)
@@ -1078,8 +1134,9 @@ private:
             res->dock_pose_yaw_deg = out.gate.dock_yaw_rad * 180.0 / M_PI;
             res->cog_std_deg = out.gate.cog_std_rad * 180.0 / M_PI;
             res->reverse_displacement_m = out.gate.displacement_m;
-            res->dock_pose_x = latest_gps_x_.load();
-            res->dock_pose_y = latest_gps_y_.load();
+            // What map_server STORED — never this node's own GPS estimate.
+            res->dock_pose_x = out.saved.x;
+            res->dock_pose_y = out.saved.y;
           }
           if (out.imu_valid)
           {
@@ -1145,17 +1202,33 @@ private:
     res->message = "Dock calibration started — watch ~/dock_calibration/status.";
   }
 
-  bool persist_dock_via_map_server(double yaw_rad, std::string& err)
+  // One set_docking_point call. `plan` is one of the requests of
+  // dock_persist_plan.hpp. On failure `err` carries map_server's own rejection
+  // text; on success `warn` is non-empty when map_server applied the pose but
+  // could not write the yaml file, and `stored` is the pose map_server holds.
+  bool persist_dock_via_map_server(const DockPersistRequest& plan,
+                                   std::string& err,
+                                   std::string& warn,
+                                   geometry_msgs::msg::Pose& stored)
   {
+    using SetDockReq = mowgli_interfaces::srv::SetDockingPoint::Request;
+    static_assert(kSetDockYawPreserve == SetDockReq::PRESERVE);
+    static_assert(kSetDockYawMotion == SetDockReq::MOTION);
+    static_assert(kDockRetryNone == CalibrateDock::Result::RETRY_NONE);
+    static_assert(kDockRetryNoChargeOnRedock == CalibrateDock::Result::RETRY_NO_CHARGE_ON_REDOCK);
+    static_assert(kDockRetryPersistFailed == CalibrateDock::Result::RETRY_PERSIST_FAILED);
+    warn.clear();
     if (!set_dock_client_->wait_for_service(std::chrono::seconds(3)))
     {
       err = "map_server set_docking_point service unavailable";
       return false;
     }
-    auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
-    req->use_gps_position = true;  // average on-dock GPS for x/y (independent of fusion)
-    req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
-    req->yaw_rad = yaw_rad;  // COG-derived chassis heading (Resolution A)
+    auto req = std::make_shared<SetDockReq>();
+    req->use_gps_position = plan.use_gps_position;
+    req->preserve_position = plan.preserve_position;
+    req->use_pending_antenna = plan.use_pending_antenna;
+    req->yaw_source = plan.yaw_source;
+    req->yaw_rad = plan.yaw_rad;  // motion-derived chassis heading
     auto fut = set_dock_client_->async_send_request(req);
     const double deadline = monotonic() + 8.0;
     while (rclcpp::ok() && monotonic() < deadline)
@@ -1165,16 +1238,200 @@ private:
     }
     if (fut.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
     {
-      err = "set_docking_point timed out";
+      err = "set_docking_point timed out after 8 s (map_server busy or hung)";
+      return false;
+    }
+    auto resp = fut.get();
+    if (!resp)
+    {
+      err = "set_docking_point returned no response";
+      return false;
+    }
+    if (!resp->success)
+    {
+      err = "set_docking_point rejected: " +
+            (resp->message.empty() ? std::string("(no reason given)") : resp->message);
+      return false;
+    }
+    warn = resp->message;
+    stored = resp->stored_pose;
+    return true;
+  }
+
+  // One ~/capture_dock_antenna call (no retry). False + `err` on rejection.
+  bool call_capture_dock_antenna(std::string& err)
+  {
+    if (!capture_antenna_client_->wait_for_service(std::chrono::seconds(3)))
+    {
+      err = "map_server capture_dock_antenna service unavailable";
+      return false;
+    }
+    auto fut = capture_antenna_client_->async_send_request(
+        std::make_shared<std_srvs::srv::Trigger::Request>());
+    const double deadline = monotonic() + 8.0;
+    while (rclcpp::ok() && monotonic() < deadline)
+    {
+      if (fut.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready)
+        break;
+    }
+    if (fut.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+    {
+      err = "capture_dock_antenna timed out after 8 s (map_server busy or hung)";
       return false;
     }
     auto resp = fut.get();
     if (!resp || !resp->success)
     {
-      err = "set_docking_point rejected (RTK / charging / yaw-convergence gate)";
+      err = (resp && !resp->message.empty()) ? resp->message : "capture_dock_antenna failed";
       return false;
     }
+    RCLCPP_INFO(get_logger(), "Dock calibration: %s", resp->message.c_str());
     return true;
+  }
+
+  // Capture the RAW antenna position while the robot is still seated on the
+  // dock, charging and RTK-Fixed — the ONE moment of the routine where all
+  // three hold (after the reverse there is no dock; after the re-dock there is
+  // often no Fixed, and the re-dock itself depends on the very position this
+  // fixes). Never derived from the fused pose or /gps/absolute_pose: on the
+  // dock those are pinned to the STORED dock pose. Waits, bounded, for
+  // map_server's sample window to fill. False + `err` = continue yaw-only.
+  bool capture_dock_antenna_with_wait(const std::function<bool()>& should_abort,
+                                      const std::function<void(const std::string&)>& on_wait,
+                                      std::string& err)
+  {
+    const double deadline = monotonic() + ANTENNA_CAPTURE_TIMEOUT_SEC;
+    while (rclcpp::ok())
+    {
+      if (should_abort())
+      {
+        err = "aborted while capturing the dock antenna position";
+        return false;
+      }
+      if (!is_charging_)
+      {
+        err = "charging was lost before the dock antenna position could be captured";
+        return false;
+      }
+      if (call_capture_dock_antenna(err))
+        return true;
+      if (monotonic() >= deadline)
+      {
+        err = "no on-dock antenna capture within " +
+              std::to_string(static_cast<int>(ANTENNA_CAPTURE_TIMEOUT_SEC)) + " s — last: " + err;
+        return false;
+      }
+      on_wait(err);
+      const double t_retry = monotonic() + ANTENNA_CAPTURE_RETRY_SEC;
+      while (rclcpp::ok() && monotonic() < t_retry && !should_abort())
+        sleep_for(1.0 / CMD_RATE_HZ);
+    }
+    err = "shutting down";
+    return false;
+  }
+
+  // One persistence request with retries. True once map_server accepted AND
+  // wrote it; on failure `perr` holds the LAST rejection reason.
+  bool persist_with_retries(const DockPersistRequest& plan,
+                            const std::string& what,
+                            const std::function<bool()>& should_abort,
+                            const std::function<void(const std::string&)>& on_retry,
+                            std::string& perr,
+                            geometry_msgs::msg::Pose& stored)
+  {
+    for (int attempt = 0; attempt < PERSIST_MAX_ATTEMPTS && rclcpp::ok(); ++attempt)
+    {
+      if (attempt > 0)
+      {
+        on_retry(what + " (retrying: " + perr + ")");
+        const double t_retry = monotonic() + PERSIST_RETRY_DELAY_SEC;
+        while (rclcpp::ok() && monotonic() < t_retry && !should_abort())
+          sleep_for(1.0 / CMD_RATE_HZ);
+      }
+      if (should_abort())
+      {
+        perr = "aborted while saving (cancel or emergency)";
+        return false;
+      }
+      std::string warn;
+      if (persist_dock_via_map_server(plan, perr, warn, stored))
+      {
+        if (!warn.empty())
+        {
+          // Applied in map_server's memory but NOT written to the yaml file:
+          // for a calibration that is a failure — it would be gone at the
+          // next restart, which is exactly when it is first used.
+          perr = warn;
+          return false;
+        }
+        return true;
+      }
+      RCLCPP_WARN(get_logger(),
+                  "Dock calibration: %s attempt %d/%d failed: %s",
+                  what.c_str(),
+                  attempt + 1,
+                  PERSIST_MAX_ATTEMPTS,
+                  perr.c_str());
+    }
+    return false;
+  }
+
+  // Persist the dock pose through the ONE canonical writer (map_server), robot
+  // OFF the dock, motion yaw in hand. Normal: yaw + the pending on-dock antenna
+  // in one write. Fallback (no capture, or map_server refused it): yaw only,
+  // stored position kept. `err` is set only when NOTHING was saved.
+  DockSavedPose persist_dock_pose(double dock_yaw_rad,
+                                  bool have_capture,
+                                  const std::string& capture_err,
+                                  const std::function<bool()>& should_abort,
+                                  const std::function<void(const std::string&)>& on_status,
+                                  std::string& err)
+  {
+    DockSavedPose saved;
+    saved.yaw_rad = dock_yaw_rad;
+    geometry_msgs::msg::Pose stored;
+    std::string perr;
+    if (have_capture)
+    {
+      on_status("saving dock yaw + position");
+      if (persist_with_retries(DockPoseStep(dock_yaw_rad),
+                               "saving dock yaw + position",
+                               should_abort,
+                               on_status,
+                               perr,
+                               stored))
+      {
+        saved.saved = DockSaved::YAW_AND_POSITION;
+        saved.x = stored.position.x;
+        saved.y = stored.position.y;
+        return saved;
+      }
+      saved.position_skip_reason = perr;
+      if (should_abort())
+      {
+        err = perr;
+        return saved;
+      }
+    }
+    else
+    {
+      saved.position_skip_reason = capture_err;
+    }
+    on_status("saving dock yaw only");
+    if (persist_with_retries(DockYawStep(dock_yaw_rad),
+                             "saving dock yaw only",
+                             should_abort,
+                             on_status,
+                             perr,
+                             stored))
+    {
+      saved.saved = DockSaved::YAW_ONLY;
+      saved.x = stored.position.x;
+      saved.y = stored.position.y;
+      return saved;
+    }
+    err = perr + " (position: " + saved.position_skip_reason + ")";
+    return saved;
   }
 
   static uint8_t cog_reason_to_retry(DockCogReason r)
@@ -1198,11 +1455,13 @@ private:
                                         const std::function<bool()>& is_canceled)
   {
     bool need_exit_recording = false;
+    DockSavedPose saved_pose;  // what reached mowgli_robot.yaml so far
 
     // Terminal-state + cleanup helper. Runs on EVERY exit path: stops the robot,
     // exits RECORDING, deactivates subs, publishes the terminal status, clears
-    // the busy flag, and returns the outcome. dock pose is persisted separately
-    // (before finish(success=true)) — this never writes it.
+    // the busy flag, LOGS the outcome and returns it. The dock pose is persisted
+    // separately (yaw after the reverse leg, position after the verified
+    // re-dock) — this never writes it.
     auto finish = [&](bool success,
                       uint8_t reason,
                       const std::string& msg,
@@ -1227,6 +1486,7 @@ private:
       out.canceled = canceled;
       out.retry_reason = reason;
       out.message = msg;
+      out.saved = saved_pose;
       if (gate)
       {
         out.gate_valid = true;
@@ -1244,6 +1504,29 @@ private:
                      success,
                      reason,
                      msg);
+      // EVERY terminal outcome goes to the ROS log too. The status topic is
+      // VOLATILE: a failure used to leave no trace at all in `docker logs`,
+      // which is what hid a deterministic persist rejection for two days.
+      if (success && reason == CalibrateDock::Result::RETRY_NONE)
+      {
+        RCLCPP_INFO(get_logger(), "Dock calibration SUCCEEDED: %s", msg.c_str());
+      }
+      else if (success)
+      {
+        // Saved, but the operator has something to do (robot not on the dock).
+        RCLCPP_WARN(get_logger(),
+                    "Dock calibration SUCCEEDED WITH A WARNING (reason=%u): %s",
+                    static_cast<unsigned>(reason),
+                    msg.c_str());
+      }
+      else
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Dock calibration %s (retry_reason=%u): %s",
+                    canceled ? "CANCELED" : "FAILED",
+                    static_cast<unsigned>(reason),
+                    msg.c_str());
+      }
       dock_action_busy_ = false;
       return out;
     };
@@ -1294,6 +1577,53 @@ private:
                     false,
                     nullptr,
                     nullptr);
+    }
+
+    // ── (2) Capture the dock ANTENNA position, NOW: seated, charging, RTK-Fixed.
+    // See capture_dock_antenna_with_wait(). A failed capture does not abort
+    // the run — the yaw is still worth measuring — it downgrades it to a
+    // yaw-only save, reported as such.
+    const auto should_abort = [&]()
+    {
+      return is_canceled() || emergency_active_.load();
+    };
+    std::string capture_err;
+    publish_status(DockStatus::PHASE_CAPTURE_POSITION,
+                   0.08f,
+                   0.0f,
+                   true,
+                   false,
+                   0,
+                   "capturing the dock position (on the dock, RTK-Fixed)");
+    const bool have_capture = capture_dock_antenna_with_wait(
+        should_abort,
+        [&](const std::string& why)
+        {
+          publish_status(DockStatus::PHASE_CAPTURE_POSITION,
+                         0.08f,
+                         0.0f,
+                         true,
+                         false,
+                         0,
+                         "waiting for the dock position capture: " + why);
+        },
+        capture_err);
+    if (should_abort())
+    {
+      return finish(false,
+                    emergency_active_ ? CalibrateDock::Result::RETRY_EMERGENCY
+                                      : CalibrateDock::Result::RETRY_WRONG_STATE,
+                    "Aborted on the dock before moving; nothing was changed.",
+                    is_canceled(),
+                    nullptr,
+                    nullptr);
+    }
+    if (!have_capture)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "Dock calibration: no on-dock antenna capture (%s) — continuing, the dock "
+                  "POSITION will not be updated (yaw only).",
+                  capture_err.c_str());
     }
 
     // Enter RECORDING so the BT stands down (BoundaryGuard etc. exempt).
@@ -1426,7 +1756,51 @@ private:
       have_imu = imu_result.success;
     }
 
-    // ── (4) Re-dock via the production docking pipeline, supervised ──
+    // ── Persist — ONE write, right now, with the robot OFF the dock: the motion
+    //    yaw + the antenna captured on the dock in step (2). map_server (the ONE
+    //    canonical writer) lever-arm-corrects that antenna with THIS yaw and
+    //    stores x, y and yaw together. No capture → yaw only, position kept.
+    //    See dock_persist_plan.hpp for why it is neither after the re-dock
+    //    (94f01b38: docking_server only reads dock_pose at container STARTUP, so
+    //    a same-session re-dock steers on the OLD pose and vouches for nothing —
+    //    the COG-coherence gate above is what validates the yaw) nor split
+    //    around it (circular: a wrong stored position makes the re-dock stop
+    //    short, so the position capture that would fix it is never reached).
+    publish_status(DockStatus::PHASE_PERSIST, 0.55f, 0.0f, true, false, 0, "saving dock pose");
+    {
+      std::string perr;
+      saved_pose = persist_dock_pose(
+          gate.dock_yaw_rad,
+          have_capture,
+          capture_err,
+          should_abort,
+          [&](const std::string& what)
+          {
+            publish_status(DockStatus::PHASE_PERSIST, 0.55f, 0.0f, true, false, 0, what);
+          },
+          perr);
+      if (saved_pose.saved == DockSaved::NOTHING)
+      {
+        return finish(false,
+                      CalibrateDock::Result::RETRY_PERSIST_FAILED,
+                      "Dock pose NOT saved: " + perr +
+                          " Nothing was changed; the robot is off the dock — send HOME.",
+                      is_canceled(),
+                      &gate,
+                      have_imu ? &imu_result : nullptr);
+      }
+      RCLCPP_INFO(get_logger(),
+                  "Dock calibration: saved %s.",
+                  DescribeDockSaved(saved_pose).c_str());
+    }
+    // From here on every abort must say what is ALREADY on disk.
+    const std::string yaw_saved_note = DockSavedNote(saved_pose);
+
+    // ── (4) Re-dock via the production docking pipeline, supervised — this
+    //    is a pure CONFIRMATION pass: everything is already saved, nothing is
+    //    measured after it. It steers on the OLD dock pose (docking_server
+    //    loaded it at startup), so with a wrong old position it may stop short
+    //    of the contacts — reported, never a calibration failure. ──
     publish_status(DockStatus::PHASE_REDOCKING, 0.60f, 0.0f, true, false, 0, "re-docking");
     {
       // Line geometry shared by the guard and the steered backoff.
@@ -1447,7 +1821,7 @@ private:
         {
           return finish(false,
                         CalibrateDock::Result::RETRY_WRONG_STATE,
-                        "Could not start the Nav2 docking (HOME rejected).",
+                        "Could not start the Nav2 docking (HOME rejected)." + yaw_saved_note,
                         false,
                         &gate,
                         nullptr);
@@ -1470,7 +1844,7 @@ private:
             call_hlc(HL_CMD_STOP, "stop HOME on cancel");
             return finish(false,
                           CalibrateDock::Result::RETRY_WRONG_STATE,
-                          "Canceled during re-dock.",
+                          "Canceled during re-dock." + yaw_saved_note,
                           true,
                           &gate,
                           nullptr);
@@ -1479,7 +1853,7 @@ private:
           {
             return finish(false,
                           CalibrateDock::Result::RETRY_EMERGENCY,
-                          "Emergency during re-dock.",
+                          "Emergency during re-dock." + yaw_saved_note,
                           false,
                           &gate,
                           nullptr);
@@ -1560,7 +1934,7 @@ private:
         {
           return finish(false,
                         CalibrateDock::Result::RETRY_WRONG_STATE,
-                        "Could not enter RECORDING for the backoff.",
+                        "Could not enter RECORDING for the backoff." + yaw_saved_note,
                         false,
                         &gate,
                         nullptr);
@@ -1615,61 +1989,10 @@ private:
       while (rclcpp::ok() && !is_charging_ && monotonic() < t_verify)
         sleep_for(period);
     }
-    if (!is_charging_)
-    {
-      return finish(false,
-                    CalibrateDock::Result::RETRY_NO_CHARGE_ON_REDOCK,
-                    "Re-dock did not re-engage the charger — retry.",
-                    false,
-                    &gate,
-                    have_imu ? &imu_result : nullptr);
-    }
-
-    // ── Persist via the ONE canonical writer (map_server, yaw_source=MOTION),
-    //    ONLY now that re-dock + charging are verified. ──
-    // map_server's yaw-convergence gate wants the fused yaw quiet over a full
-    // rolling window, and right after the drive it is still settling (observed
-    // ~6° window-std immediately after re-dock) — so retry while the robot
-    // sits still on the charger instead of failing on the first attempt.
-    publish_status(DockStatus::PHASE_PERSIST, 0.95f, 0.0f, true, false, 0, "saving dock pose");
-    std::string perr;
-    bool persisted = false;
-    for (int attempt = 0; attempt < PERSIST_MAX_ATTEMPTS && rclcpp::ok(); ++attempt)
-    {
-      if (attempt > 0)
-      {
-        publish_status(DockStatus::PHASE_PERSIST,
-                       0.95f,
-                       0.0f,
-                       true,
-                       false,
-                       0,
-                       "saving dock pose (waiting for yaw to settle)");
-        const double t_retry = monotonic() + PERSIST_RETRY_DELAY_SEC;
-        while (rclcpp::ok() && monotonic() < t_retry)
-          sleep_for(period);
-      }
-      if (is_canceled() || emergency_active_)
-        break;
-      if (persist_dock_via_map_server(gate.dock_yaw_rad, perr))
-      {
-        persisted = true;
-        break;
-      }
-    }
-    if (!persisted)
-    {
-      return finish(false,
-                    CalibrateDock::Result::RETRY_PERSIST_FAILED,
-                    perr,
-                    false,
-                    &gate,
-                    have_imu ? &imu_result : nullptr);
-    }
-
-    return finish(true,
-                  CalibrateDock::Result::RETRY_NONE,
-                  "Dock calibrated: position from averaged GPS, yaw from COG, re-dock verified.",
+    const DockVerdict verdict = DecideDockVerdict(saved_pose, is_charging_.load());
+    return finish(verdict.success,
+                  verdict.retry_reason,
+                  verdict.message,
                   false,
                   &gate,
                   have_imu ? &imu_result : nullptr);
@@ -2310,6 +2633,7 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr cog_sub_;
   rclcpp::Client<mowgli_interfaces::srv::SetDockingPoint>::SharedPtr set_dock_client_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr capture_antenna_client_;
   rclcpp_action::Server<mowgli_interfaces::action::CalibrateDock>::SharedPtr dock_action_;
   rclcpp::Publisher<mowgli_interfaces::msg::DockCalibrationStatus>::SharedPtr status_pub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr dock_start_srv_;

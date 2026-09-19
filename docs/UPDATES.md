@@ -149,7 +149,7 @@ shown for review; a date alone never proves that source code is newer.
 
 ROS2, GUI, GPS and the installed supported LiDAR variant participate by default.
 Additional installed first-party services opt in through Compose labels (below).
-Unmanaged services, including MQTT by default, remain outside this transaction. Firmware, host OS and Docker
+Unmanaged services, including MQTT by default and the optional remote-access sidecar `mowgli-remote` (GUI-owned, see `docs/REMOTE_ACCESS.md`), remain outside this transaction. Firmware, host OS and Docker
 upgrades are excluded; custom/LFP firmware is not flashed. Targets requiring a
 different firmware protocol, updater API, layout or data schema are rejected.
 Older releases without a deployment descriptor are comparison-only.

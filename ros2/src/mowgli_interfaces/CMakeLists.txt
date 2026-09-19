@@ -47,6 +47,7 @@ set(srv_files
   "srv/CalibrateImuYaw.srv"
   "srv/GetRecoveryPoint.srv"
   "srv/StartInArea.srv"
+  "srv/CoverageOrientation.srv"
   "srv/PromoteObstacle.srv"
 )
 

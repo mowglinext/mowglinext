@@ -21,6 +21,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -36,6 +38,8 @@
 
 #include "mowgli_interfaces/robot_yaml_scalar.hpp"
 #include "mowgli_interfaces/wgs84_projection.hpp"
+#include "mowgli_map/dock_antenna_capture.hpp"
+#include "mowgli_map/dock_set_gates.hpp"
 #include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
 #include <grid_map_core/iterators/PolygonIterator.hpp>
@@ -491,6 +495,44 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
   entry.name = req->area.name;
   entry.polygon = polygon_msg;
   entry.is_navigation_area = req->is_navigation_area;
+  // mowglinext#637: preserve a caller-supplied id when re-adding an area
+  // that already had one — the GUI's edit/delete flow rebuilds the WHOLE
+  // area list (clear_map + add_area per area) even when the operator only
+  // touched ONE of them, so round-tripping every untouched area's existing
+  // id here is what keeps its identity stable across that rebuild. A
+  // genuinely new area (id absent, i.e. 0 — the MapArea.msg default for a
+  // request that never set it) gets a freshly minted one instead.
+  entry.id = (req->area.id != 0) ? req->area.id : next_area_id_++;
+  // A round-tripped id must still be UNIQUE. The rebuild flow above replays one
+  // add_area per area, so a client whose cached list contains the same id twice
+  // — or that replays a stale list against areas this session already minted —
+  // would otherwise create two entries sharing an identity that the resume
+  // cursor, the mow-progress bookkeeping and the GUI all key on. Mint a fresh
+  // id instead of trusting the caller, and say so: silently renaming an area's
+  // identity is exactly the kind of thing that is impossible to debug later.
+  if (req->area.id != 0 && std::any_of(areas_.begin(),
+                                       areas_.end(),
+                                       [&entry](const AreaEntry& existing)
+                                       {
+                                         return existing.id == entry.id;
+                                       }))
+  {
+    RCLCPP_WARN(get_logger(),
+                "AddArea('%s'): id %u is already taken by another area — minting %u instead. "
+                "The caller replayed a duplicate or stale id.",
+                entry.name.c_str(),
+                entry.id,
+                next_area_id_);
+    entry.id = next_area_id_++;
+  }
+  if (entry.id >= next_area_id_)
+  {
+    // A round-tripped id can be >= our current counter (e.g. this session
+    // already minted past it via some other insert before the client's
+    // cached copy was fetched) — advance past it so the NEXT freshly
+    // minted id in this session can never collide with it.
+    next_area_id_ = entry.id + 1;
+  }
 
   // Store obstacle polygons from the MapArea message.
   // Only store in the area entry (static), NOT in obstacle_polygons_
@@ -575,30 +617,40 @@ void MapServerNode::on_get_mowing_area(
     res->area.name = entry.name;
     res->area.area = entry.polygon;
     res->area.is_navigation_area = entry.is_navigation_area;
+    res->area.id = entry.id;  // mowglinext#637 — see MapArea.msg's doc comment
 
-    // Start with the area's own obstacles. `obstacle_info` is index-aligned
-    // with `obstacles` (MapObstacleInfo.msg) and carries the name/provenance
-    // that tells a dig proposal apart from a keepout the operator drew.
-    // PENDING proposals are included: they are live keepouts for this
-    // session, so the coverage planner must route around them exactly like
-    // accepted ones — only persistence waits for the operator.
+    // `obstacles` holds APPLIED keepouts only — it is what PlanCoverageArea
+    // turns into coverage holes, so a PENDING proposal must never appear in
+    // it: a dig would otherwise change the plan mid-session (9 -> 10
+    // sub-paths on 2026-09-17), which breaks the determinism the resume cursor
+    // relies on, without the operator having agreed to anything. Proposals go
+    // to the separate `proposed_obstacles` list, read only by the GUI. Both
+    // lists carry an index-aligned MapObstacleInfo (name / provenance / id).
     for (const auto& obs : entry.obstacles)
     {
-      res->area.obstacles.push_back(obs.polygon);
       mowgli_interfaces::msg::MapObstacleInfo info;
       info.name = obs.name;
       info.source = obs.source;
       info.pending = obs.pending;
       info.id = obs.id;
-      res->area.obstacle_info.push_back(info);
+      if (obs.pending)
+      {
+        res->area.proposed_obstacles.push_back(obs.polygon);
+        res->area.proposed_obstacle_info.push_back(info);
+      }
+      else
+      {
+        res->area.obstacles.push_back(obs.polygon);
+        res->area.obstacle_info.push_back(info);
+      }
     }
 
-    // Area entries own every obstacle, including pending digs and promoted
+    // Area entries own every obstacle, including proposals and promoted
     // tracker observations. obstacle_polygons_ is only a flat keepout cache
     // for navigation; appending it here leaks other areas' obstacles into
-    // this response. With three lawns that drew one dig three times, and the
-    // extra copies lost their id/name/pending provenance. Return the owning
-    // area's entries only; the global keepout mask still protects every spot.
+    // this response and loses their id/name provenance. Return the owning
+    // area's entries only; the global keepout mask still protects every
+    // applied spot.
 
     res->success = true;
     RCLCPP_INFO(get_logger(),
@@ -622,10 +674,269 @@ void MapServerNode::clear_map_layers()
   map_[std::string(layers::CLASSIFICATION)].setConstant(defaults::CLASSIFICATION);
   initialize_mow_progress_map();
 }
+namespace
+{
+// dock_set_gates.hpp carries the yaw_source constants as plain integers so it
+// stays free of generated-message includes — pin them to the .srv here.
+using SetDockReqConsts = mowgli_interfaces::srv::SetDockingPoint::Request;
+static_assert(kDockYawSourcePreserve == SetDockReqConsts::PRESERVE);
+static_assert(kDockYawSourceRequest == SetDockReqConsts::REQUEST);
+static_assert(kDockYawSourceMotion == SetDockReqConsts::MOTION);
+
+/// printf-style std::string, so ONE text feeds both the log line and the
+/// service response — the caller (the dock calibration) relays it to the
+/// operator instead of a generic "rejected".
+[[gnu::format(printf, 1, 2)]] std::string FormatRejection(const char* fmt, ...)
+{
+  char buf[512];
+  va_list args;
+  va_start(args, fmt);
+  std::vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  return std::string(buf);
+}
+}  // namespace
+
+std::optional<std::string> MapServerNode::dock_charging_gate_rejection()
+{
+  // is_charging gate. Refuse if the last /hardware_bridge/status was not
+  // charging or is older than dock_set_status_max_age_s_.
+  const double max_age = get_parameter("dock_set_status_max_age_s").as_double();
+  const double status_age = (last_status_time_.nanoseconds() == 0)
+                                ? std::numeric_limits<double>::infinity()
+                                : (now() - last_status_time_).seconds();
+  if (status_age > max_age || !last_is_charging_)
+  {
+    return FormatRejection(
+        "robot not detected on dock "
+        "(is_charging=%s, status_age=%.1fs, max=%.1fs). "
+        "Drive onto the dock and wait for the firmware to report "
+        "charging before retrying.",
+        last_is_charging_ ? "true" : "false",
+        status_age,
+        max_age);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> MapServerNode::dock_gps_accuracy_gate_rejection()
+{
+  // GPS accuracy gate. RTK-Fixed reports σ ≈ 3 mm; RTK-Float is 10-50 cm.
+  // Reject when σ(xx) or σ(yy) breaches the threshold, or when /gps/pose_cov
+  // is stale (driver dead, USB unplugged, datum unset). Only the COVARIANCE
+  // and the age of that topic are read — never its position, which is
+  // lever-arm-corrected with the (on the dock: pinned) fused yaw.
+  const double max_acc = get_parameter("dock_set_gps_accuracy_max_m").as_double();
+  const double max_age = get_parameter("dock_set_gps_max_age_s").as_double();
+  geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr gps_snap;
+  rclcpp::Time gps_time{0, 0, RCL_ROS_TIME};
+  {
+    std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
+    gps_snap = last_gps_pose_cov_;
+    gps_time = last_gps_pose_cov_time_;
+  }
+  if (!gps_snap)
+  {
+    return std::string(
+        "no /gps/pose_cov sample yet "
+        "(navsat_to_absolute_pose_node not running, or no GPS fix).");
+  }
+  const double gps_age = (now() - gps_time).seconds();
+  if (gps_age > max_age)
+  {
+    return FormatRejection(
+        "/gps/pose_cov stale (age %.2fs > %.2fs). "
+        "Wait for the GPS feed to refresh.",
+        gps_age,
+        max_age);
+  }
+  const double sigma_xx = std::sqrt(std::max(gps_snap->pose.covariance[0], 0.0));
+  const double sigma_yy = std::sqrt(std::max(gps_snap->pose.covariance[7], 0.0));
+  const double sigma_max = std::max(sigma_xx, sigma_yy);
+  if (sigma_max > max_acc)
+  {
+    return FormatRejection(
+        "GPS not accurate enough (σ_max=%.3f m > %.3f m). "
+        "Achieve RTK-Fixed before retrying.",
+        sigma_max,
+        max_acc);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> MapServerNode::average_recent_dock_antenna(Enu& mean,
+                                                                      size_t& sample_count)
+{
+  std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
+  // Prune by age HERE too, not only when a new sample arrives: the
+  // subscription only trims the window as it pushes, and it only pushes
+  // RTK-Fixed epochs. Under the dock canopy the receiver can sit at Float, so
+  // nothing is pushed, nothing is trimmed, and the deque would otherwise keep
+  // serving samples that are minutes old.
+  const rclcpp::Time t_now = now();
+  while (!recent_gps_antenna_enu_.empty() &&
+         (t_now - std::get<0>(recent_gps_antenna_enu_.front())).seconds() >
+             dock_set_gps_avg_window_s_)
+  {
+    recent_gps_antenna_enu_.pop_front();
+  }
+  if (recent_gps_antenna_enu_.size() < dock_set_gps_avg_min_samples_)
+  {
+    return FormatRejection(
+        "only %zu RTK-Fixed /gps/fix sample(s) taken on the dock in the "
+        "last %.1f s (need >= %zu) to average the dock antenna position. "
+        "Wait for more RTK-Fixed GPS updates.",
+        recent_gps_antenna_enu_.size(),
+        dock_set_gps_avg_window_s_,
+        dock_set_gps_avg_min_samples_);
+  }
+  mean = Enu{};
+  for (const auto& [t, east, north] : recent_gps_antenna_enu_)
+  {
+    (void)t;
+    mean.east += east;
+    mean.north += north;
+  }
+  sample_count = recent_gps_antenna_enu_.size();
+  const double n = static_cast<double>(sample_count);
+  mean.east /= n;
+  mean.north /= n;
+  return std::nullopt;
+}
+
+std::optional<std::string> MapServerNode::resolve_gps_lever_arm()
+{
+  // Resolve the GPS lever arm from TF — mirrors navsat_to_absolute_pose_node's
+  // own resolution, which this node cannot reach into (separate process).
+  // Retried on every capture until URDF/TF is up. Fail closed rather than
+  // silently treat an unresolved lever arm as (0, 0): that would apply NO
+  // correction at all and store the ANTENNA position as the dock.
+  if (lever_arm_known_)
+  {
+    return std::nullopt;
+  }
+  try
+  {
+    auto tf = tf_buffer_->lookupTransform("base_footprint", "gps_link", tf2::TimePointZero);
+    lever_arm_x_ = tf.transform.translation.x;
+    lever_arm_y_ = tf.transform.translation.y;
+    lever_arm_known_ = true;
+    return std::nullopt;
+  }
+  catch (const tf2::TransformException& ex)
+  {
+    return FormatRejection(
+        "GPS lever arm not yet resolved from TF "
+        "(base_footprint→gps_link: %s). Wait for robot_state_publisher "
+        "to come up and retry.",
+        ex.what());
+  }
+}
+
+void MapServerNode::on_capture_dock_antenna(const std_srvs::srv::Trigger::Request::SharedPtr,
+                                            std_srvs::srv::Trigger::Response::SharedPtr res)
+{
+  // Step 1 of the dock calibration's persistence: take the RAW antenna mean
+  // while the robot is seated on the dock, charging and RTK-Fixed — the one
+  // moment all three hold. Nothing is written: the mean waits in memory for
+  // the motion yaw (set_docking_point use_pending_antenna), because without a
+  // trustworthy yaw the antenna cannot be turned into a base_footprint
+  // position. No yaw is involved here, hence no fused-yaw gate.
+  auto reject = [&](const std::string& why)
+  {
+    res->success = false;
+    res->message = why;
+    RCLCPP_WARN(get_logger(), "capture_dock_antenna rejected: %s", why.c_str());
+  };
+  if (const auto why = dock_charging_gate_rejection())
+  {
+    reject(*why);
+    return;
+  }
+  if (const auto why = dock_gps_accuracy_gate_rejection())
+  {
+    reject(*why);
+    return;
+  }
+  Enu mean;
+  size_t sample_count = 0;
+  if (const auto why = average_recent_dock_antenna(mean, sample_count))
+  {
+    reject(*why);
+    return;
+  }
+  pending_antenna_.valid = true;
+  pending_antenna_.antenna = mean;
+  pending_antenna_.sample_count = sample_count;
+  pending_antenna_.stamp_s = now().seconds();
+  res->success = true;
+  res->message = FormatRejection(
+      "dock antenna captured: (%.3f, %.3f) over %zu RTK-Fixed "
+      "sample(s); pending for %.0f s",
+      mean.east,
+      mean.north,
+      sample_count,
+      dock_antenna_capture_ttl_s_);
+  RCLCPP_INFO(get_logger(), "%s (not persisted — waiting for a motion yaw).", res->message.c_str());
+}
+
 void MapServerNode::on_set_docking_point(
     const mowgli_interfaces::srv::SetDockingPoint::Request::SharedPtr req,
     mowgli_interfaces::srv::SetDockingPoint::Response::SharedPtr res)
 {
+  // Whatever happens, tell the caller what is stored NOW.
+  res->stored_pose = docking_pose_;
+  auto reject = [&](const std::string& why)
+  {
+    res->success = false;
+    res->message = why;
+    RCLCPP_WARN(get_logger(), "set_docking_point rejected: %s", why.c_str());
+  };
+
+  // Which gates apply depends on WHAT is being written — see
+  // dock_set_gates.hpp. Everything that captures a position NOW or takes one
+  // from the caller keeps all three; only the dock calibration's two MOTION
+  // writes (robot necessarily OFF the dock) skip the charging + fused-yaw
+  // gates, and neither of those lets the caller supply a position.
+  const DockSetGates gates = ResolveDockSetGates(req->use_gps_position,
+                                                 req->preserve_position,
+                                                 req->use_pending_antenna,
+                                                 req->yaw_source);
+  if (gates.kind == DockSetKind::INVALID)
+  {
+    reject(FormatRejection("invalid request: %s", gates.invalid_reason));
+    return;
+  }
+  if (gates.require_existing_pose && !docking_pose_set_)
+  {
+    reject(
+        "preserve_position: no dock position is stored yet, so there is nothing to "
+        "preserve. Capture the dock position on the dock first.");
+    return;
+  }
+  if (gates.require_pending_antenna)
+  {
+    const double now_s = now().seconds();
+    switch (ClassifyPendingAntenna(pending_antenna_, now_s, dock_antenna_capture_ttl_s_))
+    {
+      case PendingAntennaState::ABSENT:
+        reject(
+            "use_pending_antenna: no dock antenna capture is pending "
+            "(~/capture_dock_antenna never succeeded, or its result was already used).");
+        return;
+      case PendingAntennaState::EXPIRED:
+        reject(
+            FormatRejection("use_pending_antenna: the dock antenna capture is %.0f s old "
+                            "(max %.0f s) — the robot may have been moved since.",
+                            now_s - pending_antenna_.stamp_s,
+                            dock_antenna_capture_ttl_s_));
+        pending_antenna_ = PendingAntennaCapture{};
+        return;
+      case PendingAntennaState::USABLE:
+        break;
+    }
+  }
+
   // Sequence of gates protecting dock_pose accuracy. The operator forces
   // the EKF to dock_pose at boot via the fusion_graph gauge reset, so a
   // bad calibration leaks straight into the map-frame anchor for every
@@ -633,72 +944,20 @@ void MapServerNode::on_set_docking_point(
   //   (1) firmware reports is_charging=true (robot physically on dock)
   //   (2) GPS sample fresh and σ(xy) ≤ dock_set_gps_accuracy_max_m_
   //   (3) EKF yaw converged on the recent rolling window
-  //
-  // (1) — is_charging gate. Refuse if the last /hardware_bridge/status was
-  // not charging or is older than dock_set_status_max_age_s_.
+  // (the two off-dock MOTION writes keep (2) only — see dock_set_gates.hpp)
+  if (gates.require_charging)
   {
-    const double max_age = get_parameter("dock_set_status_max_age_s").as_double();
-    const double status_age = (last_status_time_.nanoseconds() == 0)
-                                  ? std::numeric_limits<double>::infinity()
-                                  : (now() - last_status_time_).seconds();
-    if (status_age > max_age || !last_is_charging_)
+    if (const auto why = dock_charging_gate_rejection())
     {
-      res->success = false;
-      RCLCPP_WARN(get_logger(),
-                  "set_docking_point rejected: robot not detected on dock "
-                  "(is_charging=%s, status_age=%.1fs, max=%.1fs). "
-                  "Drive onto the dock and wait for the firmware to report "
-                  "charging before retrying.",
-                  last_is_charging_ ? "true" : "false",
-                  status_age,
-                  max_age);
+      reject(*why);
       return;
     }
   }
-
-  // (2) — GPS accuracy gate. RTK-Fixed reports σ ≈ 3 mm; RTK-Float is
-  // 10-50 cm. Reject when σ(xx) or σ(yy) breaches the threshold, or when
-  // /gps/pose_cov is stale (driver dead, USB unplugged, datum unset).
+  if (gates.require_gps_accuracy)
   {
-    const double max_acc = get_parameter("dock_set_gps_accuracy_max_m").as_double();
-    const double max_age = get_parameter("dock_set_gps_max_age_s").as_double();
-    geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr gps_snap;
-    rclcpp::Time gps_time{0, 0, RCL_ROS_TIME};
+    if (const auto why = dock_gps_accuracy_gate_rejection())
     {
-      std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
-      gps_snap = last_gps_pose_cov_;
-      gps_time = last_gps_pose_cov_time_;
-    }
-    if (!gps_snap)
-    {
-      res->success = false;
-      RCLCPP_WARN(get_logger(),
-                  "set_docking_point rejected: no /gps/pose_cov sample yet "
-                  "(navsat_to_absolute_pose_node not running, or no GPS fix).");
-      return;
-    }
-    const double gps_age = (now() - gps_time).seconds();
-    if (gps_age > max_age)
-    {
-      res->success = false;
-      RCLCPP_WARN(get_logger(),
-                  "set_docking_point rejected: /gps/pose_cov stale "
-                  "(age %.2fs > %.2fs). Wait for the GPS feed to refresh.",
-                  gps_age,
-                  max_age);
-      return;
-    }
-    const double sigma_xx = std::sqrt(std::max(gps_snap->pose.covariance[0], 0.0));
-    const double sigma_yy = std::sqrt(std::max(gps_snap->pose.covariance[7], 0.0));
-    const double sigma_max = std::max(sigma_xx, sigma_yy);
-    if (sigma_max > max_acc)
-    {
-      res->success = false;
-      RCLCPP_WARN(get_logger(),
-                  "set_docking_point rejected: GPS not accurate enough "
-                  "(σ_max=%.3f m > %.3f m). Achieve RTK-Fixed before retrying.",
-                  sigma_max,
-                  max_acc);
+      reject(*why);
       return;
     }
   }
@@ -715,17 +974,17 @@ void MapServerNode::on_set_docking_point(
   const double window_s = get_parameter("yaw_convergence_window_s").as_double();
   const auto min_samples =
       static_cast<size_t>(get_parameter("yaw_convergence_min_samples").as_int());
+  if (gates.require_yaw_convergence)
   {
     std::lock_guard<std::mutex> lk(recent_yaws_mutex_);
     if (recent_yaws_.size() < min_samples)
     {
-      res->success = false;
-      RCLCPP_WARN(get_logger(),
-                  "set_docking_point rejected: only %zu yaw samples in the last %.1f s "
-                  "(need >= %zu). Wait for the EKF to receive more updates.",
-                  recent_yaws_.size(),
-                  window_s,
-                  min_samples);
+      reject(
+          FormatRejection("only %zu yaw samples in the last %.1f s (need >= %zu). "
+                          "Wait for the EKF to receive more updates.",
+                          recent_yaws_.size(),
+                          window_s,
+                          min_samples));
       return;
     }
     // Yaw is a wrapping angle in (-π, π]; a linear mean/variance blows up near
@@ -744,15 +1003,13 @@ void MapServerNode::on_set_docking_point(
     const double std_dev = std::sqrt(-2.0 * std::log(std::max(resultant, 1e-12)));
     if (std_dev > threshold_rad)
     {
-      res->success = false;
-      RCLCPP_WARN(get_logger(),
-                  "set_docking_point rejected: EKF yaw not converged "
-                  "(std %.3f° > threshold %.3f° over %.1f s, %zu samples). "
-                  "Drive the robot 1 m forward to anchor heading from COG, then retry.",
-                  std_dev * 180.0 / M_PI,
-                  threshold_rad * 180.0 / M_PI,
-                  window_s,
-                  recent_yaws_.size());
+      reject(FormatRejection(
+          "EKF yaw not converged (std %.3f° > threshold %.3f° over %.1f s, %zu samples). "
+          "Drive the robot 1 m forward to anchor heading from COG, then retry.",
+          std_dev * 180.0 / M_PI,
+          threshold_rad * 180.0 / M_PI,
+          window_s,
+          recent_yaws_.size()));
       return;
     }
   }
@@ -760,8 +1017,8 @@ void MapServerNode::on_set_docking_point(
   // Position capture mode, selected by req->use_gps_position:
   //   true  — "capture current robot position": the robot is physically
   //           seated on the dock, so take the dock POSITION from the averaged
-  //           independent GPS projection (/gps/pose_cov, GPS-vs-datum +
-  //           lever-arm), NOT from req->docking_pose (which the GUI fills from
+  //           RAW antenna projection (/gps/fix vs datum, lever-arm-corrected
+  //           once below), NOT from req->docking_pose (which the GUI fills from
   //           the fused /odometry/filtered_map). While charging, fusion_graph
   //           gauge-resets the fused pose onto the EXISTING dock_pose, so
   //           capturing it would just re-store the old value — a calibration
@@ -794,17 +1051,23 @@ void MapServerNode::on_set_docking_point(
   // (manual map-drag / settings edit — never circular). MOTION takes the
   // RTK-gated, COG-derived yaw_rad from the one-click dock-calibration action
   // — the ONLY non-circular way to correct a stale dock heading (task #45).
+  //
+  // The new pose is assembled in a LOCAL and committed only once nothing can
+  // reject any more. It used to be written straight into docking_pose_ before
+  // the antenna checks: a rejected GPS capture then left the in-memory dock
+  // position at the request's (0, 0) — unpublished and unpersisted, but the
+  // next yaw-only write would have "preserved" and persisted exactly that.
   using SetDockReq = mowgli_interfaces::srv::SetDockingPoint::Request;
-  const auto preserved_orientation = docking_pose_.orientation;
-  docking_pose_ = req->docking_pose;  // request position (+ request orientation for REQUEST)
+  const geometry_msgs::msg::Pose stored_pose = docking_pose_;
+  geometry_msgs::msg::Pose new_pose = req->docking_pose;  // manual: position (+ REQUEST yaw)
   const char* yaw_src_desc = "request";
   switch (req->yaw_source)
   {
     case SetDockReq::MOTION:
-      docking_pose_.orientation.x = 0.0;
-      docking_pose_.orientation.y = 0.0;
-      docking_pose_.orientation.z = std::sin(req->yaw_rad * 0.5);
-      docking_pose_.orientation.w = std::cos(req->yaw_rad * 0.5);
+      new_pose.orientation.x = 0.0;
+      new_pose.orientation.y = 0.0;
+      new_pose.orientation.z = std::sin(req->yaw_rad * 0.5);
+      new_pose.orientation.w = std::cos(req->yaw_rad * 0.5);
       yaw_src_desc = "motion (COG-derived)";
       break;
     case SetDockReq::REQUEST:
@@ -813,53 +1076,85 @@ void MapServerNode::on_set_docking_point(
       break;
     case SetDockReq::PRESERVE:
     default:
-      docking_pose_.orientation = preserved_orientation;
+      new_pose.orientation = stored_pose.orientation;
       yaw_src_desc = "preserved (existing dock_pose_yaw)";
       break;
   }
+  const double final_yaw = 2.0 * std::atan2(new_pose.orientation.z, new_pose.orientation.w);
 
-  if (req->use_gps_position)
+  if (req->use_gps_position || req->use_pending_antenna)
   {
-    double gps_x_mean = 0.0;
-    double gps_y_mean = 0.0;
+    // The dock POSITION comes from the averaged RAW (yaw-independent) GPS
+    // antenna position, lever-arm-corrected ONCE with final_yaw — whatever
+    // THIS call is about to persist (PRESERVE: the existing dock_pose_yaw;
+    // REQUEST: the manually-specified yaw; MOTION: req->yaw_rad, a fresh
+    // independently-measured heading). It is never taken from the fused pose,
+    // /gps/absolute_pose or /gps/pose_cov: on the dock the fused pose is
+    // gauge-pinned onto the STORED dock pose, and those topics are
+    // lever-arm-corrected per sample with that pinned yaw (issue #446), so
+    // they would re-save the old value or bias it silently. Correcting once
+    // with THIS call's own final yaw makes the result right regardless of
+    // what the fused yaw was doing during capture — in particular a fresh
+    // MOTION yaw fixes a stale stored yaw even though every /gps/fix sample
+    // was received before that yaw was known.
+    //
+    //   use_gps_position    — average the on-dock samples NOW (robot seated).
+    //   use_pending_antenna — use the mean ~/capture_dock_antenna took while
+    //                         the robot WAS seated; the robot is off the dock
+    //                         now, which is the only place the yaw exists.
+    Enu antenna_mean;
+    size_t antenna_sample_count = 0;
+    if (req->use_pending_antenna)
     {
-      std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
-      if (recent_gps_xy_.size() < dock_set_gps_avg_min_samples_)
-      {
-        res->success = false;
-        RCLCPP_WARN(get_logger(),
-                    "set_docking_point rejected: only %zu GPS samples in the last "
-                    "%.1f s (need >= %zu) to average the dock position. Wait for "
-                    "more /gps/pose_cov updates.",
-                    recent_gps_xy_.size(),
-                    dock_set_gps_avg_window_s_,
-                    dock_set_gps_avg_min_samples_);
-        return;
-      }
-      for (const auto& [t, x, y] : recent_gps_xy_)
-      {
-        (void)t;
-        gps_x_mean += x;
-        gps_y_mean += y;
-      }
-      const double n = static_cast<double>(recent_gps_xy_.size());
-      gps_x_mean /= n;
-      gps_y_mean /= n;
+      antenna_mean = pending_antenna_.antenna;
+      antenna_sample_count = pending_antenna_.sample_count;
     }
-    docking_pose_.position.x = gps_x_mean;
-    docking_pose_.position.y = gps_y_mean;
-    docking_pose_.position.z = 0.0;
+    else if (const auto why = average_recent_dock_antenna(antenna_mean, antenna_sample_count))
+    {
+      reject(*why);
+      return;
+    }
+    if (const auto why = resolve_gps_lever_arm())
+    {
+      reject(*why);
+      return;
+    }
+
+    const Enu base = DockBaseFromAntenna(antenna_mean, final_yaw, lever_arm_x_, lever_arm_y_);
+    new_pose.position.x = base.east;
+    new_pose.position.y = base.north;
+    new_pose.position.z = 0.0;
     RCLCPP_INFO(get_logger(),
-                "Docking point captured from averaged GPS: (%.3f, %.3f) over %zu "
-                "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m. "
-                "Orientation source: %s.",
-                gps_x_mean,
-                gps_y_mean,
-                recent_gps_xy_.size(),
-                req->docking_pose.position.x,
-                req->docking_pose.position.y,
-                req->docking_pose.position.x - gps_x_mean,
-                req->docking_pose.position.y - gps_y_mean,
+                "Docking point captured (%s): raw antenna GPS averaged to (%.3f, %.3f) over "
+                "%zu sample(s), lever-arm-corrected with yaw=%.3f rad (source: %s) to "
+                "base position (%.3f, %.3f); previously stored (%.3f, %.3f) — "
+                "Δ=(%.3f, %.3f) m.",
+                req->use_pending_antenna ? "pending on-dock capture" : "live on-dock capture",
+                antenna_mean.east,
+                antenna_mean.north,
+                antenna_sample_count,
+                final_yaw,
+                yaw_src_desc,
+                base.east,
+                base.north,
+                stored_pose.position.x,
+                stored_pose.position.y,
+                base.east - stored_pose.position.x,
+                base.north - stored_pose.position.y);
+  }
+  else if (req->preserve_position)
+  {
+    // Yaw-only MOTION write: the stored X/Y stays exactly as it is. The
+    // position is kept HERE, on the server that owns it, rather than echoed
+    // back by the caller.
+    new_pose.position = stored_pose.position;
+    RCLCPP_INFO(get_logger(),
+                "Docking point YAW-ONLY update: stored position (%.3f, %.3f) preserved, "
+                "yaw %.3f -> %.3f rad (source: %s).",
+                new_pose.position.x,
+                new_pose.position.y,
+                2.0 * std::atan2(stored_pose.orientation.z, stored_pose.orientation.w),
+                final_yaw,
                 yaw_src_desc);
   }
   else
@@ -867,9 +1162,16 @@ void MapServerNode::on_set_docking_point(
     RCLCPP_INFO(get_logger(),
                 "Docking point set from request position (manual): (%.3f, %.3f). "
                 "Orientation source: %s.",
-                docking_pose_.position.x,
-                docking_pose_.position.y,
+                new_pose.position.x,
+                new_pose.position.y,
                 yaw_src_desc);
+  }
+
+  // Commit. A pending antenna capture is single-use.
+  docking_pose_ = new_pose;
+  if (req->use_pending_antenna)
+  {
+    pending_antenna_ = PendingAntennaCapture{};
   }
   docking_pose_set_ = true;
 
@@ -894,6 +1196,7 @@ void MapServerNode::on_set_docking_point(
   // Manual placements via the GUI land here; calibrate_imu_yaw_node writes
   // the same file when its dock pre-phase finishes. A line-regex update
   // preserves the surrounding comments / structure.
+  std::string persist_warning;
   try
   {
     const double yaw_rad =
@@ -905,6 +1208,11 @@ void MapServerNode::on_set_docking_point(
                   "Could not persist dock pose to %s — file missing or "
                   "not writable. Pose still applied in-memory.",
                   robot_yaml_path_.c_str());
+      // success stays true (the pose IS live in this process, and that is the
+      // long-standing contract for the manual GUI path) — but say so in the
+      // response, so a caller whose whole point is persistence (the dock
+      // calibration) can tell the operator instead of reporting "saved".
+      persist_warning = "applied in-memory only: could not write " + robot_yaml_path_;
     }
     else
     {
@@ -922,6 +1230,8 @@ void MapServerNode::on_set_docking_point(
                 "Failed to persist dock pose to %s: %s",
                 robot_yaml_path_.c_str(),
                 ex.what());
+    persist_warning =
+        "applied in-memory only: could not write " + robot_yaml_path_ + " (" + ex.what() + ")";
   }
 
   // Rebuild the lethal dock body + corridor carve-out so they follow the new
@@ -938,6 +1248,8 @@ void MapServerNode::on_set_docking_point(
   apply_area_classifications();
 
   res->success = true;
+  res->message = persist_warning;
+  res->stored_pose = docking_pose_;
 }
 void MapServerNode::on_save_areas(const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
                                   std_srvs::srv::Trigger::Response::SharedPtr res)
@@ -1000,13 +1312,38 @@ void MapServerNode::on_promote_obstacle(
     const mowgli_interfaces::srv::PromoteObstacle::Request::SharedPtr req,
     mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res)
 {
-  // Path 1: accept a PENDING proposal (a wheel-slip dig keepout). The
-  // polygon is already live in the mask, so re-sending it through the
-  // append path below would hit the centroid dedup guard and silently do
-  // nothing — the proposal would stay pending and never be persisted.
-  // Clearing the flag here is what makes the next save write it out.
+  // Path 1: accept a PENDING proposal (a wheel-slip dig report). Until this
+  // call the proposal is inert — not in the keepout mask, not a NO_GO cell,
+  // not a coverage hole, not in areas.dat. Accepting it is the operator action
+  // that APPLIES it (mask + classification + replan) and persists it.
   if (req->pending_id != 0)
   {
+    // REFUSE while the robot stands where the resulting keepout would be.
+    // Accepting turns polygon + keepout_obstacle_margin into LETHAL cells, and
+    // right after a dig the robot is only ~0.2-0.3 m from the dig point: the
+    // keepout would sit under it and every plan from its own pose would be
+    // START_OCCUPIED — the 2026-09-10 / 2026-09-17 strand, re-created by one
+    // click. Refused rather than deferred: a deferred accept is hidden state
+    // that applies itself later, mid-mission, when nobody is looking; a refusal
+    // tells the operator exactly what to do and changes nothing.
+    if (const auto blocked_m = robot_inside_accepted_band(req->pending_id); blocked_m.has_value())
+    {
+      std::ostringstream why;
+      why << std::fixed << std::setprecision(2)
+          << "the robot is standing on this proposal: accepting it now would put the robot "
+             "INSIDE the new keepout ("
+          << *blocked_m << " m from its edge, " << accept_clearance_m()
+          << " m needed) and no path could be planned from there. Let the robot drive away "
+             "or send it home, then accept again.";
+      res->success = false;
+      res->message = why.str();
+      RCLCPP_WARN(get_logger(),
+                  "promote_obstacle: pending %u refused - %s",
+                  req->pending_id,
+                  res->message.c_str());
+      return;
+    }
+
     const auto area_index = accept_pending_obstacle(req->pending_id, req->name);
     if (!area_index.has_value())
     {
@@ -1059,7 +1396,7 @@ void MapServerNode::on_promote_obstacle(
     }
   }
 
-  if (!apply_promoted_obstacle(req->area_index, poly, req->name, source, /*pending=*/false))
+  if (!apply_promoted_obstacle(req->area_index, poly, req->name, source))
   {
     res->success = false;
     res->message = "promotion rejected (bad area_index, navigation area, or polygon < 3 points)";
@@ -1125,30 +1462,47 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
   if (!area_index.has_value())
   {
     // Digs during transit or docking can happen outside every mowing area.
-    // There is no area to attach a keepout to, and inventing one would put a
-    // permanent obstacle somewhere the operator never drew a boundary. The
-    // stop-and-reverse already happened at the bridge; this is only about
-    // whether COVERAGE needs to route around the spot, and coverage never
-    // goes here. Log it and move on.
+    // There is no area to attach a proposal to, and inventing one would put
+    // an obstacle somewhere the operator never drew a boundary. The
+    // stop-and-reverse already happened at the bridge. Log it and move on.
     RCLCPP_INFO(get_logger(),
-                "Dig at (%.2f, %.2f) is outside every mowing area - not stamping a "
-                "keepout (nothing plans coverage there).",
+                "Dig at (%.2f, %.2f) is outside every mowing area - no proposal recorded.",
                 x,
                 y);
     return;
   }
 
-  // Keepout dig_obstacle_size_ wide (one chassis length by default, see
-  // kDefaultDigKeepoutSizeM), biased AHEAD of the robot's heading: the hole is
-  // under the wheels and the bridge has just reversed the robot ~0.2-0.3 m out
-  // of it, so the keepout must not reach back over the spot the robot now
-  // stands on or every transit from there is START_OCCUPIED
-  // (kDigKeepoutBehindM, net of the mask's obstacle_margin band). The heading is the last one
-  // latched by on_odom; a dig with no heading yet falls back to the centred square.
-  const bool have_heading = have_robot_heading_;
-  const double yaw = last_robot_yaw_;
-  const geometry_msgs::msg::Polygon poly =
-      dig_keepout_polygon(x, y, yaw, have_heading, dig_obstacle_size_, obstacle_margin_m_);
+  // A dig INSIDE a hole that already exists there (accepted, or still
+  // proposed) is the same hole: the centroid dedup below only catches reports
+  // within kObstacleDedupEpsilonM, and issue #500's three latches spanned
+  // 0.13 m.
+  {
+    geometry_msgs::msg::Point32 dig_pt;
+    dig_pt.x = static_cast<float>(x);
+    dig_pt.y = static_cast<float>(y);
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    for (const auto& obs : areas_[*area_index].obstacles)
+    {
+      if (point_in_polygon(dig_pt, obs.polygon))
+      {
+        RCLCPP_INFO(get_logger(),
+                    "Dig at (%.2f, %.2f) lies inside obstacle/proposal %u ('%s') - no new "
+                    "proposal.",
+                    x,
+                    y,
+                    obs.id,
+                    obs.name.c_str());
+        return;
+      }
+    }
+  }
+
+  // The proposal is sized to the PHYSICAL dig — the two drive-wheel ruts —
+  // not to the chassis (internal_helpers.hpp). The body clearance is added
+  // separately, and exactly once, when an accepted proposal is applied
+  // (keepout band, coverage obstacle_margin).
+  const double radius = dig_proposal_radius(dig_proposal_radius_m_, msg->map_distance);
+  const geometry_msgs::msg::Polygon poly = dig_proposal_polygon(x, y, radius);
 
   // The name IS the proposal's evidence: it is what the operator reads in the
   // GUI when deciding whether this inferred dig deserves a permanent hole in
@@ -1158,32 +1512,100 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
         << msg->wheel_distance << " m vs pose " << msg->map_distance << " m, sigma "
         << std::setprecision(3) << msg->position_sigma << " m";
 
-  // PENDING: live in the keepout mask right now (issue #500's re-dig loop -
-  // 3 latches in 18.4 s inside 0.13 m - is exactly what this prevents), but
-  // NOT written to areas.dat. A single inferred dig is weaker evidence than a
-  // repeatedly-observed tracker obstacle, and those already require operator
-  // sign-off (auto_promote_persistent_obstacles defaults false); the less
-  // certain signal must not get the more automatic treatment.
-  if (!apply_promoted_obstacle(*area_index,
-                               poly,
-                               label.str(),
-                               mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG,
-                               /*pending=*/true))
+  // PROPOSAL ONLY. Nothing here may touch the keepout mask, the
+  // classification layer, the coverage holes or areas.dat: the robot is
+  // standing ~0.2-0.3 m from this point, and a keepout stamped under or around
+  // it made every transit START_OCCUPIED and stranded the robot mid-lawn
+  // (2026-09-10, again 2026-09-17). Issue #500's re-dig loop is prevented in
+  // the coverage-following layer instead (mowgli_behavior/dig_skip.hpp), which
+  // cannot block planning. A single inferred dig is also weaker evidence than
+  // a repeatedly-observed tracker obstacle, and those already need operator
+  // sign-off (auto_promote_persistent_obstacles defaults false).
+  const auto proposal_id = add_obstacle_proposal(
+      *area_index, poly, label.str(), mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+  if (!proposal_id.has_value())
   {
-    RCLCPP_WARN(
-        get_logger(), "Dig keepout rejected for area %zu at (%.2f, %.2f).", *area_index, x, y);
+    RCLCPP_INFO(get_logger(),
+                "Dig at (%.2f, %.2f): an obstacle or proposal already covers this spot in area "
+                "%zu - no new proposal.",
+                x,
+                y,
+                *area_index);
     return;
   }
 
   RCLCPP_WARN(get_logger(),
-              "Dig keepout (%.2f m wide, %s) proposed for area %zu at (%.2f, %.2f); coverage "
-              "will route around it for this session. It is NOT saved to the map - accept "
-              "it in the GUI to make it permanent.",
-              std::max(dig_obstacle_size_, kMinDigKeepoutSizeM),
-              have_heading ? "ahead of the heading" : "centred square, no heading yet",
+              "Dig proposal %u (radius %.2f m, the wheel ruts) recorded for area %zu at (%.2f, "
+              "%.2f). It is NOT applied: no keepout, no coverage hole, nothing saved. Accept or "
+              "reject it in the GUI.",
+              *proposal_id,
+              radius,
               *area_index,
               x,
               y);
+}
+
+std::optional<uint32_t> MapServerNode::add_obstacle_proposal(
+    size_t area_index,
+    const geometry_msgs::msg::Polygon& polygon,
+    const std::string& name,
+    uint8_t source)
+{
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  if (area_index >= areas_.size() || areas_[area_index].is_navigation_area ||
+      polygon.points.size() < 3)
+  {
+    return std::nullopt;
+  }
+  // One proposal per spot: repeated digs at the same place (and a dig on a
+  // keepout that already exists) must not stack entries in the GUI list.
+  if (has_duplicate_obstacle_entry(areas_[area_index].obstacles, polygon, kObstacleDedupEpsilonM))
+  {
+    return std::nullopt;
+  }
+  // Deliberately NOT obstacle_polygons_, NOT masks_dirty_, NOT
+  // apply_area_classifications, NOT replan_needed: a proposal changes nothing
+  // that a planner or a controller can see.
+  areas_[area_index].obstacles.push_back(make_obstacle_entry(polygon, name, source, true));
+  return areas_[area_index].obstacles.back().id;
+}
+
+double MapServerNode::accept_clearance_m() const
+{
+  // The lethal region of an accepted obstacle is polygon + the mask band
+  // (Smac 2D is a point check, the mask is not inflated); one cell of slack
+  // for the rasterisation.
+  return std::max(keepout_obstacle_margin_m_, 0.0) + resolution_;
+}
+
+std::optional<double> MapServerNode::robot_inside_accepted_band(uint32_t pending_id)
+{
+  if (!have_robot_pose_)
+  {
+    return std::nullopt;  // no pose yet: nothing to protect, do not block the operator
+  }
+  const double rx = last_robot_x_;
+  const double ry = last_robot_y_;
+  geometry_msgs::msg::Point32 robot;
+  robot.x = static_cast<float>(rx);
+  robot.y = static_cast<float>(ry);
+
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  for (const auto& area : areas_)
+  {
+    for (const auto& obs : area.obstacles)
+    {
+      if (obs.id != pending_id || !obs.pending)
+      {
+        continue;
+      }
+      const double dist = point_in_polygon(robot, obs.polygon)
+                              ? 0.0
+                              : point_to_polygon_distance(rx, ry, obs.polygon);
+      return dist <= accept_clearance_m() ? std::optional<double>(dist) : std::nullopt;
+    }
+  }
+  return std::nullopt;  // unknown id: accept_pending_obstacle reports it
 }
 
 std::optional<size_t> MapServerNode::accept_pending_obstacle(uint32_t pending_id,
@@ -1194,26 +1616,43 @@ std::optional<size_t> MapServerNode::accept_pending_obstacle(uint32_t pending_id
     return std::nullopt;
   }
 
-  std::lock_guard<std::mutex> lock(map_mutex_);
-  for (size_t i = 0; i < areas_.size(); ++i)
+  std::optional<size_t> accepted_area;
   {
-    for (auto& obs : areas_[i].obstacles)
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    for (size_t i = 0; i < areas_.size() && !accepted_area.has_value(); ++i)
     {
-      if (obs.id != pending_id || !obs.pending)
+      for (auto& obs : areas_[i].obstacles)
       {
-        continue;
+        if (obs.id != pending_id || !obs.pending)
+        {
+          continue;
+        }
+        obs.pending = false;
+        if (!name.empty())
+        {
+          obs.name = name;
+        }
+        // THIS is the moment the polygon becomes a keepout: same stores as
+        // apply_promoted_obstacle.
+        obstacle_polygons_.push_back(obs.polygon);
+        masks_dirty_ = true;
+        accepted_area = i;
+        break;
       }
-      obs.pending = false;
-      if (!name.empty())
-      {
-        obs.name = name;
-      }
-      // Geometry, classification and mask are unchanged - the polygon has
-      // been live since the dig. Only its persistence status changed.
-      return i;
     }
   }
-  return std::nullopt;
+  if (!accepted_area.has_value())
+  {
+    return std::nullopt;
+  }
+
+  // Stamp NO_GO_ZONE and tell planners the map changed (the coverage plan has
+  // one more hole from now on). apply_area_classifications locks by itself.
+  apply_area_classifications();
+  std_msgs::msg::Bool replan_msg;
+  replan_msg.data = true;
+  replan_needed_pub_->publish(replan_msg);
+  return accepted_area;
 }
 
 bool MapServerNode::discard_pending_obstacle(uint32_t pending_id)
@@ -1223,41 +1662,25 @@ bool MapServerNode::discard_pending_obstacle(uint32_t pending_id)
     return false;
   }
 
-  bool removed = false;
+  // A proposal was never applied, so dropping it touches neither the mask nor
+  // the classification layer and needs no replan.
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  for (auto& area : areas_)
   {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    for (auto& area : areas_)
+    auto it = std::find_if(area.obstacles.begin(),
+                           area.obstacles.end(),
+                           [pending_id](const ObstacleEntry& obs)
+                           {
+                             return obs.id == pending_id && obs.pending;
+                           });
+    if (it == area.obstacles.end())
     {
-      auto it = std::find_if(area.obstacles.begin(),
-                             area.obstacles.end(),
-                             [pending_id](const ObstacleEntry& obs)
-                             {
-                               return obs.id == pending_id && obs.pending;
-                             });
-      if (it == area.obstacles.end())
-      {
-        continue;
-      }
-      erase_obstacle_polygon_locked(it->polygon);
-      area.obstacles.erase(it);
-      masks_dirty_ = true;
-      removed = true;
-      break;
+      continue;
     }
+    area.obstacles.erase(it);
+    return true;
   }
-
-  if (!removed)
-  {
-    return false;
-  }
-
-  // Re-stamp the classification layer from the surviving geometry so the
-  // discarded square stops being NO_GO_ZONE, then nudge planners to replan.
-  apply_area_classifications();
-  std_msgs::msg::Bool replan_msg;
-  replan_msg.data = true;
-  replan_needed_pub_->publish(replan_msg);
-  return true;
+  return false;
 }
 
 void MapServerNode::on_discard_obstacle(
@@ -1280,97 +1703,6 @@ void MapServerNode::on_discard_obstacle(
   RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
 }
 
-namespace
-{
-/// How far outside a pending dig polygon the robot centre may sit and still
-/// count as "trapped by it": one chassis length, which also covers the
-/// inflation the global costmap wraps around the lethal band (floor 0.58 m).
-constexpr double kDigDiscardClearanceM = 0.60;
-}  // namespace
-
-std::size_t MapServerNode::discard_dig_keepouts_near_robot()
-{
-  if (!have_robot_heading_)
-  {
-    RCLCPP_WARN(get_logger(),
-                "discard_dig_keepouts_near_robot: no robot pose latched yet - nothing dropped.");
-    return 0;
-  }
-  const double rx = last_robot_x_;
-  const double ry = last_robot_y_;
-  geometry_msgs::msg::Point32 robot;
-  robot.x = static_cast<float>(rx);
-  robot.y = static_cast<float>(ry);
-  std::size_t dropped = 0;
-  {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    for (auto& area : areas_)
-    {
-      for (auto it = area.obstacles.begin(); it != area.obstacles.end();)
-      {
-        const bool is_pending_dig =
-            it->pending && it->source == mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG;
-        const bool touches_robot =
-            is_pending_dig &&
-            (point_in_polygon(robot, it->polygon) ||
-             point_to_polygon_distance(rx, ry, it->polygon) <= kDigDiscardClearanceM);
-        if (!touches_robot)
-        {
-          ++it;
-          continue;
-        }
-        RCLCPP_WARN(get_logger(),
-                    "Dropping pending dig keepout %u ('%s') - it sits under the robot at "
-                    "(%.2f, %.2f) and would refuse the way out.",
-                    it->id,
-                    it->name.c_str(),
-                    rx,
-                    ry);
-        erase_obstacle_polygon_locked(it->polygon);
-        it = area.obstacles.erase(it);
-        masks_dirty_ = true;
-        ++dropped;
-      }
-    }
-  }
-  if (dropped == 0)
-  {
-    return 0;
-  }
-  // Same re-stamp + replan nudge as a single discard.
-  apply_area_classifications();
-  std_msgs::msg::Bool replan_msg;
-  replan_msg.data = true;
-  replan_needed_pub_->publish(replan_msg);
-  return dropped;
-}
-
-void MapServerNode::on_discard_dig_keepouts_near_robot(
-    const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
-    std_srvs::srv::Trigger::Response::SharedPtr res)
-{
-  const std::size_t dropped = discard_dig_keepouts_near_robot();
-  res->success = true;
-  res->message = std::to_string(dropped) + " pending dig keepout(s) under the robot discarded";
-  RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
-}
-
-void MapServerNode::erase_obstacle_polygon_locked(const geometry_msgs::msg::Polygon& polygon)
-{
-  const auto target = polygon_centroid(polygon);
-  const auto is_same_keepout = [&target](const geometry_msgs::msg::Polygon& poly)
-  {
-    const auto c = polygon_centroid(poly);
-    return std::hypot(static_cast<double>(c.x) - static_cast<double>(target.x),
-                      static_cast<double>(c.y) - static_cast<double>(target.y)) <=
-           kObstacleDedupEpsilonM;
-  };
-  obstacle_polygons_.erase(std::remove_if(obstacle_polygons_.begin(),
-                                          obstacle_polygons_.end(),
-                                          is_same_keepout),
-                           obstacle_polygons_.end());
-}
-
 MapServerNode::ObstacleEntry MapServerNode::make_obstacle_entry(
     const geometry_msgs::msg::Polygon& polygon,
     const std::string& name,
@@ -1388,13 +1720,17 @@ MapServerNode::ObstacleEntry MapServerNode::make_obstacle_entry(
 
 bool MapServerNode::has_duplicate_obstacle_entry(const std::vector<ObstacleEntry>& existing,
                                                  const geometry_msgs::msg::Polygon& candidate,
-                                                 double eps)
+                                                 double eps,
+                                                 bool include_pending)
 {
   std::vector<geometry_msgs::msg::Polygon> polygons;
   polygons.reserve(existing.size());
   for (const auto& obs : existing)
   {
-    polygons.push_back(obs.polygon);
+    if (include_pending || !obs.pending)
+    {
+      polygons.push_back(obs.polygon);
+    }
   }
   return has_duplicate_obstacle(polygons, candidate, eps);
 }
@@ -1459,7 +1795,11 @@ void MapServerNode::save_areas_to_file(const std::string& path)
     out << std::setprecision(6);
   }
 
-  out << "area_count: " << areas_.size() << "\n\n";
+  out << "area_count: " << areas_.size() << "\n";
+  // mowglinext#637: next_area_id_ is written unconditionally (never
+  // optional-on-read like the per-area id line below) so a reader always
+  // knows where to resume minting, even for a file with zero areas.
+  out << "next_area_id: " << next_area_id_ << "\n\n";
 
   for (std::size_t i = 0; i < areas_.size(); ++i)
   {
@@ -1467,9 +1807,14 @@ void MapServerNode::save_areas_to_file(const std::string& path)
     out << "area_" << i << "_name: " << area.name << "\n";
     out << "area_" << i << "_polygon: " << polygon_to_string(area.polygon) << "\n";
     out << "area_" << i << "_is_navigation: " << (area.is_navigation_area ? 1 : 0) << "\n";
+    // Always written (unlike the obstacle _name/_source lines above, this
+    // is never legitimately absent by the time save runs — on_add_area and
+    // load's migration below both guarantee area.id != 0 first). The
+    // *reader* still treats it as optional (see load_areas_from_file) so a
+    // pre-#637 file written by an older binary keeps loading.
+    out << "area_" << i << "_id: " << area.id << "\n";
     // PENDING obstacles (wheel-slip dig proposals) are deliberately NOT
-    // written: they protect the spot for this session only, and become
-    // permanent solely when the operator accepts them through
+    // written: they are inert until the operator accepts them through
     // ~/promote_obstacle. Count only what we actually write, and keep the
     // written indices contiguous so the loader sees no gaps.
     std::size_t persisted = 0;
@@ -1582,6 +1927,12 @@ void MapServerNode::load_areas_from_file(const std::string& path)
     entry.name = get_str(prefix + "_name");
     entry.polygon = parse_polygon_string(get_str(prefix + "_polygon"));
     entry.is_navigation_area = (get_int(prefix + "_is_navigation", 0) != 0);
+    // Optional on read (mowglinext#637): absent in any file saved before
+    // this field existed. Left at 0 here; the migration block below mints
+    // real ids for every area still at 0 once the whole file is loaded, so
+    // it can recover next_area_id_ from the highest id ACTUALLY present
+    // first, rather than one area at a time.
+    entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));
 
     const int obs_count = get_int(prefix + "_obstacle_count", 0);
     for (int j = 0; j < obs_count; ++j)
@@ -1617,6 +1968,50 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   // Dock pose is loaded from mowgli_robot.yaml at construction, never
   // from areas.dat. Old areas.dat files may still contain dock_x/dock_qw
   // keys — they are ignored on purpose.
+
+  // Area-id migration (mowglinext#637): recover next_area_id_ as
+  // max(loaded ids) + 1 — same recovery shape obstacle_tracker_node uses
+  // for its own persisted next_id_ — then mint fresh ids for any area
+  // still at 0: either a pre-#637 file, or (defensively) a legacy in-memory
+  // entry that reached here some other way. Re-save immediately so the
+  // file is stamped from here on, the same "adopt on first load" shape
+  // migrate_areas_datum uses below for the datum stamp.
+  {
+    uint32_t max_id = 0;
+    bool any_unassigned = false;
+    for (const auto& area : areas_)
+    {
+      max_id = std::max(max_id, area.id);
+      any_unassigned = any_unassigned || (area.id == 0);
+    }
+    next_area_id_ = static_cast<uint32_t>(get_int("next_area_id", 0));
+    next_area_id_ = std::max(next_area_id_, max_id + 1);
+    if (any_unassigned)
+    {
+      for (auto& area : areas_)
+      {
+        if (area.id == 0)
+        {
+          area.id = next_area_id_++;
+        }
+      }
+      RCLCPP_INFO(get_logger(),
+                  "areas file %s has area(s) with no stable id (mowglinext#637) — "
+                  "assigning and re-saving.",
+                  path.c_str());
+      try
+      {
+        save_areas_to_file(path);
+      }
+      catch (const std::exception& ex)
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Could not re-save %s with area ids: %s",
+                    path.c_str(),
+                    ex.what());
+      }
+    }
+  }
 
   // Datum-change migration (issue #216): if the file was recorded against a
   // different datum than the one this node was launched with, re-project the
@@ -1800,6 +2195,10 @@ void MapServerNode::apply_area_classifications()
 
     for (const auto& obstacle : area.obstacles)
     {
+      if (obstacle.pending)
+      {
+        continue;  // a proposal is not applied: its cells stay LAWN
+      }
       grid_map::Polygon obs_gm;
       for (const auto& pt : obstacle.polygon.points)
       {

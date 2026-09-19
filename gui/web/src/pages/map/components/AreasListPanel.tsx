@@ -23,7 +23,7 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
     if (areas.length === 0) return null;
 
     return (
-        <div style={{display: 'flex', flexDirection: 'column', minWidth: 0}}>
+        <div style={{display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, flex: '1 1 auto'}}>
             {/* Header */}
             <div style={{
                 padding: '8px 12px',
@@ -38,7 +38,7 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
             </div>
 
             {/* Area items */}
-            <div style={{overflowY: 'auto', flex: 1}}>
+            <div style={{overflowY: 'auto', flex: 1, minHeight: 0}} className="scrollbar-thin">
                 {areas.map((item) => {
                     const cfg = TYPE_CONFIG[item.ftype] ?? TYPE_CONFIG.obstacle;
                     const isSelected = selectedId === item.id;

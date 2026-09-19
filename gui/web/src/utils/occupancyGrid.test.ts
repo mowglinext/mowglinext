@@ -3,6 +3,7 @@ import {paintOccupancyGrid} from "./occupancyGrid.ts";
 import {mowProgressPaint} from "./mowProgress.ts";
 import {lidarMapHasStructure, lidarMapPaint, rasterizeLidarMap} from "./lidarMap.ts";
 import {OccupancyGrid} from "../types/ros.ts";
+import mapPageSource from "../pages/MapPage.tsx?raw";
 
 function grid(width: number, height: number, data: number[]): OccupancyGrid {
     return {
@@ -36,9 +37,17 @@ describe("paintOccupancyGrid", () => {
 
 describe("mowProgressPaint", () => {
     it("paints only cells at or above 100", () => {
-        expect(mowProgressPaint(100)).not.toBeNull();
+        expect(mowProgressPaint(100)).toEqual([124, 255, 178, 150]);
         expect(mowProgressPaint(99)).toBeNull();
         expect(mowProgressPaint(-1)).toBeNull();
+    });
+
+    it("does not apply a second opacity reduction in the MapPage raster layer", () => {
+        const layerPaint = mapPageSource.match(
+            /id=\{"mow-progress-layer"\} paint=\{\{([\s\S]*?)\}\}\/>/,
+        )?.[1];
+
+        expect(layerPaint).toContain('"raster-opacity": 1');
     });
 });
 

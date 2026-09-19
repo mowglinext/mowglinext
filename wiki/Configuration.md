@@ -2,7 +2,7 @@
 
 Complete guide to all configuration files and parameters in the Mowgli ROS2 system.
 
-This documentation is for ROS2 Kilted. The simulator is Webots — see [Simulation](Simulation).
+This documentation is for ROS2 Lyrical (Ubuntu 26.04 containers). The simulator is Webots — see [Simulation](Simulation).
 
 [CLAUDE.md](https://github.com/mowglinext/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference. If any section here contradicts it, CLAUDE.md wins.
 
@@ -273,7 +273,7 @@ hardware_bridge:
 
 Wheel-slip **dig** detection lives in `hardware_bridge_node` (`mowgli_hardware/dig_detector.hpp`) because `~/cmd_vel` is twist_mux's *merged* output — one check therefore covers every motion lane (coverage, transit, docking, teleop).
 
-It is the only wheel-**independent** stuck check on the robot: it compares the encoders' claimed travel against the GNSS-anchored fused pose (`/odometry/filtered_map`) over `dig_window_s`, and on a mismatch hard-stops on the wire and drives a bounded reverse that `on_cmd_vel` cannot override. The bridge then publishes `~/dig_event`, and `map_server` promotes the spot to a permanent keepout so coverage routes around it next pass.
+It is the only wheel-**independent** stuck check on the robot: it compares the encoders' claimed travel against the GNSS-anchored fused pose (`/odometry/filtered_map`) over `dig_window_s`, and on a mismatch hard-stops on the wire and drives a bounded reverse that `on_cmd_vel` cannot override. The bridge then publishes `~/dig_event`. `map_server` records the spot as a **proposal** you can accept or reject on the GUI map page — nothing is blocked until you accept it — and the behavior tree skips that spot on the coverage path for the rest of the mowing session so the robot does not dig the same hole again.
 
 | Parameter | Default | Notes |
 |---|---|---|
@@ -377,8 +377,8 @@ bt_navigator:
     default_nav_to_pose_bt_xml: ""
     default_nav_through_poses_bt_xml: ""
 
-    enable_stamped_cmd_vel: true           # Kilted: all Nav2 nodes use TwistStamped
-    # Kilted auto-loads plugins; no manual registration needed
+    enable_stamped_cmd_vel: true           # since Kilted: all Nav2 nodes use TwistStamped
+    # Nav2 auto-loads plugins; no manual registration needed
 ```
 
 #### controller_server Configuration
@@ -387,7 +387,7 @@ bt_navigator:
 controller_server:
   ros__parameters:
     use_sim_time: false
-    enable_stamped_cmd_vel: true           # Kilted requirement
+    enable_stamped_cmd_vel: true           # required since Kilted
 
     # Velocity feedback for the controllers. MUST be set: Nav2 defaults to
     # "odom", which NOTHING publishes on this robot, so RPP/FTC would get zero
@@ -537,7 +537,6 @@ controller_server:
       require_clear_exit: true             # cul-de-sac guard: never skirt into a pocket
       obstacle_body_half_width: 0.12
       obstacle_clearance_margin: 0.05      # overridden at launch from obstacle_clearance_margin
-      ignore_obstacles_outside_zone: true  # keepout-masked cells are not obstacles (issue #517)
       enable_obstacle_deviation: true      # false in the no-LiDAR overlay
       max_lateral_deviation: 1.5           # overridden at launch from max_obstacle_avoidance_distance
       deviation_step: 0.05
@@ -666,12 +665,15 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.5           # gentle, WIDE gradient → smooth deviation
-        # 0.58 m == the clamp floor (chassis circumscribed radius ~0.572 m).
+        # By default the effective floor is the live chassis circumscribed
+        # radius (about 0.597 m for the shipped 0.60 x 0.45 m chassis).
+        # local_inflation_inscribed_radius, when enabled, replaces that floor;
+        # 0.58 m is the setting default, not a universal runtime floor.
         # The earlier 1.0 m halo smeared a side obstacle's cost across the whole
         # front of a 0.5-1.0 m gap, so transit read "collision ahead" and Nav2
         # recoveries could not escape a physically passable pocket.
         # OVERWRITTEN at launch from mowgli_robot.yaml.obstacle_inflation_radius
-        # (clamped [0.58, 1.50]).
+        # (clamped to [the effective floor described above, 1.50]).
         inflation_radius: 0.58
 
   # LiDAR overlay adds:    plugins: ["obstacle_layer", "inflation_layer"] on /scan_costmap
@@ -720,7 +722,7 @@ coverage_server:
     use_sim_time: false
     # PHYSICAL chassis width — injected at launch from mowgli_robot.yaml.chassis_width.
     # Semantic only; the geometry is driven by operation_width + the insets.
-    robot_width: 0.40                    # m
+    robot_width: 0.45                    # m (injected from chassis_width)
     # Swath SPACING (F2C cov_width). INJECTED at launch as
     # tool_width − swath_overlap, so adjacent swaths slightly OVERLAP.
     operation_width: 0.16                # m
@@ -778,7 +780,7 @@ Access diagnostics at `http://<mower-ip>:4006/#/diagnostics` → Localization / 
 ```yaml
 twist_mux:
   ros__parameters:
-    # Kilted Kaiju: all Nav2 nodes use TwistStamped
+    # since Kilted: all Nav2 nodes use TwistStamped
     use_stamped: true
 
     # Input topics (velocity sources)

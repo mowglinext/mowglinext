@@ -5,9 +5,17 @@
 > authoritative and which is a historical record. Excludes `ros2/src/opennav_coverage/**` and
 > `ros2/src/external/**` (vendored submodules) and `node_modules/`.
 
+## Documents added after index generation
+
+- [Nav2 Lyrical controller review](../NAV2_LYRICAL_CONTROLLER_REVIEW.md) — **current**, contributor:
+  why FTC stays the coverage controller after the Lyrical migration, what Nav2 1.5.1 actually adds
+  (DWPP, TrackingFeedback, AxisGoalChecker, custom_inscribed_radius), what was evaluated and
+  rejected, and the upstream Fields2Cover state (v3.0 branch frozen).
+
 ## Update-system documents added after index generation
 
 - [Software updates and recovery](../UPDATES.md) — **current**, operator/contributor: host updater, installer, publication and platform contract.
+- [Remote access (Tailscale sidecar)](../REMOTE_ACCESS.md) — **current**, operator/contributor: optional `mowgli-remote` container owned by the GUI backend, settings keys, reconcile rules, troubleshooting.
 - [Update-system design snapshot](../UPDATE_SYSTEM_PLAN.md) — **historical**, contributor: original design intent; use UPDATES.md for implemented behavior.
 
 ## How to read this index
@@ -103,6 +111,7 @@ procedure. It supersedes Kilted-specific build details in the September 3 codema
 | Doc | What it is |
 |-----|-----------|
 | [`docs/FIRST_BOOT.md`](../FIRST_BOOT.md) | The post-install checklist: GUI up → RTK Fixed → IMU cal → yaw cal → dock pose → drive tuning → record area → first mow, plus troubleshooting. |
+| [`docs/MQTT_CONTROL.md`](../MQTT_CONTROL.md) | The `mqtt_bridge_node` topic/JSON/command contract — the stable surface for external integrations (Home Assistant, mobile apps), as opposed to the GUI's internal `:4006` REST/WS API or its separate embedded MQTT broker. |
 | [`wiki/User-Guide.md`](../../wiki/User-Guide.md) | Operator walkthrough of the live GUI, built from a real-robot session (also synced to the wiki). |
 | [`docker/README.md`](../../docker/README.md) | Manual (non-installer) Docker Compose deployment: hardware requirements, quick start, config reference, container architecture. **Partially stale** — still documents SLAM Toolbox, `slam_mode`, `slam_toolbox.yaml`, which were removed (see stale claims below). |
 | [`docker/config/mowgli/README.md`](../../docker/config/mowgli/README.md) | What the read-only `/ros2_ws/config/` bind mount is, which files are git-ignored, how parameter override works. |

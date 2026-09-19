@@ -20,6 +20,8 @@ type ContainerDetails struct {
 	Running    bool
 	Privileged bool
 	Binds      []string
+	// Labels are the container's config labels (empty map when none).
+	Labels map[string]string
 }
 
 type ContainerRunSpec struct {
@@ -27,8 +29,18 @@ type ContainerRunSpec struct {
 	Cmd        []string
 	Env        []string
 	Binds      []string
+	Devices    []ContainerDevice
+	GroupAdd   []string
 	Privileged bool
 	AutoRemove bool
+}
+
+// ContainerDevice permits an existing host device inside a non-privileged
+// container without changing ownership or mode on the host.
+type ContainerDevice struct {
+	PathOnHost        string
+	PathInContainer   string
+	CgroupPermissions string
 }
 
 type ContainerRunResult struct {
