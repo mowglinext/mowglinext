@@ -697,6 +697,18 @@ struct BTContext
   int completed_swaths{0};
   int skipped_swaths{0};
 
+  /// True while FollowStrip is driving a blade-off transit between sub-paths
+  /// (its own transit_active_/transit_pending_ members, refreshed every tick
+  /// of onRunning() — see coverage_nodes.cpp), false otherwise. Reset in
+  /// onStart()/onHalted() so a stale true value can never survive past the
+  /// FollowStrip invocation that set it. Read by withLiveStatusFields
+  /// (status_snapshot.cpp) to fold "TRANSIT" into HighLevelStatus's
+  /// sub_state_name — a LIVE override of that otherwise tree-owned field,
+  /// because a transit begins/ends mid-FollowStrip, between tree ticks, so
+  /// only the live-field projection (not PublishHighLevelStatus, which does
+  /// not re-tick while FollowStrip runs) can track it accurately.
+  bool transiting{false};
+
   // -----------------------------------------------------------------------
   // High-level status publishing (shared publisher + last-published cache)
   // -----------------------------------------------------------------------

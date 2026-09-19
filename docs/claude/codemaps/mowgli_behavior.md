@@ -81,7 +81,7 @@
 | `calibration_nodes.cpp` | 433 | Undock line-fit yaw → `/fusion_graph_node/set_pose`; forward-drive yaw seed |
 | `recording_nodes.cpp` | 515 | Area recording, DP simplification, save via `/map_server_node/add_area` |
 | `status_nodes.cpp` | 240 | Status publish, `EndSession` (session-scoped clears :159-215), `ClearCommand` |
-| `status_snapshot.cpp` | 58 | Tree-owned vs live field split for `HighLevelStatus` |
+| `status_snapshot.cpp` | ~70 | Tree-owned vs live field split for `HighLevelStatus`; the one exception is `sub_state_name`, live-overridden to `"TRANSIT"` from `BTContext::transiting` (set by `FollowStrip`, `coverage_nodes.cpp`) — consumed by `mowgli_leds`' `kTransit` ring pattern |
 | `utility_nodes.cpp` | 267 | Blade service, waits, `SaveObstacles`, `ResetEmergency` |
 | `coverage_persistence.cpp` | 219 | Text file `coverage_resume.txt` (atomic tmp+rename): `current_command`, `single_area_target`, `current_area`, `completed_areas`, per-`area` rows (pose_count, fingerprint, resume, completed swaths) |
 | `battery_filter.cpp` | 85 | Rate-independent low-pass on `v_battery` |
@@ -104,7 +104,7 @@
 | `test_localization_health.cpp` | 419 | 16 tests: pivot σ inflation must NOT pause; plain-GPS fallback must; stale feed |
 | `test_battery_critical_resume.cpp` | 225 | 3 tests: critical-battery tail auto-continues, only dead charger ends session |
 | `test_guard_fallthrough.cpp` | ~360 | 6 tests: guard handlers return FAILURE + structural `<AlwaysFailure/>` check on every blocking guard in `main_tree.xml` + `<MarkGuardHalt/>` is the first handler child in `SensorSafetyGuard` / `LocalizationGuard` |
-| `test_high_level_status_snapshot.cpp` | 156 | 6 tests: republished status carries live battery/progress, tree-owned state untouched |
+| `test_high_level_status_snapshot.cpp` | 185 | 8 tests: republished status carries live battery/progress, tree-owned state untouched, `transiting` overrides `sub_state_name` to `"TRANSIT"` |
 | `test_battery_filter.cpp` | 243 | 13 tests: sag immunity, rate independence, invalid reading never → 0 % |
 | `test_dock_alignment.cpp` | 191 | 11 tests: along/cross decomposition, yaw-drift band |
 

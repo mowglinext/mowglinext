@@ -32,6 +32,17 @@ mowgli_interfaces::msg::HighLevelStatus withLiveStatusFields(
   msg.state = base.state;
   msg.state_name = base.state_name;
   msg.sub_state_name = base.sub_state_name;
+  // EXCEPTION: sub_state_name also carries FollowStrip's live transit flag,
+  // which changes mid-FollowStrip while the tree isn't re-ticking
+  // PublishHighLevelStatus (that node only ticks on a tree transition, per
+  // its own comment) — so only this per-tick/1 Hz-republish projection can
+  // track it accurately. Overridden, not appended: a transit is orthogonal
+  // to which AUTONOMOUS sub-branch is active, and nothing else currently
+  // populates this field (PublishHighLevelStatus always writes "").
+  if (ctx.transiting)
+  {
+    msg.sub_state_name = "TRANSIT";
+  }
 
   msg.current_area = static_cast<int16_t>(ctx.current_area);
   // The GUI computes progress as current_path_index / current_path

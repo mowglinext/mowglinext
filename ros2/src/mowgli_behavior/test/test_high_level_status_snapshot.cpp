@@ -140,6 +140,35 @@ TEST(HighLevelStatusSnapshot, GuiRatioPairMirrorsSwathCounts)
   EXPECT_EQ(refreshed.current_path_index, 6);
 }
 
+// ctx.transiting is the one deliberate exception to "sub_state_name is
+// tree-owned, carried through untouched": FollowStrip's transit begins/ends
+// mid-invocation, between tree ticks, so only this live projection (ticked
+// every onRunning() cycle and by the 1 Hz republish) can track it.
+TEST(HighLevelStatusSnapshot, TransitingOverridesSubStateName)
+{
+  BTContext ctx;
+  ctx.transiting = true;
+
+  const HighLevelStatus refreshed = withLiveStatusFields(chargingSnapshot(), ctx);
+
+  EXPECT_EQ(refreshed.sub_state_name, "TRANSIT");
+}
+
+// The common case: not transiting must leave sub_state_name exactly as
+// PublishHighLevelStatus cached it (today always "", but the projection must
+// not assume that — it should carry whatever is there, not blank it).
+TEST(HighLevelStatusSnapshot, NotTransitingCarriesCachedSubStateName)
+{
+  HighLevelStatus cached = chargingSnapshot();
+  cached.sub_state_name = "SOME_FUTURE_SUB_STATE";
+  BTContext ctx;
+  ctx.transiting = false;
+
+  const HighLevelStatus refreshed = withLiveStatusFields(cached, ctx);
+
+  EXPECT_EQ(refreshed.sub_state_name, "SOME_FUTURE_SUB_STATE");
+}
+
 // A default-constructed context must not fabricate progress: the helper is a
 // pure projection of the context, so an untouched context yields zeros (and the
 // 100 % battery default), never leftovers from the cached snapshot.

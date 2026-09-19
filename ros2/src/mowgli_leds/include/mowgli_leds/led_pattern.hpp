@@ -63,6 +63,16 @@
 //                     worth seeing from across the lawn -- warm colour plus
 //                     motion, both changed, so it cannot be mistaken for the
 //                     healthy arc in bright sun where hue alone is unreliable.
+//      TRANSIT        (autonomous, blade off, driving a blade-off transit
+//                     between coverage sub-paths) the two ring HALVES
+//                     alternate lit/dark in light orange, ~1 s each -- not a
+//                     comet (nothing rotates around the ring) and not a
+//                     whole-ring blink (LOW BATTERY), so it cannot be
+//                     confused with either: exactly half the ring is ever
+//                     lit, and which half flips. Ranked ahead of MOWING/
+//                     MOWING_DEGRADED because it overrides them for the
+//                     duration of the transit -- coverage progress is not
+//                     advancing right now regardless of RTK state.
 //   6. RECORDING      cyan comet, ~2 s per revolution. The operator is walking
 //                     the boundary; motion says "I am tracking you".
 //   7. MANUAL MOWING  whole ring breathing purple, ~2 s. No progress exists to
@@ -110,6 +120,7 @@ enum class LedMode
   kLowBattery,
   kMowing,
   kMowingDegraded,
+  kTransit,
   kRecording,
   kManual,
   kIdle,
@@ -133,6 +144,12 @@ struct LedInputs
   bool emergency = false;
   /// GNSS currently reports an RTK-Fixed solution.
   bool rtk_fixed = false;
+  /// FollowStrip is currently driving a blade-off transit between coverage
+  /// sub-paths (HighLevelStatus.sub_state_name == "TRANSIT" while state is
+  /// AUTONOMOUS). Only meaningful in that state; the node does not need to
+  /// clear it elsewhere since SelectMode only reads it inside the
+  /// kAutonomous branch.
+  bool transiting = false;
   /// Seconds the ring has continuously shown the steady "charge complete"
   /// frame (is_charging && battery_valid && battery_percent >=
   /// charge_full_percent). Zero whenever that condition does not hold. The
@@ -189,6 +206,14 @@ inline constexpr Rgb kOff{0, 0, 0};
 inline constexpr Rgb kRed{255, 0, 0};
 inline constexpr Rgb kGreen{0, 255, 0};
 inline constexpr Rgb kAmber{255, 110, 0};
+/// Deliberately lighter/warmer than kAmber (Stale/Degraded) -- both are in
+/// the orange family, but TRANSIT is never shown alongside either (Stale
+/// requires a non-fresh status; Degraded is superseded by Transit inside the
+/// same kAutonomous branch), so the pairing only needs to read as distinct
+/// when directly compared, not be confusable at a glance in isolation --
+/// MOTION (alternating halves vs. a rotating comet) is the real
+/// discriminator, per the design rule at the top of this file.
+inline constexpr Rgb kLightOrange{255, 170, 40};
 inline constexpr Rgb kCyan{0, 200, 255};
 inline constexpr Rgb kPurple{170, 0, 255};
 inline constexpr Rgb kWhite{255, 255, 255};
@@ -313,6 +338,10 @@ inline LedMode SelectMode(const LedInputs& in, const LedPatternCfg& cfg)
   switch (in.state)
   {
     case HighLevelState::kAutonomous:
+      if (in.transiting)
+      {
+        return LedMode::kTransit;
+      }
       return in.rtk_fixed ? LedMode::kMowing : LedMode::kMowingDegraded;
     case HighLevelState::kRecording:
       return LedMode::kRecording;
@@ -476,6 +505,30 @@ inline std::vector<Rgb> RenderFrame(const LedInputs& in, const LedPatternCfg& cf
                        FilledCount(in.coverage_percent, cfg.led_count),
                        colors::kAmber,
                        head);
+      break;
+    }
+
+    case LedMode::kTransit:
+    {
+      // Alternating halves, ~1 s each -- deliberately NOT a comet (nothing
+      // rotates around the ring) and NOT a whole-ring blink (that is LOW
+      // BATTERY): exactly half the ring is lit at any instant, and which
+      // half flips. Integer division on an odd led_count hands the extra
+      // pixel to the second half; both halves still light at the
+      // configured led_count, nothing hardcoded.
+      const std::size_t half = pixels.size() / 2u;
+      if (BlinkOn(in.now_s, 1.0))
+      {
+        std::fill(pixels.begin(),
+                  pixels.begin() + static_cast<std::ptrdiff_t>(half),
+                  colors::kLightOrange);
+      }
+      else
+      {
+        std::fill(pixels.begin() + static_cast<std::ptrdiff_t>(half),
+                  pixels.end(),
+                  colors::kLightOrange);
+      }
       break;
     }
 

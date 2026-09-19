@@ -120,6 +120,31 @@ TEST(LedPatternMode, AutonomousWithoutRtkFixedSelectsDegradedMowing)
   EXPECT_EQ(SelectMode(in, MakeCfg()), LedMode::kMowingDegraded);
 }
 
+TEST(LedPatternMode, TransitOutranksBothMowingAndDegradedMowing)
+{
+  LedInputs in = MakeMowingInputs();
+  in.transiting = true;
+
+  in.rtk_fixed = true;
+  EXPECT_EQ(SelectMode(in, MakeCfg()), LedMode::kTransit);
+
+  in.rtk_fixed = false;
+  EXPECT_EQ(SelectMode(in, MakeCfg()), LedMode::kTransit)
+      << "a transit overrides the RTK-fixed distinction too -- coverage "
+         "progress is not advancing right now regardless";
+}
+
+TEST(LedPatternMode, TransitOnlyAppliesInsideTheAutonomousState)
+{
+  // transiting is only ever set true alongside HighLevelStatus's AUTONOMOUS
+  // state (see LedInputs::transiting's doc comment) -- but SelectMode must
+  // not crash or misbehave if some future caller sets it elsewhere.
+  LedInputs in = MakeMowingInputs();
+  in.transiting = true;
+  in.state = HighLevelState::kRecording;
+  EXPECT_EQ(SelectMode(in, MakeCfg()), LedMode::kRecording);
+}
+
 TEST(LedPatternMode, RecordingAndManualMowingMapToTheirOwnModes)
 {
   LedInputs in = MakeMowingInputs();
@@ -307,6 +332,61 @@ TEST(LedPatternRender, DegradedMowingArcIsAmberAndItsHeadBlinks)
   // The whole point is that the two frames differ, so the node's change
   // detector actually pushes the animation to the wire.
   EXPECT_NE(lit, dark);
+}
+
+TEST(LedPatternRender, TransitAlternatesLitHalvesInLightOrange)
+{
+  LedInputs in = MakeMowingInputs();
+  in.transiting = true;
+
+  in.now_s = 0.0;  // blink on -> first half lit
+  const auto first_half = RenderFrame(in, MakeCfg(16u));
+  ASSERT_EQ(first_half.size(), 16u);
+  for (std::size_t i = 0; i < 8u; ++i)
+  {
+    EXPECT_EQ(first_half[i], colors::kLightOrange) << "first-half pixel " << i;
+  }
+  for (std::size_t i = 8; i < 16u; ++i)
+  {
+    EXPECT_EQ(first_half[i], colors::kOff) << "second-half pixel " << i;
+  }
+
+  in.now_s = 0.7;  // blink off (1 s period) -> second half lit
+  const auto second_half = RenderFrame(in, MakeCfg(16u));
+  for (std::size_t i = 0; i < 8u; ++i)
+  {
+    EXPECT_EQ(second_half[i], colors::kOff) << "first-half pixel " << i;
+  }
+  for (std::size_t i = 8; i < 16u; ++i)
+  {
+    EXPECT_EQ(second_half[i], colors::kLightOrange) << "second-half pixel " << i;
+  }
+
+  // The two frames must differ, or the node's change detector would never
+  // push the alternation to the wire.
+  EXPECT_NE(first_half, second_half);
+}
+
+// The requirement was explicitly "respect however many LEDs are configured,
+// split into two halves" -- pin it against a count that is neither 16 nor
+// even, so integer division handing the extra pixel to the second half is
+// exercised, not just the common 16-LED case above.
+TEST(LedPatternRender, TransitRespectsAnOddConfiguredLedCount)
+{
+  LedInputs in = MakeMowingInputs();
+  in.transiting = true;
+  in.now_s = 0.0;  // blink on -> first half lit
+
+  const auto pixels = RenderFrame(in, MakeCfg(29u));
+  ASSERT_EQ(pixels.size(), 29u);
+  for (std::size_t i = 0; i < 14u; ++i)
+  {
+    EXPECT_EQ(pixels[i], colors::kLightOrange) << "first-half pixel " << i;
+  }
+  for (std::size_t i = 14; i < 29u; ++i)
+  {
+    EXPECT_EQ(pixels[i], colors::kOff) << "second-half pixel " << i << " (gets the extra one)";
+  }
 }
 
 TEST(LedPatternRender, ChargingFillsProportionallyToBatteryAndBreathes)

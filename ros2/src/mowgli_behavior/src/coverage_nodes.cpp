@@ -351,6 +351,7 @@ BT::NodeStatus FollowStrip::onStart()
   transit_pending_ = false;
   transit_abort_seen_ = false;
   transit_result_.reset();
+  ctx->transiting = false;
   swath_goal_sent_ = false;
   follow_goal_ever_sent_ = false;
   // Coverage-completion model (replaces the mow_progress cell grid): record this
@@ -1220,6 +1221,12 @@ BT::NodeStatus FollowStrip::onRunning()
   // the onStart seed. This is the PRIMARY GUI %; the swath X/Y counters remain a
   // secondary readout.
   ctx->coverage_percent = livePercent();
+  // Live transit flag for the LED ring / GUI — refreshed unconditionally
+  // every tick this branch runs, whether the goal in flight is a coverage
+  // swath or a blade-off transit, rather than trying to set/clear it at
+  // each of transit_active_/pending_'s many internal mutation sites. See
+  // BTContext::transiting's doc comment.
+  ctx->transiting = transit_active_ || transit_pending_;
 
   // The goal in flight was cut short at a dig skip zone and the robot has
   // reached that cut (SUCCEEDED, or FTC parked short of it and the progress
@@ -1436,6 +1443,7 @@ void FollowStrip::onHalted()
   transit_pending_ = false;
   transit_abort_seen_ = false;
   transit_result_.reset();
+  ctx->transiting = false;
   scan_pause_ = ScanPauseState{};
   truncated_at_.reset();
   unit_exhausted_by_dig_ = false;
@@ -1696,6 +1704,7 @@ FollowStrip::DigRecoveryStep FollowStrip::stepDigRecovery(const std::shared_ptr<
   transit_pending_ = false;
   transit_abort_seen_ = false;
   transit_result_.reset();
+  ctx->transiting = false;
   scan_pause_ = ScanPauseState{};
   swath_goal_sent_ = false;
   if (swath_idx_ >= swaths_.size())
