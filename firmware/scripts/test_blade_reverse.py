@@ -115,11 +115,11 @@ int main(void) {
     reset(); BLADEMOTOR_Set(1,0); BLADEMOTOR_App(); frame(0x80);
     feedback(100,3300,1,0,1); test_primask=1; BLADEMOTOR_App();
     assert(test_primask==1 && test_trace_count==1);
-    assert(strstr(test_debug_line,"tx=80 tx_t=100 seq=1 rx_t=200 valid=1 active=1 rpm=3300"));
+    assert(strstr(test_debug_line,"tx=80 tx_t=100 seq=1 rx_t=200 valid=1 active=1 speed_word=3300"));
     BLADEMOTOR_Set(0,0); BLADEMOTOR_App(); frame(0);
     assert(test_trace_count==1);
-    feedback(100,2200,0,0,1); BLADEMOTOR_App(); frame(0);
-    assert(strstr(test_debug_line,"tx=00 tx_t=200 seq=2 rx_t=300 valid=1 active=0 rpm=2200"));
+    feedback(100,3300,0,0,1); BLADEMOTOR_App(); frame(0);
+    assert(strstr(test_debug_line,"tx=00 tx_t=200 seq=2 rx_t=300 valid=1 active=0 speed_word=3300"));
     feedback(100,0,0,0,0); BLADEMOTOR_App();
     assert(strstr(test_debug_line,"valid=0"));
     puts("PASS: validation image never reverses or auto-starts; timestamped RX/accepted-command trace");
@@ -140,6 +140,46 @@ int main(void) {
     BLADEMOTOR_Set(1, 0); BLADEMOTOR_App(); frame(0);
     for (unsigned i=0; i<9; ++i) { zero(100); frame(0); }
     zero(100); frame(0x80); // symmetric reverse-to-forward interlock
+
+    // Recorded 500 pattern: inactive promptly, speed word held nonzero for
+    // ~2 s, then an abrupt zero. Exercise both directions and a longer hold;
+    // neither elapsed dwell nor repeated ON may count as zero confirmation.
+    for (unsigned direction=0; direction<2; ++direction) {
+        for (unsigned held=20; held<=60; held+=40) {
+            reset(); blademotor_u8RunDirection=1-direction;
+            feedback(0,3520,1,0,1);
+            BLADEMOTOR_Set(1,direction); BLADEMOTOR_App(); frame(0);
+            for (unsigned i=0; i<held; ++i) {
+                BLADEMOTOR_Set(1,direction);
+                feedback(100,3494,0,0,1);
+                unsigned rx_before=test_rx_count, tx_before=test_tx_count;
+                BLADEMOTOR_App(); frame(0);
+                assert(test_rx_count==rx_before+1 && test_tx_count==tx_before+1);
+                assert(!blademotor_zero_seen);
+            }
+            zero(100); frame(0); // first zero starts the confirmation window
+            zero(100); frame(0);
+            zero(100); frame(0);
+            zero(99); frame(0);
+            zero(1); frame(direction ? 0xC0 : 0x80);
+        }
+    }
+
+    // Fresh zero replies already span 300 ms, but dwell is incomplete. Reusing
+    // the last reply when the clock reaches 1000 ms must still send OFF.
+    reversing();
+    for (unsigned i=0; i<9; ++i) { zero(100); frame(0); }
+    test_tick+=100; BLADEMOTOR_App(); frame(0);
+    zero(1); frame(0xC0); // a newly received qualifying reply releases it
+
+    // A held nonzero reply interrupts zero confirmation even when overwritten
+    // by a zero before the application runs again.
+    reversing();
+    for (unsigned i=0; i<9; ++i) zero(100);
+    feedback(50,3494,0,0,1);
+    zero(50); frame(0);
+    zero(299); frame(0);
+    zero(1); frame(0xC0);
 
     reversing();
     feedback(1000, 0, 0, 0, 1); BLADEMOTOR_App(); frame(0);
