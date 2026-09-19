@@ -42,8 +42,23 @@ _make_shim() {
 # ── Generic mocks ──────────────────────────────────────────────────────────
 
 mock_sudo() {
-  # Strip leading 'sudo' and exec the remaining command.
-  _make_shim sudo 'exec "$@"'
+  # Strip leading 'sudo' and run the remaining command, if any. `sudo -v`
+  # (mowglinext.sh's credential pre-authentication, the only bare
+  # sudo-flag-only call in install/) has no trailing command at all — real
+  # sudo just refreshes the cached credential and exits, so the shim treats
+  # -v/-n the same way instead of trying to run them as a command. Plain
+  # invocation, not `exec "$@"`: exec parses a leading-dash first argument as
+  # its OWN option (`exec -v` hits bash's unrelated exec -v flag and rejects
+  # it), which silently broke every `sudo -v` call under this mock before a
+  # real (non---check) subprocess run ever exercised it.
+  _make_shim sudo '
+if [[ "${1:-}" == "-v" || "${1:-}" == "-n" ]]; then
+  exit 0
+fi
+if [[ $# -gt 0 ]]; then
+  "$@"
+fi
+'
 }
 
 mock_apt_get() {

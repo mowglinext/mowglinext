@@ -1,14 +1,43 @@
 # Set the dock pose.
 #
-# use_gps_position selects how the POSITION is captured:
-#   true  — ignore docking_pose.position and capture the dock position from
-#           the averaged independent GPS projection (/gps/pose_cov, GPS-vs-
-#           datum + lever-arm). Used when the robot is physically seated on
-#           the dock: the fused pose is gauge-reset onto the existing
-#           dock_pose while charging, so capturing it would be circular —
-#           the GPS projection is not.
-#   false — use docking_pose.position as given (manual map-drag / settings
-#           edit, where the operator specifies the location directly).
+# POSITION source — at most ONE of use_gps_position / use_pending_antenna /
+# preserve_position may be true (any pair is rejected). None set = "use
+# docking_pose.position as given" (manual map-drag / settings edit, where the
+# operator specifies the location directly).
+#
+# A dock position that is MEASURED (not typed) always comes from the RAW GPS
+# antenna position (/gps/fix projected with the datum), lever-arm-corrected
+# ONCE with the yaw this call persists. It never comes from the fused pose or
+# from /gps/absolute_pose: while charging, fusion_graph gauge-resets the fused
+# pose onto the STORED dock pose and those topics are lever-arm-corrected with
+# that pinned yaw, so reading them back on the dock is circular and would just
+# re-save the old value.
+#
+# use_gps_position — capture the position NOW, from the raw antenna samples of
+#   the last few seconds. Only meaningful with the robot physically seated on
+#   the dock: requires is_charging, RTK accuracy, enough RTK-Fixed samples and
+#   a converged fused yaw. Used by the GUI "set dock pose" button.
+#
+# use_pending_antenna — take the position from the antenna mean that
+#   map_server's ~/capture_dock_antenna (std_srvs/Trigger) stored earlier,
+#   while the robot WAS on the dock, charging and RTK-Fixed. REQUIRES
+#   yaw_source=MOTION. This is the dock calibration's normal write: the dock
+#   heading can only be measured by REVERSING OFF the dock, so the antenna is
+#   captured first (on the dock) and joined with the yaw afterwards (off the
+#   dock) — x, y and yaw are written in ONE call. The is_charging and
+#   fused-yaw-convergence gates do NOT apply to this call (they were the
+#   capture's job / the fused yaw is neither written nor read); the RTK
+#   accuracy gate still does. The pending capture must exist, be younger than
+#   map_server's dock_antenna_capture_ttl_s, and is CONSUMED by a successful
+#   write.
+#
+# preserve_position — keep the STORED dock X/Y untouched and write the yaw
+#   only. REQUIRES yaw_source=MOTION and a dock position already stored. The
+#   calibration's FALLBACK when no capture is pending. Same off-dock situation,
+#   same gates as use_pending_antenna. The position is kept on the SERVER side
+#   (map_server owns it) rather than echoed back by the caller, so a stale or
+#   never-received /map_server_node/docking_pose on the caller can never
+#   overwrite it with (0, 0).
 #
 # yaw_source selects how the ORIENTATION (yaw) is captured, INDEPENDENTLY of
 # the position source. Callers MUST set it explicitly; PRESERVE (0) is the
@@ -33,5 +62,15 @@ geometry_msgs/Pose docking_pose
 bool use_gps_position
 uint8 yaw_source
 float64 yaw_rad          # ENU map-frame chassis yaw (rad); used only when yaw_source == MOTION
+bool preserve_position   # yaw-only write, keep the stored X/Y (see above); default false
+bool use_pending_antenna # x/y from ~/capture_dock_antenna + MOTION yaw (see above); default false
 ---
 bool success
+# message: on failure, WHY the request was rejected (which gate, with the
+# numbers). On success it is empty — unless the pose was applied in memory but
+# could NOT be written to mowgli_robot.yaml, in which case it says so (a caller
+# whose point is persistence must treat that as a failure).
+string message
+# The dock pose now held by map_server (valid when success; unchanged stored
+# pose otherwise). Callers report THIS, never their own position estimate.
+geometry_msgs/Pose stored_pose

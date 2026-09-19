@@ -27,11 +27,15 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
+#include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
+#include "mowgli_interfaces/msg/map_area.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_monitoring/mqtt_bridge_node.hpp"
@@ -212,7 +216,12 @@ TEST(SerialiseHighLevelStatus, ProducesExpectedJson)
   msg.completed_swaths = 12;
   msg.skipped_swaths = 1;
   msg.coverage_percent = 42.5f;
-  msg.gps_quality_percent = 99.0f;
+  // gps_quality_percent is misnamed at the source: behavior_tree_node.cpp's
+  // context_->gps_quality is a 0.0-1.0 fraction, assigned straight into this
+  // field with no *100 (status_snapshot.cpp). serialise_high_level_status()
+  // scales it up here so the wire field genuinely means "percent" — see the
+  // comment at its definition.
+  msg.gps_quality_percent = 0.99f;
   msg.battery_percent = 73.5f;
   msg.is_charging = false;
   msg.emergency = false;
@@ -225,6 +234,27 @@ TEST(SerialiseHighLevelStatus, ProducesExpectedJson)
             "\"total_swaths\":40,\"completed_swaths\":12,\"skipped_swaths\":1,"
             "\"coverage_percent\":42.5,\"gps_quality_percent\":99.0,"
             "\"battery_percent\":73.5,\"is_charging\":false,\"emergency\":false}");
+}
+
+TEST(SerialiseHighLevelStatus, ScalesGpsQualityFractionToPercentAndClamps)
+{
+  mowgli_interfaces::msg::HighLevelStatus full{};
+  full.gps_quality_percent = 1.0f;  // "fully good" fix, per the 0.0-1.0 source convention
+  EXPECT_NE(MqttBridgeNode::serialise_high_level_status(full).find("\"gps_quality_percent\":100.0"),
+            std::string::npos);
+
+  mowgli_interfaces::msg::HighLevelStatus none{};
+  none.gps_quality_percent = 0.0f;
+  EXPECT_NE(MqttBridgeNode::serialise_high_level_status(none).find("\"gps_quality_percent\":0.0"),
+            std::string::npos);
+
+  // Defensive: the source field is documented 0.0-1.0 and should never
+  // exceed it, but a caller passing an already-scaled 0-100 value by
+  // mistake must not silently produce a nonsensical >100% reading.
+  mowgli_interfaces::msg::HighLevelStatus over{};
+  over.gps_quality_percent = 50.0f;
+  EXPECT_NE(MqttBridgeNode::serialise_high_level_status(over).find("\"gps_quality_percent\":100.0"),
+            std::string::npos);
 }
 
 TEST(SerialiseHighLevelStatus, EscapesSubStateName)
@@ -258,6 +288,180 @@ TEST(SerialiseGps, NoFixStatusIsNegative)
   sensor_msgs::msg::NavSatFix msg{};
   msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
   EXPECT_NE(MqttBridgeNode::serialise_gps(msg).find("\"status\":-1"), std::string::npos);
+}
+
+// ===========================================================================
+// serialise_rtk_status
+// ===========================================================================
+
+TEST(SerialiseRtkStatus, RtkFixedProducesExpectedJson)
+{
+  mowgli_interfaces::msg::GnssStatus msg{};
+  msg.fix_type = mowgli_interfaces::msg::GnssStatus::FIX_TYPE_RTK_FIXED;
+  msg.rtk_mode = mowgli_interfaces::msg::GnssStatus::RTK_MODE_FIXED;
+  msg.fix_valid = true;
+
+  EXPECT_EQ(MqttBridgeNode::serialise_rtk_status(msg),
+            "{\"fix_type\":3,\"fix_type_name\":\"RTK_FIXED\",\"rtk_mode\":3,"
+            "\"rtk_mode_name\":\"FIXED\",\"fix_valid\":true,\"quality_percent\":100}");
+}
+
+TEST(SerialiseRtkStatus, RtkFloatIsSeventyPercentQuality)
+{
+  // Matches gnss_status_utils::NormalizedQuality's RTK_FLOAT branch (0.7)
+  // when no horizontal_accuracy_m capability is present — same value
+  // test_gnss_status_authority.cpp pins for HardwareQualityPercent.
+  mowgli_interfaces::msg::GnssStatus msg{};
+  msg.fix_type = mowgli_interfaces::msg::GnssStatus::FIX_TYPE_RTK_FLOAT;
+  msg.rtk_mode = mowgli_interfaces::msg::GnssStatus::RTK_MODE_FLOAT;
+  msg.fix_valid = true;
+
+  const std::string json = MqttBridgeNode::serialise_rtk_status(msg);
+  EXPECT_NE(json.find("\"fix_type_name\":\"RTK_FLOAT\""), std::string::npos);
+  EXPECT_NE(json.find("\"rtk_mode_name\":\"FLOAT\""), std::string::npos);
+  EXPECT_NE(json.find("\"quality_percent\":70"), std::string::npos);
+}
+
+TEST(SerialiseRtkStatus, InvalidFixIsZeroQualityRegardlessOfFixType)
+{
+  // fix_valid=false must win over a stale/leftover fix_type — matches
+  // gnss_status_utils::IsRtkFixed/IsRtkFloat/NormalizedQuality, which all
+  // check fix_valid first.
+  mowgli_interfaces::msg::GnssStatus msg{};
+  msg.fix_type = mowgli_interfaces::msg::GnssStatus::FIX_TYPE_RTK_FIXED;
+  msg.rtk_mode = mowgli_interfaces::msg::GnssStatus::RTK_MODE_FIXED;
+  msg.fix_valid = false;
+
+  const std::string json = MqttBridgeNode::serialise_rtk_status(msg);
+  EXPECT_NE(json.find("\"fix_valid\":false"), std::string::npos);
+  EXPECT_NE(json.find("\"quality_percent\":0"), std::string::npos);
+}
+
+TEST(SerialiseRtkStatus, UnknownEnumValuesFallBackToUnknownName)
+{
+  mowgli_interfaces::msg::GnssStatus msg{};
+  msg.fix_type = 255;
+  msg.rtk_mode = 255;
+
+  const std::string json = MqttBridgeNode::serialise_rtk_status(msg);
+  EXPECT_NE(json.find("\"fix_type_name\":\"UNKNOWN\""), std::string::npos);
+  EXPECT_NE(json.find("\"rtk_mode_name\":\"UNKNOWN\""), std::string::npos);
+}
+
+// ===========================================================================
+// serialise_areas
+// ===========================================================================
+
+TEST(SerialiseAreas, EmptyListIsEmptyJsonArray)
+{
+  EXPECT_EQ(MqttBridgeNode::serialise_areas({}), "[]");
+}
+
+TEST(SerialiseAreas, ProducesExpectedJsonWithRawIndices)
+{
+  // "index" is deliberately the raw map_server_node index, not a compacted
+  // 0..N-1 position — a navigation-only area between two mowing areas would
+  // leave a gap here, matching what GetMowingArea/StartInArea expect.
+  std::vector<MqttBridgeNode::AreaSummary> areas{
+      {0, "Front Lawn"},
+      {2, "Back Garden"},
+  };
+
+  EXPECT_EQ(MqttBridgeNode::serialise_areas(areas),
+            "[{\"index\":0,\"name\":\"Front Lawn\"},{\"index\":2,\"name\":\"Back Garden\"}]");
+}
+
+TEST(SerialiseAreas, EscapesAreaName)
+{
+  std::vector<MqttBridgeNode::AreaSummary> areas{{1, R"(Side "yard")"}};
+  EXPECT_EQ(MqttBridgeNode::serialise_areas(areas), R"([{"index":1,"name":"Side \"yard\""}])");
+}
+
+// ===========================================================================
+// serialise_area_boundaries
+// ===========================================================================
+
+TEST(SerialiseAreaBoundaries, EmptyListProducesEmptyAreasArray)
+{
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{};
+
+  EXPECT_EQ(MqttBridgeNode::serialise_area_boundaries(areas, 52.0, 4.5),
+            "{\"datum_lat\":52.00000000,\"datum_lon\":4.50000000,\"areas\":[]}");
+}
+
+TEST(SerialiseAreaBoundaries, SingleAreaWithBoundaryAndNoObstacles)
+{
+  mowgli_interfaces::msg::MapArea area{};
+  area.name = "Front Lawn";
+  geometry_msgs::msg::Point32 p0;
+  p0.x = 1.0f;
+  p0.y = 2.0f;
+  geometry_msgs::msg::Point32 p1;
+  p1.x = 3.5f;
+  p1.y = -4.25f;
+  area.area.points = {p0, p1};
+
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{0, area}};
+
+  EXPECT_EQ(MqttBridgeNode::serialise_area_boundaries(areas, 0.0, 0.0),
+            "{\"datum_lat\":0.00000000,\"datum_lon\":0.00000000,\"areas\":["
+            "{\"index\":0,\"name\":\"Front Lawn\",\"boundary\":[[1.000,2.000],[3.500,-4.250]],"
+            "\"obstacles\":[]}]}");
+}
+
+TEST(SerialiseAreaBoundaries, IncludesObstaclePolygons)
+{
+  mowgli_interfaces::msg::MapArea area{};
+  area.name = "Back Lawn";
+  geometry_msgs::msg::Point32 boundary_pt;
+  boundary_pt.x = 10.0f;
+  boundary_pt.y = 10.0f;
+  area.area.points = {boundary_pt};
+
+  geometry_msgs::msg::Point32 obstacle_pt0;
+  obstacle_pt0.x = 1.0f;
+  obstacle_pt0.y = 1.0f;
+  geometry_msgs::msg::Point32 obstacle_pt1;
+  obstacle_pt1.x = 2.0f;
+  obstacle_pt1.y = 1.0f;
+  geometry_msgs::msg::Polygon obstacle;
+  obstacle.points = {obstacle_pt0, obstacle_pt1};
+  area.obstacles = {obstacle};
+
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{2, area}};
+
+  const std::string json = MqttBridgeNode::serialise_area_boundaries(areas, 0.0, 0.0);
+  EXPECT_NE(json.find("\"index\":2"), std::string::npos);
+  EXPECT_NE(json.find("\"obstacles\":[[[1.000,1.000],[2.000,1.000]]]"), std::string::npos);
+}
+
+TEST(SerialiseAreaBoundaries, EscapesAreaName)
+{
+  mowgli_interfaces::msg::MapArea area{};
+  area.name = "Back \"yard\"";
+
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{0, area}};
+
+  const std::string json = MqttBridgeNode::serialise_area_boundaries(areas, 0.0, 0.0);
+  EXPECT_NE(json.find("\"name\":\"Back \\\"yard\\\"\""), std::string::npos);
+}
+
+TEST(SerialiseAreaBoundaries, PreservesNonContiguousIndicesAndMultipleAreas)
+{
+  // Indices are exactly whatever the caller polled — this serialiser does
+  // not renumber, matching <prefix>/areas' own contract that indices are
+  // not assumed stable/contiguous (mowglinext#637).
+  mowgli_interfaces::msg::MapArea area0{};
+  area0.name = "A";
+  mowgli_interfaces::msg::MapArea area5{};
+  area5.name = "B";
+
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{0, area0},
+                                                                                {5, area5}};
+
+  const std::string json = MqttBridgeNode::serialise_area_boundaries(areas, 0.0, 0.0);
+  EXPECT_NE(json.find("\"index\":0,\"name\":\"A\""), std::string::npos);
+  EXPECT_NE(json.find("\"index\":5,\"name\":\"B\""), std::string::npos);
 }
 
 // ===========================================================================
@@ -295,4 +499,45 @@ TEST(ParseCommandPayload, TrailingGarbageAfterANumberIsTolerated)
   uint8_t out = 0;
   EXPECT_TRUE(MqttBridgeNode::parse_command_payload("1abc", out));
   EXPECT_EQ(out, 1);
+}
+
+// ===========================================================================
+// is_high_level_status_stale (mowglinext#644)
+// ===========================================================================
+
+TEST(IsHighLevelStatusStale, FalseBeforeAnyMessageEverReceived)
+{
+  // Never received one yet == still starting up (behavior_tree_node may not
+  // be up), not evidence of a stuck subscription — regardless of how much
+  // time has passed.
+  const rclcpp::Time epoch{0, 0, RCL_ROS_TIME};
+  const rclcpp::Time far_future = epoch + rclcpp::Duration::from_seconds(3600.0);
+  EXPECT_FALSE(MqttBridgeNode::is_high_level_status_stale(
+      /*received_before=*/false, far_future, epoch, /*threshold_s=*/5.0));
+}
+
+TEST(IsHighLevelStatusStale, FalseWithinThreshold)
+{
+  const rclcpp::Time last_received{10, 0, RCL_ROS_TIME};
+  const rclcpp::Time now = last_received + rclcpp::Duration::from_seconds(2.0);
+  EXPECT_FALSE(MqttBridgeNode::is_high_level_status_stale(
+      /*received_before=*/true, now, last_received, /*threshold_s=*/5.0));
+}
+
+TEST(IsHighLevelStatusStale, FalseExactlyAtThreshold)
+{
+  // Strict '>' — exactly at the threshold is not yet stale, avoiding a
+  // resubscribe right on the boundary of a perfectly-timed heartbeat.
+  const rclcpp::Time last_received{10, 0, RCL_ROS_TIME};
+  const rclcpp::Time now = last_received + rclcpp::Duration::from_seconds(5.0);
+  EXPECT_FALSE(MqttBridgeNode::is_high_level_status_stale(
+      /*received_before=*/true, now, last_received, /*threshold_s=*/5.0));
+}
+
+TEST(IsHighLevelStatusStale, TrueBeyondThreshold)
+{
+  const rclcpp::Time last_received{10, 0, RCL_ROS_TIME};
+  const rclcpp::Time now = last_received + rclcpp::Duration::from_seconds(5.001);
+  EXPECT_TRUE(MqttBridgeNode::is_high_level_status_stale(
+      /*received_before=*/true, now, last_received, /*threshold_s=*/5.0));
 }

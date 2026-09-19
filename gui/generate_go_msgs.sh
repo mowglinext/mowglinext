@@ -497,6 +497,12 @@ for file in "$MOWGLI_SRV_DIR"/*.srv; do
     resfile=$(mktemp)
     in_response=false
     while IFS= read -r line; do
+        # Strip a trailing CR: `read -r` only trims the LF, so a CRLF-checked-out
+        # .srv file (some are, on this repo — see git history) leaves the
+        # separator as "---\r", which the exact-match below never sees as "---".
+        # Every response then silently comes out empty and its fields leak into
+        # the request struct instead — a real corruption, not a formatting nit.
+        line="${line%$'\r'}"
         if [[ "$line" == "---" ]]; then
             in_response=true
             continue

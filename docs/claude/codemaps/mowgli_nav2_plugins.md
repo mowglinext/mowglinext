@@ -53,6 +53,9 @@
 | `ftc_blade_load.hpp` | 105 | Pure `BladeLoadScale()` / `BladeLoadDecision()` — linear RPM→speed ramp, inactive/stale/degenerate gates fail OPEN, `stall_crawl_speed` floor |
 | `ftc_reverse_escape.hpp` | 83 | Pure `ReverseEscapeDecide()` / `ReverseEscapeAdvance()` — opt-in, budget cap, rear-clear gate |
 | `ftc_start_index.hpp` | 80 | Pure `ChooseStartIndex()` — idx 0 by default; legacy nearest snap breaks ties to the earlier index |
+| `ftc_offset_lattice.hpp` | — | Whole-profile avoidance planner (pure, costmap-free): (station x lateral offset) lattice + DP, hard critics (blocked node, slope) and soft critics (un-mowed area, smoothness, side stability, return to line). Selected by `use_offset_lattice`; wired in `FTCController::planOffsetLattice()`. Tests: `test_ftc_offset_lattice.cpp` |
+| `ftc_carrot_lead.hpp` | — | Derived longitudinal carrot lead cap (1.5 x `speed_fast` / `kp_lon`) |
+| `ftc_resync.hpp` | — | Carrot resync bounded to a PATH-LENGTH window (never jumps to a neighbouring ring) |
 | `obstacle_deviation.hpp` | 236 | `BoundaryGuard` (zone guard + zone mask) and `ObstacleDeviation` static helpers; thresholds `kLethalThreshold=253`, `kLethalOnlyThreshold=254` |
 | `oscillation_detector.hpp` | 113 | `FailureDetector` — rolling (v, ω) window, mean + zero-crossing test |
 | `path_progress_goal_checker.hpp` | 122 | `PathProgressGoalChecker` — progress-gated goal checker state + params |
@@ -110,7 +113,7 @@ FTC: all `FollowCoveragePath.*` keys are declared in `declareParameters()`; all 
 | `obstacle_lookahead` (poses) | L431 = 30 | 5 | L823 = `max(4, round(clamp(obstacle_detection_range_m, 0.2, 5.0) / 0.05))` |
 | `use_footprint_clearance` / `obstacle_footprint_front_length_m` | L450 = false / L458 = 0.30 | false (declare) / 0.30 | — |
 | `obstacle_body_half_width` / `obstacle_clearance_margin` | L477 = 0.12 / L490 = 0.05 | 0.20 / 0.0 | margin: L831 = clamp(`obstacle_clearance_margin`, 0, 0.5) |
-| `require_clear_exit` / `confine_deviation_to_zone` / `ignore_obstacles_outside_zone` | L468 true / (absent) / L508 true | true / true / true | — |
+| `require_clear_exit` / `confine_deviation_to_zone` | L468 true / (absent) | true / true | — |
 | `max_lateral_deviation` / `deviation_step` / `deviation_blend_rate` | L515 1.5 / L516 0.05 / L517 0.5 | same | L811 = clamp(`max_obstacle_avoidance_distance`, 0.5, 10.0) |
 | `obstacle_wait_timeout_s` / `obstacle_clear_hold_s` | L529 2.5 / L530 1.5 | 2.5 / 1.5 | L838 = clamp(`obstacle_wait_timeout_s`, 0.5, 60) |
 | `obstacle_reverse_enabled` / `_max_dist_m` / `_speed_mps` | L544 true / L545 0.30 / L546 0.10 | **false** / 0.30 / 0.10 | L844–847 from `mowgli_robot.yaml` (template: true / 0.30 / 0.15), clamps dist [0,1], speed [0,0.3] |
@@ -180,6 +183,7 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 - `chooseDeviationSide` scans LEFT first at each radius (`obstacle_deviation.cpp:400-412`) — equal clearance always skirts left.
 - `updateLateralDeviation` holds the costmap mutex (`ftc_controller.cpp:1832`) and `boundary_mutex_` for its whole body; do not call `costmap_ros_` methods that re-lock from inside.
 - With `confine_deviation_to_zone=true` and no `/global_costmap/costmap` received yet, deviation is SKIPPED for the tick (fail-safe, throttled warn) — after a costmap restart FTC drives the nominal line until the latched grid arrives.
+- The global costmap is used for CONFINEMENT ONLY (it rejects lateral OFFSET candidates that leave the zone). It is **not** an obstacle source and it no longer SUBTRACTS from one: `ignore_obstacles_outside_zone` (the issue-#517 zone mask) was removed 2026-09-17 after FTC drove into the same mapped tree twice on 2026-09-16 — `keepout_filter` stamps drawn obstacles lethal globally, so the mask deleted exactly the obstacles the operator had mapped. Detection = plain local-costmap threshold (`ObstacleDeviation::isObstacleCell`).
 - `speed_fast` set outside [0, 2.0] via `set_parameters` is rejected (`result.successful=false`) — SetNavMode does not check the result.
 - PID errors are in `base_link` (rear axle, Invariant 2), while Nav2's `robot_base_frame` is `base_footprint`; `max_goal_distance_error` is measured from base_link.
 - Invariants to respect: CLAUDE.md 5 (costmap obstacles disabled in coverage — collision_monitor is the real-time guard), 8 (FTC only in the coverage slot; base + overlay YAML), "Do NOT use StoppedGoalChecker for coverage_goal_checker", "Do NOT use RPP or MPPI for coverage paths".

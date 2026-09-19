@@ -811,7 +811,11 @@
     "firmwareFlashCta": "Flash firmware",
     "coverageToday": "Coverage today · {{pct}} %",
     "soilWetTitle": "Careful: the garden is wet (IrriSense)",
-    "soilWetBlocking": "scheduled mows are suspended"
+    "soilWetBlocking": "scheduled mows are suspended",
+    "digEscalationTitle": "Mowing halted — repeat dig detected",
+    "digEscalationBody": "The mower couldn't free itself and stopped {{distance}} m from the spot (needs {{required}} m to clear). Move it further away, then try again.",
+    "digEscalationReady": "Moved {{distance}} m from the spot — ready to clear.",
+    "digEscalationClear": "Clear & resume"
   },
   "onboardingPage": {
     "preview": "Preview",
@@ -1686,6 +1690,27 @@
     "noContainingArea": "No containing area",
     "promoteTooltip": "Promote to permanent keepout"
   },
+  "mapObstacleProposals": {
+    "header": "Obstacle proposals ({{count}})",
+    "hint": "Nothing is blocked until you accept. The robot skips these spots for the current session only.",
+    "digLabel": "Dig proposal #{{id}}",
+    "digMapLabel": "DIG",
+    "genericLabel": "Proposal #{{id}}",
+    "areaFallback": "area {{index}}",
+    "accept": "Accept",
+    "acceptTooltip": "Make this a permanent keepout",
+    "acceptConfirmTitle": "Accept this obstacle proposal?",
+    "acceptConfirmBody": "This adds a permanent keepout in {{area}}, the size of the hole shown on the map (the wheel ruts): the robot will plan and mow around it, with its usual clearance, from now on (until you remove it from the area). It is refused while the robot is still standing on the spot — let it drive away first.",
+    "acceptedSuccess": "Proposal accepted as a keepout in {{area}}",
+    "acceptFailed": "Failed to accept the proposal",
+    "reject": "Reject",
+    "rejectTooltip": "Drop this proposal",
+    "rejectConfirmTitle": "Reject this obstacle proposal?",
+    "rejectConfirmBody": "The proposal is dropped and the map is left unchanged. The robot still skips the spot until the end of the current mowing session.",
+    "rejectedSuccess": "Proposal rejected",
+    "rejectFailed": "Failed to reject the proposal",
+    "cancel": "Cancel"
+  },
   "mapEditing": {
     "unableToMatchAreaForObstacle": "Unable to match an area for this obstacle",
     "splitTargetNotValidPolygon": "Split target is not a valid polygon",
@@ -1903,6 +1928,18 @@
     "obstacle_wait_timeout_s": {
       "label": "Obstacle wait timeout",
       "description": "How long the robot holds still trying to skirt a blocked obstacle before giving up on the strip. Longer values ride out transient blockages (e.g. a person passing); shorter values abandon a stuck strip sooner."
+    },
+    "transit_dynamic_window": {
+      "label": "Transit dynamic window (DWPP)",
+      "description": "Let point-to-point navigation pick the speed and turn rate it can actually reach right now, instead of applying the path curvature to a regulated speed. It slows into sharp turns on its own. Does not affect mowing, which uses its own controller."
+    },
+    "coverage_goal_checker_id": {
+      "label": "Coverage arrival test",
+      "description": "How a mowing pass is judged finished. The default requires 95% of the planned poses to have been driven — the only test that works on a closed perimeter ring, where the start and the end are the same point."
+    },
+    "local_inflation_inscribed_radius": {
+      "label": "Obstacle inscribed radius override",
+      "description": "Advanced. -1 derives it from the robot footprint, which keeps obstacle inflation above the chassis diagonal and can make a narrow gap unplannable. Set it to the real half-width plus margin only if a gap the robot physically fits through is refused."
     },
     "obstacle_clearance_margin": {
       "label": "Obstacle clearance margin",
@@ -2505,8 +2542,8 @@
   },
   "settingsObstacles": {
     "digKeepouts": "Dig obstacles",
-    "digAutoPromotion": "Automatically create dig keepouts",
-    "digKeepoutsDescription": "Create a temporary keepout when wheel slip is detected in a mowing area. Accept the proposal on the map to keep it permanently. When disabled, no dig keepouts are created; dig detection, stopping and recovery remain active. Save and restart ROS2 to apply.",
+    "digAutoPromotion": "Propose an obstacle where the robot dug in",
+    "digKeepoutsDescription": "When wheel slip is detected in a mowing area, add a proposal to the map page. Nothing is blocked until you accept it there: accepting turns it into a permanent keepout, rejecting drops it. Meanwhile the robot simply skips that spot for the rest of the mowing session. When disabled, no proposals are created; dig detection, stopping and recovery remain active. Save and restart ROS2 to apply.",
     "rootZoneHintTitle": "Trees with large roots?",
     "rootZoneHintDescription": "The 2D LiDAR cannot see roots below its scan plane (~10–20 cm). Draw the tree as an obstacle in the map editor and raise the drawn obstacle margin so mowing and transit keep off the root zone.",
     "avoidanceMargins": "Avoidance Margins",
@@ -2516,7 +2553,7 @@
     "maxDetourDistance": "Max Detour Distance",
     "maxDetourDistanceTooltip": "Maximum lateral detour around an obstacle before giving up — drives both coverage skirting and the bypass give-up threshold",
     "drawnObstacleMargin": "Drawn Obstacle Margin",
-    "drawnObstacleMarginTooltip": "Extra margin around obstacles drawn on the map, applied to both coverage and transit planning. Use for root zones invisible to the LiDAR.",
+    "drawnObstacleMarginTooltip": "How far the coverage plan stays from obstacles drawn on the map. Floored at launch at a value derived from the chassis; the transit keepout band is derived separately and follows this value when you raise it. Raise it for root zones invisible to the LiDAR.",
     "clearanceMargin": "Clearance Margin",
     "clearanceMarginTooltip": "Sideways room left beyond the chassis when skirting an obstacle while mowing. Raise this if the robot goes around obstacles but shaves past them. Inflation Radius does NOT do this.",
     "detectionRange": "Detection Range",

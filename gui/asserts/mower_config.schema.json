@@ -574,11 +574,30 @@
           "minimum": 0,
           "description": "How many of the Headland Passes rings a turn-around may cross, counted from the inner field outward. 0 = unlimited (turns may use the whole headland apron, out to the outermost ring). Set it below Headland Passes (e.g. 2 with 3 passes configured) to keep the outermost ring(s) a no-turn zone, so U-turns stay further from the recorded boundary and clear of nearby objects — at the cost of more straight/blade-off connector fallbacks where the remaining apron is too narrow for a turn-around arc to fit."
         },
+        "transit_dynamic_window": {
+          "type": "boolean",
+          "title": "Transit Dynamic Window (DWPP)",
+          "default": false,
+          "description": "Use Dynamic Window Pure Pursuit for point-to-point navigation (transits, dock approach, return home). The controller then picks the speed and turn rate it can actually reach this instant, instead of applying the path curvature to a regulated speed — it slows into sharp turns on its own. Does NOT affect mowing, which uses its own controller. Off by default: it changes how every transit is driven, so try it on a supervised run."
+        },
+        "coverage_goal_checker_id": {
+          "type": "string",
+          "enum": ["coverage_goal_checker", "coverage_axis_goal_checker"],
+          "title": "Coverage Arrival Test",
+          "default": "coverage_goal_checker",
+          "description": "How the robot decides a mowing pass is finished. 'coverage_goal_checker' requires it to have actually driven 95% of the planned poses — the only test that survives a closed perimeter ring, whose start and end are the same point. 'coverage_axis_goal_checker' is the stock Nav2 alternative (along-path and cross-track tolerances). Leave the default unless you are comparing the two."
+        },
+        "local_inflation_inscribed_radius": {
+          "type": "number",
+          "title": "Obstacle Inscribed Radius Override",
+          "default": -1,
+          "description": "Advanced. -1 derives the costmap's inscribed radius from the robot footprint, which is what forces the obstacle inflation radius to stay above the chassis diagonal (~0.6 m) and can make narrow gaps between areas unplannable. Setting it to the real half-width plus margin lets the inflation radius come down without breaking obstacle detection. Leave at -1 unless a gap the robot physically fits through is refused."
+        },
         "chassis_safety_inset": {
           "type": "number",
           "title": "Chassis Safety Inset",
-          "default": 0.2,
-          "description": "Pre-shrink the operator polygon by this many metres before F2C plans anything. Defaults to chassis_width / 2 so the chassis edge stays inside the polygon under perfect FTC tracking."
+          "default": 0,
+          "description": "How far INSIDE the recorded perimeter the outermost mowing pass sits. 0 means the outermost ring rides on the line you drove — that line is the reachable limit by definition, so the blade mows to the edge and the chassis straddles it. Every centimetre here is a band that never gets cut. Raise it only if your recorded perimeter is not actually drivable. Obstacle clearance is a separate setting (Drawn Obstacle Margin)."
         },
         "min_turning_radius": {
           "type": "number",
@@ -687,8 +706,8 @@
         "obstacle_clearance_margin": {
           "type": "number",
           "title": "Obstacle Clearance Margin",
-          "default": 0.2,
-          "description": "Sideways room (m) left beyond the chassis when skirting an obstacle while mowing. Raise this if the robot goes around obstacles but shaves past them. Clamped to [0.0, 0.5] at launch."
+          "default": 0.05,
+          "description": "Sideways room (m) left beyond the chassis when skirting an obstacle while mowing. This is genuine slack on top of the real chassis footprint — raise it if the robot goes around obstacles but shaves past them, lower it to mow closer to hedges. Clamped to [0.0, 0.5] at launch."
         },
         "obstacle_detection_range_m": {
           "type": "number",
@@ -711,14 +730,14 @@
         "dig_obstacle_enabled": {
           "type": "boolean",
           "default": true,
-          "title": "Automatically create dig keepouts",
-          "description": "Create temporary keepout proposals for detected wheel-slip digs. Disabling this leaves dig detection and recovery active. Restart ROS2 to apply."
+          "title": "Propose an obstacle where the robot dug in",
+          "description": "Record a wheel-slip dig as an obstacle proposal on the map page. A proposal blocks nothing until you accept it; the robot skips the spot for the rest of the session either way. Disabling this leaves dig detection and recovery active. Restart ROS2 to apply."
         },
         "obstacle_margin": {
           "type": "number",
           "title": "Drawn Obstacle Margin",
-          "default": 0.2,
-          "description": "Extra margin (m) around obstacles drawn on the map, applied to both coverage and transit planning. Draw a tree trunk and set this to cover its roots (invisible to the 2D LiDAR)."
+          "default": 0.389,
+          "description": "How far (m) the coverage plan keeps its centreline from obstacles drawn on the map. It is the ONLY obstacle clearance the coverage plan has, so it is floored at launch at a value derived from the chassis: the larger of body half-width + obstacle clearance margin + tracking slack (what the coverage controller demands of its own line) and body half-width + one costmap cell diagonal (so the robot stays plannable on its line). Lower values are raised. The transit keepout band is derived separately (body half-width) and follows this value when you raise it. Raise it to cover what the drawn polygon does not: a tree's root flare and low branches are invisible to the 2D LiDAR."
         },
         "obstacle_slowdown_ratio": {
           "type": "number",

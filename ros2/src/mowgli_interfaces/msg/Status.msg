@@ -23,6 +23,20 @@ bool ui_board_available
 bool mow_enabled
 bool firmware_debug_enabled
 
+# Repeat-dig escalation (mowgli_hardware/dig_escalation.hpp): true once the
+# hardware bridge has seen enough dig latches in one spot to conclude the
+# robot cannot free itself, and stays true until either the robot reaches the
+# charger or an operator confirms via ~/clear_dig_escalation that it has
+# moved dig_escalated_distance_m past the obstruction. dig_escalated_distance_m
+# is the live distance (m) from the spot the escalation latched at; 0 when
+# dig_escalated is false. dig_escalated_required_distance_m is the configured
+# dig_escalate_clear_distance_m ~/clear_dig_escalation requires exceeding
+# (floored at 0.30 m server-side regardless of configuration) — published
+# unconditionally so the GUI never hardcodes the threshold.
+bool dig_escalated
+float32 dig_escalated_distance_m
+float32 dig_escalated_required_distance_m
+
 uint8 mower_esc_status
 float32 mower_esc_temperature
 float32 mower_esc_current

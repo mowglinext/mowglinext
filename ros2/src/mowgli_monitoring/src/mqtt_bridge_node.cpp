@@ -453,6 +453,11 @@ void MqttBridgeNode::declare_parameters()
   topic_prefix_ = declare_parameter<std::string>("mqtt_topic_prefix", "mowgli");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
   use_ssl_ = declare_parameter<bool>("use_ssl", false);
+  // Injected by full_system.launch.py from mowgli_robot.yaml, same as
+  // map_server_node/navsat_to_absolute_pose_node — labels
+  // <prefix>/area_boundary's map-frame geometry with its WGS84 origin.
+  datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
+  datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
 
   if (publish_rate_ < 0.01 || publish_rate_ > 100.0)
   {
@@ -538,13 +543,7 @@ void MqttBridgeNode::create_subscriptions()
 
   // Control-plane state (BT high-level status), not raw sensor data — reliable
   // QoS(10) like status/power/emergency above, not SensorDataQoS.
-  sub_high_level_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
-      "/behavior_tree_node/high_level_status",
-      10,
-      [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
-      {
-        on_high_level_status(msg);
-      });
+  create_high_level_status_subscription();
 
   // Raw GPS fix (lat/lon/alt) for external map/device_tracker consumers.
   // SensorDataQoS per .claude/rules/ros2.md: GPS drivers publish BEST_EFFORT.
@@ -556,18 +555,54 @@ void MqttBridgeNode::create_subscriptions()
         on_gps_fix(msg);
       });
 
-  // Subscribe to MQTT command topic.
+  // RTK/GNSS fix quality — the same typed status (and gnss_status_utils
+  // helpers) the LED ring and behavior tree read, so this topic can never
+  // disagree with what the robot itself shows. QoS(10) reliable, matching
+  // led_ring_node's and behavior_tree_node's own subscriptions to it (a
+  // derived status topic, not raw sensor data).
+  sub_gnss_status_ = create_subscription<mowgli_interfaces::msg::GnssStatus>(
+      "/gps/status",
+      10,
+      [this](mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
+      {
+        on_gnss_status(msg);
+      });
+
+  // Subscribe to MQTT command topics.
   mqtt_client_->subscribe(full_topic("command"),
                           [this](const std::string& topic, const std::string& payload)
                           {
                             on_mqtt_command(topic, payload);
                           });
+
+  mqtt_client_->subscribe(full_topic("start_area"),
+                          [this](const std::string& topic, const std::string& payload)
+                          {
+                            on_mqtt_start_area(topic, payload);
+                          });
+}
+
+void MqttBridgeNode::create_high_level_status_subscription()
+{
+  sub_high_level_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
+      "/behavior_tree_node/high_level_status",
+      10,
+      [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
+      {
+        on_high_level_status(msg);
+      });
 }
 
 void MqttBridgeNode::create_service_client()
 {
   srv_high_level_ = create_client<mowgli_interfaces::srv::HighLevelControl>(
       "/behavior_tree_node/high_level_control");
+  srv_get_area_ =
+      create_client<mowgli_interfaces::srv::GetMowingArea>("/map_server_node/get_mowing_area");
+  srv_start_area_ =
+      create_client<mowgli_interfaces::srv::StartInArea>("/behavior_tree_node/start_in_area");
+  srv_get_mowing_area_ =
+      create_client<mowgli_interfaces::srv::GetMowingArea>("/map_server_node/get_mowing_area");
 }
 
 void MqttBridgeNode::create_timer()
@@ -613,6 +648,9 @@ void MqttBridgeNode::on_diagnostics(diagnostic_msgs::msg::DiagnosticArray::Const
 void MqttBridgeNode::on_high_level_status(
     mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
 {
+  received_high_level_status_ = true;
+  last_high_level_status_received_ = now();
+
   mqtt_client_->publish(full_topic("high_level_status"),
                         serialise_high_level_status(*msg),
                         /*retain=*/true);
@@ -623,6 +661,11 @@ void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // Store the latest fix; the timer will rate-limit publication (same
   // pattern as on_odom/pending_odom_ above).
   pending_gps_ = *msg;
+}
+
+void MqttBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
+{
+  mqtt_client_->publish(full_topic("rtk_status"), serialise_rtk_status(*msg), /*retain=*/true);
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +681,20 @@ bool MqttBridgeNode::parse_command_payload(const std::string& payload, uint8_t& 
   }
   out_command = static_cast<uint8_t>(command_int);
   return true;
+}
+
+bool MqttBridgeNode::is_high_level_status_stale(bool received_before,
+                                                const rclcpp::Time& now,
+                                                const rclcpp::Time& last_received,
+                                                double threshold_s)
+{
+  if (!received_before)
+  {
+    // Never received one yet — normal during startup (behavior_tree_node may
+    // not be up), not evidence of a stuck subscription.
+    return false;
+  }
+  return (now - last_received).seconds() > threshold_s;
 }
 
 void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/, const std::string& payload)
@@ -680,6 +737,128 @@ void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/, const std::st
           RCLCPP_WARN(get_logger(), "HighLevelControl command=%d reported failure.", command_int);
         }
       });
+}
+
+// ---------------------------------------------------------------------------
+// MQTT start_area callback → StartInArea service call
+// ---------------------------------------------------------------------------
+
+void MqttBridgeNode::on_mqtt_start_area(const std::string& /*topic*/, const std::string& payload)
+{
+  // Same payload convention as <prefix>/command: ASCII decimal, not a raw
+  // byte. Reuses parse_command_payload — StartInArea.area is a uint8, same
+  // range and format as the HighLevelControl command codes.
+  uint8_t area_index = 0;
+  if (!parse_command_payload(payload, area_index))
+  {
+    RCLCPP_WARN(get_logger(),
+                "MQTT start_area payload '%s' is not a valid uint8 area index. Ignored.",
+                payload.c_str());
+    return;
+  }
+
+  if (!srv_start_area_->service_is_ready())
+  {
+    RCLCPP_WARN(get_logger(), "StartInArea service not available; command dropped.");
+    return;
+  }
+
+  auto request = std::make_shared<mowgli_interfaces::srv::StartInArea::Request>();
+  request->area = area_index;
+
+  // Fire-and-forget async call, same pattern as on_mqtt_command above — this
+  // is exactly as consequential as the existing bare COMMAND_START relay
+  // (StartInArea raises COMMAND_START internally too, ahead of the normal
+  // area-iteration order), so it inherits the same "no ack topic, poll
+  // high_level_status" contract rather than a bespoke response channel.
+  srv_start_area_->async_send_request(
+      request,
+      [this, area_index](rclcpp::Client<mowgli_interfaces::srv::StartInArea>::SharedFuture future)
+      {
+        const auto response = future.get();
+        if (response->success)
+        {
+          RCLCPP_INFO(get_logger(),
+                      "StartInArea area=%u accepted.",
+                      static_cast<unsigned>(area_index));
+        }
+        else
+        {
+          RCLCPP_WARN(get_logger(),
+                      "StartInArea area=%u reported failure.",
+                      static_cast<unsigned>(area_index));
+        }
+      });
+}
+
+// ---------------------------------------------------------------------------
+// Area list: periodic poll of GetMowingArea + publish
+// ---------------------------------------------------------------------------
+
+void MqttBridgeNode::poll_areas()
+{
+  if (!srv_get_area_->service_is_ready())
+  {
+    // map_server_node not up yet (or currently down) — try again next
+    // interval; areas_poll_in_flight_ stays false so on_timer() will retry.
+    return;
+  }
+  areas_poll_in_flight_ = true;
+  poll_areas_step(0, std::make_shared<std::vector<AreaSummary>>());
+}
+
+void MqttBridgeNode::poll_areas_step(uint32_t index,
+                                     std::shared_ptr<std::vector<AreaSummary>> collected)
+{
+  if (index >= kMaxAreasPoll)
+  {
+    areas_poll_in_flight_ = false;
+    publish_areas_if_changed(*collected);
+    return;
+  }
+
+  auto request = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+  request->index = index;
+
+  srv_get_area_->async_send_request(
+      request,
+      [this, index, collected](
+          rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedFuture future)
+      {
+        const auto response = future.get();
+        if (!response->success)
+        {
+          // index >= areas_.size() on the server side — end of the list.
+          areas_poll_in_flight_ = false;
+          publish_areas_if_changed(*collected);
+          return;
+        }
+
+        // Navigation-only areas (keepout/boundary zones, never mowed) are
+        // deliberately excluded — same split the GUI applies
+        // (splitMapAreas) before offering "mow this area" to an operator. A
+        // start_area command targeting one would just be skipped by the
+        // BT's own mow-selection loop regardless, but excluding it here
+        // keeps the published list meaning "things you can actually ask
+        // this topic to mow".
+        if (!response->area.is_navigation_area)
+        {
+          collected->push_back(AreaSummary{index, response->area.name});
+        }
+
+        poll_areas_step(index + 1, collected);
+      });
+}
+
+void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& areas)
+{
+  const std::string json = serialise_areas(areas);
+  if (json == last_areas_json_)
+  {
+    return;
+  }
+  last_areas_json_ = json;
+  mqtt_client_->publish(full_topic("areas"), json, /*retain=*/true);
 }
 
 // ---------------------------------------------------------------------------
@@ -733,6 +912,125 @@ void MqttBridgeNode::on_timer()
       pending_gps_.reset();
     }
   }
+
+  maybe_poll_area_boundaries();
+
+  // Slow periodic area-list poll — independent of publish_rate_, see
+  // kAreasPollIntervalS's doc comment (mqtt_bridge_node.hpp).
+  if (!areas_poll_in_flight_)
+  {
+    const rclcpp::Time t = now();
+    const double elapsed = (t - last_areas_poll_).seconds();
+    if (elapsed >= kAreasPollIntervalS)
+    {
+      last_areas_poll_ = t;
+      poll_areas();
+    }
+  }
+
+  // <prefix>/high_level_status subscription watchdog (mowglinext#644) — see
+  // the file-level doc comment (mqtt_bridge_node.hpp) for the full field
+  // observation this recovers from.
+  if (is_high_level_status_stale(received_high_level_status_,
+                                 now(),
+                                 last_high_level_status_received_,
+                                 kHighLevelStatusStaleAfterS))
+  {
+    RCLCPP_WARN(get_logger(),
+                "No /behavior_tree_node/high_level_status message in over %.0fs — "
+                "recreating the subscription.",
+                kHighLevelStatusStaleAfterS);
+    create_high_level_status_subscription();
+    // Give the fresh subscription a full window before re-checking, rather
+    // than re-triggering next tick if behavior_tree_node itself is what's
+    // actually down.
+    last_high_level_status_received_ = now();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Area boundary polling
+// ---------------------------------------------------------------------------
+
+void MqttBridgeNode::maybe_poll_area_boundaries()
+{
+  if (area_poll_in_progress_)
+  {
+    return;
+  }
+  const rclcpp::Time t = now();
+  if ((t - last_area_poll_).seconds() < kAreaPollIntervalS)
+  {
+    return;
+  }
+  if (!srv_get_mowing_area_->service_is_ready())
+  {
+    // map_server_node not up (yet, or at all) — retry after the same
+    // interval rather than hammering service_is_ready() every tick.
+    last_area_poll_ = t;
+    return;
+  }
+
+  area_poll_in_progress_ = true;
+  last_area_poll_ = t;
+  auto accumulated =
+      std::make_shared<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>();
+  poll_area_boundary_step(0, accumulated);
+}
+
+void MqttBridgeNode::poll_area_boundary_step(
+    uint32_t index,
+    std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>> accumulated)
+{
+  if (index >= kMaxAreaPollCount)
+  {
+    finish_area_boundary_poll(accumulated);
+    return;
+  }
+
+  auto request = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+  request->index = index;
+
+  // Not native recursion: async_send_request's callback runs later, off the
+  // executor's queue, not synchronously inline — each step's lambda returns
+  // immediately after scheduling the next request, so there is no growing
+  // call stack even for many areas.
+  srv_get_mowing_area_->async_send_request(
+      request,
+      [this, index, accumulated](
+          rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedFuture future)
+      {
+        const auto response = future.get();
+        if (!response->success)
+        {
+          // Index out of range = end of the (possibly non-contiguous, see
+          // docs/MQTT_CONTROL.md) area list.
+          finish_area_boundary_poll(accumulated);
+          return;
+        }
+        if (!response->area.is_navigation_area)
+        {
+          // Navigation-only areas (keepout/boundary zones, never mowed) are
+          // excluded — matches <prefix>/areas' own filter (PR #638).
+          accumulated->emplace_back(index, response->area);
+        }
+        poll_area_boundary_step(index + 1, accumulated);
+      });
+}
+
+void MqttBridgeNode::finish_area_boundary_poll(
+    std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>> accumulated)
+{
+  area_poll_in_progress_ = false;
+  const std::string json = serialise_area_boundaries(*accumulated, datum_lat_, datum_lon_);
+  if (json == last_area_boundary_json_)
+  {
+    // Retained topic: republish only when the geometry actually changed,
+    // not every ~10s poll tick.
+    return;
+  }
+  last_area_boundary_json_ = json;
+  mqtt_client_->publish(full_topic("area_boundary"), json, /*retain=*/true);
 }
 
 // ---------------------------------------------------------------------------
@@ -865,6 +1163,20 @@ std::string MqttBridgeNode::serialise_diagnostics(const diagnostic_msgs::msg::Di
 std::string MqttBridgeNode::serialise_high_level_status(
     const mowgli_interfaces::msg::HighLevelStatus& msg)
 {
+  // HighLevelStatus.gps_quality_percent is misnamed at the source: BT
+  // context (behavior_tree_node.cpp's context_->gps_quality) is a 0.0-1.0
+  // normalized fraction (std::clamp(..., 0.0f, 1.0f) / gnss_status_utils::
+  // NormalizedQuality), and status_snapshot.cpp assigns it straight into
+  // this field with no *100 — so a "fully good" fix reads as 1.0, not
+  // 100.0. Not something to fix at the source (mowgli_behavior has other
+  // consumers of that same field/context member; changing its scale there
+  // is a separate, larger change). Scale it here so the MQTT contract's
+  // field genuinely means "percent", matching docs/MQTT_CONTROL.md and
+  // what an external consumer (e.g. a Home Assistant sensor with
+  // PERCENTAGE as its unit) will reasonably assume from the field name.
+  const double gps_quality_pct =
+      std::max(0.0, std::min(100.0, static_cast<double>(msg.gps_quality_percent) * 100.0));
+
   char buf[768];
   std::snprintf(buf,
                 sizeof(buf),
@@ -894,7 +1206,7 @@ std::string MqttBridgeNode::serialise_high_level_status(
                 static_cast<int>(msg.completed_swaths),
                 static_cast<int>(msg.skipped_swaths),
                 static_cast<double>(msg.coverage_percent),
-                static_cast<double>(msg.gps_quality_percent),
+                gps_quality_pct,
                 static_cast<double>(msg.battery_percent),
                 msg.is_charging ? "true" : "false",
                 msg.emergency ? "true" : "false");
@@ -904,9 +1216,9 @@ std::string MqttBridgeNode::serialise_high_level_status(
 std::string MqttBridgeNode::serialise_gps(const sensor_msgs::msg::NavSatFix& msg)
 {
   // status.status is STATUS_NO_FIX(-1)/STATUS_FIX(0)/STATUS_SBAS_FIX(1)/
-  // STATUS_GBAS_FIX(2); this is a raw NavSatFix relay, not the richer
-  // universal_gnss RTK-quality summary the GUI/BT use elsewhere — a
-  // consumer wanting Fixed-vs-Float should not read this field as that.
+  // STATUS_GBAS_FIX(2); this is a raw NavSatFix relay, not RTK-quality — a
+  // consumer wanting Fixed-vs-Float should read <prefix>/rtk_status
+  // (serialise_rtk_status() below) instead.
   char buf[192];
   std::snprintf(buf,
                 sizeof(buf),
@@ -918,6 +1230,176 @@ std::string MqttBridgeNode::serialise_gps(const sensor_msgs::msg::NavSatFix& msg
                 static_cast<int>(msg.status.status),
                 static_cast<unsigned>(msg.status.service));
   return std::string{buf};
+}
+
+namespace
+{
+const char* FixTypeName(uint8_t fix_type)
+{
+  using mowgli_interfaces::msg::GnssStatus;
+  switch (fix_type)
+  {
+    case GnssStatus::FIX_TYPE_NO_FIX:
+      return "NO_FIX";
+    case GnssStatus::FIX_TYPE_GPS_FIX:
+      return "GPS_FIX";
+    case GnssStatus::FIX_TYPE_RTK_FLOAT:
+      return "RTK_FLOAT";
+    case GnssStatus::FIX_TYPE_RTK_FIXED:
+      return "RTK_FIXED";
+    case GnssStatus::FIX_TYPE_DEAD_RECKONING:
+      return "DEAD_RECKONING";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+const char* RtkModeName(uint8_t rtk_mode)
+{
+  using mowgli_interfaces::msg::GnssStatus;
+  switch (rtk_mode)
+  {
+    case GnssStatus::RTK_MODE_UNKNOWN:
+      return "UNKNOWN";
+    case GnssStatus::RTK_MODE_NONE:
+      return "NONE";
+    case GnssStatus::RTK_MODE_FLOAT:
+      return "FLOAT";
+    case GnssStatus::RTK_MODE_FIXED:
+      return "FIXED";
+    default:
+      return "UNKNOWN";
+  }
+}
+}  // namespace
+
+std::string MqttBridgeNode::serialise_rtk_status(const mowgli_interfaces::msg::GnssStatus& msg)
+{
+  // quality_percent here is mowgli_interfaces::gnss_status_utils::
+  // HardwareQualityPercent(msg) — deliberately NOT msg.quality_percent
+  // directly. That field's own population is backend-dependent per
+  // GnssStatus.msg's header comment ("richer value" vs "derived from
+  // fix_type") and isn't guaranteed 0-100 the way this already-relied-upon
+  // helper is: it's the exact computation hardware_bridge_node.cpp uses for
+  // its own gps_quality_ (the GUI's "GPS %" health-check card), so this
+  // topic can never disagree with what the robot itself already shows.
+  const unsigned quality_percent =
+      static_cast<unsigned>(mowgli_interfaces::gnss_status_utils::HardwareQualityPercent(msg));
+
+  char buf[320];
+  std::snprintf(buf,
+                sizeof(buf),
+                "{"
+                "\"fix_type\":%u,"
+                "\"fix_type_name\":\"%s\","
+                "\"rtk_mode\":%u,"
+                "\"rtk_mode_name\":\"%s\","
+                "\"fix_valid\":%s,"
+                "\"quality_percent\":%u"
+                "}",
+                static_cast<unsigned>(msg.fix_type),
+                FixTypeName(msg.fix_type),
+                static_cast<unsigned>(msg.rtk_mode),
+                RtkModeName(msg.rtk_mode),
+                msg.fix_valid ? "true" : "false",
+                quality_percent);
+  return std::string{buf};
+}
+
+std::string MqttBridgeNode::serialise_areas(const std::vector<AreaSummary>& areas)
+{
+  // Dynamic string building, not the fixed-size snprintf buffers the other
+  // serialise_* functions use above — area names are operator-supplied free
+  // text of unbounded length, so a fixed buffer could silently truncate the
+  // JSON (see the file-level doc comment's note on this).
+  std::string json = "[";
+  bool first = true;
+  for (const auto& area : areas)
+  {
+    if (!first)
+    {
+      json += ',';
+    }
+    first = false;
+    json += "{\"index\":";
+    json += std::to_string(area.index);
+    json += ",\"name\":\"";
+    json += json_escape(area.name);
+    json += "\"}";
+  }
+  json += ']';
+  return json;
+}
+
+std::string MqttBridgeNode::serialise_area_boundaries(
+    const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>& areas,
+    double datum_lat,
+    double datum_lon)
+{
+  // Unbounded-length payload (polygon point counts vary), so this is built
+  // with std::string concatenation rather than a fixed snprintf buffer —
+  // same precedent as <prefix>/areas (PR #638).
+  auto append_point = [](std::string& json, double x, double y)
+  {
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "[%.3f,%.3f]", x, y);
+    json += buf;
+  };
+
+  auto append_polygon = [&](std::string& json, const geometry_msgs::msg::Polygon& polygon)
+  {
+    json += '[';
+    bool first_point = true;
+    for (const auto& point : polygon.points)
+    {
+      if (!first_point)
+      {
+        json += ',';
+      }
+      first_point = false;
+      append_point(json, static_cast<double>(point.x), static_cast<double>(point.y));
+    }
+    json += ']';
+  };
+
+  char header[96];
+  std::snprintf(header,
+                sizeof(header),
+                "{\"datum_lat\":%.8f,\"datum_lon\":%.8f,\"areas\":[",
+                datum_lat,
+                datum_lon);
+  std::string json{header};
+
+  bool first_area = true;
+  for (const auto& [index, area] : areas)
+  {
+    if (!first_area)
+    {
+      json += ',';
+    }
+    first_area = false;
+
+    json += "{\"index\":";
+    json += std::to_string(index);
+    json += ",\"name\":\"";
+    json += json_escape(area.name);
+    json += "\",\"boundary\":";
+    append_polygon(json, area.area);
+    json += ",\"obstacles\":[";
+    bool first_obstacle = true;
+    for (const auto& obstacle : area.obstacles)
+    {
+      if (!first_obstacle)
+      {
+        json += ',';
+      }
+      first_obstacle = false;
+      append_polygon(json, obstacle);
+    }
+    json += "]}";
+  }
+  json += "]}";
+  return json;
 }
 
 // ---------------------------------------------------------------------------

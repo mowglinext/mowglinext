@@ -100,7 +100,8 @@ controller_server:
     min_theta_velocity_threshold: 0.0
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker"]
+    goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker",
+                           "coverage_axis_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
     path_handler_plugins: ["PathHandler"]
     PathHandler:
@@ -196,6 +197,45 @@ controller_server:
       xy_goal_tolerance: 0.50
       yaw_goal_tolerance: 3.14   # ≈π → ignore final heading (test pins ≤ 3.1416)
       plan_topic: "/controller_server/FollowCoveragePath/global_plan"
+
+    # Stock alternative to coverage_goal_checker, NOT selected by default.
+    #
+    # ROS 2 Lyrical's nav2_controller::AxisGoalChecker is the first upstream
+    # checker that can survive a closed headland ring, because Lyrical passes the
+    # TRANSFORMED PLAN into isGoalReached(): `path_length_tolerance` refuses to
+    # accept the goal while more than that much plan is left, which is the same
+    # "you have not driven the ring yet" guard PathProgressGoalChecker implements
+    # by counting poses — with no custom plugin and no plan topic to keep in sync.
+    # It also splits the XY tolerance into an ALONG-path and a CROSS-track
+    # component, which matches how FTC actually parks: short of the last pose
+    # (along) but tightly on the line (cross).
+    #
+    # Two reasons it is not the default yet, both to be settled by a field test:
+    #   1. The length it measures is that of the LOCAL plan the FeasiblePathHandler
+    #      hands over, bounded by `prune_distance` (2.0 m) — so a tolerance
+    #      anywhere near 2.0 m would unlock immediately. 1.0 m = "the last metre".
+    #   2. That handler finds the closest pose by searching forward up to
+    #      `max_robot_pose_search_dist` (10.0 m). On a headland ring SHORTER than
+    #      that, the pose nearest the start is also the ring's END, which is the
+    #      exact snap that made a nearest-point start skip 46-99 % of closed rings
+    #      in 2026-08-24. FTC is immune (it tracks the full plan itself); a goal
+    #      checker fed the pruned plan is not.
+    #
+    # Select it with `coverage_goal_checker_id: "coverage_axis_goal_checker"` in
+    # mowgli_robot.yaml. See docs/NAV2_LYRICAL_CONTROLLER_REVIEW.md.
+    coverage_axis_goal_checker:
+      plugin: "nav2_controller::AxisGoalChecker"
+      # Along-path: FTC stops max_goal_distance_error (0.50 m) short of the final
+      # pose by design, so anything tighter can never be reached.
+      along_path_tolerance: 0.50
+      # Cross-track: FTC tracks coverage to 8-16 mm; 0.25 m is loose enough to
+      # accept a legitimate arrival and tight enough to reject "passing nearby".
+      cross_track_tolerance: 0.25
+      # The last metre of the LOCAL (pruned) plan — see note 1 above.
+      path_length_tolerance: 1.0
+      # Overshooting the last pose still completes the segment: for coverage the
+      # ground is cut either way, and refusing the goal would re-mow the area.
+      is_overshoot_valid: true
 
     # FollowPath (transit / dock approach / home / undock recovery) —
     # MPPI. FTC was the wrong tool for transit: it has a rigid state
@@ -325,6 +365,49 @@ controller_server:
         max_angular_accel: 2.5
         allow_reversing: false
 
+        # --- Dynamic Window Pure Pursuit (DWPP, ROS 2 Lyrical / Nav2 1.5.1) ---
+        # OPT-IN, OFF by default. Instead of applying the pure-pursuit curvature
+        # to the regulated linear velocity directly, DWPP searches the velocity
+        # window reachable within one control period under the acceleration
+        # limits below and picks the (v, w) pair that tracks the path most
+        # closely. It slows into sharp turns on its own, without the manual
+        # curvature tuning above.
+        #
+        # WHY IT IS HERE: the slow, metre-scale S-weave on transits (field
+        # 2026-07-21) is the pure-pursuit limit cycle — RPP overshoots each
+        # carrot because the firmware yaw loop lags its command, then corrects.
+        # It was damped by LENGTHENING the lookahead (lookahead_time 1.5 -> 2.0,
+        # min_lookahead_dist 0.30 -> 0.45), which costs cornering accuracy near
+        # the dock. DWPP attacks the same limit cycle at its source, by refusing
+        # to command a (v, w) the chassis cannot actually reach this period.
+        #
+        # NOT for the coverage lane: DWPP is still a lookahead-carrot method, so
+        # it cuts corners on the R = 0.20 m turn-around arcs of an F2C route the
+        # way any pure pursuit does. Coverage stays on FTCController
+        # (CLAUDE.md Invariant 8) — this knob only ever touches transit.
+        #
+        # Flip it with `transit_dynamic_window` in mowgli_robot.yaml (GUI:
+        # Settings -> Navigation); the launch file injects it here.
+        use_dynamic_window: false
+        # Forward-only window: allow_reversing is false above, and a transit that
+        # reverses would drag the blade deck backwards over ground the robot
+        # cannot see. 0.0 bounds the search to forward motion.
+        min_linear_vel: 0.0
+        # Yaw authority actually available on this chassis: the RotationShim
+        # pivots at 0.75 rad/s and FTC clamps at max_cmd_vel_ang 0.8. Anything
+        # larger would let DWPP pick a rate the firmware yaw loop cannot hold.
+        max_angular_vel: 0.8
+        min_angular_vel: -0.8
+        # 0 -> transit_speed in ~0.6 s. Deliberately gentle: this drive has a
+        # ~PWM 40 wheel deadband, so a window that reaches for a large step ends
+        # up commanding velocities the wheels do not produce, which is what makes
+        # the open-loop ramp elsewhere in this file necessary.
+        max_linear_accel: 0.5
+        max_linear_decel: -0.5
+        # Mirror of max_angular_accel above (that key is shared with the
+        # rotate-to-heading ramp). Nav2 expects the decel limits NEGATIVE.
+        max_angular_decel: -2.5
+
       use_interpolation: true
 
     # ── Coverage controller: FTCController (Follow-the-Carrot PID) ──────────
@@ -439,6 +522,12 @@ controller_server:
       max_goal_angle_error: 30.0
       goal_timeout: 10.0
       max_follow_distance: 2.0
+      # carrot_max_lead is deliberately NOT set: FTC derives the longitudinal
+      # carrot lead cap as 1.5 x speed_fast / kp_lon (0.30 m here, see
+      # ftc_carrot_lead.hpp). It was a 1.0 m literal until 2026-09-17, when a dig
+      # hard-stop let the carrot run 0.95 m ahead on the ring around a drawn
+      # obstacle and the robot cut the curve 0.41 m INWARDS, into the keepout
+      # band. Set a positive value here only as an explicit override.
       # forward_only=true: FTC never drives a path segment in reverse — it
       # skirts obstacles forward and rejoins the path ahead (MPPI-style), which
       # is the field-preferred behaviour. The earlier ±180° pirouette deadlock
@@ -475,7 +564,26 @@ controller_server:
       # (below) skirts those obstacles cleanly. Re-enable only after the
       # footprint sweep is made less conservative (probe the front of the
       # footprint, not its full length) and field-validated.
-      use_footprint_clearance: false
+      # TRUE since 2026-09-16: sample the REAL chassis polygon against true lethal
+      # cells (254) instead of a +/-obstacle_body_half_width line against the
+      # inscribed band (253).
+      #
+      # The line model was never a model of this robot: its half-width is 0.12 m
+      # while the body reaches 0.275 m, and obstacle_clearance_margin had to grow
+      # to 0.20 m to stand in for the missing 0.155 m. On top of that, thresholding
+      # at 253 grows every obstacle by the inscribed radius (0.17 m) before FTC
+      # even looks at it — so the controller demanded 0.12 + 0.20 + 0.17 = 0.49 m
+      # of room from any lethal cell, including the hedge it was supposed to mow
+      # along. Tuning the margin down to get closer to hedges then removed the
+      # only thing compensating for the coverage planner's too-small inset, and
+      # the robot drove into a mapped tree (2026-09-16).
+      #
+      # With the footprint model the geometry is honest: the body is the body, the
+      # margin below is real slack, and neither depends on the inflation radius.
+      # Simulated on a synthetic costmap (the edge-of-zone scene): it clears the
+      # same obstacles with 0.40 m of lateral deviation where the line model needs
+      # 0.65 m — 0.25 m of usable room recovered, with MORE body protection.
+      use_footprint_clearance: true
       # Front-clip length (m) for the SKIRT clearance footprint when
       # use_footprint_clearance is true (OBSTACLE_WEDGE_RECOVERY_SPEC.md Part A
       # middle ground). Only the leading 0.30 m of the 0.60 m chassis is probed
@@ -516,30 +624,49 @@ controller_server:
       # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml's obstacle_clearance_margin,
       # clamped [0.0, 0.50] — see navigation.launch.py.
       obstacle_clearance_margin: 0.05
-      # Zone-MASK obstacle detection (issue #517). A lethal cell in the LOCAL
-      # obstacle costmap that is ALSO lethal in the GLOBAL keepout costmap
-      # (outside the mowing area, or inside a keepout hole) is NOT an obstacle
-      # for the deviation logic — the coverage path was planned to pass beside
-      # it and never enters it. 2026-09-02 FIELD (LiDAR mow #2, 73 min): 71
-      # "lateral deviation needed > max_lateral_deviation" strip aborts, in two
-      # clusters — 35 on the diagonal area boundary (the hedge it was recorded
-      # along) and 33 beside a ~1.5 m keepout island (a tree) — with scan_min
-      # 0.80–0.86 m at the abort rows vs 0 beams within 1 m elsewhere: the
-      # object was real, the path ends chassis_safety_inset (0.20 m) short of
-      # the boundary and U-turns there, so the 0.50 m-long lookahead footprints
-      # reached it at every row end. Each abort cost obstacle_wait_timeout_s +
-      # a reverse escape + a re-dispatch and skipped 0.80 m of path (the
-      # resume-cursor step). Reuses the confine_deviation_to_zone boundary
-      # costmap, so it is inert until that costmap arrives (old behaviour);
-      # in-zone obstacles keep the exact current behaviour and collision_monitor
-      # remains the real-time guard for anything the mask drops.
-      ignore_obstacles_outside_zone: true
+      # NOTE: there is no ignore_obstacles_outside_zone knob any more (removed
+      # 2026-09-17). It zone-MASKED detection: a lethal cell in the LOCAL
+      # obstacle costmap that was ALSO lethal in the GLOBAL keepout costmap did
+      # not count as an obstacle, on the theory that the plan was routed around
+      # it. But keepout_filter stamps every DRAWN map obstacle lethal globally,
+      # so the mask deleted exactly the obstacles the operator had taken the
+      # trouble to map: on 2026-09-16 FTC logged "AVOIDANCE complete (path clear
+      # for 3.7s), back on path" and hit the same mapped tree twice, nine
+      # seconds later, with the trunk lethal in the local costmap throughout.
+      # Detection is now the plain local-costmap test. The global costmap keeps
+      # its OTHER role (confine_deviation_to_zone, plugin default true, no key
+      # here) — refusing a SKIRT that would leave the zone — which is sound
+      # because it only ever removes candidate offsets, never obstacles.
       enable_obstacle_deviation: true
       # OVERRIDDEN AT LAUNCH: navigation.launch.py injects
       # mowgli_robot.yaml.max_obstacle_avoidance_distance (default 2.0,
       # clamped [0.5, 10.0]) here — the same knob that drives
       # map_server.bypass_max_length. The static value below only governs
       # isolated runs/tests that load this yaml directly.
+      # Avoidance PLANNER. true = whole-profile lattice (ftc_offset_lattice.hpp):
+      # a (station x lateral offset) lattice over the next avoidance_horizon_m of
+      # path, searched by dynamic programming against separate critics — real
+      # footprint vs raw lethal LOCAL cells and the zone (hard), un-mowed area,
+      # smoothness, side stability, return to the line (soft). DWB/MPPI-style
+      # trajectory scoring, but in PATH space: FTC's PID still does the tracking,
+      # so none of the corner-cutting that got MPPI reverted. false = the legacy
+      # search (ONE offset for the whole window, side picked from a single pose and
+      # latched), kept as a live rollback: `ros2 param set /controller_server
+      # FollowCoveragePath.use_offset_lattice false`.
+      # Replay of bag carrot-1500 (2026-09-17), same costmap, same 110 s: legacy
+      # 117 x WEDGED "needed > max_lateral_deviation" 2.5 m before the obstacle;
+      # lattice 0 WEDGED, a 0.20-0.30 m skirt. max_lateral_deviation and
+      # deviation_step size the lattice; obstacle_clear_hold_s debounces the
+      # return; require_clear_exit / min_lateral_deviation are legacy-only.
+      use_offset_lattice: true
+      avoidance_horizon_m: 2.5     # = obstacle_layer obstacle_max_range
+      avoidance_max_slope: 1.0     # lateral m per m of path (45 deg)
+      # The skirt must be in place this far BEFORE the obstacle: the requested
+      # offset is only reached after blend + lateral loop + chassis lag.
+      avoidance_reaction_m: 0.5
+      # A blockage across the WHOLE lattice further ahead than this is not a
+      # reason to stop now: the horizon is cut and the robot keeps driving.
+      avoidance_min_horizon_m: 1.0
       max_lateral_deviation: 1.5
       deviation_step: 0.05
       deviation_blend_rate: 0.5
@@ -776,8 +903,9 @@ global_costmap:
       # FREE (0), area obstacle holes are LETHAL. The operator draws navigation
       # areas as the transit/dock corridors, so the dock + approach fall inside
       # an allowed (free) region; the dock corridor is also explicitly carved
-      # back to free in map_server. enforce_boundary_margin_m (default 0.40 m)
-      # leaves a small free slack outside each edge for RTK drift; disable the
+      # back to free in map_server. enforce_boundary_margin_m (floored at launch
+      # at the chassis circumscribed radius, 0.597 m shipped) leaves a mid-cost,
+      # non-lethal band outside each edge for the body to overhang; disable the
       # whole hard boundary via map_server lethal_outside_areas:=false if a
       # site has no navigation area over the dock (legacy wide keepout_nav_margin
       # free band). The standalone /boundary_violation topic remains as a
@@ -785,27 +913,50 @@ global_costmap:
       # filter-free (see local_costmap below) so coverage swaths near the edge
       # don't trip MPPI/RPP "collision ahead" and Nav2 local recoveries (spin,
       # backup) still function near edges.
-      # inflation_layer is listed AFTER keepout so keepout lethals are inflated
-      # by inflation_radius (0.20 m) only — wall 0.40 m outside the centre line
-      # → the inflated band ends 0.20 m OUTSIDE it, so a robot riding the
-      # outer headland ring (centerline ON the recorded line) keeps its centre
-      # cell clear of the inscribed-cost band and Smac transits no longer
-      # sporadically fail "Start occupied" at the boundary.
+      # PLUGIN ORDER (set in the lidar / no-lidar overlays): inflation_layer is
+      # listed BEFORE keepout_filter, so the keepout mask is stamped onto an
+      # already-inflated master grid and is NOT inflated itself. Only real
+      # sensor marks (obstacle_layer) get the inflation band.
+      #
+      # Why: SmacPlanner2D is a POINT check — a pose collides when its centre
+      # cell cost is >= INSCRIBED. It never tests the footprint polygon, so its
+      # ONLY body model is whatever was grown around a lethal cell beforehand.
+      # map_server already grows the body into the mask, once and explicitly:
+      #   * drawn obstacles: + keepout_obstacle_margin = chassis_half_width
+      #     (robot_config_util.keepout_obstacle_margin, injected by
+      #     full_system.launch.py);
+      #   * recorded boundary: the lethal wall starts enforce_boundary_margin_m
+      #     (floored at the chassis circumscribed radius) OUTSIDE the line.
+      # Inflating the mask on top counted the body a second time. With the old
+      # order (keepout, then inflation) a robot ON its coverage line next to a
+      # drawn obstacle sat inside the inscribed band: detour transits timed out
+      # (37 s, "nav2 UNKNOWN (code 0)", a whole first headland skipped) and
+      # transits answered START_OCCUPIED. Field 2026-09-17, this order
+      # hand-applied on the robot: a 17-minute mow with zero START_OCCUPIED and
+      # zero boundary emergency stops.
+      #
+      # The coverage line is planned >= chassis_half_width + the mask->costmap
+      # rasterisation slack from a drawn obstacle (planning_obstacle_margin in
+      # navigation.launch.py), so "on the line" is plannable by construction.
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
-        # 0.20 m (was 0.40). With keepout_nav_margin=0.3 m and robot
-        # footprint ±0.20 m lateral, 0.40 m inflation made the footprint
-        # corners land inside the inflated zone whenever the robot was
-        # within ~0.44 m of the polygon edge — Smac reported "Start
-        # 0.20 m (reverted from 0.30): with a 9×6 m polygon and
-        # auto-promoted obstacles in the middle, 0.30 m inflation
-        # blocked all transit paths between cells — robot got stuck
-        # in TRANSIT for 9+ min unable to reach any headland start.
-        # Smac's "Inflation layer ... not set sufficiently" warning
-        # is performance, not correctness — planner falls back to
-        # per-footprint checking. collision_monitor PolygonStop
-        # remains the runtime safety guard.
+        # Applies to obstacle_layer (LiDAR) marks ONLY — see the order note
+        # above. The band Smac refuses (cost >= INSCRIBED) is
+        # min(inscribed radius of the footprint, inflation_radius), NOT the
+        # whole inflation_radius: beyond the inscribed radius the cost decays
+        # below 253 and is only a traversal penalty.
+        #
+        # 0.20 m (was 0.40, then 0.30). History, all from when the keepout was
+        # still inflated: 0.40 m put a robot within ~0.44 m of the polygon
+        # edge inside the inflated zone (Smac "Start occupied"); 0.30 m, with
+        # a 9x6 m polygon and auto-promoted obstacles in the middle, blocked
+        # every transit between cells (9+ min stuck in TRANSIT).
+        # Smac's "Inflation layer ... not set sufficiently" warning is about
+        # its heuristic, not correctness. It does NOT fall back to a
+        # per-footprint check: SmacPlanner2D has no footprint check at all
+        # (that exists only in the Hybrid-A*/Lattice planners). The runtime
+        # body guard is collision_monitor's PolygonStop, not the planner.
         inflation_radius: 0.20
 
       keepout_filter:

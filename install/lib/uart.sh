@@ -121,6 +121,57 @@ configure_raspberry_pi_5_hardware() {
   upsert_config_line_by_prefix "dtparam=fan_temp3_speed=" "dtparam=fan_temp3_speed=255"
 }
 
+# Maps a serial device path to the Raspberry Pi UART overlay number that
+# must be enabled for it to exist. Prints nothing (and fails) for a path
+# that needs no `dtoverlay=uartN` line: uart0 (`/dev/ttyAMA0`, the primary
+# PL011, already covered by the unconditional `enable_uart=1`), the
+# mini-uart (`/dev/ttyS0`), a USB `/dev/serial/by-id/...` path, or empty/unset.
+uart_overlay_for_device() {
+  case "${1:-}" in
+    /dev/ttyAMA1) printf '1\n' ;;
+    /dev/ttyAMA2) printf '2\n' ;;
+    /dev/ttyAMA3) printf '3\n' ;;
+    /dev/ttyAMA4) printf '4\n' ;;
+    /dev/ttyAMA5) printf '5\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Which of the five Raspberry Pi UART overlays the hardware CONFIGURED so far
+# this run actually needs — derived from the exact port the operator picked
+# for each peripheral (`pick_uart_port`, `GNSS_SERIAL_DEVICE` /
+# `LIDAR_UART_DEVICE` / `TFLUNA_{FRONT,EDGE}_UART_DEVICE`), not a fixed
+# per-peripheral assumption: real installs don't always land a given
+# peripheral on the same header pin (e.g. a Pi 5 install that wired the LiDAR
+# to ttyAMA2 instead of the common default ttyAMA5). Nothing here ever claims
+# uart1 — no peripheral in this codebase is assigned to it today.
+#
+# Must run AFTER GPS/LiDAR/rangefinder configuration (mowglinext.sh calls
+# this step after those, not before) so these variables are populated;
+# `pick_uart_port` already tolerates picking a `/dev/ttyAMAn` that doesn't
+# exist yet (marked `(*)`, meaning "exists after the dtoverlay + reboot this
+# step performs"), so the ordering costs nothing at selection time.
+#
+# issue #631: blindly enabling all five regardless of configuration silently
+# steals whatever GPIO a custom peripheral (e.g. an LED ring) is wired to.
+required_uart_overlays() {
+  local n
+
+  n="$(uart_overlay_for_device "${GNSS_SERIAL_DEVICE:-}")" && printf '%s\n' "$n"
+
+  if [[ "${LIDAR_ENABLED:-false}" == "true" ]]; then
+    n="$(uart_overlay_for_device "${LIDAR_UART_DEVICE:-}")" && printf '%s\n' "$n"
+  fi
+
+  if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" ]]; then
+    n="$(uart_overlay_for_device "${TFLUNA_FRONT_UART_DEVICE:-}")" && printf '%s\n' "$n"
+  fi
+
+  if [[ "${TFLUNA_EDGE_ENABLED:-false}" == "true" ]]; then
+    n="$(uart_overlay_for_device "${TFLUNA_EDGE_UART_DEVICE:-}")" && printf '%s\n' "$n"
+  fi
+}
+
 enable_all_platform_uarts() {
   step "UART platform setup"
 
@@ -135,16 +186,24 @@ enable_all_platform_uarts() {
 
   append_config_line_if_missing "enable_uart=1"
 
-  # Active tous les UART overlays utiles
-  append_config_line_if_missing "dtoverlay=uart1"
-  append_config_line_if_missing "dtoverlay=uart2"
-  append_config_line_if_missing "dtoverlay=uart3"
-  append_config_line_if_missing "dtoverlay=uart4"
-  append_config_line_if_missing "dtoverlay=uart5"
+  # Enable only the overlays the configured hardware actually uses — not all
+  # five unconditionally (issue #631). Only ADDS lines; never removes one,
+  # so a `dtoverlay=uartN` the operator added by hand for something this
+  # installer doesn't model (e.g. a custom LED ring) is left alone.
+  local overlays n
+  overlays="$(required_uart_overlays | sort -un)"
+  if [[ -z "$overlays" ]]; then
+    info "No configured peripheral needs a UART overlay — leaving uart1-uart5 untouched"
+  else
+    while IFS= read -r n; do
+      [[ -n "$n" ]] || continue
+      append_config_line_if_missing "dtoverlay=uart${n}"
+    done <<< "$overlays"
+  fi
 
   # Bluetooth toujours désactivé dans Mowgli II
   disable_bluetooth_for_uart
   configure_raspberry_pi_5_hardware
 
-  info "All UART overlays requested and Bluetooth disabled"
+  info "UART overlay setup complete"
 }

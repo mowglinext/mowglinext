@@ -740,6 +740,26 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, map[string]interface{}{"message": res.Message})
 				return
 			}
+		case "clear_dig_escalation":
+			// Operator override for a latched repeat-dig escalation
+			// (Status.dig_escalated) — see dig_escalation.hpp. Distance-gated
+			// server-side: this fails (res.Success=false, a human-readable
+			// reason in Message) until the chassis has moved far enough past
+			// the obstruction, so the frontend surfaces that reason rather
+			// than treating a refusal as a transport error.
+			type TriggerRes struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
+			var res TriggerRes
+			err = provider.CallService(ctx, "/hardware_bridge/clear_dig_escalation", &struct{}{}, &res, "std_srvs/srv/Trigger")
+			if err == nil && !res.Success {
+				err = errors.New(res.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": res.Message})
+				return
+			}
 		default:
 			err = errors.New("unknown command")
 		}

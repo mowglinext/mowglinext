@@ -41,6 +41,7 @@
 #include "mowgli_interfaces/gnss_observation_freshness.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
+#include "mowgli_interfaces/msg/dig_event.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
@@ -315,6 +316,41 @@ private:
                                                        context_->context_mutex);
                                                    context_->dig_escalated = msg->data;
                                                  });
+
+    // Session dig points for FollowStrip's skip zones (dig_skip.hpp). This is
+    // what stops the robot re-digging the same hole (issue #500) now that a
+    // dig is only a PROPOSAL in map_server and no longer a keepout — a keepout
+    // under the robot refused every plan from its own pose (START_OCCUPIED,
+    // 2026-09-10 and 2026-09-17).
+    //
+    // VOLATILE on purpose, against a TRANSIENT_LOCAL publisher: the bridge
+    // replays its last 10 dig events to a late joiner, and a dig from a
+    // previous session (the bridge outlives BT restarts) must not become a
+    // skip zone of this one, nor look like "a dig just happened" to a
+    // FollowStrip that is mid-goal when this node restarts.
+    context_->dig_skip_radius_m =
+        declare_parameter<double>("dig_skip_radius_m", kDefaultDigSkipRadiusM);
+    dig_event_sub_ = create_subscription<mowgli_interfaces::msg::DigEvent>(
+        "/hardware_bridge/dig_event",
+        rclcpp::QoS(10),
+        [this](mowgli_interfaces::msg::DigEvent::ConstSharedPtr msg)
+        {
+          const DigPoint dig{msg->position.x, msg->position.y};
+          std::size_t known = 0;
+          {
+            std::lock_guard<std::mutex> lock(context_->context_mutex);
+            context_->session_dig_points = recordDigPoint(context_->session_dig_points, dig);
+            ++context_->dig_event_count;
+            known = context_->session_dig_points.size();
+          }
+          RCLCPP_WARN(get_logger(),
+                      "Dig reported at (%.2f, %.2f) — coverage will skip poses within %.2f m of "
+                      "it for the rest of the session (%zu dig point(s) recorded)",
+                      dig.x,
+                      dig.y,
+                      context_->dig_skip_radius_m,
+                      known);
+        });
 
     // Localization-quality gate feed for LocalizationGuard, latched into
     // context_->localization_degraded.
@@ -1105,6 +1141,12 @@ private:
     const double mow_angle_deg = declare_parameter<double>("mow_angle_deg", kMowAngleAutoDeg);
     blackboard_->set("mow_angle_deg", mow_angle_deg);
     context_->mow_cross_hatch = declare_parameter<bool>("mow_cross_hatch", false);
+    // Which goal-checker instance the coverage FollowPath goals carry. The
+    // default is the only one proven against closed headland rings; the stock
+    // Lyrical AxisGoalChecker is offered as `coverage_axis_goal_checker` for a
+    // side-by-side field comparison (nav2_params_base.yaml declares both).
+    context_->coverage_goal_checker_id =
+        declare_parameter<std::string>("coverage_goal_checker_id", "coverage_goal_checker");
 
     // Area-recording boundary resolution — operator-tunable in
     // mowgli_robot.yaml, previously HARDCODED in main_tree.xml (a 0.2 m
@@ -1252,6 +1294,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr boundary_violation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr lethal_boundary_violation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr dig_escalated_sub_;
+  rclcpp::Subscription<mowgli_interfaces::msg::DigEvent>::SharedPtr dig_event_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr fused_odom_sub_;
   // LocalizationGuard state. Both feeds write loc_obs_ under
   // context_->context_mutex and then call updateLocalizationHealthLocked().

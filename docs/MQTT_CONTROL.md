@@ -47,9 +47,13 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | on change |
 | `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | `publish_rate` Hz |
 | `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | `publish_rate` Hz |
+| `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | on change |
+| `<prefix>/area_boundary` | out | yes | `/map_server_node/get_mowing_area` (polled) | on change, polled every 10 s |
 | `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
 | `<prefix>/available` | out | yes | connection state (LWT) | on connect/disconnect |
+| `<prefix>/areas` | out | yes | `/map_server_node/get_mowing_area` (polled) | ~every 10s |
 | `<prefix>/command` | **in** | — | → `/behavior_tree_node/high_level_control` | — |
+| `<prefix>/start_area` | **in** | — | → `/behavior_tree_node/start_in_area` | — |
 
 ### `<prefix>/high_level_status` — the primary "is it mowing?" topic
 
@@ -74,6 +78,22 @@ reads. Every field of `mowgli_interfaces/msg/HighLevelStatus.msg`:
   "emergency": false
 }
 ```
+
+`gps_quality_percent` is a genuine 0–100 percent on the wire — the bridge scales it up from the
+underlying ROS field, which (despite its name) is actually a 0.0–1.0 fraction at the source
+(`mowgli_behavior/src/status_snapshot.cpp` assigns the BT context's `gps_quality` — itself
+`std::clamp(..., 0.0f, 1.0f)` — straight into `HighLevelStatus.gps_quality_percent` with no ×100).
+If you're reading this field via any *other* path than `<prefix>/high_level_status` (e.g. straight
+off the `/behavior_tree_node/high_level_status` ROS topic), remember it's 0.0–1.0 there, not 0–100.
+
+**Field-observed staleness (mowglinext#644):** the bridge's subscription to the underlying ROS topic
+has been seen to go stale for extended periods (30+ minutes) on a real deployment, continuing to
+report old data on `<prefix>/high_level_status` while the ROS topic itself stayed fresh and this
+node otherwise stayed connected. `mqtt_bridge_node` now watches for this — behavior_tree_node
+republishes the ROS topic unconditionally at least once a second, so several seconds of silence on
+that subscription makes the bridge recreate it automatically, with no restart needed. If you're
+seeing this topic disagree with the mower's actual state for more than a few seconds, check the
+bridge's own log for a "recreating the subscription" warning before assuming a code bug elsewhere.
 
 `state` values (`mowgli_interfaces/msg/HighLevelStatus.msg`):
 
@@ -149,8 +169,63 @@ for anything that needs a real-world location (e.g. a Home Assistant `device_tra
 
 Raw relay of `sensor_msgs/msg/NavSatFix` — `status` is `NavSatStatus.status`
 (-1 `NO_FIX`, 0 `FIX`, 1 `SBAS_FIX`, 2 `GBAS_FIX`); it does **not** distinguish RTK Fixed from
-Float the way the GUI's `universal_gnss/summary` does, so don't read it as an RTK-quality signal —
-`<prefix>/high_level_status.gps_quality_percent` is the field for that.
+Float, so don't read it as an RTK-quality signal — use `<prefix>/rtk_status` for that.
+
+### `<prefix>/rtk_status`
+
+```json
+{"fix_type": 3, "fix_type_name": "RTK_FIXED", "rtk_mode": 3, "rtk_mode_name": "FIXED", "fix_valid": true, "quality_percent": 100}
+```
+
+Relay of `/gps/status` (`mowgli_interfaces/msg/GnssStatus`) — the **same** typed status and
+`gnss_status_utils` helpers the robot's own LED ring and behavior tree read, so this can never
+disagree with what the robot itself shows (e.g. the LED ring's amber "mowing without RTK fix"
+pattern, or the GUI's own GPS % health-check card). `quality_percent` is
+`gnss_status_utils::HardwareQualityPercent()` — a genuine 0–100 — not `GnssStatus.quality_percent`
+directly, whose own population is backend-dependent and not guaranteed to be on that scale.
+
+| Field | Values |
+|-------|--------|
+| `fix_type` / `fix_type_name` | 0 `NO_FIX`, 1 `GPS_FIX`, 2 `RTK_FLOAT`, 3 `RTK_FIXED`, 4 `DEAD_RECKONING` |
+| `rtk_mode` / `rtk_mode_name` | 0 `UNKNOWN`, 1 `NONE`, 2 `FLOAT`, 3 `FIXED` |
+| `fix_valid` | Overrides everything else — a stale/leftover `fix_type` with `fix_valid: false` means no usable fix, full stop |
+
+### `<prefix>/area_boundary`
+
+```json
+{
+  "datum_lat": 52.12345678,
+  "datum_lon": 4.56789012,
+  "areas": [
+    {
+      "index": 0,
+      "name": "Front Lawn",
+      "boundary": [[1.234, -0.567], [10.0, -0.567], [10.0, 8.0], [1.234, 8.0]],
+      "obstacles": [[[3.0, 2.0], [4.0, 2.0], [4.0, 3.0], [3.0, 3.0]]]
+    }
+  ]
+}
+```
+
+Polygon geometry for every recorded mowing area, so an external tool (e.g. a Home Assistant map
+card) can render the boundary and obstacles the robot's own GUI shows. `datum_lat`/`datum_lon` are
+the map-frame origin (`mowgli_robot.yaml`'s datum — the same one `map_server_node` and the
+localizer use, see root `CLAUDE.md` Invariant 4): every `[x, y]` pair is a **map-frame offset in
+metres** from that datum (east/north, equirectangular projection — the same math as
+`wgs84_projection.hpp`), not a lat/lon pair itself. To place a point on a real map, project it back
+through the datum with the same equirectangular formula. `boundary` is the area's outer polygon
+(`MapArea.area`); `obstacles` is a list of polygons (`MapArea.obstacles`), one entry per obstacle,
+empty when the area has none. Navigation-only areas (`MapArea.is_navigation_area`) are excluded —
+they aren't mowed, so there's nothing useful to draw.
+
+This topic is polled independently of the `<prefix>/areas` name-list topic above (each runs its own
+`GetMowingArea` poll loop, on the same 10s cadence but not synchronised) — it exists purely to
+describe geometry for drawing, not to identify areas for a `<prefix>/start_area` command. Indices
+are **not guaranteed stable or contiguous** across a session (mowglinext#637) — match on `name`,
+not `index`, if you need to correlate with `<prefix>/areas`. The bridge polls
+`/map_server_node/get_mowing_area` every 10 seconds (index 0, 1, 2, … until the service reports
+`success: false`, capped at 100 areas) and only republishes (retained) when the serialised geometry
+actually changed, so a static map does not spam the broker.
 
 ### `<prefix>/diagnostics`
 
@@ -202,6 +277,42 @@ confirm it took effect.
 emergency via the separate `/hardware_bridge/emergency_stop` service and clears maps via
 `/map_server_node/clear_map`, not through `HighLevelControl`. Don't rely on sending 254/255 over
 MQTT to do either.
+
+### `<prefix>/areas` (recorded mow areas)
+
+```json
+[
+  {"index": 0, "name": "Front Lawn"},
+  {"index": 2, "name": "Back Garden"}
+]
+```
+
+Polled from `/map_server_node/get_mowing_area` roughly every 10 seconds (walking index 0, 1, 2, …
+until the service reports `success=false` — the same pattern the GUI backend's own map polling
+uses) and republished, retained, only when the resulting list actually changed. Navigation-only
+areas (keepout/boundary zones that are never mowed) are excluded.
+
+**⚠️ Interim, index-based contract — expect this to change.** `index` is the *raw*, purely
+*positional* index `map_server_node` uses internally — recorded areas have **no stable ID** yet
+([mowglinext#637](https://github.com/mowglinext/mowglinext/issues/637) tracks adding one). The
+GUI's own area editor rebuilds its entire area list on any single-area add/edit/delete, which can
+reassign *every* area's index in the process — so **do not cache an index across a session**.
+Re-fetch `<prefix>/areas` and re-resolve the target by `name` before sending `<prefix>/start_area`
+each time. Once #637 lands, this topic is expected to grow a stable `id` field and
+`<prefix>/start_area` an id-based counterpart; this index-only shape is a stepping stone, not the
+final contract — don't build a permanent integration against it without accounting for that.
+
+### `<prefix>/start_area` (inbound — start mowing a specific area)
+
+Payload is an **ASCII decimal integer string** matching the `index` field from `<prefix>/areas`
+(same convention as `<prefix>/command` — publish `"2"`, not the byte `0x02`). Relays straight
+through to `/behavior_tree_node/start_in_area`, which starts mowing that area now, **ahead of the
+normal area-iteration order** — exactly as consequential as `<prefix>/command`'s `COMMAND_START`
+(it raises that internally too). Same fire-and-forget contract: no ack/result topic, an
+unrecognised/out-of-range payload is logged and dropped, and the command is dropped silently if
+`/behavior_tree_node/start_in_area` isn't available. Poll `<prefix>/high_level_status` afterwards
+to confirm it took effect. Subject to the same index-staleness caveat as `<prefix>/areas` above —
+targeting a stale index can start the wrong area.
 
 ## Parameters
 

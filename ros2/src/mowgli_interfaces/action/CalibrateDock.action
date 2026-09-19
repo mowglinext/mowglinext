@@ -5,18 +5,40 @@
 # retry surface (replaces the old blocking CalibrateImuYaw service +
 # the map_server /set_docking_point "capture from robot" button):
 #
-#   1. Wait for RTK-Fixed (σ(xy) gate on /gps/pose_cov).
-#   2. Reverse in a STRAIGHT line under RTK-Fixed on /cmd_vel_docking
+#   1. Wait for RTK-Fixed (σ(xy) gate on /gps/pose_cov), robot on the dock.
+#   2. STILL on the dock and charging: have map_server capture the RAW GPS
+#      antenna position (~/capture_dock_antenna — charging + RTK + N-Fixed-
+#      samples gates, bounded wait). It is held in map_server memory, not
+#      persisted: an antenna position is not a dock position until a
+#      trustworthy yaw can lever-arm-correct it. This is the ONE moment of the
+#      routine where "on the dock" and "RTK-Fixed" are both guaranteed.
+#   3. Reverse in a STRAIGHT line under RTK-Fixed on /cmd_vel_docking
 #      (blade OFF, collision_monitor active), monitoring COG.
-#   3. Gate COG coherence (circular std + bearing match + min displacement);
+#   4. Gate COG coherence (circular std + bearing match + min displacement);
 #      derive the dock chassis yaw from the reverse leg.
-#   4. Drive FORWARD along the same line until the firmware reports charging
-#      (re-dock), or fail.
-#   5. Persist the dock pose via map_server /set_docking_point (the single
-#      canonical writer): averaged GPS x/y + the motion-derived yaw.
+#   5. Persist via map_server /set_docking_point (the single canonical
+#      writer), ONE call, robot OFF the dock: use_pending_antenna +
+#      yaw_source=MOTION — x, y and yaw written together. If step 2 produced
+#      no capture (or it expired), fall back to preserve_position +
+#      yaw_source=MOTION: yaw only, stored x/y kept.
+#   6. Re-dock through the production docking pipeline — a pure CONFIRMATION
+#      pass. Nothing is measured or saved after it.
 #
-# The dock pose is persisted ONLY after a verified re-dock (charging), so an
-# aborted / incoherent / non-charging run never corrupts mowgli_robot.yaml.
+# Why not persist after the re-dock: docking_server and gps_dock_detection_node
+# only read dock_pose_x/y/yaw as ROS parameters at container startup, so the
+# step-6 re-dock always steers on the OLD pose and vouches for nothing about
+# the new one. Why not capture the position after the re-dock: circular — a
+# wrong stored position makes that re-dock stop short of the contacts, so the
+# capture that would fix it is never reached (field test 2026-09-17), and the
+# receiver often sits at RTK-Float under the dock.
+#
+# `success` therefore means "yaw AND position were saved". It can come with
+# retry_reason RETRY_NO_CHARGE_ON_REDOCK: saved, but step 6 did not reach the
+# charger and the robot is NOT on the dock (expected when the old pose was
+# wrong) — a warning, not a failure. A yaw-only save is reported as a failure
+# (RETRY_PERSIST_FAILED, or RETRY_NO_CHARGE_ON_REDOCK if also not re-docked)
+# whose `message` lists the yaw as saved. The new pose only drives docking
+# after a mowgli-ros2 restart; `message` always says so.
 
 # ── Goal ──────────────────────────────────────────────────────────────────
 bool include_imu_yaw     # also solve the IMU mounting-yaw offset from the straight legs
@@ -29,7 +51,7 @@ uint8 RETRY_NONE=0
 uint8 RETRY_NO_RTK=1                # never reached RTK-Fixed within the timeout
 uint8 RETRY_COG_INCOHERENT=2       # COG std too high / bearing mismatch / RTK not truly fixed
 uint8 RETRY_INSUFFICIENT_DISPLACEMENT=3  # reverse leg did not travel far enough for a yaw fit
-uint8 RETRY_NO_CHARGE_ON_REDOCK=4  # forward re-dock did not re-engage the charger
+uint8 RETRY_NO_CHARGE_ON_REDOCK=4  # confirmation re-dock did not reach the charger (see `message` for what was saved)
 uint8 RETRY_EMERGENCY=5            # emergency latched / triggered mid-sequence
 uint8 RETRY_WRONG_STATE=6          # robot not on dock at start, or in AUTONOMOUS/mowing
 uint8 RETRY_PERSIST_FAILED=7       # set_docking_point rejected or file not writable
@@ -38,7 +60,8 @@ bool success
 uint8 retry_reason
 string message
 
-# Persisted dock pose (valid only when success == true)
+# Persisted dock pose as STORED by map_server (x/y updated only when success;
+# the yaw is persisted whenever the run got past step 5 — see `message`)
 float64 dock_pose_x            # ENU map-frame x of the dock contact (m)
 float64 dock_pose_y            # ENU map-frame y of the dock contact (m)
 float64 dock_pose_yaw_rad      # chassis heading when docked (ENU, rad)
@@ -61,6 +84,7 @@ uint8 PHASE_CHECK_COG=2
 uint8 PHASE_REDOCKING=3
 uint8 PHASE_VERIFY_CHARGE=4
 uint8 PHASE_PERSIST=5
+uint8 PHASE_CAPTURE_POSITION=8  # mirrors DockCalibrationStatus (6/7 are IDLE/DONE there)
 
 uint8 phase
 float32 progress          # 0.0 .. 1.0 over the whole sequence

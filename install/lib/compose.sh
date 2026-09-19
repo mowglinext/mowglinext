@@ -246,6 +246,7 @@ write_compose_merged() {
     if [[ -s "$DOCKER_DIR/stack-release.json" ]] && [[ "$(cat "$DOCKER_DIR/stack-release.json")" != "null" ]]; then
       info "$MSG_UPDATER_STACK_REVIEW"
     fi
+    prune_backup_if_unchanged "$FINAL_COMPOSE_FILE" "${MIGRATED_COMPOSE_BACKUP:-}"
     return 0
   fi
 
@@ -283,6 +284,7 @@ write_compose_merged() {
   fi
 
   info "Generated: $FINAL_COMPOSE_FILE"
+  prune_backup_if_unchanged "$FINAL_COMPOSE_FILE" "${MIGRATED_COMPOSE_BACKUP:-}"
 }
 
 run_compose_stack() {

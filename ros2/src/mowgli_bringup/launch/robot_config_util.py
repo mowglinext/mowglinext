@@ -107,6 +107,26 @@ def chassis_footprint(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     )
 
 
+def chassis_half_width(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
+    """Half-width of the Nav2 footprint, i.e. how far the BODY reaches sideways.
+
+    This is the distance every collision check in the stack measures against:
+    the costmap footprint, collision_monitor's polygons and FTC's footprint
+    clearance model all use `chassis_width / 2 + margin`. The coverage planner
+    must inset obstacles and the recorded boundary by at least this much, or it
+    plans a centreline the body cannot follow without touching.
+
+    DERIVED, never a literal: `chassis_width` is operator-editable in the GUI.
+    A hardcoded copy is exactly what broke on 2026-09-16 — the chassis went
+    0.40 m -> 0.45 m, the footprint followed, and `coverage_server.robot_width`
+    stayed at a hardcoded 0.40, so every plan routed the centre 0.20 m from
+    obstacles while the body reached 0.225 m. The robot then drove 2.5 cm into
+    a mapped tree while tracking its path to within 2 cm.
+    """
+    _front, _rear, half_width = chassis_footprint(params, margin)
+    return half_width
+
+
 def chassis_circumscribed_radius(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     """Radius of the smallest circle centred on base_link enclosing the footprint.
 
@@ -117,6 +137,188 @@ def chassis_circumscribed_radius(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     """
     front, rear, half_width = chassis_footprint(params, margin)
     return math.hypot(max(abs(front), abs(rear)), half_width)
+
+
+# --- Obstacle margins: count the body EXACTLY ONCE per consumer --------------
+#
+# A drawn map obstacle is kept away from by three consumers, and each one has
+# its OWN body model. Growing the obstacle by "the body" for a consumer that
+# already models the body counts it twice; that is what made the robot
+# un-plannable on its own coverage line (37 s transit timeouts, a whole first
+# headland skipped, START_OCCUPIED next to drawn obstacles, 2026-09-16/17).
+#
+#   consumer                     its body model             so the obstacle grows by
+#   ---------------------------  -------------------------  --------------------------
+#   Smac 2D (transit planner)    NONE. Point check: the     keepout_obstacle_margin()
+#                                centre cell >= INSCRIBED.  = the WHOLE half-width,
+#                                The global plugin order    painted into the keepout
+#                                is [.., inflation_layer,   mask by map_server, and
+#                                keepout_filter], so the    NOT inflated on top.
+#                                keepout mask is NOT
+#                                inflated.
+#   coverage_server (F2C)        NONE. It plans a           planning_obstacle_margin()
+#                                CENTRELINE.                (the two demands below).
+#   FTC (coverage controller)    the footprint polygon,     nothing: it reads the raw
+#                                expanded laterally by      LOCAL-costmap lethal cells.
+#                                obstacle_clearance_margin.
+#
+# Both margins are DERIVED from the live chassis (operator-editable in the GUI);
+# a literal copy is exactly what went stale on 2026-09-16.
+
+# How far FTC is allowed to wander off its line in steady state. Field
+# 2026-09-16: FTC tracks the coverage path to +/-0.02 m; 0.05 m leaves margin
+# for a transient without FTC's own clearance model tripping on the plan.
+FTC_TRACKING_SLACK_M = 0.05
+
+# FTC clamps obstacle_clearance_margin to this band (navigation.launch.py
+# injects the clamped value); the planning floor must use the SAME number FTC
+# will actually run with.
+FTC_CLEARANCE_MARGIN_MIN_M = 0.0
+FTC_CLEARANCE_MARGIN_MAX_M = 0.50
+DEFAULT_FTC_CLEARANCE_MARGIN_M = 0.05
+
+# global_costmap.resolution in nav2_params_base.yaml. Single-sourced here
+# because full_system.launch.py (map_server) does not load the Nav2 params;
+# test_nav2_params.py pins the yaml equal to this so the two cannot drift.
+GLOBAL_COSTMAP_RESOLUTION_M = 0.08
+
+# Both obstacle margins are clamped to this by their consumers
+# (coverage_server and map_server re-clamp to the same band).
+OBSTACLE_MARGIN_MAX_M = 1.0
+
+
+def ftc_obstacle_clearance_margin(params):
+    """obstacle_clearance_margin as FTC will actually run it (clamped)."""
+    requested = float((params or {}).get(
+        "obstacle_clearance_margin", DEFAULT_FTC_CLEARANCE_MARGIN_M))
+    return min(FTC_CLEARANCE_MARGIN_MAX_M,
+               max(FTC_CLEARANCE_MARGIN_MIN_M, requested))
+
+
+def keepout_raster_slack(global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
+    """Worst-case distance the keepout band gains when Smac reads it.
+
+    map_server marks a MASK cell lethal when its centre is within the margin;
+    KeepoutFilter copies the mask cell under each GLOBAL cell centre; Smac then
+    tests the global cell the robot's centre falls in. The robot can therefore
+    be blocked up to half a global-cell diagonal + half a mask-cell diagonal
+    beyond the nominal band. One full global-cell diagonal bounds that for any
+    mask no coarser than the global costmap (mask 0.05 m, global 0.08 m).
+    """
+    return float(global_resolution) * math.sqrt(2.0)
+
+
+def planning_obstacle_margin_floor(
+        params, global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
+    """Least distance coverage may plan its CENTRELINE from a drawn obstacle.
+
+    The max of two derived demands:
+      * the controller: FTC demands footprint half-width +
+        obstacle_clearance_margin between its line and any lethal cell, and it
+        tracks to within FTC_TRACKING_SLACK_M. A plan closer than that makes
+        FTC fight its own plan along every obstacle (field: WEDGED bursts of 70
+        and 160 per minute exactly along obstacles, zero elsewhere).
+      * transit plannability: a robot standing ON its coverage line must not
+        read as START_OCCUPIED, so the line must clear the keepout band's base
+        (the body half-width — the keepout is not inflated) by the
+        rasterisation slack.
+    """
+    half_width = chassis_half_width(params)
+    controller_demand = (
+        half_width + ftc_obstacle_clearance_margin(params) + FTC_TRACKING_SLACK_M)
+    transit_demand = half_width + keepout_raster_slack(global_resolution)
+    # Rounded UP to the millimetre so the template / GUI-schema default can be
+    # written exactly (the transit demand carries a sqrt(2)); the 1e-9 guards
+    # a value that is already a whole millimetre against float noise.
+    floor = max(controller_demand, transit_demand)
+    return math.ceil(floor * 1000.0 - 1e-9) / 1000.0
+
+
+def planning_obstacle_margin(
+        params, global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
+    """coverage_server.obstacle_margin: the operator's value, floored + clamped.
+
+    An operator may ask for MORE room around obstacles, never less than the
+    floor.
+    """
+    floor = planning_obstacle_margin_floor(params, global_resolution)
+    requested = float((params or {}).get("obstacle_margin", floor))
+    return min(OBSTACLE_MARGIN_MAX_M, max(floor, requested))
+
+
+def keepout_obstacle_margin(
+        params, global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
+    """map_server.keepout_obstacle_margin: lethal band around drawn obstacles.
+
+    Base = chassis_half_width: the WHOLE body for Smac 2D, which models none of
+    it and (with inflation_layer ahead of keepout_filter) gets no inflation on
+    top of the mask. Counted once.
+
+    When the operator RAISES obstacle_margin (a root zone the LiDAR cannot see)
+    the keepout follows it, so transits keep off the same ground — but always
+    one rasterisation slack inside the coverage line, so a robot on that line
+    stays plannable by construction.
+    """
+    half_width = chassis_half_width(params)
+    follow = (planning_obstacle_margin(params, global_resolution)
+              - keepout_raster_slack(global_resolution))
+    return min(OBSTACLE_MARGIN_MAX_M, max(0.0, half_width, follow))
+
+
+def dig_skip_radius(params):
+    """behavior_tree_node.dig_skip_radius_m: coverage poses skipped around a dig.
+
+    A wheel-slip dig is NOT stamped into the keepout mask any more — a keepout
+    under the robot refused every plan from its own pose (START_OCCUPIED,
+    2026-09-10 and 2026-09-17). What keeps the robot from re-digging the same
+    hole (issue #500) is FollowStrip skipping every coverage pose within this
+    radius of a recorded dig point for the rest of the session
+    (mowgli_behavior/dig_skip.hpp).
+
+    = chassis circumscribed radius: for a base_link pose inside that circle
+    SOME part of the body — a drive wheel, or a front caster that then blocks
+    the robot — can be over the hole, whatever the heading. DERIVED, never a
+    literal (chassis_length / chassis_width / chassis_center_x are
+    operator-editable). It is deliberately NOT dig_proposal_radius(): that is
+    the size of the HOLE an operator may accept; this is "which poses put the
+    chassis over that hole" — a body-sized question.
+    """
+    return chassis_circumscribed_radius(params)
+
+
+DEFAULT_WHEEL_RADIUS_M = 0.10
+DEFAULT_WHEEL_WIDTH_M = 0.04
+
+
+def dig_proposal_radius(params):
+    """map_server.dig_proposal_radius: size of a wheel-slip dig PROPOSAL.
+
+    The proposal is the PHYSICAL dig, not the chassis. What digs is the two
+    drive wheels: one rut under each tyre, at the dig point (base_link = the
+    drive-axle centre) +/- wheel_track/2. The detector reports neither which
+    wheel slipped nor the heading, so the proposal is the smallest disc centred
+    on the dig point that covers BOTH contact patches whatever the heading:
+
+        lateral reach = wheel_track/2 + wheel_width/2   (outer tyre edge)
+        along reach   = wheel_radius/2                  (contact-patch half
+                        chord of a tyre sunk ~13 % of its radius into the rut)
+        radius        = hypot(lateral, along)           -> 0.189 m shipped
+
+    map_server then adds half the DigEvent's map_distance (the chassis crept
+    that far while slipping, so the ruts are that much longer) and floors the
+    result (kMinDigProposalRadiusM) so the hole stays selectable in the GUI.
+
+    It must NOT contain the body: when an accepted proposal is applied the
+    keepout band (chassis half-width) and coverage obstacle_margin are added
+    around it — the body counted exactly once. The old 0.60 m chassis-length
+    box only existed because the polygon used to be stamped as a session
+    keepout; it blanked out a large patch of lawn on every accept.
+    """
+    params = params or {}
+    track = float(params.get("wheel_track", DEFAULT_WHEEL_TRACK_M))
+    width = float(params.get("wheel_width", DEFAULT_WHEEL_WIDTH_M))
+    radius = float(params.get("wheel_radius", DEFAULT_WHEEL_RADIUS_M))
+    return math.hypot(track / 2.0 + width / 2.0, radius / 2.0)
 
 
 

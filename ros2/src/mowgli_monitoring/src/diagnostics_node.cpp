@@ -134,6 +134,9 @@ void DiagnosticsNode::declare_parameters()
   motor_temp_warn_c_ = declare_parameter<double>("motor_temp_warn_c", 60.0);
   motor_temp_error_c_ = declare_parameter<double>("motor_temp_error_c", 80.0);
   lidar_enabled_ = declare_parameter<bool>("lidar_enabled", false);
+  path_tracking_warn_m_ = declare_parameter<double>("path_tracking_warn_m", 0.10);
+  path_tracking_error_m_ = declare_parameter<double>("path_tracking_error_m", 0.25);
+  path_tracking_idle_sec_ = declare_parameter<double>("path_tracking_idle_sec", 2.0);
 
   // Clamp publish_rate to [0.1, 100.0] Hz to prevent zero-division.
   if (publish_rate_ < 0.1 || publish_rate_ > 100.0)
@@ -214,6 +217,25 @@ void DiagnosticsNode::create_subscriptions()
       [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
       {
         on_gps(msg);
+      });
+
+  // Path-tracking error, published by controller_server for whichever controller
+  // is driving (FTC on coverage, RotationShim+RPP on transit). Reliable, depth 10:
+  // this is a low-rate status stream, not sensor data, and a dropped sample at the
+  // very moment the robot swings wide is exactly the one worth keeping.
+  //
+  // ROOT namespace, NOT `/controller_server/tracking_feedback`: Nav2 creates this
+  // publisher with a RELATIVE name, which resolves against the node's namespace
+  // (empty) rather than its name — exactly like the server's `/lookahead_point`
+  // and `/transformed_global_plan`. Verified on the robot 2026-09-17; the
+  // node-prefixed guess subscribes to a topic nobody publishes and the status
+  // sits at "Idle" forever.
+  sub_tracking_ = create_subscription<nav2_msgs::msg::TrackingFeedback>(
+      "/tracking_feedback",
+      10,
+      [this](nav2_msgs::msg::TrackingFeedback::ConstSharedPtr msg)
+      {
+        on_tracking_feedback(msg);
       });
 }
 
@@ -296,6 +318,15 @@ void DiagnosticsNode::on_gps(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   state_.gps_ever_received = true;
 }
 
+void DiagnosticsNode::on_tracking_feedback(nav2_msgs::msg::TrackingFeedback::ConstSharedPtr msg)
+{
+  state_.path_tracking.Add({static_cast<double>(msg->position_tracking_error),
+                            static_cast<double>(msg->heading_tracking_error),
+                            msg->current_path_index});
+  state_.last_tracking_time = now();
+  state_.tracking_ever_received = true;
+}
+
 // ---------------------------------------------------------------------------
 // Timer callback
 // ---------------------------------------------------------------------------
@@ -316,6 +347,7 @@ void DiagnosticsNode::publish_diagnostics()
   array.status.push_back(check_odometry(t));
   array.status.push_back(check_fusion(t));
   array.status.push_back(check_motors());
+  array.status.push_back(check_path_tracking(t));
 
   pub_diagnostics_->publish(array);
 }
@@ -663,6 +695,75 @@ diagnostic_msgs::msg::DiagnosticStatus DiagnosticsNode::check_motors() const
       kv("mower_esc_current_a", fmt_float(static_cast<double>(s.mower_esc_current), 2)));
   status.values.push_back(kv("mower_rpm", fmt_float(static_cast<double>(s.mower_motor_rpm), 0)));
 
+  return status;
+}
+
+diagnostic_msgs::msg::DiagnosticStatus DiagnosticsNode::check_path_tracking(
+    const rclcpp::Time& now) const
+{
+  diagnostic_msgs::msg::DiagnosticStatus status;
+  status.name = "Path Tracking";
+  status.hardware_id = "mowgli/controller_server";
+
+  // The controller server only publishes while a FollowPath goal is running, so
+  // silence is the NORMAL state of a parked, docked or idle robot. Neither
+  // "never seen" nor "stale" may raise an alert here: the GUI turns level >= WARN
+  // into an operator-visible alarm, and a mower sitting on its dock is not a
+  // fault. Staleness of the CONTROLLER is covered by the navigation stack's own
+  // lifecycle, not by this status.
+  if (!state_.tracking_ever_received)
+  {
+    status.level = DiagLevel::OK;
+    status.message = "Idle — no FollowPath goal since startup";
+    return status;
+  }
+
+  const double age_sec = (now - state_.last_tracking_time).seconds();
+  const bool idle = age_sec > path_tracking_idle_sec_;
+
+  // Whether live or idle, report the summary of the goal these samples belong
+  // to: right after a mow, "how well did it track?" is exactly the question, and
+  // the answer would otherwise vanish the moment the action completed.
+  const double max_abs_m = state_.path_tracking.MaxAbsPositionErrorM();
+  const double mean_abs_m = state_.path_tracking.MeanAbsPositionErrorM();
+  const double rms_m = state_.path_tracking.RmsPositionErrorM();
+  const double last_signed_m = state_.path_tracking.LastPositionErrorM();
+  const double max_heading_deg = state_.path_tracking.MaxAbsHeadingErrorRad() * 180.0 / M_PI;
+
+  status.values.push_back(kv("max_lateral_error_m", fmt_float(max_abs_m, 3)));
+  status.values.push_back(kv("mean_lateral_error_m", fmt_float(mean_abs_m, 3)));
+  status.values.push_back(kv("rms_lateral_error_m", fmt_float(rms_m, 3)));
+  status.values.push_back(kv("last_lateral_error_m", fmt_float(last_signed_m, 3)));
+  // Nav2 sign convention: positive lateral error means the robot is LEFT of the
+  // path. Spelled out because a bare sign in a GUI table is unreadable.
+  status.values.push_back(kv("last_side", last_signed_m >= 0.0 ? "left" : "right"));
+  status.values.push_back(kv("max_heading_error_deg", fmt_float(max_heading_deg, 1)));
+  status.values.push_back(kv("samples", std::to_string(state_.path_tracking.Count())));
+  status.values.push_back(kv("path_index", std::to_string(state_.path_tracking.LastPathIndex())));
+  status.values.push_back(kv("age_sec", fmt_float(age_sec, 2)));
+
+  if (idle)
+  {
+    status.level = DiagLevel::OK;
+    status.message = "Idle — last goal max " + fmt_float(max_abs_m, 3) + "m";
+    return status;
+  }
+
+  if (max_abs_m >= path_tracking_error_m_)
+  {
+    status.level = DiagLevel::ERROR;
+  }
+  else if (max_abs_m >= path_tracking_warn_m_)
+  {
+    status.level = DiagLevel::WARN;
+  }
+  else
+  {
+    status.level = DiagLevel::OK;
+  }
+
+  status.message =
+      "Lateral max " + fmt_float(max_abs_m, 3) + "m, mean " + fmt_float(mean_abs_m, 3) + "m";
   return status;
 }
 

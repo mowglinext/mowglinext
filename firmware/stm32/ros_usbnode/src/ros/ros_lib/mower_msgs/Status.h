@@ -40,6 +40,12 @@ namespace mower_msgs
       _mow_enabled_type mow_enabled;
       typedef bool _firmware_debug_enabled_type;
       _firmware_debug_enabled_type firmware_debug_enabled;
+      typedef bool _dig_escalated_type;
+      _dig_escalated_type dig_escalated;
+      typedef float _dig_escalated_distance_m_type;
+      _dig_escalated_distance_m_type dig_escalated_distance_m;
+      typedef float _dig_escalated_required_distance_m_type;
+      _dig_escalated_required_distance_m_type dig_escalated_required_distance_m;
       typedef uint8_t _mower_esc_status_type;
       _mower_esc_status_type mower_esc_status;
       typedef float _mower_esc_temperature_type;
@@ -82,6 +88,9 @@ namespace mower_msgs
       ui_board_available(0),
       mow_enabled(0),
       firmware_debug_enabled(0),
+      dig_escalated(0),
+      dig_escalated_distance_m(0),
+      dig_escalated_required_distance_m(0),
       mower_esc_status(0),
       mower_esc_temperature(0),
       mower_esc_current(0),
@@ -163,6 +172,33 @@ namespace mower_msgs
       u_firmware_debug_enabled.real = this->firmware_debug_enabled;
       *(outbuffer + offset + 0) = (u_firmware_debug_enabled.base >> (8 * 0)) & 0xFF;
       offset += sizeof(this->firmware_debug_enabled);
+      union {
+        bool real;
+        uint8_t base;
+      } u_dig_escalated;
+      u_dig_escalated.real = this->dig_escalated;
+      *(outbuffer + offset + 0) = (u_dig_escalated.base >> (8 * 0)) & 0xFF;
+      offset += sizeof(this->dig_escalated);
+      union {
+        float real;
+        uint32_t base;
+      } u_dig_escalated_distance_m;
+      u_dig_escalated_distance_m.real = this->dig_escalated_distance_m;
+      *(outbuffer + offset + 0) = (u_dig_escalated_distance_m.base >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (u_dig_escalated_distance_m.base >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (u_dig_escalated_distance_m.base >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (u_dig_escalated_distance_m.base >> (8 * 3)) & 0xFF;
+      offset += sizeof(this->dig_escalated_distance_m);
+      union {
+        float real;
+        uint32_t base;
+      } u_dig_escalated_required_distance_m;
+      u_dig_escalated_required_distance_m.real = this->dig_escalated_required_distance_m;
+      *(outbuffer + offset + 0) = (u_dig_escalated_required_distance_m.base >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (u_dig_escalated_required_distance_m.base >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (u_dig_escalated_required_distance_m.base >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (u_dig_escalated_required_distance_m.base >> (8 * 3)) & 0xFF;
+      offset += sizeof(this->dig_escalated_required_distance_m);
       *(outbuffer + offset + 0) = (this->mower_esc_status >> (8 * 0)) & 0xFF;
       offset += sizeof(this->mower_esc_status);
       union {
@@ -304,6 +340,36 @@ namespace mower_msgs
       u_firmware_debug_enabled.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
       this->firmware_debug_enabled = u_firmware_debug_enabled.real;
       offset += sizeof(this->firmware_debug_enabled);
+      union {
+        bool real;
+        uint8_t base;
+      } u_dig_escalated;
+      u_dig_escalated.base = 0;
+      u_dig_escalated.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      this->dig_escalated = u_dig_escalated.real;
+      offset += sizeof(this->dig_escalated);
+      union {
+        float real;
+        uint32_t base;
+      } u_dig_escalated_distance_m;
+      u_dig_escalated_distance_m.base = 0;
+      u_dig_escalated_distance_m.base |= ((uint32_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      u_dig_escalated_distance_m.base |= ((uint32_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      u_dig_escalated_distance_m.base |= ((uint32_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      u_dig_escalated_distance_m.base |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      this->dig_escalated_distance_m = u_dig_escalated_distance_m.real;
+      offset += sizeof(this->dig_escalated_distance_m);
+      union {
+        float real;
+        uint32_t base;
+      } u_dig_escalated_required_distance_m;
+      u_dig_escalated_required_distance_m.base = 0;
+      u_dig_escalated_required_distance_m.base |= ((uint32_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      u_dig_escalated_required_distance_m.base |= ((uint32_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      u_dig_escalated_required_distance_m.base |= ((uint32_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      u_dig_escalated_required_distance_m.base |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      this->dig_escalated_required_distance_m = u_dig_escalated_required_distance_m.real;
+      offset += sizeof(this->dig_escalated_required_distance_m);
       this->mower_esc_status =  ((uint8_t) (*(inbuffer + offset)));
       offset += sizeof(this->mower_esc_status);
       union {
@@ -374,7 +440,7 @@ namespace mower_msgs
     }
 
     virtual const char * getType() override { return "mower_msgs/Status"; };
-    virtual const char * getMD5() override { return "9a901b50f1a0e90ccf2bcb6988acc325"; };
+    virtual const char * getMD5() override { return "746a7fa1b08970aca234773165ad6a27"; };
 
   };
 

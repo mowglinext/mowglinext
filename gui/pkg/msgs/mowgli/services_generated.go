@@ -170,11 +170,15 @@ type SetDockingPointReq struct {
 	UseGpsPosition            bool                           `json:"use_gps_position"`
 	YawSource                 uint8                          `json:"yaw_source"`
 	YawRad                    float64                        `json:"yaw_rad"`
+	PreservePosition          bool                           `json:"preserve_position"`
+	UsePendingAntenna         bool                           `json:"use_pending_antenna"`
 }
 
 // SetDockingPointRes for mowgli_interfaces/srv/SetDockingPoint response.
 type SetDockingPointRes struct {
 	Success                   bool                           `json:"success"`
+	Message                   string                         `json:"message"`
+	StoredPose                geometry.Pose                  `json:"stored_pose"`
 }
 
 // StartInAreaReq for mowgli_interfaces/srv/StartInArea request.

@@ -29,6 +29,14 @@ install_dds_sysctl() {
     warn "sysctl unavailable; skipping DDS socket-buffer tuning"
     return 0
   fi
+  # Every other lib file that uses $SUDO sets it itself before first use; this
+  # function used to rely on install_udev_rules (its only caller, always
+  # immediately before it in both main()'s full flow and --only=udev) having
+  # already called require_root_for as a side effect. Harmless while that
+  # call order holds, but the same implicit-ordering assumption broke
+  # install_host_updater under --only=updater (issue #632) — fix it here too
+  # before this function can ever be reached any other way.
+  require_root_for "DDS sysctl"
   local tmpfile
   tmpfile="$(mktemp)"
   build_dds_sysctl_conf > "$tmpfile"

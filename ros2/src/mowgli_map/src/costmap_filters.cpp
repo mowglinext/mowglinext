@@ -40,10 +40,15 @@ namespace mowgli_map
 // Smac's INSCRIBED(253) validity cutoff, so a start/goal pose in either band
 // never fails "Start occupied" and A* only routes THROUGH the band when the
 // alternative is much longer. This is deliberately NEVER a lethal value for
-// either band: a lethal outside band would invite corner-cutting transits up
-// to enforce_boundary_margin_m (0.40 m) outside the polygon — past the
+// either band: a free outside band would invite corner-cutting transits up
+// to enforce_boundary_margin_m outside the polygon — past the
 // 0.30 m soft_boundary_margin_m deadband — firing spurious
-// /boundary_violation recoveries mid-transit; a lethal inside band very
+// /boundary_violation recoveries mid-transit. That pressure GREW when the
+// launch-injected floor went from the chassis half-width to the chassis
+// circumscribed radius (0.40 -> 0.597 m on the shipped chassis, 2026-09-17):
+// the band now reaches past lethal_boundary_margin_m (0.5 m) too, so the
+// mid-cost value is the only thing keeping the planner off it. Watch
+// /boundary_violation in the field. A lethal inside band very
 // nearly stranded the robot near the dock once already (map_server_node.hpp)
 // and, independently, collides with chassis_safety_inset — the outermost
 // coverage ring is planned exactly chassis_safety_inset inside the line
@@ -96,8 +101,12 @@ void MapServerNode::publish_keepout_mask()
   //
   // outside_free_margin selects the boundary policy:
   //   * lethal_outside_areas_ = true  (default, operator intent): use the
-  //     small enforce_boundary_margin_m_ (0.40 m — chassis half-width plus
-  //     costmap-cell/drift headroom). Everything beyond
+  //     enforce_boundary_margin_m_ band (0.40 m standalone default, and FLOORED
+  //     at the live chassis CIRCUMSCRIBED RADIUS — 0.597 m shipped — by
+  //     full_system.launch.py: the band has to hold the whole body overhanging
+  //     the recorded line, which it does by design now that
+  //     chassis_safety_inset is 0, and at a row END the footprint noses 0.53 m
+  //     past the line, not just the 0.275 m half-width). Everything beyond
   //     that slack is LETHAL, so the planner never routes outside the union
   //     of areas and MPPI never steers the robot out of the authorised zone
   //     (fixes the 0.32 m concave-boundary excursion). The dock corridor
@@ -136,7 +145,10 @@ void MapServerNode::publish_keepout_mask()
     accumulate_polygon(area.polygon);
     for (const auto& obs : area.obstacles)
     {
-      accumulate_polygon(obs.polygon);
+      if (!obs.pending)  // a proposal is not part of any mask, not even its extent
+      {
+        accumulate_polygon(obs.polygon);
+      }
     }
   }
   for (const auto& obs : obstacle_polygons_)
@@ -157,7 +169,8 @@ void MapServerNode::publish_keepout_mask()
   int c1 = ny - 1;
   if (bx_max >= bx_min)  // at least one polygon vertex accumulated
   {
-    const double margin_expand = std::max(outside_free_margin, obstacle_margin_m_) + resolution_;
+    const double margin_expand =
+        std::max(outside_free_margin, keepout_obstacle_margin_m_) + resolution_;
     const double cx = map_.getPosition().x();
     const double cy = map_.getPosition().y();
     const double hx = map_.getLength().x() * 0.5;
@@ -281,11 +294,12 @@ void MapServerNode::publish_keepout_mask()
   // Two sources share this pass: obstacle_polygons_ (dynamic LiDAR-promoted)
   // and every area's DRAWN entry.obstacles (whose interiors are also lethal
   // via the classification NO_GO_ZONE overlay below — the polygon pass here
-  // is what carries the margin band). obstacle_margin_m_
-  // (mowgli_robot.yaml.obstacle_margin) additionally marks cells within that
-  // distance OUTSIDE each polygon — the transit-side twin of
-  // coverage_server's F2C hole buffering, so both planners keep the same
-  // distance from a drawn tree/root zone.
+  // is what carries the margin band). keepout_obstacle_margin_m_ additionally
+  // marks cells within that distance OUTSIDE each polygon: the body half-width,
+  // because the mask's consumer (Smac 2D) is a point check and the mask is not
+  // inflated downstream — polygon + this band IS the lethal region, the body
+  // counted exactly once. It is deliberately smaller than coverage_server's
+  // obstacle_margin so a robot on its coverage line is never START_OCCUPIED.
   const auto cell_hits_obstacle =
       [this](const geometry_msgs::msg::Point32& pt, const geometry_msgs::msg::Polygon& obs)
   {
@@ -293,9 +307,9 @@ void MapServerNode::publish_keepout_mask()
     {
       return true;
     }
-    return obstacle_margin_m_ > 0.0 &&
+    return keepout_obstacle_margin_m_ > 0.0 &&
            point_to_polygon_distance(static_cast<double>(pt.x), static_cast<double>(pt.y), obs) <=
-               obstacle_margin_m_;
+               keepout_obstacle_margin_m_;
   };
   for (int r = r0; r <= r1; ++r)
   {
@@ -326,7 +340,11 @@ void MapServerNode::publish_keepout_mask()
       {
         for (const auto& obs : areas_[a].obstacles)
         {
-          if (cell_hits_obstacle(pt, obs.polygon))
+          // PENDING proposals (wheel-slip dig reports) are NEVER lethal: the
+          // robot stands ~0.2-0.3 m from a fresh dig point, and a keepout
+          // there refused every plan from its own pose (START_OCCUPIED,
+          // 2026-09-10 and 2026-09-17). Only an operator accept applies one.
+          if (!obs.pending && cell_hits_obstacle(pt, obs.polygon))
           {
             lethal = true;
             break;

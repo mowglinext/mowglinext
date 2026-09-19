@@ -28,6 +28,7 @@
 
 #include "geometry_msgs/msg/point32.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
+#include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
@@ -429,6 +430,24 @@ struct BTContext
   /// charger.
   bool dig_escalated{false};
 
+  /// Dig points reported by /hardware_bridge/dig_event during THIS session
+  /// (map frame). FollowStrip skips every coverage pose within
+  /// dig_skip_radius_m of one (dig_skip.hpp) — the anti re-dig protection of
+  /// issue #500, which lives here instead of in the keepout mask so that it
+  /// can never block planning from the robot's own pose. Written by the
+  /// subscriber callback under context_mutex; cleared by EndSession.
+  std::vector<DigPoint> session_dig_points;
+  /// Monotonic count of dig events received since the node started. NOT reset
+  /// by EndSession: FollowStrip compares it with the value it last saw to
+  /// notice a dig that happened while its goal was active. Guarded by
+  /// context_mutex.
+  std::uint64_t dig_event_count{0};
+  /// Skip radius around a dig point [m]. Injected by full_system.launch.py
+  /// from robot_config_util.dig_skip_radius() (chassis circumscribed radius:
+  /// inside it some part of the body is over the hole); <= 0 disables the
+  /// skip zones. Set once at startup.
+  double dig_skip_radius_m{kDefaultDigSkipRadiusM};
+
   /// Set to true when the robot is outside all allowed polygons by more
   /// than lethal_boundary_margin_m. Escalates the BoundaryGuard from
   /// "try to navigate back inside" to "emergency stop + wait for
@@ -558,6 +577,18 @@ struct BTContext
   /// (stopped_goal_checker, which opennav_docking still needs). Set once by
   /// behavior_tree_node from the main tree's directory.
   std::string transit_tree_xml;
+
+  /// Goal-checker instance the coverage controller is dispatched with.
+  ///
+  /// Defaults to `coverage_goal_checker` — mowgli_nav2_plugins'
+  /// PathProgressGoalChecker, the only checker that survives a coverage path
+  /// whose start and end coincide (a closed headland ring): it requires the
+  /// robot to have tracked >= 95 % of the plan's poses before "reached" can
+  /// fire. ROS 2 Lyrical added a stock alternative, `coverage_axis_goal_checker`
+  /// (nav2_controller::AxisGoalChecker), which gates on the REMAINING length of
+  /// the transformed plan instead; it is configured in nav2_params_base.yaml and
+  /// selectable here for a field comparison. See docs/NAV2_LYRICAL_CONTROLLER_REVIEW.md.
+  std::string coverage_goal_checker_id{"coverage_goal_checker"};
 
   // -----------------------------------------------------------------------
   // Per-session flags reset by ClearCommand at session end

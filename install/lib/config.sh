@@ -293,6 +293,12 @@ select_image_channel() {
 recompute_image_defaults
 
 CHECK_ONLY=false
+# --only=<step> (mowglinext/mowglinext#632): run exactly one named step
+# instead of the full install flow, for an operator adding one thing (e.g.
+# the host updater) to an already-working install. Empty = full flow, the
+# default. See run_only_step()/list_only_steps() in mowglinext.sh for the
+# valid step names.
+ONLY_STEP=""
 CLI_PRESET=false
 GNSS_RECEIVER_FAMILY_CLI_PRESET=false
 GNSS_CONNECTION_CLI_PRESET=false
@@ -836,6 +842,9 @@ parse_args() {
     case "$1" in
       --check)
         CHECK_ONLY=true
+        ;;
+      --only=*)
+        ONLY_STEP="${1#*=}"
         ;;
       --lang=*)
         MOWGLI_LANG="${1#*=}"

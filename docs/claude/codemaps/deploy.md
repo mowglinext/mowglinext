@@ -13,7 +13,8 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 
 | Task | Start here |
 |------|------------|
-| Trace an install end-to-end (15 steps) | `install/mowglinext.sh` `main()` L88–199 (each `progress_run*` names the lib function) |
+| Trace an install end-to-end (15 steps) | `install/mowglinext.sh` `main()` (each `progress_run*` names the lib function) |
+| Run a single install step in isolation (issue #632) | `install/mowglinext.sh` `run_only_step()`/`list_only_steps()`, dispatched from `main()`'s `ONLY_STEP` branch (`--only=<step>`, parsed in `config.sh` `parse_args`) — skips `select_repo_branch`/`select_language` on purpose; see `install/tests/test_only_step.sh` |
 | Add / change a `docker/.env` key | `install/lib/env.sh` `setup_env` L210–374 (defaults L216–301, writes L325–367) + whitelist `install/lib/state.sh` `is_allowed_installer_key` L11–33 + guard `install/tests/test_env_output.sh` L38 |
 | "Which env var starts which container?" | `install/lib/compose.sh` `build_compose_stack` L52–138 — see the env→service table below |
 | Change how the merged compose is produced | `install/lib/compose.sh` `write_compose_merged` L208–244 (`docker compose config --no-interpolate`), pure-Bash fallback L169–206 |
@@ -54,7 +55,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `lib/progress.sh` | 212 | Step progress bar/spinner, install log capture (`init_install_logs`) |
 | `lib/gps.sh` | 176 | `pick_serial_by_id`, `preset_key_loaded`, `configure_gps` |
 | `lib/platform.sh` | 163 | CPU arch / board family detection, `assert_supported_platform` |
-| `lib/uart.sh` | 150 | Boot-config line upsert, `dtoverlay=uart1..5`, Bluetooth disable, Pi-5 USB/fan params |
+| `lib/uart.sh` | ~215 | Boot-config line upsert; `required_uart_overlays()` derives which of `dtoverlay=uart1..5` the configured GNSS/LiDAR/TF-Luna ports actually need (issue #631 — used to enable all five unconditionally) — runs after GPS/LiDAR/rangefinder config, not before; Bluetooth disable, Pi-5 USB/fan params |
 | `lib/common.sh` | 135 | `info/warn/fail/error/step/prompt/confirm`, `detect_uart_ports`, `pick_uart_port`, `require_root*` |
 | `lib/motd.sh` | 127 | Writes `/etc/profile.d/mowgli-motd.sh` (reads `~/mowglinext/docker/.env`) |
 | `lib/range.sh` | 118 | TF-Luna front/edge rangefinder prompts |
@@ -264,7 +265,7 @@ CI: sensor images build via `.github/workflows/sensors-{gps,lidar-ldlidar,lidar-
 - TF-Luna and VESC prompts exist but are hard-gated off (`config.sh` L354–378); their compose fragments still carry `ghcr.io/...` placeholders. `install/tests/test_optional_features.sh` pins this.
 - `docker/stack.sh` re-asserts `REPO_DIR`/`DOCKER_DIR` AFTER sourcing `config.sh` (L76–83) because `config.sh` recomputes them from `MOWGLI_HOME` at source time. Any new lib that caches a path at source time needs the same treatment.
 - `docker/stack.sh` requires `COMPOSE_PROJECT_NAME` to stay stable (default `install`) — renaming it orphans the `install_mowgli_maps` volume holding `areas.dat` and the fusion graph.
-- `migrate_runtime_paths` backs up `docker/.env` and `docker/docker-compose.yaml` to `.old.<timestamp>` on **every** run (`deploy.sh` L279–280); these accumulate.
+- `migrate_runtime_paths` still backs up `docker/.env` and `docker/docker-compose.yaml` to `.old.<timestamp>` unconditionally up front on every run (the regenerated content isn't known until later steps run) — but `prune_backup_if_unchanged` (`deploy.sh`, called from `setup_env` and `run_startup_step_live`) removes the backup retroactively when the regenerated file turns out byte-identical, so a re-run that changes nothing no longer accumulates one. See `TODO-runtime-backups.md` and `install/tests/test_backup_pruning.sh`.
 - `install/lib/udev.sh` L62 falls back to a `KERNEL=="ttyACMn"` rule when `udevadm` cannot resolve USB attributes — unstable across re-enumeration (the exact bug the VID/PID form fixes).
 - Emergency stop is firmware-owned; nothing in this area may add a software e-stop path (CLAUDE.md Safety, Invariant 9). `install/config/mowgli/twist_mux.yaml` L33–45 documents why there is no `locks:` block — and that copy is not even loaded.
 

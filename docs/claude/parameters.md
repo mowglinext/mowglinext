@@ -22,7 +22,7 @@
 | `ros2/src/mowgli_bringup/config/twist_mux.yaml` (53 L) | 5 cmd_vel lanes + priorities; deliberately **no `locks:`** | `mowgli.launch.py:271` | maintainer |
 | `ros2/src/mowgli_bringup/config/foxglove_bridge.yaml` (11 L) | Foxglove params + GNSS-internal topic whitelist — **not referenced by any launch file** | nothing | maintainer |
 | `ros2/src/fusion_graph/config/fusion_graph.yaml` (480 L) | 76 of the localizer's 133 declared params | `fusion_graph/launch/fusion_graph.launch.py:137` | maintainer |
-| `ros2/src/mowgli_map/config/map_server.yaml` (176 L) | grid resolution/size, keepout margins, mow-progress gating, dig keepout | `full_system.launch.py:173` | maintainer (operator keys are injected over it) |
+| `ros2/src/mowgli_map/config/map_server.yaml` (176 L) | grid resolution/size, keepout margins, mow-progress gating, dig proposal | `full_system.launch.py:173` | maintainer (operator keys are injected over it) |
 | `ros2/src/mowgli_map/config/obstacle_tracker.yaml` (18 L) | LiDAR cluster→obstacle promotion thresholds | `full_system.launch.py` obstacle_tracker node | maintainer |
 | `ros2/src/mowgli_behavior/config/behavior_tree.yaml` (11 L) | `tree_file`, `tick_rate`, legacy `battery_*_pct` **aliases that no longer match the node's param names** | `full_system.launch.py:172` | maintainer |
 | `ros2/src/mowgli_localization/config/wheel_odometry.yaml` (18 L) | `wheel_distance`, `ticks_per_meter`, `publish_tf: false` (Invariant 2 guard) | **no launch file** — `wheel_odometry_node` is not launched; the file is only read by `test_tf_ownership.py:81` | maintainer |
@@ -42,9 +42,23 @@ All 171 template keys. `L###` = line in `ros2/src/mowgli_bringup/config/mowgli_r
 |---|---|---|---|---|
 | `dig_obstacle_enabled` | true | `full_system.launch.py` → `map_server_node` subscription gate | Obstacles | launch |
 
-Disabling automatic dig keepouts prevents new session-only map proposals. Hardware dig
-stopping, bounded reverse and repeat-dig escalation remain active. Enabled proposals
-still require operator acceptance to persist. Save and restart ROS2 to apply.
+Disabling dig proposals prevents new session-only map PROPOSALS (GUI map page: accept /
+reject). A proposal is inert — no keepout, no coverage hole, nothing saved — until the
+operator accepts it. Hardware dig stopping, bounded reverse, repeat-dig escalation and
+FollowStrip's session dig skip zone remain active either way. Save and restart ROS2 to apply.
+
+`dig_proposal_radius` (`map_server_node`) has NO robot-yaml key either: `full_system.launch.py` injects
+`robot_config_util.dig_proposal_radius(robot_params)` = hypot(`wheel_track`/2 + `wheel_width`/2,
+`wheel_radius`/2) = 0.189 m shipped — the PHYSICAL dig (both wheel ruts), not the chassis. It replaces
+`dig_obstacle_size` (0.60). Do not confuse it with the skip radius below: one is the size of the HOLE an
+operator may accept (the body is added once, by the keepout band), the other is which POSES put the
+chassis over that hole.
+
+`dig_skip_radius_m` (`behavior_tree_node`) has NO yaml key: `full_system.launch.py` injects
+`robot_config_util.dig_skip_radius(robot_params)` = the chassis circumscribed radius (0.597 m
+shipped), so it follows a GUI edit of `chassis_length` / `chassis_width` / `chassis_center_x`.
+It is the radius around a session dig point inside which FollowStrip skips coverage poses
+(`mowgli_behavior/dig_skip.hpp`); the node default (0.60) only serves ad-hoc launches and the sim.
 
 ### Chassis, wheels, encoder — feed the URDF and the Nav2 footprint
 
@@ -111,6 +125,9 @@ The five `wheel_pid_*` defaults are pinned in lockstep across template ↔ `mowg
 | `mowing_enabled` (L308) | `true` | **hardware_bridge only** `mowgli.launch.py:238` (dry-run blade inhibit; guarded by `test_launch_injection.py`) | Mowing | launch |
 | `mowing_speed` (L309) | 0.20 | BT `full_system.launch.py:245` (→ `SetNavMode`); `FollowCoveragePath.speed_fast` `navigation.launch.py:755`; also raises FTC's `max_cmd_vel_speed` clamp L764 | Mowing | dynamic (BT sets it per nav mode, `navigation_nodes.cpp:962`) |
 | `transit_speed` (L310) | 0.20 | BT `full_system.launch.py:244`; `FollowPath.primary_controller.max_linear_vel` `navigation.launch.py:745` | Mowing | dynamic (`navigation_nodes.cpp:961`) |
+| `transit_dynamic_window` | `false` | `FollowPath.primary_controller.use_dynamic_window` `navigation.launch.py` (DWPP, Nav2 1.5.1). Transit only — coverage stays FTC. OFF until a supervised field test; guarded by `test_nav2_params.py` | Mowing | launch |
+| `coverage_goal_checker_id` | `"coverage_goal_checker"` | `behavior_tree_node` param `full_system.launch.py` → `BTContext` → `FollowStrip` goal. Alternative: `"coverage_axis_goal_checker"` (stock `nav2_controller::AxisGoalChecker`, declared in `nav2_params_base.yaml`) | Mowing | launch (read once at BT startup) |
+| `local_inflation_inscribed_radius` | -1.0 (derive from footprint) | `local_costmap.inflation_layer.custom_inscribed_radius` `navigation.launch.py`; when >= 0 it also replaces the chassis-derived `inflation_radius` floor | Obstacles | launch |
 | `undock_distance` (L432) | 1.5 | BT BackUp `full_system.launch.py:232`; dock-calib `:492` | Docking | launch |
 | `undock_speed` (L433) | 0.16 | BT BackUp `full_system.launch.py:231`; dock-calib `:493` | Docking | launch |
 | `mow_angle_deg` (L338) | -1.0 (auto) | BT `full_system.launch.py:250` → `PlanCoverage` goal | Mowing | launch |
@@ -187,7 +204,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `datum_lat` (L272) / `datum_lon` (L273) | 0.0 / 0.0 (= unset) | `navsat_to_absolute_pose` + `map_server` `full_system.launch.py:363–364,433–434`; `cog_to_imu` `navigation.launch.py:548–549` → `:1121–1122`; `fusion_graph` reads the yaml itself, `fusion_graph.launch.py:130–131` → `:144–145` | GPS / Positioning | launch (a change re-projects `areas.dat` + dock pose at load, issue #216) |
 | `dock_pose_x` (L421) / `dock_pose_y` (L422) / `dock_pose_yaw` (L431) | 0.0 | `hardware_bridge` `mowgli.launch.py:200–202`; `map_server` `full_system.launch.py:380–382`; `docking_server.home_dock.pose` (with `dock_approach_overshoot` applied) `navigation.launch.py:682–686`; `fusion_graph` `fusion_graph.launch.py:151–153` | no | launch |
 
-**Writers of `dock_pose_*` back into the installed yaml** (line-splice, comments preserved — `mowgli_interfaces/robot_yaml_scalar.hpp` `UpdateDockPose` L122): `calibrate_imu_yaw_node.cpp:723` (dock pre-phase) and `map_server`'s `area_manager.cpp:916` (`/set_docking_point`, the one-click dock calibration) + `:1673` (datum migration). `calibration_nodes.cpp` **no longer writes** (its `persist_dock_pose_*` helpers were removed — `calibration_nodes.cpp:48`), so CLAUDE.md Invariant 6's "third writer" is stale: there are TWO source files, three call sites.
+**Writers of `dock_pose_*` back into the installed yaml** (line-splice, comments preserved — `mowgli_interfaces/robot_yaml_scalar.hpp` `UpdateDockPose` L122): ONLY `map_server`'s `area_manager.cpp` — `on_set_docking_point` (`/set_docking_point`: GUI set-dock-pose, map-drag, and BOTH dock calibrations of `calibrate_imu_yaw_node`, which no longer splices the file itself) + the datum migration. `calibration_nodes.cpp` **no longer writes** either (`calibration_nodes.cpp:48`). ONE source file, two call sites. `map_server` also takes `dock_antenna_capture_ttl_s` (300 s, code default): how long a `~/capture_dock_antenna` result stays usable by a `use_pending_antenna` write.
 
 ### Battery thresholds (BT, `full_system.launch.py:342–353`)
 
@@ -276,7 +293,8 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `obstacle_reverse_enabled` (L651) | `true` | `FTC.obstacle_reverse_enabled` L844 | no | dynamic (FTC param callback, `ftc_controller.cpp:260`) |
 | `obstacle_reverse_max_dist_m` (L654) | 0.30 | clamp(0.0, 1.0) L845 | no | dynamic |
 | `obstacle_reverse_speed_mps` (L657) | 0.15 | clamp(0.0, 0.30) L847 | no | dynamic |
-| `obstacle_margin` (L665) | 0.2 | `coverage_server.obstacle_margin` = clamp(0.0, 1.0) L940 **and** `map_server.obstacle_margin` `full_system.launch.py:405` (planner + keepout stay consistent) | Obstacles | launch |
+| `obstacle_margin` | 0.389 (= the derived floor on the shipped chassis, pinned by `test_nav2_params.py`) | `coverage_server.obstacle_margin` = `robot_config_util.planning_obstacle_margin` — clamp [floor, 1.0], floor = max(`chassis_half_width` + clamped `obstacle_clearance_margin` + `FTC_TRACKING_SLACK_M` 0.05, `chassis_half_width` + global-cell diagonal) rounded up to the mm. **NOT** sent to map_server any more | Obstacles | launch |
+| *(derived, no key)* `map_server.keepout_obstacle_margin` | 0.276 shipped | `robot_config_util.keepout_obstacle_margin` = max(`chassis_half_width`, planned `obstacle_margin` − global-cell diagonal), injected by `full_system.launch.py`. The WHOLE body for Smac 2D (point check, mask not inflated); follows an operator-raised `obstacle_margin` | — | launch |
 | `obstacle_slowdown_ratio` (L669) | 0.7 | `collision_monitor.PolygonSlow.slowdown_ratio` = clamp(0.05, 1.0) L866 — **only written when the merged doc has `PolygonSlow`**, i.e. the LiDAR variant | Obstacles | launch |
 
 ### Nav2 goal tolerances / progress (`navigation.launch.py:870–912`)
@@ -325,7 +343,7 @@ These fall back to a literal hardcoded in the launch file. Each is allow-listed 
 | `fusion_graph_node_period_s` | 0.04 (`navigation.launch.py:139`) | `fusion_graph_node.node_period_s` (overrides `fusion_graph.yaml:23`'s 0.02) |
 | `dock_body_length_m` / `dock_body_width_m` | 0.80 / 0.55 (`full_system.launch.py:383–384`) | `map_server` dock polygon |
 | `lethal_outside_areas` | `true` (`full_system.launch.py:416`) | `map_server` (also a static default in `map_server.yaml:96`) |
-| `enforce_boundary_margin_m` | 0.40 (`full_system.launch.py:418`) | `map_server` (static default `map_server.yaml:112`) |
+| `enforce_boundary_margin_m` | 0.40, then **floored at `robot_config_util.chassis_circumscribed_radius(rp)`** = 0.597 m shipped (`full_system.launch.py`) | `map_server` (static default `map_server.yaml`, standalone runs only). The band must hold the whole footprint overhanging the recorded line — `chassis_safety_inset` is 0, so the CENTRE rides on the line and the body reaches 0.275 m sideways but **0.53 m forward** at a row end. Floor raised from `chassis_half_width` (a no-op: 0.275 < 0.40) 2026-09-17. **Trade-off:** the band is also how far outside the perimeter Smac will route, and it now exceeds `lethal_boundary_margin_m` (0.5) |
 | `lift_recovery_mode` / `lift_blade_resume_delay_sec` | `false` / 1.0 (`mowgli.launch.py:230–232`) | `hardware_bridge` — GUI section *Safety* |
 | `imu_roll` / `imu_pitch` | 0.0 (`mowgli.launch.py:115–116`) | xacro |
 
@@ -403,7 +421,7 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 
 | Difference | LiDAR overlay | No-LiDAR overlay |
 |---|---|---|
-| Global costmap `plugins` | `[obstacle_layer, keepout_filter, inflation_layer]` (L18) | `[static_layer, keepout_filter, inflation_layer]` (L33) fed by `/no_lidar_static_map` |
+| Global costmap `plugins` | `[obstacle_layer, inflation_layer, keepout_filter]` | `[static_layer, inflation_layer, keepout_filter]` fed by `/no_lidar_static_map`. **Inflation BEFORE keepout in both** — the keepout mask already carries the body and must not be inflated (pinned by `test_global_costmap_inflates_before_the_keepout_filter`) |
 | Local costmap `plugins` | `[obstacle_layer, inflation_layer]` (L75) | `[static_layer, inflation_layer]` (L46) |
 | `FollowPath.primary_controller.use_collision_detection` | `true` (L13) | `false` (L11) |
 | `FollowCoveragePath` obstacle flags | from base (`check_obstacles: true`, `enable_obstacle_deviation: true`) | `check_obstacles: false`, `enable_obstacle_deviation: false` (L20–21) |
@@ -426,7 +444,7 @@ parameters remain directly under `FollowPath`.
 | `stopped_goal_checker` | 131–149 | transit goal gate |
 | `coverage_goal_checker` | 170–189 | `mowgli_nav2_plugins/PathProgressGoalChecker` L171, `plan_topic: /controller_server/FollowCoveragePath/global_plan` L189 — **never `StoppedGoalChecker`** |
 | `FollowPath` (transit) | 226–320 | RotationShim L227 wrapping RPP L228; `primary_controller.max_linear_vel: 0.30` L276 (overwritten by `transit_speed`) |
-| `FollowCoveragePath` (coverage) | 338–550 | `mowgli_nav2_plugins/FTCController` L339; `speed_fast` L346 / `speed_slow` L357 / `min_speed_mps` L364 (speed fast/slow launch-overwritten); obstacle restart angular acceleration `1.0 rad/s²` L363; `max_cmd_vel_ang: 0.8` L408; `max_goal_distance_error: 0.50` L414; `forward_only: true` L424; `check_obstacles` L429, `obstacle_lookahead` L435, `obstacle_body_half_width` L481, `ignore_obstacles_outside_zone` L512, `enable_obstacle_deviation` L513, `max_lateral_deviation` L519, reverse-escape trio L548–550 |
+| `FollowCoveragePath` (coverage) | 338–550 | `mowgli_nav2_plugins/FTCController` L339; `speed_fast` L346 / `speed_slow` L357 / `min_speed_mps` L364 (speed fast/slow launch-overwritten); obstacle restart angular acceleration `1.0 rad/s²` L363; `max_cmd_vel_ang: 0.8` L408; `max_goal_distance_error: 0.50` L414; `forward_only: true` L424; `check_obstacles` L429, `obstacle_lookahead` L435, `obstacle_body_half_width` L481, `enable_obstacle_deviation` L513, `max_lateral_deviation` L519, reverse-escape trio L548–550 |
 | `planner_server` | 551–590 | Smac |
 | `smoother_server` / `behavior_server` / `waypoint_follower` | 591 / 604 / 655 | BackUp lives in `behavior_server` (undock, Invariant 10) |
 | `global_costmap` | 674–789 | 70×70 m rolling L741–742, `resolution: 0.08` L715, `inflation_radius: 0.20` L780, **`keepout_filter` enabled** L782–785 |

@@ -480,6 +480,77 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
+  # ---- test_dig_skip ----
+  # Pure: session dig skip zones (which coverage poses are skipped around a
+  # recorded dig point) + the wait for the bridge's bounded reverse.
+  ament_add_gtest(test_dig_skip
+    test/test_dig_skip.cpp
+  )
+
+  target_include_directories(test_dig_skip PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_dig_skip
+    ${geometry_msgs_TARGETS}
+  )
+
+  # ---- test_follow_strip_dig ----
+  # Tick-level: FollowStrip against fake /follow_path + /navigate_to_pose
+  # servers. A dig while mowing cancels the goal, waits for the reverse, and
+  # resumes the same unit past the hole; later units are cut at recorded zones.
+  ament_add_gtest(test_follow_strip_dig
+    test/test_follow_strip_dig.cpp
+    src/coverage_nodes.cpp
+    src/coverage_persistence.cpp
+    src/status_nodes.cpp
+    src/status_snapshot.cpp
+    TIMEOUT 180
+  )
+
+  target_include_directories(test_follow_strip_dig PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_follow_strip_dig
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
+  )
+
+  # ---- test_unit_resume ----
+  ament_add_gtest(test_unit_resume
+    test/test_unit_resume.cpp
+  )
+
+  target_include_directories(test_unit_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  # ---- test_action_outcome ----
+  ament_add_gtest(test_action_outcome
+    test/test_action_outcome.cpp
+  )
+
+  target_include_directories(test_action_outcome PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_detour_resume ----
   # Unit tests for the pure detour-and-continue resume-pose search
   # (detour_resume.hpp): when FTC is blocked by an un-skirtable obstacle,
@@ -752,9 +823,9 @@ if(BUILD_TESTING)
   )
 
   # ---- test_dig_obstruction_recovery ----
-  # Structural: HOME drops the dig keepouts under the robot (gated on
-  # IsDigEscalated) before its DockRobot; the DIG_OBSTRUCTION hold publishes
-  # state=1 so the firmware hard stop holds the wedged robot.
+  # Structural: HOME bypasses the DIG_OBSTRUCTION hold and needs no dig-keepout
+  # clean-up (a dig never stamps a keepout); the hold publishes state=1 so the
+  # firmware hard stop holds the wedged robot.
   ament_add_gtest(test_dig_obstruction_recovery
     test/test_dig_obstruction_recovery.cpp
   )

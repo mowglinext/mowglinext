@@ -231,7 +231,7 @@ Application layer
 - **ObstacleArray.msg** – Collection of tracked obstacles from obstacle_tracker_node
 - **TrackedObstacle.msg** – Individual persistent obstacle with position, age, and observation count
 - **MapObstacleInfo.msg** – Per-area obstacle identity/state returned by `~/get_mowing_area`
-- **DigEvent.msg** – Wheel-slip dig report from `hardware_bridge_node`'s dig detector (`~/dig_event`), promoted to a keepout by `map_server_node`
+- **DigEvent.msg** – Wheel-slip dig report from `hardware_bridge_node`'s dig detector (`~/dig_event`); `map_server_node` records it as an operator-reviewable proposal (never an automatic keepout) and `behavior_tree_node` turns it into a session dig skip zone for `FollowStrip`
 - **GnssStatus.msg** – Authoritative receiver status from the GNSS sidecar (`/gps/status`)
 - **DockCalibrationStatus.msg** – Progress/result feed for the one-click dock calibration
 
@@ -1099,7 +1099,6 @@ FollowCoveragePath:                         # coverage
   obstacle_footprint: true
   use_footprint_clearance: false            # field: full-footprint sweep too conservative
   require_clear_exit: true                  # cul-de-sac guard — do not skirt a wall
-  ignore_obstacles_outside_zone: true
   enable_obstacle_deviation: true
   max_lateral_deviation: 1.5                # overridden from max_obstacle_avoidance_distance
   obstacle_wait_timeout_s: 2.5

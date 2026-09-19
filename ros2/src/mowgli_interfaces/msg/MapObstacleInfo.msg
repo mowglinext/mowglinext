@@ -16,11 +16,13 @@ uint8 SOURCE_TRACKER=1     # promoted from an /obstacle_tracker observation
 uint8 SOURCE_DIG=2         # proposed by the wheel-slip dig detector
 uint8 source
 
-# True while this obstacle is only a PROPOSAL: it is live in the keepout
-# mask for the current session (coverage routes around it, so the robot
-# cannot re-dig the same hole) but it is NOT written to areas.dat and will
-# not survive a restart. The operator accepts it with
-# ~/promote_obstacle{pending_id} or discards it with ~/discard_obstacle.
+# True while this obstacle is only a PROPOSAL. A proposal is NOT applied: it
+# is not in the keepout mask, not a NO_GO cell, not a coverage hole and not in
+# areas.dat, and it does not survive a restart. It is listed in
+# MapArea.proposed_obstacles (never in MapArea.obstacles) until the operator
+# accepts it with ~/promote_obstacle{pending_id} - which applies AND persists
+# it - or discards it with ~/discard_obstacle. Always false for an entry of
+# MapArea.obstacle_info.
 bool pending
 
 # Session-scoped handle used by ~/promote_obstacle and ~/discard_obstacle.

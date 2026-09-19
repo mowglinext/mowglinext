@@ -40,6 +40,8 @@
  *   ~/emergency_stop mowgli_interfaces/srv/EmergencyStop
  *   ~/reboot_board    std_srvs/srv/Trigger
  *   ~/set_firmware_debug std_srvs/srv/SetBool
+ *   ~/clear_dig_escalation std_srvs/srv/Trigger  (operator override, distance-gated — see
+ * dig_escalation.hpp)
  *
  * Parameters:
  *   serial_port      (string,  default "/dev/mowgli")
@@ -862,6 +864,21 @@ private:
     dig_escalate_cfg_.radius_m = declare_parameter<double>("dig_escalate_radius_m", 0.50);
     dig_escalate_cfg_.window_s = declare_parameter<double>("dig_escalate_window_s", 60.0);
     dig_escalate_cfg_.min_count = declare_parameter<int>("dig_escalate_count", 3);
+    // How far the chassis must move past the escalation anchor before
+    // ~/clear_dig_escalation accepts an operator override (see
+    // on_clear_dig_escalation). Independently tunable from dig_escalate_radius_m
+    // above — that radius clusters LATCHES into "the same spot" for deciding
+    // whether to escalate at all; this distance is how far clear of that spot
+    // counts as proof the operator actually freed the chassis, which a site
+    // with a lot of open room around the obstruction may want set wider than
+    // the clustering radius. Floored at 0.30 m regardless of what is
+    // configured: below that, "moved" is barely outside the position noise a
+    // stationary RTK-Fixed fix already carries, so accepting it would let the
+    // override rubber-stamp a chassis that never actually left the
+    // obstruction — exactly what issue #500's seventeen-latch wedge showed
+    // the per-event response cannot self-correct.
+    dig_escalate_clear_distance_m_ =
+        std::max(0.30, declare_parameter<double>("dig_escalate_clear_distance_m", 0.50));
 
     RCLCPP_INFO(get_logger(),
                 "Parameters: serial_port=%s baud_rate=%d heartbeat_rate=%.1f Hz "
@@ -1105,6 +1122,20 @@ private:
                std::shared_ptr<std_srvs::srv::SetBool::Response> res)
         {
           on_set_firmware_debug(req, res);
+        });
+
+    // Operator override for a latched repeat-dig escalation (see
+    // dig_escalated_'s doc comment) when driving to the dock is not the
+    // practical recovery — e.g. the dock is unreachable from here, or the
+    // operator has already freed the chassis by hand. Succeeds only once the
+    // chassis has moved past dig_escalate_clear_distance_m_ from the anchor;
+    // see on_clear_dig_escalation.
+    srv_clear_dig_escalation_ = create_service<std_srvs::srv::Trigger>(
+        "~/clear_dig_escalation",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+               std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+        {
+          on_clear_dig_escalation(req, res);
         });
   }
 
@@ -1575,6 +1606,15 @@ private:
       msg.firmware_version = fw_version_str_;
       msg.firmware_protocol_version = fw_protocol_version_;
       msg.firmware_compatible = fw_compatible_;
+      // Repeat-dig escalation (see dig_escalated_'s doc comment). Distance is
+      // live so the GUI can show progress toward the ~/clear_dig_escalation
+      // threshold without its own odometry subscription.
+      msg.dig_escalated = dig_escalated_;
+      msg.dig_escalated_distance_m =
+          dig_escalated_ ? static_cast<float>(std::hypot(last_map_pose_x_ - dig_escalation_x_,
+                                                         last_map_pose_y_ - dig_escalation_y_))
+                         : 0.0F;
+      msg.dig_escalated_required_distance_m = static_cast<float>(dig_escalate_clear_distance_m_);
       pub_status_->publish(msg);
     }
 
@@ -3420,6 +3460,62 @@ private:
     publish_dig_escalated();
   }
 
+  /// Operator override for dig_escalated_ — see the service registration and
+  /// dig_escalated_'s doc comment for the rationale. Distance-gated (NOT a
+  /// bare acknowledge/dismiss): a request that arrives while the chassis is
+  /// still within dig_escalate_clear_distance_m_ of the anchor is refused, so
+  /// an operator who only glances at the GUI and presses the button without
+  /// actually moving the robot cannot silently defeat the guard
+  /// ShouldEscalate raised (issue #500's seventeen-latch wedge is exactly the
+  /// case this must not let back in).
+  void on_clear_dig_escalation(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                               std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+  {
+    if (!dig_escalated_)
+    {
+      res->success = true;
+      res->message = "no dig escalation is currently active";
+      return;
+    }
+    const double dist =
+        std::hypot(last_map_pose_x_ - dig_escalation_x_, last_map_pose_y_ - dig_escalation_y_);
+    if (!CanClearDigEscalation(dig_escalation_x_,
+                               dig_escalation_y_,
+                               last_map_pose_x_,
+                               last_map_pose_y_,
+                               dig_escalate_clear_distance_m_))
+    {
+      res->success = false;
+      char buf[192];
+      std::snprintf(buf,
+                    sizeof(buf),
+                    "still only %.2f m from the obstruction at (%.2f, %.2f) — move the mower "
+                    "more than %.2f m away before clearing",
+                    dist,
+                    dig_escalation_x_,
+                    dig_escalation_y_,
+                    dig_escalate_clear_distance_m_);
+      res->message = buf;
+      return;
+    }
+    dig_escalated_ = false;
+    dig_latch_history_.clear();
+    publish_dig_escalated();
+    RCLCPP_INFO(get_logger(),
+                "Dig escalation cleared by operator override: moved %.2f m from the obstruction "
+                "at (%.2f, %.2f).",
+                dist,
+                dig_escalation_x_,
+                dig_escalation_y_);
+    res->success = true;
+    char buf[128];
+    std::snprintf(buf,
+                  sizeof(buf),
+                  "dig escalation cleared (moved %.2f m from the obstruction)",
+                  dist);
+    res->message = buf;
+  }
+
   void publish_dig_escalated()
   {
     std_msgs::msg::Bool msg;
@@ -3585,19 +3681,30 @@ private:
 
   // ── Repeat-dig escalation (see dig_escalation.hpp) ───────────────────────
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_dig_escalated_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_clear_dig_escalation_;
   DigEscalationCfg dig_escalate_cfg_;
+  /// Floor-clamped clear-distance threshold — see its declare_parameter call
+  /// for why it is independent of dig_escalate_cfg_.radius_m.
+  double dig_escalate_clear_distance_m_{0.50};
   DigLatchHistory dig_latch_history_;
   /// Latched once the robot proves it cannot free itself at one spot. Cleared
-  /// when the robot reaches the charger (mating with the dock is unambiguous
-  /// proof it physically left the obstruction) or when the fused pose has
-  /// moved kDigEscalationClearFactor x dig_escalate_radius_m away from the
-  /// escalation point (carried clear by the operator, or driven out on a
-  /// HOME). A robot still sitting against the object matches neither, so it
-  /// cannot quietly resume: Play stays refused by the tree's
-  /// DigObstructionGuard until one of the two happens.
+  /// (1) unconditionally when the robot reaches the charger (mating with the
+  /// dock is unambiguous proof it physically left the obstruction, whether the
+  /// operator carried it out or it drove home); (2) automatically once the
+  /// fused pose has moved kDigEscalationClearFactor x dig_escalate_radius_m
+  /// away from dig_escalation_{x,y}_ (carried clear by the operator, or driven
+  /// out on a HOME — checked in on_filtered_map_odom); (3) on operator request
+  /// via ~/clear_dig_escalation once the chassis has moved past
+  /// dig_escalate_clear_distance_m_ from the same anchor (see
+  /// on_clear_dig_escalation — an operator-confirmed "I freed it and it isn't
+  /// at the dock" path for the band between the clear distance and the
+  /// automatic 2x-radius release). A robot still sitting against the object
+  /// matches none of the three, so it cannot quietly resume: Play stays
+  /// refused by the tree's DigObstructionGuard until one of them happens.
   bool dig_escalated_{false};
-  /// Map-frame position at which the latch was raised; the displacement
-  /// clear above is measured from here.
+  /// Map-frame position last_map_pose_{x,y}_ held when dig_escalated_ was set
+  /// — the "same spot" both the displacement clear and ~/clear_dig_escalation
+  /// measure distance from.
   double dig_escalation_x_{0.0};
   double dig_escalation_y_{0.0};
 

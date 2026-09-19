@@ -33,6 +33,8 @@ import {NewAreaModal} from "./map/components/NewAreaModal.tsx";
 import {EditAreaModal} from "./map/components/EditAreaModal.tsx";
 import {AreasListPanel} from "./map/components/AreasListPanel.tsx";
 import {TrackedObstaclesPanel} from "./map/components/TrackedObstaclesPanel.tsx";
+import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.tsx";
+import {extractObstacleProposals, isDigProposal} from "./map/utils/obstacleProposals.ts";
 import {MapOffsetPanel} from "./map/components/MapOffsetPanel.tsx";
 import {MapToolbar} from "./map/components/MapToolbar.tsx";
 import {MapToolbarMobile} from "./map/components/MapToolbarMobile.tsx";
@@ -93,6 +95,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // operator sees exactly which obstacle they're about to promote. null =
     // nothing highlighted.
     const [selectedObstacleId, setSelectedObstacleId] = useState<number | null>(null);
+    // Same link for PENDING obstacle proposals (wheel-slip dig reports).
+    const [selectedProposalId, setSelectedProposalId] = useState<number | null>(null);
     const [features, setFeatures] = useState<Record<string, MowingFeature>>({});
     const [dockPlacementMode, setDockPlacementMode] = useState<boolean>(false);
     // OpenMower import preview — populated by handleImportOpenMower after
@@ -463,6 +467,47 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         }
         return names;
     }, [features, t, map]);
+
+    // PENDING obstacle proposals (wheel-slip dig reports). map_server lists
+    // them apart from each area's applied obstacles: they block nothing on the
+    // robot until the operator accepts one in ObstacleProposalsPanel. Drawn as a
+    // filled hole of their REAL polygon, like any obstacle, labelled with their
+    // provenance ("DIG #7"), but with a
+    // dashed outline so they never read as a real keepout, and kept OUT of the
+    // editable feature set so a map save cannot persist one by accident.
+    const obstacleProposals = useMemo(() => extractObstacleProposals(map), [map]);
+    const proposalCollection = useMemo<GeoJSON.FeatureCollection>(() => ({
+        type: "FeatureCollection",
+        features: datum[0] === 0 ? [] : obstacleProposals.map(proposal => {
+            const ring = (proposal.polygon.points ?? []).map(p => transpose(offsetX, offsetY, datum, p.y ?? 0, p.x ?? 0));
+            return {
+                type: "Feature" as const,
+                id: proposal.id,
+                geometry: {type: "Polygon" as const, coordinates: [[...ring, ring[0]]]},
+                properties: {proposal_id: proposal.id, proposal_label: `${isDigProposal(proposal) ? t('mapObstacleProposals.digMapLabel') : '?'} #${proposal.id}`},
+            };
+        }),
+    }), [obstacleProposals, offsetX, offsetY, datum, t]);
+    const renderProposalLayers = () => (
+        <Source type={"geojson"} id={"obstacle-proposals"} data={proposalCollection}>
+            <Layer type={"fill"} id={"obstacle-proposal-fill"}
+                paint={{'fill-color': '#bf0000', 'fill-opacity': ['case', ['==', ['get', 'proposal_id'], selectedProposalId ?? -1], 0.75, 0.5]}}/>
+            <Layer type={"line"} id={"obstacle-proposal-outline"}
+                paint={{'line-color': '#d48806', 'line-width': 2, 'line-dasharray': [2, 2]}}/>
+            <Layer type={"symbol"} id={"obstacle-proposal-label"}
+                layout={{
+                    'text-field': ['get', 'proposal_label'],
+                    'text-size': 13,
+                    'text-font': ['Open Sans Bold'],
+                    'text-allow-overlap': true,
+                }}
+                paint={{
+                    'text-color': LAYER_COLORS.labelText,
+                    'text-halo-color': LAYER_COLORS.labelHalo,
+                    'text-halo-width': 1.5,
+                }}/>
+        </Source>
+    );
 
     // Build the areas list for the sidebar panel
     const areasList = useMemo(() => {
@@ -1013,6 +1058,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         {/* Persistent tracked-obstacle polygons + id labels + hover/select highlight */}
                         {renderDynObstacleLayers(true)}
                     </Source>
+                    {/* PENDING obstacle proposals (dig reports): dashed, never a real keepout */}
+                    {renderProposalLayers()}
                     {/* fusion_graph's LiDAR anchor map (walls as ink, scanned ground as a faint wash). */}
                     {lidarMapImage && (
                         <Source type={"image"} id={"lidar-map"} url={lidarMapImage.url} coordinates={lidarMapImage.coordinates}>
@@ -1097,6 +1144,18 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         {...mowerActions}
                     />
                 )}
+                {/* Mobile: obstacle proposals need an accept/reject surface too — the
+                    operator is usually standing next to the robot with a phone. The
+                    mobile toolbar lives at the bottom, so this card takes the top. */}
+                {isMobile && !editMap && obstacleProposals.length > 0 && (
+                    <div style={{position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10, maxHeight: '40%', overflowY: 'auto', background: colors.glassBackground, borderRadius: 14, border: colors.glassBorder, boxShadow: colors.glassShadow}}>
+                        <ObstacleProposalsPanel
+                            proposals={obstacleProposals}
+                            selectedProposalId={selectedProposalId}
+                            onHoverProposal={setSelectedProposalId}
+                        />
+                    </div>
+                )}
                 {/* Desktop: Edit mode — left vertical toolbar */}
                 {!isMobile && editMap && (
                     <MapEditorToolbar
@@ -1163,6 +1222,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                     areaNames={obstacleAreaNames}
                                     selectedObstacleId={selectedObstacleId}
                                     onHoverObstacle={setSelectedObstacleId}
+                                />
+                            </div>
+                        )}
+                        {obstacleProposals.length > 0 && (
+                            <div style={{borderTop: `1px solid ${colors.borderSubtle}`}}>
+                                <ObstacleProposalsPanel
+                                    proposals={obstacleProposals}
+                                    selectedProposalId={selectedProposalId}
+                                    onHoverProposal={setSelectedProposalId}
                                 />
                             </div>
                         )}

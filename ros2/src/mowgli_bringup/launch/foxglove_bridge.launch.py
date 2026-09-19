@@ -71,6 +71,17 @@ def generate_launch_description() -> LaunchDescription:
         executable="foxglove_bridge",
         name="foxglove_bridge",
         output="screen",
+        # RESPAWN: this bridge is the GUI's ONLY link to ROS (gui/pkg/providers/
+        # ros.go connects to ws://localhost:8765 and every topic, service and
+        # parameter the operator sees goes through it). When it dies the web UI
+        # silently shows no robot on the map and "no GPS" while the robot is
+        # perfectly localised and still mowing — field 2026-09-18, where it
+        # segfaulted (exit -11) moments after the GUI backend connected and was
+        # never restarted, leaving the operator blind for a whole run.
+        # It is outside the motion path, so restarting it can only restore
+        # observability; a crash loop is bounded by respawn_delay.
+        respawn=True,
+        respawn_delay=2.0,
         parameters=[
             {
                 "port": port,

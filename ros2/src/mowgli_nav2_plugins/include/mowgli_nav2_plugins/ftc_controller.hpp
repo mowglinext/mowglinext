@@ -225,6 +225,19 @@ private:
   /// max_lateral_deviation to find clearance.
   void updateLateralDeviation(double dt);
 
+  /// Whole-profile avoidance (ftc_offset_lattice.hpp): plans the lateral offset
+  /// over the horizon and sets target_lateral_deviation_. Returns false when it
+  /// engaged the reverse-escape / wait fallback and the caller must return.
+  bool planOffsetLattice(std::size_t carrot_idx,
+                         const BoundaryGuard& guard,
+                         const std::vector<geometry_msgs::msg::Point>& footprint,
+                         double dt);
+
+  /// Plan poses [first, last) expressed in the local costmap frame.
+  bool planWindowInCostmapFrame(std::size_t first,
+                                std::size_t last,
+                                std::vector<geometry_msgs::msg::PoseStamped>& out);
+
   /// Apply lateral_deviation_ to current_control_point_ in-place.
   void applyLateralDeviationToCarrot();
 
@@ -308,6 +321,10 @@ private:
   /// own followable-duration counter because a valid offset path may exist
   /// while the nominal path remains blocked.
   std::optional<rclcpp::Time> avoidance_clear_start_;
+  /// Since when the lattice has been asking for a SMALLER offset than applied.
+  std::optional<rclcpp::Time> lattice_return_start_;
+  /// Since when the free plan has been asking for the side opposite to the committed one.
+  std::optional<rclcpp::Time> lattice_switch_start_;
 
   // ── Oscillation detection ─────────────────────────────────────────────────
 
@@ -464,6 +481,8 @@ private:
     double max_goal_angle_error{10.0};
     double goal_timeout{5.0};
     double max_follow_distance{1.0};
+    /// Max longitudinal carrot lead (m); <= 0 derives it (ftc_carrot_lead.hpp).
+    double carrot_max_lead{-1.0};
 
     // Options
     bool forward_only{true};
@@ -555,18 +574,6 @@ private:
     /// (near-edge swaths legitimately run inside the keepout margin). When
     /// false, behaves exactly as before.
     bool confine_deviation_to_zone{true};
-    /// Zone-MASK the obstacle DETECTION checks (issue #517): a lethal cell in
-    /// the local obstacle costmap that is ALSO lethal in the global keepout
-    /// costmap (out-of-zone / keepout hole) is NOT an obstacle for the
-    /// deviation logic — the coverage path was planned to pass beside it and
-    /// never enters it. Field 2026-09-02: 71 "lateral deviation needed > max"
-    /// strip aborts per mow, all at row ends against the hedge the boundary
-    /// was recorded along / the tree in a keepout hole. Only effective when
-    /// confine_deviation_to_zone is true AND the global costmap has been
-    /// received (the same BoundaryGuard is reused); otherwise the old
-    /// behaviour. In-zone obstacles are unaffected; collision_monitor stays
-    /// the real-time guard.
-    bool ignore_obstacles_outside_zone{true};
 
     /// Model the robot as its actual rectangular chassis FOOTPRINT (from
     /// costmap_ros_->getRobotFootprint()) for obstacle detection and the
@@ -598,6 +605,16 @@ private:
     /// (works with the half-width line model AND the footprint model). Default
     /// true. Set false to restore the prior skirt-anything behaviour.
     bool require_clear_exit{true};
+    /// Whole-profile avoidance planner instead of the single-offset search.
+    bool use_offset_lattice{false};
+    /// How far ahead of the carrot the offset profile is planned (m).
+    double avoidance_horizon_m{2.5};
+    /// Steepest lateral change per metre of path the profile may ask for.
+    double avoidance_max_slope{1.0};
+    /// Path length by which a skirt must be in place BEFORE the obstacle (m).
+    double avoidance_reaction_m{0.5};
+    /// Only a blockage closer than this makes the robot WEDGED (m).
+    double avoidance_min_horizon_m{1.0};
 
     /// Bounded reverse-escape for the WEDGED case (both sides of an obstacle
     /// blocked, or the skirt needed exceeds max_lateral_deviation). Before

@@ -811,7 +811,11 @@
     "areaN": "Zone {{number}}",
     "actionFailed": "Échec de la commande",
     "soilWetTitle": "Attention : le jardin est humide (IrriSense)",
-    "soilWetBlocking": "tontes planifiées suspendues"
+    "soilWetBlocking": "tontes planifiées suspendues",
+    "digEscalationTitle": "Tonte arrêtée — creusement répété détecté",
+    "digEscalationBody": "La tondeuse n'a pas pu se dégager et s'est arrêtée à {{distance}} m de l'endroit (il faut {{required}} m pour réinitialiser). Éloignez-la davantage, puis réessayez.",
+    "digEscalationReady": "Éloignée de {{distance}} m de l'endroit — prête à réinitialiser.",
+    "digEscalationClear": "Réinitialiser et reprendre"
   },
   "onboardingPage": {
     "preview": "Aperçu",
@@ -1682,6 +1686,27 @@
     "noContainingArea": "Aucune zone englobante",
     "promoteTooltip": "Promouvoir en exclusion permanente"
   },
+  "mapObstacleProposals": {
+    "header": "Propositions d’obstacles ({{count}})",
+    "hint": "Rien n’est bloqué tant que vous n’acceptez pas. Le robot évite ces endroits pour la session en cours uniquement.",
+    "digLabel": "Proposition de patinage n°{{id}}",
+    "digMapLabel": "PATINAGE",
+    "genericLabel": "Proposition n°{{id}}",
+    "areaFallback": "zone {{index}}",
+    "accept": "Accepter",
+    "acceptTooltip": "En faire une zone d’exclusion permanente",
+    "acceptConfirmTitle": "Accepter cette proposition d’obstacle ?",
+    "acceptConfirmBody": "Ceci ajoute une zone d’exclusion permanente dans {{area}}, de la taille du trou affiché sur la carte (les ornières des roues) : le robot planifiera et tondra autour, avec sa marge habituelle, dès maintenant (jusqu’à ce que vous la retiriez de la zone). L’acceptation est refusée tant que le robot se trouve encore à cet endroit — laissez-le d’abord s’éloigner.",
+    "acceptedSuccess": "Proposition acceptée comme zone d’exclusion dans {{area}}",
+    "acceptFailed": "Échec de l’acceptation de la proposition",
+    "reject": "Refuser",
+    "rejectTooltip": "Supprimer cette proposition",
+    "rejectConfirmTitle": "Refuser cette proposition d’obstacle ?",
+    "rejectConfirmBody": "La proposition est supprimée et la carte reste inchangée. Le robot évite encore cet endroit jusqu’à la fin de la session de tonte en cours.",
+    "rejectedSuccess": "Proposition refusée",
+    "rejectFailed": "Échec du refus de la proposition",
+    "cancel": "Annuler"
+  },
   "mapEditing": {
     "unableToMatchAreaForObstacle": "Impossible d'associer une zone à cet obstacle",
     "splitTargetNotValidPolygon": "La cible de la découpe n'est pas un polygone valide",
@@ -1899,6 +1924,18 @@
     "obstacle_wait_timeout_s": {
       "label": "Délai d'attente devant un obstacle",
       "description": "Durée pendant laquelle le robot reste immobile pour tenter de contourner un obstacle bloqué avant d'abandonner la bande. Une valeur plus longue tolère les blocages passagers (ex. une personne qui passe) ; une valeur plus courte abandonne plus vite une bande bloquée."
+    },
+    "transit_dynamic_window": {
+      "label": "Fenêtre dynamique en transit (DWPP)",
+      "description": "Laisse la navigation point à point choisir la vitesse et le taux de rotation réellement atteignables à l'instant, au lieu d'appliquer la courbure du chemin à une vitesse régulée. Elle ralentit d'elle-même dans les virages serrés. Sans effet sur la tonte, qui a son propre contrôleur."
+    },
+    "coverage_goal_checker_id": {
+      "label": "Test d'arrivée en tonte",
+      "description": "Comment une passe de tonte est jugée terminée. Le défaut exige que 95 % des poses planifiées aient été parcourues — le seul test qui fonctionne sur un anneau de pourtour fermé, dont le début et la fin sont le même point."
+    },
+    "local_inflation_inscribed_radius": {
+      "label": "Rayon inscrit des obstacles (override)",
+      "description": "Avancé. -1 le dérive du gabarit du robot, ce qui maintient l'inflation des obstacles au-dessus de la diagonale du châssis et peut rendre un passage étroit non planifiable. Ne le fixez à la demi-largeur réelle plus marge que si un passage où le robot tient physiquement est refusé."
     },
     "obstacle_clearance_margin": {
       "label": "Marge de dégagement d'obstacle",
@@ -2501,8 +2538,8 @@
   },
   "settingsObstacles": {
     "digKeepouts": "Obstacles de patinage",
-    "digAutoPromotion": "Créer automatiquement des zones d’exclusion de patinage",
-    "digKeepoutsDescription": "Crée une zone d’exclusion temporaire lorsqu’un patinage est détecté dans une zone de tonte. Acceptez la proposition sur la carte pour la conserver. Si désactivé, aucune zone d’exclusion de patinage n’est créée ; la détection, l’arrêt et la récupération restent actifs. Enregistrez et redémarrez ROS2 pour appliquer.",
+    "digAutoPromotion": "Proposer un obstacle là où le robot a patiné",
+    "digKeepoutsDescription": "Lorsqu’un patinage est détecté dans une zone de tonte, ajoute une proposition sur la page Carte. Rien n’est bloqué tant que vous ne l’acceptez pas : accepter en fait une zone d’exclusion permanente, refuser la supprime. En attendant, le robot évite simplement cet endroit jusqu’à la fin de la session de tonte. Si désactivé, aucune proposition n’est créée ; la détection, l’arrêt et la récupération restent actifs. Enregistrez et redémarrez ROS2 pour appliquer.",
     "rootZoneHintTitle": "Arbres avec de grosses racines ?",
     "rootZoneHintDescription": "Le LiDAR 2D ne voit pas les racines sous son plan de scan (~10–20 cm). Dessinez l'arbre comme obstacle dans l'éditeur de carte et augmentez la marge des obstacles dessinés pour que la tonte et les transits restent hors de la zone de racines.",
     "avoidanceMargins": "Marges d'évitement",
@@ -2512,7 +2549,7 @@
     "maxDetourDistance": "Distance max de détour",
     "maxDetourDistanceTooltip": "Détour latéral maximal autour d'un obstacle avant d'abandonner — pilote l'évitement en tonte et le seuil d'abandon du contournement",
     "drawnObstacleMargin": "Marge des obstacles dessinés",
-    "drawnObstacleMarginTooltip": "Marge supplémentaire autour des obstacles dessinés sur la carte, appliquée à la tonte et aux transits. À utiliser pour les zones de racines invisibles au LiDAR.",
+    "drawnObstacleMarginTooltip": "Distance que le plan de tonte garde avec les obstacles dessinés sur la carte. Un plancher dérivé du châssis est appliqué au lancement ; la bande interdite des transits est dérivée séparément et suit cette valeur quand vous l'augmentez. À augmenter pour les zones de racines invisibles au LiDAR.",
     "clearanceMargin": "Marge de dégagement",
     "clearanceMarginTooltip": "Espace latéral laissé au-delà du châssis lors du contournement d'un obstacle pendant la tonte. Augmentez si le robot contourne les obstacles en les frôlant. Le rayon d'inflation ne fait PAS cela.",
     "detectionRange": "Portée de détection",

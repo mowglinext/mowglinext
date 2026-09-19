@@ -379,7 +379,9 @@ setup_env() {
   remove_legacy_gnss_env_keys "$env_file"
   remove_env_key "$env_file" "GPS_IMAGE"
   remove_env_key "$env_file" "NMEA_IMAGE"
-  
+
   info "Backend selection : HARDWARE_BACKEND=$HARDWARE_BACKEND GNSS_BACKEND=$GNSS_BACKEND GNSS_STACK=$GNSS_STACK"
   info "Updated $env_file"
+
+  prune_backup_if_unchanged "$env_file" "${MIGRATED_ENV_BACKUP:-}"
 }

@@ -11,7 +11,7 @@ Paths in this table are repo-root relative. Everywhere else below, bare `lib/…
 |------|---------------|
 | `docs/claude/codemaps/deploy.md` | **First, always.** File/line index of `install/` + `docker/` + `sensors/`, the `.env`→fragment→container→ROS-param table, bind mounts, host artefacts, change-coupling, pitfalls. Everything below is only the delta. |
 | `docs/claude/parameters.md` | Touching `install/config/mowgli/mowgli_robot.yaml` or any key the installer patches — where each default lives, who consumes it, and which keys are `INERT`. |
-| `docs/claude/testing-ci.md` | Before pushing: what CI gates (the installer suite is gated by **nothing**; only `install/config/mowgli/**` triggers the config-drift job). |
+| `docs/claude/testing-ci.md` | Before pushing: what CI gates. `install/config/mowgli/**` triggers the config-drift job; `.github/workflows/updater.yml`'s `test-build` job (any push/PR touching `gui/**`, `install/**`, `ros2/**`, `docker/**`) additionally runs `install/tests/test_updater.sh`, `test_deployment_publication.sh`, `test_compose_validity.sh` and `test_idempotency.sh` specifically — the rest of `install/tests/test_*.sh` is **not** CI-gated, run it locally before pushing. |
 | `docs/claude/ros-interfaces.md` | Wiring a container to a topic/service/TF frame — every endpoint resolved with `node · file:line`. |
 | `docs/claude/doc-index.md` | Deciding whether a doc you found is current, historical or stale, and which doc wins a conflict. |
 | `docs/claude/codemaps/mowgli_bringup.md` | Tracing where a seeded `mowgli_robot.yaml` key is actually consumed (`robot_config_util.load_robot_params`). |
@@ -40,6 +40,15 @@ bash install/mowglinext.sh --branch=dev --image-tag=dev --backend=mowgli \
      --gnss=auto --gnss-connection=uart --gnss-baud=auto --lidar=ldlidar-uart --tfluna=none
 # also: --lang= --gnss-device= --gnss-receiver-family= --lidar-uart= --tfluna-{front,edge}-uart=
 #       --gps= / --gps-uart= / --channel=  (deprecated aliases, still parsed)
+
+# --only=<step> (issue #632): run exactly one step instead of the full 15-step
+# flow — for adding one thing (e.g. the host updater) to an already-working
+# install without re-running everything else. Skips select_repo_branch()/
+# select_language() (deliberately non-interactive-friendly), still loads the
+# existing docker/.env first. See list_only_steps()/run_only_step() in
+# mowglinext.sh for the full, current list of step names.
+bash install/mowglinext.sh --only=updater
+bash install/mowglinext.sh --only=bogus     # rejected, lists valid step names
 
 # Aim the installer or the test harness at a sandbox instead of ~/mowglinext
 MOWGLI_HOME=/tmp/sandbox bash install/mowglinext.sh --check
@@ -79,7 +88,7 @@ python3 install/scripts/migrate_openmower.py --source ~/mowgli-docker \
 - TF-Luna and VESC prompts exist but are hard-gated off (`lib/config.sh` `range_services_available` L354, `vesc_service_available` L373 returns 1 unconditionally); `tests/test_optional_features.sh` pins that they never leak into the generated compose.
 - `write_compose_merged` runs `docker compose config --no-interpolate`; the pure-Bash fallback (`lib/compose.sh` L169–206) is a naive section concatenator. Re-run `tests/test_compose_validity.sh` after touching any fragment.
 - `config.sh` recomputes `REPO_DIR` from `MOWGLI_HOME` at source time, so `docker/stack.sh` L76–83 re-asserts the paths afterwards — any new lib that caches a path at source time needs the same treatment.
-- `migrate_runtime_paths` backs up `.env` + `docker-compose.yaml` to `.old.<ts>` on **every** run (`lib/deploy.sh` L279–280) and they accumulate; policy still open in `TODO-runtime-backups.md`.
+- `migrate_runtime_paths` still backs up `.env` + `docker-compose.yaml` to `.old.<ts>` unconditionally up front on every run (`lib/deploy.sh`), but `prune_backup_if_unchanged` removes that backup afterward if the regenerated file turns out byte-identical — a re-run that changes nothing no longer accumulates one. Remaining backup-policy ideas (rotation, a dedicated backup dir, `--no-backup`) are still open in `TODO-runtime-backups.md`.
 - `lib/udev.sh` L58–63 falls back to a bare `KERNEL=="<kernel name>"` rule when `udevadm` cannot resolve USB attributes — unstable across re-enumeration, which is exactly the bug the VID/PID form fixes.
 - `COMPOSE_PROJECT_NAME` must stay stable (default `install`): renaming it orphans the `install_mowgli_maps` volume holding `areas.dat` and the saved fusion graph.
 - `parse_args` (`lib/config.sh` L842–1078) only `warn`s on an unknown argument, so a typo'd flag silently no-ops. A new flag also needs the `docs/install.sh` bootstrap allowlist and the web composer under `docs/`.

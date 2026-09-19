@@ -377,3 +377,70 @@ def test_cross_hatch_setting_reaches_behavior_tree() -> None:
     for config, expected in [({}, False), ({"mow_cross_hatch": True}, True)]:
         assert eval(expression, {"__builtins__": {}, "bool": bool},
                     {"robot_params": config}) is expected
+
+
+@pytest.mark.parametrize(
+    "launch_file", ["navigation.launch.py", "full_system.launch.py"])
+def test_no_closure_rebinds_a_name_of_its_enclosing_function(
+        launch_file: str) -> None:
+    """A nested function that ASSIGNS a name its enclosing function also owns
+    makes that name local to the closure, so any read of it there raises
+    UnboundLocalError — at LAUNCH time, not import time. That is what
+    crash-looped the stack on the robot on 2026-09-16 (`obstacle_margin`
+    re-assigned inside `_inject_dock_pose_and_speeds`), and no regex or yaml
+    test can see it. The symbol table can: a closure must use FRESH local names.
+    """
+    import symtable
+
+    with open(_launch_path(launch_file)) as fh:
+        table = symtable.symtable(fh.read(), launch_file, "exec")
+
+    offenders = []
+
+    def _walk(scope) -> None:
+        for child in scope.get_children():
+            if scope.get_type() == "function" and child.get_type() == "function":
+                outer = {sym.get_name() for sym in scope.get_symbols()
+                         if sym.is_local() or sym.is_parameter()}
+                offenders.extend(
+                    f"{scope.get_name()} -> {child.get_name()}: {sym.get_name()}"
+                    for sym in child.get_symbols()
+                    if sym.is_local() and not sym.is_parameter()
+                    and sym.get_name() in outer)
+            _walk(child)
+
+    _walk(table)
+    assert not offenders, (
+        "closure re-binds a name of its enclosing function (UnboundLocalError "
+        f"at launch): {offenders}"
+    )
+
+
+def test_foxglove_bridge_respawns() -> None:
+    """The bridge is the GUI's ONLY link to ROS (gui/pkg/providers/ros.go dials
+    ws://localhost:8765). On 2026-09-18 it segfaulted seconds after the GUI
+    backend connected and was never restarted, so the web UI showed no robot on
+    the map and "no GPS" for a whole run while the robot was RTK-Fixed and
+    mowing. It is outside the motion path, so respawning it can only restore
+    observability."""
+    tree = ast.parse(open(_launch_path("foxglove_bridge.launch.py")).read())
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or getattr(node.func, "id", None) != "Node":
+            continue
+        kwargs = {kw.arg: kw.value for kw in node.keywords}
+        name = kwargs.get("name")
+        if not isinstance(name, ast.Constant) or name.value != "foxglove_bridge":
+            continue
+        respawn = kwargs.get("respawn")
+        assert isinstance(respawn, ast.Constant) and respawn.value is True, (
+            "foxglove_bridge must respawn: without it a single crash leaves the "
+            "operator blind with no indication that the robot is fine."
+        )
+        delay = kwargs.get("respawn_delay")
+        assert isinstance(delay, ast.Constant) and delay.value > 0, (
+            "respawn_delay bounds a crash loop."
+        )
+        return
+
+    pytest.fail("no foxglove_bridge Node found in foxglove_bridge.launch.py")

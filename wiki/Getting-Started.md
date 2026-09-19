@@ -127,6 +127,14 @@ Run diagnostics on an existing installation:
 cd ~/mowglinext/install && ./mowglinext.sh --check
 ```
 
+Add or re-run a single step on an already-installed robot, instead of repeating the whole flow — e.g. install the host auto-updater afterwards, without re-answering every hardware prompt:
+
+```bash
+cd ~/mowglinext/install && ./mowglinext.sh --only=updater
+```
+
+Valid step names: `system`, `docker`, `uart`, `backend`, `gps`, `lidar`, `rangefinders`, `directory`, `migrate`, `env`, `udev`, `mower`, `tools`, `motd`, `updater`, `startup` (run with any other/unrecognised name to have the installer print this same list). `--only=` skips the branch/language prompts and reuses your existing configuration — it does not re-ask anything the full install flow would.
+
 ## Manual Install
 
 If you prefer to set things up manually:
