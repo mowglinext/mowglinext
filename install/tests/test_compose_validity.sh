@@ -90,7 +90,7 @@ GPS_SERVICE_BLOCK="$(awk '
   in_service { print }
 ' "$COMPOSE_FILE")"
 
-for required in   "UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:"   "./docker/config/mowgli:/config:ro"   "device_cgroup_rules:"   "universal_gnss_launcher"   "fix_topic:=/gps/fix"   "status_topic:=/universal_gnss_receiver/status"   "rtcm_topic:=/universal_gnss_receiver/rtcm"   "ntrip_enabled:"; do
+for required in   "UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:"   "device_cgroup_rules:"   "universal_gnss_launcher"   "fix_topic:=/gps/fix"   "status_topic:=/universal_gnss_receiver/status"   "rtcm_topic:=/universal_gnss_receiver/rtcm"   "ntrip_enabled:"; do
   # Here-string, not a pipe: under `pipefail`, grep -q exits on its first match
   # and a still-writing printf dies of SIGPIPE, failing the check at random
   # once the service block is long.
@@ -100,6 +100,20 @@ for required in   "UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:"   "./docker/con
     fail "compose contains sidecar env: $required" "missing from generated gps service"
   fi
 done
+
+# The sidecar mounts mowgli_robot.yaml's directory read-only. The installer
+# writes the short form; a stack rendered by the updater binary
+# (MOWGLI_UPDATER_STACK_BINARY, as in CI) normalises it to the long form.
+if grep -qE '(docker/config/mowgli:/config:ro|target: /config$)' <<<"$GPS_SERVICE_BLOCK"; then
+  pass "gps sidecar mounts the mowgli_robot.yaml directory at /config"
+else
+  fail "gps sidecar mounts the mowgli_robot.yaml directory at /config" "mount missing from generated gps service"
+fi
+if grep -qE 'parameters\.yaml:/etc/universal_gnss|target: /etc/universal_gnss/parameters\.yaml' <<<"$GPS_SERVICE_BLOCK"; then
+  fail "no derived GNSS parameter file is mounted from the host" "parameters.yaml bind still present"
+else
+  pass "no derived GNSS parameter file is mounted from the host"
+fi
 
 assert_not_contains "Universal GNSS command has no legacy ROS CLI remaps"   "--ros-args" "$GPS_SERVICE_BLOCK"
 assert_contains "Universal GNSS uses combined native launch"   "receiver_and_ntrip.launch.py" "$GPS_SERVICE_BLOCK"
