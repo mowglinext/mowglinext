@@ -308,6 +308,9 @@ export function useMapEditing({
                 centroidPt.properties.title =
                     feature.getLabel() + `\n${areaLabel}`;
                 centroidPt.properties.index = feature.properties.source_working_area_index;
+                // Stable id (mowglinext#637) — see MowingFeatureBase.properties
+                // in types/map.ts for why callers should prefer this over index.
+                centroidPt.properties.id = feature.properties.source_working_area_id;
             }
             centroidPt.id = feature.id;
             return [centroidPt];

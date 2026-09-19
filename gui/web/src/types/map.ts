@@ -171,6 +171,12 @@ export class MowingFeatureBase extends MowingFeature implements Feature<Polygon>
         , name? :string
         , index: number
         , source_working_area_index?: number
+        // Stable area id (MapArea.id, mowglinext#637) captured at the same
+        // time as source_working_area_index. Array position can shift
+        // whenever the area list is edited/saved; prefer resolving by this
+        // id (mowingAreaIndexById) for anything that fires an action later
+        // than the render that captured it — see MapPage's startSelectedArea.
+        , source_working_area_id?: number
         , mowing_order: number
         , feature_type: string
     }
