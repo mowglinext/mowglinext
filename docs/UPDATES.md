@@ -130,6 +130,29 @@ shown for review; a date alone never proves that source code is newer.
 
 ## What an installation does
 
+Verification reports the failing component or check, such as an unhealthy GPS
+container, missing LiDAR scans, an unexpected image, or incompatible firmware.
+If activation fails, that reason remains in the job/history after rollback.
+
+GNSS verification does not require RTK or an outdoor position fix. It accepts
+fresh position messages, or a healthy receiver transport/parser with advancing
+runtime observations from the same receiver identity and process incarnation.
+The fallback uses Universal GNSS's live `get_snapshot` service through the GUI's
+existing ROS bridge. A responsive process, frozen counters, cached status,
+correction traffic alone, and missing/disconnected receivers do not satisfy it.
+Older GUIs/receivers without this snapshot contract still need fresh position
+messages. Configured LiDAR still requires fresh scans. These checks affect
+update acceptance only; they do not change mowing or firmware safety gates.
+Upgrade the host updater before installing the new GUI to use no-fix acceptance;
+an older updater ignores the additional receiver-progress fields.
+
+The GNSS container health probe loads the image's ROS environment and checks
+typed service results for the receiver and, when configured, NTRIP. Process
+responsiveness and actual receiver data progress are deliberately separate checks.
+The bounded GNSS diagnostic storage change is tracked separately in PR #684;
+release bundles need that change as well to migrate without adding unmanaged
+persistent storage.
+
 1. Resolve a complete compatible deployment to immutable platform image digests.
    The review expires after 15 minutes and includes current and target images.
 2. Take the deployment lock, verify the installation has not changed, and pull

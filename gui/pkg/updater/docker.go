@@ -356,6 +356,8 @@ type Readiness struct {
 	FirmwareProtocol int    `json:"firmware_protocol"`
 	Reason           string `json:"reason"`
 	GPSFresh         bool   `json:"gps_fresh"`
+	GPSReceiverFresh bool   `json:"gps_receiver_fresh"`
+	GPSReason        string `json:"gps_reason,omitempty"`
 	LidarFresh       bool   `json:"lidar_fresh"`
 }
 
@@ -575,69 +577,6 @@ func (b DockerBackend) Apply(ctx context.Context, images map[string]string) erro
 		}
 	}
 	return nil
-}
-func (b DockerBackend) Verify(ctx context.Context, images map[string]string, d *Deployment) error {
-	deadline := time.NewTimer(3 * time.Minute)
-	defer deadline.Stop()
-	stable := 0
-	for {
-		ok := true
-		c, _, err := b.model(ctx)
-		if err != nil {
-			ok = false
-		}
-		for s, image := range images {
-			sc, exists := c.Services[s]
-			if !exists {
-				ok = false
-				continue
-			}
-			ci, e := b.inspect(ctx, sc.ContainerName)
-			if e != nil || !ci.State.Running || (ci.State.Health != nil && ci.State.Health.Status != "healthy") {
-				ok = false
-				continue
-			}
-			ids, e := command(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", image)
-			if e != nil || strings.TrimSpace(string(ids)) != ci.Image {
-				ok = false
-			}
-		}
-		ready, e := b.readiness(ctx)
-		if e != nil || !ready.Ready {
-			ok = false
-		}
-		if _, e := os.Stat(filepath.Join(b.Config.StateDir, "maintenance")); e == nil && !ready.Maintenance {
-			ok = false
-		}
-		if d != nil && ready.FirmwareProtocol != d.FirmwareProtocol {
-			ok = false
-		}
-		managed, contractErr := managedServices(c)
-		if contractErr != nil {
-			ok = false
-		}
-		for service := range images {
-			contract := managed[service]
-			if contract.Health == "gps" && !ready.GPSFresh || contract.Health == "lidar" && !ready.LidarFresh {
-				ok = false
-			}
-		}
-		if ok {
-			stable++
-		} else {
-			stable = 0
-		}
-		if stable >= 3 {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-deadline.C:
-			return errors.New("application health or image verification timed out")
-		case <-time.After(2 * time.Second):
-		}
-	}
 }
 func (b DockerBackend) Restore(ctx context.Context, path string) error {
 	root := filepath.Join(b.Config.StateDir, "backups") + string(os.PathSeparator)

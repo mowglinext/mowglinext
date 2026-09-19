@@ -156,14 +156,49 @@ services:
             main()
     healthcheck:
       test:
-        - CMD-SHELL
-        - >-
-          if [ -f /run/universal_gnss/ntrip_enabled ]; then
-          /usr/local/bin/universal-gnss-healthcheck --timeout 2;
-          else timeout 4 ros2 service call /universal_gnss_receiver/get_health
-          std_srvs/srv/Trigger '{}' | grep -q 'success: true'; fi
+        - CMD
+        # Docker health probes do not inherit the entrypoint's ROS environment.
+        - /usr/local/bin/universal-gnss-entrypoint
+        - python3
+        - -c
+        - |
+          import pathlib
+          import sys
+          import rclpy
+          from std_srvs.srv import Trigger
+
+          def responsive(node, service):
+              client = node.create_client(Trigger, service)
+              try:
+                  if not client.wait_for_service(timeout_sec=2.0):
+                      return False
+                  future = client.call_async(Trigger.Request())
+                  rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
+                  return (future.done() and future.exception() is None
+                          and future.result() is not None and future.result().success)
+              finally:
+                  node.destroy_client(client)
+
+          def main():
+              services = ["/universal_gnss_receiver/get_health"]
+              if pathlib.Path("/run/universal_gnss/ntrip_enabled").exists():
+                  services.append("/universal_gnss_ntrip/get_health")
+              rclpy.init()
+              node = rclpy.create_node("mowgli_gnss_container_healthcheck")
+              try:
+                  for service in services:
+                      if not responsive(node, service):
+                          print("GNSS health check failed: " + service, file=sys.stderr)
+                          return 1
+                  return 0
+              finally:
+                  node.destroy_node()
+                  rclpy.shutdown()
+
+          if __name__ == "__main__":
+              sys.exit(main())
       interval: 30s
-      timeout: 5s
+      timeout: 12s
       start_period: 20s
       retries: 3
     restart: unless-stopped
