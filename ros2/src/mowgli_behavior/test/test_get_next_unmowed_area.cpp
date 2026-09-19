@@ -693,6 +693,19 @@ TEST_F(GetNextUnmowedAreaTest, EndSessionClearsSingleAreaMode)
   EXPECT_EQ(ctx->current_area, 0);
 }
 
+// Issue #680: a stale plausibility warning must not survive into the next
+// session, or the operator would see COVERAGE_INCOMPLETE for a mow that
+// hasn't started yet.
+TEST_F(GetNextUnmowedAreaTest, EndSessionClearsCoveragePlausibilityWarning)
+{
+  ctx->coverage_plausibility_warning = true;
+
+  auto end_tree = makeEndSessionTree();
+  ASSERT_EQ(end_tree.tickOnce(), BT::NodeStatus::SUCCESS);
+
+  EXPECT_FALSE(ctx->coverage_plausibility_warning);
+}
+
 TEST_F(GetNextUnmowedAreaTest, CrossHatchPhaseReachesPlannerAndEndSessionAdvancesIt)
 {
   using Plan = mowgli_behavior::PlanCoverageArea::PlanCoverage;

@@ -252,6 +252,10 @@ BT::NodeStatus EndSession::tick()
   ctx->area_path_pose_count.clear();
   ctx->area_plan_fingerprint.clear();
   ctx->completed_areas.clear();
+  // Issue #680: a plausibility warning belongs to the session that raised
+  // it. Leaking it into the next session would show a stale
+  // COVERAGE_INCOMPLETE for a mow that hasn't run yet.
+  ctx->coverage_plausibility_warning = false;
   // Drop any "mow only area N" constraint from a targeted run (~/start_in_area)
   // at the same boundary as every other per-session set, so the next plain
   // COMMAND_START mows the whole lawn again. The clip is session state (it must

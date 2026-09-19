@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "geometry_msgs/msg/point32.hpp"
+#include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
@@ -34,6 +35,7 @@
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/buffer.hpp"
@@ -61,6 +63,13 @@ struct BTContext
   // -----------------------------------------------------------------------
 
   mowgli_interfaces::msg::Status latest_status;
+  /// Latest ~/mow_progress sample (map_server_node), used ONLY by
+  /// FollowStrip's end-of-pass coverage-plausibility cross-check (issue
+  /// #680) — see BTContext::coverage_plausibility_warning. transient_local
+  /// on the subscription (bt matches the publisher) so this is populated
+  /// before the first pass ever completes, not just after the first publish
+  /// tick following node start.
+  nav_msgs::msg::OccupancyGrid latest_mow_progress;
   /// Arrival time of the most recent /hardware_bridge/status message.
   /// Default-constructed = none has ever arrived, so latest_status is all
   /// zeroes and describes nothing. EscapeStartBlocked (issue #487) needs this:
@@ -357,6 +366,20 @@ struct BTContext
   /// Areas whose every swath is completed-or-skipped this session. Skipped by
   /// GetNextUnmowedArea. Cleared by EndSession.
   std::set<uint32_t> completed_areas;
+
+  /// Set when FollowStrip's swath-completion bookkeeping reported an area
+  /// fully mowed, but the mow_progress cross-check found the actually-
+  /// stamped interior fraction below mowgli_behavior::kMinPlausibleMowedFraction
+  /// (mow_coverage_plausibility.hpp) — issue #680: the robot drove only the
+  /// headland ring, reported clean success, and nothing told the operator.
+  /// Folded into HighLevelStatus.sub_state_name as "COVERAGE_INCOMPLETE" by
+  /// withLiveStatusFields (status_snapshot.cpp). Deliberately NOT auto-
+  /// cleared on the next area's completion — a warning from earlier in the
+  /// session must survive to the final report, not just flash briefly.
+  /// Cleared by EndSession so the next COMMAND_START starts without a stale
+  /// warning from a previous, unrelated session.
+  bool coverage_plausibility_warning{false};
+
   /// Filesystem path the coverage RESUME state (the four maps above +
   /// completed_areas + current_area) is persisted to, so an interrupted session
   /// survives a full process/container restart — not just the in-RAM BT
@@ -680,6 +703,15 @@ struct BTContext
   /// When present, FollowStrip drives THESE (one FollowCoveragePath goal per
   /// sub-path) instead of the single current_strip_path.
   std::vector<nav_msgs::msg::Path> current_strip_subpaths;
+
+  /// The planned area's outer boundary + obstacle holes, populated by
+  /// PlanCoverageArea alongside current_strip_* (from the same
+  /// ~/get_mowing_area response). Used ONLY by FollowStrip's end-of-pass
+  /// coverage-plausibility cross-check (issue #680,
+  /// coverage_plausibility_warning above) — everything else that needs the
+  /// area's geometry already has its own copy from planning.
+  geometry_msgs::msg::Polygon current_area_polygon;
+  std::vector<geometry_msgs::msg::Polygon> current_area_obstacles;
 
   /// Transit goal to reach the coverage path start (populated by
   /// PlanCoverageArea, consumed by TransitToStrip).

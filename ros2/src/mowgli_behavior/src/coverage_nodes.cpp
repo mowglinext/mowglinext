@@ -24,6 +24,7 @@
 
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
+#include "mowgli_behavior/mow_coverage_plausibility.hpp"
 #include "mowgli_behavior/unit_resume.hpp"
 #include "tf2/exceptions.hpp"
 
@@ -888,6 +889,64 @@ std::optional<FollowStrip::TransitOutcome> FollowStrip::classifyFinishedTransit(
   return TransitOutcome{classifyTransitFailure(code, msg), code, msg};
 }
 
+void FollowStrip::checkCoveragePlausibility(const std::shared_ptr<BTContext>& ctx) const
+{
+  nav_msgs::msg::OccupancyGrid grid_copy;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    grid_copy = ctx->latest_mow_progress;
+  }
+  if (grid_copy.data.empty())
+  {
+    // No mow_progress sample has ever arrived (e.g. map_server_node not yet
+    // publishing) — a missing signal is not evidence of a bad completion,
+    // so don't flag one.
+    return;
+  }
+
+  std::vector<std::pair<double, double>> outer;
+  outer.reserve(ctx->current_area_polygon.points.size());
+  for (const auto& p : ctx->current_area_polygon.points)
+  {
+    outer.emplace_back(static_cast<double>(p.x), static_cast<double>(p.y));
+  }
+
+  std::vector<std::vector<std::pair<double, double>>> holes;
+  holes.reserve(ctx->current_area_obstacles.size());
+  for (const auto& obstacle : ctx->current_area_obstacles)
+  {
+    std::vector<std::pair<double, double>> hole;
+    hole.reserve(obstacle.points.size());
+    for (const auto& p : obstacle.points)
+    {
+      hole.emplace_back(static_cast<double>(p.x), static_cast<double>(p.y));
+    }
+    holes.push_back(std::move(hole));
+  }
+
+  MowProgressGridView view;
+  view.resolution = grid_copy.info.resolution;
+  view.origin_x = grid_copy.info.origin.position.x;
+  view.origin_y = grid_copy.info.origin.position.y;
+  view.width = static_cast<int32_t>(grid_copy.info.width);
+  view.height = static_cast<int32_t>(grid_copy.info.height);
+  view.data = &grid_copy.data;
+
+  const double mowed_fraction = ComputeMowedFraction(view, outer, holes);
+  if (mowed_fraction < kMinPlausibleMowedFraction)
+  {
+    ctx->coverage_plausibility_warning = true;
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: area %u reported fully mowed (every swath done) but "
+                "mow_progress shows only %.0f%% of its interior actually stamped mowed "
+                "(floor %.0f%%) — flagging COVERAGE_INCOMPLETE instead of a silent clean "
+                "completion (issue #680)",
+                area_idx_,
+                mowed_fraction * 100.0,
+                kMinPlausibleMowedFraction * 100.0);
+  }
+}
+
 BT::NodeStatus FollowStrip::onRunning()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
@@ -947,6 +1006,7 @@ BT::NodeStatus FollowStrip::onRunning()
     if (done.size() >= swaths_.size())
     {
       ctx->completed_areas.insert(area_idx_);
+      checkCoveragePlausibility(ctx);
       saveCoverageResumeState(*ctx);
     }
     if (swaths_skipped_ >= swaths_.size())
@@ -2767,6 +2827,14 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     ctx->current_strip_segments = wrapped.result->segments;
     ctx->current_strip_path = wrapped.result->full_path;
     ctx->current_strip_subpaths = wrapped.result->drivable_subpaths;
+
+    // Area geometry for FollowStrip's end-of-pass coverage-plausibility
+    // cross-check (issue #680) — same get_mowing_area response as area_
+    // above, just handed to the context alongside the rest of the plan.
+    // area_.obstacles only (never proposed_obstacles — a pending dig
+    // proposal is not a real hole, root CLAUDE.md Invariant 16).
+    ctx->current_area_polygon = area_.area;
+    ctx->current_area_obstacles = area_.obstacles;
 
     // Publish the full plan for the GUI/Foxglove (latched). The per-segment
     // FollowCoveragePath/global_plan (goal checker) is a separate topic.

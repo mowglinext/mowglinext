@@ -242,6 +242,16 @@ private:
   /// Trim the current unit to [idx, end) and persist the moved resume cursor.
   void trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx);
 
+  /// Coverage-completion plausibility cross-check (issue #680), run once a
+  /// pass reports every swath done. Compares ctx->latest_mow_progress
+  /// against ctx->current_area_polygon/current_area_obstacles
+  /// (mow_coverage_plausibility.hpp) and sets
+  /// ctx->coverage_plausibility_warning when the actually-stamped fraction
+  /// falls below kMinPlausibleMowedFraction. Never fails or blocks the pass
+  /// — a low-confidence signal (no mow_progress sample yet) is not treated
+  /// as implausible, only a genuinely low one is.
+  void checkCoveragePlausibility(const std::shared_ptr<BTContext>& ctx) const;
+
   // --- Dig skip zones + dig recovery (dig_skip.hpp) --------------------------
   // The session's dig points never reach a costmap (a keepout under the robot
   // refused every plan from its own pose, 2026-09-10 / 2026-09-17). What keeps

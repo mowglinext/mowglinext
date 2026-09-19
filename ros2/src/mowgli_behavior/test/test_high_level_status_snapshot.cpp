@@ -140,6 +140,37 @@ TEST(HighLevelStatusSnapshot, GuiRatioPairMirrorsSwathCounts)
   EXPECT_EQ(refreshed.current_path_index, 6);
 }
 
+// ctx.coverage_plausibility_warning is the one deliberate exception to
+// "sub_state_name is tree-owned, carried through untouched": issue #680's
+// completion cross-check (FollowStrip::checkCoveragePlausibility,
+// coverage_nodes.cpp) can flip it mid-session, between tree ticks, so only
+// this live projection (ticked every onRunning() cycle and by the 1 Hz
+// republish) can track it and keep it visible through to the final report.
+TEST(HighLevelStatusSnapshot, CoveragePlausibilityWarningOverridesSubStateName)
+{
+  BTContext ctx;
+  ctx.coverage_plausibility_warning = true;
+
+  const HighLevelStatus refreshed = withLiveStatusFields(chargingSnapshot(), ctx);
+
+  EXPECT_EQ(refreshed.sub_state_name, "COVERAGE_INCOMPLETE");
+}
+
+// The common case: no warning must leave sub_state_name exactly as
+// PublishHighLevelStatus cached it (today always "", but the projection must
+// not assume that — it should carry whatever is there, not blank it).
+TEST(HighLevelStatusSnapshot, NoWarningCarriesCachedSubStateName)
+{
+  HighLevelStatus cached = chargingSnapshot();
+  cached.sub_state_name = "SOME_FUTURE_SUB_STATE";
+  BTContext ctx;
+  ctx.coverage_plausibility_warning = false;
+
+  const HighLevelStatus refreshed = withLiveStatusFields(cached, ctx);
+
+  EXPECT_EQ(refreshed.sub_state_name, "SOME_FUTURE_SUB_STATE");
+}
+
 // A default-constructed context must not fabricate progress: the helper is a
 // pure projection of the context, so an untouched context yields zeros (and the
 // 100 % battery default), never leftovers from the cached snapshot.

@@ -551,6 +551,20 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  # ---- test_mow_coverage_plausibility ----
+  # Unit tests for the pure coverage-completion plausibility cross-check
+  # (mow_coverage_plausibility.hpp, issue #680): point-in-polygon and the
+  # mowed-fraction computation against a synthetic mow_progress grid.
+  # Header-only helper, no ROS types at all → no coverage_nodes.cpp link.
+  ament_add_gtest(test_mow_coverage_plausibility
+    test/test_mow_coverage_plausibility.cpp
+  )
+
+  target_include_directories(test_mow_coverage_plausibility PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_detour_resume ----
   # Unit tests for the pure detour-and-continue resume-pose search
   # (detour_resume.hpp): when FTC is blocked by an un-skirtable obstacle,

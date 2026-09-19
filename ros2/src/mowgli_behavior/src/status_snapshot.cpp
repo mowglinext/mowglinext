@@ -32,6 +32,18 @@ mowgli_interfaces::msg::HighLevelStatus withLiveStatusFields(
   msg.state = base.state;
   msg.state_name = base.state_name;
   msg.sub_state_name = base.sub_state_name;
+  // EXCEPTION: sub_state_name also carries the coverage-completion
+  // plausibility warning (issue #680) — FollowStrip::checkCoveragePlausibility
+  // (coverage_nodes.cpp) can flip ctx.coverage_plausibility_warning mid-
+  // session, between tree transitions, so only this per-tick/1 Hz-republish
+  // projection can track it accurately and keep it visible through to the
+  // final report rather than only flash at the instant it was set.
+  // Overridden, not appended: nothing else currently populates this field
+  // (PublishHighLevelStatus always writes "").
+  if (ctx.coverage_plausibility_warning)
+  {
+    msg.sub_state_name = "COVERAGE_INCOMPLETE";
+  }
 
   msg.current_area = static_cast<int16_t>(ctx.current_area);
   // The GUI computes progress as current_path_index / current_path
