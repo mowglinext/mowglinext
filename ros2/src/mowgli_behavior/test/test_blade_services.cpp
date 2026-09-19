@@ -30,6 +30,9 @@ struct BladeServiceTestPeer
                     const std::function<BT::NodeStatus(BT::TreeNode&)>& tick)
   {
     node->context_->node = node;
+    // Production init() creates the helper before registering services. The
+    // coverage-orientation service also needs it after the upstream merge.
+    node->context_->helper_node = rclcpp::Node::make_shared("blade_service_test_helper");
     node->setupServiceServer();
     node->factory_.registerSimpleAction("TestTick", tick);
     node->tree_ = node->factory_.createTreeFromText(
