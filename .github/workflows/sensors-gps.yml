@@ -54,6 +54,16 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
+          # UPGRADE before installing. ros:lyrical-ros-base ships the ROS core
+          # it was built with; `apt-get install ros-lyrical-std-msgs` then pulls
+          # TODAY's std_msgs on top of the image's older builtin_interfaces, and
+          # the test dies before running a single assertion:
+          #   symbol lookup error: libstd_msgs__rosidl_typesupport_fastrtps_c.so:
+          #   undefined symbol: has_buffer_fields_builtin_interfaces__msg__Time
+          # A partial upgrade of a rolling apt repo is never coherent; upgrading
+          # the packages already in the image makes it one (2026-09-19, dev red
+          # with no code change in sensors/gps).
+          apt-get -y upgrade
           apt-get install -y --no-install-recommends \
             build-essential \
             cmake \
