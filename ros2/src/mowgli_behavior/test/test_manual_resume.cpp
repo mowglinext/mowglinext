@@ -53,6 +53,7 @@ using mowgli_behavior::BTContext;
 using mowgli_behavior::IsBatteryAbove;
 using mowgli_behavior::isChargeHoldState;
 using mowgli_behavior::IsManualResumeRequested;
+using mowgli_behavior::isResumableHoldState;
 
 namespace
 {
@@ -164,6 +165,25 @@ TEST(ManualResumeHelperTest, ChargeHoldStatesAreExactlyTheTwoBatteryHolds)
   EXPECT_FALSE(isChargeHoldState("CHARGER_FAILED"));
   EXPECT_FALSE(isChargeHoldState("LOW_BATTERY_DOCKING"));
   EXPECT_FALSE(isChargeHoldState(""));
+}
+
+TEST(ManualResumeHelperTest, ResumableHoldStateIsExactlyPlainIdle)
+{
+  // StopHoldSequence ("Pause") is the only branch this must catch — a
+  // COMMAND_START here must preserve single_area_target instead of
+  // clearSingleAreaMode()-ing it.
+  EXPECT_TRUE(isResumableHoldState("IDLE"));
+
+  // Everything else keeps the historical unconditional-clear-on-Start
+  // behavior: IDLE_DOCKED (session ended or never started — EndSession
+  // already cleared the target), both charge-hold states (a low-battery dock
+  // or emergency kept the session alive without EndSession — the operator's
+  // next Start explicitly does expect the whole lawn), and any other state.
+  EXPECT_FALSE(isResumableHoldState("IDLE_DOCKED"));
+  EXPECT_FALSE(isResumableHoldState("CHARGING"));
+  EXPECT_FALSE(isResumableHoldState("CRITICAL_BATTERY_CHARGING"));
+  EXPECT_FALSE(isResumableHoldState("MOWING"));
+  EXPECT_FALSE(isResumableHoldState(""));
 }
 
 // ---------------------------------------------------------------------------
