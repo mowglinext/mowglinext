@@ -16,6 +16,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <future>
 #include <limits>
 #include <memory>
@@ -27,12 +28,15 @@
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/detour_resume.hpp"
+#include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/scan_pause.hpp"
 #include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
+#include "mowgli_interfaces/path_tracking_stats.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
@@ -235,12 +239,46 @@ private:
   // RUNNING); false when it should fall back to the abort-to-next path (no
   // costmap, abort not obstacle-related, no clear resume, or budget exhausted).
   bool tryStartDetour(const std::shared_ptr<BTContext>& ctx);
+  /// Trim the current unit to [idx, end) and persist the moved resume cursor.
+  void trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx);
+
+  // --- Dig skip zones + dig recovery (dig_skip.hpp) --------------------------
+  // The session's dig points never reach a costmap (a keepout under the robot
+  // refused every plan from its own pose, 2026-09-10 / 2026-09-17). What keeps
+  // the robot out of a hole it dug is decided HERE, on the path it follows.
+  struct DigSnapshot
+  {
+    std::vector<DigPoint> points;
+    std::uint64_t event_count{0};
+    double radius_m{0.0};
+  };
+  /// Copy of the session dig state, taken under ctx->context_mutex (it is
+  /// written by a subscriber callback).
+  static DigSnapshot snapshotDigs(const std::shared_ptr<BTContext>& ctx);
+  /// Trim the front of the current unit to the first drivable run outside
+  /// every dig zone. Returns false when nothing drivable is left in the unit.
+  bool skipUnitFrontPastDigZones(const std::shared_ptr<BTContext>& ctx);
+  enum class DigRecoveryStep
+  {
+    kIdle,  ///< no dig being handled — run the normal handlers
+    kBusy,  ///< cancelling / waiting for the reverse / re-dispatched: return RUNNING
+    kUnitGivenUp,  ///< the no-progress budget is spent: caller skips the unit
+  };
+  /// Notice a new dig event while a goal of ours is active, cancel that goal,
+  /// wait for the bridge's bounded reverse to settle, then resume the SAME unit
+  /// past the dig zone through the existing blade-off transit.
+  DigRecoveryStep stepDigRecovery(const std::shared_ptr<BTContext>& ctx);
+  /// Book the current unit as mowed (shared by the success paths).
+  void markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx);
   // Dispatch swaths_[swath_idx_]. The first unit transits when it is farther
   // than kSegmentTransitGap; every later sub-path always transits blade-off so
   // a planned discontinuity is reoriented safely before FollowPath starts.
   bool sendCurrentSwath(const std::shared_ptr<BTContext>& ctx);
   // Send the FollowPath goal for the current segment (no gap check).
   bool sendFollowGoal(const std::shared_ptr<BTContext>& ctx);
+  /// Log the path-tracking summary of the segment that just finished, then arm
+  /// a fresh episode. `outcome` names why it finished ("completed", "aborted").
+  void logSegmentTracking(const std::shared_ptr<BTContext>& ctx, const char* outcome);
   // Robot distance to the current segment's first pose (TF map→base_footprint);
   // returns a large value if TF is unavailable (forces the safe transit path).
   double distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx) const;
@@ -300,6 +338,29 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr coverage_plan_pub_;
   std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
   FollowGoalHandle::SharedPtr follow_handle_;
+
+  /// Terminal verdicts from the result callbacks. Polling a goal handle is not
+  /// enough: a goal the server finishes in the same instant it accepts it can
+  /// lose its status message and leave the poll stuck (action_outcome.hpp).
+  std::shared_ptr<ActionOutcomeSlot> transit_outcome_ = std::make_shared<ActionOutcomeSlot>();
+  std::shared_ptr<ActionOutcomeSlot> follow_outcome_ = std::make_shared<ActionOutcomeSlot>();
+  // Path-tracking error of the segment currently being driven, reduced from the
+  // FollowPath action feedback that ROS 2 Lyrical's controller_server fills in
+  // for whichever controller runs (FTC here). Logged once per segment so a field
+  // bag carries the mowing-quality number next to the segment it belongs to.
+  //
+  // shared_ptr-owned for the same reason as transit_result_ below: a feedback
+  // callback that lands after this node was destroyed must not write through a
+  // dangling `this`. The mutex guards it against the action client's thread.
+  struct TrackingFeedbackSlot
+  {
+    std::mutex mutex;
+    mowgli_interfaces::path_tracking::Summary summary;
+    /// Signed error and index of the last sample, for the log line.
+    double last_error_m{0.0};
+    std::uint32_t last_index{0};
+  };
+  std::shared_ptr<TrackingFeedbackSlot> tracking_slot_;
   // Inter-segment transit (NavigateToPose) state.
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
@@ -370,6 +431,25 @@ private:
   // Blade-off detours taken on the CURRENT segment (unit). Reset to 0 per unit
   // (onStart and on advance() to the next unit). Bounded by max_detours_per_segment_.
   std::size_t detours_used_ = 0;
+  /// Consecutive same-unit resumes that made no real progress (unit_resume.hpp).
+  std::size_t unit_resumes_without_progress_ = 0;
+
+  /// The FollowCoveragePath goal in flight was cut short at this index of the
+  /// current unit because a dig zone starts there. When it succeeds the unit
+  /// is NOT done: it is trimmed here and re-dispatched past the zone.
+  std::optional<std::size_t> truncated_at_;
+  /// sendCurrentSwath found nothing drivable left in the unit (its remainder
+  /// lies inside dig zones). Consumed at the top of the next onRunning tick,
+  /// which books the unit and advances — sendCurrentSwath itself cannot.
+  bool unit_exhausted_by_dig_{false};
+  /// dig_event_count value already handled.
+  std::uint64_t dig_events_seen_{0};
+  bool dig_recovery_active_{false};
+  /// The interrupted goal was a FollowCoveragePath (vs a blade-off transit).
+  bool dig_recovery_was_following_{false};
+  bool dig_cancel_sent_{false};
+  DigSettleState dig_settle_;
+  std::chrono::steady_clock::time_point dig_settle_last_tick_{};
   // Ports read once in onStart.
   std::size_t max_detours_per_segment_ = 5;
   double detour_footprint_radius_m_ = 0.25;
@@ -384,8 +464,10 @@ private:
   static constexpr double kDetourMaxSearchM = 8.0;
   // OccupancyGrid cost at/above which a cell is lethal for the clearance test.
   // MUST be 100 (TRUE lethal only): the published /global_costmap/costmap maps
-  // LETHAL(254)->100 and INSCRIBED(253)->99, and the inscribed band extends
-  // inflation_radius (0.20 m) from every keepout wall BY DESIGN. The outer
+  // LETHAL(254)->100 and INSCRIBED(253)->99. (Historical: until 2026-09-17 the
+  // keepout wall was inflated and its inscribed band reached ~0.20 m inward;
+  // the global costmap now inflates BEFORE keepout_filter, so only LiDAR marks
+  // carry a 99 band. The threshold stays at TRUE lethal either way.) The outer
   // headland ring rides ON the recorded line (chassis_safety_inset 0), i.e.
   // permanently within 0.20 m of the boundary band — a 90 threshold counted
   // those 99-cells as lethal, so EVERY outer-ring abort was "obstacle
@@ -482,6 +564,10 @@ private:
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
+
+  /// Terminal verdict from the result callback: a goal finished in the same
+  /// instant it is accepted can lose its status message (action_outcome.hpp).
+  std::shared_ptr<ActionOutcomeSlot> nav_outcome_ = std::make_shared<ActionOutcomeSlot>();
 };
 
 // ---------------------------------------------------------------------------
@@ -524,6 +610,10 @@ private:
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
+
+  /// Terminal verdict from the result callback: a goal finished in the same
+  /// instant it is accepted can lose its status message (action_outcome.hpp).
+  std::shared_ptr<ActionOutcomeSlot> nav_outcome_ = std::make_shared<ActionOutcomeSlot>();
 };
 
 // ---------------------------------------------------------------------------

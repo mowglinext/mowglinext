@@ -25,7 +25,8 @@
 | Turn-around connector (Dubins words, radius shrink loop, straight fallback) | `coverage_planning.cpp:543-580` (`buildConnector`, `r -= 0.02` loop `:555`), Dubins helpers `:257-500` (`dubinsLSL/RSR/LSR/RSL/RLR/LRL`, `sampleDubins`) |
 | Corner fillets (rings and sub-paths) | `coverage_planning.cpp:585-680` (`roundSharpCorners`); ring call `:1108-1116` (`kRingCornerThreshold` 30°); sub-path call `:1679-1690` (`kCornerThreshold` 88°, `fillet_r = max(turn_radius/2, min_radius)`) |
 | Sub-path splitting (holes / unsafe joins), ring drive order, swath chaining, NN reorder | `coverage_planning.cpp:1337-1806` (`buildContinuousSubPaths`): ring outer/hole partition `:1359-1400`, ring start alignment `:1420-1462` (`kAlignCos` 45°), swath nearest-endpoint chain `:1469-1530`, join/split decision `:1578-1650`, sub-path NN reorder `:1724-1800` |
-| Which boundary the connectors are bounded by | `coverage_server.cpp:583-596` (`connector_clearance_boundary` → `safe_boundary` → raw), definitions `coverage_planning.hpp:76-125`, computed `coverage_planning.cpp:876-1000` |
+| Which boundary the connectors are bounded by | `coverage_server.cpp` (`connector_clearance_boundary` → `safe_boundary` → raw; always ring 0, never moved by `connector_max_headland_passes`), definitions `coverage_planning.hpp` `BoustrophedonPlan` field docs, computed `coverage_planning.cpp` `ringCenterlineBoundary` lambda |
+| Limiting how many headland passes a turn may cross (`connector_max_headland_passes`, issue #497) | `coverage_planning.cpp` `ringCenterlineBoundary`/`swath_turn_envelope` block populates a SEPARATE envelope (ring `(n_rings − limit)`'s centerline) used ONLY for mainland swath-to-swath joins in `buildContinuousSubPaths`'s `swath_turn_boundary` param — `connector_clearance_boundary` itself never moves (the #388 clamp, the verify, and every ring-involving join stay on it — a maintainer review on PR #598 caught an earlier revision that moved `connector_clearance_boundary` directly and silently clamped ring 0's own poses onto a different ring); declared/read live `coverage_server.cpp` next to `connector_turn_radius`; tests `test_coverage_planning.cpp` `ConnectorMaxHeadlandPassesLimitsSwathTurnEnvelopeDepth`, `SwathTurnEnvelopeNeverRelocatesRingZero`, `ShippedGeometryTightSwathLimitFragmentsUTurns`, `ShippedGeometryP4OfFiveKeepsTurnAroundArcs` |
 | Out-of-bounds poses at convex ring corners (#388) | `coverage_planning.cpp:1275-1335` (`kClearanceClampMarginM` 2 cm, `clampInsideRing`), applied `:1701-1707` |
 | Connector outcome stats / "fallback rate" WARN (#499) | `coverage_planning.hpp:188-243` (`ConnectorStats`), `coverage_server.cpp:161-192` (`kConnectorFallbackWarnPct` 25 %, `MOWGLI_CONNECTOR_STATS_FMT`), `:731-762` (log) |
 | Plan diagnostics: dropped pieces, planned fraction, per-stage timing | `coverage_planning.hpp:44-61` (`PlanDiagnostics`), `coverage_planning.cpp:35-40` (`fmtDrop`), `:1228-1260`; logged `coverage_server.cpp:495-512`, timing `:713-723` |
@@ -91,7 +92,7 @@ Declared in `on_configure` (`coverage_server.cpp:53-105`). "Injected" = overwrit
 
 | Param | Node default | Injected from (`mowgli_robot.yaml` key → launch line) | Read |
 |-------|--------------|-------------------------------------------------------|------|
-| `robot_width` | 0.40 | `chassis_width` → `navigation.launch.py:930` (semantic only + footprint check `coverage_server.cpp:635-636`) | configure |
+| `robot_width` | 0.40 (node fallback; shipped launch injection is 0.45) | `chassis_width` → `navigation.launch.py:930` (semantic only + footprint check `coverage_server.cpp:635-636`) | configure |
 | `operation_width` | 0.18 (yaml 0.16) | `max(0.05, tool_width − swath_overlap)` → `:924`; template `tool_width` `:195`, `swath_overlap` `:405` | configure |
 | `default_headland_width` | 0.20 | `headland_width` (template `:344`) → `:931`; only used when `num_headland_passes == 0` (AUTO) | configure |
 | `num_headland_passes` | 0 | `num_headland_passes` (template `:374`, default 5) → `:932` **unclamped** (`<0` NONE / `0` AUTO / `>0` FORCED) | configure (restart to change) |
@@ -100,7 +101,8 @@ Declared in `on_configure` (`coverage_server.cpp:53-105`). "Injected" = overwrit
 | `ring_direction` | 0 | `mow_direction` (template `:379`) → `:934` (0 F2C natural, 1 CW, 2 CCW) | LIVE |
 | `min_turning_radius` | 0.20 | `min_turning_radius` (template `:416`) clamped [0.10, 0.50] `:790` → `:944` | LIVE |
 | `connector_turn_radius` | 0.20 | `connector_turn_radius` — **no template key**; launch default `:403`, override read `:591-592`, clamped [floor, 0.50] `:791-792` → `:948` | LIVE |
-| `obstacle_margin` | 0.0 | `obstacle_margin` (template `:665`, 0.2) clamped [0, 1] `:940`; server re-clamps `coverage_server.cpp:473-474` | LIVE |
+| `connector_max_headland_passes` | 0 | `connector_max_headland_passes` (template, issue #497) → `navigation.launch.py`; passed through unclamped, `coverage_planning.cpp` clamps to `[0, n_rings]` | LIVE |
+| `obstacle_margin` | 0.0 | `obstacle_margin` (template 0.389) floored at `robot_config_util.planning_obstacle_margin_floor`, capped 1.0; server re-clamps `coverage_server.cpp:473-474` | LIVE |
 | `action_server_result_timeout` | 15.0 | not injected | configure |
 | `use_sim_time` | false | `nav2_params_base.yaml:1152` | configure |
 
@@ -116,17 +118,21 @@ and `kRingSpikeTolM` 0.005 (`:1945-1946`).
 1. `buildCellFromGoal` (`coverage_server.cpp:201-231`): rings → `dedupClosedRing`, holes →
    `bufferRingOutward(hole, obstacle_margin)`.
 2. `planBoustrophedon` (`coverage_planning.cpp:755-1260`): `n_rings` → `field_offset` →
-   `safe_cells` (inset or outward expansion) → `safe_boundary` / `connector_clearance_boundary` /
-   `safe_holes` → rings (`generateHeadlandSwaths`, out→in, min perimeter, winding, mid-edge start,
-   fillets, re-densify) → mainland (`generateHeadlands(safe_cells, n_rings·op_width)` or
-   `safe_cells` when `n_rings == 0`) → swaths per mainland cell (`BruteForce` fixed / best angle /
+   `safe_cells` (inset or outward expansion) → `safe_boundary` / `connector_clearance_boundary`
+   (always ring 0) / `swath_turn_envelope` (ring `(n_rings − limit)`, only when
+   `connector_max_headland_passes` restricts something) / `safe_holes` → rings
+   (`generateHeadlandSwaths`, out→in, min perimeter, winding, mid-edge start, fillets,
+   re-densify) → mainland (`generateHeadlands(safe_cells, n_rings·op_width)` or `safe_cells`
+   when `n_rings == 0`) → swaths per mainland cell (`BruteForce` fixed / best angle /
    longest-edge above 400 m², `BoustrophedonOrder`, `min_swath_length` drop) → diagnostics.
 3. `ringToArcs` / `swathToPath` (`coverage_server.cpp:535-565`) → `result.segments`.
 4. `buildContinuousSubPaths` (`coverage_planning.cpp:1337-1806`) bounded by
-   `connector_clearance_boundary`: ring order partition → ring start alignment → swath
-   nearest-endpoint chaining seeded from `BoustrophedonOrder`'s first swath → per join
-   `buildConnector` (Dubins, shrink 0.02 m steps to `min_turning_radius`, straight fallback) →
-   split only when the join is un-drivable blade-on (leaves boundary / crosses hole) →
+   `connector_clearance_boundary` (ring joins, the #388 clamp, the fillet pass) with
+   `swath_turn_envelope` swapped in ONLY for mainland swath-to-swath `buildConnector` calls
+   when non-empty: ring order partition → ring start alignment → swath nearest-endpoint
+   chaining seeded from `BoustrophedonOrder`'s first swath → per join `buildConnector`
+   (Dubins, shrink 0.02 m steps to `min_turning_radius`, straight fallback) → split only
+   when the join is un-drivable blade-on (leaves boundary / crosses hole) →
    `roundSharpCorners` (>88°) → `clampInsideRing` → greedy NN sub-path reorder (adopted only if
    shorter; sub-path 0 fixed).
 5. Verification + logs (`coverage_server.cpp:622-803`), result fill `:805-826`.
@@ -166,6 +172,8 @@ Test registration: `CMakeLists.txt:117-137` (`ament_add_gtest(test_coverage_plan
 | `CoverageRepro` `:108` | Sim rectangle geometry (inset 0.20, r 0.18) builds plan + sub-paths without heap corruption |
 | `CoveragePlanning` `:260-335`, `:585`, `:765-847`, `:930-1223`, `:1458-1486`, `:1974-2024` | Square/L-shape/concave coverage, serpentine order, fixed angle determinism, hole not crossed, `ring_direction` winding, too-small → empty plan, headland pass override, `num_headland_passes<0` yields no rings and same border as rings-on (#429), outermost swath at op_width/2 inside planning cell, clearance ring == `safe_boundary` with rings off, chassis-inset opt-in keeps blades inside, turn-arc footprint inside recorded boundary, ring rides ON line at inset 0, `planned_fraction` reported, large-field longest-edge fallback (>400 m²) + determinism, degenerate recorded ring sanitized to full coverage |
 | `CoverageContinuousPath` `:376-496`, `:616`, `:1336`, `:1402`, `:1671` | Continuous path avoids hole, hole-free field = 1 sub-path, single central hole does not over-fragment, sub-path reorder stays hole-free + deterministic, notch field lobe-chained (no mid-field joins), outermost ring stays inside clearance ring, rings-off = 1 sub-path, recorded area 1 no cusp + in-bounds with deployed knobs |
+| `CoveragePlanning` `ConnectorMaxHeadlandPasses*` (issue #497) | Limit populates `swath_turn_envelope` at ring `(n_rings − limit)`'s centerline (measured on a 10 m square) while `connector_clearance_boundary` stays ring 0; 0/negative/`>= n_rings` mean unlimited (`swath_turn_envelope` stays empty); no-op with rings disabled |
+| `CoverageContinuousPath` `SwathTurnEnvelopeNeverRelocatesRingZero`, `ShippedGeometryTightSwathLimitFragmentsUTurns`, `ShippedGeometryP4OfFiveKeepsTurnAroundArcs` (issue #497 review) | A limited `swath_turn_boundary` never clamps a ring's own poses onto a different ring; on shipped geometry (op 0.16, R 0.20) a 3-of-5 limit (apron 0.40 m) fragments swath U-turns more than the unlimited baseline, a 4-of-5 limit (apron 0.56 m) does not |
 | `BoundaryClipGeometry` `:1499` | `pointInRing` on a concave notch |
 | `CoverageIntegration` `:1522` | Full trace analysis on recorded area 1 (runs split at 0.6 m `kSegmentTransitGap`, in-bounds) |
 | `RingDedup` `:1803-1839` | Doubled leading vertex dropped, clean ring unchanged, deduped degenerate ring still plans |
@@ -194,11 +202,16 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
 - **`operation_width` = `tool_width − swath_overlap`** (`navigation.launch.py:924`) must stay coupled to
   `map_server.tool_width` (`full_system.launch.py:421-428`) — CLAUDE.md Invariant 6; both fallbacks import
   `robot_config_util.DEFAULT_TOOL_WIDTH_M` (`robot_config_util.py:48`).
-- **`obstacle_margin`** is applied twice: here on holes (`bufferRingOutward`) and in `map_server`'s keepout
-  mask (`full_system.launch.py:402-405`). Change the clamp band in both.
+- **`obstacle_margin`** is applied HERE only (holes, `bufferRingOutward`). `map_server`'s keepout band is the
+  separately derived `keepout_obstacle_margin` (body half-width) — see `robot_config_util`'s obstacle-margin block.
 - **`chassis_safety_inset`** also feeds BT bypass arcs (`full_system.launch.py:390-398`, fallback
   `chassis_width/2`) while `navigation.launch.py:615-623` falls back to 0.0 — the template value (0.2)
   normally masks the disagreement.
+- **`connector_max_headland_passes`** (issue #497) template key sits next to `mow_direction` in
+  `mowgli_robot.yaml`; `navigation.launch.py` reads it and writes `cov_params["connector_max_headland_passes"]`
+  unclamped (`coverage_planning.cpp` does the `[0, n_rings]` clamp); GUI `MowingSection.tsx`
+  (`Select`, disabled when `num_headland_passes` is Auto/None since the concept needs a FORCED
+  ring count), `paramCatalog.ts`, `useSettingsManager.ts` key list, JSON schema.
 - **`min_turning_radius` / `connector_turn_radius`** clamp bands (`navigation.launch.py:783-792`) feed
   `check_turn_geometry` (`robot_config_util.py:309`) and the dig detector's `dig_max_yaw_rate` rationale
   (`ros2/src/mowgli_bringup/config/hardware_bridge.yaml:88-97`).
@@ -231,10 +244,15 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
   `field_offset = inset − op_width/2` (`coverage_planning.cpp:853`), negative → outward expansion so
   ring 0 rides ON the line at inset 0; floored at 0 when rings are off. The chassis-footprint check
   only runs when `inset ≥ robot_width/2` (`coverage_server.cpp:636`).
-- Connectors/fillets are bounded by `connector_clearance_boundary` (outermost-ring centreline),
-  NOT `safe_boundary` (`coverage_server.cpp:583-596`, rationale `coverage_planning.hpp:85-113`).
+- Connectors/fillets are bounded by `connector_clearance_boundary` (outermost-ring centreline,
+  ALWAYS ring 0 — never moved by `connector_max_headland_passes`), NOT `safe_boundary`
+  (`coverage_server.cpp`, rationale `coverage_planning.hpp` `BoustrophedonPlan` field docs).
   With rings off it is `safe_boundary` exactly; on-edge swath ends pass via `kOnEdgeTolM` 1 mm
-  (`coverage_planning.cpp:69-94`) — do NOT re-add the 0.03 m outward expansion (`:86-93`).
+  (`coverage_planning.cpp:69-94`) — do NOT re-add the 0.03 m outward expansion (`:86-93`). Mainland
+  swath-to-swath U-turns get an ADDITIONAL, tighter bound (`swath_turn_envelope`, populated only
+  when `connector_max_headland_passes` restricts something) — see the row above; it is passed
+  separately as `buildContinuousSubPaths`' `swath_turn_boundary` and never substitutes for
+  `connector_clearance_boundary` in the clamp, verify, or ring-involving joins.
 - The old two-pass geometry produced a `PlanCoverage connectors … fallback rate` WARN on every
   plan (~97 % fallback, 1 arc in 32). The five-pass default provides enough headland apron for
   0.20 m turns; a high fallback rate now indicates restrictive site geometry. Heading-discontinuous

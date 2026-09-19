@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace mowgli_behavior
 {
 
@@ -45,15 +47,23 @@ struct BTContext;
 /// write.
 bool saveCoverageResumeState(const BTContext& ctx);
 
+bool beginCoverageOrientation(BTContext& ctx, uint32_t area);
+void markCoverageStarted(BTContext& ctx, uint32_t area);
+
 /// Load coverage resume state from ctx.coverage_resume_path INTO ctx.
 /// Returns false (leaving ctx unchanged) when the path is empty, the file is
 /// absent, or it cannot be parsed. Returns true when at least the header was
 /// recognised and any state present was loaded.
 bool loadCoverageResumeState(BTContext& ctx);
 
-/// Remove the persisted resume file (called by EndSession at a real session
-/// boundary so the next COMMAND_START does not resume a finished session).
-/// Returns true if the file was removed or was already absent.
+/// Clear commands/cursors at EndSession or an explicit progress reset. Retain
+/// only cross-hatch orientation metadata when present; this cannot auto-start
+/// the mower. EndSession must finish the phase before calling this function.
+/// Remove the old resume file before writing phase metadata, so a failed write
+/// cannot leave an old START command behind. Returns false if removal fails or
+/// phase metadata cannot be saved (in the latter case resume state is already
+/// gone). Callers must report failures; EndSession must still clear the live
+/// command. Empty path / already absent file without metadata returns true.
 bool clearCoverageResumeState(const BTContext& ctx);
 
 }  // namespace mowgli_behavior

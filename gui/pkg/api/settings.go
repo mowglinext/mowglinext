@@ -274,20 +274,42 @@ func flattenROS2YAML(yamlData map[string]any) map[string]any {
 	return flat
 }
 
+// cloneNestedMaps returns a copy of node with its direct child maps copied too
+// (one level deeper than a shallow copy), so a caller can write into the result
+// without touching the source document.
+func cloneNestedMaps(node map[string]any) map[string]any {
+	cloned := make(map[string]any, len(node))
+	for key, value := range node {
+		if child, isMap := value.(map[string]any); isMap {
+			clonedChild := make(map[string]any, len(child))
+			for childKey, childValue := range child {
+				clonedChild[childKey] = childValue
+			}
+			cloned[key] = clonedChild
+			continue
+		}
+		cloned[key] = value
+	}
+	return cloned
+}
+
 // nestToROS2YAML takes a flat param map and node mappings, and produces
 // nested ROS2 YAML structure. It preserves any existing YAML content that
 // is not covered by the schema.
 func nestToROS2YAML(flat map[string]any, nodeMappings map[string]string, existingYAML map[string]any) map[string]any {
 	result := map[string]any{}
 
-	// Preserve existing top-level structure
+	// Preserve existing top-level structure. The nested maps (ros__parameters)
+	// are CLONED, not aliased: the merge below writes the payload's values into
+	// them, and sharing them with the caller silently rewrote the document the
+	// caller still holds. That is what made the write-time number-type hints
+	// read an "on-disk" document that had already been overwritten with the
+	// payload's float64s, so every key neither the schema nor the template
+	// declares came out as a float (lidar_map_radius_tiles: 3 -> 3.0, which
+	// aborts a declare_parameter<int> node).
 	for nodeName, nodeData := range existingYAML {
 		if nodeMap, ok := nodeData.(map[string]any); ok {
-			cloned := map[string]any{}
-			for k, v := range nodeMap {
-				cloned[k] = v
-			}
-			result[nodeName] = cloned
+			result[nodeName] = cloneNestedMaps(nodeMap)
 		}
 	}
 
@@ -523,33 +545,16 @@ func serializeShellSettingValue(key string, value any) string {
 	return fmt.Sprintf("%#v", value)
 }
 
-func applyFixedPrecisionGeoScalars(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		for key, child := range typed {
-			if fixedPrecisionYAMLKeys[key] {
-				if f, ok := asFloat64(child); ok {
-					out[key] = fixedPrecisionFloat(f)
-					continue
-				}
-			}
-			out[key] = applyFixedPrecisionGeoScalars(child)
-		}
-		return out
-	case []any:
-		out := make([]any, len(typed))
-		for i, child := range typed {
-			out[i] = applyFixedPrecisionGeoScalars(child)
-		}
-		return out
-	default:
-		return value
+// loadYAMLTypeHints builds the number-type hints for one write of the
+// installed mowgli_robot.yaml: JSON-schema types first, the types already on
+// disk second. See settings_yaml_types.go for why every writer needs them.
+func loadYAMLTypeHints(dbProvider types.IDBProvider, existingYAML map[string]any) yamlTypeHints {
+	schema, err := getSchema(dbProvider)
+	if err != nil {
+		log.Printf("settings: schema unavailable for YAML type hints (%v); falling back to on-disk types", err)
+		schema = nil
 	}
-}
-
-func marshalROS2YAMLWithGeoPrecision(nested map[string]any) ([]byte, error) {
-	return yaml.Marshal(applyFixedPrecisionGeoScalars(nested))
+	return newYAMLTypeHints(schema, existingYAML)
 }
 
 func stringValue(value any, defaultValue string) string {
@@ -870,7 +875,13 @@ func applyUniversalGnssCompatibility(flat map[string]any, schemaDefaults map[str
 	setGnssIntIfNeeded(flat, "gnss_config_baud", compat["GNSS_CONFIG_BAUD"], schemaDefaults)
 	setGnssStringIfNeeded(flat, "gnss_profile", compat["GNSS_PROFILE"], schemaDefaults)
 	setGnssStringIfNeeded(flat, "gnss_signal_profile", compat["GNSS_SIGNAL_PROFILE"], schemaDefaults)
-	if _, exists := flat["gnss_receiver_model"]; exists {
+	if compat["GNSS_RECEIVER_FAMILY"] == "ublox" || compat["GNSS_RECEIVER_FAMILY"] == "nmea" {
+		// These are Unicore-only expert overrides. Keep a stale value from a
+		// previous receiver selection from becoming effective for u-blox/NMEA.
+		delete(flat, "gnss_receiver_model")
+		delete(flat, "gnss_signal_group")
+		delete(flat, "gnss_rover_dynamic_mode")
+	} else if _, exists := flat["gnss_receiver_model"]; exists {
 		if model := normalizeGnssReceiverModel(flat["gnss_receiver_model"]); model != "" {
 			flat["gnss_receiver_model"] = model
 		} else {
@@ -881,7 +892,16 @@ func applyUniversalGnssCompatibility(flat map[string]any, schemaDefaults map[str
 		}
 	}
 	setGnssIntIfNeeded(flat, "gnss_profile_rate_hz", compat["GNSS_PROFILE_RATE_HZ"], schemaDefaults)
-	setGnssStringIfNeeded(flat, "gnss_signal_group", normalizeGnssSignalGroup(flat["gnss_signal_group"]), schemaDefaults)
+	if compat["GNSS_RECEIVER_FAMILY"] == "unicore" {
+		setGnssStringIfNeeded(flat, "gnss_signal_group", normalizeGnssSignalGroup(flat["gnss_signal_group"]), schemaDefaults)
+		if _, exists := flat["gnss_rover_dynamic_mode"]; exists {
+			if mode := normalizeGnssRoverDynamicMode(flat["gnss_rover_dynamic_mode"]); mode != "" {
+				flat["gnss_rover_dynamic_mode"] = mode
+			} else {
+				delete(flat, "gnss_rover_dynamic_mode")
+			}
+		}
+	}
 	delete(flat, "gnss_rate_hz")
 
 	return compat
@@ -1402,6 +1422,11 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			_ = yaml.Unmarshal(file, &existingYAML)
 		}
 
+		// Number-type hints must be captured from the document as it was READ,
+		// BEFORE the payload is merged in — they are what keeps a key neither
+		// the schema nor the template declares at the type it already has.
+		typeHints := newYAMLTypeHints(nil, existingYAML)
+
 		// Flatten existing to get current values
 		existing := flattenROS2YAML(existingYAML)
 
@@ -1417,6 +1442,7 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 				}
 			}
 			nodeMappings = extractNodeMappings(schema)
+			typeHints = typeHints.withSchema(schema)
 		}
 
 		// Merge payload on top. A null value is an explicit delete request
@@ -1451,8 +1477,9 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		nested := nestToROS2YAML(existing, nodeMappings, existingYAML)
 		pruneNestedKeys(nested, prunedKeys)
 
-		// Marshal with YAML comments header
-		out, err := marshalROS2YAMLWithGeoPrecision(nested)
+		// Marshal with YAML comments header, using the hints captured from the
+		// document as it was read.
+		out, err := marshalROS2YAML(nested, typeHints)
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: "failed to marshal YAML: " + err.Error()})
 			return

@@ -151,14 +151,10 @@ RUN . /opt/ros/lyrical/setup.sh \
 
 # =============================================================================
 # Stage 0d: universal-gnss-interfaces-builder
-# Builds ONLY universal_gnss_ros2's msg/srv typesupport from the pinned
-# universal-gnss submodule. foxglove_bridge needs these schemas to introspect
-# the receiver topics and services published by the separate GNSS runtime, but
-# must not inherit the driver's core libraries, tools, or executables.
-#
-# package.xml plus msg/srv inputs are copied verbatim from the submodule. This
-# local CMakeLists is deliberately interface-only: the upstream package's
-# CMakeLists also builds the complete Universal GNSS driver stack.
+# Builds ONLY Universal GNSS's public interface package from the pinned
+# universal-gnss submodule. foxglove_bridge and mowgli_gnss_bridge need these
+# schemas, while receiver/NTRIP/driver/tools remain exclusively in the
+# external Universal GNSS sidecar.
 # =============================================================================
 FROM ros:lyrical-ros-base AS universal-gnss-interfaces-builder
 
@@ -168,23 +164,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake \
       python3-colcon-common-extensions \
       ros-lyrical-ament-cmake \
-      ros-lyrical-diagnostic-msgs \
       ros-lyrical-rosidl-default-generators \
       ros-lyrical-rosidl-default-runtime \
  && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /ws/src/universal_gnss_ros2
-COPY ros2/src/external/universal-gnss/gnss_ros2/package.xml package.xml
-COPY ros2/src/external/universal-gnss/gnss_ros2/msg/ msg/
-COPY ros2/src/external/universal-gnss/gnss_ros2/srv/ srv/
-COPY ros2/universal_gnss_interfaces.CMakeLists.txt CMakeLists.txt
+WORKDIR /ws/src
+COPY ros2/src/external/universal-gnss/universal_gnss_msgs/ universal_gnss_msgs/
 
 WORKDIR /ws
 RUN chown -R ubuntu:ubuntu /ws
 USER ubuntu
 RUN . /opt/ros/lyrical/setup.sh \
  && colcon build --merge-install \
-      --packages-select universal_gnss_ros2 \
+      --packages-select universal_gnss_msgs \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 \
       -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -Wno-dev \
  && rm -rf /ws/build /ws/log /ws/src
@@ -275,6 +267,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdal-dev libgeos++-dev libtinyxml2-dev libtbb12 \
     ros-lyrical-ortools-vendor \
     # LiDAR map anchor: Beluga MCL (header-only) + its ROS adapters
+    # MQTT bridge (mowgli_monitoring/mqtt_bridge_node) runtime dependency.
+    # libmosquitto-dev (headers + .so, needed to link) is installed in the
+    # deps stage below; this is the runtime .so the final `runtime` image
+    # (built FROM base, not FROM deps) actually needs to load
+    # MosquittoMqttClient. Not a rosdep key (checked ros/rosdistro
+    # rosdep/base.yaml — absent), so it's a plain apt-get here rather than
+    # a package.xml <depend>.
+    libmosquitto1 \
     # Utilities
     python3-argcomplete \
     # WebSocket server for cmd_vel_ws_relay (manual mowing low-latency path)
@@ -317,6 +317,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     git \
+    # mowgli_monitoring's mqtt_bridge_node links against libmosquitto at
+    # build time (CMakeLists.txt's pkg_check_modules/find_library(mosquitto)
+    # gate on this to define MOWGLI_HAS_MOSQUITTO). Installed directly here,
+    # not via rosdep, because libmosquitto-dev has no rosdep key. The
+    # runtime-only libmosquitto1 is installed in the `base` stage above so
+    # the final `runtime` image (FROM base) has it too.
+    libmosquitto-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /ros2_ws
@@ -398,9 +405,14 @@ USER root
 
 ARG BUILD_TYPE=Release
 
+# Install only the public Universal GNSS typesupport into the build environment
+# so mowgli_gnss_bridge can compile without exposing the UG runtime packages.
+COPY --from=universal-gnss-interfaces-builder /ws/install /opt/universal_gnss_interfaces
+
 # Now copy the rest of the source tree plus the sidecar tools package
 COPY ros2/src/ src/
 COPY tools/motor/ src/mowgli_tools/
+COPY sensors/gps/mowgli_gnss_bridge/ src/mowgli_gnss_bridge/
 
 # The vendored root is a generic CMake project named universal_gnss, not a ROS
 # package. Letting colcon discover it shadows its nested ROS package and builds
@@ -432,11 +444,13 @@ USER ubuntu
 RUN --mount=type=cache,id=mowgli-ros2-lyrical-${TARGETARCH},target=/home/ubuntu/.cache/ccache,uid=1000,gid=1000,sharing=locked \
     /bin/bash -c 'source /opt/ros/lyrical/setup.bash \
  && source /opt/lyrical_vendor/local_setup.bash \
+ && source /opt/universal_gnss_interfaces/setup.bash \
  && source install/setup.bash \
  && export CMAKE_PREFIX_PATH=/opt/lyrical_vendor:/opt/fields2cover-300:/opt/gtsam:${CMAKE_PREFIX_PATH:-} \
  && MAKEFLAGS=-j3 colcon build --parallel-workers 2 \
       --cmake-args -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTING=OFF \
       -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DMOWGLI_REQUIRE_MOSQUITTO=ON \
       -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache \
       --event-handlers console_cohesion+'
 
@@ -462,9 +476,10 @@ COPY --from=build /ros2_ws/install/ install/
 # every client reconnect. Sourced by ros2_entrypoint.sh as a ROS overlay.
 COPY --from=ublox-msgs-builder /ws/install /opt/ublox_msgs
 
-# Pull the schema-only universal_gnss_ros2 overlay (see
+# Pull the schema-only universal_gnss_msgs overlay (see
 # universal-gnss-interfaces-builder stage). The full Universal GNSS runtime
-# remains outside this image; foxglove_bridge only needs generated typesupport.
+# remains outside this image; foxglove_bridge and mowgli_gnss_bridge only need
+# the generated public typesupport.
 COPY --from=universal-gnss-interfaces-builder /ws/install /opt/universal_gnss_interfaces
 
 # Copy all launch files and config from every package

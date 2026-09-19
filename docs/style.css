@@ -270,6 +270,101 @@ nav .links a:hover { color: var(--text-heading); text-decoration: none; }
   font-size: 0.9rem;
 }
 
+.feature-badge {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid var(--green);
+  color: var(--green);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.features .section-subtitle {
+  margin-top: -32px;
+  margin-bottom: 40px;
+}
+
+/* ─── What's New ──────────────────────────────────── */
+.whats-new {
+  padding: 80px 0;
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.06), transparent 60%);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.whats-new h2 {
+  font-size: 2rem;
+  color: var(--text-heading);
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.whats-new .section-subtitle {
+  margin-bottom: 40px;
+}
+
+.release-pill {
+  display: table;
+  margin: 0 auto 16px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--green);
+  color: var(--green-light);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.release-pill strong { color: var(--green); }
+
+.release-callout {
+  margin-top: 40px;
+  padding: 28px;
+  border-radius: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--green);
+  text-align: center;
+}
+
+.release-callout h3 {
+  color: var(--text-heading);
+  margin-bottom: 8px;
+}
+
+.release-callout p {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.release-callout > code {
+  display: inline-block;
+  margin: 14px 0 10px;
+  padding: 10px 16px;
+  background: var(--bg-code);
+  border-radius: 8px;
+  color: var(--green-light);
+  font-size: 0.9rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.release-callout .composer-note {
+  margin: 0;
+}
+
+.release-callout .composer-note code {
+  background: var(--bg-code);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
 /* ─── Architecture ────────────────────────────────── */
 .architecture {
   padding: 80px 0;
@@ -693,3 +788,7 @@ footer a:hover { color: var(--text-heading); }
   .composer-copy { position: static; margin-top: 8px; width: 100%; justify-content: center; }
   .composer-command-wrapper { position: static; }
 }
+
+/* ─── Build manual callout (Get Started) ───────────── */
+.build-callout { margin-bottom: 32px; }
+.build-callout .btn { margin-top: 12px; }

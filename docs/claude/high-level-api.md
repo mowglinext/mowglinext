@@ -51,8 +51,9 @@ The GUI's scheduler (`gui/pkg/providers/scheduler.go`) polls its `schedule:*` DB
 
 Published with **numeric state 1 (IDLE)** and `state_name="DIG_OBSTRUCTION"` while `hardware_bridge` holds `~/dig_escalated`. The IDLE value is deliberate: the firmware maps it to a wheel + blade hard stop, so a wedged robot cannot grind on. Exits:
 
-- **HOME (command 2)** — `HomeSequence` publishes `RETURNING_HOME` (state 2, firmware unlocked), then, gated on `IsDigEscalated`, calls `/map_server_node/discard_dig_keepouts_near_robot` to drop the PENDING dig proposals that contain / lie within 0.60 m of the robot before `DockRobot` plans (otherwise Smac starts in a lethal cell → START_OCCUPIED → "HOME never moves"). Accepted keepouts and farther proposals stay.
+- **HOME (command 2)** — `HomeSequence` publishes `RETURNING_HOME` (state 2, firmware unlocked), then goes straight to `SaveObstacles` / `ClearCostmap` / `DockRobot`. There is no dig-keepout clean-up step any more (`DiscardNearbyDigKeepouts` and `/map_server_node/discard_dig_keepouts_near_robot` were removed): a dig is only an inert PROPOSAL in map_server and never stamps the keepout mask, so a HOME out of `DIG_OBSTRUCTION` can always plan from the robot's pose.
 - **Lift the robot clear, then Play** — the bridge releases the latch once the fused pose is 2 × `dig_escalate_radius_m` (1.0 m by default) from the escalation point; Play (command 1) is refused by `DigObstructionGuard` until then.
+- **Operator clear** — the dashboard's dig-escalation banner calls `/hardware_bridge/clear_dig_escalation` (`std_srvs/Trigger`); the bridge refuses it until the fused pose is more than `dig_escalate_clear_distance_m` (0.50 m default, floored at 0.30 m) from the escalation point, and `Status.dig_escalated_distance_m` / `.dig_escalated_required_distance_m` drive the banner's live progress.
 - Reaching the charger also clears the latch. Manual / recording modes (3/5/6/7) are never blocked by the guard.
 
 The GUI shows the state as "Dig obstruction" with the recovery hint, and the map toolbar offers Continue (Play) rather than Pause while it is held.

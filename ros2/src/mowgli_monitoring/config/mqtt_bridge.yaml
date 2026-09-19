@@ -14,7 +14,7 @@
     # Prefix prepended to every MQTT topic published or subscribed by this node.
     # With the default "mowgli" prefix the topics become:
     #   mowgli/status, mowgli/power, mowgli/emergency, mowgli/position,
-    #   mowgli/diagnostics, mowgli/command
+    #   mowgli/diagnostics, mowgli/command, mowgli/areas, mowgli/start_area
     mqtt_topic_prefix: "mowgli"
 
     # Rate limit for the /wheel_odom → mowgli/position bridge.

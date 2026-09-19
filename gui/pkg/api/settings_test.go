@@ -768,6 +768,37 @@ func TestApplyUniversalGnssCompatibility_DeletesEmptyNormalizedReceiverModel(t *
 	assert.False(t, exists)
 }
 
+func TestApplyUniversalGnssCompatibility_RemovesUnicoreOverridesForUblox(t *testing.T) {
+	flat := map[string]any{
+		"gnss_receiver_family":    "ublox",
+		"gnss_receiver_model":     "UM982",
+		"gnss_signal_group":       "3 6",
+		"gnss_rover_dynamic_mode": "uav",
+	}
+
+	applyUniversalGnssCompatibility(flat, gnssTestSchemaDefaults())
+
+	for _, key := range []string{"gnss_receiver_model", "gnss_signal_group", "gnss_rover_dynamic_mode"} {
+		_, exists := flat[key]
+		assert.False(t, exists, key)
+	}
+}
+
+func TestApplyUniversalGnssCompatibility_PreservesUnicoreOverridesForAuto(t *testing.T) {
+	flat := map[string]any{
+		"gnss_receiver_family":    "auto",
+		"gnss_receiver_model":     "UM982",
+		"gnss_signal_group":       "3 6",
+		"gnss_rover_dynamic_mode": "uav",
+	}
+
+	applyUniversalGnssCompatibility(flat, gnssTestSchemaDefaults())
+
+	assert.Equal(t, "UM982", flat["gnss_receiver_model"])
+	assert.Equal(t, "3 6", flat["gnss_signal_group"])
+	assert.Equal(t, "uav", flat["gnss_rover_dynamic_mode"])
+}
+
 func TestPostSettingsYAML_DoesNotMaterializeAbsentGnssDefaults(t *testing.T) {
 	// Use the real schema so this proves the fix against the actual schema
 	// defaults, not a test stub.

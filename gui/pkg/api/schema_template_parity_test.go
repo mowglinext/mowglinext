@@ -30,6 +30,7 @@ var schemaDefaultsWithNoTemplateEntry = map[string]string{
 	// compare against. Their fallback is already single-sourced through
 	// this same schema (settings.go gnssSchemaDefaultString).
 	"gnss_config_baud":     "Universal GNSS tool config, not a ROS2 parameter",
+	"gnss_execution_baud":  "Universal GNSS execution baud strategy, not a ROS2 parameter",
 	"gnss_profile":         "Universal GNSS tool config, not a ROS2 parameter",
 	"gnss_profile_rate_hz": "Universal GNSS tool config, not a ROS2 parameter",
 	"gnss_signal_profile":  "Universal GNSS tool config, not a ROS2 parameter",

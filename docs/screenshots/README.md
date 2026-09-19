@@ -1,25 +1,32 @@
-# Dashboard Screenshots
+# GUI screenshots
 
-These screenshots are referenced by the README, wiki, and GitHub Pages.
-
-## How to generate
-
-1. Open the design prototype in your browser:
-   ```
-   open /path/to/design_handoff_dashboard/Dashboard\ Redesign.html
-   ```
-2. Use the Tweaks panel (bottom-right) to switch mower states.
-3. Take screenshots of the Direction B artboard at each state and save here:
+Captured from a live robot (`http://<mower-ip>:4006`) with the interface in
+English, at 1440×900 (desktop) and 390×844 (mobile). Personal data — the GPS
+datum and live position, the NTRIP mount point, satellite tiles of the garden —
+is blurred before the capture is committed; the Map page uses the GUI's
+**Dark map** style, which shows the areas and the LiDAR tile map with no
+imagery.
 
 | File | State / View |
 |------|-------------|
-| `dashboard-mowing.png` | Dashboard, MOWING state |
-| `dashboard-idle.png` | Dashboard, IDLE state |
-| `dashboard-charging.png` | Dashboard, CHARGING state |
-| `dashboard-emergency.png` | Dashboard, EMERGENCY state |
-| `map.png` | Map page |
+| `dashboard-idle.png` | Home, robot idle and charging on the dock |
+| `dashboard-charging.png` | same capture, kept under its historical name |
+| `dashboard-mobile.png` | Home on a phone |
+| `map.png` | Map page, dark style |
 | `schedule.png` | Schedule page |
 | `stats.png` | Statistics page |
-| `dashboard-mobile.png` | Mobile home (from "Mobile - deepened" section) |
 
-Recommended: crop to the artboard content (1280x820 for desktop, 390x844 for mobile).
+The per-page walkthrough set (settings tabs, diagnostics tabs, onboarding
+steps, map editing) lives in `../gui-walkthrough/screenshots/`.
+
+Captures of the MOWING and EMERGENCY states were dropped when the interface
+was redesigned (September 2026) — they need a live mow to reproduce. Retake
+them the same way and add them back here when one is available.
+
+## How to retake
+
+1. Open the GUI in a desktop browser at 1440×900, switch it to English.
+2. Blur anything personal before saving (coordinates, mount point, map
+   imagery); on the Map page pick More → Dark map instead of blurring.
+3. Save as PNG under the names above, then update the references in the
+   README, `docs/index.html` and the wiki.

@@ -75,6 +75,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (
     chassis_circumscribed_radius,
     chassis_footprint,  # noqa: E402
+    chassis_half_width,
+    DEFAULT_CHASSIS_WIDTH_M,
     DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO,
     DEFAULT_BLADE_LOAD_RPM_FULL,
     DEFAULT_BLADE_LOAD_RPM_MIN,
@@ -83,9 +85,11 @@ from robot_config_util import (
     TRUE_TOKENS,
     check_turn_geometry,
     deep_merge,
+    ftc_obstacle_clearance_margin,
     derive_blade_load_params,
     derive_turn_speed,
     load_robot_params,
+    planning_obstacle_margin,
     resolve_lidar_enabled,
     warn_lidar_key_absent,
 )
@@ -261,11 +265,18 @@ def generate_launch_description() -> LaunchDescription:
     # installed config omits the dimensions (they are not install-decided).
     rp = load_robot_params(bringup_dir, "/ros2_ws/config/mowgli_robot.yaml")
     footprint_str = ""
-    # Physical chassis width default — overwritten from the robot config below
-    # when present. Hoisted here so it is always defined for the chassis_safety_inset
-    # fallback AND the coverage_server.robot_width injection (both read it via the
-    # _inject_dock_pose_and_speeds closure), even on a fresh checkout with no config.
-    cw = 0.40
+    # Physical chassis width, READ FROM THE MERGED CONFIG. Feeds the
+    # chassis_safety_inset floor AND coverage_server.robot_width (both via the
+    # _inject_dock_pose_and_speeds closure).
+    #
+    # This used to be a hardcoded `cw = 0.40` whose comment claimed it was
+    # "overwritten from the robot config below" — an assignment that never
+    # existed. When the chassis went 0.40 m -> 0.45 m the Nav2 footprint
+    # followed (half-width 0.275 m) and the coverage planner did not: it kept
+    # insetting obstacles and the recorded boundary by 0.20 m, i.e. 2.5 cm
+    # INSIDE the body, and FTC — tracking to within 2 cm — drove exactly there.
+    # `chassis_width` is operator-editable in the GUI, so this must be derived.
+    cw = float(rp.get("chassis_width", DEFAULT_CHASSIS_WIDTH_M))
     # LIDAR mount geometry for the costmap_scan_filter ground filter.
     # lidar_height = lidar_z (above base_link); lidar_mount_yaw rotates a
     # beam's index angle into the IMU/base frame before the gravity
@@ -275,6 +286,11 @@ def generate_launch_description() -> LaunchDescription:
     # frame; it is 0 on this stack but kept general.
     lidar_height_m = 0.30
     lidar_mount_yaw = 0.0
+    # Bound unconditionally: the `if rp:` below is not guaranteed to run, and
+    # these are read later from inside _inject_dock_pose_and_speeds. Leaving them
+    # to the branch is the UnboundLocalError that crash-looped the stack once
+    # already (see the obstacle_margin note in that closure).
+    fp_f, fp_r, fp_hw = chassis_footprint(rp or {})
     if rp:
         lidar_height_m = float(rp.get("lidar_z", lidar_height_m))
         lidar_mount_yaw = float(rp.get("lidar_yaw", 0.0)) - float(rp.get("imu_yaw", 0.0))
@@ -300,6 +316,8 @@ def generate_launch_description() -> LaunchDescription:
     # it should do something but didn't. Load here and inject into the
     # Nav2 YAMLs (controller + docking) alongside the dock pose.
     #   transit_speed    → FollowPath.primary_controller.max_linear_vel (RPP)
+    #   transit_dynamic_window
+    #                    → FollowPath.primary_controller.use_dynamic_window (RPP/DWPP)
     #   mowing_speed     → FollowCoveragePath.speed_fast (FTC)
     #   undock_speed     → behavior_tree_node param of the same name,
     #                      pushed onto the BT blackboard at startup and
@@ -308,6 +326,9 @@ def generate_launch_description() -> LaunchDescription:
     #                      Wired in full_system.launch.py (Node parameters
     #                      list). See issue #191.
     transit_speed = 0.3
+    # Dynamic Window Pure Pursuit on the TRANSIT controller (Nav2 1.5.1).
+    # OFF by default — see the template mowgli_robot.yaml for the rationale.
+    transit_dynamic_window = False
     mowing_speed = 0.25
     datum_lat = 0.000000000
     datum_lon = 0.000000000
@@ -404,6 +425,17 @@ def generate_launch_description() -> LaunchDescription:
     # a side-mounted blade on the cut side. Injected into coverage_server's
     # ring_direction param below.
     mow_direction = 0
+    # connector_max_headland_passes (issue #497): how many of the
+    # num_headland_passes rings a turn-around connector may CROSS, counted
+    # from the mainland edge outward. <= 0 (default) or >= num_headland_passes
+    # = UNLIMITED — connectors may use the whole headland apron out to the
+    # outermost ring, unchanged from before #497. A value in
+    # [1, num_headland_passes) keeps the outermost (num_headland_passes -
+    # value) ring(s) a no-turn zone, so U-turns stay further from the
+    # recorded boundary at the cost of more straight/split connector
+    # fallbacks. Injected into coverage_server.connector_max_headland_passes;
+    # operator-tunable via mowgli_robot.yaml.
+    connector_max_headland_passes = 0
     # swath_overlap: how much narrower F2C's swath spacing is than the physical
     # cut width. F2C's operation_width (Robot::setCovWidth) = tool_width −
     # swath_overlap, so adjacent swaths OVERLAP by this much. tool_width itself
@@ -479,6 +511,9 @@ def generate_launch_description() -> LaunchDescription:
     # radius (derived from chassis_*, ~0.597 m at the shipped dimensions)
     # and capped at 1.50 below.
     obstacle_inflation_radius = 0.80
+    # LOCAL costmap inscribed radius override (Nav2 1.5.1 custom_inscribed_radius).
+    # -1.0 = derive from the footprint, Nav2's own behaviour. See the template.
+    local_inflation_inscribed_radius = -1.0
     # obstacle_detection_range_m (task #51): the real "avoid from further out
     # during mowing" knob — inflation_radius above only affects Nav2 transit
     # (MPPI/RPP's cost-gradient), not FTC's coverage-time deviation, which
@@ -504,7 +539,9 @@ def generate_launch_description() -> LaunchDescription:
     obstacle_reverse_enabled = False
     obstacle_reverse_max_dist_m = 0.30
     obstacle_reverse_speed_mps = 0.10
-    obstacle_margin = 0.15
+    # 0.0 = "no operator request": the closure floors it at the DERIVED
+    # planning_obstacle_margin_floor, so no literal copy of that number lives here.
+    obstacle_margin = 0.0
     obstacle_slowdown_ratio = 0.5
     enable_mag_cal = False
     mag_cal_path = "/ros2_ws/maps/mag_calibration.yaml"
@@ -530,6 +567,8 @@ def generate_launch_description() -> LaunchDescription:
         dock_pose_y = float(rt_rp.get("dock_pose_y", 0.0))
         dock_pose_yaw = float(rt_rp.get("dock_pose_yaw", 0.0))
         transit_speed = float(rt_rp.get("transit_speed", transit_speed))
+        transit_dynamic_window = bool(rt_rp.get(
+            "transit_dynamic_window", transit_dynamic_window))
         mowing_speed = float(rt_rp.get("mowing_speed", mowing_speed))
         datum_lat = float(rt_rp.get("datum_lat", 0.000000000))
         datum_lon = float(rt_rp.get("datum_lon", 0.000000000))
@@ -575,6 +614,8 @@ def generate_launch_description() -> LaunchDescription:
         num_headland_passes = int(rt_rp.get(
             "num_headland_passes", num_headland_passes))
         mow_direction = int(rt_rp.get("mow_direction", mow_direction))
+        connector_max_headland_passes = int(rt_rp.get(
+            "connector_max_headland_passes", connector_max_headland_passes))
         swath_overlap = float(rt_rp.get("swath_overlap", swath_overlap))
         wheel_track = float(rt_rp.get("wheel_track", wheel_track))
         turn_speed_ratio = float(rt_rp.get("turn_speed_ratio", turn_speed_ratio))
@@ -594,6 +635,8 @@ def generate_launch_description() -> LaunchDescription:
             "max_obstacle_avoidance_distance", max_obstacle_avoidance_distance))
         obstacle_inflation_radius = float(rt_rp.get(
             "obstacle_inflation_radius", obstacle_inflation_radius))
+        local_inflation_inscribed_radius = float(rt_rp.get(
+            "local_inflation_inscribed_radius", local_inflation_inscribed_radius))
         obstacle_detection_range_m = float(rt_rp.get(
             "obstacle_detection_range_m", obstacle_detection_range_m))
         obstacle_clearance_margin = float(rt_rp.get(
@@ -612,14 +655,17 @@ def generate_launch_description() -> LaunchDescription:
         # Operator override wins; otherwise fall back to 0.0 (below).
         if "chassis_safety_inset" in rt_rp:
             chassis_safety_inset = float(rt_rp["chassis_safety_inset"])
+    # chassis_safety_inset is a BOUNDARY-ONLY knob: how far inside the RECORDED
+    # LINE the outermost driven pass sits. It is NOT the obstacle clearance —
+    # that is obstacle_margin, floored at the body half-width below.
+    #
+    # Default 0.0, and that is a semantic choice, not a tuning one: the operator
+    # recorded that perimeter by DRIVING it, so it is the reachable limit by
+    # definition. The outermost ring rides ON it, the blade mows to the edge and
+    # the chassis straddles the line — which is what mowing an edge means. Any
+    # inset here is a band the robot refuses to cut; 0.2 m of it was the
+    # "it stays too far from the hedges" complaint.
     if chassis_safety_inset is None:
-        # Default 0.0: the outermost headland ring rides ON the recorded line
-        # (the perimeter the operator drove), so the blade mows to the edge and
-        # the chassis is allowed to straddle the boundary. coverage_server treats
-        # chassis_safety_inset as "how far inside the recorded line the outermost
-        # ring centerline sits" and applies the op_width/2 outward expansion
-        # itself. An operator who wants the whole chassis kept inside can set
-        # chassis_safety_inset = chassis_width/2 in mowgli_robot.yaml.
         chassis_safety_inset = 0.0
 
     # Compute BT XML paths from installed package shares (not hardcoded).
@@ -743,6 +789,11 @@ def generate_launch_description() -> LaunchDescription:
                  .setdefault("ros__parameters", {})
                  .setdefault("FollowPath", {}))
         fp.setdefault("primary_controller", {})["max_linear_vel"] = transit_speed
+        # DWPP (Nav2 1.5.1) on the transit lane only. The acceleration and
+        # velocity BOUNDS of the window live in nav2_params_base.yaml — they
+        # describe the chassis, not an operator preference; this is only the
+        # on/off switch. The coverage lane is FTCController and is not affected.
+        fp["primary_controller"]["use_dynamic_window"] = bool(transit_dynamic_window)
 
         # FollowCoveragePath (coverage controller = FTCController). FTC's
         # carrot forward-speed knob is speed_fast; mowing_speed overrides it.
@@ -846,8 +897,11 @@ def generate_launch_description() -> LaunchDescription:
         # obstacle_body_half_width. Capped at 0.50: beyond that the widened
         # sweep starts colliding with the zone guard on headland rings that
         # hug the boundary, turning avoidance into "deviation > max" holds.
-        fcp["obstacle_clearance_margin"] = min(
-            0.50, max(0.0, obstacle_clearance_margin))
+        # The clamp lives in robot_config_util so the coverage planning floor
+        # below is computed from the SAME value FTC runs with.
+        clamped_clearance_margin = ftc_obstacle_clearance_margin(
+            {"obstacle_clearance_margin": obstacle_clearance_margin})
+        fcp["obstacle_clearance_margin"] = clamped_clearance_margin
         # obstacle_wait_timeout_s: how long FTC holds zero velocity on a
         # blocked/over-max deviation before aborting the strip. Previously
         # present in the GUI param catalog but never injected here, so the
@@ -885,12 +939,22 @@ def generate_launch_description() -> LaunchDescription:
         # the GUI, so a hardcoded floor goes stale the moment someone edits
         # them — which is exactly what happened before 2026-09-05.
         infl_floor = chassis_circumscribed_radius(rp)
+        # Nav2 1.5.1 lets the inflation layer be TOLD its inscribed radius
+        # instead of deriving it from the footprint's circumscribed radius. When
+        # the operator does so, that declared radius — not the chassis diagonal —
+        # is what the 253 band (and therefore FTC's obstacle detector) rests on,
+        # so it becomes the floor. Without this the floor below would raise the
+        # inflation radius straight back up and the override would be inert.
+        if local_inflation_inscribed_radius >= 0.0:
+            lc_infl["custom_inscribed_radius"] = local_inflation_inscribed_radius
+            infl_floor = local_inflation_inscribed_radius
         if infl_floor > 1.50:
             print(
-                "[navigation.launch] WARNING: chassis circumscribed radius "
+                "[navigation.launch] WARNING: local costmap inscribed radius "
                 f"{infl_floor:.3f} m exceeds the 1.50 m inflation cap; the cap "
                 "wins and the local costmap will under-inflate for this "
-                "chassis. Check chassis_length / chassis_width."
+                "chassis. Check chassis_length / chassis_width, or "
+                "local_inflation_inscribed_radius if it is set."
             )
         lc_infl["inflation_radius"] = min(
             1.50, max(infl_floor, obstacle_inflation_radius))
@@ -902,6 +966,33 @@ def generate_launch_description() -> LaunchDescription:
         if "PolygonSlow" in cm_params:
             cm_params["PolygonSlow"]["slowdown_ratio"] = min(
                 1.0, max(0.05, obstacle_slowdown_ratio))
+
+        # Collision-monitor polygon WIDTHS follow the chassis, like the costmap
+        # footprint above. They were static literals sized for the 0.40 m
+        # chassis: PolygonStopNarrow at ±0.20 and PolygonStop at ±0.18 against a
+        # body that reaches ±0.275, so 7.5 and 9.5 cm of carriage on each side
+        # sat OUTSIDE the polygon that is supposed to stop before touching it.
+        # An obstacle met by the corner of the robot simply missed them.
+        #
+        # FootprintApproach is not in this list on purpose: it reads
+        # /local_costmap/published_footprint, so it already follows the derived
+        # geometry. Only the hand-written polygons need rewriting.
+        #
+        # Longitudinal extents stay RELATIVE to the derived footprint so the
+        # shapes keep their meaning: a narrow band straddling the front edge,
+        # and a body-plus-margin box.
+        def _poly(front, rear, half):
+            return (f"[[{front:.3f}, {half:.3f}], [{front:.3f}, {-half:.3f}], "
+                    f"[{rear:.3f}, {-half:.3f}], [{rear:.3f}, {half:.3f}]]")
+
+        if "PolygonStopNarrow" in cm_params:
+            # Band from just behind the front edge to 0.12 m ahead of it.
+            cm_params["PolygonStopNarrow"]["points"] = _poly(
+                fp_f + 0.12, fp_f - 0.02, fp_hw)
+        if "PolygonStop" in cm_params:
+            # Whole body plus 0.05 m fore and aft.
+            cm_params["PolygonStop"]["points"] = _poly(
+                fp_f + 0.05, fp_r - 0.05, fp_hw)
 
         # Goal-checker tolerances. Two checkers live under
         # controller_server: stopped_goal_checker (used by FollowPath /
@@ -968,12 +1059,57 @@ def generate_launch_description() -> LaunchDescription:
         cov_params["num_headland_passes"] = num_headland_passes
         # Perimeter/headland travel winding (blade-side, issue #335).
         cov_params["ring_direction"] = mow_direction
+        # How many headland passes a turn-around connector may cross (issue
+        # #497). Passed through as configured — coverage_server clamps it to
+        # [0, num_headland_passes] itself, same as every other live-read
+        # connector geometry knob.
+        cov_params["connector_max_headland_passes"] = connector_max_headland_passes
         cov_params["chassis_safety_inset"] = chassis_safety_inset
         # Extra buffer grown around drawn map-obstacle polygons (holes) before
-        # swath planning — keeps the robot off root zones the 2D LiDAR cannot
-        # see. map_server applies the SAME key to its keepout mask
-        # (full_system.launch.py) so planner and keepout stay consistent.
-        cov_params["obstacle_margin"] = min(1.0, max(0.0, obstacle_margin))
+        # swath planning: how far the coverage CENTRELINE stays from a drawn
+        # obstacle. F2C has no body model, so this carries the whole body — and
+        # it is the ONLY obstacle clearance once chassis_safety_inset is 0 (the
+        # planning field is expanded OUTWARD and expandCellOutward leaves the
+        # holes untouched).
+        #
+        # FLOORED, by robot_config_util.planning_obstacle_margin_floor, at the
+        # MAX of two DERIVED demands (nothing here is a literal — the chassis is
+        # GUI-editable and a literal is what went stale on 2026-09-16):
+        #   * controller: chassis_half_width + FTC's clamped
+        #     obstacle_clearance_margin + FTC_TRACKING_SLACK_M. FTC's footprint
+        #     clearance model refuses a line closer than half-width + clearance
+        #     to a lethal cell; a plan at the bare half-width made FTC fight its
+        #     own plan along every obstacle (WEDGED bursts of 70 and 160 / min).
+        #   * transit plannability: chassis_half_width (= the un-inflated
+        #     keepout band map_server paints, keepout_obstacle_margin) + the
+        #     mask->global-costmap rasterisation slack, so a robot standing ON
+        #     its coverage line is never START_OCCUPIED for Smac.
+        # map_server does NOT get this value any more: its keepout band is
+        # keepout_obstacle_margin (full_system.launch.py). One shared number for
+        # a centreline planner and a mask read by a point-check planner is what
+        # counted the body twice.
+        #
+        # An operator may ask for MORE room around obstacles; never less.
+        # NOTE: `requested_margin` / `planned_margin` are NEW locals on purpose.
+        # Assigning to `obstacle_margin` here would make it local to this
+        # closure, and the read would raise UnboundLocalError at LAUNCH time —
+        # exactly what crash-looped the stack on the robot on 2026-09-16.
+        requested_margin = obstacle_margin
+        planned_margin = planning_obstacle_margin({
+            **(rp or {}),
+            "obstacle_margin": requested_margin,
+            "obstacle_clearance_margin": clamped_clearance_margin,
+        })
+        if requested_margin < planned_margin:
+            print(
+                "[navigation.launch] obstacle_margin "
+                f"{requested_margin:.3f} m is below the derived floor "
+                f"{planned_margin:.3f} m (body half-width "
+                f"{chassis_half_width(rp):.3f} m + what FTC's clearance model "
+                "and the transit keepout band demand) — raising it to the "
+                "floor."
+            )
+        cov_params["obstacle_margin"] = planned_margin
         # Hard floor on the continuous path's turn-around / fillet arcs so no
         # turn is ever tighter than the robot can track (clamp to the tuned
         # [0.10, 0.50] band; sub-0.10 loops are untrackable, >0.50 bulges OOB).

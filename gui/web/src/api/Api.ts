@@ -10,6 +10,14 @@
  * ---------------------------------------------------------------
  */
 
+export enum ProvidersRemoteAccessPhase {
+  RemoteAccessDisabled = "disabled",
+  RemoteAccessPulling = "pulling",
+  RemoteAccessStarting = "starting",
+  RemoteAccessRunning = "running",
+  RemoteAccessError = "error",
+}
+
 export interface ApiContainer {
   id?: string;
   labels?: Record<string, string>;
@@ -126,6 +134,26 @@ export interface ApiIrriSenseSettingsUpdate {
   token?: string;
   wetDeficitMm?: number;
   zoneIds?: string[];
+}
+
+export interface ApiRemoteAccessSettingsResponse {
+  authKeyMasked?: string;
+  authKeySet?: boolean;
+  containerName?: string;
+  defaultImage?: string;
+  enabled?: boolean;
+  hostname?: string;
+  image?: string;
+  serveHttps?: boolean;
+}
+
+export interface ApiRemoteAccessSettingsUpdate {
+  authKey?: string;
+  clearAuthKey?: boolean;
+  enabled?: boolean;
+  hostname?: string;
+  image?: string;
+  serveHttps?: boolean;
 }
 
 export interface ApiOkResponse {
@@ -256,7 +284,9 @@ export interface MowgliReplaceMapReq {
 
 export interface MowgliSetDockingPointReq {
   docking_pose?: GeometryPose;
+  preserve_position?: boolean;
   use_gps_position?: boolean;
+  use_pending_antenna?: boolean;
   yaw_rad?: number;
   yaw_source?: number;
 }
@@ -271,6 +301,30 @@ export interface ProvidersIrriSenseZoneSummary {
   enabled?: boolean;
   id?: string;
   label?: string;
+}
+
+export interface ProvidersRemoteAccessStatus {
+  /**
+   * BackendState mirrors tailscaled: NoState, NeedsLogin, NeedsMachineAuth,
+   * Stopped, Starting, Running.
+   */
+  backendState?: string;
+  checkedAt?: string;
+  /** ContainerState is Docker's state string, or "absent". */
+  containerState?: string;
+  dnsName?: string;
+  enabled?: boolean;
+  error?: string;
+  health?: string[];
+  hostname?: string;
+  httpUrls?: string[];
+  httpsUrl?: string;
+  /** LoginUrl is set while the node waits for an interactive login. */
+  loginUrl?: string;
+  magicDnsEnabled?: boolean;
+  phase?: ProvidersRemoteAccessPhase;
+  tailscaleIps?: string[];
+  version?: string;
 }
 
 export interface TypesFirmwareConfig {
@@ -812,6 +866,92 @@ export class Api<
       this.request<TypesSoilStatus, any>({
         path: `/irrisense/status`,
         method: "GET",
+        format: "json",
+        ...params,
+      }),
+  };
+  remoteAccess = {
+    /**
+     * No description
+     *
+     * @tags remote-access
+     * @name SettingsList
+     * @summary Remote access settings
+     * @request GET:/remote-access/settings
+     */
+    settingsList: (params: RequestParams = {}) =>
+      this.request<ApiRemoteAccessSettingsResponse, any>({
+        path: `/remote-access/settings`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags remote-access
+     * @name SettingsUpdate
+     * @summary update remote access settings
+     * @request PUT:/remote-access/settings
+     */
+    settingsUpdate: (
+      settings: ApiRemoteAccessSettingsUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<ApiRemoteAccessSettingsResponse, ApiErrorResponse>({
+        path: `/remote-access/settings`,
+        method: "PUT",
+        body: settings,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description container phase, tailscaled login state, login URL while waiting, reachable URLs once connected
+     *
+     * @tags remote-access
+     * @name StatusList
+     * @summary Remote access status
+     * @request GET:/remote-access/status
+     */
+    statusList: (params: RequestParams = {}) =>
+      this.request<ProvidersRemoteAccessStatus, any>({
+        path: `/remote-access/status`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags remote-access
+     * @name ApplyCreate
+     * @summary Retry applying remote access settings
+     * @request POST:/remote-access/apply
+     */
+    applyCreate: (params: RequestParams = {}) =>
+      this.request<ApiOkResponse, any>({
+        path: `/remote-access/apply`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description the node key is discarded; the sidecar restarts and logs in again (interactively or with the stored auth key)
+     *
+     * @tags remote-access
+     * @name LogoutCreate
+     * @summary Log the robot out of the tailnet
+     * @request POST:/remote-access/logout
+     */
+    logoutCreate: (params: RequestParams = {}) =>
+      this.request<ApiOkResponse, ApiErrorResponse>({
+        path: `/remote-access/logout`,
+        method: "POST",
         format: "json",
         ...params,
       }),

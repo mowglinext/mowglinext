@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-labelledby="t">
+  <title id="t">Raspberry Pi 40-pin header: 5 V and GND power pins, UART4 (GPIO 8/9) for the GNSS receiver and UART5 (GPIO 12/13) for the LiDAR</title>
+  <rect width="900" height="560" fill="#0f172a"/>
+  <text x="450" y="40" text-anchor="middle" fill="#f8fafc" font-size="22" font-weight="700">Raspberry Pi 4 / 5 — 40-pin header, pins used by the installer defaults</text>
+  <text x="450" y="64" text-anchor="middle" fill="#94a3b8" font-size="13">Board seen from above, USB ports to the right. Odd pins are the inner row, even pins the outer (edge) row.</text>
+
+  <!-- header body -->
+  <rect x="60" y="100" width="780" height="90" rx="6" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <g font-size="10" fill="#94a3b8" text-anchor="middle">
+    <!-- even row (top, board edge) 2..40 -->
+    <g id="even">
+      <rect x="74" y="110" width="26" height="26" rx="3" fill="#dc2626"/><text x="87" y="127" fill="#fff" font-weight="700">2</text>
+      <rect x="112" y="110" width="26" height="26" rx="3" fill="#dc2626"/><text x="125" y="127" fill="#fff" font-weight="700">4</text>
+      <rect x="150" y="110" width="26" height="26" rx="3" fill="#0f172a"/><text x="163" y="127" fill="#fff" font-weight="700">6</text>
+      <rect x="188" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="201" y="127">8</text>
+      <rect x="226" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="239" y="127">10</text>
+      <rect x="264" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="277" y="127">12</text>
+      <rect x="302" y="110" width="26" height="26" rx="3" fill="#0f172a"/><text x="315" y="127" fill="#fff" font-weight="700">14</text>
+      <rect x="340" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="353" y="127">16</text>
+      <rect x="378" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="391" y="127">18</text>
+      <rect x="416" y="110" width="26" height="26" rx="3" fill="#0f172a"/><text x="429" y="127" fill="#fff" font-weight="700">20</text>
+      <rect x="454" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="467" y="127">22</text>
+      <rect x="492" y="110" width="26" height="26" rx="3" fill="#38bdf8"/><text x="505" y="127" fill="#052e16" font-weight="700">24</text>
+      <rect x="530" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="543" y="127">26</text>
+      <rect x="568" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="581" y="127">28</text>
+      <rect x="606" y="110" width="26" height="26" rx="3" fill="#0f172a"/><text x="619" y="127" fill="#fff" font-weight="700">30</text>
+      <rect x="644" y="110" width="26" height="26" rx="3" fill="#f97316"/><text x="657" y="127" fill="#052e16" font-weight="700">32</text>
+      <rect x="682" y="110" width="26" height="26" rx="3" fill="#0f172a"/><text x="695" y="127" fill="#fff" font-weight="700">34</text>
+      <rect x="720" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="733" y="127">36</text>
+      <rect x="758" y="110" width="26" height="26" rx="3" fill="#334155"/><text x="771" y="127">38</text>
+      <rect x="796" y="110" width="26" height="26" rx="3" fill="#0f172a"/><text x="809" y="127" fill="#fff" font-weight="700">40</text>
+    </g>
+    <!-- odd row (bottom, inner) 1..39 -->
+    <g id="odd">
+      <rect x="74" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="87" y="167">1</text>
+      <rect x="112" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="125" y="167">3</text>
+      <rect x="150" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="163" y="167">5</text>
+      <rect x="188" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="201" y="167">7</text>
+      <rect x="226" y="150" width="26" height="26" rx="3" fill="#0f172a"/><text x="239" y="167" fill="#fff" font-weight="700">9</text>
+      <rect x="264" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="277" y="167">11</text>
+      <rect x="302" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="315" y="167">13</text>
+      <rect x="340" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="353" y="167">15</text>
+      <rect x="378" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="391" y="167">17</text>
+      <rect x="416" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="429" y="167">19</text>
+      <rect x="454" y="150" width="26" height="26" rx="3" fill="#38bdf8"/><text x="467" y="167" fill="#052e16" font-weight="700">21</text>
+      <rect x="492" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="505" y="167">23</text>
+      <rect x="530" y="150" width="26" height="26" rx="3" fill="#0f172a"/><text x="543" y="167" fill="#fff" font-weight="700">25</text>
+      <rect x="568" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="581" y="167">27</text>
+      <rect x="606" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="619" y="167">29</text>
+      <rect x="644" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="657" y="167">31</text>
+      <rect x="682" y="150" width="26" height="26" rx="3" fill="#f97316"/><text x="695" y="167" fill="#052e16" font-weight="700">33</text>
+      <rect x="720" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="733" y="167">35</text>
+      <rect x="758" y="150" width="26" height="26" rx="3" fill="#334155"/><text x="771" y="167">37</text>
+      <rect x="796" y="150" width="26" height="26" rx="3" fill="#0f172a"/><text x="809" y="167" fill="#fff" font-weight="700">39</text>
+    </g>
+  </g>
+
+  <!-- legend / table -->
+  <g font-size="15" fill="#e2e8f0">
+    <g transform="translate(80,240)">
+      <rect x="0" y="-14" width="18" height="18" rx="3" fill="#dc2626"/><text x="30" y="0">Pins 2 / 4 — 5 V in from the DC-DC converter (+)</text>
+      <rect x="0" y="22" width="18" height="18" rx="3" fill="#0f172a" stroke="#94a3b8"/><text x="30" y="36">Pins 6, 9, 14, 20, 25, 30, 34, 39 — GND (DC-DC −, GNSS GND, LiDAR GND)</text>
+      <rect x="0" y="58" width="18" height="18" rx="3" fill="#38bdf8"/><text x="30" y="72">UART4 → <tspan font-weight="700">/dev/ttyAMA4</tspan> (GNSS default): pin 24 = GPIO 8 = TXD4 → receiver RX · pin 21 = GPIO 9 = RXD4 ← receiver TX</text>
+      <rect x="0" y="94" width="18" height="18" rx="3" fill="#f97316"/><text x="30" y="108">UART5 → <tspan font-weight="700">/dev/ttyAMA5</tspan> (LiDAR default): pin 32 = GPIO 12 = TXD5 · pin 33 = GPIO 13 = RXD5 ← LiDAR TX</text>
+    </g>
+  </g>
+
+  <g font-size="13" fill="#94a3b8">
+    <text x="80" y="400">• TX of one side always goes to RX of the other. A 3.3 V UART only: never feed 5 V logic into a GPIO.</text>
+    <text x="80" y="426">• The installer adds enable_uart=1 and dtoverlay=uart1…uart5 to config.txt and disables Bluetooth; the ports appear after a reboot.</text>
+    <text x="80" y="452">• Device names: ttyAMA2…ttyAMA5 match uart2…uart5 on Raspberry Pi OS Bookworm. Verify with ls /dev/ttyAMA* — the installer lists what it finds.</text>
+    <text x="80" y="478">• Powering the Pi through the header bypasses the USB-C fuse: use a DC-DC rated ≥ 3 A, set to 5.1 V, and add a 470 µF capacitor if the Pi browns out.</text>
+    <text x="80" y="504">• Raspberry Pi 5: the same GPIO pins carry the UARTs, but the overlay names differ (uart2-pi5 …). Pick the port from the installer's detected list.</text>
+  </g>
+</svg>

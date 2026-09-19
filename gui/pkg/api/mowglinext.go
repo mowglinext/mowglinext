@@ -593,6 +593,21 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		case "blade_control":
 			handleBladeControl(c, provider)
 			return
+		case "coverage_orientation":
+			var req mowgli.CoverageOrientationReq
+			if err = c.BindJSON(&req); err != nil {
+				c.JSON(400, ErrorResponse{Error: err.Error()})
+				return
+			}
+			var res mowgli.CoverageOrientationRes
+			err = provider.CallService(ctx, "/behavior_tree_node/coverage_orientation", &req, &res, "mowgli_interfaces/srv/CoverageOrientation")
+			if err == nil && !res.Success {
+				err = errors.New(res.Message)
+			}
+			if err == nil {
+				c.JSON(200, res)
+				return
+			}
 		case "start_in_area":
 			var CallReq mowgli.StartInAreaReq
 			err = c.BindJSON(&CallReq)
@@ -721,6 +736,26 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			}
 			var res TriggerRes
 			err = provider.CallService(ctx, "/hardware_bridge/reboot_board", &struct{}{}, &res, "std_srvs/srv/Trigger")
+			if err == nil && !res.Success {
+				err = errors.New(res.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": res.Message})
+				return
+			}
+		case "clear_dig_escalation":
+			// Operator override for a latched repeat-dig escalation
+			// (Status.dig_escalated) — see dig_escalation.hpp. Distance-gated
+			// server-side: this fails (res.Success=false, a human-readable
+			// reason in Message) until the chassis has moved far enough past
+			// the obstruction, so the frontend surfaces that reason rather
+			// than treating a refusal as a transport error.
+			type TriggerRes struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
+			var res TriggerRes
+			err = provider.CallService(ctx, "/hardware_bridge/clear_dig_escalation", &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {
 				err = errors.New(res.Message)
 			}

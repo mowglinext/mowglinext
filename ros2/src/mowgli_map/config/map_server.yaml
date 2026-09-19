@@ -13,33 +13,37 @@ map_server_node:
     # coverage_server.operation_width.)
     tool_width: 0.18
 
-    # ── Wheel-slip dig keepout ────────────────────────────────────────────
+    # ── Wheel-slip dig proposal ───────────────────────────────────────────
     # hardware_bridge_node detects the robot digging a hole (wheels turning,
     # GNSS-anchored pose not moving), hard-stops and reverses out, then
-    # publishes /hardware_bridge/dig_event. We stamp that location as a
-    # PENDING keepout through the same path the GUI's "promote obstacle"
-    # uses, so the NEXT coverage pass plans around the churned patch instead
-    # of driving back in and digging it deeper.
+    # publishes /hardware_bridge/dig_event. We record that location as a
+    # PENDING PROPOSAL for the operator.
     #
-    # PENDING means: live in the keepout mask + classification layer for this
-    # session, but NOT written to areas.dat. A single inferred dig is weaker
-    # evidence than a repeatedly-observed tracker obstacle, and those already
-    # need operator sign-off (auto_promote_persistent_obstacles: false), so
-    # the operator accepts the proposal (map_server_node/promote_obstacle with
-    # pending_id) or drops it (map_server_node/discard_obstacle).
+    # PENDING means INERT: NOT in the keepout mask, NOT a NO_GO cell, NOT a
+    # coverage hole (get_mowing_area lists it under proposed_obstacles only)
+    # and NOT written to areas.dat. It used to be stamped into the mask for
+    # the session; the robot stands ~0.2-0.3 m from a fresh dig, so every
+    # plan from its own pose was refused with START_OCCUPIED and the mission
+    # died mid-lawn (2026-09-10, 2026-09-17). Keeping the robot out of the
+    # same patch for the rest of the session is FollowStrip's job now
+    # (mowgli_behavior/dig_skip.hpp). The operator accepts the proposal
+    # (map_server_node/promote_obstacle with pending_id — that applies AND
+    # persists it) or drops it (map_server_node/discard_obstacle).
     #
     # A dig outside every mowing area (transit / docking) is logged but NOT
-    # stamped — there is no area to attach it to, and coverage never plans
-    # there anyway.
+    # proposed — there is no area to attach it to.
     # Overridden from mowgli_robot.yaml by full_system.launch.py; exposed in
     # GUI Settings → Obstacles. False leaves dig detection/recovery active.
     dig_obstacle_enabled: true
-    # Side of the square keepout stamped at the dig [m]. One chassis LENGTH
-    # (the Nav2 footprint is 0.60 × 0.40 m). It used to be one tool width
-    # (0.18 m) — NARROWER THAN THE BODY, so "route around it" still dragged
-    # the chassis over the hole; issue #500 recorded 3 dig latches in 18.4 s
-    # inside 0.13 m.
-    dig_obstacle_size: 0.60
+    # Radius of a dig proposal [m]: the disc covering both drive-wheel contact
+    # patches — the PHYSICAL dig, not the chassis. Overridden by
+    # full_system.launch.py with robot_config_util.dig_proposal_radius()
+    # (hypot(wheel_track/2 + wheel_width/2, wheel_radius/2) = 0.189 m shipped);
+    # map_server grows it by half the DigEvent's map_distance (rut length) and
+    # floors it at 0.10 m. The body clearance of an ACCEPTED proposal is added
+    # separately (keepout band, coverage obstacle_margin) — the polygon must
+    # not contain the body a second time. Replaces dig_obstacle_size (0.60 m).
+    dig_proposal_radius: 0.19
     map_file_path: ""
     areas_file_path: "/ros2_ws/maps/areas.dat"
     publish_rate: 1.0
@@ -100,17 +104,27 @@ map_server_node:
     # Free slack (m) left OUTSIDE each area edge even when lethal_outside_areas
     # is on. Absorbs RTK/pose drift so a start pose a few cm past the recorded
     # CENTRE line is not rejected as "Start occupied", and lets the footprint
-    # overhang the line. 0.40 = chassis half-width (0.225) + one global-costmap
-    # cell (0.08) + drift headroom: at the previous 0.25 (~robot radius), a
-    # robot riding the outer headland ring (centerline ON the recorded line)
-    # kept only ~5 cm between its centre cell and the inscribed-cost band —
-    # under one 0.08 m cell — so Smac transits sporadically failed "Start
-    # occupied" and FollowStrip skipped whole sub-paths (headland rings). The
-    # global costmap lists keepout_filter BEFORE inflation_layer, so this
-    # lethal wall is inflated inward by only inflation_radius (0.20 m): wall at
-    # 0.40 m outside the centre line → the inflated band now ends 0.20 m
-    # OUTSIDE it, no bite inside the ring. Stays under lethal_boundary_margin_m
-    # (0.5) so the planner wall engages before the e-stop tripwire.
+    # overhang the line.
+    #
+    # THIS VALUE IS ONLY THE STANDALONE-RUN FALLBACK. On the robot,
+    # full_system.launch.py injects it and FLOORS it at the live chassis
+    # circumscribed radius (robot_config_util.chassis_circumscribed_radius =
+    # 0.597 m on the shipped chassis), because chassis_safety_inset is 0: the
+    # outermost coverage pass puts the CENTRE on the recorded line, so the
+    # footprint reaches up to that radius outside it — 0.275 m sideways, but
+    # 0.53 m forward at a row end.
+    #
+    # 0.40 itself replaced a 0.25 (~robot radius) value under which a robot
+    # riding the outer headland ring (centerline ON the recorded line) kept
+    # only ~5 cm between its centre cell and the inscribed-cost band — under
+    # one 0.08 m cell — so Smac transits sporadically failed "Start occupied"
+    # and FollowStrip skipped whole sub-paths (headland rings). The global
+    # costmap now lists inflation_layer BEFORE keepout_filter, so this lethal
+    # wall is NOT inflated at all (it used to be, inward, by inflation_radius
+    # 0.20 m): the band already IS the body's room, and inflating it counted
+    # the body twice. TRADE-OFF: the injected floor is ABOVE lethal_boundary_margin_m
+    # (0.5), so the planner wall no longer engages strictly before that e-stop
+    # tripwire — only the mid-cost (never free) band keeps the planner off it.
     enforce_boundary_margin_m: 0.40
 
     # /local_costmap published values are 0–100 (OccupancyGrid units, with

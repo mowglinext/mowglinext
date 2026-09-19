@@ -1,3 +1,4 @@
+import {mowingAreaIndex} from "../utils/mapAreaIndex.ts";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import {useApi} from "../hooks/useApi.ts";
 import {App} from "antd";
@@ -32,6 +33,8 @@ import {NewAreaModal} from "./map/components/NewAreaModal.tsx";
 import {EditAreaModal} from "./map/components/EditAreaModal.tsx";
 import {AreasListPanel} from "./map/components/AreasListPanel.tsx";
 import {TrackedObstaclesPanel} from "./map/components/TrackedObstaclesPanel.tsx";
+import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.tsx";
+import {extractObstacleProposals, isDigProposal} from "./map/utils/obstacleProposals.ts";
 import {MapOffsetPanel} from "./map/components/MapOffsetPanel.tsx";
 import {MapToolbar} from "./map/components/MapToolbar.tsx";
 import {MapToolbarMobile} from "./map/components/MapToolbarMobile.tsx";
@@ -92,6 +95,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // operator sees exactly which obstacle they're about to promote. null =
     // nothing highlighted.
     const [selectedObstacleId, setSelectedObstacleId] = useState<number | null>(null);
+    // Same link for PENDING obstacle proposals (wheel-slip dig reports).
+    const [selectedProposalId, setSelectedProposalId] = useState<number | null>(null);
     const [features, setFeatures] = useState<Record<string, MowingFeature>>({});
     const [dockPlacementMode, setDockPlacementMode] = useState<boolean>(false);
     // OpenMower import preview — populated by handleImportOpenMower after
@@ -293,7 +298,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
         let newFeatures: Record<string, MowingFeature> = {}
         if (map) {
-            const workingAreas = buildFeatures(map.working_area??[], "area")
+            const workingAreas = buildFeatures(map.working_area??[], "area", true)
             const navigationAreas = buildFeatures(map.navigation_areas??[], "navigation")
             newFeatures = {...workingAreas, ...navigationAreas}
 
@@ -393,9 +398,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // observation), figure out which mowing area's polygon contains its
     // centroid. The result is the area_index map_server expects when we
     // promote the obstacle — the position of the matching area in
-    // map_server's areas_ vector. Workareas are written first (per
-    // useMapFiles.ts), then navigation areas; obstacles only attach to
-    // workareas, so the index is the workarea's own ordinal in mowing_order.
+    // map_server's areas_ vector. Mowing order and the filtered working-area
+    // position are not ROS IDs; resolve the original ID from map metadata.
     // Returns null when no workarea contains the centroid → promote button
     // is disabled because we'd have nowhere to attach it.
     const obstacleAreaIndex = useMemo(() => {
@@ -440,14 +444,14 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     if (intersect) inside = !inside;
                 }
                 if (inside) {
-                    matchedIdx = i;
+                    matchedIdx = mowingAreaIndex(map, workareas[i].properties.source_working_area_index) ?? null;
                     break;
                 }
             }
             result[id] = matchedIdx;
         }
         return result;
-    }, [dynamicObstacles, features, offsetX, offsetY, datum]);
+    }, [dynamicObstacles, features, offsetX, offsetY, datum, map]);
 
     const obstacleAreaNames = useMemo(() => {
         const names: Record<number, string> = {};
@@ -455,12 +459,55 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             .filter((f): f is MowingAreaFeature => f instanceof MowingAreaFeature)
             .sort((a, b) => (a.getMowingOrder() ?? 9999) - (b.getMowingOrder() ?? 9999));
         for (let i = 0; i < workareas.length; ++i) {
-            names[i] = workareas[i].getLabel(
+            const areaIndex = mowingAreaIndex(map, workareas[i].properties.source_working_area_index);
+            if (areaIndex === undefined) continue;
+            names[areaIndex] = workareas[i].getLabel(
                 t('mapAreasList.unnamedArea', {order: workareas[i].getMowingOrder()})
             );
         }
         return names;
-    }, [features, t]);
+    }, [features, t, map]);
+
+    // PENDING obstacle proposals (wheel-slip dig reports). map_server lists
+    // them apart from each area's applied obstacles: they block nothing on the
+    // robot until the operator accepts one in ObstacleProposalsPanel. Drawn as a
+    // filled hole of their REAL polygon, like any obstacle, labelled with their
+    // provenance ("DIG #7"), but with a
+    // dashed outline so they never read as a real keepout, and kept OUT of the
+    // editable feature set so a map save cannot persist one by accident.
+    const obstacleProposals = useMemo(() => extractObstacleProposals(map), [map]);
+    const proposalCollection = useMemo<GeoJSON.FeatureCollection>(() => ({
+        type: "FeatureCollection",
+        features: datum[0] === 0 ? [] : obstacleProposals.map(proposal => {
+            const ring = (proposal.polygon.points ?? []).map(p => transpose(offsetX, offsetY, datum, p.y ?? 0, p.x ?? 0));
+            return {
+                type: "Feature" as const,
+                id: proposal.id,
+                geometry: {type: "Polygon" as const, coordinates: [[...ring, ring[0]]]},
+                properties: {proposal_id: proposal.id, proposal_label: `${isDigProposal(proposal) ? t('mapObstacleProposals.digMapLabel') : '?'} #${proposal.id}`},
+            };
+        }),
+    }), [obstacleProposals, offsetX, offsetY, datum, t]);
+    const renderProposalLayers = () => (
+        <Source type={"geojson"} id={"obstacle-proposals"} data={proposalCollection}>
+            <Layer type={"fill"} id={"obstacle-proposal-fill"}
+                paint={{'fill-color': '#bf0000', 'fill-opacity': ['case', ['==', ['get', 'proposal_id'], selectedProposalId ?? -1], 0.75, 0.5]}}/>
+            <Layer type={"line"} id={"obstacle-proposal-outline"}
+                paint={{'line-color': '#d48806', 'line-width': 2, 'line-dasharray': [2, 2]}}/>
+            <Layer type={"symbol"} id={"obstacle-proposal-label"}
+                layout={{
+                    'text-field': ['get', 'proposal_label'],
+                    'text-size': 13,
+                    'text-font': ['Open Sans Bold'],
+                    'text-allow-overlap': true,
+                }}
+                paint={{
+                    'text-color': LAYER_COLORS.labelText,
+                    'text-halo-color': LAYER_COLORS.labelHalo,
+                    'text-halo-width': 1.5,
+                }}/>
+        </Source>
+    );
 
     // Build the areas list for the sidebar panel
     const areasList = useMemo(() => {
@@ -516,7 +563,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         });
     }, []);
 
-    function buildFeatures(areas: MapArea[], type: string) : Record<string, MowingFeatureBase> {
+    function buildFeatures(areas: MapArea[], type: string, fromLiveMap = false) : Record<string, MowingFeatureBase> {
 
 
         return areas?.flatMap((area, index) : MowingFeatureBase[] => {
@@ -527,6 +574,9 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             const nfeat = type=="area" ? new MowingAreaFeature(type + "-" + index.toString() + "-area-0", index+1)
                 : new NavigationFeature(type + "-" + index.toString() + "-area-0");//, offsetX, offsetY, datum.
             nfeat.setArea(area, offsetX, offsetY, datum);
+            // Preserve source identity separately from editable mowing order.
+            // Restored/imported maps cannot target live ROS areas until saved.
+            if (fromLiveMap) nfeat.properties.source_working_area_index = index;
 
             let obstacles:  ObstacleFeature[] = [];
 
@@ -652,6 +702,13 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     }, [dockDirty, setHasUnsavedChanges]);
 
     // Mower action callbacks shared between desktop and mobile toolbars
+    const startSelectedArea = (key: string) => {
+        const item = mowingAreas.find(item => item.key == key);
+        const index = mowingAreaIndex(map, item?.feat?.properties?.index);
+        if (index === undefined) return Promise.reject(new Error(t("crossHatch.areaUnavailable")));
+        return mowerAction("start_in_area", {area: index})();
+    };
+
     const mowerActions = useMemo(() => ({
         onStart: mowerAction("high_level_control", {Command: 1}),
         onHome: mowerAction("high_level_control", {Command: 2}),
@@ -1003,6 +1060,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         {/* Persistent tracked-obstacle polygons + id labels + hover/select highlight */}
                         {renderDynObstacleLayers(true)}
                     </Source>
+                    {/* PENDING obstacle proposals (dig reports): dashed, never a real keepout */}
+                    {renderProposalLayers()}
                     {/* fusion_graph's LiDAR anchor map (walls as ink, scanned ground as a faint wash). */}
                     {lidarMapImage && (
                         <Source type={"image"} id={"lidar-map"} url={lidarMapImage.url} coordinates={lidarMapImage.coordinates}>
@@ -1016,7 +1075,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     {mowProgressImage && (
                         <Source type={"image"} id={"mow-progress"} url={mowProgressImage.url} coordinates={mowProgressImage.coordinates}>
                             <Layer type={"raster"} id={"mow-progress-layer"} paint={{
-                                "raster-opacity": 0.7,
+                                "raster-opacity": 1,
                                 "raster-fade-duration": 0,
                             }}/>
                         </Source>
@@ -1079,18 +1138,25 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onDownloadGeoJSON={handleDownloadGeoJSON}
                         onUploadGeoJSON={handleUploadGeoJSON}
                         onImportOpenMower={() => handleImportOpenMower(setImportPreview, setImportFileText)}
-                        onMowArea={(key) => {
-                            const item = mowingAreas.find(item => item.key == key)
-                            return mowerAction("start_in_area", {
-                                area: item?.feat?.properties?.index,
-                            })()
-                        }}
+                        onMowArea={startSelectedArea}
                         stateName={highLevelStatus.highLevelStatus.state_name}
                         highLevelState={highLevelStatus.highLevelStatus.state}
                         emergency={highLevelStatus.highLevelStatus.emergency}
                         onResetMowingProgress={resetMowingProgress}
                         {...mowerActions}
                     />
+                )}
+                {/* Mobile: obstacle proposals need an accept/reject surface too — the
+                    operator is usually standing next to the robot with a phone. The
+                    mobile toolbar lives at the bottom, so this card takes the top. */}
+                {isMobile && !editMap && obstacleProposals.length > 0 && (
+                    <div style={{position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10, maxHeight: '40%', overflowY: 'auto', background: colors.glassBackground, borderRadius: 14, border: colors.glassBorder, boxShadow: colors.glassShadow}}>
+                        <ObstacleProposalsPanel
+                            proposals={obstacleProposals}
+                            selectedProposalId={selectedProposalId}
+                            onHoverProposal={setSelectedProposalId}
+                        />
+                    </div>
                 )}
                 {/* Desktop: Edit mode — left vertical toolbar */}
                 {!isMobile && editMap && (
@@ -1136,12 +1202,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             onRestoreMap={handleRestoreMap}
                             onDownloadGeoJSON={handleDownloadGeoJSON}
                             onImportOpenMower={() => handleImportOpenMower(setImportPreview, setImportFileText)}
-                            onMowArea={(key) => {
-                                const item = mowingAreas.find(item => item.key == key)
-                                return mowerAction("start_in_area", {
-                                    area: item?.feat?.properties?.index,
-                                })()
-                            }}
+                            onMowArea={startSelectedArea}
                             {...mowerActions}
                         />
                     </div>
@@ -1163,6 +1224,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                     areaNames={obstacleAreaNames}
                                     selectedObstacleId={selectedObstacleId}
                                     onHoverObstacle={setSelectedObstacleId}
+                                />
+                            </div>
+                        )}
+                        {obstacleProposals.length > 0 && (
+                            <div style={{borderTop: `1px solid ${colors.borderSubtle}`}}>
+                                <ObstacleProposalsPanel
+                                    proposals={obstacleProposals}
+                                    selectedProposalId={selectedProposalId}
+                                    onHoverProposal={setSelectedProposalId}
                                 />
                             </div>
                         )}

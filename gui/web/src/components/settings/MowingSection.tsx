@@ -3,6 +3,7 @@ import { Alert, Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typogr
 import { DashboardOutlined, ScissorOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
+import {CrossHatchSettings} from "./CrossHatchSettings.tsx";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Text, Paragraph } = Typography;
@@ -25,10 +26,15 @@ const HEADLAND_PASSES_NONE = -1;
 const HEADLAND_PASSES_AUTO = 0;
 const HEADLAND_PASSES_MAX = 5;
 // The installed mowgli_robot.yaml is SPARSE (Invariant 15), so an untouched
-// robot sends no num_headland_passes at all. Fall back to the TEMPLATE default
-// (ros2/src/mowgli_bringup/config/mowgli_robot.yaml) — the value coverage_server
+// robot sends no num_headland_passes at all. Fall back to the schema/template
+// default (mower_config.schema.json, mirroring
+// ros2/src/mowgli_bringup/config/mowgli_robot.yaml) — the value coverage_server
 // actually runs — not to AUTO, which would show a ring count nobody is using.
-const HEADLAND_PASSES_TEMPLATE_DEFAULT = 2;
+// Used only before `defaults` has loaded (or if the key is ever absent from
+// it); once loaded, `defaults.num_headland_passes` is the source of truth so
+// this can never drift from the schema again (maintainer review on PR #598:
+// this literal had gone stale at 2 while the schema/template moved to 5).
+const HEADLAND_PASSES_FALLBACK_DEFAULT = 5;
 const HEADLAND_PASS_OPTIONS = [
     HEADLAND_PASSES_NONE,
     HEADLAND_PASSES_AUTO,
@@ -54,6 +60,11 @@ type Props = {
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
     onReset?: (key: string) => void;
+    // Schema/template defaults (useSettingsManager's `defaults`), keyed by
+    // yaml key — the same map hasDefault/isOverridden/onReset already read.
+    // Used ONLY to derive HEADLAND_PASSES_FALLBACK_DEFAULT's replacement from
+    // the schema instead of a literal that can drift from it.
+    defaults?: Record<string, any>;
 };
 
 /** Mini SVG preview showing the strip pattern. Spacing == tool_width (F2C
@@ -181,6 +192,7 @@ export const MowingSection: React.FC<Props> = ({
     isOverridden,
     hasDefault,
     onReset,
+    defaults,
 }) => {
     const { t } = useTranslation();
     const fieldLabel = (key: string, label: React.ReactNode) => (
@@ -198,6 +210,16 @@ export const MowingSection: React.FC<Props> = ({
     const pathSpacing = values.tool_width ?? 0.18;
     const toolWidth = values.tool_width ?? 0.18;
     const headlandWidth = values.headland_width ?? 0.18;
+    // Turn-Around Headland Limit only makes sense against a FORCED ring count
+    // (num_headland_passes > 0) — with AUTO (0) the actual ring count is not
+    // known until a plan runs, and with NONE (negative) there are no rings to
+    // bound turns against at all. Falls back to the schema default (via
+    // `defaults`, so this can never drift from mower_config.schema.json /
+    // the ROS2 template the way the old hardcoded literal did), so the option
+    // list matches what coverage_server actually plans against on a sparse
+    // (untouched) robot.
+    const currentHeadlandPasses =
+        values.num_headland_passes ?? defaults?.num_headland_passes ?? HEADLAND_PASSES_FALLBACK_DEFAULT;
     // AUTO is modelled as a negative sentinel (-1). The Auto switch toggles
     // between the sentinel and a concrete 0..179° angle; the degrees input is
     // disabled while Auto is on.
@@ -361,7 +383,7 @@ export const MowingSection: React.FC<Props> = ({
                                 <Col xs={12}>
                                     <Form.Item label={fieldLabel("num_headland_passes", t("settingsMowing.headlandPasses"))} tooltip={t("settingsMowing.headlandPassesTooltip")}>
                                         <Select
-                                            value={values.num_headland_passes ?? HEADLAND_PASSES_TEMPLATE_DEFAULT}
+                                            value={currentHeadlandPasses}
                                             onChange={(v) => onChange("num_headland_passes", v)}
                                             style={{ width: "100%" }}
                                             options={HEADLAND_PASS_OPTIONS.map((value) => ({
@@ -373,6 +395,24 @@ export const MowingSection: React.FC<Props> = ({
                                                           ? t("settingsMowing.headlandPassesAuto")
                                                           : String(value),
                                             }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12}>
+                                    <Form.Item label={fieldLabel("connector_max_headland_passes", t("settingsMowing.connectorMaxHeadlandPasses"))} tooltip={t("settingsMowing.connectorMaxHeadlandPassesTooltip")}>
+                                        <Select
+                                            value={values.connector_max_headland_passes ?? 0}
+                                            onChange={(v) => onChange("connector_max_headland_passes", v)}
+                                            style={{ width: "100%" }}
+                                            disabled={currentHeadlandPasses <= 0}
+                                            virtual={false}
+                                            options={[
+                                                { value: 0, label: t("settingsMowing.connectorMaxHeadlandPassesUnlimited") },
+                                                ...Array.from({ length: Math.max(currentHeadlandPasses, 0) }, (_, i) => i + 1).map((value) => ({
+                                                    value,
+                                                    label: String(value),
+                                                })),
+                                            ]}
                                         />
                                     </Form.Item>
                                 </Col>
@@ -421,6 +461,15 @@ export const MowingSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
+                                    <Form.Item label={fieldLabel("mow_cross_hatch", t("settingsMowing.crossHatch"))} tooltip={t("settingsMowing.crossHatchTooltip")}>
+                                        <Switch
+                                            aria-label={t("settingsMowing.crossHatch")}
+                                            checked={values.mow_cross_hatch ?? false}
+                                            onChange={(v) => onChange("mow_cross_hatch", v)}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12}>
                                     <Form.Item label={fieldLabel("mow_angle_deg", t("settingsMowing.mowAngleDeg"))} tooltip={t("settingsMowing.mowAngleDegTooltip")}>
                                         <Space>
                                             <Switch
@@ -454,6 +503,7 @@ export const MowingSection: React.FC<Props> = ({
                         />
                     </Col>
                 </Row>
+                {values.mow_cross_hatch && <CrossHatchSettings angle={values.mow_angle_deg ?? MOW_ANGLE_AUTO}/>}
             </Card>
         </div>
     );

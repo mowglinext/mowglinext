@@ -4,6 +4,20 @@ import {MapArea, Point32} from "../types/ros.ts";
 
 import {transpose} from "../utils/map.tsx";
 
+/// GeoJSON linear rings MUST be closed (first position == last). ROS polygons
+/// are not: geometry_msgs/Polygon lists each vertex once. Consumers that rely
+/// on the GeoJSON rule silently DROP the last position — mapbox-gl-draw does
+/// (`ring.slice(0, -1)`) — so an unclosed 4-vertex rectangle from map_server (a
+/// dig proposal, a promoted tracker obstacle) was drawn as a TRIANGLE, and any
+/// machine-generated polygon lost a vertex. Polygons drawn in this GUI were
+/// never affected: they are saved with their closing vertex.
+export function closeRing(ring: Position[]): Position[] {
+    if (ring.length < 3) return ring;
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    return first[0] === last[0] && first[1] === last[1] ? ring : [...ring, first];
+}
+
 export class MowingFeature implements Feature {
     id: string;
     type: 'Feature';
@@ -156,6 +170,7 @@ export class MowingFeatureBase extends MowingFeature implements Feature<Polygon>
         color: string
         , name? :string
         , index: number
+        , source_working_area_index?: number
         , mowing_order: number
         , feature_type: string
     }
@@ -179,9 +194,9 @@ export class MowingFeatureBase extends MowingFeature implements Feature<Polygon>
     }
 
     transpose( points: Point32[], offsetX: number, offsetY: number, datum: [number,number,number]) {
-        this.geometry.coordinates = [points.map((point) => {
+        this.geometry.coordinates = [closeRing(points.map((point) => {
             return transpose(offsetX, offsetY, datum, point.y||0, point.x||0)
-        })];
+        }))];
     }
 
 

@@ -148,6 +148,6 @@ describe("IrriSenseSection", () => {
         renderSection();
 
         expect(await screen.findByTestId("irrisense-verdict")).toHaveTextContent("Unknown");
-        expect(screen.getByTestId("irrisense-reason")).toHaveTextContent("IrriSense integration disabled");
+        expect(await screen.findByTestId("irrisense-reason")).toHaveTextContent("IrriSense integration disabled");
     });
 });

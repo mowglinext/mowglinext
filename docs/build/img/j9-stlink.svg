@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-labelledby="t">
+  <title id="t">Wiring an ST-Link V2 dongle to the mainboard J9 SWD header: GND, SWCLK, SWDIO, 3.3 V; the dongle stays plugged into the Raspberry Pi so the GUI can flash</title>
+  <rect width="900" height="560" fill="#0f172a"/>
+  <text x="450" y="40" text-anchor="middle" fill="#f8fafc" font-size="22" font-weight="700">ST-Link V2 → J9 (SWD) — flashing is done from the GUI</text>
+
+  <!-- ST-Link dongle -->
+  <rect x="90" y="150" width="200" height="260" rx="14" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <rect x="120" y="120" width="140" height="40" rx="6" fill="#94a3b8"/>
+  <text x="190" y="145" text-anchor="middle" fill="#0f172a" font-size="13" font-weight="700">USB-A → Raspberry Pi</text>
+  <text x="190" y="190" text-anchor="middle" fill="#f8fafc" font-size="16" font-weight="700">ST-Link V2</text>
+  <text x="190" y="210" text-anchor="middle" fill="#94a3b8" font-size="11">(clone dongles work)</text>
+  <g font-size="12" fill="#e2e8f0" text-anchor="end">
+    <rect x="240" y="240" width="20" height="20" fill="#0f172a" stroke="#94a3b8"/><text x="232" y="255">GND</text>
+    <rect x="240" y="275" width="20" height="20" fill="#0f172a" stroke="#94a3b8"/><text x="232" y="290">SWCLK</text>
+    <rect x="240" y="310" width="20" height="20" fill="#0f172a" stroke="#94a3b8"/><text x="232" y="325">SWDIO</text>
+    <rect x="240" y="345" width="20" height="20" fill="#0f172a" stroke="#94a3b8"/><text x="232" y="360">3.3V</text>
+  </g>
+
+  <!-- wires -->
+  <path d="M260,250 C400,250 480,250 620,250" stroke="#0f172a" stroke-width="5" fill="none"/>
+  <path d="M260,250 C400,250 480,250 620,250" stroke="#94a3b8" stroke-width="3" fill="none"/>
+  <path d="M260,285 C400,285 480,285 620,285" stroke="#38bdf8" stroke-width="3" fill="none"/>
+  <path d="M260,320 C400,320 480,320 620,320" stroke="#facc15" stroke-width="3" fill="none"/>
+  <path d="M260,355 C400,355 480,355 620,355" stroke="#f87171" stroke-width="3" fill="none"/>
+  <g font-size="12" text-anchor="middle">
+    <text x="440" y="243" fill="#94a3b8">GND ↔ GND</text>
+    <text x="440" y="278" fill="#38bdf8">SWCLK ↔ SWCL</text>
+    <text x="440" y="313" fill="#facc15">SWDIO ↔ SWDA</text>
+    <text x="440" y="348" fill="#f87171">3.3V ↔ 3V3</text>
+  </g>
+
+  <!-- J9 on mainboard -->
+  <rect x="620" y="150" width="200" height="260" rx="14" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+  <text x="720" y="190" text-anchor="middle" fill="#f8fafc" font-size="16" font-weight="700">Mainboard J9</text>
+  <text x="720" y="210" text-anchor="middle" fill="#94a3b8" font-size="11">4-pin header near the STM32</text>
+  <g font-size="12" fill="#e2e8f0">
+    <rect x="620" y="240" width="20" height="20" fill="#0f172a" stroke="#94a3b8"/><text x="650" y="255">GND</text>
+    <rect x="620" y="275" width="20" height="20" fill="#0f172a" stroke="#94a3b8"/><text x="650" y="290">SWCL</text>
+    <rect x="620" y="310" width="20" height="20" fill="#0f172a" stroke="#94a3b8"/><text x="650" y="325">SWDA</text>
+    <rect x="620" y="345" width="20" height="20" fill="#0f172a" stroke="#94a3b8"/><text x="650" y="360">3V3</text>
+  </g>
+
+  <g font-size="13" fill="#94a3b8">
+    <text x="90" y="460">• Match the labels, not the positions: clone ST-Links have different pin orders. Read the label printed on the dongle.</text>
+    <text x="90" y="486">• A reversed SWCLK/SWDIO pair gives "init mode failed (unable to connect to the target)". Swap them and retry.</text>
+    <text x="90" y="512">• The 3V3 pin lets the ST-Link sense the target voltage. With the mower powered on, leave it connected anyway — it is a sense line here.</text>
+    <text x="90" y="538">• Leave the ST-Link on the board and plugged into the Pi: the GUI reflashes future firmware releases through it.</text>
+  </g>
+</svg>

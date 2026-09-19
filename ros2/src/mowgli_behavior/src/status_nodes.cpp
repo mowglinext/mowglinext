@@ -232,6 +232,15 @@ BT::NodeStatus EndSession::tick()
   ctx->start_blocked_escape_armed = false;
   ctx->last_motion_valid = false;
   ctx->last_motion_cmd_vx = 0.0;
+  // Dig skip zones are SESSION state (dig_skip.hpp): a patch that made the
+  // wheels slip on wet grass today deserves another try next session, and the
+  // operator has the proposal in the GUI if it is a real hole. Written by a
+  // subscriber callback, hence the lock. dig_event_count is NOT reset — it is
+  // a monotonic edge counter, not session state.
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->session_dig_points.clear();
+  }
   // Swath-completion model (replaces the cell coverage grid): clear the
   // per-area completed-swath sets, swath counts, and the completed-area set so
   // the next COMMAND_START re-plans and re-mows every area from swath 0.
@@ -250,10 +259,30 @@ BT::NodeStatus EndSession::tick()
   // survive GetNextUnmowedArea re-entering after the targeted area finishes, or
   // the run rolls over into the next area), so THIS is where it dies.
   clearSingleAreaMode(*ctx);
-  // Remove the on-disk resume snapshot too: this is a real session boundary, so
+  // Clear the on-disk command/cursors too, retaining only the next cross-hatch
+  // phase. This is a real session boundary, so
   // the next COMMAND_START must start fresh rather than resume a finished (or
   // aborted-and-docked) session from the persisted cursor.
-  clearCoverageResumeState(*ctx);
+  ctx->base_orientation_areas.clear();
+  for (auto& [area, orientation] : ctx->cross_hatch)
+  {
+    const auto previous_failures = orientation.failed_sessions;
+    orientation.finish();
+    if (orientation.failed_sessions >= 3 && orientation.failed_sessions != previous_failures)
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "Cross-hatch area %u: orientation has failed in %u sessions; "
+                  "review the plan or override Next stripe direction by area.",
+                  area,
+                  orientation.failed_sessions);
+  }
+  if (!clearCoverageResumeState(*ctx))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "EndSession: could not clear resume file or save cross-hatch history at '%s'. "
+                 "Check storage before restarting; persisted state may be stale or missing.",
+                 ctx->coverage_resume_path.c_str());
+  }
+  // Always let the following ClearCommand run, even on a storage failure.
   return BT::NodeStatus::SUCCESS;
 }
 

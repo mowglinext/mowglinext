@@ -190,6 +190,33 @@ if(BUILD_TESTING)
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+
+  ament_add_gtest(test_ftc_carrot_lead
+    test/test_ftc_carrot_lead.cpp
+  )
+
+  target_include_directories(test_ftc_carrot_lead
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  ament_add_gtest(test_ftc_resync
+    test/test_ftc_resync.cpp
+  )
+
+  target_include_directories(test_ftc_resync
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  ament_add_gtest(test_ftc_offset_lattice
+    test/test_ftc_offset_lattice.cpp
+  )
+
+  target_include_directories(test_ftc_offset_lattice
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
 endif()
 
 # ---------------------------------------------------------------------------

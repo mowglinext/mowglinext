@@ -239,6 +239,14 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${Boost_INCLUDE_DIRS}
   )
+
+  # Pure logic, no ROS deps — which gates a SetDockingPoint request must pass.
+  ament_add_gtest(test_dock_set_gates
+    test/test_dock_set_gates.cpp
+  )
+  target_include_directories(test_dock_set_gates PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
 endif()
 
 # ---------------------------------------------------------------------------

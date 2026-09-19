@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" font-family="-apple-system, Segoe UI, Roboto, sans-serif" role="img" aria-labelledby="t">
+  <title id="t">GNSS receiver and LiDAR wiring options: USB to the Raspberry Pi, or 3.3 V UART crossed TX to RX on the Pi header</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+  <rect width="900" height="560" fill="#0f172a"/>
+  <text x="450" y="40" text-anchor="middle" fill="#f8fafc" font-size="22" font-weight="700">Receiver ↔ Pi: USB or UART</text>
+
+  <!-- USB option -->
+  <rect x="60" y="80" width="780" height="150" rx="12" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <text x="80" y="110" fill="#38bdf8" font-size="15" font-weight="700">Option A — USB (simplest, recommended for a first build)</text>
+  <g font-size="13" fill="#e2e8f0">
+    <text x="80" y="140">simpleRTK2B / F9P: micro-USB "POWER+GPS" port → any Pi USB port. UM980/982 boards: their USB-C or CH340 port.</text>
+    <text x="80" y="164">The installer prefers a stable /dev/serial/by-id/… path, so re-plugging never changes the name. A powered hub is NOT needed for one receiver.</text>
+    <text x="80" y="188" fill="#94a3b8">Pick "USB" in the composer / installer. Baud is detected automatically (921600 is the validated value for advanced profiles).</text>
+    <text x="80" y="212" fill="#94a3b8">Use a short, shielded cable and route it away from the motor leads.</text>
+  </g>
+
+  <!-- UART option -->
+  <rect x="60" y="260" width="780" height="270" rx="12" fill="#1e293b" stroke="#475569" stroke-width="2"/>
+  <text x="80" y="290" fill="#f97316" font-size="15" font-weight="700">Option B — UART on the Pi header (frees a USB port, cleaner wiring)</text>
+
+  <!-- receiver box -->
+  <rect x="90" y="320" width="220" height="170" rx="10" fill="#0f172a" stroke="#94a3b8" stroke-width="2"/>
+  <text x="200" y="345" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">Receiver UART1 header</text>
+  <g font-size="12" fill="#e2e8f0">
+    <text x="110" y="380">5V IN  (or 3V3 IN on some boards)</text>
+    <text x="110" y="408">GND</text>
+    <text x="110" y="436">TX  (3.3 V logic)</text>
+    <text x="110" y="464">RX  (3.3 V logic)</text>
+  </g>
+
+  <!-- wires -->
+  <path d="M310,376 L590,376" stroke="#dc2626" stroke-width="3" marker-end="url(#arr)"/>
+  <path d="M310,404 L590,404" stroke="#94a3b8" stroke-width="3"/>
+  <path d="M310,432 C420,432 480,460 590,460" stroke="#38bdf8" stroke-width="3" marker-end="url(#arr)"/>
+  <path d="M310,460 C420,460 480,432 590,432" stroke="#facc15" stroke-width="3" marker-start="url(#arr)"/>
+  <text x="450" y="366" text-anchor="middle" fill="#dc2626" font-size="11">5 V (header pin 4)</text>
+  <text x="450" y="420" text-anchor="middle" fill="#94a3b8" font-size="11">GND (pin 6)</text>
+  <text x="450" y="500" text-anchor="middle" fill="#f8fafc" font-size="12" font-weight="700">TX ↔ RX crossed</text>
+
+  <!-- Pi box -->
+  <rect x="590" y="320" width="220" height="170" rx="10" fill="#0f172a" stroke="#22c55e" stroke-width="2"/>
+  <text x="700" y="345" text-anchor="middle" fill="#f8fafc" font-size="13" font-weight="700">Pi header (UART4 = ttyAMA4)</text>
+  <g font-size="12" fill="#e2e8f0">
+    <text x="610" y="380">pin 4 — 5 V</text>
+    <text x="610" y="408">pin 6 — GND</text>
+    <text x="610" y="436">pin 24 — GPIO 8 TXD4 → receiver RX</text>
+    <text x="610" y="464">pin 21 — GPIO 9 RXD4 ← receiver TX</text>
+  </g>
+  <text x="80" y="520" fill="#94a3b8" font-size="12">LiDAR (LD19) uses the same pattern on UART5: LiDAR TX → pin 33 (GPIO 13 RXD5), 5 V → pin 2, GND → pin 9. The LD19 PWM pin stays unconnected.</text>
+</svg>

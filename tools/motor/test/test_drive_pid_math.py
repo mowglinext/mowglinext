@@ -1,9 +1,16 @@
 import json
+from dataclasses import replace
 
 import pytest
 import yaml
 
 from mowgli_tools.drive_pid_math import (
+    WHEEL_PID_INTEGRAL_LIMIT_RANGE,
+    WHEEL_PID_KI_RANGE,
+    WHEEL_PID_KP_RANGE,
+    WHEEL_PID_TEMPLATE_INTEGRAL_LIMIT,
+    WHEEL_PID_TEMPLATE_KI,
+    WHEEL_PID_TEMPLATE_KP,
     DrivePidParams,
     LiveOscillationDecision,
     LiveStallDiagnostic,
@@ -34,12 +41,17 @@ def _params() -> DrivePidParams:
         wheel_pid_kp=18.0,
         wheel_pid_ki=700.0,
         wheel_pid_kd=0.0,
-        wheel_pid_integral_limit=30.0,
+        wheel_pid_integral_limit=45.0,
         wheel_pid_pwm_per_mps=550.0,
     )
 
 
 def _early_pid_params(kp: float = 0.0) -> DrivePidParams:
+    """A pre-2026-09-15 style starting point: P-only, integrator disabled.
+
+    In the firmware's unscaled PWM units this can never break stiction, so the
+    tuner must reset it to the template defaults rather than refine it.
+    """
     return DrivePidParams(
         ticks_per_meter=533.0,
         wheel_pid_kp=kp,
@@ -47,6 +59,27 @@ def _early_pid_params(kp: float = 0.0) -> DrivePidParams:
         wheel_pid_kd=0.0,
         wheel_pid_integral_limit=0.0,
         wheel_pid_pwm_per_mps=550.0,
+    )
+
+
+def _template_params() -> DrivePidParams:
+    return DrivePidParams(
+        ticks_per_meter=533.0,
+        wheel_pid_kp=WHEEL_PID_TEMPLATE_KP,
+        wheel_pid_ki=WHEEL_PID_TEMPLATE_KI,
+        wheel_pid_kd=0.0,
+        wheel_pid_integral_limit=WHEEL_PID_TEMPLATE_INTEGRAL_LIMIT,
+        wheel_pid_pwm_per_mps=282.135,
+    )
+
+
+def _assert_within_firmware_envelope(params: DrivePidParams) -> None:
+    assert WHEEL_PID_KP_RANGE[0] <= params.wheel_pid_kp <= WHEEL_PID_KP_RANGE[1]
+    assert WHEEL_PID_KI_RANGE[0] <= params.wheel_pid_ki <= WHEEL_PID_KI_RANGE[1]
+    assert (
+        WHEEL_PID_INTEGRAL_LIMIT_RANGE[0]
+        <= params.wheel_pid_integral_limit
+        <= WHEEL_PID_INTEGRAL_LIMIT_RANGE[1]
     )
 
 
@@ -557,10 +590,10 @@ def test_compute_trial_metrics_does_not_flag_integral_saturation_for_mild_oversp
 def test_compute_trial_metrics_stop_trial_records_note_for_small_residual_motion() -> None:
     params = DrivePidParams(
         ticks_per_meter=345.0,
-        wheel_pid_kp=0.2,
-        wheel_pid_ki=0.25,
+        wheel_pid_kp=10.0,
+        wheel_pid_ki=2000.0,
         wheel_pid_kd=0.0,
-        wheel_pid_integral_limit=5.0,
+        wheel_pid_integral_limit=45.0,
         wheel_pid_pwm_per_mps=345.0,
     )
     trial = compute_trial_metrics(
@@ -595,10 +628,10 @@ def test_compute_trial_metrics_stop_trial_records_note_for_small_residual_motion
 def test_compute_trial_metrics_stop_trial_warns_on_residual_motion_without_flagging_stall() -> None:
     params = DrivePidParams(
         ticks_per_meter=345.0,
-        wheel_pid_kp=0.2,
-        wheel_pid_ki=0.25,
+        wheel_pid_kp=10.0,
+        wheel_pid_ki=2000.0,
         wheel_pid_kd=0.0,
-        wheel_pid_integral_limit=5.0,
+        wheel_pid_integral_limit=45.0,
         wheel_pid_pwm_per_mps=345.0,
     )
     trial = compute_trial_metrics(
@@ -632,10 +665,10 @@ def test_compute_trial_metrics_stop_trial_warns_on_residual_motion_without_flagg
 def test_compute_trial_metrics_keeps_minor_oscillation_informational_when_tracking_is_good() -> None:
     params = DrivePidParams(
         ticks_per_meter=345.0,
-        wheel_pid_kp=0.2,
-        wheel_pid_ki=0.25,
+        wheel_pid_kp=10.0,
+        wheel_pid_ki=2000.0,
         wheel_pid_kd=0.0,
-        wheel_pid_integral_limit=5.0,
+        wheel_pid_integral_limit=45.0,
         wheel_pid_pwm_per_mps=345.0,
     )
     trial = compute_trial_metrics(
@@ -669,45 +702,8 @@ def test_compute_trial_metrics_keeps_minor_oscillation_informational_when_tracki
     assert any("Minor post-trial oscillation" in note for note in trial.notes)
 
 
-def test_recommend_pid_only_params_keeps_early_pid_conservative_after_good_ff() -> None:
-    base_params = _early_pid_params()
-    response_trial = compute_trial_metrics(
-        name="pid_step",
-        phase="pid",
-        target_speed=0.30,
-        speed_samples=[
-            SpeedSample(0.0, 0.29),
-            SpeedSample(0.2, 0.31),
-            SpeedSample(0.4, 0.29),
-            SpeedSample(0.6, 0.30),
-            SpeedSample(0.8, 0.31),
-            SpeedSample(1.0, 0.29),
-        ],
-        response_samples=None,
-        ticks_seen=120,
-        left_ticks_seen=118,
-        right_ticks_seen=122,
-        params_used=base_params,
-        ground_speed_mean=None,
-        odom_distance_m=0.9,
-        rtk_distance_m=None,
-        live_oscillation_detected=True,
-        notes=(),
-    )
-
-    recommended, reasons = recommend_pid_only_params(base_params, [response_trial])
-
-    assert 0.0 < recommended.wheel_pid_kp <= 0.05
-    assert recommended.wheel_pid_ki == 0.0
-    assert recommended.wheel_pid_kd == 0.0
-    assert recommended.wheel_pid_integral_limit == 0.0
-    assert any("keeping KI at 0.0" in reason for reason in reasons)
-    assert any("Kd remains 0.0" in reason for reason in reasons)
-
-
-def test_recommend_pid_only_params_uses_small_kp_steps_from_low_gain_start() -> None:
-    base_params = _early_pid_params(kp=0.2)
-    response_trial = compute_trial_metrics(
+def _lagging_step_trial(params: DrivePidParams) -> TrialMetrics:
+    return compute_trial_metrics(
         name="pid_step",
         phase="pid",
         target_speed=0.30,
@@ -723,54 +719,113 @@ def test_recommend_pid_only_params_uses_small_kp_steps_from_low_gain_start() -> 
         ticks_seen=120,
         left_ticks_seen=118,
         right_ticks_seen=122,
-        params_used=base_params,
+        params_used=params,
         ground_speed_mean=None,
         odom_distance_m=0.9,
         rtk_distance_m=None,
         notes=(),
     )
 
-    recommended, _ = recommend_pid_only_params(base_params, [response_trial])
 
-    assert 0.2 < recommended.wheel_pid_kp <= 0.5
-    assert 0.0 < round(recommended.wheel_pid_kp - base_params.wheel_pid_kp, 3) <= 0.1
-    assert recommended.wheel_pid_ki == 0.0
+@pytest.mark.parametrize("kp", [0.0, 0.01, 0.2])
+def test_recommend_pid_only_params_resets_sub_floor_start_to_template_defaults(kp: float) -> None:
+    """The 2026-09-15 case: kp 0.2 / ki ~0.1 / integral_limit 15 in firmware PWM
+    units cannot bridge the motor deadband, so the pass measured stiction and
+    must be RESET to the template, never nudged from where it is."""
+    base_params = _early_pid_params(kp=kp)
+
+    recommended, reasons = recommend_pid_only_params(base_params, [_lagging_step_trial(base_params)])
+
+    assert recommended.wheel_pid_kp == WHEEL_PID_TEMPLATE_KP
+    assert recommended.wheel_pid_ki == WHEEL_PID_TEMPLATE_KI
+    assert recommended.wheel_pid_integral_limit == WHEEL_PID_TEMPLATE_INTEGRAL_LIMIT
+    assert recommended.wheel_pid_kd == base_params.wheel_pid_kd
+    assert recommended.ticks_per_meter == base_params.ticks_per_meter
+    assert recommended.wheel_pid_pwm_per_mps == base_params.wheel_pid_pwm_per_mps
+    assert any("below the firmware-unit floor" in reason for reason in reasons)
+    assert any("Resetting to the template defaults" in reason for reason in reasons)
+
+
+def test_recommend_pid_only_params_resets_field_failure_gains_without_nudging() -> None:
+    base_params = DrivePidParams(
+        ticks_per_meter=399.0,
+        wheel_pid_kp=0.2,
+        wheel_pid_ki=0.092,
+        wheel_pid_kd=0.01,
+        wheel_pid_integral_limit=15.0,
+        wheel_pid_pwm_per_mps=282.135,
+    )
+
+    recommended, reasons = recommend_pid_only_params(base_params, [_lagging_step_trial(base_params)])
+
+    assert recommended == replace(
+        base_params,
+        wheel_pid_kp=WHEEL_PID_TEMPLATE_KP,
+        wheel_pid_ki=WHEEL_PID_TEMPLATE_KI,
+        wheel_pid_integral_limit=WHEEL_PID_TEMPLATE_INTEGRAL_LIMIT,
+    )
+    reset_reason = next(reason for reason in reasons if "below the firmware-unit floor" in reason)
+    assert "wheel_pid_kp=0.2" in reset_reason
+    assert "wheel_pid_ki=0.092" in reset_reason
+    assert "wheel_pid_integral_limit=15" in reset_reason
+
+
+def test_recommend_pid_only_params_resets_when_only_one_field_is_below_floor() -> None:
+    base_params = replace(_template_params(), wheel_pid_integral_limit=15.0)
+
+    recommended, reasons = recommend_pid_only_params(base_params, [_lagging_step_trial(base_params)])
+
+    assert recommended.wheel_pid_integral_limit == WHEEL_PID_TEMPLATE_INTEGRAL_LIMIT
+    assert recommended.wheel_pid_kp == WHEEL_PID_TEMPLATE_KP
+    assert recommended.wheel_pid_ki == WHEEL_PID_TEMPLATE_KI
+    reset_reason = next(reason for reason in reasons if "below the firmware-unit floor" in reason)
+    assert "wheel_pid_integral_limit=15" in reset_reason
+    assert "wheel_pid_kp=" not in reset_reason
+
+
+def test_recommend_pid_only_params_refines_template_start_multiplicatively() -> None:
+    """A normal refinement: lagging response from the template set nudges KP and
+    KI upward by the usual factors and stays inside the firmware envelope."""
+    base_params = _template_params()
+
+    recommended, reasons = recommend_pid_only_params(base_params, [_lagging_step_trial(base_params)])
+
+    assert recommended.wheel_pid_kp == pytest.approx(base_params.wheel_pid_kp * 1.05)
+    assert recommended.wheel_pid_ki == pytest.approx(base_params.wheel_pid_ki * 1.08)
+    assert recommended.wheel_pid_integral_limit == base_params.wheel_pid_integral_limit
     assert recommended.wheel_pid_kd == 0.0
-    assert recommended.wheel_pid_integral_limit == 0.0
+    assert not any("below the firmware-unit floor" in reason for reason in reasons)
+    assert any("Kd remains 0.0" in reason for reason in reasons)
+    _assert_within_firmware_envelope(recommended)
 
 
-def test_recommend_pid_only_params_uses_fine_steps_for_sub_tenth_kp() -> None:
-    base_params = _early_pid_params(kp=0.01)
-    response_trial = compute_trial_metrics(
+def test_recommend_pid_only_params_never_proposes_below_the_floors() -> None:
+    """Repeated softening from exactly the floors converges ON the floors."""
+    base_params = DrivePidParams(
+        ticks_per_meter=533.0,
+        wheel_pid_kp=WHEEL_PID_KP_RANGE[0],
+        wheel_pid_ki=WHEEL_PID_KI_RANGE[0],
+        wheel_pid_kd=0.0,
+        wheel_pid_integral_limit=WHEEL_PID_INTEGRAL_LIMIT_RANGE[0],
+        wheel_pid_pwm_per_mps=550.0,
+    )
+    oscillating_trial = _trial(
+        params=base_params,
         name="pid_step",
-        phase="pid",
         target_speed=0.30,
-        speed_samples=[
-            SpeedSample(0.0, 0.21),
-            SpeedSample(0.4, 0.23),
-            SpeedSample(0.8, 0.25),
-            SpeedSample(1.2, 0.26),
-            SpeedSample(1.6, 0.27),
-            SpeedSample(2.0, 0.27),
-        ],
-        response_samples=None,
-        ticks_seen=120,
-        left_ticks_seen=118,
-        right_ticks_seen=122,
-        params_used=base_params,
-        ground_speed_mean=None,
-        odom_distance_m=0.9,
-        rtk_distance_m=None,
-        notes=(),
+        measured_speed_mean=0.31,
+        overshoot=0.12,
+        error_mean=-0.01,
+        live_oscillation_detected=True,
     )
 
-    recommended, _ = recommend_pid_only_params(base_params, [response_trial])
+    recommended, reasons = recommend_pid_only_params(base_params, [oscillating_trial])
 
-    assert base_params.wheel_pid_kp < recommended.wheel_pid_kp < 0.1
-    assert round(recommended.wheel_pid_kp - base_params.wheel_pid_kp, 3) <= 0.05
-    assert recommended.wheel_pid_ki == 0.0
-    assert recommended.wheel_pid_kd == 0.0
-    assert recommended.wheel_pid_integral_limit == 0.0
+    assert any("softening KP/KI/integral support" in reason for reason in reasons)
+    assert recommended.wheel_pid_kp == WHEEL_PID_KP_RANGE[0]
+    assert recommended.wheel_pid_ki == WHEEL_PID_KI_RANGE[0]
+    assert recommended.wheel_pid_integral_limit == WHEEL_PID_INTEGRAL_LIMIT_RANGE[0]
+    _assert_within_firmware_envelope(recommended)
 
 
 def test_recommend_pid_only_params_flags_imbalance_without_forcing_derivative() -> None:
@@ -807,10 +862,10 @@ def test_recommend_pid_only_params_flags_imbalance_without_forcing_derivative() 
 def test_recommend_pid_only_params_uses_post_analysis_oscillation_without_blocking_light_robot() -> None:
     base_params = DrivePidParams(
         ticks_per_meter=345.0,
-        wheel_pid_kp=0.2,
-        wheel_pid_ki=0.25,
+        wheel_pid_kp=10.0,
+        wheel_pid_ki=2000.0,
         wheel_pid_kd=0.0,
-        wheel_pid_integral_limit=5.0,
+        wheel_pid_integral_limit=45.0,
         wheel_pid_pwm_per_mps=345.0,
     )
     low_speed_trial = _trial(
@@ -863,10 +918,10 @@ def test_recommend_pid_only_params_uses_post_analysis_oscillation_without_blocki
 def test_recommend_pid_only_params_exposes_stop_warning_even_when_motion_trial_looks_valid() -> None:
     base_params = DrivePidParams(
         ticks_per_meter=345.0,
-        wheel_pid_kp=0.2,
-        wheel_pid_ki=0.25,
+        wheel_pid_kp=10.0,
+        wheel_pid_ki=2000.0,
         wheel_pid_kd=0.0,
-        wheel_pid_integral_limit=5.0,
+        wheel_pid_integral_limit=45.0,
         wheel_pid_pwm_per_mps=345.0,
     )
     motion_trial = _trial(
@@ -903,10 +958,10 @@ def test_recommend_pid_only_params_exposes_stop_warning_even_when_motion_trial_l
 def test_recommend_pid_only_params_does_not_ignore_one_dangerous_overshoot_when_median_is_calm() -> None:
     base_params = DrivePidParams(
         ticks_per_meter=345.0,
-        wheel_pid_kp=0.2,
-        wheel_pid_ki=0.25,
+        wheel_pid_kp=10.0,
+        wheel_pid_ki=2000.0,
         wheel_pid_kd=0.0,
-        wheel_pid_integral_limit=5.0,
+        wheel_pid_integral_limit=45.0,
         wheel_pid_pwm_per_mps=345.0,
     )
     trials = [
@@ -1000,10 +1055,10 @@ def test_sanitize_finite_data_replaces_non_finite_values_before_yaml_or_json_ser
 def test_recommend_pid_only_params_uses_mass_tier_aware_worst_overshoot_threshold() -> None:
     base_params = DrivePidParams(
         ticks_per_meter=345.0,
-        wheel_pid_kp=0.2,
-        wheel_pid_ki=0.25,
+        wheel_pid_kp=10.0,
+        wheel_pid_ki=2000.0,
         wheel_pid_kd=0.0,
-        wheel_pid_integral_limit=5.0,
+        wheel_pid_integral_limit=45.0,
         wheel_pid_pwm_per_mps=345.0,
     )
     borderline_trial = _trial(
@@ -1030,7 +1085,7 @@ def test_recommend_pid_only_params_uses_mass_tier_aware_worst_overshoot_threshol
     assert any("Worst-step overshoot reached" in reason for reason in heavy_reasons)
 
 
-def test_recommend_pid_only_params_uses_smaller_kp_steps_for_heavy_robot() -> None:
+def test_recommend_pid_only_params_mass_tier_does_not_lower_the_floor() -> None:
     base_params = _early_pid_params(kp=0.2)
     lagging_trial = _trial(
         params=base_params,
@@ -1043,19 +1098,18 @@ def test_recommend_pid_only_params_uses_smaller_kp_steps_for_heavy_robot() -> No
         left_right_tick_imbalance=0.004,
     )
 
-    recommended_light, _ = recommend_pid_only_params(
+    recommended_light, light_reasons = recommend_pid_only_params(
         base_params,
         [lagging_trial],
         robot_mass_kg=8.0,
     )
-    recommended_heavy, _ = recommend_pid_only_params(
+    recommended_heavy, heavy_reasons = recommend_pid_only_params(
         base_params,
         [lagging_trial],
         robot_mass_kg=45.0,
     )
 
-    assert recommended_light.wheel_pid_kp > base_params.wheel_pid_kp
-    assert recommended_heavy.wheel_pid_kp > base_params.wheel_pid_kp
-    assert (recommended_light.wheel_pid_kp - base_params.wheel_pid_kp) > (
-        recommended_heavy.wheel_pid_kp - base_params.wheel_pid_kp
-    )
+    assert recommended_light == recommended_heavy
+    assert recommended_light.wheel_pid_kp == WHEEL_PID_TEMPLATE_KP
+    assert any("below the firmware-unit floor" in reason for reason in light_reasons)
+    assert any("below the firmware-unit floor" in reason for reason in heavy_reasons)

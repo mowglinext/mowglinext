@@ -14,8 +14,8 @@ from mowgli_interfaces.msg import GnssStatus as PublicGnssStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rtcm_msgs.msg import Message as PublicRtcmMessage
-from universal_gnss_ros2.msg import GnssStatus as UniversalGnssStatus
-from universal_gnss_ros2.msg import RtcmFrame
+from universal_gnss_msgs.msg import GnssStatus as UniversalGnssStatus
+from universal_gnss_msgs.msg import RtcmFrame
 
 
 UNIVERSAL_TO_PUBLIC_FIX_TYPE = {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { ThemeProvider } from "../../theme/ThemeContext.tsx";
+vi.mock("./CrossHatchSettings.tsx", () => ({CrossHatchSettings: () => null}));
 import { MowingSection } from "./MowingSection.tsx";
 
 describe("MowingSection — automatic blade direction", () => {
@@ -77,6 +78,114 @@ describe("MowingSection — headland passes", () => {
         fireEvent.click(auto);
 
         expect(onChange).toHaveBeenCalledWith("num_headland_passes", 0);
+    });
+});
+
+// Maintainer review on PR #598: the sparse-robot fallback for
+// num_headland_passes must be DERIVED from the schema default (via the
+// `defaults` prop, sourced from mower_config.schema.json) rather than a
+// hardcoded literal — the old literal (2) had gone stale against the
+// schema/template default (5) without either Select noticing.
+describe("MowingSection — headland passes sparse-robot fallback (PR #598 review)", () => {
+    it("falls back to the schema default, not a hardcoded literal, when unset", () => {
+        render(
+            <ThemeProvider>
+                <MowingSection
+                    values={{ tool_width: 0.18, headland_width: 0.18 }}
+                    onChange={vi.fn()}
+                    defaults={{ num_headland_passes: 5 }}
+                />
+            </ThemeProvider>,
+        );
+
+        // Both the Headland Passes select itself and the Turn-Around Headland
+        // Limit's option-count logic key off the same derived value.
+        expect(screen.getByTitle("5")).toBeInTheDocument();
+    });
+
+    it("still falls back sanely when defaults has not loaded yet", () => {
+        render(
+            <ThemeProvider>
+                <MowingSection
+                    values={{ tool_width: 0.18, headland_width: 0.18 }}
+                    onChange={vi.fn()}
+                />
+            </ThemeProvider>,
+        );
+
+        // No `defaults` prop at all (e.g. still loading) must not crash, and
+        // the last-resort constant (kept in lockstep with the schema, 5)
+        // still renders rather than "undefined".
+        expect(screen.getByTitle("5")).toBeInTheDocument();
+    });
+});
+
+// issue #497: connector_max_headland_passes bounds how many of the headland
+// passes a turn-around may cross. It only makes sense against a FORCED ring
+// count, so its option list must track num_headland_passes and it must be
+// disabled for Auto/None.
+describe("MowingSection — turn-around headland limit (#497)", () => {
+    function renderSection(
+        onChange: (key: string, value: unknown) => void,
+        values: Record<string, unknown>,
+    ) {
+        render(
+            <ThemeProvider>
+                <MowingSection values={values} onChange={onChange} />
+            </ThemeProvider>,
+        );
+    }
+
+    it("defaults to Unlimited when unset", () => {
+        renderSection(vi.fn(), { tool_width: 0.18, headland_width: 0.18, num_headland_passes: 3 });
+        expect(screen.getByTitle("Unlimited")).toBeInTheDocument();
+    });
+
+    it("offers exactly one option per configured headland pass, plus Unlimited", async () => {
+        const onChange = vi.fn();
+        renderSection(onChange, { tool_width: 0.18, headland_width: 0.18, num_headland_passes: 3 });
+
+        // num_headland_passes' OWN select also renders a "3" title on its closed
+        // combobox, so option lookups below are scoped to the opened listbox —
+        // an unscoped getByTitle("3") would match both and throw.
+        fireEvent.mouseDown(screen.getByTitle("Unlimited"));
+        const listbox = await screen.findByRole("listbox");
+        expect(within(listbox).getByTitle("2")).toBeInTheDocument();
+        expect(within(listbox).getByTitle("3")).toBeInTheDocument();
+        expect(within(listbox).queryByTitle("4")).toBeNull();
+
+        fireEvent.click(within(listbox).getByTitle("2"));
+        expect(onChange).toHaveBeenCalledWith("connector_max_headland_passes", 2);
+    });
+
+    it("is disabled when Headland Passes is Auto (0)", () => {
+        renderSection(vi.fn(), { tool_width: 0.18, headland_width: 0.18, num_headland_passes: 0 });
+        // The Select renders as a combobox; disabled ones carry aria-disabled.
+        const combobox = screen.getByTitle("Unlimited").closest(".ant-select-disabled");
+        expect(combobox).not.toBeNull();
+    });
+
+    it("is disabled when Headland Passes is None (negative)", () => {
+        renderSection(vi.fn(), { tool_width: 0.18, headland_width: 0.18, num_headland_passes: -1 });
+        const combobox = screen.getByTitle("Unlimited").closest(".ant-select-disabled");
+        expect(combobox).not.toBeNull();
+    });
+});
+
+describe("MowingSection — cross-hatch", () => {
+    it.each([-1, 25])("allows cross-hatch with base angle %s", (angle) => {
+        const onChange = vi.fn();
+        const {rerender} = render(<ThemeProvider><MowingSection
+            values={{mow_angle_deg: angle}} onChange={onChange}/></ThemeProvider>);
+        const toggle = screen.getByRole("switch", {name: "Cross-hatch mowing"});
+        expect(toggle).not.toBeChecked();
+        fireEvent.click(toggle);
+        expect(onChange).toHaveBeenCalledWith("mow_cross_hatch", true);
+        rerender(<ThemeProvider><MowingSection
+            values={{mow_angle_deg: angle, mow_cross_hatch: true}} onChange={onChange}/></ThemeProvider>);
+        expect(toggle).toBeChecked();
+        fireEvent.click(toggle);
+        expect(onChange).toHaveBeenLastCalledWith("mow_cross_hatch", false);
     });
 });
 

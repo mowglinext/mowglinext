@@ -24,6 +24,7 @@ source "${INSTALL_LIB_DIR}/platform.sh"
 source "${INSTALL_LIB_DIR}/docker.sh"
 source "${INSTALL_LIB_DIR}/backend_choice.sh"
 source "${INSTALL_LIB_DIR}/udev.sh"
+source "${INSTALL_LIB_DIR}/sysctl.sh"
 source "${INSTALL_LIB_DIR}/deploy.sh"
 source "${INSTALL_LIB_DIR}/env.sh"
 source "${INSTALL_LIB_DIR}/serial_probe.sh"
@@ -86,6 +87,113 @@ load_install_state() {
   fi
 }
 
+# ── --only=<step> : run one step instead of the full flow (issue #632) ──────
+# Each case below mirrors exactly one of the numbered steps in main()'s full
+# sequence further down — same function(s), same progress_run* wrapper choice
+# (interactive/background/live) — just run standalone, current/total hardcoded
+# to 1/1 since "step N of 15" has no meaning here. Kept as its own dispatcher
+# rather than having main() route through it, so the tested default flow's
+# code path is untouched by this addition; test_only_step.sh guards against
+# a slug drifting out of sync with main()'s actual step list.
+list_only_steps() {
+  cat <<'EOF'
+Available --only= steps (mirrors mowglinext.sh main()'s full sequence):
+  system         Updating system
+  docker         Installing Docker
+  backend        Selecting hardware backend
+  gps            Configuring Universal GNSS
+  lidar          Configuring LiDAR
+  rangefinders   Configuring rangefinders
+  uart           Enabling UARTs + rc.local
+  directory      Preparing repository
+  migrate        Migrating runtime files
+  env            Writing environment (docker/.env)
+  udev           Installing udev rules + DDS sysctl
+  mower          Configuring mower (mowgli_robot.yaml)
+  tools          Installing optional host tools
+  motd           Installing MOTD
+  updater        Installing/updating the host updater service
+  startup        Regenerating compose + (re)starting containers
+EOF
+}
+
+run_only_step() {
+  local step="$1"
+  case "$step" in
+    system)
+      progress_run_interactive 1 1 "Updating system" \
+        run_system_update
+      ;;
+    docker)
+      progress_run 1 1 "Installing Docker" \
+        'install_docker'
+      ;;
+    uart)
+      progress_run 1 1 "Enabling UARTs" \
+        'enable_all_platform_uarts && generate_rc_local'
+      ;;
+    backend)
+      progress_run_interactive 1 1 "Selecting hardware backend" \
+        select_hardware_backend
+      ;;
+    gps)
+      progress_run_interactive 1 1 "Configuring Universal GNSS" \
+        run_gps_configuration_step
+      ;;
+    lidar)
+      progress_run_interactive 1 1 "Configuring LiDAR" \
+        run_lidar_configuration_step
+      ;;
+    rangefinders)
+      progress_run_interactive 1 1 "Configuring rangefinders" \
+        run_range_configuration_step
+      ;;
+    directory)
+      progress_run_interactive 1 1 "Preparing repository" \
+        setup_directory
+      ;;
+    migrate)
+      progress_run 1 1 "Migrating runtime files" \
+        'migrate_runtime_paths'
+      ;;
+    env)
+      progress_run 1 1 "Writing environment" \
+        'setup_env'
+      ;;
+    udev)
+      progress_run 1 1 "Installing udev rules" \
+        'install_udev_rules && install_dds_sysctl'
+      ;;
+    mower)
+      progress_run_interactive 1 1 "Configuring mower" \
+        run_mower_configuration_step
+      ;;
+    tools)
+      progress_run_interactive 1 1 "Installing optional tools" \
+        install_optional_tools
+      ;;
+    motd)
+      progress_run 1 1 "Installing MOTD" \
+        'install_motd'
+      ;;
+    updater)
+      # install_host_updater() already calls check_updater_hardware() as its
+      # own first action — no separate gate needed here.
+      install_host_updater
+      ;;
+    startup)
+      progress_run_live 1 1 "Starting containers" \
+        run_startup_step_live
+      ;;
+    *)
+      error "Unknown --only= step: '$step'"
+      echo "" >&2
+      list_only_steps >&2
+      return 1
+      ;;
+  esac
+}
+
 main() {
   show_banner
   load_locale
@@ -104,74 +212,94 @@ main() {
       echo ""
       sudo -v
     fi
-    local TOTAL_STEPS=15
 
-    # Choose the source checkout first. If the user selects another branch,
-    # the installer intentionally checks it out, syncs submodules, and
-    # re-execs before any further prompts or runtime generation happen.
-    select_repo_branch
-    sync_repo_branch_to_selected_branch
+    if [[ -n "$ONLY_STEP" ]]; then
+      # Issue #632: run exactly this one step, skipping not just the other
+      # 14 but also the branch-switch and language prompts above the full
+      # flow — an operator reaching for --only= already has a checkout and a
+      # language they're happy with; forcing them through unrelated
+      # interactive prompts (select_repo_branch, select_language, neither of
+      # which honours a non-interactive default the way e.g. select_hardware_
+      # backend's PRESET_LOADED check does) would defeat the point of a
+      # single-step, script-friendly entry point. Still loads the existing
+      # docker/.env (load_install_state) so the target step has real prior
+      # context instead of running against a blank slate.
+      load_install_state
+      run_only_step "$ONLY_STEP" || return 1
+    else
+      local TOTAL_STEPS=15
 
-    # Language selection, then load previous env unless a web preset
-    # intentionally starts a fresh runtime configuration.
-    select_language
-    load_install_state
+      # Choose the source checkout first. If the user selects another branch,
+      # the installer intentionally checks it out, syncs submodules, and
+      # re-execs before any further prompts or runtime generation happen.
+      select_repo_branch
+      sync_repo_branch_to_selected_branch
+
+      # Language selection, then load previous env unless a web preset
+      # intentionally starts a fresh runtime configuration.
+      select_language
+      load_install_state
 
     # Image refs are tied to the install script version — never inherit
     # stale paths from older installs (e.g. mowgli-docker, openmower-gui).
-    unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE GUI_IMAGE
+    unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE GUI_IMAGE
 
-    # Image tag selection is independent from the selected repository branch.
-    select_image_channel
+      # Image tag selection is independent from the selected repository branch.
+      select_image_channel
 
-    progress_run_interactive 1 "$TOTAL_STEPS" "Updating system" \
-      run_system_update
+      progress_run_interactive 1 "$TOTAL_STEPS" "Updating system" \
+        run_system_update
 
-    progress_run 2 "$TOTAL_STEPS" "Installing Docker" \
-      'install_docker'
+      progress_run 2 "$TOTAL_STEPS" "Installing Docker" \
+        'install_docker'
 
-    progress_run 3 "$TOTAL_STEPS" "Enabling UARTs" \
-      'enable_all_platform_uarts && generate_rc_local'
-    
-    progress_run_interactive 4 "$TOTAL_STEPS" "Selecting hardware backend" \
-      select_hardware_backend
+      progress_run_interactive 3 "$TOTAL_STEPS" "Selecting hardware backend" \
+        select_hardware_backend
 
-    progress_run_interactive 5 "$TOTAL_STEPS" "Configuring Universal GNSS" \
-      run_gps_configuration_step
+      progress_run_interactive 4 "$TOTAL_STEPS" "Configuring Universal GNSS" \
+        run_gps_configuration_step
 
-    progress_run_interactive 6 "$TOTAL_STEPS" "Configuring LiDAR" \
-      run_lidar_configuration_step
+      progress_run_interactive 5 "$TOTAL_STEPS" "Configuring LiDAR" \
+        run_lidar_configuration_step
 
-    progress_run_interactive 7 "$TOTAL_STEPS" "Configuring rangefinders" \
-      run_range_configuration_step
+      progress_run_interactive 6 "$TOTAL_STEPS" "Configuring rangefinders" \
+        run_range_configuration_step
 
-    check_updater_hardware || return 1
+      # Runs AFTER GPS/LiDAR/rangefinder configuration (not before, as it used
+      # to) so required_uart_overlays() (install/lib/uart.sh) can see which
+      # ports were actually picked and only claim the GPIO pins those need —
+      # see issue #631 for why enabling all five unconditionally is a bug.
+      progress_run 7 "$TOTAL_STEPS" "Enabling UARTs" \
+        'enable_all_platform_uarts && generate_rc_local'
 
-    progress_run_interactive 8 "$TOTAL_STEPS" "Preparing repository" \
-      setup_directory
+      check_updater_hardware || return 1
 
-    progress_run 9 "$TOTAL_STEPS" "Migrating runtime files" \
-      'migrate_runtime_paths'
+      progress_run_interactive 8 "$TOTAL_STEPS" "Preparing repository" \
+        setup_directory
 
-    progress_run 10 "$TOTAL_STEPS" "Writing environment" \
-      'setup_env'
+      progress_run 9 "$TOTAL_STEPS" "Migrating runtime files" \
+        'migrate_runtime_paths'
 
-    progress_run 11 "$TOTAL_STEPS" "Installing udev rules" \
-      'install_udev_rules'
+      progress_run 10 "$TOTAL_STEPS" "Writing environment" \
+        'setup_env'
 
-    progress_run_interactive 12 "$TOTAL_STEPS" "Configuring mower" \
-      run_mower_configuration_step
+      progress_run 11 "$TOTAL_STEPS" "Installing udev rules" \
+        'install_udev_rules && install_dds_sysctl'
 
-    progress_run_interactive 13 "$TOTAL_STEPS" "Installing optional tools" \
-      install_optional_tools
+      progress_run_interactive 12 "$TOTAL_STEPS" "Configuring mower" \
+        run_mower_configuration_step
 
-    progress_run 14 "$TOTAL_STEPS" "Installing MOTD" \
-      'install_motd'
+      progress_run_interactive 13 "$TOTAL_STEPS" "Installing optional tools" \
+        install_optional_tools
 
-    install_host_updater
+      progress_run 14 "$TOTAL_STEPS" "Installing MOTD" \
+        'install_motd'
 
-    progress_run_live 15 "$TOTAL_STEPS" "Starting containers" \
-      run_startup_step_live
+      install_host_updater
+
+      progress_run_live 15 "$TOTAL_STEPS" "Starting containers" \
+        run_startup_step_live
+    fi
 
   else
     load_install_state
@@ -196,6 +324,7 @@ main() {
   check_generated_gps_yaml_alignment
   check_containers
   check_firmware || true
+  check_mavros || true
   check_gps || true
   check_lidar || true
   check_rangefinders || true

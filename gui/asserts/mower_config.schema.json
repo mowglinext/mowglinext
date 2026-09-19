@@ -107,34 +107,34 @@
         "wheel_pid_kp": {
           "type": "number",
           "title": "Drive PID — Kp",
-          "default": 0.2,
+          "default": 10.0,
           "minimum": 0,
           "maximum": 200,
-          "description": "Proportional gain of the firmware per-wheel velocity loop (PWM per m/s). Applied live; higher = stiffer tracking, too high oscillates."
+          "description": "Proportional gain of the firmware per-wheel velocity loop, applied unscaled in PWM per m/s (10 = 3 PWM at a 0.3 m/s step). Applied live; higher = stiffer tracking, too high oscillates. Field-validated default 10."
         },
         "wheel_pid_ki": {
           "type": "number",
           "title": "Drive PID — Ki",
-          "default": 0.092,
+          "default": 2000.0,
           "minimum": 0,
           "maximum": 20000,
-          "description": "Integral gain of the firmware per-wheel velocity loop (PWM per m/s·s). Bridges the static-friction deadband; too high overshoots."
+          "description": "Integral gain of the firmware per-wheel velocity loop, applied unscaled in PWM per (m/s·s). Winds the integrator up to the static-friction deadband — 2000 reaches it from a 0.03 m/s error in about 0.5 s; values near 0.1 never move the wheel. Too high overshoots."
         },
         "wheel_pid_kd": {
           "type": "number",
           "title": "Drive PID — Kd",
-          "default": 0.01,
+          "default": 0.0,
           "minimum": 0,
           "maximum": 500,
-          "description": "Derivative gain of the firmware per-wheel velocity loop (PWM per m/s²). 0 = disabled (default)."
+          "description": "Derivative gain of the firmware per-wheel velocity loop (PWM per m/s²). 0 = disabled (default): the 50 Hz tick-quantised wheel speed makes the derivative term noise."
         },
         "wheel_pid_integral_limit": {
           "type": "number",
           "title": "Drive PID — Integral Limit",
-          "default": 15.0,
+          "default": 45.0,
           "minimum": 0,
           "maximum": 255,
-          "description": "Anti-windup clamp on the integral term (PWM units, motor max 255)."
+          "description": "Anti-windup clamp on the integral term (PWM units, motor max 255). Must let the integrator reach the ~40 PWM motor deadband minus feedforward (about 32 PWM at 0.03 m/s), or the slow inner wheel of an arc never turns. hardware_bridge refuses a set that cannot bridge deadband_pwm."
         },
         "wheel_pid_pwm_per_mps": {
           "type": "number",
@@ -143,6 +143,14 @@
           "minimum": 50,
           "maximum": 600,
           "description": "Open-loop velocity→PWM feedforward scale. Dominant drive term; sets the deadband/idle mapping. Change with care."
+        },
+        "deadband_pwm": {
+          "type": "number",
+          "title": "Drive Motor Deadband (PWM)",
+          "default": 40.0,
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Estimated static-friction deadband of the drive motors in PWM. Sanity gate only, never sent to the firmware: when the configured wheel_pid_* set cannot reach it (integral_limit + kp*0.03 + pwm_per_mps*0.03), hardware_bridge sends the template gains instead and logs an error; a live change that fails the gate is rejected."
         }
       }
     },
@@ -270,6 +278,16 @@
           "title": "Datum Altitude",
           "description": "Map origin altitude (WGS84 ellipsoidal, metres) — site-specific; no default. Used as the altitude reference when converting GPS fixes to the local map frame."
         },
+        "gnss_stack": {
+          "type": "string",
+          "title": "GNSS Stack",
+          "enum": [
+            "universal",
+            "disabled"
+          ],
+          "default": "universal",
+          "description": "Universal runs the receiver in the GPS container and bridges its topics into the stack. Disabled launches no GNSS bridge. Applied on the next stack restart."
+        },
         "gnss_receiver_family": {
           "type": "string",
           "title": "Receiver Family",
@@ -281,6 +299,12 @@
           ],
           "default": "auto",
           "description": "Universal GNSS receiver family. Auto is recommended unless you know you need a specific parser."
+        },
+        "gnss_frame_id": {
+          "type": "string",
+          "title": "GNSS Frame",
+          "default": "gps_link",
+          "description": "TF frame stamped on the GNSS messages. Must match the antenna link in the robot model."
         },
         "gnss_receiver_model": {
           "type": "string",
@@ -341,6 +365,13 @@
           "title": "Configured Receiver Baud",
           "default": 921600,
           "description": "Persisted target baud for future receiver-side profile application."
+        },
+        "gnss_execution_baud": {
+          "type": "string",
+          "title": "Manual Current Baud Fallback",
+          "enum": ["auto", "115200", "230400", "460800", "921600"],
+          "default": "auto",
+          "description": "Auto by default. A manual current baud is used only after autodetection fails and is validated by Universal GNSS before apply."
         },
         "gnss_signal_group": {
           "type": "string",
@@ -558,17 +589,49 @@
           "minimum": -1,
           "description": "Number of concentric perimeter rings before the inner field. -1 (or any negative) = none — no perimeter rings. The back-and-forth swaths become the outermost pass, and their centreline lands on exactly the line the outermost ring would have driven (chassis_safety_inset inside the recorded boundary), so sideways they leave the same uncut band as the rings — about 12 cm at the default 0.20 m inset. The swath ENDS, however, reach that same band, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs. 0 = auto (ceil(headland_width / tool_width)); >0 forces exactly that count."
         },
+        "connector_max_headland_passes": {
+          "type": "integer",
+          "title": "Turn-Around Headland Limit",
+          "default": 0,
+          "minimum": 0,
+          "description": "How many of the Headland Passes rings a turn-around may cross, counted from the inner field outward. 0 = unlimited (turns may use the whole headland apron, out to the outermost ring). Set it below Headland Passes (e.g. 2 with 3 passes configured) to keep the outermost ring(s) a no-turn zone, so U-turns stay further from the recorded boundary and clear of nearby objects — at the cost of more straight/blade-off connector fallbacks where the remaining apron is too narrow for a turn-around arc to fit."
+        },
+        "transit_dynamic_window": {
+          "type": "boolean",
+          "title": "Transit Dynamic Window (DWPP)",
+          "default": false,
+          "description": "Use Dynamic Window Pure Pursuit for point-to-point navigation (transits, dock approach, return home). The controller then picks the speed and turn rate it can actually reach this instant, instead of applying the path curvature to a regulated speed — it slows into sharp turns on its own. Does NOT affect mowing, which uses its own controller. Off by default: it changes how every transit is driven, so try it on a supervised run."
+        },
+        "coverage_goal_checker_id": {
+          "type": "string",
+          "enum": ["coverage_goal_checker", "coverage_axis_goal_checker"],
+          "title": "Coverage Arrival Test",
+          "default": "coverage_goal_checker",
+          "description": "How the robot decides a mowing pass is finished. 'coverage_goal_checker' requires it to have actually driven 95% of the planned poses — the only test that survives a closed perimeter ring, whose start and end are the same point. 'coverage_axis_goal_checker' is the stock Nav2 alternative (along-path and cross-track tolerances). Leave the default unless you are comparing the two."
+        },
+        "local_inflation_inscribed_radius": {
+          "type": "number",
+          "title": "Obstacle Inscribed Radius Override",
+          "default": -1,
+          "description": "Advanced. -1 derives the costmap's inscribed radius from the robot footprint, which is what forces the obstacle inflation radius to stay above the chassis diagonal (~0.6 m) and can make narrow gaps between areas unplannable. Setting it to the real half-width plus margin lets the inflation radius come down without breaking obstacle detection. Leave at -1 unless a gap the robot physically fits through is refused."
+        },
         "chassis_safety_inset": {
           "type": "number",
           "title": "Chassis Safety Inset",
-          "default": 0.2,
-          "description": "Pre-shrink the operator polygon by this many metres before F2C plans anything. Defaults to chassis_width / 2 so the chassis edge stays inside the polygon under perfect FTC tracking."
+          "default": 0,
+          "description": "How far INSIDE the recorded perimeter the outermost mowing pass sits. 0 means the outermost ring rides on the line you drove — that line is the reachable limit by definition, so the blade mows to the edge and the chassis straddles it. Every centimetre here is a band that never gets cut. Raise it only if your recorded perimeter is not actually drivable. Obstacle clearance is a separate setting (Drawn Obstacle Margin)."
         },
         "min_turning_radius": {
           "type": "number",
           "title": "Min Turning Radius",
           "default": 0.2,
           "description": "Minimum turning radius for coverage path (metres). Skid-steer pivots in place; large values force wide F2C U-turns."
+        },
+        "mow_cross_hatch": {
+          "title": "Cross-hatch mowing",
+          "type": "boolean",
+          "default": false,
+          "description": "Alternate each area's stripe direction by 90 degrees between mowing sessions. Next-direction overrides apply to the next session; interrupted sessions keep their direction after restart."
         },
         "mow_angle_deg": {
           "type": "number",
@@ -665,8 +728,8 @@
         "obstacle_clearance_margin": {
           "type": "number",
           "title": "Obstacle Clearance Margin",
-          "default": 0.2,
-          "description": "Sideways room (m) left beyond the chassis when skirting an obstacle while mowing. Raise this if the robot goes around obstacles but shaves past them. Clamped to [0.0, 0.5] at launch."
+          "default": 0.05,
+          "description": "Sideways room (m) left beyond the chassis when skirting an obstacle while mowing. This is genuine slack on top of the real chassis footprint — raise it if the robot goes around obstacles but shaves past them, lower it to mow closer to hedges. Clamped to [0.0, 0.5] at launch."
         },
         "obstacle_detection_range_m": {
           "type": "number",
@@ -689,14 +752,26 @@
         "dig_obstacle_enabled": {
           "type": "boolean",
           "default": true,
-          "title": "Automatically create dig keepouts",
-          "description": "Create temporary keepout proposals for detected wheel-slip digs. Disabling this leaves dig detection and recovery active. Restart ROS2 to apply."
+          "title": "Propose an obstacle where the robot dug in",
+          "description": "Record a wheel-slip dig as an obstacle proposal on the map page. A proposal blocks nothing until you accept it; the robot skips the spot for the rest of the session either way. Disabling this leaves dig detection and recovery active. Restart ROS2 to apply."
+        },
+        "dig_sensitivity": {
+          "type": "string",
+          "title": "Wheel-slip (dig) sensitivity",
+          "enum": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "medium",
+          "description": "How readily spinning wheels count as a dig (hard stop, short reverse; repeated digs at one spot stop the mission as DIG_OBSTRUCTION). Choose Low on tall or wet grass and on sandy or loose soil, where a healthy robot slips a lot: only gross, sustained slip is then treated as a dig and it takes 5 repeats to stop the mission. High protects a short dry lawn from the slightest scuff. Off disables the detector on the computer; the firmware protection against blocked wheels stays active. Restart ROS2 to apply."
         },
         "obstacle_margin": {
           "type": "number",
           "title": "Drawn Obstacle Margin",
-          "default": 0.2,
-          "description": "Extra margin (m) around obstacles drawn on the map, applied to both coverage and transit planning. Draw a tree trunk and set this to cover its roots (invisible to the 2D LiDAR)."
+          "default": 0.389,
+          "description": "How far (m) the coverage plan keeps its centreline from obstacles drawn on the map. It is the ONLY obstacle clearance the coverage plan has, so it is floored at launch at a value derived from the chassis: the larger of body half-width + obstacle clearance margin + tracking slack (what the coverage controller demands of its own line) and body half-width + one costmap cell diagonal (so the robot stays plannable on its line). Lower values are raised. The transit keepout band is derived separately (body half-width) and follows this value when you raise it. Raise it to cover what the drawn polygon does not: a tree's root flare and low branches are invisible to the 2D LiDAR."
         },
         "obstacle_slowdown_ratio": {
           "type": "number",
@@ -892,6 +967,56 @@
           "default": 2400000,
           "minimum": 1,
           "description": "SPI clock in Hz. The WS2812 symbol table encodes each protocol bit as three SPI bits and is derived from exactly 2.4 MHz (3 bits = 1.25 us). Changing this breaks the bit timing and produces wrong colours; the node warns at startup if it is not 2400000."
+        }
+      }
+    },
+    "mqtt_settings": {
+      "title": "MQTT / Home Assistant",
+      "type": "object",
+      "properties": {
+        "mqtt_enabled": {
+          "type": "boolean",
+          "title": "Enable MQTT Bridge",
+          "default": false,
+          "description": "Launch mowgli_monitoring/mqtt_bridge_node, which publishes status/power/emergency/high_level_status/gps/diagnostics to an MQTT broker and relays <mqtt_topic_prefix>/command to HighLevelControl (see docs/MQTT_CONTROL.md). Default false MUST stay false and MUST equal the mowgli_bringup template value, because the settings backend prunes any value equal to its schema default -- with a default of true, switching the bridge ON would be pruned away and the toggle would never persist (this is the same lidar_enabled bug fixed in #508)."
+        },
+        "mqtt_host": {
+          "type": "string",
+          "title": "Broker Host",
+          "default": "localhost",
+          "description": "Hostname or IP of the MQTT broker. \"localhost\" also reaches the bundled mowgli-mqtt container (the robot's ROS2 service runs network_mode: host) -- point this at an external broker (e.g. one already running on your own server) instead."
+        },
+        "mqtt_port": {
+          "type": "integer",
+          "title": "Broker Port",
+          "default": 1883,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "TCP port of the MQTT broker."
+        },
+        "mqtt_username": {
+          "type": "string",
+          "title": "Username",
+          "default": "",
+          "description": "Empty means no authentication, matching the bundled broker's anonymous-access default."
+        },
+        "mqtt_password": {
+          "type": "string",
+          "title": "Password",
+          "default": "",
+          "description": "MQTT broker password. Sent in the clear unless Use TLS is also enabled."
+        },
+        "mqtt_topic_prefix": {
+          "type": "string",
+          "title": "Topic Prefix",
+          "default": "mowgli",
+          "description": "All topics are published as \"<prefix>/<name>\", e.g. \"mowgli/status\"."
+        },
+        "mqtt_use_ssl": {
+          "type": "boolean",
+          "title": "Use TLS",
+          "default": false,
+          "description": "Connect over TLS, verified against the system CA store only (no custom CA/client-certificate option exists yet). If TLS setup fails the bridge refuses to connect rather than silently falling back to plaintext."
         }
       }
     },

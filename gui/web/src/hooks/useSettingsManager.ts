@@ -35,7 +35,10 @@ export type SettingsSection =
     | "navigation"
     | "rain"
     | "leds"
+    | "mqtt"
     | "irrisense"
+    | "remote_access"
+    | "notifications"
     | "advanced";
 
 export type SectionMeta = {
@@ -154,7 +157,8 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "blade_load_slowdown_enabled", "blade_load_rpm_full",
             "blade_load_rpm_min", "blade_load_min_speed_ratio",
             "headland_width", "num_headland_passes", "swath_overlap",
-            "chassis_safety_inset", "min_turning_radius", "mow_direction",
+            "chassis_safety_inset", "min_turning_radius", "mow_direction", "mow_cross_hatch",
+            "connector_max_headland_passes",
         ],
     },
     {
@@ -210,6 +214,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "obstacle_clearance_margin", "obstacle_detection_range_m",
             "obstacle_wait_timeout_s",
             "obstacle_margin", "obstacle_slowdown_ratio", "dig_obstacle_enabled",
+            "dig_sensitivity",
         ],
     },
     {
@@ -249,12 +254,42 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         ],
     },
     {
+        id: "mqtt",
+        label: "settingsSections.mqtt.label",
+        icon: "wifi",
+        description: "settingsSections.mqtt.description",
+        keys: [
+            // Every mqtt_* key is claimed here so none of them leaks into
+            // AdvancedSection's free-form editor — same rationale as "leds"
+            // above (a raw broker password with no context).
+            "mqtt_enabled", "mqtt_host", "mqtt_port", "mqtt_username",
+            "mqtt_password", "mqtt_topic_prefix", "mqtt_use_ssl",
+        ],
+    },
+    {
         id: "irrisense",
         label: "settingsSections.irrisense.label",
         icon: "cloud-sync",
         description: "settingsSections.irrisense.description",
         // No yaml keys: the IrriSense settings (token included) live in the
         // GUI's key-value DB and the section loads/saves them itself.
+        keys: [],
+    },
+    {
+        id: "remote_access",
+        label: "settingsSections.remote_access.label",
+        icon: "global",
+        description: "settingsSections.remote_access.description",
+        // No yaml keys: the remote-access settings (auth key included) live
+        // in the GUI's key-value DB and the section loads/saves them itself.
+        keys: [],
+    },
+    {
+        id: "notifications",
+        label: "settingsSections.notifications.label",
+        icon: "bell",
+        description: "settingsSections.notifications.description",
+        // Same as IrriSense: DB-backed, the section owns load/save.
         keys: [],
     },
     {

@@ -29,63 +29,6 @@ permissions:
   packages: write
 
 jobs:
-  build:
-    uses: ./.github/workflows/_sensor-docker.yml
-    with:
-      image: gps
-      context: .
-      dockerfile: sensors/gps/Dockerfile
-      smoke-test: |
-        set -euo pipefail
-        find /opt -name setup.bash 2>/dev/null | sort
-        set +u
-        source /opt/ros/lyrical/setup.bash
-        for f in /opt/gnss_sidecar/setup.bash; do
-          [ -f "$f" ] && echo "sourcing $f" && source "$f"
-        done
-        set -u
-        ros2 pkg list | sort | grep -Ei "mowgli|gnss|universal|rtcm" || true
-        ros2 pkg prefix mowgli_interfaces
-        ros2 pkg prefix universal_gnss_ros2
-        ros2 pkg list | grep -x mowgli_interfaces
-        ros2 pkg list | grep -x universal_gnss_ros2
-        ros2 pkg executables universal_gnss_ros2 | grep -x "universal_gnss_ros2 receiver_node"
-        ros2 pkg executables universal_gnss_ros2 | grep -x "universal_gnss_ros2 ntrip_node"
-        ros2 pkg list | grep -x mowgli_gnss_bridge
-        ros2 pkg executables mowgli_gnss_bridge | grep -x "mowgli_gnss_bridge universal_gnss_topic_bridge"
-        test -x /universal_gnss_topic_bridge.py
-        python3 -m py_compile /universal_gnss_topic_bridge.py
-        python3 - <<'PY'
-        from mowgli_interfaces.msg import GnssStatus as MowgliGnssStatus
-        from rtcm_msgs.msg import Message as RtcmMessage
-        from universal_gnss_ros2.msg import GnssStatus as UniversalGnssStatus
-        from universal_gnss_ros2.msg import RtcmFrame
-        assert MowgliGnssStatus.CAP_RTK_MODE > 0
-        assert UniversalGnssStatus.CAP_RTK_MODE > 0
-        assert hasattr(RtcmFrame, "data")
-        assert hasattr(RtcmMessage, "message")
-        PY
-        # Installed executables must not retain links into the deleted build tree.
-        python3 - <<'PY'
-        from pathlib import Path
-        import subprocess
-        checked = 0
-        for path in Path('/opt/gnss_sidecar').rglob('*'):
-            if not path.is_file():
-                continue
-            with path.open('rb') as stream:
-                if stream.read(4) != b'\x7fELF':
-                    continue
-            result = subprocess.run(['ldd', str(path)], capture_output=True, text=True)
-            assert result.returncode == 0, (path, result.stderr)
-            assert 'not found' not in result.stdout, (path, result.stdout)
-            checked += 1
-        assert checked > 0
-        print(f'GNSS runtime libraries checked: {checked} ELF files')
-        PY
-        gnss_inspect --help
-      no-cache: ${{ inputs.no-cache == true }}
-
   # ---------------------------------------------------------------------------
   # mowgli_gnss_bridge lives in sensors/gps/, OUTSIDE the ros2/ colcon
   # workspace, so the "ROS2 — CI" job never sees it. Its Dockerfile builds it
@@ -102,8 +45,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          # universal-gnss is a submodule and mowgli_gnss_bridge links against
-          # universal_gnss_ros2; without it the package will not configure.
+          # universal-gnss is a submodule and mowgli_gnss_bridge links only
+          # against universal_gnss_msgs; without it the package will not configure.
           submodules: recursive
 
       - name: Install build dependencies
@@ -111,6 +54,16 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
+          # UPGRADE before installing. ros:lyrical-ros-base ships the ROS core
+          # it was built with; `apt-get install ros-lyrical-std-msgs` then pulls
+          # TODAY's std_msgs on top of the image's older builtin_interfaces, and
+          # the test dies before running a single assertion:
+          #   symbol lookup error: libstd_msgs__rosidl_typesupport_fastrtps_c.so:
+          #   undefined symbol: has_buffer_fields_builtin_interfaces__msg__Time
+          # A partial upgrade of a rolling apt repo is never coherent; upgrading
+          # the packages already in the image makes it one (2026-09-19, dev red
+          # with no code change in sensors/gps).
+          apt-get -y upgrade
           apt-get install -y --no-install-recommends \
             build-essential \
             cmake \
@@ -141,10 +94,8 @@ jobs:
           # cannot import it. sensors/CLAUDE.md requires the two bridges to stay
           # behaviour-identical, so that test is the only thing enforcing it.
           cp sensors/gps/universal_gnss_topic_bridge.py /ws/src/
-          for p in gnss_ros2 gnss_core gnss_protocols gnss_transport \
-                   gnss_driver gnss_ntrip gnss_runtime gnss_tools; do
-            cp -r "ros2/src/external/universal-gnss/$p" "/ws/src/$p"
-          done
+          cp -r ros2/src/external/universal-gnss/universal_gnss_msgs \
+            /ws/src/universal_gnss_msgs
           ls /ws/src
           chown -R ubuntu:ubuntu /ws
 

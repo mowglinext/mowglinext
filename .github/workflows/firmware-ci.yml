@@ -88,7 +88,10 @@ jobs:
   release:
     name: Publish prebuilt firmware
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    # A tag is a safety publication: do not attach flashable binaries unless
+    # both board permutations build, the native safety tests pass, and the
+    # committed/template board defaults still share their single source.
+    needs: [defaults-parity, build, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write

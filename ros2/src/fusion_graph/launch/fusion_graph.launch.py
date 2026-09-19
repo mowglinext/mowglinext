@@ -82,6 +82,38 @@ def _read_robot_config() -> dict:
     return {}
 
 
+def _map_geometry_params(cfg: dict) -> dict:
+    """Runtime LiDAR-map geometry overrides, coerced to the declared types.
+
+    The node declares lidar_map_resolution_m / lidar_map_tile_size_m as
+    ``double`` and lidar_map_radius_tiles as ``int``
+    (fusion_graph_node_setup_params.cpp). rclcpp does NOT widen an int
+    parameter to a double: handing ``lidar_map_tile_size_m: 5`` to a
+    ``declare_parameter<double>`` raises InvalidParameterTypeException and the
+    localizer aborts at startup — no map->odom TF, the Nav2 costmaps never
+    activate, the robot cannot mow.
+
+    That is exactly what happened on 2026-09-15: the GUI settings writer
+    re-marshalled the installed mowgli_robot.yaml and dropped the decimal point
+    from every integral float, turning ``5.0`` into ``5``. The writer is fixed
+    (gui/pkg/api/settings_yaml_types.go), but the cast belongs here too: this
+    file is the last place that can keep a badly-typed config from bricking the
+    robot, and every neighbouring value (gps_x, dock_pose_x, ...) is already
+    read through float().
+
+    Keys absent from the config are left out so the package defaults in
+    fusion_graph.yaml still apply.
+    """
+    params: dict = {}
+    for key in ("lidar_map_resolution_m", "lidar_map_tile_size_m"):
+        if cfg.get(key) is not None:
+            params[key] = float(cfg[key])
+    for key in ("lidar_map_radius_tiles",):
+        if cfg.get(key) is not None:
+            params[key] = int(cfg[key])
+    return params
+
+
 def generate_launch_description() -> LaunchDescription:
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time", default_value="false",
@@ -139,11 +171,7 @@ def generate_launch_description() -> LaunchDescription:
         params_file,
         # Runtime map geometry overrides the package defaults. The node
         # validates the resolution, tile dimensions and range margin.
-        {key: cfg[key] for key in (
-            "lidar_map_resolution_m",
-            "lidar_map_tile_size_m",
-            "lidar_map_radius_tiles",
-        ) if key in cfg},
+        _map_geometry_params(cfg),
         {
             "use_sim_time": use_sim_time,
             "datum_lat": datum_lat,

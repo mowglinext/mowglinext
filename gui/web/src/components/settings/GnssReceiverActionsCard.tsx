@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from "react";
-import { Alert, App, Button, Card, Collapse, Space, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Collapse, Select, Space, Tag, Typography } from "antd";
 import { PlayCircleOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ContentType } from "../../api/Api.ts";
 import { useApi } from "../../hooks/useApi.ts";
+import { GNSS_EXECUTION_BAUD_OPTIONS, normalizeGnssString } from "./gnssConfig.ts";
 
 const { Paragraph, Text } = Typography;
 
@@ -31,6 +32,9 @@ type GnssActionResponse = {
     serial_device?: string;
     execution_baud?: string;
     detected_baud?: string;
+    target_baud?: string;
+    active_verified_baud?: string;
+    manual_baud_required?: boolean;
     runtime_baud?: string;
     config_baud?: string;
     runtime_baud_differs_from_config?: boolean;
@@ -53,6 +57,8 @@ type Props = {
     onSaveAndRestartGps?: () => void | Promise<void>;
     onPersistBeforeAction?: () => Promise<boolean>;
     showSaveButtons?: boolean;
+    manualCurrentBaud?: unknown;
+    onManualCurrentBaudChange?: (value: string) => void;
 };
 
 const GNSS_ACTION_LABEL_KEYS: Record<GnssActionName, string> = {
@@ -119,6 +125,8 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
     onSaveAndRestartGps,
     onPersistBeforeAction,
     showSaveButtons = false,
+    manualCurrentBaud,
+    onManualCurrentBaudChange,
 }) => {
     const guiApi = useApi();
     const { t } = useTranslation();
@@ -347,6 +355,23 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
                 />
             )}
 
+            {lastResponse?.manual_baud_required && onManualCurrentBaudChange && (
+                <Card size="small" type="inner" title={t("settingsGnssReceiver.manualCurrentBaudTitle")} style={{ marginTop: 12 }}>
+                    <Paragraph type="secondary">
+                        {t("settingsGnssReceiver.manualCurrentBaudHelp")}
+                    </Paragraph>
+                    <Select
+                        value={normalizeGnssString(manualCurrentBaud) || "115200"}
+                        onChange={onManualCurrentBaudChange}
+                        options={GNSS_EXECUTION_BAUD_OPTIONS.filter((option) => option.value !== "auto").map((option) => ({
+                            value: option.value,
+                            label: option.label,
+                        }))}
+                        style={{ width: 180 }}
+                    />
+                </Card>
+            )}
+
             {(lastResponse || transportError) && (
                 <Space direction="vertical" size={12} style={{ width: "100%", marginTop: 12 }}>
                     {lastResponse && (
@@ -399,6 +424,18 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
                                     <Text>
                                         <Text strong>{t("settingsGnssReceiver.fieldDetectedBaud")}</Text>{" "}
                                         {lastResponse.detected_baud}
+                                    </Text>
+                                )}
+                                {lastResponse.target_baud && (
+                                    <Text>
+                                        <Text strong>{t("settingsGnssReceiver.fieldTargetBaud")}</Text>{" "}
+                                        {lastResponse.target_baud}
+                                    </Text>
+                                )}
+                                {lastResponse.active_verified_baud && (
+                                    <Text>
+                                        <Text strong>{t("settingsGnssReceiver.fieldActiveVerifiedBaud")}</Text>{" "}
+                                        {lastResponse.active_verified_baud}
                                     </Text>
                                 )}
                                 {lastResponse.runtime_baud && (

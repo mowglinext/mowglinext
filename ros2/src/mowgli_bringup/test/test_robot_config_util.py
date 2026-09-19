@@ -634,6 +634,42 @@ def test_circumscribed_radius_grows_with_a_wider_chassis():
     assert narrow == pytest.approx(0.5860, abs=1e-4)
 
 
+def test_dig_skip_radius_covers_the_whole_chassis_at_shipped_dimensions():
+    # FollowStrip skips coverage poses this close to a wheel-slip dig. Inside
+    # the circumscribed radius some part of the body can be over the hole.
+    assert _util.dig_skip_radius({}) == pytest.approx(0.5971, abs=1e-4)
+
+
+def test_dig_skip_radius_follows_an_operator_edited_chassis():
+    # chassis_* are GUI-editable: a literal would go stale exactly like the
+    # hardcoded cw = 0.40 that routed coverage 2.5 cm inside the body.
+    shipped = _util.dig_skip_radius({})
+    longer = _util.dig_skip_radius({"chassis_length": 0.80})
+    assert longer > shipped
+    front, rear, half_width = _util.chassis_footprint({"chassis_length": 0.80})
+    assert longer >= math.hypot(max(abs(front), abs(rear)), half_width) - 1e-9
+
+
+def test_dig_proposal_radius_is_the_wheel_ruts_not_the_chassis():
+    # hypot(0.325/2 + 0.04/2, 0.10/2) = hypot(0.1825, 0.05)
+    radius = _util.dig_proposal_radius({})
+    assert radius == pytest.approx(0.1892, abs=1e-4)
+    # Covers the outer edge of both tyres ...
+    assert radius >= 0.325 / 2.0 + 0.04 / 2.0
+    # ... and is nowhere near the 0.60 m chassis-length box it replaces, nor
+    # the body-sized skip radius: the body is added ONCE, by the keepout band.
+    assert 2.0 * radius < 0.60
+    assert radius < _util.chassis_half_width({})
+    assert radius < _util.dig_skip_radius({})
+
+
+def test_dig_proposal_radius_follows_the_configured_wheels():
+    wide = _util.dig_proposal_radius({"wheel_track": 0.50, "wheel_width": 0.08})
+    big_wheels = _util.dig_proposal_radius({"wheel_radius": 0.20})
+    assert wide == pytest.approx(math.hypot(0.29, 0.05))
+    assert big_wheels > _util.dig_proposal_radius({})
+
+
 def test_circumscribed_radius_encloses_every_footprint_corner():
     params = {"chassis_length": 0.72, "chassis_width": 0.51, "chassis_center_x": 0.22}
     front, rear, half_width = _util.chassis_footprint(params)
@@ -747,3 +783,113 @@ def test_dig_keepout_toggle_reaches_map_server(override):
                         {"robot_params": merged, "bool": bool},
                     )
     assert injected["dig_obstacle_enabled"] is expected
+
+
+def test_chassis_half_width_tracks_the_configured_chassis() -> None:
+    """The body half-width every collision check measures against must FOLLOW the
+    operator's chassis_width. A consumer that snapshots it into a literal is the
+    2026-09-16 collision: the chassis grew 0.40 -> 0.45 m, the Nav2 footprint
+    followed, the coverage planner's hardcoded copy did not, and the plan ended
+    up 2.5 cm inside the robot."""
+    narrow = _util.chassis_half_width({"chassis_width": 0.40})
+    shipped = _util.chassis_half_width({"chassis_width": 0.45})
+
+    # chassis_width/2 + the costmap footprint margin — the same number
+    # chassis_footprint() puts in the Nav2 footprint.
+    assert narrow == pytest.approx(0.20 + _util.CHASSIS_FOOTPRINT_MARGIN_M)
+    assert shipped == pytest.approx(0.225 + _util.CHASSIS_FOOTPRINT_MARGIN_M)
+    assert shipped > narrow, "a wider chassis must widen the half-width"
+
+    # It IS the footprint's half-width, not an independent computation.
+    _front, _rear, footprint_half = _util.chassis_footprint({"chassis_width": 0.45})
+    assert shipped == pytest.approx(footprint_half)
+
+    # A sparse config falls back to the shipped chassis, never to zero.
+    assert _util.chassis_half_width({}) == pytest.approx(
+        _util.DEFAULT_CHASSIS_WIDTH_M / 2.0 + _util.CHASSIS_FOOTPRINT_MARGIN_M)
+
+
+# ---------------------------------------------------------------------------
+# dig_sensitivity — one operator knob over the wheel-slip dig detector
+# ---------------------------------------------------------------------------
+_BRIDGE_YAML = _PKG_DIR / "config" / "hardware_bridge.yaml"
+_BRIDGE_LAUNCH = _LAUNCH_DIR / "mowgli.launch.py"
+
+
+def _bridge_yaml_params() -> dict:
+    with open(_BRIDGE_YAML, "r") as handle:
+        doc = yaml.safe_load(handle) or {}
+    (node_params,) = [v["ros__parameters"] for v in doc.values()
+                      if isinstance(v, dict) and "ros__parameters" in v]
+    return node_params
+
+
+def test_dig_sensitivity_medium_is_exactly_the_shipped_detector():
+    """The default level must not change a robot that never touches the knob."""
+    assert _template_params()["dig_sensitivity"] == "medium"
+    assert _util.DEFAULT_DIG_SENSITIVITY == "medium"
+    shipped = _bridge_yaml_params()
+    injected = _util.dig_detector_params({"dig_sensitivity": "medium"})
+    assert injected, "medium injects nothing"
+    for key, value in injected.items():
+        assert shipped[key] == value, f"{key}: medium={value} shipped={shipped[key]}"
+
+
+def test_dig_sensitivity_levels_are_ordered_from_tolerant_to_strict():
+    low, medium, high = (_util.dig_detector_params({"dig_sensitivity": level})
+                         for level in ("low", "medium", "high"))
+    # More evidence, more tyre travel and LESS observed progress before "low"
+    # calls it a dig; and more same-spot repeats before the mission stops.
+    assert low["dig_window_s"] > medium["dig_window_s"] > high["dig_window_s"]
+    assert low["dig_min_wheel_dist"] > medium["dig_min_wheel_dist"] > high["dig_min_wheel_dist"]
+    assert (low["dig_progress_fraction"] < medium["dig_progress_fraction"]
+            < high["dig_progress_fraction"])
+    assert low["dig_escalate_count"] > medium["dig_escalate_count"] >= high["dig_escalate_count"]
+
+
+@pytest.mark.parametrize("tyre_m, chassis_m, seconds", [
+    (0.40, 0.03, 1.2),   # 2026-09-18, straight dig while mowing
+    (0.33, 0.01, 1.2),   # 2026-09-04, differential spin, issue #527 comment
+    (0.189, 0.015, 1.2),  # stalled pure pivot (test_dig_detector.cpp)
+])
+def test_low_sensitivity_still_latches_every_dig_on_record(tyre_m, chassis_m, seconds):
+    """Sustained at the recorded rates, each field dig clears the "low" bar."""
+    low = _util.dig_detector_params({"dig_sensitivity": "low"})
+    scale = low["dig_window_s"] / seconds
+    assert tyre_m * scale >= low["dig_min_wheel_dist"]
+    assert chassis_m * scale < low["dig_progress_fraction"] * tyre_m * scale
+
+
+def test_dig_sensitivity_off_disables_only_the_host_detector():
+    assert _util.dig_detector_params({"dig_sensitivity": "off"}) == {"dig_detect_enabled": False}
+    # A hand-edited bare `off` is a YAML boolean; it must not fall back to the
+    # default and silently keep the detector running.
+    assert yaml.safe_load("dig_sensitivity: off") == {"dig_sensitivity": False}
+    assert _util.resolve_dig_sensitivity({"dig_sensitivity": False}) == "off"
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (" LOW ", "low"), ("High", "high"), ("nonsense", "medium"), (True, "medium"), (3, "medium"),
+])
+def test_dig_sensitivity_is_normalised_and_unknown_values_fall_back(raw, expected):
+    assert _util.resolve_dig_sensitivity({"dig_sensitivity": raw}) == expected
+    assert _util.resolve_dig_sensitivity({}) == "medium"
+
+
+def test_dig_sensitivity_schema_matches_the_presets_and_default():
+    schema_path = _PKG_DIR.parents[2] / "gui" / "asserts" / "mower_config.schema.json"
+    prop = _find_schema_property(json.loads(schema_path.read_text()), "dig_sensitivity")
+    assert prop is not None
+    assert set(prop["enum"]) == set(_util.DIG_SENSITIVITY_PRESETS)
+    # The settings backend prunes a value equal to the schema default, so the
+    # two defaults must agree or choosing the template default is a no-op edit.
+    assert prop["default"] == _util.DEFAULT_DIG_SENSITIVITY
+
+
+def test_hardware_bridge_launch_injects_the_dig_sensitivity_preset():
+    """A template key no launch file injects is inert (ros2/CLAUDE.md)."""
+    source = _BRIDGE_LAUNCH.read_text()
+    assert "dig_detector_params(robot_params)" in source
+    # Injected AFTER the static params file, so the preset wins over it.
+    assert source.index("hardware_bridge_params,") < source.index(
+        "dig_detector_params(robot_params)")
