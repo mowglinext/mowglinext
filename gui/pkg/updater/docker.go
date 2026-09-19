@@ -1,6 +1,7 @@
 package updater
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -114,13 +115,22 @@ type containerInfo struct {
 	} `json:"Mounts"`
 }
 
+// command returns the command's STDOUT only. Callers parse it (JSON from
+// `docker compose config`, `docker inspect`, ...), and docker writes warnings
+// to stderr on a perfectly successful run — `time="..." level=warning msg="The
+// \"X\" variable is not set"` whenever a release's Compose file names a
+// variable the local .env does not have yet. Merged into the output that line
+// broke every plan with "invalid character 'i' in literal true". stderr is kept
+// for the error message, where it is the useful part.
 func command(ctx context.Context, name string, args ...string) ([]byte, error) {
 	c := exec.CommandContext(ctx, name, args...)
-	b, e := c.CombinedOutput()
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	out, e := c.Output()
 	if e != nil {
-		return nil, fmt.Errorf("%s: %w: %.2000s", name, e, b)
+		return nil, fmt.Errorf("%s: %w: %.2000s", name, e, append(stderr.Bytes(), out...))
 	}
-	return b, nil
+	return out, nil
 }
 func (b DockerBackend) compose(ctx context.Context, args ...string) ([]byte, error) {
 	return b.composeWithOverride(ctx, true, args...)
