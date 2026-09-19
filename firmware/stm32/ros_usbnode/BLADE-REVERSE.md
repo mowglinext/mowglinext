@@ -159,6 +159,21 @@ RPM. They do not distinguish a controller timeout from a physical stop detector,
 prove that bytes 7..8 are calibrated RPM, or justify shortening any guard. The
 software freshness checks concern reply delivery only.
 
+### Standard firmware direction test (2026-09-19)
+
+The operator confirmed **forward rotation, complete stop, opposite rotation,
+complete stop** on the same original 500 using clean `Yardforce500` firmware
+`c942ba318750fc257e1731cf80665046f54aed3f` (`1.10.233`), binary SHA256
+`86953d9b1a0f0fb2e7c9d04aed23938750178d8c5463d6040fbd8d7621e4e77c`,
+with the host image recorded above. Cutting blades were removed. Separate
+forward/OFF and reverse/OFF runs were followed by short paired direction
+requests with an explicit OFF pause between them. USB status captured spin-up
+and return to zero for each run; direction was confirmed visually.
+
+This validates explicit direction requests and stopping on that baseline.
+Because the rotor stopped before the opposite request, it does not validate
+automatic reversal requested while coasting or a worst-case stopping time.
+
 ### Remaining physical acceptance (`HARDWARE_REQUIRED`)
 
 For the firmware revision proposed for deployment, record the exact image and
