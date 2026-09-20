@@ -3,7 +3,6 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { ThemeProvider } from "../../theme/ThemeContext.tsx";
 import en from "../../i18n/locales/en.json";
 import fr from "../../i18n/locales/fr.json";
-import schema from "../../../../asserts/mower_config.schema.json";
 import { SettingsFieldCard } from "./SettingsFieldCard.tsx";
 import {
     ALL_FIELD_GROUPS,
@@ -15,23 +14,6 @@ import {
 type FieldStrings = Record<string, { label?: string; tooltip?: string }>;
 type GroupStrings = Record<string, { title?: string; description?: string } | string>;
 
-// Collects every property that carries a `default` anywhere in the schema —
-// the same set the backend serves from /settings/yaml/defaults.
-function schemaDefaults(node: unknown, found: Record<string, unknown> = {}): Record<string, unknown> {
-    if (!node || typeof node !== "object") return found;
-    const record = node as Record<string, unknown>;
-    const properties = record.properties as Record<string, Record<string, unknown>> | undefined;
-    for (const [key, prop] of Object.entries(properties ?? {})) {
-        if ("default" in prop) found[key] = prop.default;
-        schemaDefaults(prop, found);
-    }
-    for (const condition of (record.allOf as Record<string, unknown>[] | undefined) ?? []) {
-        schemaDefaults(condition.then, found);
-        schemaDefaults(condition.else, found);
-    }
-    return found;
-}
-
 describe("settingsFieldGroups", () => {
     const allKeys = ALL_FIELD_GROUPS.flatMap(groupKeys);
 
@@ -39,11 +21,9 @@ describe("settingsFieldGroups", () => {
         expect(new Set(allKeys).size).toBe(allKeys.length);
     });
 
-    it("has a schema default for every key, so an absent key never renders blank", () => {
-        const defaults = schemaDefaults(schema);
-        expect(allKeys.filter((key) => !(key in defaults))).toEqual([]);
-    });
-
+    // "Every key has a schema default" is pinned on the Go side
+    // (pkg/api/settings_field_groups_test.go): the Docker web build typechecks
+    // this file with only web/ in its context, so asserts/ is unreachable here.
     it.each([
         ["en", en],
         ["fr", fr],
