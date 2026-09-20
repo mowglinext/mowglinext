@@ -2095,13 +2095,10 @@ void DetourAroundObstacle::onHalted()
 BT::NodeStatus GetNextUnmowedArea::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-  auto helper = ctx->helper_node;
 
-  if (!client_)
-  {
-    client_ = helper->create_client<mowgli_interfaces::srv::GetMowingArea>(
-        "/map_server_node/get_mowing_area");
-  }
+  // Shared, long-lived client (see BTContext::mowingAreaClient): a client made
+  // here would have to re-discover the server on every tree rebuild.
+  client_ = ctx->mowingAreaClient();
 
   if (!client_->service_is_ready())
   {

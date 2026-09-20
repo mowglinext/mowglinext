@@ -35,6 +35,7 @@
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -133,6 +134,23 @@ struct BTContext
       blade_command_client = node->create_client<mowgli_interfaces::srv::MowerControl>(
           "/hardware_bridge/mower_control");
     return blade_command_client;
+  }
+  // ONE get_mowing_area client for the lifetime of the context. A service
+  // client is only "ready" once ITS OWN request writer and response reader have
+  // matched the server's endpoints, which takes a discovery round-trip after
+  // create_client(). GetNextUnmowedArea used to create its client in the node
+  // instance, so every tree (re)build started with a client that reported "not
+  // available" until discovery caught up — a spurious FAILURE on the first tick,
+  // and the reason test_get_next_unmowed_area failed at random on loaded CI
+  // runners (three different tests in three runs, 2026-09-20).
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr mowing_area_client;
+
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr mowingAreaClient()
+  {
+    if (!mowing_area_client)
+      mowing_area_client = helper_node->create_client<mowgli_interfaces::srv::GetMowingArea>(
+          "/map_server_node/get_mowing_area");
+    return mowing_area_client;
   }
   /// Operator-forced resume from a mid-session charge hold. Set by the
   /// ~/high_level_control handler when a COMMAND_START arrives while the tree

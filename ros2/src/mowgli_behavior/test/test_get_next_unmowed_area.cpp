@@ -142,9 +142,10 @@ protected:
     while (std::chrono::steady_clock::now() < deadline)
     {
       executor.spin_some();
-      auto client =
-          ctx->helper_node->create_client<GetMowingArea>("/map_server_node/get_mowing_area");
-      if (client->service_is_ready())
+      // The SAME client the node uses: readiness is per client (its own request
+      // writer / response reader must match the server), so probing with a
+      // throwaway client proved nothing about the node's.
+      if (ctx->mowingAreaClient()->service_is_ready())
       {
         return;
       }
