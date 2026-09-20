@@ -13,7 +13,7 @@ config_file="$REPO_DIR/install/lib/config.sh"
 stack_file="$REPO_DIR/docker/stack.sh"
 env_example="$REPO_DIR/docker/.env.example"
 
-section "External Universal GNSS RC2 sidecar contract"
+section "External Universal GNSS v0.7.0-rc1 sidecar contract"
 
 compose_content="$(<"$compose_file")"
 assert_contains "gps service consumes external Universal GNSS image" \
@@ -42,7 +42,7 @@ required_vars="$(grep -oE '\$\{[A-Z_0-9]+\}' "$compose_file" | sort -u | tr '\n'
 assert_eq "every compose variable of the gps fragment has a default" "" "$required_vars"
 assert_contains "fragment image default is pinned to the deployment descriptor digest" \
   "@$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json")}" "$compose_content"
-assert_contains "RC2 combined receiver/NTRIP launch is used" \
+assert_contains "v0.7.0-rc1 combined receiver/NTRIP launch is used" \
   'receiver_and_ntrip.launch.py' "$compose_content"
 assert_contains "NTRIP enable state is a launch argument derived from the yaml" \
   '"ntrip_enabled:=" + ("true" if ntrip else "false")' "$compose_content"
@@ -54,8 +54,8 @@ assert_contains "bridge RTCM topic stays internal to Universal GNSS" \
   'rtcm_topic:=/universal_gnss_receiver/rtcm' "$compose_content"
 
 config_content="$(<"$config_file")"
-assert_contains "MowgliNext pins RC2 Lyrical image independently" \
-  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2@sha256:24ea6c1c0553463207a4c33b803e920a974989f5891f2f107e8c35cce56f7a95"' "$config_content"
+assert_contains "MowgliNext pins v0.7.0-rc1 Lyrical image independently" \
+  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.0-rc1@sha256:d132240b90d9832d0044f4cb9bccc8c2ff29c72f170ada777c07de2867ca0fd2"' "$config_content"
 # The installer default and the deployment descriptor name the SAME image; the
 # digest is what makes the pin real, so a bump must touch both or fail here.
 descriptor_digest="$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json" 2>/dev/null || true)"
@@ -69,7 +69,7 @@ assert_contains "stack regen rebuilds sidecar runtime config" \
   'regenerate_sidecar_runtime_configs' "$stack_content"
 
 env_example_content="$(<"$env_example")"
-assert_contains "example uses RC2 Lyrical image" \
-  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.1.4-rc2@sha256:24ea6c1c0553463207a4c33b803e920a974989f5891f2f107e8c35cce56f7a95' "$env_example_content"
+assert_contains "example uses v0.7.0-rc1 Lyrical image" \
+  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.0-rc1@sha256:d132240b90d9832d0044f4cb9bccc8c2ff29c72f170ada777c07de2867ca0fd2' "$env_example_content"
 
 test_summary
