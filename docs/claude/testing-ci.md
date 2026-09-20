@@ -27,7 +27,7 @@
 | `mowgli_bringup` launch integration (2) | `ros2/src/mowgli_bringup/test/test_nodes_startup.launch.py` (TIMEOUT 60), `test_navsat_status_universal.launch.py` (TIMEOUT 45) | `launch_testing` (`add_launch_test`, `CMakeLists.txt:46–52`) | `colcon test --packages-select mowgli_bringup` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_tools` (drive-PID tuner sidecar) | `tools/motor/test/test_drive_pid_math.py` (registered), `tools/motor/test/test_drive_pid_tuner.py` (**not registered**) | pytest (`tools/motor/CMakeLists.txt:24–27`) | `colcon test --packages-select mowgli_tools` (math only) · `python3 -m pytest tools/motor/test` (both) | `ros2-ci.yml` → `build-and-test` (CI symlinks `tools/motor` into the workspace as `src/mowgli_tools`, `ros2-ci.yml:151–159`) |
 | Config-drift guard | `ros2/scripts/test_check_config_drift.py` over `ros2/scripts/check_config_drift.py` | pytest (run directly, not via colcon) | `python3 -m pytest -q ros2/scripts/test_check_config_drift.py` | `ros2-ci.yml` → `config-drift` |
-| Workspace package script guards | `ros2/scripts/test_workspace_package_scripts.py` over the workspace setup scripts | pytest (run directly, not via colcon) | `python3 -m pytest -q ros2/scripts/test_workspace_package_scripts.py` | `ros2-ci.yml` → `config-drift` |
+| Workspace package script guards | `ros2/scripts/test_workspace_package_scripts.py` over the workspace setup scripts | pytest (run directly, not via colcon) | `cd ros2 && python3 -m pytest -q scripts/test_workspace_package_scripts.py` | `ros2-ci.yml` → `build-and-test` |
 | Firmware ↔ host msg/wire guards | `firmware/scripts/sync_ros_lib.py`, `protocol_version_guard.py`, `board_defaults_parity.py` (self-checking scripts, no test files) | plain Python `--check` gates | `python3 firmware/scripts/sync_ros_lib.py --check` · `python3 firmware/scripts/protocol_version_guard.py --check` · `python3 firmware/scripts/board_defaults_parity.py` | `msg-codegen-drift.yml`, `protocol-version-drift.yml`, `firmware-ci.yml` → `defaults-parity` |
 | GUI web unit tests (45 files) | `gui/web/src/**/*.test.ts`, `*.test.tsx` | vitest + jsdom + Testing Library (`gui/web/vitest.config.ts`) | `cd gui/web && yarn test` | `gui-ci.yml` → `unit-tests` |
 | GUI backend (36 files) | `gui/pkg/api/*_test.go`, `gui/pkg/providers/*_test.go`, `gui/pkg/foxglove/*_test.go`, `gui/pkg/msgs/mowgli/mower_control_bind_test.go`, `gui/pkg/types/mocks_test.go` | Go `testing` | `cd gui && go test ./...` | `gui-ci.yml` → `go-tests` |
@@ -123,7 +123,6 @@ colcon test --packages-select fusion_graph --return-code-on-test-failure
 python3 -m pip install pyyaml pytest
 python3 ros2/scripts/check_config_drift.py                    # ros2-ci config-drift
 python3 -m pytest -q ros2/scripts/test_check_config_drift.py  # ros2-ci config-drift
-python3 -m pytest -q ros2/scripts/test_workspace_package_scripts.py  # ros2-ci config-drift
 python3 firmware/scripts/sync_ros_lib.py --check              # msg-codegen-drift
 python3 firmware/scripts/protocol_version_guard.py --check    # protocol-version-drift
 python3 firmware/scripts/board_defaults_parity.py             # firmware-ci defaults-parity

@@ -110,10 +110,10 @@ jobs:
           python3 -m pip install --quiet pyyaml
           python3 ros2/scripts/check_config_drift.py
 
-      - name: Unit-test standalone ROS2 scripts
+      - name: Unit-test check_config_drift.py
         run: |
           python3 -m pip install --quiet pytest
-          python3 -m pytest -q ros2/scripts/test_check_config_drift.py ros2/scripts/test_workspace_package_scripts.py
+          python3 -m pytest -q ros2/scripts/test_check_config_drift.py
 
   # ─── Build & Test ────────────────────────────────────────────────────────────
   # NO `strategy.matrix` here, deliberately, and the name is a literal.
@@ -391,6 +391,12 @@ jobs:
             -DMOWGLI_REQUIRE_MOSQUITTO=ON \
             --parallel-workers $(nproc) \
             --event-handlers console_cohesion+
+
+      - name: Test workspace package scripts
+        run: |
+          source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          source /opt/lyrical_vendor/local_setup.bash
+          python3 -m pytest -q scripts/test_workspace_package_scripts.py
 
       - name: Run tests
         run: |
