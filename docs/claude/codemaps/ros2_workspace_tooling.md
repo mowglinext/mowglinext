@@ -6,7 +6,7 @@
 | Task | Start here |
 |------|------------|
 | Build the workspace (devcontainer) | `ros2/Makefile` `build-full` / `build-pkg PKG=x` / `build-dev` → `ros2/scripts/build.sh` (env `BUILD_TYPE`, `PACKAGES`, `PACKAGES_MODE=up-to\|select`, L51-83) |
-| Control which package roots colcon sees | `ros2/scripts/sync_workspace_packages.sh` — globs `ros2/src/mowgli_*/` (L129), links `fusion_graph` (L175-177), `tools/motor` as `mowgli_tools` (L179-180), `opennav_coverage_msgs`, `universal_gnss_ros2`; `--print-base-paths` feeds build/test |
+| Control which package roots colcon sees | `ros2/scripts/sync_workspace_packages.sh` — globs `ros2/src/mowgli_*/` (L129), links `fusion_graph` (L175-177), `tools/motor` as `mowgli_tools` (L179-180), `opennav_coverage_msgs`, `universal_gnss_msgs`, and `universal_gnss_ros2`; `--print-base-paths` feeds build/test |
 | Run unit tests | `make test` → `ros2/scripts/test.sh` (`PACKAGES` env; requires `/ros2_ws/install/setup.bash`) |
 | Run headless Webots sim / E2E | `ros2/Makefile` `sim` (L81), `e2e-test` (L91), `e2e-test-no-lidar` (L111); harnesses `ros2/src/e2e_test.py`, `ros2/src/e2e_test_no_lidar.py` |
 | Sim will not start ("Failed to find a free participant", Webots IPC socket) | `ros2/scripts/sim-stop.sh` — SIGINT `ros2 launch`, kills Webots + node stragglers, wipes `/dev/shm/cyclone*`, `/tmp/webots/*` (L60-64) |
@@ -26,7 +26,7 @@
 | GNSS receiver hardware probes | `ros2/scripts/f9p_set_nav_prio.py`, `serial_latency_probe.py` (u-blox F9P over `/dev/ttyACM0`), `unicore_signalgroup_benchmark.py --host … ` (UM982 over SSH) |
 | Foxglove panels for the sim | `ros2/foxglove/mowgli_sim.json` (copied to `/ros2_ws/foxglove/` in the simulation stage, Dockerfile L552) |
 | Bare-metal (non-Docker) robot deploy | `ros2/systemd/mowgli.service` + `make deploy` / `make backup-maps` (`ROBOT_HOST`, `ROBOT_USER`) |
-| Submodule pins | `.gitmodules` (`universal-gnss` → `mowglinext` fork, branch `main`; `opennav_coverage` → upstream `main`) |
+| Submodule pins | `.gitmodules` (`universal-gnss` → `https://github.com/Pepeuch/universal-gnss.git`, pinned by the MowgliNext gitlink to validated release commits; current pin `v0.7.0-rc1`; `opennav_coverage` → upstream `main`) |
 | Container startup env | `ros2/scripts/ros2_entrypoint.sh` (sources lyrical + `/opt/ublox_msgs` + `/ros2_ws/install`) |
 
 ## Files
@@ -126,7 +126,7 @@
 ### CI (`.github/workflows/`)
 | Job (`ros2-ci.yml`) | Gate | What |
 |------|------|------|
-| `changes` | — | path filter as a job gate (`ros2/**`, `tools/motor/**`, `install/config/mowgli/**`, the workflow) so the required check always reports |
+| `changes` | — | path filter as a job gate (`ros2/**`, `.devcontainer/**`, `tools/motor/**`, `install/config/mowgli/**`, the workflow) so the required check always reports |
 | `config-drift` | hard | `python3 ros2/scripts/check_config_drift.py` + `pytest ros2/scripts/test_check_config_drift.py` |
 | `build-and-test` = **`Build & Test (ROS2 kilted)`** (required on `dev`) | hard | submodules recursive, `ln -s ../../tools/motor src/mowgli_tools`, cached GTSAM + F2C v3 source builds mirroring the Dockerfile, `touch` COLCON_IGNORE on the 5 opennav subpackages, `rosdep --skip-keys` them, `colcon build`/`colcon test`, `ros2 run mowgli_tools tune_drive_pid --help`, `full_system.launch.py --show-args` must NOT list `use_universal_gnss` |
 | `format-check` | hard | `git-clang-format-18 --style=file:ros2/.clang-format --diff <merge-base origin/main> -- ros2/src` (changed lines only) |
@@ -201,12 +201,12 @@ docker compose -f docker/docker-compose.simulation.yaml up dev-sim   # then: exe
 - `sync_workspace_packages.sh` refuses to overwrite a non-symlink entry in `/ros2_ws/src` (L101-104); CI's `ln -s ../../tools/motor src/mowgli_tools` and the script's `mowgli_tools` link are the same package under two mechanisms.
 - `opennav_coverage` COLCON_IGNORE markers are **untracked** files created at sync/build/CI time (`touch`), never committed (unforked submodule) — a fresh checkout without running the sync script or Dockerfile will try to compile the F2C-1.2.1 server packages and fail. Even with `INCLUDE_OPENNAV_COVERAGE_STACK=1` they are source-inspection only.
 - No in-tree package depends on `opennav_coverage_msgs` any more (`mowgli_coverage/package.xml` deps L17-28 → `mowgli_interfaces`; coverage action is `mowgli_interfaces/action/PlanCoverage`, CLAUDE.md Invariant 7). The submodule is still linked, COPYed and built (sync L135-138, Dockerfile L331-332) purely by inertia.
-- `universal-gnss` is pinned to the `mowglinext` fork branch `main` (gitlink `ab32f673`) per `.gitmodules`; only `gnss_ros2/` is a colcon package (`universal_gnss_ros2`), the `gnss_*` siblings are plain CMake subdirs pulled in at build. `UNIVERSAL_GNSS_PATH` overrides the vendored copy; legacy `/workspaces/universal-gnss` is only the fallback tried after it (sync L35-37, L65-72). The runtime stack does not launch it (`full_system.launch.py --show-args` must not list `use_universal_gnss`, asserted in CI and the Docker smoke test); the `mowgli-gps` sidecar owns GNSS.
+- `universal-gnss` uses the canonical `https://github.com/Pepeuch/universal-gnss.git` repository and is pinned by the MowgliNext gitlink to validated release commits (current pin `v0.7.0-rc1`). Both `universal_gnss_msgs` and `universal_gnss_ros2` are linked into the workspace; the `gnss_*` CMake subdirs are pulled in at build. `UNIVERSAL_GNSS_PATH` overrides the vendored copy; legacy `/workspaces/universal-gnss` is only the fallback tried after it (sync L35-37, L65-72). The runtime stack does not launch it (`full_system.launch.py --show-args` must not list `use_universal_gnss`, asserted in CI and the Docker smoke test); the `mowgli-gps` sidecar owns GNSS.
 - Dockerfile `build` stage runs `colcon test … || true` (L412-419) — image builds never fail on unit tests; the gate is `ros2-ci.yml`.
 - `ros2/CPPLINT.cfg` `set noparent` applies to `ros2/` only; cpplint is run by `make lint`, not by CI.
 
 ## Generated & vendored — do not hand-edit
 - `ros2/src/opennav_coverage/` — upstream `open-navigation/opennav_coverage` submodule @ `d6e41a29` (`main`); only `opennav_coverage_msgs` is ever linked/built; the 5 server subpackages are COLCON_IGNORE'd by untracked markers (see CLAUDE.md "Do NOT use the upstream `opennav_coverage` server").
-- `ros2/src/external/universal-gnss/` — `mowglinext/universal-gnss` fork submodule @ `ab32f673` (branch `main`, tracking `Pepeuch/universal-gnss` main); revert `.gitmodules` to `pepeuch/universal-gnss` directly once the fork is no longer needed. Top level: `gnss_core/ gnss_driver/ gnss_ntrip/ gnss_protocols/ gnss_ros2/ gnss_tools/ gnss_transport/ docs/ examples/ testdata/ MOWGLINEXT_TODO.md`.
+- `ros2/src/external/universal-gnss/` — canonical `https://github.com/Pepeuch/universal-gnss.git` submodule, pinned by the MowgliNext gitlink to validated release commits (current pin `v0.7.0-rc1`). Workspace links `universal_gnss_msgs/` and `gnss_ros2/` as `universal_gnss_msgs` and `universal_gnss_ros2`.
 - `/ros2_ws/src/*` symlinks, `build/ install/ log/`, `maps_backup/` — produced by `sync_workspace_packages.sh` / colcon / `make backup-maps`; gitignored.
 - `docker/logs/mow_sessions/*.jsonl` — session recordings written by `mow_session_monitor.py`; gitignored (`.gitignore` L64-65, only `.gitkeep` is force-tracked). The ad-hoc `.py`/`.md` analysis files sitting next to them ARE tracked.
