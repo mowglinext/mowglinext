@@ -738,6 +738,9 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   // mid-reverse budget from the previous one.
   reverse_escape_active_ = false;
   reverse_distance_done_ = 0.0;
+  reverse_followable_time_ = 0.0;
+  reverse_budget_touched_ = false;
+  reverse_engaged_index_ = 0;
 
   // Reset angle unwrapping state — the new path's first pose orientation
   // is the new reference; nothing prior to setPlan informs continuity.
@@ -1970,9 +1973,8 @@ void FTCController::holdObstacleMotion()
 // when the deviation search found no skirt this tick, and it fails safe — any
 // missing precondition (feature off, no footprint, budget spent, rear obstacle)
 // falls straight through to the existing waitOrThrowForObstacle behaviour.
-bool FTCController::reverseEscapeOrWait(const std::string& reason,
-                                        const ObstacleDeviation::Footprint& footprint,
-                                        double dt)
+ReverseEscapeAction FTCController::reverseEscapeStep(const ObstacleDeviation::Footprint& footprint,
+                                                     double dt)
 {
   ReverseEscapeCfg cfg;
   cfg.enabled = config_.obstacle_reverse_enabled;
@@ -2024,9 +2026,41 @@ bool FTCController::reverseEscapeOrWait(const std::string& reason,
                                                       ObstacleDeviation::kLethalOnlyThreshold);
   }
 
-  const ReverseEscapeAction action =
-      have_pose ? ReverseEscapeDecide(cfg, reverse_distance_done_, rear_clear)
-                : ReverseEscapeAction::kExhausted;
+  return have_pose ? ReverseEscapeDecide(cfg, reverse_distance_done_, rear_clear)
+                   : ReverseEscapeAction::kExhausted;
+}
+
+double FTCController::progressSinceReverseEngaged() const
+{
+  if (!reverse_budget_touched_ || global_plan_.empty())
+  {
+    return 0.0;
+  }
+  const std::size_t last = global_plan_.size() - 1;
+  const std::size_t from = std::min(reverse_engaged_index_, last);
+  const std::size_t to = std::min<std::size_t>(current_index_, last);
+  double length = 0.0;
+  for (std::size_t i = from; i < to; ++i)
+  {
+    length += std::hypot(global_plan_[i + 1].pose.position.x - global_plan_[i].pose.position.x,
+                         global_plan_[i + 1].pose.position.y - global_plan_[i].pose.position.y);
+  }
+  return length;
+}
+
+bool FTCController::reverseEscapeOrWait(const std::string& reason,
+                                        const ObstacleDeviation::Footprint& footprint,
+                                        double dt)
+{
+  ReverseEscapeCfg cfg;
+  cfg.enabled = config_.obstacle_reverse_enabled;
+  cfg.max_dist_m = config_.obstacle_reverse_max_dist_m;
+  cfg.speed_mps = config_.obstacle_reverse_speed_mps;
+
+  // This tick is NOT followable: an engaged escape stays committed (see
+  // ReverseEscapeShouldRelease).
+  reverse_followable_time_ = 0.0;
+  const ReverseEscapeAction action = reverseEscapeStep(footprint, dt);
 
   if (action == ReverseEscapeAction::kReverse)
   {
@@ -2040,6 +2074,11 @@ bool FTCController::reverseEscapeOrWait(const std::string& reason,
                   cfg.speed_mps);
     }
     reverse_escape_active_ = true;
+    if (!reverse_budget_touched_)
+    {
+      reverse_budget_touched_ = true;
+      reverse_engaged_index_ = current_index_;
+    }
     // A reverse-escape is an ACTIVE maneuver, not a passive hold — drop any
     // wait state so the two states never fight over cmd_vel.
     obstacle_waiting_ = false;
@@ -2494,8 +2533,39 @@ void FTCController::updateLateralDeviation(double dt)
   {
     obstacle_followable_time_ = 0.0;
   }
-  reverse_escape_active_ = false;
-  reverse_distance_done_ = 0.0;
+
+  // The path is followable THIS tick. That used to cancel an engaged
+  // reverse-escape at once and hand it a fresh budget — with feasibility
+  // flickering at the edge of what fits, the robot wagged reverse / forward at
+  // 5–10 Hz on the spot and the 0.30 m bound was never spent (282 engagements in
+  // 3 minutes at one path index, field 2026-09-20). The escape is now a
+  // committed manoeuvre, and its budget has to be earned back by real progress.
+  if (reverse_escape_active_)
+  {
+    const bool can_continue =
+        reverseEscapeStep(costmap_ros_->getRobotFootprint(), dt) == ReverseEscapeAction::kReverse;
+    if (!ReverseEscapeShouldRelease(
+            can_continue, dt, config_.obstacle_clear_hold_s, reverse_followable_time_))
+    {
+      return;  // keep backing out; computeVelocityCommands emits the reverse
+    }
+    RCLCPP_INFO(logger_,
+                "FTCController: reverse-escape released after %.2fm (%s) — following the profile.",
+                reverse_distance_done_,
+                can_continue ? "profile held" : "budget spent or rear blocked");
+    reverse_escape_active_ = false;
+    reverse_followable_time_ = 0.0;
+  }
+  if (reverse_budget_touched_)
+  {
+    ReverseEscapeCfg refill_cfg;
+    refill_cfg.max_dist_m = config_.obstacle_reverse_max_dist_m;
+    if (ReverseBudgetEarnsRefill(refill_cfg, progressSinceReverseEngaged()))
+    {
+      reverse_distance_done_ = 0.0;
+      reverse_budget_touched_ = false;
+    }
+  }
 
   // Step 2: slew lateral_deviation_ toward target_lateral_deviation_ at the
   // configured blend rate (m/s of lateral shift).
