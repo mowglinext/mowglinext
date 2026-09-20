@@ -149,9 +149,10 @@ an older updater ignores the additional receiver-progress fields.
 The GNSS container health probe loads the image's ROS environment and checks
 typed service results for the receiver and, when configured, NTRIP. Process
 responsiveness and actual receiver data progress are deliberately separate checks.
-The bounded GNSS diagnostic storage change is tracked separately in PR #684;
-release bundles need that change as well to migrate without adding unmanaged
-persistent storage.
+The GNSS sidecar adds no persistent storage: its launch logs and exports live
+in the bounded `/run/universal_gnss` tmpfs (PR #687), so a release bundle can
+introduce it on an existing robot without a storage migration. A release that
+ADDS a writable mount is refused at review time.
 
 1. Resolve a complete compatible deployment to immutable platform image digests.
    The review expires after 15 minutes and includes current and target images.
