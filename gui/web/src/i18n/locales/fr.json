@@ -3824,5 +3824,254 @@
     "componentsToUpdate": "Composants",
     "backupHelp": "Les réglages et les cartes sont sauvegardés avant l’installation. Le firmware de la carte principale reste inchangé.",
     "unavailableHelp": "Les mises à jour automatiques nécessitent le service de mise à jour hôte. Le mode Avancé affiche les versions installées et les comparaisons manuelles."
+  },
+  "settingsFields": {
+    "yaw_loop_enabled": {
+      "label": "Boucle de vitesse de lacet",
+      "tooltip": "Ferme la boucle gyro de vitesse de lacet du firmware. Désactivé = différentiel en boucle ouverte (les roues reçoivent la commande brute, sans correction de cap). Modifie le comportement de conduite : à tester après changement. Appliqué après un redémarrage de ROS2."
+    },
+    "yaw_kp": {
+      "label": "Kp boucle de lacet",
+      "tooltip": "Gain proportionnel de la boucle de lacet du firmware [m/s de correction différentielle par rad/s d'erreur]. Le firmware le borne à 0-5."
+    },
+    "yaw_ki": {
+      "label": "Ki boucle de lacet",
+      "tooltip": "Gain intégral de la boucle de lacet du firmware [m/s de correction par rad/s·s]. Le firmware le borne à 0-20."
+    },
+    "yaw_trim_limit_mps": {
+      "label": "Limite de correction de lacet",
+      "tooltip": "Correction différentielle maximale que la boucle de lacet peut ajouter entre les roues [m/s]. Le firmware la borne à 0-0,5."
+    },
+    "yaw_gyro_sign": {
+      "label": "Signe du gyroscope",
+      "tooltip": "Signe de l'axe Z du gyroscope par rapport au lacet positif du robot (sens antihoraire) : +1 ou -1. Si la boucle de lacet diverge (le robot tourne de plus en plus au lieu de corriger), inversez-le - sans reflasher le firmware."
+    },
+    "max_charge_voltage": {
+      "label": "Tension de charge max",
+      "tooltip": "Plafond de tension de charge envoyé au firmware [V]. Le firmware le borne à la limite compilée de la carte : ce réglage ne peut que rendre la charge PLUS prudente."
+    },
+    "max_charge_current": {
+      "label": "Courant de charge max",
+      "tooltip": "Plafond de courant de charge envoyé au firmware [A]. Le firmware le borne à la limite compilée de la carte : ce réglage ne peut que rendre la charge PLUS prudente."
+    },
+    "imu_cal_samples": {
+      "label": "Échantillons de calibration IMU",
+      "tooltip": "Nombre d'échantillons IMU moyennés pour une calibration du biais (hardware_bridge_node, déclenchée automatiquement sur la base)."
+    },
+    "imu_cal_auto_rest_sec": {
+      "label": "Repos avant calibration IMU auto",
+      "tooltip": "Durée en secondes pendant laquelle le robot doit rester immobile sur la base avant une calibration automatique du biais IMU."
+    },
+    "imu_cal_periodic_recal_sec": {
+      "label": "Recalibration IMU périodique",
+      "tooltip": "Intervalle en secondes entre deux recalibrations automatiques du biais IMU tant que le robot reste sur la base."
+    },
+    "use_magnetometer": {
+      "label": "Fusionner le cap magnétomètre",
+      "tooltip": "Laisse /imu/mag_yaw influencer le cap dans le repère carte. Le champ des moteurs induit un biais dépendant du cap qu'aucune calibration statique ne corrige : à laisser désactivé sauf si le magnétomètre est isolé des moteurs."
+    },
+    "enable_mag_cal": {
+      "label": "Appliquer la calibration magnétomètre",
+      "tooltip": "Applique la calibration magnétomètre enregistrée dans mag_yaw_publisher_node."
+    },
+    "declination_deg": {
+      "label": "Déclinaison magnétique",
+      "tooltip": "Déclinaison magnétique locale en degrés (positive vers l'est), ajoutée au cap du magnétomètre."
+    },
+    "min_horizontal_uT": {
+      "label": "Champ horizontal minimal",
+      "tooltip": "Les mesures du magnétomètre dont le champ horizontal est inférieur à cette valeur [µT] sont rejetées."
+    },
+    "mag_yaw_variance": {
+      "label": "Variance du cap magnétomètre",
+      "tooltip": "Variance du facteur de cap magnétomètre [rad²]. Plus grande = le localisateur fait moins confiance au magnétomètre."
+    },
+    "loc_gnss_acc_pause_m": {
+      "label": "Pause au-delà de la précision GNSS",
+      "tooltip": "La tonte (lame active) se met en pause quand la précision horizontale annoncée par le récepteur reste au-dessus de cette valeur [m]. La valeur par défaut est bien au-dessus du RTK-Fixed (~0,015 m) et du RTK-Float courant, mais sous le GPS simple (~1,5 m)."
+    },
+    "loc_gnss_acc_resume_m": {
+      "label": "Reprise sous la précision GNSS",
+      "tooltip": "La tonte reprend quand la précision horizontale annoncée repasse sous cette valeur [m]. À garder sous le seuil de pause (hystérésis)."
+    },
+    "loc_gnss_stale_s": {
+      "label": "Délai GNSS périmé",
+      "tooltip": "Un /gps/status plus ancien que cette durée est considéré comme un flux GNSS mort [s]."
+    },
+    "loc_sigma_pause_persist_s": {
+      "label": "Anti-rebond de pause",
+      "tooltip": "La condition dégradée doit durer ce temps avant la mise en pause [s], pour que les scintillements RTK ne fassent pas osciller la garde."
+    },
+    "loc_sigma_resume_persist_s": {
+      "label": "Anti-rebond de reprise",
+      "tooltip": "La condition saine doit durer ce temps avant la reprise de la tonte [s]."
+    },
+    "loc_sigma_pause_m": {
+      "label": "Garde-fou de divergence (pause)",
+      "tooltip": "Met en pause quand le sigma de position fusionnée dépasse cette valeur [m] - détecte un localisateur qui rejette tous les fix alors que le récepteur semble sain. DOIT rester au-dessus du plafond pivot/glissement du localisateur (~2,35 m), sinon la tonte se bloque à 0 %. 0 désactive le garde-fou."
+    },
+    "loc_sigma_resume_m": {
+      "label": "Garde-fou de divergence (reprise)",
+      "tooltip": "Reprend quand le sigma de position fusionnée repasse sous cette valeur [m]."
+    },
+    "loc_sigma_backstop_persist_s": {
+      "label": "Anti-rebond du garde-fou",
+      "tooltip": "Le sigma fusionné doit rester au-dessus du garde-fou pendant ce temps avant la mise en pause [s]."
+    },
+    "dock_pose_yaw_sigma_rad": {
+      "label": "Sigma du cap de la base",
+      "tooltip": "Incertitude du cap de base enregistré, utilisée quand la pose est initialisée sur la base [rad]."
+    },
+    "use_gps_dock_detection": {
+      "label": "Détection GPS de la base",
+      "tooltip": "Guide l'approche finale sur la pose de contact de la base dérivée du GPS (nécessite RTK-Fixed). À désactiver pour une base où le GPS reste en Float : l'accostage utilise alors l'ancienne approche par TF du localisateur."
+    },
+    "dock_calib_reverse_distance_m": {
+      "label": "Distance de recul (calibration)",
+      "tooltip": "Longueur du recul rectiligne hors de la base pendant la calibration en un clic [m]. Plus long = cap mieux estimé."
+    },
+    "dock_calib_reverse_speed_ms": {
+      "label": "Vitesse de recul (calibration)",
+      "tooltip": "Vitesse du recul de calibration [m/s] (lame coupée, filtrée par collision_monitor)."
+    },
+    "dock_calib_redock_overshoot_m": {
+      "label": "Dépassement au ré-accostage",
+      "tooltip": "Avance supplémentaire au-delà du point GPS capturé sur la base lors du ré-accostage, pour que les contacts de charge s'engagent [m]."
+    },
+    "dock_calib_rtk_wait_timeout_s": {
+      "label": "Attente RTK (calibration)",
+      "tooltip": "Durée d'attente du RTK-Fixed sur la base avant de démarrer la calibration [s]."
+    },
+    "dock_calib_redock_charge_timeout_s": {
+      "label": "Délai de charge au ré-accostage",
+      "tooltip": "Durée d'attente de la charge lors du ré-accostage avant l'échec NO_CHARGE_ON_REDOCK [s]."
+    },
+    "dock_calib_cog_min_samples": {
+      "label": "Échantillons COG min (calibration)",
+      "tooltip": "Nombre minimal d'échantillons valides de route GPS (COG) requis pendant le recul."
+    },
+    "dock_calib_cog_std_max_rad": {
+      "label": "Dispersion COG max (calibration)",
+      "tooltip": "Plafond de l'écart-type circulaire des échantillons COG [rad]. Ne filtre que les grosses dérives en RTK-Float."
+    },
+    "dock_calib_cog_bearing_match_max_rad": {
+      "label": "Accord COG/azimut (calibration)",
+      "tooltip": "Écart maximal entre le cap COG moyen et l'azimut du déplacement GPS [rad]. Contrôle de cohérence qui détecte un flux COG mort ou périmé."
+    },
+    "dock_calib_min_baseline_displacement_m": {
+      "label": "Déplacement min (calibration)",
+      "tooltip": "Recul minimal requis avant d'estimer un cap [m]."
+    },
+    "turn_speed_ratio": {
+      "label": "Ratio de vitesse en virage",
+      "tooltip": "Vitesse dans les demi-tours de fin de bande, en fraction de la vitesse de tonte. Baissez-la pour adoucir les virages : 0,6 retire ~25 % de la vitesse de pointe de la roue extérieure. Bornée à (0, 1] au lancement, avec pour plancher la vitesse minimale du contrôleur."
+    },
+    "mow_direction": {
+      "label": "Sens du périmètre",
+      "tooltip": "Sens de parcours des passes de périmètre : 0 = choix du planificateur, 1 = horaire, 2 = antihoraire. À régler pour qu'une lame latérale reste du côté à couper."
+    },
+    "swath_overlap": {
+      "label": "Chevauchement des bandes",
+      "tooltip": "Les bandes adjacentes se chevauchent de cette valeur [m] (espacement = largeur de coupe - chevauchement). Couvre la jonction périmètre/bandes et les marges. 0 = bandes espacées exactement d'une largeur de coupe."
+    },
+    "obstacle_reverse_enabled": {
+      "label": "Dégagement en marche arrière",
+      "tooltip": "Quand le robot est coincé contre un obstacle avec les deux côtés bloqués, autorise un court RECUL borné (l'arrière est vérifié à chaque cycle, arrêt à la moindre ambiguïté). Mouvement physique : surveillez les premiers essais après modification."
+    },
+    "obstacle_reverse_max_dist_m": {
+      "label": "Distance du recul de dégagement",
+      "tooltip": "Plafond de distance reculée par dégagement [m]. Borné à 0-1,0 au lancement."
+    },
+    "obstacle_reverse_speed_mps": {
+      "label": "Vitesse du recul de dégagement",
+      "tooltip": "Vitesse du recul de dégagement [m/s]. Doit dépasser la zone morte du firmware (~0,05 m/s) pour bouger. Bornée à 0-0,30 au lancement."
+    },
+    "area_simplification_tolerance": {
+      "label": "Tolérance de simplification de zone",
+      "tooltip": "Tolérance Douglas-Peucker appliquée au contour d'une zone enregistrée [m]. Sous 0,05 m on ne conserve que le bruit GNSS/direction ; près de la largeur de coupe on perd une passe extérieure entière."
+    },
+    "area_record_rate_hz": {
+      "label": "Fréquence d'enregistrement de zone",
+      "tooltip": "Fréquence d'échantillonnage de la position pendant l'enregistrement d'une zone [Hz]. Plafonnée par la fréquence de l'arbre de comportement : une valeur supérieure est sans effet."
+    },
+    "tick_rate": {
+      "label": "Fréquence de l'arbre de comportement",
+      "tooltip": "Fréquence de cycle de l'arbre de comportement [Hz]. C'est aussi le plafond de la fréquence d'enregistrement de zone."
+    },
+    "bt_debug_logging": {
+      "label": "Journal de débogage de l'arbre",
+      "tooltip": "Journalise chaque transition d'état de l'arbre de comportement. Verbeux : à activer uniquement pour diagnostiquer."
+    },
+    "idle_nav2_suspend": {
+      "label": "Suspendre Nav2 sur la base",
+      "tooltip": "Met la pile Nav2 en pause quand le robot est sur la base : les costmaps cessent de tourner et la charge CPU/thermique au repos chute. Nav2 est relancé (collision_monitor actif) avant tout mouvement."
+    },
+    "start_blocked_escape_enabled": {
+      "label": "Dégagement de la pose de départ",
+      "tooltip": "CRITIQUE POUR LA SÉCURITÉ, mouvement physique. Quand tous les transits sont refusés parce que le robot se tient sur une cellule interdite, le décale par un court mouvement borné, lame coupée, à l'opposé de son dernier déplacement. Désactivé par défaut : un essai terrain a montré de mauvaises directions poussant le robot hors limite. À n'activer que sur un site surveillé où la direction a été validée."
+    },
+    "start_blocked_escape_speed": {
+      "label": "Vitesse de dégagement",
+      "tooltip": "Vitesse du dégagement de la pose de départ [m/s]. Plafond codé en dur : 0,15."
+    },
+    "start_blocked_escape_distance": {
+      "label": "Distance de dégagement",
+      "tooltip": "Budget de distance du dégagement de la pose de départ [m]. Plafond codé en dur : 0,60."
+    },
+    "start_blocked_escape_timeout_s": {
+      "label": "Délai de dégagement",
+      "tooltip": "Limite de temps du dégagement [s] : termine le mouvement même si les roues ne tournent pas. Plafond codé en dur : 15."
+    },
+    "start_blocked_escape_min_signal_speed": {
+      "label": "Vitesse de signal min (dégagement)",
+      "tooltip": "Une commande de mouvement passée plus lente que cette valeur [m/s] compte comme « à l'arrêt » et ne donne aucune direction de dégagement."
+    },
+    "start_blocked_escape_signal_max_age_s": {
+      "label": "Âge max du signal (dégagement)",
+      "tooltip": "Âge maximal de la direction du dernier mouvement [s]. Trop court est sans risque (aucun mouvement) ; trop long risque d'agir sur une direction qui ne décrit plus l'arrivée du robot. Plafond codé en dur : 300."
+    }
+  },
+  "settingsFieldGroups": {
+    "safetyWarning": "Ces réglages modifient les mouvements physiques du robot. Surveillez les premiers essais après les avoir changés. Le firmware reste la seule autorité de sécurité.",
+    "yawLoop": {
+      "title": "Boucle de lacet du firmware",
+      "description": "Boucle différentielle de vitesse de lacet basée sur le gyroscope, exécutée dans le firmware STM32. Les valeurs sont envoyées au firmware au démarrage, qui les revalide et les borne."
+    },
+    "chargeLimits": {
+      "title": "Limites de charge",
+      "description": "Plafonds de charge transmis au firmware. Le firmware les borne aux limites compilées de la carte : ils ne peuvent être que resserrés."
+    },
+    "localizationGuard": {
+      "title": "Garde de localisation",
+      "description": "Met la tonte (lame active) en pause quand la solution GNSS se dégrade, et la reprend quand elle se rétablit. Basée sur la précision annoncée par le récepteur, avec un garde-fou de divergence sur la position fusionnée."
+    },
+    "dockDetection": {
+      "title": "Détection de la base",
+      "description": "Manière dont l'approche finale localise les contacts de charge."
+    },
+    "dockCalibration": {
+      "title": "Calibration de la base en un clic",
+      "description": "Réglage de la manœuvre de calibration : le recul hors de la base, le ré-accostage et les contrôles de cohérence de la route GPS (COG)."
+    },
+    "turnSpeed": {
+      "title": "Virages",
+      "description": "Vitesse dans les demi-tours de fin de bande, relative à la vitesse de tonte."
+    },
+    "reverseEscape": {
+      "title": "Dégagement en marche arrière",
+      "description": "Recul borné utilisé quand le robot est coincé contre un obstacle sans issue vers l'avant."
+    },
+    "areaRecording": {
+      "title": "Enregistrement de zone",
+      "description": "Échantillonnage et simplification de la trajectoire du robot pendant l'enregistrement du contour d'une zone."
+    },
+    "behaviorTree": {
+      "title": "Arbre de comportement",
+      "description": "Options d'exécution de l'arbre de comportement qui enchaîne tonte, accostage et récupération."
+    },
+    "startEscape": {
+      "title": "Dégagement de la pose de départ",
+      "description": "Dernier recours quand le robot se tient sur une cellule interdite et que tout plan depuis sa propre pose est refusé."
+    }
   }
 }

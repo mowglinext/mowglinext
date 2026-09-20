@@ -46,25 +46,10 @@ func TestTemplateTypesAssetCoversUnschemaedFloatKeys(t *testing.T) {
 	schemaKinds := schemaNumberKinds(mustSchema(t))
 
 	for _, key := range []string{
-		"tick_rate",
-		"imu_cal_auto_rest_sec",
-		"imu_cal_periodic_recal_sec",
-		"area_record_rate_hz",
-		"loc_gnss_stale_s",
-		"loc_sigma_pause_m",
-		"loc_sigma_resume_m",
-		"loc_sigma_pause_persist_s",
-		"loc_sigma_resume_persist_s",
-		"loc_sigma_backstop_persist_s",
-		"start_blocked_escape_timeout_s",
-		"start_blocked_escape_signal_max_age_s",
-		"dock_calib_redock_charge_timeout_s",
-		"dock_calib_reverse_distance_m",
-		"dock_calib_rtk_wait_timeout_s",
 		"dock_pose_x",
 		"dock_pose_y",
 		"dock_pose_yaw",
-		"min_horizontal_uT",
+		"max_mps",
 	} {
 		assert.Equal(t, yamlNumberFloat, kinds[key], "%s must be declared a float by the template asset", key)
 		_, inSchema := schemaKinds[key]

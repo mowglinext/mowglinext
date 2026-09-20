@@ -151,6 +151,40 @@
           "minimum": 0,
           "maximum": 255,
           "description": "Estimated static-friction deadband of the drive motors in PWM. Sanity gate only, never sent to the firmware: when the configured wheel_pid_* set cannot reach it (integral_limit + kp*0.03 + pwm_per_mps*0.03), hardware_bridge sends the template gains instead and logs an error; a live change that fails the gate is rejected."
+        },
+        "yaw_loop_enabled": {
+          "type": "boolean",
+          "title": "Yaw-Rate Loop",
+          "default": true,
+          "description": "Close the firmware gyro yaw-rate loop. Off = open differential passthrough (the wheels get the raw command, no heading trim). Affects how the robot drives: test after changing. Applied after a ROS2 restart."
+        },
+        "yaw_kp": {
+          "type": "number",
+          "title": "Yaw Loop Kp",
+          "default": 0.12,
+          "description": "Proportional gain of the firmware yaw-rate loop [m/s of differential trim per rad/s of yaw error]. The firmware clamps it to 0-5."
+        },
+        "yaw_ki": {
+          "type": "number",
+          "title": "Yaw Loop Ki",
+          "default": 0.4,
+          "description": "Integral gain of the firmware yaw-rate loop [m/s of trim per rad/s·s]. The firmware clamps it to 0-20."
+        },
+        "yaw_trim_limit_mps": {
+          "type": "number",
+          "title": "Yaw Trim Limit",
+          "default": 0.15,
+          "description": "Maximum differential trim the yaw loop may add between the wheels [m/s]. The firmware clamps it to 0-0.5."
+        },
+        "yaw_gyro_sign": {
+          "type": "integer",
+          "title": "Gyro Sign",
+          "default": 1,
+          "description": "Sign of the onboard gyro Z axis versus robot +yaw (counter-clockwise): +1 or -1. If the yaw loop diverges (the robot spins harder instead of correcting), flip this - no firmware reflash needed.",
+          "enum": [
+            1,
+            -1
+          ]
         }
       }
     },
@@ -254,6 +288,24 @@
           "title": "GPS Antenna Offset Z",
           "default": 0.2,
           "description": "Body-frame up offset of GPS antenna from base_footprint (metres)."
+        },
+        "imu_cal_samples": {
+          "type": "integer",
+          "title": "IMU Calibration Samples",
+          "default": 200,
+          "description": "Number of IMU samples averaged for one bias calibration (hardware_bridge_node, auto-triggered on the dock)."
+        },
+        "imu_cal_auto_rest_sec": {
+          "type": "number",
+          "title": "IMU Auto-Calibration Rest Time",
+          "default": 15.0,
+          "description": "Seconds the robot must rest on the dock before an automatic IMU bias calibration starts."
+        },
+        "imu_cal_periodic_recal_sec": {
+          "type": "number",
+          "title": "IMU Periodic Recalibration",
+          "default": 600.0,
+          "description": "Seconds between automatic IMU bias recalibrations while the robot stays docked."
         }
       }
     },
@@ -469,6 +521,90 @@
         }
       ]
     },
+    "localization_settings": {
+      "title": "Localization",
+      "type": "object",
+      "properties": {
+        "use_magnetometer": {
+          "type": "boolean",
+          "title": "Fuse Magnetometer Yaw",
+          "default": false,
+          "description": "Let /imu/mag_yaw influence the map-frame heading. The chassis motor field induces a heading-dependent bias no static calibration can remove, so keep this off unless the magnetometer is isolated from the motors."
+        },
+        "enable_mag_cal": {
+          "type": "boolean",
+          "title": "Apply Magnetometer Calibration",
+          "default": false,
+          "description": "Apply the stored magnetometer calibration in mag_yaw_publisher_node."
+        },
+        "declination_deg": {
+          "type": "number",
+          "title": "Magnetic Declination",
+          "default": 1.5,
+          "description": "Local magnetic declination in degrees (east positive), added to the magnetometer heading."
+        },
+        "min_horizontal_uT": {
+          "type": "number",
+          "title": "Min Horizontal Field",
+          "default": 5.0,
+          "description": "Magnetometer samples whose horizontal field is below this [µT] are rejected as unreliable."
+        },
+        "mag_yaw_variance": {
+          "type": "number",
+          "title": "Magnetometer Yaw Variance",
+          "default": 0.0027,
+          "description": "Variance of the magnetometer yaw factor [rad²]. Larger = the localizer trusts the magnetometer less."
+        },
+        "loc_gnss_acc_pause_m": {
+          "type": "number",
+          "title": "Pause Above GNSS Accuracy",
+          "default": 0.3,
+          "description": "Blade-on mowing pauses when the receiver-reported horizontal accuracy stays above this [m]. The default sits far above RTK-Fixed (~0.015 m) and ordinary RTK-Float, but well under plain GPS (~1.5 m)."
+        },
+        "loc_gnss_acc_resume_m": {
+          "type": "number",
+          "title": "Resume Below GNSS Accuracy",
+          "default": 0.15,
+          "description": "Mowing resumes once the reported horizontal accuracy falls back below this [m]. Keep it below the pause threshold (hysteresis)."
+        },
+        "loc_gnss_stale_s": {
+          "type": "number",
+          "title": "GNSS Stale Timeout",
+          "default": 5.0,
+          "description": "A /gps/status older than this counts as a dead GNSS feed [s]."
+        },
+        "loc_sigma_pause_persist_s": {
+          "type": "number",
+          "title": "Pause Debounce",
+          "default": 3.0,
+          "description": "The degraded condition must hold this long before mowing pauses [s], so per-epoch RTK flicker does not chatter the guard."
+        },
+        "loc_sigma_resume_persist_s": {
+          "type": "number",
+          "title": "Resume Debounce",
+          "default": 2.0,
+          "description": "The healthy condition must hold this long before mowing resumes [s]."
+        },
+        "loc_sigma_pause_m": {
+          "type": "number",
+          "title": "Divergence Backstop (Pause)",
+          "default": 5.0,
+          "description": "Pause when the fused position sigma exceeds this [m] - catches a localizer rejecting every fix while the receiver looks healthy. MUST stay above the localizer's own ~2.35 m pivot/slip ceiling or mowing livelocks at 0 %. 0 disables the backstop."
+        },
+        "loc_sigma_resume_m": {
+          "type": "number",
+          "title": "Divergence Backstop (Resume)",
+          "default": 2.0,
+          "description": "Resume once the fused position sigma falls back below this [m]."
+        },
+        "loc_sigma_backstop_persist_s": {
+          "type": "number",
+          "title": "Backstop Debounce",
+          "default": 10.0,
+          "description": "The fused sigma must stay above the backstop this long before it pauses mowing [s]."
+        }
+      }
+    },
     "docking_settings": {
       "title": "Docking",
       "description": "Dock position (X, Y, Yaw) is set from the map editor. Other docking parameters can be adjusted here.",
@@ -515,6 +651,72 @@
           "title": "Charging Threshold",
           "default": 0.3,
           "description": "Battery current (A) at which SimpleChargingDock considers the cradle reached. Higher = more forward press into the contacts before stopping; lower = stops sooner. 0.3 A is a stable seat on the YardForce charger."
+        },
+        "dock_pose_yaw_sigma_rad": {
+          "type": "number",
+          "title": "Dock Yaw Sigma",
+          "default": 0.035,
+          "description": "Uncertainty of the stored dock heading used when the pose is seeded on the dock [rad]."
+        },
+        "use_gps_dock_detection": {
+          "type": "boolean",
+          "title": "GPS Dock Detection",
+          "default": true,
+          "description": "Steer the final docking approach on the GPS-derived dock contact pose (needs RTK-Fixed). Turn off at a cradle where GPS only reaches Float: docking then uses the legacy localizer-TF approach."
+        },
+        "dock_calib_reverse_distance_m": {
+          "type": "number",
+          "title": "Calibration Reverse Distance",
+          "default": 2.0,
+          "description": "Length of the straight reverse leg off the dock during one-click dock calibration [m]. Longer = tighter heading fit."
+        },
+        "dock_calib_reverse_speed_ms": {
+          "type": "number",
+          "title": "Calibration Reverse Speed",
+          "default": 0.15,
+          "description": "Speed of the calibration reverse leg [m/s] (blade off, filtered by collision_monitor)."
+        },
+        "dock_calib_redock_overshoot_m": {
+          "type": "number",
+          "title": "Calibration Re-Dock Overshoot",
+          "default": 0.3,
+          "description": "Extra forward travel past the captured on-dock GPS point on the re-dock leg, so the charging contacts seat [m]."
+        },
+        "dock_calib_rtk_wait_timeout_s": {
+          "type": "number",
+          "title": "Calibration RTK Wait",
+          "default": 10.0,
+          "description": "How long the calibration waits for RTK-Fixed on the dock before starting [s]."
+        },
+        "dock_calib_redock_charge_timeout_s": {
+          "type": "number",
+          "title": "Calibration Re-Dock Charge Timeout",
+          "default": 30.0,
+          "description": "How long the re-dock leg waits for charging before failing with NO_CHARGE_ON_REDOCK [s]."
+        },
+        "dock_calib_cog_min_samples": {
+          "type": "integer",
+          "title": "Calibration Min COG Samples",
+          "default": 8,
+          "description": "Minimum number of valid GPS course-over-ground samples required over the reverse leg."
+        },
+        "dock_calib_cog_std_max_rad": {
+          "type": "number",
+          "title": "Calibration Max COG Spread",
+          "default": 0.7,
+          "description": "Circular standard deviation ceiling of the COG samples [rad]. Only screens gross RTK-Float wander."
+        },
+        "dock_calib_cog_bearing_match_max_rad": {
+          "type": "number",
+          "title": "Calibration COG/Bearing Match",
+          "default": 0.35,
+          "description": "Maximum difference between the mean COG heading and the GPS travel bearing [rad]. A sanity check that catches a dead or stale COG feed."
+        },
+        "dock_calib_min_baseline_displacement_m": {
+          "type": "number",
+          "title": "Calibration Min Displacement",
+          "default": 0.5,
+          "description": "Minimum reverse displacement required before a heading is fitted [m]."
         }
       }
     },
@@ -640,6 +842,29 @@
           "maximum": 179,
           "default": -1.0,
           "description": "Swath (mowing line) direction. -1 (or any negative) = auto: the coverage server picks the swath-count-minimising angle. 0..179 forces a fixed swath angle in degrees."
+        },
+        "turn_speed_ratio": {
+          "type": "number",
+          "title": "Turn Speed Ratio",
+          "default": 0.8,
+          "description": "Speed in swath-end turns as a fraction of Mowing Speed. Lower it to take heat out of the turns: 0.6 removes ~25 % of the peak outer-wheel speed. Clamped to (0, 1] at launch and floored at the controller's minimum speed."
+        },
+        "mow_direction": {
+          "type": "integer",
+          "title": "Perimeter Direction",
+          "default": 0,
+          "description": "Winding of the perimeter/headland passes: 0 = planner default, 1 = clockwise, 2 = counter-clockwise. Set it so a side-mounted blade stays on the cut side.",
+          "enum": [
+            0,
+            1,
+            2
+          ]
+        },
+        "swath_overlap": {
+          "type": "number",
+          "title": "Swath Overlap",
+          "default": 0.02,
+          "description": "Adjacent swaths overlap by this much [m] (swath spacing = tool width - overlap). Covers the headland/swath seam and edge margins. 0 = swaths exactly one tool width apart."
         }
       }
     },
@@ -694,6 +919,18 @@
           "title": "Manual Resume Percent",
           "default": 30.0,
           "description": "Floor for an operator-forced resume from the charger: pressing Play while the robot is charging mid-session resumes mowing only above this percentage. Must be greater than Low Percent or the robot re-docks within minutes."
+        },
+        "max_charge_voltage": {
+          "type": "number",
+          "title": "Max Charge Voltage",
+          "default": 29.4,
+          "description": "Charge voltage ceiling sent to the firmware [V]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+        },
+        "max_charge_current": {
+          "type": "number",
+          "title": "Max Charge Current",
+          "default": 1.2,
+          "description": "Charge current ceiling sent to the firmware [A]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
         }
       }
     },
@@ -778,6 +1015,24 @@
           "title": "Approach Slowdown Ratio",
           "default": 0.7,
           "description": "Speed factor when a scan return enters the chassis+15 cm approach box (LiDAR variant). 0.3 = slow to 30% of commanded speed."
+        },
+        "obstacle_reverse_enabled": {
+          "type": "boolean",
+          "title": "Reverse Escape",
+          "default": true,
+          "description": "When the robot is wedged beside an obstacle with both skirt sides blocked, allow a short bounded REVERSE (rear checked for lethal cells every tick, stops on any ambiguity). Physical motion: supervise the first runs after changing it."
+        },
+        "obstacle_reverse_max_dist_m": {
+          "type": "number",
+          "title": "Reverse Escape Distance",
+          "default": 0.3,
+          "description": "Hard cap on the distance reversed per escape [m]. Clamped to 0-1.0 at launch."
+        },
+        "obstacle_reverse_speed_mps": {
+          "type": "number",
+          "title": "Reverse Escape Speed",
+          "default": 0.15,
+          "description": "Speed of the reverse escape [m/s]. Must clear the firmware ~0.05 m/s deadband to move at all. Clamped to 0-0.30 at launch."
         }
       }
     },
@@ -806,6 +1061,18 @@
           "type": "string",
           "title": "Map Save Path",
           "description": "Container path where map artefacts are written."
+        },
+        "area_simplification_tolerance": {
+          "type": "number",
+          "title": "Area Simplification Tolerance",
+          "default": 0.05,
+          "description": "Douglas-Peucker tolerance applied to a recorded area outline [m]. Below 0.05 m only GNSS/steering jitter is preserved; near the tool width a whole outer pass is lost."
+        },
+        "area_record_rate_hz": {
+          "type": "number",
+          "title": "Area Recording Rate",
+          "default": 10.0,
+          "description": "Position sampling rate while recording an area [Hz]. Capped by the behaviour-tree tick rate: a larger value is silently ineffective."
         }
       }
     },
@@ -1069,6 +1336,60 @@
           "minimum": 0.0,
           "maximum": 10.0,
           "description": "Radius (m) around the dock pose, in every direction, exempt from Transit Boundary Margin above -- so the dock approach carries no bias at all, not just \"never blocked\". Only takes effect once a dock pose is set; widen it if your dock sees a lot of GNSS drift (e.g. under a canopy)."
+        },
+        "tick_rate": {
+          "type": "number",
+          "title": "Behaviour Tree Tick Rate",
+          "default": 10.0,
+          "description": "How often the behaviour tree ticks [Hz]. Also the ceiling for the area recording rate."
+        },
+        "bt_debug_logging": {
+          "type": "boolean",
+          "title": "Behaviour Tree Debug Logging",
+          "default": false,
+          "description": "Log every behaviour-tree state transition. Verbose: enable only while diagnosing."
+        },
+        "idle_nav2_suspend": {
+          "type": "boolean",
+          "title": "Suspend Nav2 on the Dock",
+          "default": false,
+          "description": "Pause the Nav2 stack while parked on the dock so the costmaps stop looping and idle CPU/thermal load drops. Nav2 is resumed (collision_monitor back up) before any motion."
+        },
+        "start_blocked_escape_enabled": {
+          "type": "boolean",
+          "title": "Start-Pose Escape",
+          "default": false,
+          "description": "SAFETY-CRITICAL, physical motion. When every transit is refused because the robot stands on a keepout cell, nudge it off with a short bounded blade-off move opposite its last motion. Off by default: a field test showed wrong direction guesses pushing the robot across the boundary. Enable only on a supervised site where the direction has been validated."
+        },
+        "start_blocked_escape_speed": {
+          "type": "number",
+          "title": "Escape Speed",
+          "default": 0.1,
+          "description": "Speed of the start-pose escape [m/s]. Hard ceiling 0.15 in code."
+        },
+        "start_blocked_escape_distance": {
+          "type": "number",
+          "title": "Escape Distance",
+          "default": 0.4,
+          "description": "Distance budget of the start-pose escape [m]. Hard ceiling 0.60 in code."
+        },
+        "start_blocked_escape_timeout_s": {
+          "type": "number",
+          "title": "Escape Timeout",
+          "default": 6.0,
+          "description": "Hard time bound of the escape [s]: ends the move even if the wheels are not turning. Hard ceiling 15 in code."
+        },
+        "start_blocked_escape_min_signal_speed": {
+          "type": "number",
+          "title": "Escape Min Signal Speed",
+          "default": 0.03,
+          "description": "A past motion command slower than this [m/s] counts as 'not moving' and gives no escape direction."
+        },
+        "start_blocked_escape_signal_max_age_s": {
+          "type": "number",
+          "title": "Escape Signal Max Age",
+          "default": 90.0,
+          "description": "How old the last-motion direction may be [s]. Too short is fail-safe (no motion); too long risks acting on a direction that no longer describes how the robot arrived. Hard ceiling 300 in code."
         }
       }
     }

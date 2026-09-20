@@ -232,10 +232,10 @@ func TestPostSettingsYAML_LeavesStringsAndBoolsAlone(t *testing.T) {
 }
 
 // TestPostSettingsYAML_TemplateRepairsDemotedFloat is the repair case the
-// on-disk fallback cannot handle: tick_rate is absent from the JSON schema, the
-// file ALREADY holds the demoted "10", and only the ROS2 template knows it is a
-// double (template value 10.0). full_system.launch.py casts it, but
-// hardware_bridge and every other consumer of such a key does not.
+// on-disk fallback cannot handle: max_mps is absent from the JSON schema, the
+// file ALREADY holds the demoted "1", and only the ROS2 template knows it is a
+// double (template value 0.5). A consumer that does not cast such a key aborts
+// on the type mismatch.
 func TestPostSettingsYAML_TemplateRepairsDemotedFloat(t *testing.T) {
 	chdirToGuiRoot(t)
 	resetSchemaCache()
@@ -243,20 +243,20 @@ func TestPostSettingsYAML_TemplateRepairsDemotedFloat(t *testing.T) {
 
 	existing := `mowgli:
   ros__parameters:
-    tick_rate: 10
-    imu_cal_auto_rest_sec: 15
-    loc_sigma_pause_m: 5
+    max_mps: 1
+    dock_pose_x: 15
+    dock_pose_yaw: 5
 `
 	content := postSettingsYAML(t, existing, map[string]any{"mowing_speed": 0.42})
 
-	assert.Contains(t, content, "tick_rate: 10.0")
-	assert.Contains(t, content, "imu_cal_auto_rest_sec: 15.0")
-	assert.Contains(t, content, "loc_sigma_pause_m: 5.0")
+	assert.Contains(t, content, "max_mps: 1.0")
+	assert.Contains(t, content, "dock_pose_x: 15.0")
+	assert.Contains(t, content, "dock_pose_yaw: 5.0")
 
 	params := decodeParams(t, content)
-	assert.IsType(t, float64(0), params["tick_rate"])
-	assert.IsType(t, float64(0), params["imu_cal_auto_rest_sec"])
-	assert.IsType(t, float64(0), params["loc_sigma_pause_m"])
+	assert.IsType(t, float64(0), params["max_mps"])
+	assert.IsType(t, float64(0), params["dock_pose_x"])
+	assert.IsType(t, float64(0), params["dock_pose_yaw"])
 }
 
 // TestPostSettingsYAML_TemplateIntStaysInt pins the other direction: a key the
@@ -357,10 +357,10 @@ func TestPostSettingsYAML_NoChangeSaveKeepsKnownKeyTypes(t *testing.T) {
 
 	existing := `mowgli:
   ros__parameters:
-    tick_rate: 10
-    imu_cal_auto_rest_sec: 15
+    max_mps: 1
+    dock_pose_x: 15
     battery_full_percent: 90
-    imu_cal_samples: 200
+    one_wheel_lift_emergency_ms: 2000
     gnss_config_baud: 460800
     datum_lat: 48.123456789
 `
@@ -368,15 +368,15 @@ func TestPostSettingsYAML_NoChangeSaveKeepsKnownKeyTypes(t *testing.T) {
 	params := decodeParams(t, content)
 
 	// Template says double; the file held the demoted int.
-	assert.Contains(t, content, "tick_rate: 10.0")
-	assert.Contains(t, content, "imu_cal_auto_rest_sec: 15.0")
-	assert.IsType(t, float64(0), params["tick_rate"])
+	assert.Contains(t, content, "max_mps: 1.0")
+	assert.Contains(t, content, "dock_pose_x: 15.0")
+	assert.IsType(t, float64(0), params["max_mps"])
 	// Schema says number.
 	assert.Contains(t, content, "battery_full_percent: 90.0")
 	// Template int and schema integer.
-	assert.Contains(t, content, "imu_cal_samples: 200\n")
+	assert.Contains(t, content, "one_wheel_lift_emergency_ms: 2000\n")
 	assert.Contains(t, content, "gnss_config_baud: 460800\n")
-	assert.IsType(t, 0, params["imu_cal_samples"])
+	assert.IsType(t, 0, params["one_wheel_lift_emergency_ms"])
 	assert.IsType(t, 0, params["gnss_config_baud"])
 	// Geo precision.
 	assert.Contains(t, content, "datum_lat: 48.123456789")
@@ -423,7 +423,7 @@ func TestPersistGNSSRuntimeBaud_KeepsUnknownKeyTypes(t *testing.T) {
   ros__parameters:
     lidar_map_radius_tiles: 3
     lidar_map_tile_size_m: 5.0
-    tick_rate: 10
+    max_mps: 1
 `)
 	envFile := createTempConfigFileAtGuiRoot(t, "")
 	db := types.NewMockDBProvider()
@@ -437,7 +437,7 @@ func TestPersistGNSSRuntimeBaud_KeepsUnknownKeyTypes(t *testing.T) {
 	assert.Contains(t, string(content), "lidar_map_radius_tiles: 3\n")
 	assert.NotContains(t, string(content), "lidar_map_radius_tiles: 3.0")
 	assert.Contains(t, string(content), "lidar_map_tile_size_m: 5.0")
-	assert.Contains(t, string(content), "tick_rate: 10.0")
+	assert.Contains(t, string(content), "max_mps: 1.0")
 }
 
 func TestPersistRobotYamlUpdates_KeepsUnknownKeyTypes(t *testing.T) {
@@ -449,7 +449,7 @@ func TestPersistRobotYamlUpdates_KeepsUnknownKeyTypes(t *testing.T) {
   ros__parameters:
     lidar_map_radius_tiles: 3
     lidar_map_tile_size_m: 5.0
-    tick_rate: 10
+    max_mps: 1
 `)
 	db := types.NewMockDBProvider()
 	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
@@ -461,7 +461,7 @@ func TestPersistRobotYamlUpdates_KeepsUnknownKeyTypes(t *testing.T) {
 	assert.Contains(t, string(content), "lidar_map_radius_tiles: 3\n")
 	assert.NotContains(t, string(content), "lidar_map_radius_tiles: 3.0")
 	assert.Contains(t, string(content), "lidar_map_tile_size_m: 5.0")
-	assert.Contains(t, string(content), "tick_rate: 10.0")
+	assert.Contains(t, string(content), "max_mps: 1.0")
 	assert.Contains(t, string(content), "wheel_pid_kp: 12.0")
 }
 

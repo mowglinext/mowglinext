@@ -7,6 +7,19 @@ import { useContainerRestart } from "./useContainerRestart.ts";
 import { getQuaternionFromHeading } from "../utils/map.tsx";
 import { ContentType } from "../api/Api.ts";
 import { valuesMatch } from "../utils/settingsValues.ts";
+import {
+    AREA_RECORDING_GROUP,
+    BEHAVIOR_TREE_GROUP,
+    CHARGE_LIMITS_GROUP,
+    DOCK_CALIBRATION_GROUP,
+    DOCK_DETECTION_GROUP,
+    LOCALIZATION_GUARD_GROUP,
+    REVERSE_ESCAPE_GROUP,
+    START_ESCAPE_GROUP,
+    TURN_SPEED_GROUP,
+    YAW_LOOP_GROUP,
+    groupKeys,
+} from "../components/settings/settingsFieldGroups.ts";
 
 /** A section that saves outside mowgli_robot.yaml but wants the page's Save button. */
 export interface ExternalSaver {
@@ -84,6 +97,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
             "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
+            ...groupKeys(YAW_LOOP_GROUP),
         ],
     },
     {
@@ -134,6 +148,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "use_lidar_map_anchor", "lidar_anchor_shadow_mode",
             "use_magnetometer",
             "enable_mag_cal", "declination_deg", "min_horizontal_uT", "mag_yaw_variance",
+            ...groupKeys(LOCALIZATION_GUARD_GROUP),
         ],
     },
     {
@@ -159,6 +174,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "headland_width", "num_headland_passes", "swath_overlap",
             "chassis_safety_inset", "min_turning_radius", "mow_direction", "mow_cross_hatch",
             "connector_max_headland_passes",
+            ...groupKeys(TURN_SPEED_GROUP),
         ],
     },
     {
@@ -171,6 +187,8 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "dock_max_retries", "dock_use_charger_detection",
             "dock_charging_threshold",
             "dock_approach_overshoot", "dock_pose_yaw_sigma_rad",
+            ...groupKeys(DOCK_DETECTION_GROUP),
+            ...groupKeys(DOCK_CALIBRATION_GROUP),
         ],
     },
     {
@@ -182,6 +200,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "battery_full_voltage", "battery_empty_voltage", "battery_critical_voltage",
             "battery_full_percent", "battery_low_percent", "battery_critical_percent",
             "battery_critical_recovery_percent", "battery_manual_resume_percent",
+            ...groupKeys(CHARGE_LIMITS_GROUP),
         ],
     },
     {
@@ -215,6 +234,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "obstacle_wait_timeout_s",
             "obstacle_margin", "obstacle_slowdown_ratio", "dig_obstacle_enabled",
             "dig_sensitivity",
+            ...groupKeys(REVERSE_ESCAPE_GROUP),
         ],
     },
     {
@@ -226,6 +246,9 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "xy_goal_tolerance", "yaw_goal_tolerance", "coverage_xy_tolerance",
             "progress_timeout_sec",
             "boundary_inner_margin_m", "dock_inner_margin_exempt_radius_m",
+            ...groupKeys(AREA_RECORDING_GROUP),
+            ...groupKeys(BEHAVIOR_TREE_GROUP),
+            ...groupKeys(START_ESCAPE_GROUP),
         ],
     },
     {
