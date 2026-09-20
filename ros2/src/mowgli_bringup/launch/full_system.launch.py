@@ -703,6 +703,9 @@ def generate_launch_description() -> LaunchDescription:
                 "mqtt_password": str(robot_params.get("mqtt_password", "")),
                 "mqtt_topic_prefix": str(robot_params.get("mqtt_topic_prefix", "mowgli")),
                 "use_ssl": bool(robot_params.get("mqtt_use_ssl", False)),
+                "home_assistant_discovery_enabled": bool(
+                    robot_params.get("mqtt_home_assistant_discovery_enabled", False)
+                ),
             },
         ],
     )

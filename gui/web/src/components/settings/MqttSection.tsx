@@ -67,6 +67,22 @@ export const MqttSection: React.FC<Props> = ({
 
             {enabled && (
                 <>
+                    <Card size="small" style={{ marginBottom: 16 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                            <div>
+                                <Text strong>{t("settingsMqtt.homeAssistantDiscovery")}</Text>
+                                <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
+                                    {t("settingsMqtt.homeAssistantDiscoveryDescription")}
+                                </Paragraph>
+                            </div>
+                            <Switch
+                                checked={values.mqtt_home_assistant_discovery_enabled ?? false}
+                                onChange={(checked) => onChange("mqtt_home_assistant_discovery_enabled", checked)}
+                                aria-label={t("settingsMqtt.homeAssistantDiscovery")}
+                            />
+                        </div>
+                    </Card>
+
                     <Alert
                         type="info"
                         showIcon

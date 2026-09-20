@@ -379,6 +379,19 @@ def test_cross_hatch_setting_reaches_behavior_tree() -> None:
                     {"robot_params": config}) is expected
 
 
+def test_home_assistant_discovery_setting_reaches_mqtt_bridge() -> None:
+    """The GUI setting must reach the node that publishes discovery records."""
+    call = _find_node_call(_parse("full_system.launch.py"), "mqtt_bridge_node")
+    assert call is not None
+    values = _node_parameter_values(call, "home_assistant_discovery_enabled")
+    assert len(values) == 1
+    expression = compile(ast.Expression(values[0]), "full_system.launch.py", "eval")
+    for config, expected in [({}, False),
+                             ({"mqtt_home_assistant_discovery_enabled": True}, True)]:
+        assert eval(expression, {"__builtins__": {}, "bool": bool},
+                    {"robot_params": config}) is expected
+
+
 @pytest.mark.parametrize(
     "launch_file", ["navigation.launch.py", "full_system.launch.py"])
 def test_no_closure_rebinds_a_name_of_its_enclosing_function(

@@ -3455,6 +3455,8 @@
   "settingsMqtt": {
     "bridge": "Passerelle MQTT",
     "bridgeDescription": "Publie l'état, la batterie et l'état de tonte vers un broker MQTT (par ex. pour une intégration Home Assistant) et accepte en retour les commandes démarrer/pause/retour dock. Lecture seule, sauf le topic de commande — le même canal que les boutons de l'interface.",
+    "homeAssistantDiscovery": "Découverte automatique Home Assistant",
+    "homeAssistantDiscoveryDescription": "Ajoute automatiquement cette tondeuse, ses commandes, sa batterie, sa position et ses capteurs de diagnostic dans Home Assistant. Utilise le topic de découverte standard homeassistant. Redémarrage requis.",
     "securityTitle": "Aucune authentification par défaut",
     "securityDescription": "Le broker fourni autorise les connexions anonymes et le topic de commande accepte n'importe quelle commande de haut niveau — traitez ceci comme n'importe quelle autre surface de contrôle sur votre réseau local, pas comme quelque chose à exposer sur internet.",
     "broker": "Broker",

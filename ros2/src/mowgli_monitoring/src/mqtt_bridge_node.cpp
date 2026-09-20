@@ -26,6 +26,7 @@
 
 #include "mowgli_monitoring/mqtt_bridge_node.hpp"
 
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -37,6 +38,7 @@
 #include <functional>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 #include <mosquitto.h>
 #endif
@@ -102,6 +104,13 @@ bool StubMqttClient::is_connected() const noexcept
 
 struct MosquittoMqttClient::Impl
 {
+  struct PendingMessage
+  {
+    std::string topic;
+    std::string payload;
+    bool retained{false};
+  };
+
   Config config;
   // rclcpp::Logger has no public default constructor; without an initializer
   // Impl's default constructor is deleted and make_unique<Impl>() fails to
@@ -115,6 +124,8 @@ struct MosquittoMqttClient::Impl
 
   std::mutex callbacks_mutex;
   std::unordered_map<std::string, MessageCallback> callbacks;
+  std::mutex pending_messages_mutex;
+  std::vector<PendingMessage> pending_messages;
 
   static void on_connect_cb(mosquitto* /*mosq*/, void* userdata, int rc)
   {
@@ -194,11 +205,9 @@ struct MosquittoMqttClient::Impl
                               static_cast<std::size_t>(msg->payloadlen)};
     const bool retained = msg->retain;
 
-    std::lock_guard<std::mutex> lock(self->callbacks_mutex);
-    auto it = self->callbacks.find(topic);
-    if (it != self->callbacks.end())
     {
-      it->second(topic, payload, retained);
+      std::lock_guard<std::mutex> lock(self->pending_messages_mutex);
+      self->pending_messages.push_back({topic, payload, retained});
     }
   }
 };
@@ -407,6 +416,34 @@ void MosquittoMqttClient::spin_once() noexcept
                          mosquitto_strerror(rc));
     mosquitto_reconnect(impl_->mosq);
   }
+
+  // libmosquitto invokes on_message_cb from inside mosquitto_loop(). Queue
+  // deliveries there, then invoke application callbacks only after the loop
+  // has returned. A callback may publish a response (Home Assistant's birth
+  // message does exactly that), and re-entering the same client from inside
+  // the library callback can leave that publish queued indefinitely on some
+  // libmosquitto versions.
+  std::vector<Impl::PendingMessage> pending;
+  {
+    std::lock_guard<std::mutex> lock(impl_->pending_messages_mutex);
+    pending.swap(impl_->pending_messages);
+  }
+  for (const auto& message : pending)
+  {
+    MessageCallback callback;
+    {
+      std::lock_guard<std::mutex> lock(impl_->callbacks_mutex);
+      const auto it = impl_->callbacks.find(message.topic);
+      if (it != impl_->callbacks.end())
+      {
+        callback = it->second;
+      }
+    }
+    if (callback)
+    {
+      callback(message.topic, message.payload, message.retained);
+    }
+  }
 }
 
 bool MosquittoMqttClient::is_connected() const noexcept
@@ -455,6 +492,8 @@ void MqttBridgeNode::declare_parameters()
   topic_prefix_ = declare_parameter<std::string>("mqtt_topic_prefix", "mowgli");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
   use_ssl_ = declare_parameter<bool>("use_ssl", false);
+  home_assistant_discovery_enabled_ =
+      declare_parameter<bool>("home_assistant_discovery_enabled", false);
   // Injected by full_system.launch.py from mowgli_robot.yaml, same as
   // map_server_node/navsat_to_absolute_pose_node — labels
   // <prefix>/area_boundary's map-frame geometry with its WGS84 origin.
@@ -586,6 +625,17 @@ void MqttBridgeNode::create_subscriptions()
                           {
                             on_mqtt_start_area(topic, payload, retained);
                           });
+
+  if (home_assistant_discovery_enabled_)
+  {
+    mqtt_client_->subscribe("homeassistant/status",
+                            [this](const std::string& topic,
+                                   const std::string& payload,
+                                   bool retained)
+                            {
+                              on_home_assistant_status(topic, payload, retained);
+                            });
+  }
 }
 
 void MqttBridgeNode::create_high_level_status_subscription()
@@ -613,8 +663,12 @@ void MqttBridgeNode::create_service_client()
 
 void MqttBridgeNode::create_timer()
 {
-  const auto period_ms = std::chrono::milliseconds(static_cast<int>(1000.0 / publish_rate_));
-  timer_ = create_wall_timer(period_ms,
+  // The MQTT socket must be serviced independently of the configured
+  // telemetry rate. At a normal 1 Hz publish rate, using that same one-second
+  // period for mosquitto_loop() can leave retained discovery and inbound
+  // commands queued behind sensor traffic. Position and GPS remain throttled
+  // below with publish_rate_; this timer only bounds network latency.
+  timer_ = create_wall_timer(std::chrono::milliseconds(100),
                              [this]()
                              {
                                on_timer();
@@ -818,6 +872,24 @@ void MqttBridgeNode::on_mqtt_start_area(const std::string& /*topic*/,
       });
 }
 
+void MqttBridgeNode::on_home_assistant_status(const std::string& /*topic*/,
+                                              const std::string& payload,
+                                              bool /*retained*/)
+{
+  if (home_assistant_discovery_enabled_ && payload == "online")
+  {
+    RCLCPP_INFO(get_logger(), "Home Assistant is online; republishing MQTT discovery.");
+    home_assistant_discovery_publish_pending_ = true;
+  }
+}
+
+bool MqttBridgeNode::publish_home_assistant_discovery()
+{
+  return mqtt_client_->publish(home_assistant_discovery_topic(topic_prefix_),
+                               serialise_home_assistant_discovery(topic_prefix_, last_areas_),
+                               /*retain=*/true);
+}
+
 // ---------------------------------------------------------------------------
 // Area list: periodic poll of GetMowingArea + publish
 // ---------------------------------------------------------------------------
@@ -885,7 +957,15 @@ void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& ar
     return;
   }
   last_areas_json_ = json;
+  last_areas_ = areas;
   mqtt_client_->publish(full_topic("areas"), json, /*retain=*/true);
+  if (home_assistant_discovery_enabled_)
+  {
+    // Area buttons are part of the same device-discovery document. Refresh it
+    // when the map's mowable area list changes so Home Assistant adds, renames
+    // or removes the corresponding action buttons.
+    home_assistant_discovery_publish_pending_ = !publish_home_assistant_discovery();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -900,12 +980,45 @@ void MqttBridgeNode::on_timer()
   // Attempt reconnect if disconnected.
   if (!mqtt_client_->is_connected())
   {
+    mqtt_was_connected_ = false;
     RCLCPP_WARN_THROTTLE(get_logger(),
                          *get_clock(),
                          10000,
                          "MQTT disconnected — attempting reconnect.");
     mqtt_client_->connect();
     return;
+  }
+
+  if (!mqtt_was_connected_)
+  {
+    mqtt_was_connected_ = true;
+    if (home_assistant_discovery_enabled_)
+    {
+      home_assistant_discovery_publish_pending_ = true;
+    }
+    else
+    {
+      // An empty retained discovery payload removes a configuration left by
+      // an earlier enabled run with this topic prefix.
+      mqtt_client_->publish(home_assistant_discovery_topic(topic_prefix_), "", /*retain=*/true);
+    }
+  }
+
+  // A Home Assistant birth message is received while spin_once() is driving
+  // the MQTT client. Publish only after spin_once() has returned completely,
+  // then let the next timer tick flush the queued QoS message. The same path
+  // handles the initial connection edge and retries a synchronous failure.
+  if (home_assistant_discovery_publish_pending_)
+  {
+    const bool queued = publish_home_assistant_discovery();
+    home_assistant_discovery_publish_pending_ = !queued;
+    if (queued)
+    {
+      // Discovery is a relatively large retained QoS message. Give the MQTT
+      // client one immediate network-loop pass so a busy ROS executor cannot
+      // delay delivery until a later timer callback.
+      mqtt_client_->spin_once();
+    }
   }
 
   // Rate-limited position publish.
@@ -1436,6 +1549,205 @@ std::string MqttBridgeNode::serialise_area_boundaries(
 std::string MqttBridgeNode::full_topic(const std::string& suffix) const
 {
   return topic_prefix_ + "/" + suffix;
+}
+
+std::string MqttBridgeNode::home_assistant_device_id(const std::string& topic_prefix)
+{
+  std::string id{"mowglinext_"};
+  for (const unsigned char c : topic_prefix)
+  {
+    if (std::isalnum(c) || c == '_' || c == '-')
+    {
+      id += static_cast<char>(c);
+    }
+    else
+    {
+      id += '_';
+    }
+  }
+  if (topic_prefix.empty())
+  {
+    id += "mowgli";
+  }
+  return id;
+}
+
+std::string MqttBridgeNode::home_assistant_discovery_topic(const std::string& topic_prefix)
+{
+  return "homeassistant/device/" + home_assistant_device_id(topic_prefix) + "/config";
+}
+
+std::string MqttBridgeNode::serialise_home_assistant_discovery(const std::string& topic_prefix)
+{
+  return serialise_home_assistant_discovery(topic_prefix, {});
+}
+
+std::string MqttBridgeNode::serialise_home_assistant_discovery(
+    const std::string& topic_prefix, const std::vector<AreaSummary>& areas)
+{
+  const std::string prefix = topic_prefix.empty() ? "mowgli" : topic_prefix;
+  const std::string id = home_assistant_device_id(topic_prefix);
+  // The GUI normally supplies a simple prefix, but MQTT permits characters
+  // that need escaping when the resulting topic is embedded in JSON.
+  const std::string available = json_escape(prefix + "/available");
+  const std::string high_level = json_escape(prefix + "/high_level_status");
+  const std::string status = json_escape(prefix + "/status");
+  const std::string power = json_escape(prefix + "/power");
+  const std::string emergency = json_escape(prefix + "/emergency");
+  const std::string rtk = json_escape(prefix + "/rtk_status");
+  const std::string gps = json_escape(prefix + "/gps");
+  const std::string command = json_escape(prefix + "/command");
+  const std::string start_area = json_escape(prefix + "/start_area");
+
+  const std::string activity_template =
+      "{% if value_json.emergency or value_json.state == 0 %}error"
+      "{% elif value_json.is_charging or value_json.state_name in "
+      "['IDLE_DOCKED','CHARGING','CRITICAL_BATTERY_CHARGING'] %}docked"
+      "{% elif value_json.state_name in "
+      "['RETURNING_HOME','MOWING_COMPLETE','CRITICAL_BATTERY_DOCKING',"
+      "'LOW_BATTERY_DOCKING','RAIN_DETECTED_DOCKING','COVERAGE_FAILED_DOCKING'] %}paused"
+      "{% elif value_json.state_name in ['MOWING','MANUAL_MOWING'] %}mowing"
+      "{% else %}paused{% endif %}";
+
+  std::string json;
+  json.reserve(5000);
+  json += "{\"device\":{\"identifiers\":[\"" + id +
+          "\"],\"name\":\"MowgliNext\",\"manufacturer\":\"MowgliNext\","
+          "\"model\":\"Robot mower\"},"
+          "\"origin\":{\"name\":\"MowgliNext MQTT bridge\","
+          "\"url\":\"https://github.com/mowglinext/mowglinext\"},"
+          "\"availability_topic\":\"" +
+          available + "\",\"components\":{";
+
+  auto append_component = [&json](const std::string& key, const std::string& component)
+  {
+    if (json.back() != '{')
+    {
+      json += ',';
+    }
+    json += "\"" + key + "\":" + component;
+  };
+
+  append_component("mower",
+                   "{\"platform\":\"lawn_mower\",\"name\":null,\"unique_id\":\"" + id +
+                       "_mower\",\"activity_state_topic\":\"" + high_level +
+                       "\",\"activity_value_template\":\"" + json_escape(activity_template) +
+                       "\",\"json_attributes_topic\":\"" + high_level +
+                       "\",\"start_mowing_command_topic\":\"" + command +
+                       "\",\"start_mowing_command_template\":\"1\",\"pause_command_topic\":\"" +
+                       command + "\",\"pause_command_template\":\"8\",\"dock_command_topic\":\"" +
+                       command + "\",\"dock_command_template\":\"2\"}");
+
+  auto sensor = [&](const std::string& key,
+                    const std::string& name,
+                    const std::string& state_topic,
+                    const std::string& value_template,
+                    const std::string& extra = "")
+  {
+    append_component(key,
+                     "{\"platform\":\"sensor\",\"name\":\"" + name + "\",\"unique_id\":\"" + id +
+                         "_" + key + "\",\"state_topic\":\"" + state_topic +
+                         "\",\"value_template\":\"" + json_escape(value_template) + "\"" + extra +
+                         "}");
+  };
+  auto binary_sensor = [&](const std::string& key,
+                           const std::string& name,
+                           const std::string& state_topic,
+                           const std::string& value_template,
+                           const std::string& device_class = "")
+  {
+    std::string extra = "\",\"payload_on\":\"ON\",\"payload_off\":\"OFF";
+    if (!device_class.empty())
+    {
+      extra += "\",\"device_class\":\"" + device_class;
+    }
+    append_component(key,
+                     "{\"platform\":\"binary_sensor\",\"name\":\"" + name + "\",\"unique_id\":\"" +
+                         id + "_" + key + "\",\"state_topic\":\"" + state_topic +
+                         "\",\"value_template\":\"" + json_escape(value_template) + extra + "\"}");
+  };
+
+  sensor("battery",
+         "Battery",
+         high_level,
+         "{{ value_json.battery_percent }}",
+         ",\"device_class\":\"battery\",\"unit_of_measurement\":\"%\","
+         "\"state_class\":\"measurement\"");
+  sensor("coverage",
+         "Coverage",
+         high_level,
+         "{{ value_json.coverage_percent }}",
+         ",\"unit_of_measurement\":\"%\",\"state_class\":\"measurement\"");
+  sensor("gps_quality",
+         "GPS quality",
+         high_level,
+         "{{ value_json.gps_quality_percent }}",
+         ",\"unit_of_measurement\":\"%\",\"state_class\":\"measurement\"");
+  sensor("rtk_state", "RTK state", rtk, "{{ value_json.rtk_mode_name }}");
+  sensor("blade_rpm",
+         "Blade speed",
+         status,
+         "{{ value_json.mower_motor_rpm }}",
+         ",\"unit_of_measurement\":\"rpm\",\"state_class\":\"measurement\"");
+  sensor("blade_current",
+         "Blade current",
+         status,
+         "{{ value_json.mower_esc_current }}",
+         ",\"device_class\":\"current\",\"unit_of_measurement\":\"A\","
+         "\"state_class\":\"measurement\"");
+  sensor("battery_voltage",
+         "Battery voltage",
+         power,
+         "{{ value_json.v_battery }}",
+         ",\"device_class\":\"voltage\",\"unit_of_measurement\":\"V\","
+         "\"state_class\":\"measurement\"");
+  sensor("charge_current",
+         "Charge current",
+         power,
+         "{{ value_json.charge_current }}",
+         ",\"device_class\":\"current\",\"unit_of_measurement\":\"A\","
+         "\"state_class\":\"measurement\"");
+  binary_sensor("charging",
+                "Charging",
+                high_level,
+                "{{ 'ON' if value_json.is_charging else 'OFF' }}",
+                "battery_charging");
+  binary_sensor("emergency",
+                "Emergency",
+                emergency,
+                "{{ 'ON' if value_json.active_emergency else 'OFF' }}",
+                "problem");
+  binary_sensor(
+      "rain", "Rain", status, "{{ 'ON' if value_json.rain_detected else 'OFF' }}", "moisture");
+  append_component("location",
+                   "{\"platform\":\"device_tracker\",\"name\":\"Location\","
+                   "\"unique_id\":\"" +
+                       id + "_location\",\"json_attributes_topic\":\"" + gps +
+                       "\",\"source_type\":\"gps\"}");
+
+  // A select entity would start mowing as soon as its value changed, which is
+  // surprising and unsafe for a physical mower. Expose one explicit action
+  // button per current mowable area instead. The index and sanitized name are
+  // both part of the identity: if an edit reorders positional area indices,
+  // Home Assistant replaces the affected button rather than silently keeping
+  // an automation bound to a different physical area.
+  for (const auto& area : areas)
+  {
+    const std::string area_name =
+        area.name.empty() ? "Area " + std::to_string(area.index) : area.name;
+    const std::string component_key =
+        "mow_area_" + std::to_string(area.index) + "_" + home_assistant_device_id(area_name);
+    append_component(component_key,
+                     "{\"platform\":\"button\",\"name\":\"Mow " + json_escape(area_name) +
+                         "\",\"unique_id\":\"" + id + "_" + component_key +
+                         "\",\"icon\":\"mdi:robot-mower\","
+                         "\"command_topic\":\"" +
+                         start_area + "\",\"payload_press\":\"" + std::to_string(area.index) +
+                         "\"}");
+  }
+
+  json += "}}";
+  return json;
 }
 
 std::string MqttBridgeNode::json_escape(const std::string& raw)

@@ -1113,3 +1113,5 @@ mowgli:
     mqtt_topic_prefix: "mowgli"    # all topics are "<mqtt_topic_prefix>/<name>"
     mqtt_use_ssl: false            # TLS against the system CA store only (no
                                    # custom CA/client-cert param exists yet)
+    mqtt_home_assistant_discovery_enabled: false  # retained discovery under
+                                   # homeassistant/device/<derived-id>/config
