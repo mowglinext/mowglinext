@@ -2100,7 +2100,14 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
   // here would have to re-discover the server on every tree rebuild.
   client_ = ctx->mowingAreaClient();
 
-  if (!client_->service_is_ready())
+  // service_is_ready() is a snapshot of endpoint matching, and it can read false
+  // for an instant on a client that has been answering for minutes: every tree
+  // rebuild creates and destroys other DDS endpoints, and the graph is being
+  // rewritten while we look (CI, 2026-09-20: false on the 165th consecutive
+  // successful dispatch). A single negative sample is not "map_server is down".
+  // Bounded, and only ever paid when the snapshot says no.
+  constexpr auto kServiceGrace = std::chrono::milliseconds(250);
+  if (!client_->service_is_ready() && !client_->wait_for_service(kServiceGrace))
   {
     RCLCPP_ERROR(ctx->node->get_logger(),
                  "GetNextUnmowedArea: get_mowing_area service not available");
