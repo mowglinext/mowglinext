@@ -4,12 +4,6 @@
 	branch = main
 [submodule "ros2/src/external/universal-gnss"]
 	path = ros2/src/external/universal-gnss
-	# Pinned to the mowglinext fork's main, which tracks Pepeuch/universal-gnss
-	# main. Both fork fixes for issue #395 are now upstream there — the
-	# GLONASS-1230 optional-for-RTK correction health (Pepeuch/universal-gnss#4,
-	# an ancestor of main) and the UM980 MODE ROVER UAV default +
-	# --rover-dynamic-mode override (folded into "fix(unicore): restore rover
-	# mode and correction-age policy") — so the old stacked branch is gone and
-	# this follows main directly.
+	# The gitlink pins a validated Universal GNSS release commit. Normal
+	# submodule updates use that exact commit, not a moving branch head.
 	url = https://github.com/Pepeuch/universal-gnss.git
-	branch = main

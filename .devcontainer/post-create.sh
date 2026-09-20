@@ -37,6 +37,7 @@ rm -f src/fields2cover src/Fields2Cover
 
 if git -C /ros2_ws/src/mowglinext rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "Ensuring git submodules are present..."
+    git -C /ros2_ws/src/mowglinext submodule sync --recursive
     git -C /ros2_ws/src/mowglinext submodule update --init --recursive
 fi
 

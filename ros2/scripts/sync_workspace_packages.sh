@@ -213,6 +213,8 @@ if universal_gnss_repo="$(find_universal_gnss_repo)"; then
     link_workspace_package "${universal_gnss_msgs_dir}" "${msgs_pkg_name}"
     link_workspace_package "${universal_gnss_ros2_dir}" "${ros2_pkg_name}"
 else
+    unlink_workspace_symlink "universal_gnss_msgs"
+    unlink_workspace_symlink "universal_gnss_ros2"
     warn "Universal GNSS source not found. Checked vendored submodule at ${VENDORED_UNIVERSAL_GNSS_PATH} and fallback mount at ${LEGACY_MOUNTED_UNIVERSAL_GNSS_PATH}${UNIVERSAL_GNSS_PATH:+, plus UNIVERSAL_GNSS_PATH=${UNIVERSAL_GNSS_PATH}}."
 fi
 

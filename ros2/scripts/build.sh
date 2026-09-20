@@ -22,7 +22,7 @@
 # =============================================================================
 set -euo pipefail
 
-WORKSPACE=/ros2_ws
+WORKSPACE="${WORKSPACE_ROOT:-/ros2_ws}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 PACKAGES="${PACKAGES:-}"
 PARALLEL_WORKERS=$(nproc)
@@ -39,7 +39,15 @@ if [ -f /opt/lyrical_vendor/local_setup.bash ]; then
 fi
 set -u
 
-mapfile -t BUILD_PATHS < <("${SYNC_WORKSPACE_SCRIPT}" --print-base-paths)
+if ! build_paths_output="$(WORKSPACE_ROOT="${WORKSPACE}" "${SYNC_WORKSPACE_SCRIPT}" --print-base-paths)"; then
+    echo "ERROR: Failed to sync ROS2 package roots." >&2
+    exit 1
+fi
+
+BUILD_PATHS=()
+if [ -n "${build_paths_output}" ]; then
+    mapfile -t BUILD_PATHS <<< "${build_paths_output}"
+fi
 
 if [ "${#BUILD_PATHS[@]}" -eq 0 ]; then
     echo "ERROR: No ROS2 package roots were linked into ${WORKSPACE}/src." >&2
