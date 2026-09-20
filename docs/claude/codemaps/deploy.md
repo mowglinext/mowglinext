@@ -47,7 +47,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `lib/env.sh` | 374 | `upsert_env_key`/`remove_env_key`, NTRIP-from-YAML defaults, `sync_gnss_env_contract_values`, `setup_env` (writes `docker/.env`) |
 | `lib/compose.sh` | 262 | `ensure_default_configs` (seeds `docker/config/`), `build_compose_stack` (fragment selection), `write_compose_merged`, `run_compose_stack` |
 | `lib/checks.sh` | 610 | `--check` health checks: devices, containers, firmware, GPS, LiDAR, rangefinders, GUI |
-| `lib/deploy.sh` | 297 | Git sync (`report_repository_sync_status`, `sync_repo_branch_to_selected_branch`, submodules), `setup_directory`, `migrate_runtime_paths`, `fix_path_type_conflict` |
+| `lib/deploy.sh` | 445 | Git sync (`report_repository_sync_status`, `sync_repo_branch_to_selected_branch`), self-update (`update_repo_checkout_if_behind`: fetch without submodules → `resolve_repo_local_changes` stash/keep/abort → ff-only → re-exec), submodules (never initialised, only followed), `setup_directory`, `migrate_runtime_paths`, `fix_path_type_conflict` |
 | `lib/state.sh` | 173 | Strict KV parser for `install/.preset` and `docker/.env` + the allowed-key whitelist; preset consume/backup |
 | `lib/udev.sh` | 232 | Static + dynamic udev rule generation and install |
 | `lib/backend_choice.sh` | 271 | Mowgli-STM32 vs Pixhawk/MAVROS selection, MAVROS device detect, GCS URL |
@@ -108,7 +108,9 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `tests/test_ublox_config.sh` / `test_unicore_config.sh` | 161 / 89 | Baud-upgrade command sequences and no-op guards |
 | `tests/test_lidar_matrix.sh` | 150 | `LIDAR_TYPE` × connection → fragment + baud + `LIDAR_IMAGE` |
 | `tests/test_robot_yaml.sh` | 115 | Installed yaml shape, datum placeholders, no legacy `mower_config.sh` |
-| `tests/test_bootstrap_repo_update.sh` | 111 | `docs/install.sh` stays conservative on existing checkouts |
+| `tests/test_bootstrap_repo_update.sh` | 126 | `docs/install.sh` stays conservative on existing checkouts; untracked files do not block it |
+| `tests/test_repo_self_update.sh` | 232 | Installer self-update against real git: moved submodule, tracked local edits (stash/keep/abort), own commits, foreign-owned `.git`, runtime files ignored |
+| `tests/test_compose_legacy_adoption.sh` | 130 | Plain installer records `stack-definition.sha256`; baseline-less Compose needs consent (`installer-stack` exit 3) |
 | `tests/test_hardware_presets.sh` | 103 | mowgli vs mavros backend matrix |
 | `tests/test_check_mode.sh` | 101 | `--check` targets the right services/commands |
 | `tests/test_optional_features.sh` | 97 | TF-Luna / VESC never leak into the generated compose |

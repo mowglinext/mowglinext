@@ -84,9 +84,23 @@ assert_contains "bootstrap reaches installer handoff" "── Launching installe
 assert_contains "bootstrap runs installer stub" "BOOTSTRAP_INSTALLER_ARGS:" "$(cat "$clean_output")"
 assert_contains "bootstrap forwards --branch as repository branch" "BOOTSTRAP_INSTALLER_ARGS:--branch=main" "$(cat "$clean_output")"
 
+section "untracked files do not block the bootstrap update"
+
+# The installer, the GUI and the host updater all write untracked files into
+# the checkout; treating them as local changes meant a robot was never updated
+# again after its first run.
+printf 'local note\n' > "$BOOTSTRAP_WORK/LOCAL_BOOTSTRAP_NOTES.txt"
+push_bootstrap_remote_commit "$BOOTSTRAP_REMOTE"
+
+untracked_before="$(git -C "$BOOTSTRAP_WORK" rev-parse HEAD)"
+untracked_output="$SANDBOX/bootstrap-untracked.out"
+run_bootstrap_capture "$BOOTSTRAP_WORK" "$untracked_output"
+assert_neq "bootstrap fast-forwards past an untracked file" "$untracked_before" "$(git -C "$BOOTSTRAP_WORK" rev-parse HEAD)"
+assert_file_exists "bootstrap keeps the untracked file" "$BOOTSTRAP_WORK/LOCAL_BOOTSTRAP_NOTES.txt"
+
 section "bootstrap preserves dirty existing repo"
 
-printf 'local change\n' > "$BOOTSTRAP_WORK/LOCAL_BOOTSTRAP_NOTES.txt"
+printf '# local change\n' >> "$BOOTSTRAP_WORK/install/mowglinext.sh"
 push_bootstrap_remote_commit "$BOOTSTRAP_REMOTE"
 
 dirty_before="$(git -C "$BOOTSTRAP_WORK" rev-parse HEAD)"
@@ -98,7 +112,8 @@ dirty_after="$(git -C "$BOOTSTRAP_WORK" rev-parse HEAD)"
 assert_eq "bootstrap keeps dirty repo HEAD" "$dirty_before" "$dirty_after"
 assert_contains "bootstrap warns about local changes" "Local changes detected" "$(cat "$dirty_output")"
 assert_contains "bootstrap reaches installer handoff on dirty repo" "── Launching installer ──" "$(cat "$dirty_output")"
-assert_file_exists "bootstrap keeps local dirty file" "$BOOTSTRAP_WORK/LOCAL_BOOTSTRAP_NOTES.txt"
+assert_contains "bootstrap names the modified file" "install/mowglinext.sh" "$(cat "$dirty_output")"
+assert_contains "bootstrap keeps the local modification" "# local change" "$(cat "$BOOTSTRAP_WORK/install/mowglinext.sh")"
 
 section "bootstrap can pass an explicit image tag without changing checkout"
 

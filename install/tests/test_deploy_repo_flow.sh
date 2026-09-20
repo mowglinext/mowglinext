@@ -209,7 +209,10 @@ assert_contains "behind repo warns instead of updating" "behind origin/main" "$(
 
 section "local changes and runtime files are preserved"
 
+# A tracked modification is a local change; an untracked file is not (the
+# installer and the host updater write plenty of those under docker/).
 printf 'local note\n' > "$WORK_REPO/LOCAL_NOTES.txt"
+printf '\nlocal edit\n' >> "$WORK_REPO/CLAUDE.md"
 write_runtime_files "$WORK_REPO"
 
 env_before="$(cat "$WORK_REPO/docker/.env")"
@@ -229,7 +232,8 @@ assert_eq "docker/.env preserved" "$env_before" "$(cat "$WORK_REPO/docker/.env")
 assert_eq "mowgli_robot.yaml preserved" "$yaml_before" "$(cat "$WORK_REPO/docker/config/mowgli/mowgli_robot.yaml")"
 assert_eq "mosquitto.conf preserved" "$mqtt_before" "$(cat "$WORK_REPO/docker/config/mqtt/mosquitto.conf")"
 assert_eq "mower_config.sh preserved" "$mower_before" "$(cat "$WORK_REPO/docker/config/om/mower_config.sh")"
-assert_contains "local changes still present after setup_directory" "LOCAL_NOTES.txt" "$(git -C "$WORK_REPO" status --short)"
+assert_contains "untracked file still present after setup_directory" "LOCAL_NOTES.txt" "$(git -C "$WORK_REPO" status --short)"
+assert_contains "tracked modification still present after setup_directory" "CLAUDE.md" "$(git -C "$WORK_REPO" status --short)"
 
 second_dirty_output="$SANDBOX/dirty-second.out"
 if run_setup_directory_capture "$WORK_REPO" "$second_dirty_output"; then

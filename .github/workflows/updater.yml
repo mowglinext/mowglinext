@@ -35,6 +35,8 @@ jobs:
           bash install/tests/test_deployment_publication.sh
           bash install/tests/test_compose_validity.sh
           bash install/tests/test_idempotency.sh
+          bash install/tests/test_compose_legacy_adoption.sh
+          bash install/tests/test_repo_self_update.sh
       - name: Cross-build static host binaries
         env:
           REVISION: ${{ github.sha }}

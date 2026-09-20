@@ -1,8 +1,134 @@
 #!/usr/bin/env bash
 
+# Local changes = modifications to TRACKED files, nothing else.
+#   - Untracked files never block a fast-forward (git refuses only on a real
+#     path collision, and then leaves everything in place). The installer, the
+#     GUI and the host updater write plenty of them under docker/; counting
+#     them made every updater-managed checkout permanently "dirty", so it was
+#     never updated again.
+#   - Submodule state is ignored: a robot runs published images and builds
+#     nothing from ros2/src, and a re-pinned gitlink otherwise reads as a local
+#     change that blocks the very sync that would clear it.
+repo_local_changes() {
+  local repo_dir="${1:?repo_local_changes: missing repo dir}"
+  git -C "$repo_dir" status --porcelain --untracked-files=no --ignore-submodules=all 2>/dev/null || true
+}
+
 repo_has_local_changes() {
   local repo_dir="${1:?repo_has_local_changes: missing repo dir}"
-  [ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=all 2>/dev/null || true)" ]
+  [ -n "$(repo_local_changes "$repo_dir")" ]
+}
+
+# First path under .git that the current user does not own — what a past
+# `sudo git pull` leaves behind, and git then fails with a bare "permission
+# denied" / "dubious ownership".
+repo_foreign_owned_path() {
+  local repo_dir="${1:?repo_foreign_owned_path: missing repo dir}"
+  find "$repo_dir/.git" ! -user "$(id -u)" -print -quit 2>/dev/null || true
+}
+
+# Decide what to do with tracked local modifications before the checkout is
+# moved. Returns 0 = clean (or stashed), 1 = keep them and leave the checkout
+# alone, 2 = abort the installer. Runtime configuration (docker/.env,
+# docker/config/**, docker/stack-overrides.yaml, docker-compose.yaml) is
+# untracked or ignored, so a stash WITHOUT --include-untracked cannot touch it.
+resolve_repo_local_changes() {
+  local repo_dir="${1:?resolve_repo_local_changes: missing repo dir}"
+  local changes stash_name
+
+  changes="$(repo_local_changes "$repo_dir")"
+  [ -n "$changes" ] || return 0
+
+  warn "$MSG_REPO_LOCAL_CHANGES"
+  printf '%s\n' "$changes" | sed 's/^/        /'
+  info "$MSG_REPO_LOCAL_CHANGES_SAFE"
+  prompt "$MSG_REPO_LOCAL_CHANGES_CHOICE" "k"
+  case "${REPLY,,}" in
+    s|stash)
+      stash_name="mowglinext-installer-$(date +%Y%m%d_%H%M%S)"
+      # A robot has no git identity configured; stash needs one to commit.
+      if ! git -C "$repo_dir" -c user.name="MowgliNext installer" -c user.email="installer@mowgli.invalid" \
+           stash push --quiet -m "$stash_name" >/dev/null 2>&1; then
+        error "$MSG_REPO_STASH_FAILED"
+        return 1
+      fi
+      info "$MSG_REPO_STASHED $stash_name"
+      info "$MSG_REPO_STASH_RESTORE git -C $repo_dir stash list && git -C $repo_dir stash apply"
+      return 0
+      ;;
+    a|abort)
+      error "$MSG_REPO_UPDATE_ABORTED"
+      return 2
+      ;;
+    *)
+      warn "$MSG_REPO_LOCAL_CHANGES_KEPT"
+      return 1
+      ;;
+  esac
+}
+
+# Bring the current branch up to origin, then re-exec the installer from the
+# updated tree. Replaces the documented `git pull && ./install/mowglinext.sh`,
+# which died on a raw git error for three unrelated reasons (field report
+# 2026-09-20): an initialised submodule whose URL or pin moved ("Errors during
+# submodule fetch" — git pull fetches them on demand), tracked files modified
+# on the robot, and .git entries owned by root after a sudo run.
+# Never fatal except when the operator picks "abort"; every other obstacle
+# leaves the checkout exactly as it was and continues with it.
+update_repo_checkout_if_behind() {
+  local repo_dir="${1:?update_repo_checkout_if_behind: missing repo dir}"
+  local branch="${2:?update_repo_checkout_if_behind: missing branch}"
+  local remote_ref="origin/$branch" behind foreign rc=0
+
+  [[ "${MOWGLI_REPO_UPDATED:-false}" != "true" ]] || return 0
+  repo_has_origin_remote "$repo_dir" || return 0
+
+  foreign="$(repo_foreign_owned_path "$repo_dir")"
+  if [ -n "$foreign" ]; then
+    warn "$MSG_REPO_FOREIGN_OWNER $foreign"
+    warn "$MSG_REPO_FOREIGN_OWNER_FIX sudo chown -R $(id -un) $repo_dir/.git"
+    return 0
+  fi
+
+  ensure_repo_fetch_refspec "$repo_dir"
+  if ! git -C "$repo_dir" fetch --quiet --no-recurse-submodules origin "$branch" >/dev/null 2>&1; then
+    warn "$MSG_REPO_FETCH_FAILED $remote_ref"
+    return 0
+  fi
+  behind="$(git -C "$repo_dir" rev-list --count "HEAD..$remote_ref" 2>/dev/null || true)"
+  [[ "$behind" =~ ^[0-9]+$ && "$behind" -gt 0 ]] || return 0
+
+  if ! confirm "$remote_ref: $behind $MSG_REPO_UPDATE_CONFIRM"; then
+    return 0
+  fi
+
+  resolve_repo_local_changes "$repo_dir" || rc=$?
+  [ "$rc" -ne 2 ] || return 1
+  [ "$rc" -eq 0 ] || return 0
+
+  if ! git -C "$repo_dir" -c submodule.recurse=false merge --quiet --ff-only "$remote_ref" >/dev/null 2>&1; then
+    warn "$MSG_REPO_NOT_FAST_FORWARD $remote_ref"
+    return 0
+  fi
+  info "$MSG_REPO_UPDATED $remote_ref ($(git -C "$repo_dir" rev-parse --short HEAD))"
+  sync_repo_submodules_for_current_checkout "$repo_dir"
+  reexec_installer_from_checkout "$branch"
+}
+
+reexec_installer_from_checkout() {
+  local branch="${1:?reexec_installer_from_checkout: missing branch}"
+
+  info "Re-executing installer from '$branch' branch..."
+  export REPO_BRANCH="$branch"
+  export REPO_BRANCH_PRESET=true
+  export MOWGLI_REPO_UPDATED=true
+  export IMAGE_TAG="${IMAGE_TAG:-}"
+  export IMAGE_CHANNEL_PRESET="${IMAGE_CHANNEL_PRESET:-false}"
+
+  if declare -p MOWGLI_INSTALLER_ARGV >/dev/null 2>&1; then
+    exec bash "$INSTALL_DIR/mowglinext.sh" "${MOWGLI_INSTALLER_ARGV[@]+"${MOWGLI_INSTALLER_ARGV[@]}"}"
+  fi
+  exec bash "$INSTALL_DIR/mowglinext.sh"
 }
 
 repo_current_ref() {
@@ -28,7 +154,7 @@ fetch_repo_branch_metadata() {
 
   repo_has_origin_remote "$repo_dir" || return 1
   ensure_repo_fetch_refspec "$repo_dir"
-  git -C "$repo_dir" fetch --quiet origin "$REPO_BRANCH" >/dev/null 2>&1
+  git -C "$repo_dir" fetch --quiet --no-recurse-submodules origin "$REPO_BRANCH" >/dev/null 2>&1
 }
 
 ensure_repo_fetch_refspec() {
@@ -53,7 +179,7 @@ report_repository_sync_status() {
   fi
 
   if repo_has_local_changes "$repo_dir"; then
-    warn "Local repository changes detected. Skipping in-run repository update to preserve your checkout."
+    warn "Local repository changes detected. The checkout is left as it is."
   fi
 
   if ! repo_has_origin_remote "$repo_dir"; then
@@ -98,28 +224,26 @@ report_repository_sync_status() {
   warn "Repository has diverged from ${remote_ref} (ahead ${ahead}, behind ${behind}). Continuing with the current checkout."
 }
 
+# A robot needs NO submodule: both (universal-gnss, opennav_coverage) are ROS2
+# build inputs and the robot runs published images. So this never initialises
+# one — an initialised submodule is exactly what makes a later `git pull` fail
+# when its URL or pin moves. Submodules a developer DID initialise are
+# followed (URL first, then the pin), and a failure is only a warning.
 sync_repo_submodules_for_current_checkout() {
   local repo_dir="${1:?sync_repo_submodules_for_current_checkout: missing repo dir}"
   local submodule_status=""
 
-  [ -d "$repo_dir/.git" ] || return 0
+  [ -e "$repo_dir/.git" ] || return 0
   submodule_status="$(git -C "$repo_dir" submodule status --recursive 2>/dev/null || true)"
-  [ -n "$submodule_status" ] || return 0
+  # '+' = initialised but not at the recorded commit. '-' = not initialised.
+  printf '%s\n' "$submodule_status" | grep -q '^+' || return 0
 
-  if ! printf '%s\n' "$submodule_status" | grep -qE '^[+-]'; then
-    return 0
-  fi
-
-  if repo_has_local_changes "$repo_dir"; then
-    warn "Local repository changes detected — skipping automatic submodule sync for the current checkout."
-    return 0
-  fi
-
-  info "Synchronizing git submodules for the current checkout"
-  if git -C "$repo_dir" submodule update --init --recursive >/dev/null 2>&1; then
+  info "Synchronizing initialised git submodules for the current checkout"
+  git -C "$repo_dir" submodule sync --quiet --recursive >/dev/null 2>&1 || true
+  if git -C "$repo_dir" submodule update --recursive >/dev/null 2>&1; then
     info "Git submodules ready for $(repo_current_ref "$repo_dir")"
   else
-    warn "Could not synchronize git submodules for the current checkout. Continue if the repository is already complete."
+    warn "$MSG_REPO_SUBMODULE_SKIPPED"
   fi
 }
 
@@ -145,6 +269,7 @@ sync_repo_branch_to_selected_branch() {
 
   if [[ -n "$current_branch" && "$current_branch" == "$target_branch" ]]; then
     info "Repository checkout: ${current_branch}"
+    update_repo_checkout_if_behind "$REPO_DIR" "$target_branch" || return 1
     sync_repo_submodules_for_current_checkout "$REPO_DIR"
     return 0
   fi
@@ -157,15 +282,15 @@ sync_repo_branch_to_selected_branch() {
 
   step "Switching repository to '$target_branch' branch"
 
-  if repo_has_local_changes "$REPO_DIR"; then
+  if ! resolve_repo_local_changes "$REPO_DIR"; then
     error "Cannot switch repository branches with local changes present in $REPO_DIR"
     return 1
   fi
 
   if repo_has_origin_remote "$REPO_DIR"; then
     ensure_repo_fetch_refspec "$REPO_DIR"
-    if ! git -C "$REPO_DIR" fetch --quiet --unshallow origin "$target_branch" 2>/dev/null; then
-      git -C "$REPO_DIR" fetch --quiet origin "$target_branch" >/dev/null 2>&1 || true
+    if ! git -C "$REPO_DIR" fetch --quiet --no-recurse-submodules --unshallow origin "$target_branch" 2>/dev/null; then
+      git -C "$REPO_DIR" fetch --quiet --no-recurse-submodules origin "$target_branch" >/dev/null 2>&1 || true
     fi
 
     if git -C "$REPO_DIR" rev-parse --verify "refs/remotes/origin/$target_branch" >/dev/null 2>&1; then
@@ -197,17 +322,7 @@ sync_repo_branch_to_selected_branch() {
 
   sync_repo_submodules_for_current_checkout "$REPO_DIR"
   info "Repository now on '$target_branch' branch"
-  info "Re-executing installer from '$target_branch' branch..."
-
-  export REPO_BRANCH="$target_branch"
-  export REPO_BRANCH_PRESET=true
-  export IMAGE_TAG="${IMAGE_TAG:-}"
-  export IMAGE_CHANNEL_PRESET="${IMAGE_CHANNEL_PRESET:-false}"
-
-  if declare -p MOWGLI_INSTALLER_ARGV >/dev/null 2>&1; then
-    exec bash "$INSTALL_DIR/mowglinext.sh" "${MOWGLI_INSTALLER_ARGV[@]+"${MOWGLI_INSTALLER_ARGV[@]}"}"
-  fi
-  exec bash "$INSTALL_DIR/mowglinext.sh"
+  reexec_installer_from_checkout "$target_branch"
 }
 
 setup_directory() {

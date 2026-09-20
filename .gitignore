@@ -70,3 +70,16 @@ docker/logs/mow_sessions/*.jsonl
 docker/.updater-managed
 docker/update-images.json
 docker/.deployment.lock
+# Host updater / installer stack state, written into docker/ at runtime
+# (gui/pkg/updater/stack.go `stackFiles`, installer_stack.go). Untracked but
+# un-ignored, they made every updater-managed checkout look modified.
+docker/stack-selection.json
+docker/stack-applied-selection.json
+docker/stack-bundle.json
+docker/stack-release.json
+docker/stack-definition.sha256
+docker/stack-overrides.yaml
+docker/docker-compose.yaml.legacy-*
+docker/.install-stack-*/
+docker/.compose-bundle-*/
+docker/.compose-plan-*/

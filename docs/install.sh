@@ -31,9 +31,18 @@ warn()  { echo -e "  ${YELLOW}!!${NC}  $*"; }
 error() { echo -e "${RED}[x]${NC} $*" >&2; }
 step()  { echo -e "\n${CYAN}${BOLD}── $* ──${NC}"; }
 
+# Tracked modifications only — same rule as install/lib/deploy.sh. Untracked
+# files never block a fast-forward, and the installer, GUI and host updater
+# write many of them under docker/; submodule state is irrelevant on a robot,
+# which runs published images and builds nothing from ros2/src.
+repo_local_changes() {
+  local repo_dir="${1:?repo_local_changes: missing repo dir}"
+  git -C "$repo_dir" status --porcelain --untracked-files=no --ignore-submodules=all 2>/dev/null || true
+}
+
 repo_has_local_changes() {
   local repo_dir="${1:?repo_has_local_changes: missing repo dir}"
-  [ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=all 2>/dev/null || true)" ]
+  [ -n "$(repo_local_changes "$repo_dir")" ]
 }
 
 repo_current_branch() {
@@ -50,7 +59,9 @@ update_existing_repo_checkout() {
   info "Found existing git repository at $repo_dir"
 
   if repo_has_local_changes "$repo_dir"; then
-    warn "Local changes detected in $repo_dir — skipping bootstrap git update."
+    warn "Local changes detected in $repo_dir — skipping bootstrap git update:"
+    repo_local_changes "$repo_dir" | sed 's/^/        /'
+    warn "The installer will offer to stash them and update. Robot configuration under docker/ is never touched."
     return 0
   fi
 
@@ -60,7 +71,9 @@ update_existing_repo_checkout() {
     return 0
   fi
 
-  if ! git -C "$repo_dir" fetch --quiet origin "$REPO_BRANCH"; then
+  # --no-recurse-submodules: git otherwise fetches initialised submodules on
+  # demand and fails the whole update when one moved to another URL.
+  if ! git -C "$repo_dir" fetch --quiet --no-recurse-submodules origin "$REPO_BRANCH"; then
     warn "Could not fetch origin/$REPO_BRANCH — continuing with the current checkout."
     return 0
   fi
@@ -77,7 +90,7 @@ update_existing_repo_checkout() {
     return 0
   fi
 
-  if git -C "$repo_dir" merge --ff-only "origin/$REPO_BRANCH" >/dev/null 2>&1; then
+  if git -C "$repo_dir" -c submodule.recurse=false merge --ff-only "origin/$REPO_BRANCH" >/dev/null 2>&1; then
     info "Fast-forwarded existing installation to origin/$REPO_BRANCH"
     return 0
   fi
