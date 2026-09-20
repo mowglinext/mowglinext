@@ -60,6 +60,38 @@ func TestInvalidServiceContractsFailClosed(t *testing.T) {
 	}
 }
 
+func TestNewManagedSidecarStorageContract(t *testing.T) {
+	// GPS is the reported pre-sidecar upgrade case. Camera represents any future
+	// optional service declared through the same Compose-label contract.
+	for _, name := range []string{"gps", "camera"} {
+		t.Run(name, func(t *testing.T) {
+			current := composeConfig{Services: map[string]serviceConfig{}}
+			old := map[string]managedService{}
+			next := map[string]managedService{name: {}}
+			target := composeConfig{Services: map[string]serviceConfig{
+				name: {
+					ContainerName: "mowgli-" + name,
+					Volumes: []composeVolume{{
+						Type: "bind", Source: "./config", Target: "/config", ReadOnly: true,
+					}},
+				},
+			}}
+			if err := validateStackMounts(current, target, old, next); err != nil {
+				t.Fatal("ephemeral sidecar storage blocked a first install:", err)
+			}
+			service := target.Services[name]
+			service.Volumes = append(service.Volumes, composeVolume{
+				Type: "volume", Source: name + "_data", Target: "/var/lib/" + name,
+			})
+			target.Services[name] = service
+			if err := validateStackMounts(current, target, old, next); err == nil ||
+				!strings.Contains(err.Error(), "explicit data/layout migration required") {
+				t.Fatal("persistent sidecar storage bypassed the layout-1 migration guard:", err)
+			}
+		})
+	}
+}
+
 func TestAdditionalFirstPartyImageValidation(t *testing.T) {
 	d := fixture()
 	image := d.Images["gps"]
