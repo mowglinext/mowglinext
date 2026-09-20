@@ -20,9 +20,11 @@
 // changing the on-disk formats or service interfaces.
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -42,8 +44,9 @@
 #include "mowgli_map/dock_set_gates.hpp"
 #include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
-#include <grid_map_core/iterators/PolygonIterator.hpp>
+#include <fcntl.h>
 #include <grid_map_ros/GridMapRosConverter.hpp>
+#include <unistd.h>
 
 namespace mowgli_map
 {
@@ -278,6 +281,7 @@ void MapServerNode::on_save_map(const std_srvs::srv::Trigger::Request::SharedPtr
   try
   {
     std::lock_guard<std::mutex> lock(map_mutex_);
+    ensure_classification_current_locked();  // this dump READS the layer
 
     const std::string yaml_path = map_file_path_ + ".yaml";
     const std::string data_path = map_file_path_ + ".dat";
@@ -454,6 +458,7 @@ void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPt
   keepout_filter_info_sent_ = false;
   speed_filter_info_sent_ = false;
   masks_dirty_ = true;
+  defer_mask_rebuild();
 
   res->success = true;
   res->message = "All map layers and areas cleared.";
@@ -470,24 +475,6 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
     res->success = false;
     RCLCPP_WARN(get_logger(), "add_area: polygon must have at least 3 points.");
     return;
-  }
-
-  // Build grid_map polygon from geometry_msgs polygon
-  grid_map::Polygon gm_polygon;
-  for (const auto& pt : polygon_msg.points)
-  {
-    gm_polygon.addVertex(grid_map::Position(static_cast<double>(pt.x), static_cast<double>(pt.y)));
-  }
-
-  // Classify cells inside the area as LAWN (mowable), not NO_GO_ZONE.
-  // Only exclusion zones and obstacles should be NO_GO_ZONE.
-  const float lawn_val = static_cast<float>(CellType::LAWN);
-  {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    for (grid_map::PolygonIterator it(map_, gm_polygon); !it.isPastEnd(); ++it)
-    {
-      map_.at(std::string(layers::CLASSIFICATION), *it) = lawn_val;
-    }
   }
 
   // Store as an area entry.
@@ -537,7 +524,6 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
   // Store obstacle polygons from the MapArea message.
   // Only store in the area entry (static), NOT in obstacle_polygons_
   // (which is for dynamic LiDAR-detected obstacles).
-  const float no_go_val = static_cast<float>(CellType::NO_GO_ZONE);
   for (std::size_t j = 0; j < req->area.obstacles.size(); ++j)
   {
     const auto& obstacle = req->area.obstacles[j];
@@ -555,17 +541,6 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
         obs_source = req->area.obstacle_info[j].source;
       }
       entry.obstacles.push_back(make_obstacle_entry(obstacle, obs_name, obs_source, false));
-
-      grid_map::Polygon obs_gm;
-      for (const auto& pt : obstacle.points)
-      {
-        obs_gm.addVertex(grid_map::Position(static_cast<double>(pt.x), static_cast<double>(pt.y)));
-      }
-      std::lock_guard<std::mutex> lock(map_mutex_);
-      for (grid_map::PolygonIterator it(map_, obs_gm); !it.isPastEnd(); ++it)
-      {
-        map_.at(std::string(layers::CLASSIFICATION), *it) = no_go_val;
-      }
     }
   }
 
@@ -574,12 +549,20 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
     areas_.push_back(std::move(entry));
   }
   resize_map_to_areas();
-  // resize_map_to_areas() reallocates the grid and resets every layer
-  // (CLASSIFICATION → UNKNOWN), discarding the LAWN/NO_GO cells stamped above.
-  // Re-stamp from the full area list — exactly as on_load_areas does — so the
-  // keepout/speed costmap filters see the correct classification.
-  apply_area_classifications();
-  masks_dirty_ = true;
+  // NO grid work here. This callback runs on the node's only executor thread
+  // with a GUI (or the recording BT) blocked on the answer, and a map replace
+  // calls it once per area: stamping the LAWN / NO_GO cells — which has to
+  // cover the WHOLE area list, because resize_map_to_areas() resets the layer
+  // — made a replace cost N² polygon fills, and the keepout-mask rebuild armed
+  // below ran between every two calls, on a half-built map. Both now happen
+  // once, from the publish timer, after the burst
+  // (ensure_classification_current_locked / defer_mask_rebuild).
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    classification_dirty_ = true;
+    masks_dirty_ = true;
+  }
+  defer_mask_rebuild();
 
   RCLCPP_INFO(get_logger(),
               "Added area '%s' (%s) with %zu vertices and %zu obstacles.",
@@ -1757,6 +1740,42 @@ void MapServerNode::persist_areas_best_effort(const char* context)
 // Area persistence helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+void MapServerNode::commit_file_atomically(const std::string& tmp_path, const std::string& path)
+{
+  // fsync the DATA before the rename: without it the rename can reach the
+  // journal first, and a power cut then leaves a correctly named empty file.
+  const int fd = ::open(tmp_path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0 || ::fsync(fd) != 0)
+  {
+    const std::string reason = std::strerror(errno);
+    if (fd >= 0)
+    {
+      ::close(fd);
+    }
+    std::remove(tmp_path.c_str());
+    throw std::runtime_error("Cannot flush " + tmp_path + ": " + reason);
+  }
+  ::close(fd);
+
+  if (std::rename(tmp_path.c_str(), path.c_str()) != 0)
+  {
+    const std::string reason = std::strerror(errno);
+    std::remove(tmp_path.c_str());
+    throw std::runtime_error("Cannot replace " + path + ": " + reason);
+  }
+
+  // Best effort: make the rename itself durable. A failure here cannot lose
+  // the map (both names hold complete files), so it is not an error.
+  const auto slash = path.find_last_of('/');
+  const std::string dir = (slash == std::string::npos) ? "." : path.substr(0, slash + 1);
+  const int dir_fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (dir_fd >= 0)
+  {
+    (void)::fsync(dir_fd);
+    ::close(dir_fd);
+  }
+}
+
 std::string MapServerNode::polygon_to_string(const geometry_msgs::msg::Polygon& poly)
 {
   std::ostringstream oss;
@@ -1773,10 +1792,17 @@ std::string MapServerNode::polygon_to_string(const geometry_msgs::msg::Polygon& 
 
 void MapServerNode::save_areas_to_file(const std::string& path)
 {
-  std::ofstream out(path);
+  // Write a sibling temp file, flush it to the medium, then rename it over the
+  // target. Opening `path` directly truncates the ONLY copy of the operator's
+  // map first: a power cut (or a full SD card) between that truncate and the
+  // last write left an empty or half-written areas.dat, i.e. no map at the
+  // next boot. rename() within one directory is atomic, so a reader — and the
+  // next boot — sees either the previous file or the complete new one.
+  const std::string tmp_path = path + ".tmp";
+  std::ofstream out(tmp_path, std::ios::trunc);
   if (!out.is_open())
   {
-    throw std::runtime_error("Cannot open " + path + " for writing");
+    throw std::runtime_error("Cannot open " + tmp_path + " for writing");
   }
 
   out << "# Mowgli ROS2 — Persisted areas and docking point\n";
@@ -1857,6 +1883,12 @@ void MapServerNode::save_areas_to_file(const std::string& path)
   // all-zero pose taking precedence over the calibrated value.
 
   out.close();
+  if (out.fail())
+  {
+    std::remove(tmp_path.c_str());
+    throw std::runtime_error("Writing " + tmp_path + " failed (disk full?)");
+  }
+  commit_file_atomically(tmp_path, path);
 }
 
 void MapServerNode::load_areas_from_file(const std::string& path)
@@ -2172,26 +2204,52 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
               shift_north);
 }
 
+void MapServerNode::defer_mask_rebuild()
+{
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  mask_rebuild_not_before_ = std::chrono::steady_clock::now() + kMapEditSettle;
+}
+
 void MapServerNode::apply_area_classifications()
 {
   std::lock_guard<std::mutex> lock(map_mutex_);
-  const float lawn_val = static_cast<float>(CellType::LAWN);
-  const float no_go_val = static_cast<float>(CellType::NO_GO_ZONE);
+  apply_area_classifications_locked();
+}
+
+void MapServerNode::ensure_classification_current_locked()
+{
+  if (classification_dirty_)
+  {
+    apply_area_classifications_locked();
+  }
+}
+
+void MapServerNode::apply_area_classifications_locked()
+{
+  // Polygon fills go through polygon_raster.hpp (one ray cast per grid line)
+  // instead of grid_map::PolygonIterator (one per cell): same even-odd test in
+  // the same double arithmetic, so the same cells, at a fraction of the cost
+  // for a boundary recorded with hundreds of points.
+  const raster::CellAxes axes = make_cell_axes(map_, /*through_float=*/false);
+  const raster::CellWindow whole_grid{{0, static_cast<int>(map_.getSize()(0)) - 1},
+                                      {0, static_cast<int>(map_.getSize()(1)) - 1}};
+  auto& cls = map_[std::string(layers::CLASSIFICATION)];
+  const auto fill = [&](const geometry_msgs::msg::Polygon& polygon, CellType type)
+  {
+    const float value = static_cast<float>(type);
+    raster::for_each_cell_inside<double>(polygon,
+                                         axes,
+                                         whole_grid,
+                                         [&cls, value](int r, int c)
+                                         {
+                                           cls(r, c) = value;
+                                         });
+  };
 
   for (const auto& area : areas_)
   {
-    grid_map::Polygon gm_polygon;
-    for (const auto& pt : area.polygon.points)
-    {
-      gm_polygon.addVertex(
-          grid_map::Position(static_cast<double>(pt.x), static_cast<double>(pt.y)));
-    }
-
     // Mowing areas are LAWN, not NO_GO_ZONE.
-    for (grid_map::PolygonIterator it(map_, gm_polygon); !it.isPastEnd(); ++it)
-    {
-      map_.at(std::string(layers::CLASSIFICATION), *it) = lawn_val;
-    }
+    fill(area.polygon, CellType::LAWN);
 
     for (const auto& obstacle : area.obstacles)
     {
@@ -2199,15 +2257,7 @@ void MapServerNode::apply_area_classifications()
       {
         continue;  // a proposal is not applied: its cells stay LAWN
       }
-      grid_map::Polygon obs_gm;
-      for (const auto& pt : obstacle.polygon.points)
-      {
-        obs_gm.addVertex(grid_map::Position(static_cast<double>(pt.x), static_cast<double>(pt.y)));
-      }
-      for (grid_map::PolygonIterator it(map_, obs_gm); !it.isPastEnd(); ++it)
-      {
-        map_.at(std::string(layers::CLASSIFICATION), *it) = no_go_val;
-      }
+      fill(obstacle.polygon, CellType::NO_GO_ZONE);
     }
   }
 
@@ -2216,16 +2266,7 @@ void MapServerNode::apply_area_classifications()
   // never tries to mow into or path through the dock structure.
   if (has_dock_exclusion_ && dock_body_polygon_.points.size() >= 3)
   {
-    const float body_val = static_cast<float>(CellType::OBSTACLE_PERMANENT);
-    grid_map::Polygon body_gm;
-    for (const auto& pt : dock_body_polygon_.points)
-    {
-      body_gm.addVertex(grid_map::Position(static_cast<double>(pt.x), static_cast<double>(pt.y)));
-    }
-    for (grid_map::PolygonIterator it(map_, body_gm); !it.isPastEnd(); ++it)
-    {
-      map_.at(std::string(layers::CLASSIFICATION), *it) = body_val;
-    }
+    fill(dock_body_polygon_, CellType::OBSTACLE_PERMANENT);
   }
 
   // Dock approach corridor → DOCKING_AREA. Mowable (strips can traverse),
@@ -2236,22 +2277,21 @@ void MapServerNode::apply_area_classifications()
   {
     const float corridor_val = static_cast<float>(CellType::DOCKING_AREA);
     const float perm_val = static_cast<float>(CellType::OBSTACLE_PERMANENT);
-    grid_map::Polygon corridor_gm;
-    for (const auto& pt : dock_corridor_polygon_.points)
-    {
-      corridor_gm.addVertex(
-          grid_map::Position(static_cast<double>(pt.x), static_cast<double>(pt.y)));
-    }
-    auto& cls = map_[std::string(layers::CLASSIFICATION)];
-    for (grid_map::PolygonIterator it(map_, corridor_gm); !it.isPastEnd(); ++it)
-    {
-      if (cls((*it)(0), (*it)(1)) != perm_val)
-      {
-        cls((*it)(0), (*it)(1)) = corridor_val;
-      }
-    }
+    raster::for_each_cell_inside<double>(dock_corridor_polygon_,
+                                         axes,
+                                         whole_grid,
+                                         [&cls, corridor_val, perm_val](int r, int c)
+                                         {
+                                           if (cls(r, c) != perm_val)
+                                           {
+                                             cls(r, c) = corridor_val;
+                                           }
+                                         });
   }
+
+  classification_dirty_ = false;
 }
+
 void MapServerNode::add_area_for_test(
     const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
     mowgli_interfaces::srv::AddMowingArea::Response::SharedPtr res)

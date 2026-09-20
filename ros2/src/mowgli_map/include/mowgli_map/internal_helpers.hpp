@@ -161,6 +161,27 @@ struct ClosestEdge
   double distance{std::numeric_limits<double>::max()};
 };
 
+/// Closest point to (px, py) on the segment a→b, plus its distance. The ONE
+/// place this arithmetic lives: closest_edge_point() below and the edge-driven
+/// keepout rasteriser (polygon_raster.hpp) must agree to the last bit.
+inline ClosestEdge closest_point_on_segment(
+    double px, double py, double ax, double ay, double bx, double by)
+{
+  const double dx = bx - ax;
+  const double dy = by - ay;
+  const double len2 = dx * dx + dy * dy;
+
+  double t = 0.0;
+  if (len2 > 1e-12)
+  {
+    t = std::clamp(((px - ax) * dx + (py - ay) * dy) / len2, 0.0, 1.0);
+  }
+
+  const double cx = ax + t * dx;
+  const double cy = ay + t * dy;
+  return {cx, cy, std::hypot(px - cx, py - cy)};
+}
+
 inline ClosestEdge closest_edge_point(double px,
                                       double py,
                                       const geometry_msgs::msg::Polygon& polygon)
@@ -175,27 +196,15 @@ inline ClosestEdge closest_edge_point(double px,
 
   for (std::size_t i = 0, j = n - 1; i < n; j = i++)
   {
-    const double ax = static_cast<double>(pts[j].x);
-    const double ay = static_cast<double>(pts[j].y);
-    const double bx = static_cast<double>(pts[i].x);
-    const double by = static_cast<double>(pts[i].y);
-
-    const double dx = bx - ax;
-    const double dy = by - ay;
-    const double len2 = dx * dx + dy * dy;
-
-    double t = 0.0;
-    if (len2 > 1e-12)
+    const ClosestEdge candidate = closest_point_on_segment(px,
+                                                           py,
+                                                           static_cast<double>(pts[j].x),
+                                                           static_cast<double>(pts[j].y),
+                                                           static_cast<double>(pts[i].x),
+                                                           static_cast<double>(pts[i].y));
+    if (candidate.distance < best.distance)
     {
-      t = std::clamp(((px - ax) * dx + (py - ay) * dy) / len2, 0.0, 1.0);
-    }
-
-    const double cx = ax + t * dx;
-    const double cy = ay + t * dy;
-    const double dist = std::hypot(px - cx, py - cy);
-    if (dist < best.distance)
-    {
-      best = {cx, cy, dist};
+      best = candidate;
     }
   }
   return best;

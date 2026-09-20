@@ -22,11 +22,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 #include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
-#include <grid_map_core/iterators/PolygonIterator.hpp>
+#include "mowgli_map/polygon_raster.hpp"
 
 namespace mowgli_map
 {
@@ -57,12 +59,41 @@ namespace mowgli_map
 // itself and reopen the START_OCCUPIED skip cascade (issue #487).
 constexpr int8_t kSoftPenaltyMaskCost = 50;
 
+raster::CellAxes MapServerNode::make_cell_axes(const grid_map::GridMap& map, bool through_float)
+{
+  const auto coordinate = [through_float](double value)
+  {
+    return through_float ? static_cast<double>(static_cast<float>(value)) : value;
+  };
+  raster::CellAxes axes;
+  const int rows = map.getSize()(0);
+  const int cols = map.getSize()(1);
+  axes.x_of_row.reserve(static_cast<std::size_t>(rows));
+  axes.y_of_col.reserve(static_cast<std::size_t>(cols));
+  grid_map::Position pos;
+  for (int r = 0; r < rows; ++r)
+  {
+    map.getPosition(grid_map::Index(r, 0), pos);
+    axes.x_of_row.push_back(coordinate(pos.x()));
+  }
+  for (int c = 0; c < cols; ++c)
+  {
+    map.getPosition(grid_map::Index(0, c), pos);
+    axes.y_of_col.push_back(coordinate(pos.y()));
+  }
+  return axes;
+}
+
 void MapServerNode::publish_keepout_mask()
 {
   if (areas_.empty())
   {
     return;
   }
+
+  // The NO_GO overlay below reads the CLASSIFICATION layer, which add_area no
+  // longer stamps inside its service callback.
+  ensure_classification_current_locked();
 
   // grid_map: size(0) = cells along X, size(1) = cells along Y.
   //   r=0 → X_max (decreasing), c=0 → Y_max (decreasing).
@@ -196,101 +227,117 @@ void MapServerNode::publish_keepout_mask()
     }
   }
 
+  // Cell centres, rounded through float: the per-cell definition of this mask
+  // tests `static_cast<float>(centre)` and measures distances from that same
+  // rounded point, so the rasteriser has to see the rounded coordinates too.
+  const raster::CellAxes axes = make_cell_axes(map_, /*through_float=*/true);
+  const raster::CellWindow window{{r0, r1}, {c0, c1}};
+  const std::size_t window_cols = static_cast<std::size_t>(c1 - c0 + 1);
+  const auto window_cell = [r0, c0, window_cols](int r, int c)
+  {
+    return static_cast<std::size_t>(r - r0) * window_cols + static_cast<std::size_t>(c - c0);
+  };
+  const auto og_cell = [nx, ny](int r, int c)
+  {
+    // Invariant 14: grid_map r=0 is X_max → OG col nx-1; c=0 is Y_max → OG row ny-1.
+    return static_cast<std::size_t>((ny - 1 - c) * nx + (nx - 1 - r));
+  };
+
+  // Pass 1 — areas. Polygon-driven (see polygon_raster.hpp): per area, one ray
+  // cast per grid line marks the inside cells, then each boundary EDGE visits
+  // only the cells of its own margin-grown bounding box. The flags reproduce
+  // the per-cell rule exactly:
+  //   inside ANY area                                   → free (0)
+  //   …and closer than boundary_inner_margin_m_ to the
+  //     edge of an area it is INSIDE, away from the dock → soft (50)
+  //   outside every area, within outside_free_margin of
+  //     the edge of an area                              → soft (50)
+  constexpr uint8_t kInsideAny = 1U << 0;
+  constexpr uint8_t kInnerBand = 1U << 1;
+  constexpr uint8_t kOuterBand = 1U << 2;
+  const double inner_margin = std::max(boundary_inner_margin_m_, 0.0);
+  const double outer_margin = std::max(outside_free_margin, 0.0);
+  const double band = std::max(inner_margin, outer_margin);
+  std::vector<uint8_t> flags(static_cast<std::size_t>(r1 - r0 + 1) * window_cols, 0);
+  std::vector<uint8_t> inside_this_area(flags.size(), 0);
+  for (const auto& area : areas_)
+  {
+    std::fill(inside_this_area.begin(), inside_this_area.end(), 0);
+    raster::for_each_cell_inside<float>(area.polygon,
+                                        axes,
+                                        window,
+                                        [&](int r, int c)
+                                        {
+                                          inside_this_area[window_cell(r, c)] = 1;
+                                          flags[window_cell(r, c)] |= kInsideAny;
+                                        });
+    if (band <= 0.0)
+    {
+      continue;
+    }
+    raster::for_each_cell_near_edges(area.polygon,
+                                     axes,
+                                     window,
+                                     band,
+                                     [&](int r, int c, double distance)
+                                     {
+                                       const std::size_t k = window_cell(r, c);
+                                       if (inside_this_area[k] != 0)
+                                       {
+                                         if (inner_margin > 0.0 && distance < inner_margin)
+                                         {
+                                           flags[k] |= kInnerBand;
+                                         }
+                                       }
+                                       else if (outer_margin > 0.0 && distance <= outer_margin)
+                                       {
+                                         flags[k] |= kOuterBand;
+                                       }
+                                     });
+  }
+
+  // Cells within dock_inner_margin_exempt_radius_m_ of the dock pose are
+  // exempt from the inner penalty, in EVERY direction, so the dock approach
+  // carries no bias at all — not even the soft cost. Unlike
+  // dock_corridor_polygon_ (a fixed rectangle carved out further down in this
+  // function), this isotropic exemption doesn't depend on getting the
+  // corridor's orientation/size right — it directly covers wherever GNSS
+  // drift actually puts the robot's own position near the dock.
+  const bool dock_exempts = has_dock_exclusion_ && dock_inner_margin_exempt_radius_m_ > 0.0;
+  const auto near_dock = [&](int r, int c)
+  {
+    const double ddx = axes.x_of_row[static_cast<std::size_t>(r)] - docking_pose_.position.x;
+    const double ddy = axes.y_of_col[static_cast<std::size_t>(c)] - docking_pose_.position.y;
+    return (ddx * ddx + ddy * ddy) <=
+           dock_inner_margin_exempt_radius_m_ * dock_inner_margin_exempt_radius_m_;
+  };
+
+  // Inside transit margin: the inner band gets the SAME soft mid-cost as the
+  // outside-slack band — deliberately NEVER lethal (see kSoftPenaltyMaskCost).
+  // Effect: the global planner (Smac, used for point-to-point TRANSIT) prefers
+  // a route that stays that far inside the recorded edge when one exists, but
+  // is never blocked from starting, ending, or passing through this band —
+  // coverage/mowing itself never sees this mask (FTC tracks the F2C path
+  // against the LOCAL costmap instead), and neither does a narrow seam between
+  // two adjacent areas, which stays fully crossable, just costed.
   for (int r = r0; r <= r1; ++r)
   {
     for (int c = c0; c <= c1; ++c)
     {
-      grid_map::Position pos;
-      const grid_map::Index idx(r, c);
-      if (!map_.getPosition(idx, pos))
+      const uint8_t f = flags[window_cell(r, c)];
+      if ((f & kInsideAny) != 0)
       {
-        continue;
+        const bool inner_penalty = (f & kInnerBand) != 0 && !(dock_exempts && near_dock(r, c));
+        mask.data[og_cell(r, c)] = inner_penalty ? kSoftPenaltyMaskCost : 0;
       }
-
-      geometry_msgs::msg::Point32 pt;
-      pt.x = static_cast<float>(pos.x());
-      pt.y = static_cast<float>(pos.y());
-      pt.z = 0.0F;
-
-      const int og_col = nx - 1 - r;  // grid_map r=0 (X_max) → OG col nx-1
-      const int og_row = ny - 1 - c;  // grid_map c=0 (Y_max) → OG row ny-1
-      const auto flat_idx = static_cast<std::size_t>(og_row * nx + og_col);
-
-      bool inside_any = false;
-      double inside_min_edge_dist = std::numeric_limits<double>::max();
-      bool within_outside_margin = false;
-      for (const auto& area : areas_)
+      else if ((f & kOuterBand) != 0)
       {
-        if (point_in_polygon(pt, area.polygon))
-        {
-          inside_any = true;
-          if (boundary_inner_margin_m_ > 0.0)
-          {
-            double d = point_to_polygon_distance(static_cast<double>(pt.x),
-                                                 static_cast<double>(pt.y),
-                                                 area.polygon);
-            if (d < inside_min_edge_dist)
-            {
-              inside_min_edge_dist = d;
-            }
-          }
-          // Keep scanning other polygons — a cell can be inside A but near the
-          // edge of B. We want the nearest edge distance overall.
-          continue;
-        }
-        if (!within_outside_margin && outside_free_margin > 0.0)
-        {
-          double dist = point_to_polygon_distance(static_cast<double>(pt.x),
-                                                  static_cast<double>(pt.y),
-                                                  area.polygon);
-          if (dist <= outside_free_margin)
-          {
-            within_outside_margin = true;
-          }
-        }
-      }
-
-      // Cells within dock_inner_margin_exempt_radius_m_ of the dock pose are
-      // exempt from the penalty below, in EVERY direction, so the dock
-      // approach carries no bias at all — not even the soft cost. Unlike
-      // dock_corridor_polygon_ (a fixed rectangle carved out further down in
-      // this function), this isotropic exemption doesn't depend on getting
-      // the corridor's orientation/size right — it directly covers wherever
-      // GNSS drift actually puts the robot's own position near the dock.
-      bool near_dock = false;
-      if (has_dock_exclusion_ && dock_inner_margin_exempt_radius_m_ > 0.0)
-      {
-        const double ddx = static_cast<double>(pt.x) - docking_pose_.position.x;
-        const double ddy = static_cast<double>(pt.y) - docking_pose_.position.y;
-        near_dock = (ddx * ddx + ddy * ddy) <=
-                    dock_inner_margin_exempt_radius_m_ * dock_inner_margin_exempt_radius_m_;
-      }
-
-      // Inside transit margin: cells inside a mowing/navigation area but
-      // within boundary_inner_margin_m_ of the nearest edge get the SAME
-      // soft mid-cost as the outside-slack band above — deliberately NEVER
-      // lethal (see kSoftPenaltyMaskCost). Effect: the global planner (Smac,
-      // used for point-to-point TRANSIT) prefers a route that stays that far
-      // inside the recorded edge when one exists, but is never blocked from
-      // starting, ending, or passing through this band — coverage/mowing
-      // itself never sees this mask (FTC tracks the F2C path against the
-      // LOCAL costmap instead), and neither does a narrow seam between two
-      // adjacent areas, which stays fully crossable, just costed.
-      bool inner_penalty = inside_any && boundary_inner_margin_m_ > 0.0 &&
-                           inside_min_edge_dist < boundary_inner_margin_m_ && !near_dock;
-
-      if (inside_any)
-      {
-        mask.data[flat_idx] = inner_penalty ? kSoftPenaltyMaskCost : 0;
-      }
-      else if (within_outside_margin)
-      {
-        mask.data[flat_idx] = kSoftPenaltyMaskCost;
+        mask.data[og_cell(r, c)] = kSoftPenaltyMaskCost;
       }
     }
   }
 
-  // Overlay obstacle polygons: cells inside any obstacle -> 100 (lethal).
+  // Pass 2 — obstacle polygons: cells inside any obstacle -> 100 (lethal).
   // Two sources share this pass: obstacle_polygons_ (dynamic LiDAR-promoted)
   // and every area's DRAWN entry.obstacles (whose interiors are also lethal
   // via the classification NO_GO_ZONE overlay below — the polygon pass here
@@ -300,6 +347,27 @@ void MapServerNode::publish_keepout_mask()
   // inflated downstream — polygon + this band IS the lethal region, the body
   // counted exactly once. It is deliberately smaller than coverage_server's
   // obstacle_margin so a robot on its coverage line is never START_OCCUPIED.
+  // Each obstacle only visits its own margin-grown bounding box.
+  const auto stamp_window_cells =
+      [&](const geometry_msgs::msg::Polygon& polygon, double margin, int8_t value, const auto& hits)
+  {
+    const raster::CellWindow w = raster::polygon_window(polygon, axes, window, margin);
+    for (int r = w.rows.first; r <= w.rows.last; ++r)
+    {
+      for (int c = w.cols.first; c <= w.cols.last; ++c)
+      {
+        geometry_msgs::msg::Point32 pt;
+        pt.x = static_cast<float>(axes.x_of_row[static_cast<std::size_t>(r)]);
+        pt.y = static_cast<float>(axes.y_of_col[static_cast<std::size_t>(c)]);
+        pt.z = 0.0F;
+        if (hits(pt, polygon))
+        {
+          mask.data[og_cell(r, c)] = value;
+        }
+      }
+    }
+  };
+  const double obstacle_band = std::max(keepout_obstacle_margin_m_, 0.0);
   const auto cell_hits_obstacle =
       [this](const geometry_msgs::msg::Point32& pt, const geometry_msgs::msg::Polygon& obs)
   {
@@ -311,51 +379,21 @@ void MapServerNode::publish_keepout_mask()
            point_to_polygon_distance(static_cast<double>(pt.x), static_cast<double>(pt.y), obs) <=
                keepout_obstacle_margin_m_;
   };
-  for (int r = r0; r <= r1; ++r)
+  for (const auto& obs : obstacle_polygons_)
   {
-    for (int c = c0; c <= c1; ++c)
+    stamp_window_cells(obs, obstacle_band, 100, cell_hits_obstacle);
+  }
+  for (const auto& area : areas_)
+  {
+    for (const auto& obs : area.obstacles)
     {
-      grid_map::Position pos;
-      const grid_map::Index idx(r, c);
-      if (!map_.getPosition(idx, pos))
+      // PENDING proposals (wheel-slip dig reports) are NEVER lethal: the
+      // robot stands ~0.2-0.3 m from a fresh dig point, and a keepout
+      // there refused every plan from its own pose (START_OCCUPIED,
+      // 2026-09-10 and 2026-09-17). Only an operator accept applies one.
+      if (!obs.pending)
       {
-        continue;
-      }
-
-      geometry_msgs::msg::Point32 pt;
-      pt.x = static_cast<float>(pos.x());
-      pt.y = static_cast<float>(pos.y());
-      pt.z = 0.0F;
-
-      bool lethal = false;
-      for (const auto& obs : obstacle_polygons_)
-      {
-        if (cell_hits_obstacle(pt, obs))
-        {
-          lethal = true;
-          break;
-        }
-      }
-      for (std::size_t a = 0; !lethal && a < areas_.size(); ++a)
-      {
-        for (const auto& obs : areas_[a].obstacles)
-        {
-          // PENDING proposals (wheel-slip dig reports) are NEVER lethal: the
-          // robot stands ~0.2-0.3 m from a fresh dig point, and a keepout
-          // there refused every plan from its own pose (START_OCCUPIED,
-          // 2026-09-10 and 2026-09-17). Only an operator accept applies one.
-          if (!obs.pending && cell_hits_obstacle(pt, obs.polygon))
-          {
-            lethal = true;
-            break;
-          }
-        }
-      }
-      if (lethal)
-      {
-        const int og_col = nx - 1 - r;
-        const int og_row = ny - 1 - c;
-        mask.data[static_cast<std::size_t>(og_row * nx + og_col)] = 100;
+        stamp_window_cells(obs.polygon, obstacle_band, 100, cell_hits_obstacle);
       }
     }
   }
@@ -384,28 +422,14 @@ void MapServerNode::publish_keepout_mask()
   // itself is NOT carved — it stays lethal via OBSTACLE_PERMANENT.
   if (has_dock_exclusion_ && dock_corridor_polygon_.points.size() >= 3)
   {
-    for (int r = r0; r <= r1; ++r)
-    {
-      for (int c = c0; c <= c1; ++c)
-      {
-        grid_map::Position pos;
-        const grid_map::Index idx(r, c);
-        if (!map_.getPosition(idx, pos))
-        {
-          continue;
-        }
-        geometry_msgs::msg::Point32 pt;
-        pt.x = static_cast<float>(pos.x());
-        pt.y = static_cast<float>(pos.y());
-        pt.z = 0.0F;
-        if (point_in_polygon(pt, dock_corridor_polygon_))
-        {
-          const int og_col = nx - 1 - r;
-          const int og_row = ny - 1 - c;
-          mask.data[static_cast<std::size_t>(og_row * nx + og_col)] = 0;
-        }
-      }
-    }
+    stamp_window_cells(dock_corridor_polygon_,
+                       0.0,
+                       0,
+                       [](const geometry_msgs::msg::Point32& pt,
+                          const geometry_msgs::msg::Polygon& corridor)
+                       {
+                         return point_in_polygon(pt, corridor);
+                       });
   }
 
   cached_keepout_mask_ = mask;

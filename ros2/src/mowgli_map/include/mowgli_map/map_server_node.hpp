@@ -16,6 +16,7 @@
 #ifndef MOWGLI_MAP__MAP_SERVER_NODE_HPP_
 #define MOWGLI_MAP__MAP_SERVER_NODE_HPP_
 
+#include <chrono>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -46,6 +47,7 @@
 #include "mowgli_map/dock_antenna_capture.hpp"
 #include "mowgli_map/map_types.hpp"
 #include "mowgli_map/mow_progress.hpp"
+#include "mowgli_map/polygon_raster.hpp"
 #include <grid_map_core/GridMap.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
@@ -640,6 +642,11 @@ private:
   /// Save areas and docking point to a YAML file.
   void save_areas_to_file(const std::string& path);
 
+  /// fsync `tmp_path`, rename it over `path`, fsync the directory. Throws (and
+  /// removes the temp file) if the data cannot be made durable; `path` is then
+  /// untouched.
+  static void commit_file_atomically(const std::string& tmp_path, const std::string& path);
+
   /// Load areas and docking point from a YAML file.
   void load_areas_from_file(const std::string& path);
 
@@ -659,7 +666,28 @@ private:
   void migrate_areas_datum(double file_datum_lat, double file_datum_lon, const std::string& path);
 
   /// Reapply area classifications to the map grid (called after loading areas).
+  /// Takes map_mutex_; clears classification_dirty_.
   void apply_area_classifications();
+
+  /// Same, for a caller that already holds map_mutex_.
+  void apply_area_classifications_locked();
+
+  /// Re-stamp the CLASSIFICATION layer if an edit left it stale (see
+  /// classification_dirty_). Every READER of that layer calls this first.
+  /// Caller must hold map_mutex_.
+  void ensure_classification_current_locked();
+
+  /// Cell-centre coordinates of `map`, per row / column index. With
+  /// `through_float` each coordinate is rounded through float, which is what
+  /// the keepout mask's per-cell definition tests (Point32).
+  static raster::CellAxes make_cell_axes(const grid_map::GridMap& map, bool through_float);
+
+  /// Push the next keepout-mask rebuild kMapEditSettle into the future. Called
+  /// by the two services a map REPLACE is made of (clear_map, add_area): the
+  /// GUI sends clear_map → add_area × N → save_areas back to back, and one
+  /// rebuild after the burst replaces N rebuilds of N half-built maps.
+  /// Caller must NOT hold map_mutex_.
+  void defer_mask_rebuild();
 
   /// (Re)build the three coupled dock polygons (body / corridor / exclusion)
   /// from the current docking_pose_ and set has_dock_exclusion_. Clears the
@@ -1089,6 +1117,25 @@ private:
   nav_msgs::msg::OccupancyGrid cached_keepout_mask_;
   nav_msgs::msg::OccupancyGrid cached_speed_mask_;
   bool masks_dirty_{true};
+
+  /// How long the map must have been left alone before the publish timer
+  /// rebuilds the keepout mask after a clear_map / add_area. Long enough to
+  /// span the gap between two calls of a GUI map replace (a websocket + DDS
+  /// round trip each), short enough that a single recorded area reaches Nav2
+  /// within a couple of timer ticks.
+  static constexpr std::chrono::milliseconds kMapEditSettle{1500};
+
+  /// The publish timer leaves a dirty mask alone until this instant. Steady
+  /// clock: a settle window must not depend on /clock or sim time.
+  std::chrono::steady_clock::time_point mask_rebuild_not_before_{};
+
+  /// True when areas_ changed but the CLASSIFICATION layer was not re-stamped
+  /// yet. add_area used to rasterise the WHOLE area list inside the service
+  /// callback (twice for the new area), so a replace of N areas cost N²
+  /// polygon fills while the caller waited; the layer has exactly two readers
+  /// (the keepout mask and the save_map dump), so it is rebuilt lazily, once,
+  /// by whichever of them runs first. Guarded by map_mutex_.
+  bool classification_dirty_{false};
 
   // Replan and boundary violation publishers
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr replan_needed_pub_;

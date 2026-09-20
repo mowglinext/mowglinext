@@ -966,7 +966,14 @@ void MapServerNode::on_publish_timer()
     // KeepoutFilter to reload its filter every second ("New filter
     // mask arrived" log), invalidating active plans and causing
     // docking nav-to-staging to never settle.
-    if (masks_dirty_)
+    //
+    // After a clear_map / add_area the rebuild additionally waits for the map
+    // to be left alone for kMapEditSettle (defer_mask_rebuild): a GUI "Save
+    // map" is clear_map → add_area × N, and rebuilding between two of those
+    // calls both published a HALF-BUILT map to Nav2 (everything outside the
+    // first area lethal) and held this single-threaded executor while the next
+    // add_area sat in the queue — the "context deadline exceeded" on save.
+    if (masks_dirty_ && std::chrono::steady_clock::now() >= mask_rebuild_not_before_)
     {
       publish_keepout_mask();
       masks_dirty_ = false;

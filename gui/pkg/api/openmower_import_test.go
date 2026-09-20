@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -449,6 +450,16 @@ func TestPostImportOpenMower_MnDatumConfiguredWhenDatumSet(t *testing.T) {
 
 func TestPostImportOpenMower_ApplyCallsClearAddSaveAndDock(t *testing.T) {
 	mock := types.NewMockRosProvider()
+	// An empty map_server that accepts everything: get_mowing_area reports
+	// "no such index" (zero value), the writes report success.
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		switch out := res.(type) {
+		case *mowgli.AddMowingAreaRes:
+			out.Success = true
+		case *triggerRes:
+			out.Success = true
+		}
+	}
 	router := setupImportRouter(mock, nil)
 
 	body := []byte(`{"map": ` + sampleOpenMowerMap + `, "apply": true}`)
@@ -463,16 +474,17 @@ func TestPostImportOpenMower_ApplyCallsClearAddSaveAndDock(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.True(t, resp.Applied, "applied flag must be true on the success response")
 
-	// Expected sequence: clear_map → add_area (mow) → add_area (nav) →
-	// save_areas → set_docking_point. The fixture has one mow area
-	// (with one obstacle nested) and one nav area, hence two add_area
-	// calls.
+	// Expected sequence: get_mowing_area (read-back of the current map, for
+	// the rollback — empty here) → clear_map → add_area (mow) → add_area
+	// (nav) → save_areas → set_docking_point. The fixture has one mow area
+	// (with one obstacle nested) and one nav area, hence two add_area calls.
 	services := make([]string, 0, len(mock.ServiceCalls))
 	for _, sc := range mock.ServiceCalls {
 		services = append(services, sc.Service)
 	}
 	assert.Equal(t,
 		[]string{
+			"/map_server_node/get_mowing_area",
 			"/map_server_node/clear_map",
 			"/map_server_node/add_area",
 			"/map_server_node/add_area",
@@ -484,7 +496,7 @@ func TestPostImportOpenMower_ApplyCallsClearAddSaveAndDock(t *testing.T) {
 	)
 }
 
-func TestPostImportOpenMower_ApplyClearMapErrorPropagates(t *testing.T) {
+func TestPostImportOpenMower_UnreachableMapServerAbortsBeforeClearing(t *testing.T) {
 	mock := types.NewMockRosProvider()
 	mock.ServiceErr = assert.AnError
 	router := setupImportRouter(mock, nil)
@@ -496,10 +508,13 @@ func TestPostImportOpenMower_ApplyClearMapErrorPropagates(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusInternalServerError, w.Code, "body=%s", w.Body.String())
-	// First service call attempted is clear_map and it must abort the rest.
+	// The first call is the read-back of the current map; when even that
+	// fails the import stops there — clear_map is never sent, so the robot
+	// keeps the map it had.
 	require.NotEmpty(t, mock.ServiceCalls)
-	assert.Equal(t, "/map_server_node/clear_map", mock.ServiceCalls[0].Service)
-	assert.Len(t, mock.ServiceCalls, 1, "no further calls after clear_map failure")
+	assert.Equal(t, "/map_server_node/get_mowing_area", mock.ServiceCalls[0].Service)
+	assert.Len(t, mock.ServiceCalls, 1, "nothing may be written when the map cannot be read")
+	assert.Contains(t, w.Body.String(), "nothing was changed")
 }
 
 func TestPostImportOpenMower_RejectsBadJSON(t *testing.T) {

@@ -531,6 +531,11 @@ func (c *Client) readPump() {
 			c.conn = nil
 		}
 		c.connMu.Unlock()
+		// A response can only arrive on the socket that carried the request.
+		// Without this, a call in flight when foxglove_bridge restarts (or the
+		// link drops) sat there until its caller's deadline and surfaced as a
+		// bare "context deadline exceeded" a minute later.
+		c.failPendingCalls("connection to foxglove_bridge lost before the response arrived")
 		logrus.Info("foxglove: readPump exiting")
 	}()
 
@@ -828,6 +833,18 @@ func (c *Client) dispatchToSubscribers(topic string, msg json.RawMessage) {
 	// subscribers, churned the scheduler and reordered fan-out).
 	for _, e := range entries {
 		e.callback(msg)
+	}
+}
+
+// failPendingCalls completes every in-flight CallService with a failure.
+func (c *Client) failPendingCalls(reason string) {
+	c.svcMu.Lock()
+	defer c.svcMu.Unlock()
+	for _, pending := range c.pendingSvc {
+		select {
+		case pending.ch <- serviceCallResult{success: false, data: []byte(reason)}:
+		default: // already answered
+		}
 	}
 }
 

@@ -813,9 +813,8 @@ func buildMowgliNextPayload(omMap openMowerMap, reproj datumReprojector) (*mowgl
 // HTTP-driven ReplaceMapRoute + SetDockingPointRoute via the shared
 // helpers in mowglinext.go, so the importer and the regular save path
 // can't drift apart on what "save" means. A failure mid-sequence
-// surfaces as a 500 to the caller; areas already written before the
-// failure stay in `map_server_node`'s in-memory state (the same
-// partial-write semantics the HTTP route has — there is no transaction).
+// surfaces as a 500 to the caller; replaceMapInternal puts the previous
+// map back and its error says whether that worked (map_replace.go).
 func applyImport(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mowgli.ReplaceMapReq, dockReq *mowgli.SetDockingPointReq) error {
 	if rosProvider == nil {
 		return errors.New("apply: no ROS provider")
@@ -832,7 +831,7 @@ func applyImport(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mow
 
 	logImportf("import/openmower applying: %d areas, dock=%v", len(replaceReq.Areas), dockReq != nil)
 	if err := replaceMapInternal(ctx, rosProvider, replaceReq); err != nil {
-		return fmt.Errorf("replace map: %w", err)
+		return err // already says "replace map …" and what state the robot is in
 	}
 	if dockReq != nil {
 		if err := setDockingPointInternal(ctx, rosProvider, dockReq); err != nil {

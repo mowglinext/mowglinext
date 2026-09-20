@@ -114,3 +114,45 @@ func TestSanitizeJSONValueReplacesNonFiniteFloats(t *testing.T) {
 		t.Fatalf("array[1] = %#v, want nil", array[1])
 	}
 }
+
+func TestCallServiceFailsFastWhenTheConnectionDropsMidCall(t *testing.T) {
+	// Arrange: a bridge that takes the request and dies before answering.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{Subprotocols: []string{"foxglove.sdk.v1"}}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_, _, _ = conn.ReadMessage()
+		_ = conn.Close()
+	}))
+	defer server.Close()
+	client := NewClient("ws" + strings.TrimPrefix(server.URL, "http"))
+	var service serviceDef
+	if err := json.Unmarshal([]byte(`{"id":1,"name":"/add_area","request":{"schema":""},"response":{"schema":"bool success"}}`), &service); err != nil {
+		t.Fatal(err)
+	}
+	client.services["/add_area"] = &serviceState{def: service}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	// Act
+	started := time.Now()
+	_, err := client.CallService(ctx, "/add_area", struct{}{})
+
+	// Assert: an error that names the cause, long before the caller's deadline.
+	if err == nil {
+		t.Fatal("a call whose connection dropped must fail")
+	}
+	if !strings.Contains(err.Error(), "connection to foxglove_bridge lost") {
+		t.Fatalf("error does not name the cause: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("call waited %s for its deadline instead of failing on the drop", elapsed)
+	}
+}
