@@ -82,3 +82,10 @@ MSG_UPDATER_STACK_BACKEND="Managed release updates support the Mowgli hardware b
 MSG_UPDATER_HARDWARE_LEGACY="These hardware choices require the existing installer path (MAVROS, TF-Luna or VESC). Keeping their selected containers; coordinated release updates are not enabled."
 MSG_UPDATER_HARDWARE_MANAGED="This installation already uses managed updates. MAVROS, TF-Luna and VESC selections require an explicit stack migration; runtime files have not been regenerated."
 MSG_UPDATER_STACK_REVIEW="Saved hardware choices. Review Software updates to apply container changes; the installed release definition has been retained."
+
+# Compose baseline / legacy adoption (install/lib/compose.sh)
+MSG_COMPOSE_BASELINE_UNAVAILABLE="Could not record a checksum of the generated Compose file (sha256sum/shasum missing, or docker/stack-definition.sha256 not writable); no baseline recorded."
+MSG_COMPOSE_LEGACY_EXPLAIN="docker/docker-compose.yaml was generated before managed updates existed, so no checksum of it was recorded. It differs from the current definition in the settings listed above. If you never edited that file by hand, this is only the release evolving and it is safe to replace."
+MSG_COMPOSE_LEGACY_BACKUP="The current file is kept as docker/docker-compose.yaml.legacy-<date>. Hand-made changes you want to keep belong in docker/stack-overrides.yaml."
+MSG_COMPOSE_LEGACY_CONFIRM="Replace docker/docker-compose.yaml with the current definition?"
+MSG_COMPOSE_LEGACY_DECLINED="docker/docker-compose.yaml left untouched. Move your changes into docker/stack-overrides.yaml, then rerun the installer (non-interactive: MOWGLI_ADOPT_LEGACY_COMPOSE=true)."

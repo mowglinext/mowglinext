@@ -82,3 +82,10 @@ MSG_UPDATER_STACK_BACKEND="Les mises à jour gérées prennent en charge le mat�
 MSG_UPDATER_HARDWARE_LEGACY="Ces choix matériels nécessitent le parcours d'installation existant (MAVROS, TF-Luna ou VESC). Les conteneurs sélectionnés sont conservés ; les mises à jour coordonnées ne sont pas activées."
 MSG_UPDATER_HARDWARE_MANAGED="Cette installation utilise déjà les mises à jour gérées. Les choix MAVROS, TF-Luna et VESC nécessitent une migration explicite ; les fichiers d'exécution n'ont pas été régénérés."
 MSG_UPDATER_STACK_REVIEW="Choix matériels enregistrés. Consultez les mises à jour logicielles pour appliquer les changements de conteneurs ; la définition installée a été conservée."
+
+# Compose baseline / legacy adoption (install/lib/compose.sh)
+MSG_COMPOSE_BASELINE_UNAVAILABLE="Impossible d'enregistrer l'empreinte du fichier Compose généré (sha256sum/shasum absents, ou docker/stack-definition.sha256 non inscriptible) ; aucune référence enregistrée."
+MSG_COMPOSE_LEGACY_EXPLAIN="docker/docker-compose.yaml a été généré avant les mises à jour gérées : aucune empreinte n'en a été enregistrée. Il diffère de la définition actuelle sur les réglages listés ci-dessus. Si vous n'avez jamais modifié ce fichier à la main, il s'agit seulement de l'évolution de la version et il peut être remplacé sans risque."
+MSG_COMPOSE_LEGACY_BACKUP="Le fichier actuel est conservé sous docker/docker-compose.yaml.legacy-<date>. Les modifications manuelles à garder vont dans docker/stack-overrides.yaml."
+MSG_COMPOSE_LEGACY_CONFIRM="Remplacer docker/docker-compose.yaml par la définition actuelle ?"
+MSG_COMPOSE_LEGACY_DECLINED="docker/docker-compose.yaml laissé intact. Déplacez vos modifications dans docker/stack-overrides.yaml puis relancez l'installateur (non interactif : MOWGLI_ADOPT_LEGACY_COMPOSE=true)."

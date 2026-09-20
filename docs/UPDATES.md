@@ -360,7 +360,18 @@ and immutable image references switch together in one atomic Compose replacement
 the durable journal can restore them after interruption. Private Compose/recovery
 payloads are removed from browser responses, which expose only choices and changes.
 The generated-file checksum rejects manual edits; reviewed customizations belong in
-`stack-overrides.yaml`. Legacy adoption also refuses unexplained manual differences.
+`stack-overrides.yaml`. The plain (non-managed) installer records the same checksum
+(`docker/stack-definition.sha256`) for every file it generates, so adoption compares the
+installed file against the baseline it was GENERATED from: an untouched file is adopted
+whatever the fragments became since, an edited one is refused.
+
+A Compose file generated before that baseline existed cannot be told apart from a hand
+edit — comparing it with the new target flags every change the release itself made to the
+fragments (`GNSS_STACK` added to `mowgli.environment`, the rewritten `gps` service, …).
+`installer-stack` therefore exits 3 and lists every differing `service.key`; the installer
+explains it and asks once. On consent (non-interactive: `MOWGLI_ADOPT_LEGACY_COMPOSE=true`)
+the previous file is kept byte-for-byte as `docker-compose.yaml.legacy-<UTC>` and the
+current definition is adopted. Consent never bypasses a recorded checksum.
 
 For an additional first-party service, add its image build definition to
 `install/deployment.json`, add its installer Compose fragment to the required list
