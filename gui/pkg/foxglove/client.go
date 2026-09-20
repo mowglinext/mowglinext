@@ -494,7 +494,9 @@ func (c *Client) CallService(ctx context.Context, service string, args interface
 		if err != nil {
 			return nil, fmt.Errorf("foxglove: CallService %s: CDR deserialize response: %w", service, err)
 		}
-		jsonResult, err := json.Marshal(decoded)
+		// Receiver snapshots legitimately carry NaN for unavailable optional
+		// measurements. Preserve the rest of the response, as for topic frames.
+		jsonResult, err := json.Marshal(sanitizeJSONValue(decoded))
 		if err != nil {
 			return nil, fmt.Errorf("foxglove: CallService %s: marshal response: %w", service, err)
 		}

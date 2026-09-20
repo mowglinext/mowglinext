@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "fusion_graph/fusion_graph_node.hpp"
+#include "fusion_graph/lidar_anchor_decision.hpp"
 #include "fusion_graph/lidar_covariance.hpp"
 #include <Eigen/Eigenvalues>
 #include <beluga/beluga.hpp>
@@ -360,6 +361,7 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   const auto evaluate = [&]()
   {
     const bool shadow = rtk_age_s <= lidar_anchor_engage_age_s_;
+    const Sophus::SE2d fused(pose_at_scan.theta(), pose_at_scan.translation());
     // The map anchor is a fallback for a real GNSS outage, not for an
     // RTK-Fixed -> Float transition. Field run 2026-09-09 showed that the
     // receiver kept delivering 14-28 mm Float observations while the anchor
@@ -382,49 +384,84 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
           (dr_now.translation() - lidar_anchor_last_dr_.translation()).norm();
       lidar_anchor_last_dr_ = dr_now;
     }
-    if (!compute.run)
+    const bool new_filter = !lidar_anchor_filter_;
+    const auto preparation = DecideLidarAnchorPreparation(
+        {shadow,
+         compute.run,
+         compute.reseed,
+         new_filter,
+         lidar_anchor_reference_valid_,
+         (now_s - lidar_anchor_dr_ref_s_) >= lidar_anchor_shadow_ref_period_s_});
+    if (!preparation.run_filter)
     {
       // Retain a trusted start for a future outage even while the PF is asleep.
-      if (shadow)
-        ResetLidarAnchorDeadReckoningReference(
-            Sophus::SE2d(pose_at_scan.theta(), pose_at_scan.translation()));
+      if (preparation.reference == LidarAnchorReferenceAction::kRefreshFromFusedPose)
+        ResetLidarAnchorDeadReckoningReference(fused);
       return;
     }
-    const bool new_filter = !lidar_anchor_filter_;
     RebuildLidarAnchorMap(true);
     if (!lidar_anchor_filter_)
       return;
 
-    const Sophus::SE2d fused(pose_at_scan.theta(), pose_at_scan.translation());
     // Snapshot covariance is in the node tangent frame: use its largest XY
     // sigma isotropically, never mistake local X/Y for the map axes.
     const double fused_sx = LargestSigma(snapshot->covariance.topLeftCorner<2, 2>());
     const double fused_sy = fused_sx;
 
-    if (compute.reseed || new_filter || !lidar_anchor_reference_valid_)
+    struct ReferenceMemory
     {
-      if (!shadow && lidar_anchor_reference_valid_)
-      {
-        // A tile swap or compute pause must not erase the outage's DR budget.
-        const auto reference_pose = lidar_anchor_seed_pose_;
-        const auto reference_dr = lidar_anchor_seed_dr_;
-        const double reference_time = lidar_anchor_dr_ref_s_;
-        const double path = lidar_anchor_dr_path_m_;
-        const auto predicted = reference_pose * reference_dr.inverse() * dr_now;
-        const double sigma =
-            std::max(fused_sx, DeadReckoningBudgetM(lidar_anchor_validator_, path));
-        SeedLidarAnchorFilter(predicted, sigma, sigma);
-        lidar_anchor_seed_pose_ = reference_pose;
-        lidar_anchor_seed_dr_ = reference_dr;
-        lidar_anchor_dr_ref_s_ = reference_time;
-        lidar_anchor_dr_path_m_ = path;
-      }
-      else
-        SeedLidarAnchorFilter(fused, fused_sx, fused_sy);
+      Sophus::SE2d pose;
+      Sophus::SE2d dead_reckoning_pose;
+      Sophus::SE2d last_dead_reckoning_pose;
+      double timestamp_s;
+      double path_m;
+      bool valid;
+    };
+    const auto capture_reference = [&]()
+    {
+      return ReferenceMemory{lidar_anchor_seed_pose_,
+                             lidar_anchor_seed_dr_,
+                             lidar_anchor_last_dr_,
+                             lidar_anchor_dr_ref_s_,
+                             lidar_anchor_dr_path_m_,
+                             lidar_anchor_reference_valid_};
+    };
+    const auto restore_reference = [&](const ReferenceMemory& reference)
+    {
+      lidar_anchor_seed_pose_ = reference.pose;
+      lidar_anchor_seed_dr_ = reference.dead_reckoning_pose;
+      lidar_anchor_last_dr_ = reference.last_dead_reckoning_pose;
+      lidar_anchor_dr_ref_s_ = reference.timestamp_s;
+      lidar_anchor_dr_path_m_ = reference.path_m;
+      lidar_anchor_reference_valid_ = reference.valid;
+    };
+    const auto seed_filter =
+        [&](LidarAnchorSeedAction action, const Sophus::SE2d& pose, double sigma_x, double sigma_y)
+    {
+      const auto before_seed = capture_reference();
+      SeedLidarAnchorFilter(pose, sigma_x, sigma_y);
+      restore_reference(LidarAnchorReferenceAfterSeed(action, before_seed, capture_reference()));
+    };
+
+    if (preparation.seed == LidarAnchorSeedAction::kReseedFromPredictionPreservingReference)
+    {
+      // A tile swap or compute pause must not erase the outage's DR budget.
+      const auto reference = capture_reference();
+      const auto predicted = reference.pose * reference.dead_reckoning_pose.inverse() * dr_now;
+      const double sigma =
+          std::max(fused_sx, DeadReckoningBudgetM(lidar_anchor_validator_, reference.path_m));
+      seed_filter(preparation.seed, predicted, sigma, sigma);
+    }
+    else if (preparation.seed == LidarAnchorSeedAction::kResetFromFusedPose)
+    {
+      seed_filter(preparation.seed, fused, fused_sx, fused_sy);
+    }
+    if (preparation.seed != LidarAnchorSeedAction::kNone)
+    {
       ++lidar_anchor_seeds_;
       lidar_anchor_lost_since_s_ = -1.0;
     }
-    else if (shadow && (now_s - lidar_anchor_dr_ref_s_) >= lidar_anchor_shadow_ref_period_s_)
+    else if (preparation.reference == LidarAnchorReferenceAction::kRefreshFromFusedPose)
     {
       // Under RTK the fused pose is a reference: refresh the dead-reckoning
       // reference from it so the plausibility budget stays tight. The filter
@@ -508,39 +545,34 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
                                                         lidar_anchor_validator_.max_sigma_m)
             : lidar_anchor_sigma_floor_param_m_;
     const auto cov_applied = FloorLidarCovariance(cov2, lidar_anchor_floor_eff_m_);
-    const bool apply =
-        verdict == LidarAnchorVerdict::kAccepted && !shadow &&
-        usable_gnss_age_s >= std::max(lidar_anchor_apply_age_s_, lidar_anchor_engage_age_s_) &&
-        cov_applied.has_value();
+    const auto candidate_decision = DecideLidarAnchorCandidate(
+        {verdict == LidarAnchorVerdict::kAccepted,
+         !shadow &&
+             usable_gnss_age_s >= std::max(lidar_anchor_apply_age_s_, lidar_anchor_engage_age_s_) &&
+             cov_applied.has_value(),
+         now_s,
+         lidar_anchor_lost_since_s_,
+         lidar_anchor_reseed_after_s_});
+    const bool apply = candidate_decision.apply;
     PublishLidarAnchorCandidate(pose, cov2, verdict, apply);
 
     if (verdict != LidarAnchorVerdict::kAccepted)
     {
       // Lost. Dead reckoning is the better witness now; after a dwell, put the
       // cloud back where DR says the robot is and let it re-converge.
-      if (lidar_anchor_lost_since_s_ < 0.0)
-        lidar_anchor_lost_since_s_ = now_s;
-      if ((now_s - lidar_anchor_lost_since_s_) >= lidar_anchor_reseed_after_s_)
+      lidar_anchor_lost_since_s_ = candidate_decision.next_lost_since_s;
+      if (candidate_decision.seed ==
+          LidarAnchorSeedAction::kReseedFromPredictionPreservingReference)
       {
         const double budget =
             DeadReckoningBudgetM(lidar_anchor_validator_, lidar_anchor_dr_path_m_);
         // Keep the DR reference (and its grown budget); only the cloud moves.
-        const Sophus::SE2d seed_pose = lidar_anchor_seed_pose_;
-        const Sophus::SE2d seed_dr = lidar_anchor_seed_dr_;
-        const double path = lidar_anchor_dr_path_m_;
-        const double ref_s = lidar_anchor_dr_ref_s_;
-        SeedLidarAnchorFilter(dr_pred, budget, budget);
-        lidar_anchor_seed_pose_ = seed_pose;
-        lidar_anchor_seed_dr_ = seed_dr;
-        lidar_anchor_last_dr_ = dr_now;
-        lidar_anchor_dr_path_m_ = path;
-        lidar_anchor_dr_ref_s_ = ref_s;
+        seed_filter(candidate_decision.seed, dr_pred, budget, budget);
         ++lidar_anchor_reseeds_;
-        lidar_anchor_lost_since_s_ = -1.0;
       }
       return;
     }
-    lidar_anchor_lost_since_s_ = -1.0;
+    lidar_anchor_lost_since_s_ = candidate_decision.next_lost_since_s;
     if (!apply)
       return;
     // Trust no better than the anchor's measured accuracy: inflate to the

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/mowglinext/mowglinext/pkg/updater"
@@ -57,9 +58,13 @@ func main() {
 	}
 	if len(os.Args) == 7 && os.Args[1] == "installer-stack" {
 		b := updater.DockerBackend{Config: updater.HostConfig{Directory: os.Args[2], Project: os.Args[3]}}
-		err := b.InstallStack(context.Background(), os.Args[4], map[string]string{"gnss": os.Args[5], "lidar": os.Args[6]})
+		err := b.InstallStack(context.Background(), os.Args[4], map[string]string{"gnss": os.Args[5], "lidar": os.Args[6]}, os.Getenv(updater.AdoptLegacyEnv) == "true")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			var legacy *updater.LegacyComposeError
+			if errors.As(err, &legacy) {
+				os.Exit(updater.LegacyComposeExitCode)
+			}
 			os.Exit(1)
 		}
 		return

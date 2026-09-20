@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -158,3 +160,45 @@ func TestSourceOrderingEnrichesChangedImagesWithoutAffectingDigestResults(t *tes
 		}
 	}
 }
+
+func TestChangelogRouteValidatesCachesAndReportsUpstreamFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	installed, available := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	calls, fail := 0, false
+	client := &http.Client{Transport: roundTrip(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if fail {
+			return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader(`{}`)), Header: http.Header{}}, nil
+		}
+		body := `[{"sha":"` + available + `","commit":{"message":"feat(gui): release summary (#1)"}},{"sha":"` + installed + `","commit":{"message":"fix: old"}}]`
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+	})}
+	r := gin.New()
+	registerChangelogRoute(r.Group("/api"), client)
+	get := func(query string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/api/system/updates/changelog?"+query, nil))
+		return w
+	}
+	if w := get("repository=owner/repo&installed=dev&available=" + available); w.Code != 400 || calls != 0 {
+		t.Fatalf("invalid revision: code=%d calls=%d", w.Code, calls)
+	}
+	query := "repository=owner/repo&installed=" + installed + "&available=" + available
+	for i := 0; i < 2; i++ {
+		w := get(query)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"title":"release summary"`) || strings.Contains(w.Body.String(), "old") {
+			t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("an immutable revision pair must be fetched once, got %d", calls)
+	}
+	fail = true
+	if w := get("repository=owner/repo&installed=" + available + "&available=" + installed); w.Code != 502 {
+		t.Fatalf("upstream failure: code=%d", w.Code)
+	}
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

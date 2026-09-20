@@ -64,7 +64,8 @@ function plan(base:ReturnType<typeof release>, overrides:Record<string,ReturnTyp
 for(const track of ['dev','stable'])for(const mobile of [false,true])test(`${track} release flow ${mobile?'mobile':'desktop'}`,async({page})=>{
     const data=fixture(track);const {panel,posts,errors}=await open(page,data,mobile);const prefix=track==='dev'?'host-updater':'host-updater-production';
     await expect(panel.getByText('Installed stack',{exact:true})).toBeVisible();await expect(panel.getByText('MQTT',{exact:true})).toBeVisible();
-    await expect(panel.getByRole('combobox')).toHaveCount(0);await expect(page.getByTestId('update-checks')).toHaveCount(0);
+    await expect(panel.getByRole('combobox',{name:'Update source',exact:true})).toBeVisible();
+    await expect(panel.getByRole('combobox',{name:'Robot software version',exact:true})).toHaveCount(0);await expect(page.getByTestId('update-checks')).toHaveCount(0);
     await expect(panel.getByText('Installed',{exact:true})).toBeVisible();
     await expect(panel.getByText('After update',{exact:false})).toHaveCount(0);
     if(track==='stable')await expect(panel.locator('.available-release')).toHaveText('v1.3.0');
@@ -140,6 +141,28 @@ test('preferences stay separate and source changes never install',async({page})=
     await panel.getByRole('button',{name:'Save settings',exact:true}).click();await expect.poll(()=>posts.length).toBe(2);
     expect(posts.map(p=>p.path)).toEqual(['/api/system/updater/policy','/api/system/updater/check']);
     expect(posts[0].body).toMatchObject({source:{repository:'wjcloudy/mowglinext',track:'custom',branch:'feature/test'}});
+});
+
+for(const mobile of [false,true])test(`simple mode changes the complete stack source ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture('stable');const {panel,posts,errors}=await open(page,data,mobile);
+    await choose(page,'Update source','Development');
+    await expect(panel.getByText('Save source settings before reviewing an update.')).toBeVisible();
+    await expect(panel.getByRole('button',{name:'Review update',exact:true})).toBeDisabled();
+    await page.route('**/api/system/updater/policy',r=>r.fulfill({json:{ok:true}}));
+    await page.route('**/api/system/updater/check',r=>r.fulfill({status:202,body:''}));
+    await panel.getByRole('button',{name:'Check for updates',exact:true}).click();
+    await expect.poll(()=>posts.length).toBe(2);
+    expect(posts[0]).toEqual({path:'/api/system/updater/policy',body:{source:{repository:source.repository,track:'dev',branch:'dev'},interval_hours:24,pinned:false}});
+    expect(posts[1].path).toBe('/api/system/updater/check');
+    expect(errors).toEqual([]);
+});
+
+for(const mobile of [false,true])test(`simple mode accepts another published branch ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture('stable');const {panel,posts}=await open(page,data,mobile);
+    await choose(page,'Update source','Custom branch');
+    await panel.getByRole('textbox',{name:'Custom branch',exact:true}).fill(customBranch);
+    await shot(page,'host-updater-simple-custom-branch',mobile);
+    expect(posts).toEqual([]);
 });
 
 test('host updater selection has its own reviewed action',async({page})=>{

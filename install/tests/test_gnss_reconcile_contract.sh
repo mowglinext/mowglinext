@@ -20,9 +20,8 @@ assert_contains "gps reconciliation reports the recreated service"   'compose ps
 assert_not_contains "gps reconciliation does not remove unrelated services"   '--remove-orphans' "$reconcile_block"
 
 env_content="$(<"$env_file")"
-assert_contains "compose device follows canonical serial device"   'GNSS_DEVICE="${GNSS_SERIAL_DEVICE}"' "$env_content"
 assert_contains "device group follows the current canonical device"   'GNSS_DEVICE_GID="$(stat -Lc' "$env_content"
-assert_contains "device path is persisted in runtime env"   'upsert_env_key "$env_file" "GNSS_DEVICE" "$GNSS_DEVICE"' "$env_content"
+assert_not_contains "receiver path is NOT duplicated into the runtime env"   'upsert_env_key "$env_file" "GNSS_DEVICE" ' "$env_content"
 assert_contains "device group is persisted in runtime env"   'upsert_env_key "$env_file" "GNSS_DEVICE_GID" "$GNSS_DEVICE_GID"' "$env_content"
 assert_contains "NTRIP enabled state follows canonical configuration"   'GNSS_NTRIP_ENABLED="${CONFIG_NTRIP_ENABLED:-true}"' "$env_content"
 

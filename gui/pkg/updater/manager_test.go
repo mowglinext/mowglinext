@@ -213,6 +213,11 @@ func TestInstallAndFailures(t *testing.T) {
 			if s.Job.Phase != test.phase {
 				t.Fatalf("%s: %s", s.Job.Phase, s.Job.Error)
 			}
+			if test.phase == "rolled_back" {
+				if !strings.Contains(s.Job.Error, "injected "+test.fail) || len(s.History) == 0 || s.History[len(s.History)-1].Error != s.Job.Error {
+					t.Fatalf("rollback lost the original failure in job/history: %+v", s.Job)
+				}
+			}
 			joined := strings.Join(b.events, ",")
 			for _, x := range test.must {
 				if !strings.Contains(joined, x) {

@@ -62,6 +62,15 @@ export IMAGE_TAG COMPOSE_PROJECT_NAME
 # --- Reuse the installer's compose machinery (no host setup) -----------------
 # shellcheck source=/dev/null
 source "$INSTALL_LIB_DIR/common.sh"
+# i18n.sh's MSG_* strings are referenced by compose.sh's updater-managed
+# write_compose_merged() branch (e.g. MSG_UPDATER_STACK_REVIEW) — without
+# this, that branch dies with "unbound variable" under set -u whenever this
+# script (not the interactive installer, which sources i18n.sh itself) is
+# what regenerates the compose file, e.g. the GUI's reconcile-gps action.
+# load_locale() is non-interactive (env/LANG auto-detect, default English).
+# shellcheck source=/dev/null
+source "$INSTALL_LIB_DIR/i18n.sh"
+load_locale
 # shellcheck source=/dev/null
 source "$INSTALL_LIB_DIR/config.sh"
 # shellcheck source=/dev/null

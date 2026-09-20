@@ -4,6 +4,7 @@ import {useEffect, useState} from 'react';
 import {Alert, Button, Card, Checkbox, Form, Input, Modal, Select, Segmented, Space, Tag, Typography} from 'antd';
 import {useTranslation} from 'react-i18next';
 import {type Deployment, type UpdatePlan, type UpdatePolicy, componentCompatibility, updaterRequest, useHostUpdater} from '../../hooks/useHostUpdater';
+import {UpdateChangelog} from './UpdateChangelog';
 
 export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?: boolean; inventory?: ApiInstalledComponent[]}) {
     const {t} = useTranslation();
@@ -76,6 +77,21 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                 <Typography.Text type="secondary">{t('hostUpdater.checkingSource')}: {t(`hostUpdater.tracks.${data.state.policy.source.track}`)}
                     {(data.state.policy.source.track === 'custom' || data.state.policy.source.repository !== 'mowglinext/mowglinext') && <> · {data.state.policy.source.repository} / {data.state.policy.source.branch}</>}
                 </Typography.Text>
+                {!advanced && <Form layout="vertical" className="simple-source-picker">
+                    <Form.Item label={t('hostUpdater.source')}>
+                        <Select aria-label={t('hostUpdater.source')} value={policy.source.track} disabled={pending || busy}
+                            options={['stable', 'dev', 'custom'].map(value => ({value, label: t(`hostUpdater.tracks.${value}`)}))}
+                            onChange={track => setPolicy({...policy, source: {...policy.source, track, branch: track === 'stable' ? 'main' : track === 'dev' ? 'dev' : policy.source.branch}})}/>
+                    </Form.Item>
+                    {data.trusted_repositories.length > 1 && <Form.Item label={t('hostUpdater.repository')}>
+                        <Select aria-label={t('hostUpdater.repository')} value={policy.source.repository} disabled={pending || busy}
+                            options={data.trusted_repositories.map(value => ({value, label: value}))} onChange={repository => setPolicy({...policy, source: {...policy.source, repository}})}/>
+                    </Form.Item>}
+                    {policy.source.track === 'custom' && <Form.Item label={t('hostUpdater.branch')}>
+                        <Input aria-label={t('hostUpdater.branch')} placeholder="feat/my-branch" value={policy.source.branch} disabled={pending || busy}
+                            onChange={e => setPolicy({...policy, source: {...policy.source, branch: e.target.value}})}/>
+                    </Form.Item>}
+                </Form>}
                 {runtime?.selection_pending && <Alert type="info" showIcon message={t('hostUpdater.selectionPending')}/>}
                 {data.state.check_error && <Alert type="warning" showIcon message={t('hostUpdater.checkFailed')} description={advanced ? data.state.check_error : undefined}/>}
                 {!custom && (target ? <div>
@@ -232,6 +248,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                     </div>)}</div>
                     {plan.stack.changes.some(change => change.action === 'remove') && <Typography.Text type="secondary">{t('hostUpdater.retainedData')}</Typography.Text>}
                 </> : <Typography.Text>{t('hostUpdater.componentsToUpdate')}: {Object.keys(plan.images).map(component).join(', ')}</Typography.Text>}
+                {!plan.custom_images && <UpdateChangelog repository={plan.target.source.repository} installed={data?.state.active?.revision} available={plan.target.revision}/>}
                 <Alert type="warning" showIcon message={t('hostUpdater.interruption')}/>
                 <Typography.Text>{t('hostUpdater.backupHelp')}</Typography.Text>
                 <details><summary>{t('hostUpdater.imageDetails')}</summary>

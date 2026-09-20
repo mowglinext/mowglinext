@@ -82,3 +82,27 @@ MSG_UPDATER_STACK_BACKEND="Managed release updates support the Mowgli hardware b
 MSG_UPDATER_HARDWARE_LEGACY="These hardware choices require the existing installer path (MAVROS, TF-Luna or VESC). Keeping their selected containers; coordinated release updates are not enabled."
 MSG_UPDATER_HARDWARE_MANAGED="This installation already uses managed updates. MAVROS, TF-Luna and VESC selections require an explicit stack migration; runtime files have not been regenerated."
 MSG_UPDATER_STACK_REVIEW="Saved hardware choices. Review Software updates to apply container changes; the installed release definition has been retained."
+
+# Compose baseline / legacy adoption (install/lib/compose.sh)
+MSG_COMPOSE_BASELINE_UNAVAILABLE="Could not record a checksum of the generated Compose file (sha256sum/shasum missing, or docker/stack-definition.sha256 not writable); no baseline recorded."
+MSG_COMPOSE_LEGACY_EXPLAIN="docker/docker-compose.yaml was generated before managed updates existed, so no checksum of it was recorded. It differs from the current definition in the settings listed above. If you never edited that file by hand, this is only the release evolving and it is safe to replace."
+MSG_COMPOSE_LEGACY_BACKUP="The current file is kept as docker/docker-compose.yaml.legacy-<date>. Hand-made changes you want to keep belong in docker/stack-overrides.yaml."
+MSG_COMPOSE_LEGACY_CONFIRM="Replace docker/docker-compose.yaml with the current definition?"
+MSG_COMPOSE_LEGACY_DECLINED="docker/docker-compose.yaml left untouched. Move your changes into docker/stack-overrides.yaml, then rerun the installer (non-interactive: MOWGLI_ADOPT_LEGACY_COMPOSE=true)."
+
+# Repository self-update (install/lib/deploy.sh)
+MSG_REPO_LOCAL_CHANGES="Tracked files in this checkout were modified locally:"
+MSG_REPO_LOCAL_CHANGES_SAFE="Your robot configuration (docker/.env, docker/config/, docker/stack-overrides.yaml) is not tracked by git and is never touched here."
+MSG_REPO_LOCAL_CHANGES_CHOICE="(s)tash them under a named backup and continue, (k)eep them and leave the checkout as it is, (a)bort"
+MSG_REPO_LOCAL_CHANGES_KEPT="Local modifications kept; the checkout was not changed."
+MSG_REPO_STASHED="Local modifications saved as git stash:"
+MSG_REPO_STASH_RESTORE="Restore them later with:"
+MSG_REPO_STASH_FAILED="git stash failed; the checkout was not changed."
+MSG_REPO_UPDATE_ABORTED="Installer aborted; nothing was changed."
+MSG_REPO_UPDATE_CONFIRM="new commit(s) available. Update this checkout before continuing?"
+MSG_REPO_UPDATED="Checkout fast-forwarded to"
+MSG_REPO_NOT_FAST_FORWARD="This checkout has its own commits and cannot be fast-forwarded; continuing without updating. Remote:"
+MSG_REPO_FETCH_FAILED="Could not reach the remote; continuing with the current checkout. Remote:"
+MSG_REPO_FOREIGN_OWNER="Part of the repository belongs to another user (usually after 'sudo git ...'), so git cannot update it:"
+MSG_REPO_FOREIGN_OWNER_FIX="Continuing with the current checkout. Fix it with:"
+MSG_REPO_SUBMODULE_SKIPPED="Could not update the git submodules. They are only needed to BUILD the ROS2 sources; a robot running the published images does not use them."

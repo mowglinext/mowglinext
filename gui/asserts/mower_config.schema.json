@@ -1017,6 +1017,12 @@
           "title": "Use TLS",
           "default": false,
           "description": "Connect over TLS, verified against the system CA store only (no custom CA/client-certificate option exists yet). If TLS setup fails the bridge refuses to connect rather than silently falling back to plaintext."
+        },
+        "mqtt_home_assistant_discovery_enabled": {
+          "type": "boolean",
+          "title": "Home Assistant Auto-discovery",
+          "default": false,
+          "description": "Publish a retained Home Assistant device discovery record for mower controls, state, battery, GPS, charging, emergency and diagnostics. Uses Home Assistant's default discovery prefix, homeassistant."
         }
       }
     },

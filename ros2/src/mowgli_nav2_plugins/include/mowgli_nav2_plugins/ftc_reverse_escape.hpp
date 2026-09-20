@@ -80,4 +80,63 @@ inline double ReverseEscapeAdvance(const ReverseEscapeCfg& cfg,
   return std::min(cfg.max_dist_m, dist_done + step);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Leaving a reverse-escape, and earning a new one
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Field, 2026-09-20: 282 "WEDGED … reverse-escape" engagements in 3 minutes at
+// ONE path index, the robot wagging reverse / forward-right at 5–10 Hz until an
+// unrelated dig detection happened to end it. Two defects, both here:
+//
+//  1. The reverse was cancelled the first tick the planner found ANY profile.
+//     Feasibility flickers tick to tick at the edge of what fits (the costmap
+//     keeps no memory, the profile is found only at a fallback level), so the
+//     command alternated between "back out" and "drive forward, steer away"
+//     with zero net motion. The wait-before-abort path already required the
+//     path to stay followable for obstacle_clear_hold_s before moving again;
+//     the reverse did not.
+//  2. That same tick REFILLED the distance budget. A bound that refills on a
+//     flicker is no bound: the 0.30 m was never spent, so the controller never
+//     reached wait → abort, and the BT's detour (a blade-off Nav2 transit, which
+//     pivots in place) never got its turn.
+
+/// Path distance the robot must put between itself and the spot where a
+/// reverse-escape engaged before it is granted a fresh reverse budget, as a
+/// multiple of that budget. 2x: the robot is back where it started after 1x.
+inline constexpr double kReverseBudgetRefillFactor = 2.0;
+
+/// True once real forward progress has been made since the escape engaged.
+/// `progress_m` is path arc length from the engagement index to the current
+/// one (0 when the index has not advanced). Anything non-finite keeps the
+/// budget spent (fail safe: fewer reverses, earlier hand-off to the BT).
+inline bool ReverseBudgetEarnsRefill(const ReverseEscapeCfg& cfg, double progress_m)
+{
+  if (!std::isfinite(progress_m) || cfg.max_dist_m <= 0.0)
+  {
+    return false;
+  }
+  return progress_m >= kReverseBudgetRefillFactor * cfg.max_dist_m;
+}
+
+/// An engaged reverse-escape is a COMMITTED manoeuvre. It ends when the planner
+/// has kept a usable profile for `hold_s` without interruption (`followable_time`
+/// is the caller-owned accumulator, reset whenever a tick is infeasible), or when
+/// the escape itself can no longer continue (`can_continue` false: budget spent
+/// or rear blocked) — then forward motion on the profile is all that is left.
+inline bool ReverseEscapeShouldRelease(bool can_continue,
+                                       double dt,
+                                       double hold_s,
+                                       double& followable_time)
+{
+  followable_time += std::max(0.0, dt);
+  if (!can_continue)
+  {
+    return true;
+  }
+  // Ten ticks of 0.1 s sum to 0.9999999…; do not make the hold one tick longer
+  // for it.
+  constexpr double kTimeEps = 1e-9;
+  return followable_time + kTimeEps >= std::max(0.0, hold_s);
+}
+
 }  // namespace mowgli_nav2_plugins

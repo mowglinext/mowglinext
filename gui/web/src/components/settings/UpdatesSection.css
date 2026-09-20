@@ -19,7 +19,11 @@
 
 .updater-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; width: 100%; }
 .updater-options-help { grid-column: 1 / -1; }
+.simple-source-picker { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 12px; width:100%; }
+.simple-source-picker .ant-form-item { margin-bottom:0; }
+.simple-source-picker .ant-form-item:last-child:nth-child(odd) { grid-column:1 / -1; }
 @media (max-width: 600px) { .updater-options { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) { .simple-source-picker { grid-template-columns:minmax(0,1fr); } }
 
 .update-stack { width:100%; min-width:0; }
 .update-stack-title { display:flex; justify-content:space-between; align-items:center; gap:12px; }

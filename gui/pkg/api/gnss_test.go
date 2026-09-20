@@ -240,7 +240,7 @@ func TestGNSSRestartReconcilesGPSServiceAndSynchronizesDeviceContract(t *testing
 	envContent, err := os.ReadFile(envFile)
 	require.NoError(t, err)
 	assert.Contains(t, string(envContent), "GNSS_SERIAL_DEVICE="+device)
-	assert.Contains(t, string(envContent), "GNSS_DEVICE="+device)
+	assert.NotContains(t, string(envContent), "GNSS_DEVICE="+device)
 	assert.Contains(t, string(envContent), "GNSS_DEVICE_GID=20")
 }
 

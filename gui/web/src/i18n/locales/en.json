@@ -3470,6 +3470,8 @@
   "settingsMqtt": {
     "bridge": "MQTT bridge",
     "bridgeDescription": "Publish status, battery and mow state to an MQTT broker (e.g. for a Home Assistant integration) and accept start/pause/dock commands back. Read-only monitoring, except for the command topic — the same channel the GUI's own buttons use.",
+    "homeAssistantDiscovery": "Home Assistant auto-discovery",
+    "homeAssistantDiscoveryDescription": "Automatically add this mower and its controls, battery, location and diagnostic sensors to Home Assistant. Uses the standard homeassistant discovery topic. Restart required.",
     "securityTitle": "No authentication on the wire by default",
     "securityDescription": "The bundled broker allows anonymous connections and the command topic accepts any high-level command — treat this like any other control surface on your local network, not something to expose to the internet.",
     "broker": "Broker",
@@ -3653,6 +3655,18 @@
     }
   },
   "hostUpdater": {
+    "changelog": {
+      "title": "What's in this update",
+      "features": "New features",
+      "fixes": "Fixes",
+      "breaking": "Breaking",
+      "other_one": "Plus {{count}} maintenance change.",
+      "other_other": "Plus {{count}} maintenance changes.",
+      "truncated": "Only the most recent changes are listed.",
+      "full": "Full list of changes",
+      "maintenanceOnly": "No new features or fixes — maintenance changes only.",
+      "unavailable": "The summary of changes could not be loaded (no internet access, or GitHub refused the request)."
+    },
     "standardStack": "Standard deployment",
     "customMix": "Custom mix",
     "imageMode": "Image selection",
@@ -3801,7 +3815,7 @@
     "latestInstalled": "Selected version is already installed",
     "notChecked": "Check for available software updates.",
     "checkNow": "Check for updates",
-    "simpleHelp": "Choose other versions or change the update source in Advanced.",
+    "simpleHelp": "Select Stable, Development, or another published branch above, then check and review the complete stack. Per-component versions and custom images remain in Advanced.",
     "unsavedSource": "Save source settings before reviewing an update.",
     "forkHelpTitle": "Using another repository or fork",
     "forkHelp": "Choose a repository enabled by your administrator, then Production, Development or Custom branch. Enter the full branch name, including slashes. A branch must publish a complete deployment before it can be installed. Forks are added to trusted_repositories in /etc/mowgli-updater.json on the host.",

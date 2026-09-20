@@ -16,6 +16,9 @@
     #   mowgli/status, mowgli/power, mowgli/emergency, mowgli/position,
     #   mowgli/diagnostics, mowgli/command, mowgli/areas, mowgli/start_area
     mqtt_topic_prefix: "mowgli"
+    # Publish a retained Home Assistant device definition under
+    # homeassistant/device/<id>/config and refresh it on Home Assistant birth.
+    home_assistant_discovery_enabled: false
 
     # Rate limit for the /wheel_odom → mowgli/position bridge.
     # Other topics (status, power, emergency) are published on every ROS2 message.

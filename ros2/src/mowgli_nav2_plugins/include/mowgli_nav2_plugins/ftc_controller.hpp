@@ -263,6 +263,12 @@ private:
   /// SAFETY-CRITICAL: probes the rear footprint at the ACTUAL robot pose
   /// (costmap_ros_->getRobotPose) and never reverses when it would hit lethal or
   /// the pose is unavailable.
+  /// One tick of the escape itself: integrate the distance reversed, probe the
+  /// rear footprint, decide. No side effects on the wait/abort state.
+  ReverseEscapeAction reverseEscapeStep(const ObstacleDeviation::Footprint& footprint, double dt);
+  /// Path arc length from the index where the reverse budget was first touched
+  /// to the current index (0 when the robot has not advanced).
+  double progressSinceReverseEngaged() const;
   bool reverseEscapeOrWait(const std::string& reason,
                            const ObstacleDeviation::Footprint& footprint,
                            double dt);
@@ -273,6 +279,13 @@ private:
   /// Odom-integrated reversed distance for the current escape (m), hard-capped
   /// at config_.obstacle_reverse_max_dist_m. Reset when the wedge clears.
   double reverse_distance_done_{0.0};
+  /// Time the planner has kept a usable profile since the last infeasible tick,
+  /// while a reverse-escape is engaged (ReverseEscapeShouldRelease).
+  double reverse_followable_time_{0.0};
+  /// Path index at which the current reverse budget started being spent; the
+  /// budget is only refilled after real progress past it.
+  std::size_t reverse_engaged_index_{0};
+  bool reverse_budget_touched_{false};
 
   bool is_avoiding_{false};
   double target_lateral_deviation_{0.0};

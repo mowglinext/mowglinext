@@ -23,8 +23,9 @@ selection, compatible per-service overrides and pin controls. Advanced separates
 manual per-image comparisons and deployment history also live here. The view
 switch changes presentation only: it does not check remotely, install anything
 or change policy. Unsaved source edits must be saved or reset before review.
-Simple always reviews the latest published deployment and preserves an existing
-pin; switching back from Advanced cannot install a hidden older selection.
+Simple lets the operator choose Production, Development or a named custom branch,
+then reviews the latest published deployment from that source and preserves an
+existing pin; switching back from Advanced cannot install a hidden older selection.
 Production selects the highest `vMAJOR.MINOR.PATCH`, so a later-published backport
 does not replace a newer version. Development and custom snapshots use publication
 time. Older compatible versions remain selectable explicitly in Advanced.
@@ -38,12 +39,14 @@ Advanced fields stack into one column on narrow screens.
 
 ### Selecting another branch or fork
 
-1. Open **Advanced** and choose **Production**, **Development** or **Custom branch**.
-2. Choose an enabled repository. For Custom branch, type the full name, for
-   example `feat/settings-updates`; slashes are preserved. This is a branch-name
-   field, not a list of every GitHub branch.
-3. Click **Save and check**. Choose Latest or a retained deployment, then Review
-   installation. Selecting a source alone never replaces containers.
+1. In **Simple**, choose **Production**, **Development** or **Custom branch**.
+   The same controls also remain under **Advanced → Update settings**.
+2. Choose an enabled repository when more than one is configured. For Custom
+   branch, type the full name, for example `feat/settings-updates`; slashes are
+   preserved. This is a branch-name field, not a list of every GitHub branch.
+3. Click **Check for updates** in Simple, or **Save settings** in Advanced. Choose
+   Latest or a retained deployment, then Review installation. Selecting a source
+   alone never replaces containers.
 
 An administrator enables a fork by adding it to the existing host config's list
 (preserve the other settings), for example:
@@ -126,6 +129,30 @@ read/dismiss state survives GUI and host restarts. Different source histories ar
 shown for review; a date alone never proves that source code is newer.
 
 ## What an installation does
+
+Verification reports the failing component or check, such as an unhealthy GPS
+container, missing LiDAR scans, an unexpected image, or incompatible firmware.
+If activation fails, that reason remains in the job/history after rollback.
+
+GNSS verification does not require RTK or an outdoor position fix. It accepts
+fresh position messages, or a healthy receiver transport/parser with advancing
+runtime observations from the same receiver identity and process incarnation.
+The fallback uses Universal GNSS's live `get_snapshot` service through the GUI's
+existing ROS bridge. A responsive process, frozen counters, cached status,
+correction traffic alone, and missing/disconnected receivers do not satisfy it.
+Older GUIs/receivers without this snapshot contract still need fresh position
+messages. Configured LiDAR still requires fresh scans. These checks affect
+update acceptance only; they do not change mowing or firmware safety gates.
+Upgrade the host updater before installing the new GUI to use no-fix acceptance;
+an older updater ignores the additional receiver-progress fields.
+
+The GNSS container health probe loads the image's ROS environment and checks
+typed service results for the receiver and, when configured, NTRIP. Process
+responsiveness and actual receiver data progress are deliberately separate checks.
+The GNSS sidecar adds no persistent storage: its launch logs and exports live
+in the bounded `/run/universal_gnss` tmpfs (PR #687), so a release bundle can
+introduce it on an existing robot without a storage migration. A release that
+ADDS a writable mount is refused at review time.
 
 1. Resolve a complete compatible deployment to immutable platform image digests.
    The review expires after 15 minutes and includes current and target images.
@@ -333,7 +360,18 @@ and immutable image references switch together in one atomic Compose replacement
 the durable journal can restore them after interruption. Private Compose/recovery
 payloads are removed from browser responses, which expose only choices and changes.
 The generated-file checksum rejects manual edits; reviewed customizations belong in
-`stack-overrides.yaml`. Legacy adoption also refuses unexplained manual differences.
+`stack-overrides.yaml`. The plain (non-managed) installer records the same checksum
+(`docker/stack-definition.sha256`) for every file it generates, so adoption compares the
+installed file against the baseline it was GENERATED from: an untouched file is adopted
+whatever the fragments became since, an edited one is refused.
+
+A Compose file generated before that baseline existed cannot be told apart from a hand
+edit — comparing it with the new target flags every change the release itself made to the
+fragments (`GNSS_STACK` added to `mowgli.environment`, the rewritten `gps` service, …).
+`installer-stack` therefore exits 3 and lists every differing `service.key`; the installer
+explains it and asks once. On consent (non-interactive: `MOWGLI_ADOPT_LEGACY_COMPOSE=true`)
+the previous file is kept byte-for-byte as `docker-compose.yaml.legacy-<UTC>` and the
+current definition is adopted. Consent never bypasses a recorded checksum.
 
 For an additional first-party service, add its image build definition to
 `install/deployment.json`, add its installer Compose fragment to the required list

@@ -3466,6 +3466,8 @@
   "settingsMqtt": {
     "bridge": "Passerelle MQTT",
     "bridgeDescription": "Publie l'état, la batterie et l'état de tonte vers un broker MQTT (par ex. pour une intégration Home Assistant) et accepte en retour les commandes démarrer/pause/retour dock. Lecture seule, sauf le topic de commande — le même canal que les boutons de l'interface.",
+    "homeAssistantDiscovery": "Découverte automatique Home Assistant",
+    "homeAssistantDiscoveryDescription": "Ajoute automatiquement cette tondeuse, ses commandes, sa batterie, sa position et ses capteurs de diagnostic dans Home Assistant. Utilise le topic de découverte standard homeassistant. Redémarrage requis.",
     "securityTitle": "Aucune authentification par défaut",
     "securityDescription": "Le broker fourni autorise les connexions anonymes et le topic de commande accepte n'importe quelle commande de haut niveau — traitez ceci comme n'importe quelle autre surface de contrôle sur votre réseau local, pas comme quelque chose à exposer sur internet.",
     "broker": "Broker",
@@ -3653,6 +3655,18 @@
     }
   },
   "hostUpdater": {
+    "changelog": {
+      "title": "Contenu de cette mise à jour",
+      "features": "Nouveautés",
+      "fixes": "Correctifs",
+      "breaking": "Incompatible",
+      "other_one": "Plus {{count}} changement de maintenance.",
+      "other_other": "Plus {{count}} changements de maintenance.",
+      "truncated": "Seuls les changements les plus récents sont listés.",
+      "full": "Liste complète des changements",
+      "maintenanceOnly": "Ni nouveauté ni correctif : uniquement des changements de maintenance.",
+      "unavailable": "Le résumé des changements n'a pas pu être chargé (pas d'accès internet, ou requête refusée par GitHub)."
+    },
     "standardStack": "Installation standard",
     "customMix": "Combinaison personnalisée",
     "imageMode": "Sélection des images",
@@ -3801,7 +3815,7 @@
     "latestInstalled": "La version sélectionnée est déjà installée",
     "notChecked": "Rechercher les mises à jour logicielles disponibles.",
     "checkNow": "Vérifier maintenant",
-    "simpleHelp": "Choisissez d’autres versions ou modifiez la source des mises à jour en mode Avancé.",
+    "simpleHelp": "Sélectionnez Stable, Développement ou une autre branche publiée ci-dessus, puis recherchez et vérifiez la pile complète. Les versions par composant et les images personnalisées restent dans Avancé.",
     "unsavedSource": "Enregistrez la source avant de préparer une mise à jour.",
     "forkHelpTitle": "Utiliser un autre dépôt ou fork",
     "forkHelp": "Choisissez un dépôt autorisé par votre administrateur, puis Production, Développement ou Branche personnalisée. Saisissez le nom complet de la branche, barres obliques comprises. Elle doit publier un déploiement complet pour être installable. Les forks sont ajoutés à trusted_repositories dans /etc/mowgli-updater.json sur l’hôte.",

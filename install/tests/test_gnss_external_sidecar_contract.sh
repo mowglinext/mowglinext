@@ -17,17 +17,35 @@ section "External Universal GNSS RC2 sidecar contract"
 
 compose_content="$(<"$compose_file")"
 assert_contains "gps service consumes external Universal GNSS image" \
-  'image: ${UNIVERSAL_GNSS_IMAGE}' "$compose_content"
+  'image: ${UNIVERSAL_GNSS_IMAGE:-ghcr.io/pepeuch/universal-gnss-ros2-lyrical:' "$compose_content"
 assert_not_contains "gps service no longer consumes MowgliNext GPS_IMAGE" \
   'image: ${GPS_IMAGE}' "$compose_content"
-assert_contains "receiver is mapped to stable in-container path" \
-  '${GNSS_DEVICE}:/dev/gnss-receiver' "$compose_content"
-assert_contains "sidecar receives generated parameter file" \
-  'parameters.yaml:/etc/universal_gnss/parameters.yaml:ro' "$compose_content"
+# mowgli_robot.yaml is the ONE GNSS configuration: no derived parameter file on
+# the host, no GNSS_* variable the compose file cannot live without. A robot
+# that reaches this fragment through the updater has neither.
+assert_contains "sidecar reads mowgli_robot.yaml itself" \
+  './docker/config/mowgli:/config:ro' "$compose_content"
+assert_not_contains "no derived parameter file is bind-mounted from the host" \
+  'parameters.yaml:/etc/universal_gnss' "$compose_content"
+assert_contains "generated ROS parameters live in memory only" \
+  '/run/universal_gnss:uid=1000,gid=1000,mode=0700,size=64m' "$compose_content"
+# The host updater refuses a release that ADDS writable storage (stack.go
+# validateStackMounts): /dev was already mounted by the previous gps service,
+# everything else must be read-only or tmpfs.
+writable_mounts="$(awk '/^    volumes:/{v=1;next} v&&/^    [a-z_]+:/{v=0} v&&/^      - /{print}' "$compose_file" | grep -v ':ro$' | grep -v -- '- /dev:/dev$' || true)"
+assert_eq "gps fragment adds no writable storage" "" "$writable_mounts"
+assert_not_contains "gps fragment declares no named volume" 'universal_gnss_logs' "$compose_content"
+assert_contains "receiver port comes from gnss_serial_device" \
+  '"serial_device": str(p["gnss_serial_device"])' "$compose_content"
+assert_not_contains "sidecar is not privileged" 'privileged: true' "$compose_content"
+required_vars="$(grep -oE '\$\{[A-Z_0-9]+\}' "$compose_file" | sort -u | tr '\n' ' ')"
+assert_eq "every compose variable of the gps fragment has a default" "" "$required_vars"
+assert_contains "fragment image default is pinned to the deployment descriptor digest" \
+  "@$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json")}" "$compose_content"
 assert_contains "RC2 combined receiver/NTRIP launch is used" \
   'receiver_and_ntrip.launch.py' "$compose_content"
-assert_contains "NTRIP enable state is a launch argument" \
-  'ntrip_enabled:=${GNSS_NTRIP_ENABLED:-true}' "$compose_content"
+assert_contains "NTRIP enable state is a launch argument derived from the yaml" \
+  '"ntrip_enabled:=" + ("true" if ntrip else "false")' "$compose_content"
 assert_contains "Mowgli fix topic is selected natively" \
   'fix_topic:=/gps/fix' "$compose_content"
 assert_contains "bridge status topic stays internal to Universal GNSS" \
@@ -43,9 +61,7 @@ assert_contains "MowgliNext pins RC2 Lyrical image independently" \
 descriptor_digest="$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json" 2>/dev/null || true)"
 assert_contains "installer default is pinned to the deployment descriptor digest" \
   "@${descriptor_digest:-MISSING-DIGEST}\"" "$config_content"
-assert_contains "derived receiver config uses stable device path" \
-  'serial_device: /dev/gnss-receiver' "$config_content"
-assert_contains "runtime config regeneration writes Universal GNSS parameters" \
+assert_not_contains "installer no longer writes a derived GNSS parameter file" \
   'write_universal_gnss_parameters' "$config_content"
 
 stack_content="$(<"$stack_file")"

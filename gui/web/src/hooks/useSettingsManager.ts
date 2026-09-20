@@ -264,6 +264,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // above (a raw broker password with no context).
             "mqtt_enabled", "mqtt_host", "mqtt_port", "mqtt_username",
             "mqtt_password", "mqtt_topic_prefix", "mqtt_use_ssl",
+            "mqtt_home_assistant_discovery_enabled",
         ],
     },
     {

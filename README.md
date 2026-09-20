@@ -124,8 +124,10 @@ Since v1.4.0 the mower updates itself from the web interface. **Settings → Upd
 Mowers installed before v1.4.0 enable it by rerunning the installer once (same answers as the first time):
 
 ```bash
-curl -sSL https://mowgli.garden/install.sh | bash     # or: cd ~/mowglinext && git pull && ./install/mowglinext.sh
+curl -sSL https://mowgli.garden/install.sh | bash     # or: cd ~/mowglinext && ./install/mowglinext.sh
 ```
+
+The installer updates its own checkout (no `git pull` needed): it lists any locally modified tracked file and offers to stash it under a named backup, keep it, or abort. Robot configuration under `docker/` is not tracked by git and is never touched. If `docker/docker-compose.yaml` predates managed updates, the installer asks once before replacing it and keeps the old file as `docker-compose.yaml.legacy-<date>`.
 
 Check `docker volume ls | grep mowgli_maps` first: if your map volume is not prefixed `install_`, set `COMPOSE_PROJECT_NAME=<your prefix>` in `docker/.env` before rerunning so the stack keeps its data. The legacy `mowgli-pull && mowgli-up` helpers still work but are no longer the recommended path. Details, tracks, pins and recovery: [`docs/UPDATES.md`](docs/UPDATES.md).
 
