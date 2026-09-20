@@ -5,7 +5,7 @@ export interface UpdatePolicy {source: UpdateSource; interval_hours: number; pin
 export interface Deployment {component_compatibility?: Record<string, string>; service_choices?: {service: string; image: string; when?: Record<string,string>}[]; images?: Record<string,{repository:string; platforms:Record<string,{manifest:string}>}>; gui_compatibility?: string; layout?: number; data_schema?: number; updater_api?: number; maintenance_api?: number; firmware_protocol?: number; release_tag?: string; id: string; source: UpdateSource; revision: string; published_at: string; updater: Record<string, {version: string}>}
 export interface CustomImage {repository?:string; release_tag?:string; deployment_id?:string; requested:string; reference:string; image_id:string; version?:string; revision?:string; built_at?:string}
 export interface UpdatePlan {custom_images?:Record<string,CustomImage>; stack?: {changes: {service: string; action: string}[]; selection: {options: Record<string, string>}}; overrides?: Record<string, Deployment>; id: string; target: Deployment; images: Record<string, string>; previous: Record<string, string>; expires_at: string}
-export interface UpdateJob {id: string; kind: string; phase: string; error?: string; started_at: string; plan: UpdatePlan}
+export interface UpdateJob {id: string; kind: string; phase: string; error?: string; recovery_error?: string; recovery_warnings?: string[]; started_at: string; plan: UpdatePlan}
 export interface UpdateNotice {id: string; kind: string; deployment: string; created_at: string; read: boolean; dismissed: boolean}
 export interface HostUpdater {
     api: number;

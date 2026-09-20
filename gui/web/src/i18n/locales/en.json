@@ -3805,6 +3805,11 @@
       "failed": "Update stopped before activation"
     },
     "recover": "Retry recovery",
+    "failureReason": "Why the update stopped",
+    "recoveryFailureReason": "Why recovery is blocked",
+    "recoveryHelp": "Maintenance remains active and the mower stays inhibited. Correct the restore, container, firmware, or mower safety problem shown above, then retry recovery.",
+    "recoveryWarnings": "Some components still need attention",
+    "recoveryWarningsHelp": "The previous deployment was restored and maintenance was released. Check the reported components before mowing.",
     "softwareUpdates": "Software updates",
     "simple": "Simple",
     "advanced": "Advanced",

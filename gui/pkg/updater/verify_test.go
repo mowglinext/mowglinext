@@ -13,13 +13,13 @@ func TestVerificationDistinguishesNoFixReceiverFromMissingSensors(t *testing.T) 
 	names := []string{"gps", "lidar"}
 	ready := Readiness{Ready: true, Maintenance: true, FirmwareProtocol: 6, GPSReceiverFresh: true, LidarFresh: true}
 	d := &Deployment{FirmwareProtocol: 6}
-	if problems := readinessProblems(ready, d, true, names, managed); len(problems) > 0 {
+	if problems := append(readinessProblems(ready, d, true), advisoryModuleProblems(ready, names, managed)...); len(problems) > 0 {
 		t.Fatal(problems)
 	}
 	ready.GPSReceiverFresh = false
 	ready.GPSReason = "GNSS receiver is responding but has no new observations"
 	ready.LidarFresh = false
-	problems := strings.Join(readinessProblems(ready, d, true, names, managed), "; ")
+	problems := strings.Join(advisoryModuleProblems(ready, names, managed), "; ")
 	for _, want := range []string{"gps: GNSS receiver is responding but has no new observations", "lidar: No fresh LiDAR scans"} {
 		if !strings.Contains(problems, want) {
 			t.Fatalf("missing %q in %s", want, problems)
@@ -29,18 +29,29 @@ func TestVerificationDistinguishesNoFixReceiverFromMissingSensors(t *testing.T) 
 	// work, but absent fixes never silently fall back to process health.
 	ready.GPSFresh = true
 	ready.LidarFresh = true
-	if problems := readinessProblems(ready, d, true, names, managed); len(problems) > 0 {
+	if problems := append(readinessProblems(ready, d, true), advisoryModuleProblems(ready, names, managed)...); len(problems) > 0 {
 		t.Fatal(problems)
 	}
 	ready.Ready = false
 	ready.Reason = "Mower must be stationary"
 	ready.Maintenance = false
 	ready.FirmwareProtocol = 5
-	problems = strings.Join(readinessProblems(ready, d, true, names, managed), "; ")
+	problems = strings.Join(readinessProblems(ready, d, true), "; ")
 	for _, want := range []string{"Mower must be stationary", "maintenance", "protocol mismatch"} {
 		if !strings.Contains(problems, want) {
 			t.Fatalf("safety gate %q lost: %s", want, problems)
 		}
+	}
+}
+
+func TestRecoveryClassifiesOptionalModuleRuntimeProblemsAsAdvisory(t *testing.T) {
+	problems, warnings := classifyRuntimeProblem(nil, nil, "camera", "container is not running")
+	if len(problems) != 0 || strings.Join(warnings, "; ") != "camera: container is not running" {
+		t.Fatalf("optional module did not become advisory: problems=%v warnings=%v", problems, warnings)
+	}
+	problems, warnings = classifyRuntimeProblem(nil, nil, "mowgli", "container is not running")
+	if strings.Join(problems, "; ") != "mowgli: container is not running" || len(warnings) != 0 {
+		t.Fatalf("core service did not remain mandatory: problems=%v warnings=%v", problems, warnings)
 	}
 }
 

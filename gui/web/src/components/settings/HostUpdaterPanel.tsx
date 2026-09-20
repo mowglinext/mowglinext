@@ -74,6 +74,15 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                 {!matched && active && <Typography.Text type="secondary">{t('hostUpdater.baseVersion')}: {label(active)}</Typography.Text>}
                 <Typography.Text type={runtime?.health === 'degraded' ? 'warning' : 'secondary'}>{t('hostUpdater.containerHealth')}: {t(`hostUpdater.health.${runtime?.health ?? 'unknown'}`)}</Typography.Text>
                 {['mixed', 'drifted'].includes(identity) && <Typography.Text type="secondary">{t('hostUpdater.mixedHelp')}</Typography.Text>}
+                {data.state.job && <Alert type={data.state.job.phase === 'recovery_required' ? 'error' : data.state.job.error || data.state.job.recovery_warnings?.length ? 'warning' : 'info'} showIcon message={t(`hostUpdater.phases.${data.state.job.phase}`, {defaultValue: data.state.job.phase})}
+                    description={<Space direction="vertical" size={4} style={{width:'100%'}}>
+                        {advanced && <Typography.Text code>{data.state.job.id}</Typography.Text>}
+                        {data.state.job.error && <div data-testid="update-failure"><Typography.Text strong>{t('hostUpdater.failureReason')}</Typography.Text><div>{data.state.job.error}</div></div>}
+                        {data.state.job.recovery_error && <div data-testid="recovery-failure"><Typography.Text strong>{t('hostUpdater.recoveryFailureReason')}</Typography.Text><div>{data.state.job.recovery_error}</div></div>}
+                        {!!data.state.job.recovery_warnings?.length && <div data-testid="recovery-warnings"><Typography.Text strong>{t('hostUpdater.recoveryWarnings')}</Typography.Text>{data.state.job.recovery_warnings.map(warning => <div key={warning}>{warning}</div>)}<Typography.Text type="secondary">{t('hostUpdater.recoveryWarningsHelp')}</Typography.Text></div>}
+                        {data.state.job.phase === 'recovery_required' && <Typography.Text type="secondary">{t('hostUpdater.recoveryHelp')}</Typography.Text>}
+                    </Space>}/>}
+                {data.state.job?.phase === 'recovery_required' && <Button loading={busy} onClick={() => void act(async () => {await updaterRequest('recover', {});})}>{t('hostUpdater.recover')}</Button>}
                 <Typography.Text type="secondary">{t('hostUpdater.checkingSource')}: {t(`hostUpdater.tracks.${data.state.policy.source.track}`)}
                     {(data.state.policy.source.track === 'custom' || data.state.policy.source.repository !== 'mowglinext/mowglinext') && <> · {data.state.policy.source.repository} / {data.state.policy.source.branch}</>}
                 </Typography.Text>
@@ -205,14 +214,14 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                         {dirty && <Button type="text" onClick={() => setPolicy(data.state.policy)}>{t('hostUpdater.resetSource')}</Button>}
                     </div>
                 </Form></details>}
-                {data.state.job && <Alert type={data.state.job.error ? 'warning' : 'info'} showIcon message={t(`hostUpdater.phases.${data.state.job.phase}`, {defaultValue: data.state.job.phase})}
-                    description={<>{advanced && <Typography.Text code>{data.state.job.id}</Typography.Text>}{data.state.job.error && <p>{data.state.job.error}</p>}</>}/>}
-                {data.state.job?.phase === 'recovery_required' && <Button loading={busy} onClick={() => void act(async () => {await updaterRequest('recover', {});})}>{t('hostUpdater.recover')}</Button>}
                 {canRestore && <Button disabled={pending || busy} onClick={() => setRollbackOpen(true)}>{t('hostUpdater.rollback')}</Button>}
                 {advanced && <details><summary>{t('hostUpdater.history')}</summary>
                     <Typography.Paragraph>{t('hostUpdater.observedAt', {time: date(runtime?.checked_at)})}</Typography.Paragraph>
                     {runtime?.error && <Typography.Paragraph type="warning">{runtime.error}</Typography.Paragraph>}
                     {data.state.history.map(j => <div key={j.id} className="update-history-entry"><Typography.Text>{date(j.started_at)} · {j.plan.custom_images ? t('hostUpdater.customMix') : label(j.plan.target)} · {t(`hostUpdater.phases.${j.phase}`, {defaultValue: j.phase})}</Typography.Text>
+                        {j.error && <div>{t('hostUpdater.failureReason')}: {j.error}</div>}
+                        {j.recovery_error && <div>{t('hostUpdater.recoveryFailureReason')}: {j.recovery_error}</div>}
+                        {!!j.recovery_warnings?.length && <div>{t('hostUpdater.recoveryWarnings')}: {j.recovery_warnings.join('; ')}</div>}
                         {Object.entries(j.plan.custom_images ?? {}).map(([name,image]) => <div key={name}>{component(name)}: {image.requested}</div>)}
                         {Object.entries(j.plan.overrides ?? {}).map(([name,r]) => <div key={name}>{component(name)}: {label(r)}</div>)}
                     </div>)}

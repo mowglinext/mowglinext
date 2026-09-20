@@ -186,6 +186,45 @@ test('cached progress survives GUI reconnect without a new check',async({page})=
     await expect(panel.getByText(/reconnecting to the GUI/)).toBeVisible({timeout:10000});expect(posts).toEqual([]);
 });
 
+for(const mobile of [false,true])test(`failed update and blocked recovery explain both causes ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture();
+    Object.assign(data.state,{job:{
+        id:'job-restore-failure',kind:'containers',phase:'recovery_required',started_at:'2026-09-20T17:32:50Z',
+        error:'Update verification failed: gps: container is not running',
+        recovery_error:'Cannot restore application data: backup checksum does not match',
+        plan:plan(data.state.releases[0]),
+    }});
+    const {panel,posts,errors}=await open(page,data,mobile);
+    if(mobile)await page.setViewportSize({width:390,height:1100});
+    await expect(panel.getByText('Why the update stopped',{exact:true})).toBeVisible();
+    await expect(panel.getByTestId('update-failure')).toContainText('gps: container is not running');
+    await expect(panel.getByText('Why recovery is blocked',{exact:true})).toBeVisible();
+    await expect(panel.getByTestId('recovery-failure')).toContainText('backup checksum does not match');
+    await expect(panel).toContainText('Maintenance remains active and the mower stays inhibited.');
+    await expect(panel.getByRole('button',{name:'Retry recovery',exact:true})).toBeVisible();
+    await shot(page,'host-updater-recovery-failure',mobile);
+    expect(posts).toEqual([]);expect(errors).toEqual([]);
+});
+
+for(const mobile of [false,true])test(`component warning does not block a completed rollback ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture('dev',false,true);
+    Object.assign(data.state,{job:{
+        id:'job-component-warning',kind:'containers',phase:'rolled_back',started_at:'2026-09-20T17:32:50Z',
+        error:'Update verification failed: gps: container is not running',
+        recovery_warnings:['camera: no frames received'],
+        plan:plan(data.state.releases[0]),
+    }});
+    const {panel,posts,errors}=await open(page,data,mobile);
+    if(mobile)await page.setViewportSize({width:390,height:1100});
+    await expect(panel.getByText('Previous deployment restored',{exact:true})).toBeVisible();
+    await expect(panel.getByText('Some components still need attention',{exact:true})).toBeVisible();
+    await expect(panel.getByTestId('recovery-warnings')).toContainText('camera: no frames received');
+    await expect(panel).toContainText('maintenance was released');
+    await expect(panel.getByRole('button',{name:'Retry recovery',exact:true})).toHaveCount(0);
+    await shot(page,'host-updater-rollback-warning',mobile);
+    expect(posts).toEqual([]);expect(errors).toEqual([]);
+});
+
 test('pending installer choices can be reviewed on the current release',async({page})=>{
     const data=fixture();data.state.releases=[data.state.active];Object.assign(data.runtime,{selection_pending:true});
     const {panel,posts}=await open(page,data);

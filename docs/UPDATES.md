@@ -133,6 +133,16 @@ shown for review; a date alone never proves that source code is newer.
 Verification reports the failing component or check, such as an unhealthy GPS
 container, missing LiDAR scans, an unexpected image, or incompatible firmware.
 If activation fails, that reason remains in the job/history after rollback.
+Rollback still verifies the restored Compose definition, images, containers,
+application data, firmware compatibility, and core mower safety before releasing
+maintenance. Runtime and application-level checks for optional modules remain strict
+acceptance checks for new images, but cannot strand a successfully restored previous
+deployment in maintenance. Any such failures are retained as visible component warnings
+after rollback. New standard sidecars inherit this behavior without being named in the
+recovery flow. A missing service definition, wrong restored image, core GUI/robot failure,
+firmware mismatch, unsafe mower state, or data-restore failure remains blocking. The
+updater records that recovery reason separately instead of replacing the original
+activation failure, keeps the mower inhibited, and offers recovery again.
 
 GNSS verification does not require RTK or an outdoor position fix. It accepts
 fresh position messages, or a healthy receiver transport/parser with advancing

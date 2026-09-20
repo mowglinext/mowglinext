@@ -14,10 +14,11 @@ import (
 )
 
 type fakeBackend struct {
-	mu          sync.Mutex
-	events      []string
-	fail        string
-	fingerprint string
+	mu               sync.Mutex
+	events           []string
+	fail             string
+	fingerprint      string
+	recoveryWarnings []string
 }
 
 func (b *fakeBackend) event(s string) error {
@@ -56,6 +57,9 @@ func (b *fakeBackend) Verify(_ context.Context, images map[string]string, _ *Dep
 		return b.event("verify-old")
 	}
 	return b.event("verify-new")
+}
+func (b *fakeBackend) VerifyRecovery(ctx context.Context, images map[string]string, d *Deployment) ([]string, error) {
+	return b.recoveryWarnings, b.Verify(ctx, images, d)
 }
 func (b *fakeBackend) Restore(context.Context, string) error { return b.event("restore") }
 
@@ -289,10 +293,69 @@ func TestRollbackFailureKeepsMaintenance(t *testing.T) {
 	if s.Job.Phase != "recovery_required" {
 		t.Fatal(s.Job)
 	}
+	if s.Job.RecoveryError != "injected restore" {
+		t.Fatalf("recovery failure was not recorded separately: %+v", s.Job)
+	}
 	for _, e := range b.events {
 		if e == "ungate" {
 			t.Fatal("failed rollback released maintenance")
 		}
+	}
+}
+
+func TestRecoveryFailurePreservesActivationFailure(t *testing.T) {
+	m, b, _ := setup(t, "")
+	p, e := m.MakePlan(context.Background(), fixture().ID, false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	m.state.Job = &Job{
+		ID:             "interrupted",
+		Phase:          "rolling_back",
+		Error:          "Update verification failed: gps: receiver disconnected",
+		Plan:           p,
+		Backup:         "backup",
+		PreviousPolicy: m.state.Policy,
+	}
+	b.fail = "restore"
+	m.Recover()
+	s := settled(t, m)
+	if s.Job.Phase != "recovery_required" {
+		t.Fatal(s.Job)
+	}
+	if s.Job.Error != "Update verification failed: gps: receiver disconnected" {
+		t.Fatalf("recovery replaced the activation failure: %+v", s.Job)
+	}
+	if s.Job.RecoveryError != "injected restore" {
+		t.Fatalf("restore verification failure is missing: %+v", s.Job)
+	}
+	b.fail = ""
+	m.Recover()
+	s = settled(t, m)
+	if s.Job.Phase != "rolled_back" || s.Job.RecoveryError != "" {
+		t.Fatalf("successful retry retained a stale recovery failure: %+v", s.Job)
+	}
+}
+
+func TestRollbackCompletesWithAdvisoryModuleWarnings(t *testing.T) {
+	m, b, _ := setup(t, "verify-new")
+	b.recoveryWarnings = []string{"camera: no frames received"}
+	p, err := m.MakePlan(context.Background(), fixture().ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.Start(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	s := settled(t, m)
+	if s.Job.Phase != "rolled_back" || s.Job.RecoveryError != "" {
+		t.Fatalf("advisory module warning blocked rollback: %+v", s.Job)
+	}
+	if strings.Join(s.Job.RecoveryWarnings, "; ") != "camera: no frames received" {
+		t.Fatalf("advisory module warning was not retained: %+v", s.Job)
+	}
+	if b.events[len(b.events)-1] != "ungate" {
+		t.Fatalf("successful rollback did not release maintenance: %v", b.events)
 	}
 }
 

@@ -3805,6 +3805,11 @@
       "failed": "Mise à jour arrêtée avant activation"
     },
     "recover": "Réessayer la récupération",
+    "failureReason": "Pourquoi la mise à jour s’est arrêtée",
+    "recoveryFailureReason": "Pourquoi la récupération est bloquée",
+    "recoveryHelp": "La maintenance reste active et le robot demeure inhibé. Corrigez le problème de restauration, de conteneur, de firmware ou de sécurité du robot indiqué ci-dessus, puis réessayez.",
+    "recoveryWarnings": "Certains composants nécessitent encore votre attention",
+    "recoveryWarningsHelp": "Le déploiement précédent a été restauré et le mode maintenance a été désactivé. Vérifiez les composants signalés avant de tondre.",
     "softwareUpdates": "Mises à jour logicielles",
     "simple": "Simple",
     "advanced": "Avancé",

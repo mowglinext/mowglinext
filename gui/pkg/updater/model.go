@@ -193,6 +193,8 @@ type Job struct {
 	Phase                string                 `json:"phase"`
 	Committed            string                 `json:"committed,omitempty"`
 	Error                string                 `json:"error,omitempty"`
+	RecoveryError        string                 `json:"recovery_error,omitempty"`
+	RecoveryWarnings     []string               `json:"recovery_warnings,omitempty"`
 	StartedAt            time.Time              `json:"started_at"`
 	Plan                 Plan                   `json:"plan"`
 	Backup               string                 `json:"backup,omitempty"`
