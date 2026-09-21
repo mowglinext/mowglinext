@@ -233,6 +233,13 @@ void OpenMowerBridgeNode::publish_status_bundle(const mowgli_hardware::LlStatus&
       msg.mower_motor_rpm = static_cast<float>(mow->rpm);
     }
     msg.blade_status_stamp = blade_status_stamp_;
+    msg.blade_requested_direction = blade_requested_direction_;
+    // No wheel-slip dig detector on this backend (see README): the flag is
+    // false and both distances stay 0. The BT reads the ~/dig_escalated
+    // topic, which this node also publishes as a latched false.
+    msg.dig_escalated = false;
+    msg.dig_escalated_distance_m = 0.0f;
+    msg.dig_escalated_required_distance_m = 0.0f;
     // Firmware handshake: there is no protocol version to compare on the
     // OpenMower LowLevel board. "Compatible" here means the whole hardware set
     // the stack needs is talking: LowLevel status stream + both drive

@@ -52,10 +52,15 @@ configure_mavros_backend_details() {
 # docker/stack.sh does not source this file. This file owns only the
 # interactive selection flow.
 
-# OpenMower v1 electronics: LowLevel (Pico) board + three xESC controllers on
-# the Pi's hardware UARTs. The bridge runs in the mowgli-openmower sidecar;
-# nothing is flashed. Defaults follow open_mower_ros for kernels >= 6.1.28
-# (ttyAMA0 = LowLevel, ttyAMA5/3/4 = left/right/mow xESC).
+# OpenMower v1 electronics ONLY: LowLevel (Pico) board + three xESC
+# controllers on the Pi's hardware UARTs (open_mower_ros HARDWARE_PLATFORM=1,
+# mower_comms_v1). The bridge runs in the mowgli-openmower sidecar; nothing is
+# flashed. Defaults follow open_mower_ros for kernels >= 6.1.28 (ttyAMA0 =
+# LowLevel, ttyAMA5/3/4 = left/right/mow xESC).
+#
+# OpenMower v2 (HARDWARE_PLATFORM=2, mower_comms_v2) is NOT supported: it drops
+# the serial protocol entirely for xbot_framework service interfaces over
+# Ethernet, so it needs a different bridge, not a parameter here.
 configure_openmower_backend_details() {
   local allow_existing="${1:-false}"
 
@@ -118,7 +123,7 @@ select_hardware_backend() {
       openmower)
         export HARDWARE_BACKEND="openmower"
         export MAVROS_BY_ID=""
-        info "Hardware backend pre-configured: OpenMower electronics (LowLevel + xESC)"
+        info "Hardware backend pre-configured: OpenMower v1 electronics (LowLevel + xESC)"
         configure_openmower_backend_details true || return 1
         return 0
         ;;
@@ -133,7 +138,7 @@ select_hardware_backend() {
   echo "Select hardware backend:"
   echo "  [1] Mowgli STM32 board"
   echo "  [2] Pixhawk via MAVROS"
-  echo "  [3] OpenMower electronics (LowLevel board + xESC, stock firmware)"
+  echo "  [3] OpenMower v1 electronics (LowLevel board + xESC, stock firmware)"
   echo ""
   prompt "Choice [1-3]" "1"
   choice="$REPLY"
@@ -152,7 +157,7 @@ select_hardware_backend() {
     3)
       export HARDWARE_BACKEND="openmower"
       export MAVROS_BY_ID=""
-      info "Selected backend: OpenMower electronics (LowLevel board + xESC)"
+      info "Selected backend: OpenMower v1 electronics (LowLevel board + xESC)"
       configure_openmower_backend_details false || return 1
       ;;
     *)

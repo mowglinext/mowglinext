@@ -421,7 +421,7 @@
       <!-- Hardware backend -->
       <div class="composer-group">
         <h3>Hardware Backend</h3>
-        <p class="composer-hint">`mowgli` stays the stable default. `openmower` keeps stock OpenMower electronics (LowLevel board + xESC) on their own firmware behind a bridge container. `mavros` is an advanced Pixhawk path and disables the direct GNSS/GPS container selection below.</p>
+        <p class="composer-hint">`mowgli` stays the stable default. `openmower` keeps stock OpenMower <strong>v1</strong> electronics (LowLevel board + xESC) on their own firmware behind a bridge container; v2 boards are not supported. `mavros` is an advanced Pixhawk path and disables the direct GNSS/GPS container selection below.</p>
         <div class="composer-options" data-group="backend">
           <button class="composer-option active" data-value="mowgli">
             <span class="option-icon">🧩</span>
@@ -431,8 +431,8 @@
           <button class="composer-option" data-value="openmower">
             <span class="option-icon">🔌</span>
             <span class="option-badge">Beta</span>
-            <span class="option-label">OpenMower</span>
-            <span class="option-desc">Stock OpenMower v1 board + xESC — bridge container, firmware untouched</span>
+            <span class="option-label">OpenMower v1</span>
+            <span class="option-desc">Stock OpenMower v1 board + xESC — bridge container, firmware untouched. v2 boards are not supported.</span>
           </button>
           <button class="composer-option" data-value="mavros">
             <span class="option-icon">🛩️</span>

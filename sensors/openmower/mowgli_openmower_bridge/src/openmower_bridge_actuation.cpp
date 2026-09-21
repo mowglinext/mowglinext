@@ -253,7 +253,15 @@ void OpenMowerBridgeNode::drive_blade(bool blade_allowed)
   }
   // OpenMower convention (mower_comms_v1): direction 1 = +duty, 0 = -duty.
   const double duty = blade_allowed ? (mow_direction_ != 0u ? blade_duty_ : -blade_duty_) : 0.0;
-  motors_[kMow]->SendDuty(duty);
+  const bool written = motors_[kMow]->SendDuty(duty);
+  // Mirrors hardware_bridge_node's mapping so the GUI and diagnostics read the
+  // same vocabulary on both backends: the request never left the host ->
+  // unknown; otherwise off, or the direction the operator asked for.
+  blade_requested_direction_ = !written           ? "unknown"
+                               : !blade_allowed   ? "off"
+                               : mow_direction_ == 0u ? "forward"
+                               : mow_direction_ == 1u ? "reverse"
+                                                      : "unknown";
   if (blade_allowed != blade_running_)
   {
     RCLCPP_INFO(get_logger(), "Blade %s", blade_allowed ? "ON" : "OFF");

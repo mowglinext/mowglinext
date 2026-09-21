@@ -1,7 +1,10 @@
   # -------------------------------------------------------------------------
   # OpenMower hardware bridge (HARDWARE_BACKEND=openmower).
   #
-  # Stock OpenMower v1 electronics: the LowLevel (Pico) board and the three
+  # Stock OpenMower **v1** electronics only (open_mower_ros
+  # HARDWARE_PLATFORM=1). v2 mainboards speak xbot_framework over Ethernet,
+  # not this serial protocol, and need their own bridge.
+  # The LowLevel (Pico) board and the three
   # xESC motor controllers stay on their own firmware; this sidecar speaks
   # their protocols and publishes MowgliNext's hardware_bridge contract
   # (/hardware_bridge/{status,emergency,power}, /battery_state, /imu/data,

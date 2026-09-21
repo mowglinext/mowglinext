@@ -159,7 +159,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: curl -sSL https://mowgli.garden/install.sh | bash -s -- [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --backend=TYPE      Hardware backend: mowgli (default), openmower (stock OpenMower electronics), mavros (advanced Pixhawk path)"
+      echo "  --backend=TYPE      Hardware backend: mowgli (default), openmower (stock OpenMower v1 electronics; v2 unsupported), mavros (advanced Pixhawk path)"
       echo "  --gnss-receiver-family"
       echo "                     Universal GNSS receiver family first-boot default: auto, ublox, unicore, nmea"
       echo "  --gnss-connection  Universal GNSS serial link first-boot default: usb or uart"
