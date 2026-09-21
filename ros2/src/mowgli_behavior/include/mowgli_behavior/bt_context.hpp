@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/point32.hpp"
 #include "mowgli_behavior/blade_direction.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
@@ -743,6 +744,11 @@ struct BTContext
   /// Transit goal to reach the coverage path start (populated by
   /// PlanCoverageArea, consumed by TransitToStrip).
   geometry_msgs::msg::PoseStamped current_transit_goal;
+  /// Where TransitToStrip last FAILED to take the robot (map frame), if it did.
+  /// FollowStrip consumes it to skip — not repeat — the identical transit to its
+  /// first unit (field 2026-09-21: 53 s in TransitToStrip, then 43 s more in
+  /// FollowStrip on the same unreachable start). BT-tick-thread only.
+  std::optional<geometry_msgs::msg::Point> transit_to_strip_failed_at;
 
   /// Latest coverage percentage.
   float coverage_percent{0.0f};

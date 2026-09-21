@@ -175,7 +175,7 @@ Clients (node → file:line):
 | Status — `status_nodes.{hpp,cpp}` | `PublishHighLevelStatus`(state, state_name), `WasRainingAtStart`, `ClearCommand`, `MarkGuardHalt`(reason), `EndSession`, `IncrementSkippedSwaths`† |
 | Calibration — `calibration_nodes.{hpp,cpp}` | `RecordUndockStart`, `CalibrateHeadingFromUndock`(min_displacement_m), `SeedYawFromMotion`(distance_m, speed_ms, timeout_sec, min_displacement_m) |
 | Docking — `docking_nodes.{hpp,cpp}` | `DockRobot`(dock_id, dock_type), `UndockRobot`†(dock_type), `RecordResumeUndockFailure` |
-| Coverage — `coverage_nodes.{hpp,cpp}` | `GetNextUnmowedArea`(max_areas → out `area_index`), `FollowStrip`(max_detours_per_segment, detour_footprint_radius_m), `TransitToStrip`, `DetourAroundObstacle`†(forward_m, lateral_m), `PlanCoverageArea`(area_index) |
+| Coverage — `coverage_nodes.{hpp,cpp}` | `GetNextUnmowedArea`(max_areas → out `area_index`), `FollowStrip`(max_detours_per_segment, detour_footprint_radius_m), `TransitToStrip`(timeout_sec, ≤ 0 = `transitDeadlineSec(gap)`; a non-START_OCCUPIED failure is recorded in `BTContext::transit_to_strip_failed_at` so FollowStrip skips — not repeats — that first transit), `DetourAroundObstacle`†(forward_m, lateral_m), `PlanCoverageArea`(area_index) |
 | Recording — `recording_nodes.{hpp,cpp}` | `RecordArea`(simplification_tolerance, min_vertices, min_area, record_rate_hz, is_exclusion_zone) |
 
 † registered but not referenced by `trees/main_tree.xml`.
