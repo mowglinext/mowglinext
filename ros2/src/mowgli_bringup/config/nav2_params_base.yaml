@@ -194,6 +194,12 @@ controller_server:
       # by the perpendicular swaths, so: ignore yaw (π) and match xy to FTC's
       # max_goal_distance_error (0.50). progress_threshold 0.95 still guarantees
       # the area was actually mowed before "done" can fire.
+      # 2026-09-21: the checker ALSO passes once the path still ahead of its
+      # monotonic cursor is <= xy_goal_tolerance (FTC's 0.50 m park, measured
+      # along the path). Without it a 0.6 m sub-path that FTC parked 0.3-0.45 m
+      # short of never reached 95 % of its poses and progress_checker aborted it
+      # 30 s later. It needs no key: it reuses xy_goal_tolerance, which must stay
+      # >= FTC max_goal_distance_error (navigation.launch.py floors it).
       xy_goal_tolerance: 0.50
       yaw_goal_tolerance: 3.14   # ≈π → ignore final heading (test pins ≤ 3.1416)
       plan_topic: "/controller_server/FollowCoveragePath/global_plan"
@@ -516,8 +522,9 @@ controller_server:
       # Loose goal-acceptance envelope: the F2C path's last pose can sit 25-50 cm
       # from where the PID can converge (Dubins-connector approach-angle bias),
       # and near the goal fine-heading commands fall sub-deadband on the wheel-PI
-      # motor model. PathProgressGoalChecker still gates path-progress ≥ 95%, so a
-      # loose tolerance CANNOT fire mid-traversal.
+      # motor model. PathProgressGoalChecker still gates on monotonic path progress
+      # (≥ 95 % of the poses, or within this distance of the end ALONG the path),
+      # so a loose tolerance CANNOT fire mid-traversal.
       max_goal_distance_error: 0.50
       max_goal_angle_error: 30.0
       goal_timeout: 10.0

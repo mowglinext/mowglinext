@@ -119,6 +119,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
   target_link_libraries(test_lyrical_goal_checker ${PROJECT_NAME})
 
+  ament_add_gtest(test_path_progress_end_approach test/test_path_progress_end_approach.cpp)
+  target_link_libraries(test_path_progress_end_approach ${PROJECT_NAME})
+
   ament_add_gtest(test_oscillation_detector
     test/test_oscillation_detector.cpp
     src/oscillation_detector.cpp

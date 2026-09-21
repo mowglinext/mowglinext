@@ -15,6 +15,24 @@
 namespace mowgli_nav2_plugins
 {
 
+namespace
+{
+
+/// Arc length from the first pose to each pose (element 0 is 0).
+std::vector<double> cumulativeArcLength(const std::vector<geometry_msgs::msg::PoseStamped>& poses)
+{
+  std::vector<double> arc(poses.size(), 0.0);
+  for (size_t i = 1; i < poses.size(); ++i)
+  {
+    const auto& a = poses[i - 1].pose.position;
+    const auto& b = poses[i].pose.position;
+    arc[i] = arc[i - 1] + std::hypot(b.x - a.x, b.y - a.y);
+  }
+  return arc;
+}
+
+}  // namespace
+
 void PathProgressGoalChecker::initialize(
     const nav2::LifecycleNode::WeakPtr& parent,
     const std::string& plugin_name,
@@ -132,6 +150,7 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
   if (size_changed || start_moved_far)
   {
     path_poses_ = msg->poses;
+    path_arc_m_ = cumulativeArcLength(path_poses_);
     last_path_size_ = n;
     last_path_first_x_ = fx;
     last_path_first_y_ = fy;
@@ -152,7 +171,38 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
     // keep max_reached_index_ so the monotonic-progress invariant
     // holds across republishes.
     path_poses_ = msg->poses;
+    path_arc_m_ = cumulativeArcLength(path_poses_);
   }
+}
+
+double PathProgressGoalChecker::remainingPathLength(const geometry_msgs::msg::Point& robot) const
+{
+  // From pose max_reached_index_, advanced by the robot's projection onto the
+  // segment that FOLLOWS it. The nearest pose can sit up to half a pose spacing
+  // behind a robot that stopped between two poses; counting that half-segment as
+  // still ahead would reject a robot parked just inside the tolerance. The
+  // projection is clamped to that one segment, so it never reaches past pose
+  // max_reached_index_ + 1 — the bounded monotonic search stays the only thing
+  // that moves the reached point forward.
+  if (path_poses_.empty() || path_arc_m_.size() != path_poses_.size())
+  {
+    return std::numeric_limits<double>::infinity();  // fail closed: rule cannot pass
+  }
+  const size_t last = path_poses_.size() - 1;
+  const size_t k = std::min(max_reached_index_, last);
+  double along = 0.0;
+  if (k < last)
+  {
+    const auto& a = path_poses_[k].pose.position;
+    const auto& b = path_poses_[k + 1].pose.position;
+    const double seg = path_arc_m_[k + 1] - path_arc_m_[k];
+    if (seg > 0.0)
+    {
+      const double proj = ((robot.x - a.x) * (b.x - a.x) + (robot.y - a.y) * (b.y - a.y)) / seg;
+      along = std::clamp(proj, 0.0, seg);
+    }
+  }
+  return path_arc_m_[last] - path_arc_m_[k] - along;
 }
 
 bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& query_pose,
@@ -284,8 +334,20 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
     max_reached_index_ = best_idx;
   }
 
+  // Progress gate. EITHER rule proves the robot drove the path rather than
+  // merely arriving near its end:
+  //  - the historical one: >= progress_threshold_ of the poses reached;
+  //  - end approach: the path still ahead of the furthest monotonically-reached
+  //    point is no longer than xy_goal_tolerance_. FTC parks up to
+  //    max_goal_distance_error (the floor of xy_goal_tolerance_) short of the
+  //    last pose. On a 0.6 m sub-path that is most of its poses, so the pose
+  //    ratio alone never passed and controller_server's progress checker
+  //    aborted the goal 30 s later (field 2026-09-21). Measured ALONG the path
+  //    from the monotonic cursor, this rule stays false at the start of a looped
+  //    path whose end is near its start: the whole path is still ahead.
   const double progress = static_cast<double>(max_reached_index_) / static_cast<double>(n - 1);
-  if (progress < progress_threshold_)
+  const double remaining_m = remainingPathLength(progress_pose.position);
+  if (progress < progress_threshold_ && remaining_m > xy_goal_tolerance_)
   {
     return false;
   }
@@ -311,10 +373,11 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
 
   RCLCPP_INFO(logger_,
               "PathProgressGoalChecker: goal reached — progress=%.1f%% "
-              "(idx %zu/%zu), xy_err=%.3fm, yaw_err=%.3frad",
+              "(idx %zu/%zu), remaining=%.3fm, xy_err=%.3fm, yaw_err=%.3frad",
               progress * 100.0,
               max_reached_index_,
               n - 1,
+              remaining_m,
               xy_err,
               yaw_err);
   return true;

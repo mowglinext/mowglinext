@@ -4,7 +4,7 @@
 > Index updated 2026-09-09 for FTC obstacle-hold steering recovery; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
-> Lyrical API: full plans enter `newPathReceived`; local processed plans do not replace FTC progress. The goal checker transforms the costmap-frame query into the full-plan frame and exposes both XY and XY+yaw checks. Regression tests: `test/test_lyrical_goal_checker.cpp`.
+> Lyrical API: full plans enter `newPathReceived`; local processed plans do not replace FTC progress. The goal checker transforms the costmap-frame query into the full-plan frame and exposes both XY and XY+yaw checks. Regression tests: `test/test_lyrical_goal_checker.cpp`; end-approach rule (short sub-paths FTC parks short of): `test/test_path_progress_end_approach.cpp`.
 
 ## Where to look
 
@@ -26,8 +26,8 @@
 | Body-in-lethal check at the ACTUAL robot pose (SAFETY_REVIEW F-C1) | `ftc_controller.cpp` `currentBodyInLethal()` (L1663), gated at L907 |
 | Legacy collision throw (deviation OFF, e.g. no-LiDAR) | `ftc_controller.cpp` `checkCollision()` (L1577) — frame caveat at L1621 |
 | Oscillation detector (ring buffer, zero-crossings) | `src/oscillation_detector.cpp` `FailureDetector::detect`; wrapper `checkOscillation()` (L2296) |
-| Goal-checker progress gate / short-path proximity fallback / empty-plan watchdog | `src/path_progress_goal_checker.cpp` `isGoalReached()` (L151); new-path fingerprint in `onPath()` (L125) |
-| Which topic the goal checker tracks | `path_progress_goal_checker.cpp:63` (`plan_topic`); FTC publishes `<plugin>/global_plan` at `ftc_controller.cpp:66`, `:762` |
+| Goal-checker progress gate (95 % of poses OR end approach) / short-path proximity fallback / empty-plan watchdog | `src/path_progress_goal_checker.cpp` `isGoalReached()` (L208, gate at L350); path length still ahead `remainingPathLength()` (L178); new-path fingerprint + arc table in `onPath()` (L118) |
+| Which topic the goal checker tracks | `path_progress_goal_checker.cpp:88` (`plan_topic`); FTC publishes `<plugin>/global_plan` at `ftc_controller.cpp:66`, `:762` |
 | Add / rename an FTC parameter | 4 places: `ftc_controller.hpp` `struct Config` (L345), `declareParameters()` (L140), `onParameterChange()` (L267, finite + range check — out-of-range is REJECTED, not clamped), `ros2/src/mowgli_bringup/config/nav2_params_base.yaml` `FollowCoveragePath:` (L338) |
 | Expose a param to operators / GUI | template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` → `ros2/src/mowgli_bringup/launch/navigation.launch.py` `_inject_dock_pose_and_speeds` (L646, `fcp[...]` L755–847) → `gui/web/src/components/settings/paramCatalog.ts` → `ros2/src/mowgli_bringup/test/test_nav2_params.py` |
 | Tune shipped defaults | `nav2_params_base.yaml` L338–546 (`FollowCoveragePath`), L170–189 (`coverage_goal_checker`); no-LiDAR diff `ros2/src/mowgli_bringup/config/nav2_params_no_lidar.yaml` L19–21 |
@@ -58,13 +58,13 @@
 | `ftc_resync.hpp` | — | Carrot resync bounded to a PATH-LENGTH window (never jumps to a neighbouring ring) |
 | `obstacle_deviation.hpp` | 236 | `BoundaryGuard` (zone guard + zone mask) and `ObstacleDeviation` static helpers; thresholds `kLethalThreshold=253`, `kLethalOnlyThreshold=254` |
 | `oscillation_detector.hpp` | 113 | `FailureDetector` — rolling (v, ω) window, mean + zero-crossing test |
-| `path_progress_goal_checker.hpp` | 122 | `PathProgressGoalChecker` — progress-gated goal checker state + params |
+| `path_progress_goal_checker.hpp` | 155 | `PathProgressGoalChecker` — progress-gated goal checker state + params (`path_arc_m_` cumulative arc table) |
 | **`src/`** | | |
 | `ftc_controller.cpp` | ~2.4k | Lifecycle, params + dynamic callback, newPathReceived, computeVelocityCommands, FSM, carrot, PID, collision, deviation, reverse-escape, oscillation |
 | `ftc_controller_plugin.cpp` | 20 | `PLUGINLIB_EXPORT_CLASS(FTCController, nav2_core::Controller)` |
 | `obstacle_deviation.cpp` | 486 | cell/body/footprint samplers, `isObstacleCell`, `hasClearExit`, `findFirstObstacleIndex`, `chooseDeviationSide`, `isPathClearWithDeviation`, `growDeviationUntilClear` |
 | `oscillation_detector.cpp` | 153 | `FailureDetector` impl (normalise by v_max/ω_max, half-full buffer before deciding) |
-| `path_progress_goal_checker.cpp` | 317 | `initialize` (params + plan sub), `onPath` fingerprint, `isGoalReached`, `getTolerances`; `PLUGINLIB_EXPORT_CLASS` at bottom |
+| `path_progress_goal_checker.cpp` | 422 | `initialize` (params + plan sub), `onPath` fingerprint + arc table, `remainingPathLength`, `isGoalReached`, `getTolerances`; `PLUGINLIB_EXPORT_CLASS` at bottom |
 | **`test/`** | | |
 | `test_ftc_stall.cpp` | 182 | 13 cases on stall behavior and acceleration-limited obstacle restart |
 | `test_ftc_obstacle_wait.cpp` | 61 | 6 cases: continuous-clear hold, blocked-scan reset, alternating scans never resume, angular restart slew |
@@ -73,6 +73,7 @@
 | `test_ftc_start_index.cpp` | 77 | 4 cases: fresh plan → 0, closed ring never resolves to its end, legacy snap, empty plan |
 | `test_obstacle_deviation.cpp` | 823 | ~50 cases on a 400×400 @0.05 m synthetic costmap: detection, side choice (left bias), grow, boundary guard, zone mask (#517), footprint model, clip/expand, `hasClearExit`, lookahead clamp |
 | `test_oscillation_detector.cpp` | 195 | 11 cases: capacity, half-full gate, alternating ω detected, steady motion not |
+| `test_path_progress_end_approach.cpp` | 388 | 13 cases on the checker (needs a node): field sub-path parked 0.30/0.45/0.499 m short and off the line → reached; start / > tolerance short → not; U-turn and closed ring whose end is near their start → not reached at the start or while passing near the end, reached at the end; long path unchanged; 95 % rule kept; path shorter than the tolerance completes on proximity |
 
 ## Runtime surface
 
@@ -83,7 +84,7 @@ None. Both classes are pluginlib plugins loaded by Nav2's `controller_server` (l
 | Topic | Type | Dir | QoS | Notes / other end |
 |-------|------|-----|-----|-------------------|
 | `/controller_server/FollowCoveragePath/global_point` | `geometry_msgs/PoseStamped` | pub | depth 1, lifecycle | Carrot pose (map frame) every tick — viz only |
-| `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub | `QoS(1).transient_local()` | Published ONCE per `newPathReceived` with the tail pose duplicated (`ftc_controller.cpp:762`). Sub: `PathProgressGoalChecker` (`KeepLast(1).reliable()`, `path_progress_goal_checker.cpp:67-70`). ALSO published by BT `FollowStrip` (`ros2/src/mowgli_behavior/src/coverage_nodes.cpp:391`, same QoS) |
+| `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub | `QoS(1).transient_local()` | Published ONCE per `newPathReceived` with the tail pose duplicated (`ftc_controller.cpp:762`). Sub: `PathProgressGoalChecker` (`KeepLast(1).reliable()`, `path_progress_goal_checker.cpp:91-99`). ALSO published by BT `FollowStrip` (`ros2/src/mowgli_behavior/src/coverage_nodes.cpp:391`, same QoS) |
 | `/controller_server/FollowCoveragePath/costmap_marker` | `visualization_msgs/Marker` | pub | depth 10 | Only when `debug_obstacle` and deviation OFF (`debugObstacle`) |
 | `/global_costmap/costmap` | `nav_msgs/OccupancyGrid` | sub | `QoS(1).transient_local()` | Rebuilt into `boundary_costmap_` (`data >= 99 → 254`, else 0) for the zone guard/mask (`ftc_controller.cpp:75-96`) |
 | `/hardware_bridge/status` | `mowgli_interfaces/Status` | sub | `QoS(1)` | `mower_esc_status` / `mower_motor_rpm` / `blade_status_stamp` → `blade_active_` / `blade_rpm_` / `blade_status_time_` under `blade_mutex_` for the blade-load slowdown (always subscribed; inert unless `blade_load_slowdown_enabled`) |
@@ -158,7 +159,7 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 ## Change coupling — "if you change X, also update Y"
 
 - **New/renamed FTC param** → `ftc_controller.hpp` `Config` + `declareParameters()` + `onParameterChange()` (else it is not dynamic and SetNavMode/GUI writes fail) + `nav2_params_base.yaml`. Operator-facing: template `mowgli_robot.yaml` + `navigation.launch.py` injection + `paramCatalog.ts` + `gui/web/src/hooks/useSettingsManager.ts:197-198` + a `test_nav2_params.py` pin.
-- **Plugin slot name `FollowCoveragePath`** appears in: `path_progress_goal_checker.cpp:64` (default `plan_topic`), `nav2_params_base.yaml:113,189,338`, `coverage_nodes.cpp:391,581`, `navigation_nodes.cpp:962`, `navigation.launch.py:754`, `test_nav2_params.py`.
+- **Plugin slot name `FollowCoveragePath`** appears in: `path_progress_goal_checker.cpp:88` (default `plan_topic`), `nav2_params_base.yaml:113,189,338`, `coverage_nodes.cpp:391,581`, `navigation_nodes.cpp:962`, `navigation.launch.py:754`, `test_nav2_params.py`.
 - **`max_goal_distance_error`** ↔ `coverage_goal_checker.xy_goal_tolerance` floor (`navigation.launch.py:890-905`), template `coverage_xy_tolerance` (`mowgli_robot.yaml:687`), `test_*_ftc_park` tests.
 - **`max_cmd_vel_speed` clamp** ↔ `navigation.launch.py:762-764` (raise-to-`mowing_speed`); `speed_fast` callback range [0, 2.0].
 - **`min_speed_mps` / `max_cmd_vel_ang`** are read by `robot_config_util.derive_turn_speed` / `check_turn_geometry` (`test_robot_config_util.py:251,296`).
@@ -178,8 +179,9 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 - Never call `goal_checker->reset()` inside `computeVelocityCommands` (`ftc_controller.cpp:844-853`): `max_reached_index_` can only advance `max_idx_advance_per_call` (10) poses per call, so a per-tick reset pins progress < 95 % forever.
 - `newPathReceived` duplicates the last pose and re-orients the second-to-last (`ftc_controller.cpp:744-748`); the FSM's `size() - 2` test depends on it. Plans with < 3 poses go straight to `FINISHED` — one reason FTC is not the transit controller.
 - `newPathReceived` starts at idx 0 by default; re-adding a nearest-point snap skipped 46–99 % of closed headland rings on 2026-08-24 (`ftc_start_index.hpp` header). Resume trimming is `FollowStrip`'s job.
-- Goal-checker "new path" fingerprint = pose-count change OR front pose moved > 2 m (`path_progress_goal_checker.cpp:123-125`). Two consecutive plans of identical length starting < 2 m apart are treated as the SAME path (progress carries over).
-- Paths with ≤ `short_path_poses` (10) poses complete on xy+yaw proximity only (`path_progress_goal_checker.cpp:209`), bypassing the progress gate.
+- Goal-checker "new path" fingerprint = pose-count change OR front pose moved > 2 m (`path_progress_goal_checker.cpp:148-150`). Two consecutive plans of identical length starting < 2 m apart are treated as the SAME path (progress carries over).
+- Paths with ≤ `short_path_poses` (10) poses complete on xy+yaw proximity only (`path_progress_goal_checker.cpp:267`), bypassing the progress gate.
+- The progress gate passes on EITHER ≥ `progress_threshold` of the poses OR the path length still ahead of the furthest monotonically-reached point ≤ `xy_goal_tolerance` (`path_progress_goal_checker.cpp:350`); xy + yaw are checked after it either way. The second rule exists because FTC parks up to `max_goal_distance_error` short and then emits zero velocity: on a sub-path shorter than ~10 m that is more than 5 % of the poses, so the pose ratio alone never passed and `progress_checker` aborted the goal after `movement_time_allowance` (field 2026-09-21, 0.6 m sub-paths, 30 s each). It is measured ALONG the path from the bounded monotonic cursor, so it stays false at the start of a looped path whose end is near its start; do not replace it with a straight-line distance. `xy_goal_tolerance` must stay ≥ FTC `max_goal_distance_error` (launch floor) or FTC parks where neither rule can pass. A path whose whole length is ≤ `xy_goal_tolerance` completes on proximity at its start. The bounded search still lets `max_reached_index_` creep up to `max_idx_advance_per_call` poses per call toward a robot that is AHEAD along the path (catch-up by design) — that is unchanged.
 - `chooseDeviationSide` scans LEFT first at each radius (`obstacle_deviation.cpp:400-412`) — equal clearance always skirts left.
 - `updateLateralDeviation` holds the costmap mutex (`ftc_controller.cpp:1832`) and `boundary_mutex_` for its whole body; do not call `costmap_ros_` methods that re-lock from inside.
 - With `confine_deviation_to_zone=true` and no `/global_costmap/costmap` received yet, deviation is SKIPPED for the tick (fail-safe, throttled warn) — after a costmap restart FTC drives the nominal line until the latched grid arrives.
