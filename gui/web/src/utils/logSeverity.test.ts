@@ -1,12 +1,39 @@
 import {describe, expect, it} from "vitest";
-import {detectLogSeverity} from "./logSeverity.ts";
+import {createLogSeverityClassifier} from "./logSeverity.ts";
 
-describe("detectLogSeverity", () => {
-    it.each([
-        "[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)",
-        "[ERROR] [node-X]: process has died [pid 42, exit code -2, cmd '/opt/ros/node']",
-    ])("classifies a normal ROS 2 SIGINT shutdown as INFO: %s", (line) => {
-        expect(detectLogSeverity(line)).toBe('INFO');
+describe("LogSeverityClassifier", () => {
+    it("classifies a launch SIGINT message as INFO", () => {
+        const classifier = createLogSeverityClassifier();
+
+        expect(classifier.detect("[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)"))
+            .toBe('INFO');
+    });
+
+    it("classifies a subsequent SIGINT process death as INFO", () => {
+        const classifier = createLogSeverityClassifier();
+        classifier.detect("[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)");
+
+        expect(classifier.detect(
+            "[ERROR] [node-X]: process has died [pid 42, exit code -2, cmd '/opt/ros/node']",
+        )).toBe('INFO');
+    });
+
+    it("keeps an isolated SIGINT process death as ERROR", () => {
+        const classifier = createLogSeverityClassifier();
+
+        expect(classifier.detect(
+            "[ERROR] [node-X]: process has died [pid 42, exit code -2, cmd '/opt/ros/node']",
+        )).toBe('ERROR');
+    });
+
+    it("does not retain launch SIGINT context after reset", () => {
+        const classifier = createLogSeverityClassifier();
+        classifier.detect("[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)");
+        classifier.reset();
+
+        expect(classifier.detect(
+            "[ERROR] [node-X]: process has died [pid 42, exit code -2, cmd '/opt/ros/node']",
+        )).toBe('ERROR');
     });
 
     it.each([
@@ -14,10 +41,11 @@ describe("detectLogSeverity", () => {
         "[ERROR] [node-X]: process has died [pid 42, exit code -6, cmd '/opt/ros/node']",
         "[ERROR] [node-X]: process has died [pid 42, exit code -20, cmd '/opt/ros/node']",
     ])("keeps a non-SIGINT process death as ERROR: %s", (line) => {
-        expect(detectLogSeverity(line)).toBe('ERROR');
+        expect(createLogSeverityClassifier().detect(line)).toBe('ERROR');
     });
 
     it("keeps unrelated launch warnings as WARN", () => {
-        expect(detectLogSeverity("[WARNING] [launch]: required process exited")).toBe('WARN');
+        expect(createLogSeverityClassifier().detect("[WARNING] [launch]: required process exited"))
+            .toBe('WARN');
     });
 });

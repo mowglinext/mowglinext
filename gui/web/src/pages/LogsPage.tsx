@@ -9,7 +9,11 @@ import {useIsMobile} from "../hooks/useIsMobile";
 import {appendCappedBatch, createLogBatcher, type LogBatcher} from "./logBatcher.ts";
 import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
 import {parseLogTimestamp, type LogTimestampSource} from "../utils/logTime.ts";
-import {detectLogSeverity, type Severity} from "../utils/logSeverity.ts";
+import {
+    createLogSeverityClassifier,
+    type LogSeverityClassifier,
+    type Severity,
+} from "../utils/logSeverity.ts";
 // ESC is a control character by definition -- an ANSI escape matcher cannot
 // be written without it. Silenced at the one site that needs it rather than
 // globally, so a genuine stray control character elsewhere still reports.
@@ -63,14 +67,19 @@ export const LogsPage = () => {
     const nextIdRef = useRef(0);
     const listRef = useRef<HTMLDivElement | null>(null);
     const batcherRef = useRef<LogBatcher<ParsedLog> | null>(null);
+    const severityClassifierRef = useRef<LogSeverityClassifier | null>(null);
     if (batcherRef.current === null) {
         batcherRef.current = createLogBatcher<ParsedLog>((batch) => {
             setLogs(prev => appendCappedBatch(prev, batch, MAX_LINES));
         }, LOG_BATCH_INTERVAL_MS);
     }
+    if (severityClassifierRef.current === null) {
+        severityClassifierRef.current = createLogSeverityClassifier();
+    }
 
     const resetLogs = () => {
         batcherRef.current?.reset();
+        severityClassifierRef.current?.reset();
         nextIdRef.current = 0;
         setLogs([]);
     };
@@ -99,7 +108,7 @@ export const LogsPage = () => {
             batcherRef.current?.push({
                 id: nextIdRef.current++,
                 plain: body,
-                severity: detectLogSeverity(body),
+                severity: severityClassifierRef.current!.detect(body),
                 tsMs: epochMs,
                 tsSource: source,
             });
