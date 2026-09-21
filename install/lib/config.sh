@@ -53,7 +53,7 @@ recompute_image_defaults() {
   # Pinned by DIGEST, not only by tag: this container owns the GNSS serial
   # port and runs privileged-adjacent on every robot, and a tag on a third-party
   # registry can be re-pushed. Must match install/deployment.json (test-gated).
-  UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.0-rc1@sha256:d132240b90d9832d0044f4cb9bccc8c2ff29c72f170ada777c07de2867ca0fd2"
+  UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.1-rc2@sha256:c07d4fa819eba27bf05b756f64e5f09250534466a3db62dec8d2c6789854edb3"
 }
 
 is_release_image_channel() {
