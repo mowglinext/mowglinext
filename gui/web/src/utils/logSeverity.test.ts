@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {createLogSeverityClassifier} from "./logSeverity.ts";
+import {createLogSeverityClassifier, SHUTDOWN_CONTEXT_WINDOW_MS} from "./logSeverity.ts";
 
 describe("LogSeverityClassifier", () => {
     it("classifies a launch SIGINT message as INFO", () => {
@@ -30,6 +30,17 @@ describe("LogSeverityClassifier", () => {
         const classifier = createLogSeverityClassifier();
         classifier.detect("[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)");
         classifier.reset();
+
+        expect(classifier.detect(
+            "[ERROR] [node-X]: process has died [pid 42, exit code -2, cmd '/opt/ros/node']",
+        )).toBe('ERROR');
+    });
+
+    it("expires launch SIGINT context after the bounded shutdown window", () => {
+        let nowMs = 1_000;
+        const classifier = createLogSeverityClassifier(() => nowMs);
+        classifier.detect("[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)");
+        nowMs += SHUTDOWN_CONTEXT_WINDOW_MS + 1;
 
         expect(classifier.detect(
             "[ERROR] [node-X]: process has died [pid 42, exit code -2, cmd '/opt/ros/node']",
