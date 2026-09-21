@@ -605,30 +605,186 @@ std::vector<std::pair<double, double>> buildConnector(
   return straight;
 }
 
+namespace cg = mowgli_interfaces::coverage_geometry;
+
+// Absolute heading difference, wrapped to [0, π].
+double headingError(double a, double b)
+{
+  return std::abs(std::atan2(std::sin(a - b), std::cos(a - b)));
+}
+
 // A straight fallback is only a continuous connector when its line is already
 // tangent to both segments. Otherwise the polyline contains one or two
 // zero-radius corners. FTC cannot track those while moving forward: the carrot
 // crosses the corner, the heading error changes side, and the angular command
 // alternates at its clamp. The 2026-09-09 field bag measured this exact pattern
-// on the F2C swath ends (up to 29 sign flips in 3.3 s).
+// on the F2C swath ends (up to 29 sign flips in 3.3 s). Such a join is either
+// kept as a PIVOT JOIN (planPivotJoin, the robot stops and rotates in place at
+// each corner) or split. The 15° kink both accept while moving is the pivot
+// corner contract's threshold (coverage_geometry.hpp), single-sourced there.
 bool straightFallbackIsContinuous(const Pose& start, const Pose& goal)
 {
-  constexpr double kMaxHeadingError = 15.0 * M_PI / 180.0;
-  auto angleError = [](double a, double b)
-  {
-    return std::abs(std::atan2(std::sin(a - b), std::cos(a - b)));
-  };
-
   const double dx = goal.x - start.x;
   const double dy = goal.y - start.y;
   if (std::hypot(dx, dy) < 1e-6)
   {
-    return angleError(start.theta, goal.theta) <= kMaxHeadingError;
+    return headingError(start.theta, goal.theta) <= cg::kPivotCornerMinTurnRad;
   }
 
   const double connector_heading = std::atan2(dy, dx);
-  return angleError(connector_heading, start.theta) <= kMaxHeadingError &&
-         angleError(goal.theta, connector_heading) <= kMaxHeadingError;
+  return headingError(connector_heading, start.theta) <= cg::kPivotCornerMinTurnRad &&
+         headingError(goal.theta, connector_heading) <= cg::kPivotCornerMinTurnRad;
+}
+
+// Outcome of planPivotJoin: whether the join may stay in the sub-path, and at
+// which of its two ends the robot has to pivot (a kink within
+// kPivotCornerMinTurnRad is tracked while moving, like an aligned connector).
+struct PivotJoin
+{
+  bool ok = false;
+  bool corner_at_start = false;
+  bool corner_at_goal = false;
+};
+
+// Decide whether a join that fits no arc and is not an aligned straight
+// connector may stay inside the sub-path as a pivot join (see PivotJoinLimits
+// for the rules and why). `straight` is buildConnector's straight fallback
+// (start-inclusive, goal-exclusive). Pure: deterministic for a fixed plan, which
+// the resume cursor relies on.
+PivotJoin planPivotJoin(const Pose& start,
+                        const Pose& goal,
+                        const std::vector<std::pair<double, double>>& straight,
+                        const std::vector<std::pair<double, double>>& boundary,
+                        const std::vector<std::vector<std::pair<double, double>>>& holes,
+                        const PivotJoinLimits& limits)
+{
+  PivotJoin join;
+  if (limits.sweep_radius <= 0.0)
+  {
+    return join;  // disabled: split, the pre-pivot behaviour
+  }
+  const double dx = goal.x - start.x;
+  const double dy = goal.y - start.y;
+  const double length = std::hypot(dx, dy);
+  // A turn-around between ADJACENT passes, never a relocation: the same bound
+  // FollowStrip uses to decide a gap needs a blade-off transit.
+  if (length > cg::kSegmentTransitGapM)
+  {
+    return join;
+  }
+  // The connector centreline obeys exactly the rules of every other blade-on
+  // join: inside the connector boundary, clear of the margin-grown holes.
+  if (!straight.empty() && (!allInside(straight, boundary) || !clearOfHoles(straight, holes)))
+  {
+    return join;
+  }
+  if (length < cg::kPivotCornerMaxStepM)
+  {
+    // Coincident ends: at most one pivot, straight from the exit heading to the
+    // entry heading.
+    join.corner_at_start = headingError(goal.theta, start.theta) > cg::kPivotCornerMinTurnRad;
+  }
+  else
+  {
+    const double heading = std::atan2(dy, dx);
+    join.corner_at_start = headingError(heading, start.theta) > cg::kPivotCornerMinTurnRad;
+    join.corner_at_goal = headingError(goal.theta, heading) > cg::kPivotCornerMinTurnRad;
+  }
+  // SAFETY: base_link is the REAR wheel axis, so a pivot sweeps the front of
+  // the body round a disc of the chassis circumscribed radius. Only pivot where
+  // that disc stays in the designed envelope (recorded line + soft band) and
+  // off every drawn obstacle.
+  if (join.corner_at_start && !pivotSweepFits(start.x, start.y, limits))
+  {
+    return join;
+  }
+  if (join.corner_at_goal && !pivotSweepFits(goal.x, goal.y, limits))
+  {
+    return join;
+  }
+  join.ok = true;
+  return join;
+}
+
+// Append a pivot join to the sub-path being built. `path.back()` is the join's
+// start (the previous segment's last pose). Emits, per the pivot corner
+// contract: [start twin if it pivots], the straight connector, the goal, [goal
+// twin if it pivots]. The next segment is then appended from its SECOND pose,
+// its first being the goal already emitted here.
+void appendPivotJoin(std::vector<std::pair<double, double>>& path,
+                     const std::vector<std::pair<double, double>>& straight,
+                     const Pose& goal,
+                     const PivotJoin& join)
+{
+  if (join.corner_at_start)
+  {
+    const std::pair<double, double> corner = path.back();
+    path.push_back(corner);  // exact twin: the outgoing-heading pose
+  }
+  if (straight.size() > 1)
+  {
+    path.insert(path.end(), straight.begin() + 1, straight.end());
+  }
+  const std::pair<double, double> goal_pt{goal.x, goal.y};
+  if (std::hypot(goal_pt.first - path.back().first, goal_pt.second - path.back().second) >=
+      cg::kPivotCornerMaxStepM)
+  {
+    path.push_back(goal_pt);
+  }
+  if (join.corner_at_goal)
+  {
+    const std::pair<double, double> corner = path.back();
+    path.push_back(corner);
+  }
+}
+
+// Enforce the pivot corner contract on one finished sub-path: a step shorter
+// than kPivotCornerMaxStepM survives ONLY as a planner-made corner twin, and
+// never more than two poses share a position. `is_twin[i]` marks pose i as the
+// exact twin the join loop emitted (computed before clampInsideRing, which maps
+// both twins identically but could also snap two distinct neighbours together).
+// Every other near-coincident pose is dropped, so FTC can never mistake a
+// numerical near-duplicate (Dubins segment seams, fillet exits, #388 clamps) for
+// a pivot — whether pivot joins are enabled or not.
+std::vector<std::pair<double, double>> enforcePivotCornerContract(
+    const std::vector<std::pair<double, double>>& pts, const std::vector<bool>& is_twin)
+{
+  std::vector<std::pair<double, double>> out;
+  out.reserve(pts.size());
+  bool last_was_twin = false;
+  for (std::size_t i = 0; i < pts.size(); ++i)
+  {
+    if (!out.empty() && std::hypot(pts[i].first - out.back().first,
+                                   pts[i].second - out.back().second) < cg::kPivotCornerMaxStepM)
+    {
+      if (is_twin[i] && !last_was_twin)
+      {
+        const std::pair<double, double> corner = out.back();
+        out.push_back(corner);  // keep the corner, bit-exact
+        last_was_twin = true;
+      }
+      continue;
+    }
+    out.push_back(pts[i]);
+    last_was_twin = false;
+  }
+  // A corner is interior by construction: every segment has >= 2 poses (swaths
+  // >= min_swath_length, closed rings), so something always follows a twin.
+  // A twin left at either end could only come from a segment collapsed by the
+  // near-duplicate pass above; with nothing to rotate towards (or from) it is
+  // not a pivot — FTC would ignore it too (FindPivotCorners) — so drop it.
+  while (out.size() >= 2 && std::hypot(out[out.size() - 1].first - out[out.size() - 2].first,
+                                       out[out.size() - 1].second - out[out.size() - 2].second) <
+                                cg::kPivotCornerMaxStepM)
+  {
+    out.pop_back();
+  }
+  while (out.size() >= 2 && std::hypot(out[1].first - out[0].first, out[1].second - out[0].second) <
+                                cg::kPivotCornerMaxStepM)
+  {
+    out.erase(out.begin());
+  }
+  return out;
 }
 
 // Round any corner of `pts` whose turn angle exceeds `max_turn_rad` with a
@@ -792,6 +948,78 @@ std::vector<std::pair<double, double>> densifyPolyline(
 }
 
 }  // namespace
+
+// True iff every cell is a valid OGR/GEOS polygon (holes inside the shell, not
+// overlapping each other). F2C's clip operations assume validity.
+static bool cellsAreValid(const f2c::types::Cells& cells)
+{
+  for (std::size_t i = 0; i < cells.size(); ++i)
+  {
+    const auto cell = cells.getGeometry(i);
+    if (cell.get() == nullptr || !cell.get()->IsValid())
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Rebuild every cell as its shell MINUS each of its holes, one difference at a
+// time: overlapping holes merge, a hole crossing the shell becomes a notch (or
+// splits the cell). A plain zero-width buffer is NOT a safe repair here: on a
+// polygon whose holes overlap it keeps the overlap as an island (inside two
+// holes = outside neither), and swaths were planned inside the obstacles.
+static f2c::types::Cells shellMinusHoles(const f2c::types::Cells& cells)
+{
+  f2c::types::Cells out;
+  for (std::size_t i = 0; i < cells.size(); ++i)
+  {
+    const auto cell = cells.getGeometry(i);
+    const OGRPolygon* poly = cell.get();
+    if (poly == nullptr || poly->getExteriorRing() == nullptr)
+    {
+      continue;
+    }
+    OGRPolygon shell;
+    shell.addRing(poly->getExteriorRing());
+    std::unique_ptr<OGRGeometry> area(shell.Buffer(0.0));
+    if (!area)
+    {
+      continue;
+    }
+    for (int r = 0; r < poly->getNumInteriorRings(); ++r)
+    {
+      OGRPolygon hole;
+      hole.addRing(poly->getInteriorRing(r));
+      std::unique_ptr<OGRGeometry> valid_hole(hole.Buffer(0.0));
+      if (!valid_hole)
+      {
+        continue;
+      }
+      std::unique_ptr<OGRGeometry> rest(area->Difference(valid_hole.get()));
+      if (rest)
+      {
+        area = std::move(rest);
+      }
+    }
+    const auto type = wkbFlatten(area->getGeometryType());
+    if (type == wkbPolygon)
+    {
+      out.addGeometry(f2c::types::Cell(area.get()));
+    }
+    else if (type == wkbMultiPolygon || type == wkbGeometryCollection)
+    {
+      for (const auto* part : *area->toGeometryCollection())
+      {
+        if (wkbFlatten(part->getGeometryType()) == wkbPolygon)
+        {
+          out.addGeometry(f2c::types::Cell(part));
+        }
+      }
+    }
+  }
+  return out;
+}
 
 // Expand a cell's exterior ring outward by `margin`, preserving its holes.
 // Used to place the outermost headland ring ON the recorded boundary (the
@@ -957,6 +1185,27 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       safe_cells = expanded;
     }
     // else: buffer degeneracy — fall back to the raw field (safe_cells = cells).
+  }
+  else if (n_rings == 0 && !cellsAreValid(safe_cells))
+  {
+    // Rings off and no inset: safe_cells IS the goal cell, and this is the one
+    // branch where no GEOS buffer ever normalises it (every other branch goes
+    // through generateHeadlands). Drawn obstacles grown by obstacle_margin can
+    // overlap each other or cross the recorded line; that polygon is INVALID
+    // and F2C's swath clip then throws a GEOS TopologyException and crashes
+    // (field geometry 2026-09-21 with num_headland_passes -1: two obstacles
+    // 0.63 m apart grown by 0.389 m, one 0.22 m from the line). Repair it as the
+    // shell minus the union of its holes — only when invalid, so a valid field
+    // still plans byte-identically (issue #429: a needless buffer round-trip
+    // re-nodes the polygon).
+    safe_cells = shellMinusHoles(safe_cells);
+    plan.diagnostics.notes.push_back(
+        "field polygon invalid (grown obstacles overlap each other or the boundary): "
+        "repaired as the boundary minus the union of the obstacles");
+    if (safe_cells.size() == 0 || safe_cells.area() < 1e-6)
+    {
+      return plan;
+    }
   }
 
   // Expose the planning outer ring so the continuous-path connectors/fillets are
@@ -1472,7 +1721,8 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     double min_turn_radius,
     double step,
     ConnectorStats* stats,
-    const std::vector<std::pair<double, double>>& swath_turn_boundary)
+    const std::vector<std::pair<double, double>>& swath_turn_boundary,
+    const PivotJoinLimits& pivot_limits)
 {
   // Flatten the plan into ordered drivable segments (densified polylines),
   // rings first (outermost → inner) then the swaths.
@@ -1742,6 +1992,7 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       const std::vector<std::pair<double, double>>& conn_boundary =
           (is_swath_join && swath_turn_boundary.size() >= 3) ? swath_turn_boundary : boundary;
       bool conn_safe = false;
+      PivotJoin pivot_join;
       {
         bool fallback = false;
         auto conn = buildConnector(
@@ -1749,16 +2000,26 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
         conn_safe = !conn.empty() && (!fallback || (allInside(conn, conn_boundary) &&
                                                     clearOfHoles(conn, plan.safe_holes) &&
                                                     straightFallbackIsContinuous(start, goal)));
+        // No arc and no aligned straight: before splitting, try to keep the
+        // join as a pivot join (short, in-bounds, pivot sweep inside the
+        // designed envelope). Disabled pivot limits leave this `ok == false`.
+        if (!conn_safe && fallback)
+        {
+          pivot_join =
+              planPivotJoin(start, goal, conn, conn_boundary, plan.safe_holes, pivot_limits);
+        }
         // Pure accounting of how this join resolved (issue #499) — see
-        // ConnectorStats. Deliberately AFTER conn_safe so the classification
+        // ConnectorStats. Deliberately AFTER the decision so the classification
         // reflects what is actually driven, not just whether buildConnector
-        // reached its straight-connector last resort: only an in-bounds fallback
-        // tangent to both segments is driven blade-on; every other fallback
-        // becomes a sub-path split. Changes no decision.
+        // reached its straight-connector last resort. Changes no decision.
         if (stats != nullptr)
         {
           ++stats->attempted;
-          if (!conn_safe)
+          if (pivot_join.ok)
+          {
+            ++stats->pivot;
+          }
+          else if (!conn_safe)
           {
             ++stats->split;
           }
@@ -1777,8 +2038,12 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
           // duplicate start so the polyline stays simple.
           path.insert(path.end(), conn.begin() + 1, conn.end());
         }
+        else if (pivot_join.ok)
+        {
+          appendPivotJoin(path, conn, goal, pivot_join);
+        }
       }
-      if (!conn_safe)
+      if (!conn_safe && !pivot_join.ok)
       {
         subpaths.push_back(std::move(path));
         path.clear();
@@ -1826,6 +2091,16 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     }
     auto rounded = roundSharpCorners(
         sp, boundary, plan.safe_holes, kCornerThreshold, fillet_r, min_radius, step);
+    // Pivot corner twins, marked BEFORE the clamp below. Up to here the only
+    // bit-exact consecutive duplicates are the twins appendPivotJoin emitted:
+    // the densifiers skip zero-length steps, the connectors drop their start,
+    // and roundSharpCorners never fillets a zero-length vertex, so it carries
+    // the twins through untouched.
+    std::vector<bool> is_twin(rounded.size(), false);
+    for (std::size_t k = 1; k < rounded.size(); ++k)
+    {
+      is_twin[k] = rounded[k] == rounded[k - 1];
+    }
     // SAFETY (#388): the ring/swath poses are appended verbatim from F2C, and the
     // OUTERMOST ring's convex-corner vertices can poke a few cm PAST the clearance
     // ring — generateHeadlandSwaths (the ring) and generateHeadlands (this
@@ -1844,8 +2119,9 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       }
     }
     // Connector discontinuities were split before rounding, so every remaining
-    // join in this sub-path is either part of an original segment or tangent to a
-    // real connector arc.
+    // join in this sub-path is either part of an original segment, tangent to a
+    // real connector arc, or an explicit pivot corner.
+    rounded = enforcePivotCornerContract(rounded, is_twin);
     if (rounded.size() >= 2)
     {
       out.emplace_back(std::move(rounded));
@@ -1953,6 +2229,85 @@ std::vector<std::pair<double, double>> buildContinuousPath(
     path.insert(path.end(), sp.begin(), sp.end());
   }
   return path;
+}
+
+// ── Pivot joins (public helpers) ─────────────────────────────────────────────
+
+bool pivotSweepFits(double x, double y, const PivotJoinLimits& limits)
+{
+  if (limits.sweep_radius <= 0.0 || limits.recorded_boundary.size() < 3)
+  {
+    return false;
+  }
+  // Signed distance of the pivot point past the recorded line (negative = that
+  // deep inside). Every point of the disc lies within max(0, signed + radius)
+  // of the recorded polygon — for an inside point, the disc of its depth is in
+  // the polygon and the rest of the sweep is at most radius − depth beyond it —
+  // so the disc is inside the polygon grown by boundary_margin whenever
+  // signed + radius <= margin. Exact on straight edges, conservative elsewhere.
+  // The 1 mm tolerance keeps a pivot ON the recorded line (rings off, inset 0,
+  // margin floored at the radius) deterministic, as for allInside().
+  const double edge = distanceToRing(x, y, limits.recorded_boundary);
+  const double signed_outside = pointInRing(x, y, limits.recorded_boundary) ? -edge : edge;
+  if (signed_outside + limits.sweep_radius > limits.boundary_margin + kOnEdgeTolM)
+  {
+    return false;
+  }
+  for (const auto& obstacle : limits.recorded_obstacles)
+  {
+    if (obstacle.size() < 3)
+    {
+      continue;
+    }
+    if (pointInRing(x, y, obstacle) || distanceToRing(x, y, obstacle) < limits.sweep_radius)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::vector<double> pathHeadings(const std::vector<std::pair<double, double>>& pts)
+{
+  const std::size_t n = pts.size();
+  std::vector<double> yaw(n, 0.0);
+  const auto step_heading = [&](std::size_t a, std::size_t b, double& out)
+  {
+    const double dx = pts[b].first - pts[a].first;
+    const double dy = pts[b].second - pts[a].second;
+    if (std::hypot(dx, dy) < cg::kPivotCornerMaxStepM)
+    {
+      return false;
+    }
+    out = std::atan2(dy, dx);
+    return true;
+  };
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    // Outgoing step first; a zero-length one (the first pose of a pivot corner)
+    // or the last pose falls back to the incoming step.
+    if (i + 1 < n && step_heading(i, i + 1, yaw[i]))
+    {
+      continue;
+    }
+    if (i > 0 && step_heading(i - 1, i, yaw[i]))
+    {
+      continue;
+    }
+    if (i > 0)
+    {
+      yaw[i] = yaw[i - 1];
+      continue;
+    }
+    // Degenerate head (never produced by buildContinuousSubPaths): take the
+    // first real step ahead.
+    std::size_t j = 1;
+    while (j < n && !step_heading(0, j, yaw[0]))
+    {
+      ++j;
+    }
+  }
+  return yaw;
 }
 
 // ── Boundary geometry (used by coverage_server's in-bounds verification) ─────

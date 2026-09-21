@@ -132,8 +132,10 @@ struct BoustrophedonPlan
   // buildConnector falls back to a straight join; since 40d0c30b a straight
   // fallback is only kept blade-on when straightFallbackIsContinuous (its
   // heading is within 15° of both segments) — a ~180° swath-to-swath reversal
-  // fails that test, so the sub-path SPLITS there (a blade-off Nav2
-  // transit), it does not silently stay one continuous path. A tight
+  // fails that test, so it becomes a PIVOT JOIN (explicit in-place pivot
+  // corners, see PivotJoinLimits) where the pivot sweep fits, and otherwise the
+  // sub-path SPLITS there (a blade-off Nav2 transit); it is never driven as a
+  // silent zero-radius corner. A tight
   // `swath_turn_envelope` produces the exact same starved-apron split pattern
   // one ring set further out — that is the intended trade-off of asking turns
   // to stay off the outer band.
@@ -293,7 +295,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 // provides a five-pass apron for 0.20 m arcs and splits any residual
 // discontinuous fallback. See the CoverageConnectorStats tests.
 //
-// The three outcomes are mutually exclusive and sum to `attempted`:
+// The four outcomes are mutually exclusive and sum to `attempted`:
 struct ConnectorStats
 {
   // Segment-to-segment joins where a connector was attempted (== segments - 1
@@ -305,13 +307,78 @@ struct ConnectorStats
   std::size_t arc = 0;
   // The shrink loop found no in-bounds arc, but its straight fallback stayed
   // inside the boundary, clear of holes, and aligned with both segment headings.
-  // Only this tangent-enough fallback is kept blade-on.
+  // Only this tangent-enough fallback is kept blade-on without a pivot.
   std::size_t straight_kept = 0;
+  // No arc fitted and the straight fallback is NOT aligned, but it is a short
+  // join between adjacent passes that passed every pivot-join check (see
+  // PivotJoinLimits): kept blade-on inside the sub-path, its corners encoded as
+  // explicit pivot corners FTC rotates in place at.
+  std::size_t pivot = 0;
   // No continuous blade-on connector: empty, outside the boundary, through a
-  // hole, or a straight fallback whose heading is discontinuous. The sub-path
-  // is broken here and FollowStrip repositions and reorients blade-off.
+  // hole, or a discontinuous straight fallback that is not an acceptable pivot
+  // join. The sub-path is broken here and FollowStrip repositions and reorients
+  // blade-off.
   std::size_t split = 0;
 };
+
+// When (and where) a join that fits no forward arc may still stay inside the
+// sub-path as a PIVOT JOIN — a straight connector whose zero-radius corners FTC
+// drives as in-place pivots (corner encoding: mowgli_interfaces/
+// coverage_geometry.hpp, "PIVOT CORNER CONTRACT").
+//
+// Why it exists: with a thin headland apron (num_headland_passes auto on a
+// narrow tool, or none) no arc of radius >= min_turning_radius fits between the
+// swath ends and the clearance ring, so every row end split into a blade-off
+// Nav2 transit + a PRE_ROTATE — 128 sub-paths / 127 transits on a 152 m² lawn
+// (field 2026-09-21, 6.7 % mowed in 6 minutes).
+//
+// A join becomes a pivot join only when ALL of the following hold, otherwise it
+// splits exactly as before:
+//   * pivot joins are enabled (sweep_radius > 0);
+//   * the straight connector is at most kSegmentTransitGapM long — a turn-around
+//     between ADJACENT passes, never a relocation;
+//   * the connector centreline stays inside the connector boundary and clear of
+//     the (margin-grown) holes — the same allInside / clearOfHoles tests every
+//     other blade-on join passes;
+//   * at every corner the robot pivots at, the disc the chassis sweeps rotating
+//     in place about base_link (rear wheel axis, radius sweep_radius) stays
+//     inside the RECORDED boundary grown by boundary_margin (map_server's
+//     non-lethal soft band) and clear of every DRAWN obstacle.
+// The blade stays ON through a pivot join: it lies inside the mowing area
+// between two adjacent passes, exactly like the blade-on arcs it replaces.
+struct PivotJoinLimits
+{
+  // Radius (m) of the disc the chassis sweeps pivoting in place about
+  // base_link: robot_config_util.chassis_circumscribed_radius (0.597 m shipped).
+  // <= 0 disables pivot joins — the pre-pivot behaviour (and the default, so an
+  // uninjected server never pivots).
+  double sweep_radius = 0.0;
+  // How far past the recorded boundary the body may reach (m): map_server's
+  // non-lethal soft band, enforce_boundary_margin_m floored at the chassis
+  // circumscribed radius (robot_config_util.boundary_soft_margin).
+  double boundary_margin = 0.0;
+  // The RECORDED outer boundary — the operator polygon before any inset or
+  // outward expansion (open or closed ring).
+  std::vector<std::pair<double, double>> recorded_boundary;
+  // The DRAWN obstacles — operator polygons before obstacle_margin. The sweep
+  // must clear these by sweep_radius; the margin-grown safe_holes only bound
+  // the connector centreline.
+  std::vector<std::vector<std::pair<double, double>>> recorded_obstacles;
+};
+
+// True iff a robot pivoting in place with base_link at (x, y) sweeps only
+// ground inside `limits.recorded_boundary` grown by `limits.boundary_margin`
+// and clear of every `limits.recorded_obstacles` polygon. Conservative: the
+// whole disc of radius sweep_radius is tested, whatever the rotation. False
+// when pivot joins are disabled or the recorded boundary is missing.
+bool pivotSweepFits(double x, double y, const PivotJoinLimits& limits);
+
+// Yaw of every pose of a drivable sub-path, honouring the pivot corner
+// contract: a pose followed by a pose at the SAME position (a pivot corner)
+// takes the INCOMING heading, its twin the outgoing one; every other pose takes
+// the heading of the step to its successor, the last pose that of the step
+// into it. coverage_server stamps these into the result poses.
+std::vector<double> pathHeadings(const std::vector<std::pair<double, double>>& pts);
 
 // Flatten a BoustrophedonPlan into continuous, in-bounds polylines that FTC can
 // track without crossing a zero-radius segment join.
@@ -388,6 +455,16 @@ std::vector<std::pair<double, double>> buildContinuousPath(
 //                        keep swath U-turns off the outer rings WITHOUT ever
 //                        clamping a ring's own poses onto a different ring's
 //                        centerline (see BoustrophedonPlan::swath_turn_envelope).
+//   pivot_limits       — optional, defaults to disabled (every existing call
+//                        site is unaffected). When enabled, a join that fits
+//                        no arc and is not an aligned straight connector is
+//                        kept as a PIVOT JOIN instead of splitting, where the
+//                        PivotJoinLimits checks allow it. Its corners are
+//                        emitted per the pivot corner contract
+//                        (mowgli_interfaces/coverage_geometry.hpp): the corner
+//                        position twice in a row. Every OTHER near-coincident
+//                        pose pair is collapsed, enabled or not, so a
+//                        zero-length step in a sub-path always means a pivot.
 std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,
@@ -395,7 +472,8 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     double min_turn_radius,
     double step,
     ConnectorStats* stats = nullptr,
-    const std::vector<std::pair<double, double>>& swath_turn_boundary = {});
+    const std::vector<std::pair<double, double>>& swath_turn_boundary = {},
+    const PivotJoinLimits& pivot_limits = {});
 
 // 2-D point-in-polygon (ray casting) against `ring`, a list of (x, y)
 // vertices. Open or closed ring; winding-independent. Used by the server to

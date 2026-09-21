@@ -1,6 +1,6 @@
 # Codemap: mowgli_nav2_plugins
 
-> Nav2 plugin library (`libmowgli_nav2_plugins.so`) for the COVERAGE lane of `controller_server`. It owns `mowgli_nav2_plugins/FTCController` (Follow-the-Carrot: 5-state FSM, decoupled lon/lat/ang PID, anti-wheelspin stall crawl, lateral obstacle deviation with zone guard/mask, debounced obstacle recovery, cul-de-sac guard, bounded reverse-escape, oscillation override) in the `FollowCoveragePath` slot, and `mowgli_nav2_plugins/PathProgressGoalChecker` in the `coverage_goal_checker` slot. Transit (`FollowPath`) is upstream RotationShim+RPP and is NOT in this package (CLAUDE.md Invariant 8). No node of its own — everything runs inside `controller_server`.
+> Nav2 plugin library (`libmowgli_nav2_plugins.so`) for the COVERAGE lane of `controller_server`. It owns `mowgli_nav2_plugins/FTCController` (Follow-the-Carrot: 5-state FSM plus in-place PIVOT at the coverage planner's explicit corners, decoupled lon/lat/ang PID, anti-wheelspin stall crawl, lateral obstacle deviation with zone guard/mask, debounced obstacle recovery, cul-de-sac guard, bounded reverse-escape, oscillation override) in the `FollowCoveragePath` slot, and `mowgli_nav2_plugins/PathProgressGoalChecker` in the `coverage_goal_checker` slot. Transit (`FollowPath`) is upstream RotationShim+RPP and is NOT in this package (CLAUDE.md Invariant 8). No node of its own — everything runs inside `controller_server`.
 > Index updated 2026-09-09 for FTC obstacle-hold steering recovery; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
@@ -12,7 +12,8 @@
 |------|------------|
 | Carrot speed target / accel ramp / carrot lead cap (1.0 m) | `ros2/src/mowgli_nav2_plugins/src/ftc_controller.cpp` `update_control_point()` (L1176) + `distanceLookahead()` (L1144) |
 | PID mix, forward_only clamp, min_speed floor, stall cap, oscillation override | `ftc_controller.cpp` `calculate_velocity_commands()` (L1407) |
-| FSM transitions / timeouts (`PRE_ROTATE → FOLLOWING → WAITING_FOR_GOAL_APPROACH → POST_ROTATE → FINISHED`) | `ftc_controller.cpp` `update_planner_state()` (L987); enum at `include/mowgli_nav2_plugins/ftc_controller.hpp:93` |
+| FSM transitions / timeouts (`PRE_ROTATE → FOLLOWING → WAITING_FOR_GOAL_APPROACH → POST_ROTATE → FINISHED`, plus `FOLLOWING ⇄ PIVOT` at planner corners) | `ftc_controller.cpp` `update_planner_state()`; enum at `include/mowgli_nav2_plugins/ftc_controller.hpp` (`PIVOT` appended last so the logged numbers of the other states did not change: PIVOT = 5) |
+| **In-place pivots at planner corners** (pivot joins, field 2026-09-21) | corner contract `ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp` (two consecutive poses at the same position: incoming then outgoing heading); pure helpers `include/mowgli_nav2_plugins/ftc_pivot.hpp` (`FindPivotCorners`, `PivotLeg`, `ClipWindowToCorner`, `PivotArrived` 2 cm, `PivotAligned`, `PivotSweepYaws`); controller: corners found in `newPathReceived` (`pivot_corners_`, plan opening on a corner starts at its outgoing twin), carrot CAPPED at the next corner in `update_control_point()`, FOLLOWING → PIVOT in `update_planner_state()` once base_link is within 2 cm (never mid reverse-escape / obstacle hold), `enterPivot()` / `leavePivot()`, PIVOT branch of `computeVelocityCommands()` (no deviation planner, `pivotSweepGate()` → `pivotSweepBlocked()` = rotated footprint vs TRUE-lethal local cells, else PRE_ROTATE's angular PID + oscillation override); tests `test/test_ftc_pivot.cpp` |
 | Where a fresh plan starts tracking (idx 0 vs legacy nearest snap) | `ftc_controller.cpp` `newPathReceived()` (L616) + `include/mowgli_nav2_plugins/ftc_start_index.hpp` `ChooseStartIndex` |
 | Anti-wheelspin stall (crawl at `stall_crawl_speed`, freeze carrot) | `include/mowgli_nav2_plugins/ftc_stall.hpp` `StallDecision`; consumed in `update_control_point()` and `calculate_velocity_commands()` (`is_stalled_`) |
 | Blade-load slowdown (scale carrot speed by blade RPM sag, fail-open) | `include/mowgli_nav2_plugins/ftc_blade_load.hpp` `BladeLoadDecision`; `applyBladeLoad()` in `update_control_point()`, `is_blade_limited_` lowers the `min_speed_mps` floor in `calculate_velocity_commands()`; telemetry from `/hardware_bridge/status` |
@@ -42,7 +43,7 @@
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`ros2/src/mowgli_nav2_plugins/`** | | |
-| `CMakeLists.txt` | 201 | One shared lib from 5 .cpp; exports both plugin XMLs to `nav2_core`; 6 gtests |
+| `CMakeLists.txt` | ~215 | One shared lib from 5 .cpp; exports both plugin XMLs to `nav2_core`; ROS-free gtests (incl. `test_ftc_pivot`, linked to `mowgli_interfaces::mowgli_interfaces_headers` for the corner contract) |
 | `package.xml` | 40 | ament_cmake; deps nav2_core/nav2_costmap_2d/nav2_util/pluginlib/tf2*/Eigen; `<nav2_core plugin=...>` exports |
 | `ftc_controller_plugin.xml` | 12 | pluginlib: `mowgli_nav2_plugins/FTCController` → `nav2_core::Controller`, `<library path="mowgli_nav2_plugins">` |
 | `goal_checker_plugin.xml` | 16 | pluginlib: `mowgli_nav2_plugins/PathProgressGoalChecker` → `nav2_core::GoalChecker` |
@@ -55,7 +56,8 @@
 | `ftc_start_index.hpp` | 80 | Pure `ChooseStartIndex()` — idx 0 by default; legacy nearest snap breaks ties to the earlier index |
 | `ftc_offset_lattice.hpp` | — | Whole-profile avoidance planner (pure, costmap-free): (station x lateral offset) lattice + DP, hard critics (blocked node, slope) and soft critics (un-mowed area, smoothness, side stability, return to line). Selected by `use_offset_lattice`; wired in `FTCController::planOffsetLattice()`. Tests: `test_ftc_offset_lattice.cpp` |
 | `ftc_carrot_lead.hpp` | — | Derived longitudinal carrot lead cap (1.5 x `speed_fast` / `kp_lon`) |
-| `ftc_resync.hpp` | — | Carrot resync bounded to a PATH-LENGTH window (never jumps to a neighbouring ring) |
+| `ftc_resync.hpp` | — | Carrot resync bounded to a PATH-LENGTH window (never jumps to a neighbouring ring); the controller further bounds it to the current pivot LEG (`PivotLeg`) so a resync can neither skip a pivot nor repeat one |
+| `ftc_pivot.hpp` | ~190 | Pure pivot-corner helpers (see "In-place pivots" above); detection threshold = half the planner's 15° guarantee |
 | `obstacle_deviation.hpp` | 236 | `BoundaryGuard` (zone guard + zone mask) and `ObstacleDeviation` static helpers; thresholds `kLethalThreshold=253`, `kLethalOnlyThreshold=254` |
 | `oscillation_detector.hpp` | 113 | `FailureDetector` — rolling (v, ω) window, mean + zero-crossing test |
 | `path_progress_goal_checker.hpp` | 122 | `PathProgressGoalChecker` — progress-gated goal checker state + params |
@@ -71,6 +73,7 @@
 | `test_ftc_blade_load.cpp` | 180 | 17 cases on `BladeLoadScale` / `BladeLoadDecision` (disabled/inactive/stale/degenerate fail open, ramp endpoints + midpoint, floor never raises speed, immediate recovery) |
 | `test_ftc_reverse_escape.cpp` | 108 | 10 cases: opt-in default, rear-blocked never reverses, budget cap, advance arithmetic |
 | `test_ftc_start_index.cpp` | 77 | 4 cases: fresh plan → 0, closed ring never resolves to its end, legacy snap, empty plan |
+| `test_ftc_pivot.cpp` | ~215 | 10 cases: the planner's corners found exactly; turn-around arcs (r 0.10–0.30), straights and twin-less sharp corners NEVER trigger a pivot; duplicate without a turn / sub-threshold kink / corner at the plan end ignored; leg bounds; obstacle window stops at the corner; plan opening on a corner; arrival/alignment; shortest-rotation sweep probes |
 | `test_obstacle_deviation.cpp` | 823 | ~50 cases on a 400×400 @0.05 m synthetic costmap: detection, side choice (left bias), grow, boundary guard, zone mask (#517), footprint model, clip/expand, `hasClearExit`, lookahead clamp |
 | `test_oscillation_detector.cpp` | 195 | 11 cases: capacity, half-full gate, alternating ω detected, steady motion not |
 
@@ -107,6 +110,7 @@ FTC: all `FollowCoveragePath.*` keys are declared in `declareParameters()`; all 
 | `kp_lat` / `kd_lat` / `kp_ang` / `kp_ang_following` / `derivative_filter_tau` | L388 0.8 / L390 0.5 / L391 1.5 / L392 1.0 / L402 0.2 | 1.0 / 0 / 1.0 / =kp_ang / 0 | — |
 | `max_goal_distance_error` | L410 = 0.50 | 1.0 | — but FLOORS `coverage_goal_checker.xy_goal_tolerance` (L890–905) |
 | `max_goal_angle_error` / `goal_timeout` / `max_follow_distance` | L411 30.0 / L412 10.0 / L413 2.0 | 10.0 / 5.0 / 1.0 | — |
+| `pivot_angle_tolerance_deg` | not in yaml | 10.0 (dynamic, [1, 45]) | — ends a PIVOT; tighter than PRE_ROTATE's 30° because the straight after a corner is one swath spacing long. PIVOT reuses `goal_timeout` (abort) and `obstacle_wait_timeout_s` (sweep hold) |
 | `forward_only` | L420 = true | true | — |
 | `snap_to_nearest_on_set_plan` / `min_lateral_deviation` | not in yaml | false / 0.30 | — |
 | `check_obstacles` / `enable_obstacle_deviation` | L425 / L509 = true | true | `nav2_params_no_lidar.yaml:20-21` = false |
@@ -186,6 +190,9 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 - The global costmap is used for CONFINEMENT ONLY (it rejects lateral OFFSET candidates that leave the zone). It is **not** an obstacle source and it no longer SUBTRACTS from one: `ignore_obstacles_outside_zone` (the issue-#517 zone mask) was removed 2026-09-17 after FTC drove into the same mapped tree twice on 2026-09-16 — `keepout_filter` stamps drawn obstacles lethal globally, so the mask deleted exactly the obstacles the operator had mapped. Detection = plain local-costmap threshold (`ObstacleDeviation::isObstacleCell`).
 - `speed_fast` set outside [0, 2.0] via `set_parameters` is rejected (`result.successful=false`) — SetNavMode does not check the result.
 - PID errors are in `base_link` (rear axle, Invariant 2), while Nav2's `robot_base_frame` is `base_footprint`; `max_goal_distance_error` is measured from base_link.
+- **Pivots** happen about base_link (the REAR axle): the front of the body sweeps a disc of the chassis circumscribed radius. The planner only emits a corner where that disc fits the recorded line + soft band and clears drawn obstacles; FTC adds the LiDAR check (`pivotSweepGate`, same hold-then-abort as every obstacle stop). Never let anything but an explicit corner twin trigger PIVOT (ordinary curvature must stay FOLLOWING), never apply `lateral_deviation_` in PIVOT, and never run the deviation planners there (reverse-escape must not engage mid-rotation).
+- A lateral skirt must be back on the line AT a corner: the lattice plans the corner pose as a zero-offset station (hard constraint) and releases its return debounce once the remaining path is only what the return needs; an obstacle that leaves no room to return before the corner therefore WEDGES (reverse-escape / wait / abort to the BT) where a split plan used to end the sub-path at the offset. When the carrot sits on the corner the target offset is forced to 0.
+- The obstacle windows (legacy `window`, lattice stations behind AND ahead) stop at the pivot corners (`ClipWindowToCorner`, `PivotLeg`): an obstacle on the next leg is examined once the robot has pivoted onto it — the rotation itself is covered by the sweep gate.
 - Invariants to respect: CLAUDE.md 5 (costmap obstacles disabled in coverage — collision_monitor is the real-time guard), 8 (FTC only in the coverage slot; base + overlay YAML), "Do NOT use StoppedGoalChecker for coverage_goal_checker", "Do NOT use RPP or MPPI for coverage paths".
 
 ## Generated & vendored — do not hand-edit

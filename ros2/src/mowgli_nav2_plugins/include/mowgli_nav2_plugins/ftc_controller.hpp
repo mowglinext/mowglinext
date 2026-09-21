@@ -57,9 +57,11 @@ namespace mowgli_nav2_plugins
  *
  * The controller advances a virtual carrot point along the global path and drives
  * the robot towards it using three decoupled PID channels (longitudinal, lateral,
- * angular).  A five-state machine manages the full trajectory lifecycle:
+ * angular).  A state machine manages the full trajectory lifecycle:
  *
  *   PRE_ROTATE -> FOLLOWING -> WAITING_FOR_GOAL_APPROACH -> POST_ROTATE -> FINISHED
+ *                   ^    |
+ *                   +----+  PIVOT at each explicit planner corner (ftc_pivot.hpp)
  *
  * Ported from ftc_local_planner (mbf_costmap_core::CostmapController, ROS1).
  */
@@ -100,7 +102,15 @@ private:
     FOLLOWING,
     WAITING_FOR_GOAL_APPROACH,
     POST_ROTATE,
-    FINISHED
+    FINISHED,
+    /// In-place rotation at a pivot corner the coverage planner encoded in the
+    /// path (mowgli_interfaces/coverage_geometry.hpp, "PIVOT CORNER CONTRACT").
+    /// Entered from FOLLOWING once base_link reaches the corner the carrot is
+    /// capped on; rotates with PRE_ROTATE's angular control and limits, no
+    /// linear motion and no lateral offset; returns to FOLLOWING from the
+    /// corner's outgoing pose. Appended last so the logged state numbers of the
+    /// other states are unchanged.
+    PIVOT
   };
 
   PlannerState current_state_{PlannerState::PRE_ROTATE};
@@ -119,6 +129,32 @@ private:
 
   /// Compute the look-ahead distance along the remaining straight path.
   double distanceLookahead() const;
+
+  // ── Pivot corners (ftc_pivot.hpp) ─────────────────────────────────────────
+
+  /// Plan indices of the pivot corners' FIRST (incoming-heading) poses, found
+  /// once per plan in newPathReceived. Empty for plans without corners (every
+  /// transit plan, every plan from a planner without pivot joins).
+  std::vector<std::size_t> pivot_corners_;
+
+  /// The corner the carrot must stop at (first corner at/after current_index_).
+  std::optional<std::size_t> nextPivotCorner() const;
+
+  /// FOLLOWING -> PIVOT: stop at the corner, retarget the carrot to the
+  /// corner's outgoing pose, drop any lateral offset, reset the PID history.
+  void enterPivot();
+
+  /// PIVOT -> FOLLOWING from the corner's outgoing pose.
+  void leavePivot();
+
+  /// True when the chassis footprint, rotated in place from the current
+  /// heading to the pivot target, overlaps a TRUE-lethal local-costmap cell.
+  bool pivotSweepBlocked();
+
+  /// Obstacle gate of a pivot: holds (and eventually aborts, like every other
+  /// obstacle hold) while pivotSweepBlocked(); returns true when the pivot may
+  /// rotate this tick.
+  bool pivotSweepGate(double dt);
 
   std::vector<geometry_msgs::msg::PoseStamped> global_plan_;
   Eigen::Affine3d current_control_point_;  ///< Carrot pose in map frame.
@@ -492,6 +528,11 @@ private:
     double max_cmd_vel_ang{2.0};
     double max_goal_distance_error{1.0};
     double max_goal_angle_error{10.0};
+    /// Heading tolerance (deg) that ends an in-place PIVOT at a planner corner.
+    /// Tighter than max_goal_angle_error (PRE_ROTATE's, 30° shipped): the next
+    /// straight after a corner is one swath spacing long, too short for the
+    /// lateral loop to absorb a large heading error before the next pivot.
+    double pivot_angle_tolerance_deg{10.0};
     double goal_timeout{5.0};
     double max_follow_distance{1.0};
     /// Max longitudinal carrot lead (m); <= 0 derives it (ftc_carrot_lead.hpp).

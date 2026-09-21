@@ -217,6 +217,20 @@ if(BUILD_TESTING)
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+
+  # In-place pivots at the coverage planner's explicit corners (ftc_pivot.hpp):
+  # corner detection, leg bounds, arrival/alignment, sweep probes. ROS-free;
+  # needs only the header-only corner contract from mowgli_interfaces.
+  ament_add_gtest(test_ftc_pivot
+    test/test_ftc_pivot.cpp
+  )
+
+  target_include_directories(test_ftc_pivot
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  target_link_libraries(test_ftc_pivot mowgli_interfaces::mowgli_interfaces_headers)
 endif()
 
 # ---------------------------------------------------------------------------

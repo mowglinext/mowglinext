@@ -28,7 +28,10 @@
 | Which boundary the connectors are bounded by | `coverage_server.cpp` (`connector_clearance_boundary` → `safe_boundary` → raw; always ring 0, never moved by `connector_max_headland_passes`), definitions `coverage_planning.hpp` `BoustrophedonPlan` field docs, computed `coverage_planning.cpp` `ringCenterlineBoundary` lambda |
 | Limiting how many headland passes a turn may cross (`connector_max_headland_passes`, issue #497) | `coverage_planning.cpp` `ringCenterlineBoundary`/`swath_turn_envelope` block populates a SEPARATE envelope (ring `(n_rings − limit)`'s centerline) used ONLY for mainland swath-to-swath joins in `buildContinuousSubPaths`'s `swath_turn_boundary` param — `connector_clearance_boundary` itself never moves (the #388 clamp, the verify, and every ring-involving join stay on it — a maintainer review on PR #598 caught an earlier revision that moved `connector_clearance_boundary` directly and silently clamped ring 0's own poses onto a different ring); declared/read live `coverage_server.cpp` next to `connector_turn_radius`; tests `test_coverage_planning.cpp` `ConnectorMaxHeadlandPassesLimitsSwathTurnEnvelopeDepth`, `SwathTurnEnvelopeNeverRelocatesRingZero`, `ShippedGeometryTightSwathLimitFragmentsUTurns`, `ShippedGeometryP4OfFiveKeepsTurnAroundArcs` |
 | Out-of-bounds poses at convex ring corners (#388) | `coverage_planning.cpp:1275-1335` (`kClearanceClampMarginM` 2 cm, `clampInsideRing`), applied `:1701-1707` |
-| Connector outcome stats / "fallback rate" WARN (#499) | `coverage_planning.hpp:188-243` (`ConnectorStats`), `coverage_server.cpp:161-192` (`kConnectorFallbackWarnPct` 25 %, `MOWGLI_CONNECTOR_STATS_FMT`), `:731-762` (log) |
+| Connector outcome stats / "fallback rate" + "split rate" WARN (#499) | `coverage_planning.hpp` (`ConnectorStats`: arc / straight_kept / pivot / split partition `attempted`), `coverage_server.cpp` (`kConnectorSplitWarnPct` 25 % — severity follows the SPLIT share since pivot joins, `MOWGLI_CONNECTOR_STATS_FMT`) |
+| **Pivot joins** (a row-end join that fits no arc stays blade-on as a short straight with in-place pivot corners instead of splitting — field 2026-09-21, 128 sub-paths on AUTO rings) | `coverage_planning.cpp` `planPivotJoin` (length ≤ `kSegmentTransitGapM`, `allInside` + `clearOfHoles`, `pivotSweepFits` at each corner), `appendPivotJoin` (emits the corner twins), `enforcePivotCornerContract` (after `clampInsideRing`: only planner twins survive as zero-length steps); limits `PivotJoinLimits` in `coverage_planning.hpp`; server builds them from the RAW goal polygons + params `pivot_sweep_radius` / `boundary_soft_margin`; tests `test/test_pivot_joins.cpp` |
+| **Pivot corner contract** (planner ↔ FTC) | `ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp` (`kPivotCornerMaxStepM` 1e-4, `kPivotCornerMinTurnRad` 15°); pose yaws via `pathHeadings` (`coverage_planning.cpp`, used by `coverage_server.cpp` for every result pose); consumer `mowgli_nav2_plugins/ftc_pivot.hpp` |
+| Rings off + drawn obstacles whose `obstacle_margin` growth overlaps each other / the recorded line (invalid cell → GEOS TopologyException → SIGSEGV in F2C's swath clip) | `coverage_planning.cpp` `cellsAreValid` / `shellMinusHoles` (only on the rings-off, zero-offset branch, only when invalid; NOT `buffer(0)`, which keeps the overlap of two holes as an island) |
 | Plan diagnostics: dropped pieces, planned fraction, per-stage timing | `coverage_planning.hpp:44-61` (`PlanDiagnostics`), `coverage_planning.cpp:35-40` (`fmtDrop`), `:1228-1260`; logged `coverage_server.cpp:495-512`, timing `:713-723` |
 | Verification of the final path (out-of-bounds, chassis footprint, in-hole) | `coverage_server.cpp:622-711` (`kBoundarySlackM` 0.05 `:642`, footprint check only when `inset >= robot_width/2` `:636`), ERROR logs `:771-803` |
 | Discrete `segments` for the GUI (rings split at corners) | `coverage_server.cpp:248-294` (`douglasPeucker`), `:310-385` (`ringToArcs`, `kDpTol` 0.08), `:388-404` (`swathToPath`, `kSwathStep` 0.10) |
@@ -49,6 +52,7 @@
 | `ros2/src/mowgli_coverage/src/coverage_planning.cpp` | ~2.1k | F2C pipeline (`planBoustrophedon`), Dubins connectors, fillets, sub-path builder, ring sanitization/buffering |
 | `ros2/src/mowgli_coverage/src/main.cpp` | 15 | `rclcpp::spin` of `CoverageServer` |
 | `ros2/src/mowgli_coverage/test/test_coverage_planning.cpp` | ~2.3k | 45 gtests against the REAL F2C v3 library (no ROS) — see Build, test, run |
+| `ros2/src/mowgli_coverage/test/test_pivot_joins.cpp` | ~480 | 17 gtests: pivot joins (synthetic two-swath joins, whole-field rectangles at -1/AUTO/1 rings, drawn obstacle), corner contract, `pivotSweepFits`, `pathHeadings`, rings-off invalid-cell repair |
 
 No README, launch file, or config YAML lives in this package. Node defaults live in
 `ros2/src/mowgli_bringup/config/nav2_params_base.yaml:1150-1180`; the launch entry is in
@@ -103,6 +107,8 @@ Declared in `on_configure` (`coverage_server.cpp:53-105`). "Injected" = overwrit
 | `connector_turn_radius` | 0.20 | `connector_turn_radius` — **no template key**; launch default `:403`, override read `:591-592`, clamped [floor, 0.50] `:791-792` → `:948` | LIVE |
 | `connector_max_headland_passes` | 0 | `connector_max_headland_passes` (template, issue #497) → `navigation.launch.py`; passed through unclamped, `coverage_planning.cpp` clamps to `[0, n_rings]` | LIVE |
 | `obstacle_margin` | 0.0 | `obstacle_margin` (template 0.389) floored at `robot_config_util.planning_obstacle_margin_floor`, capped 1.0; server re-clamps `coverage_server.cpp:473-474` | LIVE |
+| `pivot_sweep_radius` | 0.0 (= pivot joins DISABLED) | `robot_config_util.chassis_circumscribed_radius(rp)` (0.597 m shipped) → `navigation.launch.py` `cov_params` | LIVE |
+| `boundary_soft_margin` | 0.0 | `robot_config_util.boundary_soft_margin(rp)` = `enforce_boundary_margin_m` (fallback 0.40) floored at the circumscribed radius — the same band `full_system.launch.py` gives map_server | LIVE |
 | `action_server_result_timeout` | 15.0 | not injected | configure |
 | `use_sim_time` | false | `nav2_params_base.yaml:1152` | configure |
 
@@ -126,16 +132,20 @@ and `kRingSpikeTolM` 0.005 (`:1945-1946`).
    when `n_rings == 0`) → swaths per mainland cell (`BruteForce` fixed / best angle /
    longest-edge above 400 m², `BoustrophedonOrder`, `min_swath_length` drop) → diagnostics.
 3. `ringToArcs` / `swathToPath` (`coverage_server.cpp:535-565`) → `result.segments`.
-4. `buildContinuousSubPaths` (`coverage_planning.cpp:1337-1806`) bounded by
+4. `buildContinuousSubPaths` (`coverage_planning.cpp`) bounded by
    `connector_clearance_boundary` (ring joins, the #388 clamp, the fillet pass) with
    `swath_turn_envelope` swapped in ONLY for mainland swath-to-swath `buildConnector` calls
    when non-empty: ring order partition → ring start alignment → swath nearest-endpoint
    chaining seeded from `BoustrophedonOrder`'s first swath → per join `buildConnector`
-   (Dubins, shrink 0.02 m steps to `min_turning_radius`, straight fallback) → split only
-   when the join is un-drivable blade-on (leaves boundary / crosses hole) →
-   `roundSharpCorners` (>88°) → `clampInsideRing` → greedy NN sub-path reorder (adopted only if
-   shorter; sub-path 0 fixed).
-5. Verification + logs (`coverage_server.cpp:622-803`), result fill `:805-826`.
+   (Dubins, shrink 0.02 m steps to `min_turning_radius`, straight fallback) → aligned
+   straight kept (≤ 15° kinks) → else PIVOT JOIN when `planPivotJoin` allows it (≤ 0.6 m,
+   in-bounds, hole-free, pivot sweep inside recorded line + soft band and ≥ sweep radius from
+   every drawn obstacle) → else split →
+   `roundSharpCorners` (>88°, never at a zero-length twin) → `clampInsideRing` →
+   `enforcePivotCornerContract` → greedy NN sub-path reorder (adopted only if shorter; sub-path 0
+   fixed; reversing a sub-path keeps its twins).
+5. Pose yaws from `pathHeadings` (a corner's first twin = incoming heading, second = outgoing),
+   verification + logs (`coverage_server.cpp`), result fill.
 
 ### TF frames
 
@@ -178,7 +188,16 @@ Test registration: `CMakeLists.txt:117-137` (`ament_add_gtest(test_coverage_plan
 | `CoverageIntegration` `:1522` | Full trace analysis on recorded area 1 (runs split at 0.6 m `kSegmentTransitGap`, in-bounds) |
 | `RingDedup` `:1803-1839` | Doubled leading vertex dropped, clean ring unchanged, deduped degenerate ring still plans |
 | `ObstacleMargin` `:1858-1921` | `bufferRingOutward` grows by margin, zero margin passthrough, degenerate ring falls back to input, plan keeps margin off drawn obstacle |
-| `CoverageConnectorStats` `:2181-2302` | Outcomes partition `attempted`; every join is an arc when spacing > 2R; swath-end arcs decided by headland apron not radius; raising the floor barely moves fallback rate; null stats pointer safe (#499) |
+| `CoverageConnectorStats` `:2181-2302` | Outcomes partition `attempted` (arc + straight_kept + pivot + split); every join is an arc when spacing > 2R; swath-end arcs decided by headland apron not radius; raising the floor barely moves fallback rate; null stats pointer safe (#499) |
+
+`ros2/src/mowgli_coverage/test/test_pivot_joins.cpp` — 17 `TEST`s: `PivotJoinFixture` (one
+row-end join: disabled → split as before; adjacent passes → one pivot join with bit-exact twins and
+incoming/outgoing yaws; relocation > 0.6 m, connector through a hole, connector leaving the
+clearance ring, sweep past the soft band, drawn obstacle inside the sweep → split; deeper-inside
+pivot fits a narrower band; obstacle just outside the sweep keeps the pivot), `PivotSweep`,
+`PivotCorner` (`pathHeadings`), `PivotJoinField` (6×4 m lawn at -1 / AUTO / 1 rings: > 10 sub-paths
+before, ≤ 2 after, contract + clearance + sweep + determinism), `PivotJoinFieldObstacle` (no pivot
+within the sweep radius of a drawn obstacle; rings off with overlapping grown obstacles plans).
 
 Related tests elsewhere: `ros2/src/mowgli_bringup/test/test_launch_injection.py:116,134`
 (`num_headland_passes` injected and NOT clamped), `gui/web/src/components/settings/MowingSection.test.tsx`
@@ -218,9 +237,18 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
 - **Pose spacing of `drivable_subpaths`** (`kConnectorStep` 0.03 on swaths/connectors, `kDensifyStep`
   0.10 on rings) is assumed by FTC's `obstacle_lookahead` conversion in `navigation.launch.py:813-824`
   (`kF2CSamplingM = 0.05`) and by the BT resume cursor — change one, re-derive the other.
-- **`kSegmentTransitGapM` 0.6** (`ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp:26`)
-  is the BT's gap classifier for the gaps BETWEEN sub-paths (`coverage_nodes.cpp:618`); the planner no
-  longer splits on it (`coverage_planning.cpp:1578-1600`). Test `:1522` mirrors it as `kTransitGap`.
+- **`kSegmentTransitGapM` 0.6** (`ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp`)
+  is the BT's gap classifier for the gaps BETWEEN sub-paths (`coverage_nodes.cpp`), and the LENGTH BOUND of
+  a pivot join (`planPivotJoin`: longer is a relocation → split). Test `:1522` mirrors it as `kTransitGap`.
+- **Pivot corner contract** (`coverage_geometry.hpp` `kPivotCornerMaxStepM` / `kPivotCornerMinTurnRad`) ↔
+  `mowgli_nav2_plugins/ftc_pivot.hpp` (`FindPivotCorners` detects at half the turn threshold) ↔
+  `pathHeadings` (the server's yaw rule). Anything that post-processes `drivable_subpaths` (FollowStrip
+  trims, the GUI) must keep consecutive identical poses; anything new in the planner that can create a
+  zero-length step must go through `enforcePivotCornerContract`.
+- **`pivot_sweep_radius` / `boundary_soft_margin`** ↔ `robot_config_util.chassis_circumscribed_radius` /
+  `boundary_soft_margin` ↔ `full_system.launch.py`'s own `enforce_boundary_margin_m` floor (map_server's
+  real band; `test_robot_config_util.py::test_boundary_soft_margin_default_matches_full_system_fallback`
+  pins the shared fallback) ↔ `test_launch_injection.py::test_navigation_launch_injects_pivot_join_limits`.
 - **F2C pin** (`CMakeLists.txt:42-48`, 3.0.0 at `/opt/fields2cover-300`) ↔ `ros2/Dockerfile:79-125`
   (stage + SHA), `:273-275` (copy + ldconfig), `ros2-ci.yml:233-276` (same SHA in cache key), RPATHs
   in `CMakeLists.txt:82,97,135`. Moving the SHA means all four.
@@ -256,7 +284,15 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
 - The old two-pass geometry produced a `PlanCoverage connectors … fallback rate` WARN on every
   plan (~97 % fallback, 1 arc in 32). The five-pass default provides enough headland apron for
   0.20 m turns; a high fallback rate now indicates restrictive site geometry. Heading-discontinuous
-  fallbacks are split into blade-off transits and never driven as zero-radius corners (#499).
+  fallbacks are never driven as zero-radius corners (#499): they become a PIVOT JOIN (explicit corner
+  twins FTC stops and rotates at) where `planPivotJoin` allows it, else a blade-off split. Replay of
+  the 2026-09-21 lawn (152 m², 9 drawn obstacles, op_width 0.13): AUTO rings 135 → 10 sub-paths,
+  none 167 → 90, 5 rings 13 → 11; the residual splits are relocations and joins next to drawn
+  obstacles (a swath end there is closer to the obstacle than the pivot sweep radius, and the chord
+  between two ends on a margin-grown hole cuts into it) or across a concave bite of the boundary.
+- A pivot join's safety rests on the sweep check being made against the RECORDED geometry (goal
+  polygons before inset/expansion/obstacle_margin) with the DERIVED radius and band — never pass
+  `plan.safe_boundary` / `safe_holes` as `PivotJoinLimits`, and never a literal radius.
 - `clampInsideRing` (#388, `coverage_planning.cpp:1275-1335`) silently nudges out-of-bounds poses
   2 cm inside the clearance ring; only residuals beyond `kBoundarySlackM` 0.05 reach the ERROR log
   (`coverage_server.cpp:673-677`).

@@ -139,6 +139,27 @@ def chassis_circumscribed_radius(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     return math.hypot(max(abs(front), abs(rear)), half_width)
 
 
+# full_system.launch.py's fallback for enforce_boundary_margin_m when neither the
+# installed config nor the template sets it.
+DEFAULT_ENFORCE_BOUNDARY_MARGIN_M = 0.40
+
+
+def boundary_soft_margin(params):
+    """Width of map_server's NON-LETHAL soft band outside every area [m].
+
+    = enforce_boundary_margin_m floored at the chassis circumscribed radius —
+    the same floor full_system.launch.py applies before handing the value to
+    map_server (the band must hold the whole footprint, which reaches that far
+    past the recorded line in some orientation). coverage_server receives it as
+    `boundary_soft_margin`: a PIVOT JOIN is only planned where the disc the body
+    sweeps pivoting about base_link stays inside the recorded line grown by
+    this band.
+    """
+    requested = float((params or {}).get(
+        "enforce_boundary_margin_m", DEFAULT_ENFORCE_BOUNDARY_MARGIN_M))
+    return max(requested, chassis_circumscribed_radius(params))
+
+
 # --- Obstacle margins: count the body EXACTLY ONCE per consumer --------------
 #
 # A drawn map obstacle is kept away from by three consumers, and each one has

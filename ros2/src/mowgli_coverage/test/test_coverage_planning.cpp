@@ -2552,7 +2552,7 @@ TEST_F(CoverageAlternateConnector, HoleRejectsOtherwiseInBoundsAlternateWords)
   EXPECT_EQ(stats.split, 1u);
 }
 
-// The three outcomes partition every attempted join. If this ever fails, the
+// The four outcomes partition every attempted join. If this ever fails, the
 // fallback rate derived from them is meaningless.
 TEST(CoverageConnectorStats, OutcomesPartitionAttemptedJoins)
 {
@@ -2560,9 +2560,10 @@ TEST(CoverageConnectorStats, OutcomesPartitionAttemptedJoins)
       kShippedHeadlandPasses, kStatsOpWidth, kStatsHeadland, kStatsTurnRadius, kStatsMinTurnRadius);
 
   EXPECT_GT(stats.attempted, 0u) << "a multi-segment plan must attempt connectors";
-  EXPECT_EQ(stats.attempted, stats.arc + stats.straight_kept + stats.split)
-      << "arc/straight_kept/split must partition attempted — the fallback rate "
+  EXPECT_EQ(stats.attempted, stats.arc + stats.straight_kept + stats.pivot + stats.split)
+      << "arc/straight_kept/pivot/split must partition attempted — the fallback rate "
          "derived from them is otherwise nonsense";
+  EXPECT_EQ(stats.pivot, 0u) << "pivot joins are opt-in: no limits, no pivot join";
 }
 
 // Counter sanity on a case whose outcome is hand-checkable, so a stuck

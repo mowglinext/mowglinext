@@ -32,6 +32,7 @@
 #include "mowgli_nav2_plugins/ftc_carrot_lead.hpp"
 #include "mowgli_nav2_plugins/ftc_obstacle_wait.hpp"
 #include "mowgli_nav2_plugins/ftc_offset_lattice.hpp"
+#include "mowgli_nav2_plugins/ftc_pivot.hpp"
 #include "mowgli_nav2_plugins/ftc_resync.hpp"
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include "mowgli_nav2_plugins/ftc_start_index.hpp"
@@ -239,6 +240,7 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.max_cmd_vel_ang = declare_double("max_cmd_vel_ang", 2.0);
   config_.max_goal_distance_error = declare_double("max_goal_distance_error", 1.0);
   config_.max_goal_angle_error = declare_double("max_goal_angle_error", 10.0);
+  config_.pivot_angle_tolerance_deg = declare_double("pivot_angle_tolerance_deg", 10.0);
   config_.goal_timeout = declare_double("goal_timeout", 5.0);
   config_.max_follow_distance = declare_double("max_follow_distance", 1.0);
   // <= 0 derives the cap from speed_fast / kp_lon (ftc_carrot_lead.hpp).
@@ -535,6 +537,12 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
         break;
       config_.max_goal_angle_error = p.as_double();
     }
+    else if (key == "pivot_angle_tolerance_deg")
+    {
+      if (reject_invalid(key, p.as_double(), 1.0, 45.0))
+        break;
+      config_.pivot_angle_tolerance_deg = p.as_double();
+    }
     else if (key == "goal_timeout")
     {
       if (reject_invalid(key, p.as_double(), 0.1, 300.0))
@@ -750,6 +758,20 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   current_index_ = 0;
   current_progress_ = 0.0;
 
+  // Pivot corners the coverage planner encoded in this plan (two poses at the
+  // same position, incoming then outgoing heading). Found on the plan AS
+  // RECEIVED: the tail duplication below appends and re-orients only the last
+  // pose, which FindPivotCorners never counts as a corner's outgoing pose.
+  {
+    std::vector<PlanPose2D> poses;
+    poses.reserve(path.poses.size());
+    for (const auto& ps : path.poses)
+    {
+      poses.push_back({ps.pose.position.x, ps.pose.position.y, tf2::getYaw(ps.pose.orientation)});
+    }
+    pivot_corners_ = FindPivotCorners(poses);
+  }
+
   // Start at the BEGINNING of a freshly dispatched plan.
   //
   // This used to run an UNBOUNDED nearest-point search over the whole plan and
@@ -828,6 +850,15 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
                   ex.what());
       current_index_ = 0;
     }
+  }
+  // A plan that opens ON a pivot corner (FollowStrip trimmed it there) starts
+  // at the corner's outgoing pose, so PRE_ROTATE turns straight to it.
+  current_index_ = static_cast<uint32_t>(PivotAwareStartIndex(pivot_corners_, current_index_));
+  if (!pivot_corners_.empty())
+  {
+    RCLCPP_INFO(logger_,
+                "FTCController: plan has %zu pivot corner(s) — rotating in place at each.",
+                pivot_corners_.size());
   }
 
   last_time_ = clock_->now();
@@ -1041,6 +1072,8 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
 
   // 2. Update the state machine.
   const PlannerState new_state = update_planner_state();
+  const bool entering_pivot =
+      new_state == PlannerState::PIVOT && current_state_ != PlannerState::PIVOT;
   if (new_state != current_state_)
   {
     RCLCPP_INFO(logger_,
@@ -1049,8 +1082,25 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
                 static_cast<int>(new_state),
                 current_index_,
                 angle_error_ * 180.0 / M_PI);
+    if (new_state == PlannerState::PIVOT)
+    {
+      enterPivot();
+    }
+    else if (current_state_ == PlannerState::PIVOT && new_state == PlannerState::FOLLOWING)
+    {
+      leavePivot();
+    }
     state_entered_time_ = clock_->now();
     current_state_ = new_state;
+  }
+
+  // The tick that enters a pivot only STOPS. Its heading error was measured
+  // against the corner's incoming pose (update_control_point ran before the
+  // transition); the rotation, and the sweep check that must precede it, start
+  // next tick from the outgoing pose enterPivot() retargeted to.
+  if (entering_pivot)
+  {
+    return cmd_vel;  // zero velocity
   }
 
   // 3. Collision check + lateral-deviation update.
@@ -1076,6 +1126,23 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     {
       waitOrThrowForObstacle("chassis footprint overlaps a lethal obstacle cell");
       return cmd_vel;  // zero-velocity hold (waitOrThrow throws after timeout)
+    }
+    if (current_state_ == PlannerState::PIVOT)
+    {
+      // A pivot applies NO lateral offset (the offset is defined against the
+      // path heading, which is discontinuous at a corner) and the deviation
+      // planners reason about path poses the rotating robot is not on, so
+      // neither runs here — and the reverse-escape can therefore never engage
+      // mid-rotation. The only obstacle question is whether the rotation
+      // itself sweeps the body into something the LiDAR sees; the planner
+      // already checked the sweep against the recorded boundary and drawn
+      // obstacles.
+      if (!pivotSweepGate(safe_dt))
+      {
+        return cmd_vel;  // zero-velocity hold (waitOrThrow throws after timeout)
+      }
+      calculate_velocity_commands(safe_dt, cmd_vel);
+      return cmd_vel;
     }
     updateLateralDeviation(safe_dt);
     // updateLateralDeviation engaged the bounded reverse-escape sub-state
@@ -1199,19 +1266,30 @@ FTCController::PlannerState FTCController::update_planner_state()
           // Bounded to a window of PATH LENGTH around the carrot: the nearest
           // pose of the whole plan is, on concentric rings 0.16 m apart, a pose
           // on a NEIGHBOURING ring tens of metres further on (ftc_resync.hpp).
+          // And bounded to the current LEG between pivot corners: re-anchoring
+          // past a corner would skip its pivot (the robot would then chase a
+          // carrot 90° off its heading), re-anchoring before the last one would
+          // pivot twice.
+          const auto [leg_first, leg_last] =
+              PivotLeg(pivot_corners_, current_index_, global_plan_.size());
           std::vector<std::pair<double, double>> plan_xy;
-          plan_xy.reserve(global_plan_.size());
-          for (const auto& ps : global_plan_)
+          plan_xy.reserve(leg_last - leg_first + 1);
+          for (std::size_t i = leg_first; i <= leg_last; ++i)
           {
-            plan_xy.emplace_back(ps.pose.position.x, ps.pose.position.y);
+            plan_xy.emplace_back(global_plan_[i].pose.position.x, global_plan_[i].pose.position.y);
           }
-          const ResyncResult resync = FindResyncIndex(
-              plan_xy, current_index_, rx, ry, kResyncWindowFactor * config_.max_follow_distance);
+          const ResyncResult resync =
+              FindResyncIndex(plan_xy,
+                              current_index_ - leg_first,
+                              rx,
+                              ry,
+                              kResyncWindowFactor * config_.max_follow_distance);
           const double best_dist = resync.distance_m;
           // The carrot interpolates towards index + 1, so never anchor on the
           // very last pose.
           const uint32_t best_idx = static_cast<uint32_t>(
-              std::min(resync.index, global_plan_.size() >= 2 ? global_plan_.size() - 2 : 0));
+              std::min(leg_first + resync.index,
+                       global_plan_.size() >= 2 ? global_plan_.size() - 2 : 0));
           if (best_dist < config_.max_follow_distance)
           {
             RCLCPP_WARN(logger_,
@@ -1241,10 +1319,41 @@ FTCController::PlannerState FTCController::update_planner_state()
           return PlannerState::FINISHED;
         }
       }
+      // Pivot corner: the carrot is capped on its incoming pose (see
+      // update_control_point), so the robot drives straight at it; once
+      // base_link is there, stop and rotate. Never mid reverse-escape or
+      // mid obstacle hold — those own the output until they release.
+      const auto corner = nextPivotCorner();
+      if (corner.has_value() && current_index_ == *corner && !reverse_escape_active_ &&
+          !obstacle_waiting_ &&
+          PivotArrived(local_control_point_.translation().x(), kPivotArrivalToleranceM))
+      {
+        return PlannerState::PIVOT;
+      }
       if (current_index_ == global_plan_.size() - 2)
       {
         RCLCPP_INFO(logger_, "FTCController: switching to WAITING_FOR_GOAL_APPROACH.");
         return PlannerState::WAITING_FOR_GOAL_APPROACH;
+      }
+    }
+    break;
+
+    case PlannerState::PIVOT:
+    {
+      if (time_in_current_state() > config_.goal_timeout)
+      {
+        // Same bound and same escalation as PRE_ROTATE: the BT sees an aborted
+        // goal and runs its detour / resume logic.
+        RCLCPP_ERROR(logger_,
+                     "FTCController: timeout (%.1fs) pivoting at corner idx=%u.",
+                     config_.goal_timeout,
+                     current_index_);
+        is_crashed_ = true;
+        return PlannerState::FINISHED;
+      }
+      if (PivotAligned(angle_error_, config_.pivot_angle_tolerance_deg * (M_PI / 180.0)))
+      {
+        return PlannerState::FOLLOWING;
       }
     }
     break;
@@ -1349,6 +1458,9 @@ void FTCController::update_control_point(double dt)
   switch (current_state_)
   {
     case PlannerState::PRE_ROTATE:
+    case PlannerState::PIVOT:
+      // Rotate in place towards the pose under the cursor: the plan start, or
+      // a pivot corner's outgoing-heading pose (enterPivot moved the cursor).
       tf2::fromMsg(global_plan_[current_index_].pose, current_control_point_);
       break;
 
@@ -1471,10 +1583,17 @@ void FTCController::update_control_point(double dt)
         angle_to_move = 0.0;
       }
 
-      // Advance the carrot along path segments.
+      // Advance the carrot along path segments — but never past the next pivot
+      // corner: the carrot stops ON the corner's incoming pose so the robot
+      // drives straight to it and pivots there (update_planner_state). A
+      // carrot allowed round a zero-radius corner is what made the heading
+      // error change side and the angular command flip at its clamp
+      // (2026-09-09: 29 sign flips in 3.3 s).
+      const std::size_t carrot_cap =
+          std::min<std::size_t>(global_plan_.size() - 2,
+                                nextPivotCorner().value_or(global_plan_.size() - 2));
       Eigen::Affine3d nextPose, currentPose;
-      while (angle_to_move > 0.0 && distance_to_move > 0.0 &&
-             current_index_ < global_plan_.size() - 2)
+      while (angle_to_move > 0.0 && distance_to_move > 0.0 && current_index_ < carrot_cap)
       {
         tf2::fromMsg(global_plan_[current_index_].pose, currentPose);
         tf2::fromMsg(global_plan_[current_index_ + 1].pose, nextPose);
@@ -1787,6 +1906,157 @@ void FTCController::calculate_velocity_commands(double dt,
                  cmd_vel.twist.linear.x,
                  cmd_vel.twist.angular.z);
   }
+}
+
+// ── Pivot corners (ftc_pivot.hpp) ─────────────────────────────────────────────
+
+std::optional<std::size_t> FTCController::nextPivotCorner() const
+{
+  return NextPivotCorner(pivot_corners_, current_index_);
+}
+
+void FTCController::enterPivot()
+{
+  const std::size_t corner = current_index_;
+  const auto& in = global_plan_[corner].pose;
+  const double turn_deg = WrapPivotAngle(tf2::getYaw(global_plan_[corner + 1].pose.orientation) -
+                                         tf2::getYaw(in.orientation)) *
+                          180.0 / M_PI;
+  RCLCPP_INFO(logger_,
+              "FTCController: PIVOT at corner idx=%zu (%.2f, %.2f), turning %.0f deg in place "
+              "(lateral error %.3f m, residual offset %.3f m).",
+              corner,
+              in.position.x,
+              in.position.y,
+              turn_deg,
+              lat_error_,
+              lateral_deviation_);
+  // Aim at the corner's outgoing-heading twin: update_control_point's rotation
+  // case keeps the carrot there until the heading matches.
+  current_index_ = static_cast<uint32_t>(corner + 1);
+  current_progress_ = 0.0;
+  tf2::fromMsg(global_plan_[current_index_].pose, current_control_point_);
+
+  // No lateral offset through a pivot: the offset is defined against the path
+  // heading, which is discontinuous here. The next leg's avoidance starts
+  // fresh, from the line, once the robot is aligned with it.
+  is_avoiding_ = false;
+  target_lateral_deviation_ = 0.0;
+  lateral_deviation_ = 0.0;
+  avoidance_clear_start_.reset();
+  lattice_return_start_.reset();
+  lattice_switch_start_.reset();
+
+  // Stop: rotation states emit no linear velocity. The speed ramp restarts in
+  // leavePivot; the stall detector must not read the stop as a stall.
+  current_movement_speed_ = 0.0;
+  stall_time_ = 0.0;
+  is_stalled_ = false;
+
+  // The PID history belongs to the leg just finished; the heading error jumps
+  // by the corner's turn when the carrot switches twin. Same reset as a fresh
+  // plan, so the rotation starts exactly like PRE_ROTATE's.
+  i_lon_error_ = 0.0;
+  i_lat_error_ = 0.0;
+  i_angle_error_ = 0.0;
+  last_lat_error_ = 0.0;
+  last_lon_error_ = 0.0;
+  last_angle_error_ = 0.0;
+  d_lat_filt_ = 0.0;
+  d_lon_filt_ = 0.0;
+  d_angle_filt_ = 0.0;
+  angle_error_raw_prev_ = std::numeric_limits<double>::quiet_NaN();
+}
+
+void FTCController::leavePivot()
+{
+  RCLCPP_INFO(logger_,
+              "FTCController: pivot done at idx=%u (heading error %.1f deg), following.",
+              current_index_,
+              WrapPivotAngle(angle_error_) * 180.0 / M_PI);
+  // Resume FOLLOWING from the corner's outgoing pose, exactly as PRE_ROTATE
+  // hands a fresh plan over: carrot on the cursor, slow speed, no stall debt.
+  current_progress_ = 0.0;
+  current_movement_speed_ = config_.speed_slow;
+  stall_time_ = 0.0;
+  is_stalled_ = false;
+  i_lat_error_ = 0.0;
+  i_lon_error_ = 0.0;
+  i_angle_error_ = 0.0;
+}
+
+bool FTCController::pivotSweepBlocked()
+{
+  if (costmap_map_ == nullptr || costmap_ros_ == nullptr)
+  {
+    return false;
+  }
+  const ObstacleDeviation::Footprint footprint = costmap_ros_->getRobotFootprint();
+  if (footprint.size() < 3)
+  {
+    return false;  // no polygon: cannot assert (currentBodyInLethal has the same posture)
+  }
+  geometry_msgs::msg::PoseStamped robot_pose;
+  if (!costmap_ros_->getRobotPose(robot_pose))
+  {
+    return false;
+  }
+  // Probe spacing: the arc the farthest footprint vertex travels between two
+  // probes stays within one costmap cell — derived from the live footprint.
+  double reach = 0.0;
+  for (const auto& v : footprint)
+  {
+    reach = std::max(reach, std::hypot(v.x, v.y));
+  }
+  const double step = (reach > 0.0) ? costmap_map_->getResolution() / reach : 0.0;
+  // angle_error_ is the remaining rotation (carrot heading relative to the
+  // robot); the angular PID turns the short way, like these probes.
+  const double yaw_now = tf2::getYaw(robot_pose.pose.orientation);
+  const double remaining = WrapPivotAngle(angle_error_);
+
+  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap_map_->getMutex());
+  for (const double yaw : PivotSweepYaws(yaw_now, yaw_now + remaining, step))
+  {
+    geometry_msgs::msg::PoseStamped probe = robot_pose;
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, yaw);
+    probe.pose.orientation = tf2::toMsg(q);
+    if (ObstacleDeviation::footprintBlocked(*costmap_map_,
+                                            probe,
+                                            0.0,
+                                            footprint,
+                                            ObstacleDeviation::BoundaryGuard{},
+                                            ObstacleDeviation::kLethalOnlyThreshold))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool FTCController::pivotSweepGate(double dt)
+{
+  if (pivotSweepBlocked())
+  {
+    // Same bounded hold as every other obstacle stop: zero velocity, then a
+    // ControllerException after obstacle_wait_timeout_s so the BT's detour /
+    // resume logic takes over. Never rotate into a LiDAR-seen obstacle.
+    waitOrThrowForObstacle("obstacle inside the pivot sweep");
+    return false;
+  }
+  if (obstacle_waiting_)
+  {
+    if (!ObstacleWaitReadyToResume(
+            true, dt, config_.obstacle_clear_hold_s, obstacle_followable_time_))
+    {
+      holdObstacleMotion();
+      return false;
+    }
+    RCLCPP_INFO(logger_, "FTCController: pivot sweep clear, resuming the pivot.");
+    obstacle_waiting_ = false;
+    obstacle_followable_time_ = 0.0;
+  }
+  return true;
 }
 
 // ── Collision checking ────────────────────────────────────────────────────────
@@ -2134,10 +2404,17 @@ void FTCController::updateLateralDeviation(double dt)
   // the lookahead window into the costmap frame BEFORE sampling, then index it
   // from 0 (the ObstacleDeviation helpers clamp to the window size).
   std::vector<geometry_msgs::msg::PoseStamped> window;
+  // A pivot corner ends the leg: poses past it have another heading, so a
+  // lateral offset (and "which side to skirt") means something else there.
+  // The next leg is examined once the robot has pivoted onto it.
+  const std::optional<std::size_t> corner = nextPivotCorner();
   {
     const std::size_t win_end =
-        std::min(global_plan_.size(),
-                 start_idx + static_cast<std::size_t>(std::max(0, config_.obstacle_lookahead)));
+        ClipWindowToCorner(start_idx,
+                           std::min(global_plan_.size(),
+                                    start_idx + static_cast<std::size_t>(
+                                                    std::max(0, config_.obstacle_lookahead))),
+                           corner);
     const std::string costmap_frame = costmap_ros_->getGlobalFrameID();
     const std::string plan_frame = global_plan_[start_idx].header.frame_id;
     window.reserve(win_end - start_idx);
@@ -2256,7 +2533,19 @@ void FTCController::updateLateralDeviation(double dt)
   // Whole-profile planner (ftc_offset_lattice.hpp). It needs the real chassis
   // polygon; without one it falls back to the legacy single-offset search.
   const bool use_lattice = config_.use_offset_lattice && detect_footprint.size() >= 3;
-  if (use_lattice)
+  // Carrot capped ON a pivot corner: nothing of this leg lies ahead of it, and
+  // no offset may be carried through the pivot. Bring any skirt back to the
+  // line now (the slew below). The lattice planned the corner pose at zero
+  // offset as a hard constraint, so this is the profile it was already
+  // converging to; for both planners the arrival gate, currentBodyInLethal and
+  // the pivot-sweep gate hold the robot if the body would touch anything.
+  const bool carrot_on_corner = corner.has_value() && start_idx >= *corner;
+  if (carrot_on_corner)
+  {
+    target_lateral_deviation_ = 0.0;
+    lattice_return_start_.reset();
+  }
+  else if (use_lattice)
   {
     const ObstacleDeviation::Footprint body =
         ObstacleDeviation::expandFootprintLateral(detect_footprint,
@@ -2266,7 +2555,7 @@ void FTCController::updateLateralDeviation(double dt)
       return;
     }
   }
-  if (!use_lattice)
+  if (!use_lattice && !carrot_on_corner)
   {
     // The decision to STOP avoiding must be gated on whether the NOMINAL path
     // (zero deviation) is clear within the lookahead — i.e. has the robot
@@ -2638,9 +2927,17 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
   // the chassis, still beside it, into it.
   const double lead = CarrotMaxLead(config_.carrot_max_lead, config_.speed_fast, config_.kp_lon);
 
-  // Resample the plan at `ds`, from `lead` behind the carrot to the horizon.
+  // Resample the plan at `ds`, from `lead` behind the carrot to the horizon —
+  // within the current LEG only: behind the carrot no further back than the
+  // last pivot corner, ahead no further than the next one (the heading, and so
+  // every lateral offset, is discontinuous across a pivot). A pivot corner
+  // inside the horizon becomes the last station and must be planned at ZERO
+  // offset: no skirt is carried through a pivot.
+  const auto [leg_first, leg_last] = PivotLeg(pivot_corners_, carrot_idx, global_plan_.size());
+  const std::optional<std::size_t> corner = nextPivotCorner();
   std::vector<std::size_t> pose_idx;  // plan index of each resampled pose
   std::size_t carrot_pos = 0;  // position of the carrot inside pose_idx
+  bool corner_is_last_station = false;
   {
     const auto step_len = [this](std::size_t a, std::size_t b)
     {
@@ -2650,7 +2947,7 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
     std::vector<std::size_t> behind;
     double acc = 0.0;
     double total = 0.0;
-    for (std::size_t i = carrot_idx; i > 0 && total < lead; --i)
+    for (std::size_t i = carrot_idx; i > leg_first && total < lead; --i)
     {
       const double l = step_len(i, i - 1);
       acc += l;
@@ -2666,8 +2963,8 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
     pose_idx.push_back(carrot_idx);
     acc = 0.0;
     total = 0.0;
-    for (std::size_t i = carrot_idx;
-         i + 1 < global_plan_.size() && total < config_.avoidance_horizon_m;
+    std::size_t i = carrot_idx;
+    for (; i + 1 < global_plan_.size() && i + 1 <= leg_last && total < config_.avoidance_horizon_m;
          ++i)
     {
       const double l = step_len(i, i + 1);
@@ -2678,6 +2975,14 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
         pose_idx.push_back(i + 1);
         acc = 0.0;
       }
+    }
+    if (corner.has_value() && i == *corner && *corner > carrot_idx)
+    {
+      if (pose_idx.back() != *corner)
+      {
+        pose_idx.push_back(*corner);
+      }
+      corner_is_last_station = true;
     }
   }
 
@@ -2695,6 +3000,11 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
     }
   }
 
+  // Station index of a pivot corner that ends the horizon (hard zero offset),
+  // or none.
+  const std::size_t corner_station = corner_is_last_station
+                                         ? pose_idx.size() - 1 - carrot_pos
+                                         : std::numeric_limits<std::size_t>::max();
   std::vector<double> stations;
   stations.reserve(poses.size() - carrot_pos);
   stations.push_back(0.0);
@@ -2835,6 +3145,7 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
             [&, ahead = ahead, grace = grace, only_side](std::size_t station, double offset)
             {
               return (only_side != 0 && offset * static_cast<double>(only_side) < -1e-9) ||
+                     (station == corner_station && std::fabs(offset) > 1e-9) ||
                      span_blocked(station, offset, ahead, grace);
             },
             cfg);
@@ -2979,7 +3290,16 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
   // costmap keeps no memory (observation_persistence 0), so an obstacle that
   // drops out of one scan would otherwise start a return into it.
   const bool is_return = std::fabs(wanted) < std::fabs(target_lateral_deviation_) - 1e-6;
-  if (!is_return)
+  // A pivot corner ends this leg at ZERO offset. Once the path left to it is no
+  // longer than the return itself needs (slope-limited, plus the reaction
+  // slack), holding a planned return back for the debounce would only turn a
+  // feasible, collision-checked profile into a WEDGED one a few ticks later.
+  const bool corner_forces_return =
+      corner_is_last_station && planned_stations == stations.size() &&
+      stations.back() <=
+          std::fabs(target_lateral_deviation_) / std::max(1e-3, config_.avoidance_max_slope) +
+              config_.avoidance_reaction_m;
+  if (!is_return || corner_forces_return)
   {
     lattice_return_start_.reset();
     target_lateral_deviation_ = wanted;

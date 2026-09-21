@@ -236,6 +236,37 @@ def test_navigation_launch_injects_connector_max_headland_passes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# (b3) pivot-join limits must reach coverage_server, DERIVED from the chassis.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "key, helper",
+    [
+        ("pivot_sweep_radius", "chassis_circumscribed_radius"),
+        ("boundary_soft_margin", "boundary_soft_margin"),
+    ],
+)
+def test_navigation_launch_injects_pivot_join_limits(key: str, helper: str) -> None:
+    """coverage_server keeps pivot joins DISABLED (0.0 defaults) unless the
+    launch injects the pivot sweep radius and the soft-band width. Both must be
+    the robot_config_util derivation of the live chassis — a literal would go
+    stale the moment an operator edits chassis_* in the GUI (the 2026-09-16
+    hardcoded-width lesson), and a missing line silently brings back one
+    blade-off transit per row end (2026-09-21: 128 sub-paths on 152 m²).
+    """
+    tree = _parse("navigation.launch.py")
+    values = _subscript_assign_values(tree, "cov_params", key)
+    assert values, f'navigation.launch.py must assign cov_params["{key}"]'
+    for value in values:
+        assert (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == helper
+        ), f'cov_params["{key}"] must be {helper}(rp), not a literal or another value'
+
+
+# ---------------------------------------------------------------------------
 # (c) mowing_enabled must reach hardware_bridge_node (issue #195).
 # ---------------------------------------------------------------------------
 

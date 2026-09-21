@@ -73,6 +73,7 @@ from nav2_common.launch import RewrittenYaml
 # implementation instead of a per-file copy that can drift.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (
+    boundary_soft_margin,
     chassis_circumscribed_radius,
     chassis_footprint,  # noqa: E402
     chassis_half_width,
@@ -1118,6 +1119,17 @@ def generate_launch_description() -> LaunchDescription:
         # teardrop). Clamped alongside the floor above (eff_min_turn_radius) so the
         # geometry check and the injected value can never describe different plans.
         cov_params["connector_turn_radius"] = eff_connector_turn_radius
+        # PIVOT JOINS: a row-end join that fits no turn-around arc (thin headland
+        # apron — num_headland_passes auto on a narrow tool, or none) stays
+        # blade-on as a short straight with in-place pivots, but only where the
+        # disc the chassis sweeps pivoting about base_link (the REAR axle) stays
+        # inside the recorded line grown by map_server's non-lethal soft band and
+        # clear of drawn obstacles. Both DERIVED from the live chassis — never a
+        # literal (chassis_* are GUI-editable). Without these two lines the node
+        # keeps its 0.0 defaults and pivot joins stay disabled (every such join
+        # splits into a blade-off transit, the 2026-09-21 128-sub-path plan).
+        cov_params["pivot_sweep_radius"] = chassis_circumscribed_radius(rp)
+        cov_params["boundary_soft_margin"] = boundary_soft_margin(rp)
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w", prefix="mowgli_nav2_", suffix=".yaml", delete=False)
