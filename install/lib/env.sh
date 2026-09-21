@@ -333,6 +333,8 @@ setup_env() {
       ;;
   esac
 
+  # MAVROS and Universal GNSS are independent sidecars.
+  # Selecting MAVROS as the hardware backend must not disable GNSS.
   if [[ "${GNSS_BACKEND:-universal}" == "nmea" ]]; then
     warn_legacy_nmea_backend_once
     GNSS_BACKEND="universal"
