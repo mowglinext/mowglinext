@@ -189,7 +189,7 @@ if ! harness_run; then
 else
   feature_env="$(cat "$repo_feature/docker/.env")"
   assert_contains "custom IMAGE_TAG written" "IMAGE_TAG=feat-universal-gnss-integration" "$feature_env"
-  assert_contains "Universal GNSS image stays independent from IMAGE_TAG"     "UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.1-rc2@sha256:c07d4fa819eba27bf05b756f64e5f09250534466a3db62dec8d2c6789854edb3
+  assert_contains "Universal GNSS image stays independent from IMAGE_TAG"     "UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.1-rc3@ssha256:4e7960132882f2f83fb2b1e7d1430b4dfd00081d4be15d7d8ab20dacf7f22bc5
 " "$feature_env"
   assert_not_contains "legacy MowgliNext GPS_IMAGE is removed" "GPS_IMAGE=" "$feature_env"
   assert_contains "custom mowgli-ros2 image tag written" "MOWGLI_ROS2_IMAGE=ghcr.io/mowglinext/mowglinext/mowgli-ros2:feat-universal-gnss-integration" "$feature_env"

@@ -13,7 +13,7 @@ config_file="$REPO_DIR/install/lib/config.sh"
 stack_file="$REPO_DIR/docker/stack.sh"
 env_example="$REPO_DIR/docker/.env.example"
 
-section "External Universal GNSS v0.7.1-rc2 sidecar contract"
+section "External Universal GNSS v0.7.1-rc3 sidecar contract"
 
 compose_content="$(<"$compose_file")"
 assert_contains "gps service consumes external Universal GNSS image" \
@@ -42,7 +42,7 @@ required_vars="$(grep -oE '\$\{[A-Z_0-9]+\}' "$compose_file" | sort -u | tr '\n'
 assert_eq "every compose variable of the gps fragment has a default" "" "$required_vars"
 assert_contains "fragment image default is pinned to the deployment descriptor digest" \
   "@$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json")}" "$compose_content"
-assert_contains "v0.7.1-rc2 combined receiver/NTRIP launch is used" \
+assert_contains "v0.7.1-rc3 combined receiver/NTRIP launch is used" \
   'receiver_and_ntrip.launch.py' "$compose_content"
 assert_contains "NTRIP enable state is a launch argument derived from the yaml" \
   '"ntrip_enabled:=" + ("true" if ntrip else "false")' "$compose_content"
@@ -54,8 +54,8 @@ assert_contains "bridge RTCM topic stays internal to Universal GNSS" \
   'rtcm_topic:=/universal_gnss_receiver/rtcm' "$compose_content"
 
 config_content="$(<"$config_file")"
-assert_contains "MowgliNext pins v0.7.1-rc2 Lyrical image independently" \
-  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.1-rc2@sha256:c07d4fa819eba27bf05b756f64e5f09250534466a3db62dec8d2c6789854edb3
+assert_contains "MowgliNext pins v0.7.1-rc3 Lyrical image independently" \
+  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.1-rc3@ssha256:4e7960132882f2f83fb2b1e7d1430b4dfd00081d4be15d7d8ab20dacf7f22bc5
 "' "$config_content"
 # The installer default and the deployment descriptor name the SAME image; the
 # digest is what makes the pin real, so a bump must touch both or fail here.
@@ -70,8 +70,8 @@ assert_contains "stack regen rebuilds sidecar runtime config" \
   'regenerate_sidecar_runtime_configs' "$stack_content"
 
 env_example_content="$(<"$env_example")"
-assert_contains "example uses v0.7.1-rc2 Lyrical image" \
-  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.1-rc2@sha256:c07d4fa819eba27bf05b756f64e5f09250534466a3db62dec8d2c6789854edb3
+assert_contains "example uses v0.7.1-rc3 Lyrical image" \
+  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.1-rc3@ssha256:4e7960132882f2f83fb2b1e7d1430b4dfd00081d4be15d7d8ab20dacf7f22bc5
 ' "$env_example_content"
 
 test_summary
