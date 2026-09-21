@@ -54,7 +54,7 @@ USER ubuntu
 # Keep them static under Lyrical's ament defaults so installed nodes are self-contained.
 RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash \
  && MAKEFLAGS=-j3 colcon build --merge-install --parallel-workers 2 \
-      --packages-select mowgli_interfaces universal_gnss_ros2 mowgli_gnss_bridge \
+      --packages-select mowgli_interfaces universsal_gnss_msgs universal_gnss_ros2 mowgli_gnss_bridge \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
       -DCMAKE_CXX_STANDARD=20 -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -Wno-dev \
  && for component in gnss_core gnss_protocols gnss_driver gnss_transport gnss_ntrip gnss_runtime gnss_tools; do \
