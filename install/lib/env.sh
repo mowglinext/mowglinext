@@ -320,12 +320,9 @@ setup_env() {
     MAVROS_PORT="$MAVROS_BY_ID"
   fi
 
-  # If MAVROS is the selected hardware backend, the standalone GNSS backend
-  # is disabled because positioning is provided through MAVROS/Pixhawk.
-  if [[ "$HARDWARE_BACKEND" == "mavros" ]]; then
-    GNSS_BACKEND="disabled"
-    GNSS_STACK="disabled"
-  elif [[ "${GNSS_BACKEND:-universal}" == "nmea" ]]; then
+  # MAVROS and Universal GNSS are independent sidecars.
+  # Selecting MAVROS as the hardware backend must not disable GNSS.
+  if [[ "${GNSS_BACKEND:-universal}" == "nmea" ]]; then
     warn_legacy_nmea_backend_once
     GNSS_BACKEND="universal"
     GNSS_RECEIVER_FAMILY="nmea"
