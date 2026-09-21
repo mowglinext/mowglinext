@@ -37,6 +37,7 @@ WORKDIR /ws/src
 COPY ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces
 COPY sensors/gps/mowgli_gnss_bridge /ws/src/mowgli_gnss_bridge
 COPY ros2/src/external/universal-gnss/gnss_ros2 /ws/src/gnss_ros2
+COPY ros2/src/external/universal-gnss/universal_gnss_msgs /ws/src/universal_gnss_msgs
 COPY ros2/src/external/universal-gnss/gnss_core /ws/src/gnss_core
 COPY ros2/src/external/universal-gnss/gnss_protocols /ws/src/gnss_protocols
 COPY ros2/src/external/universal-gnss/gnss_transport /ws/src/gnss_transport
