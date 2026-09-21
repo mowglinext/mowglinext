@@ -762,7 +762,10 @@ TEST_F(GetNextUnmowedAreaTest, SelectedAreaOnlyAdvancesThatArea)
 TEST_F(GetNextUnmowedAreaTest, OrientationServiceEditsNextWithoutChangingActivePlan)
 {
   using Service = mowgli_interfaces::srv::CoverageOrientation;
-  ctx->coverage_resume_path = ::testing::TempDir() + "/cross_hatch_service.txt";
+  const auto path = std::string(::testing::TempDir()) + "/cross_hatch_service.txt";
+  std::filesystem::remove_all(path);
+  std::filesystem::remove_all(path + ".tmp");
+  ctx->coverage_resume_path = path;
   ctx->mow_cross_hatch = true;
   ctx->node->declare_parameter<double>("mow_angle_deg", 25.0);
   ctx->cross_hatch[2].begin(true);
@@ -788,13 +791,13 @@ TEST_F(GetNextUnmowedAreaTest, OrientationServiceEditsNextWithoutChangingActiveP
     return future.get();
   };
   auto status = call();
-  ASSERT_TRUE(status->success);
+  ASSERT_TRUE(status->success) << status->message;
   EXPECT_TRUE(status->next_perpendicular);
   EXPECT_DOUBLE_EQ(status->base_angle_deg, 25.0);
   req->set_next = true;
   req->perpendicular = false;
   status = call();
-  ASSERT_TRUE(status->success);
+  ASSERT_TRUE(status->success) << status->message;
   EXPECT_TRUE(status->current_active);
   EXPECT_FALSE(status->current_perpendicular);
   EXPECT_FALSE(status->next_perpendicular);
@@ -803,8 +806,7 @@ TEST_F(GetNextUnmowedAreaTest, OrientationServiceEditsNextWithoutChangingActiveP
   EXPECT_FALSE(ctx->cross_hatch[2].begin(true));
   // Persistence failure must not pretend the requested change was saved.
   req->perpendicular = true;
-  const auto path = ctx->coverage_resume_path;
-  std::filesystem::create_directory(path + ".tmp");
+  ASSERT_TRUE(std::filesystem::create_directory(path + ".tmp"));
   EXPECT_FALSE(call()->success);
   EXPECT_FALSE(ctx->cross_hatch[2].next());
   BTContext disk;
