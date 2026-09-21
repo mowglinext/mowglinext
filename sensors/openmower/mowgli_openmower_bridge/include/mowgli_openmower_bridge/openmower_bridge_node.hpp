@@ -189,6 +189,10 @@ private:
   bool mow_requested_{false};
   uint8_t mow_direction_{0u};
   bool blade_running_{false};
+  // Command intent for Status.blade_requested_direction, with the same
+  // vocabulary the STM32 bridge uses (diagnostics_node reads it): unknown
+  // when the duty never reached the controller, else off/forward/reverse.
+  std::string blade_requested_direction_{"unknown"};
   rclcpp::Time blade_status_stamp_{0, 0, RCL_ROS_TIME};
   uint8_t current_mode_{HL_MODE_NULL};
   rclcpp::Time hl_status_stamp_{0, 0, RCL_ROS_TIME};
@@ -214,6 +218,7 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::EmergencyStop>::SharedPtr srv_emergency_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reboot_board_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_set_firmware_debug_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_clear_dig_escalation_;
   rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedPtr client_high_level_control_;
   rclcpp::TimerBase::SharedPtr timer_ll_read_;
   rclcpp::TimerBase::SharedPtr timer_control_;

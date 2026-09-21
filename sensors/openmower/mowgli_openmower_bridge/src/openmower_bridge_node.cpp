@@ -319,6 +319,19 @@ void OpenMowerBridgeNode::create_interfaces()
         res->message = "firmware debug flags do not exist on the OpenMower LowLevel board";
       });
 
+  // The GUI offers this action whenever a bridge is present and surfaces the
+  // refusal message, so answer with a reason instead of timing out.
+  srv_clear_dig_escalation_ = create_service<std_srvs::srv::Trigger>(
+      "~/clear_dig_escalation",
+      [](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+         std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+      {
+        res->success = false;
+        res->message =
+            "no dig escalation to clear: the wheel-slip dig detector does not run on the "
+            "OpenMower backend";
+      });
+
   client_high_level_control_ = create_client<mowgli_interfaces::srv::HighLevelControl>(
       "/behavior_tree_node/high_level_control");
 }

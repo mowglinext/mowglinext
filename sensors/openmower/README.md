@@ -1,4 +1,4 @@
-# OpenMower hardware bridge (`HARDWARE_BACKEND=openmower`)
+# OpenMower v1 hardware bridge (`HARDWARE_BACKEND=openmower`)
 
 Runs MowgliNext on **stock OpenMower v1 electronics** — the LowLevel (Raspberry
 Pi Pico) mainboard firmware and the xESC motor controllers — **without
@@ -25,6 +25,34 @@ the behaviour tree, the GUI — is unchanged.
 
 GNSS is **not** part of this backend: the OpenMower GPS is a plain u-blox
 receiver and stays with the Universal GNSS sidecar (`GNSS_STACK=universal`).
+
+## v1 only — v2 is a different machine
+
+OpenMower has two hardware generations and `open_mower_ros` ships a separate
+comms node for each, selected by `HARDWARE_PLATFORM` in
+`launch/include/_comms.launch`:
+
+| | v1 (`HARDWARE_PLATFORM=1`) | v2 (`HARDWARE_PLATFORM=2`) |
+|---|---|---|
+| Pi-side node | `mower_comms_v1` | `mower_comms_v2` |
+| Mainboard | LowLevel, RP2040 Pico | `fw-openmower-v2` on hw-openmower-yardforce / -sabo |
+| Transport | UART, COBS frames + CRC-16 | `xbot_framework` service interfaces (Ethernet/UDP) |
+| Motors | xESC mini / xESC 2040 on their own UARTs | driven through the mainboard's DiffDrive service |
+| This bridge | **supported** | **not supported** |
+
+**v2 support is planned; only v1 works today.** v2 is not a variant of the
+same protocol: it replaces the serial link with a service-oriented framework
+(`BmsServiceInterface`, `DiffDriveServiceInterface`, `EmergencyServiceInterface`,
+`ImuServiceInterface`, …) over the network, so none of `vesc_protocol.hpp`,
+`xesc_2040_protocol.hpp` or the LowLevel packet handling applies. What it does
+reuse is the ROS-facing half of this node — the publishers, the blade and
+emergency policy, the wheel loop and the Status/Emergency/Power projection —
+which is why those pieces are already split out of the serial code.
+
+Until it lands, a v2 robot that selects `--backend=openmower` gets a bridge
+that opens UARTs nothing answers on: `firmware_compatible` stays false,
+PreFlightCheck refuses to mow, and the wheels never move. That is a visible,
+safe failure rather than a silent half-working stack.
 
 ## Selecting it
 
@@ -131,8 +159,8 @@ is **safety-critical**; treat it as such in review.
 
 - Wheel-slip dig detection and the repeat-dig escalation (CLAUDE.md
   Invariant 16) — needs the firmware anti-dig backstop the Pico lacks.
-- `xesc_yfr4` (Rev4 motor adapter) and OpenMower **v2** mainboards
-  (xbot_framework over Ethernet).
+- `xesc_yfr4` (Rev4 motor adapter). OpenMower **v2** mainboards have their own
+  section above — they need a separate sidecar, not a flag here.
 - Lift-recovery mode (`lift_recovery_mode`) — a lift is a full emergency here.
 - IMU bias persistence across container restarts (re-learned after 15 s at
   rest or on the next dock).
