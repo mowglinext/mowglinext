@@ -713,25 +713,55 @@ TEST_F(GetNextUnmowedAreaTest, CrossHatchPhaseReachesPlannerAndEndSessionAdvance
   executor.add_node(ctx->node);
   factory.registerNodeType<mowgli_behavior::PlanCoverageArea>("PlanCoverageArea");
   areas[0] = {"lawn", false};
-  waitForService();
   ctx->mow_cross_hatch = true;
   auto plan = factory.createTreeFromText(
       "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Test\"><PlanCoverageArea/>"
       "</BehaviorTree></root>",
       blackboard);
+
+  auto dispatchNewRejectedPlannerGoal = [&]() -> bool
+  {
+    const size_t previous_goal_count = goals.size();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    BT::NodeStatus status = BT::NodeStatus::IDLE;
+    bool planner_started = false;
+
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      status = plan.tickOnce();
+      // PlanCoverageArea reaches RUNNING only after its own lazily-created
+      // get_mowing_area client sees the service and sends the request. A
+      // discovery miss returns FAILURE, so retry it while spinning instead
+      // of assuming a separate probe client's readiness applies to it.
+      planner_started = planner_started || status == BT::NodeStatus::RUNNING;
+      executor.spin_some();
+      if (planner_started && status == BT::NodeStatus::FAILURE &&
+          goals.size() > previous_goal_count)
+      {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    EXPECT_TRUE(planner_started);
+    EXPECT_EQ(status, BT::NodeStatus::FAILURE);  // fake action server rejects
+    EXPECT_EQ(goals.size(), previous_goal_count + 1);
+    return planner_started && status == BT::NodeStatus::FAILURE &&
+           goals.size() == previous_goal_count + 1;
+  };
+
   for (double angle : {-1.0, 25.0})
   {
     blackboard->set("mow_angle_deg", angle);
-    EXPECT_EQ(tickToCompletion(plan), BT::NodeStatus::FAILURE);  // fake server rejects
-    ASSERT_FALSE(goals.empty());
+    ASSERT_TRUE(dispatchNewRejectedPlannerGoal());
     EXPECT_DOUBLE_EQ(goals.back().mow_angle_deg, angle);
     EXPECT_FALSE(goals.back().perpendicular);
     ctx->cross_hatch[0].used = true;  // simulate coverage having started
     auto end = makeEndSessionTree();
     EXPECT_EQ(end.tickOnce(), BT::NodeStatus::SUCCESS);
-    EXPECT_EQ(tickToCompletion(plan), BT::NodeStatus::FAILURE);
+    ASSERT_TRUE(dispatchNewRejectedPlannerGoal());
     EXPECT_TRUE(goals.back().perpendicular);
-    EXPECT_EQ(tickToCompletion(plan), BT::NodeStatus::FAILURE);  // same-session replan
+    ASSERT_TRUE(dispatchNewRejectedPlannerGoal());  // same-session replan
     EXPECT_TRUE(goals.back().perpendicular);
     ctx->cross_hatch[0].used = true;
     EXPECT_EQ(end.tickOnce(), BT::NodeStatus::SUCCESS);
