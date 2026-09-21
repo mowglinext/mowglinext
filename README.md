@@ -14,8 +14,8 @@
   <a href="https://github.com/Fields2Cover/Fields2Cover">
     <img src="https://img.shields.io/badge/Coverage-Fields2Cover-yellow" alt="Coverage">
   </a>
-  <a href="https://github.com/Pepeuch/universal-gnss/releases/tag/v0.7.0-rc1">
-    <img src="https://img.shields.io/badge/Universal%20GNSS-v0.7.0--rc1-success" alt="Universal GNSS v0.7.0-rc1">
+  <a href="https://github.com/Pepeuch/universal-gnss/releases/tag/v0.7.1-rc2">
+    <img src="https://img.shields.io/badge/Universal%20GNSS-v0.7.1--rc2-success" alt="Universal GNSS v0.7.1-rc2">
   </a>
 </p>
 
