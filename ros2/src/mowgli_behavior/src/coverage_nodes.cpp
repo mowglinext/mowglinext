@@ -435,6 +435,7 @@ BT::NodeStatus FollowStrip::onStart()
   // dispatched.
   truncated_at_.reset();
   unit_exhausted_by_dig_ = false;
+  unit_transit_already_failed_ = false;
   dig_recovery_active_ = false;
   dig_cancel_sent_ = false;
   dig_events_seen_ = snapshotDigs(ctx).event_count;
@@ -779,11 +780,30 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
   // directly to FTC re-enables the blade before PRE_ROTATE and can dig in place.
   const double gap = distanceToSegmentStart(ctx);
   const bool unit_boundary = follow_goal_ever_sent_;
+  // TransitToStrip's failure is about the FIRST dispatch only: consume it here
+  // whichever way this dispatch goes.
+  std::optional<geometry_msgs::msg::Point> failed_transit;
+  if (!unit_boundary)
+  {
+    failed_transit = ctx->transit_to_strip_failed_at;
+    ctx->transit_to_strip_failed_at.reset();
+  }
   if (coverageTransitRequired(gap, unit_boundary))
   {
     // SAFETY: force the blade OFF first, unconditionally, before any dispatch or
     // early return below — nothing may cross this gap blade-on.
     setBladeEnabled(false);
+
+    // TransitToStrip has just failed to reach this very start. Sending the
+    // identical transit again only repeats the failure (field 2026-09-21: 53 s,
+    // then 43 s more on the same start). Skip the unit for this pass instead —
+    // the next onRunning tick books it; it stays un-mowed for a later pass.
+    const auto& start = swaths_[swath_idx_].poses.front().pose.position;
+    if (failed_transit && sameTransitTarget(failed_transit->x, failed_transit->y, start.x, start.y))
+    {
+      unit_transit_already_failed_ = true;
+      return true;
+    }
 
     // If navigate_to_pose isn't ready yet, do NOT fall through to a blade-on
     // FollowPath. Hold with the blade off and retry the transit each tick
@@ -1039,6 +1059,20 @@ BT::NodeStatus FollowStrip::onRunning()
                 area_idx_);
     follow_handle_.reset();
     markCurrentUnitMowed(ctx);
+    return advance();
+  }
+
+  // TransitToStrip could not reach this unit's start (sendCurrentSwath): move
+  // on without repeating that transit. Not booked as mowed.
+  if (unit_transit_already_failed_)
+  {
+    unit_transit_already_failed_ = false;
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: segment %zu/%zu — TransitToStrip could not reach its start; not "
+                "repeating that transit, moving on (it stays un-mowed for a later pass)",
+                swath_idx_ + 1,
+                swaths_.size());
+    ++swaths_skipped_;
     return advance();
   }
 
@@ -1479,6 +1513,7 @@ void FollowStrip::abortActiveGoals(const std::shared_ptr<BTContext>& ctx)
   scan_pause_ = ScanPauseState{};
   truncated_at_.reset();
   unit_exhausted_by_dig_ = false;
+  unit_transit_already_failed_ = false;
   dig_recovery_active_ = false;
   dig_cancel_sent_ = false;
   setBladeEnabled(false);
@@ -1902,6 +1937,8 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
 BT::NodeStatus TransitToStrip::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  // A new attempt: forget any earlier failure, whatever happens below.
+  ctx->transit_to_strip_failed_at.reset();
 
   // Nothing to transit to if there is no coverage path (e.g. the area is
   // already fully mowed → PlanCoverageArea returned an empty path with a
@@ -1932,23 +1969,57 @@ BT::NodeStatus TransitToStrip::onStart()
   goal.pose = ctx->current_transit_goal;
   goal.behavior_tree = ctx->transit_tree_xml;
 
+  // Bound this attempt — the same bound FollowStrip gives its own transits
+  // (transitDeadlineSec).
+  double gap_m = kTransitToStripUnknownGapM;
+  try
+  {
+    if (ctx->tf_buffer)
+    {
+      const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+      gap_m = std::hypot(goal.pose.pose.position.x - tf.transform.translation.x,
+                         goal.pose.pose.position.y - tf.transform.translation.y);
+    }
+  }
+  catch (const tf2::TransformException&)
+  {
+    // Keep the generous unknown-position bound.
+  }
+  double timeout_s = -1.0;
+  getInput<double>("timeout_sec", timeout_s);
+  deadline_s_ = timeout_s > 0.0 ? timeout_s : transitDeadlineSec(gap_m);
+  start_time_ = std::chrono::steady_clock::now();
+  timeout_requested_ = false;
+  failure_seen_ = false;
+
   nav_handle_.reset();
   // Also ask for the result: a transit to a pose the robot already occupies
   // finishes in the same instant it is accepted, and its terminal status
   // message can be dropped before the client registers the handle
-  // (action_outcome.hpp).
+  // (action_outcome.hpp). It also carries nav2's error code (onFailed).
   nav_outcome_->Reset();
+  nav_result_ = std::make_shared<TransitResultSlot>();
   auto send_opts = rclcpp_action::Client<Nav2Navigate>::SendGoalOptions{};
-  send_opts.result_callback = [slot = nav_outcome_](const NavGoalHandle::WrappedResult& result)
+  send_opts.result_callback =
+      [slot = nav_outcome_, result_slot = nav_result_](const NavGoalHandle::WrappedResult& result)
   {
     slot->Record(OutcomeFromResultCode(result.code));
+    std::lock_guard<std::mutex> lk(result_slot->mutex);
+    result_slot->ready = true;
+    if (result.result)
+    {
+      result_slot->error_code = result.result->error_code;
+      result_slot->error_msg = result.result->error_msg;
+    }
   };
   nav_future_ = nav_client_->async_send_goal(goal, send_opts);
 
   RCLCPP_INFO(ctx->node->get_logger(),
-              "TransitToStrip: navigating to (%.2f, %.2f)",
+              "TransitToStrip: navigating to (%.2f, %.2f), %.1fm away, bound %.0fs",
               goal.pose.pose.position.x,
-              goal.pose.pose.position.y);
+              goal.pose.pose.position.y,
+              gap_m,
+              deadline_s_);
 
   return BT::NodeStatus::RUNNING;
 }
@@ -1960,7 +2031,16 @@ BT::NodeStatus TransitToStrip::onRunning()
   if (!nav_handle_)
   {
     if (nav_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
-      return BT::NodeStatus::RUNNING;
+    {
+      const double waited =
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_).count();
+      if (waited <= deadline_s_)
+        return BT::NodeStatus::RUNNING;
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "TransitToStrip: navigate_to_pose never answered the goal (%.0fs)",
+                  waited);
+      return BT::NodeStatus::FAILURE;
+    }
     nav_handle_ = nav_future_.get();
     if (!nav_handle_)
     {
@@ -1981,12 +2061,87 @@ BT::NodeStatus TransitToStrip::onRunning()
   if (status == action_msgs::msg::GoalStatus::STATUS_ABORTED ||
       status == action_msgs::msg::GoalStatus::STATUS_CANCELED)
   {
-    RCLCPP_WARN(ctx->node->get_logger(), "TransitToStrip: navigation failed");
-    nav_handle_.reset();
-    return BT::NodeStatus::FAILURE;
+    return onFailed(ctx);
   }
 
+  enforceDeadline(ctx);
   return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus TransitToStrip::onFailed(const std::shared_ptr<BTContext>& ctx)
+{
+  if (!failure_seen_)
+  {
+    failure_seen_ = true;
+    failure_time_ = std::chrono::steady_clock::now();
+  }
+  bool ready = false;
+  uint16_t code = 0;
+  std::string msg;
+  {
+    std::lock_guard<std::mutex> lk(nav_result_->mutex);
+    ready = nav_result_->ready;
+    code = nav_result_->error_code;
+    msg = nav_result_->error_msg;
+  }
+  const double waited =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - failure_time_).count();
+  if (!ready && waited < kTransitResultWaitSec)
+  {
+    return BT::NodeStatus::RUNNING;  // bounded wait for nav2's error code
+  }
+  nav_handle_.reset();
+
+  const TransitFailure kind = ready ? classifyTransitFailure(code, msg) : TransitFailure::kUnknown;
+  if (isStartPoseBlocked(kind))
+  {
+    // The robot's own pose is refused: FollowStrip's transit is refused the
+    // same way, instantly, and that is what arms the escape (issue #487).
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "TransitToStrip: refused — nav2 %s (code %u): \"%s\"; left to FollowStrip",
+                transitFailureName(kind),
+                static_cast<unsigned>(code),
+                msg.c_str());
+    return BT::NodeStatus::FAILURE;
+  }
+  // Anything else (controller refusing the path, the watchdog, ...) would only
+  // fail again, as slowly: FollowStrip skips this start for the pass instead.
+  ctx->transit_to_strip_failed_at = ctx->current_transit_goal.pose.position;
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "TransitToStrip: failed — nav2 %s (code %u): \"%s\". FollowStrip will not repeat "
+              "this transit: it moves on to the next unit and this start is retried next pass",
+              transitFailureName(kind),
+              static_cast<unsigned>(code),
+              msg.c_str());
+  return BT::NodeStatus::FAILURE;
+}
+
+void TransitToStrip::enforceDeadline(const std::shared_ptr<BTContext>& ctx)
+{
+  if (timeout_requested_ || deadline_s_ <= 0.0)
+  {
+    return;
+  }
+  const double elapsed =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_).count();
+  if (elapsed <= deadline_s_)
+  {
+    return;
+  }
+  // Cancel once; the CANCELED status then ends the node through onFailed.
+  timeout_requested_ = true;
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "TransitToStrip: still running after %.0fs (bound %.0fs) — cancelling it",
+              elapsed,
+              deadline_s_);
+  try
+  {
+    nav_client_->async_cancel_goal(nav_handle_);
+  }
+  catch (const std::exception& ex)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(), "TransitToStrip: cancel failed: %s", ex.what());
+  }
 }
 
 void TransitToStrip::onHalted()

@@ -12,11 +12,27 @@
 // phase, completing the action with <2% coverage.
 //
 // PathProgressGoalChecker gates completion on two conditions:
-//   1. monotonically-tracked max-reached path index >= progress_threshold
-//      * global_plan size (default 0.95 = 95%)
+//   1. the robot has PROGRESSED along the path, i.e. EITHER
+//      a. monotonically-tracked max-reached path index >= progress_threshold
+//         * global_plan size (default 0.95 = 95%), OR
+//      b. the path length still ahead of the furthest monotonically-reached
+//         point is <= xy_goal_tolerance ("driven to within the goal
+//         tolerance of the END").
 //   2. robot is within xy_goal_tolerance of the goal pose AND yaw is
 //      within yaw_goal_tolerance (matches SimpleGoalChecker semantics
 //      for the final-pose check)
+//
+// Why 1b: FTC parks up to max_goal_distance_error (0.50 m, the floor of
+// xy_goal_tolerance) short of the last pose and then emits zero velocity. On a
+// long path that is < 5 % of the poses, so 1a passes; on a 0.6 m sub-path it is
+// most of the path, 1a never passes and controller_server's progress checker
+// aborts the goal 30 s later (field 2026-09-21: 2 of 6 sub-paths). 1b accepts
+// exactly what 2 already accepts at the end of ANY path, measured along the
+// path so it cannot be met by a robot that is merely NEAR the end — at the
+// start of a looped path whose end is near its start, the whole path is still
+// ahead. A path whose total length is itself <= xy_goal_tolerance lies
+// entirely inside the goal tolerance and completes on proximity, as the
+// short_path_poses paths already do.
 //
 // The plugin subscribes to the FTC controller's republished
 // `<plugin_name>/global_plan` topic so it always has the latest path
@@ -74,7 +90,10 @@ public:
 
 private:
   friend class PathProgressGoalCheckerTest;
+  friend class PathProgressEndApproachTest;
   void onPath(nav_msgs::msg::Path::SharedPtr msg);
+  // Path length from the furthest monotonically-reached point to the last pose.
+  double remainingPathLength(const geometry_msgs::msg::Point& robot) const;
 
   rclcpp::Logger logger_{rclcpp::get_logger("path_progress_goal_checker")};
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
@@ -107,6 +126,9 @@ private:
   // from one thread while the topic callback fires on another).
   std::mutex mutex_;
   std::vector<geometry_msgs::msg::PoseStamped> path_poses_;
+  // Arc length from the first pose to each pose of path_poses_ (same size,
+  // element 0 = 0). Rebuilt with path_poses_ in onPath().
+  std::vector<double> path_arc_m_;
   size_t max_reached_index_{0};
   // Detect a fresh path so we can reset the max-reached index. Use the
   // pose count + first-pose XY as a cheap fingerprint (header.stamp is

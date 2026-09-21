@@ -87,6 +87,7 @@ from robot_config_util import (
     check_turn_geometry,
     deep_merge,
     ftc_obstacle_clearance_margin,
+    global_inflation_radius,
     derive_blade_load_params,
     derive_turn_speed,
     load_robot_params,
@@ -929,9 +930,8 @@ def generate_launch_description() -> LaunchDescription:
         # sqrt(0.530² + 0.275²) ≈ 0.597 m at chassis_width 0.45 (2026-09-05,
         # maintainer-measured). The previous floor of 0.58 quoted ~0.572 m,
         # which came from the older chassis_length 0.54 and was already below
-        # the real radius (≈0.586 m) even at the old chassis_width 0.40. The GLOBAL costmap radius (0.20)
-        # is deliberately untouched — 0.30 already blocked all transit paths
-        # on a 9×6 m polygon (see the inflation_layer comment in base.yaml).
+        # the real radius (≈0.586 m) even at the old chassis_width 0.40. The
+        # GLOBAL costmap radius is set separately just below.
         lc_infl = (doc.setdefault("local_costmap", {})
                       .setdefault("local_costmap", {})
                       .setdefault("ros__parameters", {})
@@ -959,6 +959,15 @@ def generate_launch_description() -> LaunchDescription:
             )
         lc_infl["inflation_radius"] = min(
             1.50, max(infl_floor, obstacle_inflation_radius))
+        # GLOBAL costmap: a cost gradient out to the body's reach around LiDAR
+        # marks, so the transit planner keeps berth instead of hugging an
+        # obstacle the controller then refuses to pass (field 2026-09-21). It
+        # does not widen the band Smac refuses — see global_inflation_radius().
+        gc_infl = (doc.setdefault("global_costmap", {})
+                      .setdefault("global_costmap", {})
+                      .setdefault("ros__parameters", {})
+                      .setdefault("inflation_layer", {}))
+        gc_infl["inflation_radius"] = global_inflation_radius(rp)
         # PolygonSlow only exists in the LiDAR overlay's collision_monitor —
         # write the slowdown ratio only when the merged doc carries it so the
         # no-lidar variant (pass-through monitor) stays untouched.

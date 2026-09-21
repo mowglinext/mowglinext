@@ -84,6 +84,38 @@ inline double transitDeadlineSec(double gap_m)
   return t > kTransitTimeoutMinSec ? t : kTransitTimeoutMinSec;
 }
 
+/// Two transit goals this close are the SAME destination. FollowStrip's first
+/// unit starts where TransitToStrip was sent (both come from the plan start or
+/// the resume cursor), give or take the dig-zone front trim.
+constexpr double kSameTransitTargetM = 0.30;
+inline bool sameTransitTarget(double ax, double ay, double bx, double by)
+{
+  const double dx = ax - bx;
+  const double dy = ay - by;
+  return dx * dx + dy * dy <= kSameTransitTargetM * kSameTransitTargetM;
+}
+
+/// TransitToStrip's time bound when the robot's position is unknown: the
+/// deadline of a 30 m transit (transitDeadlineSec) — bounded, and generous.
+constexpr double kTransitToStripUnknownGapM = 30.0;
+
+/// Latest NavigateToPose result, filled by the result_callback registered at
+/// dispatch (FollowStrip's sub-path transits, TransitToStrip). Held behind a
+/// shared_ptr so the callback never touches a destroyed node, and behind a
+/// mutex so a future Reentrant callback group cannot race the BT tick (today
+/// they are serialized — see bt_context.hpp).
+struct TransitResultSlot
+{
+  std::mutex mutex;
+  bool ready = false;
+  uint16_t error_code = 0;
+  std::string error_msg;
+};
+/// The status topic reports a transit's abort before its result (and nav2's
+/// error code) lands. How long a caller waits for it before classifying the
+/// failure as UNKNOWN [s].
+constexpr double kTransitResultWaitSec = 2.0;
+
 /// Whether FollowStrip should spin the blade up on start, BEFORE the first
 /// unit is dispatched. Only when that unit will be mowed directly from where
 /// the robot stands. A first unit that must be reached by a blade-off transit
@@ -314,18 +346,6 @@ private:
     uint16_t error_code = 0;
     std::string error_msg;
   };
-  /// Latest NavigateToPose result, filled by the result_callback registered at
-  /// dispatch. Held behind a shared_ptr so the callback never touches a
-  /// destroyed FollowStrip, and behind a mutex so a future Reentrant callback
-  /// group cannot race the BT tick (today they are serialized — see
-  /// bt_context.hpp).
-  struct TransitResultSlot
-  {
-    std::mutex mutex;
-    bool ready = false;
-    uint16_t error_code = 0;
-    std::string error_msg;
-  };
   /// Arm a fresh result slot for a transit about to be dispatched.
   void resetTransitResult();
   /// Classify the transit whose STATUS already reported abort/cancel. The nav2
@@ -389,7 +409,6 @@ private:
   // Max wait for the NavigateToPose RESULT after get_status() says the goal
   // terminated. Past this the failure is logged as UNKNOWN and the swath is
   // skipped — i.e. exactly the pre-#487 behaviour, never a hang.
-  static constexpr double kTransitResultWaitSec = 2.0;
 
   // The drivable units being executed: the hole-free continuous SUB-PATHS
   // (ctx->current_strip_subpaths, issue #333), or a single continuous path when
@@ -450,6 +469,10 @@ private:
   /// lies inside dig zones). Consumed at the top of the next onRunning tick,
   /// which books the unit and advances — sendCurrentSwath itself cannot.
   bool unit_exhausted_by_dig_{false};
+  /// The first unit's blade-off transit would repeat one TransitToStrip has
+  /// just FAILED (same destination). Booked as skipped by the next onRunning
+  /// tick instead of sending the identical transit a second time.
+  bool unit_transit_already_failed_{false};
   /// dig_event_count value already handled.
   std::uint64_t dig_events_seen_{0};
   bool dig_recovery_active_{false};
@@ -561,7 +584,10 @@ public:
 
   static BT::PortsList providedPorts()
   {
-    return {};
+    return {BT::InputPort<double>("timeout_sec",
+                                  -1.0,
+                                  "Hard bound on the transit [s]; <= 0 derives it from the "
+                                  "distance to the strip (transitDeadlineSec)")};
   }
 
   BT::NodeStatus onStart() override;
@@ -569,9 +595,27 @@ public:
   void onHalted() override;
 
 private:
+  /// The transit ended ABORTED/CANCELED. Waits (bounded) for nav2's error code,
+  /// then records the destination in BTContext::transit_to_strip_failed_at so
+  /// FollowStrip does not send the identical transit again — unless the planner
+  /// refused the robot's OWN pose (START_OCCUPIED): that refusal is instant and
+  /// FollowStrip's own transit must see it to arm the escape (issue #487).
+  BT::NodeStatus onFailed(const std::shared_ptr<BTContext>& ctx);
+  /// Cancels a transit still running past its bound, once.
+  void enforceDeadline(const std::shared_ptr<BTContext>& ctx);
+
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
+  /// Watchdog: TransitToStrip used to have NO time bound — field 2026-09-21 it
+  /// ran 53 s against a path its controller kept refusing.
+  std::chrono::steady_clock::time_point start_time_{};
+  double deadline_s_{0.0};
+  bool timeout_requested_{false};
+  /// nav2's error code for the failure classification (issue #487).
+  std::shared_ptr<TransitResultSlot> nav_result_ = std::make_shared<TransitResultSlot>();
+  bool failure_seen_{false};
+  std::chrono::steady_clock::time_point failure_time_{};
 
   /// Terminal verdict from the result callback: a goal finished in the same
   /// instant it is accepted can lose its status message (action_outcome.hpp).

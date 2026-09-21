@@ -9,26 +9,16 @@ import {useIsMobile} from "../hooks/useIsMobile";
 import {appendCappedBatch, createLogBatcher, type LogBatcher} from "./logBatcher.ts";
 import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
 import {parseLogTimestamp, type LogTimestampSource} from "../utils/logTime.ts";
-
-type Severity = 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'OTHER';
-
-const LEVEL_PATTERN = /\b(ERROR|ERR|FATAL|CRITICAL|WARN(?:ING)?|INFO|DEBUG|TRACE)\b/i;
+import {
+    createLogSeverityClassifier,
+    type LogSeverityClassifier,
+    type Severity,
+} from "../utils/logSeverity.ts";
 // ESC is a control character by definition -- an ANSI escape matcher cannot
 // be written without it. Silenced at the one site that needs it rather than
 // globally, so a genuine stray control character elsewhere still reports.
 // eslint-disable-next-line no-control-regex
 const ANSI_REGEX = /\x1b\[[0-9;]*m/g;
-
-function detectSeverity(line: string): Severity {
-    const m = LEVEL_PATTERN.exec(line);
-    if (!m) return 'OTHER';
-    const tok = m[1].toUpperCase();
-    if (tok === 'ERROR' || tok === 'ERR' || tok === 'FATAL' || tok === 'CRITICAL') return 'ERROR';
-    if (tok === 'WARN' || tok === 'WARNING') return 'WARN';
-    if (tok === 'INFO') return 'INFO';
-    if (tok === 'DEBUG' || tok === 'TRACE') return 'DEBUG';
-    return 'OTHER';
-}
 
 interface ParsedLog {
     id: number;
@@ -77,14 +67,19 @@ export const LogsPage = () => {
     const nextIdRef = useRef(0);
     const listRef = useRef<HTMLDivElement | null>(null);
     const batcherRef = useRef<LogBatcher<ParsedLog> | null>(null);
+    const severityClassifierRef = useRef<LogSeverityClassifier | null>(null);
     if (batcherRef.current === null) {
         batcherRef.current = createLogBatcher<ParsedLog>((batch) => {
             setLogs(prev => appendCappedBatch(prev, batch, MAX_LINES));
         }, LOG_BATCH_INTERVAL_MS);
     }
+    if (severityClassifierRef.current === null) {
+        severityClassifierRef.current = createLogSeverityClassifier();
+    }
 
     const resetLogs = () => {
         batcherRef.current?.reset();
+        severityClassifierRef.current?.reset();
         nextIdRef.current = 0;
         setLogs([]);
     };
@@ -113,7 +108,7 @@ export const LogsPage = () => {
             batcherRef.current?.push({
                 id: nextIdRef.current++,
                 plain: body,
-                severity: detectSeverity(body),
+                severity: severityClassifierRef.current!.detect(body),
                 tsMs: epochMs,
                 tsSource: source,
             });
