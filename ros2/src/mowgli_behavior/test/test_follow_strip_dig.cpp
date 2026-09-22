@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 /**
  * @file test_follow_strip_dig.cpp
- * @brief Tick-level tests of FollowStrip's reaction to a wheel-slip dig.
+ * @brief Tick-level tests of FollowStrip's dig and short scan-dropout reactions.
  *
  * Field 2026-09-17 (bag part2-1920): after a dig at (-3.23, 11.01) the bridge
  * stopped and reversed correctly, but FTC kept following the ACTIVE coverage
@@ -27,6 +27,10 @@
  *   - resumes the SAME unit at the first pose past the dig skip zone, reached
  *     by the existing blade-off transit,
  *   - and skips the zone of every recorded dig on every later unit.
+ *
+ * The scan case additionally records real mower-control requests: stale scans
+ * cut the blade while preserving the active follow goal; fresh scans restore it
+ * without a transit or progress mutation.
  *
  * Also: FollowStrip's progress cursor following the coverage controller's
  * rejoin after an FTC turn fallback (ControllerRejoin, strip_progress.hpp).
@@ -53,6 +57,8 @@
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
+#include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_interfaces/srv/mower_control.hpp"
 #include "tf2_ros/buffer.hpp"
 #include <gtest/gtest.h>
 
@@ -65,6 +71,7 @@ using Follow = FollowStrip::Nav2FollowPath;
 using Navigate = FollowStrip::Nav2Navigate;
 using FollowHandle = rclcpp_action::ServerGoalHandle<Follow>;
 using NavigateHandle = rclcpp_action::ServerGoalHandle<Navigate>;
+using MowerControl = mowgli_interfaces::srv::MowerControl;
 
 namespace
 {
@@ -194,6 +201,15 @@ protected:
     server_node = rclcpp::Node::make_shared("fake_nav2");
     follow = std::make_unique<FakeActionServer<Follow>>(server_node, "/follow_path");
     navigate = std::make_unique<FakeActionServer<Navigate>>(server_node, "/navigate_to_pose");
+    blade_service = server_node->create_service<MowerControl>(
+        "/hardware_bridge/mower_control",
+        [this](const std::shared_ptr<MowerControl::Request> request,
+               std::shared_ptr<MowerControl::Response> response)
+        {
+          std::lock_guard<std::mutex> lock(blade_mutex);
+          blade_requests.push_back(*request);
+          response->success = true;
+        });
 
     executor = std::make_unique<rclcpp::executors::MultiThreadedExecutor>();
     executor->add_node(ctx->node);
@@ -287,12 +303,356 @@ protected:
   rclcpp::Node::SharedPtr server_node;
   std::unique_ptr<FakeActionServer<Follow>> follow;
   std::unique_ptr<FakeActionServer<Navigate>> navigate;
+  rclcpp::Service<MowerControl>::SharedPtr blade_service;
+  std::mutex blade_mutex;
+  std::vector<MowerControl::Request> blade_requests;
   std::unique_ptr<rclcpp::executors::MultiThreadedExecutor> executor;
   std::thread spinner;
   BT::Blackboard::Ptr blackboard;
   BT::BehaviorTreeFactory factory;
   std::unique_ptr<BT::Tree> tree;
+
+  std::size_t bladeRequestCount()
+  {
+    std::lock_guard<std::mutex> lock(blade_mutex);
+    return blade_requests.size();
+  }
+
+  MowerControl::Request bladeRequest(std::size_t i)
+  {
+    std::lock_guard<std::mutex> lock(blade_mutex);
+    return blade_requests.at(i);
+  }
 };
+
+TEST_F(FollowStripDigTest, ShortScanDropoutCutsAndRestoresBladeWithoutReplacingCoverageGoal)
+{
+  std::mutex status_mutex;
+  std::vector<mowgli_interfaces::msg::HighLevelStatus> statuses;
+  auto status_subscription =
+      server_node->create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
+          "/test_follow_strip_dig/high_level_status",
+          10,
+          [&](const mowgli_interfaces::msg::HighLevelStatus::SharedPtr msg)
+          {
+            std::lock_guard<std::mutex> lock(status_mutex);
+            statuses.push_back(*msg);
+          });
+  ctx->high_level_status_pub =
+      ctx->node->create_publisher<mowgli_interfaces::msg::HighLevelStatus>("~/high_level_status",
+                                                                           10);
+  ctx->last_high_level_status.state =
+      mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS;
+  ctx->last_high_level_status.state_name = "MOWING";
+  ctx->has_high_level_status = true;
+
+  const auto discovery_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (ctx->high_level_status_pub->get_subscription_count() == 0 &&
+         std::chrono::steady_clock::now() < discovery_deadline)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_GT(ctx->high_level_status_pub->get_subscription_count(), 0u);
+
+  auto sawStatus = [&](const std::string& sub_state)
+  {
+    std::lock_guard<std::mutex> lock(status_mutex);
+    return std::any_of(statuses.begin(),
+                       statuses.end(),
+                       [&](const auto& status)
+                       {
+                         return status.sub_state_name == sub_state;
+                       });
+  };
+  auto statusCount = [&]()
+  {
+    std::lock_guard<std::mutex> lock(status_mutex);
+    return statuses.size();
+  };
+
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 1u);
+  ASSERT_GT(bladeRequestCount(), 0u);
+  EXPECT_EQ(bladeRequest(0).mow_enabled, 1u);
+
+  const std::size_t requests_before_pause = bladeRequestCount();
+  const float progress_before_pause = ctx->coverage_percent;
+  const auto completed_before_pause = ctx->area_completed_swaths;
+  const auto resume_before_pause = ctx->area_resume_pose_index;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->last_scan_time = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+  }
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return ctx->coverage_scan_paused && bladeRequestCount() > requests_before_pause &&
+                         sawStatus("SCAN_PAUSED");
+                },
+                3.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 0u);
+  EXPECT_EQ(follow->goalCount(), 1u);
+  EXPECT_FALSE(follow->isCanceling(0));
+  EXPECT_EQ(navigate->goalCount(), 0u);
+  EXPECT_FLOAT_EQ(ctx->coverage_percent, progress_before_pause);
+  EXPECT_EQ(ctx->area_resume_pose_index, resume_before_pause);
+  EXPECT_EQ(ctx->area_completed_swaths, completed_before_pause);
+
+  const std::size_t requests_before_resume = bladeRequestCount();
+  const std::size_t statuses_before_resume = statusCount();
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->last_scan_time = std::chrono::steady_clock::now();
+  }
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  if (ctx->coverage_scan_paused || bladeRequestCount() <= requests_before_resume)
+                  {
+                    return false;
+                  }
+                  std::lock_guard<std::mutex> lock(status_mutex);
+                  return statuses.size() > statuses_before_resume &&
+                         statuses.back().sub_state_name.empty();
+                },
+                3.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 1u);
+  EXPECT_EQ(follow->goalCount(), 1u);
+  EXPECT_FALSE(follow->isCanceling(0));
+  EXPECT_EQ(navigate->goalCount(), 0u);
+  EXPECT_FLOAT_EQ(ctx->coverage_percent, progress_before_pause);
+  EXPECT_EQ(ctx->area_resume_pose_index, resume_before_pause);
+  EXPECT_EQ(ctx->area_completed_swaths, completed_before_pause);
+}
+
+TEST_F(FollowStripDigTest, ScanPauseSurvivesABladeOffTransitToTheNextUnit)
+{
+  startFollowStrip({straightUnit(0.0, 10.0), straightUnit(10.0, 20.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->last_scan_time = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+  }
+  const std::size_t requests_before_pause = bladeRequestCount();
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return ctx->coverage_scan_paused && bladeRequestCount() > requests_before_pause;
+                },
+                3.0),
+            BT::NodeStatus::RUNNING);
+  const std::size_t first_blade_off = bladeRequestCount() - 1;
+  ASSERT_EQ(bladeRequest(first_blade_off).mow_enabled, 0u);
+
+  // Finish unit one, then let scans become fresh only DURING the structural
+  // transit. That unobserved interval must not shorten the full fresh-scan
+  // window required after the second follow goal is active.
+  follow->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                3.0),
+            BT::NodeStatus::RUNNING);
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->last_scan_time = std::chrono::steady_clock::now();
+  }
+  EXPECT_TRUE(ctx->coverage_scan_paused);
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 2;
+                },
+                3.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_TRUE(ctx->coverage_scan_paused);
+  EXPECT_FALSE(follow->isCanceling(1));
+  for (std::size_t i = first_blade_off; i < bladeRequestCount(); ++i)
+  {
+    EXPECT_EQ(bladeRequest(i).mow_enabled, 0u)
+        << "fresh scans observed only during transit must not re-enable the blade";
+  }
+
+  const std::size_t requests_before_resume = bladeRequestCount();
+  for (int i = 0; i < 4; ++i)
+  {
+    EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  EXPECT_TRUE(ctx->coverage_scan_paused);
+  EXPECT_EQ(bladeRequestCount(), requests_before_resume);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return !ctx->coverage_scan_paused && bladeRequestCount() > requests_before_resume;
+                },
+                3.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 1u);
+  EXPECT_EQ(follow->goalCount(), 2u);
+}
+
+TEST_F(FollowStripDigTest, StaleScanDuringTransitKeepsBladeOffUntilFreshWindowAfterTransit)
+{
+  mowgli_interfaces::msg::HighLevelStatus mowing_status;
+  mowing_status.state = mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS;
+  mowing_status.state_name = "MOWING";
+  std::mutex status_mutex;
+  std::vector<mowgli_interfaces::msg::HighLevelStatus> statuses;
+  auto status_subscription =
+      server_node->create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
+          "/test_follow_strip_dig/high_level_status",
+          10,
+          [&](const mowgli_interfaces::msg::HighLevelStatus::SharedPtr msg)
+          {
+            std::lock_guard<std::mutex> lock(status_mutex);
+            statuses.push_back(*msg);
+          });
+  ctx->high_level_status_pub =
+      ctx->node->create_publisher<mowgli_interfaces::msg::HighLevelStatus>("~/high_level_status",
+                                                                           10);
+  ctx->last_high_level_status = mowing_status;
+  ctx->has_high_level_status = true;
+  const auto discovery_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (ctx->high_level_status_pub->get_subscription_count() == 0 &&
+         std::chrono::steady_clock::now() < discovery_deadline)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_GT(ctx->high_level_status_pub->get_subscription_count(), 0u);
+
+  auto waitForStatus = [&](const std::string& sub_state, std::size_t after)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      {
+        std::lock_guard<std::mutex> lock(status_mutex);
+        if (statuses.size() > after && statuses.back().sub_state_name == sub_state)
+        {
+          return true;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+  };
+
+  startFollowStrip({straightUnit(0.0, 10.0), straightUnit(10.0, 20.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+
+  // Finish the first unit while scans are fresh, then let the structural
+  // blade-off transit begin. The scan stream drops only DURING that transit.
+  follow->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                3.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_TRUE(ctx->transiting);
+  EXPECT_EQ(mowgli_behavior::withLiveStatusFields(mowing_status, *ctx).sub_state_name, "TRANSIT");
+  const std::size_t requests_before_stale_transit = bladeRequestCount();
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->last_scan_time = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+  }
+
+  // The transit completion immediately dispatches FollowCoveragePath. That
+  // hand-off must sample stale scan data before it can issue mower-on.
+  navigate->succeed(0);
+  const std::size_t statuses_before_pause = [&]()
+  {
+    std::lock_guard<std::mutex> lock(status_mutex);
+    return statuses.size();
+  }();
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return ctx->coverage_scan_paused;
+                },
+                3.0),
+            BT::NodeStatus::RUNNING);
+  // onRunning snapshots transit state at the start of this completion tick.
+  // The scan pause must still win the live status projection immediately.
+  EXPECT_TRUE(ctx->transiting);
+  EXPECT_EQ(mowgli_behavior::withLiveStatusFields(mowing_status, *ctx).sub_state_name,
+            "SCAN_PAUSED");
+  EXPECT_TRUE(waitForStatus("SCAN_PAUSED", statuses_before_pause));
+  const auto follow_goal_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (follow->goalCount() < 2 && std::chrono::steady_clock::now() < follow_goal_deadline)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(follow->goalCount(), 2u);
+  for (std::size_t i = requests_before_stale_transit; i < bladeRequestCount(); ++i)
+  {
+    EXPECT_EQ(bladeRequest(i).mow_enabled, 0u)
+        << "a stale scan detected at transit completion must not briefly enable the blade";
+  }
+
+  // A newly fresh scan alone is insufficient. The ordinary coverage ticks,
+  // rather than the unobserved transit duration, must establish the existing
+  // continuous fresh-scan requirement before mower-on.
+  const std::size_t requests_before_fresh_window = bladeRequestCount();
+  const std::size_t statuses_before_resume = [&]()
+  {
+    std::lock_guard<std::mutex> lock(status_mutex);
+    return statuses.size();
+  }();
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->last_scan_time = std::chrono::steady_clock::now();
+  }
+  for (int i = 0; i < 4; ++i)
+  {
+    EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  EXPECT_TRUE(ctx->coverage_scan_paused);
+  EXPECT_EQ(bladeRequestCount(), requests_before_fresh_window);
+
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return !ctx->coverage_scan_paused &&
+                         bladeRequestCount() > requests_before_fresh_window;
+                },
+                3.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 1u);
+  EXPECT_EQ(follow->goalCount(), 2u);
+  EXPECT_FALSE(ctx->transiting);
+  EXPECT_EQ(mowgli_behavior::withLiveStatusFields(mowing_status, *ctx).sub_state_name, "");
+  EXPECT_TRUE(waitForStatus("", statuses_before_resume));
+}
 
 TEST_F(FollowStripDigTest, DigWhileMowingCancelsTheGoalWaitsForTheReverseAndResumesPastTheHole)
 {

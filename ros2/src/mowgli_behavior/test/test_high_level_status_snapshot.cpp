@@ -29,9 +29,10 @@
  * progress during a multi-minute FollowStrip.
  *
  * withLiveStatusFields refreshes every context-derived field from the live
- * BTContext while keeping the tree-owned state identity (state / state_name /
- * sub_state_name) from the cached snapshot. These tests pin that split with a
- * plain BTContext (no ROS, no publisher).
+ * BTContext while keeping the tree-owned main state identity (state /
+ * state_name) from the cached snapshot. Live TRANSIT and SCAN_PAUSED overlays
+ * are the sub_state_name exceptions. These tests pin that split with a plain
+ * BTContext (no ROS, no publisher).
  */
 
 #include "mowgli_behavior/bt_context.hpp"
@@ -85,6 +86,39 @@ TEST(HighLevelStatusSnapshot, StateIdentityIsCarriedFromCache)
   EXPECT_EQ(refreshed.state, HighLevelStatus::HIGH_LEVEL_STATE_IDLE);
   EXPECT_EQ(refreshed.state_name, "CHARGING");
   EXPECT_EQ(refreshed.sub_state_name, "");
+}
+
+TEST(HighLevelStatusSnapshot, ScanPauseOverlaysOnlyAutonomousMowing)
+{
+  BTContext ctx;
+  ctx.coverage_scan_paused = true;
+
+  HighLevelStatus mowing;
+  mowing.state = HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS;
+  mowing.state_name = "MOWING";
+  mowing.sub_state_name = "FOLLOWING";
+  EXPECT_EQ(withLiveStatusFields(mowing, ctx).sub_state_name, "SCAN_PAUSED");
+
+  ctx.coverage_scan_paused = false;
+  EXPECT_EQ(withLiveStatusFields(mowing, ctx).sub_state_name, "FOLLOWING");
+
+  ctx.coverage_scan_paused = true;
+  HighLevelStatus charging = chargingSnapshot();
+  charging.sub_state_name = "WAITING";
+  EXPECT_EQ(withLiveStatusFields(charging, ctx).sub_state_name, "WAITING");
+}
+
+TEST(HighLevelStatusSnapshot, ScanPauseTakesPriorityOverTransitSnapshot)
+{
+  BTContext ctx;
+  ctx.transiting = true;
+  ctx.coverage_scan_paused = true;
+
+  HighLevelStatus mowing;
+  mowing.state = HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS;
+  mowing.state_name = "MOWING";
+
+  EXPECT_EQ(withLiveStatusFields(mowing, ctx).sub_state_name, "SCAN_PAUSED");
 }
 
 // Charger unplugged / emergency asserted while the tree sits in the charge hold:

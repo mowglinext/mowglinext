@@ -505,6 +505,8 @@ TEST_F(GetNextUnmowedAreaTest, GuardHaltExemptionStopsAtTheCap)
   areas[0] = {"lawn", /*is_navigation_area=*/false};
   waitForService();
 
+  EXPECT_EQ(BTContext::kMaxGuardHaltedPasses, 30u);
+
   for (uint32_t halt = 0; halt < BTContext::kMaxGuardHaltedPasses; ++halt)
   {
     guardHaltsTree("scan_stale");
@@ -529,6 +531,12 @@ TEST_F(GetNextUnmowedAreaTest, GuardHaltExemptionStopsAtTheCap)
   EXPECT_TRUE(retired) << "past kMaxGuardHaltedPasses the no-progress budget must apply again";
   EXPECT_EQ(ctx->area_guard_halt_count[0u], BTContext::kMaxGuardHaltedPasses)
       << "the exemption counter must not grow past the cap";
+  EXPECT_EQ(ctx->completed_areas.count(0u), 0u)
+      << "retiring a flapping-sensor pass must not fabricate coverage completion";
+  EXPECT_LT(ctx->coverage_percent, 100.0f)
+      << "retiring a flapping-sensor pass must not fabricate 100% progress";
+  EXPECT_FALSE(ctx->coverage_all_complete)
+      << "an incomplete retirement must route to coverage failure, not MOWING_COMPLETE";
 }
 
 // EndSession is the session boundary: a guard halt that ended one session
@@ -545,11 +553,15 @@ TEST_F(GetNextUnmowedAreaTest, EndSessionClearsGuardHaltBookkeeping)
   }
   ASSERT_EQ(ctx->area_guard_halt_count[0u], 1u);
   guardHaltsTree("localization_degraded");  // halted again on the way to the dock
+  ctx->coverage_scan_paused = true;
+  ctx->incomplete_retired_areas.insert(0u);
 
   auto end_tree = makeEndSessionTree();
   ASSERT_EQ(end_tree.tickOnce(), BT::NodeStatus::SUCCESS);
   EXPECT_FALSE(ctx->guard_halted_reason.has_value());
   EXPECT_TRUE(ctx->area_guard_halt_count.empty());
+  EXPECT_TRUE(ctx->incomplete_retired_areas.empty());
+  EXPECT_FALSE(ctx->coverage_scan_paused);
 
   // Next session: the first dispatch is charged normally (1/5).
   auto tree = makeTree(/*max_areas=*/5);
@@ -617,12 +629,15 @@ TEST_F(GetNextUnmowedAreaTest, TargetedRunReMowsAnAlreadyCompletedArea)
 
   ctx->completed_areas.insert(1u);
   ctx->attempted_areas.insert(1u);
+  ctx->incomplete_retired_areas.insert(1u);
 
   ctx->target_area_index = 1;
   auto tree = makeTree(/*max_areas=*/5);
   EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS)
       << "an explicit re-mow request must clear the stale completed/attempted flags";
   EXPECT_EQ(ctx->current_area, 1);
+  EXPECT_EQ(ctx->incomplete_retired_areas.count(1u), 0u)
+      << "an explicit target retry must clear its prior incomplete retirement";
 }
 
 // ...but that erase is tied to the ONE-SHOT request, not to the session flag:

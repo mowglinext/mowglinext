@@ -586,8 +586,11 @@ private:
   /// goal stays alive, only the blade is cut and later restored.
   ScanPauseState scan_pause_;
   std::chrono::steady_clock::time_point last_scan_pause_tick_{};
-  /// Per-tick scan-pause step; returns true while the blade is paused.
-  bool stepScanPause(const std::shared_ptr<BTContext>& ctx);
+  /// Per-tick scan-pause step; returns true while the blade is paused. A
+  /// blade-off transit may call this with allow_resume=false to notice a
+  /// dropout at its completion without treating the unobserved transit time as
+  /// proof of continuously fresh scans.
+  bool stepScanPause(const std::shared_ptr<BTContext>& ctx, bool allow_resume = true);
   bool goal_sent_ = false;
   bool follow_goal_ever_sent_ = false;
 

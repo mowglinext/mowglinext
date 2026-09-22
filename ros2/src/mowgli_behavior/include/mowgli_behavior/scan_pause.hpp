@@ -24,7 +24,7 @@
 // the blip: FollowPath goal cancelled, full F2C replan, transit back to the
 // resume cursor, 1.5 s blade spin-up — and the sequence restarted before the
 // next dropout. The robot cycled CALIBRATING → UNDOCKING → PLANNING → TRANSIT
-// for a whole session and mowed nothing (up to 200 re-dispatches, ~28 min).
+// for a whole session and mowed nothing (the former 200-pass exemption cap).
 //
 // ── What a short dropout actually needs ─────────────────────────────────────
 // Motion is already handled below the tree: collision_monitor's
@@ -78,10 +78,10 @@ struct ScanPauseState
 /// @param have_scan   false when no scan was ever received this session
 /// @param scan_age_s  age of the newest /scan_collision message [s]
 /// @param dt_s        time since the previous tick [s]
-inline ScanPauseAction ScanPauseStep(ScanPauseState& st,
-                                     bool have_scan,
-                                     double scan_age_s,
-                                     double dt_s)
+/// @param allow_resume false at a transit handoff: discard unobserved fresh
+///                     time and keep an existing blade-off pause active
+inline ScanPauseAction ScanPauseStep(
+    ScanPauseState& st, bool have_scan, double scan_age_s, double dt_s, bool allow_resume = true)
 {
   if (!have_scan)
   {
@@ -100,6 +100,14 @@ inline ScanPauseAction ScanPauseStep(ScanPauseState& st,
   }
   if (!st.paused)
   {
+    return ScanPauseAction::kNone;
+  }
+  if (!allow_resume)
+  {
+    // A transit does not sample scan liveness on each tick. Do not count its
+    // elapsed time, or any partial fresh interval before it, toward the full
+    // fresh window required after FollowCoveragePath becomes active again.
+    st.fresh_for_s = 0.0;
     return ScanPauseAction::kNone;
   }
   st.fresh_for_s += (dt_s > 0.0 ? dt_s : 0.0);

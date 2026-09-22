@@ -1369,6 +1369,7 @@ private:
       context_->area_plan_fingerprint.clear();
       context_->completed_areas.clear();
       context_->attempted_areas.clear();
+      context_->incomplete_retired_areas.clear();
       context_->area_attempt_count.clear();
       context_->area_last_coverage.clear();
       context_->coverage_start_blocked = false;

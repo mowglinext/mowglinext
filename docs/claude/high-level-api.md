@@ -25,6 +25,13 @@
 | 3 | `HIGH_LEVEL_STATE_RECORDING` | Area recording in progress |
 | 4 | `HIGH_LEVEL_STATE_MANUAL_MOWING` | Manual mowing via teleop |
 
+While cached state is `AUTONOMOUS` / `MOWING`, `sub_state_name="SCAN_PAUSED"` is a live-only
+overlay: `FollowStrip` has cut the blade for a short stale LiDAR interval while preserving the
+same coverage goal. It clears after 0.5 s of fresh scans (or on every FollowStrip/session terminal
+path); both edges publish immediately, with the normal 1 Hz republisher as a liveness fallback.
+It does not change the numeric state, main state name, or command semantics. It takes priority over
+the live `TRANSIT` sub-state if a transit completion discovers the stale scan in the same tick.
+
 ## Area Recording Flow
 1. GUI sends `COMMAND_RECORD_AREA` (3) to start recording
 2. BT enters `RecordArea` node — samples position at `area_record_rate_hz` (default **10 Hz**, from `mowgli_robot.yaml` via the blackboard; points closer than `kMinSampleSpacingM` = 0.05 m are dropped). Live preview is republished on `~/recording_trajectory` at `kPreviewPublishRateHz` = 2 Hz

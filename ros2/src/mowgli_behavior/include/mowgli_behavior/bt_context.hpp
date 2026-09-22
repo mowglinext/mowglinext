@@ -96,7 +96,7 @@ struct BTContext
   ///
   /// Does NOT cover the coverage-tracking fields below (command state +
   /// swath-completion model: target_area_index, single_area_target,
-  /// attempted_areas, area_attempt_count, area_last_coverage,
+  /// attempted_areas, incomplete_retired_areas, area_attempt_count, area_last_coverage,
   /// area_completed_swaths,
   /// area_swath_count, area_resume_pose_index, area_path_pose_count,
   /// area_plan_fingerprint, completed_areas, coverage_all_complete). Those
@@ -215,6 +215,14 @@ struct BTContext
   /// Cleared by EndSession.
   std::set<uint32_t> attempted_areas;
 
+  /// Areas skipped for the rest of this session because they exhausted the
+  /// bounded no-progress budget without completing. Kept separate from
+  /// attempted_areas so an exhausted candidate cannot be reported as a clean
+  /// MOWING_COMPLETE merely because no dispatchable areas remain. Cleared by
+  /// EndSession and an explicit "Start fresh"; an explicit target re-mow
+  /// clears that target only.
+  std::set<uint32_t> incomplete_retired_areas;
+
   /// Per-area count of CONSECUTIVE GetNextUnmowedArea dispatches that
   /// made NO coverage progress. Reset to 0 whenever a dispatch shows the
   /// area's coverage_percent advanced beyond the last dispatch (see
@@ -294,13 +302,18 @@ struct BTContext
   /// Cleared by EndSession.
   std::map<uint32_t, uint32_t> area_guard_halt_count;
   /// Maximum guard-halted dispatches exempted from area_attempt_count per
-  /// area. Deliberately GENEROUS: a permanently dead sensor is not this cap's
-  /// problem — the guard itself holds the whole tree (blade off, stopped) for
-  /// as long as the fault lasts, so nothing dispatches at all. The cap only
-  /// bounds the FLAPPING case (a fault that clears and re-trips every few
-  /// seconds) so a pathological flap cannot re-dispatch the same area forever;
-  /// past it the normal no-progress budget takes over and the area retires.
-  static constexpr uint32_t kMaxGuardHaltedPasses = 200;
+  /// area. A one-second scan blip is absorbed inside FollowStrip; the Root
+  /// scan guard only halts after >20 s. Thirty exemptions therefore allow at
+  /// least ten minutes of actual blind intervals before the normal five-pass
+  /// retirement budget resumes. Fleet yields share this bounded counter.
+  static constexpr uint32_t kMaxGuardHaltedPasses = 30;
+
+  /// Live FollowStrip overlay: true only while an active coverage goal is held
+  /// blade-off for a short stale-/scan_collision interval. It is deliberately
+  /// context-owned so the 1 Hz HighLevelStatus republisher can expose it
+  /// without a tree transition. FollowStrip and EndSession clear it on every
+  /// lifecycle and terminal path; it never changes the numeric state or goal.
+  bool coverage_scan_paused{false};
 
   // -----------------------------------------------------------------------
   // Fleet coordination (docs/MULTI_ROBOT.md)
@@ -795,8 +808,8 @@ struct BTContext
   int skipped_swaths{0};
 
   /// True while FollowStrip is driving a blade-off transit between sub-paths
-  /// (its own transit_active_/transit_pending_ members, refreshed every tick
-  /// of onRunning() — see coverage_nodes.cpp), false otherwise. Reset in
+  /// (its own transit_active_/transit_pending_ members, snapshotted at the
+  /// start of every onRunning() tick — see coverage_nodes.cpp), false otherwise. Reset in
   /// onStart()/onHalted() so a stale true value can never survive past the
   /// FollowStrip invocation that set it. Read by withLiveStatusFields
   /// (status_snapshot.cpp) to fold "TRANSIT" into HighLevelStatus's
