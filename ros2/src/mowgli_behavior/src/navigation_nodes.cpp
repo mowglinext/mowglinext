@@ -23,6 +23,7 @@
 #include "action_msgs/msg/goal_status.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
+#include "mowgli_behavior/cancel_goal.hpp"
 #include "rcl_interfaces/srv/set_parameters.hpp"
 #include "tf2/LinearMath/Quaternion.hpp"
 #include "tf2/utils.hpp"
@@ -391,7 +392,7 @@ void NavigateToPose::onHalted()
   if (goal_handle_)
   {
     RCLCPP_INFO(ctx->node->get_logger(), "NavigateToPose: canceling active goal");
-    action_client_->async_cancel_goal(goal_handle_);
+    cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "NavigateToPose");
     goal_handle_.reset();
   }
 }
@@ -717,7 +718,10 @@ void NavigateInsideBoundary::onHalted()
   if (goal_handle_)
   {
     RCLCPP_INFO(ctx->node->get_logger(), "NavigateInsideBoundary: canceling goal");
-    action_client_->async_cancel_goal(goal_handle_);
+    cancelGoalQuietly(action_client_,
+                      goal_handle_,
+                      ctx->node->get_logger(),
+                      "NavigateInsideBoundary");
     goal_handle_.reset();
   }
   if (keepout_disabled_)
@@ -817,7 +821,7 @@ void BackUp::onHalted()
   if (goal_handle_)
   {
     auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-    action_client_->async_cancel_goal(goal_handle_);
+    cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "BackUp");
     RCLCPP_INFO(ctx->node->get_logger(), "BackUp: halted, goal cancelled");
   }
   goal_handle_ = nullptr;

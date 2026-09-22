@@ -211,6 +211,37 @@ if(BUILD_TESTING)
     ${tf2_geometry_msgs_TARGETS}
   )
 
+  # ---- test_cancel_on_halt ----
+  # Halting a node whose action goal already finished must not throw
+  # (rclcpp_action's UnknownGoalHandleError). Field 2026-09-21/22: DockRobot
+  # wedged the tree in RETURNING_HOME for 10 h. Fake /dock_robot server.
+  ament_add_gtest(test_cancel_on_halt
+    test/test_cancel_on_halt.cpp
+    src/docking_nodes.cpp
+    TIMEOUT 120
+  )
+
+  target_include_directories(test_cancel_on_halt PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_cancel_on_halt
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${action_msgs_TARGETS}
+  )
+
   # ---- test_docking_boundary_exempt ----
   # Regression for "Mowing Complete → robot stops short of the dock": exercises
   # the IsDocking condition and the BoundaryGuard whitelist logic that exempts
