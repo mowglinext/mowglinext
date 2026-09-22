@@ -42,7 +42,9 @@
 
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_nav2_plugins/ftc_blade_load.hpp"
+#include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
+#include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
 #include <Eigen/Geometry>
@@ -274,6 +276,95 @@ private:
                                 std::size_t last,
                                 std::vector<geometry_msgs::msg::PoseStamped>& out);
 
+  /// The lattice solver parameters planOffsetLattice uses, from config_.
+  LatticeSolverCfg latticeSolverCfg() const;
+
+  /// Zone guard (boundary costmap -> local costmap frame) for the deviation
+  /// checks. Call with boundary_mutex_ held. False (logged, throttled) when the
+  /// global costmap or its transform is missing: deviation is skipped that tick.
+  bool buildBoundaryGuard(BoundaryGuard& guard);
+
+  // ── Turn fallback (ftc_turn_fallback.hpp) ─────────────────────────────────
+  //
+  // When the offset lattice finds no profile and the blockage lies in a TURN
+  // of the plan (field 2026-09-22: 8 of 8 WEDGED), FTC improvises the turn
+  // instead of aborting: (bounded straight reverse) -> pivot -> straight
+  // connector -> pivot -> FOLLOWING from a rejoin pose past the turn. The
+  // pivots and the connector are spliced into global_plan_ as runtime pivot
+  // corners (mowgli_interfaces/coverage_geometry.hpp contract) so the existing
+  // PIVOT state, its per-tick sweep gate, the lattice and currentBodyInLethal
+  // execute and re-check them every cycle. Anything not safely possible falls
+  // back to the unchanged WEDGED -> reverse-escape -> hold -> abort path.
+
+  enum class TurnFallbackPhase
+  {
+    kIdle,
+    /// Backing straight up (bounded, rear footprint probed every tick) before
+    /// the first rotation; the spliced plan is built when it ends.
+    kReverse,
+    /// The spliced pivots / connector are being driven; ends at the rejoin.
+    kRunning,
+  };
+
+  struct TurnFallbackState
+  {
+    TurnFallbackPhase phase{TurnFallbackPhase::kIdle};
+    double reverse_target_m{0.0};
+    double reverse_done_m{0.0};
+    double reverse_time_s{0.0};
+    rclcpp::Time started{0, 0, RCL_ROS_TIME};
+    /// Working-plan index of the rejoin pose once spliced.
+    std::size_t rejoin_idx{0};
+    double skipped_arc_m{0.0};
+    /// No new fallback before current_index_ reaches this (progress past the
+    /// last rejoin), so a turn that stays blocked cannot loop.
+    std::optional<std::size_t> rearm_idx;
+    std::size_t count{0};
+  };
+
+  TurnFallbackState turn_fallback_;
+  /// Set on the tick a fallback engages: that tick only stops.
+  bool turn_fallback_engaged_now_{false};
+  /// Header of the plan as received (frame + stamp), for republishing.
+  std_msgs::msg::Header plan_header_;
+
+  bool turnFallbackReversing() const
+  {
+    return turn_fallback_.phase == TurnFallbackPhase::kReverse;
+  }
+
+  /// Called where the lattice would go WEDGED. True when a fallback engaged
+  /// (the caller returns; this tick emits zero velocity), false to take the
+  /// unchanged WEDGED path. Needs the costmap lock and boundary_mutex_ held
+  /// (both are, inside updateLateralDeviation).
+  bool tryTurnFallback(std::size_t carrot_idx,
+                       const BoundaryGuard& guard,
+                       const ObstacleDeviation::Footprint& body);
+
+  /// Plan a fallback from the robot's current pose, reversing at most
+  /// `max_reverse_m`. `window_first` receives the plan index of the window's
+  /// first pose. Locks held as for tryTurnFallback.
+  TurnFallbackPlan planTurnFallback(std::size_t carrot_idx,
+                                    const BoundaryGuard& guard,
+                                    const ObstacleDeviation::Footprint& body,
+                                    double max_reverse_m,
+                                    std::size_t& window_first,
+                                    TurnFallbackProblem* problem_out = nullptr);
+
+  /// Replace the skipped part of global_plan_ by the fallback's runtime pivot
+  /// corners and connector, and start driving them. False when the robot pose
+  /// is unavailable (nothing changed).
+  bool spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t window_first);
+
+  /// One tick of the fallback's straight reverse; emits into cmd_vel.
+  void turnFallbackReverseTick(double dt, geometry_msgs::msg::TwistStamped& cmd_vel);
+
+  /// Completion (rejoin reached) and timeout of a running fallback.
+  void turnFallbackProgress();
+
+  /// Log line + hold/abort after a fallback that could not continue.
+  void failTurnFallback(const std::string& why);
+
   /// Apply lateral_deviation_ to current_control_point_ in-place.
   void applyLateralDeviationToCarrot();
 
@@ -435,6 +526,14 @@ private:
   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PoseStamped>::SharedPtr
       global_point_pub_;
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr global_plan_pub_;
+  /// The plan the coverage progress trackers follow: PathProgressGoalChecker's
+  /// plan_topic and FollowStrip's cursor, "~/<plugin>/global_plan" =
+  /// /controller_server/FollowCoveragePath/global_plan (FollowStrip publishes
+  /// each dispatched unit there). global_plan_pub_ above resolves to
+  /// /<plugin>/global_plan instead and only feeds visualisation. FTC publishes
+  /// here only when a turn fallback rejoins the plan: the remainder from the
+  /// rejoin pose, so neither tracker is left behind at the skipped turn.
+  rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr progress_plan_pub_;
   rclcpp_lifecycle::LifecyclePublisher<visualization_msgs::msg::Marker>::SharedPtr
       obstacle_marker_pub_;
 
@@ -686,6 +785,22 @@ private:
     double obstacle_reverse_max_dist_m{0.30};
     /// Straight reverse speed (m/s). Must clear the firmware deadband (~0.05).
     double obstacle_reverse_speed_mps{0.10};
+
+    /// Turn fallback (ftc_turn_fallback.hpp): improvise a turn of the plan the
+    /// lattice cannot drive instead of aborting. Lattice planner only
+    /// (use_offset_lattice), and only where obstacle deviation runs (never in
+    /// the no-LiDAR overlay).
+    bool turn_fallback_enabled{true};
+    /// Longest straight reverse before the first pivot (m). Also 0 whenever
+    /// obstacle_reverse_enabled is false.
+    double turn_fallback_max_reverse_m{0.40};
+    /// Longest stretch of plan a rejoin may skip (m).
+    double turn_fallback_max_rejoin_arc_m{3.0};
+    /// A blockage is in a turn when the plan heading sweeps this much (deg).
+    double turn_fallback_min_turn_deg{45.0};
+    /// The whole fallback (reverse, pivots, connector) must reach its rejoin
+    /// within this time (s), else the goal is aborted.
+    double turn_fallback_timeout_s{45.0};
   };
 
   Config config_;

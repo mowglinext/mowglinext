@@ -43,7 +43,9 @@ add_library(${PROJECT_NAME} SHARED
   src/oscillation_detector.cpp
   src/obstacle_deviation.cpp
   src/ftc_lattice_solver.cpp
+  src/ftc_turn_fallback.cpp
   src/ftc_controller.cpp
+  src/ftc_controller_turn_fallback.cpp
   src/ftc_controller_plugin.cpp
   src/path_progress_goal_checker.cpp
 )
@@ -261,6 +263,38 @@ if(BUILD_TESTING)
     ${tf2_TARGETS}
     ${tf2_geometry_msgs_TARGETS}
   )
+
+  # Turn fallback decision (ftc_turn_fallback.hpp): turn detection, rejoin
+  # search, bounded reverse, pivot/straight sweeps, zone rule, and the recorded
+  # 2026-09-22 08:08:25 WEDGED. ROS-free.
+  ament_add_gtest(test_ftc_turn_fallback
+    test/test_ftc_turn_fallback.cpp
+    src/ftc_turn_fallback.cpp
+    src/ftc_lattice_solver.cpp
+    src/obstacle_deviation.cpp
+  )
+
+  target_include_directories(test_ftc_turn_fallback
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  target_link_libraries(test_ftc_turn_fallback
+    ${geometry_msgs_TARGETS}
+    ${nav2_costmap_2d_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    mowgli_interfaces::mowgli_interfaces_headers
+  )
+
+  # FTCController through a turn fallback, closed loop (real controller + a
+  # configured Costmap2DROS + kinematic robot + controlled clock). Brings up
+  # rclcpp, hence the isolated DDS domain.
+  ament_add_ros_isolated_gtest(test_ftc_turn_fallback_controller
+    test/test_ftc_turn_fallback_controller.cpp
+    TIMEOUT 300
+  )
+  target_link_libraries(test_ftc_turn_fallback_controller ${PROJECT_NAME})
 
   add_executable(lattice_replay test/lattice_replay.cpp)
   target_link_libraries(lattice_replay ${PROJECT_NAME})

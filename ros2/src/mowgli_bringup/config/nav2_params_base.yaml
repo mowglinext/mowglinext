@@ -710,6 +710,31 @@ controller_server:
       obstacle_reverse_enabled: true
       obstacle_reverse_max_dist_m: 0.30
       obstacle_reverse_speed_mps: 0.10   # must clear the firmware deadband (~0.05)
+      # TURN FALLBACK (ftc_turn_fallback.hpp). Field 2026-09-22: all 8 WEDGED
+      # of a 110-min mow were in TURNS (U-turns, omega loops, 70-107 deg kinks)
+      # where the body front met real lethal cells — 7x the hedge just past the
+      # recorded line, where the planner lets the body overhang at a turn
+      # (Invariant 5), 1x an unmapped object beside a drawn obstacle. The lattice
+      # can only offset sideways, which cannot shorten a turn, so FTC wedged,
+      # reversed, held and aborted, and FollowStrip lost the turn and more.
+      # With the fallback, when the lattice finds no profile AND the first
+      # blocked pose lies where the plan heading sweeps >= turn_fallback_min_turn_deg,
+      # FTC improvises the turn: (straight reverse, <= turn_fallback_max_reverse_m,
+      # only if obstacle_reverse_enabled) -> pivot in place -> straight -> pivot
+      # -> FOLLOWING from a rejoin pose past the turn, the rejoin that skips the
+      # least path within turn_fallback_max_rejoin_arc_m. Planned with the
+      # executing checks (pivot sweep = real footprint vs true-lethal cells,
+      # connector/rejoin = the lattice body, body AXIS vs the zone off the plan)
+      # plus a 0.05 m planning margin, and executed by the existing PIVOT state
+      # at runtime corners spliced into FTC's plan: every cycle re-checks it, and
+      # anything new stops it (hold, then abort). An obstacle on a straight, or
+      # a turn with no safe way round, takes the unchanged WEDGED path. Replay of
+      # the 8 recorded wedges: a safe fallback for all 8 (PR notes).
+      turn_fallback_enabled: true
+      turn_fallback_max_reverse_m: 0.40      # [0, 1.0]
+      turn_fallback_max_rejoin_arc_m: 3.0    # path a rejoin may skip, [0.2, 10.0]
+      turn_fallback_min_turn_deg: 45.0       # a straight (post, wall) is not a turn, [10, 180]
+      turn_fallback_timeout_s: 45.0          # whole manoeuvre, else the goal aborts, [5, 300]
 
 # ---------------------------------------------------------------------------
 # Planner server

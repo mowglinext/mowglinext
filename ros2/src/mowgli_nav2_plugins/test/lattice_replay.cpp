@@ -39,6 +39,16 @@
 //   --no-zone       leave the zone guard out
 //   --keepout-zone  zone guard from /keepout_mask only (no LiDAR layer)
 //   -v              print the node grid for every sample, not only the blocked ones
+//   --fallback      where the lattice is WEDGED, also run FTC's turn fallback
+//                   (ftc_turn_fallback.hpp) from the recorded robot pose and print
+//                   its decision: verdict, reverse, rejoin, skipped arc, clearances
+//   --fallback-all  run the turn fallback on every sample, wedged or not
+//   --reverse M     turn_fallback_max_reverse_m, default 0.40
+//   --arc M         turn_fallback_max_rejoin_arc_m, default 3.0
+//   --min-turn D    turn_fallback_min_turn_deg, default 45
+//   --margin M      planning margin around the swept shapes, default 0.05
+//   --max-rot D     largest rotation checked one way only, default 160
+//   --ascii         draw the fallback (odom frame, 0.05 m per character)
 //
 // Output per sample: FEASIBLE/WEDGED, fallback level, planned horizon; for a
 // degraded or wedged solve, one row per station (left = +max .. right = -max):
@@ -47,6 +57,7 @@
 // tests at fallback level 2.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -62,6 +73,7 @@
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_offset_lattice.hpp"
 #include "mowgli_nav2_plugins/ftc_pivot.hpp"
+#include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
 #include "nav2_costmap_2d/costmap_2d.hpp"
 
 namespace mn = mowgli_nav2_plugins;
@@ -80,6 +92,14 @@ struct Options
   bool no_zone{false};
   bool keepout_zone{false};
   bool verbose{false};
+  bool fallback{false};
+  bool fallback_all{false};
+  bool ascii{false};
+  double fallback_reverse{0.40};
+  double fallback_arc{3.0};
+  double fallback_min_turn_deg{45.0};
+  double fallback_margin{0.05};
+  double fallback_max_rot_deg{160.0};
   std::vector<std::string> samples;
 };
 
@@ -103,6 +123,10 @@ struct Sample
   double carrot_x{0.0};
   double carrot_y{0.0};
   bool has_carrot{false};
+  double ob_x{0.0};
+  double ob_y{0.0};
+  double ob_yaw{0.0};
+  bool has_odom_base{false};
   int plan{-1};
 };
 
@@ -139,6 +163,22 @@ bool ParseArgs(int argc, char** argv, Options& o)
       o.keepout_zone = true;
     else if (a == "-v")
       o.verbose = true;
+    else if (a == "--fallback")
+      o.fallback = true;
+    else if (a == "--fallback-all")
+      o.fallback = o.fallback_all = true;
+    else if (a == "--ascii")
+      o.ascii = true;
+    else if (a == "--reverse")
+      o.fallback_reverse = value();
+    else if (a == "--arc")
+      o.fallback_arc = value();
+    else if (a == "--min-turn")
+      o.fallback_min_turn_deg = value();
+    else if (a == "--margin")
+      o.fallback_margin = value();
+    else if (a == "--max-rot")
+      o.fallback_max_rot_deg = value();
     else if (!a.empty() && a[0] == '-')
       return false;
     else
@@ -165,6 +205,11 @@ Sample ReadSample(const std::string& dir)
       ss >> m.global.w >> m.global.h >> m.global.res >> m.global.ox >> m.global.oy;
     else if (key == "map_odom")
       ss >> m.mo_x >> m.mo_y >> m.mo_yaw;
+    else if (key == "odom_base")
+    {
+      ss >> m.ob_x >> m.ob_y >> m.ob_yaw;
+      m.has_odom_base = true;
+    }
     else if (key == "carrot")
     {
       double stamp = 0.0;
@@ -241,10 +286,9 @@ const std::vector<geometry_msgs::msg::PoseStamped>& LoadPlan(const std::string& 
   return cache.emplace(path, std::move(plan)).first->second;
 }
 
-/// The 0.60 x 0.45 chassis centred 0.18 m ahead of base_link, grown by `pad`
-/// (getRobotFootprint()), then widened by the clearance margin like
-/// FTCController::updateLateralDeviation does for the lattice.
-mn::ObstacleDeviation::Footprint LatticeBody(const Options& o)
+/// The 0.60 x 0.45 chassis centred 0.18 m ahead of base_link, grown by `pad`:
+/// getRobotFootprint() on the robot.
+mn::ObstacleDeviation::Footprint RobotFootprint(const Options& o)
 {
   const double front = 0.48 + o.pad;
   const double rear = -0.12 - o.pad;
@@ -258,7 +302,14 @@ mn::ObstacleDeviation::Footprint LatticeBody(const Options& o)
     p.y = y;
     fp.push_back(p);
   }
-  return mn::ObstacleDeviation::expandFootprintLateral(fp, o.clearance);
+  return fp;
+}
+
+/// RobotFootprint widened by the clearance margin like
+/// FTCController::updateLateralDeviation does for the lattice.
+mn::ObstacleDeviation::Footprint LatticeBody(const Options& o)
+{
+  return mn::ObstacleDeviation::expandFootprintLateral(RobotFootprint(o), o.clearance);
 }
 
 /// FTC's boundary_costmap_: global cells >= 99 become lethal, the rest free.
@@ -393,6 +444,218 @@ void PrintGrid(mn::LatticeSolver& solver, const Options& o)
   }
 }
 
+/// Plan pose (map) -> costmap frame (odom), as planWindowInCostmapFrame does.
+geometry_msgs::msg::PoseStamped PoseInOdom(const geometry_msgs::msg::PoseStamped& p,
+                                           const Sample& m)
+{
+  const double c = std::cos(m.mo_yaw);
+  const double s = std::sin(m.mo_yaw);
+  const double dx = p.pose.position.x - m.mo_x;
+  const double dy = p.pose.position.y - m.mo_y;
+  return MakePose(c * dx + s * dy, -s * dx + c * dy, YawOf(p) - m.mo_yaw);
+}
+
+/// Odom-frame ASCII view of a fallback decision, 0.05 m per character.
+///   #  lethal local cell          z  zone band (global >= 99)
+///   *  plan window                B  first blocked pose    J  rejoin
+///   R  robot                      S  start (after the reverse)   -  connector
+void DrawFallback(const nav2_costmap_2d::Costmap2D& local,
+                  const mn::BoundaryGuard& guard,
+                  const mn::TurnFallbackProblem& problem,
+                  const mn::TurnFallbackPlan& fb)
+{
+  constexpr double kCell = 0.05;
+  constexpr int kHalf = 40;  // 2 m each way
+  const double cx = problem.robot.x;
+  const double cy = problem.robot.y;
+  std::map<std::pair<int, int>, char> marks;
+  const auto mark = [&](double x, double y, char ch)
+  {
+    marks[{static_cast<int>(std::lround((x - cx) / kCell)),
+           static_cast<int>(std::lround((y - cy) / kCell))}] = ch;
+  };
+  for (const auto& p : problem.plan)
+  {
+    mark(p.pose.position.x, p.pose.position.y, '*');
+  }
+  if (fb.verdict == mn::TurnFallbackVerdict::kPlanned)
+  {
+    const double len = std::hypot(fb.rejoin_pose.x - fb.start.x, fb.rejoin_pose.y - fb.start.y);
+    for (double d = 0.0; d < len; d += kCell / 2.0)
+    {
+      mark(fb.start.x + d / len * (fb.rejoin_pose.x - fb.start.x),
+           fb.start.y + d / len * (fb.rejoin_pose.y - fb.start.y),
+           '-');
+    }
+    mark(fb.rejoin_pose.x, fb.rejoin_pose.y, 'J');
+    mark(fb.start.x, fb.start.y, 'S');
+  }
+  if (fb.verdict != mn::TurnFallbackVerdict::kBadInput &&
+      fb.verdict != mn::TurnFallbackVerdict::kNoBlockage)
+  {
+    const auto& b = problem.plan[fb.blocked].pose.position;
+    mark(b.x, b.y, 'B');
+  }
+  mark(cx, cy, 'R');
+  std::printf("   odom view around the robot (%.2f, %.2f), +x right, +y up, 1 char = %.2f m\n",
+              cx,
+              cy,
+              kCell);
+  for (int j = kHalf; j >= -kHalf; --j)
+  {
+    std::string row = "   ";
+    for (int i = -kHalf; i <= kHalf; ++i)
+    {
+      const double x = cx + i * kCell;
+      const double y = cy + j * kCell;
+      char ch = '.';
+      unsigned int mx = 0;
+      unsigned int my = 0;
+      if (local.worldToMap(x, y, mx, my) &&
+          mn::ObstacleDeviation::isObstacleCell(local.getCost(mx, my)))
+      {
+        ch = '#';
+      }
+      else if (guard.isLethalAt(x, y))
+      {
+        ch = 'z';
+      }
+      const auto it = marks.find({i, j});
+      if (it != marks.end())
+      {
+        ch = (ch == '#' && it->second == '*') ? '%' : it->second;
+      }
+      row += ch;
+    }
+    std::printf("%s\n", row.c_str());
+  }
+}
+
+/// What FTCController's turn fallback would decide on this sample.
+void ReplayFallback(const std::vector<geometry_msgs::msg::PoseStamped>& plan,
+                    std::size_t carrot,
+                    const Sample& m,
+                    const nav2_costmap_2d::Costmap2D& local,
+                    const mn::BoundaryGuard& guard,
+                    const mn::LatticeSolverCfg& lattice_cfg,
+                    const Options& o)
+{
+  if (!m.has_odom_base)
+  {
+    std::printf("   FALLBACK: no odom->base_footprint in the sample\n");
+    return;
+  }
+  mn::TurnFallbackCfg cfg;
+  cfg.max_reverse_m = o.fallback_reverse;
+  cfg.max_rejoin_arc_m = o.fallback_arc;
+  cfg.min_turn_rad = o.fallback_min_turn_deg * M_PI / 180.0;
+  cfg.plan_margin_m = o.fallback_margin;
+  cfg.unambiguous_rotation_rad = o.fallback_max_rot_deg * M_PI / 180.0;
+  cfg.blockage_scan_m = kHorizon;
+
+  // The robot's map pose (map->odom o odom->base_footprint) picks the window.
+  const double c = std::cos(m.mo_yaw);
+  const double s = std::sin(m.mo_yaw);
+  const double rx = m.mo_x + c * m.ob_x - s * m.ob_y;
+  const double ry = m.mo_y + s * m.ob_x + c * m.ob_y;
+  const auto [first, last] = mn::FallbackWindow(plan,
+                                                carrot,
+                                                rx,
+                                                ry,
+                                                mn::kFallbackRobotSearchBackM,
+                                                cfg.blockage_scan_m + cfg.max_rejoin_arc_m);
+  // Corners on the plan as FTC received it (the published copy carries one
+  // duplicated tail pose).
+  std::vector<mn::PlanPose2D> p2d;
+  for (std::size_t i = 0; i + 1 < plan.size(); ++i)
+  {
+    p2d.push_back({plan[i].pose.position.x, plan[i].pose.position.y, YawOf(plan[i])});
+  }
+  const auto corners = mn::FindPivotCorners(p2d);
+
+  mn::TurnFallbackProblem problem;
+  problem.costmap = &local;
+  problem.guard = guard;
+  problem.footprint = RobotFootprint(o);
+  problem.body = LatticeBody(o);
+  problem.robot = {m.ob_x, m.ob_y, m.ob_yaw};
+  for (std::size_t i = first; i < last; ++i)
+  {
+    problem.plan.push_back(PoseInOdom(plan[i], m));
+  }
+  const auto to_odom = [&m](const geometry_msgs::msg::PoseStamped& p)
+  {
+    return PoseInOdom(p, m);
+  };
+  const std::size_t window_first = first;
+  problem.followable = [&](std::size_t w)
+  {
+    const std::size_t j = window_first + w;
+    const auto [leg_first, leg_last] = mn::PivotLeg(corners, j, plan.size());
+    return mn::LatticeFeasibleFrom(local,
+                                   guard,
+                                   problem.body,
+                                   plan,
+                                   j,
+                                   leg_first,
+                                   leg_last,
+                                   mn::NextPivotCorner(corners, j),
+                                   to_odom,
+                                   lattice_cfg,
+                                   kHorizon);
+  };
+  const auto t0 = std::chrono::steady_clock::now();
+  const mn::TurnFallbackPlan fb = mn::PlanTurnFallback(problem, cfg);
+  const double ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  if (fb.verdict != mn::TurnFallbackVerdict::kPlanned)
+  {
+    std::printf(
+        "   FALLBACK %s: robot idx %zu, blocked idx %zu (%.2fm ahead), turn %.0f deg, rear clear "
+        "%.2fm, %zu candidates%s%s (%.1f ms)\n",
+        mn::ToString(fb.verdict),
+        first,
+        first + fb.blocked,
+        fb.blocked_arc_m,
+        fb.turn_rad * 180.0 / M_PI,
+        fb.reverse_limit_m,
+        fb.evaluated,
+        fb.why.empty() ? "" : ", last: ",
+        fb.why.c_str(),
+        ms);
+  }
+  else
+  {
+    const mn::TurnFallbackClearances cl = mn::MeasureTurnFallbackClearances(problem, fb, 0.5);
+    std::printf(
+        "   FALLBACK planned: robot idx %zu, blocked idx %zu (%.2fm ahead) in a %.0f deg turn; "
+        "reverse %.2fm (rear clear %.2fm), rotate %+.0f deg, connector %.2fm, rotate %+.0f deg, "
+        "rejoin idx %zu, skipping %.2fm; clearances rev %.2f rot1 %.2f conn %.2f rot2 %.2f m; "
+        "%zu candidates (%.1f ms)\n",
+        first,
+        first + fb.blocked,
+        fb.blocked_arc_m,
+        fb.turn_rad * 180.0 / M_PI,
+        fb.reverse_m,
+        fb.reverse_limit_m,
+        fb.rotate_start_rad * 180.0 / M_PI,
+        fb.connector_m,
+        fb.rotate_rejoin_rad * 180.0 / M_PI,
+        first + fb.rejoin,
+        fb.skipped_arc_m,
+        std::isfinite(cl.reverse_m) ? cl.reverse_m : -1.0,
+        cl.rotate_start_m,
+        std::isfinite(cl.connector_m) ? cl.connector_m : -1.0,
+        std::isfinite(cl.rotate_rejoin_m) ? cl.rotate_rejoin_m : -1.0,
+        fb.evaluated,
+        ms);
+  }
+  if (o.ascii)
+  {
+    DrawFallback(local, guard, problem, fb);
+  }
+}
+
 void ReplaySample(const std::string& dir, const Options& o)
 {
   const std::string window = dir.substr(0, dir.find_last_of('/'));
@@ -451,6 +714,10 @@ void ReplaySample(const std::string& dir, const Options& o)
   {
     PrintGrid(solver, o);
   }
+  if (o.fallback && (o.fallback_all || !sol.plan.feasible))
+  {
+    ReplayFallback(plan, carrot, m, local, guard, cfg, o);
+  }
 }
 
 }  // namespace
@@ -462,7 +729,9 @@ int main(int argc, char** argv)
   {
     std::fprintf(stderr,
                  "usage: %s [--offset M] [--side S] [--max-offset M] [--lead M] [--clearance M] "
-                 "[--pad M] [--no-zone] [--keepout-zone] [-v] <sample_dir>...\n",
+                 "[--pad M] [--no-zone] [--keepout-zone] [-v] [--fallback|--fallback-all] "
+                 "[--reverse M] [--arc M] [--min-turn D] [--margin M] [--max-rot D] [--ascii] "
+                 "<sample_dir>...\n",
                  argv[0]);
     return 2;
   }

@@ -278,4 +278,40 @@ LatticeSolution LatticeSolver::Solve(double start_offset, int preferred_sign, in
   return out;
 }
 
+bool LatticeFeasibleFrom(
+    const nav2_costmap_2d::Costmap2D& costmap,
+    const BoundaryGuard& guard,
+    const ObstacleDeviation::Footprint& body,
+    const std::vector<geometry_msgs::msg::PoseStamped>& plan,
+    std::size_t carrot_idx,
+    std::size_t leg_first,
+    std::size_t leg_last,
+    std::optional<std::size_t> corner,
+    const std::function<geometry_msgs::msg::PoseStamped(const geometry_msgs::msg::PoseStamped&)>&
+        to_costmap,
+    const LatticeSolverCfg& cfg,
+    double horizon_m)
+{
+  const LatticeWindow window = ResampleLatticeWindow(
+      plan, carrot_idx, leg_first, leg_last, corner, cfg.station_spacing_m, cfg.lead_m, horizon_m);
+  if (window.pose_idx.empty())
+  {
+    return false;
+  }
+  std::vector<geometry_msgs::msg::PoseStamped> poses;
+  poses.reserve(window.pose_idx.size());
+  for (const std::size_t i : window.pose_idx)
+  {
+    poses.push_back(to_costmap(plan[i]));
+  }
+  LatticeSolver solver(costmap,
+                       guard,
+                       body,
+                       std::move(poses),
+                       window.carrot_pos,
+                       window.corner_is_last_station,
+                       cfg);
+  return solver.Solve(0.0, 0, 0).plan.feasible;
+}
+
 }  // namespace mowgli_nav2_plugins

@@ -28,6 +28,9 @@
  *     by the existing blade-off transit,
  *   - and skips the zone of every recorded dig on every later unit.
  *
+ * Also: FollowStrip's progress cursor following the coverage controller's
+ * rejoin after an FTC turn fallback (ControllerRejoin, strip_progress.hpp).
+ *
  * Real action servers (fake Nav2) + a real TF buffer; FollowStrip is ticked
  * exactly as the tree ticks it.
  */
@@ -159,6 +162,12 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex_);
     handles_.at(i)->succeed(std::make_shared<typename ActionT::Result>());
+  }
+
+  void abort(std::size_t i)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    handles_.at(i)->abort(std::make_shared<typename ActionT::Result>());
   }
 
 private:
@@ -454,6 +463,142 @@ TEST_F(FollowStripDigTest, UnitLyingEntirelyInsideADigZoneIsBookedWithoutAnyGoal
   EXPECT_EQ(navigate->goalCount(), 0u);
   EXPECT_EQ(ctx->area_completed_swaths[0].count(0), 1u)
       << "an un-mowable unit must not keep the area open forever";
+}
+
+// --- Coverage controller rejoin (FTC turn fallback) --------------------------
+//
+// Not a dig, but the same tick-level harness: FTC's turn fallback improvises a
+// blocked U-turn and rejoins the unit on the return swath, then republishes the
+// rest of the unit on the goal checker's plan topic. FollowStrip's progress
+// cursor, which can only creep 1 m of path per tick and at a U-turn stays on
+// the pose abeam on the other swath, must jump to the rejoin — or the live
+// percent lags and an abort later on resumes back at the turn.
+
+namespace
+{
+
+nav_msgs::msg::Path uTurnUnit(double length, double spacing)
+{
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  const auto add = [&path](double x, double y, double yaw)
+  {
+    geometry_msgs::msg::PoseStamped p;
+    p.header.frame_id = "map";
+    p.pose.position.x = x;
+    p.pose.position.y = y;
+    p.pose.orientation.z = std::sin(yaw / 2.0);
+    p.pose.orientation.w = std::cos(yaw / 2.0);
+    path.poses.push_back(p);
+  };
+  for (double x = 0.0; x < length - 1e-9; x += kStep)
+  {
+    add(x, 0.0, 0.0);
+  }
+  const double r = spacing / 2.0;
+  for (int k = 0; k <= 4; ++k)
+  {
+    const double a = -M_PI / 2.0 + M_PI * k / 4.0;
+    add(length + r * std::cos(a), r + r * std::sin(a), a + M_PI / 2.0);
+  }
+  for (double x = length - kStep; x >= -1e-9; x -= kStep)
+  {
+    add(x, spacing, M_PI);
+  }
+  return path;
+}
+
+std::size_t nearestPose(const nav_msgs::msg::Path& path, double x, double y)
+{
+  std::size_t best = 0;
+  for (std::size_t i = 0; i < path.poses.size(); ++i)
+  {
+    const auto& p = path.poses[i].pose.position;
+    const auto& b = path.poses[best].pose.position;
+    if (std::hypot(p.x - x, p.y - y) < std::hypot(b.x - x, b.y - y))
+    {
+      best = i;
+    }
+  }
+  return best;
+}
+
+}  // namespace
+
+TEST_F(FollowStripDigTest, ControllerRejoinMovesTheProgressCursorPastTheSkippedTurn)
+{
+  // Arrange: one U-turn unit (swath A 6 m, 0.13 m spacing, swath B back).
+  const auto unit = uTurnUnit(6.0, 0.13);
+  startFollowStrip({unit});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  for (double x = 0.25; x <= 4.5 + 1e-9; x += 0.25)
+  {
+    setRobot(x, 0.0);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  }
+  const float before = ctx->coverage_percent;
+  const std::size_t rejoin = nearestPose(unit, 4.5, 0.13);
+  ASSERT_GT(rejoin, nearestPose(unit, 4.5, 0.0) + 40);
+
+  auto pub = server_node->create_publisher<nav_msgs::msg::Path>(
+      "/controller_server/FollowCoveragePath/global_plan", rclcpp::QoS(1).transient_local());
+  nav_msgs::msg::Path remainder;
+  remainder.header.frame_id = "map";
+  remainder.poses.assign(unit.poses.begin() + static_cast<std::ptrdiff_t>(rejoin),
+                         unit.poses.end());
+
+  // A message stamped before the goal went out (a latched leftover) is ignored.
+  remainder.header.stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  pub->publish(remainder);
+  setRobot(4.5, 0.13);
+  tickUntil(
+      []()
+      {
+        return false;
+      },
+      0.5);
+  EXPECT_NEAR(ctx->coverage_percent, before, 1.0) << "a stale republish moved the cursor";
+
+  // Act: FTC's rejoin republish (stamped now), the robot on swath B.
+  remainder.header.stamp = ctx->node->now();
+  pub->publish(remainder);
+  const float expected =
+      100.0f * static_cast<float>(rejoin) / static_cast<float>(unit.poses.size());
+  tickUntil(
+      [&]()
+      {
+        return ctx->coverage_percent >= expected - 1.0f;
+      },
+      3.0);
+
+  // Assert 1: the live percent follows the robot past the skipped turn.
+  EXPECT_GE(ctx->coverage_percent, expected - 1.0f);
+
+  // Assert 2: an abort further along B resumes from B, not back at the turn.
+  for (double x = 4.25; x >= 3.5 - 1e-9; x -= 0.25)
+  {
+    setRobot(x, 0.13);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  }
+  follow->abort(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1 || follow->goalCount() == 2;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  const auto resume = navigate->goalCount() == 1
+                          ? navigate->goal(0)->pose.pose.position
+                          : follow->goal(1)->path.poses.front().pose.position;
+  EXPECT_NEAR(resume.y, 0.13, 1e-6) << "resumed on swath A, back before the skipped turn";
+  EXPECT_LT(resume.x, 3.5) << "did not resume past the robot on swath B";
 }
 
 TEST_F(FollowStripDigTest, EndSessionForgetsTheDigPointsButKeepsTheEventCounter)

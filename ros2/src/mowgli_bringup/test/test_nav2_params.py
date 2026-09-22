@@ -832,6 +832,50 @@ def test_ftc_stall_trio_present_in_both_variants() -> None:
         )
 
 
+def test_ftc_turn_fallback_is_configured_and_bounded() -> None:
+    """FTC's turn fallback (ftc_turn_fallback.hpp) improvises a turn the lattice
+    cannot drive — reverse, pivot, straight, pivot — instead of aborting. It
+    drives the bladed robot off its plan, so every knob that bounds it must be
+    set explicitly (a missing key silently runs the C++ default) and stay inside
+    the ranges FTCController accepts (onParameterChange rejects, declare clamps):
+    the reverse within the reverse-escape's order of magnitude, a rejoin search
+    of a few metres, a turn threshold that leaves straights to the WEDGED path,
+    and a finite deadline. The reverse must also still be governed by
+    obstacle_reverse_enabled (FTC zeroes it when that is false), so that switch
+    has to be present alongside.
+    """
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        for key in ("turn_fallback_enabled", "turn_fallback_max_reverse_m",
+                    "turn_fallback_max_rejoin_arc_m", "turn_fallback_min_turn_deg",
+                    "turn_fallback_timeout_s", "obstacle_reverse_enabled"):
+            assert key in fcp, f"FollowCoveragePath.{key} missing from merged config"
+        assert isinstance(fcp["turn_fallback_enabled"], bool)
+        assert 0.0 <= fcp["turn_fallback_max_reverse_m"] <= 0.5, (
+            "the fallback's straight reverse must stay of the order of the "
+            "reverse-escape's 0.30 m"
+        )
+        assert 1.0 <= fcp["turn_fallback_max_rejoin_arc_m"] <= 5.0, (
+            "the rejoin search must reach past a U-turn (> 1 m) but stay a few metres"
+        )
+        assert 30.0 <= fcp["turn_fallback_min_turn_deg"] <= 90.0, (
+            "the turn threshold must keep straights (0 deg) on the WEDGED path "
+            "and still catch the 70 deg kinks of 2026-09-22"
+        )
+        assert 10.0 <= fcp["turn_fallback_timeout_s"] <= 120.0
+
+
+def test_turn_fallback_is_unreachable_without_lidar() -> None:
+    """The fallback runs only where FTC's obstacle deviation runs. The no-LiDAR
+    overlay must keep both obstacle flags off, so a GPS-only robot behaves
+    exactly as before (it has no local obstacle layer to plan the manoeuvre on).
+    """
+    fcp = _controller_section(_load_no_lidar_params())["FollowCoveragePath"]
+    assert fcp["enable_obstacle_deviation"] is False
+    assert fcp["check_obstacles"] is False
+    assert _controller_section(_load_params())["FollowCoveragePath"]["use_offset_lattice"] is True
+
+
 def test_coverage_is_ftc_transit_is_not() -> None:
     """Wiring guard (restored 2026-06-19): the COVERAGE slot (FollowCoveragePath)
     MUST be FTCController, and the TRANSIT slot (FollowPath) MUST NOT be — transit

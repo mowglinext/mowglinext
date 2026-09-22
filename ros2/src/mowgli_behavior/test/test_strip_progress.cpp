@@ -134,3 +134,101 @@ TEST(StripProgress, NeverMovesBackwardsOrPastTheEnd)
   EXPECT_EQ(advanceProgressCursor(path, last + 20, 0.0, 0.0), last);
   EXPECT_EQ(advanceProgressCursor(Poses{}, 7, 0.0, 0.0), 7u);
 }
+
+// --- FTC turn fallback rejoins (mowgli_nav2_plugins/ftc_turn_fallback.hpp) ---
+
+using mowgli_behavior::findControllerRejoin;
+
+namespace
+{
+
+// Swath A along +x, a U-turn of radius r to the left, swath B back along -x,
+// headings along the path (a pose's orientation is part of what a rejoin
+// matches).
+Poses uTurn(double length, double r)
+{
+  Poses path;
+  const auto add = [&path](double x, double y, double yaw)
+  {
+    geometry_msgs::msg::PoseStamped p;
+    p.pose.position.x = x;
+    p.pose.position.y = y;
+    p.pose.orientation.z = std::sin(yaw / 2.0);
+    p.pose.orientation.w = std::cos(yaw / 2.0);
+    path.push_back(p);
+  };
+  for (double x = 0.0; x < length - 1e-9; x += kStep)
+  {
+    add(x, 0.0, 0.0);
+  }
+  const int n = static_cast<int>(std::ceil(M_PI * r / kStep));
+  for (int k = 0; k <= n; ++k)
+  {
+    const double a = -M_PI / 2.0 + M_PI * k / n;
+    add(length + r * std::cos(a), r + r * std::sin(a), a + M_PI / 2.0);
+  }
+  for (double x = length - kStep; x >= -1e-9; x -= kStep)
+  {
+    add(x, 2.0 * r, M_PI);
+  }
+  return path;
+}
+
+std::size_t nearestIndex(const Poses& path, double x, double y)
+{
+  std::size_t best = 0;
+  for (std::size_t i = 0; i < path.size(); ++i)
+  {
+    if (std::hypot(path[i].pose.position.x - x, path[i].pose.position.y - y) <
+        std::hypot(path[best].pose.position.x - x, path[best].pose.position.y - y))
+    {
+      best = i;
+    }
+  }
+  return best;
+}
+
+}  // namespace
+
+TEST(StripProgress, ABoundedCursorCannotFollowATurnFallbackRejoin)
+{
+  // Why a rejoin needs its own signal. The robot was at x = 2.4 on swath A (the
+  // cursor there); the fallback skipped the row end and the U-turn and rejoined
+  // swath B abeam, 0.13 m away, then drives B to its end. The cursor never gets
+  // past its own pose on A, which stays nearer to the robot than anything
+  // within kMaxProgressAdvanceM ahead of it.
+  const Poses path = uTurn(kSwathLen, kSpacing / 2.0);
+  std::size_t cursor = nearestIndex(path, 2.4, 0.0);
+  const std::size_t stuck = cursor;
+  for (double x = 2.4; x >= 0.0; x -= kStep)
+  {
+    cursor = advanceProgressCursor(path, cursor, x, kSpacing);
+  }
+  EXPECT_LT(cursor, stuck + 3) << "the bounded search did follow the rejoin after all";
+}
+
+TEST(StripProgress, AControllerRejoinIsFoundOnlyAsTheExactPoseAhead)
+{
+  const Poses path = uTurn(kSwathLen, kSpacing / 2.0);
+  const std::size_t cursor = nearestIndex(path, 2.4, 0.0);
+  const std::size_t rejoin = nearestIndex(path, 2.4, kSpacing);
+  ASSERT_GT(rejoin, cursor);
+
+  // The exact pose FTC republished from: found.
+  const auto found = findControllerRejoin(path, cursor, path[rejoin].pose);
+  ASSERT_TRUE(found.has_value());
+  EXPECT_EQ(*found, rejoin);
+
+  // A pose merely NEAR one of the unit's — the return swath's position with
+  // swath A's heading, or 1 mm off — is never taken for it.
+  auto near = path[rejoin].pose;
+  near.orientation = path[cursor].pose.orientation;
+  EXPECT_FALSE(findControllerRejoin(path, cursor, near).has_value());
+  near = path[rejoin].pose;
+  near.position.x += 1e-3;
+  EXPECT_FALSE(findControllerRejoin(path, cursor, near).has_value());
+
+  // Never backwards, never further than the bound.
+  EXPECT_FALSE(findControllerRejoin(path, rejoin, path[cursor].pose).has_value());
+  EXPECT_FALSE(findControllerRejoin(path, cursor, path[rejoin].pose, 0.5).has_value());
+}

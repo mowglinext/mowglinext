@@ -455,6 +455,24 @@ private:
   // bt_context.hpp). Null until the first costmap arrives → detour falls back.
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   nav_msgs::msg::OccupancyGrid::SharedPtr latest_costmap_;
+
+  // --- Coverage controller rejoin (FTC turn fallback) ------------------------
+  // FTC republishes the rest of the unit on the goal checker's plan topic when
+  // its turn fallback rejoins the plan past a blocked turn; the front pose is an
+  // exact pose of the unit, and path_progress_idx_ jumps to it
+  // (strip_progress.hpp findControllerRejoin). Same topic as coverage_plan_pub_,
+  // so this node also hears its own dispatches: only a message STAMPED after the
+  // goal in flight was sent counts (FTC stamps its republish with now(); a
+  // dispatched unit carries the coverage plan's older stamp). Serialized
+  // against the tick like latest_costmap_ (one MutuallyExclusive group).
+  struct ControllerRejoin
+  {
+    rclcpp::Time stamp;
+    geometry_msgs::msg::Pose pose;
+  };
+  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr controller_plan_sub_;
+  std::optional<ControllerRejoin> controller_rejoin_;
+  rclcpp::Time follow_goal_sent_stamp_{0, 0, RCL_ROS_TIME};
   // Blade-off detours taken on the CURRENT segment (unit). Reset to 0 per unit
   // (onStart and on advance() to the next unit). Bounded by max_detours_per_segment_.
   std::size_t detours_used_ = 0;

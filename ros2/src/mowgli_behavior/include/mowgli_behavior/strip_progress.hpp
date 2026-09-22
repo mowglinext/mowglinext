@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -76,6 +77,61 @@ inline std::size_t advanceProgressCursor(const std::vector<geometry_msgs::msg::P
     }
   }
   return best;
+}
+
+/// How closely a pose FTC republished must match a unit pose to be taken for
+/// it: the controller copies poses verbatim, so anything but float-exact means
+/// a different pose.
+constexpr double kControllerRejoinMatchTolerance = 1e-6;
+
+/// Longest jump along the unit a controller rejoin may make the cursor take
+/// [m]: FTC's turn fallback skips at most turn_fallback_max_rejoin_arc_m
+/// (3.0 m shipped, parameter cap 10.0 m) past the robot, and the cursor may
+/// trail the robot by up to kMaxProgressAdvanceM.
+constexpr double kMaxControllerRejoinJumpM = 12.0;
+
+/// FTC's turn fallback (mowgli_nav2_plugins/ftc_turn_fallback.hpp) improvises
+/// a blocked turn and REJOINS the unit further on. It then republishes the rest
+/// of the unit, from the rejoin pose, on FollowCoveragePath/global_plan — a
+/// jump advanceProgressCursor can never follow: the skipped turn is often more
+/// than kMaxProgressAdvanceM of path, and at a U-turn the cursor's own pose, on
+/// the other swath 0.13 m away, stays nearer to the robot than anything in its
+/// window for the rest of the unit (test_strip_progress.cpp pins both).
+///
+/// The republished front pose is an EXACT copy of one of the unit's poses: find
+/// it ahead of `cursor` (within `max_arc_m` of path). Nothing but an exact
+/// position AND orientation match counts, so a neighbouring swath or ring can
+/// never be taken for it. nullopt when there is no such pose ahead.
+inline std::optional<std::size_t> findControllerRejoin(
+    const std::vector<geometry_msgs::msg::PoseStamped>& poses,
+    std::size_t cursor,
+    const geometry_msgs::msg::Pose& rejoin,
+    double max_arc_m = kMaxControllerRejoinJumpM)
+{
+  const auto same = [&rejoin](const geometry_msgs::msg::Pose& p)
+  {
+    constexpr double tol = kControllerRejoinMatchTolerance;
+    return std::abs(p.position.x - rejoin.position.x) <= tol &&
+           std::abs(p.position.y - rejoin.position.y) <= tol &&
+           std::abs(p.orientation.z - rejoin.orientation.z) <= tol &&
+           std::abs(p.orientation.w - rejoin.orientation.w) <= tol;
+  };
+  double arc = 0.0;
+  for (std::size_t i = cursor + 1; i < poses.size(); ++i)
+  {
+    const auto& p = poses[i].pose.position;
+    const auto& q = poses[i - 1].pose.position;
+    arc += std::hypot(p.x - q.x, p.y - q.y);
+    if (arc > max_arc_m)
+    {
+      break;
+    }
+    if (same(poses[i].pose))
+    {
+      return i;
+    }
+  }
+  return std::nullopt;
 }
 
 }  // namespace mowgli_behavior

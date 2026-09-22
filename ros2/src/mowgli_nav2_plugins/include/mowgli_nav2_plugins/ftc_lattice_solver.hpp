@@ -26,6 +26,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -168,5 +169,25 @@ private:
   double axis_rear_{0.0};
   double axis_front_{0.0};
 };
+
+/// The lattice problem FTC solves on the first tick it FOLLOWS from plan index
+/// `carrot_idx` with no offset applied — e.g. right after a turn-fallback rejoin
+/// (ftc_turn_fallback.hpp): true when it finds a profile, false when it would be
+/// WEDGED again. `leg_first`/`leg_last`/`corner` are the pivot leg and next
+/// pivot corner of `carrot_idx` (ftc_pivot.hpp PivotLeg / NextPivotCorner);
+/// `to_costmap` maps a plan pose into the costmap frame.
+bool LatticeFeasibleFrom(
+    const nav2_costmap_2d::Costmap2D& costmap,
+    const BoundaryGuard& guard,
+    const ObstacleDeviation::Footprint& body,
+    const std::vector<geometry_msgs::msg::PoseStamped>& plan,
+    std::size_t carrot_idx,
+    std::size_t leg_first,
+    std::size_t leg_last,
+    std::optional<std::size_t> corner,
+    const std::function<geometry_msgs::msg::PoseStamped(const geometry_msgs::msg::PoseStamped&)>&
+        to_costmap,
+    const LatticeSolverCfg& cfg,
+    double horizon_m);
 
 }  // namespace mowgli_nav2_plugins
