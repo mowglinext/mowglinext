@@ -62,6 +62,13 @@
 namespace mowgli_nav2_plugins
 {
 
+/// Longest path still ahead that the progress_threshold pose-ratio rule may
+/// forgive [m]. It covers a sub-path that ends on a turn-around arc bending back
+/// inside the xy tolerance; beyond it only the end-approach rule (remaining path
+/// <= xy_goal_tolerance) completes the goal. Field 2026-09-22: without the bound,
+/// a long sub-path completed at 97 % of its poses with 4.9 m still to mow.
+constexpr double kRatioRuleMaxRemainingM = 1.0;
+
 class PathProgressGoalChecker : public nav2_core::GoalChecker
 {
 public:

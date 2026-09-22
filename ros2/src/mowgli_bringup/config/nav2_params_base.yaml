@@ -200,6 +200,10 @@ controller_server:
       # short of never reached 95 % of its poses and progress_checker aborted it
       # 30 s later. It needs no key: it reuses xy_goal_tolerance, which must stay
       # >= FTC max_goal_distance_error (navigation.launch.py floors it).
+      # 2026-09-22: the 95 % pose-ratio rule now also needs <= 1.0 m of path
+      # still ahead (kRatioRuleMaxRemainingM): on a long sub-path 5 % of the
+      # poses is metres, and one whose end looped back near pose 2326/2391
+      # completed there with 4.9 m unmowed.
       xy_goal_tolerance: 0.50
       yaw_goal_tolerance: 3.14   # ≈π → ignore final heading (test pins ≤ 3.1416)
       plan_topic: "/controller_server/FollowCoveragePath/global_plan"

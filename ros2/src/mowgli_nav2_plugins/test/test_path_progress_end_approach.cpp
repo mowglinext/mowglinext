@@ -377,6 +377,27 @@ TEST_F(PathProgressEndApproachTest, LongPathKeepsThe95PercentRule)
   EXPECT_GE(driveAlong(19.0, 19.2), 0.0);
 }
 
+// Field 2026-09-22: a 2391-pose sub-path completed at 97 % of its poses with
+// 4.9 m of path still ahead — its end loops back within 0.49 m of that point, so
+// the 95 % rule alone ended the goal and those metres were never mowed. The pose
+// ratio may only forgive a SHORT remainder (kRatioRuleMaxRemainingM).
+TEST_F(PathProgressEndApproachTest, The95PercentRuleNeverSkipsMetresOfPath)
+{
+  std::vector<Pose2> loop;
+  appendLine(loop, 0.0, 0.0, 102.3, 0.0, 0.05);
+  appendHalfTurn(loop, 102.3, 0.2, 0.2, -M_PI / 2.0, 0.05);
+  appendLine(loop, 102.3, 0.4, 100.1, 0.4, 0.05);
+  loadPath(withFtcTail(loop));
+  const double length = pathLength(path_);
+  const Pose2 loop_entry = pointAt(path_, 100.0);
+  ASSERT_LT(std::hypot(loop_entry.x - path_.back().x, loop_entry.y - path_.back().y), kXyTolM);
+  ASSERT_GE(100.0 / length, 0.95) << "the pose ratio alone must pass at the loop entry";
+  ASSERT_GT(length - 100.0, 5.0);
+
+  EXPECT_LT(driveAlong(0.0, 100.4), 0.0) << "completed with metres of path still ahead";
+  EXPECT_GE(driveAlong(100.4, length - 0.30), 0.0);
+}
+
 // A path whose whole length fits inside the goal tolerance cannot tell its start
 // from its end: it completes on proximity, as short_path_poses paths already do.
 TEST_F(PathProgressEndApproachTest, PathShorterThanToleranceCompletesOnProximity)

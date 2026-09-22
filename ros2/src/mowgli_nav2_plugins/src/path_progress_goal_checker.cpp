@@ -345,9 +345,17 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
   //    aborted the goal 30 s later (field 2026-09-21). Measured ALONG the path
   //    from the monotonic cursor, this rule stays false at the start of a looped
   //    path whose end is near its start: the whole path is still ahead.
+  //  The pose ratio may only forgive a SHORT remainder (a sub-path ending on a
+  //  turn-around arc that bends back inside the xy tolerance). On a long path
+  //  5 % of the poses is metres of lawn: field 2026-09-22 a 2391-pose sub-path
+  //  whose end loops back within 0.49 m of pose 2326 completed there, at 97 %,
+  //  with 4.9 m of path — never mowed — still ahead.
   const double progress = static_cast<double>(max_reached_index_) / static_cast<double>(n - 1);
   const double remaining_m = remainingPathLength(progress_pose.position);
-  if (progress < progress_threshold_ && remaining_m > xy_goal_tolerance_)
+  const bool end_approach = remaining_m <= xy_goal_tolerance_;
+  const bool pose_ratio = progress >= progress_threshold_ &&
+                          remaining_m <= std::max(kRatioRuleMaxRemainingM, xy_goal_tolerance_);
+  if (!end_approach && !pose_ratio)
   {
     return false;
   }
