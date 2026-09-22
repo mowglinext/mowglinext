@@ -236,7 +236,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 
   // ── TF buffer for map-frame robot position lookup ────────────────────────
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
-  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+  tf_listener_ = std::make_unique<SafeTransformListener>(*tf_buffer_, *this);
 
   // ── Initialise map ───────────────────────────────────────────────────────
   init_map();
