@@ -17,6 +17,7 @@
 // coverage transits must select transit_goal_checker (final heading ignored)
 // while the default navigate_to_pose.xml keeps stopped_goal_checker for
 // opennav_docking's staging approach. The two files must otherwise match.
+#include <cmath>
 #include <fstream>
 #include <regex>
 #include <sstream>
@@ -88,4 +89,35 @@ TEST(TransitTree, RecoveryBacksUpBeforeAnythingElse)
   EXPECT_LT(backup, clearing) << "BackUp must come before clearing the costmaps";
   EXPECT_LT(backup, spin) << "BackUp must come before Spin";
   EXPECT_LT(backup, wait) << "BackUp must come before Wait";
+}
+
+// Both trees must validate the path as a POINT, the model SmacPlanner2D plans
+// with. Nav2 Lyrical's ValidatePath defaults to the robot footprint, which made
+// nearly every fresh transit plan near the boundary or a drawn obstacle
+// "invalid" and replanned it every second (field 2026-09-22: 118 of 124).
+TEST(TransitTree, ValidatesThePathAsAPointLikeSmac)
+{
+  for (const char* path : {MOWGLI_NAV_TREE_PATH, MOWGLI_TRANSIT_TREE_PATH})
+  {
+    const std::string xml = stripHeaderComment(readFile(path));
+    std::smatch m;
+    ASSERT_TRUE(std::regex_search(xml, m, std::regex("<ValidatePath[^>]*/>"))) << path;
+    const std::string node = m.str();
+    std::smatch fp;
+    ASSERT_TRUE(std::regex_search(node, fp, std::regex("footprint=\"([^\"]+)\"")))
+        << path << ": ValidatePath has no footprint — it falls back to the robot footprint";
+    const std::string poly = fp[1].str();
+    const std::regex number("-?[0-9]*\\.?[0-9]+");
+    int count = 0;
+    for (auto it = std::sregex_iterator(poly.begin(), poly.end(), number);
+         it != std::sregex_iterator();
+         ++it, ++count)
+    {
+      EXPECT_LE(std::abs(std::stod(it->str())), 0.05)
+          << path << ": footprint " << poly << " is not a point";
+    }
+    EXPECT_GE(count, 6) << path << ": footprint " << poly << " is not a polygon";
+    EXPECT_EQ(node.find("max_cost"), std::string::npos)
+        << path << ": keep the default max_cost (lethal only), Jazzy's point check";
+  }
 }

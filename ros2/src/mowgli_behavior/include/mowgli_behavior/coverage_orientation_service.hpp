@@ -45,10 +45,27 @@ class CoverageOrientationService
   };
 
 public:
-  CoverageOrientationService(rclcpp::Node& owner, const std::shared_ptr<BTContext>& context)
-      : context_(context)
+  // service_is_ready() is a snapshot. On Fast DDS it is also false whenever the
+  // graph holds a different number of request readers and response writers for
+  // the service, or this client has matched a different number of each — i.e.
+  // while ANY server of that name is half-discovered or half-removed. A matched
+  // map_server that has been answering for minutes then reads "not ready" for a
+  // few milliseconds (a map_server restart; in CI, a test process on the same
+  // DDS domain creating one every 20 ms). One negative sample is not "map_server
+  // is down", so a request keeps polling for this long before it is refused.
+  // Polled from processPending, never slept: the owner is the BT tick.
+  static constexpr std::chrono::milliseconds kServiceReadyGrace{500};
+  // How long an already-sent get_mowing_area request may stay unanswered.
+  static constexpr std::chrono::seconds kValidationTimeout{2};
+
+  CoverageOrientationService(rclcpp::Node& owner,
+                             const std::shared_ptr<BTContext>& context,
+                             std::chrono::milliseconds service_ready_grace = kServiceReadyGrace)
+      : context_(context), service_ready_grace_(service_ready_grace)
   {
-    area_client_ = context->helper_node->create_client<Area>("/map_server_node/get_mowing_area");
+    // The shared, long-lived client (BTContext::mowingAreaClient), not a second
+    // one: a fresh client must first re-discover the server on its own.
+    area_client_ = context->mowingAreaClient();
     service_ = owner.create_service<Service>(
         "~/coverage_orientation",
         [this](std::shared_ptr<rmw_request_id_t> header, Service::Request::SharedPtr request)
@@ -107,12 +124,20 @@ public:
       return reply("Behavior context is unavailable");
     if (!area_future_)
     {
+      const auto now = std::chrono::steady_clock::now();
       if (!area_client_->service_is_ready())
+      {
+        if (!unready_since_)
+          unready_since_ = now;
+        if (now - *unready_since_ < service_ready_grace_)
+          return;  // re-sampled on the next call
         return reply("Map area validation is unavailable");
+      }
+      unready_since_.reset();
       auto request = std::make_shared<Area::Request>();
       request->index = active_->request->area_index;
       area_future_.emplace(area_client_->async_send_request(request));
-      deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      deadline_ = now + kValidationTimeout;
       return;
     }
     if (area_future_->future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
@@ -171,15 +196,19 @@ private:
     service_->send_response(*active_->header, response);
     active_.reset();
     area_future_.reset();
+    unready_since_.reset();
   }
 
   std::weak_ptr<BTContext> context_;
+  std::chrono::milliseconds service_ready_grace_;
   std::mutex queue_mutex_;
   std::deque<Pending> queue_;
   std::optional<Pending> active_;
   rclcpp::Client<Area>::SharedPtr area_client_;
   std::optional<rclcpp::Client<Area>::FutureAndRequestId> area_future_;
   std::chrono::steady_clock::time_point deadline_;
+  // First negative service_is_ready() sample of the active request.
+  std::optional<std::chrono::steady_clock::time_point> unready_since_;
   rclcpp::Service<Service>::SharedPtr service_;
 };
 }  // namespace mowgli_behavior

@@ -78,6 +78,15 @@ Two more piles of test files exist but **never execute**: the 62 CTest suites in
 - **`msg-codegen-drift.yml` and `protocol-version-drift.yml` have `pull_request: branches: [main]` only.** A PR into `dev` gets them only through the `push` trigger on the source branch — a branch name outside `feat|fix|refactor|chore|perf/**` (e.g. `codex/…`) matches neither, so both gates can be silently absent. `ros2-ci.yml` solved exactly this with its `changes` job.
 - **No workflow runs Playwright, the installer suite, the `docs/` static checks, or the simulation E2E.**
 
+### Tests that bring up rclcpp must be DDS-isolated
+
+- **CI tests on Fast DDS, not Cyclone.** `ros2-ci.yml` never sets `RMW_IMPLEMENTATION`, so `build-and-test` runs the Lyrical default (`rmw_fastrtps_cpp`); the robot and the dev images run Cyclone. A local Cyclone loop is not a reproduction of a CI flake: use `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`.
+- **`colcon test` runs packages in parallel**, and without isolation every test process sits on `ROS_DOMAIN_ID` 0 and discovers every other one. That caused two CI flakes (2026-09-22), both reproduced locally with a concurrent `test_map_server` loop on the same domain and both gone with one domain per process:
+  - `service_is_ready()` on Fast DDS is false whenever the graph holds a different number of request readers and response writers for the service — so while `test_map_server` created and destroyed its `/map_server_node/get_mowing_area` every ~20 ms, the orientation tests in `test_get_next_unmowed_area` got "Map area validation is unavailable" in 51 of 60 runs. A foreign server can also simply answer first.
+  - SIGSEGV (-11) in `test_diagnostics` and `test_map_server` (backtraced; `test_blade_services`' CI -11 has the same shape): destroying a process's last node deletes its DDS participant, and Fast DDS 3.6.2's `~TypeLookupManager` frees its builtin writer histories *before* stopping the TypeLookup listener threads, which may still be answering type requests from another test process's participant (`TypeLookupManager::send` → `WriterHistory::create_change` / `History::remove_change` on freed memory). An upstream race that needs a remote participant on the same domain.
+- **Rule:** register every gtest that calls `rclcpp::init` with **`ament_add_ros_isolated_gtest`** (`find_package(ament_cmake_ros REQUIRED)` in `BUILD_TESTING`, `<test_depend>ament_cmake_ros</test_depend>`). Its runner (`rmw_test_fixture_implementation/run_rmw_isolated`) gives each test process its own `ROS_DOMAIN_ID` (1–101, claimed by a loopback port lock). Running the binary by hand bypasses the runner, so it lands on domain 0 again.
+- **Known residual, not isolation-related:** `test_map_server` can hang (60 s ctest timeout) in `~MapServerNode` → `tf2_ros::TransformListener::~TransformListener`, which calls `executor_->cancel()` and joins its spin thread; if that thread has not entered `spin()` yet, the cancel is lost and the join never returns (upstream geometry2). Seen 5 times in 600 local runs under heavy load, never in CI so far.
+
 ---
 
 ## Running ROS2 tests locally

@@ -115,11 +115,17 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  # Every test that brings up rclcpp runs through ament_add_ros_isolated_gtest:
+  # colcon tests packages in parallel, and on one shared DDS domain the test
+  # processes discover each other's nodes (docs/claude/testing-ci.md).
+  find_package(ament_cmake_ros REQUIRED)
 
-  ament_add_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
+  ament_add_ros_isolated_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
   target_link_libraries(test_lyrical_goal_checker ${PROJECT_NAME})
 
-  ament_add_gtest(test_path_progress_end_approach test/test_path_progress_end_approach.cpp)
+  ament_add_ros_isolated_gtest(test_path_progress_end_approach
+    test/test_path_progress_end_approach.cpp
+  )
   target_link_libraries(test_path_progress_end_approach ${PROJECT_NAME})
 
   ament_add_gtest(test_oscillation_detector
