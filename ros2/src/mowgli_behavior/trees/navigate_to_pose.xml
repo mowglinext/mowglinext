@@ -43,7 +43,17 @@
               <Inverter>
                 <GlobalUpdatedGoal/>
               </Inverter>
-              <ValidatePath path="{path}"/>
+              <!-- Validate the path the way SmacPlanner2D PLANS it: as a POINT
+                   (tiny footprint), lethal cells only. Nav2 Lyrical's ValidatePath
+                   defaults to the ROBOT footprint, so a point path Smac had just
+                   planned past the boundary band or a drawn obstacle's band came
+                   back "invalid" at once and the tree replanned every second
+                   (field 2026-09-22: 118 of 124 transit plans; 2026-09-21: 76 of
+                   92). Replanning cannot help there — Smac returns the same path —
+                   and the body is guarded by RPP's footprint check and
+                   collision_monitor, not by this node. A LiDAR obstacle landing ON
+                   the path still invalidates it. -->
+              <ValidatePath path="{path}" footprint="[[0.01,0.01],[0.01,-0.01],[-0.01,-0.01],[-0.01,0.01]]"/>
             </ReactiveSequence>
             <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
           </Fallback>
