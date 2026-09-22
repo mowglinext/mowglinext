@@ -42,6 +42,7 @@ find_package(Eigen3 REQUIRED)
 add_library(${PROJECT_NAME} SHARED
   src/oscillation_detector.cpp
   src/obstacle_deviation.cpp
+  src/ftc_lattice_solver.cpp
   src/ftc_controller.cpp
   src/ftc_controller_plugin.cpp
   src/path_progress_goal_checker.cpp
@@ -240,6 +241,29 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_ftc_pivot mowgli_interfaces::mowgli_interfaces_headers)
+
+  # Costmap side of the offset lattice (ftc_lattice_solver.hpp): node tests,
+  # degrading solve, and a case recorded on the robot (2026-09-22). ROS-free.
+  ament_add_gtest(test_ftc_lattice_solver
+    test/test_ftc_lattice_solver.cpp
+    src/ftc_lattice_solver.cpp
+    src/obstacle_deviation.cpp
+  )
+
+  target_include_directories(test_ftc_lattice_solver
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  target_link_libraries(test_ftc_lattice_solver
+    ${geometry_msgs_TARGETS}
+    ${nav2_costmap_2d_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
+  add_executable(lattice_replay test/lattice_replay.cpp)
+  target_link_libraries(lattice_replay ${PROJECT_NAME})
 endif()
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@
 #include <tf2_ros/transform_listener.hpp>
 
 #include "mowgli_nav2_plugins/ftc_carrot_lead.hpp"
+#include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_obstacle_wait.hpp"
 #include "mowgli_nav2_plugins/ftc_offset_lattice.hpp"
 #include "mowgli_nav2_plugins/ftc_pivot.hpp"
@@ -2934,187 +2935,58 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
   // inside the horizon becomes the last station and must be planned at ZERO
   // offset: no skirt is carried through a pivot.
   const auto [leg_first, leg_last] = PivotLeg(pivot_corners_, carrot_idx, global_plan_.size());
-  const std::optional<std::size_t> corner = nextPivotCorner();
-  std::vector<std::size_t> pose_idx;  // plan index of each resampled pose
-  std::size_t carrot_pos = 0;  // position of the carrot inside pose_idx
-  bool corner_is_last_station = false;
+  const LatticeWindow window = ResampleLatticeWindow(global_plan_,
+                                                     carrot_idx,
+                                                     leg_first,
+                                                     leg_last,
+                                                     nextPivotCorner(),
+                                                     ds,
+                                                     lead,
+                                                     config_.avoidance_horizon_m);
+  const bool corner_is_last_station = window.corner_is_last_station;
+  if (window.pose_idx.empty())
   {
-    const auto step_len = [this](std::size_t a, std::size_t b)
-    {
-      return std::hypot(global_plan_[a].pose.position.x - global_plan_[b].pose.position.x,
-                        global_plan_[a].pose.position.y - global_plan_[b].pose.position.y);
-    };
-    std::vector<std::size_t> behind;
-    double acc = 0.0;
-    double total = 0.0;
-    for (std::size_t i = carrot_idx; i > leg_first && total < lead; --i)
-    {
-      const double l = step_len(i, i - 1);
-      acc += l;
-      total += l;
-      if (acc >= ds)
-      {
-        behind.push_back(i - 1);
-        acc = 0.0;
-      }
-    }
-    pose_idx.assign(behind.rbegin(), behind.rend());
-    carrot_pos = pose_idx.size();
-    pose_idx.push_back(carrot_idx);
-    acc = 0.0;
-    total = 0.0;
-    std::size_t i = carrot_idx;
-    for (; i + 1 < global_plan_.size() && i + 1 <= leg_last && total < config_.avoidance_horizon_m;
-         ++i)
-    {
-      const double l = step_len(i, i + 1);
-      acc += l;
-      total += l;
-      if (acc >= ds)
-      {
-        pose_idx.push_back(i + 1);
-        acc = 0.0;
-      }
-    }
-    if (corner.has_value() && i == *corner && *corner > carrot_idx)
-    {
-      if (pose_idx.back() != *corner)
-      {
-        pose_idx.push_back(*corner);
-      }
-      corner_is_last_station = true;
-    }
+    return true;  // no window (callers never pass an empty plan): keep the target
   }
 
   std::vector<geometry_msgs::msg::PoseStamped> poses;
   {
     std::vector<geometry_msgs::msg::PoseStamped> span;
-    if (!planWindowInCostmapFrame(pose_idx.front(), pose_idx.back() + 1, span))
+    if (!planWindowInCostmapFrame(window.pose_idx.front(), window.pose_idx.back() + 1, span))
     {
       return true;  // no TF this tick: keep the current target, do not escape
     }
-    poses.reserve(pose_idx.size());
-    for (const std::size_t i : pose_idx)
+    poses.reserve(window.pose_idx.size());
+    for (const std::size_t i : window.pose_idx)
     {
-      poses.push_back(span[i - pose_idx.front()]);
+      poses.push_back(span[i - window.pose_idx.front()]);
     }
   }
 
-  // Station index of a pivot corner that ends the horizon (hard zero offset),
-  // or none.
-  const std::size_t corner_station = corner_is_last_station
-                                         ? pose_idx.size() - 1 - carrot_pos
-                                         : std::numeric_limits<std::size_t>::max();
-  std::vector<double> stations;
-  stations.reserve(poses.size() - carrot_pos);
-  stations.push_back(0.0);
-  for (std::size_t i = carrot_pos + 1; i < poses.size(); ++i)
+  // Which (pose, offset) nodes the body cannot occupy, and the degrading solve
+  // (reaction slack -> none -> ignore the stations under the body, each over a
+  // shrinking horizon): ftc_lattice_solver.hpp, shared with the offline replay
+  // tests so they exercise exactly this decision.
+  LatticeSolverCfg solver_cfg;
+  solver_cfg.lattice = cfg;
+  solver_cfg.station_spacing_m = ds;
+  solver_cfg.lead_m = lead;
+  solver_cfg.reaction_m = config_.avoidance_reaction_m;
+  solver_cfg.min_horizon_m = config_.avoidance_min_horizon_m;
+  LatticeSolver solver(*costmap_map_,
+                       guard,
+                       footprint,
+                       std::move(poses),
+                       window.carrot_pos,
+                       corner_is_last_station,
+                       solver_cfg);
+  const std::vector<double>& stations = solver.Stations();
+  const auto stations_in = [&solver](double metres)
   {
-    stations.push_back(stations.back() +
-                       std::hypot(poses[i].pose.position.x - poses[i - 1].pose.position.x,
-                                  poses[i].pose.position.y - poses[i - 1].pose.position.y));
-  }
-
-  // Footprint tests are the expensive part and the DP asks for the same
-  // (pose, offset) from several stations: memoise per tick.
-  const int half = static_cast<int>(std::floor(cfg.max_offset / cfg.offset_step + 1e-9));
-  const std::size_t width = static_cast<std::size_t>(2 * half + 1);
-  std::vector<signed char> memo(poses.size() * width, -1);
-  double axis_rear = 0.0;
-  double axis_front = 0.0;
-  for (const auto& v : footprint)
-  {
-    axis_rear = std::min(axis_rear, v.x);
-    axis_front = std::max(axis_front, v.x);
-  }
-  const auto pose_blocked = [&](std::size_t pose, double offset)
-  {
-    const std::size_t k = static_cast<std::size_t>(
-        std::clamp(half + static_cast<int>(std::lround(offset / cfg.offset_step)), 0, 2 * half));
-    signed char& cell = memo[pose * width + k];
-    if (cell < 0)
-    {
-      // Obstacles: the real chassis polygon against RAW lethal cells of the local
-      // costmap, with NO zone guard — the guard samples every footprint cell
-      // against a global band that already contains the body (the keepout band
-      // is one chassis half-width, the boundary band one circumscribed radius),
-      // which counts the body twice and made the planned line itself read
-      // "blocked" beside every drawn obstacle.
-      bool hit = ObstacleDeviation::footprintBlocked(*costmap_map_,
-                                                     poses[pose],
-                                                     offset,
-                                                     footprint,
-                                                     ObstacleDeviation::BoundaryGuard{},
-                                                     ObstacleDeviation::kLethalOnlyThreshold);
-      // Zone: only for a candidate that LEAVES the planned line (the plan is
-      // authoritative — Invariant 5), and as a test of the body AXIS against the
-      // band, which is exactly "the body, once".
-      if (!hit && std::fabs(offset) > 1e-9 && guard.costmap != nullptr)
-      {
-        const double yaw = tf2::getYaw(poses[pose].pose.orientation);
-        const double ox = poses[pose].pose.position.x - offset * std::sin(yaw);
-        const double oy = poses[pose].pose.position.y + offset * std::cos(yaw);
-        for (const double along : {axis_rear, 0.0, axis_front})
-        {
-          if (guard.isLethalAt(ox + along * std::cos(yaw), oy + along * std::sin(yaw)))
-          {
-            hit = true;
-            break;
-          }
-        }
-      }
-      cell = hit ? 1 : 0;
-    }
-    return cell == 1;
+    return solver.StationsIn(metres);
   };
-  // A node is tested over a SPAN of poses, not one:
-  //   behind — the robot trails the carrot by `lead` (see above);
-  //   ahead  — `reaction`: the offset the profile asks for is only REACHED after
-  //            the blend, the lateral loop and the chassis have caught up, and
-  //            an obstacle grows as the LiDAR gets a closer look at it. Without
-  //            it the cheapest profile ramps at the last possible station with
-  //            zero slack (field 2026-09-17: a -0.30 m skirt planned for 13 s,
-  //            never started, then "no profile" 0.5 m from the obstacle).
-  const auto span_blocked =
-      [&](std::size_t station, double offset, std::size_t ahead, std::size_t grace)
-  {
-    if (station <= grace)
-    {
-      return false;
-    }
-    const std::size_t at = carrot_pos + station;
-    const std::size_t from = at > carrot_pos ? at - carrot_pos : 0;
-    const std::size_t to = std::min(poses.size() - 1, at + ahead);
-    for (std::size_t pose = from; pose <= to; ++pose)
-    {
-      if (pose_blocked(pose, offset))
-      {
-        return true;
-      }
-    }
-    return false;
-  };
-  const double mean_ds =
-      stations.size() > 1 ? stations.back() / static_cast<double>(stations.size() - 1) : ds;
-  const auto stations_in = [&](double metres)
-  {
-    return static_cast<std::size_t>(std::ceil(std::max(0.0, metres) / std::max(1e-3, mean_ds)));
-  };
-  const std::size_t reaction = stations_in(config_.avoidance_reaction_m);
 
   const int preferred = is_avoiding_ ? (avoid_sign_ >= 0.0 ? 1 : -1) : 0;
-  // Degrade in steps rather than give up: (1) with the reaction slack; (2) without
-  // it — we are already closer than we would like; (3) ignoring the stations the
-  // body already covers (the robot is where it is, exactly like station 0) so
-  // the profile still steers AWAY. Only when all three fail is the robot wedged.
-  //
-  // The HORIZON degrades too, and first: a column of the lattice that is blocked
-  // at every offset 2 m ahead (the hedge where the ring turns, a scan that paints
-  // a wall for one tick) makes the whole problem infeasible, but it is not a
-  // reason to stop NOW — field 2026-09-17: WEDGED + reverse-escape with the
-  // obstacle still 2.4 m away, flipping with a feasible plan every other tick.
-  // Only a blockage inside avoidance_min_horizon_m counts as wedged; beyond it
-  // the robot keeps driving on the longest prefix it can plan and looks again.
   OffsetLatticeResult plan;
   int plan_level = 0;
   std::size_t planned_stations = stations.size();
@@ -3122,44 +2994,10 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
   // to ask "is the side we committed to still passable?".
   const auto solve = [&](int only_side)
   {
-    plan = OffsetLatticeResult{};
-    const std::size_t min_stations =
-        std::min(stations.size(),
-                 std::max<std::size_t>(2, stations_in(config_.avoidance_min_horizon_m) + 1));
-    const std::size_t shrink = std::max<std::size_t>(1, stations_in(0.25));
-    for (std::size_t n = stations.size(); !plan.feasible;
-         n = (n > min_stations + shrink) ? n - shrink : min_stations)
-    {
-      const std::vector<double> prefix(stations.begin(),
-                                       stations.begin() + static_cast<std::ptrdiff_t>(n));
-      plan_level = 0;
-      for (const auto& [ahead, grace] : {std::pair<std::size_t, std::size_t>{reaction, 0},
-                                         std::pair<std::size_t, std::size_t>{0, 0},
-                                         std::pair<std::size_t, std::size_t>{0, stations_in(lead)}})
-      {
-        ++plan_level;
-        plan = PlanOffsetProfile(
-            prefix,
-            lateral_deviation_,
-            preferred,
-            [&, ahead = ahead, grace = grace, only_side](std::size_t station, double offset)
-            {
-              return (only_side != 0 && offset * static_cast<double>(only_side) < -1e-9) ||
-                     (station == corner_station && std::fabs(offset) > 1e-9) ||
-                     span_blocked(station, offset, ahead, grace);
-            },
-            cfg);
-        if (plan.feasible)
-        {
-          break;
-        }
-      }
-      planned_stations = n;
-      if (n == min_stations)
-      {
-        break;
-      }
-    }
+    const LatticeSolution sol = solver.Solve(lateral_deviation_, preferred, only_side);
+    plan = sol.plan;
+    plan_level = sol.level;
+    planned_stations = sol.planned_stations;
   };
   solve(0);
 
