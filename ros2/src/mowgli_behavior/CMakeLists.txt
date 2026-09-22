@@ -222,7 +222,7 @@ if(BUILD_TESTING)
   # Halting a node whose action goal already finished must not throw
   # (rclcpp_action's UnknownGoalHandleError). Field 2026-09-21/22: DockRobot
   # wedged the tree in RETURNING_HOME for 10 h. Fake /dock_robot server.
-  ament_add_gtest(test_cancel_on_halt
+  ament_add_ros_isolated_gtest(test_cancel_on_halt
     test/test_cancel_on_halt.cpp
     src/docking_nodes.cpp
     TIMEOUT 120
