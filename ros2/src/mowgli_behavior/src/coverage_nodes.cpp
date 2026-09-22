@@ -569,12 +569,14 @@ void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
   {
     return;
   }
-  double rx, ry;
+  double rx, ry, ryaw;
   try
   {
     const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
     rx = tf.transform.translation.x;
     ry = tf.transform.translation.y;
+    // A TF rotation is always populated; 0 is only the unreachable fallback.
+    ryaw = quaternionYaw(tf.transform.rotation).value_or(0.0);
   }
   catch (const tf2::TransformException&)
   {
@@ -607,7 +609,9 @@ void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
   // Monotonic nearest-pose search over at most kMaxProgressAdvanceM of PATH
   // ahead of the cursor (strip_progress.hpp) — never a pose count: 400 poses
   // reached the neighbouring serpentine swath and the cursor jumped onto it.
-  path_progress_idx_ = advanceProgressCursor(poses, path_progress_idx_, rx, ry);
+  // The arc bound alone does not close that case at a pivot-joined row end
+  // (issue #742), so candidates must also be oriented with the robot.
+  path_progress_idx_ = advanceProgressCursor(poses, path_progress_idx_, rx, ry, ryaw);
 }
 
 float FollowStrip::livePercent() const

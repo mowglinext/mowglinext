@@ -41,17 +41,20 @@ constexpr double kSpacing = 0.13;  // shipped operation width
 constexpr double kStep = 0.03;  // coverage pose spacing
 constexpr double kSwathLen = 4.0;
 
-void append(Poses& path, double x, double y)
+void append(Poses& path, double x, double y, double yaw)
 {
   geometry_msgs::msg::PoseStamped p;
   p.pose.position.x = x;
   p.pose.position.y = y;
-  p.pose.orientation.w = 1.0;
+  p.pose.orientation.z = std::sin(yaw / 2.0);
+  p.pose.orientation.w = std::cos(yaw / 2.0);
   path.push_back(p);
 }
 
 // `count` swaths along x, `kSpacing` apart in y, alternating direction, joined
 // by pivot joins (a straight 0.13 m step between swath ends), like #716 plans.
+// Orientations are the driven headings: a return swath is ANTIPARALLEL, which
+// is what tells the cursor it is not the row being mowed (issue #742).
 Poses serpentine(int count)
 {
   Poses path;
@@ -59,10 +62,11 @@ Poses serpentine(int count)
   for (int s = 0; s < count; ++s)
   {
     const double y = s * kSpacing;
+    const double yaw = (s % 2 == 0) ? 0.0 : M_PI;
     for (int i = 0; i <= n; ++i)
     {
       const double x = (s % 2 == 0) ? i * kStep : kSwathLen - i * kStep;
-      append(path, x, y);
+      append(path, x, y, yaw);
     }
   }
   return path;
@@ -71,6 +75,31 @@ Poses serpentine(int count)
 double yAt(const Poses& path, std::size_t i)
 {
   return path[i].pose.position.y;
+}
+
+std::size_t nearestIndex(const Poses& path, double x, double y)
+{
+  std::size_t best = 0;
+  for (std::size_t i = 0; i < path.size(); ++i)
+  {
+    if (std::hypot(path[i].pose.position.x - x, path[i].pose.position.y - y) <
+        std::hypot(path[best].pose.position.x - x, path[best].pose.position.y - y))
+    {
+      best = i;
+    }
+  }
+  return best;
+}
+
+double arcBetween(const Poses& path, std::size_t from, std::size_t to)
+{
+  double arc = 0.0;
+  for (std::size_t i = from + 1; i <= to; ++i)
+  {
+    arc += std::hypot(path[i].pose.position.x - path[i - 1].pose.position.x,
+                      path[i].pose.position.y - path[i - 1].pose.position.y);
+  }
+  return arc;
 }
 
 }  // namespace
@@ -85,21 +114,52 @@ TEST(StripProgress, AnOffsetRobotStaysOnItsOwnSwath)
   const double ry = 0.08;
 
   // Act
-  const std::size_t cursor = advanceProgressCursor(path, mid - 5, rx, ry);
+  const std::size_t cursor = advanceProgressCursor(path, mid - 5, rx, ry, /*robot_yaw=*/0.0);
 
   // Assert
   EXPECT_DOUBLE_EQ(yAt(path, cursor), 0.0) << "the cursor jumped onto the neighbouring swath";
   EXPECT_NEAR(path[cursor].pose.position.x, rx, kStep);
 }
 
-TEST(StripProgress, TheOldPoseCountWindowDidJump)
+TEST(StripProgress, TheOldPoseCountWindowIsNowRefusedByTheHeading)
 {
-  // The pre-fix behaviour, for the record: a 400-pose (~12 m) window reaches the
-  // pose of swath 1 beside the robot and takes it.
+  // The pre-fix window, for the record: 400 poses (~12 m) reaches the pose of
+  // swath 1 beside the robot. It is antiparallel to the robot, so the heading
+  // gate refuses it even though the arc bound would not.
   const Poses path = serpentine(4);
   const std::size_t mid = static_cast<std::size_t>(std::round(2.0 / kStep));
-  const std::size_t cursor = advanceProgressCursor(path, mid - 5, 2.0, 0.08, 400 * kStep);
-  EXPECT_DOUBLE_EQ(yAt(path, cursor), kSpacing);
+  const std::size_t cursor =
+      advanceProgressCursor(path, mid - 5, 2.0, 0.08, /*robot_yaw=*/0.0, 400 * kStep);
+  EXPECT_DOUBLE_EQ(yAt(path, cursor), 0.0);
+}
+
+TEST(StripProgress, AtAPivotJoinedRowEndTheArcBoundAloneWouldHaveJumped)
+{
+  // Issue #742: kMaxProgressAdvanceM alone does NOT forbid the return swath.
+  // Since #716 a short join is a pivot join of about one swath spacing, so from
+  // 0.40 m short of the row end the abeam pose on the next row is only
+  // 0.40 + 0.13 + 0.40 m of path away — and nearer than the robot's own line
+  // once it runs more than half a spacing wide.
+  const Poses path = serpentine(2);
+  const double rx = kSwathLen - 0.40;
+  const double ry = 0.08;
+  const std::size_t start = nearestIndex(path, rx, 0.0);
+  const std::size_t abeam = nearestIndex(path, rx, kSpacing);
+
+  // The counterexample's two preconditions, asserted rather than assumed.
+  ASSERT_GT(abeam, start);
+  ASSERT_LT(arcBetween(path, start, abeam), kMaxProgressAdvanceM)
+      << "the return swath is no longer inside the arc window — counterexample stale";
+  ASSERT_LT(std::hypot(path[abeam].pose.position.x - rx, path[abeam].pose.position.y - ry),
+            std::hypot(path[start].pose.position.x - rx, path[start].pose.position.y - ry))
+      << "the return swath is not the nearer one — counterexample stale";
+
+  // Act
+  const std::size_t cursor = advanceProgressCursor(path, start, rx, ry, /*robot_yaw=*/0.0);
+
+  // Assert: with both preconditions met, only the heading can refuse it.
+  EXPECT_DOUBLE_EQ(yAt(path, cursor), 0.0)
+      << "the cursor jumped the pivot join onto the return swath";
 }
 
 TEST(StripProgress, FollowsTheRobotAlongItsSwathAndRoundTheTurn)
@@ -117,7 +177,8 @@ TEST(StripProgress, FollowsTheRobotAlongItsSwathAndRoundTheTurn)
     const double side = (yAt(path, i) < kSpacing * 1.5) ? +0.05 : -0.05;
     const double rx = path[i].pose.position.x;
     const double ry = yAt(path, i) + side;
-    cursor = advanceProgressCursor(path, cursor, rx, ry);
+    // The robot is ON path[i], so it is heading the way that pose points.
+    cursor = advanceProgressCursor(path, cursor, rx, ry, *mowgli_behavior::poseYaw(path[i].pose));
     ASSERT_GE(cursor, previous) << "the cursor moved backwards at pose " << i;
     ASSERT_LE(cursor, i + static_cast<std::size_t>(std::ceil(kMaxProgressAdvanceM / kStep)) + 1)
         << "the cursor ran ahead of the robot at pose " << i;
@@ -130,9 +191,9 @@ TEST(StripProgress, NeverMovesBackwardsOrPastTheEnd)
 {
   const Poses path = serpentine(2);
   const std::size_t last = path.size() - 1;
-  EXPECT_EQ(advanceProgressCursor(path, 50, 0.0, 0.0), 50u);  // robot behind the cursor
-  EXPECT_EQ(advanceProgressCursor(path, last + 20, 0.0, 0.0), last);
-  EXPECT_EQ(advanceProgressCursor(Poses{}, 7, 0.0, 0.0), 7u);
+  EXPECT_EQ(advanceProgressCursor(path, 50, 0.0, 0.0, 0.0), 50u);  // robot behind the cursor
+  EXPECT_EQ(advanceProgressCursor(path, last + 20, 0.0, 0.0, 0.0), last);
+  EXPECT_EQ(advanceProgressCursor(Poses{}, 7, 0.0, 0.0, 0.0), 7u);
 }
 
 // --- FTC turn fallback rejoins (mowgli_nav2_plugins/ftc_turn_fallback.hpp) ---
@@ -174,20 +235,6 @@ Poses uTurn(double length, double r)
   return path;
 }
 
-std::size_t nearestIndex(const Poses& path, double x, double y)
-{
-  std::size_t best = 0;
-  for (std::size_t i = 0; i < path.size(); ++i)
-  {
-    if (std::hypot(path[i].pose.position.x - x, path[i].pose.position.y - y) <
-        std::hypot(path[best].pose.position.x - x, path[best].pose.position.y - y))
-    {
-      best = i;
-    }
-  }
-  return best;
-}
-
 }  // namespace
 
 TEST(StripProgress, ABoundedCursorCannotFollowATurnFallbackRejoin)
@@ -202,7 +249,7 @@ TEST(StripProgress, ABoundedCursorCannotFollowATurnFallbackRejoin)
   const std::size_t stuck = cursor;
   for (double x = 2.4; x >= 0.0; x -= kStep)
   {
-    cursor = advanceProgressCursor(path, cursor, x, kSpacing);
+    cursor = advanceProgressCursor(path, cursor, x, kSpacing, M_PI);
   }
   EXPECT_LT(cursor, stuck + 3) << "the bounded search did follow the rejoin after all";
 }

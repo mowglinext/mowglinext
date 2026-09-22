@@ -222,14 +222,18 @@ protected:
     navigate.reset();
   }
 
-  void setRobot(double x, double y)
+  /// `yaw` matters: the progress cursor only accepts a path pose oriented with
+  /// the robot (strip_progress.hpp, issue #742), so a test driving DOWN a
+  /// return swath must say so or the cursor correctly refuses to follow it.
+  void setRobot(double x, double y, double yaw = 0.0)
   {
     geometry_msgs::msg::TransformStamped tf;
     tf.header.frame_id = "map";
     tf.child_frame_id = "base_footprint";
     tf.transform.translation.x = x;
     tf.transform.translation.y = y;
-    tf.transform.rotation.w = 1.0;
+    tf.transform.rotation.z = std::sin(yaw / 2.0);
+    tf.transform.rotation.w = std::cos(yaw / 2.0);
     ctx->tf_buffer->setTransform(tf, "test", /*is_static=*/true);
   }
 
@@ -623,7 +627,7 @@ TEST_F(FollowStripDigTest, ControllerRejoinMovesTheProgressCursorPastTheSkippedT
   // A message stamped before the goal went out (a latched leftover) is ignored.
   remainder.header.stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
   pub->publish(remainder);
-  setRobot(4.5, 0.13);
+  setRobot(4.5, 0.13, M_PI);
   tickUntil(
       []()
       {
@@ -650,7 +654,7 @@ TEST_F(FollowStripDigTest, ControllerRejoinMovesTheProgressCursorPastTheSkippedT
   // Assert 2: an abort further along B resumes from B, not back at the turn.
   for (double x = 4.25; x >= 3.5 - 1e-9; x -= 0.25)
   {
-    setRobot(x, 0.13);
+    setRobot(x, 0.13, M_PI);  // driving DOWN swath B
     ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
   }
   follow->abort(0);
