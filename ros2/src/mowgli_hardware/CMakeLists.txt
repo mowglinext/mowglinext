@@ -109,6 +109,10 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  # Every test that brings up rclcpp runs through ament_add_ros_isolated_gtest:
+  # colcon tests packages in parallel, and on one shared DDS domain the test
+  # processes discover each other's nodes (docs/claude/testing-ci.md).
+  find_package(ament_cmake_ros REQUIRED)
 
   # ---- test_cobs ----
   ament_add_gtest(test_cobs
@@ -259,7 +263,7 @@ if(BUILD_TESTING)
   # ---- test_hardware_bridge_parameters ----
   # Includes the node implementation to exercise ROS's actual read-only
   # parameter contract while a missing serial device keeps the test hardware-free.
-  ament_add_gtest(test_hardware_bridge_parameters
+  ament_add_ros_isolated_gtest(test_hardware_bridge_parameters
     test/test_hardware_bridge_parameters.cpp
     src/odometry_publisher.cpp
   )
