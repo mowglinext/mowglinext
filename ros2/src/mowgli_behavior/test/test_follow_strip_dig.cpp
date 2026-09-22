@@ -295,8 +295,14 @@ TEST_F(FollowStripDigTest, DigWhileMowingCancelsTheGoalWaitsForTheReverseAndResu
             BT::NodeStatus::RUNNING);
   ASSERT_EQ(follow->goalCount(), 1u);
   EXPECT_EQ(follow->goal(0)->path.poses.size(), 201u) << "no dig yet: the whole unit is sent";
-  setRobot(3.0, 0.0);  // FTC drove 3 m...
-  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  // FTC drives 3 m... The progress cursor follows the robot a bounded stretch
+  // of path per tick (strip_progress.hpp), so drive there rather than teleport:
+  // 0.25 m per tick is still ~8x a real 10 Hz tick at mowing speed.
+  for (double x = 0.25; x <= 3.0 + 1e-9; x += 0.25)
+  {
+    setRobot(x, 0.0);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  }
 
   // Act: ...and the bridge reports a dig just ahead.
   reportDig(dig.x, dig.y);

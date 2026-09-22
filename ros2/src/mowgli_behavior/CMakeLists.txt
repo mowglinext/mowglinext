@@ -654,6 +654,22 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
+  # ---- test_strip_progress ----
+  # FollowStrip's progress cursor may advance at most kMaxProgressAdvanceM of
+  # path per update, so it cannot jump to the neighbouring serpentine swath.
+  ament_add_gtest(test_strip_progress
+    test/test_strip_progress.cpp
+  )
+
+  target_include_directories(test_strip_progress PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_strip_progress
+    ${geometry_msgs_TARGETS}
+  )
+
   # ---- test_unit_resume ----
   ament_add_gtest(test_unit_resume
     test/test_unit_resume.cpp

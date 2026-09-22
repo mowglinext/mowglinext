@@ -25,6 +25,7 @@
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
+#include "mowgli_behavior/strip_progress.hpp"
 #include "mowgli_behavior/unit_resume.hpp"
 #include "tf2/exceptions.hpp"
 
@@ -540,27 +541,10 @@ void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
   {
     return;  // no pose this tick — keep the last cursor
   }
-  // Monotonic, bounded forward nearest-pose search from the current cursor. The
-  // path can be thousands of poses, so we only scan a forward window (the robot
-  // can't have jumped far in one tick) — O(window), cheap to call every tick.
-  constexpr std::size_t kSearchWindow = 400;
-  const std::size_t end = std::min(poses.size(), path_progress_idx_ + kSearchWindow);
-  double best_d2 = std::numeric_limits<double>::max();
-  std::size_t best = path_progress_idx_;
-  for (std::size_t i = path_progress_idx_; i < end; ++i)
-  {
-    const auto& p = poses[i].pose.position;
-    const double d2 = (p.x - rx) * (p.x - rx) + (p.y - ry) * (p.y - ry);
-    if (d2 < best_d2)
-    {
-      best_d2 = d2;
-      best = i;
-    }
-  }
-  if (best > path_progress_idx_)
-  {
-    path_progress_idx_ = best;
-  }
+  // Monotonic nearest-pose search over at most kMaxProgressAdvanceM of PATH
+  // ahead of the cursor (strip_progress.hpp) — never a pose count: 400 poses
+  // reached the neighbouring serpentine swath and the cursor jumped onto it.
+  path_progress_idx_ = advanceProgressCursor(poses, path_progress_idx_, rx, ry);
 }
 
 float FollowStrip::livePercent() const
