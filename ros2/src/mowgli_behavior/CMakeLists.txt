@@ -108,6 +108,10 @@ install(DIRECTORY include/
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   find_package(ament_cmake_gtest REQUIRED)
+  # Every test that brings up rclcpp runs through ament_add_ros_isolated_gtest:
+  # colcon tests packages in parallel, and on one shared DDS domain the test
+  # processes discover each other's nodes (docs/claude/testing-ci.md).
+  find_package(ament_cmake_ros REQUIRED)
   # Exclude uncrustify — we use clang-format (see .clang-format)
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
@@ -115,7 +119,10 @@ if(BUILD_TESTING)
   # Real production service/timer wiring, including multithreaded ownership.
   get_target_property(blade_service_sources behavior_tree_node SOURCES)
   list(REMOVE_ITEM blade_service_sources src/behavior_tree_node.cpp)
-  ament_add_gtest(test_blade_services test/test_blade_services.cpp ${blade_service_sources})
+  ament_add_ros_isolated_gtest(test_blade_services
+    test/test_blade_services.cpp
+    ${blade_service_sources}
+  )
   target_include_directories(test_blade_services PUBLIC include)
   target_link_libraries(test_blade_services
     ${ament_index_cpp_TARGETS}
@@ -136,7 +143,7 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
-  ament_add_gtest(test_blade_direction
+  ament_add_ros_isolated_gtest(test_blade_direction
     test/test_blade_direction.cpp
     src/utility_nodes.cpp
     src/coverage_nodes.cpp
@@ -163,7 +170,7 @@ if(BUILD_TESTING)
   )
 
   # ---- test_recording_nodes ----
-  ament_add_gtest(test_recording_nodes
+  ament_add_ros_isolated_gtest(test_recording_nodes
     test/test_recording_nodes.cpp
     src/recording_nodes.cpp
   )
@@ -187,7 +194,7 @@ if(BUILD_TESTING)
   # Exercises IsObstacleStuck by ticking it through a minimal BT, with
   # the BTContext (and its collision_monitor fields) mutated directly to
   # simulate the subscriber callback in behavior_tree_node.cpp.
-  ament_add_gtest(test_obstacle_recovery
+  ament_add_ros_isolated_gtest(test_obstacle_recovery
     test/test_obstacle_recovery.cpp
     src/condition_nodes.cpp
   )
@@ -216,7 +223,7 @@ if(BUILD_TESTING)
   # the IsDocking condition and the BoundaryGuard whitelist logic that exempts
   # the blade-off dock transit (command 1 + IsDocking) while keeping full
   # boundary protection during blade-on mowing.
-  ament_add_gtest(test_docking_boundary_exempt
+  ament_add_ros_isolated_gtest(test_docking_boundary_exempt
     test/test_docking_boundary_exempt.cpp
     src/condition_nodes.cpp
   )
@@ -244,7 +251,7 @@ if(BUILD_TESTING)
   # Exercises the SetNav2Lifecycle action node's idle-suspend gating
   # (disabled = no-op, PAUSE refused off-dock, idempotent transitions) and,
   # with a fake manage_nodes service, the actual PAUSE/RESUME transition.
-  ament_add_gtest(test_set_nav2_lifecycle
+  ament_add_ros_isolated_gtest(test_set_nav2_lifecycle
     test/test_set_nav2_lifecycle.cpp
     src/navigation_nodes.cpp
   )
@@ -274,7 +281,7 @@ if(BUILD_TESTING)
   # ---- test_boundary_recovery ----
   # Verifies the safety-critical keepout filter service sequence used to
   # recover a robot whose current global-costmap cell is outside the area.
-  ament_add_gtest(test_boundary_recovery
+  ament_add_ros_isolated_gtest(test_boundary_recovery
     test/test_boundary_recovery.cpp
     src/navigation_nodes.cpp
   )
@@ -310,7 +317,7 @@ if(BUILD_TESTING)
   # state, so the run must not roll over into another area when the BT re-enters
   # MowingSequence after the target completes. status_nodes/status_snapshot are
   # linked in for the real EndSession node (the session boundary that clears it).
-  ament_add_gtest(test_get_next_unmowed_area
+  ament_add_ros_isolated_gtest(test_get_next_unmowed_area
     test/test_get_next_unmowed_area.cpp
     src/coverage_nodes.cpp
     src/coverage_persistence.cpp
@@ -346,7 +353,7 @@ if(BUILD_TESTING)
   # fallback), the consume-once IsCoverageStartBlocked condition, and a
   # STRUCTURAL check that main_tree.xml still carries the non-motion recovery
   # branch (clear costmaps + retry) and still commands no escape motion.
-  ament_add_gtest(test_start_occupied_retry
+  ament_add_ros_isolated_gtest(test_start_occupied_retry
     test/test_start_occupied_retry.cpp
     src/condition_nodes.cpp
   )
@@ -550,7 +557,7 @@ if(BUILD_TESTING)
   # Tick-level: FollowStrip against fake /follow_path + /navigate_to_pose
   # servers. A dig while mowing cancels the goal, waits for the reverse, and
   # resumes the same unit past the hole; later units are cut at recorded zones.
-  ament_add_gtest(test_follow_strip_dig
+  ament_add_ros_isolated_gtest(test_follow_strip_dig
     test/test_follow_strip_dig.cpp
     src/coverage_nodes.cpp
     src/coverage_persistence.cpp
@@ -585,7 +592,7 @@ if(BUILD_TESTING)
   # Tick-level: TransitToStrip + FollowStrip against fake Nav2 servers. A
   # transit that cannot reach the coverage start is bounded and not repeated;
   # the mow moves on to the next unit (field 2026-09-21).
-  ament_add_gtest(test_transit_non_blocking
+  ament_add_ros_isolated_gtest(test_transit_non_blocking
     test/test_transit_non_blocking.cpp
     src/coverage_nodes.cpp
     src/coverage_persistence.cpp
@@ -692,7 +699,7 @@ if(BUILD_TESTING)
   # Regression for "robot stuck after a critical-battery charge": the
   # CriticalBatteryDock tail must AUTO-CONTINUE on recovery (undock, keep
   # current_command + resume cursor) and only EndSession on a dead charger.
-  ament_add_gtest(test_battery_critical_resume
+  ament_add_ros_isolated_gtest(test_battery_critical_resume
     test/test_battery_critical_resume.cpp
     src/condition_nodes.cpp
     src/status_nodes.cpp
@@ -727,7 +734,7 @@ if(BUILD_TESTING)
   # consume/refuse/stale semantics, the handler's decision helper, the wait
   # loop's exit order, and structurally that BOTH loops in main_tree.xml carry
   # the node, poll at <= 5 s, and still bound at 8 h.
-  ament_add_gtest(test_manual_resume
+  ament_add_ros_isolated_gtest(test_manual_resume
     test/test_manual_resume.cpp
     src/condition_nodes.cpp
   )
@@ -765,7 +772,7 @@ if(BUILD_TESTING)
   # Covers the guard behaviour AND asserts structurally that every blocking
   # guard in main_tree.xml still terminates with <AlwaysFailure/>, so a
   # newly added guard cannot reintroduce it.
-  ament_add_gtest(test_guard_fallthrough
+  ament_add_ros_isolated_gtest(test_guard_fallthrough
     test/test_guard_fallthrough.cpp
     src/condition_nodes.cpp
   )
@@ -805,7 +812,7 @@ if(BUILD_TESTING)
   # subtle part - that the guard's INVERTED debounced condition still passes
   # mowing through during the unsettled window. Structurally asserts the tree
   # keeps the debounced entry, the raw exit and the documented 24 h bound.
-  ament_add_gtest(test_manual_charge_guard
+  ament_add_ros_isolated_gtest(test_manual_charge_guard
     test/test_manual_charge_guard.cpp
     src/condition_nodes.cpp
   )

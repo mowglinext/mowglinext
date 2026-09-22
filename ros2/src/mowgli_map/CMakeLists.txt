@@ -161,6 +161,10 @@ install(DIRECTORY include/
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  # Every test that brings up rclcpp runs through ament_add_ros_isolated_gtest:
+  # colcon tests packages in parallel, and on one shared DDS domain the test
+  # processes discover each other's nodes (docs/claude/testing-ci.md).
+  find_package(ament_cmake_ros REQUIRED)
   find_package(ament_lint_auto REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)
@@ -170,7 +174,7 @@ if(BUILD_TESTING)
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 
-  ament_add_gtest(test_map_server
+  ament_add_ros_isolated_gtest(test_map_server
     test/test_map_server.cpp
   )
 
@@ -191,7 +195,7 @@ if(BUILD_TESTING)
 
   # Map replace (GUI "Save map"): fast keepout mask == per-cell definition,
   # and add_area does no grid work inside the service callback.
-  ament_add_gtest(test_map_replace
+  ament_add_ros_isolated_gtest(test_map_replace
     test/test_map_replace.cpp
     TIMEOUT 300
   )
@@ -212,7 +216,7 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_map_replace PUBLIC ${grid_map_ros_INCLUDE_DIRS})
 
-  ament_add_gtest(test_mow_progress
+  ament_add_ros_isolated_gtest(test_mow_progress
     test/test_mow_progress.cpp
   )
 
@@ -233,7 +237,7 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_mow_progress PUBLIC ${grid_map_ros_INCLUDE_DIRS})
 
-  ament_add_gtest(test_obstacle_tracker
+  ament_add_ros_isolated_gtest(test_obstacle_tracker
     test/test_obstacle_tracker.cpp
   )
 
