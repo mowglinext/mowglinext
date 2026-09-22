@@ -193,6 +193,22 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_map_server PUBLIC ${grid_map_ros_INCLUDE_DIRS})
 
+  # SafeTransformListener: back-to-back build/destroy never hangs (tf2_ros's own
+  # dedicated-thread listener can lose its cancel and hang the destructor).
+  ament_add_ros_isolated_gtest(test_safe_transform_listener
+    test/test_safe_transform_listener.cpp
+    TIMEOUT 120
+  )
+  target_include_directories(test_safe_transform_listener PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  target_link_libraries(test_safe_transform_listener
+    ${rclcpp_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+  )
+
   # Map replace (GUI "Save map"): fast keepout mask == per-cell definition,
   # and add_area does no grid work inside the service callback.
   ament_add_ros_isolated_gtest(test_map_replace
