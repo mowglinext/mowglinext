@@ -522,6 +522,11 @@ void MqttBridgeNode::declare_parameters()
   // <prefix>/area_boundary's map-frame geometry with its WGS84 origin.
   datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
   datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
+  // Charging dock pose (map frame), injected from mowgli_robot.yaml by
+  // full_system.launch.py like the datum above; shown on <prefix>/area_boundary.
+  dock_pose_x_ = declare_parameter<double>("dock_pose_x", 0.0);
+  dock_pose_y_ = declare_parameter<double>("dock_pose_y", 0.0);
+  dock_pose_yaw_ = declare_parameter<double>("dock_pose_yaw", 0.0);
 
   if (publish_rate_ < 0.01 || publish_rate_ > 100.0)
   {
@@ -631,6 +636,18 @@ void MqttBridgeNode::create_subscriptions()
       {
         on_gnss_status(msg);
       });
+
+  // Fused map-frame pose from the localizer: position and heading that do not jitter
+  // like the raw GPS fix. SensorDataQoS is compatible with the localizer's reliable
+  // publisher and with a best-effort one, should it ever become one.
+  sub_pose_ =
+      create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered_map",
+                                                   sensor_qos,
+                                                   [this](
+                                                       nav_msgs::msg::Odometry::ConstSharedPtr msg)
+                                                   {
+                                                     on_pose(msg);
+                                                   });
 
   // Subscribe to MQTT command topics.
   mqtt_client_->subscribe(full_topic("command"),
@@ -758,6 +775,17 @@ void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
 void MqttBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
 {
   pending_gnss_status_ = *msg;
+}
+
+void MqttBridgeNode::on_pose(nav_msgs::msg::Odometry::ConstSharedPtr msg)
+{
+  const auto& p = msg->pose.pose;
+  if (!std::isfinite(p.position.x) || !std::isfinite(p.position.y) ||
+      !std::isfinite(p.orientation.z) || !std::isfinite(p.orientation.w))
+  {
+    return;  // a localizer that has not converged yet must not put NaN on the wire
+  }
+  pending_pose_ = *msg;
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,6 +1110,7 @@ void MqttBridgeNode::on_timer()
   flush(pending_gps_, last_gps_publish_, "gps", serialise_gps, /*retain=*/false);
   flush(pending_status_, last_status_publish_, "status", serialise_status, /*retain=*/true);
   flush(pending_power_, last_power_publish_, "power", serialise_power, /*retain=*/true);
+  flush(pending_pose_, last_pose_publish_, "pose", serialise_pose, /*retain=*/false);
   flush(pending_gnss_status_,
         last_gnss_status_publish_,
         "rtk_status",
@@ -1197,7 +1226,11 @@ void MqttBridgeNode::finish_area_boundary_poll(
     std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>> accumulated)
 {
   area_poll_in_progress_ = false;
-  const std::string json = serialise_area_boundaries(*accumulated, datum_lat_, datum_lon_);
+  const std::string json =
+      serialise_area_boundaries(*accumulated,
+                                datum_lat_,
+                                datum_lon_,
+                                make_dock_pose(dock_pose_x_, dock_pose_y_, dock_pose_yaw_));
   if (json == last_area_boundary_json_)
   {
     // Retained topic: republish only when the geometry actually changed,
@@ -1307,6 +1340,36 @@ std::string MqttBridgeNode::serialise_position(const nav_msgs::msg::Odometry& ms
   char buf[128];
   std::snprintf(buf, sizeof(buf), "{\"x\":%.4f,\"y\":%.4f,\"theta\":%.4f}", x, y, theta);
   return std::string{buf};
+}
+
+std::string MqttBridgeNode::serialise_pose(const nav_msgs::msg::Odometry& msg)
+{
+  const auto& q = msg.pose.pose.orientation;
+  const double yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+
+  char buf[128];
+  std::snprintf(buf,
+                sizeof(buf),
+                "{\"x\":%.3f,\"y\":%.3f,\"yaw\":%.4f}",
+                msg.pose.pose.position.x,
+                msg.pose.pose.position.y,
+                yaw);
+  return std::string{buf};
+}
+
+std::optional<MqttBridgeNode::DockPose> MqttBridgeNode::make_dock_pose(double x,
+                                                                       double y,
+                                                                       double yaw)
+{
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(yaw))
+  {
+    return std::nullopt;
+  }
+  if (x == 0.0 && y == 0.0 && yaw == 0.0)
+  {
+    return std::nullopt;  // the template default: no dock calibrated yet
+  }
+  return DockPose{x, y, yaw};
 }
 
 std::string MqttBridgeNode::serialise_diagnostics(const diagnostic_msgs::msg::DiagnosticArray& msg)
@@ -1509,7 +1572,8 @@ std::string MqttBridgeNode::serialise_areas(const std::vector<AreaSummary>& area
 std::string MqttBridgeNode::serialise_area_boundaries(
     const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>& areas,
     double datum_lat,
-    double datum_lon)
+    double datum_lon,
+    const std::optional<DockPose>& dock)
 {
   // Unbounded-length payload (polygon point counts vary), so this is built
   // with std::string concatenation rather than a fixed snprintf buffer —
@@ -1573,7 +1637,19 @@ std::string MqttBridgeNode::serialise_area_boundaries(
     }
     json += "]}";
   }
-  json += "]}";
+  json += ']';
+  if (dock.has_value())
+  {
+    char dock_json[96];
+    std::snprintf(dock_json,
+                  sizeof(dock_json),
+                  ",\"dock\":{\"x\":%.3f,\"y\":%.3f,\"yaw\":%.4f}",
+                  dock->x,
+                  dock->y,
+                  dock->yaw);
+    json += dock_json;
+  }
+  json += '}';
   return json;
 }
 

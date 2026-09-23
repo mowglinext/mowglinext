@@ -204,6 +204,7 @@ BT::NodeStatus EndSession::tick()
   // Clear the per-session "already planned" set and attempt counters
   // so the next COMMAND_START can plan + mow each area afresh.
   ctx->attempted_areas.clear();
+  ctx->incomplete_retired_areas.clear();
   ctx->area_attempt_count.clear();
   // Also clear the per-area coverage high-water mark (documented in
   // bt_context.hpp as "Cleared by EndSession"). Leaking it across sessions
@@ -224,6 +225,7 @@ BT::NodeStatus EndSession::tick()
   // pause that happened last session.
   ctx->guard_halted_reason.reset();
   ctx->area_guard_halt_count.clear();
+  ctx->coverage_scan_paused = false;
   // A fleet yield describes ONE pass of the session that just ended.
   ctx->fleet_yielded_areas.clear();
   // SAFETY (issue #487 escape motion): disarm the escape and forget the
@@ -255,6 +257,10 @@ BT::NodeStatus EndSession::tick()
   ctx->area_path_pose_count.clear();
   ctx->area_plan_fingerprint.clear();
   ctx->completed_areas.clear();
+  // Issue #680: a plausibility warning belongs to the session that raised
+  // it. Leaking it into the next session would show a stale
+  // COVERAGE_INCOMPLETE for a mow that hasn't run yet.
+  ctx->coverage_plausibility_warning = false;
   // Drop any "mow only area N" constraint from a targeted run (~/start_in_area)
   // at the same boundary as every other per-session set, so the next plain
   // COMMAND_START mows the whole lawn again. The clip is session state (it must

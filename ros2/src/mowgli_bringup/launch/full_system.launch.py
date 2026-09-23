@@ -721,6 +721,20 @@ def generate_launch_description() -> LaunchDescription:
                 "home_assistant_discovery_enabled": bool(
                     robot_params.get("mqtt_home_assistant_discovery_enabled", False)
                 ),
+                # Labels <prefix>/area_boundary's map-frame metres with the WGS84
+                # origin they are relative to. Without this the node keeps its
+                # 0.0/0.0 default and every consumer that projects a real GPS
+                # fix through the published datum puts the mower ~6000 km away.
+                "datum_lat": datum_lat,
+                "datum_lon": datum_lon,
+            },
+            # Charging dock pose (map frame), shown on <prefix>/area_boundary. Same
+            # robot_params source as hardware_bridge / map_server; read at startup,
+            # like they do (a dock re-calibration takes effect after a restart).
+            {
+                "dock_pose_x": float(robot_params.get("dock_pose_x", 0.0)),
+                "dock_pose_y": float(robot_params.get("dock_pose_y", 0.0)),
+                "dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0)),
             },
         ],
     )

@@ -236,6 +236,37 @@ def test_navigation_launch_injects_connector_max_headland_passes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# (b3) pivot-join limits must reach coverage_server, DERIVED from the chassis.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "key, helper",
+    [
+        ("pivot_sweep_radius", "chassis_circumscribed_radius"),
+        ("boundary_soft_margin", "boundary_soft_margin"),
+    ],
+)
+def test_navigation_launch_injects_pivot_join_limits(key: str, helper: str) -> None:
+    """coverage_server keeps pivot joins DISABLED (0.0 defaults) unless the
+    launch injects the pivot sweep radius and the soft-band width. Both must be
+    the robot_config_util derivation of the live chassis — a literal would go
+    stale the moment an operator edits chassis_* in the GUI (the 2026-09-16
+    hardcoded-width lesson), and a missing line silently brings back one
+    blade-off transit per row end (2026-09-21: 128 sub-paths on 152 m²).
+    """
+    tree = _parse("navigation.launch.py")
+    values = _subscript_assign_values(tree, "cov_params", key)
+    assert values, f'navigation.launch.py must assign cov_params["{key}"]'
+    for value in values:
+        assert (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == helper
+        ), f'cov_params["{key}"] must be {helper}(rp), not a literal or another value'
+
+
+# ---------------------------------------------------------------------------
 # (c) mowing_enabled must reach hardware_bridge_node (issue #195).
 # ---------------------------------------------------------------------------
 
@@ -409,6 +440,30 @@ def test_home_assistant_discovery_setting_reaches_mqtt_bridge() -> None:
                     {"robot_params": config}) is expected
 
 
+def test_datum_reaches_mqtt_bridge() -> None:
+    """<prefix>/area_boundary carries the datum its metre coordinates are relative to.
+
+    mqtt_bridge_node declares datum_lat/datum_lon with a 0.0 default, so if the
+    launch file stops injecting them every consumer that projects a real GPS
+    fix through the published datum places the mower thousands of km away
+    (found through the Home Assistant map camera, 2026-09-21).
+    """
+    tree = _parse("full_system.launch.py")
+    call = _find_node_call(tree, "mqtt_bridge_node")
+    assert call is not None
+    for key in ("datum_lat", "datum_lon"):
+        values = _node_parameter_values(call, key)
+        assert len(values) == 1, key
+        # It must be the variable the localizer / map_server are fed from (read once
+        # from robot_params near the WGS84 datum block), not a literal.
+        assert isinstance(values[0], ast.Name) and values[0].id == key, key
+        assert any(
+            isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == key for t in n.targets)
+            for n in ast.walk(tree)
+        ), key
+
+
 @pytest.mark.parametrize(
     "launch_file", ["navigation.launch.py", "full_system.launch.py"])
 def test_no_closure_rebinds_a_name_of_its_enclosing_function(
@@ -492,3 +547,20 @@ def test_full_system_launches_fleet_peer_obstacles_unconditionally() -> None:
         assert "scripts/fleet_peer_obstacles.py" in fh.read(), (
             "fleet_peer_obstacles.py is launched but not installed by CMakeLists.txt"
         )
+
+
+def test_dock_pose_reaches_mqtt_bridge() -> None:
+    """<prefix>/area_boundary carries the dock pose, so the bridge must be given it.
+
+    mqtt_bridge_node declares dock_pose_x/y/yaw with a 0.0 default, which it treats
+    as "no dock calibrated" and then publishes no dock at all.
+    """
+    call = _find_node_call(_parse("full_system.launch.py"), "mqtt_bridge_node")
+    assert call is not None
+    for key in ("dock_pose_x", "dock_pose_y", "dock_pose_yaw"):
+        values = _node_parameter_values(call, key)
+        assert len(values) == 1, key
+        expression = compile(ast.Expression(values[0]), "full_system.launch.py", "eval")
+        scope = {"__builtins__": {}, "float": float}
+        assert eval(expression, scope, {"robot_params": {key: 1.25}}) == 1.25, key
+        assert eval(expression, scope, {"robot_params": {}}) == 0.0, key

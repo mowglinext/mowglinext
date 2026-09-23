@@ -8,12 +8,31 @@
 #include <cmath>
 #include <limits>
 
+#include "mowgli_interfaces/coverage_path_invariants.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/utils.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 namespace mowgli_nav2_plugins
 {
+
+namespace
+{
+
+/// Arc length from the first pose to each pose (element 0 is 0).
+std::vector<double> cumulativeArcLength(const std::vector<geometry_msgs::msg::PoseStamped>& poses)
+{
+  std::vector<double> arc(poses.size(), 0.0);
+  for (size_t i = 1; i < poses.size(); ++i)
+  {
+    const auto& a = poses[i - 1].pose.position;
+    const auto& b = poses[i].pose.position;
+    arc[i] = arc[i - 1] + std::hypot(b.x - a.x, b.y - a.y);
+  }
+  return arc;
+}
+
+}  // namespace
 
 void PathProgressGoalChecker::initialize(
     const nav2::LifecycleNode::WeakPtr& parent,
@@ -60,7 +79,9 @@ void PathProgressGoalChecker::initialize(
   // Short paths (<= this many poses) complete on proximity, not progress —
   // per-swath DISCONTINUOUS coverage feeds short swaths + tiny turn-connectors
   // that the 95%-progress gate can't reliably register (stall). See header.
-  short_path_poses_ = static_cast<size_t>(declare("short_path_poses", 10).as_int());
+  short_path_poses_ = static_cast<size_t>(
+      declare("short_path_poses", static_cast<int>(mowgli_interfaces::kCoverageShortPathPoses))
+          .as_int());
 
   // Which controller's republished plan to track. Default matches the
   // FollowCoveragePath FTC slot from nav2_params.yaml. If you have a
@@ -94,6 +115,7 @@ void PathProgressGoalChecker::reset()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   max_reached_index_ = 0;
+  last_progress_query_.reset();
   empty_path_first_call_.reset();
 }
 
@@ -132,10 +154,12 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
   if (size_changed || start_moved_far)
   {
     path_poses_ = msg->poses;
+    path_arc_m_ = cumulativeArcLength(path_poses_);
     last_path_size_ = n;
     last_path_first_x_ = fx;
     last_path_first_y_ = fy;
     max_reached_index_ = 0;
+    last_progress_query_.reset();
     RCLCPP_INFO(logger_,
                 "PathProgressGoalChecker: new path with %zu poses, "
                 "start=(%.2f,%.2f), end=(%.2f,%.2f) — reset progress",
@@ -152,7 +176,38 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
     // keep max_reached_index_ so the monotonic-progress invariant
     // holds across republishes.
     path_poses_ = msg->poses;
+    path_arc_m_ = cumulativeArcLength(path_poses_);
   }
+}
+
+double PathProgressGoalChecker::remainingPathLength(const geometry_msgs::msg::Point& robot) const
+{
+  // From pose max_reached_index_, advanced by the robot's projection onto the
+  // segment that FOLLOWS it. The nearest pose can sit up to half a pose spacing
+  // behind a robot that stopped between two poses; counting that half-segment as
+  // still ahead would reject a robot parked just inside the tolerance. The
+  // projection is clamped to that one segment, so it never reaches past pose
+  // max_reached_index_ + 1 — the bounded monotonic search stays the only thing
+  // that moves the reached point forward.
+  if (path_poses_.empty() || path_arc_m_.size() != path_poses_.size())
+  {
+    return std::numeric_limits<double>::infinity();  // fail closed: rule cannot pass
+  }
+  const size_t last = path_poses_.size() - 1;
+  const size_t k = std::min(max_reached_index_, last);
+  double along = 0.0;
+  if (k < last)
+  {
+    const auto& a = path_poses_[k].pose.position;
+    const auto& b = path_poses_[k + 1].pose.position;
+    const double seg = path_arc_m_[k + 1] - path_arc_m_[k];
+    if (seg > 0.0)
+    {
+      const double proj = ((robot.x - a.x) * (b.x - a.x) + (robot.y - a.y) * (b.y - a.y)) / seg;
+      along = std::clamp(proj, 0.0, seg);
+    }
+  }
+  return path_arc_m_[last] - path_arc_m_[k] - along;
 }
 
 bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& query_pose,
@@ -264,28 +319,71 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
       return false;
     }
   }
-  const size_t start = std::min(max_reached_index_, n - 1);
-  const size_t end_exclusive = std::min(start + max_idx_advance_per_call_ + 1, n);
-  double best_d2 = std::numeric_limits<double>::infinity();
-  size_t best_idx = max_reached_index_;
-  for (size_t i = start; i < end_exclusive; ++i)
+
+  // Controller-server can call us many times with an unchanged pose while it
+  // waits at the endpoint. Without this gate each call advances the bounded
+  // search window, turning callback frequency into fake path progress.
+  bool query_moved = !last_progress_query_.has_value();
+  if (!query_moved)
   {
-    const double dx = path_poses_[i].pose.position.x - progress_pose.position.x;
-    const double dy = path_poses_[i].pose.position.y - progress_pose.position.y;
-    const double d2 = dx * dx + dy * dy;
-    if (d2 < best_d2)
+    query_moved =
+        std::hypot(progress_pose.position.x - last_progress_query_->x,
+                   progress_pose.position.y - last_progress_query_->y) >= kMinProgressQueryMotionM;
+  }
+  if (query_moved)
+  {
+    last_progress_query_ = progress_pose.position;
+    const size_t start = std::min(max_reached_index_, n - 1);
+    const size_t end_exclusive = std::min(start + max_idx_advance_per_call_ + 1, n);
+    double best_d2 = std::numeric_limits<double>::infinity();
+    size_t best_idx = max_reached_index_;
+    for (size_t i = start; i < end_exclusive; ++i)
     {
-      best_d2 = d2;
-      best_idx = i;
+      const double dx = path_poses_[i].pose.position.x - progress_pose.position.x;
+      const double dy = path_poses_[i].pose.position.y - progress_pose.position.y;
+      const double d2 = dx * dx + dy * dy;
+      if (d2 < best_d2)
+      {
+        best_d2 = d2;
+        best_idx = i;
+      }
+    }
+    // A query at the goal can be closest to this call's artificial search
+    // boundary even when the robot never traversed the intervening path. Do
+    // not turn that cap into progress; only the real final path index may be
+    // accepted at a window boundary. Normal ordered tracking finds interior
+    // matches until it genuinely reaches the final pose.
+    const size_t search_boundary = end_exclusive - 1;
+    const bool boundary_is_final_path_pose = (search_boundary == n - 1);
+    if (best_idx > max_reached_index_ &&
+        (best_idx != search_boundary || boundary_is_final_path_pose))
+    {
+      max_reached_index_ = best_idx;
     }
   }
-  if (best_idx > max_reached_index_)
-  {
-    max_reached_index_ = best_idx;
-  }
 
+  // Progress gate. EITHER rule proves the robot drove the path rather than
+  // merely arriving near its end:
+  //  - the historical one: >= progress_threshold_ of the poses reached;
+  //  - end approach: the path still ahead of the furthest monotonically-reached
+  //    point is no longer than xy_goal_tolerance_. FTC parks up to
+  //    max_goal_distance_error (the floor of xy_goal_tolerance_) short of the
+  //    last pose. On a 0.6 m sub-path that is most of its poses, so the pose
+  //    ratio alone never passed and controller_server's progress checker
+  //    aborted the goal 30 s later (field 2026-09-21). Measured ALONG the path
+  //    from the monotonic cursor, this rule stays false at the start of a looped
+  //    path whose end is near its start: the whole path is still ahead.
+  //  The pose ratio may only forgive a SHORT remainder (a sub-path ending on a
+  //  turn-around arc that bends back inside the xy tolerance). On a long path
+  //  5 % of the poses is metres of lawn: field 2026-09-22 a 2391-pose sub-path
+  //  whose end loops back within 0.49 m of pose 2326 completed there, at 97 %,
+  //  with 4.9 m of path — never mowed — still ahead.
   const double progress = static_cast<double>(max_reached_index_) / static_cast<double>(n - 1);
-  if (progress < progress_threshold_)
+  const double remaining_m = remainingPathLength(progress_pose.position);
+  const bool end_approach = remaining_m <= xy_goal_tolerance_;
+  const bool pose_ratio = progress >= progress_threshold_ &&
+                          remaining_m <= std::max(kRatioRuleMaxRemainingM, xy_goal_tolerance_);
+  if (!end_approach && !pose_ratio)
   {
     return false;
   }
@@ -311,10 +409,11 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
 
   RCLCPP_INFO(logger_,
               "PathProgressGoalChecker: goal reached — progress=%.1f%% "
-              "(idx %zu/%zu), xy_err=%.3fm, yaw_err=%.3frad",
+              "(idx %zu/%zu), remaining=%.3fm, xy_err=%.3fm, yaw_err=%.3frad",
               progress * 100.0,
               max_reached_index_,
               n - 1,
+              remaining_m,
               xy_err,
               yaw_err);
   return true;

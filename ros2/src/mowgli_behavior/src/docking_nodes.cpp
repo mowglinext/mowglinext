@@ -16,6 +16,7 @@
 #include "mowgli_behavior/docking_nodes.hpp"
 
 #include "action_msgs/msg/goal_status.hpp"
+#include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/dock_alignment.hpp"
 
 namespace mowgli_behavior
@@ -198,7 +199,7 @@ void DockRobot::onHalted()
   if (goal_handle_)
   {
     RCLCPP_INFO(ctx->node->get_logger(), "DockRobot: canceling active goal");
-    action_client_->async_cancel_goal(goal_handle_);
+    cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "DockRobot");
     goal_handle_.reset();
   }
 }
@@ -293,7 +294,7 @@ void UndockRobot::onHalted()
   {
     auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
     RCLCPP_INFO(ctx->node->get_logger(), "UndockRobot: canceling active goal");
-    action_client_->async_cancel_goal(goal_handle_);
+    cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "UndockRobot");
     goal_handle_.reset();
   }
 }

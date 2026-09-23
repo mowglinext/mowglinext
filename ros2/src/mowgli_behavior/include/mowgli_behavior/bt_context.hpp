@@ -26,7 +26,9 @@
 #include <utility>
 #include <vector>
 
+#include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/point32.hpp"
+#include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_behavior/blade_direction.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
@@ -37,6 +39,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/buffer.hpp"
@@ -64,6 +67,13 @@ struct BTContext
   // -----------------------------------------------------------------------
 
   mowgli_interfaces::msg::Status latest_status;
+  /// Latest ~/mow_progress sample (map_server_node), used ONLY by
+  /// FollowStrip's end-of-pass coverage-plausibility cross-check (issue
+  /// #680) — see BTContext::coverage_plausibility_warning. transient_local
+  /// on the subscription (bt matches the publisher) so this is populated
+  /// before the first pass ever completes, not just after the first publish
+  /// tick following node start.
+  nav_msgs::msg::OccupancyGrid latest_mow_progress;
   /// Arrival time of the most recent /hardware_bridge/status message.
   /// Default-constructed = none has ever arrived, so latest_status is all
   /// zeroes and describes nothing. EscapeStartBlocked (issue #487) needs this:
@@ -86,7 +96,7 @@ struct BTContext
   ///
   /// Does NOT cover the coverage-tracking fields below (command state +
   /// swath-completion model: target_area_index, single_area_target,
-  /// attempted_areas, area_attempt_count, area_last_coverage,
+  /// attempted_areas, incomplete_retired_areas, area_attempt_count, area_last_coverage,
   /// area_completed_swaths,
   /// area_swath_count, area_resume_pose_index, area_path_pose_count,
   /// area_plan_fingerprint, completed_areas, coverage_all_complete). Those
@@ -205,6 +215,14 @@ struct BTContext
   /// Cleared by EndSession.
   std::set<uint32_t> attempted_areas;
 
+  /// Areas skipped for the rest of this session because they exhausted the
+  /// bounded no-progress budget without completing. Kept separate from
+  /// attempted_areas so an exhausted candidate cannot be reported as a clean
+  /// MOWING_COMPLETE merely because no dispatchable areas remain. Cleared by
+  /// EndSession and an explicit "Start fresh"; an explicit target re-mow
+  /// clears that target only.
+  std::set<uint32_t> incomplete_retired_areas;
+
   /// Per-area count of CONSECUTIVE GetNextUnmowedArea dispatches that
   /// made NO coverage progress. Reset to 0 whenever a dispatch shows the
   /// area's coverage_percent advanced beyond the last dispatch (see
@@ -284,13 +302,18 @@ struct BTContext
   /// Cleared by EndSession.
   std::map<uint32_t, uint32_t> area_guard_halt_count;
   /// Maximum guard-halted dispatches exempted from area_attempt_count per
-  /// area. Deliberately GENEROUS: a permanently dead sensor is not this cap's
-  /// problem — the guard itself holds the whole tree (blade off, stopped) for
-  /// as long as the fault lasts, so nothing dispatches at all. The cap only
-  /// bounds the FLAPPING case (a fault that clears and re-trips every few
-  /// seconds) so a pathological flap cannot re-dispatch the same area forever;
-  /// past it the normal no-progress budget takes over and the area retires.
-  static constexpr uint32_t kMaxGuardHaltedPasses = 200;
+  /// area. A one-second scan blip is absorbed inside FollowStrip; the Root
+  /// scan guard only halts after >20 s. Thirty exemptions therefore allow at
+  /// least ten minutes of actual blind intervals before the normal five-pass
+  /// retirement budget resumes. Fleet yields share this bounded counter.
+  static constexpr uint32_t kMaxGuardHaltedPasses = 30;
+
+  /// Live FollowStrip overlay: true only while an active coverage goal is held
+  /// blade-off for a short stale-/scan_collision interval. It is deliberately
+  /// context-owned so the 1 Hz HighLevelStatus republisher can expose it
+  /// without a tree transition. FollowStrip and EndSession clear it on every
+  /// lifecycle and terminal path; it never changes the numeric state or goal.
+  bool coverage_scan_paused{false};
 
   // -----------------------------------------------------------------------
   // Fleet coordination (docs/MULTI_ROBOT.md)
@@ -416,6 +439,20 @@ struct BTContext
   /// Areas whose every swath is completed-or-skipped this session. Skipped by
   /// GetNextUnmowedArea. Cleared by EndSession.
   std::set<uint32_t> completed_areas;
+
+  /// Set when FollowStrip's swath-completion bookkeeping reported an area
+  /// fully mowed, but the mow_progress cross-check found the actually-
+  /// stamped interior fraction below mowgli_behavior::kMinPlausibleMowedFraction
+  /// (mow_coverage_plausibility.hpp) — issue #680: the robot drove only the
+  /// headland ring, reported clean success, and nothing told the operator.
+  /// Folded into HighLevelStatus.sub_state_name as "COVERAGE_INCOMPLETE" by
+  /// withLiveStatusFields (status_snapshot.cpp). Deliberately NOT auto-
+  /// cleared on the next area's completion — a warning from earlier in the
+  /// session must survive to the final report, not just flash briefly.
+  /// Cleared by EndSession so the next COMMAND_START starts without a stale
+  /// warning from a previous, unrelated session.
+  bool coverage_plausibility_warning{false};
+
   /// Filesystem path the coverage RESUME state (the four maps above +
   /// completed_areas + current_area) is persisted to, so an interrupted session
   /// survives a full process/container restart — not just the in-RAM BT
@@ -740,9 +777,23 @@ struct BTContext
   /// sub-path) instead of the single current_strip_path.
   std::vector<nav_msgs::msg::Path> current_strip_subpaths;
 
+  /// The planned area's outer boundary + obstacle holes, populated by
+  /// PlanCoverageArea alongside current_strip_* (from the same
+  /// ~/get_mowing_area response). Used ONLY by FollowStrip's end-of-pass
+  /// coverage-plausibility cross-check (issue #680,
+  /// coverage_plausibility_warning above) — everything else that needs the
+  /// area's geometry already has its own copy from planning.
+  geometry_msgs::msg::Polygon current_area_polygon;
+  std::vector<geometry_msgs::msg::Polygon> current_area_obstacles;
+
   /// Transit goal to reach the coverage path start (populated by
   /// PlanCoverageArea, consumed by TransitToStrip).
   geometry_msgs::msg::PoseStamped current_transit_goal;
+  /// Where TransitToStrip last FAILED to take the robot (map frame), if it did.
+  /// FollowStrip consumes it to skip — not repeat — the identical transit to its
+  /// first unit (field 2026-09-21: 53 s in TransitToStrip, then 43 s more in
+  /// FollowStrip on the same unreachable start). BT-tick-thread only.
+  std::optional<geometry_msgs::msg::Point> transit_to_strip_failed_at;
 
   /// Latest coverage percentage.
   float coverage_percent{0.0f};
@@ -755,6 +806,18 @@ struct BTContext
   int total_swaths{0};
   int completed_swaths{0};
   int skipped_swaths{0};
+
+  /// True while FollowStrip is driving a blade-off transit between sub-paths
+  /// (its own transit_active_/transit_pending_ members, snapshotted at the
+  /// start of every onRunning() tick — see coverage_nodes.cpp), false otherwise. Reset in
+  /// onStart()/onHalted() so a stale true value can never survive past the
+  /// FollowStrip invocation that set it. Read by withLiveStatusFields
+  /// (status_snapshot.cpp) to fold "TRANSIT" into HighLevelStatus's
+  /// sub_state_name — a LIVE override of that otherwise tree-owned field,
+  /// because a transit begins/ends mid-FollowStrip, between tree ticks, so
+  /// only the live-field projection (not PublishHighLevelStatus, which does
+  /// not re-tick while FollowStrip runs) can track it accurately.
+  bool transiting{false};
 
   // -----------------------------------------------------------------------
   // High-level status publishing (shared publisher + last-published cache)

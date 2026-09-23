@@ -100,8 +100,8 @@ const (
 // canopy, and that is not a problem the operator needs to hear about.
 const notifyRtkDwell = 120 * time.Second
 
-// notifyCooldown suppresses a repeat of the same message id: a flapping state
-// (Cyclone rediscovery, a bouncing e-stop switch) must not storm the phone.
+// notifyCooldown suppresses a repeat of the same semantic event: a flapping
+// state (Cyclone rediscovery, a bouncing e-stop switch) must not storm the phone.
 const notifyCooldown = 60 * time.Second
 
 // blockedStates are the BT's terminal failure states: the mission stopped
@@ -166,16 +166,17 @@ func (d *NotifyDetector) OnStatus(st NotifyStatus, now time.Time, wantsKind func
 	}
 	var events []NotifyEvent
 	emit := func(kind, message string, priority int, params map[string]string) {
-		if !d.pastCooldown(message, now) {
-			return
-		}
-		d.lastSent[message] = now
-		d.lastEventAt = now
 		if params == nil {
 			params = map[string]string{}
 		}
 		params["state"] = st.StateName
 		params["battery"] = formatPercent(st.BatteryPercent)
+		cooldownKey := notificationCooldownKey(message, params)
+		if !d.pastCooldown(cooldownKey, now) {
+			return
+		}
+		d.lastSent[cooldownKey] = now
+		d.lastEventAt = now
 		events = append(events, NotifyEvent{Kind: kind, Message: message, Priority: priority, Params: params, At: now})
 	}
 
@@ -335,9 +336,23 @@ func (d *NotifyDetector) endSession() {
 	d.areaPeak = 0
 }
 
-func (d *NotifyDetector) pastCooldown(message string, now time.Time) bool {
-	last, ok := d.lastSent[message]
+func (d *NotifyDetector) pastCooldown(key string, now time.Time) bool {
+	last, ok := d.lastSent[key]
 	return !ok || now.Sub(last) >= notifyCooldown
+}
+
+// notificationCooldownKey keeps every message-scoped cooldown intact except
+// zone events. Zone labels and coverage are presentation details, so they
+// deliberately do not weaken repeat suppression.
+func notificationCooldownKey(message string, params map[string]string) string {
+	switch message {
+	case NotifyMsgZoneStarted, NotifyMsgZoneFinished:
+		return message + ":" + params["areaIndex"]
+	case NotifyMsgZoneChanged:
+		return message + ":" + params["areaIndex"] + ":" + params["nextIndex"]
+	default:
+		return message
+	}
 }
 
 // areaParams names an area for the catalogue: the operator's name when the

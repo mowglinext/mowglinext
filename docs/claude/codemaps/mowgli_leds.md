@@ -17,6 +17,7 @@
 | Change mode priority / what beats what | `led_pattern.hpp` `SelectMode()` (l.241-275); pinned by `test/test_led_pattern.cpp` `LedPatternMode.*` (l.58-143) |
 | Add a new `HIGH_LEVEL_STATE_*` | `led_pattern.hpp` `HighLevelState` enum (l.80-87) + `led_ring_node.cpp` `static_assert`s (l.22-36) + `ToHighLevelState()` (l.42-57) + `SelectMode` switch (l.262-274) |
 | Change staleness / source precedence (BT vs Power vs GNSS) | `led_ring_node.cpp` `collectInputs()` (l.191-218) |
+| Transit mode (`kTransit`) signal source | `HighLevelStatus.sub_state_name == "TRANSIT"`, set LIVE (not by `PublishHighLevelStatus`, which does not re-tick while `FollowStrip` runs) by `withLiveStatusFields` in `mowgli_behavior/status_snapshot.cpp` from `BTContext::transiting` (refreshed every `FollowStrip::onRunning()` tick in `coverage_nodes.cpp`); consumed into `LedInputs::transiting` in `led_ring_node.cpp` `collectInputs()`, gated on `status_fresh` |
 | Change device open / retry / warn-once policy | `led_ring_node.cpp` `ensureDevice()` (l.220-260), `writeFrame()` (l.262-301) |
 | Change SPI mode, bits-per-word, ioctls | `ros2/src/mowgli_leds/src/spi_device.cpp` `Open()` (l.50-105) |
 | Change bit timing / SPI clock / symbol table | `ros2/src/mowgli_leds/include/mowgli_leds/ws2812_encoder.hpp` `kSpiClockHz` (l.74), `ExpandByte()` (l.101-114); header comment l.16-36 explains why 3 bits @ 2.4 MHz |
@@ -124,6 +125,7 @@ None (no TF publish or lookup).
 | 3 | `kStale` | `!status_fresh` | `kAmber` comet, 1.5 s/rev |
 | 4 | `kLowBattery` | `battery_valid && battery_percent < low_battery_percent` | whole ring `kRed` blink 1 Hz |
 | 5 | `kMowing` / `kMowingDegraded` | `kAutonomous` + `rtk_fixed` / not | green arc + white head / amber arc + 2 Hz blinking head |
+| 5.5 | `kTransit` | `kAutonomous` + `transiting` (outranks Mowing/Degraded inside the same branch) | `kLightOrange`, ring halves alternate lit/dark ~1 s each (`led_count / 2` — not hardcoded) |
 | 6 | `kRecording` | `kRecording` | `kCyan` comet 2 s/rev |
 | 7 | `kManual` | `kManualMowing` | `kPurple` breathing 2 s |
 | 8 | `kIdle` | `kIdle` / `kNull` / default | `Dim(kWhite, idle_scale)` |

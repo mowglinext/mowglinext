@@ -670,6 +670,58 @@ def test_dig_proposal_radius_follows_the_configured_wheels():
     assert big_wheels > _util.dig_proposal_radius({})
 
 
+def test_boundary_soft_margin_is_floored_at_the_circumscribed_radius():
+    # enforce_boundary_margin_m is absent from the template: the 0.40 fallback
+    # is inside the shipped body's reach (0.597 m) and is raised to it, exactly
+    # as full_system.launch.py does for map_server.
+    assert _util.boundary_soft_margin({}) == pytest.approx(
+        _util.chassis_circumscribed_radius({}))
+    assert _util.boundary_soft_margin({"enforce_boundary_margin_m": 0.20}) == pytest.approx(
+        _util.chassis_circumscribed_radius({}))
+
+
+def test_boundary_soft_margin_keeps_a_wider_operator_band():
+    assert _util.boundary_soft_margin({"enforce_boundary_margin_m": 0.90}) == pytest.approx(0.90)
+
+
+def test_boundary_soft_margin_follows_an_operator_edited_chassis():
+    # A longer chassis reaches further past the line at a row end, so the band
+    # (and the pivot sweep check it bounds) must follow it — never a literal.
+    params = {"chassis_length": 0.90}
+    assert _util.boundary_soft_margin(params) == pytest.approx(
+        _util.chassis_circumscribed_radius(params))
+    assert _util.boundary_soft_margin(params) > _util.boundary_soft_margin({})
+
+
+def test_boundary_soft_margin_default_matches_full_system_fallback():
+    """coverage_server's pivot-join band (navigation.launch.py, via the helper)
+    and map_server's real band (full_system.launch.py, inline) must start from
+    the same fallback, or the planner would validate pivots against a band the
+    keepout mask does not paint. Source-level, like the tool_width guard above.
+    """
+    import ast
+
+    map_server_src = _MAP_SERVER_LAUNCH.read_text()
+    fallbacks = [
+        node.args[1].value
+        for node in ast.walk(ast.parse(map_server_src))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and len(node.args) == 2
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "enforce_boundary_margin_m"
+        and isinstance(node.args[1], ast.Constant)
+    ]
+    assert fallbacks, "full_system.launch.py no longer reads enforce_boundary_margin_m"
+    for value in fallbacks:
+        assert value == pytest.approx(_util.DEFAULT_ENFORCE_BOUNDARY_MARGIN_M), (
+            "full_system.launch.py's enforce_boundary_margin_m fallback drifted from "
+            "robot_config_util.DEFAULT_ENFORCE_BOUNDARY_MARGIN_M"
+        )
+    assert "chassis_circumscribed_radius(robot_params)" in map_server_src
+
+
 def test_circumscribed_radius_encloses_every_footprint_corner():
     params = {"chassis_length": 0.72, "chassis_width": 0.51, "chassis_center_x": 0.22}
     front, rear, half_width = _util.chassis_footprint(params)

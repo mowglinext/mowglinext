@@ -42,7 +42,10 @@ find_package(Eigen3 REQUIRED)
 add_library(${PROJECT_NAME} SHARED
   src/oscillation_detector.cpp
   src/obstacle_deviation.cpp
+  src/ftc_lattice_solver.cpp
+  src/ftc_turn_fallback.cpp
   src/ftc_controller.cpp
+  src/ftc_controller_turn_fallback.cpp
   src/ftc_controller_plugin.cpp
   src/path_progress_goal_checker.cpp
 )
@@ -115,9 +118,18 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  # Every test that brings up rclcpp runs through ament_add_ros_isolated_gtest:
+  # colcon tests packages in parallel, and on one shared DDS domain the test
+  # processes discover each other's nodes (docs/claude/testing-ci.md).
+  find_package(ament_cmake_ros REQUIRED)
 
-  ament_add_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
+  ament_add_ros_isolated_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
   target_link_libraries(test_lyrical_goal_checker ${PROJECT_NAME})
+
+  ament_add_ros_isolated_gtest(test_path_progress_end_approach
+    test/test_path_progress_end_approach.cpp
+  )
+  target_link_libraries(test_path_progress_end_approach ${PROJECT_NAME})
 
   ament_add_gtest(test_oscillation_detector
     test/test_oscillation_detector.cpp
@@ -217,6 +229,75 @@ if(BUILD_TESTING)
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+
+  # In-place pivots at the coverage planner's explicit corners (ftc_pivot.hpp):
+  # corner detection, leg bounds, arrival/alignment, sweep probes. ROS-free;
+  # needs only the header-only corner contract from mowgli_interfaces.
+  ament_add_gtest(test_ftc_pivot
+    test/test_ftc_pivot.cpp
+  )
+
+  target_include_directories(test_ftc_pivot
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  target_link_libraries(test_ftc_pivot mowgli_interfaces::mowgli_interfaces_headers)
+
+  # Costmap side of the offset lattice (ftc_lattice_solver.hpp): node tests,
+  # degrading solve, and a case recorded on the robot (2026-09-22). ROS-free.
+  ament_add_gtest(test_ftc_lattice_solver
+    test/test_ftc_lattice_solver.cpp
+    src/ftc_lattice_solver.cpp
+    src/obstacle_deviation.cpp
+  )
+
+  target_include_directories(test_ftc_lattice_solver
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  target_link_libraries(test_ftc_lattice_solver
+    ${geometry_msgs_TARGETS}
+    ${nav2_costmap_2d_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
+  # Turn fallback decision (ftc_turn_fallback.hpp): turn detection, rejoin
+  # search, bounded reverse, pivot/straight sweeps, zone rule, and the recorded
+  # 2026-09-22 08:08:25 WEDGED. ROS-free.
+  ament_add_gtest(test_ftc_turn_fallback
+    test/test_ftc_turn_fallback.cpp
+    src/ftc_turn_fallback.cpp
+    src/ftc_lattice_solver.cpp
+    src/obstacle_deviation.cpp
+  )
+
+  target_include_directories(test_ftc_turn_fallback
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  target_link_libraries(test_ftc_turn_fallback
+    ${geometry_msgs_TARGETS}
+    ${nav2_costmap_2d_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    mowgli_interfaces::mowgli_interfaces_headers
+  )
+
+  # FTCController through a turn fallback, closed loop (real controller + a
+  # configured Costmap2DROS + kinematic robot + controlled clock). Brings up
+  # rclcpp, hence the isolated DDS domain.
+  ament_add_ros_isolated_gtest(test_ftc_turn_fallback_controller
+    test/test_ftc_turn_fallback_controller.cpp
+    TIMEOUT 300
+  )
+  target_link_libraries(test_ftc_turn_fallback_controller ${PROJECT_NAME})
+
+  add_executable(lattice_replay test/lattice_replay.cpp)
+  target_link_libraries(lattice_replay ${PROJECT_NAME})
 endif()
 
 # ---------------------------------------------------------------------------

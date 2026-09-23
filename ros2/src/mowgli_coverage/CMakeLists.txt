@@ -134,6 +134,18 @@ if(BUILD_TESTING)
   set_target_properties(test_coverage_planning PROPERTIES
     INSTALL_RPATH "/opt/fields2cover-300/lib"
   )
+
+  # Pivot joins: row-end joins that fit no arc kept blade-on with explicit
+  # in-place pivot corners (field 2026-09-21), plus the rings-off invalid-cell
+  # repair. Real F2C v3, no ROS.
+  ament_add_gtest(test_pivot_joins test/test_pivot_joins.cpp)
+  target_link_libraries(test_pivot_joins
+    ${PROJECT_NAME}_core
+    Fields2Cover::Fields2Cover
+  )
+  set_target_properties(test_pivot_joins PROPERTIES
+    INSTALL_RPATH "/opt/fields2cover-300/lib"
+  )
 endif()
 
 ament_export_include_directories(include)

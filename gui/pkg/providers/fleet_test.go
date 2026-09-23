@@ -1,11 +1,17 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -128,12 +134,114 @@ func TestFleetProvider_LoadsPersistedPeers(t *testing.T) {
 	peers := f.Peers()
 	require.Len(t, peers, 1, "entries without id are dropped")
 	assert.Equal(t, "bravo", peers[0].Name)
+	assert.Zero(t, peers[0].APIVersion, "legacy registry entries omit api_version")
 
 	rows, err := f.Robots()
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	assert.True(t, rows[0].Self)
 	assert.False(t, rows[1].Online, "an unreachable peer is offline")
+	assert.Equal(t, 0, rows[1].Identity.APIVersion, "unknown legacy peer version stays fail-closed")
+
+	stored, err := db.Get(fleetPeersKey)
+	require.NoError(t, err)
+	assert.Contains(t, string(stored), `"id":"b"`, "loading an older record must not discard the peer")
+}
+
+func TestPeerClientSessionRefreshesIdentity(t *testing.T) {
+	var got RobotIdentity
+	invalidated := false
+	mux := http.NewServeMux()
+	mux.HandleFunc(peerIdentityPath, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(RobotIdentity{ID: "peer-id", Name: "bravo", APIVersion: 7})
+	})
+	upgrader := websocket.Upgrader{}
+	mux.HandleFunc(peerMultiplexPath, func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for range FleetTopics {
+			var op map[string]string
+			if err := conn.ReadJSON(&op); err != nil {
+				return
+			}
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := newPeerClient(strings.TrimPrefix(server.URL, "http://"), time.Now)
+	client.onIdentityUnavailable = func() { invalidated = true }
+	client.onIdentity = func(identity RobotIdentity) { got = identity }
+	err := client.session()
+	assert.Error(t, err, "test server closes after receiving all subscriptions")
+	assert.False(t, invalidated, "the initial version stays trusted while the first refresh succeeds")
+	assert.Equal(t, "peer-id", got.ID)
+	assert.Equal(t, 7, got.APIVersion)
+}
+
+func TestFleetProvider_PersistsRefreshedPeerAPIVersion(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(peerIdentityPath, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(RobotIdentity{ID: "b", Name: "bravo", APIVersion: 2})
+	})
+	upgrader := websocket.Upgrader{}
+	mux.HandleFunc(peerMultiplexPath, func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for range FleetTopics {
+			var op map[string]string
+			if err := conn.ReadJSON(&op); err != nil {
+				return
+			}
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	db := types.NewMockDBProvider()
+	writeRobotYaml(t, db, "mowgli:\n  ros__parameters: {}\n")
+	address := strings.TrimPrefix(server.URL, "http://")
+	legacyPeer, err := json.Marshal([]FleetPeer{{ID: "b", Name: "bravo", Address: address, APIVersion: 1}})
+	require.NoError(t, err)
+	require.NoError(t, db.Set(fleetPeersKey, legacyPeer))
+	f := NewFleetProvider(db, types.NewMockRosProvider())
+	defer f.Close()
+
+	require.Eventually(t, func() bool {
+		peers := f.Peers()
+		return len(peers) == 1 && peers[0].APIVersion == 2
+	}, 3*time.Second, 10*time.Millisecond, "peer reconnect refreshes its changed API version")
+	rows, err := f.Robots()
+	require.NoError(t, err)
+	assert.Equal(t, 2, rows[1].Identity.APIVersion)
+	stored, err := db.Get(fleetPeersKey)
+	require.NoError(t, err)
+	assert.Contains(t, string(stored), `"api_version":2`)
+}
+
+func TestFleetProvider_BlocksCommandsToIncompatiblePeer(t *testing.T) {
+	db := types.NewMockDBProvider()
+	writeRobotYaml(t, db, "mowgli:\n  ros__parameters: {}\n")
+	require.NoError(t, db.Set(fleetPeersKey, []byte(`[{"id":"b","name":"bravo","address":"127.0.0.1:1","api_version":2}]`)))
+	ros := types.NewMockRosProvider()
+	f := NewFleetProvider(db, ros)
+	defer f.Close()
+
+	status, _, err := f.Call(context.Background(), "b", "high_level_control", []byte(`{"command":1}`))
+	assert.Equal(t, http.StatusConflict, status)
+	assert.ErrorContains(t, err, "incompatible")
+	assert.Empty(t, ros.ServiceCalls)
 }
 
 func TestFleetProvider_SelfSnapshotMirrorsLocalTopics(t *testing.T) {

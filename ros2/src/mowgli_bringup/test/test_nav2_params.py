@@ -9,6 +9,7 @@
 # was 0.5 m, which made every <0.5 m strip "already done" the moment
 # FTC started.
 """Regression tests for the nav2_params.yaml goal-checker tolerances."""
+import math
 import os
 import re
 import sys
@@ -23,8 +24,11 @@ import yaml
 # aliasing-prone) reimplementation.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "launch"))
 from robot_config_util import (  # noqa: E402
+    GLOBAL_COSTMAP_RESOLUTION_M,
     chassis_circumscribed_radius as _chassis_circumscribed_radius,
+    chassis_footprint as _chassis_footprint,
     deep_merge as _deep_merge,
+    global_inflation_radius as _global_inflation_radius,
 )
 
 
@@ -388,14 +392,80 @@ def test_navigation_launch_injects_local_inflation_with_floor() -> None:
         "the 0.58 m the local costmap was tuned against — footprint-cost "
         "semantics degrade below the circumscribed radius."
     )
-    # The GLOBAL costmap radius is pinned at 0.20 (0.30 blocked all transit
-    # paths on a 9x6 m polygon) — the LOCAL chain must be the only
-    # inflation_radius writer in the launch script.
+    # Exactly two writers: the local chain above and the derived global radius
+    # (test_global_inflation_gives_the_transit_planner_berth_without_blocking).
     writers = re.findall(r"(\w+)\[.inflation_radius.\]\s*=", src)
-    assert writers == ["lc_infl"], (
+    assert sorted(writers) == ["gc_infl", "lc_infl"], (
         f"inflation_radius writers in navigation.launch.py: {writers} — only the "
-        "local-costmap chain (lc_infl) may write it; the 0.20 m global radius is "
-        "pinned (0.30 blocked transits, see base.yaml)."
+        "local chain (lc_infl) and the derived global radius (gc_infl) may write it."
+    )
+
+
+def test_global_inflation_gives_the_transit_planner_berth_without_blocking() -> None:
+    """Field 2026-09-21: with a 0.20 m global inflation the cost gradient around
+    a LiDAR obstacle was 3 cm wide, SmacPlanner2D planned the transit 0.2 m
+    from it, the body (0.275 m half-width) overlapped it and RPP refused the
+    path 442 times over 97 s. The global radius now reaches the body's full
+    reach, derived from the chassis, so cost_travel_multiplier has a gradient
+    to act on.
+
+    What must NOT change is the band Smac refuses: cost >= INSCRIBED, i.e. the
+    footprint's inscribed radius. Widening THAT is what made robots standing on
+    their own coverage line "start occupied" — so no custom_inscribed_radius on
+    the global costmap, and the keepout mask stays un-inflated (keepout_filter
+    after inflation_layer, pinned elsewhere)."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(r"gc_infl\[.inflation_radius.\]\s*=\s*global_inflation_radius\(rp\)", src), (
+        "the GLOBAL inflation radius must be injected from "
+        "robot_config_util.global_inflation_radius(rp) — derived, never a literal."
+    )
+    assert "gc_infl[\"custom_inscribed_radius\"]" not in src and \
+        "gc_infl['custom_inscribed_radius']" not in src, (
+        "the global costmap must keep the footprint's inscribed band: widening "
+        "what Smac refuses re-creates 'start occupied' on the coverage line."
+    )
+    template = _load_yaml("mowgli_robot.yaml")["mowgli"]["ros__parameters"]
+    circumscribed = _chassis_circumscribed_radius(template)
+    derived = _global_inflation_radius(template)
+    assert derived > circumscribed, (
+        f"global inflation {derived:.3f} m must reach past the body "
+        f"({circumscribed:.3f} m) or the gradient ends inside the footprint."
+    )
+    base = _load_yaml("nav2_params_base.yaml")
+    gi = base["global_costmap"]["global_costmap"]["ros__parameters"]["inflation_layer"]
+    assert abs(float(gi["inflation_radius"]) - round(derived, 2)) <= 0.01, (
+        f"base.yaml global inflation_radius {gi['inflation_radius']} should document "
+        f"the shipped derived value {derived:.3f} (the launch overwrites it)."
+    )
+    scaling = float(gi["cost_scaling_factor"])
+    front, rear, half_width = _chassis_footprint(template)
+    inscribed = min(front, -rear, half_width)
+    # Nav2 InflationLayer: cost = 252 * exp(-scaling * (d - inscribed)).
+    cost_at_body = 252.0 * math.exp(-scaling * (circumscribed - inscribed))
+    assert cost_at_body >= 5.0, (
+        f"global cost_scaling_factor {scaling}: the cost left at the body's reach "
+        f"({cost_at_body:.1f}) is too small for cost_travel_multiplier to buy berth — "
+        "Smac hugs obstacles again (10 let the replayed transit dip to 0.29 m)."
+    )
+
+    # obstacle_tracker_node draws obstacle proposals by clustering THIS costmap
+    # at an occupancy threshold, so the gradient's reach at that cost is the
+    # size of every tracked obstacle. Keep it within one global cell of what it
+    # was (0.20 m, the old inflation_radius, which capped it).
+    tracker = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "mowgli_map", "src",
+        "obstacle_tracker_node.cpp")
+    with open(tracker) as fh:
+        m = re.search(r"OBSTACLE_COST\s*=\s*(\d+)", fh.read())
+    assert m, "obstacle_tracker_node.cpp no longer defines OBSTACLE_COST — re-check this bound"
+    occupancy = int(m.group(1))
+    # nav2_costmap_2d publisher: occupancy = 1 + 97 * (cost - 1) / 251 (integer).
+    cost = next(c for c in range(1, 253) if 1 + (97 * (c - 1)) // 251 >= occupancy)
+    tracker_reach = min(derived, inscribed + math.log(252.0 / cost) / scaling)
+    assert tracker_reach <= 0.20 + GLOBAL_COSTMAP_RESOLUTION_M + 1e-9, (
+        f"tracked obstacles would reach {tracker_reach:.3f} m past the LiDAR mark "
+        f"(cost >= {cost}), more than one cell beyond the 0.20 m before 2026-09-21 — "
+        "a lower cost_scaling_factor inflates every obstacle proposal."
     )
 
 
@@ -760,6 +830,50 @@ def test_ftc_stall_trio_present_in_both_variants() -> None:
             f"stall_crawl_speed={fcp['stall_crawl_speed']} must be a genuine crawl — "
             f"below speed_slow={fcp['speed_slow']} — or easing to it doesn't slow anything down"
         )
+
+
+def test_ftc_turn_fallback_is_configured_and_bounded() -> None:
+    """FTC's turn fallback (ftc_turn_fallback.hpp) improvises a turn the lattice
+    cannot drive — reverse, pivot, straight, pivot — instead of aborting. It
+    drives the bladed robot off its plan, so every knob that bounds it must be
+    set explicitly (a missing key silently runs the C++ default) and stay inside
+    the ranges FTCController accepts (onParameterChange rejects, declare clamps):
+    the reverse within the reverse-escape's order of magnitude, a rejoin search
+    of a few metres, a turn threshold that leaves straights to the WEDGED path,
+    and a finite deadline. The reverse must also still be governed by
+    obstacle_reverse_enabled (FTC zeroes it when that is false), so that switch
+    has to be present alongside.
+    """
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        for key in ("turn_fallback_enabled", "turn_fallback_max_reverse_m",
+                    "turn_fallback_max_rejoin_arc_m", "turn_fallback_min_turn_deg",
+                    "turn_fallback_timeout_s", "obstacle_reverse_enabled"):
+            assert key in fcp, f"FollowCoveragePath.{key} missing from merged config"
+        assert isinstance(fcp["turn_fallback_enabled"], bool)
+        assert 0.0 <= fcp["turn_fallback_max_reverse_m"] <= 0.5, (
+            "the fallback's straight reverse must stay of the order of the "
+            "reverse-escape's 0.30 m"
+        )
+        assert 1.0 <= fcp["turn_fallback_max_rejoin_arc_m"] <= 5.0, (
+            "the rejoin search must reach past a U-turn (> 1 m) but stay a few metres"
+        )
+        assert 30.0 <= fcp["turn_fallback_min_turn_deg"] <= 90.0, (
+            "the turn threshold must keep straights (0 deg) on the WEDGED path "
+            "and still catch the 70 deg kinks of 2026-09-22"
+        )
+        assert 10.0 <= fcp["turn_fallback_timeout_s"] <= 120.0
+
+
+def test_turn_fallback_is_unreachable_without_lidar() -> None:
+    """The fallback runs only where FTC's obstacle deviation runs. The no-LiDAR
+    overlay must keep both obstacle flags off, so a GPS-only robot behaves
+    exactly as before (it has no local obstacle layer to plan the manoeuvre on).
+    """
+    fcp = _controller_section(_load_no_lidar_params())["FollowCoveragePath"]
+    assert fcp["enable_obstacle_deviation"] is False
+    assert fcp["check_obstacles"] is False
+    assert _controller_section(_load_params())["FollowCoveragePath"]["use_offset_lattice"] is True
 
 
 def test_coverage_is_ftc_transit_is_not() -> None:

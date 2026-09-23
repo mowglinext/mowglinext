@@ -194,6 +194,16 @@ controller_server:
       # by the perpendicular swaths, so: ignore yaw (π) and match xy to FTC's
       # max_goal_distance_error (0.50). progress_threshold 0.95 still guarantees
       # the area was actually mowed before "done" can fire.
+      # 2026-09-21: the checker ALSO passes once the path still ahead of its
+      # monotonic cursor is <= xy_goal_tolerance (FTC's 0.50 m park, measured
+      # along the path). Without it a 0.6 m sub-path that FTC parked 0.3-0.45 m
+      # short of never reached 95 % of its poses and progress_checker aborted it
+      # 30 s later. It needs no key: it reuses xy_goal_tolerance, which must stay
+      # >= FTC max_goal_distance_error (navigation.launch.py floors it).
+      # 2026-09-22: the 95 % pose-ratio rule now also needs <= 1.0 m of path
+      # still ahead (kRatioRuleMaxRemainingM): on a long sub-path 5 % of the
+      # poses is metres, and one whose end looped back near pose 2326/2391
+      # completed there with 4.9 m unmowed.
       xy_goal_tolerance: 0.50
       yaw_goal_tolerance: 3.14   # ≈π → ignore final heading (test pins ≤ 3.1416)
       plan_topic: "/controller_server/FollowCoveragePath/global_plan"
@@ -516,8 +526,9 @@ controller_server:
       # Loose goal-acceptance envelope: the F2C path's last pose can sit 25-50 cm
       # from where the PID can converge (Dubins-connector approach-angle bias),
       # and near the goal fine-heading commands fall sub-deadband on the wheel-PI
-      # motor model. PathProgressGoalChecker still gates path-progress ≥ 95%, so a
-      # loose tolerance CANNOT fire mid-traversal.
+      # motor model. PathProgressGoalChecker still gates on monotonic path progress
+      # (≥ 95 % of the poses, or within this distance of the end ALONG the path),
+      # so a loose tolerance CANNOT fire mid-traversal.
       max_goal_distance_error: 0.50
       max_goal_angle_error: 30.0
       goal_timeout: 10.0
@@ -699,6 +710,31 @@ controller_server:
       obstacle_reverse_enabled: true
       obstacle_reverse_max_dist_m: 0.30
       obstacle_reverse_speed_mps: 0.10   # must clear the firmware deadband (~0.05)
+      # TURN FALLBACK (ftc_turn_fallback.hpp). Field 2026-09-22: all 8 WEDGED
+      # of a 110-min mow were in TURNS (U-turns, omega loops, 70-107 deg kinks)
+      # where the body front met real lethal cells — 7x the hedge just past the
+      # recorded line, where the planner lets the body overhang at a turn
+      # (Invariant 5), 1x an unmapped object beside a drawn obstacle. The lattice
+      # can only offset sideways, which cannot shorten a turn, so FTC wedged,
+      # reversed, held and aborted, and FollowStrip lost the turn and more.
+      # With the fallback, when the lattice finds no profile AND the first
+      # blocked pose lies where the plan heading sweeps >= turn_fallback_min_turn_deg,
+      # FTC improvises the turn: (straight reverse, <= turn_fallback_max_reverse_m,
+      # only if obstacle_reverse_enabled) -> pivot in place -> straight -> pivot
+      # -> FOLLOWING from a rejoin pose past the turn, the rejoin that skips the
+      # least path within turn_fallback_max_rejoin_arc_m. Planned with the
+      # executing checks (pivot sweep = real footprint vs true-lethal cells,
+      # connector/rejoin = the lattice body, body AXIS vs the zone off the plan)
+      # plus a 0.05 m planning margin, and executed by the existing PIVOT state
+      # at runtime corners spliced into FTC's plan: every cycle re-checks it, and
+      # anything new stops it (hold, then abort). An obstacle on a straight, or
+      # a turn with no safe way round, takes the unchanged WEDGED path. Replay of
+      # the 8 recorded wedges: a safe fallback for all 8 (PR notes).
+      turn_fallback_enabled: true
+      turn_fallback_max_reverse_m: 0.40      # [0, 1.0]
+      turn_fallback_max_rejoin_arc_m: 3.0    # path a rejoin may skip, [0.2, 10.0]
+      turn_fallback_min_turn_deg: 45.0       # a straight (post, wall) is not a turn, [10, 180]
+      turn_fallback_timeout_s: 45.0          # whole manoeuvre, else the goal aborts, [5, 300]
 
 # ---------------------------------------------------------------------------
 # Planner server
@@ -940,24 +976,43 @@ global_costmap:
       # navigation.launch.py), so "on the line" is plannable by construction.
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
         # Applies to obstacle_layer (LiDAR) marks ONLY — see the order note
-        # above. The band Smac refuses (cost >= INSCRIBED) is
-        # min(inscribed radius of the footprint, inflation_radius), NOT the
-        # whole inflation_radius: beyond the inscribed radius the cost decays
-        # below 253 and is only a traversal penalty.
+        # above. The band Smac REFUSES (cost >= INSCRIBED) is the footprint's
+        # inscribed radius (0.17 m, rear edge), whatever inflation_radius says:
+        # beyond it the cost decays below 253 and is only a traversal penalty,
+        # which cost_travel_multiplier turns into berth. So inflation_radius
+        # sets how far Smac FEELS an obstacle, not what it refuses — raising it
+        # cannot create a "start occupied".
         #
-        # 0.20 m (was 0.40, then 0.30). History, all from when the keepout was
-        # still inflated: 0.40 m put a robot within ~0.44 m of the polygon
-        # edge inside the inflated zone (Smac "Start occupied"); 0.30 m, with
-        # a 9x6 m polygon and auto-promoted obstacles in the middle, blocked
-        # every transit between cells (9+ min stuck in TRANSIT).
+        # OVERWRITTEN AT LAUNCH with robot_config_util.global_inflation_radius()
+        # = chassis circumscribed radius + one global cell (~0.68 m shipped),
+        # derived because chassis dimensions are operator-editable. The value
+        # below is that shipped result, for tools that read this file raw.
+        # It was 0.20 m until 2026-09-21: a 3 cm gradient, so a LiDAR obstacle
+        # cost nothing 0.20 m away, Smac planned the transit to the first strip
+        # 0.2 m from one, the body (0.275 m half-width) overlapped it and RPP
+        # refused the path 442 times over 97 s. Replayed through the real
+        # planner on that bag, this radius at cost_scaling_factor 7 keeps
+        # >= 0.47 m of body clearance past the start (0 m before: the body
+        # overlapped the obstacle). (The older "0.30 blocked every transit"
+        # history dates from when the keepout mask was still inflated; it is
+        # not any more.)
+        #
+        # cost_scaling_factor 7 (was 10): same replay, 10 let the path dip to
+        # 0.29 m, 5 and 3 gave no more berth than 7. It is NOT free to lower:
+        # obstacle_tracker_node clusters this costmap at occupancy >= 50
+        # (cost >= 128) to draw obstacle proposals, so the gradient's reach at
+        # cost 128 is the size of every tracked obstacle — 7 grows it by 7 cm
+        # (0.20 -> 0.27 m), 3 would have grown it by 20 cm. Pinned by
+        # test_nav2_params.py (at most one global cell wider than before).
+        #
         # Smac's "Inflation layer ... not set sufficiently" warning is about
         # its heuristic, not correctness. It does NOT fall back to a
         # per-footprint check: SmacPlanner2D has no footprint check at all
         # (that exists only in the Hybrid-A*/Lattice planners). The runtime
         # body guard is collision_monitor's PolygonStop, not the planner.
-        inflation_radius: 0.20
+        cost_scaling_factor: 7.0
+        inflation_radius: 0.68
 
       keepout_filter:
         plugin: "nav2_costmap_2d::KeepoutFilter"

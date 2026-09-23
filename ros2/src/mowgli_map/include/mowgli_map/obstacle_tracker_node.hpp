@@ -29,6 +29,7 @@
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_map/safe_transform_listener.hpp"
 #include <map_msgs/msg/occupancy_grid_update.hpp>
 #include <mowgli_interfaces/msg/obstacle_array.hpp>
 #include <mowgli_interfaces/srv/clear_obstacle.hpp>
@@ -234,7 +235,9 @@ private:
 
   // ── TF ────────────────────────────────────────────────────────────────────
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  // Destruction-safe listener (safe_transform_listener.hpp): tf2_ros's own
+  // dedicated-thread listener can hang its destructor.
+  std::unique_ptr<SafeTransformListener> tf_listener_;
 
   // ── Publishers ────────────────────────────────────────────────────────────
   rclcpp::Publisher<mowgli_interfaces::msg::ObstacleArray>::SharedPtr obstacle_pub_;

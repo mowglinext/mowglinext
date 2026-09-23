@@ -54,6 +54,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # This job runs on EVERY pull request (no paths filter), which is the point:
+      # the rollback comes from branches that never meant to touch a submodule.
+      - name: Submodule gitlinks match their recorded pins
+        run: bash .github/scripts/check_submodule_pins.sh
+
       - name: Detect ROS2-relevant paths
         id: filter
         env:

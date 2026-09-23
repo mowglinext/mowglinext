@@ -28,10 +28,40 @@ mowgli_interfaces::msg::HighLevelStatus withLiveStatusFields(
   mowgli_interfaces::msg::HighLevelStatus msg;
 
   // Tree-owned identity: only PublishHighLevelStatus knows which branch is
-  // selected, so carry it through untouched.
+  // selected, so carry it through untouched before applying live overlays.
   msg.state = base.state;
   msg.state_name = base.state_name;
   msg.sub_state_name = base.sub_state_name;
+  // EXCEPTION: sub_state_name also carries two live overrides that change
+  // mid-invocation, between tree ticks, so only this per-tick/1 Hz-republish
+  // projection can track them accurately. Overridden, not appended: nothing
+  // else currently populates this field (PublishHighLevelStatus always
+  // writes ""). TRANSIT wins if both happen to be true on the same tick (a
+  // later area still mowing after an earlier one was flagged) — cosmetic
+  // only, the warning reappears the next non-transiting tick.
+  if (ctx.transiting)
+  {
+    msg.sub_state_name = "TRANSIT";
+  }
+  else if (ctx.coverage_plausibility_warning)
+  {
+    // Issue #680: FollowStrip::checkCoveragePlausibility (coverage_nodes.cpp)
+    // can flip this mid-session; it must stay visible through to the final
+    // report rather than only flash at the instant it was set.
+    msg.sub_state_name = "COVERAGE_INCOMPLETE";
+  }
+
+  // A scan pause owns the blade. It therefore takes priority over a transit
+  // snapshot: on the completion tick transit_active_ is cleared only after
+  // onRunning() has sampled it, while sendFollowGoal() can synchronously find
+  // a stale scan. Never let that one-tick stale TRANSIT snapshot hide the
+  // active safety hold from the operator.
+  if (ctx.coverage_scan_paused &&
+      base.state == mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS &&
+      base.state_name == "MOWING")
+  {
+    msg.sub_state_name = "SCAN_PAUSED";
+  }
 
   msg.current_area = static_cast<int16_t>(ctx.current_area);
   // The GUI computes progress as current_path_index / current_path

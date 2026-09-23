@@ -79,6 +79,51 @@ TEST(ScanPause, FlappingStreamDoesNotToggleTheBlade)
   EXPECT_TRUE(st.paused);
 }
 
+TEST(ScanPause, TransitHandoffLeavesFreshInitialGoalUnpaused)
+{
+  mb::ScanPauseState st;
+
+  EXPECT_EQ(mb::ScanPauseStep(st, true, 0.1, 10.0, /*allow_resume=*/false),
+            mb::ScanPauseAction::kNone);
+  EXPECT_FALSE(st.paused);
+  EXPECT_DOUBLE_EQ(st.fresh_for_s, 0.0);
+}
+
+TEST(ScanPause, TransitHandoffDiscardsPartialFreshWindow)
+{
+  mb::ScanPauseState st;
+  ASSERT_EQ(mb::ScanPauseStep(st, true, 1.2, 0.1), mb::ScanPauseAction::kPause);
+
+  // Fresh shortly before and during a transit is unobserved as a continuous
+  // stream. The handoff must discard it even when ordinary stepping would
+  // return kNone rather than kResume.
+  EXPECT_EQ(mb::ScanPauseStep(st, true, 0.1, 0.2), mb::ScanPauseAction::kNone);
+  EXPECT_DOUBLE_EQ(st.fresh_for_s, 0.2);
+  EXPECT_EQ(mb::ScanPauseStep(st, true, 0.1, 0.1, /*allow_resume=*/false),
+            mb::ScanPauseAction::kNone);
+  EXPECT_TRUE(st.paused);
+  EXPECT_DOUBLE_EQ(st.fresh_for_s, 0.0);
+
+  for (int i = 0; i < 4; ++i)
+  {
+    EXPECT_EQ(mb::ScanPauseStep(st, true, 0.1, 0.1), mb::ScanPauseAction::kNone);
+  }
+  EXPECT_TRUE(st.paused);
+  EXPECT_EQ(mb::ScanPauseStep(st, true, 0.1, 0.1), mb::ScanPauseAction::kResume);
+  EXPECT_FALSE(st.paused);
+}
+
+TEST(ScanPause, TransitHandoffSuppressesAnOtherwiseReadyResume)
+{
+  mb::ScanPauseState st;
+  ASSERT_EQ(mb::ScanPauseStep(st, true, 1.2, 0.1), mb::ScanPauseAction::kPause);
+
+  EXPECT_EQ(mb::ScanPauseStep(st, true, 0.1, 0.6, /*allow_resume=*/false),
+            mb::ScanPauseAction::kNone);
+  EXPECT_TRUE(st.paused);
+  EXPECT_DOUBLE_EQ(st.fresh_for_s, 0.0);
+}
+
 TEST(ScanPause, ThresholdsMatchTheMotionLayer)
 {
   // Blade cut at the historical IsScanStale threshold; collision_monitor's

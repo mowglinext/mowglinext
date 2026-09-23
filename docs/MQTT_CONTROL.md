@@ -76,6 +76,7 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | every ROS message (~1 Hz, not rate-limited) |
 | `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | `publish_rate` Hz |
 | `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | `publish_rate` Hz |
+| `<prefix>/pose` | out | no | `/odometry/filtered_map` (fused localizer pose, **map frame**) | latest value, at most `publish_rate` Hz |
 | `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | latest value, at most `publish_rate` Hz |
 | `<prefix>/area_boundary` | out | yes | `/map_server_node/get_mowing_area` (polled) | on change, polled every 10 s |
 | `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
@@ -232,9 +233,16 @@ directly, whose own population is backend-dependent and not guaranteed to be on 
       "boundary": [[1.234, -0.567], [10.0, -0.567], [10.0, 8.0], [1.234, 8.0]],
       "obstacles": [[[3.0, 2.0], [4.0, 2.0], [4.0, 3.0], [3.0, 3.0]]]
     }
-  ]
+  ],
+  "dock": {"x": 12.5, "y": -3.25, "yaw": 1.5708}
 }
 ```
+
+`dock` is the charging dock's pose in the same map frame (`dock_pose_x/y/yaw` from
+`mowgli_robot.yaml`; `yaw` in radians, the heading the robot has when docked). It is **omitted**
+when no dock is calibrated (all three values still at their `0/0/0` default) or any value is not
+finite. The bridge reads it at startup, like the other consumers of these keys, so a dock
+re-calibration shows up after a restart.
 
 Polygon geometry for every recorded mowing area, so an external tool (e.g. a Home Assistant map
 card) can render the boundary and obstacles the robot's own GUI shows. `datum_lat`/`datum_lon` are
@@ -255,6 +263,20 @@ not `index`, if you need to correlate with `<prefix>/areas`. The bridge polls
 `/map_server_node/get_mowing_area` every 10 seconds (index 0, 1, 2, … until the service reports
 `success: false`, capped at 100 areas) and only republishes (retained) when the serialised geometry
 actually changed, so a static map does not spam the broker.
+
+### `<prefix>/pose`
+
+```json
+{"x": 12.5, "y": -3.25, "yaw": 1.5708}
+```
+
+The mower's fused pose in the **map frame** — the same frame as the polygons in
+`<prefix>/area_boundary` and the `dock` there: `x` east, `y` north, in metres from the datum, `yaw`
+in radians counter-clockwise from east (−π…π]. It is `/odometry/filtered_map`, the localizer's
+canonical global pose, so it is smoother than the raw `<prefix>/gps` fix (which jitters, especially
+at the dock) and it carries a heading, which `<prefix>/gps` does not. It needs no datum to be
+placed on the `area_boundary` geometry. Not retained; a localizer that has not converged yet (non-
+finite values) publishes nothing.
 
 ### `<prefix>/diagnostics`
 

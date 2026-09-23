@@ -24,6 +24,16 @@ func messages(events []NotifyEvent) []string {
 	return out
 }
 
+func messagesForKind(events []NotifyEvent, kind string) []string {
+	var out []string
+	for _, ev := range events {
+		if ev.Kind == kind {
+			out = append(out, ev.Message)
+		}
+	}
+	return out
+}
+
 func TestNotifyDetector_MowStartedOnceAcrossRechargePause(t *testing.T) {
 	d := NewNotifyDetector()
 	now := t0
@@ -69,6 +79,38 @@ func TestNotifyDetector_ZoneChangeMergesWhenBothKindsOn(t *testing.T) {
 	assert.Equal(t, "3", got[0].Params["nextIndex"])
 }
 
+func TestNotifyDetector_ZoneChangeDoesNotSuppressDistinctTransition(t *testing.T) {
+	d := NewNotifyDetector()
+	now := t0
+	d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)
+
+	// The first transition establishes the zoneChanged cooldown identity.
+	now = now.Add(notifyCooldown + time.Second)
+	got := d.OnStatus(tick(2, "MOWING", 1, 0), now, allKinds)
+	assert.Equal(t, []string{NotifyMsgZoneChanged}, messages(got))
+
+	// This is a different transition, not flapping back to the same boundary.
+	now = now.Add(time.Second)
+	got = d.OnStatus(tick(2, "MOWING", 2, 0), now, allKinds)
+	assert.Equal(t, []string{NotifyMsgZoneChanged}, messages(got))
+}
+
+func TestNotifyDetector_ZoneChangeCooldownSuppressesRepeatTransition(t *testing.T) {
+	d := NewNotifyDetector()
+	now := t0
+	d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)
+
+	now = now.Add(notifyCooldown + time.Second)
+	assert.Equal(t, []string{NotifyMsgZoneChanged}, messages(d.OnStatus(tick(2, "MOWING", 1, 0), now, allKinds)))
+
+	// Crossing back is a distinct boundary; repeating the original boundary
+	// immediately afterwards is cooldown noise and must remain suppressed.
+	now = now.Add(time.Second)
+	assert.Equal(t, []string{NotifyMsgZoneChanged}, messages(d.OnStatus(tick(2, "MOWING", 0, 0), now, allKinds)))
+	now = now.Add(time.Second)
+	assert.Empty(t, d.OnStatus(tick(2, "MOWING", 1, 0), now, allKinds))
+}
+
 func TestNotifyDetector_ZoneChangeSplitsWhenOnlyOneKindOn(t *testing.T) {
 	d := NewNotifyDetector()
 	onlyFinished := func(kind string) bool { return kind != NotifyEventZoneStarted }
@@ -77,6 +119,36 @@ func TestNotifyDetector_ZoneChangeSplitsWhenOnlyOneKindOn(t *testing.T) {
 	now = now.Add(2 * time.Minute)
 	got := d.OnStatus(tick(2, "MOWING", 1, 0), now, onlyFinished)
 	assert.Equal(t, []string{NotifyMsgZoneFinished, NotifyMsgZoneStarted}, messages(got))
+}
+
+func TestNotifyDetector_ZoneStartedDoesNotSuppressDistinctZones(t *testing.T) {
+	d := NewNotifyDetector()
+	onlyStarted := func(kind string) bool { return kind == NotifyEventZoneStarted }
+	now := t0
+	d.OnStatus(tick(2, "MOWING", 0, 10), now, onlyStarted)
+
+	now = now.Add(notifyCooldown + time.Second)
+	got := d.OnStatus(tick(2, "MOWING", 1, 0), now, onlyStarted)
+	assert.Equal(t, []string{NotifyMsgZoneStarted}, messagesForKind(got, NotifyEventZoneStarted))
+
+	now = now.Add(time.Second)
+	got = d.OnStatus(tick(2, "MOWING", 2, 0), now, onlyStarted)
+	assert.Equal(t, []string{NotifyMsgZoneStarted}, messagesForKind(got, NotifyEventZoneStarted))
+}
+
+func TestNotifyDetector_ZoneFinishedDoesNotSuppressDistinctZones(t *testing.T) {
+	d := NewNotifyDetector()
+	onlyFinished := func(kind string) bool { return kind == NotifyEventZoneFinished }
+	now := t0
+	d.OnStatus(tick(2, "MOWING", 0, 10), now, onlyFinished)
+
+	now = now.Add(notifyCooldown + time.Second)
+	got := d.OnStatus(tick(2, "MOWING", 1, 0), now, onlyFinished)
+	assert.Equal(t, []string{NotifyMsgZoneFinished}, messagesForKind(got, NotifyEventZoneFinished))
+
+	now = now.Add(time.Second)
+	got = d.OnStatus(tick(2, "MOWING", 2, 0), now, onlyFinished)
+	assert.Equal(t, []string{NotifyMsgZoneFinished}, messagesForKind(got, NotifyEventZoneFinished))
 }
 
 func TestNotifyDetector_MowCompleteThenDocked(t *testing.T) {

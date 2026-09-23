@@ -38,9 +38,10 @@ var FleetCommands = map[string]bool{
 
 // FleetPeer is a persisted registry entry.
 type FleetPeer struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Address string `json:"address"` // host:port of the peer's GUI backend
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Address    string `json:"address"` // host:port of the peer's GUI backend
+	APIVersion int    `json:"api_version"`
 }
 
 // FleetRobot is one row of the fleet snapshot the GUI renders.
@@ -167,13 +168,13 @@ func (f *FleetProvider) AddPeer(ctx context.Context, address string) (AddPeerRes
 	if strings.EqualFold(remote.Name, self.Name) {
 		return AddPeerResult{}, fmt.Errorf("peer is also named %q; give each mower a distinct name in Settings → Hardware", remote.Name)
 	}
-	peer := FleetPeer{ID: remote.ID, Name: remote.Name, Address: address}
+	peer := FleetPeer{ID: remote.ID, Name: remote.Name, Address: address, APIVersion: remote.APIVersion}
 	if err := f.upsertPeer(peer); err != nil {
 		return AddPeerResult{}, err
 	}
 	result := AddPeerResult{Peer: peer}
 	status, body, err := postPeerJSON(ctx, f.http, address, peerRegisterPath, registerBody{
-		ID: self.ID, Name: self.Name, Port: LocalAPIPort(f.db),
+		ID: self.ID, Name: self.Name, Port: LocalAPIPort(f.db), APIVersion: self.APIVersion,
 	})
 	switch {
 	case err != nil:
@@ -190,16 +191,21 @@ func (f *FleetProvider) AddPeer(ctx context.Context, address string) (AddPeerRes
 }
 
 type registerBody struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Port int    `json:"port"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Port       int    `json:"port"`
+	APIVersion int    `json:"api_version"`
 }
 
 // RegisterPeer is the receiving side of AddPeer: a peer told us its id, name
 // and API port, and the transport told us its IP.
-func (f *FleetProvider) RegisterPeer(id, name, host string, port int) (FleetPeer, error) {
+func (f *FleetProvider) RegisterPeer(id, name, host string, port int, apiVersions ...int) (FleetPeer, error) {
 	if id == "" || name == "" || host == "" || port <= 0 {
 		return FleetPeer{}, errors.New("id, name, host and port are required")
+	}
+	apiVersion := 0
+	if len(apiVersions) > 0 {
+		apiVersion = apiVersions[0]
 	}
 	self, err := f.Identity()
 	if err != nil {
@@ -208,7 +214,7 @@ func (f *FleetProvider) RegisterPeer(id, name, host string, port int) (FleetPeer
 	if id == self.ID {
 		return FleetPeer{}, errors.New("a robot cannot register itself")
 	}
-	peer := FleetPeer{ID: id, Name: name, Address: net.JoinHostPort(host, strconv.Itoa(port))}
+	peer := FleetPeer{ID: id, Name: name, Address: net.JoinHostPort(host, strconv.Itoa(port)), APIVersion: apiVersion}
 	if err := f.upsertPeer(peer); err != nil {
 		return FleetPeer{}, err
 	}
@@ -271,8 +277,36 @@ func (f *FleetProvider) startClient(peer FleetPeer) {
 
 func (f *FleetProvider) startClientLocked(peer FleetPeer) {
 	c := newPeerClient(peer.Address, f.now)
+	c.onIdentityUnavailable = func() {
+		f.updatePeerAPIVersion(peer.ID, peer.Address, 0)
+	}
+	c.onIdentity = func(identity RobotIdentity) {
+		if identity.ID != peer.ID {
+			f.updatePeerAPIVersion(peer.ID, peer.Address, 0)
+			logrus.WithField("peer", peer.Address).Warn("fleet: identity refresh returned a different robot id")
+			return
+		}
+		f.updatePeerAPIVersion(peer.ID, peer.Address, identity.APIVersion)
+	}
 	f.clients[peer.ID] = c
 	c.start()
+}
+
+// updatePeerAPIVersion persists the version reported by the same peer identity
+// and address that owns this client. Reconnecting peers may have been upgraded
+// since their registry entry was first written.
+func (f *FleetProvider) updatePeerAPIVersion(id, address string, apiVersion int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	peer, ok := f.peers[id]
+	if !ok || peer.Address != address || peer.APIVersion == apiVersion {
+		return
+	}
+	peer.APIVersion = apiVersion
+	f.peers[id] = peer
+	if err := f.savePeersLocked(); err != nil {
+		logrus.WithField("peer", address).Warnf("fleet: persist refreshed API version: %v", err)
+	}
 }
 
 func (f *FleetProvider) loadPeers() {
@@ -325,7 +359,7 @@ func (f *FleetProvider) Robots() ([]FleetRobot, error) {
 	f.mu.Unlock()
 	for _, p := range peers {
 		row := FleetRobot{
-			Identity: RobotIdentity{ID: p.ID, Name: p.Name},
+			Identity: RobotIdentity{ID: p.ID, Name: p.Name, APIVersion: p.APIVersion},
 			Address:  p.Address,
 			Topics:   map[string]json.RawMessage{},
 		}
@@ -370,6 +404,9 @@ func (f *FleetProvider) Call(ctx context.Context, id, command string, body json.
 	f.mu.Unlock()
 	if !ok {
 		return http.StatusNotFound, nil, fmt.Errorf("unknown robot %s", id)
+	}
+	if peer.APIVersion != FleetAPIVersion {
+		return http.StatusConflict, nil, fmt.Errorf("peer %s fleet API version %d is incompatible with ours (v%d)", peer.Name, peer.APIVersion, FleetAPIVersion)
 	}
 	var payload any = map[string]any{}
 	if len(body) > 0 {

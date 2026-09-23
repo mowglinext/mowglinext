@@ -30,6 +30,9 @@ func setupMowgliNextRouter(provider types.IRosProvider) *gin.Engine {
 
 func TestServiceRoute_HighLevelControl(t *testing.T) {
 	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		res.(*mowgli.HighLevelControlRes).Success = true
+	}
 	router := setupMowgliNextRouter(mock)
 
 	payload := map[string]any{"Command": 1}
@@ -175,6 +178,9 @@ func TestServiceRoute_ServiceError(t *testing.T) {
 
 func TestServiceRoute_StartInArea(t *testing.T) {
 	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		res.(*mowgli.StartInAreaRes).Success = true
+	}
 	router := setupMowgliNextRouter(mock)
 
 	payload := map[string]any{"Area": 2}
@@ -188,6 +194,56 @@ func TestServiceRoute_StartInArea(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	require.Len(t, mock.ServiceCalls, 1)
 	assert.Equal(t, "/behavior_tree_node/start_in_area", mock.ServiceCalls[0].Service)
+}
+
+func TestServiceRoute_ActionServiceRejection(t *testing.T) {
+	cases := []struct {
+		command string
+		body    string
+		message string
+	}{
+		{"high_level_control", `{"command":1}`, "high_level_control rejected the command"},
+		{"start_in_area", `{"area":2}`, "start_in_area rejected the command"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.command, func(t *testing.T) {
+			mock := types.NewMockRosProvider()
+			mock.ServiceResponder = func(_ string, _ any, res any) {
+				switch response := res.(type) {
+				case *mowgli.HighLevelControlRes:
+					response.Success = false
+				case *mowgli.StartInAreaRes:
+					response.Success = false
+				default:
+					t.Fatalf("unexpected service response type %T", res)
+				}
+			}
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("POST", "/api/mowglinext/call/"+tc.command, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			setupMowgliNextRouter(mock).ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusInternalServerError, w.Code)
+			var response ErrorResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			assert.Equal(t, tc.message, response.Error)
+			require.Len(t, mock.ServiceCalls, 1)
+		})
+	}
+}
+
+func TestServiceRoute_StartInAreaMalformedRequest(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/mowglinext/call/start_in_area", strings.NewReader(`{"area":"invalid"}`))
+	req.Header.Set("Content-Type", "application/json")
+	setupMowgliNextRouter(mock).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var response ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.NotEmpty(t, response.Error)
+	assert.Empty(t, mock.ServiceCalls)
 }
 
 func TestClearMapRoute(t *testing.T) {

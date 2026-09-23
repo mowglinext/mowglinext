@@ -527,7 +527,11 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(ctx, "/behavior_tree_node/high_level_control", &CallReq, &mowgli.HighLevelControlRes{}, "mowgli_interfaces/srv/HighLevelControl")
+			var res mowgli.HighLevelControlRes
+			err = provider.CallService(ctx, "/behavior_tree_node/high_level_control", &CallReq, &res, "mowgli_interfaces/srv/HighLevelControl")
+			if err == nil && !res.Success {
+				err = errors.New("high_level_control rejected the command")
+			}
 		case "emergency":
 			var CallReq mowgli.EmergencyStopReq
 			err = c.BindJSON(&CallReq)
@@ -575,7 +579,11 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(ctx, "/behavior_tree_node/start_in_area", &CallReq, &mowgli.StartInAreaRes{}, "mowgli_interfaces/srv/StartInArea")
+			var res mowgli.StartInAreaRes
+			err = provider.CallService(ctx, "/behavior_tree_node/start_in_area", &CallReq, &res, "mowgli_interfaces/srv/StartInArea")
+			if err == nil && !res.Success {
+				err = errors.New("start_in_area rejected the command")
+			}
 		case "set_datum":
 			type TriggerRes struct {
 				Success bool   `json:"success"`

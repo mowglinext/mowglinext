@@ -56,6 +56,7 @@
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "nav2_msgs/msg/collision_monitor_state.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -303,6 +304,20 @@ private:
                                                        context_->context_mutex);
                                                    context_->lethal_boundary_violation = msg->data;
                                                  });
+
+    // FollowStrip's end-of-pass coverage-plausibility cross-check (issue
+    // #680) — see BTContext::latest_mow_progress's doc comment. transient_local
+    // depth 1 to match the publisher (map_server_node ~/mow_progress), so a
+    // sample is available even if the first area finishes its pass before a
+    // fresh publish tick.
+    mow_progress_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
+        "/map_server_node/mow_progress",
+        rclcpp::QoS(1).transient_local(),
+        [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          context_->latest_mow_progress = *msg;
+        });
 
     // Repeat-dig escalation feed for DigObstructionGuard. The bridge latches
     // this after dig_escalate_count dig latches inside dig_escalate_radius_m
@@ -1354,6 +1369,7 @@ private:
       context_->area_plan_fingerprint.clear();
       context_->completed_areas.clear();
       context_->attempted_areas.clear();
+      context_->incomplete_retired_areas.clear();
       context_->area_attempt_count.clear();
       context_->area_last_coverage.clear();
       context_->coverage_start_blocked = false;
@@ -1429,6 +1445,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr lethal_boundary_violation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr dig_escalated_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::DigEvent>::SharedPtr dig_event_sub_;
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr mow_progress_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr fused_odom_sub_;
   // LocalizationGuard state. Both feeds write loc_obs_ under
   // context_->context_mutex and then call updateLocalizationHealthLocked().

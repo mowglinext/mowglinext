@@ -139,6 +139,27 @@ def chassis_circumscribed_radius(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     return math.hypot(max(abs(front), abs(rear)), half_width)
 
 
+# full_system.launch.py's fallback for enforce_boundary_margin_m when neither the
+# installed config nor the template sets it.
+DEFAULT_ENFORCE_BOUNDARY_MARGIN_M = 0.40
+
+
+def boundary_soft_margin(params):
+    """Width of map_server's NON-LETHAL soft band outside every area [m].
+
+    = enforce_boundary_margin_m floored at the chassis circumscribed radius —
+    the same floor full_system.launch.py applies before handing the value to
+    map_server (the band must hold the whole footprint, which reaches that far
+    past the recorded line in some orientation). coverage_server receives it as
+    `boundary_soft_margin`: a PIVOT JOIN is only planned where the disc the body
+    sweeps pivoting about base_link stays inside the recorded line grown by
+    this band.
+    """
+    requested = float((params or {}).get(
+        "enforce_boundary_margin_m", DEFAULT_ENFORCE_BOUNDARY_MARGIN_M))
+    return max(requested, chassis_circumscribed_radius(params))
+
+
 # --- Obstacle margins: count the body EXACTLY ONCE per consumer --------------
 #
 # A drawn map obstacle is kept away from by three consumers, and each one has
@@ -193,6 +214,32 @@ def ftc_obstacle_clearance_margin(params):
         "obstacle_clearance_margin", DEFAULT_FTC_CLEARANCE_MARGIN_M))
     return min(FTC_CLEARANCE_MARGIN_MAX_M,
                max(FTC_CLEARANCE_MARGIN_MIN_M, requested))
+
+
+def global_inflation_radius(params, global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
+    """GLOBAL costmap inflation_radius: how far Smac feels a LiDAR obstacle.
+
+    SmacPlanner2D is a point planner. It REFUSES a cell only at cost >=
+    INSCRIBED, and that band is the footprint's inscribed radius (0.17 m on the
+    shipped chassis, rear edge) whatever inflation_radius says, so this value
+    does NOT widen what the planner refuses and cannot create a new "start
+    occupied". What it sets is the COST GRADIENT beyond that band, which
+    cost_travel_multiplier turns into berth. At the old 0.20 m the gradient
+    was 3 cm wide: past 0.20 m an obstacle cost nothing, Smac hugged it, and
+    RPP (which checks the real footprint) refused the path. Field 2026-09-21:
+    the transit to the first strip passed 0.2 m from a LiDAR obstacle, the body
+    (0.275 m half-width) overlapped it, RPP logged "collision ahead" 442 times
+    and the robot spent 97 s backing, spinning and waiting before the unit was
+    skipped. Replayed through the real planner on that bag: at this radius (with
+    cost_scaling_factor 7, nav2_params_base.yaml) the same transit keeps
+    >= 0.47 m between the body and the obstacle past its start.
+
+    = chassis circumscribed radius (the body's reach in any direction) + one
+    global cell. DERIVED: chassis dimensions are operator-editable. Applies to
+    sensor marks only: keepout_filter is listed AFTER inflation_layer, so the
+    keepout mask (which already carries the body) is never inflated.
+    """
+    return chassis_circumscribed_radius(params) + float(global_resolution)
 
 
 def keepout_raster_slack(global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):

@@ -27,6 +27,7 @@ export interface FleetPeerWire {
     id: string;
     name: string;
     address: string;
+    api_version?: number;
 }
 
 export type FleetPhase = "offline" | "idle" | "mowing" | "returning" | "recording" | "manual" | "charging" | "emergency";

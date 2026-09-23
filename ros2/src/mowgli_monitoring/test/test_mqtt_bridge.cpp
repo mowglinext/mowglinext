@@ -26,7 +26,9 @@
  */
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -755,4 +757,90 @@ TEST(IsPublishDue, DueBeyondInterval)
   const rclcpp::Time last{10, 0, RCL_ROS_TIME};
   const rclcpp::Time now = last + rclcpp::Duration::from_seconds(5.0);
   EXPECT_TRUE(MqttBridgeNode::is_publish_due(now, last, /*min_interval_s=*/1.0));
+}
+
+// ===========================================================================
+// <prefix>/pose (fused map-frame pose) and the dock in <prefix>/area_boundary
+// ===========================================================================
+
+namespace
+{
+nav_msgs::msg::Odometry pose_with_yaw(double x, double y, double yaw)
+{
+  nav_msgs::msg::Odometry msg{};
+  msg.pose.pose.position.x = x;
+  msg.pose.pose.position.y = y;
+  msg.pose.pose.orientation.z = std::sin(yaw / 2.0);
+  msg.pose.pose.orientation.w = std::cos(yaw / 2.0);
+  return msg;
+}
+}  // namespace
+
+TEST(SerialisePose, ExtractsXyAndYaw)
+{
+  EXPECT_EQ(MqttBridgeNode::serialise_pose(pose_with_yaw(1.25, -6.5, M_PI / 2.0)),
+            "{\"x\":1.250,\"y\":-6.500,\"yaw\":1.5708}");
+}
+
+TEST(SerialisePose, IdentityOrientationIsYawZero)
+{
+  nav_msgs::msg::Odometry msg{};
+  msg.pose.pose.orientation.w = 1.0;
+  EXPECT_EQ(MqttBridgeNode::serialise_pose(msg), "{\"x\":0.000,\"y\":0.000,\"yaw\":0.0000}");
+}
+
+TEST(SerialisePose, YawIsWrappedIntoMinusPiToPi)
+{
+  // 270 degrees is the same heading as -90 degrees.
+  EXPECT_EQ(MqttBridgeNode::serialise_pose(pose_with_yaw(0.0, 0.0, 3.0 * M_PI / 2.0)),
+            "{\"x\":0.000,\"y\":0.000,\"yaw\":-1.5708}");
+}
+
+TEST(MakeDockPose, DefaultZeroMeansNoDockCalibrated)
+{
+  EXPECT_FALSE(MqttBridgeNode::make_dock_pose(0.0, 0.0, 0.0).has_value());
+}
+
+TEST(MakeDockPose, AnyNonZeroComponentIsARealDock)
+{
+  // The datum can sit on the dock (x = y = 0); a calibrated yaw is never exactly 0.
+  const auto dock = MqttBridgeNode::make_dock_pose(0.0, 0.0, 1.5);
+  ASSERT_TRUE(dock.has_value());
+  EXPECT_DOUBLE_EQ(dock->yaw, 1.5);
+  EXPECT_TRUE(MqttBridgeNode::make_dock_pose(3.0, -2.0, 0.0).has_value());
+}
+
+TEST(MakeDockPose, NonFiniteValuesAreRejected)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(MqttBridgeNode::make_dock_pose(nan, 1.0, 1.0).has_value());
+  EXPECT_FALSE(MqttBridgeNode::make_dock_pose(1.0, inf, 1.0).has_value());
+  EXPECT_FALSE(MqttBridgeNode::make_dock_pose(1.0, 1.0, nan).has_value());
+}
+
+TEST(SerialiseAreaBoundaries, DockIsAppendedWhenSet)
+{
+  mowgli_interfaces::msg::MapArea area{};
+  area.name = "Front Lawn";
+  geometry_msgs::msg::Point32 p0;
+  p0.x = 1.0f;
+  p0.y = 2.0f;
+  area.area.points = {p0};
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{0, area}};
+
+  const auto json = MqttBridgeNode::serialise_area_boundaries(
+      areas, 52.0, 4.0, MqttBridgeNode::DockPose{1.25, -3.5, 1.5708});
+  EXPECT_EQ(json,
+            "{\"datum_lat\":52.00000000,\"datum_lon\":4.00000000,\"areas\":["
+            "{\"index\":0,\"name\":\"Front Lawn\",\"boundary\":[[1.000,2.000]],"
+            "\"obstacles\":[]}],"
+            "\"dock\":{\"x\":1.250,\"y\":-3.500,\"yaw\":1.5708}}");
+}
+
+TEST(SerialiseAreaBoundaries, NoDockKeyWhenUnset)
+{
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> none{};
+  EXPECT_EQ(MqttBridgeNode::serialise_area_boundaries(none, 0.0, 0.0, std::nullopt),
+            "{\"datum_lat\":0.00000000,\"datum_lon\":0.00000000,\"areas\":[]}");
 }

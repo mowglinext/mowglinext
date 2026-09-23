@@ -73,6 +73,7 @@ from nav2_common.launch import RewrittenYaml
 # implementation instead of a per-file copy that can drift.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (
+    boundary_soft_margin,
     chassis_circumscribed_radius,
     chassis_footprint,  # noqa: E402
     chassis_half_width,
@@ -86,6 +87,7 @@ from robot_config_util import (
     check_turn_geometry,
     deep_merge,
     ftc_obstacle_clearance_margin,
+    global_inflation_radius,
     derive_blade_load_params,
     derive_turn_speed,
     load_robot_params,
@@ -928,9 +930,8 @@ def generate_launch_description() -> LaunchDescription:
         # sqrt(0.530² + 0.275²) ≈ 0.597 m at chassis_width 0.45 (2026-09-05,
         # maintainer-measured). The previous floor of 0.58 quoted ~0.572 m,
         # which came from the older chassis_length 0.54 and was already below
-        # the real radius (≈0.586 m) even at the old chassis_width 0.40. The GLOBAL costmap radius (0.20)
-        # is deliberately untouched — 0.30 already blocked all transit paths
-        # on a 9×6 m polygon (see the inflation_layer comment in base.yaml).
+        # the real radius (≈0.586 m) even at the old chassis_width 0.40. The
+        # GLOBAL costmap radius is set separately just below.
         lc_infl = (doc.setdefault("local_costmap", {})
                       .setdefault("local_costmap", {})
                       .setdefault("ros__parameters", {})
@@ -958,6 +959,15 @@ def generate_launch_description() -> LaunchDescription:
             )
         lc_infl["inflation_radius"] = min(
             1.50, max(infl_floor, obstacle_inflation_radius))
+        # GLOBAL costmap: a cost gradient out to the body's reach around LiDAR
+        # marks, so the transit planner keeps berth instead of hugging an
+        # obstacle the controller then refuses to pass (field 2026-09-21). It
+        # does not widen the band Smac refuses — see global_inflation_radius().
+        gc_infl = (doc.setdefault("global_costmap", {})
+                      .setdefault("global_costmap", {})
+                      .setdefault("ros__parameters", {})
+                      .setdefault("inflation_layer", {}))
+        gc_infl["inflation_radius"] = global_inflation_radius(rp)
         # PolygonSlow only exists in the LiDAR overlay's collision_monitor —
         # write the slowdown ratio only when the merged doc carries it so the
         # no-lidar variant (pass-through monitor) stays untouched.
@@ -1118,6 +1128,17 @@ def generate_launch_description() -> LaunchDescription:
         # teardrop). Clamped alongside the floor above (eff_min_turn_radius) so the
         # geometry check and the injected value can never describe different plans.
         cov_params["connector_turn_radius"] = eff_connector_turn_radius
+        # PIVOT JOINS: a row-end join that fits no turn-around arc (thin headland
+        # apron — num_headland_passes auto on a narrow tool, or none) stays
+        # blade-on as a short straight with in-place pivots, but only where the
+        # disc the chassis sweeps pivoting about base_link (the REAR axle) stays
+        # inside the recorded line grown by map_server's non-lethal soft band and
+        # clear of drawn obstacles. Both DERIVED from the live chassis — never a
+        # literal (chassis_* are GUI-editable). Without these two lines the node
+        # keeps its 0.0 defaults and pivot joins stay disabled (every such join
+        # splits into a blade-off transit, the 2026-09-21 128-sub-path plan).
+        cov_params["pivot_sweep_radius"] = chassis_circumscribed_radius(rp)
+        cov_params["boundary_soft_margin"] = boundary_soft_margin(rp)
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w", prefix="mowgli_nav2_", suffix=".yaml", delete=False)

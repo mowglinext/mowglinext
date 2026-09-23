@@ -85,14 +85,17 @@ func (c *peerCache) snapshot(now time.Time) (map[string]json.RawMessage, time.Ti
 // mirrors FleetTopics into a peerCache. It reconnects with capped backoff
 // until Close is called.
 type peerClient struct {
-	address string
-	cache   *peerCache
-	http    *http.Client
-	dialer  *websocket.Dialer
-	ctx     context.Context
-	cancel  context.CancelFunc
-	done    chan struct{}
-	now     func() time.Time
+	address               string
+	cache                 *peerCache
+	http                  *http.Client
+	dialer                *websocket.Dialer
+	onIdentity            func(RobotIdentity)
+	onIdentityUnavailable func()
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	done                  chan struct{}
+	now                   func() time.Time
+	sessionOpened         bool
 }
 
 func newPeerClient(address string, now func() time.Time) *peerClient {
@@ -149,6 +152,22 @@ func (p *peerClient) session() error {
 		return err
 	}
 	defer conn.Close()
+	wasConnected := p.sessionOpened
+	if wasConnected && p.onIdentityUnavailable != nil {
+		p.onIdentityUnavailable()
+	}
+	if p.onIdentity != nil {
+		identity, err := fetchPeerIdentity(p.ctx, p.http, p.address)
+		if err != nil {
+			if p.onIdentityUnavailable != nil {
+				p.onIdentityUnavailable()
+			}
+			logrus.WithField("peer", p.address).Debugf("fleet peer identity refresh: %v", err)
+		} else {
+			p.onIdentity(identity)
+		}
+	}
+	p.sessionOpened = true
 	conn.SetReadLimit(peerMaxFrameBytes)
 	for _, topic := range FleetTopics {
 		op := map[string]string{"op": "subscribe", "topic": topic}

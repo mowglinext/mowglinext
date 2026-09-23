@@ -100,9 +100,10 @@ func postFleetPeer(c *gin.Context, fleet *providers.FleetProvider) {
 }
 
 type registerPeerRequest struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Port int    `json:"port"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Port       int    `json:"port"`
+	APIVersion int    `json:"api_version"`
 }
 
 // postFleetRegister is called BY a peer that just added us; its IP comes from
@@ -122,7 +123,7 @@ func postFleetRegister(c *gin.Context, fleet *providers.FleetProvider) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
-	peer, err := fleet.RegisterPeer(req.ID, req.Name, c.ClientIP(), req.Port)
+	peer, err := fleet.RegisterPeer(req.ID, req.Name, c.ClientIP(), req.Port, req.APIVersion)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
@@ -180,6 +181,7 @@ func deleteFleetPeer(c *gin.Context, fleet *providers.FleetProvider) {
 // @Success 200 {object} OkResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 502 {object} ErrorResponse
+// @Failure 409 {object} ErrorResponse
 // @Router /fleet/robots/{id}/call/{command} [post]
 func postFleetCall(c *gin.Context, fleet *providers.FleetProvider) {
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 64<<10))

@@ -59,6 +59,7 @@ describe("deriveFleetRow", () => {
         expect(row.gpsPercent).toBe(100);
         expect(row.position).toEqual({lat: 48.1, lon: 2.2});
         expect(row.apiVersionMismatch).toBe(false);
+        expect(canCommand(row)).toBe(true);
     });
 
     it("falls back to the voltage when the BT has not published a percentage", () => {
@@ -70,6 +71,12 @@ describe("deriveFleetRow", () => {
         const row = deriveFleetRow(wire({identity: {id: "r2", name: "", api_version: 2}}, {gps: gpsAt(0, 0)}));
         expect(row.position).toBeUndefined();
         expect(row.name).toBe("r2");
+        expect(row.apiVersionMismatch).toBe(true);
+        expect(canCommand(row)).toBe(false);
+    });
+
+    it("fails closed for a persisted peer with no API version", () => {
+        const row = deriveFleetRow(wire({identity: {id: "r2", name: "bravo", api_version: 0}}));
         expect(row.apiVersionMismatch).toBe(true);
         expect(canCommand(row)).toBe(false);
     });

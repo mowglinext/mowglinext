@@ -256,6 +256,7 @@ LedInputs LedRingNode::collectInputs() const
     in.battery_valid = std::isfinite(latest_status_.battery_percent);
     in.is_charging = latest_status_.is_charging;
     in.emergency = latest_status_.emergency;
+    in.transiting = latest_status_.sub_state_name == "TRANSIT";
   }
   else if (have_power_ && (now_s - power_time_s_) <= status_timeout_s_)
   {

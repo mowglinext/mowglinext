@@ -48,6 +48,7 @@
 #include "mowgli_map/map_types.hpp"
 #include "mowgli_map/mow_progress.hpp"
 #include "mowgli_map/polygon_raster.hpp"
+#include "mowgli_map/safe_transform_listener.hpp"
 #include <grid_map_core/GridMap.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
@@ -1188,7 +1189,9 @@ private:
 
   // ── TF ────────────────────────────────────────────────────────────────────
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  // Destruction-safe listener (safe_transform_listener.hpp): tf2_ros's own
+  // dedicated-thread listener can hang its destructor.
+  std::unique_ptr<SafeTransformListener> tf_listener_;
 
   // ── Timers ────────────────────────────────────────────────────────────────
   rclcpp::TimerBase::SharedPtr publish_timer_;

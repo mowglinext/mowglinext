@@ -34,6 +34,7 @@ import type {MiniArea, MiniProgress} from "../concept/components/LiveMapMini.tsx
 import {ProgressRibbon} from "../concept/components/ProgressRibbon.tsx";
 import {SoilWetBanner} from "../components/dashboard/SoilWetBanner.tsx";
 import {DigEscalationBanner} from "../components/dashboard/DigEscalationBanner.tsx";
+import {isCoverageScanPaused} from "../components/dashboard/scanPaused.ts";
 import {WeatherChip} from "../concept/components/WeatherChip.tsx";
 import {useWeather} from "../hooks/useWeather.ts";
 import {NoiseTexture} from "../concept/components/NoiseTexture.tsx";
@@ -73,6 +74,7 @@ function useMowerData() {
   // OBSTACLE_BACKOFF, DYNAMIC_OBSTACLE_CLEARED, AREA_UNREACHABLE) and carried a
   // phantom SKIP_STRIP, so every planning/backoff phase read as "idle" mid-mow.
   const stateNum = highLevelStatus.state ?? -1;
+  const scanPaused = isCoverageScanPaused(highLevelStatus);
   const isMoving = deriveIsMoving(stateNum, isCharging);
 
   return {
@@ -93,6 +95,7 @@ function useMowerData() {
     motorTemp: status.mower_motor_temperature ?? 0,
     rain: status.rain_detected ?? false,
     isMoving,
+    scanPaused,
     toolWidth: (settings?.tool_width as number | undefined) ?? 0.18,
     currentAreaIndex: highLevelStatus.current_area ?? null,
     currentArea: highLevelStatus.current_area != null
@@ -220,11 +223,12 @@ export const MowgliNextPage = () => {
     ? Math.max(1, Math.round(remainingM2 / rateM2PerSec / 60))
     : 0;
 
-  // Headline mirrors the subline's branch ORDER (moving first) so the two never
-  // contradict. When moving WITH a usable ETA we show the countdown; when moving
-  // but the coverage snapshot hasn't arrived yet (remainingMin === 0) we still
-  // say "en tonte" instead of falling through to the idle "au repos" text.
-  const headline = data.isMoving
+  // Headline mirrors the subline's branch order: SCAN_PAUSED gets the operator
+  // explanation first while the mission remains active; otherwise a moving mower
+  // gets its ETA/mowing copy instead of falling through to the idle text.
+  const headline = data.scanPaused
+    ? <>{t('mowgliNextPage.headlineScanPausedPrefix')}<em style={{fontStyle: 'italic', color: 'var(--amber, #FFB84D)'}}>{t('mowgliNextPage.headlineScanPausedEmphasis')}</em>{t('mowgliNextPage.headlineScanPausedSuffix')}</>
+    : data.isMoving
     ? (remainingMin > 0
         ? <>{t('mowgliNextPage.headlineUntilHomePrefix')}<span style={{
             background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
@@ -242,8 +246,10 @@ export const MowgliNextPage = () => {
         ? <span style={{color: 'var(--rose, #FF6B7A)'}}>{t('mowgliNextPage.emergencyStop')}</span>
         : <>{t('mowgliNextPage.headlineIdlePrefix')}<em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>{t('mowgliNextPage.headlineIdleEmphasis')}</em>{t('mowgliNextPage.headlineIdleSuffix')}</>;
 
-  const subline = data.isMoving
-    ? t('mowgliNextPage.sublineMoving', {gps: data.gpsLabel.toLowerCase(), area: data.currentArea ?? t('mowgliNextPage.activeZone')})
+  const subline = data.scanPaused
+    ? t('mowgliNextPage.sublineScanPaused')
+    : data.isMoving
+      ? t('mowgliNextPage.sublineMoving', {gps: data.gpsLabel.toLowerCase(), area: data.currentArea ?? t('mowgliNextPage.activeZone')})
     : data.charging
       ? t('mowgliNextPage.sublineCharging', {current: data.current.toFixed(1)})
       : data.emergency
@@ -323,13 +329,13 @@ export const MowgliNextPage = () => {
               color: 'var(--ink, #ECFFF4)', fontWeight: 400,
               letterSpacing: '-0.02em', lineHeight: 1.05, marginTop: 4,
             }}>
-              {data.isMoving ? t('mowgliNextPage.mowgliMowing') : data.charging ? t('mowgliNextPage.mowgliCharging') : t('mowgliNextPage.welcomeBack')}
+              {data.scanPaused ? t('mowgliNextPage.mowgliScanPaused') : data.isMoving ? t('mowgliNextPage.mowgliMowing') : data.charging ? t('mowgliNextPage.mowgliCharging') : t('mowgliNextPage.welcomeBack')}
             </div>
           </div>
           <StatusOrb
             tone={data.emergency ? "alert" : data.isMoving ? "live" : data.charging ? "charging" : "resting"}
             size={10}
-            label={data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
+            label={data.scanPaused ? t('mowgliNextPage.orbScanPaused') : data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
           />
         </motion.header>
 

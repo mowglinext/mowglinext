@@ -108,6 +108,17 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
   // Obstacles); map_server applies the same key to its keepout mask so transit
   // and coverage keep the same distance. Read LIVE per plan.
   declare_double("obstacle_margin", 0.0);
+  // PIVOT JOINS (PivotJoinLimits in coverage_planning.hpp): a row-end join that
+  // fits no forward arc may stay blade-on as a short straight with in-place
+  // pivots instead of splitting into a blade-off Nav2 transit — only where the
+  // disc the chassis sweeps pivoting about base_link (the REAR wheel axis)
+  // stays inside the recorded boundary grown by map_server's non-lethal soft
+  // band and clear of every drawn obstacle. Both injected at launch, DERIVED
+  // from the live chassis (robot_config_util.chassis_circumscribed_radius /
+  // boundary_soft_margin). The 0.0 defaults DISABLE pivot joins: a server that
+  // was never told the chassis size never pivots. Read live per plan.
+  declare_double("pivot_sweep_radius", 0.0);
+  declare_double("boundary_soft_margin", 0.0);
 
   // Lyrical's SimpleActionServer owns the standard ROS action options.
   // Result retention starts after completion; it is not a planning deadline.
@@ -163,17 +174,18 @@ namespace
 
 constexpr double kSwathStep = 0.10;  // m between poses on a straight swath
 
-// Connector-outcome reporting (issue #499). Share of segment joins resolved by
-// an aligned straight connector or a sub-path split, at or above which the summary
-// is logged at WARN instead of INFO. 25 % is a judgement call, not a measured
-// threshold: below it the odd un-fittable join is normal on a concave field,
-// above it the plan is mostly NOT being joined by real turn-around arcs.
+// Connector-outcome reporting (issue #499). Share of segment joins SPLIT into a
+// blade-off transit, at or above which the summary is logged at WARN instead of
+// INFO. 25 % is a judgement call, not a measured threshold: below it the odd
+// un-fittable join is normal on a concave field, above it the plan spends much
+// of its time on blade-off reorientations.
 //
 // The 2026-09-09 field bag measured 146 fallbacks in 168 joins with the old
-// two-pass apron. Production now uses five passes and 0.20 m arcs, so this should
-// remain INFO on ordinary fields. A WARN means the plan will require many
-// blade-off reorientations and the site geometry/configuration needs review.
-constexpr double kConnectorFallbackWarnPct = 25.0;
+// two-pass apron; 2026-09-21 split 127 of 172 with the ring count on AUTO. With
+// pivot joins a join that fits no arc stays blade-on (a pivot join), so the
+// FALLBACK rate (every non-arc join) can legitimately stay high on a thin apron;
+// the SPLIT rate is what costs transits and is what the severity follows.
+constexpr double kConnectorSplitWarnPct = 25.0;
 // One format string, two severities — keeps the WARN and INFO variants from
 // drifting apart. A macro rather than a `constexpr const char*` so it expands to
 // a string LITERAL at each RCLCPP_* call site: the logging macros carry a
@@ -186,8 +198,9 @@ constexpr double kConnectorFallbackWarnPct = 25.0;
 // each other forever.
 #define MOWGLI_CONNECTOR_STATS_FMT                                             \
   "PlanCoverage connectors: %zu join(s): %zu turn-around arc, %zu straight "   \
-  "aligned fallback (blade-on), %zu split (blade-off transit); fallback rate " \
-  "%.1f%% at connector_turn_radius=%.2f min_turning_radius=%.2f. A high rate " \
+  "aligned fallback (blade-on), %zu pivot join (blade-on, in-place pivots), "  \
+  "%zu split (blade-off transit); fallback rate %.1f%%, split rate %.1f%% at " \
+  "connector_turn_radius=%.2f min_turning_radius=%.2f. A high fallback rate "  \
   "means the available headland/site geometry could not fit the configured "   \
   "turn-around arcs"
 
@@ -634,13 +647,38 @@ void CoverageServer::planCoverage()
     // segment join resolved — a real turn-around arc, an aligned straight
     // connector, or a blade-off sub-path split. See ConnectorStats.
     mowgli_coverage::ConnectorStats connector_stats;
+    // Pivot joins: the sweep is tested against the RECORDED geometry (the goal's
+    // raw polygons, before the chassis inset / outward expansion and before
+    // obstacle_margin) — that is what the soft band and the drawn obstacles are
+    // measured from.
+    PivotJoinLimits pivot_limits;
+    pivot_limits.sweep_radius = std::max(0.0, get_parameter("pivot_sweep_radius").as_double());
+    pivot_limits.boundary_margin = std::max(0.0, get_parameter("boundary_soft_margin").as_double());
+    if (pivot_limits.sweep_radius > 0.0)
+    {
+      pivot_limits.recorded_boundary = outer;
+      for (const auto& obstacle : goal->obstacles)
+      {
+        std::vector<std::pair<double, double>> ring;
+        ring.reserve(obstacle.points.size());
+        for (const auto& p : obstacle.points)
+        {
+          ring.emplace_back(p.x, p.y);
+        }
+        if (ring.size() >= 3)
+        {
+          pivot_limits.recorded_obstacles.push_back(std::move(ring));
+        }
+      }
+    }
     const auto subpaths = buildContinuousSubPaths(plan,
                                                   connector_boundary,
                                                   connector_turn_radius,
                                                   min_turning_radius,
                                                   kConnectorStep,
                                                   &connector_stats,
-                                                  swath_turn_boundary);
+                                                  swath_turn_boundary,
+                                                  pivot_limits);
     const double subpaths_ms = 1e3 * (now() - t_subpaths0).seconds();
 
     result->full_path.header = header;
@@ -665,22 +703,22 @@ void CoverageServer::planCoverage()
     // connector excursion is op_width/2 (~0.08 m) or more, well above it.
     constexpr double kBoundarySlackM = 0.05;
     const auto t_verify0 = now();
+    std::size_t pivot_corners = 0;
     for (const auto& sub : subpaths)
     {
       nav_msgs::msg::Path spath;
       spath.header = header;
+      // Pose yaws per the pivot corner contract: a corner's first pose keeps the
+      // incoming heading, its twin carries the outgoing one (pathHeadings).
+      const std::vector<double> yaws = pathHeadings(sub);
       for (std::size_t i = 0; i < sub.size(); ++i)
       {
         const double x = sub[i].first;
         const double y = sub[i].second;
-        double yaw = 0.0;
-        if (i + 1 < sub.size())
+        const double yaw = yaws[i];
+        if (i > 0 && sub[i] == sub[i - 1])
         {
-          yaw = std::atan2(sub[i + 1].second - y, sub[i + 1].first - x);
-        }
-        else if (i > 0)
-        {
-          yaw = std::atan2(y - sub[i - 1].second, x - sub[i - 1].first);
+          ++pivot_corners;
         }
         if (i > 0)
         {
@@ -718,10 +756,14 @@ void CoverageServer::planCoverage()
         }
         // Sub-paths are split so none crosses a hole; a residual pose inside one
         // means even a straight fallback couldn't be avoided (degenerate
-        // geometry) — surface it as the #333 safety residual.
+        // geometry) — surface it as the #333 safety residual. A pose ON the hole
+        // ring is not inside it: with the headland rings off F2C clips the swath
+        // ends exactly there, where ray casting is ambiguous (the 2026-09-21
+        // lawn: 35 false "inside" ends, 0 beyond 1 mm).
+        constexpr double kOnHoleEdgeM = 0.001;
         for (const auto& hole : plan.safe_holes)
         {
-          if (pointInRing(x, y, hole))
+          if (pointInRing(x, y, hole) && distanceToRing(x, y, hole) > kOnHoleEdgeM)
           {
             ++in_hole;
             break;
@@ -754,20 +796,24 @@ void CoverageServer::planCoverage()
     // A/B'ing a radius sees it without turning on debug logging.
     if (connector_stats.attempted > 0)
     {
-      const std::size_t fallbacks = connector_stats.straight_kept + connector_stats.split;
-      const double fallback_pct =
-          100.0 * static_cast<double>(fallbacks) / static_cast<double>(connector_stats.attempted);
+      const double attempted = static_cast<double>(connector_stats.attempted);
+      const std::size_t fallbacks =
+          connector_stats.straight_kept + connector_stats.pivot + connector_stats.split;
+      const double fallback_pct = 100.0 * static_cast<double>(fallbacks) / attempted;
+      const double split_pct = 100.0 * static_cast<double>(connector_stats.split) / attempted;
       // Same text either way; only the severity changes, so a routine plan stays
-      // at INFO and a plan that is mostly straight joins is impossible to miss.
-      if (fallback_pct >= kConnectorFallbackWarnPct)
+      // at INFO and a plan that is mostly blade-off transits is impossible to miss.
+      if (split_pct >= kConnectorSplitWarnPct)
       {
         RCLCPP_WARN(get_logger(),
                     MOWGLI_CONNECTOR_STATS_FMT,
                     connector_stats.attempted,
                     connector_stats.arc,
                     connector_stats.straight_kept,
+                    connector_stats.pivot,
                     connector_stats.split,
                     fallback_pct,
+                    split_pct,
                     connector_turn_radius,
                     min_turning_radius);
       }
@@ -778,11 +824,31 @@ void CoverageServer::planCoverage()
                     connector_stats.attempted,
                     connector_stats.arc,
                     connector_stats.straight_kept,
+                    connector_stats.pivot,
                     connector_stats.split,
                     fallback_pct,
+                    split_pct,
                     connector_turn_radius,
                     min_turning_radius);
       }
+    }
+    if (connector_stats.pivot > 0)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "PlanCoverage: %zu pivot join(s) kept blade-on — %zu in-place pivot corner(s) "
+                  "(sweep radius %.3f m within the recorded boundary + %.3f m soft band, clear "
+                  "of %zu drawn obstacle(s))",
+                  connector_stats.pivot,
+                  pivot_corners,
+                  pivot_limits.sweep_radius,
+                  pivot_limits.boundary_margin,
+                  pivot_limits.recorded_obstacles.size());
+    }
+    else if (pivot_limits.sweep_radius <= 0.0 && connector_stats.split > 0)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "PlanCoverage: pivot joins disabled (pivot_sweep_radius not injected) — every "
+                  "join that fits no turn-around arc is split");
     }
     if (result->drivable_subpaths.size() > 1)
     {

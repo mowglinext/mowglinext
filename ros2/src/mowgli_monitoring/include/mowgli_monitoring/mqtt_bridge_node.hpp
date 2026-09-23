@@ -35,6 +35,8 @@
  *   /behavior_tree_node/high_level_status → <prefix>/high_level_status (JSON) — retained;
  *                                           subscription watchdog below (mowglinext#644)
  *   /gps/fix                             → <prefix>/gps        (JSON: lat/lon/alt) — rate-limited
+ *   /odometry/filtered_map               → <prefix>/pose       (JSON: x, y, yaw, MAP frame) —
+ *                                           the fused localizer pose, rate-limited
  *   /gps/status                          → <prefix>/rtk_status (JSON) — retained; the SAME
  *                                           mowgli_interfaces/msg/GnssStatus + gnss_status_utils
  *                                           helpers the LED ring and behavior tree use, so this
@@ -130,6 +132,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -339,6 +342,8 @@ public:
   static std::string serialise_power(const mowgli_interfaces::msg::Power& msg);
   static std::string serialise_emergency(const mowgli_interfaces::msg::Emergency& msg);
   static std::string serialise_position(const nav_msgs::msg::Odometry& msg);
+  /// Map-frame pose {x, y, yaw} from the fused localizer (/odometry/filtered_map).
+  static std::string serialise_pose(const nav_msgs::msg::Odometry& msg);
   static std::string serialise_diagnostics(const diagnostic_msgs::msg::DiagnosticArray& msg);
   static std::string serialise_high_level_status(
       const mowgli_interfaces::msg::HighLevelStatus& msg);
@@ -370,6 +375,23 @@ public:
                                                         const std::vector<AreaSummary>& areas);
   static std::string serialise_areas(const std::vector<AreaSummary>& areas);
 
+  /// Charging dock pose in the map frame (metres, radians), as configured in mowgli_robot.yaml.
+  struct DockPose
+  {
+    double x{0.0};
+    double y{0.0};
+    double yaw{0.0};
+  };
+
+  /**
+   * @brief The dock pose to publish, or nullopt when there is none to show.
+   *
+   * mowgli_robot.yaml's dock_pose_x/y/yaw default to 0/0/0 on a robot whose dock has
+   * not been calibrated; a real calibrated yaw is never exactly 0.0, so all three
+   * being zero (or any being non-finite) means "not set" and nothing is published.
+   */
+  static std::optional<DockPose> make_dock_pose(double x, double y, double yaw);
+
   /**
    * @brief Build the <prefix>/area_boundary payload from a polled area list.
    * @param areas (index, MapArea) pairs, in whatever order they were polled —
@@ -380,11 +402,13 @@ public:
    *        exclusion (mowglinext PR #638).
    * @param datum_lat / datum_lon WGS84 origin the polygon points (map-frame
    *        metres, X=east/Y=north) are relative to.
+   * @param dock Charging dock pose in the same frame; adds a "dock" object when set.
    */
   static std::string serialise_area_boundaries(
       const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>& areas,
       double datum_lat,
-      double datum_lon);
+      double datum_lon,
+      const std::optional<DockPose>& dock = std::nullopt);
 
   /// Escape a raw string so it is safe inside a JSON string literal.
   static std::string json_escape(const std::string& raw);
@@ -479,6 +503,7 @@ private:
   void on_high_level_status(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg);
   void on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
   void on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg);
+  void on_pose(nav_msgs::msg::Odometry::ConstSharedPtr msg);
 
   // ---- MQTT command callback ------------------------------------------------
 
@@ -518,6 +543,7 @@ private:
   rclcpp::Subscription<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr sub_high_level_status_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps_fix_;
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr sub_gnss_status_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_pose_;
 
   rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedPtr srv_high_level_;
   rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr srv_get_area_;
@@ -545,6 +571,9 @@ private:
   bool home_assistant_discovery_enabled_{false};
   double datum_lat_{0.0};
   double datum_lon_{0.0};
+  double dock_pose_x_{0.0};
+  double dock_pose_y_{0.0};
+  double dock_pose_yaw_{0.0};
 
   // Tracks MQTT connection edges so discovery is refreshed after reconnect.
   bool mqtt_was_connected_{false};
@@ -564,6 +593,8 @@ private:
   rclcpp::Time last_power_publish_{0, 0, RCL_ROS_TIME};
   std::optional<mowgli_interfaces::msg::GnssStatus> pending_gnss_status_{};
   rclcpp::Time last_gnss_status_publish_{0, 0, RCL_ROS_TIME};
+  std::optional<nav_msgs::msg::Odometry> pending_pose_{};
+  rclcpp::Time last_pose_publish_{0, 0, RCL_ROS_TIME};
 
   // ---- High-level-status subscription watchdog state -------------------------
 

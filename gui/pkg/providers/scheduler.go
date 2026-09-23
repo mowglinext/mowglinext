@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/msgs/std"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
 )
@@ -39,19 +40,28 @@ type SchedulerProvider struct {
 	dbProvider   types.IDBProvider
 	soilProvider types.ISoilProvider
 
-	mu                     sync.RWMutex
-	lastHighLevelState     uint8
-	lastHighLevelStateName string
-	lastEmergency          bool
+	mu                      sync.RWMutex
+	checkMu                 sync.Mutex
+	lastHighLevelState      uint8
+	lastHighLevelStateName  string
+	hasHighLevelStatus      bool
+	lastEmergency           bool
+	highLevelEmergency      bool
+	coverageSessionActive   bool
+	coverageSessionKnown    bool
+	coverageResumeAvailable bool
+	coverageResumeKnown     bool
+	statusUpdates           chan struct{}
 }
 
 // NewSchedulerProvider creates and starts the scheduler background goroutine.
 // soilProvider may be nil, in which case no soil gate is applied.
 func NewSchedulerProvider(rosProvider types.IRosProvider, dbProvider types.IDBProvider, soilProvider types.ISoilProvider) *SchedulerProvider {
 	s := &SchedulerProvider{
-		rosProvider:  rosProvider,
-		dbProvider:   dbProvider,
-		soilProvider: soilProvider,
+		rosProvider:   rosProvider,
+		dbProvider:    dbProvider,
+		soilProvider:  soilProvider,
+		statusUpdates: make(chan struct{}, 1),
 	}
 	s.subscribeToStatus()
 	go s.run()
@@ -61,7 +71,9 @@ func NewSchedulerProvider(rosProvider types.IRosProvider, dbProvider types.IDBPr
 // subscribeToStatus subscribes to highLevelStatus and emergency so that the
 // scheduler can perform pre-flight safety checks without an extra service call.
 func (s *SchedulerProvider) subscribeToStatus() {
-	// highLevelStatus — tracks robot operational state (idle/autonomous/recording)
+	// highLevelStatus — tracks robot operational state and its co-reported
+	// emergency snapshot. Keep it separate from the hardware emergency topic so
+	// an older HLS snapshot can never clear a newer hardware emergency.
 	if err := s.rosProvider.Subscribe("highLevelStatus", "scheduler-hls", 0, func(msg []byte) {
 		var hls mowgli.HighLevelStatus
 		if err := json.Unmarshal(msg, &hls); err != nil {
@@ -88,7 +100,10 @@ func (s *SchedulerProvider) subscribeToStatus() {
 		s.mu.Lock()
 		s.lastHighLevelState = hls.State
 		s.lastHighLevelStateName = hls.StateName
+		s.highLevelEmergency = hls.Emergency
+		s.hasHighLevelStatus = true
 		s.mu.Unlock()
+		s.wakeStartupRetry()
 	}); err != nil {
 		logrus.Warnf("Scheduler: failed to subscribe to highLevelStatus: %v", err)
 	}
@@ -111,27 +126,104 @@ func (s *SchedulerProvider) subscribeToStatus() {
 		s.mu.Lock()
 		s.lastEmergency = emg.ActiveEmergency
 		s.mu.Unlock()
+		s.wakeStartupRetry()
 	}); err != nil {
 		logrus.Warnf("Scheduler: failed to subscribe to emergency: %v", err)
+	}
+
+	// coverageSession identifies a live COMMAND_START session even while its
+	// high-level state is IDLE (for example, a mid-session recharge hold).
+	if err := s.rosProvider.Subscribe("coverageSession", "scheduler-session", 0, func(msg []byte) {
+		var session mowgli.CoverageSession
+		if err := json.Unmarshal(msg, &session); err != nil {
+			return
+		}
+		s.mu.Lock()
+		s.coverageSessionActive = session.SessionActive
+		s.coverageSessionKnown = true
+		s.mu.Unlock()
+		s.wakeStartupRetry()
+	}); err != nil {
+		logrus.Warnf("Scheduler: failed to subscribe to coverageSession: %v", err)
+	}
+
+	// coverageResumeAvailable is latched by the behavior tree. It is the
+	// session identity needed to distinguish a fresh IDLE status from a paused
+	// mow that COMMAND_START would resume.
+	if err := s.rosProvider.Subscribe("coverageResumeAvailable", "scheduler-resume", 0, func(msg []byte) {
+		var available std.Bool
+		if err := json.Unmarshal(msg, &available); err != nil {
+			return
+		}
+		s.mu.Lock()
+		s.coverageResumeAvailable = available.Data
+		s.coverageResumeKnown = true
+		s.mu.Unlock()
+		s.wakeStartupRetry()
+	}); err != nil {
+		logrus.Warnf("Scheduler: failed to subscribe to coverageResumeAvailable: %v", err)
+	}
+}
+
+// wakeStartupRetry rechecks the bounded startup minute when any input to
+// safeToStart changes. The retained high-level status and coverage provenance
+// can arrive in either order, so waking only for status could leave an on-time
+// schedule blocked after its final required input becomes known.
+func (s *SchedulerProvider) wakeStartupRetry() {
+	select {
+	case s.statusUpdates <- struct{}{}:
+	default:
 	}
 }
 
 func (s *SchedulerProvider) run() {
+	startedAt := time.Now()
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		s.checkSchedules()
+
+	// Do not wait a full minute after startup: schedules are evaluated for the
+	// current minute immediately. safeToStart keeps this fail-closed until the
+	// first high-level status is received.
+	s.checkSchedulesAt(startedAt)
+	for {
+		select {
+		case <-ticker.C:
+			s.checkSchedules()
+		case <-s.statusUpdates:
+			s.checkStartupUpdateAt(startedAt, time.Now())
+		}
 	}
 }
 
 func (s *SchedulerProvider) checkSchedules() {
+	s.checkSchedulesAt(time.Now())
+}
+
+// checkSchedulesAt evaluates schedules at now. Keeping the clock explicit
+// makes the minute-boundary policy deterministic to test.
+func (s *SchedulerProvider) checkSchedulesAt(now time.Time) {
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
+	s.checkSchedulesAtLocked(now)
+}
+
+// checkStartupUpdateAt retries a startup check only while it remains in the
+// calendar minute in which the backend started. This lets delayed admission
+// inputs unlock an on-time run without backfilling missed schedules.
+func (s *SchedulerProvider) checkStartupUpdateAt(startedAt, now time.Time) {
+	if startedAt.Format("2006-01-02 15:04") != now.Format("2006-01-02 15:04") {
+		return
+	}
+	s.checkSchedulesAt(now)
+}
+
+func (s *SchedulerProvider) checkSchedulesAtLocked(now time.Time) {
 	keys, err := s.dbProvider.KeysWithSuffix(schedulerKeyPrefix)
 	if err != nil {
 		logrus.Warnf("Scheduler: failed to list schedules: %v", err)
 		return
 	}
 
-	now := time.Now()
 	currentDay := int(now.Weekday())
 	currentTime := now.Format("15:04")
 
@@ -250,11 +342,10 @@ func (s *SchedulerProvider) persistSkip(sched schedule, reason string, now time.
 }
 
 // safeToStart returns true when it is safe to send COMMAND_START.
-// It blocks mowing when:
-//   - an emergency is active (latched or active), or
-//   - the robot is already in autonomous (2) or recording (3) state,
-//     EXCEPT the post-mow dock transit (state 2, state_name MOWING_COMPLETE),
-//     which reports autonomous only to keep the firmware wheel gate open.
+// It admits starts only from known, non-resumable idle status and coverage
+// provenance. A charge hold belongs to a live session only when
+// CoverageSession.session_active is true; only then would COMMAND_START be an
+// operator manual-resume request.
 //
 // HIGH_LEVEL_STATE constants:
 //
@@ -267,33 +358,28 @@ func (s *SchedulerProvider) safeToStart() bool {
 	s.mu.RLock()
 	state := s.lastHighLevelState
 	stateName := s.lastHighLevelStateName
-	emergency := s.lastEmergency
+	hasHighLevelStatus := s.hasHighLevelStatus
+	emergency := s.lastEmergency || s.highLevelEmergency
+	sessionActive := s.coverageSessionActive
+	sessionKnown := s.coverageSessionKnown
+	resumeAvailable := s.coverageResumeAvailable
+	resumeKnown := s.coverageResumeKnown
 	s.mu.RUnlock()
 
-	if emergency {
+	if !hasHighLevelStatus || emergency || !sessionKnown || !resumeKnown {
 		return false
 	}
-	// The blade-off dock transit that follows a FINISHED mow stays startable:
-	// the run is over, the robot is only trundling home, and a schedule due in
-	// that window should not be silently skipped. It reports AUTONOMOUS purely
-	// so the firmware will move the wheels (HL_MODE_IDLE is a wheel hard stop),
-	// not because a session is still running.
-	//
-	// Deliberately MOWING_COMPLETE only. The other transits that report
-	// AUTONOMOUS must stay blocked: RETURNING_HOME is an explicit operator
-	// "go home", and LOW_BATTERY_DOCKING / CRITICAL_BATTERY_DOCKING /
-	// RAIN_DETECTED_DOCKING are the robot protecting itself — starting a mow
-	// on a flat battery or in the rain is exactly what they exist to prevent.
-	if state == 2 && stateName == "MOWING_COMPLETE" {
+	if state != 1 || sessionActive || resumeAvailable {
+		return false
+	}
+	switch stateName {
+	case "IDLE", "IDLE_DOCKED", "CHARGING":
 		return true
-	}
-	// Do not interrupt an already-running autonomous session or an ongoing
-	// area recording. State 0 (NULL/emergency) is also blocked.
-	switch state {
-	case 0, 2, 3:
+	case "CRITICAL_BATTERY_CHARGING", "RAIN_WAITING":
+		return false
+	default:
 		return false
 	}
-	return true
 }
 
 func (s *SchedulerProvider) shouldRun(sched *schedule, currentDay int, currentTime string, now time.Time) bool {
