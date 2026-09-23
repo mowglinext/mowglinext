@@ -47,6 +47,7 @@
 #include "mowgli_interfaces/msg/dig_event.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
+#include "mowgli_interfaces/msg/lidar_motor_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
@@ -688,6 +689,23 @@ private:
           context_->last_scan_time = std::chrono::steady_clock::now();
         });
 
+    // LD19 motor PWM state (issue #569) — stamp every /lidar_pwm/status
+    // arrival so IsLidarMotorReady can gate leaving IDLE on the motor
+    // actually being healthy. Reliable QoS(10), matching mowgli_lidar_pwm's
+    // publisher and every other status topic in this repo. On an install
+    // without the PWM sidecar node nothing ever arrives and the
+    // default-constructed lidar_motor_state (IDLE) is what IsLidarMotorReady
+    // sees — it only gates when its own port asks it to.
+    lidar_motor_status_sub_ = create_subscription<mowgli_interfaces::msg::LidarMotorStatus>(
+        "/lidar_pwm/status",
+        rclcpp::QoS(10),
+        [this](mowgli_interfaces::msg::LidarMotorStatus::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          context_->lidar_motor_state = msg->state;
+          context_->last_lidar_motor_status_time = std::chrono::steady_clock::now();
+        });
+
     RCLCPP_DEBUG(get_logger(), "Topic subscribers created");
   }
 
@@ -1142,6 +1160,15 @@ private:
     const double undock_distance = declare_parameter<double>("undock_distance", 1.0);
     blackboard_->set("undock_distance", undock_distance);
 
+    // lidar_pwm_enabled (issue #569): whether this install uses PWM
+    // spin-down control on the LD19. Consumed by WaitForLidarMotorReady via
+    // {lidar_pwm_enabled} — with it false, the node stays inert (matches
+    // last_scan_time's "no LiDAR install" idiom, but explicit here rather
+    // than inferred from "no status message ever arrived yet", which would
+    // be indistinguishable from a PWM-enabled install still cold-booting).
+    const bool lidar_pwm_enabled = declare_parameter<bool>("lidar_pwm_enabled", false);
+    blackboard_->set("lidar_pwm_enabled", lidar_pwm_enabled);
+
     // idle_nav2_suspend (default false): when true, the BT PAUSEs the Nav2
     // lifecycle stack (via SetNav2Lifecycle) while parked on the dock to cut
     // the idle CPU/thermal load of the always-looping costmaps, and RESUMEs
@@ -1458,6 +1485,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr localization_mode_sub_;
   rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_monitor_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_liveness_sub_;
+  rclcpp::Subscription<mowgli_interfaces::msg::LidarMotorStatus>::SharedPtr lidar_motor_status_sub_;
 
   // Service server
   rclcpp::Service<mowgli_interfaces::srv::HighLevelControl>::SharedPtr high_level_control_srv_;

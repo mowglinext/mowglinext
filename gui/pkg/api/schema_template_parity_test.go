@@ -46,6 +46,14 @@ var schemaDefaultsWithNoTemplateEntry = map[string]string{
 	// sparse installed config by design, never in the template.
 	"lidar_enabled": "install-time choice, sparse-config-only (Invariant 15)",
 
+	// Host/install-level GPIO config (issue #569), consumed by the
+	// lidar-ldlidar sidecar container's mowgli_lidar_pwm node (via
+	// start_lidar.sh reading mowgli_robot.yaml directly) -- never a
+	// mowgli_bringup ROS2 declare_parameter, so there is no template line.
+	// Same shape as lidar_enabled.
+	"lidar_pwm_enabled":  "install-time/host choice, sparse-config-only, consumed by the lidar-ldlidar sidecar",
+	"lidar_pwm_gpio_pin": "install-time/host choice, sparse-config-only, consumed by the lidar-ldlidar sidecar",
+
 	// hardware_bridge_node.cpp's declare_parameter defaults match this
 	// schema default without needing a template line.
 	"lift_recovery_mode":          "hardware_bridge_node.cpp declare_parameter default matches",

@@ -169,6 +169,14 @@ type ImuRaw struct {
 	Mz                        float64                        `json:"mz"`
 }
 
+// LidarMotorStatus matches mowgli_interfaces/msg/LidarMotorStatus.
+type LidarMotorStatus struct {
+	Header                    geometry.Header                `json:"header"`
+	State                     uint8                          `json:"state"`
+	CommandedDutyCycle        float32                        `json:"commanded_duty_cycle"`
+	TimeInStateSec            float32                        `json:"time_in_state_sec"`
+}
+
 // MapArea matches mowgli_interfaces/msg/MapArea.
 type MapArea struct {
 	Name                      string                         `json:"name"`

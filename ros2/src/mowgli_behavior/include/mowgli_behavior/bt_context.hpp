@@ -667,6 +667,19 @@ struct BTContext
   /// existed and then died (LiDAR container crash, filter-chain death).
   std::chrono::steady_clock::time_point last_scan_time{};
 
+  /// LD19 motor PWM state (issue #569, mowgli_lidar_pwm/LidarMotorStatus),
+  /// stamped by the /lidar_pwm/status subscriber in behavior_tree_node on
+  /// every message. Consumed by IsLidarMotorReady: when lidar_pwm_enabled is
+  /// off (or the topic has never published — no-PWM-install/older sidecar),
+  /// default-constructed lidar_motor_state == IDLE reads the same as "not
+  /// ready", but IsLidarMotorReady only actually GATES anything when the
+  /// caller opts in via its own port — see condition_nodes.hpp. Mirrors
+  /// last_scan_time's shape but is intentionally a separate field: PWM motor
+  /// health and scan-stream health are different questions (a motor can be
+  /// RUNNING while /scan is briefly stale, or vice versa on a fresh boot).
+  uint8_t lidar_motor_state{0};  // mowgli_interfaces::msg::LidarMotorStatus::IDLE
+  std::chrono::steady_clock::time_point last_lidar_motor_status_time{};
+
   /// Nav2 behaviour tree handed to NavigateToPose for COVERAGE transits
   /// (trees/navigate_to_pose_transit.xml next to the main tree: selects
   /// transit_goal_checker, final heading ignored). Empty = Nav2 default tree

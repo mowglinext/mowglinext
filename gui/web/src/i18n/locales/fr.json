@@ -2680,7 +2680,16 @@
     "restWindowBeforeCalTooltip": "Durée pendant laquelle le robot doit être détecté immobile avant qu'une calibration ne démarre.",
     "periodicRecalInterval": "Intervalle de recalibration périodique",
     "periodicRecalIntervalTooltip": "Réestime le biais IMU toutes les N secondes lorsque le robot est sur la base. 0 désactive la recalibration périodique.",
-    "lidarDescription": "À activer si le robot possède un LiDAR. Active la détection des obstacles et autorise la localisation sur carte, configurée dans l’onglet Localisation."
+    "lidarDescription": "À activer si le robot possède un LiDAR. Active la détection des obstacles et autorise la localisation sur carte, configurée dans l’onglet Localisation.",
+    "lidarPwm": "Arrêt du moteur à l'arrêt",
+    "lidarPwmDescription": "Arrête le moteur du LiDAR pendant que le robot est inactif au lieu de le laisser tourner en continu — nécessite d'abord une modification unique de la configuration de démarrage (ci-dessous).",
+    "lidarPwmPrerequisitesTitle": "Avant d'activer ceci",
+    "lidarPwmPrerequisiteBootConfig": "La broche PWM par défaut (GPIO12 / broche physique 32) est normalement utilisée par UART5 — la connexion de données du LiDAR lui-même. Ajoutez cette ligne à config.txt APRÈS la ligne UART5 existante, pas à sa place :",
+    "lidarPwmPrerequisiteThenLine": "puis",
+    "lidarPwmPrerequisiteReboot": "Redémarrez le Pi pour que l'overlay prenne effet.",
+    "lidarPwmPrerequisiteVerify": "Vérifiez que le périphérique PWM existe :",
+    "lidarPwmGpioPin": "Broche GPIO PWM",
+    "lidarPwmGpioPinTooltip": "Broche GPIO (numérotation BCM) qui pilote la ligne de contrôle PWM du LiDAR. Ne modifiez ceci que si vous avez câblé la ligne de contrôle PWM sur une autre broche et configuré vous-même l'overlay de démarrage correspondant."
   },
   "settingsRain": {
     "rainBehavior": "Comportement en cas de pluie",

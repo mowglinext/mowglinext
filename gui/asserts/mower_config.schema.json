@@ -241,6 +241,18 @@
           "default": false,
           "description": "Enable LiDAR. Sole source of truth for the ROS2 stack's LiDAR mode (the LIDAR_ENABLED env var is not read). Scan-to-map localization in fusion_graph_node is gated by this setting, so it cannot run without a scanner. Default false: this default MUST match robot_config_util.DEFAULT_LIDAR_ENABLED, because the settings backend prunes any value equal to its schema default -- with a default of true, switching LiDAR ON would be pruned away and the toggle would never persist."
         },
+        "lidar_pwm_enabled": {
+          "type": "boolean",
+          "title": "Enable LiDAR motor PWM control",
+          "default": false,
+          "description": "Spin the LD19's motor down while the robot is idle instead of leaving it running continuously (issue #569). REQUIRES a manual boot config change first -- see the LiDAR sensor page prerequisites -- because the default PWM pin (GPIO12/pin 32) is normally claimed by UART5, the LD19's own scan-data connection. Read by the lidar-ldlidar sidecar container's mowgli_lidar_pwm node, not a mowgli_bringup ROS2 parameter."
+        },
+        "lidar_pwm_gpio_pin": {
+          "type": "integer",
+          "title": "LiDAR motor PWM GPIO pin",
+          "default": 12,
+          "description": "BCM GPIO pin driving the LD19's PWM control line. Default 12 (physical pin 32) is UART5's TXD5 -- the LD19 never receives anything on that pin (it only transmits scan data on RXD5/GPIO13/pin33), so it is free once the matching dtoverlay=pwm,pin=12,func=4 boot config line is added AFTER dtoverlay=uart5. Changing this pin requires re-confirming the same reasoning for whichever pin you pick -- it is not validated against what else that pin is wired to."
+        },
         "use_lidar_map_anchor": {
           "type": "boolean",
           "title": "LiDAR map anchor",

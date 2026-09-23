@@ -31,6 +31,7 @@ set(msg_files
   "msg/DockCalibrationStatus.msg"
   "msg/DigEvent.msg"
   "msg/CoverageSession.msg"
+  "msg/LidarMotorStatus.msg"
 )
 
 # Declare service files

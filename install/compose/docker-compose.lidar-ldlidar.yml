@@ -27,10 +27,27 @@ services:
       <<: *ros2-env
     # No command override — image CMD (/start_lidar.sh) launches Myzhar's
     # ldrobot-lidar-ros2 lifecycle component via /ldlidar_scan.launch.py
-    # with fixed scan length from /ldlidar.yaml (hardcoded /dev/lidar @ 230400).
+    # with fixed scan length from /ldlidar.yaml (hardcoded /dev/lidar @ 230400),
+    # plus mowgli_lidar_pwm (issue #569), whose lidar_pwm_* settings
+    # start_lidar.sh resolves from the mounted mowgli_robot.yaml below —
+    # same source of truth as lidar_enabled (root CLAUDE.md Invariant 15),
+    # same mount sensors/gps already uses for its own config.
     volumes:
       - /dev:/dev
+      - ./docker/config/mowgli:/config:ro
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
+    # No explicit /sys/class/pwm mount for mowgli_lidar_pwm (issue #569): unlike
+    # a bind-mounted directory of real files, sysfs is a live kernel API
+    # surface, not persistent data, so `privileged: true` above is already
+    # sufficient — Docker gives a privileged container its own read-write
+    # sysfs mount, which for a non-namespaced class like /sys/class/pwm shows
+    # and affects the SAME host kernel objects a host bind-mount would. An
+    # earlier revision added an explicit `/sys/class/pwm:/sys/class/pwm` line
+    # anyway, which the host updater's validateStackMounts (gui/pkg/updater/
+    # stack.go) correctly treats as a brand-new writable mount requiring an
+    # explicit data/layout migration on every robot that hasn't manually
+    # added it before — since there is no data behind it to migrate, the
+    # right fix is to not declare the mount at all, not to justify one.
     restart: unless-stopped
     logging:
       driver: json-file

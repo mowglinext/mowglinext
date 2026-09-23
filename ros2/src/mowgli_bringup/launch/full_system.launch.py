@@ -324,6 +324,14 @@ def generate_launch_description() -> LaunchDescription:
             # references in main_tree.xml. See issue #191.
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
             {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
+            # lidar_pwm_enabled (issue #569): consumed by WaitForLidarMotorReady
+            # via the {lidar_pwm_enabled} blackboard reference in main_tree.xml,
+            # so the pre-undock motor-ready gate only actually waits/blocks on
+            # an install that uses PWM spin-down control. Schema-only GUI
+            # setting (Invariant 15 style, like lidar_enabled) — no template
+            # entry, hence the literal False fallback here rather than a
+            # robot_config_util constant.
+            {"lidar_pwm_enabled": bool(robot_params.get("lidar_pwm_enabled", False))},
             # idle_nav2_suspend: PAUSE the Nav2 lifecycle stack while parked on
             # the dock to cut idle CPU/thermal load (costmaps stop looping).
             # Default off — a deliberate per-site opt-in. RESUME is guaranteed

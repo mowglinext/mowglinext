@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mowgli_lidar_pwm</name>
+  <version>0.1.0</version>
+  <description>
+    Owns the LD19 LiDAR spin-motor's PWM control line (issue #569). Spins the
+    motor down while the robot is idle and back up before navigation needs
+    scans, driven by the robot's HighLevelStatus and a sysfs PWM device.
+    Publishes mowgli_interfaces/LidarMotorStatus so mowgli_behavior can gate
+    motion on the motor actually being healthy.
+  </description>
+  <maintainer email="cedric@mowgli.dev">Cedric</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>mowgli_interfaces</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

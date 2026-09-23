@@ -33,9 +33,9 @@
     {
       "name": "lidar-ldlidar",
       "type": "built",
-      "context": "sensors/lidar-ldlidar",
+      "context": ".",
       "file": "sensors/lidar-ldlidar/Dockerfile",
-      "target": ""
+      "target": "runtime"
     },
     {
       "name": "lidar-rplidar",

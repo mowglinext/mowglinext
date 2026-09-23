@@ -70,6 +70,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<PublishHighLevelStatus>("PublishHighLevelStatus");
   factory.registerNodeType<WaitForDuration>("WaitForDuration");
   factory.registerNodeType<WaitForGpsFix>("WaitForGpsFix");
+  factory.registerNodeType<WaitForLidarMotorReady>("WaitForLidarMotorReady");
   factory.registerNodeType<NavigateToPose>("NavigateToPose");
   factory.registerNodeType<NavigateInsideBoundary>("NavigateInsideBoundary");
   factory.registerNodeType<BackUp>("BackUp");

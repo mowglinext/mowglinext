@@ -15,6 +15,8 @@
 
 #include "mowgli_behavior/utility_nodes.hpp"
 
+#include "mowgli_interfaces/msg/lidar_motor_status.hpp"
+
 namespace mowgli_behavior
 {
 
@@ -202,6 +204,96 @@ BT::NodeStatus WaitForGpsFix::onRunning()
 }
 
 void WaitForGpsFix::onHalted()
+{
+  // Nothing to clean up.
+}
+
+// ---------------------------------------------------------------------------
+// WaitForLidarMotorReady
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus WaitForLidarMotorReady::onStart()
+{
+  bool enabled = false;
+  if (auto res = getInput<bool>("enabled"))
+  {
+    enabled = res.value();
+  }
+
+  double timeout_sec = 10.0;
+  if (auto res = getInput<double>("timeout_sec"))
+  {
+    timeout_sec = res.value();
+  }
+
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  if (!enabled)
+  {
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  timeout_ = std::chrono::duration<double>(timeout_sec);
+  start_time_ = std::chrono::steady_clock::now();
+
+  uint8_t current_state = 0;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    current_state = ctx->lidar_motor_state;
+  }
+
+  if (current_state == mowgli_interfaces::msg::LidarMotorStatus::RUNNING)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "WaitForLidarMotorReady: motor already RUNNING, proceeding");
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "WaitForLidarMotorReady: waiting up to %.1fs for the LiDAR motor to spin up "
+              "(current state=%u)",
+              timeout_sec,
+              current_state);
+  return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus WaitForLidarMotorReady::onRunning()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  uint8_t current_state = 0;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    current_state = ctx->lidar_motor_state;
+  }
+
+  if (current_state == mowgli_interfaces::msg::LidarMotorStatus::RUNNING)
+  {
+    const auto waited = std::chrono::steady_clock::now() - start_time_;
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "WaitForLidarMotorReady: motor RUNNING after %.1fs",
+                std::chrono::duration<double>(waited).count());
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  const auto elapsed = std::chrono::steady_clock::now() - start_time_;
+  if (elapsed >= timeout_)
+  {
+    // Deliberately FAILURE, not SUCCESS — see the class comment. Starting
+    // navigation with a LiDAR motor that never confirmed healthy is not an
+    // acceptable degraded mode the way a stale GPS fix is.
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "WaitForLidarMotorReady: timeout after %.1fs (last state=%u) — "
+                 "LiDAR motor never confirmed healthy, refusing to start motion",
+                 std::chrono::duration<double>(timeout_).count(),
+                 current_state);
+    return BT::NodeStatus::FAILURE;
+  }
+
+  return BT::NodeStatus::RUNNING;
+}
+
+void WaitForLidarMotorReady::onHalted()
 {
   // Nothing to clean up.
 }

@@ -6,6 +6,8 @@ on:
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'sensors/lidar-ldlidar/**'
+      - 'ros2/src/mowgli_interfaces'
+      - 'ros2/src/mowgli_interfaces/**'
       - '.github/workflows/sensors-lidar-ldlidar.yml'
       - '.github/workflows/_sensor-docker.yml'
   workflow_dispatch:
@@ -24,10 +26,127 @@ permissions:
   packages: write
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # mowgli_lidar_pwm lives in sensors/lidar-ldlidar/, OUTSIDE the ros2/ colcon
+  # workspace, so the "ROS2 — CI" job never sees it. The Dockerfile builds it
+  # with -DBUILD_TESTING=OFF, so its gtests are compiled by nothing and run by
+  # nothing there. This job is the only thing that executes them — mirrors
+  # sensors-gps.yml's "Test mowgli_gnss_bridge" job for the same reason. Keep
+  # it in lockstep with the builder stage of sensors/lidar-ldlidar/Dockerfile:
+  # same distro, same package set for mowgli_lidar_pwm's own dependencies
+  # (rclcpp, sensor_msgs, mowgli_interfaces) — the driver's own build deps are
+  # irrelevant here since this job never builds ldrobot-lidar-ros2.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test mowgli_lidar_pwm
+    runs-on: ubuntu-latest
+    container: ros:lyrical-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          # Same reasoning as sensors-gps.yml: upgrade before installing so a
+          # freshly-apt-installed std_msgs/mowgli_interfaces build doesn't link
+          # against the image's older builtin_interfaces.
+          apt-get -y upgrade
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            python3-colcon-common-extensions \
+            ros-lyrical-ament-cmake \
+            ros-lyrical-ament-cmake-gtest \
+            ros-lyrical-ament-lint-auto \
+            ros-lyrical-ament-lint-common \
+            ros-lyrical-geometry-msgs \
+            ros-lyrical-nav-msgs \
+            ros-lyrical-rclcpp \
+            ros-lyrical-rosidl-default-generators \
+            ros-lyrical-rosidl-default-runtime \
+            ros-lyrical-sensor-msgs \
+            ros-lyrical-std-msgs
+
+      - name: Assemble the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /ws/src
+          cp -r ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces
+          cp -r sensors/lidar-ldlidar/mowgli_lidar_pwm /ws/src/mowgli_lidar_pwm
+          ls /ws/src
+          chown -R ubuntu:ubuntu /ws
+
+      - name: Build dependencies
+        shell: bash
+        run: |
+          runuser -u ubuntu -- bash <<'BUILD'
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          cd /ws
+          colcon build \
+            --packages-skip mowgli_lidar_pwm \
+            --packages-up-to mowgli_lidar_pwm \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTING=OFF -Wno-dev \
+            --event-handlers console_cohesion+
+
+          BUILD
+
+      - name: Build and test mowgli_lidar_pwm
+        shell: bash
+        run: |
+          runuser -u ubuntu -- bash <<'BUILD'
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          cd /ws
+          source install/setup.bash
+          colcon build \
+            --packages-select mowgli_lidar_pwm \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTING=ON -Wno-dev \
+            --event-handlers console_cohesion+
+          colcon test \
+            --packages-select mowgli_lidar_pwm \
+            --return-code-on-test-failure \
+            --event-handlers console_cohesion+
+          colcon test-result --verbose
+
+          BUILD
+
+      - name: Assert the gtests actually ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same reasoning as sensors-gps.yml: a package whose tests silently
+          # stop being registered would otherwise pass this job with zero
+          # tests. Count ONLY *.gtest.xml — ament writes a sibling xunit file
+          # per LINTER too, and those also carry tests="N".
+          results=/ws/build/mowgli_lidar_pwm/test_results/mowgli_lidar_pwm
+          test -d "$results" || { echo "no test_results directory"; exit 1; }
+          shopt -s nullglob
+          gtest_xml=("$results"/*.gtest.xml)
+          if [ ${#gtest_xml[@]} -eq 0 ]; then
+            echo "no *.gtest.xml produced — the gtests were not registered"
+            ls -la "$results" || true
+            exit 1
+          fi
+          n=$(grep -ho 'tests="[0-9]*"' "${gtest_xml[@]}" | grep -o '[0-9]*' \
+              | awk '{s+=$1} END {print s+0}')
+          echo "gtest binaries: ${#gtest_xml[@]}, gtest cases executed: $n"
+          test "$n" -gt 0 || { echo "mowgli_lidar_pwm ran ZERO gtest cases"; exit 1; }
+
   build:
+    needs: test
     uses: ./.github/workflows/_sensor-docker.yml
     with:
       image: lidar-ldlidar
-      context: ./sensors/lidar-ldlidar
+      # Repo-root context (not ./sensors/lidar-ldlidar): the Dockerfile now
+      # COPYs ros2/src/mowgli_interfaces for mowgli_lidar_pwm's
+      # LidarMotorStatus/HighLevelStatus dependency (issue #569) — same shape
+      # as sensors/gps/Dockerfile.
+      context: .
+      dockerfile: sensors/lidar-ldlidar/Dockerfile
       target: runtime
       no-cache: ${{ inputs.no-cache == true }}

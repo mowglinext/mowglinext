@@ -14,6 +14,14 @@
 # The Myzhar driver is a lifecycle ComposableNode; it auto-transitions
 # through configure → activate via the bundled nav2_lifecycle_manager
 # launch (ldlidar_with_mgr.launch.py).
+#
+# Also builds mowgli_lidar_pwm (issue #569): a small first-party node that
+# owns the LD19's PWM spin-motor control line, same "vendored driver +
+# one small owned node" shape as sensors/gps/mowgli_gnss_bridge. Because it
+# depends on mowgli_interfaces, this image now needs the monorepo root as
+# its build context (mirroring sensors/gps/Dockerfile):
+#
+#   docker build -t mowgli-lidar-ldlidar --target runtime -f sensors/lidar-ldlidar/Dockerfile .
 # =============================================================================
 
 FROM ros:lyrical-ros-base AS build
@@ -35,7 +43,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       ros-lyrical-bondcpp \
       ros-lyrical-diagnostic-msgs \
       ros-lyrical-diagnostic-updater \
+      ros-lyrical-geometry-msgs \
       ros-lyrical-launch-ros \
+      ros-lyrical-nav-msgs \
       ros-lyrical-nav2-lifecycle-manager \
       ros-lyrical-nav2-msgs \
       ros-lyrical-nav2-util \
@@ -45,6 +55,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       ros-lyrical-rclcpp-components \
       ros-lyrical-rclcpp-lifecycle \
       ros-lyrical-robot-state-publisher \
+      ros-lyrical-rosidl-default-generators \
+      ros-lyrical-rosidl-default-runtime \
       ros-lyrical-sensor-msgs \
       ros-lyrical-std-msgs
 
@@ -90,6 +102,12 @@ for p in root.rglob('*'):
     p.write_text(s)
 PY_PATCH
 
+# mowgli_lidar_pwm (issue #569) needs mowgli_interfaces for LidarMotorStatus
+# and HighLevelStatus. Copied in beside the cloned driver so the single
+# colcon build below (no --packages-select) picks up both.
+COPY ros2/src/mowgli_interfaces /ros2_ws/src/mowgli_interfaces
+COPY sensors/lidar-ldlidar/mowgli_lidar_pwm /ros2_ws/src/mowgli_lidar_pwm
+
 WORKDIR /ros2_ws
 RUN chown -R ubuntu:ubuntu /ros2_ws
 USER ubuntu
@@ -129,14 +147,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       ros-lyrical-rclcpp-components \
       ros-lyrical-rclcpp-lifecycle \
       ros-lyrical-rmw-cyclonedds-cpp \
-      ros-lyrical-robot-state-publisher
+      ros-lyrical-robot-state-publisher \
+      ros-lyrical-rosidl-default-runtime \
+      ros-lyrical-sensor-msgs
 
 COPY --from=build /ros2_ws/install /opt/ldlidar
 
-COPY ros2_entrypoint.sh /ros2_entrypoint.sh
-COPY ldlidar.yaml /ldlidar.yaml
-COPY ldlidar_scan.launch.py /ldlidar_scan.launch.py
-COPY start_lidar.sh /start_lidar.sh
+COPY sensors/lidar-ldlidar/ros2_entrypoint.sh /ros2_entrypoint.sh
+COPY sensors/lidar-ldlidar/ldlidar.yaml /ldlidar.yaml
+COPY sensors/lidar-ldlidar/ldlidar_scan.launch.py /ldlidar_scan.launch.py
+COPY sensors/lidar-ldlidar/start_lidar.sh /start_lidar.sh
 RUN chmod +x /ros2_entrypoint.sh /start_lidar.sh
 
 ENTRYPOINT ["/ros2_entrypoint.sh"]

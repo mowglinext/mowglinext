@@ -136,6 +136,58 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// WaitForLidarMotorReady
+// ---------------------------------------------------------------------------
+
+/// Stateful action that returns RUNNING until the LD19 motor PWM controller
+/// (mowgli_lidar_pwm, issue #569) reports RUNNING, then returns SUCCESS.
+///
+/// Deliberately DOES NOT mirror WaitForGpsFix's "proceed anyway on timeout"
+/// resolution: GPS-degraded motion is an acceptable tradeoff, but starting
+/// navigation with obstacle avoidance planned around a LiDAR whose motor
+/// never actually spun up is not — the whole point of Invariant 5's
+/// LiDAR-based obstacle deviation and collision_monitor's real-time guard is
+/// a live /scan. On timeout this returns FAILURE, which the caller (the
+/// UndockSequence in main_tree.xml) treats the same as any other pre-flight
+/// failure (falls through to UndockFailed) rather than driving blind.
+///
+/// Inert (immediate SUCCESS) when the `enabled` port is false — the
+/// install-time/GUI lidar_pwm_enabled setting, plumbed onto the blackboard
+/// as {lidar_pwm_enabled} by behavior_tree_node. This is an explicit port,
+/// not inferred from "no /lidar_pwm/status message has arrived yet" (unlike
+/// IsScanStale's "never received = no LiDAR install" idiom) — a PWM-enabled
+/// install that is still cold-booting the sidecar container would otherwise
+/// be indistinguishable from a no-PWM install at the worst possible moment.
+///
+/// Input ports:
+///   enabled      (bool,   default false) — {lidar_pwm_enabled} blackboard ref.
+///   timeout_sec  (double, default 10.0)  — max wait before declaring FAILURE.
+class WaitForLidarMotorReady : public BT::StatefulActionNode
+{
+public:
+  WaitForLidarMotorReady(const std::string& name, const BT::NodeConfig& config)
+      : BT::StatefulActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {
+        BT::InputPort<bool>("enabled", false, "Whether this install uses LiDAR motor PWM control"),
+        BT::InputPort<double>("timeout_sec", 10.0, "Max seconds to wait before failing"),
+    };
+  }
+
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+
+private:
+  std::chrono::steady_clock::time_point start_time_;
+  std::chrono::duration<double> timeout_{};
+};
+
+// ---------------------------------------------------------------------------
 // SaveObstacles
 // ---------------------------------------------------------------------------
 

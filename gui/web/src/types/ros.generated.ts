@@ -392,6 +392,21 @@ export type ImuRaw = {
   mz?: number;
 };
 
+export const enum LidarMotorStatusConstants {
+  IDLE = 0,
+  SPINNING_UP = 1,
+  RUNNING = 2,
+  SPINNING_DOWN = 3,
+  FAULT = 4,
+};
+
+export type LidarMotorStatus = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  state?: number;
+  commanded_duty_cycle?: number;
+  time_in_state_sec?: number;
+};
+
 export type MapArea = {
   name?: string;
   area?: Polygon;

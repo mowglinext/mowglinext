@@ -618,6 +618,17 @@
               <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
               <RecordUndockStart/>
               <ClearCostmap/>
+              <!-- issue #569: on a PWM-controlled LiDAR install, the motor
+                   has been spinning up since HighLevelStatus left IDLE (the
+                   PWM node reacts to that transition directly), so most of
+                   the spin-up time has already elapsed by the time we get
+                   here. This is still the right place to actually BLOCK on
+                   it: IsScanStale's "never received = no LiDAR install"
+                   idiom would silently wave through a motor that never
+                   spun up, and undock/transit is exactly the motion that
+                   needs live obstacle detection from the first metre.
+                   Inert (immediate SUCCESS) when lidar_pwm_enabled is false. -->
+              <WaitForLidarMotorReady enabled="{lidar_pwm_enabled}" timeout_sec="10.0"/>
               <!-- BackUp via Nav2 behavior_server instead of
                    opennav_docking's UndockRobot: opennav's isDocked() uses
                    a geometric distance to the dock pose that is fragile

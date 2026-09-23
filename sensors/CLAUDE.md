@@ -1,6 +1,6 @@
 # sensors/ — working notes for Claude
 
-Four self-contained Docker images that run **beside** `mowgli-ros2` and talk to it only over DDS: the Universal GNSS sidecar (`gps/`) and three LiDAR driver wrappers (`lidar-ldlidar/`, `lidar-rplidar/`, `lidar-stl27l/`). The only ROS node this tree owns is `gps/mowgli_gnss_bridge`; everything else is a vendored upstream driver plus a startup shell script.
+Four self-contained Docker images that run **beside** `mowgli-ros2` and talk to it only over DDS: the Universal GNSS sidecar (`gps/`) and three LiDAR driver wrappers (`lidar-ldlidar/`, `lidar-rplidar/`, `lidar-stl27l/`). This tree owns two first-party ROS nodes beside the vendored drivers — `gps/mowgli_gnss_bridge` and `lidar-ldlidar/mowgli_lidar_pwm` (the LD19 motor PWM spin-down controller, issue #569) — colcon-built into their sensor's own image; everything else is a vendored upstream driver plus a startup shell script.
 It must NOT own: which containers run, device paths, udev symlinks, `docker/.env` or the compose fragments (installer — see `install/CLAUDE.md`); the `GnssStatus.msg` schema (`ros2/src/mowgli_interfaces`); or any consumer of `/gps/*` and `/scan` (see `ros2/CLAUDE.md`). Nothing here publishes TF or a pose — root CLAUDE.md Invariants 1–2.
 
 ## Read next
@@ -25,8 +25,11 @@ It must NOT own: which containers run, device paths, udev symlinks, `docker/.env
 git submodule update --init --recursive ros2/src/external/universal-gnss
 docker build -t mowgli-gps -f sensors/gps/Dockerfile .
 
-# LiDAR images — context is the sensor directory
-docker build -t mowgli-lidar-ldlidar --target runtime sensors/lidar-ldlidar/
+# lidar-ldlidar — ALSO build context = repo root (it now copies ros2/src/mowgli_interfaces
+# for mowgli_lidar_pwm, issue #569 — same shape as gps, unlike the other two LiDAR images)
+docker build -t mowgli-lidar-ldlidar --target runtime -f sensors/lidar-ldlidar/Dockerfile .
+
+# Other LiDAR images — context is still the sensor directory
 docker build -t mowgli-lidar-stl27l  --target runtime sensors/lidar-stl27l/
 docker build -t mowgli-lidar-rplidar sensors/lidar-rplidar/     # CI passes no target
 
@@ -44,6 +47,8 @@ mowgli-gps-logs ; mowgli-lidar-logs
 ```
 
 `mowgli_gnss_bridge`'s tests run in the **`Test mowgli_gnss_bridge` job of `sensors-gps.yml`** — and nowhere else. The image itself still builds with `-DBUILD_TESTING=OFF` and deletes `/ws/build`, and `ros2-ci.yml` only builds `ros2/src`, so that job is the sole thing that compiles and executes them. It assembles the same source set as the Dockerfile's builder stage, then runs `colcon test --packages-select mowgli_gnss_bridge`, and finally asserts the gtest XML reports a non-zero case count — because a package whose tests silently stop being registered would otherwise turn the job green with zero coverage, which is exactly how these tests rotted unnoticed until 2026-09-05. **Keep that job's package list in lockstep with the Dockerfile's builder stage.** To reproduce locally, build a scratch overlay containing `mowgli_interfaces`, `ros2/src/external/universal-gnss/gnss_ros2` (`universal_gnss_ros2`) and this package: `colcon build --packages-up-to mowgli_gnss_bridge && colcon test --packages-select mowgli_gnss_bridge`.
+
+`mowgli_lidar_pwm`'s tests run the same way, in the **`Test mowgli_lidar_pwm` job of `sensors-lidar-ldlidar.yml`** — for the identical reason (it lives outside `ros2/src`, and the image builds with `-DBUILD_TESTING=OFF`). Reproduce locally with a scratch overlay containing `mowgli_interfaces` and this package: `colcon build --packages-up-to mowgli_lidar_pwm && colcon test --packages-select mowgli_lidar_pwm`.
 
 CI: one thin caller per image (`.github/workflows/sensors-{gps,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`) → reusable `_sensor-docker.yml` (amd64 + arm64, push-by-digest then manifest merge). Only `sensors-gps.yml` has a smoke test (L37–66: packages/executables present, `CAP_RTK_MODE`, `RtcmFrame.data`, `rtcm_msgs/Message.message`).
 

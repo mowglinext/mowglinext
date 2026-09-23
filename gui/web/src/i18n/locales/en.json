@@ -2684,7 +2684,16 @@
     "restWindowBeforeCalTooltip": "How long the robot must be detected stationary before a calibration starts.",
     "periodicRecalInterval": "Periodic recal interval",
     "periodicRecalIntervalTooltip": "Re-estimate the IMU bias every N seconds while docked. 0 disables periodic recal.",
-    "lidarDescription": "Enable if your robot has a LiDAR. Enables obstacle detection and allows scan-to-map localization, configured in the Localization tab."
+    "lidarDescription": "Enable if your robot has a LiDAR. Enables obstacle detection and allows scan-to-map localization, configured in the Localization tab.",
+    "lidarPwm": "Motor spin-down when idle",
+    "lidarPwmDescription": "Spin the LiDAR's motor down while the robot is idle instead of running it continuously — needs a one-time boot config change first (below).",
+    "lidarPwmPrerequisitesTitle": "Before enabling this",
+    "lidarPwmPrerequisiteBootConfig": "The default PWM pin (GPIO12 / physical pin 32) is normally claimed by UART5 — the LiDAR's own scan-data connection. Add this line to config.txt AFTER the existing UART5 line, not instead of it:",
+    "lidarPwmPrerequisiteThenLine": "then",
+    "lidarPwmPrerequisiteReboot": "Reboot the Pi for the overlay to take effect.",
+    "lidarPwmPrerequisiteVerify": "Confirm the PWM device exists:",
+    "lidarPwmGpioPin": "PWM GPIO pin",
+    "lidarPwmGpioPinTooltip": "BCM GPIO pin driving the LiDAR's PWM control line. Only change this if you've wired the PWM control line to a different pin and set up the matching boot config overlay yourself."
   },
   "settingsRain": {
     "rainBehavior": "Rain Behavior",
