@@ -129,14 +129,16 @@ public:
   // false for COG (gated on forward motion + RTK-Fixed).
   void QueueYaw(double yaw, double sigma_yaw, bool robust = false);
 
-  // LiDAR map anchor: absolute XY (map frame) with its 2x2 covariance from the
-  // particle filter. A historical target plus node_to_scan observes the scan-time
-  // body origin. Every principal variance is floored; invalid covariance is rejected.
+  // LiDAR map anchor: absolute scan-time XY (map frame) with its 2x2 covariance
+  // from the particle filter. node_to_scan_map is the fixed map-frame displacement
+  // from the target node to the scan time; it retimes the XY observation without
+  // adding a yaw Jacobian. Every principal variance is floored; invalid covariance
+  // is rejected.
   void QueueLidarMapXy(const gtsam::Vector2& xy,
                        const Eigen::Matrix2d& cov,
                        bool robust = true,
                        std::optional<uint64_t> target = std::nullopt,
-                       const gtsam::Vector2& node_to_scan = gtsam::Vector2::Zero(),
+                       const gtsam::Vector2& node_to_scan_map = gtsam::Vector2::Zero(),
                        double expires_at = std::numeric_limits<double>::infinity());
   void ClearLidarObservations();
   uint64_t LidarAnchorFactorCount() const
@@ -310,7 +312,7 @@ private:
       Eigen::Matrix2d cov;
       bool robust;
       std::optional<uint64_t> target;
-      gtsam::Vector2 node_to_scan;
+      gtsam::Vector2 node_to_scan_map;
       double expires_at;
     };
     std::optional<LidarMapXy> lidar_map_xy;

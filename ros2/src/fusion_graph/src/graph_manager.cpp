@@ -183,11 +183,12 @@ void GraphManager::QueueLidarMapXy(const gtsam::Vector2& xy,
                                    const Eigen::Matrix2d& cov,
                                    bool robust,
                                    std::optional<uint64_t> target,
-                                   const gtsam::Vector2& node_to_scan,
+                                   const gtsam::Vector2& node_to_scan_map,
                                    double expires_at)
 {
   std::lock_guard<std::mutex> lock(mu_);
-  queue_.lidar_map_xy = UnaryQueue::LidarMapXy{xy, cov, robust, target, node_to_scan, expires_at};
+  queue_.lidar_map_xy =
+      UnaryQueue::LidarMapXy{xy, cov, robust, target, node_to_scan_map, expires_at};
 }
 
 void GraphManager::ClearLidarObservations()

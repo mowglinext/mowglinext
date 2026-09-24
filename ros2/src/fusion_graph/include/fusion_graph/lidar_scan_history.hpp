@@ -8,6 +8,14 @@
 #include <gtsam/geometry/Pose2.h>
 namespace fusion_graph
 {
+// Convert the scan-time odometry displacement to a fixed map-frame vector at
+// the matched graph node. Used to retime XY measurements without a yaw factor.
+inline gtsam::Vector2 LidarNodeToScanMapOffset(const gtsam::Pose2& node_pose,
+                                               const gtsam::Pose2& node_to_scan)
+{
+  return node_pose.compose(node_to_scan).translation() - node_pose.translation();
+}
+
 // Bounded odometry history in a continuous frame. Never extrapolate a scan.
 class LidarScanHistory
 {

@@ -455,7 +455,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     const auto& q = *queue_.lidar_map_xy;
     const auto target = q.target.value_or(next_index_);
     const auto cov = FloorLidarCovariance(q.cov, params_.lidar_anchor_sigma_floor_m);
-    if (now_s <= q.expires_at && cov && q.xy.allFinite() && q.node_to_scan.allFinite() &&
+    if (now_s <= q.expires_at && cov && q.xy.allFinite() && q.node_to_scan_map.allFinite() &&
         (target == next_index_ || HasPoseAt(target)))
     {
       gtsam::SharedNoiseModel noise = gtsam::noiseModel::Gaussian::Covariance(*cov);
@@ -463,10 +463,12 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
         noise =
             gtsam::noiseModel::Robust::Create(gtsam::noiseModel::mEstimator::Huber::Create(1.345),
                                               noise);
-      // Same XY measurement geometry as a GNSS lever arm: observe the body
-      // origin at scan time, displaced from this node by measured odometry.
-      // This supplies no absolute LiDAR heading observation.
-      new_factors_.add(GnssLeverArmFactor(PoseKey(target), q.xy, q.node_to_scan, noise));
+      // Retiming to the graph node is done with a fixed map-frame displacement,
+      // then the unary factor observes only node translation. Do not rotate the
+      // offset by this node's yaw: a LiDAR map anchor must not observe heading.
+      new_factors_.add(gtsam::PoseTranslationPrior<gtsam::Pose2>(PoseKey(target),
+                                                                 q.xy - q.node_to_scan_map,
+                                                                 noise));
       ++lidar_anchor_factors_;
     }
   }

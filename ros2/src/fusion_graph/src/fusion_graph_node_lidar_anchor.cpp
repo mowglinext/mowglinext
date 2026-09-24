@@ -331,6 +331,7 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   if (!snapshot || !node_pose)
     return;
   const auto pose_at_scan = node_pose->compose(scan_time.offset);
+  const auto node_to_scan_map = LidarNodeToScanMapOffset(*node_pose, scan_time.offset);
 
   // On the charger the fused pose is gauge-pinned to the dock while the
   // BackUp undock actually moves the robot 1.5 m (field 2026-09-07, t+9..38 s:
@@ -581,7 +582,7 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
                             *cov_applied,
                             true,
                             scan_time.index,
-                            scan_time.offset.translation(),
+                            node_to_scan_map,
                             lidar_scan_stamp_s_ + lidar_scan_max_age_s_);
     ++lidar_anchor_updates_;
   };
