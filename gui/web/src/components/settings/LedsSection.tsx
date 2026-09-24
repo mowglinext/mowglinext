@@ -26,6 +26,7 @@ const LED_MODES: { key: string; color: string }[] = [
     { key: "modeCharging", color: "#00ff00" },
     { key: "modeStale", color: "#ff6e00" },
     { key: "modeLowBattery", color: "#ff0000" },
+    { key: "modeTransit", color: "#ffaa28" },
     { key: "modeMowing", color: "#00ff00" },
     { key: "modeMowingDegraded", color: "#ff6e00" },
     { key: "modeRecording", color: "#00c8ff" },

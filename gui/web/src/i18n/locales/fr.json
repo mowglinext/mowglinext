@@ -3467,6 +3467,8 @@
     "modeStaleDescription": "Point orange tournant sur un anneau éteint. Alimenté et en marche, mais l'arbre de comportement ne répond pas.",
     "modeLowBattery": "Batterie faible",
     "modeLowBatteryDescription": "Tout l'anneau clignote en rouge. Même couleur que l'arrêt d'urgence — c'est le clignotement qui les distingue.",
+    "modeTransit": "Transit",
+    "modeTransitDescription": "L'anneau alterne les moitiés allumées en orange chaud, environ une fois par seconde. Trajet vers la bande suivante, lame arrêtée.",
     "modeMowing": "Tonte",
     "modeMowingDescription": "Arc vert qui grandit avec la couverture, avec un pixel blanc à sa pointe.",
     "modeMowingDegraded": "Tonte sans fix RTK",

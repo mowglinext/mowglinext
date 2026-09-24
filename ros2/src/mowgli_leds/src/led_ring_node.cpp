@@ -256,7 +256,16 @@ LedInputs LedRingNode::collectInputs() const
     in.battery_valid = std::isfinite(latest_status_.battery_percent);
     in.is_charging = latest_status_.is_charging;
     in.emergency = latest_status_.emergency;
-    in.transiting = latest_status_.sub_state_name == "TRANSIT";
+    // sub_state_name == "TRANSIT" is FollowStrip's own live override for its
+    // blade-off bridge between coverage sub-paths within one area (issue:
+    // this alone left the ring reporting MOWING/MOWING_DEGRADED across every
+    // OTHER blade-off drive, since those instead set the tree-owned
+    // state_name field -- see LedInputs::transiting's doc comment). Treat
+    // all four the same way: the operator wants to know "is the blade
+    // spinning right now", not which BT node currently owns the transit.
+    const std::string& state_name = latest_status_.state_name;
+    in.transiting = latest_status_.sub_state_name == "TRANSIT" || state_name == "TRANSIT" ||
+                    state_name == "UNDOCKING" || state_name == "RETURNING_HOME";
   }
   else if (have_power_ && (now_s - power_time_s_) <= status_timeout_s_)
   {

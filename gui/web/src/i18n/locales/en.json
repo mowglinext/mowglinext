@@ -3471,6 +3471,8 @@
     "modeStaleDescription": "Amber dot circling a dark ring. Powered and running, but the behavior tree is not reporting.",
     "modeLowBattery": "Low battery",
     "modeLowBatteryDescription": "Whole ring blinking red. Same colour as emergency — the blinking is what tells them apart.",
+    "modeTransit": "Transit",
+    "modeTransitDescription": "Ring alternates lit halves in warm orange, about once a second. Driving to the next strip with the blade off.",
     "modeMowing": "Mowing",
     "modeMowingDescription": "Green arc growing with coverage, with a white pixel at its tip.",
     "modeMowingDegraded": "Mowing without RTK fix",

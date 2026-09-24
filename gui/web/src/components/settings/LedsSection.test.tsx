@@ -218,6 +218,7 @@ describe("LedsSection", () => {
             "Charging",
             "No status",
             "Low battery",
+            "Transit",
             "Mowing",
             "Mowing without RTK fix",
             "Recording a boundary",
