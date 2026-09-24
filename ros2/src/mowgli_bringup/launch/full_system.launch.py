@@ -324,6 +324,17 @@ def generate_launch_description() -> LaunchDescription:
             # references in main_tree.xml. See issue #191.
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
             {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
+            # rain_mode / rain_delay_minutes / rain_debounce_sec: consumed by
+            # IsNewRain / IsRainModeAtLeast off the {rain_mode} /
+            # {rain_debounce_sec} blackboard refs (condition_nodes.cpp) and
+            # {rain_delay_sec} (rain_delay_minutes * 60, set alongside them in
+            # behavior_tree_node.cpp). #147 added the declare_parameter side
+            # in behavior_tree_node.cpp but never added this launch-side
+            # injection, so the node always ran on its own compiled defaults
+            # and the GUI's RainSection setting never reached it (issue #757).
+            {"rain_mode": int(robot_params.get("rain_mode", 2))},
+            {"rain_delay_minutes": float(robot_params.get("rain_delay_minutes", 30.0))},
+            {"rain_debounce_sec": float(robot_params.get("rain_debounce_sec", 0.0))},
             # idle_nav2_suspend: PAUSE the Nav2 lifecycle stack while parked on
             # the dock to cut idle CPU/thermal load (costmaps stop looping).
             # Default off — a deliberate per-site opt-in. RESUME is guaranteed

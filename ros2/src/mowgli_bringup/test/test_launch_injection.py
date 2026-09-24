@@ -309,6 +309,34 @@ def test_full_system_injects_blade_auto_reverse() -> None:
     }) is False
 
 
+@pytest.mark.parametrize(
+    "key,cast,default,configured",
+    [
+        ("rain_mode", "int", 2, 0),
+        ("rain_delay_minutes", "float", 30.0, 5.0),
+        ("rain_debounce_sec", "float", 0.0, 3.0),
+    ],
+)
+def test_full_system_injects_rain_settings(
+    key: str, cast: str, default, configured
+) -> None:
+    """issue #757: #147 added rain_mode/rain_debounce_sec's declare_parameter
+    side in behavior_tree_node.cpp (rain_delay_minutes predates it) but never
+    added the launch-side injection anywhere, so the GUI's RainSection always
+    did nothing -- the node ran on its own compiled defaults forever. Without
+    this guard the injection could be silently dropped again the same way.
+    """
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    values = _node_parameter_values(call, key)
+    assert len(values) == 1, f"behavior_tree_node must receive {key} exactly once"
+    expression = compile(ast.Expression(values[0]), "full_system.launch.py", "eval")
+    scope = {"__builtins__": {}, "int": int, "float": float}
+    for robot_params, expected in [({}, default), ({key: configured}, configured)]:
+        actual = eval(expression, scope, {"robot_params": robot_params})
+        assert actual == pytest.approx(expected)
+
+
 def test_mowing_enabled_is_not_wired_to_some_other_node() -> None:
     """Companion guard: moving the parameter onto a node that cannot act on it
     (e.g. the BT or coverage server) would keep this file's first assertion
