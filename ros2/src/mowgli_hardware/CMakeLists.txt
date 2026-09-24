@@ -280,6 +280,34 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  # ---- STM32 runtime parameters (protocol v7) ----
+  # The firmware's pure flash-log format and parameter catalog are compiled
+  # here directly (like the heartbeat/emergency policies) so the append-only
+  # persistence rules and the envelope are verified without hardware, and the
+  # host mirror in ll_datatypes.hpp is pinned id for id.
+  ament_add_gtest(test_fw_param_log
+    test/test_fw_param_log.cpp
+  )
+  target_include_directories(test_fw_param_log
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware/stm32/ros_usbnode/include
+  )
+  ament_add_gtest(test_fw_param_catalog
+    test/test_fw_param_catalog.cpp
+  )
+  target_include_directories(test_fw_param_catalog
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware/stm32/ros_usbnode/include
+  )
+  ament_add_gtest(test_firmware_params
+    test/test_firmware_params.cpp
+  )
+  target_include_directories(test_firmware_params
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
   # ---- test_hardware_bridge_parameters ----
   # Includes the node implementation to exercise ROS's actual read-only
   # parameter contract while a missing serial device keeps the test hardware-free.

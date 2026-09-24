@@ -109,7 +109,7 @@ const CATALOG: Record<string, ParamMeta> = {
   // ── Motor control (firmware-adjacent PID) ────────────────────────────────
   // 2026-07-17 Option C (task #34): angular_rate_kp/ki/kff (the host-side
   // yaw-rate PI, Option B task #24) are removed — the loop now runs in
-  // firmware (task #33), tuned via these params (PACKET_ID_LL_SET_YAW_PID).
+  // firmware (task #33), tuned via these params (protocol v7 SET_PARAM, persisted in the board's flash).
   yaw_kp: {label: "paramCatalog.yaw_kp.label", description: "paramCatalog.yaw_kp.description", tier: "expert", group: "Motor control"},
   yaw_ki: {label: "paramCatalog.yaw_ki.label", description: "paramCatalog.yaw_ki.description", tier: "expert", group: "Motor control"},
   yaw_trim_limit_mps: {label: "paramCatalog.yaw_trim_limit_mps.label", description: "paramCatalog.yaw_trim_limit_mps.description", tier: "expert", group: "Motor control", unit: "m/s"},

@@ -84,18 +84,19 @@ It is the radius around a session dig point inside which FollowStrip skips cover
 
 ### Runtime limits pushed to the STM32
 
-`mowgli.launch.py` injects each of these into `hardware_bridge_node`, which pushes them in its reconnect burst (`SET_KINEMATICS` / `SET_SAFETY_LIMITS`). The firmware clamps every field so the wire can only tighten protection. `test_launch_injection.py::test_mowgli_launch_passes_firmware_limits_to_hardware_bridge` pins the injection (until it existed, `max_mps` and the `*_emergency_ms` keys were declared by the node but never injected, so an operator override was silently ignored).
+`mowgli.launch.py` injects each of these into `hardware_bridge_node`, which pushes them in its reconnect burst (protocol v7 `SET_PARAM`) and then commits them to the board's flash, so they also apply at power-on before ROS2 connects. The firmware coerces each into an absolute envelope compiled in `fw_param_catalog.h` — stricter or looser than the default, never outside it — and reports the applied value on `/hardware_bridge/firmware_params`. `test_launch_injection.py::test_mowgli_launch_passes_firmware_limits_to_hardware_bridge` pins the injection (until it existed, `max_mps` and the `*_emergency_ms` keys were declared by the node but never injected, so an operator override was silently ignored).
 
 | Key (L) | Default | Consumer · where read | GUI | Life |
 |---|---|---|---|---|
-| `max_mps` (L49) | 0.5 | `mowgli.launch.py` → `hardware_bridge_node` (`LL_SET_KINEMATICS`; firmware clamps ≤ compiled `MAX_MPS`); also an input to the offline `compute_nav2_params.py:325` | Safety | launch |
-| `max_charge_voltage` (L57) | 29.4 | `mowgli.launch.py` → `hardware_bridge_node` (`LL_SET_SAFETY_LIMITS`; firmware clamps ≤ compiled ceiling) | Battery | launch |
-| `max_charge_current` (L58) | 1.2 | `mowgli.launch.py` → `hardware_bridge_node` (same packet) | Battery | launch |
-| `one_wheel_lift_emergency_ms` (L59) | 2000 | `mowgli.launch.py` → `hardware_bridge_node` (same packet; clamped to [10, compiled]) | Safety | launch |
-| `both_wheels_lift_emergency_ms` (L60) | 1000 | same | Safety | launch |
-| `tilt_emergency_ms` (L61) | 500 | same | Safety | launch |
-| `stop_button_emergency_ms` (L62) | 100 | same | Safety | launch |
-| `play_button_clear_emergency_ms` (L63) | 2000 | same (clamped to [compiled, 10000] — can only lengthen) | Safety | launch |
+| `max_mps` (L49) | 0.5 | `mowgli.launch.py` → `hardware_bridge_node` (`FW_PARAM_ID_MAX_MPS`; envelope [0.1, 0.6]); also an input to the offline `compute_nav2_params.py:325` | Safety | launch |
+| `max_charge_voltage` (L57) | 29.4 | `mowgli.launch.py` → `hardware_bridge_node` (envelope [25.2, 29.4] — 29.4 V is the pack limit) | Battery | launch |
+| `max_charge_current` (L58) | 1.2 | same (envelope [0.1, 1.2]) | Battery | launch |
+| `one_wheel_lift_emergency_ms` (L59) | 2000 | same (envelope [10, 5000]) | Safety | launch |
+| `both_wheels_lift_emergency_ms` (L60) | 1000 | same (envelope [10, 3000]) | Safety | launch |
+| `tilt_emergency_ms` (L61) | 500 | same (envelope [10, 1000]) | Safety | launch |
+| `stop_button_emergency_ms` (L62) | 100 | same (envelope [10, 250]) | Safety | launch |
+| `play_button_clear_emergency_ms` (L63) | 2000 | same (envelope [500, 10000]; longer is stricter) | Safety | launch |
+| `imu_inclination_threshold` | 56 | same (onboard LIS3DH INT1_THS, envelope [44, 64]; 44 = stock firmware) | Safety | launch |
 
 ### Drive loops (both close in FIRMWARE — CLAUDE.md preamble, Option C)
 
@@ -103,12 +104,12 @@ The five `wheel_pid_*` defaults are pinned in lockstep across template ↔ `mowg
 
 | Key (L) | Default | Consumer · where read | GUI | Life |
 |---|---|---|---|---|
-| `wheel_pid_kp` (L137) | 10.0 | `hardware_bridge` `mowgli.launch.py:225` → STM32 `SET_DRIVE_PID`; firmware applies it UNSCALED in PWM per m/s | Hardware | launch |
+| `wheel_pid_kp` (L137) | 10.0 | `hardware_bridge` `mowgli.launch.py:225` → STM32 (`SET_PARAM`, persisted in flash); firmware applies it UNSCALED in PWM per m/s | Hardware | launch |
 | `wheel_pid_ki` (L138) | 2000.0 | `mowgli.launch.py:226`; PWM per (m/s·s) — reaches the ~40 PWM deadband from a 0.03 m/s error in ~0.5 s | Hardware | launch |
 | `wheel_pid_kd` (L139) | 0.0 | `mowgli.launch.py:227`; 0 because the 50 Hz tick-quantised speed makes D noise | Hardware | launch |
 | `wheel_pid_integral_limit` (L140) | 45.0 | `mowgli.launch.py:228`; PWM — must reach deadband − feedforward(0.03 m/s) ≈ 32 PWM or the slow inner arc wheel never turns | Hardware | launch |
 | `wheel_pid_pwm_per_mps` (L141) | 282.135 | `mowgli.launch.py:230` (open-loop feedforward) | Hardware | launch |
-| `deadband_pwm` (L145) | 40.0 | `mowgli.launch.py:234` → `hardware_bridge` startup-only gate (`mowgli_hardware/drive_gain_sanity.hpp`): if `integral_limit + kp·0.03 + pwm_per_mps·0.03 < deadband_pwm` the bridge logs ERROR and sends the TEMPLATE gains in `SET_DRIVE_PID` instead of the configured ones (`ticks_per_meter`/`pwm_per_mps` unchanged, file untouched); the same check rejects a live `wheel_pid_*` param set that would fail. Never sent to the firmware itself | Hardware | launch |
+| `deadband_pwm` (L145) | 40.0 | `mowgli.launch.py:234` → `hardware_bridge` startup-only gate (`mowgli_hardware/drive_gain_sanity.hpp`): if `integral_limit + kp·0.03 + pwm_per_mps·0.03 < deadband_pwm` the bridge logs ERROR and sends the TEMPLATE gains to the firmware instead of the configured ones (`ticks_per_meter`/`pwm_per_mps` unchanged, file untouched); the same check rejects a live `wheel_pid_*` param set that would fail. Never sent to the firmware itself | Hardware | launch |
 | `yaw_kp` (L84) | 0.12 | `mowgli.launch.py:247` → firmware gyro yaw-rate loop | Hardware | launch |
 | `yaw_ki` (L85) | 0.40 | `mowgli.launch.py:248` | Hardware | launch |
 | `yaw_trim_limit_mps` (L86) | 0.15 | `mowgli.launch.py:249` | Hardware | launch |

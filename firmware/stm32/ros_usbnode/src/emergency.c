@@ -23,6 +23,7 @@
 #include "main.h"
 #include "i2c.h"
 #include "emergency_clear_policy.h"
+#include "fw_param_catalog.h"
 
 //#define EMERGENCY_DEBUG 1
 
@@ -56,34 +57,21 @@ static uint8_t emergency_physical_inputs_are_clear(void)
     return emergency_physical_inputs_clear(inputs);
 }
 
-/* Runtime emergency-sensor timeouts [ms] (PKT_ID_SET_SAFETY_LIMITS). Seeded with
- * the compile-time board_defaults values, which stay the power-on fallback so an
- * unconnected host runs the vetted safe defaults. The four TRIP timeouts can only
- * be SHORTENED (faster e-stop); the play-button CLEAR hold can only be LENGTHENED
- * (harder to un-latch). See emergency_set_timeouts(). */
+/* Runtime emergency-sensor timeouts [ms] (fw_params, protocol v7). Seeded with
+ * the compile-time board_defaults values; init_ROS() then applies the values
+ * persisted in flash, and the host may move them anywhere inside the absolute
+ * envelope of fw_param_catalog.h. See emergency_set_timeouts(). */
 static volatile uint32_t g_one_wheel_lift_ms = ONE_WHEEL_LIFT_EMERGENCY_MILLIS;
 static volatile uint32_t g_both_wheels_lift_ms = BOTH_WHEELS_LIFT_EMERGENCY_MILLIS;
 static volatile uint32_t g_tilt_ms = TILT_EMERGENCY_MILLIS;
 static volatile uint32_t g_stop_button_ms = STOP_BUTTON_EMERGENCY_MILLIS;
 static volatile uint32_t g_play_clear_ms = PLAY_BUTTON_CLEAR_EMERGENCY_MILLIS;
 
-#define EMERGENCY_MIN_TRIP_MS 10u
-#define EMERGENCY_MAX_CLEAR_MS 10000u
-
-/* Trip timeouts clamp to [MIN, compiled] — the wire can only SHORTEN them (a
- * faster e-stop is safer); it can never make a fault take longer to trip. */
-static uint32_t emergency_clamp_trip(uint32_t v, uint32_t compiled) {
-  if (v < EMERGENCY_MIN_TRIP_MS) return EMERGENCY_MIN_TRIP_MS;
-  if (v > compiled) return compiled;
-  return v;
-}
-/* The clear-hold clamps to [compiled, MAX] — the wire can only LENGTHEN it
- * (harder to un-latch the emergency). Shortening it would make accidental
- * clearing of the e-stop EASIER = weaker protection, so that direction is
- * forbidden (the one field whose safe direction is the opposite of the trips). */
-static uint32_t emergency_clamp_clear(uint32_t v, uint32_t compiled) {
-  if (v < compiled) return compiled;
-  if (v > EMERGENCY_MAX_CLEAR_MS) return EMERGENCY_MAX_CLEAR_MS;
+/* Defence in depth: fw_params already coerced every value into the envelope,
+ * but this module never trusts its caller with a safety timing. */
+static uint32_t emergency_clamp_ms(uint32_t v, float min_ms, float max_ms) {
+  if (v < (uint32_t)min_ms) return (uint32_t)min_ms;
+  if (v > (uint32_t)max_ms) return (uint32_t)max_ms;
   return v;
 }
 
@@ -94,15 +82,15 @@ void emergency_set_timeouts(uint32_t one_wheel_lift_ms,
    * interrupt context. uint32 stores are atomic on Cortex-M3, but apply the set
    * as a group under the same guard the module uses elsewhere. */
   __disable_irq();
-  g_one_wheel_lift_ms =
-      emergency_clamp_trip(one_wheel_lift_ms, ONE_WHEEL_LIFT_EMERGENCY_MILLIS);
-  g_both_wheels_lift_ms = emergency_clamp_trip(
-      both_wheels_lift_ms, BOTH_WHEELS_LIFT_EMERGENCY_MILLIS);
-  g_tilt_ms = emergency_clamp_trip(tilt_ms, TILT_EMERGENCY_MILLIS);
-  g_stop_button_ms =
-      emergency_clamp_trip(stop_button_ms, STOP_BUTTON_EMERGENCY_MILLIS);
-  g_play_clear_ms =
-      emergency_clamp_clear(play_clear_ms, PLAY_BUTTON_CLEAR_EMERGENCY_MILLIS);
+  g_one_wheel_lift_ms = emergency_clamp_ms(
+      one_wheel_lift_ms, FW_ENVELOPE_TRIP_MIN_MS, FW_ENVELOPE_ONE_WHEEL_LIFT_MAX_MS);
+  g_both_wheels_lift_ms = emergency_clamp_ms(
+      both_wheels_lift_ms, FW_ENVELOPE_TRIP_MIN_MS, FW_ENVELOPE_BOTH_WHEELS_LIFT_MAX_MS);
+  g_tilt_ms = emergency_clamp_ms(tilt_ms, FW_ENVELOPE_TRIP_MIN_MS, FW_ENVELOPE_TILT_MAX_MS);
+  g_stop_button_ms = emergency_clamp_ms(
+      stop_button_ms, FW_ENVELOPE_TRIP_MIN_MS, FW_ENVELOPE_STOP_BUTTON_MAX_MS);
+  g_play_clear_ms = emergency_clamp_ms(
+      play_clear_ms, FW_ENVELOPE_PLAY_CLEAR_MIN_MS, FW_ENVELOPE_PLAY_CLEAR_MAX_MS);
   __enable_irq();
 }
 

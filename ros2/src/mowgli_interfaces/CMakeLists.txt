@@ -31,6 +31,8 @@ set(msg_files
   "msg/DockCalibrationStatus.msg"
   "msg/DigEvent.msg"
   "msg/CoverageSession.msg"
+  "msg/FirmwareParam.msg"
+  "msg/FirmwareParams.msg"
 )
 
 # Declare service files

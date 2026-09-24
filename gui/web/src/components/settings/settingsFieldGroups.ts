@@ -49,22 +49,27 @@ export const YAW_LOOP_GROUP: SettingsFieldGroup = {
 
 export const CHARGE_LIMITS_GROUP: SettingsFieldGroup = {
     id: "chargeLimits",
+    isSafetyRelevant: true,
     fields: [
-        num("max_charge_voltage", 0, 30, 0.1, 1, "V"),
-        num("max_charge_current", 0, 5, 0.1, 1, "A"),
+        num("max_charge_voltage", 25.2, 29.4, 0.1, 1, "V"),
+        num("max_charge_current", 0.1, 1.2, 0.1, 1, "A"),
     ],
 };
 
+// Bounds = the firmware's absolute envelope (fw_param_catalog.h). The
+// firmware coerces anything outside it and reports what it applied
+// (FirmwareParamsCard).
 export const FIRMWARE_SAFETY_GROUP: SettingsFieldGroup = {
     id: "firmwareSafety",
     isSafetyRelevant: true,
     fields: [
-        num("max_mps", 0.01, 0.5, 0.01, 2, "m/s"),
-        num("one_wheel_lift_emergency_ms", 10, 2000, 10, 0, "ms"),
-        num("both_wheels_lift_emergency_ms", 10, 1000, 10, 0, "ms"),
-        num("tilt_emergency_ms", 10, 500, 10, 0, "ms"),
-        num("stop_button_emergency_ms", 10, 100, 10, 0, "ms"),
-        num("play_button_clear_emergency_ms", 2000, 10000, 100, 0, "ms"),
+        num("max_mps", 0.1, 0.6, 0.01, 2, "m/s"),
+        num("one_wheel_lift_emergency_ms", 10, 5000, 10, 0, "ms"),
+        num("both_wheels_lift_emergency_ms", 10, 3000, 10, 0, "ms"),
+        num("tilt_emergency_ms", 10, 1000, 10, 0, "ms"),
+        num("stop_button_emergency_ms", 10, 250, 10, 0, "ms"),
+        num("play_button_clear_emergency_ms", 500, 10000, 100, 0, "ms"),
+        num("imu_inclination_threshold", 44, 64, 1, 0),
     ],
 };
 

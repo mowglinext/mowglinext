@@ -3876,6 +3876,10 @@
     "unavailableHelp": "Les mises à jour automatiques nécessitent le service de mise à jour hôte. Le mode Avancé affiche les versions installées et les comparaisons manuelles."
   },
   "settingsFields": {
+    "imu_inclination_threshold": {
+      "label": "Seuil du capteur de basculement",
+      "tooltip": "Seuil du capteur de basculement embarqué (registre INT1_THS du LIS3DH). Plus grand = plus d'inclinaison tolérée avant l'arrêt d'urgence. Le firmware le garde entre 44 (0x2C, firmware d'origine) et 64 (0x40) ; 56 (0x38) est la valeur livrée."
+    },
     "yaw_loop_enabled": {
       "label": "Boucle de vitesse de lacet",
       "tooltip": "Ferme la boucle gyro de vitesse de lacet du firmware. Désactivé = différentiel en boucle ouverte (les roues reçoivent la commande brute, sans correction de cap). Modifie le comportement de conduite : à tester après changement. Appliqué après un redémarrage de ROS2."
@@ -3898,35 +3902,35 @@
     },
     "max_charge_voltage": {
       "label": "Tension de charge max",
-      "tooltip": "Plafond de tension de charge envoyé au firmware [V]. Le firmware le borne à la limite compilée de la carte : ce réglage ne peut que rendre la charge PLUS prudente."
+      "tooltip": "Plafond de tension de charge envoyé au STM32 [V] et enregistré dans sa flash. Le firmware le garde entre 25,2 et 29,4 V : 29,4 V est la limite de la batterie et ne peut jamais être dépassée."
     },
     "max_charge_current": {
       "label": "Courant de charge max",
-      "tooltip": "Plafond de courant de charge envoyé au firmware [A]. Le firmware le borne à la limite compilée de la carte : ce réglage ne peut que rendre la charge PLUS prudente."
+      "tooltip": "Plafond de courant de charge envoyé au STM32 [A] et enregistré dans sa flash. Le firmware le garde entre 0,1 et 1,2 A : aucun courant supérieur n'a été validé sur la carte."
     },
     "max_mps": {
       "label": "Vitesse de roue max",
-      "tooltip": "Plafond de vitesse des roues envoyé au firmware [m/s]. Le firmware le borne à son MAX_MPS compilé : ce réglage ne peut que BAISSER le plafond."
+      "tooltip": "Plafond de vitesse des roues envoyé au STM32 [m/s] et enregistré dans sa flash. Le firmware le garde entre 0,1 et 0,6 m/s."
     },
     "one_wheel_lift_emergency_ms": {
       "label": "Délai soulèvement d'une roue",
-      "tooltip": "Durée pendant laquelle une roue doit rester soulevée avant que le firmware déclenche l'arrêt d'urgence [ms]. Le firmware la garde entre 10 ms et sa valeur compilée : elle ne peut qu'être raccourcie."
+      "tooltip": "Durée pendant laquelle une roue doit rester soulevée avant que le firmware déclenche l'arrêt d'urgence [ms]. Plus court = plus strict. Le firmware la garde entre 10 et 5000 ms."
     },
     "both_wheels_lift_emergency_ms": {
       "label": "Délai soulèvement des deux roues",
-      "tooltip": "Durée pendant laquelle les deux roues doivent rester soulevées avant que le firmware déclenche l'arrêt d'urgence [ms]. Le firmware la garde entre 10 ms et sa valeur compilée : elle ne peut qu'être raccourcie."
+      "tooltip": "Durée pendant laquelle les deux roues doivent rester soulevées avant que le firmware déclenche l'arrêt d'urgence [ms]. Plus court = plus strict. Le firmware la garde entre 10 et 3000 ms."
     },
     "tilt_emergency_ms": {
       "label": "Délai basculement",
-      "tooltip": "Durée pendant laquelle un basculement (contacteur mécanique ou accéléromètre) doit persister avant que le firmware déclenche l'arrêt d'urgence [ms]. Le firmware la garde entre 10 ms et sa valeur compilée : elle ne peut qu'être raccourcie."
+      "tooltip": "Durée pendant laquelle un basculement (contacteur mécanique ou accéléromètre) doit persister avant que le firmware déclenche l'arrêt d'urgence [ms]. Plus court = plus strict. Le firmware la garde entre 10 et 1000 ms."
     },
     "stop_button_emergency_ms": {
       "label": "Délai bouton STOP",
-      "tooltip": "Durée d'appui sur le bouton STOP avant que le firmware déclenche l'arrêt d'urgence [ms]. Le firmware la garde entre 10 ms et sa valeur compilée : elle ne peut qu'être raccourcie."
+      "tooltip": "Durée d'appui sur le bouton STOP avant que le firmware déclenche l'arrêt d'urgence [ms]. Plus court = plus strict. Le firmware la garde entre 10 et 250 ms."
     },
     "play_button_clear_emergency_ms": {
       "label": "Appui PLAY pour lever l'urgence",
-      "tooltip": "Durée d'appui sur PLAY, sur le robot, pour lever un arrêt d'urgence verrouillé [ms]. Le firmware la garde entre sa valeur compilée et 10 s : elle ne peut qu'être allongée."
+      "tooltip": "Durée d'appui sur PLAY, sur le robot, pour lever un arrêt d'urgence verrouillé [ms]. Plus long = plus strict. Le firmware la garde entre 500 et 10000 ms."
     },
     "imu_cal_samples": {
       "label": "Échantillons de calibration IMU",
@@ -4113,11 +4117,11 @@
     },
     "chargeLimits": {
       "title": "Limites de charge",
-      "description": "Plafonds de charge transmis au firmware. Le firmware les borne aux limites compilées de la carte : ils ne peuvent être que resserrés."
+      "description": "Plafonds de charge envoyés au firmware STM32 et enregistrés dans sa flash : ils s'appliquent aussi avant le démarrage de la pile ROS2. Le firmware garde chaque valeur dans son enveloppe de sécurité. Pris en compte après un redémarrage de ROS2."
     },
     "firmwareSafety": {
       "title": "Limites de sécurité du firmware",
-      "description": "Plafond de vitesse et délais d'arrêt d'urgence envoyés au firmware STM32 à chaque connexion de la pile ROS2. Le firmware revalide chaque valeur par rapport à ses limites compilées : ces réglages ne peuvent que renforcer la protection. Pris en compte après un redémarrage de ROS2."
+      "description": "Plafond de vitesse, délais d'arrêt d'urgence et seuil de basculement envoyés au firmware STM32 et enregistrés dans sa flash : ils s'appliquent aussi avant le démarrage de la pile ROS2. Une valeur peut être plus stricte ou plus souple que le défaut, mais le firmware ne la laisse jamais sortir de son enveloppe de sécurité compilée. Pris en compte après un redémarrage de ROS2."
     },
     "localizationGuard": {
       "title": "Garde de localisation",
@@ -4151,6 +4155,28 @@
       "title": "Dégagement de la pose de départ",
       "description": "Dernier recours quand le robot se tient sur une cellule interdite et que tout plan depuis sa propre pose est refusé."
     }
+  },
+  "firmwareParams": {
+    "title": "Valeurs appliquées par le firmware",
+    "description": "Ce que le STM32 exécute réellement, tel qu'il l'a rapporté. Une valeur que le firmware a dû ramener dans son enveloppe est signalée ; une valeur marquée enregistrée est conservée dans la flash de la carte et s'applique dès la mise sous tension.",
+    "noData": "Aucun rapport du firmware pour l'instant. La pile ROS2 envoie les paramètres quand elle se connecte à la carte.",
+    "incompatible": "Le firmware de la carte ne parle pas cette version du protocole : ces valeurs ne sont pas appliquées. Reflashez le firmware.",
+    "bootDefaults": "La carte a démarré sur ses valeurs par défaut compilées (rien d'enregistré pour l'instant).",
+    "bootFlash": "La carte a démarré sur les valeurs enregistrées dans sa flash.",
+    "bootErased": "Au démarrage, la carte a trouvé son stockage de paramètres plein ou illisible et l'a réécrit.",
+    "commitError": "La carte n'a pas pu écrire sa flash : ces valeurs seront perdues à la prochaine mise sous tension.",
+    "commitFull": "Le stockage de paramètres de la carte est plein : il sera réécrit au prochain démarrage.",
+    "recordsLeft": "Encore {{count}} enregistrements possibles avant la prochaine réécriture.",
+    "colParameter": "Paramètre",
+    "colApplied": "Appliqué",
+    "colRequested": "Demandé",
+    "colRange": "Plage autorisée",
+    "colState": "État",
+    "stateStored": "Enregistré",
+    "stateNotStored": "Pas encore enregistré",
+    "stateVolatile": "Non enregistré (mesuré)",
+    "stateClamped": "Ramené dans la plage",
+    "stateUnreported": "Pas de rapport"
   },
   "fleetPage": {
     "betaTag": "Bêta",

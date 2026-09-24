@@ -3876,6 +3876,10 @@
     "unavailableHelp": "Automatic updates need the host updater installed. Advanced contains installed versions and manual image comparisons."
   },
   "settingsFields": {
+    "imu_inclination_threshold": {
+      "label": "Tilt sensor threshold",
+      "tooltip": "Threshold of the onboard tilt sensor (LIS3DH INT1_THS register). Larger allows more inclination before the tilt emergency. The firmware keeps it between 44 (0x2C, stock firmware) and 64 (0x40); 56 (0x38) is the shipped value."
+    },
     "yaw_loop_enabled": {
       "label": "Yaw-Rate Loop",
       "tooltip": "Close the firmware gyro yaw-rate loop. Off = open differential passthrough (the wheels get the raw command, no heading trim). Affects how the robot drives: test after changing. Applied after a ROS2 restart."
@@ -3897,36 +3901,36 @@
       "tooltip": "Sign of the onboard gyro Z axis versus robot +yaw (counter-clockwise): +1 or -1. If the yaw loop diverges (the robot spins harder instead of correcting), flip this - no firmware reflash needed."
     },
     "max_charge_voltage": {
-      "label": "Max Charge Voltage",
-      "tooltip": "Charge voltage ceiling sent to the firmware [V]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+      "label": "Max charge voltage",
+      "tooltip": "Charge voltage ceiling sent to the STM32 [V] and stored in its flash. The firmware keeps it between 25.2 and 29.4 V: 29.4 V is the battery pack limit and can never be exceeded."
     },
     "max_charge_current": {
-      "label": "Max Charge Current",
-      "tooltip": "Charge current ceiling sent to the firmware [A]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+      "label": "Max charge current",
+      "tooltip": "Charge current ceiling sent to the STM32 [A] and stored in its flash. The firmware keeps it between 0.1 and 1.2 A: no higher current has been validated on the board."
     },
     "max_mps": {
       "label": "Max wheel speed",
-      "tooltip": "Runtime wheel-speed cap sent to the firmware [m/s]. The firmware clamps it to its compiled MAX_MPS: this setting can only LOWER the cap."
+      "tooltip": "Wheel-speed cap sent to the STM32 [m/s] and stored in its flash. The firmware keeps it between 0.1 and 0.6 m/s."
     },
     "one_wheel_lift_emergency_ms": {
       "label": "One-wheel lift trip",
-      "tooltip": "How long one wheel must stay lifted before the firmware latches an emergency [ms]. The firmware keeps it between 10 ms and its compiled value: it can only be shortened."
+      "tooltip": "How long one wheel must stay lifted before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 5000 ms."
     },
     "both_wheels_lift_emergency_ms": {
       "label": "Both-wheels lift trip",
-      "tooltip": "How long both wheels must stay lifted before the firmware latches an emergency [ms]. The firmware keeps it between 10 ms and its compiled value: it can only be shortened."
+      "tooltip": "How long both wheels must stay lifted before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 3000 ms."
     },
     "tilt_emergency_ms": {
       "label": "Tilt trip",
-      "tooltip": "How long a tilt (mechanical switch or accelerometer) must persist before the firmware latches an emergency [ms]. The firmware keeps it between 10 ms and its compiled value: it can only be shortened."
+      "tooltip": "How long a tilt (mechanical switch or accelerometer) must persist before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 1000 ms."
     },
     "stop_button_emergency_ms": {
       "label": "Stop button trip",
-      "tooltip": "How long the stop button must be held before the firmware latches an emergency [ms]. The firmware keeps it between 10 ms and its compiled value: it can only be shortened."
+      "tooltip": "How long the stop button must be held before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 250 ms."
     },
     "play_button_clear_emergency_ms": {
       "label": "Hold PLAY to clear emergency",
-      "tooltip": "How long PLAY must be held on the robot to clear a latched emergency [ms]. The firmware keeps it between its compiled value and 10 s: it can only be lengthened."
+      "tooltip": "How long PLAY must be held on the robot to clear a latched emergency [ms]. Longer is stricter. The firmware keeps it between 500 and 10000 ms."
     },
     "imu_cal_samples": {
       "label": "IMU Calibration Samples",
@@ -4112,12 +4116,12 @@
       "description": "Gyro-based differential yaw-rate loop running in the STM32 firmware. The values are pushed to the firmware at startup, which re-validates and clamps them."
     },
     "chargeLimits": {
-      "title": "Charge Limits",
-      "description": "Charge ceilings forwarded to the firmware. The firmware clamps them to its compiled board limits, so they can only be tightened."
+      "title": "Charge limits",
+      "description": "Charge ceilings sent to the STM32 firmware and stored in its flash, so they also apply before the ROS2 stack starts. The firmware keeps each value inside its safe envelope. Takes effect after a ROS2 restart."
     },
     "firmwareSafety": {
       "title": "Firmware safety limits",
-      "description": "Speed cap and emergency timings sent to the STM32 firmware every time the ROS2 stack connects to it. The firmware re-validates each value against its compiled limits: these settings can only make protection stronger. Takes effect after a ROS2 restart."
+      "description": "Speed cap, emergency timings and tilt threshold sent to the STM32 firmware and stored in its flash, so they also apply before the ROS2 stack starts. A value may be stricter or looser than the default, but the firmware never lets it leave its compiled safe envelope. Takes effect after a ROS2 restart."
     },
     "localizationGuard": {
       "title": "Localization Guard",
@@ -4151,6 +4155,28 @@
       "title": "Start-Pose Escape",
       "description": "Last-resort nudge when the robot stands on a keepout cell and every plan from its own pose is refused."
     }
+  },
+  "firmwareParams": {
+    "title": "Values applied by the firmware",
+    "description": "What the STM32 actually runs, as it reported it. A value the firmware had to move into its envelope is flagged; a value marked stored is kept in the board's flash and applies at power-on.",
+    "noData": "No report from the firmware yet. The ROS2 stack sends the parameters when it connects to the board.",
+    "incompatible": "The firmware on the board does not speak this protocol version: these values are not applied. Reflash the firmware.",
+    "bootDefaults": "The board started on its compiled defaults (nothing stored yet).",
+    "bootFlash": "The board started on the values stored in its flash.",
+    "bootErased": "The board found its parameter storage full or unreadable at start-up and rewrote it.",
+    "commitError": "The board could not write its flash: these values are lost at the next power cycle.",
+    "commitFull": "The board's parameter storage is full: it is rewritten at the next start-up.",
+    "recordsLeft": "Room for {{count}} more saves before the next rewrite.",
+    "colParameter": "Parameter",
+    "colApplied": "Applied",
+    "colRequested": "Requested",
+    "colRange": "Allowed range",
+    "colState": "State",
+    "stateStored": "Stored",
+    "stateNotStored": "Not stored yet",
+    "stateVolatile": "Not stored (measured)",
+    "stateClamped": "Moved into range",
+    "stateUnreported": "No report"
   },
   "fleetPage": {
     "betaTag": "Beta",

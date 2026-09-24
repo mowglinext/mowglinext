@@ -17,6 +17,7 @@
 #include "board.h"
 #include "adc.h"
 #include "charger.h"
+#include "fw_param_catalog.h"
 /******************************************************************************
  * Module Preprocessor Constants
  *******************************************************************************/
@@ -50,27 +51,25 @@ uint8_t  chargecontrol_is_charging  = 0;
 static CHARGER_STATE_e charger_state = CHARGER_STATE_IDLE;
 static float charge_end_voltage=BAT_CHARGE_CUTOFF_VOLTAGE ;
 
-/* Runtime charge ceiling (PKT_ID_SET_SAFETY_LIMITS). Seeded with the compile-time
- * board_defaults.h values, which stay the power-on fallback AND the hard upper
- * bound the wire can never exceed (see charger_clamp_*): the host can only LOWER
- * the charge envelope, never overcharge. An unconnected host runs these vetted
- * defaults. */
+/* Runtime charge ceiling (fw_params, protocol v7). Seeded with the compile-time
+ * board_defaults.h values; init_ROS() then applies the persisted value. Clamped
+ * to the absolute envelope of fw_param_catalog.h, whose top (29.4 V, 1.2 A) is
+ * the pack/charger limit: nothing on the wire can overcharge. */
 static volatile float g_max_charge_voltage = (float)MAX_CHARGE_VOLTAGE;
 static volatile float g_max_charge_current = (float)MAX_CHARGE_CURRENT;
 
-/* Lower-only clamp to (floor, compiled ceiling]. Non-finite is rejected upstream
- * in the packet handler; an out-of-range value here falls back to the compiled
- * ceiling (invalid) or is capped to it (too high) — never above it. */
+/* Defence in depth: fw_params already coerced the value into the envelope.
+ * Non-finite or non-positive input keeps the compiled default. */
 static float charger_clamp_voltage(float v) {
-  if (v <= 0.0f) return (float)MAX_CHARGE_VOLTAGE;
-  if (v < LOW_BAT_THRESHOLD) return (float)LOW_BAT_THRESHOLD;
-  if (v > (float)MAX_CHARGE_VOLTAGE) return (float)MAX_CHARGE_VOLTAGE;
+  if (!(v > 0.0f)) return (float)MAX_CHARGE_VOLTAGE;
+  if (v < FW_ENVELOPE_CHARGE_VOLTAGE_MIN) return FW_ENVELOPE_CHARGE_VOLTAGE_MIN;
+  if (v > FW_ENVELOPE_CHARGE_VOLTAGE_MAX) return FW_ENVELOPE_CHARGE_VOLTAGE_MAX;
   return v;
 }
 static float charger_clamp_current(float i) {
-  if (i <= 0.0f) return (float)MAX_CHARGE_CURRENT;
-  if (i < 0.1f) return 0.1f;
-  if (i > (float)MAX_CHARGE_CURRENT) return (float)MAX_CHARGE_CURRENT;
+  if (!(i > 0.0f)) return (float)MAX_CHARGE_CURRENT;
+  if (i < FW_ENVELOPE_CHARGE_CURRENT_MIN) return FW_ENVELOPE_CHARGE_CURRENT_MIN;
+  if (i > FW_ENVELOPE_CHARGE_CURRENT_MAX) return FW_ENVELOPE_CHARGE_CURRENT_MAX;
   return i;
 }
 

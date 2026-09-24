@@ -39,6 +39,7 @@ import { SettingsPreview } from "../components/settings/SettingsPreview.tsx";
 import { DisplayModeSection } from "../components/settings/DisplayModeSection.tsx";
 import { LogTimeZoneSection } from "../components/settings/LogTimeZoneSection.tsx";
 import { SettingsFieldCard } from "../components/settings/SettingsFieldCard.tsx";
+import { FirmwareParamsCard } from "../components/settings/FirmwareParamsCard.tsx";
 import {
     AREA_RECORDING_GROUP,
     BEHAVIOR_TREE_GROUP,
@@ -253,6 +254,7 @@ export const SettingsPage = () => {
                     <>
                         <SafetySection values={values} onChange={handleChange} />
                         {renderFieldCards(FIRMWARE_SAFETY_GROUP)}
+                        <FirmwareParamsCard />
                     </>
                 );
             case "obstacles":

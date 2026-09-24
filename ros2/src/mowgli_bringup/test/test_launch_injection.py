@@ -419,6 +419,7 @@ def test_navigation_launch_injects_dock_use_charger_detection() -> None:
         ("tilt_emergency_ms", 500, 300),
         ("stop_button_emergency_ms", 100, 50),
         ("play_button_clear_emergency_ms", 2000, 3000),
+        ("imu_inclination_threshold", 56, 48),
     ],
 )
 def test_mowgli_launch_passes_firmware_limits_to_hardware_bridge(
