@@ -79,3 +79,31 @@ describe("FirmwareParamsCard", () => {
         expect(screen.getByText("No report")).toBeInTheDocument();
     });
 });
+
+describe("FirmwareParamsCard names", () => {
+    it("shows a label, the parameter name and a description for every parameter", () => {
+        report = {
+            firmware_incompatible: false,
+            boot_source: 1,
+            last_commit: 2,
+            records_left: 29,
+            params: [
+                param({}),
+                param({ id: 2, name: "wheel_pid_kp", requested: 10, applied: 10 }),
+                param({ id: 15, name: "imu_gyro_bias_z", requested: 0.01, applied: 0.01, is_volatile: true }),
+            ],
+        };
+        render(<FirmwareParamsCard />);
+        // Editable setting: its settingsFields label + the raw name.
+        expect(screen.getByText("Tilt trip")).toBeInTheDocument();
+        expect(screen.getByText("tilt_emergency_ms")).toBeInTheDocument();
+        // Tuned elsewhere / measured: labels from firmwareParams.params.
+        expect(screen.getByText("Wheel PI proportional gain")).toBeInTheDocument();
+        expect(screen.getByText("wheel_pid_kp")).toBeInTheDocument();
+        expect(screen.getByText("Gyro bias (measured)")).toBeInTheDocument();
+        // Each row carries its description (tooltip icon, labelled by it).
+        expect(screen.getByLabelText(/must persist before the firmware latches/)).toBeInTheDocument();
+        expect(screen.getByLabelText(/Proportional gain of the per-wheel velocity loop/)).toBeInTheDocument();
+        expect(screen.getByLabelText(/At-rest gyro Z offset/)).toBeInTheDocument();
+    });
+});
