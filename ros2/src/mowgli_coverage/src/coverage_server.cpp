@@ -174,18 +174,11 @@ namespace
 
 constexpr double kSwathStep = 0.10;  // m between poses on a straight swath
 
-// Connector-outcome reporting (issue #499). Share of segment joins SPLIT into a
-// blade-off transit, at or above which the summary is logged at WARN instead of
-// INFO. 25 % is a judgement call, not a measured threshold: below it the odd
-// un-fittable join is normal on a concave field, above it the plan spends much
-// of its time on blade-off reorientations.
-//
 // The 2026-09-09 field bag measured 146 fallbacks in 168 joins with the old
 // two-pass apron; 2026-09-21 split 127 of 172 with the ring count on AUTO. With
 // pivot joins a join that fits no arc stays blade-on (a pivot join), so the
 // FALLBACK rate (every non-arc join) can legitimately stay high on a thin apron;
 // the SPLIT rate is what costs transits and is what the severity follows.
-constexpr double kConnectorSplitWarnPct = 25.0;
 // One format string, two severities — keeps the WARN and INFO variants from
 // drifting apart. A macro rather than a `constexpr const char*` so it expands to
 // a string LITERAL at each RCLCPP_* call site: the logging macros carry a
@@ -803,7 +796,7 @@ void CoverageServer::planCoverage()
       const double split_pct = 100.0 * static_cast<double>(connector_stats.split) / attempted;
       // Same text either way; only the severity changes, so a routine plan stays
       // at INFO and a plan that is mostly blade-off transits is impossible to miss.
-      if (split_pct >= kConnectorSplitWarnPct)
+      if (connectorSplitRateWarns(connector_stats))
       {
         RCLCPP_WARN(get_logger(),
                     MOWGLI_CONNECTOR_STATS_FMT,

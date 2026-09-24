@@ -2057,6 +2057,51 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   EXPECT_NEAR(subs.front().front().second, plan.rings.front().front().second, 1e-9);
 }
 
+// Evidence pin for the sub-paths FollowStrip actually receives, not a
+// production rejection rule. On the shipped five-pass, 0.16 m operation-width,
+// 0.18 m headland and 0.20 m connector/min-radius geometry, every split is a
+// blade-off transit and must remain bounded on the recorded operator area.
+TEST(CoverageContinuousPath, RecordedArea1ShippedGeometryBoundsBladeOffExecutorTransits)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr int kHeadlandPasses = 5;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kTurnRadius = 0.20;
+  constexpr double kStep = 0.03;
+
+  const auto plan = planBoustrophedon(
+      makeRecordedArea1(), kOpWidth, kHeadland, kHeadlandPasses, 0.0, -1.0, kMinSwath);
+  ASSERT_EQ(plan.rings.size(), static_cast<std::size_t>(kHeadlandPasses));
+  ASSERT_FALSE(plan.swaths.empty());
+  ASSERT_GE(plan.connector_clearance_boundary.size(), 3u);
+
+  // Mirror the launch-injected pivot limits from the shipped 0.60 x 0.45 m
+  // chassis at base_link x=0.18 with the 0.05 m footprint margin. The soft
+  // boundary band is floored at this circumscribed radius in
+  // robot_config_util.boundary_soft_margin().
+  mowgli_coverage::PivotJoinLimits pivot_limits;
+  pivot_limits.sweep_radius = std::hypot(0.18 + 0.60 / 2.0 + 0.05, 0.45 / 2.0 + 0.05);
+  pivot_limits.boundary_margin = pivot_limits.sweep_radius;
+  pivot_limits.recorded_boundary = recordedArea1Pts();
+
+  mowgli_coverage::ConnectorStats stats;
+  const auto subpaths = buildContinuousSubPaths(plan,
+                                                plan.connector_clearance_boundary,
+                                                kTurnRadius,
+                                                kTurnRadius,
+                                                kStep,
+                                                &stats,
+                                                plan.swath_turn_envelope,
+                                                pivot_limits);
+
+  ASSERT_GT(stats.attempted, 10u) << "fixture no longer exercises a non-trivial coverage plan";
+  EXPECT_LE(stats.split, 4u);
+  EXPECT_LE(static_cast<double>(stats.split) / static_cast<double>(stats.attempted), 0.20);
+  EXPECT_EQ(subpaths.size(), stats.split + 1u);
+  EXPECT_LE(subpaths.size(), 5u);
+}
+
 // ===========================================================================
 // RING DEDUP: a doubled leading vertex (points[0] == points[1]) is the common
 // OpenMower-export / hand-drawn-GUI-polygon defect. The zero-length edge makes
@@ -2564,6 +2609,24 @@ TEST(CoverageConnectorStats, OutcomesPartitionAttemptedJoins)
       << "arc/straight_kept/pivot/split must partition attempted — the fallback rate "
          "derived from them is otherwise nonsense";
   EXPECT_EQ(stats.pivot, 0u) << "pivot joins are opt-in: no limits, no pivot join";
+}
+
+TEST(CoverageConnectorStats, SplitWarningThresholdIncludesExactBoundary)
+{
+  mowgli_coverage::ConnectorStats stats;
+  EXPECT_FALSE(mowgli_coverage::connectorSplitRateWarns(stats));
+
+  stats = {.attempted = 4, .split = 0};
+  EXPECT_FALSE(mowgli_coverage::connectorSplitRateWarns(stats));
+
+  stats = {.attempted = 4, .split = 1};
+  EXPECT_TRUE(mowgli_coverage::connectorSplitRateWarns(stats));
+
+  stats = {.attempted = 100, .split = 24};
+  EXPECT_FALSE(mowgli_coverage::connectorSplitRateWarns(stats));
+
+  stats = {.attempted = 100, .split = 25};
+  EXPECT_TRUE(mowgli_coverage::connectorSplitRateWarns(stats));
 }
 
 // Counter sanity on a case whose outcome is hand-checkable, so a stuck
