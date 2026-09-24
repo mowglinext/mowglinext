@@ -4157,6 +4157,40 @@
     }
   },
   "firmwareParams": {
+    "params": {
+      "ticks_per_meter": {
+        "label": "Encoder ticks per metre",
+        "description": "Encoder scale used by the wheel PI and the odometry [ticks/m]. Calibrated by the drive tuning (Motors section)."
+      },
+      "wheel_pid_kp": {
+        "label": "Wheel PI proportional gain",
+        "description": "Proportional gain of the per-wheel velocity loop [PWM per m/s of error]. Set in the Motors section."
+      },
+      "wheel_pid_ki": {
+        "label": "Wheel PI integral gain",
+        "description": "Integral gain of the per-wheel velocity loop [PWM per m/s·s]; it is what pushes the wheel through the motor deadband. Set in the Motors section."
+      },
+      "wheel_pid_kd": {
+        "label": "Wheel PI derivative gain",
+        "description": "Derivative gain of the per-wheel velocity loop; 0 on this robot. Set in the Motors section."
+      },
+      "wheel_pid_integral_limit": {
+        "label": "Wheel PI integral limit",
+        "description": "Clamp on the integral term [PWM], anti-windup. Set in the Motors section."
+      },
+      "wheel_pid_pwm_per_mps": {
+        "label": "Wheel feedforward",
+        "description": "Open-loop PWM per m/s added before the PI correction. Calibrated by the drive tuning (Motors section)."
+      },
+      "imu_gyro_bias_z": {
+        "label": "Gyro bias (measured)",
+        "description": "At-rest gyro Z offset measured by the IMU calibration on the dock [rad/s] and subtracted by the firmware yaw loop. Re-measured on every calibration, never stored in flash."
+      },
+      "wheel_track": {
+        "label": "Wheel track",
+        "description": "Distance between the two drive wheels [m], used by the firmware to split a turn between the wheels. Set in the Hardware section."
+      }
+    },
     "title": "Values applied by the firmware",
     "description": "What the STM32 actually runs, as it reported it. A value the firmware had to move into its envelope is flagged; a value marked stored is kept in the board's flash and applies at power-on.",
     "noData": "No report from the firmware yet. The ROS2 stack sends the parameters when it connects to the board.",

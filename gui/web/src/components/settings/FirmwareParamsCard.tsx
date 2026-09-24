@@ -1,5 +1,6 @@
 import React from "react";
-import { Alert, Card, Space, Table, Tag, Typography } from "antd";
+import { Alert, Card, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { useTranslation } from "react-i18next";
 import { useFirmwareParams } from "../../hooks/useFirmwareParams.ts";
@@ -40,8 +41,37 @@ export const FirmwareParamsCard: React.FC = () => {
     const report = useFirmwareParams();
     const params = report?.params ?? [];
 
-    const label = (name: string | undefined) =>
-        t(`settingsFields.${name}.label`, { defaultValue: name ?? "" });
+    // Editable settings carry their label/tooltip under settingsFields; the
+    // parameters edited elsewhere (drive tuning, hardware) or measured (gyro
+    // bias) have theirs under firmwareParams.params.
+    const label = (name: string) =>
+        t(`settingsFields.${name}.label`, {
+            defaultValue: t(`firmwareParams.params.${name}.label`, { defaultValue: name }),
+        });
+    const description = (name: string) =>
+        t(`settingsFields.${name}.tooltip`, {
+            defaultValue: t(`firmwareParams.params.${name}.description`, { defaultValue: "" }),
+        });
+
+    const renderName = (name: string | undefined) => {
+        const key = name ?? "";
+        const help = description(key);
+        return (
+            <Space direction="vertical" size={0}>
+                <Space size={4}>
+                    <Text>{label(key)}</Text>
+                    {help && (
+                        <Tooltip title={help}>
+                            <InfoCircleOutlined aria-label={help} style={{ opacity: 0.6 }} />
+                        </Tooltip>
+                    )}
+                </Space>
+                <Text type="secondary" code style={{ fontSize: 11 }}>
+                    {key}
+                </Text>
+            </Space>
+        );
+    };
 
     const stateTag = (param: FirmwareParam) => {
         if (!param.reported) {
@@ -74,7 +104,7 @@ export const FirmwareParamsCard: React.FC = () => {
             title: t("firmwareParams.colParameter"),
             dataIndex: "name",
             key: "name",
-            render: (name: string) => label(name),
+            render: (name: string) => renderName(name),
         },
         {
             title: t("firmwareParams.colApplied"),

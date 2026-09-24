@@ -4157,6 +4157,40 @@
     }
   },
   "firmwareParams": {
+    "params": {
+      "ticks_per_meter": {
+        "label": "Ticks encodeur par mètre",
+        "description": "Échelle des encodeurs utilisée par la boucle PI des roues et l'odométrie [ticks/m]. Calibrée par le réglage de propulsion (section Moteurs)."
+      },
+      "wheel_pid_kp": {
+        "label": "Gain proportionnel PI roue",
+        "description": "Gain proportionnel de la boucle de vitesse de chaque roue [PWM par m/s d'erreur]. Se règle dans la section Moteurs."
+      },
+      "wheel_pid_ki": {
+        "label": "Gain intégral PI roue",
+        "description": "Gain intégral de la boucle de vitesse de chaque roue [PWM par m/s·s] ; c'est lui qui fait franchir la zone morte du moteur. Se règle dans la section Moteurs."
+      },
+      "wheel_pid_kd": {
+        "label": "Gain dérivé PI roue",
+        "description": "Gain dérivé de la boucle de vitesse de chaque roue ; 0 sur ce robot. Se règle dans la section Moteurs."
+      },
+      "wheel_pid_integral_limit": {
+        "label": "Limite intégrale PI roue",
+        "description": "Borne du terme intégral [PWM], anti-emballement. Se règle dans la section Moteurs."
+      },
+      "wheel_pid_pwm_per_mps": {
+        "label": "Anticipation roue",
+        "description": "PWM par m/s appliqué en boucle ouverte avant la correction PI. Calibré par le réglage de propulsion (section Moteurs)."
+      },
+      "imu_gyro_bias_z": {
+        "label": "Biais gyroscope (mesuré)",
+        "description": "Décalage du gyroscope Z au repos, mesuré par la calibration IMU sur la base [rad/s] et soustrait par la boucle de lacet du firmware. Remesuré à chaque calibration, jamais enregistré en flash."
+      },
+      "wheel_track": {
+        "label": "Voie des roues",
+        "description": "Distance entre les deux roues motrices [m], utilisée par le firmware pour répartir un virage entre les roues. Se règle dans la section Matériel."
+      }
+    },
     "title": "Valeurs appliquées par le firmware",
     "description": "Ce que le STM32 exécute réellement, tel qu'il l'a rapporté. Une valeur que le firmware a dû ramener dans son enveloppe est signalée ; une valeur marquée enregistrée est conservée dans la flash de la carte et s'applique dès la mise sous tension.",
     "noData": "Aucun rapport du firmware pour l'instant. La pile ROS2 envoie les paramètres quand elle se connecte à la carte.",
