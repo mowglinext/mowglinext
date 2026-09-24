@@ -758,7 +758,16 @@ private:
             // Safe to do here: the GUI's "mow this area" button calls
             // ~/start_in_area, which sets current_command itself and never
             // reaches this handler, so this cannot cancel a targeted request.
-            if (cmd == HighLevelControl::Request::COMMAND_START)
+            //
+            // EXCEPTION: not while parked in StopHoldSequence's IDLE
+            // (isResumableHoldState) — that is the operator's own "Pause" on a
+            // run still in progress, and pressing Resume/Start again must
+            // continue that SAME targeted area, not silently widen to the
+            // whole lawn. The charge-hold/emergency scenario above is
+            // unaffected: it publishes CHARGING/CRITICAL_BATTERY_CHARGING (or,
+            // once EndSession has run, IDLE_DOCKED), never plain IDLE.
+            if (cmd == HighLevelControl::Request::COMMAND_START &&
+                !isResumableHoldState(context_->last_high_level_status.state_name))
             {
               clearSingleAreaMode(*context_);
             }
