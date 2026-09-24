@@ -955,6 +955,42 @@
           "title": "Lift Recovery Mode",
           "default": false,
           "description": "Allow autonomous resume after a lift event (default: stay stopped until operator ack)."
+        },
+        "max_mps": {
+          "type": "number",
+          "title": "Max Wheel Speed",
+          "default": 0.5,
+          "description": "Runtime wheel-speed cap sent to the firmware [m/s]. The firmware clamps it to its compiled MAX_MPS, so this can only LOWER the cap."
+        },
+        "one_wheel_lift_emergency_ms": {
+          "type": "integer",
+          "title": "One-Wheel Lift Trip",
+          "default": 2000,
+          "description": "How long one wheel must stay lifted before the firmware latches an emergency [ms]. The firmware clamps it to [10, compiled value]: it can only be shortened."
+        },
+        "both_wheels_lift_emergency_ms": {
+          "type": "integer",
+          "title": "Both-Wheels Lift Trip",
+          "default": 1000,
+          "description": "How long both wheels must stay lifted before the firmware latches an emergency [ms]. The firmware clamps it to [10, compiled value]: it can only be shortened."
+        },
+        "tilt_emergency_ms": {
+          "type": "integer",
+          "title": "Tilt Trip",
+          "default": 500,
+          "description": "How long a tilt (mechanical switch or accelerometer) must persist before the firmware latches an emergency [ms]. The firmware clamps it to [10, compiled value]: it can only be shortened."
+        },
+        "stop_button_emergency_ms": {
+          "type": "integer",
+          "title": "Stop Button Trip",
+          "default": 100,
+          "description": "How long the stop button must be held before the firmware latches an emergency [ms]. The firmware clamps it to [10, compiled value]: it can only be shortened."
+        },
+        "play_button_clear_emergency_ms": {
+          "type": "integer",
+          "title": "Play Hold To Clear Emergency",
+          "default": 2000,
+          "description": "How long PLAY must be held on the robot to clear a latched emergency [ms]. The firmware clamps it to [compiled value, 10000]: it can only be lengthened."
         }
       }
     },

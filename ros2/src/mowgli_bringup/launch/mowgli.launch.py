@@ -204,6 +204,20 @@ def generate_launch_description() -> LaunchDescription:
             # Forward configured charge ceilings; firmware enforces its board limits.
             {"max_charge_voltage": float(robot_params.get("max_charge_voltage", 29.4))},
             {"max_charge_current": float(robot_params.get("max_charge_current", 1.2))},
+            # Runtime motion cap + e-stop timings, pushed to the STM32 in the
+            # same reconnect burst (SET_KINEMATICS / SET_SAFETY_LIMITS). Until
+            # these were injected the bridge always sent its own compiled-in
+            # defaults and the template / GUI values never reached the board.
+            {"max_mps": float(robot_params.get("max_mps", 0.5))},
+            {"one_wheel_lift_emergency_ms": int(robot_params.get(
+                "one_wheel_lift_emergency_ms", 2000))},
+            {"both_wheels_lift_emergency_ms": int(robot_params.get(
+                "both_wheels_lift_emergency_ms", 1000))},
+            {"tilt_emergency_ms": int(robot_params.get("tilt_emergency_ms", 500))},
+            {"stop_button_emergency_ms": int(robot_params.get(
+                "stop_button_emergency_ms", 100))},
+            {"play_button_clear_emergency_ms": int(robot_params.get(
+                "play_button_clear_emergency_ms", 2000))},
             # Pass dock pose from robot config for dock position anchoring
             {"dock_pose_x": float(robot_params.get("dock_pose_x", 0.0))},
             {"dock_pose_y": float(robot_params.get("dock_pose_y", 0.0))},

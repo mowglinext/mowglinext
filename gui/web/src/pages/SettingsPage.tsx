@@ -45,6 +45,7 @@ import {
     CHARGE_LIMITS_GROUP,
     DOCK_CALIBRATION_GROUP,
     DOCK_DETECTION_GROUP,
+    FIRMWARE_SAFETY_GROUP,
     LOCALIZATION_GUARD_GROUP,
     REVERSE_ESCAPE_GROUP,
     START_ESCAPE_GROUP,
@@ -248,7 +249,12 @@ export const SettingsPage = () => {
                     </>
                 );
             case "safety":
-                return <SafetySection values={values} onChange={handleChange} />;
+                return (
+                    <>
+                        <SafetySection values={values} onChange={handleChange} />
+                        {renderFieldCards(FIRMWARE_SAFETY_GROUP)}
+                    </>
+                );
             case "obstacles":
                 return (
                     <>

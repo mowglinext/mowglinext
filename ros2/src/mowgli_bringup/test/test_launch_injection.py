@@ -410,12 +410,27 @@ def test_navigation_launch_injects_dock_use_charger_detection() -> None:
 
 @pytest.mark.parametrize(
     "key,default,configured",
-    [("max_charge_voltage", 29.4, 28.5), ("max_charge_current", 1.2, 1.8)],
+    [
+        ("max_charge_voltage", 29.4, 28.5),
+        ("max_charge_current", 1.2, 1.8),
+        ("max_mps", 0.5, 0.35),
+        ("one_wheel_lift_emergency_ms", 2000, 1500),
+        ("both_wheels_lift_emergency_ms", 1000, 800),
+        ("tilt_emergency_ms", 500, 300),
+        ("stop_button_emergency_ms", 100, 50),
+        ("play_button_clear_emergency_ms", 2000, 3000),
+    ],
 )
-def test_mowgli_launch_passes_charge_limits_to_hardware_bridge(
+def test_mowgli_launch_passes_firmware_limits_to_hardware_bridge(
     key: str, default: float, configured: float
 ) -> None:
-    """Saved charge ceilings must reach the bridge; missing keys keep defaults."""
+    """Every runtime firmware limit the bridge pushes to the STM32 must come
+    from the robot config; missing keys keep the template default.
+
+    The bridge declares these parameters itself, so a key that is NOT injected
+    silently falls back to the bridge's hardcoded default and the operator's
+    setting never reaches the board (max_mps and the e-stop timings, until
+    this test existed)."""
     call = _find_node_call(_parse("mowgli.launch.py"), "hardware_bridge_node")
     assert call is not None
     parameters = next(kw.value for kw in call.keywords if kw.arg == "parameters")
@@ -430,10 +445,12 @@ def test_mowgli_launch_passes_charge_limits_to_hardware_bridge(
     expression = compile(ast.Expression(values[0]), "mowgli.launch.py", "eval")
     for robot_params, expected in [({}, default), ({key: configured}, configured)]:
         actual = eval(
-            expression, {"__builtins__": {}, "float": float},
+            expression, {"__builtins__": {}, "float": float, "int": int},
             {"robot_params": robot_params},
         )
-        assert isinstance(actual, float)
+        # The bridge declares the *_ms keys as integers and the rest as
+        # doubles; rclcpp rejects a value of the other type at startup.
+        assert type(actual) is type(default)
         assert actual == pytest.approx(expected)
 
 

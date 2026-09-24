@@ -82,20 +82,20 @@ It is the radius around a session dig point inside which FollowStrip skips cover
 | `blade_radius` (L194) | 0.09 | xacro `mowgli.launch.py:105` (`blade_link`) | Hardware | launch |
 | `tool_width` (L195) | 0.18 | `map_server.tool_width` `full_system.launch.py:426` (mow-progress stamp radius); `coverage_server.operation_width = tool_width − swath_overlap` `navigation.launch.py:924`. Fallback single-sourced as `DEFAULT_TOOL_WIDTH_M` (`robot_config_util.py:48`) — **Invariant 6** | Hardware | launch |
 
-### Runtime limits pushed to the STM32 — all currently INERT
+### Runtime limits pushed to the STM32
 
-`hardware_bridge_node.cpp:379,386–392` declares each of these, but **no launch file injects them**, so the yaml value never reaches the node. The compiled defaults are identical to the template today, so behaviour is correct — an operator *override* would be silently ignored.
+`mowgli.launch.py` injects each of these into `hardware_bridge_node`, which pushes them in its reconnect burst (`SET_KINEMATICS` / `SET_SAFETY_LIMITS`). The firmware clamps every field so the wire can only tighten protection. `test_launch_injection.py::test_mowgli_launch_passes_firmware_limits_to_hardware_bridge` pins the injection (until it existed, `max_mps` and the `*_emergency_ms` keys were declared by the node but never injected, so an operator override was silently ignored).
 
-| Key (L) | Default | Declared at | GUI | Life |
+| Key (L) | Default | Consumer · where read | GUI | Life |
 |---|---|---|---|---|
-| `max_mps` (L49) | 0.5 | `hardware_bridge_node.cpp:379` (`PACKET_ID_LL_SET_KINEMATICS`); also an input to the offline `compute_nav2_params.py:325` | no | INERT |
+| `max_mps` (L49) | 0.5 | `mowgli.launch.py` → `hardware_bridge_node` (`LL_SET_KINEMATICS`; firmware clamps ≤ compiled `MAX_MPS`); also an input to the offline `compute_nav2_params.py:325` | Safety | launch |
 | `max_charge_voltage` (L57) | 29.4 | `mowgli.launch.py` → `hardware_bridge_node` (`LL_SET_SAFETY_LIMITS`; firmware clamps ≤ compiled ceiling) | Battery | launch |
 | `max_charge_current` (L58) | 1.2 | `mowgli.launch.py` → `hardware_bridge_node` (same packet) | Battery | launch |
-| `one_wheel_lift_emergency_ms` (L59) | 2000 | `hardware_bridge_node.cpp:388` | no | INERT |
-| `both_wheels_lift_emergency_ms` (L60) | 1000 | `hardware_bridge_node.cpp:389` | no | INERT |
-| `tilt_emergency_ms` (L61) | 500 | `hardware_bridge_node.cpp:390` | no | INERT |
-| `stop_button_emergency_ms` (L62) | 100 | `hardware_bridge_node.cpp:391` | no | INERT |
-| `play_button_clear_emergency_ms` (L63) | 2000 | `hardware_bridge_node.cpp:392` | no | INERT |
+| `one_wheel_lift_emergency_ms` (L59) | 2000 | `mowgli.launch.py` → `hardware_bridge_node` (same packet; clamped to [10, compiled]) | Safety | launch |
+| `both_wheels_lift_emergency_ms` (L60) | 1000 | same | Safety | launch |
+| `tilt_emergency_ms` (L61) | 500 | same | Safety | launch |
+| `stop_button_emergency_ms` (L62) | 100 | same | Safety | launch |
+| `play_button_clear_emergency_ms` (L63) | 2000 | same (clamped to [compiled, 10000] — can only lengthen) | Safety | launch |
 
 ### Drive loops (both close in FIRMWARE — CLAUDE.md preamble, Option C)
 

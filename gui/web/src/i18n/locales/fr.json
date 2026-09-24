@@ -3904,6 +3904,30 @@
       "label": "Courant de charge max",
       "tooltip": "Plafond de courant de charge envoyé au firmware [A]. Le firmware le borne à la limite compilée de la carte : ce réglage ne peut que rendre la charge PLUS prudente."
     },
+    "max_mps": {
+      "label": "Vitesse de roue max",
+      "tooltip": "Plafond de vitesse des roues envoyé au firmware [m/s]. Le firmware le borne à son MAX_MPS compilé : ce réglage ne peut que BAISSER le plafond."
+    },
+    "one_wheel_lift_emergency_ms": {
+      "label": "Délai soulèvement d'une roue",
+      "tooltip": "Durée pendant laquelle une roue doit rester soulevée avant que le firmware déclenche l'arrêt d'urgence [ms]. Le firmware la garde entre 10 ms et sa valeur compilée : elle ne peut qu'être raccourcie."
+    },
+    "both_wheels_lift_emergency_ms": {
+      "label": "Délai soulèvement des deux roues",
+      "tooltip": "Durée pendant laquelle les deux roues doivent rester soulevées avant que le firmware déclenche l'arrêt d'urgence [ms]. Le firmware la garde entre 10 ms et sa valeur compilée : elle ne peut qu'être raccourcie."
+    },
+    "tilt_emergency_ms": {
+      "label": "Délai basculement",
+      "tooltip": "Durée pendant laquelle un basculement (contacteur mécanique ou accéléromètre) doit persister avant que le firmware déclenche l'arrêt d'urgence [ms]. Le firmware la garde entre 10 ms et sa valeur compilée : elle ne peut qu'être raccourcie."
+    },
+    "stop_button_emergency_ms": {
+      "label": "Délai bouton STOP",
+      "tooltip": "Durée d'appui sur le bouton STOP avant que le firmware déclenche l'arrêt d'urgence [ms]. Le firmware la garde entre 10 ms et sa valeur compilée : elle ne peut qu'être raccourcie."
+    },
+    "play_button_clear_emergency_ms": {
+      "label": "Appui PLAY pour lever l'urgence",
+      "tooltip": "Durée d'appui sur PLAY, sur le robot, pour lever un arrêt d'urgence verrouillé [ms]. Le firmware la garde entre sa valeur compilée et 10 s : elle ne peut qu'être allongée."
+    },
     "imu_cal_samples": {
       "label": "Échantillons de calibration IMU",
       "tooltip": "Nombre d'échantillons IMU moyennés pour une calibration du biais (hardware_bridge_node, déclenchée automatiquement sur la base)."
@@ -4090,6 +4114,10 @@
     "chargeLimits": {
       "title": "Limites de charge",
       "description": "Plafonds de charge transmis au firmware. Le firmware les borne aux limites compilées de la carte : ils ne peuvent être que resserrés."
+    },
+    "firmwareSafety": {
+      "title": "Limites de sécurité du firmware",
+      "description": "Plafond de vitesse et délais d'arrêt d'urgence envoyés au firmware STM32 à chaque connexion de la pile ROS2. Le firmware revalide chaque valeur par rapport à ses limites compilées : ces réglages ne peuvent que renforcer la protection. Pris en compte après un redémarrage de ROS2."
     },
     "localizationGuard": {
       "title": "Garde de localisation",

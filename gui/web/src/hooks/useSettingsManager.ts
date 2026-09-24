@@ -13,6 +13,7 @@ import {
     CHARGE_LIMITS_GROUP,
     DOCK_CALIBRATION_GROUP,
     DOCK_DETECTION_GROUP,
+    FIRMWARE_SAFETY_GROUP,
     LOCALIZATION_GUARD_GROUP,
     REVERSE_ESCAPE_GROUP,
     START_ESCAPE_GROUP,
@@ -221,6 +222,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // that mode is on. Listing them here is what keeps them out of
             // AdvancedSection's free-form editor, exactly as before.
             "lift_blade_resume_delay_sec", "lift_recovery_mode",
+            ...groupKeys(FIRMWARE_SAFETY_GROUP),
         ],
     },
     {

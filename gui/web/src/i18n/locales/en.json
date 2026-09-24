@@ -3904,6 +3904,30 @@
       "label": "Max Charge Current",
       "tooltip": "Charge current ceiling sent to the firmware [A]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
     },
+    "max_mps": {
+      "label": "Max wheel speed",
+      "tooltip": "Runtime wheel-speed cap sent to the firmware [m/s]. The firmware clamps it to its compiled MAX_MPS: this setting can only LOWER the cap."
+    },
+    "one_wheel_lift_emergency_ms": {
+      "label": "One-wheel lift trip",
+      "tooltip": "How long one wheel must stay lifted before the firmware latches an emergency [ms]. The firmware keeps it between 10 ms and its compiled value: it can only be shortened."
+    },
+    "both_wheels_lift_emergency_ms": {
+      "label": "Both-wheels lift trip",
+      "tooltip": "How long both wheels must stay lifted before the firmware latches an emergency [ms]. The firmware keeps it between 10 ms and its compiled value: it can only be shortened."
+    },
+    "tilt_emergency_ms": {
+      "label": "Tilt trip",
+      "tooltip": "How long a tilt (mechanical switch or accelerometer) must persist before the firmware latches an emergency [ms]. The firmware keeps it between 10 ms and its compiled value: it can only be shortened."
+    },
+    "stop_button_emergency_ms": {
+      "label": "Stop button trip",
+      "tooltip": "How long the stop button must be held before the firmware latches an emergency [ms]. The firmware keeps it between 10 ms and its compiled value: it can only be shortened."
+    },
+    "play_button_clear_emergency_ms": {
+      "label": "Hold PLAY to clear emergency",
+      "tooltip": "How long PLAY must be held on the robot to clear a latched emergency [ms]. The firmware keeps it between its compiled value and 10 s: it can only be lengthened."
+    },
     "imu_cal_samples": {
       "label": "IMU Calibration Samples",
       "tooltip": "Number of IMU samples averaged for one bias calibration (hardware_bridge_node, auto-triggered on the dock)."
@@ -4090,6 +4114,10 @@
     "chargeLimits": {
       "title": "Charge Limits",
       "description": "Charge ceilings forwarded to the firmware. The firmware clamps them to its compiled board limits, so they can only be tightened."
+    },
+    "firmwareSafety": {
+      "title": "Firmware safety limits",
+      "description": "Speed cap and emergency timings sent to the STM32 firmware every time the ROS2 stack connects to it. The firmware re-validates each value against its compiled limits: these settings can only make protection stronger. Takes effect after a ROS2 restart."
     },
     "localizationGuard": {
       "title": "Localization Guard",
