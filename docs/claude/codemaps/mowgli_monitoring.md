@@ -92,6 +92,7 @@
 | MQTT `<prefix>/area_boundary` | JSON `{datum_lat,datum_lon,areas:[{index,name,boundary,obstacles}],dock?:{x,y,yaw}}`, map-frame `[x,y]` metre offsets; `dock` (from `dock_pose_x/y/yaw`, read at startup) is omitted while they are all still 0/0/0 (`make_dock_pose()`) | out (retain=true), polled every 10 s via `on_timer()` | QoS 1 | `serialise_area_boundaries()`; only republished when the geometry changes — see [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md) |
 | MQTT `<prefix>/diagnostics` | JSON `[{name,level,message},…]` | out | QoS 1, retain=false | — |
 | MQTT `<prefix>/available` | plain text `"online"`/`"offline"` (LWT) | out — set pre-connect via `mosquitto_will_set`, republished on every (re)connect | QoS 1, retain=true | lets a consumer tell "offline" apart from "online but stuck" |
+| MQTT `<prefix>/host` | JSON `{ip}` — the bridge's own LAN IP (`detect_local_ip()`, a UDP-connect routing-table lookup, no traffic sent) | out, published once on the first successful connect (retained, so a reconnect need not repeat it) | QoS 1, retain=true | lets a consumer (e.g. Home Assistant) link to the mower's own GUI at `<ip>:4006` without the operator entering it; not published at all when there is no default route |
 | MQTT `<prefix>/command` | decimal **ASCII string** uint8 payload (e.g. `"1"`, not a raw byte) | in → `parse_command_payload()` → `on_mqtt_command()` | QoS 1 | any broker client |
 
 Published `DiagnosticStatus.name` / `hardware_id` pairs (order = array order, `diagnostics_node.cpp:310–318`):

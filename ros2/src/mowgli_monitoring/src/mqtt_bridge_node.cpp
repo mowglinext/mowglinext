@@ -34,6 +34,11 @@
 #include <string>
 #include <utility>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #ifdef MOWGLI_HAS_MOSQUITTO
 #include <chrono>
 #include <functional>
@@ -484,6 +489,7 @@ MqttBridgeNode::MqttBridgeNode(const rclcpp::NodeOptions& options)
     : Node("mqtt_bridge_node", options)
 {
   declare_parameters();
+  host_ip_ = detect_local_ip();
   create_mqtt_client();
   create_subscriptions();
   create_service_client();
@@ -495,10 +501,49 @@ MqttBridgeNode::MqttBridgeNode(std::unique_ptr<IMqttClient> client,
     : Node("mqtt_bridge_node", options), mqtt_client_(std::move(client))
 {
   declare_parameters();
+  host_ip_ = detect_local_ip();
   // Client is already provided — skip create_mqtt_client().
   create_subscriptions();
   create_service_client();
   create_timer();
+}
+
+std::string MqttBridgeNode::detect_local_ip()
+{
+  const int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0)
+  {
+    return "";
+  }
+
+  sockaddr_in remote{};
+  remote.sin_family = AF_INET;
+  remote.sin_port = htons(53);
+  // Any public address works: UDP connect() only consults the routing table to
+  // pick a local source address/interface, it sends nothing on the wire.
+  inet_pton(AF_INET, "8.8.8.8", &remote.sin_addr);
+
+  if (connect(sock, reinterpret_cast<sockaddr*>(&remote), sizeof(remote)) != 0)
+  {
+    close(sock);
+    return "";  // no default route at all — e.g. a fully static, isolated LAN
+  }
+
+  sockaddr_in local{};
+  socklen_t local_len = sizeof(local);
+  if (getsockname(sock, reinterpret_cast<sockaddr*>(&local), &local_len) != 0)
+  {
+    close(sock);
+    return "";
+  }
+  close(sock);
+
+  char buf[INET_ADDRSTRLEN];
+  if (!inet_ntop(AF_INET, &local.sin_addr, buf, sizeof(buf)))
+  {
+    return "";
+  }
+  return std::string{buf};
 }
 
 // ---------------------------------------------------------------------------
@@ -775,6 +820,11 @@ void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
 void MqttBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
 {
   pending_gnss_status_ = *msg;
+}
+
+std::string MqttBridgeNode::serialise_host(const std::string& ip)
+{
+  return "{\"ip\":\"" + json_escape(ip) + "\"}";
 }
 
 void MqttBridgeNode::on_pose(nav_msgs::msg::Odometry::ConstSharedPtr msg)
@@ -1085,6 +1135,18 @@ void MqttBridgeNode::on_timer()
       // delay delivery until a later timer callback.
       mqtt_client_->spin_once();
     }
+  }
+
+  if (!host_ip_published_ && !host_ip_.empty())
+  {
+    // Rarely changes and is cheap, so just publish once per node lifetime rather
+    // than tracking a "did it change" flag like <prefix>/area_boundary does. Kept
+    // out of the "just (re)connected" block above: this only needs to happen
+    // once, not on every reconnect, and after any discovery publish so a test (or
+    // a consumer) asserting "connecting publishes exactly the discovery config"
+    // is not also seeing this in the same batch.
+    host_ip_published_ = true;
+    mqtt_client_->publish(full_topic("host"), serialise_host(host_ip_), /*retain=*/true);
   }
 
   // Rate-limited publishes: each topic sends only its latest pending message, at most
