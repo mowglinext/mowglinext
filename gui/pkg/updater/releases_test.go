@@ -67,6 +67,66 @@ func TestReleaseOrderingByTrack(t *testing.T) {
 	}
 }
 
+// mowglinext#? / field report 2026-09-23: GitHub's bulk releases list can
+// report a release with an empty/stale assets array for hours after the
+// asset has actually finished uploading (confirmed separately via the
+// dedicated per-release assets endpoint). The scan must not gate on that
+// field — it must actually attempt the descriptor download and only skip a
+// release on a genuine 404 there.
+func TestReleaseWithStaleEmptyAssetsListStillDiscoveredViaDirectDownload(t *testing.T) {
+	d := fixture()
+	d.ReleaseTag = "deployment-fresh"
+	client := &http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "api.github.com" {
+			headers := []map[string]any{{"tag_name": d.ReleaseTag, "name": d.Source.Branch + " deployment-fresh", "prerelease": true}}
+			data, _ := json.Marshal(headers)
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+		}
+		data, _ := json.Marshal(d)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+	})}
+	g := GitHubSource{Client: client, Trusted: []string{d.Source.Repository}}
+	result, err := g.List(context.Background(), d.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || result[0].ReleaseTag != d.ReleaseTag {
+		t.Fatalf("release with stale empty assets list was not discovered: %+v", result)
+	}
+}
+
+// The complementary case: a release whose descriptor genuinely isn't there
+// yet (real 404) must be skipped quietly, not fail discovery of every other
+// release already found in the same scan.
+func TestReleaseMissingDescriptorIsSkippedNotFatal(t *testing.T) {
+	ready := fixture()
+	ready.ReleaseTag = "deployment-ready"
+	notReady := "deployment-not-ready"
+	client := &http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "api.github.com" {
+			headers := []map[string]any{
+				{"tag_name": notReady, "name": ready.Source.Branch + " deployment-not-ready", "prerelease": true},
+				{"tag_name": ready.ReleaseTag, "name": ready.Source.Branch + " deployment-ready", "prerelease": true},
+			}
+			data, _ := json.Marshal(headers)
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+		}
+		if strings.Contains(r.URL.Path, notReady) {
+			return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader(""))}, nil
+		}
+		data, _ := json.Marshal(ready)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+	})}
+	g := GitHubSource{Client: client, Trusted: []string{ready.Source.Repository}}
+	result, err := g.List(context.Background(), ready.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || result[0].ReleaseTag != ready.ReleaseTag {
+		t.Fatalf("expected only the ready release, got: %+v", result)
+	}
+}
+
 func TestProductionVersionOrderingPrecedesPaginationAndRetention(t *testing.T) {
 	base := fixture()
 	base.Source = Source{Repository: base.Source.Repository, Track: "stable", Branch: "main"}
