@@ -2583,9 +2583,9 @@
   },
   "settingsSafety": {
     "alertMessage": "Les réglages de sécurité protègent le robot et son environnement",
-    "alertDescription": "Le firmware STM32 est la seule autorité de sécurité : il coupe la lame en cas de soulèvement, d’inclinaison ou d’arrêt d’urgence, et rien de cela n’est configurable depuis cette page. Il n’y a rien à modifier ici.",
+    "alertDescription": "Le firmware STM32 est la seule autorité de sécurité : il coupe la lame en cas de soulèvement, d’inclinaison ou d’arrêt d’urgence, quoi que fasse la pile ROS2. Les réglages ci-dessous n’ajustent que ses délais et seuils, et le firmware garde chacun dans une enveloppe de sécurité compilée.",
     "firmwareOwnedTitle": "Géré par le firmware",
-    "firmwareOwnedDescription": "La détection de soulèvement et d’inclinaison, le verrou d’arrêt d’urgence et la coupure de la lame résident tous dans le firmware STM32, qui décide selon ses propres seuils physiques. L’interface ne peut ni les assouplir, ni les retarder, ni les contourner : aucun réglage n’est donc proposé ici.",
+    "firmwareOwnedDescription": "La détection de soulèvement et d’inclinaison, le verrou d’arrêt d’urgence et la coupure de la lame résident tous dans le firmware STM32. L’interface ne peut ni les contourner ni les désactiver : elle règle seulement la durée pendant laquelle un défaut doit persister avant le déclenchement, et le seuil du capteur de basculement, chacun dans les limites imposées par le firmware.",
     "temperatureThresholdsNote": "La température du moteur de lame est uniquement mesurée et rapportée — aucune couche de la pile n’arrête la lame en fonction de la température. Les seuils d’alerte et d’erreur utilisés par les diagnostics (motor_temp_warn_c et motor_temp_error_c, dans mowgli_monitoring/config/diagnostics.yaml) se modifient sur la page Paramètres."
   },
   "settingsObstacles": {

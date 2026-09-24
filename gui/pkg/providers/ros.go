@@ -75,6 +75,16 @@ var topicMap = map[string]topicDef{
 	"firmwareParams": {"/hardware_bridge/firmware_params", "mowgli_interfaces/msg/FirmwareParams"},
 }
 
+// TopicKeys returns every logical topic key the provider can subscribe to, so
+// the API layer can check that each one is also routable.
+func TopicKeys() []string {
+	keys := make([]string, 0, len(topicMap))
+	for key := range topicMap {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 // ---------------------------------------------------------------------------
 // RosSubscriber – single fan-out worker for one (topic, id) pair
 // ---------------------------------------------------------------------------

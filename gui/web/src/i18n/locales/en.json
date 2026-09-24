@@ -2587,9 +2587,9 @@
   },
   "settingsSafety": {
     "alertMessage": "Safety settings protect the robot and its surroundings",
-    "alertDescription": "The STM32 firmware is the sole safety authority: it cuts the blade on lift, tilt and emergency stop, and none of that is configurable from this page. There is nothing to edit here.",
+    "alertDescription": "The STM32 firmware is the sole safety authority: it cuts the blade on a lift, a tilt or an emergency stop, whatever the ROS2 stack does. The settings below only tune its timings and thresholds, and the firmware keeps each one inside a compiled safe envelope.",
     "firmwareOwnedTitle": "Handled by the firmware",
-    "firmwareOwnedDescription": "Lift and tilt detection, the emergency-stop latch and the blade cut-out all live in the STM32 firmware, which decides on its own physical thresholds. The GUI cannot relax, delay or bypass any of them, so no control is offered here.",
+    "firmwareOwnedDescription": "Lift and tilt detection, the emergency-stop latch and the blade cut-out all live in the STM32 firmware. The interface cannot bypass or disable them: it can only set how long a fault must persist before it trips, and the tilt sensor threshold, each within the limits the firmware enforces.",
     "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited on the Parameters page."
   },
   "settingsObstacles": {
