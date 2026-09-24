@@ -366,6 +366,26 @@ func TestReconcilePullFailureIsReportedAsErrorPhase(t *testing.T) {
 	assert.Empty(t, docker.created)
 }
 
+func TestReconcilePullFailureDuringReplacementPreservesExistingSidecar(t *testing.T) {
+	docker := &fakeServiceDocker{
+		found: true,
+		details: types.ContainerDetails{
+			ID: "existing", Running: true, Labels: map[string]string{remoteAccessSpecLabel: "old-hash"},
+		},
+		pullErr: errors.New("registry unreachable"),
+	}
+	p := newTestRemoteAccess(t, enabledRemoteConfig(), docker)
+
+	err := p.Reconcile(context.Background())
+
+	require.Error(t, err)
+	assert.Empty(t, docker.removed, "a failed pull must not remove the working sidecar")
+	assert.Empty(t, docker.created)
+	st := p.Status(context.Background())
+	assert.Equal(t, RemoteAccessError, st.Phase)
+	assert.Contains(t, st.Error, "registry unreachable")
+}
+
 func TestUpdateConfigNormalisesAndRejectsInvalidInput(t *testing.T) {
 	p := newTestRemoteAccess(t, DefaultRemoteAccessConfig(), &fakeServiceDocker{})
 
