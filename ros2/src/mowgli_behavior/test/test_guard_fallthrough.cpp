@@ -341,8 +341,11 @@ TEST(GuardFallthroughTest, PausingGuardsMarkTheHaltFirst)
   const std::string xml = ReadMainTree();
   ASSERT_FALSE(xml.empty());
 
-  for (const auto& [guard, reason] : std::vector<std::pair<std::string, std::string>>{
-           {"SensorSafetyGuard", "scan_stale"}, {"LocalizationGuard", "localization_degraded"}})
+  for (const auto& [guard, reason] :
+       std::vector<std::pair<std::string, std::string>>{{"SensorSafetyGuard", "scan_stale"},
+                                                        {"LocalizationGuard",
+                                                         "localization_degraded"},
+                                                        {"RainGuard", "rain"}})
   {
     const std::string block = ExtractGuardBlock(xml, guard);
     ASSERT_FALSE(block.empty()) << "Guard not found in main_tree.xml: " << guard;

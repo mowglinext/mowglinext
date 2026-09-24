@@ -681,7 +681,24 @@
                    out where the robot stands. -->
               <Fallback name="RainGuard">
                 <Inverter><IsNewRain/></Inverter>
-                <Sequence name="RainHandle">
+                <Sequence name="RainGuardHandler">
+                  <!-- FIRST child, same reasoning as SensorFaultHandler /
+                       LocalizationDegradedHandler: without it, every rain
+                       pause is charged to GetNextUnmowedArea's per-area
+                       no-progress budget (BTContext::kMaxAreaAttempts) —
+                       RainGuard was the one guard listed in
+                       test_guard_fallthrough.cpp's own "pausing guards"
+                       comment that never actually got this marker. Field
+                       2026-09-23: two rain events on the same area (each a
+                       genuine, real-progress pass — 2%->14%->25%->27%) were
+                       enough to exhaust the area's attempt budget and end
+                       the whole session with COVERAGE_FAILED_DOCKING,
+                       because a shower has nothing to do with the area
+                       being unmowable. Rain pauses are now exempt up to the
+                       same bounded kMaxGuardHaltedPasses every other guard
+                       shares (a pathological flap still eventually charges
+                       the area, same as scan_stale/localization_degraded). -->
+                  <MarkGuardHalt reason="rain"/>
                   <SetMowerEnabled enabled="false"/>
                   <StopMoving/>
                   <Fallback name="RainDockBranch">
