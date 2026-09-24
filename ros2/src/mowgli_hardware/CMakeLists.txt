@@ -223,6 +223,16 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware/stm32/ros_usbnode/include
   )
 
+  # The firmware's pure blade-intent policy is compiled here directly to
+  # verify emergency, recovery, explicit-command, and IDLE transitions.
+  ament_add_gtest(test_blade_emergency_policy
+    test/test_blade_emergency_policy.cpp
+  )
+  target_include_directories(test_blade_emergency_policy
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware/stm32/ros_usbnode/include
+  )
+
   # ---- test_cmd_vel_validation ----
   ament_add_gtest(test_cmd_vel_validation
     test/test_cmd_vel_validation.cpp

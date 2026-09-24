@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 uint8_t Emergency_State(void);
+uint32_t Emergency_Generation(void);
 void Emergency_SetState(uint8_t new_emergency_state);
 void Emergency_OnboardSensorFault(void);
 int Emergency_Tilt(void);

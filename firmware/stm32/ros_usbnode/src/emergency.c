@@ -32,6 +32,9 @@
  * is already atomic on Cortex-M3, but the read-modify-write |= is NOT, so
  * every OR is done under a __disable_irq guard (see emergency_set_bits). */
 static volatile uint8_t emergency_state = 0;
+/* Incremented on each transition from clear to latched, including a complete
+ * assert/release cycle that may occur between blade motor updates. */
+static volatile uint32_t emergency_generation = 0;
 static uint32_t stop_emergency_started = 0;
 static uint32_t blue_wheel_lift_emergency_started = 0;
 static uint32_t red_wheel_lift_emergency_started = 0;
@@ -113,6 +116,11 @@ uint8_t Emergency_State(void)
     return emergency_state | (I2C_OnboardHealthy() ? 0u : 0x40u);
 }
 
+uint32_t Emergency_Generation(void)
+{
+    return emergency_generation;
+}
+
 /**
  * @brief Set Emergency State (host/ROS API, runs in USB RX interrupt context)
  * @note  Only assert (any non-zero -> 1) or release (0). The former
@@ -127,7 +135,10 @@ void  Emergency_SetState(uint8_t new_emergency_state)
 {
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    if (new_emergency_state != 0) emergency_state |= 1u;
+    if (new_emergency_state != 0) {
+        if (emergency_state == 0) emergency_generation++;
+        emergency_state |= 1u;
+    }
     else if (I2C_OnboardHealthy() && emergency_physical_inputs_are_clear())
         emergency_state = 0;
     __set_PRIMASK(primask);
@@ -142,6 +153,7 @@ static void emergency_set_bits(uint8_t bits)
 {
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
+    if (emergency_state == 0 && bits != 0) emergency_generation++;
     emergency_state |= bits;
     __set_PRIMASK(primask);
 }

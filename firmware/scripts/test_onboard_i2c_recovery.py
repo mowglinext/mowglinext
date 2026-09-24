@@ -110,6 +110,7 @@ static uint8_t test_physical_inputs_clear = 1;
 static uint8_t emergency_physical_inputs_are_clear(void) {
     return test_physical_inputs_clear && !I2C_TestZLowINT();
 }
+static volatile uint32_t emergency_generation;
 '''
 
 TEST = r'''
@@ -124,7 +125,7 @@ static void reset(void) {
     memset(registers, 0, sizeof(registers)); registers[LIS3DH_WHO_AM_I] = LIS3DH_ID;
     tick=ipsr=primask=0; mode=GPIO_MODE_AF_OD; outputs=GPIO_PIN_6|GPIO_PIN_7;
     pulses=stops=stuck_sda=stuck_scl=release_after=busy=fail_io=bad_write=io_calls=hal_init_fail=0;
-    emergency_state=0; test_physical_inputs_clear=1;
+    emergency_state=0; test_physical_inputs_clear=1; emergency_generation=0;
     memset((void *)&onboard_i2c_diag,0,sizeof(onboard_i2c_diag));
     I2C_Init();
 }
@@ -137,6 +138,11 @@ static void ready(void) {
 }
 int main(void) {
     ready();
+    assert(Emergency_Generation() == 0);
+    Emergency_SetState(1); assert(Emergency_Generation() == 1);
+    Emergency_SetState(0); assert(Emergency_Generation() == 1);
+    Emergency_SetState(1); assert(Emergency_Generation() == 2);
+    Emergency_SetState(0); assert(!Emergency_State());
     Emergency_SetState(1);
     test_physical_inputs_clear=0;
     Emergency_SetState(0); assert(Emergency_State());
@@ -247,6 +253,7 @@ def main():
     emergency = (FW / 'src/emergency.c').read_text()
     functions = ''.join(extract(emergency, signature) for signature in [
         'uint8_t Emergency_State(void)', 'void  Emergency_SetState(uint8_t',
+        'uint32_t Emergency_Generation(void)',
         'static void emergency_set_bits(uint8_t', 'void Emergency_OnboardSensorFault(void)'])
     with tempfile.TemporaryDirectory(prefix='onboard-i2c-') as directory:
         out = Path(directory)

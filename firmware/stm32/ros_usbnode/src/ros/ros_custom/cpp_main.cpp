@@ -26,6 +26,7 @@
 #include "charger.h"
 #include "drivemotor.h"
 #include "emergency.h"
+#include "blade_emergency_policy.hpp"
 #include "heartbeat_emergency_policy.hpp"
 #include "nbt.h"
 #include "panel.h"
@@ -254,6 +255,7 @@ static volatile float g_yaw_gyro_bias = 0.0f;
  * Blade motor control state
  * ---------------------------------------------------------------------------*/
 static volatile uint8_t target_blade_on_off = 0;
+static volatile uint32_t target_blade_emergency_generation = 0;
 static uint8_t blade_on_off = 0;
 static uint8_t blade_direction = 0;
 
@@ -662,6 +664,7 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     left_target_mps = right_target_mps = 0.0f;
     cmd_wz = 0.0f;
     blade_on_off = target_blade_on_off = 0;
+    target_blade_emergency_generation = Emergency_Generation();
     break;
   }
 
@@ -674,17 +677,21 @@ static void on_cmd_blade(const uint8_t *data, size_t len) {
   }
 
   const pkt_cmd_blade_t *pkt = reinterpret_cast<const pkt_cmd_blade_t *>(data);
-  /* Defense-in-depth: never arm the blade target while IDLE/docked. The
-   * authoritative gate is in motors_handler (which zeroes blade_on_off in
-   * IDLE every tick), but refusing to latch the target here keeps state
-   * consistent and avoids an instantaneous spin-up on the IDLE→MOWING edge.
-   * blade_dir is still accepted so direction is correct once mowing starts. */
-  if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
-    target_blade_on_off = 0;
-  } else {
-    target_blade_on_off = pkt->blade_on;
-  }
+  /* Bind each explicit request to the emergency generation it followed.
+   * Commands received during an emergency are rejected by the shared policy. */
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  const uint32_t emergency_generation = Emergency_Generation();
+  const bool emergency_active = Emergency_State() != 0u;
+  const BladeIntentDecision decision = decide_blade_intent(
+      target_blade_on_off, target_blade_emergency_generation, true,
+      pkt->blade_on, emergency_generation,
+      main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, emergency_active,
+      emergency_generation);
+  target_blade_on_off = decision.retained_request;
+  target_blade_emergency_generation = decision.request_generation;
   blade_direction = pkt->blade_dir;
+  __set_PRIMASK(primask);
 }
 
 /* Host -> Firmware reboot request. Sets reboot_flag so chatter_handler issues
@@ -840,21 +847,44 @@ extern "C" void motors_handler() {
     float snap_right_target = right_target_mps;
     float snap_cmd_wz = cmd_wz;
     uint8_t snap_target_blade = target_blade_on_off;
-    uint32_t snap_heartbeat = last_heartbeat_tick;
+    uint32_t snap_blade_generation = target_blade_emergency_generation;
     uint32_t snap_cmd_vel = last_cmd_vel_tick;
     float snap_ticks_per_meter = DRIVEMOTOR_GetTicksPerMeter();
+    uint32_t snap_emergency_generation = Emergency_Generation();
+    bool emergency_active = Emergency_State() != 0u;
+    bool idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
     __enable_irq();
 
-    blade_on_off = snap_target_blade;
+    /* Emergency and IDLE gates discard retained blade intent as well as
+     * forcing the output OFF, so clearing a gate cannot revive an older
+     * enable request. */
+    const BladeIntentDecision blade_decision = decide_blade_intent(
+        snap_target_blade, snap_blade_generation, false, 0u,
+        snap_emergency_generation, idle, emergency_active,
+        snap_emergency_generation);
+    blade_on_off = blade_decision.effective_output;
+    if (blade_decision.retained_request != snap_target_blade ||
+        blade_decision.request_generation != snap_blade_generation) {
+      const uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      const uint32_t current_generation = Emergency_Generation();
+      const bool emergency_active_now = Emergency_State() != 0u;
+      const bool idle_now = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
+      if (target_blade_on_off != 0u &&
+          (emergency_active_now || idle_now ||
+           target_blade_emergency_generation != current_generation)) {
+        target_blade_on_off = 0;
+        target_blade_emergency_generation = current_generation;
+      }
+      __set_PRIMASK(primask);
+    }
 
-    /* --- decide effective target ---
-     * Emergency or cmd_vel watchdog timeout overrides to a hard stop.
-     * Otherwise the snapshot value drives the PI loop below. */
+    /* --- decide effective drive target ---
+     * Emergency or cmd_vel watchdog timeout overrides the drive output. */
     bool hard_stop = false;
-    if (Emergency_State()) {
+    if (emergency_active) {
       hard_stop = true;
-      blade_on_off = 0;
-    } else if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
+    } else if (idle) {
       /* Re-assert the IDLE gate HERE — in the one place that actually
        * drives the wheels AND the blade — so the "never move / never
        * spin the blade while idle/docked" guarantee holds regardless of
@@ -1133,17 +1163,37 @@ extern "C" void motors_handler() {
     // be auto-cleared when heartbeats resume (on_heartbeat), instead of
     // stranding the robot. If a physical sensor is asserted, leave the flag
     // cleared so the latch needs an explicit operator release.
-    if (snap_heartbeat != 0 &&
-        (HAL_GetTick() - snap_heartbeat) > HEARTBEAT_TIMEOUT_MS) {
+    const uint32_t heartbeat_primask = __get_PRIMASK();
+    __disable_irq();
+    const uint32_t current_heartbeat = last_heartbeat_tick;
+    if (current_heartbeat != 0u &&
+        (HAL_GetTick() - current_heartbeat) > HEARTBEAT_TIMEOUT_MS) {
       if (any_physical_emergency()) {
         heartbeat_only_latch = false;
       } else if (!Emergency_State()) {
         heartbeat_only_latch = true;
       }
       Emergency_SetState(1);
+      target_blade_on_off = 0;
+      target_blade_emergency_generation = Emergency_Generation();
+      blade_on_off = 0;
     }
+    __set_PRIMASK(heartbeat_primask);
 
+    /* Close the interrupt window between the earlier snapshot and the motor
+     * request. A new emergency generation, emergency state, IDLE transition,
+     * or explicit OFF command must still force this cycle's output OFF. */
+    const uint32_t output_primask = __get_PRIMASK();
+    __disable_irq();
+    const uint32_t output_generation = Emergency_Generation();
+    if (Emergency_State() != 0u ||
+        main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
+        target_blade_on_off == 0u ||
+        target_blade_emergency_generation != output_generation) {
+      blade_on_off = 0;
+    }
     BLADEMOTOR_Set(blade_on_off, blade_direction);
+    __set_PRIMASK(output_primask);
   }
 }
 
