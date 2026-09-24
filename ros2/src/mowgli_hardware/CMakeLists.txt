@@ -213,6 +213,16 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware/stm32/ros_usbnode/include
   )
 
+  # The firmware's pure physical-input clear policy is compiled here directly
+  # so each safety input is covered without physical hardware.
+  ament_add_gtest(test_emergency_clear_policy
+    test/test_emergency_clear_policy.cpp
+  )
+  target_include_directories(test_emergency_clear_policy
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../firmware/stm32/ros_usbnode/include
+  )
+
   # ---- test_cmd_vel_validation ----
   ament_add_gtest(test_cmd_vel_validation
     test/test_cmd_vel_validation.cpp

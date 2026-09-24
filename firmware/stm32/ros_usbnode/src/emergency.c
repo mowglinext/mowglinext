@@ -22,6 +22,7 @@
 #include "board.h"
 #include "main.h"
 #include "i2c.h"
+#include "emergency_clear_policy.h"
 
 //#define EMERGENCY_DEBUG 1
 
@@ -38,6 +39,19 @@ static uint32_t both_wheels_lift_emergency_started = 0;
 static uint32_t tilt_emergency_started = 0;
 static uint32_t accelerometer_int_emergency_started = 0;
 static uint32_t play_button_started = 0;
+
+static uint8_t emergency_physical_inputs_are_clear(void)
+{
+    const EmergencyPhysicalInputs inputs = {
+        (uint8_t)Emergency_StopButtonYellow(),
+        (uint8_t)Emergency_StopButtonWhite(),
+        (uint8_t)Emergency_WheelLiftBlue(),
+        (uint8_t)Emergency_WheelLiftRed(),
+        (uint8_t)Emergency_Tilt(),
+        (uint8_t)Emergency_LowZAccelerometer(),
+    };
+    return emergency_physical_inputs_clear(inputs);
+}
 
 /* Runtime emergency-sensor timeouts [ms] (PKT_ID_SET_SAFETY_LIMITS). Seeded with
  * the compile-time board_defaults values, which stay the power-on fallback so an
@@ -114,7 +128,8 @@ void  Emergency_SetState(uint8_t new_emergency_state)
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
     if (new_emergency_state != 0) emergency_state |= 1u;
-    else if (I2C_OnboardHealthy() && !I2C_TestZLowINT()) emergency_state = 0;
+    else if (I2C_OnboardHealthy() && emergency_physical_inputs_are_clear())
+        emergency_state = 0;
     __set_PRIMASK(primask);
 }
 
@@ -328,25 +343,24 @@ void EmergencyController(void)
         tilt_emergency_started = 0;
     }
 
-    if (emergency_state && play_button)
-    {
-        if(play_button_started == 0)
-        {
-            play_button_started = now;
-        }
-        else
-        {
-            if (now - play_button_started >= g_play_clear_ms) {
-                Emergency_SetState(0);
-                debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - manual reset\r\n");
-				StatusLEDUpdate();
-                do_chirp=1;
-            }
-        }
-    }
-    else
-    {
+    const EmergencyPhysicalInputs physical_inputs = {
+        stop_button_yellow,
+        stop_button_white,
+        wheel_lift_blue,
+        wheel_lift_red,
+        tilt,
+        accelerometer_int_triggered,
+    };
+    if (emergency_play_clear_hold_step(
+            now, g_play_clear_ms, (uint8_t)play_button, emergency_state,
+            physical_inputs, &play_button_started)) {
+        Emergency_SetState(0);
         play_button_started = 0;
+        if (Emergency_State() == 0) {
+            debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - manual reset\r\n");
+            StatusLEDUpdate();
+            do_chirp=1;
+        }
     }
     /* play buzzer when emergency every 5s*/
     if(Emergency_State() && ((HAL_GetTick()-l_u32timestamp) > 5000)){
