@@ -930,13 +930,13 @@
           "type": "number",
           "title": "Max Charge Voltage",
           "default": 29.4,
-          "description": "Charge voltage ceiling sent to the firmware [V]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+          "description": "Charge voltage ceiling sent to the STM32 [V] and stored in its flash. The firmware keeps it inside [25.2, 29.4] V: 29.4 V is the pack limit and can never be exceeded."
         },
         "max_charge_current": {
           "type": "number",
           "title": "Max Charge Current",
           "default": 1.2,
-          "description": "Charge current ceiling sent to the firmware [A]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+          "description": "Charge current ceiling sent to the STM32 [A] and stored in its flash. The firmware keeps it inside [0.1, 1.2] A: no current above 1.2 A has been validated on the board."
         }
       }
     },
@@ -960,37 +960,43 @@
           "type": "number",
           "title": "Max Wheel Speed",
           "default": 0.5,
-          "description": "Runtime wheel-speed cap sent to the firmware [m/s]. The firmware clamps it to its compiled MAX_MPS, so this can only LOWER the cap."
+          "description": "Wheel-speed cap sent to the STM32 [m/s] and stored in its flash. The firmware keeps it inside [0.1, 0.6] m/s."
         },
         "one_wheel_lift_emergency_ms": {
           "type": "integer",
           "title": "One-Wheel Lift Trip",
           "default": 2000,
-          "description": "How long one wheel must stay lifted before the firmware latches an emergency [ms]. The firmware clamps it to [10, compiled value]: it can only be shortened."
+          "description": "How long one wheel must stay lifted before the firmware latches an emergency [ms]. Stored in the board's flash; the firmware keeps it inside [10, 5000] ms."
         },
         "both_wheels_lift_emergency_ms": {
           "type": "integer",
           "title": "Both-Wheels Lift Trip",
           "default": 1000,
-          "description": "How long both wheels must stay lifted before the firmware latches an emergency [ms]. The firmware clamps it to [10, compiled value]: it can only be shortened."
+          "description": "How long both wheels must stay lifted before the firmware latches an emergency [ms]. Stored in the board's flash; the firmware keeps it inside [10, 3000] ms."
         },
         "tilt_emergency_ms": {
           "type": "integer",
           "title": "Tilt Trip",
           "default": 500,
-          "description": "How long a tilt (mechanical switch or accelerometer) must persist before the firmware latches an emergency [ms]. The firmware clamps it to [10, compiled value]: it can only be shortened."
+          "description": "How long a tilt (mechanical switch or accelerometer) must persist before the firmware latches an emergency [ms]. Stored in the board's flash; the firmware keeps it inside [10, 1000] ms."
         },
         "stop_button_emergency_ms": {
           "type": "integer",
           "title": "Stop Button Trip",
           "default": 100,
-          "description": "How long the stop button must be held before the firmware latches an emergency [ms]. The firmware clamps it to [10, compiled value]: it can only be shortened."
+          "description": "How long the stop button must be held before the firmware latches an emergency [ms]. Stored in the board's flash; the firmware keeps it inside [10, 250] ms."
         },
         "play_button_clear_emergency_ms": {
           "type": "integer",
           "title": "Play Hold To Clear Emergency",
           "default": 2000,
-          "description": "How long PLAY must be held on the robot to clear a latched emergency [ms]. The firmware clamps it to [compiled value, 10000]: it can only be lengthened."
+          "description": "How long PLAY must be held on the robot to clear a latched emergency [ms]. Stored in the board's flash; the firmware keeps it inside [500, 10000] ms."
+        },
+        "imu_inclination_threshold": {
+          "type": "integer",
+          "title": "Tilt Sensor Threshold",
+          "default": 56,
+          "description": "Onboard LIS3DH tilt-interrupt threshold (register INT1_THS). Larger allows more inclination before the tilt emergency. Stored in the board's flash; the firmware keeps it inside [44, 64] (0x2C-0x40). 56 (0x38) is stricter than the stock firmware's 44."
         }
       }
     },

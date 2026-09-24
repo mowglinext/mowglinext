@@ -61,6 +61,7 @@
     "imu_cal_auto_rest_sec": "number",
     "imu_cal_periodic_recal_sec": "number",
     "imu_cal_samples": "integer",
+    "imu_inclination_threshold": "integer",
     "imu_x": "number",
     "imu_y": "number",
     "imu_yaw": "number",

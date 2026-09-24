@@ -416,10 +416,11 @@ struct LlCmdVel {
 | 0x50 | LL_CMD_VEL | Pi → STM32 | Motor velocity commands |
 | 0x51 | LL_CMD_BLADE | Pi → STM32 | Blade motor control |
 | 0x52 | LL_REBOOT | Pi → STM32 | Reboot the board (guarded by a magic byte) |
-| 0x54 / 0x55 | LL_SET_DRIVE_PID / LL_SET_YAW_PID | Pi → STM32 | Runtime tuning of the firmware wheel-velocity and yaw-rate loops |
-| 0x56 / 0x57 | LL_SET_KINEMATICS / LL_SET_SAFETY_LIMITS | Pi → STM32 | Runtime max-speed + wheel base; charge ceiling + e-stop timeouts |
+| 0x58 | LL_SET_PARAM | Pi → STM32 | Set one runtime firmware parameter (wheel/yaw loops, speed cap, wheel base, charge ceiling, e-stop timings, tilt threshold) |
+| 0x59 / 0x5A | LL_GET_PARAM / LL_PARAM_COMMIT | Pi → STM32 | Ask for the applied values; persist the set in the board's flash |
+| 0x13 / 0x14 | LL_PARAM_VALUE / LL_PARAM_STORE_STATUS | STM32 → Pi | Applied value + envelope per parameter; flash persistence state (→ `/hardware_bridge/firmware_params`) |
 
-The wire protocol is versioned: `kMowgliProtocolVersion` in `ll_datatypes.hpp` must match what the firmware reports through the config handshake, or `PreFlightCheck` blocks mowing.
+Runtime parameters (protocol v7) are coerced by the firmware into an absolute envelope and stored in its flash, so the board runs them from power-on, before ROS2 connects. The wire protocol is versioned: `kMowgliProtocolVersion` in `ll_datatypes.hpp` must match what the firmware reports through the config handshake, or `PreFlightCheck` blocks mowing.
 
 #### Data Flow Diagrams
 
@@ -634,7 +635,7 @@ wheel_odometry:
     publish_tf: false         # fusion_graph_node owns odom → base_footprint
 ```
 On the live robot the equivalent values reach `hardware_bridge_node` (and the
-STM32, via `LL_SET_KINEMATICS`) from `mowgli_robot.yaml` — `ticks_per_meter` and
+STM32, via `LL_SET_PARAM`) from `mowgli_robot.yaml` — `ticks_per_meter` and
 `wheel_track` — which is the file calibration writes back to.
 
 #### 3b. navsat_to_absolute_pose_node
@@ -809,7 +810,7 @@ installed file) and passes it on the `xacro` command line, so the yaml — not t
 (measured on a YardForce 500):
 
 - **Chassis:** 0.60 m long × 0.40 m wide × 0.19 m tall, geometric centre 0.18 m ahead of `base_link` (rear bumper −0.12 m, front bumper +0.48 m). Nav2's footprint is derived from these.
-- **Drive wheels (rear):** 0.04475 m radius, 0.04 m width, 0.325 m track (centre-to-centre). `wheel_track` is also pushed to the STM32 via `LL_SET_KINEMATICS` and must match the firmware's assumption.
+- **Drive wheels (rear):** 0.04475 m radius, 0.04 m width, 0.325 m track (centre-to-centre). `wheel_track` is also pushed to the STM32 via `LL_SET_PARAM` and must match the firmware's assumption.
 - **Casters:** front pair, 0.03 m radius, 0.36 m track
 - **Ground clearance:** `base_link` sits exactly one wheel radius above ground
 - **Blade:** 0.09 m radius disc, 0.01 m height (under base_link); `tool_width` = 2 × `blade_radius` = 0.18 m

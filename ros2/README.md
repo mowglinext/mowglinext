@@ -962,10 +962,11 @@ Packet IDs (from `src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp`)
 | `0x50` | Pi -> STM32 | Velocity command (linear x, angular z) |
 | `0x51` | Pi -> STM32 | Blade motor control (enable / disable) |
 | `0x52` | Pi -> STM32 | Reboot the board (`NVIC_SystemReset`) |
-| `0x54` | Pi -> STM32 | Drive (per-wheel) PID gains |
-| `0x55` | Pi -> STM32 | Firmware yaw-rate loop gains |
-| `0x56` | Pi -> STM32 | Runtime kinematics: max wheel speed cap + wheel base |
-| `0x57` | Pi -> STM32 | Runtime safety limits: charge ceiling + e-stop timeouts |
+| `0x58` | Pi -> STM32 | Set one runtime firmware parameter (wheel/yaw loops, speed cap, wheel base, charge ceiling, e-stop timings, tilt threshold) |
+| `0x59` / `0x5A` | Pi -> STM32 | Request parameter reports / persist the set in the board's flash |
+| `0x13` / `0x14` | STM32 -> Pi | Applied value + envelope per parameter / flash store status (→ `/hardware_bridge/firmware_params`) |
+
+Protocol v7 retired `0x54`–`0x57`. The firmware coerces each parameter into an absolute envelope (`fw_param_catalog.h`) and stores the set in flash, so it applies from power-on.
 
 Both the wheel-velocity loop **and** the yaw-rate loop run in STM32 firmware; ROS2 sends
 `cmd_vel` through unshaped (the former host-side angular-rate PI was removed in 2026-07).

@@ -19,10 +19,9 @@ int Emergency_WheelLiftRed(void);
 int Emergency_LowZAccelerometer(void);
 void EmergencyController(void);
 void Emergency_Init(void);
-/* Runtime emergency-sensor timeouts (PKT_ID_SET_SAFETY_LIMITS). The four trip
- * timeouts clamp LOWER-ONLY to their compiled board_defaults value (faster
- * e-stop); play_clear clamps HIGHER-ONLY (harder to un-latch). Compile-time
- * values stay the power-on fallback. */
+/* Runtime emergency-sensor timeouts (fw_params, protocol v7). Each is clamped
+ * to its absolute envelope in fw_param_catalog.h; the compile-time values are
+ * the default when no persisted or host value exists. */
 void emergency_set_timeouts(uint32_t one_wheel_lift_ms,
                             uint32_t both_wheels_lift_ms, uint32_t tilt_ms,
                             uint32_t stop_button_ms, uint32_t play_clear_ms);

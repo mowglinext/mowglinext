@@ -17,7 +17,7 @@ namespace mowgli_hardware
 
 using TimerDuration = std::chrono::nanoseconds;
 
-// Mirrors the firmware's PKT_ID_SET_KINEMATICS wheel-base clamp. Keeping the
+// Mirrors the firmware's FW_PARAM_WHEEL_BASE envelope (fw_param_catalog.h). Keeping the
 // host in this range prevents host odometry and firmware inverse kinematics
 // from silently using different geometry.
 inline constexpr double kMinRuntimeWheelTrackM = 0.15;

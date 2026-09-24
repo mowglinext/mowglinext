@@ -45,6 +45,7 @@
 // ros
 #include "cpp_main.h"
 #include "ringbuffer.h"
+#include "fw_params.h"
 
 static void WATCHDOG_vInit(void);
 static void WATCHDOG_Refresh(void);
@@ -493,6 +494,10 @@ int main(void)
   LED_Init();
   BOOT_BlinkResetCause(g_boot_reset_csr);
   DB_TRACE(" * LED initialized\r\n");
+  // Runtime parameters: compiled defaults, then the values persisted in flash.
+  // Must run before WATCHDOG_vInit(): it may erase the parameter log, which
+  // blocks far longer than the window watchdog allows.
+  fw_params_init();
   TIM2_Init();
   ADC_Charging_Init();
   WATCHDOG_LoadBootBreadcrumb();

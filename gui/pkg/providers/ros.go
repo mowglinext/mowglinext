@@ -70,6 +70,9 @@ var topicMap = map[string]topicDef{
 	// 1 Hz per-session coverage sets (completed / attempted / excluded areas)
 	// for the fleet coordinator on every member's GUI (docs/MULTI_ROBOT.md).
 	"coverageSession": {"/behavior_tree_node/coverage_session", "mowgli_interfaces/msg/CoverageSession"},
+	// Latched: what the STM32 actually runs for every runtime parameter, its
+	// envelope and whether it is persisted in the board's flash (protocol v7).
+	"firmwareParams": {"/hardware_bridge/firmware_params", "mowgli_interfaces/msg/FirmwareParams"},
 }
 
 // ---------------------------------------------------------------------------

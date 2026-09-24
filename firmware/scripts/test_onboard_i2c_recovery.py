@@ -158,6 +158,20 @@ int main(void) {
     assert(I2C_platform_read(&I2C_Handle,15,&value,1)==-1);
     assert(io_calls==calls && primask==1); ipsr=primask=0;
 
+    // A runtime tilt-threshold change (fw_params) is written and verified from
+    // the POLL state, so the once-a-second register audit keeps passing: no
+    // sensor fault, no emergency, INT1 routing (CTRL3) never disabled.
+    ready(); I2C_Onboard_SetInclinationThreshold(0x2C); advance(40);
+    assert(registers[LIS3DH_INT1_THS] == 0x2C && registers[LIS3DH_CTRL_REG3] == 0x40);
+    assert(I2C_OnboardHealthy() && !Emergency_State());
+    advance(3000); assert(I2C_OnboardHealthy() && !Emergency_State());
+    // Queued before setup completes: applied once POLL is reached.
+    reset(); I2C_Onboard_SetInclinationThreshold(0x30); advance(120);
+    assert(registers[LIS3DH_INT1_THS] == 0x30 && I2C_OnboardHealthy() && !Emergency_State());
+    // Restore the default for the scenarios below (sensor_config outlives I2C_Init).
+    I2C_Onboard_SetInclinationThreshold(IMU_ONBOARD_INCLINATION_THRESHOLD); advance(40);
+    assert(registers[LIS3DH_INT1_THS] == IMU_ONBOARD_INCLINATION_THRESHOLD);
+
     // Every possible slave release pulse, STOP, verified configuration and
     // successful fresh INT1_SRC required; recovery never clears the latch.
     for (unsigned release=1; release<=9; ++release) {

@@ -40,6 +40,11 @@ namespace mowgli_hardware
 // the bridge can report which firmware main-loop section was active when the
 // WWDG fired. The same v3 diagnostic stack also uses the config handshake
 // flags byte so the GUI can toggle optional firmware diagnostics on demand.
+// Protocol v7 replaces the four per-group runtime packets (0x54-0x57) with the
+// generic SET_PARAM / GET_PARAM / PARAM_COMMIT protocol: every firmware
+// parameter has a stable id (FirmwareParamId below, mirroring
+// fw_param_catalog.h), the firmware reports the value it applied, and it
+// persists the set in flash so it applies before the host connects.
 //
 // This is the COMPATIBILITY KEY: the bridge sends PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ
 // on every (re)connect and the firmware answers with its own
@@ -48,7 +53,7 @@ namespace mowgli_hardware
 // formats and the operator must reflash. Bump this in lockstep with
 // MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h when an incompatible wire
 // change requires a hard compatibility break.
-static constexpr uint8_t kMowgliProtocolVersion = 6u;
+static constexpr uint8_t kMowgliProtocolVersion = 7u;
 
 // ---------------------------------------------------------------------------
 // Packet type identifiers
@@ -64,18 +69,75 @@ enum PacketId : uint8_t
   PACKET_ID_LL_RESET_CAUSE = 0x06,  ///< STM32 → Pi: current boot reset cause
   PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ = 0x11,  ///< Bidirectional: config request
   PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP = 0x12,  ///< Bidirectional: config response
+  PACKET_ID_LL_PARAM_VALUE = 0x13,  ///< STM32 → Pi: one parameter's applied value
+  PACKET_ID_LL_PARAM_STORE_STATUS = 0x14,  ///< STM32 → Pi: flash persistence state
   PACKET_ID_LL_HEARTBEAT = 0x42,  ///< Pi → STM32: heartbeat
   PACKET_ID_LL_HIGH_LEVEL_STATE = 0x43,  ///< Pi → STM32: high-level state
   PACKET_ID_LL_CMD_VEL = 0x50,  ///< Pi → STM32: velocity command (extension)
   PACKET_ID_LL_BLADE_STATUS = 0x05,  ///< STM32 → Pi: blade motor status
   PACKET_ID_LL_CMD_BLADE = 0x51,  ///< Pi → STM32: blade motor control
   PACKET_ID_LL_REBOOT = 0x52,  ///< Pi → STM32: reboot the board (NVIC_SystemReset)
-  PACKET_ID_LL_SET_DRIVE_PID =
-      0x54,  ///< Pi → STM32: drive-motor runtime tuning (PID/FF + ticks_per_meter)
-  PACKET_ID_LL_SET_YAW_PID = 0x55,  ///< Pi → STM32: firmware yaw-rate loop tuning (Option C)
-  PACKET_ID_LL_SET_KINEMATICS = 0x56,  ///< Pi → STM32: runtime max-speed cap + wheel base
-  PACKET_ID_LL_SET_SAFETY_LIMITS = 0x57,  ///< Pi → STM32: runtime charge ceiling + e-stop timeouts
+  // 0x54-0x57 (per-group runtime packets) were retired in protocol v7.
+  PACKET_ID_LL_SET_PARAM = 0x58,  ///< Pi → STM32: set one runtime parameter
+  PACKET_ID_LL_GET_PARAM = 0x59,  ///< Pi → STM32: request parameter report(s)
+  PACKET_ID_LL_PARAM_COMMIT = 0x5A,  ///< Pi → STM32: persist the parameter set to flash
 };
+
+/// Magic byte in LlParamCommit.
+static constexpr uint8_t kLlParamCommitMagic = 0xC5;
+
+/// Runtime firmware parameter ids — mirror of fw_param_catalog.h (pinned by
+/// test_fw_param_catalog.cpp). Ids are also flash record keys: never renumber.
+enum FirmwareParamId : uint16_t
+{
+  FW_PARAM_ID_TICKS_PER_METER = 1,
+  FW_PARAM_ID_WHEEL_KP = 2,
+  FW_PARAM_ID_WHEEL_KI = 3,
+  FW_PARAM_ID_WHEEL_KD = 4,
+  FW_PARAM_ID_WHEEL_INTEGRAL_LIMIT = 5,
+  FW_PARAM_ID_PWM_PER_MPS = 6,
+  FW_PARAM_ID_YAW_KP = 10,
+  FW_PARAM_ID_YAW_KI = 11,
+  FW_PARAM_ID_YAW_TRIM_LIMIT_MPS = 12,
+  FW_PARAM_ID_YAW_LOOP_ENABLED = 13,
+  FW_PARAM_ID_YAW_GYRO_SIGN = 14,
+  FW_PARAM_ID_YAW_GYRO_BIAS_RADPS = 15,
+  FW_PARAM_ID_MAX_MPS = 20,
+  FW_PARAM_ID_WHEEL_BASE = 21,
+  FW_PARAM_ID_MAX_CHARGE_VOLTAGE = 30,
+  FW_PARAM_ID_MAX_CHARGE_CURRENT = 31,
+  FW_PARAM_ID_ONE_WHEEL_LIFT_MS = 40,
+  FW_PARAM_ID_BOTH_WHEELS_LIFT_MS = 41,
+  FW_PARAM_ID_TILT_MS = 42,
+  FW_PARAM_ID_STOP_BUTTON_MS = 43,
+  FW_PARAM_ID_PLAY_CLEAR_MS = 44,
+  FW_PARAM_ID_IMU_INCLINATION_THRESHOLD = 50,
+  FW_PARAM_ALL =
+      0xFFFF,  ///< GET_PARAM: every parameter + the store status (firmware FW_PARAM_ID_ALL)
+};
+
+/// LlParamValue::status (fw_param_status_t).
+constexpr uint8_t FW_PARAM_STATUS_OK = 0u;
+constexpr uint8_t FW_PARAM_STATUS_CLAMPED = 1u;
+constexpr uint8_t FW_PARAM_STATUS_UNKNOWN_ID = 2u;
+constexpr uint8_t FW_PARAM_STATUS_REJECTED = 3u;
+
+/// LlParamValue::flags.
+constexpr uint8_t PARAM_VALUE_FLAG_PERSISTED = 0x01u;
+constexpr uint8_t PARAM_VALUE_FLAG_VOLATILE = 0x02u;
+
+/// LlParamStoreStatus::boot_source.
+constexpr uint8_t PARAM_BOOT_DEFAULTS = 0u;
+constexpr uint8_t PARAM_BOOT_FLASH = 1u;
+constexpr uint8_t PARAM_BOOT_FLASH_ERASED = 2u;
+
+/// LlParamStoreStatus::last_commit.
+constexpr uint8_t PARAM_COMMIT_NONE = 0u;
+constexpr uint8_t PARAM_COMMIT_WRITTEN = 1u;
+constexpr uint8_t PARAM_COMMIT_UNCHANGED = 2u;
+constexpr uint8_t PARAM_COMMIT_PENDING = 3u;
+constexpr uint8_t PARAM_COMMIT_LOG_FULL = 4u;
+constexpr uint8_t PARAM_COMMIT_ERROR = 5u;
 
 /// Magic byte in LlReboot — a dedicated reboot packet plus this confirmation
 /// byte prevents a corrupt/misframed packet from accidentally rebooting the
@@ -332,138 +394,85 @@ struct LlReboot
 };
 
 /**
- * @brief Drive-motor runtime tuning packet sent by the Pi (PACKET_ID_LL_SET_DRIVE_PID = 0x54).
+ * @brief Set one runtime parameter (PACKET_ID_LL_SET_PARAM = 0x58).
  *
- * Retunes the firmware's per-wheel velocity loop (both wheels share the gains)
- * and the runtime encoder scale without reflashing. The firmware
- * validates/clamps every field before applying and keeps its compile-time
- * defaults as the power-on fallback until the host reconnects.
+ * The firmware coerces the value into the parameter's absolute envelope,
+ * applies it from its main loop and answers with LlParamValue.
  */
-struct LlSetDrivePid
+struct LlSetParam
 {
-  uint8_t type;  ///< Must equal PACKET_ID_LL_SET_DRIVE_PID
-  float ticks_per_meter;  ///< Runtime encoder scale [ticks / m]
-  float kp;  ///< Proportional gain [PWM per m/s]
-  float ki;  ///< Integral gain [PWM per (m/s·s)]
-  float kd;  ///< Derivative gain [PWM per (m/s²)]
-  float integral_limit;  ///< Anti-windup clamp on the integral term [PWM]
-  float pwm_per_mps;  ///< Open-loop feedforward velocity→PWM scale
+  uint8_t type;  ///< Must equal PACKET_ID_LL_SET_PARAM
+  uint16_t param_id;  ///< FirmwareParamId
+  float value;  ///< Requested value
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
-
-static_assert(offsetof(LlSetDrivePid, type) == 0u, "LlSetDrivePid.type offset drifted");
-static_assert(offsetof(LlSetDrivePid, ticks_per_meter) == 1u,
-              "LlSetDrivePid.ticks_per_meter offset drifted");
-static_assert(offsetof(LlSetDrivePid, kp) == 5u, "LlSetDrivePid.kp offset drifted");
-static_assert(offsetof(LlSetDrivePid, ki) == 9u, "LlSetDrivePid.ki offset drifted");
-static_assert(offsetof(LlSetDrivePid, kd) == 13u, "LlSetDrivePid.kd offset drifted");
-static_assert(offsetof(LlSetDrivePid, integral_limit) == 17u,
-              "LlSetDrivePid.integral_limit offset drifted");
-static_assert(offsetof(LlSetDrivePid, pwm_per_mps) == 21u,
-              "LlSetDrivePid.pwm_per_mps offset drifted");
-static_assert(offsetof(LlSetDrivePid, crc) == 25u, "LlSetDrivePid.crc offset drifted");
+static_assert(offsetof(LlSetParam, param_id) == 1u, "LlSetParam.param_id offset drifted");
+static_assert(offsetof(LlSetParam, value) == 3u, "LlSetParam.value offset drifted");
+static_assert(offsetof(LlSetParam, crc) == 7u, "LlSetParam.crc offset drifted");
 
 /**
- * @brief Gyro yaw-rate loop tuning packet sent by the Pi (PACKET_ID_LL_SET_YAW_PID = 0x55).
- *
- * Retunes the firmware's closed yaw-rate loop (Option C, task #33/#34): at
- * the 50 Hz motor cadence the firmware regulates (commanded wz − measured
- * gyro wz) and injects a SYMMETRIC differential velocity trim (clamped to
- * ±trim_limit_mps) onto the per-wheel setpoints before the per-wheel PIs.
- * This is a SEPARATE packet from LlSetDrivePid — it does not extend it.
- * The firmware validates/clamps every field before applying.
- *
- * gyro_bias_radps (protocol v6): the host-measured mean at-rest gyro-Z offset
- * (imu_cal_offset_gz_, raw sensor frame — the same value the host subtracts
- * before its /imu publish). The firmware subtracts it before the gyro_sign
- * multiply so open-loop moves (BackUp: wz=0) hold a straight line instead of
- * tracing the bias as a constant-radius arc.
+ * @brief Request one parameter's report, or all of them plus the store status
+ * with FW_PARAM_ID_ALL (PACKET_ID_LL_GET_PARAM = 0x59).
  */
-struct LlSetYawPid
+struct LlGetParam
 {
-  uint8_t type;  ///< Must equal PACKET_ID_LL_SET_YAW_PID
-  float yaw_kp;  ///< P gain [m/s trim per rad/s yaw error]
-  float yaw_ki;  ///< I gain [m/s trim per (rad/s·s)]
-  float trim_limit_mps;  ///< Clamp on |differential trim| [m/s]
-  uint8_t enabled;  ///< 1 = closed yaw loop on, 0 = open-diff passthrough
-  int8_t gyro_sign;  ///< +1 / -1: gyro Z sign vs robot +yaw (CCW) — field sign-check remedy
-  float gyro_bias_radps;  ///< mean at-rest gyro-Z bias [rad/s], raw sensor frame (v6)
+  uint8_t type;  ///< Must equal PACKET_ID_LL_GET_PARAM
+  uint16_t param_id;  ///< FirmwareParamId or FW_PARAM_ID_ALL
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
-
-static_assert(offsetof(LlSetYawPid, type) == 0u, "LlSetYawPid.type offset drifted");
-static_assert(offsetof(LlSetYawPid, yaw_kp) == 1u, "LlSetYawPid.yaw_kp offset drifted");
-static_assert(offsetof(LlSetYawPid, yaw_ki) == 5u, "LlSetYawPid.yaw_ki offset drifted");
-static_assert(offsetof(LlSetYawPid, trim_limit_mps) == 9u,
-              "LlSetYawPid.trim_limit_mps offset drifted");
-static_assert(offsetof(LlSetYawPid, enabled) == 13u, "LlSetYawPid.enabled offset drifted");
-static_assert(offsetof(LlSetYawPid, gyro_sign) == 14u, "LlSetYawPid.gyro_sign offset drifted");
-static_assert(offsetof(LlSetYawPid, gyro_bias_radps) == 15u,
-              "LlSetYawPid.gyro_bias_radps offset drifted");
-static_assert(offsetof(LlSetYawPid, crc) == 19u, "LlSetYawPid.crc offset drifted");
 
 /**
- * @brief Runtime kinematics packet sent by the Pi (PACKET_ID_LL_SET_KINEMATICS = 0x56).
- *
- * Retunes the runtime max wheel-speed cap and wheel base without a reflash. The
- * firmware clamps max_mps to at most its compile-time MAX_MPS (the wire can only
- * LOWER the motion cap, never raise it above the compiled safety ceiling) and
- * wheel_base to a sane range; the compile-time MAX_MPS/WHEEL_BASE remain the
- * power-on fallback. The firmware validates/clamps every field before applying.
+ * @brief Persist the current parameter set (PACKET_ID_LL_PARAM_COMMIT = 0x5A).
+ * An unchanged set is not rewritten, so committing after every burst is cheap.
  */
-struct LlSetKinematics
+struct LlParamCommit
 {
-  uint8_t type;  ///< Must equal PACKET_ID_LL_SET_KINEMATICS
-  float max_mps;  ///< Runtime max wheel speed cap [m/s]; clamped ≤ firmware MAX_MPS
-  float wheel_base;  ///< Wheel track (centre-to-centre) [m]
+  uint8_t type;  ///< Must equal PACKET_ID_LL_PARAM_COMMIT
+  uint8_t magic;  ///< Must equal kLlParamCommitMagic (0xC5)
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
-
-static_assert(offsetof(LlSetKinematics, type) == 0u, "LlSetKinematics.type offset drifted");
-static_assert(offsetof(LlSetKinematics, max_mps) == 1u, "LlSetKinematics.max_mps offset drifted");
-static_assert(offsetof(LlSetKinematics, wheel_base) == 5u,
-              "LlSetKinematics.wheel_base offset drifted");
-static_assert(offsetof(LlSetKinematics, crc) == 9u, "LlSetKinematics.crc offset drifted");
 
 /**
- * @brief Runtime safety-limits packet sent by the Pi (PACKET_ID_LL_SET_SAFETY_LIMITS = 0x57).
- *
- * Retunes the battery charge ceiling + emergency-sensor timeouts without a
- * reflash. The firmware clamps EVERY field so the wire can only make protection
- * STRONGER, never weaker: charge V/I clamped ≤ compiled ceiling; the four trip
- * timeouts clamped ≤ compiled (faster e-stop); play_clear_ms clamped ≥ compiled
- * (harder to un-latch). Compile-time board_defaults.h values stay the power-on
- * fallback. The firmware validates/clamps every field before applying.
+ * @brief One parameter's state from the STM32 (PACKET_ID_LL_PARAM_VALUE = 0x13).
  */
-struct LlSetSafetyLimits
+struct LlParamValue
 {
-  uint8_t type;  ///< Must equal PACKET_ID_LL_SET_SAFETY_LIMITS
-  float max_charge_voltage;  ///< Charge voltage ceiling [V]; clamped ≤ compiled
-  float max_charge_current;  ///< Charge current ceiling [A]; clamped ≤ compiled
-  uint16_t one_wheel_lift_ms;  ///< One-wheel-lift trip [ms]; clamped ≤ compiled
-  uint16_t both_wheels_lift_ms;  ///< Both-wheels-lift trip [ms]; clamped ≤ compiled
-  uint16_t tilt_ms;  ///< Tilt trip [ms]; clamped ≤ compiled
-  uint16_t stop_button_ms;  ///< Stop-button trip [ms]; clamped ≤ compiled
-  uint16_t play_clear_ms;  ///< Hold-to-clear-emergency [ms]; clamped ≥ compiled
+  uint8_t type;  ///< Must equal PACKET_ID_LL_PARAM_VALUE
+  uint16_t param_id;  ///< FirmwareParamId
+  uint8_t status;  ///< FW_PARAM_STATUS_* of the last set since boot
+  uint8_t flags;  ///< PARAM_VALUE_FLAG_*
+  float value;  ///< Applied value
+  float default_value;  ///< Compiled power-on default
+  float min_value;  ///< Absolute envelope lower bound
+  float max_value;  ///< Absolute envelope upper bound
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
+static_assert(offsetof(LlParamValue, status) == 3u, "LlParamValue.status offset drifted");
+static_assert(offsetof(LlParamValue, flags) == 4u, "LlParamValue.flags offset drifted");
+static_assert(offsetof(LlParamValue, value) == 5u, "LlParamValue.value offset drifted");
+static_assert(offsetof(LlParamValue, default_value) == 9u,
+              "LlParamValue.default_value offset drifted");
+static_assert(offsetof(LlParamValue, min_value) == 13u, "LlParamValue.min_value offset drifted");
+static_assert(offsetof(LlParamValue, max_value) == 17u, "LlParamValue.max_value offset drifted");
+static_assert(offsetof(LlParamValue, crc) == 21u, "LlParamValue.crc offset drifted");
 
-static_assert(offsetof(LlSetSafetyLimits, type) == 0u, "LlSetSafetyLimits.type offset drifted");
-static_assert(offsetof(LlSetSafetyLimits, max_charge_voltage) == 1u,
-              "LlSetSafetyLimits.max_charge_voltage offset drifted");
-static_assert(offsetof(LlSetSafetyLimits, max_charge_current) == 5u,
-              "LlSetSafetyLimits.max_charge_current offset drifted");
-static_assert(offsetof(LlSetSafetyLimits, one_wheel_lift_ms) == 9u,
-              "LlSetSafetyLimits.one_wheel_lift_ms offset drifted");
-static_assert(offsetof(LlSetSafetyLimits, both_wheels_lift_ms) == 11u,
-              "LlSetSafetyLimits.both_wheels_lift_ms offset drifted");
-static_assert(offsetof(LlSetSafetyLimits, tilt_ms) == 13u,
-              "LlSetSafetyLimits.tilt_ms offset drifted");
-static_assert(offsetof(LlSetSafetyLimits, stop_button_ms) == 15u,
-              "LlSetSafetyLimits.stop_button_ms offset drifted");
-static_assert(offsetof(LlSetSafetyLimits, play_clear_ms) == 17u,
-              "LlSetSafetyLimits.play_clear_ms offset drifted");
-static_assert(offsetof(LlSetSafetyLimits, crc) == 19u, "LlSetSafetyLimits.crc offset drifted");
+/**
+ * @brief Flash persistence state from the STM32
+ * (PACKET_ID_LL_PARAM_STORE_STATUS = 0x14).
+ */
+struct LlParamStoreStatus
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_PARAM_STORE_STATUS
+  uint8_t boot_source;  ///< PARAM_BOOT_*
+  uint8_t last_commit;  ///< PARAM_COMMIT_*
+  uint16_t records_left;  ///< Full records that still fit before a boot-time erase
+  uint16_t param_count;  ///< Parameters the firmware knows
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+static_assert(offsetof(LlParamStoreStatus, records_left) == 3u,
+              "LlParamStoreStatus.records_left offset drifted");
+static_assert(offsetof(LlParamStoreStatus, param_count) == 5u,
+              "LlParamStoreStatus.param_count offset drifted");
 
 /**
  * @brief Blade motor status packet from STM32 (PACKET_ID_LL_BLADE_STATUS = 0x05).
@@ -530,9 +539,10 @@ static_assert(sizeof(LlCmdBlade) == 5u, "LlCmdBlade layout mismatch");
 static_assert(sizeof(LlBladeStatus) == 16u, "LlBladeStatus layout mismatch");
 static_assert(sizeof(LlConfigReq) == 4u, "LlConfigReq layout mismatch");
 static_assert(sizeof(LlConfigRsp) == 8u, "LlConfigRsp layout mismatch");
-static_assert(sizeof(LlSetDrivePid) == 27u, "LlSetDrivePid layout mismatch");
-static_assert(sizeof(LlSetYawPid) == 21u, "LlSetYawPid layout mismatch");
-static_assert(sizeof(LlSetKinematics) == 11u, "LlSetKinematics layout mismatch");
-static_assert(sizeof(LlSetSafetyLimits) == 21u, "LlSetSafetyLimits layout mismatch");
+static_assert(sizeof(LlSetParam) == 9u, "LlSetParam layout mismatch");
+static_assert(sizeof(LlGetParam) == 5u, "LlGetParam layout mismatch");
+static_assert(sizeof(LlParamCommit) == 4u, "LlParamCommit layout mismatch");
+static_assert(sizeof(LlParamValue) == 23u, "LlParamValue layout mismatch");
+static_assert(sizeof(LlParamStoreStatus) == 9u, "LlParamStoreStatus layout mismatch");
 
 }  // namespace mowgli_hardware

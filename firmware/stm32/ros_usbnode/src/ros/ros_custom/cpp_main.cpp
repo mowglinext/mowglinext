@@ -41,10 +41,14 @@
 // COBS protocol (replaces rosserial)
 #include "mowgli_comms.h"
 #include "mowgli_protocol.h"
+#include "drive_tuning_defaults.h"
+#include "fw_params.h"
+#include "i2c.h"
 #include "cmd_vel_safety.hpp"
 
 // Math
 #include <cmath>
+#include <cstring>
 
 // IMU
 #include "imu/imu.h"
@@ -111,12 +115,8 @@ static int16_t right_pwm_signed = 0;
  * Set USE_WHEEL_PI to 0 to fall back to open-loop forwarding for
  * debugging / hardware bring-up. */
 #define USE_WHEEL_PI 1
-#define WHEEL_PI_KP_PWM_PER_MPS 30.0f /* proportional gain */
-#define WHEEL_PI_KI_PWM_PER_MPS_S                                              \
-  5000.0f /* integral gain (50 PWM in ~0.2 s when err=0.05 m/s) */
-#define WHEEL_PI_INT_MAX_PWM                                                   \
-  100.0f /* anti-windup clamp on the integral term                             \
-          */
+/* Power-on gains: drive_tuning_defaults.h. The live gains come from fw_params
+ * (flash, then the host) — see apply_drive_params(). */
 #define WHEEL_PI_DT_S (MOTORS_NBT_TIME_MS / 1000.0f)
 /* Per-wheel velocity PI — battle-tested PX4 PID core (pid.hpp). Gains/limits
  * set once in init_ROS(). The integrator (kept inside the PID object) is what
@@ -166,16 +166,13 @@ static float r_dig_exp_ticks = 0.0f;
 static bool l_dig_latched = false;
 static bool r_dig_latched = false;
 
-/* Open-loop feedforward velocity->PWM scale. Runtime-tunable copy of the
- * board.h PWM_PER_MPS default so the ROS 2 host can retune the drive loop via
- * PKT_ID_SET_DRIVE_PID without a reflash. Seeded with the compile-time default,
- * which therefore remains the power-on fallback (this board has no config
- * persistence; the bridge re-sends the gains on every reconnect). */
+/* Open-loop feedforward velocity->PWM scale. Runtime copy of the board.h
+ * PWM_PER_MPS default, set from fw_params (FW_PARAM_PWM_PER_MPS). */
 static volatile float g_pwm_per_mps = (float)PWM_PER_MPS;
 
 /* Runtime wheel base (centre-to-centre track) used by the differential-drive
- * inverse kinematics. Seeded with the board.h/template WHEEL_BASE, which remains
- * the power-on fallback; retunable via PKT_ID_SET_KINEMATICS without a reflash.
+ * inverse kinematics. Seeded with the board.h/template WHEEL_BASE, then set from
+ * fw_params (FW_PARAM_WHEEL_BASE).
  * The runtime max-speed cap lives in drivemotor.c (g_max_mps / DRIVEMOTOR_*MaxMps)
  * because it is also consumed there for the anti-dig frame ceiling. */
 static volatile float g_wheel_base = (float)WHEEL_BASE;
@@ -201,9 +198,7 @@ static volatile float g_wheel_base = (float)WHEEL_BASE;
  * bounded differential the per-wheel loops still cap at ±MAX_MPS — a bounded
  * veer, never an unbounded spin. Gains/sign/enable are runtime-tunable via
  * PKT_ID_SET_YAW_PID. */
-#define YAW_PI_KP_DEFAULT 0.30f          /* m/s trim per rad/s yaw error */
-#define YAW_PI_KI_DEFAULT 0.40f          /* m/s trim per (rad/s·s) */
-#define YAW_TRIM_LIMIT_MPS_DEFAULT 0.15f /* clamp on |differential trim| [m/s] */
+/* Power-on gains/limit: drive_tuning_defaults.h (YAW_PI_*_DEFAULT). */
 /* Integral term is clamped TIGHTER than the total trim (leaves headroom for the
  * P term and limits integral-driven overshoot/hunting). */
 #define YAW_INT_LIMIT_FRAC 0.60f
@@ -248,7 +243,8 @@ static volatile float g_yaw_gyro_sign = 1.0f;     /* gyro Z sign vs robot +yaw *
 static volatile float g_yaw_trim_limit_mps = YAW_TRIM_LIMIT_MPS_DEFAULT;
 /* Host-measured mean at-rest gyro-Z bias [rad/s], raw sensor frame. Subtracted
  * before the sign multiply so open-loop moves (BackUp) hold a true straight line
- * instead of tracing the bias as an arc. 0 until the host sends SET_YAW_PID. */
+ * instead of tracing the bias as an arc. 0 until the host sends it
+ * (FW_PARAM_YAW_GYRO_BIAS_RADPS, never persisted: re-measured on every dock). */
 static volatile float g_yaw_gyro_bias = 0.0f;
 
 /* ---------------------------------------------------------------------------
@@ -467,153 +463,121 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
   right_target_mps = right_mps;
 }
 
-static void on_set_drive_pid(const uint8_t *data, size_t len) {
-  if (len < sizeof(pkt_set_drive_pid_t) - 2u) {
+/* ---------------------------------------------------------------------------
+ * Runtime parameters (protocol v7). Handlers run in USB RX interrupt context:
+ * they only store the coerced value (fw_params_set). The subsystems are updated
+ * from the main loop by apply_param_groups(), one group at a time, so no loop
+ * ever sees a half-applied set.
+ * ---------------------------------------------------------------------------*/
+static void on_set_param(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_set_param_t) - 2u) {
     return;
   }
+  pkt_set_param_t pkt;
+  memcpy(&pkt, data, sizeof(pkt) - 2u);
+  (void)fw_params_set(pkt.param_id, pkt.value);
+}
 
-  const pkt_set_drive_pid_t *pkt =
-      reinterpret_cast<const pkt_set_drive_pid_t *>(data);
-
-  /* Drive behaviour is safety-relevant: reject the whole packet if any field
-   * is non-finite, then clamp each field to a safe range before applying so a
-   * bad host value can never make the wheel loop diverge. Both wheels share
-   * the gains; the output limit stays fixed at 255 PWM (motor controller max).
-   * pid_constrain() comes from pid.hpp. */
-  if (!std::isfinite(pkt->ticks_per_meter) || !std::isfinite(pkt->kp) ||
-      !std::isfinite(pkt->ki) || !std::isfinite(pkt->kd) ||
-      !std::isfinite(pkt->integral_limit) || !std::isfinite(pkt->pwm_per_mps)) {
-    debug_printf("set_drive_pid rejected: non-finite field\r\n");
+static void on_get_param(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_get_param_t) - 2u) {
     return;
   }
+  pkt_get_param_t pkt;
+  memcpy(&pkt, data, sizeof(pkt) - 2u);
+  fw_params_request_report(pkt.param_id);
+}
 
-  const float ticks_per_meter =
-      pid_constrain(pkt->ticks_per_meter, 50.0f, 5000.0f);
-  const float kp = pid_constrain(pkt->kp, 0.0f, 200.0f);
-  const float ki = pid_constrain(pkt->ki, 0.0f, 20000.0f);
-  const float kd = pid_constrain(pkt->kd, 0.0f, 500.0f);
-  const float ilim = pid_constrain(pkt->integral_limit, 0.0f, 255.0f);
-  const float ff = pid_constrain(pkt->pwm_per_mps, 50.0f, 600.0f);
+static void on_param_commit(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_param_commit_t) - 2u) {
+    return;
+  }
+  if (data[1] == PKT_PARAM_COMMIT_MAGIC) {
+    fw_params_request_commit();
+  }
+}
 
-  /* Apply atomically w.r.t. motors_handler(), which reads these objects in the
-   * main loop at 50 Hz: this handler runs in USB RX interrupt context, and a
-   * half-applied update (e.g. new gains but the old integral limit) could let
-   * the ki integrator wind up unbounded for one cycle. Same __disable_irq
-   * guard motors_handler uses for its setpoint snapshot. setOutputLimit is
-   * re-asserted here so the ±255 clamp never silently depends on init_ROS
-   * having run first (the PX4 PID default-inits _limit_output to 0). */
-  __disable_irq();
+/* Per-wheel velocity PI + encoder scale + feedforward. Both wheels share the
+ * gains; the output limit stays 255 PWM (motor controller max) and is
+ * re-asserted so it never depends on init order (the PX4 PID default-inits
+ * _limit_output to 0). */
+static void apply_drive_params() {
+  const float kp = fw_params_get(FW_PARAM_WHEEL_KP);
+  const float ki = fw_params_get(FW_PARAM_WHEEL_KI);
+  const float kd = fw_params_get(FW_PARAM_WHEEL_KD);
+  const float ilim = fw_params_get(FW_PARAM_WHEEL_INTEGRAL_LIMIT);
   left_wheel_pid.setGains(kp, ki, kd);
   left_wheel_pid.setIntegralLimit(ilim);
   left_wheel_pid.setOutputLimit(255.0f);
   right_wheel_pid.setGains(kp, ki, kd);
   right_wheel_pid.setIntegralLimit(ilim);
   right_wheel_pid.setOutputLimit(255.0f);
-  DRIVEMOTOR_SetTicksPerMeter(ticks_per_meter);
-  g_pwm_per_mps = ff;
-  __enable_irq();
-
-  /* Do not log successful drive-PID updates here: this handler runs in the USB
-   * RX path and hardware_bridge intentionally re-sends the packet in bursts
-   * after reconnect. Printing each success over the debug UART can stall long
-   * enough to starve the main loop and re-trigger the watchdog reboot loop. */
+  DRIVEMOTOR_SetTicksPerMeter(fw_params_get(FW_PARAM_TICKS_PER_METER));
+  g_pwm_per_mps = fw_params_get(FW_PARAM_PWM_PER_MPS);
 }
 
-static void on_set_yaw_pid(const uint8_t *data, size_t len) {
-  if (len < sizeof(pkt_set_yaw_pid_t) - 2u) {
-    return;
-  }
-
-  const pkt_set_yaw_pid_t *pkt =
-      reinterpret_cast<const pkt_set_yaw_pid_t *>(data);
-
-  /* Yaw regulation is safety-relevant (it steers the chassis): reject the whole
-   * packet if any gain/limit is non-finite, then clamp before applying so a bad
-   * host value can never make the yaw loop diverge. */
-  if (!std::isfinite(pkt->yaw_kp) || !std::isfinite(pkt->yaw_ki) ||
-      !std::isfinite(pkt->trim_limit_mps) ||
-      !std::isfinite(pkt->gyro_bias_radps)) {
-    debug_printf("set_yaw_pid rejected: non-finite field\r\n");
-    return;
-  }
-
-  const float kp = pid_constrain(pkt->yaw_kp, 0.0f, 5.0f);
-  const float ki = pid_constrain(pkt->yaw_ki, 0.0f, 20.0f);
-  const float tl =
-      pid_constrain(pkt->trim_limit_mps, 0.0f, DRIVEMOTOR_GetMaxMps());
-  const uint8_t en = (pkt->enabled != 0) ? 1u : 0u;
-  const float sign = (pkt->gyro_sign < 0) ? -1.0f : 1.0f;
-  /* A physical at-rest gyro bias is small (WT901: a few deg/s). Clamp hard so a
-   * bad host value can only nudge, not steer — and the differential trim clamp
-   * below bounds the yaw correction regardless. */
-  const float bias = pid_constrain(pkt->gyro_bias_radps, -0.5f, 0.5f);
-
-  /* Apply atomically w.r.t. motors_handler() (reads these at 50 Hz); this
-   * handler runs in USB RX interrupt context. The integral limit is pinned to
-   * the trim limit so the integrator alone can never exceed the differential
-   * clamp. Same __disable_irq guard as on_set_drive_pid. */
-  __disable_irq();
-  yaw_pid.setGains(kp, ki, 0.0f);
+/* Gyro yaw-rate loop. The trim limit is also capped to the live speed cap,
+ * and the integral limit is pinned below it so the integrator alone can never
+ * exceed the differential clamp. */
+static void apply_yaw_params() {
+  const float tl = pid_constrain(fw_params_get(FW_PARAM_YAW_TRIM_LIMIT_MPS), 0.0f,
+                                 DRIVEMOTOR_GetMaxMps());
+  yaw_pid.setGains(fw_params_get(FW_PARAM_YAW_KP), fw_params_get(FW_PARAM_YAW_KI), 0.0f);
   yaw_pid.setIntegralLimit(tl * YAW_INT_LIMIT_FRAC);
   yaw_pid.setOutputLimit(tl);
   g_yaw_trim_limit_mps = tl;
-  g_yaw_gyro_sign = sign;
-  g_yaw_gyro_bias = bias;
-  g_yaw_loop_enabled = en;
-  __enable_irq();
+  g_yaw_gyro_sign = fw_params_get(FW_PARAM_YAW_GYRO_SIGN) < 0.0f ? -1.0f : 1.0f;
+  g_yaw_gyro_bias = fw_params_get(FW_PARAM_YAW_GYRO_BIAS_RADPS);
+  g_yaw_loop_enabled = fw_params_get(FW_PARAM_YAW_LOOP_ENABLED) != 0.0f ? 1u : 0u;
 }
 
-static void on_set_kinematics(const uint8_t *data, size_t len) {
-  if (len < sizeof(pkt_set_kinematics_t) - 2u) {
-    return;
-  }
-
-  const pkt_set_kinematics_t *pkt =
-      reinterpret_cast<const pkt_set_kinematics_t *>(data);
-
-  /* Motion caps are safety-relevant: reject the whole packet if any field is
-   * non-finite, then clamp before applying. max_mps is clamped by
-   * DRIVEMOTOR_SetMaxMps to (0, compile-time MAX_MPS] — the wire can only LOWER
-   * the cap, never raise it above the compiled ceiling. wheel_base is clamped to
-   * a sane physical range. Applied atomically w.r.t. motors_handler() (50 Hz);
-   * this handler runs in USB RX interrupt context. */
-  if (!std::isfinite(pkt->max_mps) || !std::isfinite(pkt->wheel_base)) {
-    debug_printf("set_kinematics rejected: non-finite field\r\n");
-    return;
-  }
-
-  const float wb = pid_constrain(pkt->wheel_base, 0.15f, 0.60f);
-
+static void apply_kinematics_params() {
+  /* on_cmd_vel (USB interrupt) reads both: update them together. */
   __disable_irq();
-  DRIVEMOTOR_SetMaxMps(pkt->max_mps); /* clamps to (0, MAX_MPS] internally */
-  g_wheel_base = wb;
+  DRIVEMOTOR_SetMaxMps(fw_params_get(FW_PARAM_MAX_MPS));
+  g_wheel_base = fw_params_get(FW_PARAM_WHEEL_BASE);
   __enable_irq();
 }
 
-static void on_set_safety_limits(const uint8_t *data, size_t len) {
-  if (len < sizeof(pkt_set_safety_limits_t) - 2u) {
-    return;
+static void apply_charge_params() {
+  charger_set_charge_limits(fw_params_get(FW_PARAM_MAX_CHARGE_VOLTAGE),
+                            fw_params_get(FW_PARAM_MAX_CHARGE_CURRENT));
+}
+
+static void apply_emergency_params() {
+  emergency_set_timeouts((uint32_t)fw_params_get(FW_PARAM_ONE_WHEEL_LIFT_MS),
+                         (uint32_t)fw_params_get(FW_PARAM_BOTH_WHEELS_LIFT_MS),
+                         (uint32_t)fw_params_get(FW_PARAM_TILT_MS),
+                         (uint32_t)fw_params_get(FW_PARAM_STOP_BUTTON_MS),
+                         (uint32_t)fw_params_get(FW_PARAM_PLAY_CLEAR_MS));
+}
+
+static void apply_imu_params() {
+  /* Queued: I2C_Onboard_Service rewrites the LIS3DH register from its own
+   * state machine, never mid-transaction. */
+  I2C_Onboard_SetInclinationThreshold(
+      (uint8_t)fw_params_get(FW_PARAM_IMU_INCLINATION_THRESHOLD));
+}
+
+static void apply_param_groups(uint32_t groups) {
+  if (groups & (1u << FW_PARAM_GROUP_DRIVE)) {
+    apply_drive_params();
   }
-
-  const pkt_set_safety_limits_t *pkt =
-      reinterpret_cast<const pkt_set_safety_limits_t *>(data);
-
-  /* Charge/e-stop limits are safety-critical: reject the whole packet if a charge
-   * field is non-finite. charger.c / emergency.c then clamp EVERY field so the
-   * wire can only make protection STRONGER (lower charge ceiling, faster trips,
-   * harder emergency-clear), never weaker; the compile-time board_defaults values
-   * remain the power-on fallback (an unconnected host = full vetted safety).
-   * emergency_set_timeouts self-guards its group apply; the two charge stores are
-   * individually atomic (single 32-bit writes on Cortex-M3). */
-  if (!std::isfinite(pkt->max_charge_voltage) ||
-      !std::isfinite(pkt->max_charge_current)) {
-    debug_printf("set_safety_limits rejected: non-finite charge field\r\n");
-    return;
+  if (groups & (1u << FW_PARAM_GROUP_KINEMATICS)) {
+    apply_kinematics_params();
   }
-
-  charger_set_charge_limits(pkt->max_charge_voltage, pkt->max_charge_current);
-  emergency_set_timeouts(pkt->one_wheel_lift_ms, pkt->both_wheels_lift_ms,
-                         pkt->tilt_ms, pkt->stop_button_ms, pkt->play_clear_ms);
+  /* The yaw trim is capped by max_mps: re-apply it when the cap moves. */
+  if (groups & ((1u << FW_PARAM_GROUP_YAW) | (1u << FW_PARAM_GROUP_KINEMATICS))) {
+    apply_yaw_params();
+  }
+  if (groups & (1u << FW_PARAM_GROUP_CHARGE)) {
+    apply_charge_params();
+  }
+  if (groups & (1u << FW_PARAM_GROUP_EMERGENCY)) {
+    apply_emergency_params();
+  }
+  if (groups & (1u << FW_PARAM_GROUP_IMU)) {
+    apply_imu_params();
+  }
 }
 
 static void on_hl_state(const uint8_t *data, size_t len) {
@@ -1500,8 +1464,10 @@ extern "C" void broadcast_handler() {
  * spinOnce — no-op (rosserial spin removed)
  * ---------------------------------------------------------------------------*/
 extern "C" void spinOnce() {
-  // Nothing to do — COBS RX is handled in CDC_DataReceivedHandler().
-  // This function is kept so main.c doesn't need modification.
+  // COBS RX is handled in CDC_DataReceivedHandler(). The main loop applies the
+  // parameter groups the host changed and services the flash commit / reports.
+  apply_param_groups(fw_params_take_dirty_groups());
+  fw_params_service(HAL_GetTick());
 }
 
 /* ---------------------------------------------------------------------------
@@ -1517,10 +1483,9 @@ extern "C" void init_ROS() {
   mowgli_comms_register_handler(PKT_ID_HL_STATE, on_hl_state);
   mowgli_comms_register_handler(PKT_ID_CMD_BLADE, on_cmd_blade);
   mowgli_comms_register_handler(PKT_ID_REBOOT, on_reboot);
-  mowgli_comms_register_handler(PKT_ID_SET_DRIVE_PID, on_set_drive_pid);
-  mowgli_comms_register_handler(PKT_ID_SET_YAW_PID, on_set_yaw_pid);
-  mowgli_comms_register_handler(PKT_ID_SET_KINEMATICS, on_set_kinematics);
-  mowgli_comms_register_handler(PKT_ID_SET_SAFETY_LIMITS, on_set_safety_limits);
+  mowgli_comms_register_handler(PKT_ID_SET_PARAM, on_set_param);
+  mowgli_comms_register_handler(PKT_ID_GET_PARAM, on_get_param);
+  mowgli_comms_register_handler(PKT_ID_PARAM_COMMIT, on_param_commit);
   mowgli_comms_register_handler(PKT_ID_CONFIG_REQ, on_config_req);
 
   // Initialise timers
@@ -1531,27 +1496,13 @@ extern "C" void init_ROS() {
   NBT_init(&motors_nbt, MOTORS_NBT_TIME_MS);
   NBT_init(&blade_nbt, BLADE_NBT_TIME_MS);
 
-#if USE_WHEEL_PI
-  // Per-wheel velocity PI gains/limits (vendored PX4 PID, pid.hpp). D=0 — no
-  // derivative on a velocity loop. Gains/limits are in PWM units, matching the
-  // hand-rolled loop they replace (Kp·err + integrator, integral clamp ±100,
-  // output clamp ±255). The PID adds derivative-on-measurement (unused at D=0)
-  // and conditional-integration anti-windup.
-  left_wheel_pid.setGains(WHEEL_PI_KP_PWM_PER_MPS, WHEEL_PI_KI_PWM_PER_MPS_S,
-                          0.0f);
-  left_wheel_pid.setIntegralLimit(WHEEL_PI_INT_MAX_PWM);
-  left_wheel_pid.setOutputLimit(255.0f);
-  right_wheel_pid.setGains(WHEEL_PI_KP_PWM_PER_MPS, WHEEL_PI_KI_PWM_PER_MPS_S,
-                           0.0f);
-  right_wheel_pid.setIntegralLimit(WHEEL_PI_INT_MAX_PWM);
-  right_wheel_pid.setOutputLimit(255.0f);
-
-  /* Gyro yaw-rate loop (Option C). Output/integral both clamped to the trim
-   * limit so the differential correction is bounded regardless of gains. */
-  yaw_pid.setGains(YAW_PI_KP_DEFAULT, YAW_PI_KI_DEFAULT, 0.0f);
-  yaw_pid.setIntegralLimit(YAW_TRIM_LIMIT_MPS_DEFAULT * YAW_INT_LIMIT_FRAC);
-  yaw_pid.setOutputLimit(YAW_TRIM_LIMIT_MPS_DEFAULT);
-#endif
+  // Apply every runtime parameter group: the values fw_params_init() loaded
+  // from flash (or the compiled defaults when none are stored), so a board the
+  // host never talks to still runs the persisted configuration. The wheel PIs
+  // are the vendored PX4 PID (pid.hpp) in PWM units; the yaw loop's output and
+  // integral are both clamped to the trim limit.
+  fw_params_mark_all_dirty();
+  apply_param_groups(fw_params_take_dirty_groups());
 
   last_odom_tick = HAL_GetTick();
   last_heartbeat_tick = 0;
