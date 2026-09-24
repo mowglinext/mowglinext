@@ -431,7 +431,16 @@ func (r *RosProvider) initMapPolling() {
 	}()
 }
 
-// Preserve ROS area IDs when the UI separates mowing and navigation areas.
+// Preserve each working area's ROS ARRAY INDEX (its position in `areas`, what
+// map_server's index-based services — get_mowing_area, start_in_area,
+// coverage_orientation — expect) when the UI separates mowing and navigation
+// areas. This is NOT the stable MapArea.Id (mowglinext#637): the index is
+// wire-protocol-required and unavoidably shifts whenever the area list is
+// edited/saved (map_server rebuilds it wholesale), but Id survives that edit
+// (map_server's on_add_area preserves a caller-supplied one) and is carried
+// through verbatim on every returned MapArea — the frontend resolves the
+// CURRENT index from Id at the moment it acts (mowingAreaIndexById), rather
+// than trusting a position captured earlier.
 func splitMapAreas(areas []mowgli.MapArea) (working, navigation []mowgli.MapArea, indices []uint32) {
 	for index, area := range areas {
 		if area.IsNavigationArea {

@@ -1,4 +1,4 @@
-import {mowingAreaIndex} from "../utils/mapAreaIndex.ts";
+import {mowingAreaIndexById} from "../utils/mapAreaIndex.ts";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import {useApi} from "../hooks/useApi.ts";
 import {App} from "antd";
@@ -399,7 +399,10 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // centroid. The result is the area_index map_server expects when we
     // promote the obstacle — the position of the matching area in
     // map_server's areas_ vector. Mowing order and the filtered working-area
-    // position are not ROS IDs; resolve the original ID from map metadata.
+    // position are not ROS IDs; resolve the CURRENT index from the area's
+    // stable id (mowingAreaIndexById, mowglinext#637) rather than a position
+    // captured from `features`, which is frozen while editMap is true and can
+    // go stale relative to the still-live-polling `map`.
     // Returns null when no workarea contains the centroid → promote button
     // is disabled because we'd have nowhere to attach it.
     const obstacleAreaIndex = useMemo(() => {
@@ -444,7 +447,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     if (intersect) inside = !inside;
                 }
                 if (inside) {
-                    matchedIdx = mowingAreaIndex(map, workareas[i].properties.source_working_area_index) ?? null;
+                    matchedIdx = mowingAreaIndexById(map, workareas[i].properties.source_working_area_id) ?? null;
                     break;
                 }
             }
@@ -459,7 +462,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             .filter((f): f is MowingAreaFeature => f instanceof MowingAreaFeature)
             .sort((a, b) => (a.getMowingOrder() ?? 9999) - (b.getMowingOrder() ?? 9999));
         for (let i = 0; i < workareas.length; ++i) {
-            const areaIndex = mowingAreaIndex(map, workareas[i].properties.source_working_area_index);
+            const areaIndex = mowingAreaIndexById(map, workareas[i].properties.source_working_area_id);
             if (areaIndex === undefined) continue;
             names[areaIndex] = workareas[i].getLabel(
                 t('mapAreasList.unnamedArea', {order: workareas[i].getMowingOrder()})
@@ -576,7 +579,16 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             nfeat.setArea(area, offsetX, offsetY, datum);
             // Preserve source identity separately from editable mowing order.
             // Restored/imported maps cannot target live ROS areas until saved.
-            if (fromLiveMap) nfeat.properties.source_working_area_index = index;
+            // source_working_area_id (mowglinext#637) is the STABLE identity;
+            // source_working_area_index is only the array position at build
+            // time and can point at a different area by the time it is
+            // re-resolved (the area list is rebuilt wholesale on any edit
+            // save) — prefer the id via mowingAreaIndexById where the value
+            // outlives this render (e.g. a later button click).
+            if (fromLiveMap) {
+                nfeat.properties.source_working_area_index = index;
+                nfeat.properties.source_working_area_id = area.id;
+            }
 
             let obstacles:  ObstacleFeature[] = [];
 
@@ -706,10 +718,17 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         if (dockDirty) setHasUnsavedChanges(true);
     }, [dockDirty, setHasUnsavedChanges]);
 
-    // Mower action callbacks shared between desktop and mobile toolbars
+    // Mower action callbacks shared between desktop and mobile toolbars.
+    // mowingAreas is only rebuilt when `features` changes, which is frozen
+    // while editMap is true (see the map/path/plan-rebuild effect above) — a
+    // selection made, or held across, an edit session can be older than the
+    // latest `map` poll. Resolve the CURRENT ROS index from the area's
+    // stable id (mowglinext#637) at the moment this fires, not from a
+    // position captured whenever mowingAreas last rebuilt, so a re-indexed
+    // area list can never send COMMAND_START at the wrong area.
     const startSelectedArea = (key: string) => {
         const item = mowingAreas.find(item => item.key == key);
-        const index = mowingAreaIndex(map, item?.feat?.properties?.index);
+        const index = mowingAreaIndexById(map, item?.feat?.properties?.id);
         if (index === undefined) return Promise.reject(new Error(t("crossHatch.areaUnavailable")));
         return mowerAction("start_in_area", {area: index})();
     };

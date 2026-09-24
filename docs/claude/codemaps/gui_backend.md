@@ -256,6 +256,7 @@ Tests (what each pins):
 - `HighLevelControl` command numbers (`Command: 1/2`) in `scheduler.go`, `homekit.go` mirror `HighLevelControl.srv` constants — see `docs/claude/high-level-api.md`.
 - Host power actions need `pid: host` + `privileged` in `install/compose/docker-compose.gui.yml` and `util-linux` in `gui/Dockerfile`.
 - Swagger annotations (`// @Router`) feed `gui/docs/*` (swaggo) — regenerate when routes change (no script in repo invokes `swag`).
+- mowglinext#637 phase 3: `mowgli.MapArea.Id` (phase 1's stable id) must round-trip through `PUT /mowglinext/map`'s `MowgliMapArea` for `on_add_area` to preserve it — this is why `gui/docs/{swagger.json,swagger.yaml,docs.go}` and `web/src/api/Api.ts` all carry `MowgliMapArea.id` now (hand-added, `swag` isn't run). `splitMapAreas`/`pollMap` (`ros.go`) already pass every `MapArea` field through untouched, so the id needs no other backend wiring — only `WorkingAreaIndices` (the array position) is backend-computed, and it is NOT a stable identity.
 
 ## Pitfalls
 - `getSchema` opens `asserts/mower_config.schema.json` **relative to the process CWD** (`settings.go:1043`); run the binary from `gui/` (Dockerfile sets `WORKDIR /app`) or every settings route 500s. Tests call `chdirToGuiRoot`.
