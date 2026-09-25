@@ -190,6 +190,7 @@ target_link_libraries(costmap_scan_filter_node
   ${rclcpp_TARGETS}
   ${sensor_msgs_TARGETS}
   ${mowgli_interfaces_TARGETS}
+  ${nav_msgs_TARGETS}
 )
 
 # ---------------------------------------------------------------------------

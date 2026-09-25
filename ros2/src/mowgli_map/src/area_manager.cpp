@@ -459,6 +459,10 @@ void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPt
   speed_filter_info_sent_ = false;
   masks_dirty_ = true;
   defer_mask_rebuild();
+  // LiDAR-ignore corridors are deliberately NOT cleared here: the GUI's map
+  // save is clear_map + add_area per area, so clearing them would wipe every
+  // corridor on each map edit (field log 2026-09-25: a line lived ~5 s).
+  // They have their own ~/clear_lidar_ignore_corridors.
 
   res->success = true;
   res->message = "All map layers and areas cleared.";
@@ -1882,6 +1886,21 @@ void MapServerNode::save_areas_to_file(const std::string& path)
   // on_set_docking_point. Storing it in areas.dat too led to a stale
   // all-zero pose taking precedence over the calibrated value.
 
+  out << "lidar_corridor_count: " << lidar_ignore_corridors_.size() << "\n";
+  out << "next_lidar_corridor_id: " << next_lidar_corridor_id_ << "\n\n";
+  for (std::size_t i = 0; i < lidar_ignore_corridors_.size(); ++i)
+  {
+    const auto& corridor = lidar_ignore_corridors_[i];
+    out << "lidar_corridor_" << i << "_name: " << corridor.name << "\n";
+    out << "lidar_corridor_" << i << "_polyline: " << polygon_to_string(corridor.polyline) << "\n";
+    out << "lidar_corridor_" << i << "_width_m: " << corridor.width_m << "\n";
+    out << "lidar_corridor_" << i << "_id: " << corridor.id << "\n";
+  }
+  if (!lidar_ignore_corridors_.empty())
+  {
+    out << "\n";
+  }
+
   out.close();
   if (out.fail())
   {
@@ -1997,6 +2016,36 @@ void MapServerNode::load_areas_from_file(const std::string& path)
     }
   }
 
+  lidar_ignore_corridors_.clear();
+  const int lidar_corridor_count = get_int("lidar_corridor_count", 0);
+  for (int i = 0; i < lidar_corridor_count; ++i)
+  {
+    const std::string prefix = "lidar_corridor_" + std::to_string(i);
+    auto polyline = parse_polygon_string(get_str(prefix + "_polyline"));
+    if (polyline.points.size() < 2)
+    {
+      continue;
+    }
+    LidarIgnoreCorridorEntry entry;
+    entry.name = get_str(prefix + "_name");
+    entry.polyline = std::move(polyline);
+    entry.width_m = std::clamp(get_double(prefix + "_width_m", 0.20),
+                               kMinLidarIgnoreCorridorWidthM,
+                               kMaxLidarIgnoreCorridorWidthM);
+    entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));
+    lidar_ignore_corridors_.push_back(std::move(entry));
+  }
+  {
+    uint32_t max_corridor_id = 0;
+    for (const auto& corridor : lidar_ignore_corridors_)
+    {
+      max_corridor_id = std::max(max_corridor_id, corridor.id);
+    }
+    next_lidar_corridor_id_ = static_cast<uint32_t>(get_int("next_lidar_corridor_id", 1));
+    next_lidar_corridor_id_ = std::max(next_lidar_corridor_id_, max_corridor_id + 1);
+  }
+  RCLCPP_INFO(get_logger(), "Loaded %zu LiDAR-ignore corridor(s).", lidar_ignore_corridors_.size());
+
   // Dock pose is loaded from mowgli_robot.yaml at construction, never
   // from areas.dat. Old areas.dat files may still contain dock_x/dock_qw
   // keys — they are ignored on purpose.
@@ -2060,6 +2109,10 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   keepout_filter_info_sent_ = false;
   speed_filter_info_sent_ = false;
   masks_dirty_ = true;
+  // Harmless if migrate_areas_datum already published above (transient_local
+  // — a redundant publish is a no-op for subscribers); unconditional so a
+  // load with no migration still announces the loaded corridor list.
+  publish_lidar_ignore_corridors();
 }
 
 void MapServerNode::migrate_areas_datum(double file_datum_lat,
@@ -2133,6 +2186,14 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
       reproject_polygon(obstacle.polygon);
     }
   }
+  // LidarIgnoreCorridor polylines are map-frame metres anchored to the same
+  // datum (LidarIgnoreCorridorEntry's doc comment) — must move with the map
+  // exactly like an area/obstacle polygon, or a corridor drawn against a
+  // hedge silently drifts off it after a datum change.
+  for (auto& corridor : lidar_ignore_corridors_)
+  {
+    reproject_polygon(corridor.polyline);
+  }
 
   // Where the old datum origin lands in the new frame == the translation
   // every point just underwent (to first order) — logged so an operator can
@@ -2190,15 +2251,18 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
                  ex.what());
   }
 
+  publish_lidar_ignore_corridors();
+
   RCLCPP_WARN(get_logger(),
-              "Datum changed (%.9f, %.9f) → (%.9f, %.9f): re-projected %zu area(s) "
-              "and %s dock pose by (%.3f, %.3f) m so the map stays anchored to the "
-              "physical garden (issue #216).",
+              "Datum changed (%.9f, %.9f) → (%.9f, %.9f): re-projected %zu area(s), "
+              "%zu LiDAR-ignore corridor(s) and %s dock pose by (%.3f, %.3f) m so the "
+              "map stays anchored to the physical garden (issue #216).",
               file_datum_lat,
               file_datum_lon,
               datum_lat_,
               datum_lon_,
               areas_.size(),
+              lidar_ignore_corridors_.size(),
               docking_pose_set_ ? "the" : "no",
               shift_east,
               shift_north);

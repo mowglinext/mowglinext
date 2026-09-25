@@ -5,6 +5,17 @@ import (
 	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 )
 
+// AddLidarIgnoreCorridorReq for mowgli_interfaces/srv/AddLidarIgnoreCorridor request.
+type AddLidarIgnoreCorridorReq struct {
+	Corridor                  LidarIgnoreCorridor            `json:"corridor"`
+}
+
+// AddLidarIgnoreCorridorRes for mowgli_interfaces/srv/AddLidarIgnoreCorridor response.
+type AddLidarIgnoreCorridorRes struct {
+	Success                   bool                           `json:"success"`
+	Id                        uint32                         `json:"id"`
+}
+
 // AddMowingAreaReq for mowgli_interfaces/srv/AddMowingArea request.
 type AddMowingAreaReq struct {
 	Area                      MapArea                        `json:"area"`
@@ -72,6 +83,14 @@ type CalibrateImuYawRes struct {
 	DockUndockDisplacementM   float64                        `json:"dock_undock_displacement_m"`
 }
 
+// ClearLidarIgnoreCorridorsReq for mowgli_interfaces/srv/ClearLidarIgnoreCorridors request (empty).
+type ClearLidarIgnoreCorridorsReq struct{}
+
+// ClearLidarIgnoreCorridorsRes for mowgli_interfaces/srv/ClearLidarIgnoreCorridors response.
+type ClearLidarIgnoreCorridorsRes struct {
+	Success                   bool                           `json:"success"`
+}
+
 // ClearMapReq for mowgli_interfaces/srv/ClearMap request (empty).
 type ClearMapReq struct{}
 
@@ -116,6 +135,15 @@ type EmergencyStopReq struct {
 
 // EmergencyStopRes for mowgli_interfaces/srv/EmergencyStop response.
 type EmergencyStopRes struct {
+	Success                   bool                           `json:"success"`
+}
+
+// GetLidarIgnoreCorridorsReq for mowgli_interfaces/srv/GetLidarIgnoreCorridors request (empty).
+type GetLidarIgnoreCorridorsReq struct{}
+
+// GetLidarIgnoreCorridorsRes for mowgli_interfaces/srv/GetLidarIgnoreCorridors response.
+type GetLidarIgnoreCorridorsRes struct {
+	Corridors                 []LidarIgnoreCorridor          `json:"corridors"`
 	Success                   bool                           `json:"success"`
 }
 

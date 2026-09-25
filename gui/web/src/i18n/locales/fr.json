@@ -1745,6 +1745,26 @@
     "noContainingArea": "Aucune zone englobante",
     "promoteTooltip": "Promouvoir en exclusion permanente"
   },
+  "mapLidarCorridors": {
+    "header": "Lignes d'ignorance LiDAR ({{count}})",
+    "hint": "Le long d'une ligne tracée, le LiDAR est ignoré dans la largeur définie, de sorte que la tondeuse suit la limite enregistrée près d'une haie par exemple. Partout ailleurs, le LiDAR continue de surveiller les obstacles.",
+    "safetyWarning": "À l'intérieur d'une ligne, l'arrêt de collision est aussi ignoré. Tracez-la avec précision et gardez la largeur faible.",
+    "unnamed": "Ligne {{id}}",
+    "widthLabel": "Largeur d'ignorance en centimètres",
+    "widthTooltip": "Largeur totale autour de la ligne (moitié de chaque côté), 5-100 cm",
+    "delete": "Supprimer cette ligne",
+    "drawing": "Cliquez des points sur la carte le long de la ligne ({{count}} placés).",
+    "finish": "Terminer la ligne",
+    "cancel": "Annuler",
+    "draw": "Tracer une ligne d'ignorance",
+    "saveFailed": "Impossible d'enregistrer les lignes d'ignorance",
+    "lockedHint": "Passez en mode édition de la carte pour modifier ces lignes.",
+    "smooth": "Courber",
+    "smoothTooltip": "Arrondir la ligne à travers ses points (ajoute des points le long de la courbe)",
+    "simplify": "Simplifier",
+    "simplifyTooltip": "Supprimer les points qui changent à peine la forme",
+    "editHint": "Sélectionnez une ligne sur la carte puis double-cliquez pour la modifier : faites glisser un point pour le déplacer, faites glisser un milieu pour ajouter un point, sélectionnez un point et appuyez sur Suppr pour le retirer."
+  },
   "mapObstacleProposals": {
     "header": "Propositions d’obstacles ({{count}})",
     "hint": "Rien n’est bloqué tant que vous n’acceptez pas. Le robot évite ces endroits pour la session en cours uniquement.",

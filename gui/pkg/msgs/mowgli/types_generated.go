@@ -195,6 +195,20 @@ type ImuRaw struct {
 	Mz                        float64                        `json:"mz"`
 }
 
+// LidarIgnoreCorridor matches mowgli_interfaces/msg/LidarIgnoreCorridor.
+type LidarIgnoreCorridor struct {
+	Name                      string                         `json:"name"`
+	Polyline                  geometry.Polygon               `json:"polyline"`
+	WidthM                    float64                        `json:"width_m"`
+	Id                        uint32                         `json:"id"`
+}
+
+// LidarIgnoreCorridorArray matches mowgli_interfaces/msg/LidarIgnoreCorridorArray.
+type LidarIgnoreCorridorArray struct {
+	Header                    geometry.Header                `json:"header"`
+	Corridors                 []LidarIgnoreCorridor          `json:"corridors"`
+}
+
 // MapArea matches mowgli_interfaces/msg/MapArea.
 type MapArea struct {
 	Name                      string                         `json:"name"`

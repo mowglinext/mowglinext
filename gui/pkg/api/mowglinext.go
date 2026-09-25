@@ -628,6 +628,59 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, map[string]interface{}{"message": promoteRes.Message})
 				return
 			}
+		case "get_lidar_ignore_corridors":
+			var res mowgli.GetLidarIgnoreCorridorsRes
+			err = provider.CallService(ctx,
+				"/map_server_node/get_lidar_ignore_corridors",
+				&struct{}{},
+				&res,
+				"mowgli_interfaces/srv/GetLidarIgnoreCorridors")
+			if err == nil {
+				if res.Corridors == nil {
+					res.Corridors = []mowgli.LidarIgnoreCorridor{}
+				}
+				c.JSON(200, res)
+				return
+			}
+		case "set_lidar_ignore_corridors":
+			// Replace the whole LiDAR-ignore corridor list (clear + add each),
+			// the same rebuild shape the map save uses for areas. map_server
+			// clamps width_m and persists into areas.dat on every add.
+			var setReq struct {
+				Corridors []mowgli.LidarIgnoreCorridor `json:"corridors"`
+			}
+			if err = c.BindJSON(&setReq); err != nil {
+				c.JSON(400, ErrorResponse{Error: err.Error()})
+				return
+			}
+			var clearRes mowgli.ClearLidarIgnoreCorridorsRes
+			err = provider.CallService(ctx,
+				"/map_server_node/clear_lidar_ignore_corridors",
+				&mowgli.ClearLidarIgnoreCorridorsReq{},
+				&clearRes,
+				"mowgli_interfaces/srv/ClearLidarIgnoreCorridors")
+			if err == nil && !clearRes.Success {
+				err = errors.New("clear_lidar_ignore_corridors failed")
+			}
+			for i := 0; err == nil && i < len(setReq.Corridors); i++ {
+				corridor := setReq.Corridors[i]
+				if corridor.Polyline.Points == nil {
+					corridor.Polyline.Points = []geometry.Point32{}
+				}
+				var addRes mowgli.AddLidarIgnoreCorridorRes
+				err = provider.CallService(ctx,
+					"/map_server_node/add_lidar_ignore_corridor",
+					&mowgli.AddLidarIgnoreCorridorReq{Corridor: corridor},
+					&addRes,
+					"mowgli_interfaces/srv/AddLidarIgnoreCorridor")
+				if err == nil && !addRes.Success {
+					err = errors.New("add_lidar_ignore_corridor rejected a corridor (needs at least 2 points)")
+				}
+			}
+			if err == nil {
+				c.JSON(200, OkResponse{})
+				return
+			}
 		case "ignore_obstacle", "discard_obstacle":
 			// Reject a PENDING obstacle proposal (currently: wheel-slip dig
 			// keepouts) by its MapObstacleInfo.id. Nothing was persisted, so

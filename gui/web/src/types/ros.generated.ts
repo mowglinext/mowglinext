@@ -436,6 +436,18 @@ export type ImuRaw = {
   mz?: number;
 };
 
+export type LidarIgnoreCorridor = {
+  name?: string;
+  polyline?: Polygon;
+  width_m?: number;
+  id?: number;
+};
+
+export type LidarIgnoreCorridorArray = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  corridors?: LidarIgnoreCorridor[];
+};
+
 export type MapArea = {
   name?: string;
   area?: Polygon;

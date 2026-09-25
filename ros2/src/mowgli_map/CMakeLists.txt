@@ -46,6 +46,7 @@ add_library(mowgli_map_lib STATIC
   src/area_manager.cpp
   src/costmap_filters.cpp
   src/progress_tracker.cpp
+  src/lidar_corridor_manager.cpp
 )
 
 target_include_directories(mowgli_map_lib PUBLIC

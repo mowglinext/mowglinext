@@ -78,7 +78,7 @@ On mobile, the dashboard stacks vertically: compact hero card, live mini-map, 2x
 | Page | Description |
 |------|-------------|
 | **Dashboard** | State-adaptive hero + live mini-map + telemetry tiles + health check |
-| **Map** | Mapbox GL map editor -- define mowing areas, navigation zones and obstacles, place the dock (position + heading), OpenMower map import, live robot position, joystick for manual mowing |
+| **Map** | Mapbox GL map editor -- define mowing areas, navigation zones and obstacles, place the dock (position + heading), OpenMower map import, [LiDAR ignore lines](LiDAR-Ignore-Lines) along boundary-side hedges/grasses, live robot position, joystick for manual mowing |
 | **Schedule** | Weekly grid view with color-coded schedule blocks, schedule cards with day toggles and time picker, IrriSense soil chip |
 | **Statistics** | Hero stat cards (distance, hours, completion rate, runs), weekly bar chart, a year-of-mowing heatmap, zone coverage bars, session history table |
 | **Settings** | Grouped configuration editor (Appearance, Hardware, Drive Motor, NTRIP Corrections, GPS & Positioning, Sensors, **Localization**, Mowing, Docking, Battery, Safety, Obstacles, Navigation, Rain, Status LEDs, IrriSense, Remote access, Notifications, Advanced) |

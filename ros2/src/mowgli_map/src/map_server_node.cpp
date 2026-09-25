@@ -258,6 +258,9 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   keepout_mask_pub_ =
       create_publisher<nav_msgs::msg::OccupancyGrid>("/keepout_mask", transient_qos);
 
+  lidar_ignore_corridors_pub_ = create_publisher<mowgli_interfaces::msg::LidarIgnoreCorridorArray>(
+      "/mowgli/lidar_ignore_corridors", transient_qos);
+
   // ── Subscribers ──────────────────────────────────────────────────────────
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
       "/map",
@@ -401,6 +404,31 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       {
         on_get_mowing_area(req, res);
       });
+
+  add_lidar_ignore_corridor_srv_ = create_service<mowgli_interfaces::srv::AddLidarIgnoreCorridor>(
+      "~/add_lidar_ignore_corridor",
+      [this](const mowgli_interfaces::srv::AddLidarIgnoreCorridor::Request::SharedPtr req,
+             mowgli_interfaces::srv::AddLidarIgnoreCorridor::Response::SharedPtr res)
+      {
+        on_add_lidar_ignore_corridor(req, res);
+      });
+
+  get_lidar_ignore_corridors_srv_ = create_service<mowgli_interfaces::srv::GetLidarIgnoreCorridors>(
+      "~/get_lidar_ignore_corridors",
+      [this](const mowgli_interfaces::srv::GetLidarIgnoreCorridors::Request::SharedPtr req,
+             mowgli_interfaces::srv::GetLidarIgnoreCorridors::Response::SharedPtr res)
+      {
+        on_get_lidar_ignore_corridors(req, res);
+      });
+
+  clear_lidar_ignore_corridors_srv_ =
+      create_service<mowgli_interfaces::srv::ClearLidarIgnoreCorridors>(
+          "~/clear_lidar_ignore_corridors",
+          [this](const mowgli_interfaces::srv::ClearLidarIgnoreCorridors::Request::SharedPtr req,
+                 mowgli_interfaces::srv::ClearLidarIgnoreCorridors::Response::SharedPtr res)
+          {
+            on_clear_lidar_ignore_corridors(req, res);
+          });
 
   capture_dock_antenna_srv_ = create_service<std_srvs::srv::Trigger>(
       "~/capture_dock_antenna",

@@ -1749,6 +1749,26 @@
     "noContainingArea": "No containing area",
     "promoteTooltip": "Promote to permanent keepout"
   },
+  "mapLidarCorridors": {
+    "header": "LiDAR ignore lines ({{count}})",
+    "hint": "Along a drawn line the LiDAR is ignored within the set width, so the mower follows the recorded boundary next to e.g. a hedge. Everywhere else the LiDAR keeps watching for obstacles.",
+    "safetyWarning": "Inside a line the collision stop is ignored too. Draw it accurately and keep the width small.",
+    "unnamed": "Line {{id}}",
+    "widthLabel": "Ignore width in centimetres",
+    "widthTooltip": "Total width around the line (half on each side), 5-100 cm",
+    "delete": "Delete this line",
+    "drawing": "Click points on the map along the line ({{count}} placed).",
+    "finish": "Finish line",
+    "cancel": "Cancel",
+    "draw": "Draw ignore line",
+    "saveFailed": "Could not save the ignore lines",
+    "lockedHint": "Switch to map edit mode to change these lines.",
+    "smooth": "Make curved",
+    "smoothTooltip": "Round the line through its points (adds points along the curve)",
+    "simplify": "Simplify",
+    "simplifyTooltip": "Remove points that barely change the shape",
+    "editHint": "Select a line on the map, then double-click it to edit: drag a point to move it, drag a midpoint to add a point, select a point and press Delete to remove it."
+  },
   "mapObstacleProposals": {
     "header": "Obstacle proposals ({{count}})",
     "hint": "Nothing is blocked until you accept. The robot skips these spots for the current session only.",

@@ -1,0 +1,3 @@
+---
+LidarIgnoreCorridor[] corridors
+bool success
