@@ -39,6 +39,8 @@
     "dock_calib_cog_min_samples": "integer",
     "dock_calib_cog_std_max_rad": "number",
     "dock_calib_min_baseline_displacement_m": "number",
+    "dock_calib_position_avg_min_samples": "integer",
+    "dock_calib_position_avg_window_s": "number",
     "dock_calib_redock_charge_timeout_s": "number",
     "dock_calib_redock_overshoot_m": "number",
     "dock_calib_reverse_distance_m": "number",

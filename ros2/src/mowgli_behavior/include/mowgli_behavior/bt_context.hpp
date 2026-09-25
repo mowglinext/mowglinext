@@ -460,6 +460,44 @@ struct BTContext
   /// Areas whose every swath is completed-or-skipped this session. Skipped by
   /// GetNextUnmowedArea. Cleared by EndSession.
   std::set<uint32_t> completed_areas;
+  /// mowglinext#637 phase 2: the stable area id (MapArea.msg `id`, phase 1)
+  /// last OBSERVED for each area INDEX. Every map above is keyed by INDEX,
+  /// not id — but the GUI's area edit/delete flow rebuilds the WHOLE area
+  /// list (map_server's on_add_area, `area_manager.cpp`: clear_map + one
+  /// add_area per surviving area) which can shift what area a given index
+  /// refers to, LIVE and mid-session, not only across a process restart.
+  /// GetNextUnmowedArea compares the freshly-probed id against this map on
+  /// EVERY probe (never "verify once and trust forever") and discards the
+  /// per-index state above for that slot on a mismatch, so a re-indexed area
+  /// is never mistaken for the old one that used to sit at that index — it
+  /// cannot silently inherit a stale "completed" flag (and so get skipped
+  /// forever while genuinely unmowed) nor another area's swath/cross-hatch
+  /// history. Loaded from disk (the id column of the "area" row,
+  /// coverage_persistence.cpp) so the check also covers a restart; updated
+  /// in place by every probe thereafter. Never cleared by EndSession — an id
+  /// is a fact about the CURRENT area list, not per-session state.
+  std::map<uint32_t, uint32_t> area_ids;
+  /// Live area-list generation, updated by a subscription to map_server's
+  /// ~/area_list_generation (transient_local — the topic, not a probe
+  /// response, so it is current by the time any BT tick runs regardless of
+  /// whether GetNextUnmowedArea has been ticking). map_server bumps it on
+  /// every successful ~/add_area — i.e. on every edit/delete/save, since the
+  /// GUI's rebuild flow re-adds every surviving area too.
+  uint64_t current_area_list_generation{0};
+  /// Per-index: current_area_list_generation as of the last time THIS index
+  /// was actually reconciled by a live probe (set alongside area_ids in
+  /// GetNextUnmowedArea::processResponse). GetNextUnmowedArea's synchronous
+  /// fast-skip path (onStart/advanceAndProbe skipping already-completed/
+  /// attempted indices without firing a probe) may only trust an index's
+  /// cached completed_areas/attempted_areas flag when this equals
+  /// current_area_list_generation — i.e. nothing has changed since this
+  /// index was last actually verified. An index with no entry here (never
+  /// probed this process) or a stale entry (probed, but the area list has
+  /// since been edited) always falls through to a real probe instead, which
+  /// re-populates both this and area_ids and runs the full id-reconciliation
+  /// in processResponse. Not persisted — a fresh boot starts empty, which is
+  /// safe: nothing is trusted as verified until actually probed again.
+  std::map<uint32_t, uint64_t> area_verified_generation;
 
   /// Set when FollowStrip's swath-completion bookkeeping reported an area
   /// fully mowed, but the mow_progress cross-check found the actually-

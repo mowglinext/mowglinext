@@ -664,6 +664,15 @@ def generate_launch_description() -> LaunchDescription:
                 robot_params.get("dock_calib_cog_bearing_match_max_rad", 0.1047))},
             {"dock_calib_min_baseline_displacement_m": float(
                 robot_params.get("dock_calib_min_baseline_displacement_m", 0.5))},
+            # Datum for the pre-reverse dock-position capture's WGS84->ENU
+            # projection (mowglinext#446) — same values injected into
+            # map_server_node/navsat_converter_node above.
+            {"datum_lat": datum_lat},
+            {"datum_lon": datum_lon},
+            {"dock_calib_position_avg_window_s": float(
+                robot_params.get("dock_calib_position_avg_window_s", 12.0))},
+            {"dock_calib_position_avg_min_samples": int(
+                robot_params.get("dock_calib_position_avg_min_samples", 10))},
         ],
     )
 

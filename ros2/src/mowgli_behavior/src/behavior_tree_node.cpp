@@ -63,6 +63,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/int32.hpp"
+#include "std_msgs/msg/u_int64.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
 using namespace std::chrono_literals;
@@ -309,6 +310,27 @@ private:
                                                        context_->context_mutex);
                                                    context_->lethal_boundary_violation = msg->data;
                                                  });
+
+    // mowglinext#637 phase 2: map_server's area-list generation counter, so
+    // GetNextUnmowedArea's synchronous fast-skip path can tell whether the
+    // area list has been rebuilt since it last verified a given index — see
+    // BTContext::current_area_list_generation's doc comment. transient_local
+    // to match the publisher (map_server_node.cpp ~/area_list_generation) so
+    // this subscription gets the current value immediately even if it
+    // starts after the last edit, instead of waiting for the next one.
+    // current_area_list_generation is one of the coverage-tracking fields
+    // context_mutex deliberately does NOT cover (bt_context.hpp) — every
+    // callback of this node, subscriptions included, shares the default
+    // MutuallyExclusive callback group and is therefore already serialized
+    // against the tick thread.
+    area_list_generation_sub_ =
+        create_subscription<std_msgs::msg::UInt64>("/map_server_node/area_list_generation",
+                                                   rclcpp::QoS(1).transient_local(),
+                                                   [this](std_msgs::msg::UInt64::ConstSharedPtr msg)
+                                                   {
+                                                     context_->current_area_list_generation =
+                                                         msg->data;
+                                                   });
 
     // FollowStrip's end-of-pass coverage-plausibility cross-check (issue
     // #680) — see BTContext::latest_mow_progress's doc comment. transient_local
@@ -1513,6 +1535,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr replan_needed_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr boundary_violation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr lethal_boundary_violation_sub_;
+  rclcpp::Subscription<std_msgs::msg::UInt64>::SharedPtr area_list_generation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr dig_escalated_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::DigEvent>::SharedPtr dig_event_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr mow_progress_sub_;

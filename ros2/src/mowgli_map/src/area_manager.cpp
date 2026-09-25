@@ -924,7 +924,9 @@ void MapServerNode::on_set_docking_point(
   // the EKF to dock_pose at boot via the fusion_graph gauge reset, so a
   // bad calibration leaks straight into the map-frame anchor for every
   // subsequent session. Reject unless ALL conditions hold:
-  //   (1) firmware reports is_charging=true (robot physically on dock)
+  //   (1) firmware reports is_charging=true (robot physically on dock) —
+  //       EXCEPT for a MOTION-sourced call with an explicit (not
+  //       GPS-averaged) position, see below
   //   (2) GPS sample fresh and σ(xy) ≤ dock_set_gps_accuracy_max_m_
   //   (3) EKF yaw converged on the recent rolling window
   // (the two off-dock MOTION writes keep (2) only — see dock_set_gates.hpp)
