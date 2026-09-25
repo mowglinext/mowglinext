@@ -83,6 +83,15 @@
     "noContainers": "No Mowgli containers could be identified",
     "mainboard": "Mainboard firmware",
     "firmwareMeaning": "Compatibility is checked against the robot software's protocol. It does not mean the firmware is the latest release. Disconnected or stale values are last known readings.",
+    "firmwareAvailable": "Firmware {{version}} (protocol {{protocol}}) is available for this installation.",
+    "firmwareUpToDate": "The board runs the firmware of this installation ({{version}}).",
+    "firmwareFromLatestStable": "This installation's release carries no firmware: taken from the latest stable release {{release}}.",
+    "firmwareNoBoard": "No board has been selected yet: flash the firmware once from the onboarding to record it.",
+    "firmwareNoPrebuilt": "There is no prebuilt firmware for {{board}}: use the expert (compile from source) path of the onboarding.",
+    "firmwareCheckFailed": "Could not check the available firmware",
+    "firmwareRelease": "Firmware release",
+    "firmwareFlashNeedsDock": "Put the robot on its charger first: flashing reboots the board and stops the motors and the blade.",
+    "firmwareFlashVersion": "Flash firmware {{version}}",
     "protocol": "Protocol",
     "configuredModel": "Configured mower model",
     "boardRevision": "Board revision",
@@ -713,6 +722,7 @@
     "sensors": "Sensors",
     "tabRobot": "Robot",
     "tabCalibration": "Calibration",
+    "tabParameters": "Advanced parameters",
     "calibrationCancel": "Cancel",
     "calibrationStatusErrorTitle": "Failed to load calibration status",
     "calibrationTimedOut": "Calibration timed out",
@@ -2590,7 +2600,7 @@
     "alertDescription": "The STM32 firmware is the sole safety authority: it cuts the blade on a lift, a tilt or an emergency stop, whatever the ROS2 stack does. The settings below only tune its timings and thresholds, and the firmware keeps each one inside a compiled safe envelope.",
     "firmwareOwnedTitle": "Handled by the firmware",
     "firmwareOwnedDescription": "Lift and tilt detection, the emergency-stop latch and the blade cut-out all live in the STM32 firmware. The interface cannot bypass or disable them: it can only set how long a fault must persist before it trips, and the tilt sensor threshold, each within the limits the firmware enforces.",
-    "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited on the Parameters page."
+    "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited in Diagnostics → Advanced parameters."
   },
   "settingsObstacles": {
     "digSensitivity": "Wheel-slip (dig) sensitivity",
@@ -3534,6 +3544,10 @@
     "topicsDescription": "Full JSON schema and command codes are documented in docs/MQTT_CONTROL.md."
   },
   "settingsSections": {
+    "weather": {
+      "label": "Weather",
+      "description": "Rain sensor behaviour and the IrriSense soil-moisture check: whether the weather lets the robot mow."
+    },
     "updates": {"label": "Updates", "description": "Installed versions, update sources and recovery"},
     "appearance": {
       "label": "Appearance",

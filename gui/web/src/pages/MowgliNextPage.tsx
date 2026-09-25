@@ -702,7 +702,7 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
         <Button
           type="primary"
           size="small"
-          onClick={() => navigate('/onboarding?step=firmware&flash=1')}
+          onClick={() => navigate('/settings?section=updates')}
         >
           {t('mowgliNextPage.firmwareFlashCta')}
         </Button>

@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, dev]
     tags: ['v*.*.*']
-    paths: ['gui/**', 'ros2/**', 'sensors/**', 'install/**', '.github/workflows/deployment-release.yml', '.github/scripts/publish-stable-deployment.sh']
+    paths: ['gui/**', 'ros2/**', 'sensors/**', 'install/**', 'firmware/**', '.github/workflows/deployment-release.yml', '.github/scripts/publish-stable-deployment.sh']
   workflow_dispatch:
 permissions:
   contents: read
@@ -54,6 +54,51 @@ jobs:
           [[ "$protocol" =~ ^[0-9]+$ ]] || exit 1
           printf 'protocol=%s\n' "$protocol" >> "$GITHUB_OUTPUT"
           printf 'id=%s\nrelease=%s\nbranch=%s\ntrack=%s\n' "$id" "$release" "$branch" "$track" >> "$GITHUB_OUTPUT"
+  # The STM32 firmware built from the SAME revision as the images: a dev or
+  # custom deployment attaches it (bins + manifest.json) so the GUI flashes a
+  # firmware whose wire protocol matches this deployment's ROS2 image, instead
+  # of the latest stable release from main. Stable releases get theirs from
+  # firmware-ci.yml's tag job.
+  firmware:
+    needs: identity
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # package_release.py / git_build_id.py derive the firmware version
+          # from the commit count: a shallow clone would report 1.
+          fetch-depth: 0
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-deployment-${{ hashFiles('firmware/stm32/ros_usbnode/platformio.ini') }}
+          restore-keys: |
+            pio-deployment-
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Build every prebuilt permutation
+        working-directory: firmware/stm32/ros_usbnode
+        run: |
+          pip install platformio
+          pio run -e Yardforce500
+          pio run -e Yardforce500B
+      - name: Package binaries + manifest for this deployment's release
+        env:
+          RELEASE: ${{ needs.identity.outputs.release }}
+          REPO: ${{ github.repository }}
+        # Outside the checkout: an untracked output dir would make the
+        # manifest's version "dirty" and differ from the one in the binary.
+        run: |
+          python3 firmware/scripts/package_release.py --build-root firmware/stm32/ros_usbnode \
+            --tag "$RELEASE" --repo "$REPO" --out-dir "$RUNNER_TEMP/firmware-dist"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-firmware
+          path: ${{ runner.temp }}/firmware-dist
+          if-no-files-found: error
   build:
     needs: identity
     strategy:
@@ -117,7 +162,7 @@ jobs:
           name: deployment-${{ matrix.component.name }}-${{ matrix.arch }}
           path: digests/*
   publish:
-    needs: [identity, build, quality-ros2, quality-gui]
+    needs: [identity, build, firmware, quality-ros2, quality-gui]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -129,6 +174,10 @@ jobs:
           pattern: deployment-*
           merge-multiple: true
           path: digests
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-firmware
+          path: firmware-dist
       - uses: actions/setup-go@v6
         with:
           go-version-file: gui/go.mod
@@ -166,5 +215,8 @@ jobs:
           if [[ "$TRACK" == stable ]]; then
             bash ../.github/scripts/publish-stable-deployment.sh
           else
+            # The stable tag already carries firmware-ci's manifest; a dev or
+            # custom deployment ships its own (see the firmware job).
+            cp ../firmware-dist/* .
             gh release create "$RELEASE" ./* --repo "$REPO" --target "$REVISION" --prerelease --title "$BRANCH $DEPLOYMENT" --notes 'Complete stack deployment; mowgli-compose.json defines required/optional services and mowgli-deployment.json pins source, compatibility, images and the bundle checksum.'
           fi

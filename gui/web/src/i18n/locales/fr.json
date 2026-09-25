@@ -83,6 +83,15 @@
     "noContainers": "Aucun conteneur Mowgli identifié",
     "mainboard": "Firmware de la carte principale",
     "firmwareMeaning": "La compatibilité est vérifiée avec le protocole du logiciel du robot. Elle ne signifie pas que le firmware est le plus récent. Les valeurs déconnectées ou périmées sont les dernières connues.",
+    "firmwareAvailable": "Le firmware {{version}} (protocole {{protocol}}) est disponible pour cette installation.",
+    "firmwareUpToDate": "La carte exécute le firmware de cette installation ({{version}}).",
+    "firmwareFromLatestStable": "La release de cette installation ne contient pas de firmware : il est pris dans la dernière release stable {{release}}.",
+    "firmwareNoBoard": "Aucune carte n'a encore été choisie : flashez une fois le firmware depuis l'onboarding pour l'enregistrer.",
+    "firmwareNoPrebuilt": "Il n'y a pas de firmware précompilé pour {{board}} : utilisez le mode expert (compilation depuis les sources) de l'onboarding.",
+    "firmwareCheckFailed": "Impossible de vérifier le firmware disponible",
+    "firmwareRelease": "Release du firmware",
+    "firmwareFlashNeedsDock": "Mettez d'abord le robot sur sa base : le flash redémarre la carte et arrête les moteurs et la lame.",
+    "firmwareFlashVersion": "Flasher le firmware {{version}}",
     "protocol": "Protocole",
     "configuredModel": "Modèle de tondeuse configuré",
     "boardRevision": "Révision de la carte",
@@ -713,6 +722,7 @@
     "sensors": "Capteurs",
     "tabRobot": "Robot",
     "tabCalibration": "Calibration",
+    "tabParameters": "Paramètres avancés",
     "calibrationCancel": "Annuler",
     "calibrationStatusErrorTitle": "Échec du chargement de l’état de calibration",
     "calibrationTimedOut": "Délai de calibration dépassé",
@@ -2586,7 +2596,7 @@
     "alertDescription": "Le firmware STM32 est la seule autorité de sécurité : il coupe la lame en cas de soulèvement, d’inclinaison ou d’arrêt d’urgence, quoi que fasse la pile ROS2. Les réglages ci-dessous n’ajustent que ses délais et seuils, et le firmware garde chacun dans une enveloppe de sécurité compilée.",
     "firmwareOwnedTitle": "Géré par le firmware",
     "firmwareOwnedDescription": "La détection de soulèvement et d’inclinaison, le verrou d’arrêt d’urgence et la coupure de la lame résident tous dans le firmware STM32. L’interface ne peut ni les contourner ni les désactiver : elle règle seulement la durée pendant laquelle un défaut doit persister avant le déclenchement, et le seuil du capteur de basculement, chacun dans les limites imposées par le firmware.",
-    "temperatureThresholdsNote": "La température du moteur de lame est uniquement mesurée et rapportée — aucune couche de la pile n’arrête la lame en fonction de la température. Les seuils d’alerte et d’erreur utilisés par les diagnostics (motor_temp_warn_c et motor_temp_error_c, dans mowgli_monitoring/config/diagnostics.yaml) se modifient sur la page Paramètres."
+    "temperatureThresholdsNote": "La température du moteur de lame est uniquement mesurée et rapportée — aucune couche de la pile n’arrête la lame en fonction de la température. Les seuils d’alerte et d’erreur utilisés par les diagnostics (motor_temp_warn_c et motor_temp_error_c, dans mowgli_monitoring/config/diagnostics.yaml) se modifient dans Diagnostics → Paramètres avancés."
   },
   "settingsObstacles": {
     "digSensitivity": "Sensibilité au patinage (dig)",
@@ -3530,6 +3540,10 @@
     "topicsDescription": "Le schéma JSON complet et les codes de commande sont documentés dans docs/MQTT_CONTROL.md."
   },
   "settingsSections": {
+    "weather": {
+      "label": "Météo",
+      "description": "Comportement du capteur de pluie et vérification d'humidité du sol IrriSense : si la météo permet au robot de tondre."
+    },
     "updates": {"label": "Mises à jour", "description": "Versions installées, sources des mises à jour et récupération"},
     "appearance": {
       "label": "Apparence",

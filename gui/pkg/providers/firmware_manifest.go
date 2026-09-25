@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +20,60 @@ import (
 // GitHub's /releases/latest/download/<asset> always resolves to the newest
 // non-prerelease release, so the GUI never has to know the current tag.
 const DefaultFirmwareManifestURL = "https://github.com/mowglinext/mowglinext/releases/latest/download/manifest.json"
+
+// firmwareReleaseDownloadBase is where a specific release's assets live, and
+// latestFirmwareManifestURL the latest-stable fallback. Variables only so the
+// tests can point them at a local server.
+var (
+	firmwareReleaseDownloadBase = "https://github.com/mowglinext/mowglinext/releases/download/"
+	latestFirmwareManifestURL   = DefaultFirmwareManifestURL
+)
+
+// stableReleaseTag matches a production release (vMAJOR.MINOR.PATCH).
+var stableReleaseTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+// firmwareManifestURLForVersion returns the manifest published WITH the given
+// GUI build: every deployment release (dev, custom branch) and every stable
+// vX.Y.Z release carries the firmware built from the same revision, i.e. the
+// one whose wire protocol matches the ROS2 image of that deployment. A build
+// that is not a release (local, branch image) gets the latest stable manifest;
+// the bool reports whether the URL is the build's own release.
+func firmwareManifestURLForVersion(version string) (string, bool) {
+	if strings.HasPrefix(version, "deployment-") || stableReleaseTag.MatchString(version) {
+		return firmwareReleaseDownloadBase + version + "/manifest.json", true
+	}
+	return latestFirmwareManifestURL, false
+}
+
+// FirmwareManifestSource says which manifest a flash would use.
+type FirmwareManifestSource struct {
+	URL string `json:"url"`
+	// Release is the tag the manifest belongs to.
+	Release string `json:"release"`
+	// OwnRelease is true when the manifest comes from the release this GUI
+	// was installed from, false for the latest-stable fallback.
+	OwnRelease bool `json:"own_release"`
+}
+
+// fetchInstallFirmwareManifest fetches the manifest of the running release,
+// falling back to the latest stable one when that release has none (a
+// deployment published before deployments carried firmware, or a build that
+// is not a release). The fallback is reported so the flash log can say so.
+func fetchInstallFirmwareManifest(version string) (*firmwareManifest, FirmwareManifestSource, error) {
+	url, own := firmwareManifestURLForVersion(version)
+	manifest, err := fetchFirmwareManifest(url)
+	if err == nil {
+		return manifest, FirmwareManifestSource{URL: url, Release: manifest.Tag, OwnRelease: own}, nil
+	}
+	if !own {
+		return nil, FirmwareManifestSource{}, err
+	}
+	manifest, fallbackErr := fetchFirmwareManifest(latestFirmwareManifestURL)
+	if fallbackErr != nil {
+		return nil, FirmwareManifestSource{}, xerrors.Errorf("%v; latest stable: %w", err, fallbackErr)
+	}
+	return manifest, FirmwareManifestSource{URL: latestFirmwareManifestURL, Release: manifest.Tag}, nil
+}
 
 // manifestDownloadTimeout bounds the manifest fetch and the binary download so a
 // hung release server can never wedge the flash flow.

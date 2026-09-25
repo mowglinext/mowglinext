@@ -111,7 +111,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `gui/pkg/providers/db.go` | 203 | bitcask DB, env fallbacks, defaults, corruption backup+recovery |
 | `gui/pkg/providers/irrisense_wetness.go` | 145 | Pure wetness rule (`EvaluateWetness`, `EvaluateZones`) |
 | `gui/pkg/providers/mqtt.go` | 144 | Embedded MQTT broker (`system.mqtt.host`, default `:1883`) bridging topics + 4 service calls |
-| `gui/pkg/providers/firmware_manifest.go` | 133 | Release `manifest.json` fetch, permutation lookup, sha256 download |
+| `gui/pkg/providers/firmware_manifest.go` | 190 | Release `manifest.json` fetch — from THIS installation's release (`buildinfo.Version` = `deployment-*` or `vX.Y.Z`; deployments attach their firmware in `deployment-release.yml`), falling back to `releases/latest` — permutation lookup, sha256 download. `AvailableFirmware` (`firmware.go`) serves `GET /api/setup/firmware/available` for the Updates page flash button |
 | `gui/pkg/providers/cmd_vel_relay.go` | 132 | Persistent WS client to `ws://localhost:8766` |
 | `gui/pkg/providers/irrisense_client.go` | 116 | HTTP client for `/api/ha/gardens[/{id}]` (401/404/429 mapped) |
 | `gui/pkg/providers/homekit.go` | 111 | HAP switch accessory ("MowgliNext"), on→START(1) / off→HOME(2) |

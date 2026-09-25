@@ -6,6 +6,22 @@ import (
 
 type IFirmwareProvider interface {
 	FlashFirmware(writer io.Writer, config FirmwareConfig) error
+	AvailableFirmware() (FirmwareAvailability, error)
+}
+
+// FirmwareAvailability is the prebuilt firmware a flash would install for the
+// saved board selection.
+type FirmwareAvailability struct {
+	Board           string `json:"board"`
+	Panel           string `json:"panel"`
+	Available       bool   `json:"available"`
+	FwVersion       string `json:"fw_version,omitempty"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	// Release the manifest came from; OwnRelease is false when this
+	// installation's release carries no firmware and the latest stable one
+	// was used instead.
+	Release    string `json:"release,omitempty"`
+	OwnRelease bool   `json:"own_release"`
 }
 
 type FirmwareConfig struct {
