@@ -206,6 +206,54 @@ TEST(CoveragePersistence, RoundTripsAllResumeState)
   std::remove(path.c_str());
 }
 
+// mowglinext#637 phase 2: the last-observed area id round-trips per index,
+// including an index that carries NO other resume-relevant state (only
+// cross-hatch history) — it must still get an id row so a later load can
+// detect the area list having changed since this file was written.
+TEST(CoveragePersistence, RoundTripsAreaIds)
+{
+  const std::string path = tempPath("coverage_resume_area_ids.txt");
+  std::remove(path.c_str());
+
+  BTContext saved;
+  seedContext(saved, path);
+  saved.area_ids[0] = 501;
+  saved.area_ids[2] = 502;
+  saved.area_ids[7] = 503;  // no other per-area state — cross-hatch only
+  saved.cross_hatch[7].begin(true);
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  EXPECT_EQ(loaded.area_ids[0], 501u);
+  EXPECT_EQ(loaded.area_ids[2], 502u);
+  EXPECT_EQ(loaded.area_ids[7], 503u);
+
+  std::remove(path.c_str());
+}
+
+// An index with no id ever recorded (0 — the "never observed" sentinel) must
+// not create a spurious ctx.area_ids entry: a real probe seeing an unrecorded
+// id must never be mistaken for "already observed and matching 0".
+TEST(CoveragePersistence, UnrecordedIdIsNotStoredAsZero)
+{
+  const std::string path = tempPath("coverage_resume_unrecorded_id.txt");
+  std::remove(path.c_str());
+
+  BTContext saved;
+  seedContext(saved, path);  // area 0 and 2 get rows; neither has an id set
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  EXPECT_EQ(loaded.area_ids.count(0u), 0u);
+  EXPECT_EQ(loaded.area_ids.count(2u), 0u);
+
+  std::remove(path.c_str());
+}
+
 TEST(CoveragePersistence, MissingFileLeavesContextUntouched)
 {
   BTContext ctx;
@@ -244,11 +292,11 @@ TEST(CoveragePersistence, MalformedRowIsSkippedNotFatal)
   const std::string path = tempPath("coverage_resume_partial.txt");
   {
     std::ofstream f(path, std::ios::trunc);
-    f << "mowgli_coverage_resume v2\n";
+    f << "mowgli_coverage_resume v3\n";
     f << "current_area 1\n";
     f << "area not_a_number garbage\n";  // malformed → skipped
-    // v2 row: area idx pose_count fingerprint resume completed ...
-    f << "area 1 2048 777 512 completed 0 1 2\n";  // valid → loaded
+    // v3 row: area idx id pose_count fingerprint resume completed ...
+    f << "area 1 555 2048 777 512 completed 0 1 2\n";  // valid → loaded
   }
   BTContext ctx;
   ctx.coverage_resume_path = path;
@@ -259,6 +307,29 @@ TEST(CoveragePersistence, MalformedRowIsSkippedNotFatal)
   EXPECT_EQ(ctx.area_plan_fingerprint[1], 777u);
   EXPECT_EQ(ctx.area_resume_pose_index[1], 512u);
   EXPECT_EQ(ctx.area_completed_swaths[1], (std::set<std::size_t>{0, 1, 2}));
+  EXPECT_EQ(ctx.area_ids[1], 555u);
+  std::remove(path.c_str());
+}
+
+// mowglinext#637 phase 2: the header bump is deliberately a hard break, not a
+// soft/optional column — an old v2 row parsed against the new column layout
+// would silently read the pose count into the id field and shift every field
+// after it. An old file must be rejected outright ("start fresh"), exactly
+// like any other unrecognised header.
+TEST(CoveragePersistence, OldVersionHeaderIsRejectedNotMisparsed)
+{
+  const std::string path = tempPath("coverage_resume_old_version.txt");
+  {
+    std::ofstream f(path, std::ios::trunc);
+    f << "mowgli_coverage_resume v2\n";
+    f << "current_area 1\n";
+    f << "area 1 2048 777 512 completed 0 1 2\n";  // valid v2 row
+  }
+  BTContext ctx;
+  ctx.coverage_resume_path = path;
+  EXPECT_FALSE(loadCoverageResumeState(ctx));
+  EXPECT_EQ(ctx.current_area, -1);  // unchanged — nothing parsed
+  EXPECT_TRUE(ctx.area_path_pose_count.empty());
   std::remove(path.c_str());
 }
 
@@ -364,9 +435,9 @@ TEST(CoveragePersistence, AbsentCurrentCommandDefaultsToIdle)
   const std::string path = tempPath("coverage_resume_no_command.txt");
   {
     std::ofstream f(path, std::ios::trunc);
-    f << "mowgli_coverage_resume v2\n";
+    f << "mowgli_coverage_resume v3\n";
     f << "current_area 0\n";
-    f << "area 0 1000 5 512 completed 0 1\n";  // resumable, but no command line
+    f << "area 0 900 1000 5 512 completed 0 1\n";  // resumable, but no command line
   }
   BTContext ctx;
   ctx.coverage_resume_path = path;
@@ -388,6 +459,11 @@ TEST(CoveragePersistence, RoundTripsSingleAreaTarget)
   seedContext(saved, path);
   saved.current_command = 1;
   saved.single_area_target = 3u;
+  // mowglinext#637: the id it was locked in against must survive the same
+  // restart, or the very next probe after reboot would have nothing to
+  // verify the target against and silently re-lock onto whatever is at
+  // index 3 by then.
+  saved.single_area_target_id = 42u;
   ASSERT_TRUE(saveCoverageResumeState(saved));
 
   BTContext loaded;
@@ -395,6 +471,32 @@ TEST(CoveragePersistence, RoundTripsSingleAreaTarget)
   ASSERT_TRUE(loadCoverageResumeState(loaded));
   ASSERT_TRUE(loaded.single_area_target.has_value());
   EXPECT_EQ(*loaded.single_area_target, 3u);
+  ASSERT_TRUE(loaded.single_area_target_id.has_value());
+  EXPECT_EQ(*loaded.single_area_target_id, 42u);
+
+  std::remove(path.c_str());
+}
+
+// A targeted run whose very first dispatch never got a probe response before
+// a restart has a target index but no locked-in id yet — that must read back
+// as "not yet locked in" (so the next probe locks it in fresh), not as a
+// spurious mismatch against nothing.
+TEST(CoveragePersistence, SingleAreaTargetWithoutIdMeansNotYetLockedIn)
+{
+  const std::string path = tempPath("coverage_resume_single_area_no_id.txt");
+  std::remove(path.c_str());
+
+  BTContext saved;
+  seedContext(saved, path);
+  saved.current_command = 1;
+  saved.single_area_target = 2u;
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  ASSERT_TRUE(loaded.single_area_target.has_value());
+  EXPECT_FALSE(loaded.single_area_target_id.has_value());
 
   std::remove(path.c_str());
 }
@@ -491,7 +593,7 @@ TEST(CoveragePersistence, MalformedCrossHatchStateIsIgnored)
   const auto path = tempPath("cross_hatch_corrupt.txt");
   {
     std::ofstream out(path);
-    out << "mowgli_coverage_resume v2\ncross_hatch_area 0 1 5 1 1 -1\n";
+    out << "mowgli_coverage_resume v3\ncross_hatch_area 0 1 5 1 1 -1\n";
   }
   BTContext ctx;
   ctx.coverage_resume_path = path;

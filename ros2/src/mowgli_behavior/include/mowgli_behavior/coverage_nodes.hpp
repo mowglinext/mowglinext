@@ -732,7 +732,11 @@ private:
   BT::NodeStatus processResponse();
 
   /// Advance current_area_idx_ past completed/attempted areas and fire the
-  /// next existence probe. Returns RUNNING (probe in flight) or FAILURE.
+  /// next existence probe. Returns RUNNING (probe in flight) or FAILURE. The
+  /// completed/attempted skip is only taken when isSkipVerified() confirms
+  /// the index was reconciled at the CURRENT area-list generation
+  /// (mowglinext#637 phase 2, coverage_nodes.cpp) — otherwise it falls
+  /// through to a real probe, which reconciles it in processResponse.
   BT::NodeStatus advanceAndProbe();
 
   // Existence probe: GetMowingArea(index).success is false once index passes
