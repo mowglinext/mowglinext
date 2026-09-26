@@ -13,7 +13,7 @@ on:
       - 'firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/**'
       - '.github/workflows/msg-codegen-drift.yml'
   pull_request:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - 'ros2/src/mowgli_interfaces/**'
       - 'gui/generate_go_msgs.sh'
