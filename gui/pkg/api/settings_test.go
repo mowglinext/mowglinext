@@ -1113,6 +1113,77 @@ func TestPostSettingsYAML_ResetToDefault(t *testing.T) {
 	assert.Contains(t, string(content), "datum_lat: 48.123")
 }
 
+func TestPostSettingsYAML_ExplicitDeleteSchemaDefault(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	yamlFile := createTempYAMLFileAtGuiRoot(t, `mowgli:
+  ros__parameters:
+    mowing_speed: 0.55
+    transit_speed: 0.25
+    datum_lat: 48.123
+`)
+	envFile := createTempConfigFileAtGuiRoot(t, "")
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+	router := setupSettingsRouter(db)
+
+	body, err := json.Marshal(map[string]any{
+		"mowing_speed":  nil,
+		"transit_speed": 0.5,
+	})
+	require.NoError(t, err)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/yaml", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	assert.NotContains(t, string(content), "mowing_speed:")
+	assert.Contains(t, string(content), "transit_speed: 0.5")
+	assert.Contains(t, string(content), "datum_lat: 48.123")
+}
+
+func TestPostSettingsYAML_ExplicitDeleteCustomKey(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	yamlFile := createTempYAMLFileAtGuiRoot(t, `mowgli:
+  ros__parameters:
+    advanced_custom_parameter: 42
+    mowing_speed: 0.55
+    datum_lat: 48.123
+`)
+	envFile := createTempConfigFileAtGuiRoot(t, "")
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+	router := setupSettingsRouter(db)
+
+	body, err := json.Marshal(map[string]any{"advanced_custom_parameter": nil})
+	require.NoError(t, err)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/yaml", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	assert.NotContains(t, string(content), "advanced_custom_parameter:")
+	assert.Contains(t, string(content), "mowing_speed: 0.55")
+	assert.Contains(t, string(content), "datum_lat: 48.123")
+}
+
 // TestPostSettingsYAMLPrunesRetiredKeys verifies that keys retired in issue #195
 // (removed from BOTH the ROS2 template and the GUI schema, because no node ever
 // read them) are scrubbed from a pre-existing installed YAML on the next save.

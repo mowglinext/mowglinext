@@ -1450,9 +1450,11 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		// "reset to default" for a key that has no schema default) — drop the
 		// key so it is removed from the YAML rather than written back as
 		// "key: null".
+		explicitlyDeletedKeys := map[string]bool{}
 		for key, value := range payload {
 			if value == nil {
 				delete(existing, key)
+				explicitlyDeletedKeys[key] = true
 			} else {
 				existing[key] = value
 			}
@@ -1470,6 +1472,11 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		// them — scrub them explicitly (issue #195).
 		for key := range retiredParamKeys {
 			delete(existing, key)
+			prunedKeys[key] = true
+		}
+		// nestToROS2YAML clones the on-disk YAML, so explicit deletes must also
+		// reach the nested prune step or the clone would restore their old values.
+		for key := range explicitlyDeletedKeys {
 			prunedKeys[key] = true
 		}
 
