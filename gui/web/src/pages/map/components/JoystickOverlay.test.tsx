@@ -43,4 +43,27 @@ describe('JoystickOverlay', () => {
         );
         expect(container.firstChild).not.toBeNull();
     });
+
+    it('hides the joystick while another client owns manual driving', () => {
+        render(
+            <JoystickOverlay visible={true} controlState="busy" onMove={noop} onStop={noop}/>,
+        );
+        expect(screen.getByText(en.mapJoystick.controlInUse)).toBeTruthy();
+        expect(screen.queryByRole('button', {name: en.mapJoystick.takeControl})).toBeNull();
+    });
+
+    it('offers control only after the previous owner releases it', () => {
+        const onTakeControl = vi.fn();
+        render(
+            <JoystickOverlay
+                visible={true}
+                controlState="available"
+                onTakeControl={onTakeControl}
+                onMove={noop}
+                onStop={noop}
+            />,
+        );
+        screen.getByRole('button', {name: en.mapJoystick.takeControl}).click();
+        expect(onTakeControl).toHaveBeenCalledTimes(1);
+    });
 });

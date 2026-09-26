@@ -817,7 +817,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onHome: mowerAction("high_level_control", {Command: 2}),
         onEmergencyOn: mowerAction("emergency", {Emergency: 1}),
         onEmergencyOff: mowerAction("emergency", {Emergency: 0}),
-        onAreaRecording: mowerAction("high_level_control", {Command: 3}),
+        onAreaRecording: async () => {
+            joyStream.requestControl();
+            try {
+                await mowerAction("high_level_control", {Command: 3})();
+            } catch (error) {
+                joyStream.releaseControl();
+                throw error;
+            }
+        },
         onMowNextArea: mowerAction("high_level_control", {Command: 4}),
         // Match MapToolbar's isIdle: the BT publishes IDLE_DOCKED as the
         // primary resting state; "IDLE" without a suffix only appears as the
@@ -840,7 +848,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onBladeOff: mowerAction("blade_control", {mow_enabled: 0, mow_direction: 0}),
         onRecordFinish: mowerAction("high_level_control", {Command: 5}),
         onRecordCancel: mowerAction("high_level_control", {Command: 6}),
-    }), [mowerAction, highLevelStatus.highLevelStatus.state_name]);
+    }), [mowerAction, highLevelStatus.highLevelStatus.state_name, joyStream]);
 
     // Centered message panel used for the missing-token and missing-datum
     // states — a plain, translated explanation instead of an eternal spinner
@@ -1209,6 +1217,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     visible={highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode}
                     isRecording={highLevelStatus.highLevelStatus.state_name === "RECORDING"}
                     mobile={isMobile}
+                    controlState={joyStream.controlState}
+                    onTakeControl={joyStream.requestControl}
                     onMove={handleJoyMove}
                     onStop={handleJoyStop}
                     onFinishRecording={mowerActions.onRecordFinish}

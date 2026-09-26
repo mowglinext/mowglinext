@@ -49,6 +49,56 @@ func TestServiceRoute_HighLevelControl(t *testing.T) {
 	assert.Equal(t, "/behavior_tree_node/high_level_control", mock.ServiceCalls[0].Service)
 }
 
+func TestServiceRoute_StopRevokesTeleopAndPublishesZero(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		res.(*mowgli.HighLevelControlRes).Success = true
+	}
+	router := setupMowgliNextRouter(mock)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/mowglinext/call/high_level_control", bytes.NewReader([]byte(`{"Command":8}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, mock.GetPublishes(), 1)
+	assert.Equal(t, "/cmd_vel_teleop", mock.GetPublishes()[0].Topic)
+}
+
+func TestServiceRoute_ManualModeUnlocksTeleopOnlyWhenAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		success bool
+		blocked bool
+		status  int
+	}{
+		{name: "accepted", success: true, blocked: false, status: http.StatusOK},
+		{name: "rejected", success: false, blocked: true, status: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := types.NewMockRosProvider()
+			mock.ServiceResponder = func(_ string, _ any, res any) {
+				res.(*mowgli.HighLevelControlRes).Success = tc.success
+			}
+			teleop := newTeleopController(mock)
+			teleop.globalStop()
+			router := gin.New()
+			ServiceRoute(router.Group("/api/mowglinext"), mock, teleop)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("POST", "/api/mowglinext/call/high_level_control", bytes.NewReader([]byte(`{"Command":7}`)))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tc.status, w.Code)
+			teleop.mu.Lock()
+			assert.Equal(t, tc.blocked, teleop.blocked)
+			teleop.mu.Unlock()
+		})
+	}
+}
+
 func TestServiceRoute_Emergency(t *testing.T) {
 	mock := types.NewMockRosProvider()
 	router := setupMowgliNextRouter(mock)
@@ -195,6 +245,8 @@ func TestServiceRoute_StartInArea(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	require.Len(t, mock.ServiceCalls, 1)
 	assert.Equal(t, "/behavior_tree_node/start_in_area", mock.ServiceCalls[0].Service)
+	require.Len(t, mock.GetPublishes(), 1)
+	assert.Equal(t, "/cmd_vel_teleop", mock.GetPublishes()[0].Topic)
 }
 
 func TestServiceRoute_ActionServiceRejection(t *testing.T) {

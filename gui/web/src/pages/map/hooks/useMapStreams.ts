@@ -26,6 +26,7 @@ import { useRobotDescription } from "../../../hooks/useRobotDescription.ts";
 import {useLatestThrottle} from "./useLatestThrottle.ts";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 import {MAP_RENDER_BUDGETS} from "./mapRenderBudget.ts";
+import {useTeleopControl} from "./useTeleopControl.ts";
 
 export type MowProgressImage = GridImage;
 
@@ -170,13 +171,7 @@ export function useMapStreams({
         }
     );
 
-    const joyStream = useWS<string>(
-        () => {
-        },
-        () => {
-        },
-        () => {}
-    );
+    const joyStream = useTeleopControl();
 
     // Mow-progress overlay and the LiDAR anchor map are both OccupancyGrids
     // rasterized off the message handler (see useGridImageStream).

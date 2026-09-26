@@ -17,7 +17,12 @@ const MAX_ANGULAR_RAD_S = 0.6;
 
 interface UseManualModeOptions {
     mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
-    joyStream: { sendJsonMessage: (msg: unknown) => void; start: (uri: string) => void };
+    joyStream: {
+        sendCommand: (msg: TwistStamped) => void;
+        requestControl: () => void;
+        releaseControl: () => void;
+        isOwner: boolean;
+    };
     stateName?: string;
 }
 
@@ -54,7 +59,7 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
         clearInterval(joyIntervalRef.current);
         joyIntervalRef.current = setInterval(() => {
             if (lastTwistRef.current) {
-                joyStream.sendJsonMessage(lastTwistRef.current);
+                joyStream.sendCommand(lastTwistRef.current);
             }
         }, JOY_SEND_INTERVAL_MS);
     }, [joyStream]);
@@ -63,6 +68,15 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
         clearInterval(joyIntervalRef.current);
         joyIntervalRef.current = undefined;
     }, []);
+
+    // If STOP, lease expiry, or disconnect removes ownership while the stick
+    // is held, also remove the local repeat timer. The backend rejects those
+    // stale frames, but the browser should not keep generating them.
+    useEffect(() => {
+        if (joyStream.isOwner) return;
+        lastTwistRef.current = null;
+        stopJoyInterval();
+    }, [joyStream.isOwner, stopJoyInterval]);
 
     // Cleanup on unmount — stop joy interval and any pending exit debounce
     useEffect(() => {
@@ -75,7 +89,17 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
     const handleManualMode = async () => {
         // Joy stream is auto-started by useMapStreams when state becomes MANUAL_MOWING.
         // Send the command first — the BT will transition to MANUAL_MOWING state.
-        await mowerAction("high_level_control", {Command: 7})();
+        try {
+            await mowerAction("high_level_control", {Command: 7})();
+            // The API opens the teleop session before this request resolves.
+            // Requesting earlier can race the websocket's initial `stopped`
+            // snapshot, which clears pending intent and leaves the operator
+            // needing an extra Take Control click even when nobody owns it.
+            joyStream.requestControl();
+        } catch (error) {
+            joyStream.releaseControl();
+            throw error;
+        }
         // The BT owns the blade: once state=4 (MANUAL_MOWING) it re-ticks
         // SetMowerEnabled(true) ~10 Hz. We deliberately do NOT send mow_enabled=1
         // from the client here — that call races the firmware, which zeroes the
@@ -107,7 +131,7 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
             twist: {linear: {x: linear, y: 0, z: 0}, angular: {z: angular, x: 0, y: 0}},
         };
         lastTwistRef.current = msg;
-        joyStream.sendJsonMessage(msg);
+        joyStream.sendCommand(msg);
         if (!joyIntervalRef.current) {
             startJoyInterval();
         }
@@ -120,7 +144,7 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
         };
         lastTwistRef.current = null;
         stopJoyInterval();
-        joyStream.sendJsonMessage(msg);
+        joyStream.sendCommand(msg);
     }, [joyStream, stopJoyInterval]);
 
     return {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop};

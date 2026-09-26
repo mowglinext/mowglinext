@@ -1817,7 +1817,12 @@
   "mapJoystick": {
     "finish": "Terminer",
     "cancel": "Annuler",
-    "home": "Retour base"
+    "home": "Retour base",
+    "controlInUse": "La conduite manuelle est contrôlée depuis un autre appareil.",
+    "controlAvailable": "La conduite manuelle est disponible.",
+    "controlStopped": "La conduite manuelle a été arrêtée.",
+    "connecting": "Connexion de la conduite manuelle…",
+    "takeControl": "Prendre le contrôle"
   },
   "mapManualMode": {},
   "mapBearing": {

@@ -1821,7 +1821,12 @@
   "mapJoystick": {
     "finish": "Finish",
     "cancel": "Cancel",
-    "home": "Home"
+    "home": "Home",
+    "controlInUse": "Manual driving is controlled from another device.",
+    "controlAvailable": "Manual driving control is available.",
+    "controlStopped": "Manual driving has been stopped.",
+    "connecting": "Connecting manual driving control…",
+    "takeControl": "Take control"
   },
   "mapManualMode": {},
   "mapBearing": {
