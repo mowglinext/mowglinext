@@ -72,8 +72,8 @@ assert_contains "gnss connection flag generation exists" "parts.push('--gnss-con
 assert_not_contains "web composer no longer emits legacy --gnss flags" "--gnss=' + state.gnss" "$html"
 assert_not_contains "web composer no longer emits legacy --gps flags" "--gps=' + state.gps" "$html"
 assert_not_contains "gps group removed from composer" 'id="gps-group"' "$html"
-assert_contains "tfluna group is disabled in ui" 'id="tfluna-group" aria-disabled="true"' "$html"
-assert_contains "tfluna unavailability is explicit" "Temporarily disabled on this branch" "$html"
+assert_not_contains "TF-Luna group is not offered by the current composer" 'id="tfluna-group"' "$html"
+assert_not_contains "obsolete TF-Luna temporary-disabled copy is absent" "Temporarily disabled on this branch" "$html"
 
 assert_contains "channel group exists" 'data-group="channel"' "$html"
 assert_contains "channel option main exists" 'data-value="main"' "$html"
