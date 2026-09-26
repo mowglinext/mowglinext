@@ -2,17 +2,18 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
-
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -45,17 +46,23 @@ func (f fixedPrecisionFloat) MarshalYAML() (any, error) {
 	}, nil
 }
 
-// writePreservingPerms writes content to path, preserving the existing
-// file's mode and uid/gid when the file already exists. When the file
-// is being created for the first time, it is written owner- and
-// group-writable (0664) so other processes (ROS containers) sharing the
-// file's group can still update it. NOTE: 0664 is NOT world-writable, so
-// the ROS-side line-splice writers (calibration service, set_docking_point,
-// drive-tuning rollback) only persist if their container shares the file's
-// gid; if the containers run with a different uid AND gid, those write-backs
-// fail with EACCES. The previous behavior would silently rewrite the file as
-// owned by the GUI process with mode 0644, which locked out those writers.
+// writePreservingPerms atomically replaces path while preserving the existing
+// file's mode and uid/gid when available. New files are owner- and
+// group-writable (0664) so other processes (ROS containers) sharing the file's
+// group can still update it. NOTE: 0664 is NOT world-writable, so the ROS-side
+// line-splice writers (calibration service, set_docking_point, drive-tuning
+// rollback) only persist if their container shares the file's gid; if the
+// containers run with a different uid AND gid, those write-backs fail with
+// EACCES. Replacing the file in its own directory keeps the rename on the same
+// filesystem; the installed config directory is shared as a directory mount
+// between the GUI and ROS containers.
 func writePreservingPerms(path string, content []byte) error {
+	return writePreservingPermsWithWriter(path, content, (*os.File).Write)
+}
+
+// writePreservingPermsWithWriter accepts the write operation so tests can
+// inject a failure after writing part of the temporary file.
+func writePreservingPermsWithWriter(path string, content []byte, write func(*os.File, []byte) (int, error)) error {
 	mode := os.FileMode(0664)
 	var uid, gid int = -1, -1
 	if info, err := os.Stat(path); err == nil {
@@ -64,21 +71,66 @@ func writePreservingPerms(path string, content []byte) error {
 			uid = int(stat.Uid)
 			gid = int(stat.Gid)
 		}
-	}
-	if err := os.WriteFile(path, content, mode); err != nil {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	// os.WriteFile only applies the mode on creation; force it after
-	// every write so an externally-changed mode does not stick.
-	if err := os.Chmod(path, mode); err != nil {
+
+	temp, err := os.CreateTemp(filepath.Dir(path), ".mowgli-settings-*.tmp")
+	if err != nil {
 		return err
 	}
+	tempPath := temp.Name()
+	closed := false
+	replaced := false
+	defer func() {
+		if !closed {
+			_ = temp.Close()
+		}
+		if !replaced {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	written, err := write(temp, content)
+	if err != nil {
+		return err
+	}
+	if written != len(content) {
+		return io.ErrShortWrite
+	}
+
 	if uid >= 0 && gid >= 0 {
-		// Best-effort: chown can fail when the GUI process is not root
-		// (e.g. running directly on the host). In that case the file
-		// was opened in-place so ownership is already preserved.
-		_ = os.Chown(path, uid, gid)
+		info, err := temp.Stat()
+		if err != nil {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("cannot inspect temporary settings file ownership")
+		}
+		if int(stat.Uid) != uid || int(stat.Gid) != gid {
+			// If ownership cannot be copied, keep the old file rather than
+			// installing a replacement that could lock out ROS-side writers.
+			if err := temp.Chown(uid, gid); err != nil {
+				return err
+			}
+		}
 	}
+	if err := temp.Chmod(mode); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		closed = true
+		return err
+	}
+	closed = true
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	replaced = true
 	return nil
 }
 
