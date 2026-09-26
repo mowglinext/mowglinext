@@ -538,7 +538,14 @@ func (m *Manager) run(recovery bool) {
 		if err = m.phase("quiescing", nil); err != nil {
 			return
 		}
-		if err = m.backend.Maintenance(ctx, true); err != nil {
+		if backend, ok := m.backend.(interface {
+			PrepareUpdate(context.Context, Plan) error
+		}); ok {
+			err = backend.PrepareUpdate(ctx, j.Plan)
+		} else {
+			err = m.backend.Maintenance(ctx, true)
+		}
+		if err != nil {
 			_ = m.phase("recovery_required", err)
 			return
 		}

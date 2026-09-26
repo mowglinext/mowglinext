@@ -3714,6 +3714,13 @@
     }
   },
   "hostUpdater": {
+    "customShort": "Perso",
+    "standardStackShort": "Cohérent",
+    "localServiceShort": "Local",
+    "unhealthyShort": "Dégradé",
+    "component": "Composant",
+    "runningBuild": "Version active / date",
+    "status": "État",
     "changelog": {
       "title": "Contenu de cette mise à jour",
       "features": "Nouveautés",
