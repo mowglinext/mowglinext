@@ -75,8 +75,8 @@ Complete deployment image metadata/versioning: `.github/workflows/deployment-rel
 | `test/test_drive_pid_math.py` | 1061 | 35 pytest cases over the pure layer |
 | `README.md` | 83 | Operator usage, flags, preset rationale (`1964 / 3` ticks/m) |
 | `mowgli_tools/robot_hardware_config.py` | 51 | Reads `chassis_mass_kg` / `wheel_radius` / `ticks_per_revolution` out of a `mowgli_robot.yaml`-shaped payload |
-| `test/test_drive_pid_tuner.py` | 31 | 2 cases over `extract_robot_hardware_config` — **not registered in `CMakeLists.txt`** |
-| `CMakeLists.txt` | 30 | `ament_python_install_package`, installs `scripts/tune_drive_pid`, registers only `test_drive_pid_math` |
+| `test/test_drive_pid_tuner.py` | 31 | 2 cases over `extract_robot_hardware_config`, registered with `ament_cmake_pytest` |
+| `CMakeLists.txt` | 35 | `ament_python_install_package`, installs `scripts/tune_drive_pid`, registers both pytest suites |
 | `package.xml` | 28 | `mowgli_tools`, ament_cmake, exec_deps rclpy / geometry_msgs / nav_msgs / sensor_msgs / mowgli_interfaces / python3-yaml |
 | `scripts/tune_drive_pid` | 7 | Console entry point → `mowgli_tools.drive_pid_tuner:main` |
 | `setup.cfg` | 3 | flake8 `max-line-length = 130` |
@@ -165,7 +165,7 @@ git-clang-format-18 --binary clang-format-18 --style=file:ros2/.clang-format \
   --diff "$(git merge-base origin/main HEAD)" -- ros2/src
 
 # mowgli_tools
-colcon test --packages-select mowgli_tools                     # only test_drive_pid_math is registered
+colcon test --packages-select mowgli_tools                     # runs both registered pytest suites
 python3 -m pytest tools/motor/test                             # runs BOTH test files (needs mowgli_tools importable)
 ros2 run mowgli_tools tune_drive_pid --help
 
@@ -201,7 +201,6 @@ Where the tests run in CI: `tools/motor` is symlinked to `ros2/src/mowgli_tools`
 - `msg-codegen-drift.yml` and `protocol-version-drift.yml` have `pull_request: branches: [main]` only (L15–16 / L12–13). A PR into `dev` gets those gates only through the `push` trigger on the source branch — a `codex/…`-style branch name matches neither, so both gates can be silently absent on a `dev` PR. `ros2-ci.yml` solved exactly this problem with the `changes` job.
 - `docs/test_install.sh` and `docs/test_web_composer.sh` are both RED at this SHA and no workflow runs them: `test_install.sh` L57–58 asserts help strings without the `first-boot default:` wording that `install.sh` L151–152 actually prints; `test_web_composer.sh` L75–76 asserts a `tfluna-group` that no longer exists in `docs/index.html`.
 - `install.sh` still parses `--tfluna=` (L142, L306–317) and forwards it to the installer, but the composer never emits it and the UI group is gone.
-- `tools/motor/CMakeLists.txt` L24–27 registers only `test_drive_pid_math`; `test/test_drive_pid_tuner.py` never runs under `colcon test`.
 - `static-analysis` is `continue-on-error: true` (`ros2-ci.yml` L472) — cppcheck findings never fail a PR; only the log/artifact records them.
 - `auto-label.yml` and `welcome.yml` use `pull_request_target`, which runs with repo write scope on fork PRs. Neither checks out PR head code — keep it that way.
 - `changes` reads `github.base_ref` through `env:` rather than inlining it (`ros2-ci.yml` L56–60) because a fork branch name is attacker-controlled; preserve that pattern in any new script step.
