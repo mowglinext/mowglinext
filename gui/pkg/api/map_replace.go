@@ -44,6 +44,11 @@ const (
 	maxSnapshotAreas = 512
 )
 
+// mapReplacementLock serializes the GUI's full read/replace/persist/rollback
+// transaction. A channel-backed lock lets a request stop waiting when its
+// caller context expires.
+var mapReplacementLock = make(chan struct{}, 1)
+
 // triggerRes decodes a std_srvs/srv/Trigger response. The generated
 // mowgli.ClearMapRes has no message field, which is where map_server explains
 // a refused save ("Save failed: …").
@@ -158,9 +163,21 @@ func persistAreas(ctx context.Context, provider types.IRosProvider) error {
 //     that failed too, map_server holds a partial map and the error says so;
 //   - only save_areas failed          → the NEW map is live but not on disk.
 func replaceMapInternal(ctx context.Context, provider types.IRosProvider, req *mowgli.ReplaceMapReq) error {
+	return replaceMapInternalWithLockWait(ctx, provider, req, nil)
+}
+
+// replaceMapInternalWithLockWait exposes the point where a caller encounters a
+// held transaction lock so concurrency tests can coordinate that boundary
+// without timing assumptions. Production callers pass no callback.
+func replaceMapInternalWithLockWait(ctx context.Context, provider types.IRosProvider, req *mowgli.ReplaceMapReq, onWait func()) error {
 	if req == nil {
 		return errors.New("replaceMapInternal: nil request")
 	}
+	if err := lockMapReplacement(ctx, onWait); err != nil {
+		return fmt.Errorf("replace map: waiting for another map replacement: %w", err)
+	}
+	defer unlockMapReplacement()
+
 	previous, err := snapshotMap(ctx, provider)
 	if err != nil {
 		return fmt.Errorf("replace map: could not read the current map, so nothing was changed: %w", err)
@@ -173,6 +190,35 @@ func replaceMapInternal(ctx context.Context, provider types.IRosProvider, req *m
 		return fmt.Errorf("replace map: the new map is live but was NOT written to disk and will be lost at the next restart — check free space on the robot, then save again: %w", err)
 	}
 	return nil
+}
+
+func lockMapReplacement(ctx context.Context, onWait func()) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case mapReplacementLock <- struct{}{}:
+	default:
+		if onWait != nil {
+			onWait()
+		}
+		select {
+		case mapReplacementLock <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	// The context may have expired at the same time the lock became
+	// available. Do not start a transaction after its caller has left.
+	if err := ctx.Err(); err != nil {
+		<-mapReplacementLock
+		return err
+	}
+	return nil
+}
+
+func unlockMapReplacement() {
+	<-mapReplacementLock
 }
 
 // restorePreviousMap puts the snapshot back after a failed replace and
