@@ -172,6 +172,9 @@ func (m *Manager) UpgradeAgent(ctx context.Context, c HostConfig, id string) err
 	if !ok {
 		return errors.New("no updater binary for this platform")
 	}
+	if sameWorkerBuild(binary, BuildID, Version) {
+		return errors.New("this updater build is already running")
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", assetURL(target.Source.Repository, target.ReleaseTag, binary.Asset), nil)
 	if err != nil {
 		return err
@@ -207,6 +210,14 @@ func (m *Manager) UpgradeAgent(ctx context.Context, c HostConfig, id string) err
 	}
 	if err = validateWorkerProbe(output, binary.Version); err != nil {
 		return err
+	}
+	if binary.BuildID != "" {
+		var probe struct {
+			BuildID string `json:"build_id"`
+		}
+		if json.Unmarshal(output, &probe) != nil || probe.BuildID != binary.BuildID {
+			return errors.New("updater build identity probe failed")
+		}
 	}
 
 	current, err := os.Executable()
@@ -344,6 +355,15 @@ func supervise(ctx context.Context, configPath string, c HostConfig, original st
 			break
 		}
 	}
+}
+
+func sameWorkerBuild(candidate Binary, buildID, version string) bool {
+	if buildID != "" && candidate.BuildID != "" {
+		return candidate.BuildID == buildID
+	}
+	// Older publishers/workers have no content identity. Never infer sameness
+	// from the container release or a missing identity.
+	return candidate.Version == version
 }
 
 func validateWorkerProbe(output []byte, expectedVersion string) error {

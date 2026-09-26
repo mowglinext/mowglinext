@@ -207,10 +207,17 @@ jobs:
           cd gui
           go test ./pkg/updater
           for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/mowglinext/mowglinext/pkg/updater.Version=$DEPLOYMENT -X github.com/mowglinext/mowglinext/pkg/updater.Revision=$REVISION" -o "../dist/mowgli-updater-linux-$arch" ./cmd/mowgli-updater
+            # Hash executable inputs without per-release metadata. This includes
+            # transitive dependencies, toolchain and build flags, but a frontend
+            # or ROS-only commit must not advertise a new host worker.
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -buildvcs=false -trimpath -ldflags "-s -w" -o "../dist/mowgli-updater-linux-$arch" ./cmd/mowgli-updater
+            worker_build=$(sha256sum "../dist/mowgli-updater-linux-$arch" | cut -d' ' -f1)
+            printf '%s\n' "$worker_build" > "../dist/mowgli-updater-linux-$arch.build-id"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/mowglinext/mowglinext/pkg/updater.Version=$DEPLOYMENT -X github.com/mowglinext/mowglinext/pkg/updater.Revision=$REVISION -X github.com/mowglinext/mowglinext/pkg/updater.BuildID=$worker_build" -o "../dist/mowgli-updater-linux-$arch" ./cmd/mowgli-updater
           done
           go run ./cmd/publish-deployment --repository "$REPO" --branch "$BRANCH" --track "$TRACK" --revision "$REVISION" --id "$DEPLOYMENT" --release "$RELEASE" --assets ../dist --compose-dir ../install/compose --protocol "$protocol" --definition ../install/deployment.json --component-contracts "$(jq -c .component_compatibility ../install/deployment.json)" --gui-compatibility "$(jq -r .gui_compatibility ../install/deployment.json)"
           cd ../dist
+          rm mowgli-updater-linux-*.build-id
           sha256sum mowgli-updater-linux-* > updater-SHA256SUMS
           if [[ "$TRACK" == stable ]]; then
             bash ../.github/scripts/publish-stable-deployment.sh

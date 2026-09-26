@@ -3714,6 +3714,13 @@
     }
   },
   "hostUpdater": {
+    "customShort": "Custom",
+    "standardStackShort": "Matched",
+    "localServiceShort": "Local",
+    "unhealthyShort": "Unhealthy",
+    "component": "Component",
+    "runningBuild": "Running version / date",
+    "status": "Status",
     "changelog": {
       "title": "What's in this update",
       "features": "New features",

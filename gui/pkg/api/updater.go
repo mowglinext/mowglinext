@@ -184,8 +184,6 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 		switch {
 		case !fresh(statusAt) || !fresh(stateAt) || !fresh(odomAt):
 			result.Reason = "Fresh firmware, behaviour and wheel telemetry required"
-		case !status.FirmwareCompatible:
-			result.Reason = "Firmware communication is incompatible"
 		case state.State != 1:
 			result.Reason = "Mower must be idle before updating"
 		case math.IsNaN(linear) || math.IsNaN(angular) || math.Abs(linear) > 0.005 || math.Abs(angular) > 0.01:
@@ -193,7 +191,14 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 		case status.MowEnabled || !fresh(stampTime(status.BladeStatusStamp)) || math.IsNaN(float64(status.MowerMotorRpm)) || math.Abs(float64(status.MowerMotorRpm)) > 1:
 			result.Reason = "Fresh blade-off telemetry required"
 		default:
-			result.Ready = true
+			// A protocol-first upgrade can leave the old ROS bridge incompatible.
+			// This verdict proves only safe maintenance entry from live telemetry;
+			// it must never authorize motion or release the maintenance gate.
+			result.MaintenanceReady = status.FirmwareProtocolVersion > 0
+			result.Ready = result.MaintenanceReady && status.FirmwareCompatible
+			if !result.Ready {
+				result.Reason = "Firmware communication is incompatible"
+			}
 		}
 		mu.Unlock()
 		if !result.GPSFresh {
