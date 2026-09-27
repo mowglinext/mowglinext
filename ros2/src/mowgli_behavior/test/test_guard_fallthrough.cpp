@@ -299,6 +299,132 @@ std::string ExtractGuardBlock(const std::string& xml, const std::string& guard_n
   return {};
 }
 
+// Execute the production guard, keeping its conditions and control flow real.
+// Only the handler's effects and MainLogic are probes: no hardware or timers.
+struct LocalizationProbe
+{
+  int main_ticks{0};
+  int wait_statuses{0};
+  int stop_ticks{0};
+  int blade_off_ticks{0};
+};
+
+BT::Tree MakeProductionLocalizationTree(BT::BehaviorTreeFactory& factory,
+                                        const std::shared_ptr<BTContext>& ctx,
+                                        LocalizationProbe& probe)
+{
+  auto blackboard = BT::Blackboard::create();
+  blackboard->set("context", ctx);
+  factory.registerNodeType<IsCharging>("IsCharging");
+  factory.registerNodeType<IsCommand>("IsCommand");
+  factory.registerNodeType<mowgli_behavior::IsDocking>("IsDocking");
+  factory.registerNodeType<IsLocalizationDegraded>("IsLocalizationDegraded");
+  factory.registerSimpleAction("MarkGuardHalt",
+                               [](BT::TreeNode&)
+                               {
+                                 return BT::NodeStatus::SUCCESS;
+                               },
+                               {BT::InputPort<std::string>("reason")});
+  factory.registerSimpleAction("SetMowerEnabled",
+                               [&probe](BT::TreeNode& node)
+                               {
+                                 EXPECT_FALSE(node.getInput<bool>("enabled").value());
+                                 ++probe.blade_off_ticks;
+                                 return BT::NodeStatus::SUCCESS;
+                               },
+                               {BT::InputPort<bool>("enabled")});
+  factory.registerSimpleAction("StopMoving",
+                               [&probe](BT::TreeNode&)
+                               {
+                                 ++probe.stop_ticks;
+                                 return BT::NodeStatus::SUCCESS;
+                               });
+  factory.registerSimpleAction("PublishHighLevelStatus",
+                               [&probe](BT::TreeNode& node)
+                               {
+                                 EXPECT_EQ(node.getInput<int>("state").value(), 2);
+                                 EXPECT_EQ(node.getInput<std::string>("state_name").value(),
+                                           "WAITING_FOR_RTK");
+                                 ++probe.wait_statuses;
+                                 return BT::NodeStatus::SUCCESS;
+                               },
+                               {BT::InputPort<int>("state"),
+                                BT::InputPort<std::string>("state_name")});
+  factory.registerSimpleAction("WaitForDuration",
+                               [](BT::TreeNode&)
+                               {
+                                 return BT::NodeStatus::SUCCESS;
+                               },
+                               {BT::InputPort<double>("duration_sec")});
+  factory.registerSimpleAction("MainLogicProbe",
+                               [&probe](BT::TreeNode&)
+                               {
+                                 ++probe.main_ticks;
+                                 return BT::NodeStatus::SUCCESS;
+                               });
+  const auto guard = ExtractGuardBlock(ReadMainTree(), "LocalizationGuard");
+  EXPECT_FALSE(guard.empty());
+  return factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Main\"><ReactiveSequence>" + guard +
+          "<MainLogicProbe/></ReactiveSequence></BehaviorTree></root>",
+      blackboard);
+}
+
+TEST(GuardFallthroughTest, ProductionLocalizationGuardKeepsIdleAndStopOutOfAutonomous)
+{
+  for (const int command : {0, 8})
+  {
+    auto ctx = MakeContext("test_idle_rtk_" + std::to_string(command));
+    ctx->current_command = command;
+    LocalizationProbe probe;
+    BT::BehaviorTreeFactory factory;
+    auto tree = MakeProductionLocalizationTree(factory, ctx, probe);
+
+    // Idle off-dock, or a full pack whose charger bit is no longer asserted.
+    for (const bool degraded : {false, true, true, false})
+    {
+      ctx->localization_degraded = degraded;
+      EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+      EXPECT_EQ(ctx->current_command, command);
+    }
+    EXPECT_EQ(probe.main_ticks, 4);
+    EXPECT_EQ(probe.wait_statuses, 0);  // no false mow/session/zone notifications
+    EXPECT_EQ(probe.stop_ticks, 0);
+    EXPECT_EQ(probe.blade_off_ticks, 0);
+  }
+}
+
+TEST(GuardFallthroughTest, ProductionLocalizationGuardHonoursStopButStillGatesNextStart)
+{
+  auto ctx = MakeContext("test_stop_during_rtk_wait");
+  LocalizationProbe probe;
+  BT::BehaviorTreeFactory factory;
+  auto tree = MakeProductionLocalizationTree(factory, ctx, probe);
+
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(probe.wait_statuses, 1);
+  EXPECT_EQ(probe.stop_ticks, 1);
+  EXPECT_EQ(probe.blade_off_ticks, 1);
+  EXPECT_EQ(probe.main_ticks, 0);
+
+  ctx->current_command = 8;  // STOP must reach StopHoldSequence despite bad GPS.
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(probe.main_ticks, 1);
+  EXPECT_EQ(probe.wait_statuses, 1);
+
+  ctx->current_command = 1;  // Explicit restart must not bypass localization.
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(probe.main_ticks, 1);
+  EXPECT_EQ(probe.wait_statuses, 2);
+  EXPECT_EQ(probe.stop_ticks, 2);
+  EXPECT_EQ(probe.blade_off_ticks, 2);
+
+  ctx->localization_degraded = false;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(probe.main_ticks, 2);
+  EXPECT_EQ(ctx->current_command, 1);
+}
+
 // Every guard that must BLOCK MainLogic while its fault holds. Nav2ResumeGuard
 // is deliberately always-SUCCESS (it is a pass-through that resumes the Nav2
 // lifecycle) and RecordingCommandGuard is a pure condition, so neither is

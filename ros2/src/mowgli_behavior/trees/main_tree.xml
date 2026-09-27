@@ -288,6 +288,14 @@
            ================================================================ -->
       <ReactiveFallback name="LocalizationGuard">
         <IsCharging/>
+        <!-- No autonomous mission exists in IDLE (0) or operator STOP (8).
+             Let MainLogic publish the idle/stop state even if GPS degrades.
+             Otherwise this handler falsely publishes AUTONOMOUS and the GUI
+             announces a new mow while the wheels and blade remain stopped.
+             Re-evaluate these before the handler so STOP also interrupts an
+             existing RTK wait; a subsequent START still needs healthy GPS. -->
+        <IsCommand command="0"/>
+        <IsCommand command="8"/>
         <IsCommand command="7"/>
         <IsCommand command="3"/>
         <IsCommand command="5"/>
