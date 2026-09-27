@@ -1,10 +1,15 @@
-# Default owner for everything
-* @cedbossneo
+# Code owners — a review from one of them is REQUIRED before a PR can merge
+# into dev or main (repository rulesets, "Require review from Code Owners").
+# Keep this list to the maintainers/admins of the repository; write-role
+# contributors review too, but their approval alone does not unlock a merge.
+
+# Default owners for everything
+* @cedbossneo @Pepeuch @Nekraus
 
 # Component owners
-/ros2/ @cedbossneo
-/gui/ @cedbossneo
-/docker/ @cedbossneo
-/sensors/ @cedbossneo
-/firmware/ @cedbossneo
-/docs/ @cedbossneo
+/ros2/ @cedbossneo @Pepeuch @Nekraus
+/gui/ @cedbossneo @Pepeuch @Nekraus
+/docker/ @cedbossneo @Pepeuch @Nekraus
+/sensors/ @cedbossneo @Pepeuch @Nekraus
+/firmware/ @cedbossneo @Pepeuch @Nekraus
+/docs/ @cedbossneo @Pepeuch @Nekraus
