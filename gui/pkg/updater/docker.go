@@ -222,10 +222,10 @@ func (b DockerBackend) Inventory(ctx context.Context) (string, map[string]string
 	}
 	return updates.Hash(data), images, nil
 }
-func (b DockerBackend) PlanImages(ctx context.Context, d Deployment) (map[string]string, error) {
-	return b.PlanSelectedImages(ctx, d, nil)
+func (b DockerBackend) PlanImages(ctx context.Context, d Deployment, opts PlanOptions) (map[string]string, error) {
+	return b.PlanSelectedImages(ctx, d, nil, opts)
 }
-func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, error) {
+func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment, opts PlanOptions) (map[string]string, error) {
 	if err := d.Validate(b.Config.Trusted); err != nil {
 		return nil, err
 	}
@@ -233,8 +233,8 @@ func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, ove
 	if err != nil {
 		return nil, err
 	}
-	if ready.FirmwareProtocol != d.FirmwareProtocol {
-		return nil, errors.New("target requires a different mainboard firmware protocol")
+	if _, err := firmwareProtocolChange(ready.FirmwareProtocol, d, opts); err != nil {
+		return nil, err
 	}
 	c, _, err := b.model(ctx)
 	if err != nil {
@@ -351,14 +351,19 @@ func (b DockerBackend) ValidateImageStorage(ctx context.Context, p Plan) error {
 }
 
 type Readiness struct {
-	Ready            bool   `json:"ready"`
-	Maintenance      bool   `json:"maintenance"`
-	FirmwareProtocol int    `json:"firmware_protocol"`
-	Reason           string `json:"reason"`
-	GPSFresh         bool   `json:"gps_fresh"`
-	GPSReceiverFresh bool   `json:"gps_receiver_fresh"`
-	GPSReason        string `json:"gps_reason,omitempty"`
-	LidarFresh       bool   `json:"lidar_fresh"`
+	Ready       bool `json:"ready"`
+	Maintenance bool `json:"maintenance"`
+	// FirmwareProtocol is what the mainboard reported in its handshake, 0 until
+	// the bridge has one — never what the running image expects.
+	FirmwareProtocol int `json:"firmware_protocol"`
+	// FirmwareIncompatible is set when the only unready cause is the bridge
+	// refusing that protocol (see FirmwareIncompatibleReason for older GUIs).
+	FirmwareIncompatible bool   `json:"firmware_incompatible,omitempty"`
+	Reason               string `json:"reason"`
+	GPSFresh             bool   `json:"gps_fresh"`
+	GPSReceiverFresh     bool   `json:"gps_receiver_fresh"`
+	GPSReason            string `json:"gps_reason,omitempty"`
+	LidarFresh           bool   `json:"lidar_fresh"`
 }
 
 func (b DockerBackend) readiness(ctx context.Context) (Readiness, error) {
@@ -370,6 +375,13 @@ func (b DockerBackend) readiness(ctx context.Context) (Readiness, error) {
 	}
 	return r, e
 }
+
+// RunningFirmwareProtocol lets the manager record an allowed protocol change
+// on the plan it hands back for review.
+func (b DockerBackend) RunningFirmwareProtocol(ctx context.Context) (int, error) {
+	r, err := b.readiness(ctx)
+	return r.FirmwareProtocol, err
+}
 func (b DockerBackend) MaintenanceSet() (bool, error) {
 	_, err := os.Stat(filepath.Join(b.Config.StateDir, "maintenance"))
 	if os.IsNotExist(err) {
@@ -377,7 +389,7 @@ func (b DockerBackend) MaintenanceSet() (bool, error) {
 	}
 	return err == nil, err
 }
-func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
+func (b DockerBackend) Maintenance(ctx context.Context, enable bool, change *FirmwareProtocolChange) error {
 	marker := filepath.Join(b.Config.StateDir, "maintenance")
 	if !enable {
 		if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
@@ -389,7 +401,9 @@ func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
 	if err != nil {
 		return err
 	}
-	if !r.Ready {
+	// Rolling back a forced update before the board was reflashed finds the
+	// bridge refusing the firmware; that is the state the operator accepted.
+	if !r.Ready && !expectedFirmwareMismatch(r, change) {
 		return fmt.Errorf("mower not ready: %s", r.Reason)
 	}
 	// Never let a second updater recreate a container during our transaction.
@@ -406,7 +420,7 @@ func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
 	// Require the GUI to acknowledge the persisted gate before stopping writers.
 	for i := 0; i < 20; i++ {
 		r, e := b.readiness(ctx)
-		if e == nil && r.Maintenance && r.Ready {
+		if e == nil && r.Maintenance && (r.Ready || expectedFirmwareMismatch(r, change)) {
 			return nil
 		}
 		select {

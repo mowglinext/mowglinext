@@ -26,7 +26,7 @@ type integrationBackend struct {
 	bundle           *ComposeBundle
 }
 
-func (b *integrationBackend) PlanStack(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, *StackPlan, error) {
+func (b *integrationBackend) PlanStack(ctx context.Context, d Deployment, overrides map[string]Deployment, opts PlanOptions) (map[string]string, *StackPlan, error) {
 	copyData, _ := json.Marshal(d)
 	_ = json.Unmarshal(copyData, &d)
 	if b.bundle == nil {
@@ -48,19 +48,19 @@ func (b *integrationBackend) PlanStack(ctx context.Context, d Deployment, overri
 	for _, family := range []string{"mowgli-ros2", "mowglinext-gui", "helper"} {
 		d.Images[family] = updates.Image{Repository: reference[0], Digest: reference[1], Platforms: map[string]updates.Platform{"linux/amd64": {Manifest: reference[1], Config: images[0].ID}}}
 	}
-	return b.planBundle(ctx, d, overrides, *b.bundle, StackSelection{Options: map[string]string{"gnss": "none", "lidar": "none"}})
+	return b.planBundle(ctx, d, overrides, *b.bundle, StackSelection{Options: map[string]string{"gnss": "none", "lidar": "none"}}, opts)
 }
 
-func (b *integrationBackend) PlanImages(context.Context, Deployment) (map[string]string, error) {
+func (b *integrationBackend) PlanImages(context.Context, Deployment, PlanOptions) (map[string]string, error) {
 	return map[string]string{"gui": b.target, "mowgli": b.target, "metrics": b.target}, nil
 }
-func (b *integrationBackend) Verify(ctx context.Context, images map[string]string, d *Deployment) error {
+func (b *integrationBackend) Verify(ctx context.Context, images map[string]string, d *Deployment, change *FirmwareProtocolChange) error {
 	if b.failVerification && images["gui"] == b.target {
 		b.failVerification = false
 		_ = os.WriteFile(b.data, []byte("new incompatible data"), 0600)
 		return errors.New("injected application failure")
 	}
-	return b.DockerBackend.Verify(ctx, images, d)
+	return b.DockerBackend.Verify(ctx, images, d, change)
 }
 func TestDockerTransactionRestoresImagesAndData(t *testing.T)    { runDockerTransaction(t, false, true) }
 func TestDockerReleaseTopologyFailureRestoresStack(t *testing.T) { runDockerTransaction(t, true, true) }
@@ -224,7 +224,7 @@ func runDockerTransaction(t *testing.T, topology, failVerification bool) {
 	if _, err = os.Stat(filepath.Join(stateDir, "maintenance")); !os.IsNotExist(err) {
 		t.Fatal("maintenance not released after verified rollback")
 	}
-	if err = backend.DockerBackend.Verify(ctx, plan.Previous, nil); err != nil {
+	if err = backend.DockerBackend.Verify(ctx, plan.Previous, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if topology {

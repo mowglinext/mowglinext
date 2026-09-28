@@ -170,7 +170,7 @@ func TestInstallerMembershipIdentityAndPendingSelections(t *testing.T) {
 
 type stackFakeBackend struct{ *fakeBackend }
 
-func (b stackFakeBackend) PlanStack(context.Context, Deployment, map[string]Deployment) (map[string]string, *StackPlan, error) {
+func (b stackFakeBackend) PlanStack(context.Context, Deployment, map[string]Deployment, PlanOptions) (map[string]string, *StackPlan, error) {
 	return map[string]string{"gui": "new-gui", "mowgli": "new-ros", "helper": "new-helper"}, &StackPlan{Compose: []byte("private"), Changes: []ServiceChange{{"helper", "add"}}}, nil
 }
 func (b stackFakeBackend) BackupStack(context.Context, string, *StackPlan) (string, error) {

@@ -161,7 +161,7 @@ type componentBackend struct {
 	images map[string]string
 }
 
-func (b *componentBackend) PlanImages(_ context.Context, d Deployment) (map[string]string, error) {
+func (b *componentBackend) PlanImages(_ context.Context, d Deployment, _ PlanOptions) (map[string]string, error) {
 	return map[string]string{"gui": d.ID + "-gui", "mowgli": d.ID + "-ros"}, nil
 }
 func (b *componentBackend) Inventory(context.Context) (string, map[string]string, error) {
@@ -175,7 +175,9 @@ func (b *componentBackend) Apply(_ context.Context, images map[string]string) er
 	b.images = images
 	return nil
 }
-func (b *componentBackend) Verify(context.Context, map[string]string, *Deployment) error { return nil }
+func (b *componentBackend) Verify(context.Context, map[string]string, *Deployment, *FirmwareProtocolChange) error {
+	return nil
+}
 
 func TestGUIOverridePersistsAndRollbackRestoresCombination(t *testing.T) {
 	m, fake, _ := setup(t, "")
@@ -333,14 +335,14 @@ func TestWorkerDowngradeCannotDiscardComponentProvenance(t *testing.T) {
 	}
 }
 
-func (b *componentBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, error) {
+func (b *componentBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment, opts PlanOptions) (map[string]string, error) {
 	services := map[string]managedService{"gui": {Image: "mowglinext-gui"}, "mowgli": {Image: "mowgli-ros2"}}
 	if err := validateOverrides(d, overrides, services); err != nil {
 		return nil, err
 	}
-	images, _ := b.PlanImages(ctx, d)
+	images, _ := b.PlanImages(ctx, d, opts)
 	for service, selected := range overrides {
-		values, _ := b.PlanImages(ctx, selected)
+		values, _ := b.PlanImages(ctx, selected, opts)
 		images[service] = values[service]
 	}
 	return images, nil

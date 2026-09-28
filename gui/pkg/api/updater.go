@@ -185,7 +185,8 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 		case !fresh(statusAt) || !fresh(stateAt) || !fresh(odomAt):
 			result.Reason = "Fresh firmware, behaviour and wheel telemetry required"
 		case !status.FirmwareCompatible:
-			result.Reason = "Firmware communication is incompatible"
+			result.Reason = updater.FirmwareIncompatibleReason
+			result.FirmwareIncompatible = true
 		case state.State != 1:
 			result.Reason = "Mower must be idle before updating"
 		case math.IsNaN(linear) || math.IsNaN(angular) || math.Abs(linear) > 0.005 || math.Abs(angular) > 0.01:

@@ -57,7 +57,7 @@ func TestCustomPlanDoesNotRemainMatchedAfterSuccessAndCanReturnToRelease(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = m.StartAcknowledged(p.ID, true); err != nil {
+		if _, err = m.StartAcknowledged(p.ID, true, false); err != nil {
 			t.Fatal(err)
 		}
 		if s := settled(t, m); s.Job.Phase != "succeeded" || s.Active.ID != base.ID {
@@ -124,7 +124,7 @@ func TestCustomPlanKeepsUnselectedImagesAndRequiresAcknowledgement(t *testing.T)
 	if _, err = m.Start(p.ID); err == nil {
 		t.Fatal("installed without final custom warning acknowledgement")
 	}
-	if _, err = m.StartAcknowledged(p.ID, true); err != nil {
+	if _, err = m.StartAcknowledged(p.ID, true, false); err != nil {
 		t.Fatal(err)
 	}
 	s := settled(t, m)
@@ -161,7 +161,7 @@ func TestCustomFailureRestoresReleaseProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = m.StartAcknowledged(p.ID, true); err != nil {
+	if _, err = m.StartAcknowledged(p.ID, true, false); err != nil {
 		t.Fatal(err)
 	}
 	s := settled(t, m)

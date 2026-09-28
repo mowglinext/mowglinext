@@ -44,7 +44,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		if data, err := os.ReadFile(filepath.Join(config.StateDir, "agent-active.json")); err == nil {
 			_ = json.Unmarshal(data, &selection)
 		}
-		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": PublicState(m.Snapshot()), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services", "release-compose", "service-version-overrides", "custom-images", "external-images"}, "trusted_repositories": config.Trusted}, nil)
+		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": PublicState(m.Snapshot()), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services", "release-compose", "service-version-overrides", "custom-images", "external-images", "firmware-protocol-change"}, "trusted_repositories": config.Trusted}, nil)
 	})
 	mux.HandleFunc("POST /v1/policy", func(w http.ResponseWriter, r *http.Request) {
 		var p Policy
@@ -62,10 +62,11 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 	})
 	mux.HandleFunc("POST /v1/plan", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Deployment string            `json:"deployment"`
-			Pinned     bool              `json:"pinned"`
-			GUI        string            `json:"gui_deployment"`
-			Components map[string]string `json:"component_deployments"`
+			Deployment                  string            `json:"deployment"`
+			Pinned                      bool              `json:"pinned"`
+			GUI                         string            `json:"gui_deployment"`
+			Components                  map[string]string `json:"component_deployments"`
+			AllowFirmwareProtocolChange bool              `json:"allow_firmware_protocol_change"`
 		}
 		if decode(w, r, &req) {
 			if req.Components == nil {
@@ -78,7 +79,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 				}
 				req.Components["gui"] = req.GUI
 			}
-			p, e := m.MakeServicePlan(r.Context(), req.Deployment, req.Pinned, req.Components)
+			p, e := m.MakeServicePlan(r.Context(), req.Deployment, req.Pinned, req.Components, PlanOptions{AllowFirmwareProtocolChange: req.AllowFirmwareProtocolChange})
 			respond(w, PublicPlan(p), e)
 		}
 	})
@@ -94,11 +95,12 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 	})
 	mux.HandleFunc("POST /v1/apply", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Plan               string `json:"plan"`
-			CustomAcknowledged bool   `json:"custom_acknowledged"`
+			Plan                         string `json:"plan"`
+			CustomAcknowledged           bool   `json:"custom_acknowledged"`
+			FirmwareProtocolAcknowledged bool   `json:"firmware_protocol_acknowledged"`
 		}
 		if decode(w, r, &req) {
-			id, e := m.StartAcknowledged(req.Plan, req.CustomAcknowledged)
+			id, e := m.StartAcknowledged(req.Plan, req.CustomAcknowledged, req.FirmwareProtocolAcknowledged)
 			respond(w, map[string]string{"job": id}, e)
 		}
 	})
@@ -177,7 +179,7 @@ func Serve(config HostConfig) error {
 		// loss prevented the final marker removal. The commit is authoritative.
 		state := m.Snapshot()
 		if state.Job != nil && (state.Job.Phase == "succeeded" || state.Job.Phase == "rolled_back") {
-			if err = (DockerBackend{config}).Maintenance(context.Background(), false); err != nil {
+			if err = (DockerBackend{config}).Maintenance(context.Background(), false, nil); err != nil {
 				return err
 			}
 		}

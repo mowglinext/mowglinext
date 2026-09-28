@@ -19,6 +19,19 @@ type fakeBackend struct {
 	fail             string
 	fingerprint      string
 	recoveryWarnings []string
+	// firmwareProtocol is what the mainboard reports (0 = no handshake yet).
+	firmwareProtocol int
+	// gateChanges and verifyChanges record the FirmwareProtocolChange each
+	// maintenance gate and verification was told to expect.
+	gateChanges   []*FirmwareProtocolChange
+	verifyChanges []*FirmwareProtocolChange
+}
+
+func (b *fakeBackend) RunningFirmwareProtocol(context.Context) (int, error) {
+	if b.firmwareProtocol == 0 {
+		return 6, nil
+	}
+	return b.firmwareProtocol, nil
 }
 
 func (b *fakeBackend) event(s string) error {
@@ -33,12 +46,15 @@ func (b *fakeBackend) event(s string) error {
 func (b *fakeBackend) Inventory(context.Context) (string, map[string]string, error) {
 	return b.fingerprint, map[string]string{"gui": "old-gui", "mowgli": "old-ros"}, b.event("inventory")
 }
-func (b *fakeBackend) PlanImages(context.Context, Deployment) (map[string]string, error) {
+func (b *fakeBackend) PlanImages(context.Context, Deployment, PlanOptions) (map[string]string, error) {
 	return map[string]string{"gui": "new-gui", "mowgli": "new-ros"}, nil
 }
 func (b *fakeBackend) Pull(context.Context, map[string]string) error { return b.event("pull") }
-func (b *fakeBackend) Maintenance(_ context.Context, active bool) error {
+func (b *fakeBackend) Maintenance(_ context.Context, active bool, change *FirmwareProtocolChange) error {
 	if active {
+		b.mu.Lock()
+		b.gateChanges = append(b.gateChanges, change)
+		b.mu.Unlock()
 		return b.event("gate")
 	}
 	return b.event("ungate")
@@ -52,14 +68,17 @@ func (b *fakeBackend) Apply(_ context.Context, images map[string]string) error {
 	}
 	return b.event("apply-new")
 }
-func (b *fakeBackend) Verify(_ context.Context, images map[string]string, _ *Deployment) error {
+func (b *fakeBackend) Verify(_ context.Context, images map[string]string, _ *Deployment, change *FirmwareProtocolChange) error {
+	b.mu.Lock()
+	b.verifyChanges = append(b.verifyChanges, change)
+	b.mu.Unlock()
 	if images["gui"] == "old-gui" {
 		return b.event("verify-old")
 	}
 	return b.event("verify-new")
 }
-func (b *fakeBackend) VerifyRecovery(ctx context.Context, images map[string]string, d *Deployment) ([]string, error) {
-	return b.recoveryWarnings, b.Verify(ctx, images, d)
+func (b *fakeBackend) VerifyRecovery(ctx context.Context, images map[string]string, d *Deployment, change *FirmwareProtocolChange) ([]string, error) {
+	return b.recoveryWarnings, b.Verify(ctx, images, d, change)
 }
 func (b *fakeBackend) Restore(context.Context, string) error { return b.event("restore") }
 

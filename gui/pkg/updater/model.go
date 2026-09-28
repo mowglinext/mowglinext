@@ -177,14 +177,17 @@ type Notice struct {
 type Plan struct {
 	CustomImages map[string]CustomImage `json:"custom_images,omitempty"`
 	Stack        *StackPlan             `json:"stack,omitempty"`
-	ID           string                 `json:"id"`
-	Target       Deployment             `json:"target"`
-	Policy       Policy                 `json:"policy"`
-	Fingerprint  string                 `json:"fingerprint"`
-	ExpiresAt    time.Time              `json:"expires_at"`
-	Images       map[string]string      `json:"images"`
-	Previous     map[string]string      `json:"previous"`
-	Overrides    map[string]Deployment  `json:"overrides,omitempty"`
+	// FirmwareProtocolChange is set only when the operator explicitly allowed
+	// installing images that cannot talk to the running mainboard firmware.
+	FirmwareProtocolChange *FirmwareProtocolChange `json:"firmware_protocol_change,omitempty"`
+	ID                     string                  `json:"id"`
+	Target                 Deployment              `json:"target"`
+	Policy                 Policy                  `json:"policy"`
+	Fingerprint            string                  `json:"fingerprint"`
+	ExpiresAt              time.Time               `json:"expires_at"`
+	Images                 map[string]string       `json:"images"`
+	Previous               map[string]string       `json:"previous"`
+	Overrides              map[string]Deployment   `json:"overrides,omitempty"`
 }
 type Job struct {
 	PreviousCustomImages map[string]CustomImage `json:"previous_custom_images,omitempty"`

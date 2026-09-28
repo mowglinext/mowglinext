@@ -180,7 +180,7 @@ func (b DockerBackend) checkStackBaseline() error {
 	return nil
 }
 
-func (b DockerBackend) PlanStack(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, *StackPlan, error) {
+func (b DockerBackend) PlanStack(ctx context.Context, d Deployment, overrides map[string]Deployment, opts PlanOptions) (map[string]string, *StackPlan, error) {
 	if err := d.Validate(b.Config.Trusted); err != nil {
 		return nil, nil, err
 	}
@@ -206,10 +206,10 @@ func (b DockerBackend) PlanStack(ctx context.Context, d Deployment, overrides ma
 	if err != nil {
 		return nil, nil, err
 	}
-	return b.planBundle(ctx, d, overrides, bundle, selection)
+	return b.planBundle(ctx, d, overrides, bundle, selection, opts)
 }
 
-func (b DockerBackend) planBundle(ctx context.Context, d Deployment, overrides map[string]Deployment, bundle ComposeBundle, selection StackSelection) (map[string]string, *StackPlan, error) {
+func (b DockerBackend) planBundle(ctx context.Context, d Deployment, overrides map[string]Deployment, bundle ComposeBundle, selection StackSelection, opts PlanOptions) (map[string]string, *StackPlan, error) {
 	if d.ServiceChoices != nil {
 		choices, err := bundle.ServiceChoices()
 		if err != nil {
@@ -223,8 +223,8 @@ func (b DockerBackend) planBundle(ctx context.Context, d Deployment, overrides m
 	if err != nil {
 		return nil, nil, err
 	}
-	if ready.FirmwareProtocol != d.FirmwareProtocol {
-		return nil, nil, errors.New("target requires a different mainboard firmware protocol")
+	if _, err := firmwareProtocolChange(ready.FirmwareProtocol, d, opts); err != nil {
+		return nil, nil, err
 	}
 	current, _, err := b.model(ctx)
 	if err != nil {
