@@ -351,6 +351,7 @@ func (b DockerBackend) ValidateImageStorage(ctx context.Context, p Plan) error {
 }
 
 type Readiness struct {
+	MaintenanceReady bool   `json:"maintenance_ready"`
 	Ready            bool   `json:"ready"`
 	Maintenance      bool   `json:"maintenance"`
 	FirmwareProtocol int    `json:"firmware_protocol"`
@@ -385,11 +386,33 @@ func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
 		}
 		return nil
 	}
+	return b.enterMaintenance(ctx, 0)
+}
+
+// Only a reviewed install that matches the live firmware may enter maintenance
+// despite an old bridge's protocol mismatch. Rollback and final verification
+// still require full compatibility. Older GUI endpoints fail closed.
+func (b DockerBackend) PrepareUpdate(ctx context.Context, p Plan) error {
+	return b.enterMaintenance(ctx, p.Target.FirmwareProtocol)
+}
+
+func maintenanceReady(r Readiness, protocol int) bool {
+	if protocol == 0 {
+		return r.Ready
+	}
+	return r.FirmwareProtocol == protocol && (r.Ready || r.MaintenanceReady)
+}
+
+func (b DockerBackend) enterMaintenance(ctx context.Context, protocol int) error {
+	marker := filepath.Join(b.Config.StateDir, "maintenance")
 	r, err := b.readiness(ctx)
 	if err != nil {
 		return err
 	}
-	if !r.Ready {
+	if protocol != 0 && r.FirmwareProtocol != protocol {
+		return fmt.Errorf("firmware protocol changed since review: running %d, update requires %d", r.FirmwareProtocol, protocol)
+	}
+	if !maintenanceReady(r, protocol) {
 		return fmt.Errorf("mower not ready: %s", r.Reason)
 	}
 	// Never let a second updater recreate a container during our transaction.
@@ -406,7 +429,7 @@ func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
 	// Require the GUI to acknowledge the persisted gate before stopping writers.
 	for i := 0; i < 20; i++ {
 		r, e := b.readiness(ctx)
-		if e == nil && r.Maintenance && r.Ready {
+		if e == nil && r.Maintenance && maintenanceReady(r, protocol) {
 			return nil
 		}
 		select {

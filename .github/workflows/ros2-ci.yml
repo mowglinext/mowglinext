@@ -10,6 +10,11 @@ on:
       - 'tools/motor/**'
       - 'install/config/mowgli/**'
       - 'firmware/stm32/ros_usbnode/include/heartbeat_emergency_policy.hpp'
+      # Pure firmware headers compiled by mowgli_hardware's tests (protocol v7
+      # runtime parameters): a firmware-only change must still re-run them.
+      - 'firmware/stm32/ros_usbnode/include/fw_param_log.h'
+      - 'firmware/stm32/ros_usbnode/include/fw_param_catalog.h'
+      - 'firmware/stm32/ros_usbnode/include/board_defaults.h'
       - '.github/workflows/ros2-ci.yml'
   # NOTE: deliberately NO `paths:` filter here, and `dev` is included alongside
   # `main`. Two bugs used to hide in this block:
@@ -83,6 +88,9 @@ jobs:
           CHANGED=$(git diff --name-only "$BASE" HEAD -- \
             'ros2/**' '.devcontainer/**' 'tools/motor/**' 'install/config/mowgli/**' \
             'firmware/stm32/ros_usbnode/include/heartbeat_emergency_policy.hpp' \
+            'firmware/stm32/ros_usbnode/include/fw_param_log.h' \
+            'firmware/stm32/ros_usbnode/include/fw_param_catalog.h' \
+            'firmware/stm32/ros_usbnode/include/board_defaults.h' \
             '.github/workflows/ros2-ci.yml')
           if [ -n "$CHANGED" ]; then
             echo "ROS2-relevant changes:"; echo "$CHANGED"

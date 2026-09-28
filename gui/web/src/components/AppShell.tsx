@@ -3,7 +3,7 @@ import {useMatches, useNavigate, useOutlet} from "react-router-dom";
 import {AnimatePresence, motion, LayoutGroup} from "framer-motion";
 import {
   Home, Map as MapIcon, Calendar, Compass, Settings, Terminal, Rocket, Activity,
-  MoreHorizontal, X, SlidersHorizontal, Users,
+  MoreHorizontal, X, Users,
 } from "lucide-react";
 
 import {useTranslation} from "react-i18next";
@@ -52,7 +52,6 @@ const NAV: NavItem[] = [
   {key: '/statistics',  labelKey: 'nav.stats',                                        icon: Compass,  showInBottom: false},
   {key: '/fleet',       labelKey: 'nav.fleet',                                        icon: Users,    showInBottom: false},
   {key: '/settings',    labelKey: 'nav.settings',                                     icon: Settings, showInBottom: false},
-  {key: '/parameters',  labelKey: 'nav.parameters',                                   icon: SlidersHorizontal, showInBottom: false},
   {key: '/logs',        labelKey: 'nav.logs',                                         icon: Terminal, showInBottom: false},
   {key: '/onboarding',  labelKey: 'nav.onboarding',                                   icon: Rocket,   showInBottom: false},
 ];
@@ -67,7 +66,6 @@ const PAGE_META: Record<string, {titleKey: string; subtitleKey?: string}> = {
   '/statistics':  {titleKey: 'pageMeta.statistics.title', subtitleKey: 'pageMeta.statistics.subtitle'},
   '/fleet':       {titleKey: 'nav.fleet',                subtitleKey: 'pageMeta.fleet.subtitle'},
   '/settings':    {titleKey: 'nav.settings',             subtitleKey: 'pageMeta.settings.subtitle'},
-  '/parameters':  {titleKey: 'nav.parameters',           subtitleKey: 'pageMeta.parameters.subtitle'},
   '/logs':        {titleKey: 'nav.logs',                 subtitleKey: 'pageMeta.logs.subtitle'},
   '/onboarding':  {titleKey: 'nav.onboarding'},
 };

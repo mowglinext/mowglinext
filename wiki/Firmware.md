@@ -74,13 +74,16 @@ dead-time — so the loop lives in firmware where local encoder feedback is fast
 
 Field-validated on the robot: linear speed tracked ~0.85–1.03 of commanded.
 
-**Nothing is persisted on the board.** The compile-time values in `board.h`
+**Runtime parameters live in the board's flash.** The compile-time values in `board.h`
 (`PWM_PER_MPS`, `TICKS_PER_M`, `MAX_MPS`, `WHEEL_BASE` — 337 / 339 / 0.5 / 0.325 on the
-Yardforce 500, 275 / 277 / 0.5 / 0.325 on the 500B) are only the power-on fallback. The
-live values come from `mowgli_robot.yaml` and are re-sent by `hardware_bridge_node` on
-every connect via `PKT_ID_SET_DRIVE_PID` / `PKT_ID_SET_KINEMATICS`, so a tuning change
-never needs a reflash. Runtime setters can only *tighten*: `max_mps` is clamped to at
-most the compiled `MAX_MPS`.
+Yardforce 500, 275 / 277 / 0.5 / 0.325 on the 500B) are only the defaults used when
+nothing is stored. The live values come from `mowgli_robot.yaml`: `hardware_bridge_node`
+sends each one with `PKT_ID_SET_PARAM` on every connect and then commits the set to the
+board's flash (`PKT_ID_PARAM_COMMIT`), so the board boots on them before ROS2 connects
+and a tuning change never needs a reflash. The firmware coerces every value into an
+absolute envelope compiled in `fw_param_catalog.h` (e.g. `max_mps` 0.1–0.6 m/s): a value
+may be stricter or looser than the default, never outside the envelope. The flash log is
+append-only and only erased at boot, before the window watchdog is armed.
 
 ## Yaw-Rate Control — Gyro Loop in Firmware (Option C)
 
@@ -89,7 +92,7 @@ per-wheel speed loops. ROS2 sends `cmd_vel` straight through with no host-side s
 the host-side angular-rate PI that used to live in `hardware_bridge_node` was removed.
 
 **Source:** `cpp_main.cpp` (yaw constants and rationale in the block above the yaw
-globals; loop body inside `motors_handler`; runtime retune in `on_set_yaw_pid`).
+globals; loop body inside `motors_handler`; runtime retune in `apply_yaw_params`).
 
 - The per-wheel PIs regulate each wheel's *speed* independently, so chassis yaw was only
   their emergent difference — on soft or uneven turf the actual yaw lagged or overshot
@@ -104,7 +107,8 @@ globals; loop body inside `motors_handler`; runtime retune in `on_set_yaw_pid`).
   (`YAW_TRIM_SLEW_MPS_PER_CYCLE` 0.03) to stop the loop self-exciting a 2–4 Hz
   limit cycle against the wheel deadband.
 - Gains, `enabled`, `gyro_sign` and the host-measured `gyro_bias_radps` are all
-  runtime-tunable over `PKT_ID_SET_YAW_PID` (0x55) — no reflash for an A/B.
+  runtime-tunable with `PKT_ID_SET_PARAM` (0x58) — no reflash for an A/B. The gyro
+  bias is re-measured on the dock and never stored in flash.
 - **Fail-safe by construction:** on gyro read failure, hard-stop or `enabled=0` the trim
   is 0 and the integrator is reset, degrading to the previous open-diff behaviour. The
   hard clamp means even an inverted `gyro_sign` can only produce a bounded veer, never
@@ -217,8 +221,10 @@ window):
   version. The bridge compares that against its own `kMowgliProtocolVersion` — a mismatch
   (or no reply at all, which is what pre-handshake firmware does) sets
   `firmware_compatible = false` and **blocks mowing** until the board is reflashed.
-- The bridge then re-pushes `SET_DRIVE_PID` / `SET_YAW_PID` / `SET_KINEMATICS` /
-  `SET_SAFETY_LIMITS`, because the board persists nothing.
+- The bridge then re-sends every runtime parameter (`SET_PARAM`), commits the set to
+  the board's flash (`PARAM_COMMIT`, skipped by the firmware when unchanged) and asks
+  for the applied values (`GET_PARAM`), which it republishes on
+  `/hardware_bridge/firmware_params` (shown in the GUI under Settings > Safety).
 - Heartbeat: the host sends `PKT_ID_HEARTBEAT` at 4 Hz (`heartbeat_rate` in
   `hardware_bridge.yaml`). Absent for more than `HEARTBEAT_TIMEOUT_MS` (2000 ms) the
   firmware asserts an emergency stop. A latch raised *only* by this watchdog, with no
@@ -237,7 +243,7 @@ for the runtime-tuning packets, on every field offset). The C++ mirror on the ho
 `ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp`; the two must be
 changed together.
 
-Current wire version: `MOWGLI_PROTOCOL_VERSION` **6**.
+Current wire version: `MOWGLI_PROTOCOL_VERSION` **7**.
 
 ### Firmware → Host
 
@@ -250,6 +256,8 @@ Current wire version: `MOWGLI_PROTOCOL_VERSION` **6**.
 | `0x05` | `pkt_blade_status_t` | 16 | `is_active`, `rpm`, `power_watts`, `temperature`, `error_count` |
 | `0x06` | `pkt_reset_cause_t` | 5 | `reset_cause` (`RESET_CAUSE_*`), `last_stage_before_reset` (WWDG breadcrumb) |
 | `0x12` | `pkt_config_rsp_t` | 8 | `protocol_version`, `active_flags`, `fw_version_{major,minor,patch}` |
+| `0x13` | `pkt_param_value_t` | 23 | `param_id`, `status` (OK / CLAMPED / UNKNOWN_ID / REJECTED), `flags` (PERSISTED / VOLATILE), applied `value`, `default_value`, envelope `min_value` / `max_value` |
+| `0x14` | `pkt_param_store_status_t` | 9 | `boot_source` (defaults / flash / erased at boot), `last_commit`, `records_left`, `param_count` |
 
 The blade packet's legacy `power_watts` field contains **ESC current in milliamps**,
 not watts. Both Yardforce 500 and 500B forward ESC UART bytes 9–10 unchanged.
@@ -267,10 +275,12 @@ for compatibility; no firmware update or protocol version change is required.
 | `0x50` | `pkt_cmd_vel_t` | 11 | `linear_x` (m/s), `angular_z` (rad/s) |
 | `0x51` | `pkt_cmd_blade_t` | 5 | `blade_on`, `blade_dir` — fire-and-forget; firmware decides |
 | `0x52` | `pkt_reboot_t` | 4 | `magic` must equal `PKT_REBOOT_MAGIC` (0xB0) |
-| `0x54` | `pkt_set_drive_pid_t` | 27 | `ticks_per_meter`, `kp`, `ki`, `kd`, `integral_limit`, `pwm_per_mps` |
-| `0x55` | `pkt_set_yaw_pid_t` | 21 | `yaw_kp`, `yaw_ki`, `trim_limit_mps`, `enabled`, `gyro_sign`, `gyro_bias_radps` |
-| `0x56` | `pkt_set_kinematics_t` | 11 | `max_mps` (clamped ≤ compiled `MAX_MPS`), `wheel_base` |
-| `0x57` | `pkt_set_safety_limits_t` | 21 | charge V/I ceiling (lower-only) + four emergency trip timeouts (shorten-only) and `play_clear_ms` (lengthen-only) |
+| `0x58` | `pkt_set_param_t` | 9 | `param_id` (`fw_param_catalog.h`), `value` (float; coerced into the envelope) |
+| `0x59` | `pkt_get_param_t` | 5 | `param_id`, or `0xFFFF` for every parameter + the store status |
+| `0x5A` | `pkt_param_commit_t` | 4 | `magic` must equal `PKT_PARAM_COMMIT_MAGIC` (0xC5); persists the set in flash |
+
+`0x54`–`0x57` (the per-group runtime packets of protocol v2–v6) were retired in v7 and
+must not be reused.
 
 Every struct starts with a `uint8_t type` holding its packet ID and ends with a
 `uint16_t crc`; the byte counts above include both.

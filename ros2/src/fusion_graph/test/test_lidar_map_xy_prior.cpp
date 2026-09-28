@@ -3,13 +3,14 @@
 //
 // GraphManager-level tests for the LiDAR map anchor's unary factor: a queued
 // QueueLidarMapXy(xy, cov, robust) must become an XY-ONLY PoseTranslationPrior
-// on the NEXT node (pulls position, never heading), with its covariance floored
-// at GraphParams::lidar_anchor_sigma_floor_m. Modelled on the removed
-// scan-to-keyframe apply tests; the consumer is graph_manager_node.cpp.
+// on the target node (pulls position, never heading), with its covariance floored
+// at GraphParams::lidar_anchor_sigma_floor_m. Scan-time offset is removed in map
+// coordinates before the factor is added; the consumer is graph_manager_node.cpp.
 
 #include <cmath>
 
 #include "fusion_graph/graph_manager.hpp"
+#include "fusion_graph/lidar_scan_history.hpp"
 #include <Eigen/Core>
 #include <gtest/gtest.h>
 #include <gtsam/geometry/Pose2.h>
@@ -38,9 +39,9 @@ fg::GraphParams TickParams()
 
 // Drive straight 5 ticks @ 0.5 m/s (a node each tick) and return the
 // dead-reckoned x of node 5.
-double DriveFiveNodes(fg::GraphManager& gm)
+double DriveFiveNodes(fg::GraphManager& gm, const gtsam::Pose2& initial = gtsam::Pose2(0, 0, 0))
 {
-  gm.Initialize(gtsam::Pose2(0, 0, 0), 0.0);
+  gm.Initialize(initial, 0.0);
   for (int i = 1; i <= 5; ++i)
   {
     gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
@@ -61,16 +62,21 @@ struct PullResult
   double dr6_x;
 };
 
-PullResult TickWithXyPrior(double pull_x, double pull_y, double sigma_m)
+PullResult TickWithXyPrior(double pull_x,
+                           double pull_y,
+                           double sigma_m,
+                           const gtsam::Vector2& node_to_scan_map = gtsam::Vector2::Zero())
 {
   fg::GraphManager gm(TickParams());
   const double x_dr = DriveFiveNodes(gm);
   const double dr6_x = x_dr + 0.05;
   gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
   gm.AddGyroDelta(0.0, 0.1);
-  gm.QueueLidarMapXy(gtsam::Vector2(dr6_x + pull_x, pull_y),
+  gm.QueueLidarMapXy(gtsam::Vector2(dr6_x + pull_x, pull_y) + node_to_scan_map,
                      Eigen::Matrix2d::Identity() * (sigma_m * sigma_m),
-                     /*robust=*/true);
+                     /*robust=*/true,
+                     std::nullopt,
+                     node_to_scan_map);
   auto out = gm.Tick(0.1 * 6);
   EXPECT_TRUE(out.has_value());
   EXPECT_EQ(gm.LidarAnchorFactorCount(), 1u);
@@ -96,13 +102,27 @@ TEST(LidarMapXyPrior, PullsNextNodeXyTowardTarget)
 // incident is why no LiDAR heading ever enters the graph).
 TEST(LidarMapXyPrior, LeavesYawToGyro)
 {
-  const auto forward = TickWithXyPrior(0.10, 0.0, kFloorSigmaM);
+  // A 10 cm scan-time translation is a realistic non-zero offset. The
+  // lateral target would rotate this offset to reduce XY error if the factor
+  // incorrectly used body-frame lever-arm geometry.
+  const gtsam::Vector2 node_to_scan_map(0.10, 0.0);
+  const auto forward = TickWithXyPrior(0.10, 0.0, kFloorSigmaM, node_to_scan_map);
   EXPECT_LT(std::abs(forward.pose.theta()), 0.02)
       << "forward xy prior moved heading: theta=" << forward.pose.theta();
 
-  const auto lateral = TickWithXyPrior(0.0, 0.10, 1.0e-3);
+  const auto lateral_without_offset = TickWithXyPrior(0.0, 0.10, 1.0e-3);
+  const auto lateral = TickWithXyPrior(0.0, 0.10, 1.0e-3, node_to_scan_map);
+  EXPECT_LT(std::abs(lateral_without_offset.pose.theta()), 0.02)
+      << "lateral xy prior moved heading without a scan offset: theta="
+      << lateral_without_offset.pose.theta();
   EXPECT_LT(std::abs(lateral.pose.theta()), 0.02)
       << "lateral xy prior moved heading: theta=" << lateral.pose.theta();
+  EXPECT_NEAR(lateral.pose.theta(), lateral_without_offset.pose.theta(), 1.0e-7)
+      << "a non-zero node-to-scan offset changed the graph yaw";
+  EXPECT_NEAR(lateral.pose.y(), lateral_without_offset.pose.y(), 1.0e-6)
+      << "retiming the scan observation changed its XY constraint";
+  EXPECT_GT(lateral.pose.y(), 0.02)
+      << "translation-only prior did not constrain lateral position: y=" << lateral.pose.y();
 }
 
 // A 1 mm covariance must not pin harder than lidar_anchor_sigma_floor_m: the
@@ -147,6 +167,56 @@ TEST(LidarMapXyPrior, DelayedObservationUsesHistoricalNodeAndMotionOffset)
   EXPECT_EQ(gm.LidarAnchorFactorCount(), 1u);
   EXPECT_NEAR(out->pose.x(), before->pose.x() + 0.05, 1e-5);
 }
+
+TEST(LidarMapXyPrior, RotatedHistoricalOffsetRetimesToSameNodeTranslation)
+{
+  const gtsam::Pose2 initial(1.0, -0.5, 0.4);
+  fg::GraphManager scan_time_graph(TickParams());
+  fg::GraphManager node_time_graph(TickParams());
+  DriveFiveNodes(scan_time_graph, initial);
+  DriveFiveNodes(node_time_graph, initial);
+  const auto scan_node = scan_time_graph.LatestSnapshot();
+  const auto target_node = node_time_graph.LatestSnapshot();
+  ASSERT_TRUE(scan_node);
+  ASSERT_TRUE(target_node);
+  ASSERT_NEAR(scan_node->pose.theta(), 0.4, 1e-5);
+
+  // The scan offset is expressed in the node's local odometry frame, then
+  // rotated once into map coordinates just as LidarMapAnchorStep does.
+  const gtsam::Pose2 node_to_scan_local(0.02, 0.0, 0.0);
+  const auto scan_pose = scan_node->pose.compose(node_to_scan_local);
+  const gtsam::Vector2 node_to_scan_map =
+      fg::LidarNodeToScanMapOffset(scan_node->pose, node_to_scan_local);
+  const gtsam::Vector2 expected_offset(0.02 * std::cos(scan_node->pose.theta()),
+                                       0.02 * std::sin(scan_node->pose.theta()));
+  EXPECT_NEAR(node_to_scan_map.x(), expected_offset.x(), 1e-12);
+  EXPECT_NEAR(node_to_scan_map.y(), expected_offset.y(), 1e-12);
+  EXPECT_NEAR((scan_pose.translation() - scan_node->pose.translation() - node_to_scan_map).norm(),
+              0.0,
+              1e-12);
+  const gtsam::Vector2 target_xy = target_node->pose.translation() + gtsam::Vector2(0.08, -0.04);
+  const Eigen::Matrix2d cov = Eigen::Matrix2d::Identity() * 0.0025;
+
+  scan_time_graph.QueueLidarMapXy(
+      target_xy + node_to_scan_map, cov, false, scan_node->node_index, node_to_scan_map);
+  node_time_graph.QueueLidarMapXy(
+      target_xy, cov, false, target_node->node_index, gtsam::Vector2::Zero());
+  for (auto* gm : {&scan_time_graph, &node_time_graph})
+  {
+    gm->AddWheelTwist(0.5, 0.0, 0.0, 0.1);
+    gm->AddGyroDelta(0.0, 0.1);
+  }
+  const auto scan_time_out = scan_time_graph.Tick(0.7);
+  const auto node_time_out = node_time_graph.Tick(0.7);
+  ASSERT_TRUE(scan_time_out);
+  ASSERT_TRUE(node_time_out);
+  EXPECT_EQ(scan_time_graph.LidarAnchorFactorCount(), 1u);
+  EXPECT_EQ(node_time_graph.LidarAnchorFactorCount(), 1u);
+  EXPECT_NEAR(scan_time_out->pose.x(), node_time_out->pose.x(), 1e-6);
+  EXPECT_NEAR(scan_time_out->pose.y(), node_time_out->pose.y(), 1e-6);
+  EXPECT_NEAR(scan_time_out->pose.theta(), node_time_out->pose.theta(), 1e-7);
+}
+
 TEST(LidarMapXyPrior, MissingHistoricalNodeDoesNotFallForward)
 {
   fg::GraphManager gm(TickParams());

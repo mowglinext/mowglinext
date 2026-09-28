@@ -77,6 +77,7 @@
 #include "mowgli_hardware/dig_detector.hpp"
 #include "mowgli_hardware/dig_escalation.hpp"
 #include "mowgli_hardware/drive_gain_sanity.hpp"
+#include "mowgli_hardware/firmware_params.hpp"
 #include "mowgli_hardware/gnss_hardware_status.hpp"
 #include "mowgli_hardware/imu_liveness.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
@@ -149,6 +150,7 @@ static const char* high_level_mode_name(const uint8_t mode)
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_interfaces/msg/dig_event.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/firmware_params.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
@@ -435,18 +437,18 @@ private:
                                       300.0,
                                       kMinRuntimeTicksPerMeter,
                                       kMaxRuntimeTicksPerMeter);
-    // Runtime max wheel-speed cap pushed to the STM32 (PACKET_ID_LL_SET_KINEMATICS)
-    // alongside wheel_track_ as the wheel base, so both can be retuned without a
-    // reflash. Default mirrors the firmware compile-time MAX_MPS fallback; the
-    // firmware clamps the cap to at most its own compiled MAX_MPS (wire can only
-    // LOWER it). Sourced from the sparse mowgli_robot.yaml (Invariant 15).
-    max_mps_ = bounded_double("max_mps", 0.5, 0.01, 0.5);
-    // Runtime safety limits pushed to the STM32 (PACKET_ID_LL_SET_SAFETY_LIMITS)
-    // so the charge ceiling + e-stop timeouts can be TIGHTENED without a reflash.
-    // Defaults mirror the firmware compile-time board_defaults.h values; the
-    // firmware clamps each so the wire can only make protection stronger (charge
-    // ≤ compiled, trips ≤ compiled, play-clear ≥ compiled). Sourced from the
-    // sparse mowgli_robot.yaml (Invariant 15).
+    // Runtime max wheel-speed cap pushed to the STM32 (FW_PARAM_ID_MAX_MPS)
+    // alongside wheel_track_ as the wheel base. The range mirrors the firmware's
+    // absolute envelope (fw_param_catalog.h); the firmware coerces it again and
+    // reports the applied value. Sourced from the sparse mowgli_robot.yaml
+    // (Invariant 15).
+    max_mps_ = bounded_double("max_mps", 0.5, 0.1, 0.6);
+    // Runtime safety limits pushed to the STM32 (protocol v7 SET_PARAM): charge
+    // ceiling, e-stop trip delays, hold-PLAY-to-clear, onboard tilt threshold.
+    // Defaults mirror the firmware's board_defaults.h. The firmware coerces each
+    // into its absolute envelope (fw_param_catalog.h), persists the set in flash
+    // so it applies before this node connects, and reports what it applied on
+    // ~/firmware_params. Sourced from the sparse mowgli_robot.yaml (Invariant 15).
     max_charge_voltage_ = declare_parameter<double>("max_charge_voltage", 29.4);
     max_charge_current_ = declare_parameter<double>("max_charge_current", 1.2);
     one_wheel_lift_ms_ = declare_parameter<int>("one_wheel_lift_emergency_ms", 2000);
@@ -454,6 +456,9 @@ private:
     tilt_emergency_ms_ = declare_parameter<int>("tilt_emergency_ms", 500);
     stop_button_ms_ = declare_parameter<int>("stop_button_emergency_ms", 100);
     play_clear_ms_ = declare_parameter<int>("play_button_clear_emergency_ms", 2000);
+    // LIS3DH INT1 threshold for the onboard tilt switch (0x38 = 56 shipped,
+    // envelope 0x2C..0x40 = 44..64; larger allows more inclination).
+    imu_inclination_threshold_ = declare_parameter<int>("imu_inclination_threshold", 56);
     // Drive-motor wheel-velocity PID gains + feedforward. Pushed to the STM32
     // firmware (PACKET_ID_LL_SET_DRIVE_PID) so the GUI can retune the per-wheel
     // loop without reflashing. The firmware applies them UNSCALED in PWM units
@@ -936,6 +941,13 @@ private:
     pub_emergency_ =
         create_publisher<mowgli_interfaces::msg::Emergency>("~/emergency", rclcpp::QoS(10));
     pub_power_ = create_publisher<mowgli_interfaces::msg::Power>("~/power", rclcpp::QoS(10));
+    // What the STM32 actually runs for every runtime parameter (protocol v7).
+    // TRANSIENT_LOCAL depth 1: the GUI reads the current state whenever it
+    // subscribes; republished only when a firmware report changes it.
+    pub_firmware_params_ =
+        create_publisher<mowgli_interfaces::msg::FirmwareParams>("~/firmware_params",
+                                                                 rclcpp::QoS(1).transient_local());
+    publish_firmware_params();
     pub_cmd_vel_applied_ =
         create_publisher<geometry_msgs::msg::TwistStamped>("~/cmd_vel_applied", rclcpp::QoS(10));
     // RELIABLE, not SensorDataQoS — robot_localization's EKF nodes
@@ -1226,9 +1238,25 @@ private:
                               // ignores the unknown packet ID.
                               send_kinematics();
                               // Runtime safety limits (charge ceiling + e-stop
-                              // timeouts) — protocol v5, same burst.
+                              // timeouts) and the onboard tilt threshold.
                               send_safety_limits();
+                              send_imu_params();
                               --pid_resend_count_;
+                              if (pid_resend_count_ == 0)
+                              {
+                                // End of the burst: persist the set in the
+                                // board's flash (a no-op when unchanged) and
+                                // ask what it applied.
+                                send_param_commit();
+                                send_get_param(FW_PARAM_ALL);
+                                param_report_retries_ = 0;
+                                param_report_check_at_ =
+                                    now() + rclcpp::Duration::from_seconds(kParamReportTimeoutS);
+                              }
+                            }
+                            else
+                            {
+                              recheck_firmware_param_reports();
                             }
                             // Firmware version handshake: ask the
                             // board for its protocol/firmware
@@ -1311,6 +1339,10 @@ private:
       // Re-run the firmware version handshake: a re-enumeration may be a
       // reflash to a different firmware, so re-ask and re-evaluate compatibility.
       rearm_firmware_handshake();
+      // A reboot or reflash forgets nothing the board stored, but every report
+      // must be re-read: publish "unreported" until the new ones arrive.
+      firmware_params_.reset_reports();
+      publish_firmware_params();
       RCLCPP_INFO(get_logger(), "Serial port re-opened successfully.");
     }
 
@@ -1438,6 +1470,12 @@ private:
         break;
       case PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP:
         handle_config_rsp(data, len);
+        break;
+      case PACKET_ID_LL_PARAM_VALUE:
+        handle_param_value(data, len);
+        break;
+      case PACKET_ID_LL_PARAM_STORE_STATUS:
+        handle_param_store_status(data, len);
         break;
       default:
         RCLCPP_DEBUG(get_logger(), "Unhandled packet type 0x%02X (len=%zu)", data[0], len);
@@ -2586,10 +2624,11 @@ private:
     send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlReboot) - sizeof(uint16_t));
   }
 
-  // Push the drive-motor runtime tuning to the firmware. The board has no
-  // config persistence, so the bridge is the source of truth and re-sends
-  // these on every (re)connect (pid_resend_count_) and whenever a parameter
-  // changes. The firmware validates/clamps every field on receipt.
+  // Push the drive-motor runtime tuning to the firmware (protocol v7
+  // SET_PARAM). The bridge is the source of truth: it re-sends these on every
+  // (re)connect (pid_resend_count_) and whenever a parameter changes, then
+  // commits them to the board's flash so they also apply before the host
+  // connects. The firmware coerces every value into its envelope.
   void send_drive_pid()
   {
     // Defensive: the set-parameters callback can fire during declare_parameters
@@ -2627,24 +2666,14 @@ private:
                             kd,
                             integral_limit);
     }
-    LlSetDrivePid pkt{};
-    pkt.type = PACKET_ID_LL_SET_DRIVE_PID;
-    pkt.ticks_per_meter = static_cast<float>(ticks_per_meter_);
-    pkt.kp = static_cast<float>(kp);
-    pkt.ki = static_cast<float>(ki);
-    pkt.kd = static_cast<float>(kd);
-    pkt.integral_limit = static_cast<float>(integral_limit);
-    pkt.pwm_per_mps = static_cast<float>(wheel_pid_pwm_per_mps_);
-    if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
-                        sizeof(LlSetDrivePid) - sizeof(uint16_t)))
+    const bool sent = send_param(FW_PARAM_ID_TICKS_PER_METER, ticks_per_meter_) &&
+                      send_param(FW_PARAM_ID_WHEEL_KP, kp) &&
+                      send_param(FW_PARAM_ID_WHEEL_KI, ki) &&
+                      send_param(FW_PARAM_ID_WHEEL_KD, kd) &&
+                      send_param(FW_PARAM_ID_WHEEL_INTEGRAL_LIMIT, integral_limit) &&
+                      send_param(FW_PARAM_ID_PWM_PER_MPS, wheel_pid_pwm_per_mps_);
+    if (sent)
     {
-      RCLCPP_WARN_ONCE(
-          get_logger(),
-          "Drive runtime tuning now uses protocol v%u packet 0x%02X (27-byte payload with "
-          "ticks_per_meter). Older STM32 firmware that only understands the legacy 0x53 packet "
-          "will ignore live drive tuning until you flash the matching firmware.",
-          static_cast<unsigned>(kMowgliProtocolVersion),
-          static_cast<unsigned>(PACKET_ID_LL_SET_DRIVE_PID));
       RCLCPP_INFO(get_logger(),
                   "Sent drive params: ticks_per_meter=%.3f kp=%.3f ki=%.3f kd=%.3f "
                   "integral_limit=%.3f pwm_per_mps=%.3f",
@@ -2657,32 +2686,29 @@ private:
     }
   }
 
-  // Firmware gyro yaw-rate loop tuning (Option C, task #33/#34). Mirrors
-  // send_drive_pid() exactly — separate packet (PACKET_ID_LL_SET_YAW_PID),
-  // same "re-send on (re)connect via pid_resend_count_" burst (Firmware-2's
-  // #33 report: firmware has no config persistence, so a lost packet must be
-  // retried). encode_packet appends the CRC, so it is left zero-initialized
-  // here, matching send_drive_pid()'s convention.
+  // Firmware gyro yaw-rate loop tuning (Option C, task #33/#34). Same
+  // "re-send on (re)connect via pid_resend_count_" burst as send_drive_pid().
+  // The gyro bias is also re-sent after every IMU calibration; the firmware
+  // never persists it (volatile parameter).
   void send_yaw_pid()
   {
     if (!serial_)
     {
       return;
     }
-    LlSetYawPid pkt{};
-    pkt.type = PACKET_ID_LL_SET_YAW_PID;
-    pkt.yaw_kp = static_cast<float>(yaw_kp_);
-    pkt.yaw_ki = static_cast<float>(yaw_ki_);
-    pkt.trim_limit_mps = static_cast<float>(yaw_trim_limit_mps_);
-    pkt.enabled = yaw_loop_enabled_ ? 1u : 0u;
-    pkt.gyro_sign = static_cast<int8_t>(yaw_gyro_sign_);
+    const int gyro_sign = yaw_gyro_sign_ < 0 ? -1 : 1;
     // Forward the measured at-rest gyro-Z bias (raw sensor frame, the same value
     // subtracted before the /imu publish) so the firmware yaw loop regulates the
     // TRUE rate — otherwise an open-loop BackUp arcs by the bias. 0 until the IMU
     // has calibrated; the firmware clamps it hard before applying.
-    pkt.gyro_bias_radps = imu_cal_ready_ ? static_cast<float>(imu_cal_offset_gz_) : 0.0f;
-    if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
-                        sizeof(LlSetYawPid) - sizeof(uint16_t)))
+    const double gyro_bias = imu_cal_ready_ ? imu_cal_offset_gz_ : 0.0;
+    const bool sent = send_param(FW_PARAM_ID_YAW_KP, yaw_kp_) &&
+                      send_param(FW_PARAM_ID_YAW_KI, yaw_ki_) &&
+                      send_param(FW_PARAM_ID_YAW_TRIM_LIMIT_MPS, yaw_trim_limit_mps_) &&
+                      send_param(FW_PARAM_ID_YAW_LOOP_ENABLED, yaw_loop_enabled_ ? 1.0 : 0.0) &&
+                      send_param(FW_PARAM_ID_YAW_GYRO_SIGN, gyro_sign) &&
+                      send_param(FW_PARAM_ID_YAW_GYRO_BIAS_RADPS, gyro_bias);
+    if (sent)
     {
       RCLCPP_INFO(get_logger(),
                   "Sent yaw-loop params: kp=%.3f ki=%.3f trim_limit_mps=%.3f enabled=%d "
@@ -2690,31 +2716,23 @@ private:
                   yaw_kp_,
                   yaw_ki_,
                   yaw_trim_limit_mps_,
-                  static_cast<int>(pkt.enabled),
-                  static_cast<int>(pkt.gyro_sign),
-                  static_cast<double>(pkt.gyro_bias_radps));
+                  yaw_loop_enabled_ ? 1 : 0,
+                  gyro_sign,
+                  gyro_bias);
     }
   }
 
-  // Push the runtime kinematics (max-speed cap + wheel base) to the firmware
-  // (PACKET_ID_LL_SET_KINEMATICS, protocol v4). Same "re-send on (re)connect via
-  // pid_resend_count_" burst as send_drive_pid()/send_yaw_pid() — the board has
-  // no config persistence. The firmware clamps max_mps to at most its compiled
-  // MAX_MPS (the wire can only LOWER the cap) and wheel_base to a sane range.
-  // Older firmware (protocol < 4) simply ignores the unknown packet ID and keeps
-  // its compile-time MAX_MPS/WHEEL_BASE.
+  // Push the runtime kinematics (max-speed cap + wheel base) to the firmware.
+  // Same reconnect burst as send_drive_pid(); the firmware coerces both into
+  // its envelope.
   void send_kinematics()
   {
     if (!serial_)
     {
       return;
     }
-    LlSetKinematics pkt{};
-    pkt.type = PACKET_ID_LL_SET_KINEMATICS;
-    pkt.max_mps = static_cast<float>(max_mps_);
-    pkt.wheel_base = static_cast<float>(wheel_track_);
-    if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
-                        sizeof(LlSetKinematics) - sizeof(uint16_t)))
+    if (send_param(FW_PARAM_ID_MAX_MPS, max_mps_) &&
+        send_param(FW_PARAM_ID_WHEEL_BASE, wheel_track_))
     {
       RCLCPP_INFO(get_logger(),
                   "Sent kinematics: max_mps=%.3f wheel_base=%.3f",
@@ -2723,29 +2741,25 @@ private:
     }
   }
 
-  // Push the runtime safety limits (charge V/I ceiling + e-stop timeouts) to the
-  // firmware (PACKET_ID_LL_SET_SAFETY_LIMITS, protocol v5). Same reconnect burst
-  // as the other runtime-param packets. The firmware clamps every field so the
-  // wire can only TIGHTEN protection (charge ≤ compiled, trips ≤ compiled,
-  // play-clear ≥ compiled); older firmware (protocol < 5) ignores the unknown ID
-  // and keeps its compile-time board_defaults limits.
+  // Push the runtime safety limits (charge V/I ceiling + e-stop timings) to the
+  // firmware. Same reconnect burst as the other runtime parameters. The
+  // firmware coerces every value into its absolute envelope (fw_param_catalog.h)
+  // and reports what it applied; a clamped value is logged by
+  // handle_param_value().
   void send_safety_limits()
   {
     if (!serial_)
     {
       return;
     }
-    LlSetSafetyLimits pkt{};
-    pkt.type = PACKET_ID_LL_SET_SAFETY_LIMITS;
-    pkt.max_charge_voltage = static_cast<float>(max_charge_voltage_);
-    pkt.max_charge_current = static_cast<float>(max_charge_current_);
-    pkt.one_wheel_lift_ms = static_cast<uint16_t>(one_wheel_lift_ms_);
-    pkt.both_wheels_lift_ms = static_cast<uint16_t>(both_wheels_lift_ms_);
-    pkt.tilt_ms = static_cast<uint16_t>(tilt_emergency_ms_);
-    pkt.stop_button_ms = static_cast<uint16_t>(stop_button_ms_);
-    pkt.play_clear_ms = static_cast<uint16_t>(play_clear_ms_);
-    if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
-                        sizeof(LlSetSafetyLimits) - sizeof(uint16_t)))
+    const bool sent = send_param(FW_PARAM_ID_MAX_CHARGE_VOLTAGE, max_charge_voltage_) &&
+                      send_param(FW_PARAM_ID_MAX_CHARGE_CURRENT, max_charge_current_) &&
+                      send_param(FW_PARAM_ID_ONE_WHEEL_LIFT_MS, one_wheel_lift_ms_) &&
+                      send_param(FW_PARAM_ID_BOTH_WHEELS_LIFT_MS, both_wheels_lift_ms_) &&
+                      send_param(FW_PARAM_ID_TILT_MS, tilt_emergency_ms_) &&
+                      send_param(FW_PARAM_ID_STOP_BUTTON_MS, stop_button_ms_) &&
+                      send_param(FW_PARAM_ID_PLAY_CLEAR_MS, play_clear_ms_);
+    if (sent)
     {
       RCLCPP_INFO(get_logger(),
                   "Sent safety limits: charge<=%.2fV/%.2fA trips[ms]=%d/%d/%d/%d play_clear=%d",
@@ -2757,6 +2771,188 @@ private:
                   stop_button_ms_,
                   play_clear_ms_);
     }
+  }
+
+  // Onboard LIS3DH tilt threshold. The firmware rewrites the register from its
+  // own sensor state machine, so a change never trips the register audit.
+  void send_imu_params()
+  {
+    if (!serial_)
+    {
+      return;
+    }
+    send_param(FW_PARAM_ID_IMU_INCLINATION_THRESHOLD, imu_inclination_threshold_);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Runtime parameter protocol (v7)
+  // ---------------------------------------------------------------------------
+
+  bool send_param(uint16_t id, double value)
+  {
+    if (!serial_)
+    {
+      return false;
+    }
+    LlSetParam pkt{};
+    pkt.type = PACKET_ID_LL_SET_PARAM;
+    pkt.param_id = id;
+    pkt.value = static_cast<float>(value);
+    firmware_params_.set_requested(id, pkt.value);
+    return send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                           sizeof(LlSetParam) - sizeof(uint16_t));
+  }
+
+  void send_get_param(uint16_t id)
+  {
+    if (!serial_)
+    {
+      return;
+    }
+    LlGetParam pkt{};
+    pkt.type = PACKET_ID_LL_GET_PARAM;
+    pkt.param_id = id;
+    send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlGetParam) - sizeof(uint16_t));
+  }
+
+  void send_param_commit()
+  {
+    if (!serial_)
+    {
+      return;
+    }
+    LlParamCommit pkt{};
+    pkt.type = PACKET_ID_LL_PARAM_COMMIT;
+    pkt.magic = kLlParamCommitMagic;
+    send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                    sizeof(LlParamCommit) - sizeof(uint16_t));
+  }
+
+  // The firmware answers GET_PARAM(ALL) at a bounded rate and its USB TX queue
+  // drops rather than blocks: re-ask a few times for anything still missing.
+  void recheck_firmware_param_reports()
+  {
+    if (!fw_compatible_ || param_report_retries_ >= kMaxParamReportRetries ||
+        now() < param_report_check_at_)
+    {
+      return;
+    }
+    const auto missing = firmware_params_.unreported();
+    if (missing.empty())
+    {
+      param_report_retries_ = kMaxParamReportRetries;
+      return;
+    }
+    ++param_report_retries_;
+    param_report_check_at_ = now() + rclcpp::Duration::from_seconds(kParamReportTimeoutS);
+    if (param_report_retries_ == kMaxParamReportRetries)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "Firmware did not report %zu runtime parameter(s) (first: %s) — asking one "
+                  "last time; /hardware_bridge/firmware_params will show them as unreported.",
+                  missing.size(),
+                  firmware_param_name(missing.front()).c_str());
+    }
+    send_get_param(FW_PARAM_ALL);
+  }
+
+  void handle_param_value(const uint8_t* data, std::size_t len)
+  {
+    if (len < sizeof(LlParamValue))
+    {
+      return;
+    }
+    LlParamValue pkt{};
+    std::memcpy(&pkt, data, sizeof(LlParamValue));
+    const FirmwareParamReport result = firmware_params_.on_value(pkt);
+    const std::string name = firmware_param_name(pkt.param_id);
+    switch (result)
+    {
+      case FirmwareParamReport::kUnchanged:
+        return;
+      case FirmwareParamReport::kUnknownId:
+        RCLCPP_WARN(get_logger(),
+                    "Firmware does not know runtime parameter %s (id %u) — the STM32 firmware "
+                    "is older than this image; reflash it to apply this setting.",
+                    name.c_str(),
+                    static_cast<unsigned>(pkt.param_id));
+        return;
+      case FirmwareParamReport::kDiffersFromRequest:
+      {
+        const auto& state = firmware_params_.states().at(pkt.param_id);
+        RCLCPP_WARN(get_logger(),
+                    "Firmware applied %s = %g, not the requested %g: its envelope is "
+                    "[%g, %g]. Change the setting to a value inside it.",
+                    name.c_str(),
+                    static_cast<double>(state.applied),
+                    static_cast<double>(state.requested),
+                    static_cast<double>(state.min_value),
+                    static_cast<double>(state.max_value));
+        break;
+      }
+      case FirmwareParamReport::kUpdated:
+        break;
+    }
+    publish_firmware_params();
+  }
+
+  void handle_param_store_status(const uint8_t* data, std::size_t len)
+  {
+    if (len < sizeof(LlParamStoreStatus))
+    {
+      return;
+    }
+    LlParamStoreStatus pkt{};
+    std::memcpy(&pkt, data, sizeof(LlParamStoreStatus));
+    if (!firmware_params_.on_store_status(pkt))
+    {
+      return;
+    }
+    if (pkt.last_commit == PARAM_COMMIT_ERROR)
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "Firmware could not write its parameter flash: the values apply until the "
+                   "board reboots, then it falls back to the last stored set.");
+    }
+    else if (pkt.last_commit == PARAM_COMMIT_LOG_FULL)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "Firmware parameter log is full: the board erases it at its next boot and "
+                  "this node re-sends and re-commits the values after reconnecting.");
+    }
+    publish_firmware_params();
+  }
+
+  void publish_firmware_params()
+  {
+    if (!pub_firmware_params_)
+    {
+      return;
+    }
+    mowgli_interfaces::msg::FirmwareParams msg;
+    msg.stamp = now();
+    msg.firmware_incompatible = fw_handshake_done_ && !fw_compatible_;
+    msg.boot_source = firmware_params_.boot_source();
+    msg.last_commit = firmware_params_.last_commit();
+    msg.records_left = firmware_params_.records_left();
+    for (const auto& [id, state] : firmware_params_.states())
+    {
+      mowgli_interfaces::msg::FirmwareParam param;
+      param.id = id;
+      param.name = firmware_param_name(id);
+      param.requested_valid = state.requested_valid;
+      param.requested = state.requested;
+      param.reported = state.reported;
+      param.applied = state.applied;
+      param.default_value = state.default_value;
+      param.min_value = state.min_value;
+      param.max_value = state.max_value;
+      param.status = state.status;
+      param.persisted = state.persisted;
+      param.is_volatile = state.is_volatile;
+      msg.params.push_back(param);
+    }
+    pub_firmware_params_->publish(msg);
   }
 
   void on_reboot_board(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
@@ -2882,6 +3078,10 @@ private:
 
     const bool version_changed = !had_handshake || previous_protocol != fw_protocol_version_ ||
                                  previous_version != fw_version_str_;
+    if (version_changed)
+    {
+      publish_firmware_params();  // firmware_incompatible follows the handshake
+    }
     if (fw_compatible_ && version_changed)
     {
       RCLCPP_INFO(get_logger(),
@@ -2958,6 +3158,7 @@ private:
                    "(no CONFIG_RSP in %.0f s). This firmware predates the version protocol — "
                    "reflash it (see docs/FIRST_BOOT.md). Mowing is blocked until then.",
                    fw_handshake_timeout_s_);
+      publish_firmware_params();
     }
   }
 
@@ -3901,6 +4102,14 @@ private:
   int tilt_emergency_ms_{500};
   int stop_button_ms_{100};
   int play_clear_ms_{2000};
+  int imu_inclination_threshold_{56};
+  // Runtime parameter bookkeeping (protocol v7): requested vs applied.
+  FirmwareParamTracker firmware_params_;
+  rclcpp::Publisher<mowgli_interfaces::msg::FirmwareParams>::SharedPtr pub_firmware_params_;
+  static constexpr double kParamReportTimeoutS = 3.0;
+  static constexpr int kMaxParamReportRetries = 3;
+  int param_report_retries_{kMaxParamReportRetries};
+  rclcpp::Time param_report_check_at_{0, 0, RCL_ROS_TIME};
   // Drive-motor wheel-velocity PID gains + feedforward, pushed to the STM32
   // (PACKET_ID_LL_SET_DRIVE_PID). Defaults mirror the firmware compile-time
   // fallback. The board has no persistence, so the bridge re-sends on every

@@ -39,12 +39,14 @@ import { SettingsPreview } from "../components/settings/SettingsPreview.tsx";
 import { DisplayModeSection } from "../components/settings/DisplayModeSection.tsx";
 import { LogTimeZoneSection } from "../components/settings/LogTimeZoneSection.tsx";
 import { SettingsFieldCard } from "../components/settings/SettingsFieldCard.tsx";
+import { FirmwareParamsCard } from "../components/settings/FirmwareParamsCard.tsx";
 import {
     AREA_RECORDING_GROUP,
     BEHAVIOR_TREE_GROUP,
     CHARGE_LIMITS_GROUP,
     DOCK_CALIBRATION_GROUP,
     DOCK_DETECTION_GROUP,
+    FIRMWARE_SAFETY_GROUP,
     LOCALIZATION_GUARD_GROUP,
     REVERSE_ESCAPE_GROUP,
     START_ESCAPE_GROUP,
@@ -130,7 +132,10 @@ export const SettingsPage = () => {
         );
     }, [sections, searchQuery, matchesSearch, t]);
 
-    const requestedSection = searchParams.get('section') ?? 'hardware';
+    // Sections merged into "weather" keep their old links working.
+    const LEGACY_SECTIONS: Record<string, string> = { rain: "weather", irrisense: "weather" };
+    const rawSection = searchParams.get('section') ?? 'hardware';
+    const requestedSection = LEGACY_SECTIONS[rawSection] ?? rawSection;
     const activeSection = visibleSections.find(section => section.id === requestedSection)?.id
         ?? visibleSections[0]?.id ?? 'hardware';
 
@@ -248,7 +253,13 @@ export const SettingsPage = () => {
                     </>
                 );
             case "safety":
-                return <SafetySection values={values} onChange={handleChange} />;
+                return (
+                    <>
+                        <SafetySection values={values} onChange={handleChange} />
+                        {renderFieldCards(FIRMWARE_SAFETY_GROUP)}
+                        <FirmwareParamsCard />
+                    </>
+                );
             case "obstacles":
                 return (
                     <>
@@ -275,8 +286,18 @@ export const SettingsPage = () => {
                         {renderFieldCards(AREA_RECORDING_GROUP, BEHAVIOR_TREE_GROUP, START_ESCAPE_GROUP)}
                     </>
                 );
-            case "rain":
-                return <RainSection values={values} onChange={handleChange} />;
+            case "weather":
+                // IrriSense keeps its own save path (GUI DB, token included);
+                // the rain keys go through the yaml like any other section.
+                return (
+                    <>
+                        <RainSection values={values} onChange={handleChange} />
+                        <IrriSenseSection
+                            registerSaver={registerExternalSaver}
+                            unregisterSaver={unregisterExternalSaver}
+                        />
+                    </>
+                );
             case "leds":
                 return (
                     <LedsSection
@@ -295,13 +316,6 @@ export const SettingsPage = () => {
                         isOverridden={isOverridden}
                         hasDefault={hasDefault}
                         onReset={resetToDefault}
-                    />
-                );
-            case "irrisense":
-                return (
-                    <IrriSenseSection
-                        registerSaver={registerExternalSaver}
-                        unregisterSaver={unregisterExternalSaver}
                     />
                 );
             case "remote_access":

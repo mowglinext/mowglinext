@@ -106,6 +106,11 @@ static int transfer(void *h, unsigned address, unsigned reg, unsigned size,
 float lis3dh_from_fs2_hr_to_mg(int16_t n) { return n; }
 float lis3dh_from_lsb_hr_to_celsius(int16_t n) { return n; }
 static volatile uint8_t emergency_state;
+static uint8_t test_physical_inputs_clear = 1;
+static uint8_t emergency_physical_inputs_are_clear(void) {
+    return test_physical_inputs_clear && !I2C_TestZLowINT();
+}
+static volatile uint32_t emergency_generation;
 '''
 
 TEST = r'''
@@ -120,7 +125,8 @@ static void reset(void) {
     memset(registers, 0, sizeof(registers)); registers[LIS3DH_WHO_AM_I] = LIS3DH_ID;
     tick=ipsr=primask=0; mode=GPIO_MODE_AF_OD; outputs=GPIO_PIN_6|GPIO_PIN_7;
     pulses=stops=stuck_sda=stuck_scl=release_after=busy=fail_io=bad_write=io_calls=hal_init_fail=0;
-    emergency_state=0; memset((void *)&onboard_i2c_diag,0,sizeof(onboard_i2c_diag));
+    emergency_state=0; test_physical_inputs_clear=1; emergency_generation=0;
+    memset((void *)&onboard_i2c_diag,0,sizeof(onboard_i2c_diag));
     I2C_Init();
 }
 static void ready(void) {
@@ -132,6 +138,16 @@ static void ready(void) {
 }
 int main(void) {
     ready();
+    assert(Emergency_Generation() == 0);
+    Emergency_SetState(1); assert(Emergency_Generation() == 1);
+    Emergency_SetState(0); assert(Emergency_Generation() == 1);
+    Emergency_SetState(1); assert(Emergency_Generation() == 2);
+    Emergency_SetState(0); assert(!Emergency_State());
+    Emergency_SetState(1);
+    test_physical_inputs_clear=0;
+    Emergency_SetState(0); assert(Emergency_State());
+    test_physical_inputs_clear=1;
+    Emergency_SetState(0); assert(!Emergency_State());
     registers[LIS3DH_INT1_SRC]=0x50; advance(12); assert(I2C_TestZLowINT());
     Emergency_SetState(1); Emergency_SetState(0); assert(Emergency_State());
     registers[LIS3DH_INT1_SRC]=0; advance(12); Emergency_SetState(0); assert(!Emergency_State());
@@ -141,6 +157,20 @@ int main(void) {
     uint8_t value=0; I2C_Onboard_Service(); (void)I2C_TestZLowINT();
     assert(I2C_platform_read(&I2C_Handle,15,&value,1)==-1);
     assert(io_calls==calls && primask==1); ipsr=primask=0;
+
+    // A runtime tilt-threshold change (fw_params) is written and verified from
+    // the POLL state, so the once-a-second register audit keeps passing: no
+    // sensor fault, no emergency, INT1 routing (CTRL3) never disabled.
+    ready(); I2C_Onboard_SetInclinationThreshold(0x2C); advance(40);
+    assert(registers[LIS3DH_INT1_THS] == 0x2C && registers[LIS3DH_CTRL_REG3] == 0x40);
+    assert(I2C_OnboardHealthy() && !Emergency_State());
+    advance(3000); assert(I2C_OnboardHealthy() && !Emergency_State());
+    // Queued before setup completes: applied once POLL is reached.
+    reset(); I2C_Onboard_SetInclinationThreshold(0x30); advance(120);
+    assert(registers[LIS3DH_INT1_THS] == 0x30 && I2C_OnboardHealthy() && !Emergency_State());
+    // Restore the default for the scenarios below (sensor_config outlives I2C_Init).
+    I2C_Onboard_SetInclinationThreshold(IMU_ONBOARD_INCLINATION_THRESHOLD); advance(40);
+    assert(registers[LIS3DH_INT1_THS] == IMU_ONBOARD_INCLINATION_THRESHOLD);
 
     // Every possible slave release pulse, STOP, verified configuration and
     // successful fresh INT1_SRC required; recovery never clears the latch.
@@ -237,6 +267,7 @@ def main():
     emergency = (FW / 'src/emergency.c').read_text()
     functions = ''.join(extract(emergency, signature) for signature in [
         'uint8_t Emergency_State(void)', 'void  Emergency_SetState(uint8_t',
+        'uint32_t Emergency_Generation(void)',
         'static void emergency_set_bits(uint8_t', 'void Emergency_OnboardSensorFault(void)'])
     with tempfile.TemporaryDirectory(prefix='onboard-i2c-') as directory:
         out = Path(directory)

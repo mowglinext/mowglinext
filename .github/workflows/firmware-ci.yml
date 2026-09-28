@@ -23,7 +23,7 @@ jobs:
   # firmware (what CI builds / what prebuilt binaries ship) and the GUI-rendered
   # firmware can never silently drift apart on a safety value.
   defaults-parity:
-    name: Board defaults, blade reversal and sensor recovery
+    name: Board defaults, blade reversal, sensor recovery and runtime parameters
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -40,6 +40,9 @@ jobs:
         run: |
           python3 firmware/scripts/test_soft_i2c_recovery.py
           python3 firmware/scripts/test_onboard_i2c_recovery.py
+
+      - name: Test runtime parameters and their flash persistence
+        run: python3 firmware/scripts/test_fw_params.py
 
   build:
     runs-on: ubuntu-latest

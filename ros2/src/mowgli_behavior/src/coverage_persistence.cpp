@@ -138,6 +138,8 @@ bool saveCoverageResumeState(const BTContext& ctx)
   // written as a number, not a raw char. EndSession clears this command and
   // the cursors, retaining only cross-hatch metadata when needed.
   out << "current_command " << static_cast<unsigned>(ctx.current_command) << '\n';
+  out << "critical_charge_stop_latched " << (ctx.critical_charge_stop_latched ? 1 : 0) << '\n';
+  out << "critical_dock_failure_latched " << (ctx.critical_dock_failure_latched ? 1 : 0) << '\n';
   // Single-area mode (a ~/start_in_area targeted run). Persisted for the same
   // reason as current_command: a restart mid-run auto-re-enters MowingSequence,
   // and without this the restored run would silently widen into a mow-the-whole-
@@ -243,6 +245,21 @@ bool loadCoverageResumeState(BTContext& ctx)
       unsigned v;
       if (ls >> v)
         ctx.current_command = static_cast<uint8_t>(v);
+    }
+    else if (tag == "critical_charge_stop_latched")
+    {
+      // Optional in v2 snapshots written before the critical charge STOP hold.
+      int v;
+      if (ls >> v && (v == 0 || v == 1))
+        ctx.critical_charge_stop_latched = v != 0;
+    }
+    else if (tag == "critical_dock_failure_latched")
+    {
+      // Optional in v2 snapshots written before critical docking failures were
+      // latched; an absent field preserves the default retryable state.
+      int v;
+      if (ls >> v && (v == 0 || v == 1))
+        ctx.critical_dock_failure_latched = v != 0;
     }
     else if (tag == "single_area_target")
     {

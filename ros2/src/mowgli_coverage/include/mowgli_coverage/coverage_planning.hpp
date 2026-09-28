@@ -321,6 +321,22 @@ struct ConnectorStats
   std::size_t split = 0;
 };
 
+// The server reports connector outcomes at WARN when at least this share of
+// attempted joins split into blade-off transits. This is a visibility threshold,
+// not a planner rejection rule: a small number of splits is normal on concave
+// geometry, while a high share makes the resulting transits easy to miss.
+constexpr double kConnectorSplitWarnPct = 25.0;
+
+// True when ConnectorStats should be reported at WARN. The zero-attempt case is
+// intentionally not a warning: no connector was attempted, so there is no
+// split rate to report.
+inline bool connectorSplitRateWarns(const ConnectorStats& stats)
+{
+  return stats.attempted > 0 &&
+         100.0 * static_cast<double>(stats.split) / static_cast<double>(stats.attempted) >=
+             kConnectorSplitWarnPct;
+}
+
 // When (and where) a join that fits no forward arc may still stay inside the
 // sub-path as a PIVOT JOIN — a straight connector whose zero-radius corners FTC
 // drives as in-place pivots (corner encoding: mowgli_interfaces/

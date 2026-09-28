@@ -260,6 +260,7 @@ export interface MowgliAddMowingAreaReq {
 
 export interface MowgliMapArea {
   area?: GeometryPolygon;
+  id?: number;
   is_navigation_area?: boolean;
   name?: string;
   obstacle_info?: MowgliMapObstacleInfo[];

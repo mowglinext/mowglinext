@@ -53,9 +53,8 @@ extern "C" {
  void charger_set_end_voltage(float v);
 
  /**
-  * Runtime charge ceiling (PKT_ID_SET_SAFETY_LIMITS). Clamps LOWER-ONLY to the
-  * compile-time board_defaults ceiling — the wire can only lower the charge
-  * envelope, never overcharge. Non-finite must be rejected by the caller.
+  * Runtime charge ceiling (fw_params, protocol v7). Clamped to the absolute
+  * envelope of fw_param_catalog.h, whose top is the pack/charger limit.
   */
  void charger_set_charge_limits(float max_voltage, float max_current);
 

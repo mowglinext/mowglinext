@@ -2,7 +2,7 @@ import {useCallback, useEffect, useState} from 'react';
 
 export interface UpdateSource {repository: string; track: 'stable' | 'dev' | 'custom'; branch: string}
 export interface UpdatePolicy {source: UpdateSource; interval_hours: number; pinned: boolean}
-export interface Deployment {component_compatibility?: Record<string, string>; service_choices?: {service: string; image: string; when?: Record<string,string>}[]; images?: Record<string,{repository:string; platforms:Record<string,{manifest:string}>}>; gui_compatibility?: string; layout?: number; data_schema?: number; updater_api?: number; maintenance_api?: number; firmware_protocol?: number; release_tag?: string; id: string; source: UpdateSource; revision: string; published_at: string; updater: Record<string, {version: string}>}
+export interface Deployment {component_compatibility?: Record<string, string>; service_choices?: {service: string; image: string; when?: Record<string,string>}[]; images?: Record<string,{repository:string; platforms:Record<string,{manifest:string}>}>; gui_compatibility?: string; layout?: number; data_schema?: number; updater_api?: number; maintenance_api?: number; firmware_protocol?: number; release_tag?: string; id: string; source: UpdateSource; revision: string; published_at: string; updater: Record<string, {version: string; build_id?: string}>}
 export interface CustomImage {repository?:string; release_tag?:string; deployment_id?:string; requested:string; reference:string; image_id:string; version?:string; revision?:string; built_at?:string}
 export interface UpdatePlan {custom_images?:Record<string,CustomImage>; stack?: {changes: {service: string; action: string}[]; selection: {options: Record<string, string>}}; overrides?: Record<string, Deployment>; id: string; target: Deployment; images: Record<string, string>; previous: Record<string, string>; expires_at: string}
 export interface UpdateJob {id: string; kind: string; phase: string; error?: string; recovery_error?: string; recovery_warnings?: string[]; started_at: string; plan: UpdatePlan}
@@ -10,8 +10,8 @@ export interface UpdateNotice {id: string; kind: string; deployment: string; cre
 export interface HostUpdater {
     api: number;
     capabilities?: string[];
-    runtime?: {selection?: Record<string,string>; selection_pending?: boolean; identity: string; health: string; checked_at: string; error?: string; components?: Record<string, {name?:string; family?:string; reference?:string; version?:string; revision?:string; image: string; healthy: boolean; healthcheck: boolean}>};
-    agent: {version: string; revision: string; platform: string; error?: string};
+    runtime?: {selection?: Record<string,string>; selection_pending?: boolean; identity: string; health: string; checked_at: string; error?: string; components?: Record<string, {name?:string; family?:string; reference?:string; version?:string; revision?:string; built_at?:string; image: string; healthy: boolean; healthcheck: boolean}>};
+    agent: {build_id?: string; version: string; revision: string; platform: string; error?: string};
     trusted_repositories: string[];
     state: {custom_images?:Record<string,CustomImage>; active_job_id?: string; policy: UpdatePolicy; installed_policy?: UpdatePolicy; overrides?: Record<string, Deployment>; active?: Deployment; last_check: string; last_success: string; next_check: string; check_error?: string; releases: Deployment[]; notices: UpdateNotice[]; job?: UpdateJob; history: UpdateJob[]};
 }
@@ -42,6 +42,12 @@ export function compatibleGUI(base: Deployment, gui: Deployment): boolean {
         base.source.repository === gui.source.repository &&
         ['layout', 'data_schema', 'updater_api', 'maintenance_api', 'firmware_protocol'].every(key =>
             base[key as keyof Deployment] !== undefined && base[key as keyof Deployment] === gui[key as keyof Deployment]);
+}
+
+// Deployment IDs also change for frontend/ROS-only releases. Prefer the
+// publisher's executable-input identity; retain old-worker compatibility.
+export function sameUpdaterBuild(candidate: {version: string; build_id?: string}, running: {version: string; build_id?: string}): boolean {
+    return candidate.build_id && running.build_id ? candidate.build_id === running.build_id : candidate.version === running.version;
 }
 
 export function componentCompatibility(base: Deployment, candidate: Deployment, family: string, platform: string): 'source' | 'contract' | 'platform' | undefined {

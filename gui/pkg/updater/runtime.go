@@ -16,6 +16,7 @@ type RunningComponent struct {
 	Reference   string `json:"reference,omitempty"`
 	Version     string `json:"version,omitempty"`
 	Revision    string `json:"revision,omitempty"`
+	BuiltAt     string `json:"built_at,omitempty"`
 	Healthy     bool   `json:"healthy"`
 	Healthcheck bool   `json:"healthcheck"`
 }
@@ -45,6 +46,7 @@ func (b DockerBackend) Observe(ctx context.Context) (map[string]RunningComponent
 			return nil, e
 		}
 		result[name] = RunningComponent{Image: ci.Image, Name: c.Services[name].ContainerName, Family: contract.Image, Reference: ci.Config.Image, Version: ci.Config.Labels["org.opencontainers.image.version"], Revision: ci.Config.Labels["org.opencontainers.image.revision"],
+			BuiltAt:     ci.Config.Labels["org.opencontainers.image.created"],
 			Healthy:     ci.Config.Labels["com.docker.compose.project"] == b.Config.Project && ci.State.Running && (ci.State.Health == nil || ci.State.Health.Status == "healthy"),
 			Healthcheck: ci.State.Health != nil}
 	}

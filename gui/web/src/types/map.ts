@@ -133,15 +133,18 @@ export class DynObstacleFeature extends MowingFeature implements Feature<Polygon
 }
 
 export class DockFeatureBase extends PointFeatureBase  {
+    private headingValid: boolean;
+
     declare properties: {
         color: string;
         feature_type: string;
-        heading: number;
+        heading?: number;
     };
 
-    constructor(coordinate: Position, heading = 0) {
+    constructor(coordinate: Position, heading?: number) {
         super('dock', coordinate,'dock');
-        this.properties.heading = heading;
+        if (Number.isFinite(heading)) this.properties.heading = heading;
+        this.headingValid = Number.isFinite(heading);
         this.setColor('#ff00f2');
     }
 
@@ -149,8 +152,14 @@ export class DockFeatureBase extends PointFeatureBase  {
         return this.properties.heading ?? 0;
     }
 
+    hasValidHeading(): boolean {
+        return this.headingValid;
+    }
+
     setHeading(heading: number) {
-        this.properties.heading = heading;
+        this.headingValid = Number.isFinite(heading);
+        if (this.headingValid) this.properties.heading = heading;
+        else delete this.properties.heading;
     }
 
     getCoordinates(): Position {
@@ -171,6 +180,12 @@ export class MowingFeatureBase extends MowingFeature implements Feature<Polygon>
         , name? :string
         , index: number
         , source_working_area_index?: number
+        // Stable area id (MapArea.id, mowglinext#637) captured at the same
+        // time as source_working_area_index. Array position can shift
+        // whenever the area list is edited/saved; prefer resolving by this
+        // id (mowingAreaIndexById) for anything that fires an action later
+        // than the render that captured it — see MapPage's startSelectedArea.
+        , source_working_area_id?: number
         , mowing_order: number
         , feature_type: string
     }
@@ -397,7 +412,7 @@ export function featureFromJSON(
         }
         case 'dock': {
             const coords = (json.geometry as Point).coordinates;
-            return new DockFeatureBase(coords, (props.heading as number) ?? 0);
+            return new DockFeatureBase(coords, Number.isFinite(props.heading) ? props.heading as number : undefined);
         }
         default: {
             const feature = new MowingFeature(json.id);
@@ -452,4 +467,3 @@ export function cloneFeature<T extends MowingFeature>(feature: T): T {
     copy.geometry = structuredClone(feature.geometry);
     return copy;
 }
-

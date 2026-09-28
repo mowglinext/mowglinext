@@ -1,6 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import {createHashRouter, RouterProvider,} from "react-router-dom";
+import {createHashRouter, Navigate, RouterProvider,} from "react-router-dom";
 import AppShell from "./components/AppShell.tsx";
 import {App, ConfigProvider, theme} from "antd";
 import {Spinner} from "./components/Spinner.tsx";
@@ -20,7 +20,6 @@ const OnboardingPage   = React.lazy(() => import("./pages/OnboardingPage.tsx"));
 const SchedulePage     = React.lazy(() => import("./pages/SchedulePage.tsx"));
 const DiagnosticsPage  = React.lazy(() => import("./pages/DiagnosticsPage.tsx"));
 const StatisticsPage   = React.lazy(() => import("./pages/StatisticsPage.tsx"));
-const ParametersPage   = React.lazy(() => import("./pages/ParametersPage.tsx"));
 const FleetPage        = React.lazy(() => import("./pages/FleetPage.tsx"));
 const ConceptRoot      = React.lazy(() => import("./concept/ConceptRoot.tsx"));
 
@@ -68,7 +67,8 @@ const router = createHashRouter([
                 path: "/statistics",
             },
             {
-                element: <ParametersPage/>,
+                // The parameters editor moved into Diagnostics (advanced users).
+                element: <Navigate to="/diagnostics?tab=parameters" replace/>,
                 path: "/parameters",
             },
             {

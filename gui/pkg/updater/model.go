@@ -23,6 +23,10 @@ const DefaultCheckIntervalHours = 24
 
 var Version = "development"
 var Revision = ""
+
+// BuildID hashes the worker built without release labels or VCS metadata. It
+// changes with executable inputs, not with unrelated monorepo commits.
+var BuildID = ""
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 var revisionPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 
@@ -55,6 +59,7 @@ func (s Source) Validate(trusted []string) error {
 }
 
 type Binary struct {
+	BuildID string `json:"build_id,omitempty"`
 	Asset   string `json:"asset"`
 	SHA256  string `json:"sha256"`
 	Version string `json:"version"`
@@ -154,6 +159,9 @@ func (d Deployment) Validate(trusted []string) error {
 		}
 	}
 	for platform, b := range d.Updater {
+		if b.BuildID != "" && !updates.DigestPattern.MatchString("sha256:"+b.BuildID) {
+			return errors.New("invalid updater build identity")
+		}
 		if platform != "linux/arm64" && platform != "linux/amd64" || !idPattern.MatchString(b.Asset) || !updates.DigestPattern.MatchString("sha256:"+b.SHA256) || !idPattern.MatchString(b.Version) {
 			return errors.New("invalid updater asset")
 		}

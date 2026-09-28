@@ -15,7 +15,7 @@ func isActiveMowingSessionStatus(state int, stateName string) bool {
 // tree resumes the current mow without a new operator start.
 func isResumableMowingPause(stateName string) bool {
 	switch stateName {
-	case "CHARGING", "CRITICAL_BATTERY_CHARGING", "RAIN_WAITING":
+	case "CHARGING", "CRITICAL_BATTERY_CHARGING", "MANUAL_CHARGING", "RAIN_WAITING":
 		return true
 	}
 	return false
@@ -23,4 +23,8 @@ func isResumableMowingPause(stateName string) bool {
 
 func isRechargeMowingPause(stateName string) bool {
 	return stateName == "CHARGING" || stateName == "CRITICAL_BATTERY_CHARGING"
+}
+
+func isRainMowingPause(stateName string) bool {
+	return stateName == "RAIN_WAITING"
 }

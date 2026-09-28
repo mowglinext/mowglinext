@@ -107,6 +107,7 @@ Relative names are remapped in `mowgli.launch.py` (:257–267). QoS is `rclcpp::
 | `~/status` → `/hardware_bridge/status` | `mowgli_interfaces/msg/Status` | pub | one per `LlStatus`; carries `firmware_version`, `firmware_protocol_version`, `firmware_compatible` (PreFlightCheck reads it, `mowgli_behavior/src/condition_nodes.cpp` :551). Subs: BT, fusion_graph, map_server, diagnostics, mqtt_bridge, calibrate_imu_yaw, costmap_scan_filter, GUI |
 | `~/emergency` → `/hardware_bridge/emergency` | `mowgli_interfaces/msg/Emergency` | pub | same packet; `lift_warning` only in `lift_recovery_mode`. Subs: BT, diagnostics, mqtt_bridge, calibrate_imu_yaw, GUI |
 | `~/power` → `/hardware_bridge/power` | `mowgli_interfaces/msg/Power` | pub | same packet. Subs: BT, led_ring_node, diagnostics, mqtt_bridge, GUI |
+| `~/firmware_params` → `/hardware_bridge/firmware_params` | `mowgli_interfaces/msg/FirmwareParams` | pub, QoS(1) transient_local | protocol v7 reports (0x13/0x14): requested vs applied value, envelope, persisted flag, boot source; republished on change. Sub: GUI (`firmwareParams`) |
 | `/battery_state` (absolute) | `sensor_msgs/msg/BatteryState` | pub | `current = abs(charging_current)` when charging else 0 (Invariant 12); frame `base_link`; consumed by Nav2 docking (`nav2_params_base.yaml` :1088) |
 | `~/imu/data_raw` → `/imu/data` | `sensor_msgs/msg/Imu` | pub | **RELIABLE on purpose** (:708 comment); frame `imu_link`; stamp from `imu_clock_fit_`; calibrated offsets applied; orientation = identity w/ roll/pitch var 0.001, yaw var 99; Z accel uncalibrated |
 | `~/imu/mag_raw` → `/imu/mag_raw` | `sensor_msgs/msg/MagneticField` | pub | only when a subscriber exists; µT→T; cov[0] = −1. Subs: `mag_yaw_publisher_node`, `calibrate_imu_yaw_node` |
@@ -151,10 +152,13 @@ Frame = `0x00 | COBS(payload + CRC16-LE) | 0x00`; CRC-16/CCITT-FALSE over `type�
 | 0x50 | `LlCmdVel` (11) | host→FW | `send_cmd_vel_packet` |
 | 0x51 | `LlCmdBlade` (5) | host→FW | `send_blade_command` |
 | 0x52 | `LlReboot` (4, magic 0xB0) | host→FW | `send_reboot_command` |
-| 0x54 | `LlSetDrivePid` (27) | host→FW | `send_drive_pid` |
-| 0x55 | `LlSetYawPid` (21, v6 adds `gyro_bias_radps`) | host→FW | `send_yaw_pid` |
-| 0x56 | `LlSetKinematics` (11) | host→FW | `send_kinematics` |
-| 0x57 | `LlSetSafetyLimits` (21) | host→FW | `send_safety_limits` |
+| 0x58 | `LlSetParam` (9: id + float) | host→FW | `send_param` (called by `send_drive_pid` / `send_yaw_pid` / `send_kinematics` / `send_safety_limits` / `send_imu_params`) |
+| 0x59 | `LlGetParam` (5) | host→FW | `send_get_param` (`FW_PARAM_ALL` at the end of each burst, retried by `recheck_firmware_param_reports`) |
+| 0x5A | `LlParamCommit` (4, magic 0xC5) | host→FW | `send_param_commit` (end of each burst; the firmware skips an unchanged set) |
+| 0x13 | `LlParamValue` (23) | FW→host | `handle_param_value` → `FirmwareParamTracker` (`firmware_params.hpp`); WARN when applied ≠ requested |
+| 0x14 | `LlParamStoreStatus` (9) | FW→host | `handle_param_store_status` (boot source, last commit, records left) |
+
+Protocol v7 retired 0x54–0x57. Parameter ids are `FirmwareParamId` (`ll_datatypes.hpp`, mirror of firmware `fw_param_catalog.h`, pinned by `test_fw_param_catalog.cpp`); `firmware_param_names()` maps each to the ROS param that feeds it. Everything the firmware reports is republished latched on `~/firmware_params` (`mowgli_interfaces/FirmwareParams`, remapped to `/hardware_bridge/firmware_params`); a reconnect resets the reports.
 
 ### Parameters
 
@@ -165,12 +169,13 @@ Layering at launch (`mowgli.launch.py` :194–254, later entries override earlie
 | `serial_port`, `baud_rate` | :332–333 | `hardware_bridge.yaml`; `serial_port` also a launch arg | `/dev/mowgli`, 115200 |
 | `publish_rate`, `heartbeat_rate`, `high_level_rate`, `serial_rx_timeout_s` | :334–345 | `hardware_bridge.yaml` (except `high_level_rate`, which is not in any yaml — code default) | 100 / 4 / 2 Hz / 2 s; `publish_rate` is the serial **read** tick |
 | `dock_pose_x/y/yaw` | :346–348 | launch from `robot_params` (Invariant 6) | `dock_pose_yaw` is map-frame ENU |
-| `wheel_track`, `ticks_per_meter` | :357, :370 | template `mowgli_robot.yaml` :32, :43 (399.0) | `ticks_per_meter` range 50–5000, pushed in `LlSetDrivePid`; `wheel_track` pushed as `wheel_base` in `LlSetKinematics` |
-| `max_mps` | :379 | code default 0.5 (template :49 is **not forwarded** by `mowgli.launch.py`) | range 0.01–0.5; `LlSetKinematics`; firmware can only lower its compiled cap |
-| `max_charge_voltage`, `max_charge_current`, `one_wheel_lift_emergency_ms`, `both_wheels_lift_emergency_ms`, `tilt_emergency_ms`, `stop_button_emergency_ms`, `play_button_clear_emergency_ms` | :386–392 | code defaults (template :57–63 is **not forwarded** by `mowgli.launch.py`) | `LlSetSafetyLimits`; firmware clamps so the wire can only tighten |
+| `wheel_track`, `ticks_per_meter` | :357, :370 | template `mowgli_robot.yaml` :32, :43 (399.0) | `ticks_per_meter` range 50–5000, pushed as `FW_PARAM_ID_TICKS_PER_METER`; `wheel_track` pushed as `FW_PARAM_ID_WHEEL_BASE` |
+| `max_mps` | :379 | template :49, injected by `mowgli.launch.py` | range 0.1–0.6 = firmware envelope; `FW_PARAM_ID_MAX_MPS` |
+| `max_charge_voltage`, `max_charge_current`, `one_wheel_lift_emergency_ms`, `both_wheels_lift_emergency_ms`, `tilt_emergency_ms`, `stop_button_emergency_ms`, `play_button_clear_emergency_ms` | `declare_parameters()` | template, injected by `mowgli.launch.py` | SET_PARAM; the firmware coerces each into its envelope (`fw_param_catalog.h`) — stricter or looser than the default, never outside — and persists it in flash |
+| `imu_inclination_threshold` | `declare_parameters()` | template (56 = 0x38), injected by `mowgli.launch.py` | onboard LIS3DH INT1_THS, envelope 44–64; `FW_PARAM_ID_IMU_INCLINATION_THRESHOLD` |
 | `wheel_pid_kp/ki/kd/integral_limit/pwm_per_mps` | `declare_parameters()` (`bounded_double`) | template :137–141 via launch (10 / 2000 / 0 / 45 / 282.135, firmware PWM units) | bounds `kMin/MaxRuntimeWheel*` / `*PwmPerMps` mirror firmware clamps; declared defaults = `kTemplateWheelPid*`, pinned to the template by `mowgli_bringup/test/test_drive_pid_defaults.py` |
 | `deadband_pwm` | `declare_parameters()` (`startup_double`, read-only) | template :145 via launch (40.0) | stiction gate: if `DriveGainsBridgeDeadband()` fails at startup the bridge logs ERROR, sets `drive_gains_below_deadband_` and `send_drive_pid()` substitutes the template gains (`kTemplateWheelPid*`) on the wire while keeping the configured `ticks_per_meter`/`pwm_per_mps` (throttled ERROR on every send); a live `wheel_pid_*`/`ticks_per_meter` change that would fail the gate is rejected with a reason, one that passes clears the flag |
-| `yaw_kp`, `yaw_ki`, `yaw_trim_limit_mps`, `yaw_loop_enabled`, `yaw_gyro_sign` | :422–429 | template :84–91 via launch | `LlSetYawPid`; `gyro_bias_radps` comes from the IMU cal, not a param |
+| `yaw_kp`, `yaw_ki`, `yaw_trim_limit_mps`, `yaw_loop_enabled`, `yaw_gyro_sign` | :422–429 | template :84–91 via launch | yaw SET_PARAM ids; `FW_PARAM_ID_YAW_GYRO_BIAS_RADPS` comes from the IMU cal, not a param, and is volatile (never stored in flash) |
 | `min_linear_vel` | :433 | code (0.05) | sub-deadband |vx| → 0 in `on_cmd_vel` |
 | `cmd_vel_linear_accel_limit`, `cmd_vel_linear_decel_limit`, `cmd_vel_angular_accel_limit`, `cmd_vel_angular_decel_limit` | :480–497 | `hardware_bridge.yaml` | startup-only 0.30 / 0.60 m/s² and 1.0 / 2.0 rad/s²; zero stops immediately, reversals decelerate through zero |
 | `lift_recovery_mode`, `lift_blade_resume_delay_sec` | :613–614 | launch dict (`mowgli.launch.py` :230–232) — **no template entry**, so the launch fallbacks false / 1.0 apply unless the installed file sets them (GUI schema exposes both) | blade-off-on-lift instead of emergency |
@@ -223,15 +228,14 @@ CI: `.github/workflows/ros2-ci.yml` (`colcon build` + `colcon test --return-code
 - `~/dig_event` is **not** in the launch remaps; it resolves to `/hardware_bridge/dig_event` via the node name. Renaming the node breaks `map_server` (dig proposals) AND `behavior_tree_node` (dig skip zones — the issue-#500 re-dig protection).
 - `on_cmd_vel` promotes firmware mode NULL→AUTONOMOUS on ANY non-zero merged `cmd_vel` (documented authority leak, gated only by `fw_latched_emergency_`); while `dig_escaping_` it drops incoming commands entirely — the escape is driven from `dig_monitor_tick` on purpose (an aborted Nav2 goal stops publishing). Its final slew limiter covers every mux lane, but exact zero bypasses the ramp and a stale stream resets from rest.
 - Dig trust gate = GNSS receiver accuracy under RTK-Fixed (`DigTrustSigma`); `last_map_sigma_` (major axis of the graph covariance, `on_filtered_map_odom` :2744) is log-only. Do not re-point the gate at it (Invariant 16, CLAUDE.md "What NOT to Do").
-- IMU cal aborts if the wheels move or the charger drops mid-window (`handle_imu`); a window whose |accel| is not gravity or whose gyro variance is exactly 0 on all three axes is discarded and never persisted (:1615); a persisted file with all-zero covariances or |gyro offset| > 0.2 rad/s is rejected at load (:1468). `apply_imu_calibration` (:1637) also re-sends `LlSetYawPid` with the new `gyro_bias_radps`.
+- IMU cal aborts if the wheels move or the charger drops mid-window (`handle_imu`); a window whose |accel| is not gravity or whose gyro variance is exactly 0 on all three axes is discarded and never persisted (:1615); a persisted file with all-zero covariances or |gyro offset| > 0.2 rad/s is rejected at load (:1468). `apply_imu_calibration` (:1637) also re-sends the yaw parameters (`send_yaw_pid()`) with the new gyro bias.
 - Member initializers are NOT the defaults: `double yaw_kp_{0.30}` vs declared 0.12 (:422); read `declare_parameters()`.
 - `~/dock_heading` comments reference `dock_yaw_to_set_pose` (inlined into fusion_graph, `navigation.launch.py` :1094) — `/gnss/heading` has no subscriber, and `/tmp/dock_start_pose.txt` (:1919) has no reader since SLAM was removed.
 - `mowgli.launch.py` :203 passes `imu_yaw`, which the node never declares (:622 comment) — it is silently ignored.
 - `blade_gate.hpp` suppresses ENABLE only. Never add a path that swallows a DISABLE, and never present `mowing_enabled` as a safety interlock (CLAUDE.md Safety, Invariant 9).
-- Serial: `write_all` retries EAGAIN briefly (`serial_port.cpp` :170–205); a short write or read error closes the port and the next read tick reopens it (`read_serial_tick` :990); reconnect re-arms `pid_resend_count_ = 5` and the version handshake, and resets firmware debug to OFF.
+- Serial: `write_all` retries EAGAIN briefly (`serial_port.cpp` :170–205); a short write or read error closes the port and the next read tick reopens it (`read_serial_tick` :990); reconnect re-arms `pid_resend_count_ = 5` and the version handshake, resets the firmware-parameter reports, and resets firmware debug to OFF.
 - Odometry: int32 ticks wrap at 16 bits (`unwrap_16bit` :80); |delta| > `kTickSpikeLimit` 100 is dropped (:96); `OdometryPublisher::reset()` does not zero `tyre_travelled_m_` or the WheelTick magnitudes (monotonic by design).
-- `ros2/src/mowgli_hardware/firmware/` is a hand-copied C mirror at protocol v3 (missing 0x05/0x51/0x52/0x55–0x57); nothing compiles it and `protocol-version-drift.yml` does not check it. Use `firmware/stm32/ros_usbnode/` as truth.
-- `max_mps`, `max_charge_*` and the `*_emergency_ms` params are declared (:379–392) but not forwarded by `mowgli.launch.py`, so template values (:49, :57–63) never reach the node unless added to the launch pass-through; only the code defaults (identical today) are pushed to the firmware.
+- `ros2/src/mowgli_hardware/firmware/` is a hand-copied C mirror at protocol v3 (missing 0x05/0x51/0x52 and all of protocol v7); nothing compiles it and `protocol-version-drift.yml` does not check it. Use `firmware/stm32/ros_usbnode/` as truth.
 
 ## Generated & vendored — do not hand-edit
 

@@ -83,6 +83,15 @@
     "noContainers": "Aucun conteneur Mowgli identifié",
     "mainboard": "Firmware de la carte principale",
     "firmwareMeaning": "La compatibilité est vérifiée avec le protocole du logiciel du robot. Elle ne signifie pas que le firmware est le plus récent. Les valeurs déconnectées ou périmées sont les dernières connues.",
+    "firmwareAvailable": "Le firmware {{version}} (protocole {{protocol}}) est disponible pour cette installation.",
+    "firmwareUpToDate": "La carte exécute le firmware de cette installation ({{version}}).",
+    "firmwareFromLatestStable": "La release de cette installation ne contient pas de firmware : il est pris dans la dernière release stable {{release}}.",
+    "firmwareNoBoard": "Aucune carte n'a encore été choisie : flashez une fois le firmware depuis l'onboarding pour l'enregistrer.",
+    "firmwareNoPrebuilt": "Il n'y a pas de firmware précompilé pour {{board}} : utilisez le mode expert (compilation depuis les sources) de l'onboarding.",
+    "firmwareCheckFailed": "Impossible de vérifier le firmware disponible",
+    "firmwareRelease": "Release du firmware",
+    "firmwareFlashNeedsDock": "Mettez d'abord le robot sur sa base : le flash redémarre la carte et arrête les moteurs et la lame.",
+    "firmwareFlashVersion": "Flasher le firmware {{version}}",
     "protocol": "Protocole",
     "configuredModel": "Modèle de tondeuse configuré",
     "boardRevision": "Révision de la carte",
@@ -296,6 +305,7 @@
     "stateAtBase": "À la base",
     "stateIdle": "Au repos",
     "stateCharging": "En charge",
+    "stateManualCharging": "Posée manuellement",
     "statePreflight": "Pré-vol",
     "stateLeavingBase": "Départ base",
     "stateCalibration": "Calibration",
@@ -712,6 +722,7 @@
     "sensors": "Capteurs",
     "tabRobot": "Robot",
     "tabCalibration": "Calibration",
+    "tabParameters": "Paramètres avancés",
     "calibrationCancel": "Annuler",
     "calibrationStatusErrorTitle": "Échec du chargement de l’état de calibration",
     "calibrationTimedOut": "Délai de calibration dépassé",
@@ -761,6 +772,7 @@
     "headlineMinutes": "{{value}} min",
     "headlineUntilHomeSuffix": " avant la maison.",
     "headlineChargingPrefix": "En charge · ",
+    "headlineMowingPausedPrefix": "Tonte en pause · ",
     "headlinePercent": "{{value}} %",
     "emergencyStop": "Arrêt d'urgence",
     "headlineIdlePrefix": "Mowgli est ",
@@ -776,6 +788,8 @@
     "sublineScanPaused": "Le scan LiDAR est temporairement obsolète. Les lames sont arrêtées ; la tonte reprend automatiquement dès le retour de scans frais.",
     "activeZone": "zone active",
     "sublineCharging": "Sur la dock, {{current}} A en entrée.",
+    "sublineChargeHold": "La tonte est en pause et reprendra automatiquement à {{full}}%. Reprise manuelle possible à partir de {{manual}}%.",
+    "sublineManualChargeHold": "La tonte est en pause car la tondeuse a été posée manuellement sur la base. Retirez-la de la base avant de reprendre.",
     "sublineEmergency": "Sécurise la zone puis relance avec le bouton vert.",
     "sublineIdle": "Tape Play pour démarrer une tonte ou laisse le planning gérer.",
     "emergencyConfirmBody": "Cela déclenche l'arrêt d'urgence matériel (lames + déplacement). À réarmer manuellement ensuite. Continuer ?",
@@ -1323,7 +1337,13 @@
     "startMowing": "Démarrer la tonte",
     "pause": "Pause",
     "returnToBase": "Retour à la base",
-    "rearm": "Réarmer"
+    "rearm": "Réarmer",
+    "resumeNow": "Reprendre maintenant",
+    "cancelMowing": "Annuler la tonte",
+    "lowChargeHold": "La tonte est en pause pendant la charge.",
+    "manualChargeHold": "La tonte est en pause car la tondeuse a été posée manuellement sur la base.",
+    "criticalChargeHold": "La tonte est en pause pour charger une batterie critique.",
+    "chargeHold": "{{message}} Reprise automatique à {{full}}%. Reprise possible à partir de {{resumeAt}}%."
   },
   "modeSegment": {
     "ecoLabel": "Eco",
@@ -1385,6 +1405,10 @@
       "label": "En charge",
       "friendly": "Recharge de la batterie"
     },
+    "MANUAL_CHARGING": {
+      "label": "Posée manuellement",
+      "friendly": "Tonte en pause sur la base"
+    },
     "PREFLIGHT_CHECK": {
       "label": "Pré-vol",
       "friendly": "Vérifications avant départ"
@@ -1436,6 +1460,10 @@
     "CRITICAL_BATTERY_DOCKING": {
       "label": "Batterie critique",
       "friendly": "Batterie critique — retour à la base"
+    },
+    "CRITICAL_BATTERY_CHARGING": {
+      "label": "Charge batterie critique",
+      "friendly": "Tonte en pause pendant la récupération de la batterie"
     },
     "CRITICAL_BATTERY_NAV_FAILED": {
       "label": "Échec retour",
@@ -1496,6 +1524,16 @@
   },
   "mapToolbar": {
     "actionFailed": "Échec de l'action",
+    "mowerAppearance": "Image de la tondeuse sur la carte",
+    "mowerAppearanceUrdf": "Silhouette URDF (repli automatique)",
+    "mowerAppearanceBiltemaRm1000": "Biltema RM1000",
+    "mowerAppearanceBiltemaRm1000Alt": "Tondeuse Biltema RM1000",
+    "dockAppearance": "Apparence de la base",
+    "dockAppearanceMarker": "Marqueur de base actuel",
+    "dockAppearanceGeneric": "Image générique de base (approx.)",
+    "dockAppearanceGenericAlt": "Approximation visuelle d'une base, basée sur une photo RM1000 nettoyée",
+    "dockAppearanceBiltemaRm1000": "Base RM1000 (autocollant d'assistance)",
+    "dockAppearanceBiltemaRm1000Alt": "Station de recharge Biltema RM1000 avec autocollant d'assistance",
     "darkMap": "Carte sombre",
     "satellite": "Satellite",
     "flattenMap": "Aplatir la carte",
@@ -2555,10 +2593,10 @@
   },
   "settingsSafety": {
     "alertMessage": "Les réglages de sécurité protègent le robot et son environnement",
-    "alertDescription": "Le firmware STM32 est la seule autorité de sécurité : il coupe la lame en cas de soulèvement, d’inclinaison ou d’arrêt d’urgence, et rien de cela n’est configurable depuis cette page. Il n’y a rien à modifier ici.",
+    "alertDescription": "Le firmware STM32 est la seule autorité de sécurité : il coupe la lame en cas de soulèvement, d’inclinaison ou d’arrêt d’urgence, quoi que fasse la pile ROS2. Les réglages ci-dessous n’ajustent que ses délais et seuils, et le firmware garde chacun dans une enveloppe de sécurité compilée.",
     "firmwareOwnedTitle": "Géré par le firmware",
-    "firmwareOwnedDescription": "La détection de soulèvement et d’inclinaison, le verrou d’arrêt d’urgence et la coupure de la lame résident tous dans le firmware STM32, qui décide selon ses propres seuils physiques. L’interface ne peut ni les assouplir, ni les retarder, ni les contourner : aucun réglage n’est donc proposé ici.",
-    "temperatureThresholdsNote": "La température du moteur de lame est uniquement mesurée et rapportée — aucune couche de la pile n’arrête la lame en fonction de la température. Les seuils d’alerte et d’erreur utilisés par les diagnostics (motor_temp_warn_c et motor_temp_error_c, dans mowgli_monitoring/config/diagnostics.yaml) se modifient sur la page Paramètres."
+    "firmwareOwnedDescription": "La détection de soulèvement et d’inclinaison, le verrou d’arrêt d’urgence et la coupure de la lame résident tous dans le firmware STM32. L’interface ne peut ni les contourner ni les désactiver : elle règle seulement la durée pendant laquelle un défaut doit persister avant le déclenchement, et le seuil du capteur de basculement, chacun dans les limites imposées par le firmware.",
+    "temperatureThresholdsNote": "La température du moteur de lame est uniquement mesurée et rapportée — aucune couche de la pile n’arrête la lame en fonction de la température. Les seuils d’alerte et d’erreur utilisés par les diagnostics (motor_temp_warn_c et motor_temp_error_c, dans mowgli_monitoring/config/diagnostics.yaml) se modifient dans Diagnostics → Paramètres avancés."
   },
   "settingsObstacles": {
     "digSensitivity": "Sensibilité au patinage (dig)",
@@ -3467,6 +3505,8 @@
     "modeStaleDescription": "Point orange tournant sur un anneau éteint. Alimenté et en marche, mais l'arbre de comportement ne répond pas.",
     "modeLowBattery": "Batterie faible",
     "modeLowBatteryDescription": "Tout l'anneau clignote en rouge. Même couleur que l'arrêt d'urgence — c'est le clignotement qui les distingue.",
+    "modeTransit": "Transit",
+    "modeTransitDescription": "L'anneau alterne les moitiés allumées en orange chaud, environ une fois par seconde. Trajet vers la bande suivante, lame arrêtée.",
     "modeMowing": "Tonte",
     "modeMowingDescription": "Arc vert qui grandit avec la couverture, avec un pixel blanc à sa pointe.",
     "modeMowingDegraded": "Tonte sans fix RTK",
@@ -3500,6 +3540,10 @@
     "topicsDescription": "Le schéma JSON complet et les codes de commande sont documentés dans docs/MQTT_CONTROL.md."
   },
   "settingsSections": {
+    "weather": {
+      "label": "Météo",
+      "description": "Comportement du capteur de pluie et vérification d'humidité du sol IrriSense : si la météo permet au robot de tondre."
+    },
     "updates": {"label": "Mises à jour", "description": "Versions installées, sources des mises à jour et récupération"},
     "appearance": {
       "label": "Apparence",
@@ -3670,6 +3714,13 @@
     }
   },
   "hostUpdater": {
+    "customShort": "Perso",
+    "standardStackShort": "Cohérent",
+    "localServiceShort": "Local",
+    "unhealthyShort": "Dégradé",
+    "component": "Composant",
+    "runningBuild": "Version active / date",
+    "status": "État",
     "changelog": {
       "title": "Contenu de cette mise à jour",
       "features": "Nouveautés",
@@ -3846,6 +3897,10 @@
     "unavailableHelp": "Les mises à jour automatiques nécessitent le service de mise à jour hôte. Le mode Avancé affiche les versions installées et les comparaisons manuelles."
   },
   "settingsFields": {
+    "imu_inclination_threshold": {
+      "label": "Seuil du capteur de basculement",
+      "tooltip": "Seuil du capteur de basculement embarqué (registre INT1_THS du LIS3DH). Plus grand = plus d'inclinaison tolérée avant l'arrêt d'urgence. Le firmware le garde entre 44 (0x2C, firmware d'origine) et 64 (0x40) ; 56 (0x38) est la valeur livrée."
+    },
     "yaw_loop_enabled": {
       "label": "Boucle de vitesse de lacet",
       "tooltip": "Ferme la boucle gyro de vitesse de lacet du firmware. Désactivé = différentiel en boucle ouverte (les roues reçoivent la commande brute, sans correction de cap). Modifie le comportement de conduite : à tester après changement. Appliqué après un redémarrage de ROS2."
@@ -3868,11 +3923,35 @@
     },
     "max_charge_voltage": {
       "label": "Tension de charge max",
-      "tooltip": "Plafond de tension de charge envoyé au firmware [V]. Le firmware le borne à la limite compilée de la carte : ce réglage ne peut que rendre la charge PLUS prudente."
+      "tooltip": "Plafond de tension de charge envoyé au STM32 [V] et enregistré dans sa flash. Le firmware le garde entre 25,2 et 29,4 V : 29,4 V est la limite de la batterie et ne peut jamais être dépassée."
     },
     "max_charge_current": {
       "label": "Courant de charge max",
-      "tooltip": "Plafond de courant de charge envoyé au firmware [A]. Le firmware le borne à la limite compilée de la carte : ce réglage ne peut que rendre la charge PLUS prudente."
+      "tooltip": "Plafond de courant de charge envoyé au STM32 [A] et enregistré dans sa flash. Le firmware le garde entre 0,1 et 1,2 A : aucun courant supérieur n'a été validé sur la carte."
+    },
+    "max_mps": {
+      "label": "Vitesse de roue max",
+      "tooltip": "Plafond de vitesse des roues envoyé au STM32 [m/s] et enregistré dans sa flash. Le firmware le garde entre 0,1 et 0,6 m/s."
+    },
+    "one_wheel_lift_emergency_ms": {
+      "label": "Délai soulèvement d'une roue",
+      "tooltip": "Durée pendant laquelle une roue doit rester soulevée avant que le firmware déclenche l'arrêt d'urgence [ms]. Plus court = plus strict. Le firmware la garde entre 10 et 5000 ms."
+    },
+    "both_wheels_lift_emergency_ms": {
+      "label": "Délai soulèvement des deux roues",
+      "tooltip": "Durée pendant laquelle les deux roues doivent rester soulevées avant que le firmware déclenche l'arrêt d'urgence [ms]. Plus court = plus strict. Le firmware la garde entre 10 et 3000 ms."
+    },
+    "tilt_emergency_ms": {
+      "label": "Délai basculement",
+      "tooltip": "Durée pendant laquelle un basculement (contacteur mécanique ou accéléromètre) doit persister avant que le firmware déclenche l'arrêt d'urgence [ms]. Plus court = plus strict. Le firmware la garde entre 10 et 1000 ms."
+    },
+    "stop_button_emergency_ms": {
+      "label": "Délai bouton STOP",
+      "tooltip": "Durée d'appui sur le bouton STOP avant que le firmware déclenche l'arrêt d'urgence [ms]. Plus court = plus strict. Le firmware la garde entre 10 et 250 ms."
+    },
+    "play_button_clear_emergency_ms": {
+      "label": "Appui PLAY pour lever l'urgence",
+      "tooltip": "Durée d'appui sur PLAY, sur le robot, pour lever un arrêt d'urgence verrouillé [ms]. Plus long = plus strict. Le firmware la garde entre 500 et 10000 ms."
     },
     "imu_cal_samples": {
       "label": "Échantillons de calibration IMU",
@@ -4059,7 +4138,11 @@
     },
     "chargeLimits": {
       "title": "Limites de charge",
-      "description": "Plafonds de charge transmis au firmware. Le firmware les borne aux limites compilées de la carte : ils ne peuvent être que resserrés."
+      "description": "Plafonds de charge envoyés au firmware STM32 et enregistrés dans sa flash : ils s'appliquent aussi avant le démarrage de la pile ROS2. Le firmware garde chaque valeur dans son enveloppe de sécurité. Pris en compte après un redémarrage de ROS2."
+    },
+    "firmwareSafety": {
+      "title": "Limites de sécurité du firmware",
+      "description": "Plafond de vitesse, délais d'arrêt d'urgence et seuil de basculement envoyés au firmware STM32 et enregistrés dans sa flash : ils s'appliquent aussi avant le démarrage de la pile ROS2. Une valeur peut être plus stricte ou plus souple que le défaut, mais le firmware ne la laisse jamais sortir de son enveloppe de sécurité compilée. Pris en compte après un redémarrage de ROS2."
     },
     "localizationGuard": {
       "title": "Garde de localisation",
@@ -4093,6 +4176,62 @@
       "title": "Dégagement de la pose de départ",
       "description": "Dernier recours quand le robot se tient sur une cellule interdite et que tout plan depuis sa propre pose est refusé."
     }
+  },
+  "firmwareParams": {
+    "params": {
+      "ticks_per_meter": {
+        "label": "Ticks encodeur par mètre",
+        "description": "Échelle des encodeurs utilisée par la boucle PI des roues et l'odométrie [ticks/m]. Calibrée par le réglage de propulsion (section Moteurs)."
+      },
+      "wheel_pid_kp": {
+        "label": "Gain proportionnel PI roue",
+        "description": "Gain proportionnel de la boucle de vitesse de chaque roue [PWM par m/s d'erreur]. Se règle dans la section Moteurs."
+      },
+      "wheel_pid_ki": {
+        "label": "Gain intégral PI roue",
+        "description": "Gain intégral de la boucle de vitesse de chaque roue [PWM par m/s·s] ; c'est lui qui fait franchir la zone morte du moteur. Se règle dans la section Moteurs."
+      },
+      "wheel_pid_kd": {
+        "label": "Gain dérivé PI roue",
+        "description": "Gain dérivé de la boucle de vitesse de chaque roue ; 0 sur ce robot. Se règle dans la section Moteurs."
+      },
+      "wheel_pid_integral_limit": {
+        "label": "Limite intégrale PI roue",
+        "description": "Borne du terme intégral [PWM], anti-emballement. Se règle dans la section Moteurs."
+      },
+      "wheel_pid_pwm_per_mps": {
+        "label": "Anticipation roue",
+        "description": "PWM par m/s appliqué en boucle ouverte avant la correction PI. Calibré par le réglage de propulsion (section Moteurs)."
+      },
+      "imu_gyro_bias_z": {
+        "label": "Biais gyroscope (mesuré)",
+        "description": "Décalage du gyroscope Z au repos, mesuré par la calibration IMU sur la base [rad/s] et soustrait par la boucle de lacet du firmware. Remesuré à chaque calibration, jamais enregistré en flash."
+      },
+      "wheel_track": {
+        "label": "Voie des roues",
+        "description": "Distance entre les deux roues motrices [m], utilisée par le firmware pour répartir un virage entre les roues. Se règle dans la section Matériel."
+      }
+    },
+    "title": "Valeurs appliquées par le firmware",
+    "description": "Ce que le STM32 exécute réellement, tel qu'il l'a rapporté. Une valeur que le firmware a dû ramener dans son enveloppe est signalée ; une valeur marquée enregistrée est conservée dans la flash de la carte et s'applique dès la mise sous tension.",
+    "noData": "Aucun rapport du firmware pour l'instant. La pile ROS2 envoie les paramètres quand elle se connecte à la carte.",
+    "incompatible": "Le firmware de la carte ne parle pas cette version du protocole : ces valeurs ne sont pas appliquées. Reflashez le firmware.",
+    "bootDefaults": "La carte a démarré sur ses valeurs par défaut compilées (rien d'enregistré pour l'instant).",
+    "bootFlash": "La carte a démarré sur les valeurs enregistrées dans sa flash.",
+    "bootErased": "Au démarrage, la carte a trouvé son stockage de paramètres plein ou illisible et l'a réécrit.",
+    "commitError": "La carte n'a pas pu écrire sa flash : ces valeurs seront perdues à la prochaine mise sous tension.",
+    "commitFull": "Le stockage de paramètres de la carte est plein : il sera réécrit au prochain démarrage.",
+    "recordsLeft": "Encore {{count}} enregistrements possibles avant la prochaine réécriture.",
+    "colParameter": "Paramètre",
+    "colApplied": "Appliqué",
+    "colRequested": "Demandé",
+    "colRange": "Plage autorisée",
+    "colState": "État",
+    "stateStored": "Enregistré",
+    "stateNotStored": "Pas encore enregistré",
+    "stateVolatile": "Non enregistré (mesuré)",
+    "stateClamped": "Ramené dans la plage",
+    "stateUnreported": "Pas de rapport"
   },
   "fleetPage": {
     "betaTag": "Bêta",

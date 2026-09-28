@@ -6,6 +6,7 @@ import type {Map as MapType} from "../../../types/ros.ts";
 import {
     MowingFeature,
     MowingAreaFeature,
+    MapAreaFeature,
     NavigationFeature,
     ObstacleFeature,
     DockFeatureBase,
@@ -104,6 +105,15 @@ export function useMapFiles({
             areas[type][index] = {
                 name: f.properties?.name ?? '',
                 area: {points},
+                // Round-trip the stable area id (mowglinext#637) the feature
+                // was loaded with, so map_server's on_add_area preserves it
+                // instead of minting a fresh one. PUT /mowglinext/map clears
+                // and re-adds every area on ANY edit, so omitting this would
+                // re-index the WHOLE map on every save, discarding all
+                // coverage-resume progress even for areas the operator never
+                // touched. Undefined for a genuinely new (never-saved) area,
+                // which is exactly when a fresh id should be minted.
+                id: f instanceof MapAreaFeature ? f.area?.id : undefined,
             };
         }
 

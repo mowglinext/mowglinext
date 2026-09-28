@@ -288,6 +288,14 @@
            ================================================================ -->
       <ReactiveFallback name="LocalizationGuard">
         <IsCharging/>
+        <!-- No autonomous mission exists in IDLE (0) or operator STOP (8).
+             Let MainLogic publish the idle/stop state even if GPS degrades.
+             Otherwise this handler falsely publishes AUTONOMOUS and the GUI
+             announces a new mow while the wheels and blade remain stopped.
+             Re-evaluate these before the handler so STOP also interrupts an
+             existing RTK wait; a subsequent START still needs healthy GPS. -->
+        <IsCommand command="0"/>
+        <IsCommand command="8"/>
         <IsCommand command="7"/>
         <IsCommand command="3"/>
         <IsCommand command="5"/>
@@ -458,73 +466,125 @@
              with FAILURE so the undock/resume tail is skipped.
              ============================================================ -->
         <Sequence name="CriticalBatteryDock">
-          <IsBatteryLow threshold="{battery_critical_pct}" voltage_threshold="{battery_critical_voltage}"/>
+          <Fallback name="CriticalBatteryLowOrDockFailureLatched">
+            <IsCriticalDockFailureLatched/>
+            <IsBatteryLow threshold="{battery_critical_pct}" voltage_threshold="{battery_critical_voltage}"/>
+          </Fallback>
+          <!-- Once STOP is observed after docking, keep the stopped mower out
+               of this higher-priority branch on later root ticks. The same
+               gate is below the DockRobot action, so STOP during the safety
+               transit cannot cancel docking. -->
+          <Inverter name="CriticalChargeStopNotLatched">
+            <IsCriticalChargeStopHeld latch_current_stop="false"/>
+          </Inverter>
+          <!-- After one failed critical docking attempt, hold in an explicit
+               failure state until an operator command requests a retry.
+               Check this before publishing docking status or attempting motion. -->
+          <Fallback name="CriticalDockRetryGate">
+            <Sequence>
+              <Inverter><IsCriticalDockFailureLatched/></Inverter>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
           <PublishHighLevelStatus state="2" state_name="CRITICAL_BATTERY_DOCKING"/>
           <SaveObstacles/>
           <ClearCostmap/>
-          <Fallback name="CriticalNavOrStop">
-            <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
-            <!-- Docking failed — stay stopped, battery is critical -->
-            <Sequence>
+              <Fallback name="CriticalNavOrStop">
+                <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                <!-- Docking failed — stay stopped, battery is critical -->
+                <Sequence>
+                  <PublishHighLevelStatus state="0" state_name="CRITICAL_BATTERY_NAV_FAILED"/>
+                  <LatchCriticalDockFailure/>
+                  <AlwaysSuccess/>
+                </Sequence>
+              </Fallback>
+              <IfThenElse name="CriticalDockSucceededOrStayStopped">
+                <IsLastDockSucceeded/>
+                <Sequence>
+                  <!-- Hold on the charger until the pack charges to the resume level
+                         (battery_full_pct, 95 %). Each 5 s wait re-ticks the loop so a
+                         fresh battery sample is sampled; the AUTO-resume branch exits
+                         the loop only once BOTH IsBatteryAbove AND IsChargeCurrentBelow
+                         clear — battery_percent is derived from raw pack voltage, which
+                         reads well above the true state of charge for the whole CC/CV
+                         charge while the charger is pushing current in, so voltage alone
+                         can cross battery_full_pct long before the pack is genuinely full
+                         (see condition_nodes.hpp IsChargeCurrentBelow). A stalled charger trips
+                         IsChargingProgressing → CriticalChargerFailed, which ends the
+                         session and aborts the branch so we don't sit here forever.
+                         IsChargingProgressing gets full_pct because waiting for the
+                         current taper means waiting through the CV tail, where the
+                         voltage-derived percentage is flat by construction; it must
+                         not read that as a dead charger (charge_progress.hpp).
+
+                         MANUAL RESUME: the operator can press Play (COMMAND_START)
+                         during this hold to resume the mow before the pack is full.
+                         The handler flags it and IsManualResumeRequested consumes it —
+                         but it is honoured ONLY above battery_manual_resume_pct
+                         (battery_manual_resume_percent, default 30 %); below the floor
+                         the request is refused (WARN) and the hold continues, so a
+                         critical pack can never be forced back onto the lawn. The
+                         5 s tick keeps a Play press from waiting up to a full 30 s.
+
+                         BOUND: 5760 attempts x 5.0 s = 8 h (unchanged from the former
+                         960 x 30 s). -->
+                  <PublishHighLevelStatus state="1" state_name="CRITICAL_BATTERY_CHARGING"/>
+                  <!-- STOP is accepted only after docking completed and the charge hold
+                         is active. It fails this sequence immediately, so MainLogic
+                         reaches StopHoldSequence without the undock/resume tail. Keep it
+                         here rather than before DockRobot: critical docking remains a
+                         safety action, not a casually cancellable transit. -->
+                  <ReactiveSequence name="CriticalChargeHold">
+                    <Inverter name="CriticalChargeHoldNotStopped">
+                      <IsCriticalChargeStopHeld latch_current_stop="true"/>
+                    </Inverter>
+                    <Fallback name="CriticalChargeOrAbort">
+                      <RetryUntilSuccessful num_attempts="5760">
+                        <Sequence>
+                          <IsChargingProgressing full_pct="{battery_full_pct}"/>
+                          <Fallback>
+                            <Sequence>
+                              <IsBatteryAbove threshold="{battery_full_pct}"/>
+                              <IsChargeCurrentBelow threshold="{battery_charge_tail_current_a}"/>
+                            </Sequence>
+                            <IsManualResumeRequested min_battery_pct="{battery_manual_resume_pct}"/>
+                            <Sequence>
+                              <WaitForDuration duration_sec="5.0"/>
+                              <AlwaysFailure/>
+                            </Sequence>
+                          </Fallback>
+                        </Sequence>
+                      </RetryUntilSuccessful>
+                      <!-- Charger looks dead — END the session (never resume mowing on a
+                           critical pack) and terminate this branch with FAILURE so the
+                           undock/resume tail below is skipped and the robot stays docked
+                           in a settled state instead of a frozen one. -->
+                      <Sequence name="CriticalChargerFailed">
+                        <PublishHighLevelStatus state="1" state_name="CHARGER_FAILED"/>
+                        <EndSession/>
+                        <ClearCommand/>
+                        <AlwaysFailure/>
+                      </Sequence>
+                    </Fallback>
+                  </ReactiveSequence>
+                  <!-- Recovered to the resume level — AUTO-CONTINUE. Undock (BackUp,
+                         not opennav UndockRobot: isDocked() is fragile with RTK drift at
+                         the dock) and fall through WITHOUT EndSession/ClearCommand, so
+                         current_command stays 1 and MowingSequence resumes coverage from
+                         the saved cursor on the next tick. Mirrors BatteryGuard's tail. -->
+                  <IsResumeUndockAllowed max_attempts="3"/>
+                  <PublishHighLevelStatus state="2" state_name="RESUMING_UNDOCKING"/>
+                  <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
+                  <PublishHighLevelStatus state="2" state_name="MOWING"/>
+                </Sequence>
+                <AlwaysSuccess/>
+              </IfThenElse>
+            </Sequence>
+            <Sequence name="CriticalDockFailureLatched">
+              <IsCriticalDockFailureLatched/>
               <PublishHighLevelStatus state="0" state_name="CRITICAL_BATTERY_NAV_FAILED"/>
               <AlwaysSuccess/>
             </Sequence>
           </Fallback>
-          <!-- Hold on the charger until the pack charges to the resume level
-               (battery_full_pct, 95 %). Each 5 s wait re-ticks the loop so a
-               fresh battery sample is sampled; IsBatteryAbove exits the loop
-               the moment we clear battery_full_pct. A stalled charger trips
-               IsChargingProgressing → CriticalChargerFailed, which ends the
-               session and aborts the branch so we don't sit here forever.
-
-               MANUAL RESUME: the operator can press Play (COMMAND_START)
-               during this hold to resume the mow before the pack is full.
-               The handler flags it and IsManualResumeRequested consumes it —
-               but it is honoured ONLY above battery_manual_resume_pct
-               (battery_manual_resume_percent, default 30 %); below the floor
-               the request is refused (WARN) and the hold continues, so a
-               critical pack can never be forced back onto the lawn. The
-               5 s tick keeps a Play press from waiting up to a full 30 s.
-
-               BOUND: 5760 attempts x 5.0 s = 8 h (unchanged from the former
-               960 x 30 s). -->
-          <PublishHighLevelStatus state="1" state_name="CRITICAL_BATTERY_CHARGING"/>
-          <Fallback name="CriticalChargeOrAbort">
-            <RetryUntilSuccessful num_attempts="5760">
-              <Sequence>
-                <IsChargingProgressing/>
-                <Fallback>
-                  <IsBatteryAbove threshold="{battery_full_pct}"/>
-                  <IsManualResumeRequested min_battery_pct="{battery_manual_resume_pct}"/>
-                  <Sequence>
-                    <WaitForDuration duration_sec="5.0"/>
-                    <AlwaysFailure/>
-                  </Sequence>
-                </Fallback>
-              </Sequence>
-            </RetryUntilSuccessful>
-            <!-- Charger looks dead — END the session (never resume mowing on a
-                 critical pack) and terminate this branch with FAILURE so the
-                 undock/resume tail below is skipped and the robot stays docked
-                 in a settled state instead of a frozen one. -->
-            <Sequence name="CriticalChargerFailed">
-              <PublishHighLevelStatus state="1" state_name="CHARGER_FAILED"/>
-              <EndSession/>
-              <ClearCommand/>
-              <AlwaysFailure/>
-            </Sequence>
-          </Fallback>
-          <!-- Recovered to the resume level — AUTO-CONTINUE. Undock (BackUp,
-               not opennav UndockRobot: isDocked() is fragile with RTK drift at
-               the dock) and fall through WITHOUT EndSession/ClearCommand, so
-               current_command stays 1 and MowingSequence resumes coverage from
-               the saved cursor on the next tick. Mirrors BatteryGuard's tail. -->
-          <IsResumeUndockAllowed max_attempts="3"/>
-          <PublishHighLevelStatus state="2" state_name="RESUMING_UNDOCKING"/>
-          <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
-          <PublishHighLevelStatus state="2" state_name="MOWING"/>
         </Sequence>
 
         <!-- ============================================================
@@ -681,7 +741,24 @@
                    out where the robot stands. -->
               <Fallback name="RainGuard">
                 <Inverter><IsNewRain/></Inverter>
-                <Sequence name="RainHandle">
+                <Sequence name="RainGuardHandler">
+                  <!-- FIRST child, same reasoning as SensorFaultHandler /
+                       LocalizationDegradedHandler: without it, every rain
+                       pause is charged to GetNextUnmowedArea's per-area
+                       no-progress budget (BTContext::kMaxAreaAttempts) —
+                       RainGuard was the one guard listed in
+                       test_guard_fallthrough.cpp's own "pausing guards"
+                       comment that never actually got this marker. Field
+                       2026-09-23: two rain events on the same area (each a
+                       genuine, real-progress pass — 2%->14%->25%->27%) were
+                       enough to exhaust the area's attempt budget and end
+                       the whole session with COVERAGE_FAILED_DOCKING,
+                       because a shower has nothing to do with the area
+                       being unmowable. Rain pauses are now exempt up to the
+                       same bounded kMaxGuardHaltedPasses every other guard
+                       shares (a pathological flap still eventually charges
+                       the area, same as scan_stale/localization_degraded). -->
+                  <MarkGuardHalt reason="rain"/>
                   <SetMowerEnabled enabled="false"/>
                   <StopMoving/>
                   <Fallback name="RainDockBranch">
@@ -742,29 +819,65 @@
               <!-- Reactive battery check -->
               <Fallback name="BatteryGuard">
                 <Inverter><NeedsDocking threshold="{battery_low_pct}"/></Inverter>
-                <Sequence name="BatteryDockAndResume">
+                <Sequence name="BatteryGuardHandler">
+                  <!-- FIRST child, same reasoning as RainGuardHandler /
+                       SensorFaultHandler / LocalizationDegradedHandler:
+                       without it, every battery-triggered dock-and-charge
+                       cycle is charged to GetNextUnmowedArea's per-area
+                       no-progress budget (BTContext::kMaxAreaAttempts) —
+                       BatteryGuard is structurally identical to RainGuard
+                       (same StripGuards ReactiveSequence, same mid-swath
+                       FollowStrip interruption) and was one of the guards
+                       named in test_guard_fallthrough.cpp's own "pausing
+                       guards" comment that never actually got this marker.
+                       A low-battery dock-and-recharge is routine, expected
+                       behaviour on every area, not evidence the area is
+                       unmowable; charging it against the attempt budget
+                       compounds with issue #759 (a mower that ends up
+                       cycling dock/undock repeatedly, e.g. from a premature
+                       "battery full" read while still under charge current,
+                       can exhaust the budget and abandon a genuinely
+                       mowable area after only a couple of cycles). -->
+                  <MarkGuardHalt reason="battery"/>
                   <SetMowerEnabled enabled="false"/>
                   <StopMoving/>
                   <PublishHighLevelStatus state="2" state_name="LOW_BATTERY_DOCKING"/>
                   <ClearCostmap/>
                   <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
                   <PublishHighLevelStatus state="1" state_name="CHARGING"/>
-                  <!-- Charge hold until battery_full_pct. MANUAL RESUME: a Play
-                       press (COMMAND_START) during this hold is flagged by the
-                       handler and consumed by IsManualResumeRequested, which
-                       honours it only above battery_manual_resume_pct
-                       (battery_manual_resume_percent, default 30 %) — below the
-                       floor it is refused (WARN) and the hold continues. The
-                       5 s tick keeps a Play press from waiting up to 30 s.
+                  <!-- Charge hold until battery_full_pct AND the charge current
+                       has tapered (IsChargeCurrentBelow) — battery_full_pct
+                       alone is not enough, see the identical note on
+                       CriticalBatteryDock's charge hold above and
+                       condition_nodes.hpp's IsChargeCurrentBelow — and the same
+                       reason IsChargingProgressing gets full_pct: the CV tail
+                       this waits through has a flat percentage by construction
+                       (charge_progress.hpp). MANUAL
+                       RESUME: a Play press (COMMAND_START) during this hold
+                       is flagged by the handler and consumed by
+                       IsManualResumeRequested, which honours it only above
+                       battery_manual_resume_pct (battery_manual_resume_percent,
+                       default 30 %) — below the floor it is refused (WARN)
+                       and the hold continues. The 5 s tick keeps a Play press
+                       from waiting up to 30 s.
 
                        BOUND: 5760 attempts x 5.0 s = 8 h (unchanged from the
                        former 960 x 30 s). -->
-                  <Fallback name="ChargeOrAbort">
+                  <!-- Once docked and in the charge hold, STOP must leave the
+                       wait promptly and reach StopHoldSequence. Keep this
+                       after DockRobot so low-battery docking remains
+                       non-cancellable. -->
+                  <ReactiveSequence name="ChargeHold">
+                    <Inverter name="ChargeHoldNotStopped"><IsCommand command="8"/></Inverter>
+                    <Fallback name="ChargeOrAbort">
                     <RetryUntilSuccessful num_attempts="5760">
                       <Sequence>
-                        <IsChargingProgressing/>
+                        <IsChargingProgressing full_pct="{battery_full_pct}"/>
                         <Fallback>
-                          <IsBatteryAbove threshold="{battery_full_pct}"/>
+                          <Sequence>
+                            <IsBatteryAbove threshold="{battery_full_pct}"/>
+                            <IsChargeCurrentBelow threshold="{battery_charge_tail_current_a}"/>
+                          </Sequence>
                           <IsManualResumeRequested min_battery_pct="{battery_manual_resume_pct}"/>
                           <Sequence>
                             <WaitForDuration duration_sec="5.0"/>
@@ -778,7 +891,8 @@
                       <ClearCommand/>
                       <AlwaysFailure/>
                     </Sequence>
-                  </Fallback>
+                    </Fallback>
+                  </ReactiveSequence>
                   <IsResumeUndockAllowed max_attempts="3"/>
                   <PublishHighLevelStatus state="2" state_name="RESUMING_UNDOCKING"/>
                   <WaitForDuration duration_sec="1.0"/>
@@ -852,7 +966,7 @@
                 <Sequence name="ManualChargeHandler">
                   <SetMowerEnabled enabled="false"/>
                   <StopMoving/>
-                  <PublishHighLevelStatus state="1" state_name="CHARGING"/>
+                  <PublishHighLevelStatus state="1" state_name="MANUAL_CHARGING"/>
                   <!-- Wait for the operator to take the mower off the dock. No
                        battery-threshold auto-undock here on purpose: the
                        operator docked it, so the operator undocks it.

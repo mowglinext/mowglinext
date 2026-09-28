@@ -68,6 +68,52 @@ func TestUpdateReadinessRequiresLiveStoppedHardware(t *testing.T) {
 	if !read().Ready {
 		t.Fatal(read().Reason)
 	}
+	// A protocol-first upgrade may enter maintenance only with independently
+	// fresh stopped telemetry. Full readiness must remain false until the
+	// matching bridge is running; neither verdict permits mowing.
+	status["firmware_compatible"] = false
+	status["firmware_protocol_version"] = 7
+	emit("status", status)
+	if result := read(); result.Ready || !result.MaintenanceReady {
+		t.Fatalf("protocol transition verdict: %+v", result)
+	}
+	for _, field := range []string{"mow_enabled", "mower_motor_rpm", "blade_status_stamp", "stamp", "firmware_protocol_version"} {
+		previous := status[field]
+		switch field {
+		case "mow_enabled":
+			status[field] = true
+		case "mower_motor_rpm":
+			status[field] = 50
+		case "firmware_protocol_version":
+			status[field] = 0
+		default:
+			status[field] = map[string]any{"sec": 1}
+		}
+		emit("status", status)
+		if result := read(); result.Ready || result.MaintenanceReady {
+			t.Fatalf("unsafe %s accepted: %+v", field, result)
+		}
+		status[field] = previous
+	}
+	emit("status", status)
+	emit("highLevelStatus", map[string]any{"state": 2})
+	if read().MaintenanceReady {
+		t.Fatal("non-idle incompatible mower accepted")
+	}
+	emit("highLevelStatus", map[string]any{"state": 1})
+	for _, velocity := range []float64{0.1, 0} {
+		wheelStamp := stamp
+		if velocity == 0 {
+			wheelStamp = map[string]any{"sec": 1}
+		}
+		emit("wheelOdom", map[string]any{"header": map[string]any{"stamp": wheelStamp}, "twist": map[string]any{"twist": map[string]any{"linear": map[string]any{"x": velocity}}}})
+		if read().MaintenanceReady {
+			t.Fatal("moving or stale wheels accepted")
+		}
+	}
+	emit("wheelOdom", map[string]any{"header": map[string]any{"stamp": stamp}})
+	status["firmware_compatible"] = true
+	emit("status", status)
 	// No charging-current threshold: an LFP ramp at zero current still permits
 	// an explicitly idle maintenance operation.
 	status["mower_motor_rpm"] = 25

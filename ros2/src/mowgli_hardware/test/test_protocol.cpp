@@ -116,36 +116,18 @@ TEST(ProtocolSizes, RebootPacketSize)
   EXPECT_EQ(sizeof(LlReboot), 4u);  // type(1) + magic(1) + crc(2)
 }
 
-TEST(ProtocolSizes, SetDrivePidPacketSize)
+TEST(ProtocolSizes, RuntimeParameterPacketSizes)
 {
-  // type(1) + ticks_per_meter/kp/ki/kd/integral_limit/pwm_per_mps(6*4=24)
-  // + crc(2) = 27.
-  EXPECT_EQ(sizeof(LlSetDrivePid), 27u);
-}
-
-TEST(ProtocolSizes, SetYawPidPacketSize)
-{
-  // type(1) + yaw_kp/yaw_ki/trim_limit_mps(3*4=12) + enabled(1) +
-  // gyro_sign(1) + gyro_bias_radps(4) + crc(2) = 21. Option C (task #33/#34) +
-  // protocol v6 (gyro-bias forward) — verified against the firmware's own
-  // pkt_set_yaw_pid_t asserts.
-  EXPECT_EQ(sizeof(LlSetYawPid), 21u);
-}
-
-TEST(ProtocolSizes, SetKinematicsPacketSize)
-{
-  // type(1) + max_mps(4) + wheel_base(4) + crc(2) = 11. Protocol v4 (runtime
-  // MaxMps/WheelBase migration) — must match the firmware pkt_set_kinematics_t
-  // asserts in mowgli_protocol.h.
-  EXPECT_EQ(sizeof(LlSetKinematics), 11u);
-}
-
-TEST(ProtocolSizes, SetSafetyLimitsPacketSize)
-{
-  // type(1) + max_charge_voltage/current(2*4=8) + 5*uint16 timeouts(10) +
-  // crc(2) = 21. Protocol v5 (runtime charge/emergency-limit migration) — must
-  // match the firmware pkt_set_safety_limits_t asserts in mowgli_protocol.h.
-  EXPECT_EQ(sizeof(LlSetSafetyLimits), 21u);
+  // Protocol v7 generic runtime parameters — must match the firmware
+  // pkt_set_param_t / pkt_get_param_t / pkt_param_commit_t / pkt_param_value_t
+  // / pkt_param_store_status_t asserts in mowgli_protocol.h.
+  EXPECT_EQ(sizeof(LlSetParam), 9u);  // type(1) + id(2) + value(4) + crc(2)
+  EXPECT_EQ(sizeof(LlGetParam), 5u);  // type(1) + id(2) + crc(2)
+  EXPECT_EQ(sizeof(LlParamCommit), 4u);  // type(1) + magic(1) + crc(2)
+  // type(1) + id(2) + status(1) + flags(1) + value/default/min/max(16) + crc(2)
+  EXPECT_EQ(sizeof(LlParamValue), 23u);
+  // type(1) + boot(1) + commit(1) + records_left(2) + param_count(2) + crc(2)
+  EXPECT_EQ(sizeof(LlParamStoreStatus), 9u);
 }
 
 TEST(ProtocolSizes, ConfigPacketSizes)
@@ -176,7 +158,11 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_CMD_VEL, 0x50);
   EXPECT_EQ(PACKET_ID_LL_CMD_BLADE, 0x51);
   EXPECT_EQ(PACKET_ID_LL_REBOOT, 0x52);
-  EXPECT_EQ(PACKET_ID_LL_SET_DRIVE_PID, 0x54);
+  EXPECT_EQ(PACKET_ID_LL_PARAM_VALUE, 0x13);
+  EXPECT_EQ(PACKET_ID_LL_PARAM_STORE_STATUS, 0x14);
+  EXPECT_EQ(PACKET_ID_LL_SET_PARAM, 0x58);
+  EXPECT_EQ(PACKET_ID_LL_GET_PARAM, 0x59);
+  EXPECT_EQ(PACKET_ID_LL_PARAM_COMMIT, 0x5A);
 }
 
 // ---------------------------------------------------------------------------
@@ -370,72 +356,49 @@ TEST(ProtocolRoundtrip, CmdVelPacket)
   roundtrip_struct(pkt);
 }
 
-TEST(ProtocolRoundtrip, SetDrivePidPacket)
+TEST(ProtocolRoundtrip, SetParamPacket)
 {
-  LlSetDrivePid pkt{};
-  pkt.type = PACKET_ID_LL_SET_DRIVE_PID;
-  pkt.ticks_per_meter = 319.305f;
-  pkt.kp = 30.0f;
-  pkt.ki = 5000.0f;
-  pkt.kd = 0.0f;
-  pkt.integral_limit = 100.0f;
-  pkt.pwm_per_mps = 300.0f;
+  LlSetParam pkt{};
+  pkt.type = PACKET_ID_LL_SET_PARAM;
+  pkt.param_id = FW_PARAM_ID_TICKS_PER_METER;
+  pkt.value = 319.305f;
 
   roundtrip_struct(pkt);
 }
 
-TEST(SetDrivePidPacket, PreservesFractionalTicksPerMeter)
+TEST(ProtocolRoundtrip, ParamValuePacket)
 {
-  LlSetDrivePid pkt{};
-  pkt.type = PACKET_ID_LL_SET_DRIVE_PID;
-  pkt.ticks_per_meter = 319.305f;
-  pkt.kp = 0.2f;
-  pkt.ki = 0.0f;
-  pkt.kd = 0.0f;
-  pkt.integral_limit = 0.0f;
-  pkt.pwm_per_mps = 261.035f;
+  LlParamValue pkt{};
+  pkt.type = PACKET_ID_LL_PARAM_VALUE;
+  pkt.param_id = FW_PARAM_ID_TILT_MS;
+  pkt.status = FW_PARAM_STATUS_CLAMPED;
+  pkt.flags = PARAM_VALUE_FLAG_PERSISTED;
+  pkt.value = 1000.0f;
+  pkt.default_value = 500.0f;
+  pkt.min_value = 10.0f;
+  pkt.max_value = 1000.0f;
 
-  const uint8_t* raw = reinterpret_cast<const uint8_t*>(&pkt);
-  float decoded_ticks = 0.0f;
-  std::memcpy(&decoded_ticks, raw + 1, sizeof(decoded_ticks));
-  EXPECT_FLOAT_EQ(decoded_ticks, 319.305f);
-
-  float decoded_ff = 0.0f;
-  std::memcpy(&decoded_ff, raw + 21, sizeof(decoded_ff));
-  EXPECT_FLOAT_EQ(decoded_ff, 261.035f);
+  roundtrip_struct(pkt);
 }
 
-TEST(SetDrivePidPacket, FieldOffsetsAreCorrect)
+TEST(SetParamPacket, FieldOffsetsAreCorrect)
 {
-  LlSetDrivePid pkt{};
-  pkt.type = PACKET_ID_LL_SET_DRIVE_PID;
-  pkt.ticks_per_meter = 319.305f;
-  pkt.kp = 0.2f;
-  pkt.ki = 0.3f;
-  pkt.kd = 0.4f;
-  pkt.integral_limit = 10.0f;
-  pkt.pwm_per_mps = 261.035f;
+  LlSetParam pkt{};
+  pkt.type = PACKET_ID_LL_SET_PARAM;
+  pkt.param_id = 0x1234;
+  pkt.value = 261.035f;
   pkt.crc = 0xABCD;
 
   const uint8_t* raw = reinterpret_cast<const uint8_t*>(&pkt);
-  EXPECT_EQ(raw[0], PACKET_ID_LL_SET_DRIVE_PID);
-
+  EXPECT_EQ(raw[0], PACKET_ID_LL_SET_PARAM);
+  uint16_t id = 0u;
+  std::memcpy(&id, raw + 1, sizeof(id));
+  EXPECT_EQ(id, 0x1234);
   float value = 0.0f;
-  std::memcpy(&value, raw + 1, sizeof(value));
-  EXPECT_FLOAT_EQ(value, 319.305f);
-  std::memcpy(&value, raw + 5, sizeof(value));
-  EXPECT_FLOAT_EQ(value, 0.2f);
-  std::memcpy(&value, raw + 9, sizeof(value));
-  EXPECT_FLOAT_EQ(value, 0.3f);
-  std::memcpy(&value, raw + 13, sizeof(value));
-  EXPECT_FLOAT_EQ(value, 0.4f);
-  std::memcpy(&value, raw + 17, sizeof(value));
-  EXPECT_FLOAT_EQ(value, 10.0f);
-  std::memcpy(&value, raw + 21, sizeof(value));
+  std::memcpy(&value, raw + 3, sizeof(value));
   EXPECT_FLOAT_EQ(value, 261.035f);
-
   uint16_t crc = 0u;
-  std::memcpy(&crc, raw + 25, sizeof(crc));
+  std::memcpy(&crc, raw + 7, sizeof(crc));
   EXPECT_EQ(crc, 0xABCD);
 }
 

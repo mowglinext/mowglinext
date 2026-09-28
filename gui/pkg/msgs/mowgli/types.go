@@ -6,6 +6,10 @@ package mowgli
 // Map is the internal map structure sent to the frontend via the virtual "map" topic.
 // It is assembled by pollMap() from get_mowing_area service calls.
 type Map struct {
+	// ROS array index of each entry in WorkingArea (map_server's index-based
+	// services expect this). NOT a stable identity — it shifts on any area
+	// list edit/save. Each MapArea's own Id (mowglinext#637) is what survives
+	// that; the frontend should resolve a live index from Id, not cache this.
 	WorkingAreaIndices []uint32  `json:"working_area_indices"`
 	MapWidth           float64   `json:"map_width"`
 	MapHeight          float64   `json:"map_height"`

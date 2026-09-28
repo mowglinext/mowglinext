@@ -110,26 +110,31 @@ public:
       // Auto-continue after a mid-run container restart: the loader also restored
       // current_command from disk, but only leave it active (so MowingSequence
       // auto-re-enters) when it was a mow command (COMMAND_START == 1) AND a
-      // resumable snapshot genuinely exists. Any other restored command, or an
-      // empty snapshot, falls back to IDLE so the robot never starts moving on
-      // boot without real resume state. EndSession clears commands/cursors;
-      // a phase-only cross-hatch snapshot therefore stays IDLE too.
+      // resumable snapshot genuinely exists. Preserve an explicitly latched
+      // critical charge STOP as a stop hold across restart; other restored
+      // commands, or an empty snapshot, fall back to IDLE. EndSession clears
+      // commands/cursors; a phase-only cross-hatch snapshot therefore stays
+      // IDLE too.
       constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
       const bool has_resumable_state =
           !context_->area_resume_pose_index.empty() || !context_->completed_areas.empty();
       const bool auto_continue = context_->current_command == kCommandStart && has_resumable_state;
-      if (!auto_continue)
+      constexpr uint8_t kCommandStop = 8;  // HighLevelControl::Request::COMMAND_STOP
+      const bool preserve_stop_hold =
+          context_->current_command == kCommandStop && context_->critical_charge_stop_latched;
+      if (!auto_continue && !preserve_stop_hold)
       {
         context_->current_command = 0;  // IDLE — require an explicit operator start
       }
       RCLCPP_INFO(get_logger(),
                   "Restored coverage resume state from %s (current_area=%d, %zu area(s) with a "
-                  "resume cursor, %zu completed, auto_continue=%s)",
+                  "resume cursor, %zu completed, auto_continue=%s, stop_hold=%s)",
                   context_->coverage_resume_path.c_str(),
                   context_->current_area,
                   context_->area_resume_pose_index.size(),
                   context_->completed_areas.size(),
-                  auto_continue ? "true" : "false");
+                  auto_continue ? "true" : "false",
+                  preserve_stop_hold ? "true" : "false");
     }
 
     setupSubscribers();
@@ -723,6 +728,7 @@ private:
             RCLCPP_INFO(get_logger(),
                         "HighLevelControl: COMMAND_S2 normalised to COMMAND_START (mow next area)");
           }
+          bool cleared_dock_failure_latch = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
             // Play pressed while parked in a charge hold (CHARGING /
@@ -749,6 +755,19 @@ private:
                 cmd == HighLevelControl::Request::COMMAND_MANUAL_MOW)
               context_->blade_direction.clearOperatorInhibit();
             context_->current_command = cmd;
+            if (cmd != HighLevelControl::Request::COMMAND_STOP)
+            {
+              context_->critical_charge_stop_latched = false;
+              cleared_dock_failure_latch = context_->critical_dock_failure_latched;
+              context_->critical_dock_failure_latched = false;
+            }
+            else if (context_->last_high_level_status.state_name == "CRITICAL_BATTERY_CHARGING")
+            {
+              // Capture cancellation synchronously as well as in the tree
+              // condition, so the persisted snapshot already represents this
+              // post-dock hold if the process stops before its next tick.
+              context_->critical_charge_stop_latched = true;
+            }
             // A plain COMMAND_START means "mow the lawn", so it must cancel any
             // single-area clip still latched from an earlier ~/start_in_area run.
             // EndSession normally clears it, but a session can legitimately stay
@@ -758,10 +777,28 @@ private:
             // Safe to do here: the GUI's "mow this area" button calls
             // ~/start_in_area, which sets current_command itself and never
             // reaches this handler, so this cannot cancel a targeted request.
-            if (cmd == HighLevelControl::Request::COMMAND_START)
+            //
+            // EXCEPTION: not while parked in StopHoldSequence's IDLE
+            // (isResumableHoldState) — that is the operator's own "Pause" on a
+            // run still in progress, and pressing Resume/Start again must
+            // continue that SAME targeted area, not silently widen to the
+            // whole lawn. The charge-hold/emergency scenario above is
+            // unaffected: it publishes CHARGING/CRITICAL_BATTERY_CHARGING (or,
+            // once EndSession has run, IDLE_DOCKED), never plain IDLE.
+            if (cmd == HighLevelControl::Request::COMMAND_START &&
+                !isResumableHoldState(context_->last_high_level_status.state_name))
             {
               clearSingleAreaMode(*context_);
             }
+          }
+          // Let the BT issue stop/retry actions before doing disk I/O. The tick
+          // thread serializes this snapshot with all coverage-map access. The
+          // service response acknowledges the in-memory command immediately;
+          // a durability failure is reported to the node log.
+          if ((cmd == HighLevelControl::Request::COMMAND_STOP || cleared_dock_failure_latch) &&
+              !context_->coverage_resume_path.empty())
+          {
+            command_resume_persistence_requested_.store(true);
           }
           resp->success = true;
         },
@@ -788,11 +825,19 @@ private:
             resp->success = false;
             return;
           }
+          bool cleared_dock_failure_latch = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
             context_->target_area_index = static_cast<int>(req->area);
             context_->blade_direction.clearOperatorInhibit();
             context_->current_command = 1;  // COMMAND_START
+            context_->critical_charge_stop_latched = false;
+            cleared_dock_failure_latch = context_->critical_dock_failure_latched;
+            context_->critical_dock_failure_latched = false;
+          }
+          if (cleared_dock_failure_latch && !context_->coverage_resume_path.empty())
+          {
+            command_resume_persistence_requested_.store(true);
           }
           resp->success = true;
         },
@@ -1245,6 +1290,15 @@ private:
                      static_cast<float>(battery_critical_recovery_pct));
     blackboard_->set("battery_manual_resume_pct", static_cast<float>(battery_manual_resume_pct));
 
+    // Tail-current gate for the charge-hold auto-resume (IsChargeCurrentBelow,
+    // BatteryGuard / CriticalBatteryDock) — see condition_nodes.hpp for why
+    // battery_full_pct alone is not sufficient. Default mirrors the
+    // firmware's CHARGE_END_LIMIT_CURRENT (board_defaults.h).
+    const double battery_charge_tail_current_a =
+        declare_parameter<double>("battery_charge_tail_current_a", 0.08);
+    blackboard_->set("battery_charge_tail_current_a",
+                     static_cast<float>(battery_charge_tail_current_a));
+
     // Swath (mow) angle — operator-tunable in mowgli_robot.yaml and surfaced
     // on the GUI Mowing settings. < 0 = AUTO (coverage server picks the
     // swath-count-minimising angle); 0..179 = a fixed swath angle in degrees.
@@ -1409,6 +1463,22 @@ private:
     {
       RCLCPP_ERROR(get_logger(), "Exception during tree tick: %s", ex.what());
     }
+    bool persist_resume_state = command_resume_persistence_requested_.exchange(false);
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      if (context_->critical_dock_failure_persistence_requested)
+      {
+        context_->critical_dock_failure_persistence_requested = false;
+        persist_resume_state = true;
+      }
+    }
+    if (persist_resume_state && !saveCoverageResumeState(*context_))
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "The active command or critical docking failure could not be persisted to "
+                   "'%s'; inspect storage before restarting",
+                   context_->coverage_resume_path.c_str());
+    }
   }
 
   // ------------------------------------------------------------------
@@ -1471,6 +1541,8 @@ private:
   // Set by the ~/clear_coverage_resume service, consumed by tickTree() so the
   // actual map clearing happens on the BT tick thread (see the service comment).
   std::atomic<bool> clear_resume_requested_{false};
+  /// Command storage is deferred until the BT tick has issued its actions.
+  std::atomic<bool> command_resume_persistence_requested_{false};
   // ~/set_fleet_assignment payload, handed to the tick thread through
   // fleet_assignment_requested_ (same deferral as clear_resume_requested_).
   struct FleetAssignment

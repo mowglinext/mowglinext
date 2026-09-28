@@ -49,7 +49,6 @@ func TestTemplateTypesAssetCoversUnschemaedFloatKeys(t *testing.T) {
 		"dock_pose_x",
 		"dock_pose_y",
 		"dock_pose_yaw",
-		"max_mps",
 	} {
 		assert.Equal(t, yamlNumberFloat, kinds[key], "%s must be declared a float by the template asset", key)
 		_, inSchema := schemaKinds[key]

@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/mowglinext/mowglinext/pkg/buildinfo"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"golang.org/x/sys/execabs"
@@ -300,10 +301,15 @@ func openocdTargetCfg(board string) string {
 //     the strongest available since the firmware carries no board self-ID).
 func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.FirmwareConfig) error {
 	_, _ = writer.Write([]byte("------> Fetching firmware manifest...\n"))
-	manifest, err := fetchFirmwareManifest(DefaultFirmwareManifestURL)
+	manifest, source, err := fetchInstallFirmwareManifest(buildinfo.Current().Version)
 	if err != nil {
 		_, _ = fmt.Fprintf(writer, "------> Error fetching manifest: %v\n", err)
 		return xerrors.Errorf("fetching firmware manifest: %w", err)
+	}
+	if source.OwnRelease {
+		_, _ = fmt.Fprintf(writer, "------> Using the firmware of this installation's release %s\n", source.Release)
+	} else {
+		_, _ = fmt.Fprintf(writer, "------> This installation's release has no firmware attached: using the latest stable release %s\n", source.Release)
 	}
 
 	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType)
@@ -412,4 +418,37 @@ func (fp *FirmwareProvider) postFlashProtocolCheck(writer io.Writer, entry firmw
 	}
 	_, _ = fmt.Fprintf(writer, "------> OK: firmware verified — protocol %d, version %s, compatible.\n",
 		s.FirmwareProtocolVersion, s.FirmwareVersion)
+}
+
+// AvailableFirmware reports the prebuilt firmware a flash would install for the
+// saved board selection (gui.firmware.config), from the same manifest
+// flashPrebuilt uses, so the Updates page can offer a re-flash without the
+// onboarding wizard. Board is empty when no board was ever configured.
+func (fp *FirmwareProvider) AvailableFirmware() (types.FirmwareAvailability, error) {
+	var config types.FirmwareConfig
+	raw, err := fp.db.Get("gui.firmware.config")
+	if err == nil && len(raw) > 0 {
+		if err := json.Unmarshal(raw, &config); err != nil {
+			return types.FirmwareAvailability{}, xerrors.Errorf("reading saved firmware config: %w", err)
+		}
+	}
+	result := types.FirmwareAvailability{Board: config.BoardType, Panel: config.PanelType}
+	if config.BoardType == "" {
+		return result, nil
+	}
+	manifest, source, err := fetchInstallFirmwareManifest(buildinfo.Current().Version)
+	if err != nil {
+		return result, err
+	}
+	result.Release = source.Release
+	result.OwnRelease = source.OwnRelease
+	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType)
+	if err != nil {
+		// No prebuilt for this board: the operator needs the expert path.
+		return result, nil
+	}
+	result.Available = true
+	result.FwVersion = entry.FwVersion
+	result.ProtocolVersion = entry.ProtocolVersion
+	return result, nil
 }

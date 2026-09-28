@@ -21,7 +21,7 @@
  * PublishHighLevelStatus is a SyncActionNode that only fires on tree
  * transitions, and behavior_tree_node's 1 Hz timer used to re-publish the
  * cached message VERBATIM. Once the tree parked in the low-battery charge hold
- * (BatteryDockAndResume: PublishHighLevelStatus "CHARGING" once, then a 30 s
+ * (BatteryGuardHandler: PublishHighLevelStatus "CHARGING" once, then a 30 s
  * RetryUntilSuccessful loop with no further transitions), the topic kept
  * emitting the battery percent captured at the moment of docking — observed on
  * the robot 2026-08-23 frozen at 46.03 % for the whole charge while the pack

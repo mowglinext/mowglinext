@@ -111,7 +111,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `gui/pkg/providers/db.go` | 203 | bitcask DB, env fallbacks, defaults, corruption backup+recovery |
 | `gui/pkg/providers/irrisense_wetness.go` | 145 | Pure wetness rule (`EvaluateWetness`, `EvaluateZones`) |
 | `gui/pkg/providers/mqtt.go` | 144 | Embedded MQTT broker (`system.mqtt.host`, default `:1883`) bridging topics + 4 service calls |
-| `gui/pkg/providers/firmware_manifest.go` | 133 | Release `manifest.json` fetch, permutation lookup, sha256 download |
+| `gui/pkg/providers/firmware_manifest.go` | 190 | Release `manifest.json` fetch — from THIS installation's release (`buildinfo.Version` = `deployment-*` or `vX.Y.Z`; deployments attach their firmware in `deployment-release.yml`), falling back to `releases/latest` — permutation lookup, sha256 download. `AvailableFirmware` (`firmware.go`) serves `GET /api/setup/firmware/available` for the Updates page flash button |
 | `gui/pkg/providers/cmd_vel_relay.go` | 132 | Persistent WS client to `ws://localhost:8766` |
 | `gui/pkg/providers/irrisense_client.go` | 116 | HTTP client for `/api/ha/gardens[/{id}]` (401/404/429 mapped) |
 | `gui/pkg/providers/homekit.go` | 111 | HAP switch accessory ("MowgliNext"), on→START(1) / off→HOME(2) |
@@ -256,6 +256,7 @@ Tests (what each pins):
 - `HighLevelControl` command numbers (`Command: 1/2`) in `scheduler.go`, `homekit.go` mirror `HighLevelControl.srv` constants — see `docs/claude/high-level-api.md`.
 - Host power actions need `pid: host` + `privileged` in `install/compose/docker-compose.gui.yml` and `util-linux` in `gui/Dockerfile`.
 - Swagger annotations (`// @Router`) feed `gui/docs/*` (swaggo) — regenerate when routes change (no script in repo invokes `swag`).
+- mowglinext#637 phase 3: `mowgli.MapArea.Id` (phase 1's stable id) must round-trip through `PUT /mowglinext/map`'s `MowgliMapArea` for `on_add_area` to preserve it — this is why `gui/docs/{swagger.json,swagger.yaml,docs.go}` and `web/src/api/Api.ts` all carry `MowgliMapArea.id` now (hand-added, `swag` isn't run). `splitMapAreas`/`pollMap` (`ros.go`) already pass every `MapArea` field through untouched, so the id needs no other backend wiring — only `WorkingAreaIndices` (the array position) is backend-computed, and it is NOT a stable identity.
 
 ## Pitfalls
 - `getSchema` opens `asserts/mower_config.schema.json` **relative to the process CWD** (`settings.go:1043`); run the binary from `gui/` (Dockerfile sets `WORKDIR /app`) or every settings route 500s. Tests call `chdirToGuiRoot`.

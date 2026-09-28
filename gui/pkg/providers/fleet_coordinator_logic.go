@@ -278,7 +278,7 @@ func decideYield(self fleetMember, peers []fleetMember, st yieldState, s Coordin
 	}
 	// We are holding. If the operator moved the robot on (it is autonomous
 	// again, or docked / charging), our hold is over without a resume.
-	if self.Autonomous || self.StateName == "CHARGING" || self.StateName == "RETURNING_HOME" {
+	if self.Autonomous || self.StateName == "CHARGING" || self.StateName == "MANUAL_CHARGING" || self.StateName == "RETURNING_HOME" {
 		return yieldState{}, YieldNone
 	}
 	if nearest < s.ResumeDistanceM {

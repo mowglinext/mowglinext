@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include "mowgli_behavior/charge_progress.hpp"
+#include "mowgli_behavior/coverage_persistence.hpp"
 #include "tf2/exceptions.hpp"
 #include "tf2/time.hpp"
 #include "tf2_ros/buffer.hpp"
@@ -185,6 +187,30 @@ BT::NodeStatus IsBatteryAbove::tick()
 }
 
 // ---------------------------------------------------------------------------
+// IsChargeCurrentBelow
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsChargeCurrentBelow::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+
+  float threshold = 0.08f;
+  if (auto res = getInput<float>("threshold"))
+  {
+    threshold = res.value();
+  }
+
+  if (!ctx->latest_power.charger_enabled)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  return ctx->latest_power.charge_current <= threshold ? BT::NodeStatus::SUCCESS
+                                                       : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
 // IsManualResumeRequested
 // ---------------------------------------------------------------------------
 
@@ -266,6 +292,44 @@ BT::NodeStatus IsCommand::tick()
     current = ctx->current_command;
   }
   return current == res.value() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+BT::NodeStatus IsCriticalChargeStopHeld::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  bool latch_current_stop = false;
+  if (!getInput<bool>("latch_current_stop", latch_current_stop))
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  if (latch_current_stop && ctx->current_command == 8 && !ctx->critical_charge_stop_latched)
+  {
+    ctx->critical_charge_stop_latched = true;
+  }
+  return ctx->critical_charge_stop_latched ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+BT::NodeStatus IsLastDockSucceeded::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  return ctx->last_dock_succeeded ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+BT::NodeStatus IsCriticalDockFailureLatched::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  return ctx->critical_dock_failure_latched ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+BT::NodeStatus LatchCriticalDockFailure::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  ctx->critical_dock_failure_latched = true;
+  ctx->critical_dock_failure_persistence_requested = true;
+  return BT::NodeStatus::SUCCESS;
 }
 
 // ---------------------------------------------------------------------------
@@ -489,23 +553,27 @@ BT::NodeStatus IsChargingProgressing::tick()
   }
 
   const double elapsed = std::chrono::duration<double>(now - baseline_time_).count();
+  float full_pct = kNoChargeSaturationPct;
+  getInput<float>("full_pct", full_pct);
 
-  if (elapsed < check_interval_sec_)
+  switch (judgeChargeProgress(
+      baseline_battery_, current_battery, elapsed, check_interval_sec_, min_increase_, full_pct))
   {
-    // Not enough time has passed yet — assume charging is OK.
-    return BT::NodeStatus::SUCCESS;
+    case ChargeProgress::kWithinWindow:
+      // Not enough time has passed yet — assume charging is OK.
+      return BT::NodeStatus::SUCCESS;
+    case ChargeProgress::kSaturated:
+      // Saturated pack in the CV tail: flat by construction, not a stall. Keep
+      // the window fresh so a later drop below full_pct is judged from here.
+    case ChargeProgress::kProgressing:
+      // Good progress — reset baseline for the next window.
+      baseline_battery_ = current_battery;
+      baseline_time_ = now;
+      return BT::NodeStatus::SUCCESS;
+    case ChargeProgress::kStalled:
+      break;
   }
-
-  // 30 minutes have passed — check progress.
   const float increase = current_battery - baseline_battery_;
-
-  if (increase >= min_increase_)
-  {
-    // Good progress — reset baseline for the next window.
-    baseline_battery_ = current_battery;
-    baseline_time_ = now;
-    return BT::NodeStatus::SUCCESS;
-  }
 
   // No meaningful charge increase in 30 minutes — charger problem.
   // Set charger_failed_ so subsequent ticks fail immediately, allowing

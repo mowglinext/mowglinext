@@ -12,6 +12,8 @@ import {
     NavigationFeature,
     MowingAreaFeature,
     closeRing,
+    serializeFeature,
+    featuresFromJSON,
 } from './map.ts';
 
 describe('MowingFeature (base class)', () => {
@@ -96,6 +98,20 @@ describe('DockFeatureBase', () => {
         expect(f.geometry.coordinates).toEqual([5, 10]);
         expect(f.properties.feature_type).toBe('dock');
         expect(f.properties.color).toBe('#ff00f2');
+    });
+
+    it('tracks whether the dock heading is actually available', () => {
+        const missing = new DockFeatureBase([5, 10]);
+        expect(missing.getHeading()).toBe(0);
+        expect(missing.hasValidHeading()).toBe(false);
+        const restored = featuresFromJSON({dock: serializeFeature(missing)}).dock;
+        expect(restored).toBeInstanceOf(DockFeatureBase);
+        expect((restored as DockFeatureBase).hasValidHeading()).toBe(false);
+
+        const withHeading = new DockFeatureBase([5, 10], Math.PI / 2);
+        expect(withHeading.hasValidHeading()).toBe(true);
+        withHeading.setHeading(Number.NaN);
+        expect(withHeading.hasValidHeading()).toBe(false);
     });
 });
 

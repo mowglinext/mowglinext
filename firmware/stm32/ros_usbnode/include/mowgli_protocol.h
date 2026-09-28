@@ -54,9 +54,18 @@ extern "C" {
  * host and firmware MUST match. The compat gate (MOWGLI_PROTOCOL_VERSION) blocks
  * mowing on a mismatch, and the CRC over the grown body means a v5 firmware fed
  * a 21-byte packet fails the CRC and safely drops it rather than misapplying it.
+ * v7 REPLACES the four per-group runtime packets (0x54 drive PID, 0x55 yaw PID,
+ * 0x56 kinematics, 0x57 safety limits) with one generic parameter protocol:
+ * SET_PARAM (0x58) / GET_PARAM (0x59) / PARAM_COMMIT (0x5A) host->firmware and
+ * PARAM_VALUE (0x13) / PARAM_STORE_STATUS (0x14) firmware->host. Every runtime
+ * parameter has a stable id and an absolute envelope (fw_param_catalog.h); the
+ * firmware reports the value it actually applied, and persists the set in an
+ * append-only flash log (fw_param_log.h) that is re-applied at boot, before the
+ * host connects. Breaking: 0x54-0x57 are no longer handled — never reuse those
+ * ids.
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 6u
+#define MOWGLI_PROTOCOL_VERSION 7u
 
 /* ---------------------------------------------------------------------------
  * Firmware version (semantic version of THIS firmware build).
@@ -110,6 +119,14 @@ extern "C" {
 /** High-level config response packet. */
 #define PKT_ID_CONFIG_RSP 0x12u
 
+/** One runtime parameter's applied value + envelope (pkt_param_value_t).
+ *  Sent after every SET_PARAM and in answer to GET_PARAM. */
+#define PKT_ID_PARAM_VALUE 0x13u
+
+/** Flash persistence state (pkt_param_store_status_t). Sent after a
+ *  PARAM_COMMIT is processed and in answer to GET_PARAM(FW_PARAM_ID_ALL). */
+#define PKT_ID_PARAM_STORE_STATUS 0x14u
+
 /* ---------------------------------------------------------------------------
  * Packet IDs
  * Host -> Firmware (Raspberry Pi -> STM32)
@@ -140,31 +157,23 @@ extern "C" {
 #define PKT_ID_REBOOT 0x52u
 #define PKT_REBOOT_MAGIC 0xB0u
 
-/** Drive-motor PID/feedforward gains (Host -> Firmware). Lets the ROS 2 host
- *  retune the per-wheel velocity loop at runtime without reflashing. The
- *  firmware validates and clamps every field; its compile-time defaults remain
- *  the power-on fallback. */
-#define PKT_ID_SET_DRIVE_PID 0x54u
+/* 0x54-0x57 (SET_DRIVE_PID, SET_YAW_PID, SET_KINEMATICS, SET_SAFETY_LIMITS)
+ * were retired in protocol v7 in favour of SET_PARAM. Never reuse them. */
 
-/** Gyro yaw-rate loop gains/enable (Host -> Firmware). Retunes the firmware
- *  closed yaw-rate loop (Option C) that trims the per-wheel setpoints from the
- *  onboard gyro. Validated + clamped; compile-time defaults are the power-on
- *  fallback. */
-#define PKT_ID_SET_YAW_PID 0x55u
+/** Set one runtime parameter (pkt_set_param_t). The firmware coerces the
+ *  value into the parameter's absolute envelope (fw_param_catalog.h), applies
+ *  it from the main loop, and answers with PKT_ID_PARAM_VALUE. */
+#define PKT_ID_SET_PARAM 0x58u
 
-/** Runtime kinematics (max wheel-speed cap + wheel base) (Host -> Firmware).
- *  Lets the ROS 2 host retune the motion cap and wheel base without reflashing.
- *  The firmware clamps max_mps to at most the compile-time MAX_MPS (the wire can
- *  only LOWER the cap, never raise it) and wheel_base to a sane range; the
- *  compile-time MAX_MPS/WHEEL_BASE remain the power-on fallback. */
-#define PKT_ID_SET_KINEMATICS 0x56u
+/** Ask for one parameter's PKT_ID_PARAM_VALUE, or every parameter's plus a
+ *  PKT_ID_PARAM_STORE_STATUS with id FW_PARAM_ID_ALL (pkt_get_param_t). */
+#define PKT_ID_GET_PARAM 0x59u
 
-/** Runtime safety limits (charge V/I ceiling + emergency-sensor timeouts)
- *  (Host -> Firmware). Lets the host TIGHTEN battery/e-stop protection without a
- *  reflash. The firmware clamps every field so the wire can only make protection
- *  stronger, never weaker (see pkt_set_safety_limits_t); the compile-time
- *  board_defaults.h values remain the power-on fallback. */
-#define PKT_ID_SET_SAFETY_LIMITS 0x57u
+/** Persist the current parameter set to flash (pkt_param_commit_t). A set
+ *  identical to the stored one is not rewritten, so the host may commit after
+ *  every reconnect burst without wearing the flash. */
+#define PKT_ID_PARAM_COMMIT 0x5Au
+#define PKT_PARAM_COMMIT_MAGIC 0xC5u
 
 /* ---------------------------------------------------------------------------
  * status_bitmask bit definitions  (pkt_status_t::status_bitmask)
@@ -473,115 +482,94 @@ typedef struct {
 } pkt_reboot_t;
 
 /**
- * @brief Drive-motor runtime tuning packet — Host -> Firmware
- * (PKT_ID_SET_DRIVE_PID = 0x54).
+ * @brief Set one runtime parameter — Host -> Firmware (PKT_ID_SET_PARAM = 0x58).
  *
- * Retunes the per-wheel velocity loop (both wheels share the same gains) and
- * the runtime ticks_per_meter scale used by the wheel PI and odometry math.
- * The firmware rejects the packet if any field is non-finite and clamps each
- * field to a safe range before applying; the output limit stays fixed at 255
- * PWM.
+ * value is always a float on the wire; integer, boolean and sign parameters
+ * are rounded/coerced by the firmware (fw_param_coerce). A non-finite value is
+ * rejected and leaves the parameter unchanged.
  *
- * Wire size: 27 bytes (must match sizeof(LlSetDrivePid) in ll_datatypes.hpp).
+ * Wire size: 9 bytes (must match sizeof(LlSetParam) in ll_datatypes.hpp).
  */
 typedef struct {
-  uint8_t type;          /**< PKT_ID_SET_DRIVE_PID */
-  float ticks_per_meter; /**< Runtime encoder scale [ticks / m] */
-  float kp;              /**< Proportional gain [PWM per m/s] */
-  float ki;              /**< Integral gain [PWM per (m/s·s)] */
-  float kd;              /**< Derivative gain [PWM per (m/s²)] */
-  float integral_limit;  /**< Anti-windup clamp on the integral term [PWM] */
-  float pwm_per_mps;     /**< Open-loop feedforward velocity->PWM scale */
-  uint16_t crc;          /**< CRC-16 CCITT over preceding bytes */
-} pkt_set_drive_pid_t;
-
-/**
- * @brief Gyro yaw-rate loop tuning packet — Host -> Firmware
- * (PKT_ID_SET_YAW_PID = 0x55).
- *
- * Retunes the firmware closed yaw-rate loop (Option C): at the 50 Hz motor
- * cadence the firmware regulates (commanded wz − measured gyro wz) and injects
- * a SYMMETRIC differential velocity trim (±trim_limit_mps) onto the per-wheel
- * setpoints before the per-wheel PIs. The firmware rejects the packet if
- * yaw_kp/yaw_ki/trim_limit_mps is non-finite and clamps every field to a safe
- * range before applying.
- *
- * gyro_sign (+1/-1) selects the sign of the onboard gyro's Z axis relative to
- * robot +yaw (CCW). It is exposed at runtime because the correct sign depends
- * on the physical IMU mounting — flipping it is the field sign-check remedy if
- * the loop diverges (see firmware tuning notes). enabled=0 disables the loop
- * (pure open-diff passthrough) for A/B without a reflash.
- *
- * gyro_bias_radps is the host-measured mean at-rest gyro-Z offset (raw sensor
- * frame, same value the host subtracts before its own /imu publish). The
- * firmware subtracts it BEFORE the gyro_sign multiply — meas = sign*(gz - bias)
- * — so the open-loop reverse (BackUp: wz=0) holds a true straight line instead
- * of tracing the bias as a constant-radius arc. Sign-safe for either gyro_sign.
- *
- * Wire size: 21 bytes (must match sizeof(LlSetYawPid) in ll_datatypes.hpp).
- */
-typedef struct {
-  uint8_t type;           /**< PKT_ID_SET_YAW_PID */
-  float yaw_kp;           /**< P gain [m/s trim per rad/s yaw error] */
-  float yaw_ki;           /**< I gain [m/s trim per (rad/s·s)] */
-  float trim_limit_mps;   /**< Clamp on |differential trim| [m/s] */
-  uint8_t enabled;        /**< 1 = closed yaw loop on, 0 = open-diff passthrough */
-  int8_t gyro_sign;       /**< +1 / -1: gyro Z sign vs robot +yaw (CCW) */
-  float gyro_bias_radps;  /**< mean at-rest gyro-Z bias [rad/s], raw sensor frame */
-  uint16_t crc;           /**< CRC-16 CCITT over preceding bytes */
-} pkt_set_yaw_pid_t;
-
-/**
- * @brief Runtime kinematics packet — Host -> Firmware
- * (PKT_ID_SET_KINEMATICS = 0x56).
- *
- * Retunes the runtime max wheel-speed cap and wheel base without a reflash. The
- * firmware rejects the packet if any field is non-finite and clamps each before
- * applying: max_mps to (0, compile-time MAX_MPS] — the wire can only LOWER the
- * motion cap, never raise it above the compiled safety ceiling — and wheel_base
- * to a sane physical range. The compile-time MAX_MPS/WHEEL_BASE remain the
- * power-on fallback (this board has no config persistence; the host re-sends on
- * every reconnect).
- *
- * Wire size: 11 bytes (must match sizeof(LlSetKinematics) in ll_datatypes.hpp).
- */
-typedef struct {
-  uint8_t type;      /**< PKT_ID_SET_KINEMATICS */
-  float max_mps;     /**< Runtime max wheel speed cap [m/s]; clamped ≤ MAX_MPS */
-  float wheel_base;  /**< Wheel track (centre-to-centre) [m] */
+  uint8_t type;      /**< PKT_ID_SET_PARAM */
+  uint16_t param_id; /**< FW_PARAM_* id (fw_param_catalog.h) */
+  float value;       /**< Requested value */
   uint16_t crc;      /**< CRC-16 CCITT over preceding bytes */
-} pkt_set_kinematics_t;
+} pkt_set_param_t;
 
 /**
- * @brief Runtime safety-limits packet — Host -> Firmware
- * (PKT_ID_SET_SAFETY_LIMITS = 0x57).
+ * @brief Request parameter reports — Host -> Firmware (PKT_ID_GET_PARAM = 0x59).
  *
- * Retunes the battery charge ceiling and the emergency-sensor timeouts without a
- * reflash. The firmware rejects the packet if a charge field is non-finite and
- * clamps EVERY field so the wire can only make protection STRONGER, never weaker:
- *   - max_charge_voltage / max_charge_current: clamped to (0, compiled ceiling]
- *     — can only LOWER the charge envelope (can't overcharge).
- *   - one_wheel_lift/both_wheels_lift/tilt/stop_button timeouts: clamped to
- *     [min, compiled] — can only SHORTEN (faster e-stop).
- *   - play_clear_ms (hold-to-clear-emergency): clamped to [compiled, max] — can
- *     only LENGTHEN (harder to un-latch); shortening it would WEAKEN the latch,
- *     so that direction is forbidden.
- * The compile-time board_defaults.h values remain the power-on fallback: an
- * unconnected/silent host runs the vetted safe defaults.
- *
- * Wire size: 21 bytes (must match sizeof(LlSetSafetyLimits) in ll_datatypes.hpp).
+ * Wire size: 5 bytes (must match sizeof(LlGetParam) in ll_datatypes.hpp).
  */
 typedef struct {
-  uint8_t type;                 /**< PKT_ID_SET_SAFETY_LIMITS */
-  float max_charge_voltage;     /**< Charge voltage ceiling [V]; clamped ≤ compiled */
-  float max_charge_current;     /**< Charge current ceiling [A]; clamped ≤ compiled */
-  uint16_t one_wheel_lift_ms;   /**< One-wheel-lift trip [ms]; clamped ≤ compiled */
-  uint16_t both_wheels_lift_ms; /**< Both-wheels-lift trip [ms]; clamped ≤ compiled */
-  uint16_t tilt_ms;             /**< Tilt trip [ms]; clamped ≤ compiled */
-  uint16_t stop_button_ms;      /**< Stop-button trip [ms]; clamped ≤ compiled */
-  uint16_t play_clear_ms;       /**< Hold-to-clear-emergency [ms]; clamped ≥ compiled */
-  uint16_t crc;                 /**< CRC-16 CCITT over preceding bytes */
-} pkt_set_safety_limits_t;
+  uint8_t type;      /**< PKT_ID_GET_PARAM */
+  uint16_t param_id; /**< FW_PARAM_* id, or FW_PARAM_ID_ALL (0xFFFF) */
+  uint16_t crc;      /**< CRC-16 CCITT over preceding bytes */
+} pkt_get_param_t;
+
+/**
+ * @brief Persist the parameter set — Host -> Firmware (PKT_ID_PARAM_COMMIT = 0x5A).
+ *
+ * Wire size: 4 bytes (must match sizeof(LlParamCommit) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;  /**< PKT_ID_PARAM_COMMIT */
+  uint8_t magic; /**< Must equal PKT_PARAM_COMMIT_MAGIC (0xC5) */
+  uint16_t crc;  /**< CRC-16 CCITT over preceding bytes */
+} pkt_param_commit_t;
+
+/** pkt_param_value_t::flags */
+#define PARAM_VALUE_FLAG_PERSISTED 0x01u /**< applied value == the one in flash */
+#define PARAM_VALUE_FLAG_VOLATILE 0x02u  /**< never persisted (re-measured) */
+
+/**
+ * @brief One parameter's state — Firmware -> Host (PKT_ID_PARAM_VALUE = 0x13).
+ *
+ * status is the fw_param_status_t of the LAST set of this parameter (OK when it
+ * was never set since boot); value is what the firmware is running with now.
+ *
+ * Wire size: 23 bytes (must match sizeof(LlParamValue) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;        /**< PKT_ID_PARAM_VALUE */
+  uint16_t param_id;   /**< FW_PARAM_* id */
+  uint8_t status;      /**< fw_param_status_t */
+  uint8_t flags;       /**< PARAM_VALUE_FLAG_* */
+  float value;         /**< Applied value */
+  float default_value; /**< Compiled power-on default */
+  float min_value;     /**< Absolute envelope, lower bound */
+  float max_value;     /**< Absolute envelope, upper bound */
+  uint16_t crc;        /**< CRC-16 CCITT over preceding bytes */
+} pkt_param_value_t;
+
+/** pkt_param_store_status_t::boot_source */
+#define PARAM_BOOT_DEFAULTS 0u    /**< no valid record: compiled defaults */
+#define PARAM_BOOT_FLASH 1u       /**< values loaded from the flash log */
+#define PARAM_BOOT_FLASH_ERASED 2u /**< log was full or foreign; erased at boot */
+
+/** pkt_param_store_status_t::last_commit */
+#define PARAM_COMMIT_NONE 0u      /**< no commit since boot */
+#define PARAM_COMMIT_WRITTEN 1u   /**< new record programmed */
+#define PARAM_COMMIT_UNCHANGED 2u /**< identical to the stored set: skipped */
+#define PARAM_COMMIT_PENDING 3u   /**< programming in progress */
+#define PARAM_COMMIT_LOG_FULL 4u  /**< no room: erased + rewritten at next boot */
+#define PARAM_COMMIT_ERROR 5u     /**< flash program error */
+
+/**
+ * @brief Flash persistence state — Firmware -> Host
+ * (PKT_ID_PARAM_STORE_STATUS = 0x14).
+ *
+ * Wire size: 9 bytes (must match sizeof(LlParamStoreStatus) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;           /**< PKT_ID_PARAM_STORE_STATUS */
+  uint8_t boot_source;    /**< PARAM_BOOT_* */
+  uint8_t last_commit;    /**< PARAM_COMMIT_* */
+  uint16_t records_left;  /**< full records that still fit before an erase */
+  uint16_t param_count;   /**< parameters this firmware knows */
+  uint16_t crc;           /**< CRC-16 CCITT over preceding bytes */
+} pkt_param_store_status_t;
 
 /**
  * @brief Blade motor status packet — Firmware -> Host (PKT_ID_BLADE_STATUS =
@@ -702,75 +690,46 @@ _Static_assert(sizeof(pkt_config_req_t) == 4u,
                "pkt_config_req_t layout unexpected");
 _Static_assert(sizeof(pkt_config_rsp_t) == 8u,
                "pkt_config_rsp_t layout unexpected");
-_Static_assert(sizeof(pkt_set_drive_pid_t) == 27u,
-               "pkt_set_drive_pid_t layout unexpected");
-_Static_assert(offsetof(pkt_set_drive_pid_t, type) == 0u,
-               "pkt_set_drive_pid_t.type offset unexpected");
-_Static_assert(offsetof(pkt_set_drive_pid_t, ticks_per_meter) == 1u,
-               "pkt_set_drive_pid_t.ticks_per_meter offset unexpected");
-_Static_assert(offsetof(pkt_set_drive_pid_t, kp) == 5u,
-               "pkt_set_drive_pid_t.kp offset unexpected");
-_Static_assert(offsetof(pkt_set_drive_pid_t, ki) == 9u,
-               "pkt_set_drive_pid_t.ki offset unexpected");
-_Static_assert(offsetof(pkt_set_drive_pid_t, kd) == 13u,
-               "pkt_set_drive_pid_t.kd offset unexpected");
-_Static_assert(offsetof(pkt_set_drive_pid_t, integral_limit) == 17u,
-               "pkt_set_drive_pid_t.integral_limit offset unexpected");
-_Static_assert(offsetof(pkt_set_drive_pid_t, pwm_per_mps) == 21u,
-               "pkt_set_drive_pid_t.pwm_per_mps offset unexpected");
-_Static_assert(offsetof(pkt_set_drive_pid_t, crc) == 25u,
-               "pkt_set_drive_pid_t.crc offset unexpected");
+_Static_assert(sizeof(pkt_set_param_t) == 9u, "pkt_set_param_t layout unexpected");
+_Static_assert(offsetof(pkt_set_param_t, param_id) == 1u,
+               "pkt_set_param_t.param_id offset unexpected");
+_Static_assert(offsetof(pkt_set_param_t, value) == 3u,
+               "pkt_set_param_t.value offset unexpected");
+_Static_assert(offsetof(pkt_set_param_t, crc) == 7u,
+               "pkt_set_param_t.crc offset unexpected");
 
-_Static_assert(sizeof(pkt_set_yaw_pid_t) == 21u,
-               "pkt_set_yaw_pid_t layout unexpected");
-_Static_assert(offsetof(pkt_set_yaw_pid_t, type) == 0u,
-               "pkt_set_yaw_pid_t.type offset unexpected");
-_Static_assert(offsetof(pkt_set_yaw_pid_t, yaw_kp) == 1u,
-               "pkt_set_yaw_pid_t.yaw_kp offset unexpected");
-_Static_assert(offsetof(pkt_set_yaw_pid_t, yaw_ki) == 5u,
-               "pkt_set_yaw_pid_t.yaw_ki offset unexpected");
-_Static_assert(offsetof(pkt_set_yaw_pid_t, trim_limit_mps) == 9u,
-               "pkt_set_yaw_pid_t.trim_limit_mps offset unexpected");
-_Static_assert(offsetof(pkt_set_yaw_pid_t, enabled) == 13u,
-               "pkt_set_yaw_pid_t.enabled offset unexpected");
-_Static_assert(offsetof(pkt_set_yaw_pid_t, gyro_sign) == 14u,
-               "pkt_set_yaw_pid_t.gyro_sign offset unexpected");
-_Static_assert(offsetof(pkt_set_yaw_pid_t, gyro_bias_radps) == 15u,
-               "pkt_set_yaw_pid_t.gyro_bias_radps offset unexpected");
-_Static_assert(offsetof(pkt_set_yaw_pid_t, crc) == 19u,
-               "pkt_set_yaw_pid_t.crc offset unexpected");
+_Static_assert(sizeof(pkt_get_param_t) == 5u, "pkt_get_param_t layout unexpected");
+_Static_assert(offsetof(pkt_get_param_t, param_id) == 1u,
+               "pkt_get_param_t.param_id offset unexpected");
 
-_Static_assert(sizeof(pkt_set_kinematics_t) == 11u,
-               "pkt_set_kinematics_t layout unexpected");
-_Static_assert(offsetof(pkt_set_kinematics_t, type) == 0u,
-               "pkt_set_kinematics_t.type offset unexpected");
-_Static_assert(offsetof(pkt_set_kinematics_t, max_mps) == 1u,
-               "pkt_set_kinematics_t.max_mps offset unexpected");
-_Static_assert(offsetof(pkt_set_kinematics_t, wheel_base) == 5u,
-               "pkt_set_kinematics_t.wheel_base offset unexpected");
-_Static_assert(offsetof(pkt_set_kinematics_t, crc) == 9u,
-               "pkt_set_kinematics_t.crc offset unexpected");
+_Static_assert(sizeof(pkt_param_commit_t) == 4u,
+               "pkt_param_commit_t layout unexpected");
 
-_Static_assert(sizeof(pkt_set_safety_limits_t) == 21u,
-               "pkt_set_safety_limits_t layout unexpected");
-_Static_assert(offsetof(pkt_set_safety_limits_t, type) == 0u,
-               "pkt_set_safety_limits_t.type offset unexpected");
-_Static_assert(offsetof(pkt_set_safety_limits_t, max_charge_voltage) == 1u,
-               "pkt_set_safety_limits_t.max_charge_voltage offset unexpected");
-_Static_assert(offsetof(pkt_set_safety_limits_t, max_charge_current) == 5u,
-               "pkt_set_safety_limits_t.max_charge_current offset unexpected");
-_Static_assert(offsetof(pkt_set_safety_limits_t, one_wheel_lift_ms) == 9u,
-               "pkt_set_safety_limits_t.one_wheel_lift_ms offset unexpected");
-_Static_assert(offsetof(pkt_set_safety_limits_t, both_wheels_lift_ms) == 11u,
-               "pkt_set_safety_limits_t.both_wheels_lift_ms offset unexpected");
-_Static_assert(offsetof(pkt_set_safety_limits_t, tilt_ms) == 13u,
-               "pkt_set_safety_limits_t.tilt_ms offset unexpected");
-_Static_assert(offsetof(pkt_set_safety_limits_t, stop_button_ms) == 15u,
-               "pkt_set_safety_limits_t.stop_button_ms offset unexpected");
-_Static_assert(offsetof(pkt_set_safety_limits_t, play_clear_ms) == 17u,
-               "pkt_set_safety_limits_t.play_clear_ms offset unexpected");
-_Static_assert(offsetof(pkt_set_safety_limits_t, crc) == 19u,
-               "pkt_set_safety_limits_t.crc offset unexpected");
+_Static_assert(sizeof(pkt_param_value_t) == 23u,
+               "pkt_param_value_t layout unexpected");
+_Static_assert(offsetof(pkt_param_value_t, param_id) == 1u,
+               "pkt_param_value_t.param_id offset unexpected");
+_Static_assert(offsetof(pkt_param_value_t, status) == 3u,
+               "pkt_param_value_t.status offset unexpected");
+_Static_assert(offsetof(pkt_param_value_t, flags) == 4u,
+               "pkt_param_value_t.flags offset unexpected");
+_Static_assert(offsetof(pkt_param_value_t, value) == 5u,
+               "pkt_param_value_t.value offset unexpected");
+_Static_assert(offsetof(pkt_param_value_t, default_value) == 9u,
+               "pkt_param_value_t.default_value offset unexpected");
+_Static_assert(offsetof(pkt_param_value_t, min_value) == 13u,
+               "pkt_param_value_t.min_value offset unexpected");
+_Static_assert(offsetof(pkt_param_value_t, max_value) == 17u,
+               "pkt_param_value_t.max_value offset unexpected");
+_Static_assert(offsetof(pkt_param_value_t, crc) == 21u,
+               "pkt_param_value_t.crc offset unexpected");
+
+_Static_assert(sizeof(pkt_param_store_status_t) == 9u,
+               "pkt_param_store_status_t layout unexpected");
+_Static_assert(offsetof(pkt_param_store_status_t, records_left) == 3u,
+               "pkt_param_store_status_t.records_left offset unexpected");
+_Static_assert(offsetof(pkt_param_store_status_t, param_count) == 5u,
+               "pkt_param_store_status_t.param_count offset unexpected");
 #endif
 
 #ifdef __cplusplus

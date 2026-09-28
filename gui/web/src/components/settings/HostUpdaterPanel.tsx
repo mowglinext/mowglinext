@@ -3,7 +3,7 @@ import {imageVersion} from '../../utils/versions';
 import {useEffect, useState} from 'react';
 import {Alert, Button, Card, Checkbox, Form, Input, Modal, Select, Segmented, Space, Tag, Typography} from 'antd';
 import {useTranslation} from 'react-i18next';
-import {type Deployment, type UpdatePlan, type UpdatePolicy, componentCompatibility, updaterRequest, useHostUpdater} from '../../hooks/useHostUpdater';
+import {type Deployment, type UpdatePlan, type UpdatePolicy, componentCompatibility, sameUpdaterBuild, updaterRequest, useHostUpdater} from '../../hooks/useHostUpdater';
 import {UpdateChangelog} from './UpdateChangelog';
 
 export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?: boolean; inventory?: ApiInstalledComponent[]}) {
@@ -60,28 +60,31 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
     const published = (deployment?: Deployment) => `${t('hostUpdater.published')}: ${date(deployment?.published_at)}`;
     const datedLabel = (deployment: Deployment) => `${label(deployment)} · ${published(deployment)}`;
     const component = (service: string) => t(`updates.components.${service === 'mowgli' ? 'robot' : service}`, {defaultValue: service});
+    const job = data?.state.job;
+    const jobDetails = advanced || !!(job?.error || job?.recovery_error || job?.recovery_warnings?.length || job?.phase === 'recovery_required');
+    const agentRelease = versions.find(r => r.updater[data?.agent.platform ?? '']?.version === data?.agent.version);
     return <Card title={t('hostUpdater.softwareUpdates')} size="small" data-testid="host-updater" className={advanced ? undefined : "updates-simple"}>
         <Space direction="vertical" size="middle" style={{width: '100%', overflowWrap: 'anywhere'}}>
             {error && <Alert type="warning" showIcon message={t(pending ? 'hostUpdater.reconnecting' : 'hostUpdater.unavailable')} description={pending ? undefined : t('hostUpdater.unavailableHelp')}/>}
             {failure && <Alert type="error" showIcon message={failure}/>}
             {data && policy && <>
-                <div className="installed-version-heading">
+                <div className="installed-version-heading updater-installed-summary">
                     <div><Typography.Text type="secondary">{t('hostUpdater.installed')}</Typography.Text><div><Typography.Text strong>{matched ? label(data.state.active) : t(`hostUpdater.identities.${identity}`, {defaultValue: t('hostUpdater.customInstalled')})}</Typography.Text></div></div>
-                    {matched && <Tag color="green">{t('hostUpdater.standardStack')}</Tag>}
-                    {installedPin && <Tag>{t('hostUpdater.pinned')}</Tag>}
+                    <div className="installed-version-badges">{matched && <Tag title={t('hostUpdater.standardStack')} color="green">{t('hostUpdater.standardStackShort')}</Tag>}
+                    {installedPin && <Tag>{t('hostUpdater.pinned')}</Tag>}</div>
                 </div>
-                {advanced && matched && active && <Typography.Text type="secondary">{published(active)}</Typography.Text>}
+                {matched && active && <Typography.Text type="secondary">{published(active)}</Typography.Text>}
                 {!matched && active && <Typography.Text type="secondary">{t('hostUpdater.baseVersion')}: {label(active)}</Typography.Text>}
                 <Typography.Text type={runtime?.health === 'degraded' ? 'warning' : 'secondary'}>{t('hostUpdater.containerHealth')}: {t(`hostUpdater.health.${runtime?.health ?? 'unknown'}`)}</Typography.Text>
                 {['mixed', 'drifted'].includes(identity) && <Typography.Text type="secondary">{t('hostUpdater.mixedHelp')}</Typography.Text>}
                 {data.state.job && <Alert type={data.state.job.phase === 'recovery_required' ? 'error' : data.state.job.error || data.state.job.recovery_warnings?.length ? 'warning' : 'info'} showIcon message={t(`hostUpdater.phases.${data.state.job.phase}`, {defaultValue: data.state.job.phase})}
-                    description={<Space direction="vertical" size={4} style={{width:'100%'}}>
+                    data-testid="update-job" description={jobDetails ? <Space direction="vertical" size={4} style={{width:'100%'}}>
                         {advanced && <Typography.Text code>{data.state.job.id}</Typography.Text>}
                         {data.state.job.error && <div data-testid="update-failure"><Typography.Text strong>{t('hostUpdater.failureReason')}</Typography.Text><div>{data.state.job.error}</div></div>}
                         {data.state.job.recovery_error && <div data-testid="recovery-failure"><Typography.Text strong>{t('hostUpdater.recoveryFailureReason')}</Typography.Text><div>{data.state.job.recovery_error}</div></div>}
                         {!!data.state.job.recovery_warnings?.length && <div data-testid="recovery-warnings"><Typography.Text strong>{t('hostUpdater.recoveryWarnings')}</Typography.Text>{data.state.job.recovery_warnings.map(warning => <div key={warning}>{warning}</div>)}<Typography.Text type="secondary">{t('hostUpdater.recoveryWarningsHelp')}</Typography.Text></div>}
                         {data.state.job.phase === 'recovery_required' && <Typography.Text type="secondary">{t('hostUpdater.recoveryHelp')}</Typography.Text>}
-                    </Space>}/>}
+                    </Space> : undefined}/>}
                 {data.state.job?.phase === 'recovery_required' && <Button loading={busy} onClick={() => void act(async () => {await updaterRequest('recover', {});})}>{t('hostUpdater.recover')}</Button>}
                 <Typography.Text type="secondary">{t('hostUpdater.checkingSource')}: {t(`hostUpdater.tracks.${data.state.policy.source.track}`)}
                     {(data.state.policy.source.track === 'custom' || data.state.policy.source.repository !== 'mowglinext/mowglinext') && <> · {data.state.policy.source.repository} / {data.state.policy.source.branch}</>}
@@ -105,7 +108,10 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                 {data.state.check_error && <Alert type="warning" showIcon message={t('hostUpdater.checkFailed')} description={advanced ? data.state.check_error : undefined}/>}
                 {!custom && (target ? <div>
                     <Typography.Text strong>{sameDeployment ? t('hostUpdater.latestInstalled') : t('hostUpdater.availableVersion')}</Typography.Text>
-                    {!sameDeployment && <><div className="available-release">{label(target)}</div><Typography.Text type="secondary">{date(target.published_at)}</Typography.Text><div>{t('hostUpdater.bundleHelp')}</div></>}
+                    {!sameDeployment && <><table className="update-stack-table update-release-table" aria-label={t('hostUpdater.availableVersion')}>
+                        <thead><tr><th scope="col">{t('hostUpdater.version')}</th><th scope="col">{t('hostUpdater.published')}</th></tr></thead>
+                        <tbody><tr><td><div className="available-release">{label(target)}</div></td><td><Typography.Text type="secondary">{date(target.published_at)}</Typography.Text></td></tr></tbody>
+                    </table><div>{t('hostUpdater.bundleHelp')}</div></>}
                 </div> : <Typography.Text>{t(data.state.last_check && !data.state.last_check.startsWith('0001') ? 'hostUpdater.noBuild' : 'hostUpdater.notChecked')}</Typography.Text>)}
                 {dirty && <Typography.Text type="warning">{t('hostUpdater.unsavedSource')}</Typography.Text>}
                 {advanced && <Segmented block aria-label={t('hostUpdater.imageMode')} value={custom ? 'custom' : 'published'} disabled={pending || busy}
@@ -141,25 +147,30 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                     </div>
                     {advanced && <Typography.Paragraph type="secondary">{t(custom ? 'hostUpdater.customReferenceHelp' : 'hostUpdater.componentSourceHelp')} {t('hostUpdater.buildDatesHelp')}</Typography.Paragraph>}
                     {serviceNames.length === 0 && <Typography.Text type="secondary">{t('hostUpdater.stackUnavailable')}</Typography.Text>}
-                    {serviceNames.map(name => {
+                    <table className="update-stack-table" aria-label={t('hostUpdater.stack')}>
+                    <thead><tr><th scope="col">{t('hostUpdater.component')}</th><th scope="col">{t('hostUpdater.runningBuild')}</th><th scope="col">{t(advanced ? 'hostUpdater.selected' : 'hostUpdater.status')}</th></tr></thead>
+                    <tbody>{serviceNames.map(name => {
                         const running = runtime?.components?.[name]; const family = families[name];
-                        const info = inventory.find(c => c.name === running?.name);
+                        // Never attach a cached inventory date to a different running image.
+                        const info = inventory.find(c => c.name === running?.name && c.image_id === running?.image);
                         const version = info?.version || running?.version || imageVersion(info?.image ?? running?.reference ?? '') || running?.revision?.slice(0,8) || t('updates.unknown');
                         const revision = info?.revision || running?.revision;
-                        const runningVersion = revision && !/^v?\d+\.\d+/.test(version) ? `${version} · ${revision.slice(0,8)}` : version;
+                        const runningVersion = revision && version.startsWith('deployment-') ? revision.slice(0,8) : revision && !/^v?\d+\.\d+/.test(version) ? `${version} · ${revision.slice(0,8)}` : version;
                         const selectedRelease = overrides[name] ?? target;
                         const choices = releases.filter(r => r.id !== target?.id).map(r => ({release:r, reason:target ? componentCompatibility(target,r,family ?? '',data.agent.platform) : 'contract'}));
                         const supported = data.capabilities?.includes('service-version-overrides') || (name === 'gui' && data.capabilities?.includes('component-overrides'));
                         const noAlternatives = choices.every(c => !!c.reason);
-                        return <div className="update-stack-row" key={name} data-testid={`stack-${name}`}>
-                            <div><Typography.Text strong>{component(name)}</Typography.Text> {running && <Tag color={runtime?.health === 'unknown' ? undefined : running.healthy ? 'green' : 'orange'}>{runtime?.health === 'unknown' ? t('updates.unknown') : t(`hostUpdater.health.${running.healthy ? 'healthy' : 'degraded'}`)}</Tag>}
-                                <div className="stack-version"><Typography.Text type="secondary">{t('hostUpdater.running')}: </Typography.Text>{running ? runningVersion : t('hostUpdater.notInstalled')}</div>
-                                {advanced && running && <div className="stack-build-date"><Typography.Text type="secondary">{t('hostUpdater.built')}: {date(info?.built_at)}</Typography.Text></div>}
+                        return <tr key={name} data-testid={`stack-${name}`}>
+                            <th scope="row">{component(name)}</th>
+                            <td>
+                                <div className="stack-version" title={version}>{running ? runningVersion : t('hostUpdater.notInstalled')}</div>
+                                {running && <div className="stack-build-date"><Typography.Text type="secondary">{t('hostUpdater.built')}: {date(running.built_at || info?.built_at)}</Typography.Text></div>}
                                 {data.state.custom_images?.[name] && <div><Tag color="gold">{t('hostUpdater.customMix')}</Tag><Typography.Text code>{data.state.custom_images[name].requested}</Typography.Text></div>}
-                                {data.state.overrides?.[name] && <Tag>{t('hostUpdater.customComponent')}</Tag>}
+                                {data.state.overrides?.[name] && <Tag title={t('hostUpdater.customComponent')}>{t('hostUpdater.customShort')}</Tag>}
                                 <details className="stack-image-details"><summary>{t('updates.details')}</summary><Typography.Paragraph code>{running?.reference ?? info?.image ?? family}</Typography.Paragraph><Typography.Paragraph code>{running?.image ?? info?.image_id}</Typography.Paragraph></details>
-                            </div>
-                            <div className="stack-target">
+                            </td>
+                            <td><div className="stack-target">
+                                {running && <Tag title={t(`hostUpdater.health.${runtime?.health === 'unknown' ? 'unknown' : running.healthy ? 'healthy' : 'degraded'}`)} color={runtime?.health === 'unknown' ? undefined : running.healthy ? 'green' : 'orange'}>{runtime?.health === 'unknown' ? t('updates.unknown') : running.healthy ? t('updates.containerStates.running') : t('hostUpdater.unhealthyShort')}</Tag>}
                                 {custom && running ? <><Checkbox aria-label={`${component(name)} ${t('hostUpdater.imageChoice')}`} checked={name in customImages} disabled={pending || busy || !data.capabilities?.includes('custom-images')}
                                     onChange={e => setCustomImages(current => {const next={...current};if(e.target.checked)next[name]='';else delete next[name];return next;})}>{t('hostUpdater.enterImage')}</Checkbox>
                                     {name in customImages ? <Input.TextArea autoSize={{minRows:2,maxRows:4}} aria-label={`${component(name)} ${t('hostUpdater.imageReference')}`} placeholder="ghcr.io/owner/repository/image:tag" value={customImages[name]} disabled={pending || busy} onChange={e => setCustomImages(current => ({...current,[name]:e.target.value}))}/> : <Typography.Text type="secondary">{t('hostUpdater.keepImage')}</Typography.Text>}
@@ -167,23 +178,23 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                                     disabled={pending || busy || dirty || !target || !supported || noAlternatives}
                                     options={[{value:'',label:t('hostUpdater.followRelease')},...choices.map(({release,reason}) => ({value:release.id,disabled:!!reason,label:datedLabel(release)+(reason ? ` · ${t('hostUpdater.compatibility.'+reason)}` : '')}))]}
                                     onChange={id => setComponentSelected(current => {const next={...current};if(id)next[name]=id;else delete next[name];return next;})}/>
-                                    {overrides[name] && <Tag color="gold">{t('hostUpdater.customComponent')}</Tag>}
+                                    {overrides[name] && <Tag title={t('hostUpdater.customComponent')} color="gold">{t('hostUpdater.customShort')}</Tag>}
                                     {!target && <Typography.Text type="secondary">{t('hostUpdater.noVersionsHelp')}</Typography.Text>}
                                     {!supported && <Typography.Text type="secondary">{t('hostUpdater.serviceSelectionUnsupported')}</Typography.Text>}
                                     {target && supported && noAlternatives && <Typography.Text type="secondary">{t('hostUpdater.noCompatibleComponent')}</Typography.Text>}
                                 </> : !family && target && <Typography.Text type="secondary">{t('hostUpdater.removedByRelease')}</Typography.Text>}
                                 {selectedRelease && family && advanced && !custom && <Typography.Text type="secondary">{t('hostUpdater.selected')}: {label(selectedRelease)}<div>{published(selectedRelease)}</div></Typography.Text>}
-                            </div>
-                        </div>;
+                            </div></td>
+                        </tr>;
                     })}
-                    {localComponents.map(c => <div className="update-stack-row local" key={c.name}><div><Typography.Text strong>{t(`updates.components.${c.component}`, {defaultValue:c.name})}</Typography.Text><div>{c.version || imageVersion(c.image ?? '') || t('updates.unknown')}</div></div><Tag>{t('hostUpdater.localService')}</Tag></div>)}
-                    <div className="update-stack-row"><div><Typography.Text strong>{t('hostUpdater.agent')}</Typography.Text><div>{data.agent.version}</div><Typography.Text type="secondary">{t('hostUpdater.separateUpdate')}</Typography.Text></div>
-                        <div className="stack-target">{advanced && !custom && <Select classNames={{popup:{root:'update-version-menu'}}} aria-label={t('hostUpdater.agentVersion')} value={agentTarget?.id} disabled={pending || busy || dirty || releases.length === 0} placeholder={t('hostUpdater.noVersions')}
+                    {localComponents.map(c => <tr key={c.name}><th scope="row">{t(`updates.components.${c.component}`, {defaultValue:c.name})}</th><td>{c.version || imageVersion(c.image ?? '') || t('updates.unknown')}<div className="stack-build-date"><Typography.Text type="secondary">{t('hostUpdater.built')}: {date(c.built_at)}</Typography.Text></div></td><td><Tag title={t('hostUpdater.localService')}>{t('hostUpdater.localServiceShort')}</Tag></td></tr>)}
+                    <tr data-testid="stack-agent"><th scope="row">{t('hostUpdater.agent')}</th><td><div title={data.agent.version}>{data.agent.version.startsWith('deployment-') ? data.agent.revision.slice(0,8) : data.agent.version}</div><Typography.Text type="secondary">{published(agentRelease)}</Typography.Text></td>
+                        <td><div className="stack-target"><Typography.Text type="secondary">{t('hostUpdater.separateUpdate')}</Typography.Text>{advanced && !custom && <Select classNames={{popup:{root:'update-version-menu'}}} aria-label={t('hostUpdater.agentVersion')} value={agentTarget?.id} disabled={pending || busy || dirty || releases.length === 0} placeholder={t('hostUpdater.noVersions')}
                             options={releases.filter(r => r.updater[data.agent.platform]).map(r => ({value:r.id,label:datedLabel(r)}))} onChange={setAgentSelected}/>}
                             {advanced && !custom && agentTarget && <Typography.Text type="secondary">{published(agentTarget)}</Typography.Text>}
-                            {!custom && agentTarget?.updater[data.agent.platform] && agentTarget.updater[data.agent.platform].version !== data.agent.version && <Button disabled={pending || busy || dirty} onClick={() => setAgentPlan(agentTarget)}>{t('hostUpdater.updateAgent')}</Button>}
-                        </div>
-                    </div>
+                            {!custom && agentTarget?.updater[data.agent.platform] && !sameUpdaterBuild(agentTarget.updater[data.agent.platform], data.agent) && <Button disabled={pending || busy || dirty} onClick={() => setAgentPlan(agentTarget)}>{t('hostUpdater.updateAgent')}</Button>}
+                        </div></td>
+                    </tr></tbody></table>
                 </section>
                 {data.agent.error && <Alert type="warning" showIcon message={data.agent.error}/>}
                 {advanced && <details className="update-preferences"><summary>{t('hostUpdater.preferences')}</summary><Form layout="vertical" className="updater-options">

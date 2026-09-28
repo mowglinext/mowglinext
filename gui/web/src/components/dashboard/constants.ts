@@ -20,6 +20,7 @@ export const MOWER_STATES: Record<string, { label: string; tone: 'info' | 'prima
   IDLE_DOCKED:                { label: 'mowerStates.IDLE_DOCKED.label',                 tone: 'info',    friendly: 'mowerStates.IDLE_DOCKED.friendly' },
   IDLE:                       { label: 'mowerStates.IDLE.label',                        tone: 'info',    friendly: 'mowerStates.IDLE.friendly' },
   CHARGING:                   { label: 'mowerStates.CHARGING.label',                    tone: 'success', friendly: 'mowerStates.CHARGING.friendly' },
+  MANUAL_CHARGING:            { label: 'mowerStates.MANUAL_CHARGING.label',             tone: 'info',    friendly: 'mowerStates.MANUAL_CHARGING.friendly' },
 
   // Autonomous mowing cycle
   PREFLIGHT_CHECK:            { label: 'mowerStates.PREFLIGHT_CHECK.label',             tone: 'info',    friendly: 'mowerStates.PREFLIGHT_CHECK.friendly' },
@@ -41,6 +42,7 @@ export const MOWER_STATES: Record<string, { label: string; tone: 'info' | 'prima
   // Battery
   LOW_BATTERY_DOCKING:        { label: 'mowerStates.LOW_BATTERY_DOCKING.label',         tone: 'warning', friendly: 'mowerStates.LOW_BATTERY_DOCKING.friendly' },
   CRITICAL_BATTERY_DOCKING:   { label: 'mowerStates.CRITICAL_BATTERY_DOCKING.label',    tone: 'warning', friendly: 'mowerStates.CRITICAL_BATTERY_DOCKING.friendly' },
+  CRITICAL_BATTERY_CHARGING:  { label: 'mowerStates.CRITICAL_BATTERY_CHARGING.label',   tone: 'warning', friendly: 'mowerStates.CRITICAL_BATTERY_CHARGING.friendly' },
   CRITICAL_BATTERY_NAV_FAILED:{ label: 'mowerStates.CRITICAL_BATTERY_NAV_FAILED.label', tone: 'danger',  friendly: 'mowerStates.CRITICAL_BATTERY_NAV_FAILED.friendly' },
 
   // Rain

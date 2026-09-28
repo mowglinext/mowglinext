@@ -1808,9 +1808,31 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       // ring's exit heading (within 45°): concentric rings have a parallel edge
       // there, so the join becomes a tangent ~op_width sideways shift. Fall back
       // to plain nearest if nothing aligns (degenerate tiny ring).
+      //
+      // Among ALIGNED candidates, nearest-by-distance alone still tends to pick
+      // the vertex directly "inward" from prev_end: near-zero forward advance,
+      // near-op_width lateral offset. A forward-only Dubins connector cannot
+      // just slide sideways between two closely-spaced, near-parallel poses —
+      // it has to loop to satisfy the curvature bound, which is exactly the
+      // "weird little loop between headland rings" field report. The minimum
+      // forward advance for a clean two-arc S-curve merge across a lateral
+      // offset `l` at radius `r` is f_min = sqrt(l·(4r − l)) (tangent-circle
+      // geometry, valid for 0 <= l <= 4r — derived from the standard symmetric
+      // reverse-curve construction: l = 2r(1−cos φ), f = 2r·sin φ for the arc
+      // angle φ, eliminate φ). Score a candidate by how far short of f_min its
+      // OWN forward advance falls (its "deficit") instead of raw distance, so
+      // the chosen entry point is pulled far enough along the ring for a
+      // diagonal merge — a candidate that already clears its own deficit is
+      // still scored by plain distance (nearest SUFFICIENT point — no reason
+      // to overshoot further along the ring than necessary). kInsufficientPenalty
+      // separates the two bands (d2 is at most a few thousand m² for any real
+      // field) so one min-cost scan implements "prefer any sufficient candidate
+      // over every insufficient one, tie-broken as described" without a second
+      // pass.
       const double kAlignCos = 0.7071;  // cos(45°)
+      constexpr double kInsufficientPenalty = 1.0e6;
       std::size_t best = 0;
-      double best_d2 = std::numeric_limits<double>::max();
+      double best_cost = std::numeric_limits<double>::max();
       bool found_aligned = false;
       for (int pass = 0; pass < 2 && !found_aligned; ++pass)
       {
@@ -1830,16 +1852,30 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
           const double dx = loop[j].first - prev_end.first;
           const double dy = loop[j].second - prev_end.second;
           const double d2 = dx * dx + dy * dy;
-          if (d2 < best_d2)
+          double cost = d2;
+          if (pass == 0 && en > 1e-9)
           {
-            best_d2 = d2;
+            const double forward = (dx * ex + dy * ey) / en;
+            const double lateral =
+                std::min(std::sqrt(std::max(0.0, d2 - forward * forward)), 4.0 * turn_radius);
+            const double f_min =
+                lateral > 1e-9 ? std::sqrt(lateral * (4.0 * turn_radius - lateral)) : 0.0;
+            const double deficit = f_min - forward;
+            if (deficit > 1e-9)
+            {
+              cost = kInsufficientPenalty + deficit;
+            }
+          }
+          if (cost < best_cost)
+          {
+            best_cost = cost;
             best = j;
             found_aligned = (pass == 0);
           }
         }
         if (pass == 0 && !found_aligned)
         {
-          best_d2 = std::numeric_limits<double>::max();  // retry unfiltered
+          best_cost = std::numeric_limits<double>::max();  // retry unfiltered
         }
       }
       std::rotate(loop.begin(), loop.begin() + static_cast<std::ptrdiff_t>(best), loop.end());

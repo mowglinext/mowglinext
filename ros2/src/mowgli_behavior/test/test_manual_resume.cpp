@@ -20,18 +20,22 @@
  *
  * When BatteryGuard / CriticalBatteryDock park the robot on the charger, the
  * tree waits in RetryUntilSuccessful { IsChargingProgressing; Fallback {
- * IsBatteryAbove battery_full_pct; ... } } until the pack reaches 95 %. A
+ * Sequence { IsBatteryAbove battery_full_pct; IsChargeCurrentBelow }; ... } }
+ * until the pack reaches 95 % AND the charge current has tapered (the second
+ * condition closes issue #759's follow-up: raw pack voltage alone reads
+ * "full" while the charger is still actively pushing current in). A
  * COMMAND_START during that hold used to be a no-op (current_command is
  * already 1). It now sets BTContext::manual_resume_requested, and the new
  * IsManualResumeRequested node inside both wait loops consumes it — honouring
- * it only at or above battery_manual_resume_pct.
+ * it only at or above battery_manual_resume_pct, REGARDLESS of charge current
+ * (an operator override is a deliberate, informed choice to resume early).
  *
  * Covers: the node's consume / refuse / stale semantics, the handler's
  * charge-hold decision helper (isChargeHoldState — the handler lambda itself
  * is not unit-testable in isolation), the wait loop's exit order with the
- * real IsBatteryAbove, and structurally that BOTH loops in main_tree.xml carry
- * the node, poll at <= 5 s so a Play press is noticed promptly, and still
- * bound at 8 h.
+ * real IsBatteryAbove + IsChargeCurrentBelow, and structurally that BOTH
+ * loops in main_tree.xml carry the node, poll at <= 5 s so a Play press is
+ * noticed promptly, and still bound at 8 h.
  */
 
 #include <chrono>
@@ -46,19 +50,26 @@
 
 #include "behaviortree_cpp/bt_factory.h"
 #include "mowgli_behavior/bt_context.hpp"
+#include "mowgli_behavior/charge_progress.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
 #include <gtest/gtest.h>
 
 using mowgli_behavior::BTContext;
+using mowgli_behavior::ChargeProgress;
 using mowgli_behavior::IsBatteryAbove;
+using mowgli_behavior::IsChargeCurrentBelow;
 using mowgli_behavior::isChargeHoldState;
 using mowgli_behavior::IsManualResumeRequested;
+using mowgli_behavior::isResumableHoldState;
+using mowgli_behavior::judgeChargeProgress;
+using mowgli_behavior::kNoChargeSaturationPct;
 
 namespace
 {
 
 constexpr float kFullPct = 95.0f;
 constexpr float kManualResumePct = 30.0f;
+constexpr float kTailCurrentA = 0.08f;
 constexpr double kChargeHoldBoundSec = 8.0 * 3600.0;
 constexpr double kMaxPollSec = 5.0;
 
@@ -101,9 +112,17 @@ protected:
     blackboard->set("context", ctx);
     blackboard->set("battery_full_pct", kFullPct);
     blackboard->set("battery_manual_resume_pct", kManualResumePct);
+    blackboard->set("battery_charge_tail_current_a", kTailCurrentA);
 
     factory.registerNodeType<IsBatteryAbove>("IsBatteryAbove");
+    factory.registerNodeType<IsChargeCurrentBelow>("IsChargeCurrentBelow");
     factory.registerNodeType<IsManualResumeRequested>("IsManualResumeRequested");
+
+    // Default to "charger active, current already tapered" so tests that only
+    // care about battery_percent don't also have to think about the new gate;
+    // tests exercising IsChargeCurrentBelow itself override these.
+    ctx->latest_power.charger_enabled = true;
+    ctx->latest_power.charge_current = 0.0f;
   }
 
   /// Mirror of the handler's flagging: what ~/high_level_control does on a
@@ -126,15 +145,34 @@ protected:
     return factory.createTreeFromText(xml, blackboard);
   }
 
+  BT::Tree makeChargeCurrentOnlyTree()
+  {
+    static const char* xml = R"(
+      <root BTCPP_format="4">
+        <BehaviorTree ID="MainTree">
+          <IsChargeCurrentBelow threshold="{battery_charge_tail_current_a}"/>
+        </BehaviorTree>
+      </root>
+    )";
+    return factory.createTreeFromText(xml, blackboard);
+  }
+
   /// The inner Fallback of both charge wait loops, with the timed wait
   /// collapsed to a bare AlwaysFailure (it only matters that it is LAST).
+  /// Mirrors main_tree.xml: the AUTO exit requires BOTH IsBatteryAbove AND
+  /// IsChargeCurrentBelow (issue #759 follow-up — voltage alone reads "full"
+  /// while the charger is still pushing current in); the manual exit is
+  /// unaffected by charge current.
   BT::Tree makeWaitLoopExitTree()
   {
     static const char* xml = R"(
       <root BTCPP_format="4">
         <BehaviorTree ID="MainTree">
           <Fallback>
-            <IsBatteryAbove threshold="{battery_full_pct}"/>
+            <Sequence>
+              <IsBatteryAbove threshold="{battery_full_pct}"/>
+              <IsChargeCurrentBelow threshold="{battery_charge_tail_current_a}"/>
+            </Sequence>
             <IsManualResumeRequested min_battery_pct="{battery_manual_resume_pct}"/>
             <AlwaysFailure/>
           </Fallback>
@@ -164,6 +202,25 @@ TEST(ManualResumeHelperTest, ChargeHoldStatesAreExactlyTheTwoBatteryHolds)
   EXPECT_FALSE(isChargeHoldState("CHARGER_FAILED"));
   EXPECT_FALSE(isChargeHoldState("LOW_BATTERY_DOCKING"));
   EXPECT_FALSE(isChargeHoldState(""));
+}
+
+TEST(ManualResumeHelperTest, ResumableHoldStateIsExactlyPlainIdle)
+{
+  // StopHoldSequence ("Pause") is the only branch this must catch — a
+  // COMMAND_START here must preserve single_area_target instead of
+  // clearSingleAreaMode()-ing it.
+  EXPECT_TRUE(isResumableHoldState("IDLE"));
+
+  // Everything else keeps the historical unconditional-clear-on-Start
+  // behavior: IDLE_DOCKED (session ended or never started — EndSession
+  // already cleared the target), both charge-hold states (a low-battery dock
+  // or emergency kept the session alive without EndSession — the operator's
+  // next Start explicitly does expect the whole lawn), and any other state.
+  EXPECT_FALSE(isResumableHoldState("IDLE_DOCKED"));
+  EXPECT_FALSE(isResumableHoldState("CHARGING"));
+  EXPECT_FALSE(isResumableHoldState("CRITICAL_BATTERY_CHARGING"));
+  EXPECT_FALSE(isResumableHoldState("MOWING"));
+  EXPECT_FALSE(isResumableHoldState(""));
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +302,42 @@ TEST_F(ManualResumeTest, FloorPortDefaultsWhenBlackboardKeyIsAbsent)
 }
 
 // ---------------------------------------------------------------------------
-// Wait-loop exit order (real IsBatteryAbove + IsManualResumeRequested)
+// IsChargeCurrentBelow
+// ---------------------------------------------------------------------------
+
+TEST_F(ManualResumeTest, ChargeCurrentAtOrBelowThresholdSucceeds)
+{
+  ctx->latest_power.charger_enabled = true;
+  ctx->latest_power.charge_current = kTailCurrentA;
+
+  auto tree = makeChargeCurrentOnlyTree();
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+}
+
+TEST_F(ManualResumeTest, ChargeCurrentAboveThresholdFails)
+{
+  ctx->latest_power.charger_enabled = true;
+  ctx->latest_power.charge_current = kTailCurrentA + 0.5f;
+
+  auto tree = makeChargeCurrentOnlyTree();
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+}
+
+// A never-received / stale Power message default-constructs charger_enabled
+// to false — this must FAIL, never be read as "tapered, therefore full".
+// Errs toward waiting, never toward a premature resume.
+TEST_F(ManualResumeTest, ChargerNotEnabledFailsRegardlessOfCurrentReading)
+{
+  ctx->latest_power.charger_enabled = false;
+  ctx->latest_power.charge_current = 0.0f;  // would pass the threshold on its own
+
+  auto tree = makeChargeCurrentOnlyTree();
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+}
+
+// ---------------------------------------------------------------------------
+// Wait-loop exit order (real IsBatteryAbove + IsChargeCurrentBelow +
+// IsManualResumeRequested)
 // ---------------------------------------------------------------------------
 
 TEST_F(ManualResumeTest, WaitLoopStillExitsOnFullBatteryWithoutARequest)
@@ -281,6 +373,48 @@ TEST_F(ManualResumeTest, WaitLoopKeepsChargingOnManualResumeBelowFloor)
 
   auto tree = makeWaitLoopExitTree();
   EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_FALSE(ctx->manual_resume_requested);
+}
+
+// Issue #759 follow-up: battery_percent reads "full" from raw pack voltage,
+// which stays elevated for the whole CC/CV charge while the charger is
+// actively pushing current in — NOT just a brief transient. Without
+// IsChargeCurrentBelow the loop would exit here and the mower would undock
+// with the charger still bulk-charging, nowhere near actually full.
+TEST_F(ManualResumeTest, WaitLoopKeepsChargingOnFullVoltageWithUntaperedCurrent)
+{
+  ctx->battery_percent = 96.0f;
+  ctx->latest_power.charger_enabled = true;
+  ctx->latest_power.charge_current = 1.1f;  // still bulk/CV charging, well above the tail
+
+  auto tree = makeWaitLoopExitTree();
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+}
+
+// Once the current has genuinely tapered (the charger's own CHARGE_END_LIMIT_
+// CURRENT definition of "full", mirrored by battery_charge_tail_current_a),
+// the auto-exit fires — same as before the fix, now for the right reason.
+TEST_F(ManualResumeTest, WaitLoopExitsOnceCurrentHasTaperedAtFullVoltage)
+{
+  ctx->battery_percent = 96.0f;
+  ctx->latest_power.charger_enabled = true;
+  ctx->latest_power.charge_current = kTailCurrentA;  // at the threshold — inclusive
+
+  auto tree = makeWaitLoopExitTree();
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+}
+
+// A manual resume request is honoured regardless of charge current — it is a
+// deliberate operator override, not a claim that the pack is actually full.
+TEST_F(ManualResumeTest, ManualResumeIgnoresUntaperedChargeCurrent)
+{
+  ctx->battery_percent = 50.0f;
+  ctx->latest_power.charger_enabled = true;
+  ctx->latest_power.charge_current = 1.1f;
+  requestManualResume();
+
+  auto tree = makeWaitLoopExitTree();
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
   EXPECT_FALSE(ctx->manual_resume_requested);
 }
 
@@ -359,20 +493,29 @@ TEST(ManualResumeTreeTest, BothChargeWaitLoopsCarryTheManualResumeExit)
     ASSERT_FALSE(block.empty()) << loop << " not found in main_tree.xml.";
 
     const std::size_t above_at = block.find("<IsBatteryAbove threshold=\"{battery_full_pct}\"/>");
+    const std::size_t tapered_at =
+        block.find("<IsChargeCurrentBelow threshold=\"{battery_charge_tail_current_a}\"/>");
     const std::size_t manual_at =
         block.find("<IsManualResumeRequested min_battery_pct=\"{battery_manual_resume_pct}\"/>");
     const std::size_t wait_at = block.find("<WaitForDuration");
 
     ASSERT_NE(above_at, std::string::npos) << loop << ": IsBatteryAbove exit missing.";
+    ASSERT_NE(tapered_at, std::string::npos)
+        << loop
+        << ": IsChargeCurrentBelow exit missing — issue #759's follow-up (voltage alone "
+           "reads \"full\" while the charger is still pushing current in) has regressed.";
     ASSERT_NE(manual_at, std::string::npos)
         << loop
         << ": IsManualResumeRequested exit missing — a Play press during this charge "
            "hold is a no-op again.";
     ASSERT_NE(wait_at, std::string::npos) << loop << ": timed wait missing.";
 
-    // Exit order: full battery first (never consumes the token), then the
-    // operator override, then the timed wait that fails the attempt.
+    // Exit order: full battery + tapered current first (never consumes the
+    // token), then the operator override, then the timed wait that fails
+    // the attempt.
     EXPECT_LT(above_at, manual_at) << loop << ": IsBatteryAbove must precede the manual exit.";
+    EXPECT_LT(tapered_at, manual_at)
+        << loop << ": IsChargeCurrentBelow must precede the manual exit.";
     EXPECT_LT(manual_at, wait_at) << loop << ": the manual exit must precede the timed wait.";
   }
 }
@@ -414,4 +557,85 @@ TEST(ManualResumeTreeTest, ManualChargeGuardIsNotAManualResumeLoop)
   const std::string block = ExtractNamedFallback(ReadMainTree(), "ManualChargeGuard");
   ASSERT_FALSE(block.empty());
   EXPECT_EQ(block.find("IsManualResumeRequested"), std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// IsChargingProgressing on a saturated pack (charge_progress.hpp)
+// ---------------------------------------------------------------------------
+//
+// The charge loops now wait for IsChargeCurrentBelow, i.e. through the
+// charger's CV tail, where battery_percent — derived from pack voltage, held at
+// the charge setpoint — is flat by construction. IsChargingProgressing demands
+// a 1 % rise per 30 min window. Without the saturation exemption a CV tail
+// longer than one window is read as a dead charger: CHARGER_FAILED, and the
+// session ends on the dock instead of resuming the mow.
+
+namespace
+{
+constexpr double kProgressWindowS = 1800.0;  // IsChargingProgressing's window
+constexpr float kProgressMinRisePct = 1.0f;  // its required rise per window
+constexpr float kProgressFullPct = 95.0f;  // battery_full_pct template default
+}  // namespace
+
+TEST(ChargeProgressTest, AFlatSaturatedPackInTheCvTailIsNotAStall)
+{
+  // Pinned at the voltage-derived ceiling for 45 min while the current tapers.
+  EXPECT_EQ(judgeChargeProgress(
+                100.0f, 100.0f, 45 * 60.0, kProgressWindowS, kProgressMinRisePct, kProgressFullPct),
+            ChargeProgress::kSaturated);
+  // Exactly at the resume level counts as saturated too.
+  EXPECT_EQ(judgeChargeProgress(
+                95.0f, 95.0f, 45 * 60.0, kProgressWindowS, kProgressMinRisePct, kProgressFullPct),
+            ChargeProgress::kSaturated);
+}
+
+TEST(ChargeProgressTest, AFlatPackBelowFullIsStillADeadCharger)
+{
+  // The case the stall rule exists for: a whole window below full, no rise.
+  EXPECT_EQ(judgeChargeProgress(
+                60.0f, 60.5f, 31 * 60.0, kProgressWindowS, kProgressMinRisePct, kProgressFullPct),
+            ChargeProgress::kStalled);
+  // One tenth below full is still below full.
+  EXPECT_EQ(judgeChargeProgress(
+                94.9f, 94.9f, 31 * 60.0, kProgressWindowS, kProgressMinRisePct, kProgressFullPct),
+            ChargeProgress::kStalled);
+}
+
+TEST(ChargeProgressTest, TheRuleBelowFullIsUnchanged)
+{
+  EXPECT_EQ(judgeChargeProgress(
+                60.0f, 62.0f, 31 * 60.0, kProgressWindowS, kProgressMinRisePct, kProgressFullPct),
+            ChargeProgress::kProgressing);
+  EXPECT_EQ(judgeChargeProgress(
+                60.0f, 60.0f, 10 * 60.0, kProgressWindowS, kProgressMinRisePct, kProgressFullPct),
+            ChargeProgress::kWithinWindow);
+}
+
+TEST(ChargeProgressTest, WithoutFullPctASaturatedPackIsJudgedTheOldWay)
+{
+  // A tree that does not pass full_pct keeps the classic rule everywhere.
+  EXPECT_EQ(judgeChargeProgress(100.0f,
+                                100.0f,
+                                45 * 60.0,
+                                kProgressWindowS,
+                                kProgressMinRisePct,
+                                kNoChargeSaturationPct),
+            ChargeProgress::kStalled);
+}
+
+TEST(ManualResumeTreeTest, BothChargeLoopsTellTheStallCheckWherePackIsFull)
+{
+  // Without full_pct, IsChargingProgressing would judge the CV tail these loops
+  // now wait through as a dead charger.
+  const std::string xml = ReadMainTree();
+  for (const char* loop : kChargeLoops)
+  {
+    const std::string block = ExtractNamedFallback(xml, loop);
+    ASSERT_FALSE(block.empty()) << loop << " not found in main_tree.xml.";
+    EXPECT_NE(block.find("<IsChargingProgressing full_pct=\"{battery_full_pct}\"/>"),
+              std::string::npos)
+        << loop << ": IsChargingProgressing must get full_pct (charge_progress.hpp).";
+  }
+  EXPECT_EQ(xml.find("<IsChargingProgressing/>"), std::string::npos)
+      << "An IsChargingProgressing without full_pct would read a CV tail as a dead charger.";
 }

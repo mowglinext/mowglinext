@@ -96,18 +96,19 @@ mowgli:
     # fallback before ROS re-applies the saved runtime value.
     ticks_per_meter: 399.0
     # Runtime max wheel-speed cap [m/s], consumed by hardware_bridge_node and
-    # pushed to the STM32 (PACKET_ID_LL_SET_KINEMATICS) with wheel_track as the
-    # wheel base, so both can be retuned without reflashing. The firmware clamps
-    # this to at most its compiled MAX_MPS (board.h/template) — the wire can only
-    # LOWER the cap, never raise it above the compiled safety ceiling.
+    # pushed to the STM32 (protocol v7 SET_PARAM) with wheel_track as the wheel
+    # base. The firmware coerces it into its absolute envelope [0.1, 0.6]
+    # (fw_param_catalog.h) and reports the value it applied on
+    # /hardware_bridge/firmware_params.
     max_mps: 0.5
-    # Runtime SAFETY limits pushed to the STM32 (PACKET_ID_LL_SET_SAFETY_LIMITS)
-    # so the charge ceiling + e-stop timeouts can be TIGHTENED without reflashing.
-    # Defaults mirror the firmware compile-time board_defaults.h values. The
-    # firmware clamps every field so the wire can only make protection STRONGER:
-    # charge V/I clamped <= compiled ceiling; the four trip timeouts clamped
-    # <= compiled (faster e-stop); play_button_clear clamped >= compiled (harder
-    # to un-latch the emergency). An unconnected host runs the compiled defaults.
+    # Runtime SAFETY limits pushed to the STM32 (protocol v7 SET_PARAM) and
+    # persisted in the board's flash, so they also apply before ROS2 connects.
+    # Defaults mirror the firmware's board_defaults.h. The firmware coerces each
+    # into an absolute envelope compiled in fw_param_catalog.h — a value may be
+    # stricter OR looser than the default, never outside the envelope:
+    #   charge voltage [25.2, 29.4] V, charge current [0.1, 1.2] A,
+    #   one-wheel lift [10, 5000] ms, both wheels [10, 3000] ms,
+    #   tilt [10, 1000] ms, stop button [10, 250] ms, hold PLAY [500, 10000] ms.
     max_charge_voltage: 29.4          # [V] charge voltage ceiling
     max_charge_current: 1.2           # [A] charge current ceiling
     one_wheel_lift_emergency_ms: 2000 # [ms] one-wheel-lift trip
@@ -115,6 +116,10 @@ mowgli:
     tilt_emergency_ms: 500            # [ms] tilt trip (mechanical + accelerometer)
     stop_button_emergency_ms: 100     # [ms] stop-button trip
     play_button_clear_emergency_ms: 2000 # [ms] hold-PLAY-to-clear-emergency
+    # Onboard LIS3DH tilt-interrupt threshold (register INT1_THS). Larger =
+    # more inclination before the tilt emergency. Envelope [44, 64] (0x2C-0x40);
+    # 56 (0x38) is stricter than the stock firmware's 44 (0x2C).
+    imu_inclination_threshold: 56
     # Drive-motor wheel-velocity PI + feedforward (consumed by
     # hardware_bridge_node, pushed to the STM32 firmware over the serial link so
     # the GUI can retune the per-wheel loop without reflashing). The firmware
@@ -151,8 +156,8 @@ mowgli:
     deadband_pwm: 40.0
     # Firmware gyro yaw-rate loop (Option C, 2026-07-17, task #33/#34 —
     # replaces the removed host-side angular_rate_* PI). Consumed by
-    # hardware_bridge_node, pushed to the STM32 over PACKET_ID_LL_SET_YAW_PID
-    # (a separate packet from SET_DRIVE_PID). Defaults are the firmware's own
+    # hardware_bridge_node, pushed to the STM32 with protocol v7 SET_PARAM
+    # and persisted in its flash. Defaults are the firmware's own
     # power-on fallback (Firmware-2's #33 report). The firmware re-validates
     # and clamps every value on receipt (yaw_kp 0-5, yaw_ki 0-20,
     # yaw_trim_limit_mps 0-MAX_MPS=0.5).
@@ -391,6 +396,16 @@ mowgli:
     battery_manual_resume_percent: 30.0     # floor for an operator-forced resume from the charger (Play
                                             # pressed while CHARGING / CRITICAL_BATTERY_CHARGING); must be
                                             # > battery_low_percent or the robot re-docks within minutes
+    battery_charge_tail_current_a: 0.08     # BatteryGuard/CriticalBatteryDock also require the charge
+                                            # current to have tapered to this before auto-resuming, not
+                                            # just battery_full_percent: pack voltage under active charge
+                                            # current reads well above true state of charge for the whole
+                                            # CC/CV charge (not a brief transient), so voltage alone can
+                                            # cross battery_full_percent long before the pack is actually
+                                            # full and the mower undocks prematurely. Mirrors the
+                                            # firmware's own already-calibrated tail-current "full" test,
+                                            # CHARGE_END_LIMIT_CURRENT (board_defaults.h) — keep the two in
+                                            # sync unless you have a specific reason to diverge
 
     # -----------------------------------------------------------------
     # Mowing

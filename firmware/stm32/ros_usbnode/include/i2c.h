@@ -3,11 +3,17 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void I2C_Init(void);
 /* Foreground-only owner of onboard sensor transactions and bus recovery. */
 void I2C_Onboard_Service(void);
 /* Interrupt-safe snapshots; neither accessor touches the bus. */
 uint8_t I2C_OnboardHealthy(void);
+/* Queue a new LIS3DH INT1 (tilt) threshold; applied by I2C_Onboard_Service. */
+void I2C_Onboard_SetInclinationThreshold(uint8_t threshold);
 uint8_t I2C_Acclerometer_TestDevice(void);
 void I2C_Accelerometer_Setup(void);
 void I2C_ReadAccelerometer(float *x, float *y, float *z);
@@ -15,5 +21,9 @@ float I2C_ReadAccelerometerTemp(void);
 int32_t I2C_platform_write(void *handle, uint8_t reg, const uint8_t *bufp, uint16_t len);
 int32_t I2C_platform_read(void *handle, uint8_t reg, uint8_t *bufp, uint16_t len);
 uint8_t I2C_TestZLowINT(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif  /* __I2C_H */

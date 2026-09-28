@@ -83,6 +83,15 @@
     "noContainers": "No Mowgli containers could be identified",
     "mainboard": "Mainboard firmware",
     "firmwareMeaning": "Compatibility is checked against the robot software's protocol. It does not mean the firmware is the latest release. Disconnected or stale values are last known readings.",
+    "firmwareAvailable": "Firmware {{version}} (protocol {{protocol}}) is available for this installation.",
+    "firmwareUpToDate": "The board runs the firmware of this installation ({{version}}).",
+    "firmwareFromLatestStable": "This installation's release carries no firmware: taken from the latest stable release {{release}}.",
+    "firmwareNoBoard": "No board has been selected yet: flash the firmware once from the onboarding to record it.",
+    "firmwareNoPrebuilt": "There is no prebuilt firmware for {{board}}: use the expert (compile from source) path of the onboarding.",
+    "firmwareCheckFailed": "Could not check the available firmware",
+    "firmwareRelease": "Firmware release",
+    "firmwareFlashNeedsDock": "Put the robot on its charger first: flashing reboots the board and stops the motors and the blade.",
+    "firmwareFlashVersion": "Flash firmware {{version}}",
     "protocol": "Protocol",
     "configuredModel": "Configured mower model",
     "boardRevision": "Board revision",
@@ -296,6 +305,7 @@
     "stateAtBase": "At base",
     "stateIdle": "Idle",
     "stateCharging": "Charging",
+    "stateManualCharging": "Manually docked",
     "statePreflight": "Pre-flight",
     "stateLeavingBase": "Leaving base",
     "stateCalibration": "Calibration",
@@ -712,6 +722,7 @@
     "sensors": "Sensors",
     "tabRobot": "Robot",
     "tabCalibration": "Calibration",
+    "tabParameters": "Advanced parameters",
     "calibrationCancel": "Cancel",
     "calibrationStatusErrorTitle": "Failed to load calibration status",
     "calibrationTimedOut": "Calibration timed out",
@@ -761,6 +772,7 @@
     "headlineMinutes": "{{value}} min",
     "headlineUntilHomeSuffix": " until home.",
     "headlineChargingPrefix": "Charging · ",
+    "headlineMowingPausedPrefix": "Mowing paused · ",
     "headlinePercent": "{{value}} %",
     "emergencyStop": "Emergency stop",
     "headlineIdlePrefix": "Mowgli is ",
@@ -776,6 +788,8 @@
     "sublineScanPaused": "LiDAR scan is temporarily stale. Blades are off; mowing resumes automatically when fresh scans return.",
     "activeZone": "active zone",
     "sublineCharging": "On the dock, {{current}} A coming in.",
+    "sublineChargeHold": "Mowing is paused and resumes automatically at {{full}}%. Resume now is available from {{manual}}%.",
+    "sublineManualChargeHold": "Mowing is paused because the mower was docked manually. Take it off the dock before resuming.",
     "sublineEmergency": "Secure the area, then restart with the green button.",
     "sublineIdle": "Tap Play to start a mow, or let the schedule take over.",
     "emergencyConfirmBody": "This triggers the hardware emergency stop (blades + movement). Re-arm manually afterwards. Continue?",
@@ -1327,7 +1341,13 @@
     "startMowing": "Start mowing",
     "pause": "Pause",
     "returnToBase": "Return to base",
-    "rearm": "Re-arm"
+    "rearm": "Re-arm",
+    "resumeNow": "Resume now",
+    "cancelMowing": "Cancel mowing",
+    "lowChargeHold": "Mowing is paused while the battery charges.",
+    "manualChargeHold": "Mowing is paused because the mower was docked manually.",
+    "criticalChargeHold": "Mowing is paused for critical-battery charging.",
+    "chargeHold": "{{message}} It resumes automatically at {{full}}%. Resume is available at {{resumeAt}}%."
   },
   "modeSegment": {
     "ecoLabel": "Eco",
@@ -1389,6 +1409,10 @@
       "label": "Charging",
       "friendly": "Charging the battery"
     },
+    "MANUAL_CHARGING": {
+      "label": "Manually docked",
+      "friendly": "Mowing paused on the dock"
+    },
     "PREFLIGHT_CHECK": {
       "label": "Pre-flight",
       "friendly": "Checks before starting"
@@ -1440,6 +1464,10 @@
     "CRITICAL_BATTERY_DOCKING": {
       "label": "Critical battery",
       "friendly": "Critical battery — returning to base"
+    },
+    "CRITICAL_BATTERY_CHARGING": {
+      "label": "Critical-battery charge",
+      "friendly": "Mowing paused while the battery recovers"
     },
     "CRITICAL_BATTERY_NAV_FAILED": {
       "label": "Return failed",
@@ -1500,6 +1528,16 @@
   },
   "mapToolbar": {
     "actionFailed": "Action failed",
+    "mowerAppearance": "Mower map image",
+    "mowerAppearanceUrdf": "URDF silhouette (automatic fallback)",
+    "mowerAppearanceBiltemaRm1000": "Biltema RM1000",
+    "mowerAppearanceBiltemaRm1000Alt": "Biltema RM1000 mower",
+    "dockAppearance": "Dock appearance",
+    "dockAppearanceMarker": "Existing dock marker",
+    "dockAppearanceGeneric": "Generic dock image (approx.)",
+    "dockAppearanceGenericAlt": "Generic visual dock approximation based on a cleaned RM1000 station photo",
+    "dockAppearanceBiltemaRm1000": "RM1000 dock (support sticker)",
+    "dockAppearanceBiltemaRm1000Alt": "Biltema RM1000 docking station with support sticker",
     "darkMap": "Dark map",
     "satellite": "Satellite",
     "flattenMap": "Flatten map",
@@ -2559,10 +2597,10 @@
   },
   "settingsSafety": {
     "alertMessage": "Safety settings protect the robot and its surroundings",
-    "alertDescription": "The STM32 firmware is the sole safety authority: it cuts the blade on lift, tilt and emergency stop, and none of that is configurable from this page. There is nothing to edit here.",
+    "alertDescription": "The STM32 firmware is the sole safety authority: it cuts the blade on a lift, a tilt or an emergency stop, whatever the ROS2 stack does. The settings below only tune its timings and thresholds, and the firmware keeps each one inside a compiled safe envelope.",
     "firmwareOwnedTitle": "Handled by the firmware",
-    "firmwareOwnedDescription": "Lift and tilt detection, the emergency-stop latch and the blade cut-out all live in the STM32 firmware, which decides on its own physical thresholds. The GUI cannot relax, delay or bypass any of them, so no control is offered here.",
-    "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited on the Parameters page."
+    "firmwareOwnedDescription": "Lift and tilt detection, the emergency-stop latch and the blade cut-out all live in the STM32 firmware. The interface cannot bypass or disable them: it can only set how long a fault must persist before it trips, and the tilt sensor threshold, each within the limits the firmware enforces.",
+    "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited in Diagnostics → Advanced parameters."
   },
   "settingsObstacles": {
     "digSensitivity": "Wheel-slip (dig) sensitivity",
@@ -3471,6 +3509,8 @@
     "modeStaleDescription": "Amber dot circling a dark ring. Powered and running, but the behavior tree is not reporting.",
     "modeLowBattery": "Low battery",
     "modeLowBatteryDescription": "Whole ring blinking red. Same colour as emergency — the blinking is what tells them apart.",
+    "modeTransit": "Transit",
+    "modeTransitDescription": "Ring alternates lit halves in warm orange, about once a second. Driving to the next strip with the blade off.",
     "modeMowing": "Mowing",
     "modeMowingDescription": "Green arc growing with coverage, with a white pixel at its tip.",
     "modeMowingDegraded": "Mowing without RTK fix",
@@ -3504,6 +3544,10 @@
     "topicsDescription": "Full JSON schema and command codes are documented in docs/MQTT_CONTROL.md."
   },
   "settingsSections": {
+    "weather": {
+      "label": "Weather",
+      "description": "Rain sensor behaviour and the IrriSense soil-moisture check: whether the weather lets the robot mow."
+    },
     "updates": {"label": "Updates", "description": "Installed versions, update sources and recovery"},
     "appearance": {
       "label": "Appearance",
@@ -3670,6 +3714,13 @@
     }
   },
   "hostUpdater": {
+    "customShort": "Custom",
+    "standardStackShort": "Matched",
+    "localServiceShort": "Local",
+    "unhealthyShort": "Unhealthy",
+    "component": "Component",
+    "runningBuild": "Running version / date",
+    "status": "Status",
     "changelog": {
       "title": "What's in this update",
       "features": "New features",
@@ -3846,6 +3897,10 @@
     "unavailableHelp": "Automatic updates need the host updater installed. Advanced contains installed versions and manual image comparisons."
   },
   "settingsFields": {
+    "imu_inclination_threshold": {
+      "label": "Tilt sensor threshold",
+      "tooltip": "Threshold of the onboard tilt sensor (LIS3DH INT1_THS register). Larger allows more inclination before the tilt emergency. The firmware keeps it between 44 (0x2C, stock firmware) and 64 (0x40); 56 (0x38) is the shipped value."
+    },
     "yaw_loop_enabled": {
       "label": "Yaw-Rate Loop",
       "tooltip": "Close the firmware gyro yaw-rate loop. Off = open differential passthrough (the wheels get the raw command, no heading trim). Affects how the robot drives: test after changing. Applied after a ROS2 restart."
@@ -3867,12 +3922,36 @@
       "tooltip": "Sign of the onboard gyro Z axis versus robot +yaw (counter-clockwise): +1 or -1. If the yaw loop diverges (the robot spins harder instead of correcting), flip this - no firmware reflash needed."
     },
     "max_charge_voltage": {
-      "label": "Max Charge Voltage",
-      "tooltip": "Charge voltage ceiling sent to the firmware [V]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+      "label": "Max charge voltage",
+      "tooltip": "Charge voltage ceiling sent to the STM32 [V] and stored in its flash. The firmware keeps it between 25.2 and 29.4 V: 29.4 V is the battery pack limit and can never be exceeded."
     },
     "max_charge_current": {
-      "label": "Max Charge Current",
-      "tooltip": "Charge current ceiling sent to the firmware [A]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+      "label": "Max charge current",
+      "tooltip": "Charge current ceiling sent to the STM32 [A] and stored in its flash. The firmware keeps it between 0.1 and 1.2 A: no higher current has been validated on the board."
+    },
+    "max_mps": {
+      "label": "Max wheel speed",
+      "tooltip": "Wheel-speed cap sent to the STM32 [m/s] and stored in its flash. The firmware keeps it between 0.1 and 0.6 m/s."
+    },
+    "one_wheel_lift_emergency_ms": {
+      "label": "One-wheel lift trip",
+      "tooltip": "How long one wheel must stay lifted before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 5000 ms."
+    },
+    "both_wheels_lift_emergency_ms": {
+      "label": "Both-wheels lift trip",
+      "tooltip": "How long both wheels must stay lifted before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 3000 ms."
+    },
+    "tilt_emergency_ms": {
+      "label": "Tilt trip",
+      "tooltip": "How long a tilt (mechanical switch or accelerometer) must persist before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 1000 ms."
+    },
+    "stop_button_emergency_ms": {
+      "label": "Stop button trip",
+      "tooltip": "How long the stop button must be held before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 250 ms."
+    },
+    "play_button_clear_emergency_ms": {
+      "label": "Hold PLAY to clear emergency",
+      "tooltip": "How long PLAY must be held on the robot to clear a latched emergency [ms]. Longer is stricter. The firmware keeps it between 500 and 10000 ms."
     },
     "imu_cal_samples": {
       "label": "IMU Calibration Samples",
@@ -4058,8 +4137,12 @@
       "description": "Gyro-based differential yaw-rate loop running in the STM32 firmware. The values are pushed to the firmware at startup, which re-validates and clamps them."
     },
     "chargeLimits": {
-      "title": "Charge Limits",
-      "description": "Charge ceilings forwarded to the firmware. The firmware clamps them to its compiled board limits, so they can only be tightened."
+      "title": "Charge limits",
+      "description": "Charge ceilings sent to the STM32 firmware and stored in its flash, so they also apply before the ROS2 stack starts. The firmware keeps each value inside its safe envelope. Takes effect after a ROS2 restart."
+    },
+    "firmwareSafety": {
+      "title": "Firmware safety limits",
+      "description": "Speed cap, emergency timings and tilt threshold sent to the STM32 firmware and stored in its flash, so they also apply before the ROS2 stack starts. A value may be stricter or looser than the default, but the firmware never lets it leave its compiled safe envelope. Takes effect after a ROS2 restart."
     },
     "localizationGuard": {
       "title": "Localization Guard",
@@ -4093,6 +4176,62 @@
       "title": "Start-Pose Escape",
       "description": "Last-resort nudge when the robot stands on a keepout cell and every plan from its own pose is refused."
     }
+  },
+  "firmwareParams": {
+    "params": {
+      "ticks_per_meter": {
+        "label": "Encoder ticks per metre",
+        "description": "Encoder scale used by the wheel PI and the odometry [ticks/m]. Calibrated by the drive tuning (Motors section)."
+      },
+      "wheel_pid_kp": {
+        "label": "Wheel PI proportional gain",
+        "description": "Proportional gain of the per-wheel velocity loop [PWM per m/s of error]. Set in the Motors section."
+      },
+      "wheel_pid_ki": {
+        "label": "Wheel PI integral gain",
+        "description": "Integral gain of the per-wheel velocity loop [PWM per m/s·s]; it is what pushes the wheel through the motor deadband. Set in the Motors section."
+      },
+      "wheel_pid_kd": {
+        "label": "Wheel PI derivative gain",
+        "description": "Derivative gain of the per-wheel velocity loop; 0 on this robot. Set in the Motors section."
+      },
+      "wheel_pid_integral_limit": {
+        "label": "Wheel PI integral limit",
+        "description": "Clamp on the integral term [PWM], anti-windup. Set in the Motors section."
+      },
+      "wheel_pid_pwm_per_mps": {
+        "label": "Wheel feedforward",
+        "description": "Open-loop PWM per m/s added before the PI correction. Calibrated by the drive tuning (Motors section)."
+      },
+      "imu_gyro_bias_z": {
+        "label": "Gyro bias (measured)",
+        "description": "At-rest gyro Z offset measured by the IMU calibration on the dock [rad/s] and subtracted by the firmware yaw loop. Re-measured on every calibration, never stored in flash."
+      },
+      "wheel_track": {
+        "label": "Wheel track",
+        "description": "Distance between the two drive wheels [m], used by the firmware to split a turn between the wheels. Set in the Hardware section."
+      }
+    },
+    "title": "Values applied by the firmware",
+    "description": "What the STM32 actually runs, as it reported it. A value the firmware had to move into its envelope is flagged; a value marked stored is kept in the board's flash and applies at power-on.",
+    "noData": "No report from the firmware yet. The ROS2 stack sends the parameters when it connects to the board.",
+    "incompatible": "The firmware on the board does not speak this protocol version: these values are not applied. Reflash the firmware.",
+    "bootDefaults": "The board started on its compiled defaults (nothing stored yet).",
+    "bootFlash": "The board started on the values stored in its flash.",
+    "bootErased": "The board found its parameter storage full or unreadable at start-up and rewrote it.",
+    "commitError": "The board could not write its flash: these values are lost at the next power cycle.",
+    "commitFull": "The board's parameter storage is full: it is rewritten at the next start-up.",
+    "recordsLeft": "Room for {{count}} more saves before the next rewrite.",
+    "colParameter": "Parameter",
+    "colApplied": "Applied",
+    "colRequested": "Requested",
+    "colRange": "Allowed range",
+    "colState": "State",
+    "stateStored": "Stored",
+    "stateNotStored": "Not stored yet",
+    "stateVolatile": "Not stored (measured)",
+    "stateClamped": "Moved into range",
+    "stateUnreported": "No report"
   },
   "fleetPage": {
     "betaTag": "Beta",

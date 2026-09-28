@@ -75,6 +75,7 @@ void DockRobot::log_contact_delta(const std::shared_ptr<BTContext>& ctx, uint16_
 BT::NodeStatus DockRobot::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  ctx->last_dock_succeeded = false;
 
   std::string dock_id = "home_dock";
   if (auto res = getInput<std::string>("dock_id"))
@@ -169,6 +170,7 @@ BT::NodeStatus DockRobot::onRunning()
   {
     case action_msgs::msg::GoalStatus::STATUS_SUCCEEDED:
       RCLCPP_INFO(ctx->node->get_logger(), "DockRobot: docking succeeded");
+      ctx->last_dock_succeeded = true;
       ctx->docking_active = false;
       return BT::NodeStatus::SUCCESS;
 

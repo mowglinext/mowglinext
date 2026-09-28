@@ -13,6 +13,7 @@ import {
     CHARGE_LIMITS_GROUP,
     DOCK_CALIBRATION_GROUP,
     DOCK_DETECTION_GROUP,
+    FIRMWARE_SAFETY_GROUP,
     LOCALIZATION_GUARD_GROUP,
     REVERSE_ESCAPE_GROUP,
     START_ESCAPE_GROUP,
@@ -46,10 +47,9 @@ export type SettingsSection =
     | "safety"
     | "obstacles"
     | "navigation"
-    | "rain"
+    | "weather"
     | "leds"
     | "mqtt"
-    | "irrisense"
     | "remote_access"
     | "notifications"
     | "advanced";
@@ -221,6 +221,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // that mode is on. Listing them here is what keeps them out of
             // AdvancedSection's free-form editor, exactly as before.
             "lift_blade_resume_delay_sec", "lift_recovery_mode",
+            ...groupKeys(FIRMWARE_SAFETY_GROUP),
         ],
     },
     {
@@ -252,10 +253,12 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         ],
     },
     {
-        id: "rain",
-        label: "settingsSections.rain.label",
+        // Rain sensor behaviour + the IrriSense soil-moisture skip: both
+        // decide whether the weather lets the robot mow.
+        id: "weather",
+        label: "settingsSections.weather.label",
         icon: "cloud",
-        description: "settingsSections.rain.description",
+        description: "settingsSections.weather.description",
         keys: ["rain_mode", "rain_delay_minutes", "rain_debounce_sec"],
     },
     {
@@ -289,15 +292,6 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "mqtt_password", "mqtt_topic_prefix", "mqtt_use_ssl",
             "mqtt_home_assistant_discovery_enabled",
         ],
-    },
-    {
-        id: "irrisense",
-        label: "settingsSections.irrisense.label",
-        icon: "cloud-sync",
-        description: "settingsSections.irrisense.description",
-        // No yaml keys: the IrriSense settings (token included) live in the
-        // GUI's key-value DB and the section loads/saves them itself.
-        keys: [],
     },
     {
         id: "remote_access",

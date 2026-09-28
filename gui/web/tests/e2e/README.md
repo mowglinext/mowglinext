@@ -60,6 +60,7 @@ The other four specs are targeted regressions rather than a matrix:
 | `reset-mowing-progress.spec.ts` | "Reset mowing progress" confirms first, then calls **only** `coverage_clear_resume`; the menu item is disabled while mowing. |
 | `system-power.spec.ts` | Shared battery menu and Diagnostics shortcut: confirmation/cancel, reboot reconnect polling, mobile shutdown, and existing failure notification. Runs in GUI CI and captures desktop/mobile PR screenshots. |
 | `visual-effects.spec.ts` | Balanced/Efficient display modes run zero backdrop-blur and zero infinite animations; Visual restores them; emergency emphasis is kept but yields to `prefers-reduced-motion`. |
+| `map-image-marker-scale.spec.ts` | A local empty Mapbox style exercises real marker transforms at 0°/90° bearing, 0°/50° pitch and multiple headings against projected physical image corners. Uses only a local asset and a blocked placeholder token endpoint. |
 | `diagnostics-mobile.spec.ts` | Final accordion headers clear the fixed mobile navigation and support touch expansion/collapse in portrait and landscape. |
 | `mobile-page-clearance.spec.ts` | Home and Settings scroll their final content above mobile navigation; map and logs retain their viewport height on mobile and desktop. |
 

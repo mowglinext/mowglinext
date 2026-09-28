@@ -309,6 +309,34 @@ def test_full_system_injects_blade_auto_reverse() -> None:
     }) is False
 
 
+@pytest.mark.parametrize(
+    "key,cast,default,configured",
+    [
+        ("rain_mode", "int", 2, 0),
+        ("rain_delay_minutes", "float", 30.0, 5.0),
+        ("rain_debounce_sec", "float", 0.0, 3.0),
+    ],
+)
+def test_full_system_injects_rain_settings(
+    key: str, cast: str, default, configured
+) -> None:
+    """issue #757: #147 added rain_mode/rain_debounce_sec's declare_parameter
+    side in behavior_tree_node.cpp (rain_delay_minutes predates it) but never
+    added the launch-side injection anywhere, so the GUI's RainSection always
+    did nothing -- the node ran on its own compiled defaults forever. Without
+    this guard the injection could be silently dropped again the same way.
+    """
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    values = _node_parameter_values(call, key)
+    assert len(values) == 1, f"behavior_tree_node must receive {key} exactly once"
+    expression = compile(ast.Expression(values[0]), "full_system.launch.py", "eval")
+    scope = {"__builtins__": {}, "int": int, "float": float}
+    for robot_params, expected in [({}, default), ({key: configured}, configured)]:
+        actual = eval(expression, scope, {"robot_params": robot_params})
+        assert actual == pytest.approx(expected)
+
+
 def test_mowing_enabled_is_not_wired_to_some_other_node() -> None:
     """Companion guard: moving the parameter onto a node that cannot act on it
     (e.g. the BT or coverage server) would keep this file's first assertion
@@ -382,12 +410,28 @@ def test_navigation_launch_injects_dock_use_charger_detection() -> None:
 
 @pytest.mark.parametrize(
     "key,default,configured",
-    [("max_charge_voltage", 29.4, 28.5), ("max_charge_current", 1.2, 1.8)],
+    [
+        ("max_charge_voltage", 29.4, 28.5),
+        ("max_charge_current", 1.2, 1.8),
+        ("max_mps", 0.5, 0.35),
+        ("one_wheel_lift_emergency_ms", 2000, 1500),
+        ("both_wheels_lift_emergency_ms", 1000, 800),
+        ("tilt_emergency_ms", 500, 300),
+        ("stop_button_emergency_ms", 100, 50),
+        ("play_button_clear_emergency_ms", 2000, 3000),
+        ("imu_inclination_threshold", 56, 48),
+    ],
 )
-def test_mowgli_launch_passes_charge_limits_to_hardware_bridge(
+def test_mowgli_launch_passes_firmware_limits_to_hardware_bridge(
     key: str, default: float, configured: float
 ) -> None:
-    """Saved charge ceilings must reach the bridge; missing keys keep defaults."""
+    """Every runtime firmware limit the bridge pushes to the STM32 must come
+    from the robot config; missing keys keep the template default.
+
+    The bridge declares these parameters itself, so a key that is NOT injected
+    silently falls back to the bridge's hardcoded default and the operator's
+    setting never reaches the board (max_mps and the e-stop timings, until
+    this test existed)."""
     call = _find_node_call(_parse("mowgli.launch.py"), "hardware_bridge_node")
     assert call is not None
     parameters = next(kw.value for kw in call.keywords if kw.arg == "parameters")
@@ -402,10 +446,12 @@ def test_mowgli_launch_passes_charge_limits_to_hardware_bridge(
     expression = compile(ast.Expression(values[0]), "mowgli.launch.py", "eval")
     for robot_params, expected in [({}, default), ({key: configured}, configured)]:
         actual = eval(
-            expression, {"__builtins__": {}, "float": float},
+            expression, {"__builtins__": {}, "float": float, "int": int},
             {"robot_params": robot_params},
         )
-        assert isinstance(actual, float)
+        # The bridge declares the *_ms keys as integers and the rest as
+        # doubles; rclcpp rejects a value of the other type at startup.
+        assert type(actual) is type(default)
         assert actual == pytest.approx(expected)
 
 

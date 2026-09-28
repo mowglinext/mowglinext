@@ -80,6 +80,32 @@ type Emergency struct {
 	Reason                    string                         `json:"reason"`
 }
 
+// FirmwareParam matches mowgli_interfaces/msg/FirmwareParam.
+type FirmwareParam struct {
+	Id                        uint16                         `json:"id"`
+	Name                      string                         `json:"name"`
+	RequestedValid            bool                           `json:"requested_valid"`
+	Requested                 float32                        `json:"requested"`
+	Reported                  bool                           `json:"reported"`
+	Applied                   float32                        `json:"applied"`
+	DefaultValue              float32                        `json:"default_value"`
+	MinValue                  float32                        `json:"min_value"`
+	MaxValue                  float32                        `json:"max_value"`
+	Status                    uint8                          `json:"status"`
+	Persisted                 bool                           `json:"persisted"`
+	IsVolatile                bool                           `json:"is_volatile"`
+}
+
+// FirmwareParams matches mowgli_interfaces/msg/FirmwareParams.
+type FirmwareParams struct {
+	Stamp                     geometry.Stamp                 `json:"stamp"`
+	FirmwareIncompatible      bool                           `json:"firmware_incompatible"`
+	BootSource                uint8                          `json:"boot_source"`
+	LastCommit                uint8                          `json:"last_commit"`
+	RecordsLeft               uint16                         `json:"records_left"`
+	Params                    []FirmwareParam                `json:"params"`
+}
+
 // GnssStatus matches mowgli_interfaces/msg/GnssStatus.
 type GnssStatus struct {
 	Header                    geometry.Header                `json:"header"`

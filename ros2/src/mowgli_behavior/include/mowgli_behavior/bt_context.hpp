@@ -181,6 +181,27 @@ struct BTContext
   std::chrono::steady_clock::time_point manual_resume_requested_time{};
   static constexpr double kManualResumeMaxAgeSec = 30.0;
 
+  /// Latched after COMMAND_STOP is observed in CriticalBatteryDock's
+  /// post-dock charge hold. The critical-battery branch otherwise re-enters
+  /// on every root tick and would send another DockRobot goal before reaching
+  /// StopHoldSequence. Explicit new commands clear this latch. Protected by
+  /// context_mutex.
+  bool critical_charge_stop_latched{false};
+
+  /// Outcome of the most recent DockRobot attempt. Reset when an action starts
+  /// and set only after its action result reports success. Used by the
+  /// critical-battery tree to avoid treating a failed navigation attempt as
+  /// arrival at the charger.
+  bool last_dock_succeeded{false};
+
+  /// Latches a failed critical-battery dock attempt. The mower stays stopped
+  /// until an operator sends a new command, rather than retrying at BT rate.
+  bool critical_dock_failure_latched{false};
+
+  /// Set by LatchCriticalDockFailure and consumed by the node after the current
+  /// tree tick, so persistence remains serialized with coverage-map access.
+  bool critical_dock_failure_persistence_requested{false};
+
   /// Set by the ~/start_in_area service to REQUEST mowing a single, specific
   /// area instead of iterating all areas. This is the one-shot *request*:
   /// GetNextUnmowedArea consumes it on the next onStart() and latches the
@@ -863,6 +884,14 @@ struct BTContext
 ///     lawn. The GUI's "mow this area" button calls ~/start_in_area, which
 ///     sets current_command itself and never goes through that handler, so
 ///     clearing there cannot cancel a targeted request.
+///     EXCEPTION, guarded at the call site with isResumableHoldState(): a
+///     plain COMMAND_START received while parked in StopHoldSequence's IDLE
+///     (the operator paused a run with "Pause" and pressed Resume/Start
+///     again) does NOT call this — Resume must continue the SAME targeted
+///     area, not silently widen to the whole lawn (mowglinext field report,
+///     2026-09-18: a paused single-area run restarted at area 0 instead of
+///     finishing the paused area). The charge-hold/emergency case above still
+///     clears unconditionally; only the plain-pause case is exempted.
 /// Also drops an unconsumed target_area_index: a request that was never
 /// picked up (e.g. start_in_area during an emergency) must not silently
 /// hijack a later plain start.
@@ -873,7 +902,7 @@ inline void clearSingleAreaMode(BTContext& ctx)
 }
 
 /// True for the HighLevelStatus state_name values published while the tree
-/// is parked in a battery charge hold: BatteryDockAndResume's "CHARGING" and
+/// is parked in a battery charge hold: BatteryGuardHandler's "CHARGING" and
 /// CriticalBatteryDock's "CRITICAL_BATTERY_CHARGING" (main_tree.xml). A
 /// COMMAND_START received in one of these states is an operator asking to
 /// resume the mow before the pack reaches battery_full_pct — see
@@ -881,6 +910,28 @@ inline void clearSingleAreaMode(BTContext& ctx)
 inline bool isChargeHoldState(const std::string& state_name)
 {
   return state_name == "CHARGING" || state_name == "CRITICAL_BATTERY_CHARGING";
+}
+
+/// True only for "IDLE" — StopHoldSequence's stop-in-place (COMMAND_STOP=8,
+/// "Pause": mower off, halt where it stands, Nav2 left up so the mission can
+/// resume promptly; main_tree.xml). A plain COMMAND_START received here is
+/// the operator continuing the SAME run they just paused, targeted single
+/// area included, not asking for the whole lawn — see the exception this
+/// carves out of clearSingleAreaMode's unconditional-clear-on-Start rule at
+/// the call site in behavior_tree_node.cpp.
+///
+/// Deliberately narrower than "not a charge hold": IDLE_DOCKED (a finished /
+/// never-started session — EndSession already cleared the target, so this is
+/// moot) and the charge-hold states (isChargeHoldState — a low-battery dock
+/// or emergency that kept the session alive without EndSession, where the
+/// operator pressing Start explicitly does expect the whole lawn per
+/// clearSingleAreaMode's doc comment) must both keep the historical clear.
+/// StopHoldSequence is the only branch that publishes IDLE without also
+/// being reachable from a charge hold or a session end, so the state_name
+/// alone disambiguates without needing extra context fields.
+inline bool isResumableHoldState(const std::string& state_name)
+{
+  return state_name == "IDLE";
 }
 
 }  // namespace mowgli_behavior

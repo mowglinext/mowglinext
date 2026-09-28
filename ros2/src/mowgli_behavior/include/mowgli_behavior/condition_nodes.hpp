@@ -210,6 +210,54 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// IsChargeCurrentBelow
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS when the live charge current is at or below the given
+/// threshold AND the charger reports itself enabled. Combined with
+/// IsBatteryAbove (both required — see main_tree.xml's BatteryGuard /
+/// CriticalBatteryDock charge-hold loops) this closes the gap where
+/// battery_percent, derived from raw pack voltage under load
+/// (battery_filter.hpp), reads a premature "full" while the charger is still
+/// in constant-voltage bulk charging: charging current polarizes the
+/// terminal voltage well above the true state-of-charge-equivalent resting
+/// voltage for the whole CC/CV charge, not just a brief transient, so no
+/// amount of voltage smoothing fixes it — only the current actually has to
+/// taper. The default threshold (0.08 A) mirrors the firmware's OWN
+/// already-calibrated "battery full" tail-current constant,
+/// CHARGE_END_LIMIT_CURRENT (firmware/stm32/ros_usbnode/include/
+/// board_defaults.h) — charger.c's CHARGER_STATE_CHARGING_CV case tests the
+/// identical `current < CHARGE_END_LIMIT_CURRENT` condition itself (its own
+/// state transition to CHARGER_STATE_END_CHARGING is dead code, commented
+/// out, but the tail-current physics it tests is real and already the
+/// firmware's answer to "is this pack actually full").
+///
+/// Requiring charger_enabled==true (not just a low current reading) is
+/// deliberate: an unset/never-received Power message default-constructs to
+/// charger_enabled=false, so a missing or stale charging telemetry feed
+/// FAILS this condition rather than being silently read as "tapered,
+/// therefore full" — errs toward waiting, never toward a premature resume.
+///
+/// Input ports:
+///   threshold (float, default "0.08") – charge current in amps at/below
+///                                       which the pack is considered full.
+class IsChargeCurrentBelow : public BT::ConditionNode
+{
+public:
+  IsChargeCurrentBelow(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<float>("threshold", 0.08f, "Charge current threshold (A)")};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // IsManualResumeRequested
 // ---------------------------------------------------------------------------
 
@@ -263,6 +311,79 @@ public:
   static BT::PortsList providedPorts()
   {
     return {BT::InputPort<uint8_t>("command", "Expected HighLevelControl command value")};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+/// Returns SUCCESS for a latched critical charge-hold STOP. The optional port
+/// also latches a current COMMAND_STOP when used inside the post-dock hold.
+/// Used before critical docking and within its charge hold so the completed
+/// dock action is not reissued on later root ticks.
+class IsCriticalChargeStopHeld : public BT::ConditionNode
+{
+public:
+  IsCriticalChargeStopHeld(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<bool>("latch_current_stop",
+                                false,
+                                "Latch COMMAND_STOP here; false only reads the persisted latch")};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+/// Succeeds only when the most recent DockRobot action completed successfully.
+class IsLastDockSucceeded : public BT::ConditionNode
+{
+public:
+  IsLastDockSucceeded(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+/// Reads the operator-reset critical docking failure latch.
+class IsCriticalDockFailureLatched : public BT::ConditionNode
+{
+public:
+  IsCriticalDockFailureLatched(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+/// Latches a failed critical docking attempt until the next operator command.
+class LatchCriticalDockFailure : public BT::SyncActionNode
+{
+public:
+  LatchCriticalDockFailure(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
   }
 
   BT::NodeStatus tick() override;
@@ -548,6 +669,12 @@ public:
 /// 30 minutes of charging.  Returns FAILURE if charging appears stalled
 /// (broken charger, bad connection, etc.).  On first call it records the
 /// baseline and always returns SUCCESS.
+///
+/// At or above `full_pct` the pack is SATURATED and a flat percentage is not a
+/// stall (charge_progress.hpp): battery_percent is voltage-derived and cannot
+/// rise during the charger's CV tail, which is exactly where the charge loops
+/// wait for IsChargeCurrentBelow. Leaving `full_pct` unset keeps the classic
+/// rule everywhere.
 class IsChargingProgressing : public BT::ConditionNode
 {
 public:
@@ -558,7 +685,9 @@ public:
 
   static BT::PortsList providedPorts()
   {
-    return {};
+    return {BT::InputPort<float>(
+        "full_pct",
+        "Resume level [%]; at or above it a flat percentage is a saturated pack, not a stall")};
   }
 
   BT::NodeStatus tick() override;

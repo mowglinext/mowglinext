@@ -70,6 +70,19 @@ var topicMap = map[string]topicDef{
 	// 1 Hz per-session coverage sets (completed / attempted / excluded areas)
 	// for the fleet coordinator on every member's GUI (docs/MULTI_ROBOT.md).
 	"coverageSession": {"/behavior_tree_node/coverage_session", "mowgli_interfaces/msg/CoverageSession"},
+	// Latched: what the STM32 actually runs for every runtime parameter, its
+	// envelope and whether it is persisted in the board's flash (protocol v7).
+	"firmwareParams": {"/hardware_bridge/firmware_params", "mowgli_interfaces/msg/FirmwareParams"},
+}
+
+// TopicKeys returns every logical topic key the provider can subscribe to, so
+// the API layer can check that each one is also routable.
+func TopicKeys() []string {
+	keys := make([]string, 0, len(topicMap))
+	for key := range topicMap {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // ---------------------------------------------------------------------------
@@ -431,7 +444,16 @@ func (r *RosProvider) initMapPolling() {
 	}()
 }
 
-// Preserve ROS area IDs when the UI separates mowing and navigation areas.
+// Preserve each working area's ROS ARRAY INDEX (its position in `areas`, what
+// map_server's index-based services — get_mowing_area, start_in_area,
+// coverage_orientation — expect) when the UI separates mowing and navigation
+// areas. This is NOT the stable MapArea.Id (mowglinext#637): the index is
+// wire-protocol-required and unavoidably shifts whenever the area list is
+// edited/saved (map_server rebuilds it wholesale), but Id survives that edit
+// (map_server's on_add_area preserves a caller-supplied one) and is carried
+// through verbatim on every returned MapArea — the frontend resolves the
+// CURRENT index from Id at the moment it acts (mowingAreaIndexById), rather
+// than trusting a position captured earlier.
 func splitMapAreas(areas []mowgli.MapArea) (working, navigation []mowgli.MapArea, indices []uint32) {
 	for index, area := range areas {
 		if area.IsNavigationArea {

@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/providers"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -442,6 +443,7 @@ func TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics(t *testing.T) {
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",
 		"coverageResumeAvailable", "fusionDiag", "dockCalibrationStatus",
+		"firmwareParams",
 	}
 	for _, topic := range knownTopics {
 		interval, known := topicSubscribeInterval(topic)
@@ -451,6 +453,17 @@ func TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics(t *testing.T) {
 
 	_, known := topicSubscribeInterval("not_a_real_topic")
 	assert.False(t, known)
+}
+
+// TestTopicSubscribeInterval_CoversEveryProviderTopic: a topic added to the
+// provider's topicMap but not to topicSubscribeInterval is silently dropped by
+// MultiplexRoute ("ignoring unknown topic"), so the frontend never receives it
+// — the firmwareParams card stayed empty on the robot for exactly that reason.
+func TestTopicSubscribeInterval_CoversEveryProviderTopic(t *testing.T) {
+	for _, topic := range providers.TopicKeys() {
+		_, known := topicSubscribeInterval(topic)
+		assert.Truef(t, known, "topicMap key %q is not routable by topicSubscribeInterval", topic)
+	}
 }
 
 // dialSubscribe opens the test server's dedicated /subscribe/:topic

@@ -54,7 +54,7 @@ static uint8_t recovering;
  * See LIS3DH register definitions: 100 Hz XYZ, +/-2g HR/BDU, temperature ADC,
  * Z-low threshold/duration, pulsed active-high INT1 and bypass FIFO.
  */
-static const struct { uint8_t reg, value; } sensor_config[] = {
+static struct { uint8_t reg, value; } sensor_config[] = {
     {LIS3DH_CTRL_REG3, 0x00},
     {LIS3DH_CTRL_REG1, 0x57},
     {LIS3DH_CTRL_REG2, 0x00},
@@ -68,6 +68,34 @@ static const struct { uint8_t reg, value; } sensor_config[] = {
     {LIS3DH_FIFO_CTRL_REG, 0x00},
     {LIS3DH_CTRL_REG3, 0x40},
 };
+
+/* Runtime tilt threshold (fw_params, FW_PARAM_IMU_INCLINATION_THRESHOLD).
+ * Applied only from SENSOR_POLL, by re-running the normal write+verify
+ * sequence from the INT1_THS entry, so the once-a-second register audit never
+ * sees a value that differs from sensor_config (which would latch a fault). */
+static volatile uint8_t pending_inclination;
+static volatile uint8_t pending_inclination_valid;
+
+void I2C_Onboard_SetInclinationThreshold(uint8_t threshold)
+{
+    pending_inclination = threshold;
+    pending_inclination_valid = 1;
+}
+
+static uint8_t sensor_apply_pending_inclination(void)
+{
+    if (!pending_inclination_valid) return 0;
+    pending_inclination_valid = 0;
+    for (uint8_t i = 0; i < sizeof(sensor_config) / sizeof(sensor_config[0]); ++i) {
+        if (sensor_config[i].reg != LIS3DH_INT1_THS) continue;
+        if (sensor_config[i].value == pending_inclination) return 0;
+        sensor_config[i].value = pending_inclination;
+        config_index = i;
+        sensor_state = SENSOR_WRITE;
+        return 1;
+    }
+    return 0;
+}
 
 static void sensor_fault(void)
 {
@@ -207,6 +235,7 @@ void I2C_Onboard_Service(void)
         } else sensor_state = SENSOR_WRITE;
         return;
     case SENSOR_POLL:
+        if (sensor_apply_pending_inclination()) return;
         /* Audit identity/configuration a register at a time between polls.
          * This detects a powered-but-reset sensor whose INT source reads zero.
          * Skip the initial routing-disable entry; final CTRL3 is 0x40. */

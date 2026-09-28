@@ -239,8 +239,10 @@ func (s *SessionTracker) OnHighLevelStatus(msg []byte) {
 			if isRechargeMowingPause(status.StateName) {
 				s.pauseCount++
 				log.Printf("SessionTracker: mowing session paused for recharge (pause #%d)", s.pauseCount)
-			} else {
+			} else if isRainMowingPause(status.StateName) {
 				log.Printf("SessionTracker: mowing session paused for rain")
+			} else {
+				log.Printf("SessionTracker: mowing session paused after manual docking")
 			}
 		}
 		return

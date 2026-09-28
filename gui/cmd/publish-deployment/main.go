@@ -96,7 +96,11 @@ func publish() error {
 			return err
 		}
 		sum := sha256.Sum256(data)
-		d.Updater["linux/"+arch] = updater.Binary{Asset: asset, SHA256: hex.EncodeToString(sum[:]), Version: *id}
+		identity, err := os.ReadFile(filepath.Join(*dir, asset+".build-id"))
+		if err != nil {
+			return fmt.Errorf("updater build identity: %w", err)
+		}
+		d.Updater["linux/"+arch] = updater.Binary{Asset: asset, SHA256: hex.EncodeToString(sum[:]), Version: *id, BuildID: strings.TrimSpace(string(identity))}
 	}
 	bundle, err := updater.ReadComposeBundle(*composeDir)
 	if err != nil {
