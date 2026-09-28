@@ -222,10 +222,10 @@ func (b DockerBackend) Inventory(ctx context.Context) (string, map[string]string
 	}
 	return updates.Hash(data), images, nil
 }
-func (b DockerBackend) PlanImages(ctx context.Context, d Deployment) (map[string]string, error) {
-	return b.PlanSelectedImages(ctx, d, nil)
+func (b DockerBackend) PlanImages(ctx context.Context, d Deployment, opts PlanOptions) (map[string]string, error) {
+	return b.PlanSelectedImages(ctx, d, nil, opts)
 }
-func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, error) {
+func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment, opts PlanOptions) (map[string]string, error) {
 	if err := d.Validate(b.Config.Trusted); err != nil {
 		return nil, err
 	}
@@ -233,8 +233,8 @@ func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, ove
 	if err != nil {
 		return nil, err
 	}
-	if ready.FirmwareProtocol != d.FirmwareProtocol {
-		return nil, errors.New("target requires a different mainboard firmware protocol")
+	if _, err := firmwareProtocolChange(ready.FirmwareProtocol, d, opts); err != nil {
+		return nil, err
 	}
 	c, _, err := b.model(ctx)
 	if err != nil {
@@ -371,6 +371,13 @@ func (b DockerBackend) readiness(ctx context.Context) (Readiness, error) {
 	}
 	return r, e
 }
+
+// RunningFirmwareProtocol lets the manager record an allowed protocol change
+// on the plan it hands back for review.
+func (b DockerBackend) RunningFirmwareProtocol(ctx context.Context) (int, error) {
+	r, err := b.readiness(ctx)
+	return r.FirmwareProtocol, err
+}
 func (b DockerBackend) MaintenanceSet() (bool, error) {
 	_, err := os.Stat(filepath.Join(b.Config.StateDir, "maintenance"))
 	if os.IsNotExist(err) {
@@ -386,33 +393,42 @@ func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
 		}
 		return nil
 	}
-	return b.enterMaintenance(ctx, 0)
+	return b.enterMaintenance(ctx, 0, nil)
 }
 
 // Only a reviewed install that matches the live firmware may enter maintenance
-// despite an old bridge's protocol mismatch. Rollback and final verification
-// still require full compatibility. Older GUI endpoints fail closed.
+// despite an old bridge's protocol mismatch (protocol-first transition), or one
+// whose operator explicitly allowed the mismatch (update-first transition, the
+// plan's FirmwareProtocolChange). Rollback and final verification still require
+// full compatibility except under that same acknowledged change. Older GUI
+// endpoints fail closed.
 func (b DockerBackend) PrepareUpdate(ctx context.Context, p Plan) error {
-	return b.enterMaintenance(ctx, p.Target.FirmwareProtocol)
+	return b.enterMaintenance(ctx, p.Target.FirmwareProtocol, p.FirmwareProtocolChange)
 }
 
-func maintenanceReady(r Readiness, protocol int) bool {
+func maintenanceReady(r Readiness, protocol int, change *FirmwareProtocolChange) bool {
+	if change != nil {
+		return expectedFirmwareMismatch(r, change)
+	}
 	if protocol == 0 {
 		return r.Ready
 	}
 	return r.FirmwareProtocol == protocol && (r.Ready || r.MaintenanceReady)
 }
 
-func (b DockerBackend) enterMaintenance(ctx context.Context, protocol int) error {
+func (b DockerBackend) enterMaintenance(ctx context.Context, protocol int, change *FirmwareProtocolChange) error {
 	marker := filepath.Join(b.Config.StateDir, "maintenance")
 	r, err := b.readiness(ctx)
 	if err != nil {
 		return err
 	}
-	if protocol != 0 && r.FirmwareProtocol != protocol {
+	switch {
+	case change != nil && r.FirmwareProtocol != change.From && r.FirmwareProtocol != change.To:
+		return fmt.Errorf("firmware protocol changed since review: running %d, the reviewed change expects %d or %d", r.FirmwareProtocol, change.From, change.To)
+	case change == nil && protocol != 0 && r.FirmwareProtocol != protocol:
 		return fmt.Errorf("firmware protocol changed since review: running %d, update requires %d", r.FirmwareProtocol, protocol)
 	}
-	if !maintenanceReady(r, protocol) {
+	if !maintenanceReady(r, protocol, change) {
 		return fmt.Errorf("mower not ready: %s", r.Reason)
 	}
 	// Never let a second updater recreate a container during our transaction.
@@ -429,7 +445,7 @@ func (b DockerBackend) enterMaintenance(ctx context.Context, protocol int) error
 	// Require the GUI to acknowledge the persisted gate before stopping writers.
 	for i := 0; i < 20; i++ {
 		r, e := b.readiness(ctx)
-		if e == nil && r.Maintenance && maintenanceReady(r, protocol) {
+		if e == nil && r.Maintenance && maintenanceReady(r, protocol, change) {
 			return nil
 		}
 		select {

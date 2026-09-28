@@ -3894,6 +3894,15 @@
     "imageDetails": "Détails des images des conteneurs",
     "componentsToUpdate": "Composants",
     "backupHelp": "Les réglages et les cartes sont sauvegardés avant l’installation. Le firmware de la carte principale reste inchangé.",
+    "firmwareChangeWarning": "Cette version requiert le protocole firmware {{to}} ; la carte principale utilise le protocole {{from}}",
+    "firmwareChangeHelp": "Les mises à jour logicielles ne flashent jamais la carte principale. Après cette mise à jour, le robot refusera de tondre tant que le firmware correspondant n’est pas flashé depuis la section Firmware de la nouvelle interface (ST-Link, quelques minutes). Un retour en arrière logiciel reste possible avant le flash.",
+    "firmwareChangeAccept": "Installer quand même. Je flasherai le firmware de la carte principale juste après la mise à jour.",
+    "firmwareChangeAgent": "Mettez d’abord à jour l’agent de mise à jour : l’agent installé ne peut pas franchir un changement de protocole firmware.",
+    "firmwareInstallWarning": "Le protocole firmware de la carte principale passe de {{from}} à {{to}}",
+    "firmwareInstallHelp": "La tonte reste bloquée après l’installation jusqu’au flash de la carte principale. Gardez le ST-Link à portée de main.",
+    "firmwareInstallAccept": "Installer puis flasher le firmware de la carte principale. Je comprends que le robot ne peut pas tondre d’ici là.",
+    "firmwareFlashNeeded": "Flashez maintenant le firmware de la carte principale (protocole {{from}} → {{to}})",
+    "firmwareFlashNeededHelp": "Le logiciel installé utilise un protocole plus récent que la carte principale. Le robot ne tondra pas tant que le firmware n’est pas flashé.",
     "unavailableHelp": "Les mises à jour automatiques nécessitent le service de mise à jour hôte. Le mode Avancé affiche les versions installées et les comparaisons manuelles."
   },
   "settingsFields": {

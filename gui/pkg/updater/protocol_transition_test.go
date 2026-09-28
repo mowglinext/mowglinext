@@ -8,26 +8,26 @@ import (
 
 func TestMaintenanceEntryDoesNotReleaseIncompatibleFirmware(t *testing.T) {
 	ready := Readiness{MaintenanceReady: true, Maintenance: true, FirmwareProtocol: 7, Reason: "Firmware communication is incompatible"}
-	if !maintenanceReady(ready, 7) {
+	if !maintenanceReady(ready, 7, nil) {
 		t.Fatal("safe protocol-first transition blocked")
 	}
 	for _, protocol := range []int{0, 6, 8} {
-		if maintenanceReady(ready, protocol) {
+		if maintenanceReady(ready, protocol, nil) {
 			t.Fatalf("incompatible entry accepted for protocol %d", protocol)
 		}
 	}
-	if len(readinessProblems(ready, &Deployment{FirmwareProtocol: 7}, true)) == 0 {
+	if len(readinessProblems(ready, &Deployment{FirmwareProtocol: 7}, true, nil)) == 0 {
 		t.Fatal("maintenance-only readiness released incompatible firmware")
 	}
 	ready.MaintenanceReady = false
-	if maintenanceReady(ready, 7) {
+	if maintenanceReady(ready, 7, nil) {
 		t.Fatal("legacy GUI or unsafe telemetry accepted")
 	}
 	ready.Ready = true
-	if !maintenanceReady(ready, 7) {
+	if !maintenanceReady(ready, 7, nil) {
 		t.Fatal("compatible legacy GUI blocked")
 	}
-	if maintenanceReady(ready, 6) {
+	if maintenanceReady(ready, 6, nil) {
 		t.Fatal("firmware changed after plan was accepted")
 	}
 }

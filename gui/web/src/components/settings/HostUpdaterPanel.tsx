@@ -3,11 +3,23 @@ import {imageVersion} from '../../utils/versions';
 import {useEffect, useState} from 'react';
 import {Alert, Button, Card, Checkbox, Form, Input, Modal, Select, Segmented, Space, Tag, Typography} from 'antd';
 import {useTranslation} from 'react-i18next';
+import {useNavigate} from 'react-router-dom';
 import {type Deployment, type UpdatePlan, type UpdatePolicy, componentCompatibility, sameUpdaterBuild, updaterRequest, useHostUpdater} from '../../hooks/useHostUpdater';
 import {UpdateChangelog} from './UpdateChangelog';
 
-export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?: boolean; inventory?: ApiInstalledComponent[]}) {
+const FIRMWARE_MISMATCH_ERROR = 'different mainboard firmware protocol';
+const FIRMWARE_FLASH_ROUTE = '/onboarding?step=firmware&flash=1';
+
+interface HostUpdaterPanelProps {
+    advanced?: boolean;
+    inventory?: ApiInstalledComponent[];
+    /** Protocol the mainboard reported in its handshake; undefined/0 until the bridge has one. */
+    firmwareProtocol?: number;
+}
+
+export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProtocol}: HostUpdaterPanelProps) {
     const {t} = useTranslation();
+    const navigate = useNavigate();
     const {data, error, refresh} = useHostUpdater();
     const [policy, setPolicy] = useState<UpdatePolicy>();
     const [selected, setSelected] = useState<string>();
@@ -23,6 +35,8 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
     const [customImages, setCustomImages] = useState<Record<string,string>>({});
     const [customAccepted, setCustomAccepted] = useState(false);
     const [reviewAccepted, setReviewAccepted] = useState(false);
+    const [firmwareChangeAccepted, setFirmwareChangeAccepted] = useState(false);
+    const [firmwareInstallAccepted, setFirmwareInstallAccepted] = useState(false);
     const custom = advanced && customMode;
     useEffect(() => {if (!advanced) {setCustomMode(false);setCustomImages({});setCustomAccepted(false);setPlan(undefined);}}, [advanced]);
     const savedPolicy = data ? JSON.stringify(data.state.policy) : undefined;
@@ -53,6 +67,21 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
     const matched = identity === 'matched';
     const dirty = !!policy && JSON.stringify(policy) !== savedPolicy;
     const sameDeployment = !!target && target.id === active?.id && matched && !hasOverrides && !runtime?.selection_pending;
+    // Container updates never flash the STM32. A target speaking another mainboard
+    // protocol is refused by the updater unless the operator allows it here, and
+    // then blocks mowing until the firmware is flashed from the NEW interface.
+    // The allowance is offered when the mismatch is visible up front, or when the
+    // updater has just refused for that reason (board protocol not known yet).
+    const runningProtocol = firmwareProtocol && firmwareProtocol > 0 ? firmwareProtocol : undefined;
+    const targetProtocol = !custom && !sameDeployment ? target?.firmware_protocol : undefined;
+    const visibleMismatch = targetProtocol !== undefined && runningProtocol !== undefined && targetProtocol !== runningProtocol;
+    const firmwareChange = visibleMismatch || (!custom && !!failure?.includes(FIRMWARE_MISMATCH_ERROR));
+    const supportsFirmwareChange = !!data?.capabilities?.includes('firmware-protocol-change');
+    const firmwareChangeBlocked = firmwareChange && (!supportsFirmwareChange || !firmwareChangeAccepted);
+    // After a forced install the last job keeps its change until the board runs the new protocol.
+    const flashPending = data?.state.job?.phase === 'succeeded' ? data.state.job.plan.firmware_protocol_change : undefined;
+    const flashNeeded = !!flashPending && runningProtocol !== flashPending.to;
+    useEffect(() => {setFirmwareChangeAccepted(false);}, [target?.id, custom]);
     const canRestore = data?.state.history.some(j => j.phase === 'succeeded' && (data.state.active_job_id ? j.id === data.state.active_job_id : j.plan.target.id === data.state.active?.id));
     const date = (value?: string) => value && !value.startsWith('0001') && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(undefined, {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}) : t('updates.unknown');
     const label = (deployment?: Deployment) => !deployment ? t('hostUpdater.customInstalled') : deployment.source.track === 'stable'
@@ -86,6 +115,8 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                         {data.state.job.phase === 'recovery_required' && <Typography.Text type="secondary">{t('hostUpdater.recoveryHelp')}</Typography.Text>}
                     </Space> : undefined}/>}
                 {data.state.job?.phase === 'recovery_required' && <Button loading={busy} onClick={() => void act(async () => {await updaterRequest('recover', {});})}>{t('hostUpdater.recover')}</Button>}
+                {flashNeeded && flashPending && <Alert type="error" showIcon data-testid="firmware-flash-needed" message={t('hostUpdater.firmwareFlashNeeded', {...flashPending})}
+                    description={<Space direction="vertical" size={4}><span>{t('hostUpdater.firmwareFlashNeededHelp')}</span><Button danger onClick={() => void navigate(FIRMWARE_FLASH_ROUTE)}>{t('mowgliNextPage.firmwareFlashCta')}</Button></Space>}/>}
                 <Typography.Text type="secondary">{t('hostUpdater.checkingSource')}: {t(`hostUpdater.tracks.${data.state.policy.source.track}`)}
                     {(data.state.policy.source.track === 'custom' || data.state.policy.source.repository !== 'mowglinext/mowglinext') && <> · {data.state.policy.source.repository} / {data.state.policy.source.branch}</>}
                 </Typography.Text>
@@ -122,12 +153,18 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                     {!data.capabilities?.includes('custom-images') && <Alert type="info" message={t('hostUpdater.customUnsupported')}/>}
                     <Checkbox checked={customAccepted} onChange={e => setCustomAccepted(e.target.checked)}>{t('hostUpdater.customAccept')}</Checkbox>
                 </>}
+                {firmwareChange && <Alert type="warning" showIcon data-testid="firmware-change" message={t('hostUpdater.firmwareChangeWarning', {from: runningProtocol ?? t('updates.unknown'), to: targetProtocol ?? t('updates.unknown')})}
+                    description={<Space direction="vertical" size={4} style={{width:'100%'}}>
+                        <span>{t('hostUpdater.firmwareChangeHelp')}</span>
+                        {supportsFirmwareChange ? <Checkbox checked={firmwareChangeAccepted} disabled={pending || busy} onChange={e => setFirmwareChangeAccepted(e.target.checked)}>{t('hostUpdater.firmwareChangeAccept')}</Checkbox>
+                            : <Typography.Text strong>{t('hostUpdater.firmwareChangeAgent')}</Typography.Text>}
+                    </Space>}/>}
                 <Space wrap className="update-actions">
                     <Button disabled={pending} loading={busy} onClick={() => void act(async () => {if (dirty && policy) {await updaterRequest('policy',policy);setSelected(undefined);setComponentSelected({});} await updaterRequest('check', {});})}>{t('hostUpdater.checkNow')}</Button>
-                    <Button type="primary" disabled={pending || (custom ? !data.capabilities?.includes('custom-images') || !customAccepted || Object.keys(customImages).length === 0 || Object.values(customImages).some(v => !v.trim()) : !target || dirty || (sameDeployment && (!advanced || pinned === installedPin)))} loading={busy} onClick={() => void act(async () => {
-                        setReviewAccepted(false);
+                    <Button type="primary" disabled={pending || (custom ? !data.capabilities?.includes('custom-images') || !customAccepted || Object.keys(customImages).length === 0 || Object.values(customImages).some(v => !v.trim()) : !target || dirty || firmwareChangeBlocked || (sameDeployment && (!advanced || pinned === installedPin)))} loading={busy} onClick={() => void act(async () => {
+                        setReviewAccepted(false); setFirmwareInstallAccepted(false);
                         if (custom) setPlan(await updaterRequest<UpdatePlan>('custom-plan', {images:customImages,acknowledged:customAccepted}));
-                        else if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {})}));
+                        else if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {}), ...(supportsFirmwareChange && firmwareChangeAccepted ? {allow_firmware_protocol_change: true} : {})}));
                     })}>{custom ? t('hostUpdater.downloadReview') : advanced && ['mixed', 'drifted'].includes(identity) && !hasOverrides ? t('hostUpdater.returnMatched') : t('hostUpdater.review')}</Button>
                 </Space>
                 <Typography.Text type="secondary">{t('hostUpdater.lastCheck', {time: date(data.state.last_check)})}</Typography.Text>
@@ -248,11 +285,16 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
             onOk={() => void act(async () => {await updaterRequest('rollback', {}); setRollbackOpen(false);})}>
             {t('hostUpdater.rollbackHelp')}
         </Modal>
-        <Modal title={t(plan?.custom_images ? 'hostUpdater.reviewCustom' : 'hostUpdater.review')} open={!!plan} onCancel={() => setPlan(undefined)} okText={t('hostUpdater.install')} confirmLoading={busy} okButtonProps={{disabled: !!plan?.custom_images && !reviewAccepted}}
+        <Modal title={t(plan?.custom_images ? 'hostUpdater.reviewCustom' : 'hostUpdater.review')} open={!!plan} onCancel={() => setPlan(undefined)} okText={t('hostUpdater.install')} confirmLoading={busy} okButtonProps={{disabled: (!!plan?.custom_images && !reviewAccepted) || (!!plan?.firmware_protocol_change && !firmwareInstallAccepted)}}
             style={{top: 24, paddingBottom: 24}} styles={{body: {maxHeight: 'calc(100dvh - 180px)', overflowY: 'auto'}}}
-            onOk={() => void act(async () => {if (plan) {await updaterRequest('apply', {plan: plan.id, ...(plan.custom_images ? {custom_acknowledged:reviewAccepted} : {})}); setPlan(undefined);}})}>
+            onOk={() => void act(async () => {if (plan) {await updaterRequest('apply', {plan: plan.id, ...(plan.custom_images ? {custom_acknowledged:reviewAccepted} : {}), ...(plan.firmware_protocol_change ? {firmware_protocol_acknowledged:firmwareInstallAccepted} : {})}); setPlan(undefined);}})}>
             {plan && <Space direction="vertical" size="middle" style={{width: '100%', overflowWrap: 'anywhere'}}>
                 <Typography.Text strong>{plan.custom_images ? t('hostUpdater.customMix') : label(plan.target)}</Typography.Text>
+                {plan.firmware_protocol_change && <Alert type="warning" showIcon data-testid="firmware-change-review" message={t('hostUpdater.firmwareInstallWarning', {...plan.firmware_protocol_change})}
+                    description={<Space direction="vertical" size={4} style={{width:'100%'}}>
+                        <span>{t('hostUpdater.firmwareInstallHelp')}</span>
+                        <Checkbox checked={firmwareInstallAccepted} onChange={e => setFirmwareInstallAccepted(e.target.checked)}>{t('hostUpdater.firmwareInstallAccept')}</Checkbox>
+                    </Space>}/>}
                 {plan.custom_images && <><Alert type="warning" showIcon message={t('hostUpdater.customWarning')} description={t('hostUpdater.customWarningHelp')}/>
                     {Object.entries(plan.images).map(([name]) => {const image=plan.custom_images?.[name];return <div key={name}><Typography.Text strong>{component(name)}</Typography.Text><div>{image ? image.requested : t('hostUpdater.keepImage')}</div>{image && <><div>{image.version} · {image.repository}</div><Typography.Text code>{image.reference}</Typography.Text><div>{t('hostUpdater.built')}: {date(image.built_at)}</div></>}</div>;})}
                     <Checkbox checked={reviewAccepted} onChange={e => setReviewAccepted(e.target.checked)}>{t('hostUpdater.customInstallAccept')}</Checkbox>

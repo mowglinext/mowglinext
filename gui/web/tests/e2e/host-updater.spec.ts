@@ -34,10 +34,10 @@ const inventory={docker_available:true,server:{version:'dev'},components:[
     ...['mowgli','gui','gps','lidar','camera'].map(name=>({name:`mowgli-${name}`,component:name==='mowgli'?'robot':name,version:'dev',revision:devPrevious,state:'running',image:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,image_id:`sha256:installed-${name}`})),
     {name:'mowgli-mqtt',component:'mqtt',version:'2.0.22',state:'running',image:'eclipse-mosquitto:2.0.22'},
 ]};
-async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false) {
+async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false, topics:Record<string,unknown>={}) {
     await page.setViewportSize(mobile?{width:390,height:844}:{width:1440,height:1800});
     const names=new Set(Object.values(data.runtime.components).map(c=>c.name));
-    await installMockBackend(page,{...SCENARIOS[0],rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version,revision:Object.values(data.runtime.components).find(r=>r.name===c.name)?.revision,built_at:data.state.active?.published_at ? new Date(Date.parse(data.state.active.published_at)-60000).toISOString() : undefined}))}}});
+    await installMockBackend(page,{...SCENARIOS[0],topics:{...SCENARIOS[0].topics,...topics},rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version,revision:Object.values(data.runtime.components).find(r=>r.name===c.name)?.revision,built_at:data.state.active?.published_at ? new Date(Date.parse(data.state.active.published_at)-60000).toISOString() : undefined}))}}});
     const posts:{path:string;body:Record<string,unknown>}[]=[];const errors:string[]=[];
     page.on('pageerror',e=>errors.push(e.message));
     page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/system/updater/'))posts.push({path:new URL(r.url()).pathname,body:r.postDataJSON()});});
@@ -450,4 +450,58 @@ test('worker changes offer update, missing legacy identities remain conservative
     data.agent.build_id='';data.state.releases[0].updater['linux/arm64'].version='legacy-new-worker';
     await page.route('**/api/system/updater/state',r=>r.fulfill({json:data}));
     await expect(panel.getByRole('button',{name:'Update the update service'})).toBeVisible();
+});
+
+// The board reports its protocol in the firmware handshake; the mock status
+// topic carries it. A release built for another protocol is refused unless the
+// operator allows it, confirms again at install, and is then told to flash.
+const boardStatus=(protocol:number)=>({status:{...(SCENARIOS[0].topics?.status as Record<string,unknown>),firmware_protocol_version:protocol,firmware_compatible:true}});
+for(const mobile of [false,true])test(`firmware protocol change needs allowance, confirmation and a flash ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture();data.capabilities.push('firmware-protocol-change');data.state.releases[0].firmware_protocol=7;
+    const {panel,posts,errors}=await open(page,data,mobile,boardStatus(6));
+    const warning=page.getByTestId('firmware-change');
+    await expect(warning).toContainText('needs mainboard firmware protocol 7');await expect(warning).toContainText('runs protocol 6');
+    await expect(panel.getByRole('button',{name:'Review update'})).toBeDisabled();
+    await shot(page,'host-updater-firmware-change',mobile,'firmware-change');
+    await warning.getByRole('checkbox',{name:/Install anyway/}).check();
+    await expect(panel.getByRole('button',{name:'Review update'})).toBeEnabled();
+    const prepared={...plan(data.state.releases[0]),firmware_protocol_change:{from:6,to:7}};
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:prepared}));
+    await page.route('**/api/system/updater/apply',r=>r.fulfill({json:{job:'forced-job'}}));
+    await panel.getByRole('button',{name:'Review update'}).click();
+    const dialog=page.getByRole('dialog');
+    await expect(dialog.getByTestId('firmware-change-review')).toContainText('changes from 6 to 7');
+    await expect(dialog.getByRole('button',{name:'Install reviewed deployment'})).toBeDisabled();
+    await shot(page,'host-updater-firmware-change-review',mobile);
+    await dialog.getByRole('checkbox',{name:/flash the mainboard firmware afterwards/}).check();
+    await dialog.getByRole('button',{name:'Install reviewed deployment'}).click();
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true,allow_firmware_protocol_change:true}},{path:'/api/system/updater/apply',body:{plan:'review-plan',firmware_protocol_acknowledged:true}}]);
+    expect(errors).toEqual([]);
+});
+test('firmware protocol change without an updated agent cannot be reviewed',async({page})=>{
+    const data=fixture();data.state.releases[0].firmware_protocol=7;
+    const {panel,posts}=await open(page,data,false,boardStatus(6));
+    const warning=page.getByTestId('firmware-change');
+    await expect(warning).toContainText('Update the updater agent first');
+    await expect(warning.getByRole('checkbox')).toHaveCount(0);
+    await expect(panel.getByRole('button',{name:'Review update'})).toBeDisabled();
+    expect(posts).toEqual([]);
+});
+test('matching firmware protocol shows no allowance and sends no flag',async({page})=>{
+    const data=fixture();data.capabilities.push('firmware-protocol-change');
+    const {panel,posts}=await open(page,data,false,boardStatus(6));
+    await expect(page.getByTestId('firmware-change')).toHaveCount(0);
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.releases[0])}));
+    await panel.getByRole('button',{name:'Review update'}).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true}}]);
+});
+for(const protocol of [6,7])test(`after a forced install the flash reminder ${protocol===6?'stays until the board is flashed':'clears once the board runs the new protocol'}`,async({page})=>{
+    const data=fixture();data.capabilities.push('firmware-protocol-change');
+    const forced={...plan(data.state.releases[0]),firmware_protocol_change:{from:6,to:7}};
+    data.state.job={id:'forced-job',kind:'containers',phase:'succeeded',started_at:'2026-09-07T09:40:00Z',plan:forced} as never;
+    await open(page,data,false,boardStatus(protocol));
+    const reminder=page.getByTestId('firmware-flash-needed');
+    if(protocol===6){await expect(reminder).toContainText('Flash the mainboard firmware now (protocol 6 → 7)');await expect(reminder.getByRole('button',{name:'Flash firmware'})).toBeVisible();}
+    else await expect(reminder).toHaveCount(0);
 });

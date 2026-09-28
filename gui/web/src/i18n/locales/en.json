@@ -3894,7 +3894,16 @@
     "imageDetails": "Container image details",
     "componentsToUpdate": "Components",
     "backupHelp": "Settings and maps are backed up before installation. Mainboard firmware is unchanged.",
-    "unavailableHelp": "Automatic updates need the host updater installed. Advanced contains installed versions and manual image comparisons."
+    "unavailableHelp": "Automatic updates need the host updater installed. Advanced contains installed versions and manual image comparisons.",
+    "firmwareChangeWarning": "This version needs mainboard firmware protocol {{to}}; the board runs protocol {{from}}",
+    "firmwareChangeHelp": "Software updates never flash the mainboard. After this update the robot refuses to mow until you flash the matching firmware from the Firmware section of the new interface (ST-Link, a few minutes). Rolling back the software before flashing is still possible.",
+    "firmwareChangeAccept": "Install anyway. I will flash the mainboard firmware right after the update.",
+    "firmwareChangeAgent": "Update the updater agent first: the installed agent cannot cross a firmware protocol change.",
+    "firmwareInstallWarning": "Mainboard firmware protocol changes from {{from}} to {{to}}",
+    "firmwareInstallHelp": "Mowing stays blocked after installation until the mainboard is flashed. Keep the ST-Link at hand.",
+    "firmwareInstallAccept": "Install and flash the mainboard firmware afterwards. I understand the robot cannot mow until then.",
+    "firmwareFlashNeeded": "Flash the mainboard firmware now (protocol {{from}} → {{to}})",
+    "firmwareFlashNeededHelp": "The installed software speaks a newer mainboard protocol than the board. The robot will not mow until the firmware is flashed."
   },
   "settingsFields": {
     "imu_inclination_threshold": {

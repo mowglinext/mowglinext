@@ -59,7 +59,7 @@ func TestMultipleOverridesPersistAndRollbackExactCombination(t *testing.T) {
 	b := &componentBackend{fakeBackend: fake, images: map[string]string{"gui": "old-gui", "mowgli": "old-ros"}}
 	m.backend = b
 	m.state.Releases = []Deployment{base, other}
-	p, err := m.MakeServicePlan(context.Background(), base.ID, true, map[string]string{"mowgli": other.ID, "gui": other.ID})
+	p, err := m.MakeServicePlan(context.Background(), base.ID, true, map[string]string{"mowgli": other.ID, "gui": other.ID}, PlanOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

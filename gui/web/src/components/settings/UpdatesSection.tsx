@@ -48,7 +48,7 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
             {error && <Alert type="warning" showIcon message={t('updates.fetchFailed')} description={data ? t('updates.showingPrevious') : undefined}/>}
             {data && !data.docker_available && <Alert type="warning" showIcon message={t('updates.dockerUnavailable')}/>}
             {browserBuildDiffers(browserBuild, servedBuild ?? {}) && <Alert type="warning" showIcon message={t('updates.browserStale')} action={<Button onClick={() => window.location.reload()}>{t('updates.reloadBrowser')}</Button>}/>}
-            <HostUpdaterPanel advanced={advanced} inventory={components}/>
+            <HostUpdaterPanel advanced={advanced} inventory={components} firmwareProtocol={firmware.data.firmware_protocol_version}/>
             {advanced && <details className="update-diagnostics"><summary>{t('hostUpdater.diagnostics')}</summary><UpdateChecks/>
             {advanced && <div className="installed-version-toolbar"><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => void refresh()}>{t('updates.refresh')}</Button>{data && <Typography.Paragraph style={{margin: 0}} copyable={{text: versionDetails, tooltips: [t('updates.copy'), t('updates.copied')]}}>{t('updates.copy')}</Typography.Paragraph>}</div>}
             {advanced && <Card title={t('updates.installedSoftware')} size="small">

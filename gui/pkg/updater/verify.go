@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-func (b DockerBackend) Verify(ctx context.Context, images map[string]string, d *Deployment) error {
+func (b DockerBackend) Verify(ctx context.Context, images map[string]string, d *Deployment, change *FirmwareProtocolChange) error {
 	return waitForVerification(ctx, 3*time.Minute, 2*time.Second, func(ctx context.Context) []string {
-		problems, warnings := b.verificationProblems(ctx, images, d)
+		problems, warnings := b.verificationProblems(ctx, images, d, change)
 		return append(problems, warnings...)
 	})
 }
@@ -20,10 +20,10 @@ func (b DockerBackend) Verify(ctx context.Context, images map[string]string, d *
 // VerifyRecovery verifies that the previous deployment was restored and is safe
 // to release from maintenance. Advisory module checks remain visible to the
 // operator, but cannot strand an otherwise successful rollback.
-func (b DockerBackend) VerifyRecovery(ctx context.Context, images map[string]string, d *Deployment) ([]string, error) {
+func (b DockerBackend) VerifyRecovery(ctx context.Context, images map[string]string, d *Deployment, change *FirmwareProtocolChange) ([]string, error) {
 	var warnings []string
 	err := waitForVerification(ctx, 3*time.Minute, 2*time.Second, func(ctx context.Context) []string {
-		problems, observedWarnings := b.verificationProblems(ctx, images, d)
+		problems, observedWarnings := b.verificationProblems(ctx, images, d, change)
 		warnings = observedWarnings
 		return problems
 	})
@@ -61,7 +61,7 @@ func waitForVerification(ctx context.Context, budget, interval time.Duration, ch
 	}
 }
 
-func (b DockerBackend) verificationProblems(ctx context.Context, images map[string]string, d *Deployment) ([]string, []string) {
+func (b DockerBackend) verificationProblems(ctx context.Context, images map[string]string, d *Deployment, change *FirmwareProtocolChange) ([]string, []string) {
 	c, _, err := b.model(ctx)
 	if err != nil {
 		return []string{"Cannot read the installed container configuration"}, nil
@@ -107,7 +107,7 @@ func (b DockerBackend) verificationProblems(ctx context.Context, images map[stri
 	if err != nil && !os.IsNotExist(err) {
 		problems = append(problems, "Cannot read the update maintenance marker")
 	}
-	problems = append(problems, readinessProblems(ready, d, err == nil)...)
+	problems = append(problems, readinessProblems(ready, d, err == nil, change)...)
 	return problems, append(warnings, advisoryModuleProblems(ready, names, managed)...)
 }
 
@@ -119,9 +119,15 @@ func classifyRuntimeProblem(problems, warnings []string, name, reason string) ([
 	return problems, append(warnings, problem)
 }
 
-func readinessProblems(ready Readiness, d *Deployment, maintenance bool) []string {
+// readinessProblems lists the mandatory mower checks. An acknowledged
+// FirmwareProtocolChange makes the bridge's firmware refusal the EXPECTED
+// outcome of the update (the operator reflashes from the new GUI afterwards),
+// so that one cause is accepted — and only while the board still reports one
+// of the two protocols named in the plan, proving the bridge reaches it.
+func readinessProblems(ready Readiness, d *Deployment, maintenance bool, change *FirmwareProtocolChange) []string {
 	var problems []string
-	if !ready.Ready {
+	expected := expectedFirmwareMismatch(ready, change)
+	if !ready.Ready && !expected {
 		reason := ready.Reason
 		if reason == "" {
 			reason = "fresh, stationary mower telemetry is required"
@@ -131,7 +137,7 @@ func readinessProblems(ready Readiness, d *Deployment, maintenance bool) []strin
 	if maintenance && !ready.Maintenance {
 		problems = append(problems, "GUI has not acknowledged update maintenance")
 	}
-	if d != nil && ready.FirmwareProtocol != d.FirmwareProtocol {
+	if d != nil && ready.FirmwareProtocol != d.FirmwareProtocol && !expected {
 		problems = append(problems, fmt.Sprintf("Firmware protocol mismatch: running %d, update requires %d", ready.FirmwareProtocol, d.FirmwareProtocol))
 	}
 	return problems

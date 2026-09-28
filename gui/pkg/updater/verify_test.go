@@ -13,7 +13,7 @@ func TestVerificationDistinguishesNoFixReceiverFromMissingSensors(t *testing.T) 
 	names := []string{"gps", "lidar"}
 	ready := Readiness{Ready: true, Maintenance: true, FirmwareProtocol: 6, GPSReceiverFresh: true, LidarFresh: true}
 	d := &Deployment{FirmwareProtocol: 6}
-	if problems := append(readinessProblems(ready, d, true), advisoryModuleProblems(ready, names, managed)...); len(problems) > 0 {
+	if problems := append(readinessProblems(ready, d, true, nil), advisoryModuleProblems(ready, names, managed)...); len(problems) > 0 {
 		t.Fatal(problems)
 	}
 	ready.GPSReceiverFresh = false
@@ -29,14 +29,14 @@ func TestVerificationDistinguishesNoFixReceiverFromMissingSensors(t *testing.T) 
 	// work, but absent fixes never silently fall back to process health.
 	ready.GPSFresh = true
 	ready.LidarFresh = true
-	if problems := append(readinessProblems(ready, d, true), advisoryModuleProblems(ready, names, managed)...); len(problems) > 0 {
+	if problems := append(readinessProblems(ready, d, true, nil), advisoryModuleProblems(ready, names, managed)...); len(problems) > 0 {
 		t.Fatal(problems)
 	}
 	ready.Ready = false
 	ready.Reason = "Mower must be stationary"
 	ready.Maintenance = false
 	ready.FirmwareProtocol = 5
-	problems = strings.Join(readinessProblems(ready, d, true), "; ")
+	problems = strings.Join(readinessProblems(ready, d, true, nil), "; ")
 	for _, want := range []string{"Mower must be stationary", "maintenance", "protocol mismatch"} {
 		if !strings.Contains(problems, want) {
 			t.Fatalf("safety gate %q lost: %s", want, problems)
