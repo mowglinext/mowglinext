@@ -143,7 +143,7 @@ export default function FleetPage() {
                                 <Row gutter={12}>
                                     <Col span={12}>
                                         <Text type="secondary" style={{fontSize: 11}}>{t("fleetPage.battery")}</Text>
-                                        <Progress percent={row.batteryPercent} size="small" status={row.batteryPercent <= 20 ? "exception" : "normal"}/>
+                                        {row.batteryKnown ? <Progress percent={row.batteryPercent} size="small" status={row.batteryPercent <= 20 ? "exception" : "normal"}/> : <Text>—</Text>}
                                     </Col>
                                     <Col span={12}>
                                         <Text type="secondary" style={{fontSize: 11}}>{t("fleetPage.gps")}</Text>
