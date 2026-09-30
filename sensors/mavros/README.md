@@ -4,15 +4,33 @@ This directory is MowgliNext's integration contract for the externally built
 MowgliMAVROS sidecar. It intentionally contains no Dockerfile and no copy of
 the MowgliMAVROS source: the external image remains the runtime owner of
 MAVROS, its hardware bridge, battery observation, and ESC wheel odometry.
-The Universal GNSS sidecar is the sole owner of the receiver and NTRIP.
+
+## GNSS ownership: nominal architecture and temporary cutover
+
+Nominal architecture: Universal GNSS owns the receiver, GNSS processing and
+NTRIP; MAVROS supplies the flight-controller transport. This is the target
+once Universal GNSS's `backend=mavros` and RTCM sink are complete.
+
+Temporary current state: `GNSS_STACK=disabled` with
+`MAVROS_GPS1_CANONICAL=true`, so MAVROS GPS1 is the sole canonical GPS
+publisher. Keep this cutover until the Universal GNSS MAVROS backend and RTCM
+sink are implemented and validated; do not run both GPS owners concurrently.
 
 ## Image and compose boundary
 
 `image.env` is the authoritative MowgliNext default for the external image:
 
 ```text
-ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560
+ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:lyrical@sha256:96e23dca25c1a854af191e1a3c94ecad977c41af345733d56214cbac08195c94
 ```
+
+This is the Lyrical multi-architecture image built from MowgliMAVROS Git
+`v0.5b` (commit `649e797da1b948b5a4941833cb59bfa8287794e8`). The Docker
+workflow publishes `lyrical` on `main` but does not create a Docker `v0.5b`
+tag for Git tag pushes. The verified index digest above contains linux/amd64
+and linux/arm64; its arm64 manifest is
+`sha256:8183c9102166b96608241bde4a178a834f0efc1c1e03707b9580b517c5871819`.
+Use the digest-pinned `lyrical` reference; do not substitute `:v0.5b`.
 
 `install/lib/config.sh` sources that file, then writes `MAVROS_IMAGE` to the
 generated `docker/.env`. `install/compose/docker-compose.mavros.yml` remains
@@ -30,9 +48,9 @@ this repository.
 
 ## Backend ownership and fail-closed behavior
 
-`HARDWARE_BACKEND=mavros` selects exactly one external `mowgli-mavros`
-sidecar alongside the independent Universal GNSS sidecar when GNSS is enabled.
-MAVROS never receives the receiver or NTRIP configuration as an owner. In the
+Nominally, `HARDWARE_BACKEND=mavros` selects the `mowgli-mavros` sidecar
+alongside Universal GNSS. During the temporary cutover above, GNSS is disabled
+instead. MAVROS does not own NTRIP in the nominal architecture. In the
 main MowgliNext launch, only the legacy `mowgli_hardware/hardware_bridge_node` is excluded;
 `robot_state_publisher` and `twist_mux` remain running. The external sidecar
 is expected to own `mavros_hardware_bridge_node`.
