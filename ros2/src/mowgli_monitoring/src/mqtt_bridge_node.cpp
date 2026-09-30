@@ -1373,30 +1373,36 @@ std::string MqttBridgeNode::serialise_status(const mowgli_interfaces::msg::Statu
 
 std::string MqttBridgeNode::serialise_power(const mowgli_interfaces::msg::Power& msg)
 {
-  // Derive battery percentage same as diagnostics (4S LiPo 12.0–16.8V range).
-  constexpr double kVFull = 16.8;
-  constexpr double kVEmpty = 12.0;
-  const double voltage = static_cast<double>(msg.v_battery);
-  double pct = 100.0 * (voltage - kVEmpty) / (kVFull - kVEmpty);
-  pct = std::max(0.0, std::min(100.0, pct));
+  // Power has no SoC field. The high-level status owns the configured
+  // voltage-derived estimate; do not invent a fixed 4S estimate here.
+  const auto number_or_null = [](float value)
+  {
+    if (!std::isfinite(value))
+      return std::string{"null"};
+    char number[32];
+    std::snprintf(number, sizeof(number), "%.3f", static_cast<double>(value));
+    return std::string{number};
+  };
+  const auto v_charge = number_or_null(msg.v_charge);
+  const auto v_battery = number_or_null(msg.v_battery);
+  const auto charge_current = number_or_null(msg.charge_current);
 
   char buf[256];
   std::snprintf(buf,
                 sizeof(buf),
                 "{"
-                "\"v_charge\":%.3f,"
-                "\"v_battery\":%.3f,"
-                "\"charge_current\":%.3f,"
+                "\"v_charge\":%s,"
+                "\"v_battery\":%s,"
+                "\"charge_current\":%s,"
                 "\"charger_enabled\":%s,"
                 "\"charger_status\":\"%s\","
-                "\"battery_pct\":%.1f"
+                "\"battery_pct\":null"
                 "}",
-                static_cast<double>(msg.v_charge),
-                voltage,
-                static_cast<double>(msg.charge_current),
+                v_charge.c_str(),
+                v_battery.c_str(),
+                charge_current.c_str(),
                 msg.charger_enabled ? "true" : "false",
-                json_escape(msg.charger_status).c_str(),
-                pct);
+                json_escape(msg.charger_status).c_str());
   return std::string{buf};
 }
 
