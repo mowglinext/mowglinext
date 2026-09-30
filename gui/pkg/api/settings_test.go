@@ -571,6 +571,8 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 	assert.Contains(t, string(envContent), "GNSS_SERIAL_DEVICE=/dev/serial/by-id/usb-gnss")
 	assert.Contains(t, string(envContent), "GNSS_SERIAL_BAUD=921600")
 	assert.Contains(t, string(envContent), "GNSS_BACKEND=universal")
+	assert.Contains(t, string(envContent), "GNSS_STACK=universal")
+	assert.Contains(t, string(envContent), "GNSS_STATUS_SOURCE=universal")
 	assert.Contains(t, string(envContent), "GNSS_TRANSPORT=serial")
 	assert.Contains(t, string(envContent), "GNSS_FRAME_ID=gps_link")
 	assert.Contains(t, string(envContent), "GNSS_NTRIP_ENABLED=true")
@@ -581,6 +583,34 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 	assert.NotContains(t, string(envContent), "GNSS_SIGNAL_GROUP=3 6")
 	assert.NotContains(t, string(envContent), legacyProtocol)
 	assert.NotContains(t, string(envContent), legacyByID)
+}
+
+func TestPostSettingsYAML_DisabledGNSSSurvivesUnrelatedSave(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+	yamlFile := createTempYAMLFile(t, "")
+	envFile := createTempConfigFile(t, "GNSS_STACK=universal\nGNSS_STATUS_SOURCE=universal\n")
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+	router := setupSettingsRouter(db)
+
+	for _, payload := range []string{`{"gnss_stack":"disabled"}`, `{"datum_lat":48.123}`} {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/api/settings/yaml", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		envContent, err := os.ReadFile(envFile)
+		require.NoError(t, err)
+		assert.Contains(t, string(envContent), "GNSS_STACK=disabled")
+		assert.Contains(t, string(envContent), "GNSS_STATUS_SOURCE=external")
+		assert.Contains(t, string(envContent), "GNSS_BACKEND=universal")
+	}
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "gnss_stack: disabled")
 }
 
 func TestPostSettingsYAML_MergesExisting(t *testing.T) {

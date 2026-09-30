@@ -33,6 +33,10 @@ export const getBatteryLevel = (percent: number): BatteryLevel => {
     return "ok";
 };
 
+/** A displayed percentage requires a live, valid pack voltage. */
+export const hasBatteryReading = (voltage: number | undefined): boolean =>
+    typeof voltage === "number" && Number.isFinite(voltage) && voltage > 0;
+
 export const computeBatteryPercent = (
     batteryPercent: number | null | undefined,
     voltage: number | undefined,
