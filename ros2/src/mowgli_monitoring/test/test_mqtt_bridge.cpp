@@ -300,32 +300,34 @@ TEST(SerialiseStatus, ProducesExpectedJson)
 // serialise_power
 // ===========================================================================
 
-TEST(SerialisePower, ProducesExpectedJsonAndDerivesBatteryPercent)
+TEST(SerialisePower, KeepsCanonicalFieldsAndDoesNotInventSoc)
 {
   mowgli_interfaces::msg::Power msg{};
-  msg.v_charge = 16.5f;
-  msg.v_battery = 14.4f;  // midpoint of the 12.0-16.8V 4S LiPo range -> 50.0%
+  msg.v_charge = 28.56f;
+  msg.v_battery = 28.02f;
   msg.charge_current = 0.75f;
   msg.charger_enabled = true;
-  msg.charger_status = "bulk";
+  msg.charger_status = "charging";
 
   const std::string json = MqttBridgeNode::serialise_power(msg);
 
   EXPECT_EQ(json,
-            "{\"v_charge\":16.500,\"v_battery\":14.400,\"charge_current\":0.750,"
-            "\"charger_enabled\":true,\"charger_status\":\"bulk\",\"battery_pct\":50.0}");
+            "{\"v_charge\":28.560,\"v_battery\":28.020,\"charge_current\":0.750,"
+            "\"charger_enabled\":true,\"charger_status\":\"charging\",\"battery_pct\":null}");
 }
 
-TEST(SerialisePower, ClampsBatteryPercentToZeroAndHundred)
+TEST(SerialisePower, UnknownMeasurementsAreJsonNull)
 {
-  mowgli_interfaces::msg::Power below{};
-  below.v_battery = 5.0f;  // below kVEmpty (12.0)
-  EXPECT_NE(MqttBridgeNode::serialise_power(below).find("\"battery_pct\":0.0"), std::string::npos);
+  mowgli_interfaces::msg::Power msg{};
+  msg.v_charge = std::numeric_limits<float>::quiet_NaN();
+  msg.v_battery = std::numeric_limits<float>::infinity();
+  msg.charge_current = std::numeric_limits<float>::quiet_NaN();
+  msg.charger_status = "unknown";
 
-  mowgli_interfaces::msg::Power above{};
-  above.v_battery = 20.0f;  // above kVFull (16.8)
-  EXPECT_NE(MqttBridgeNode::serialise_power(above).find("\"battery_pct\":100.0"),
-            std::string::npos);
+  const std::string json = MqttBridgeNode::serialise_power(msg);
+  EXPECT_EQ(json,
+            "{\"v_charge\":null,\"v_battery\":null,\"charge_current\":null,"
+            "\"charger_enabled\":false,\"charger_status\":\"unknown\",\"battery_pct\":null}");
 }
 
 TEST(SerialisePower, EscapesChargerStatusString)

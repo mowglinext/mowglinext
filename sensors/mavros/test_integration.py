@@ -16,7 +16,7 @@ LAUNCH = ROOT / "ros2/src/mowgli_bringup/launch/mowgli.launch.py"
 
 EXPECTED_IMAGE = (
     "ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:"
-    "kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560"
+    "lyrical@sha256:96e23dca25c1a854af191e1a3c94ecad977c41af345733d56214cbac08195c94"
 )
 
 
