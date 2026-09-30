@@ -66,7 +66,7 @@ import {useSearchParams} from "react-router-dom";
 import {App} from "antd";
 import {useTranslation} from "react-i18next";
 import {useSettings} from "../hooks/useSettings.ts";
-import {computeBatteryPercent, getBatteryLevel} from "../utils/battery.ts";
+import {computeBatteryPercent, getBatteryLevel, hasBatteryReading} from "../utils/battery.ts";
 import {yawFromQuaternion, rollFromQuaternion, pitchFromQuaternion, wrapDeg180} from "../utils/quaternion.ts";
 import {useApi} from "../hooks/useApi.ts";
 import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
@@ -211,6 +211,8 @@ export const DiagnosticsPage = () => {
     const {modal} = App.useApp();
     const {snapshot, loading, error: snapshotError, refresh} = useDiagnosticsSnapshot();
     const {diagnostics} = useDiagnostics();
+    const finitePower = (value: number | undefined) =>
+        typeof value === "number" && Number.isFinite(value) ? value : undefined;
     // Mobile uses collapsible panels; desktop shows sensors in the Robot tab.
     // Subscribe to the high-rate IMU stream only in the visible sensor view.
     // ?tab=parameters opens the advanced ROS parameters editor (formerly its
@@ -233,6 +235,8 @@ export const DiagnosticsPage = () => {
         () => computeBatteryPercent(highLevelStatus.battery_percent, power.v_battery, settings),
         [highLevelStatus.battery_percent, power.v_battery, settings],
     );
+
+    const batteryKnown = hasBatteryReading(power.v_battery);
 
     const gpsFix = useMemo(() => deriveGpsStatus(gnssStatus), [gnssStatus]);
     const gpsFixType = gpsFix.label;
@@ -291,8 +295,8 @@ export const DiagnosticsPage = () => {
     const cpuHot = cpuTemp > 70;
     const cpuWarm = cpuTemp > 55 && cpuTemp <= 70;
     const batteryLevel = getBatteryLevel(batteryPercent);
-    const batteryLow = batteryLevel === "danger";
-    const batteryMid = batteryLevel === "warn";
+    const batteryLow = batteryKnown && batteryLevel === "danger";
+    const batteryMid = batteryKnown && batteryLevel === "warn";
 
     // The emergency signal proper — only this drives the big "Emergency"
     // wording. Other danger causes (low battery, hot CPU, stopped container,
@@ -364,9 +368,21 @@ export const DiagnosticsPage = () => {
                     color={gpsOk ? "success" : gpsWarn ? "warning" : "error"}
                 />
                 <HealthBadge
-                    label={t('diagnosticsPage.batteryBadge', {value: HEALTH_BADGE_VALUE_MARKER})}
-                    color={batteryLevel === "ok" ? "success" : batteryLevel === "warn" ? "warning" : "error"}
-                    numericValue={batteryPercent.toFixed(0)}
+                    label={
+                        batteryKnown
+                            ? t('diagnosticsPage.batteryBadge', {value: HEALTH_BADGE_VALUE_MARKER})
+                            : t('diagnosticsPage.battery')
+                    }
+                    color={
+                        !batteryKnown
+                            ? "warning"
+                            : batteryLevel === "ok"
+                                ? "success"
+                                : batteryLevel === "warn"
+                                    ? "warning"
+                                    : "error"
+                    }
+                    numericValue={batteryKnown ? batteryPercent.toFixed(0) : undefined}
                 />
                 <HealthBadge
                     label={emergencyActive ? t('diagnosticsPage.emergencyUpper') : t('diagnosticsPage.noEmergency')}
@@ -443,8 +459,8 @@ export const DiagnosticsPage = () => {
         imuStatus.level < 2 && // OK or WARN; ERROR (2) / STALE (3) mean no fresh data
         (nowMs - imuStatus.receivedAt) < 15_000;
     const anatomyInputs = {
-        batteryPct: batteryPercent,
-        vBattery: power.v_battery ?? 0,
+        batteryPct: batteryKnown ? batteryPercent : Number.NaN,
+        vBattery: batteryKnown ? (power.v_battery ?? Number.NaN) : Number.NaN,
         motorTempC: status.mower_motor_temperature ?? 0,
         escTempC: status.mower_esc_temperature ?? 0,
         gpsLabel: anatomyGps.label,
@@ -1253,8 +1269,9 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.battery')}
-                                value={batteryPercent}
+                                value={batteryKnown ? batteryPercent : "—"}
                                 precision={0}
+                                suffix={batteryKnown ? "%" : undefined}
                                 valueStyle={{
                                     color: batteryPercent < 20 ? colors.danger : batteryPercent < 50 ? colors.warning : undefined,
                                 }}
@@ -1263,7 +1280,7 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.voltage')}
-                                value={power.v_battery}
+                                value={finitePower(power.v_battery)}
                                 precision={2}
 
                             />
@@ -1280,7 +1297,7 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.chargeCurrent')}
-                                value={clampTinyToZero(power.charge_current) ?? undefined}
+                                value={finitePower(clampTinyToZero(power.charge_current) ?? undefined)}
                                 precision={2}
                                 valueStyle={{
                                     color: highLevelStatus.is_charging && (power.charge_current ?? 0) > 0
@@ -1292,7 +1309,7 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.chargerVoltage')}
-                                value={clampTinyToZero(power.v_charge) ?? undefined}
+                                value={finitePower(clampTinyToZero(power.v_charge) ?? undefined)}
                                 precision={2}
                             />
                         </Col>

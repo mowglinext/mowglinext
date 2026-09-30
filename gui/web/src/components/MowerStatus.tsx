@@ -4,7 +4,7 @@ import {useEmergency} from "../hooks/useEmergency.ts";
 import {usePower} from "../hooks/usePower.ts";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useSettings} from "../hooks/useSettings.ts";
-import {computeBatteryPercent} from "../utils/battery.ts";
+import {computeBatteryPercent, hasBatteryReading} from "../utils/battery.ts";
 import {deriveGpsStatus} from "../utils/gpsStatus.ts";
 import {PowerMenu} from "./PowerMenu.tsx";
 import {useMowerAction} from "./MowerActions.tsx";
@@ -160,7 +160,21 @@ export const MowerStatus = () => {
                                 fontSize: 13,
                             }}/>
                             <Typography.Text style={{fontSize: 12, color: colors.text}}>
-                                <span style={{display: 'inline-block', width: '3ch', textAlign: 'end', fontVariantNumeric: 'tabular-nums'}}>{batteryPercent}</span>%
+                                {hasBatteryReading(power.v_battery) ? (
+                                    <>
+                                        <span
+                                            style={{
+                                                display: 'inline-block',
+                                                width: '3ch',
+                                                textAlign: 'end',
+                                                fontVariantNumeric: 'tabular-nums',
+                                            }}
+                                        >
+                                            {batteryPercent}
+                                        </span>
+                                        %
+                                    </>
+                                ) : "—"}
                             </Typography.Text>
                         </Space>
                     </Button>

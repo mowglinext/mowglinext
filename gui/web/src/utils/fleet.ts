@@ -1,6 +1,6 @@
 import {HighLevelStatusConstants} from "../types/ros.ts";
 import type {AbsolutePose, GnssStatus, HighLevelStatus, Power, Status} from "../types/ros.ts";
-import {computeBatteryPercent} from "./battery.ts";
+import {computeBatteryPercent, hasBatteryReading} from "./battery.ts";
 import {deriveGpsStatus} from "./gpsStatus.ts";
 
 /** Wire shape of GET /api/fleet/robots (gui/pkg/providers/fleet.go). */
@@ -45,6 +45,7 @@ export interface FleetRow {
     currentArea: number;
     coveragePercent: number;
     batteryPercent: number;
+    batteryKnown: boolean;
     isCharging: boolean;
     emergency: boolean;
     gpsLabel: string;
@@ -113,6 +114,7 @@ export function deriveFleetRow(row: FleetRobotWire, settings: Record<string, unk
         currentArea: hl?.current_area ?? -1,
         coveragePercent: hl?.coverage_percent ?? 0,
         batteryPercent: computeBatteryPercent(hl?.battery_percent, power?.v_battery, settings),
+        batteryKnown: hasBatteryReading(power?.v_battery),
         isCharging: hl?.is_charging ?? status?.is_charging ?? false,
         emergency: hl?.emergency ?? false,
         gpsLabel: gps.label,

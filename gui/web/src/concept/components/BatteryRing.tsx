@@ -11,7 +11,7 @@ import {useEffect} from "react";
  */
 
 interface BatteryRingProps {
-  percent: number;
+  percent?: number;
   size?: number;
   thickness?: number;
   /** Lime by default. Override for charging / low-battery variants. */
@@ -39,7 +39,9 @@ export function BatteryRing({
   const dashOffset = useTransform(offset, (v) => v);
 
   useEffect(() => {
-    const target = circ * (1 - Math.max(0, Math.min(1, percent / 100)));
+    const target = percent == null || !Number.isFinite(percent)
+      ? circ
+      : circ * (1 - Math.max(0, Math.min(1, percent / 100)));
     const controls = animate(offset, target, {
       duration: 1.2,
       ease: [0.2, 0.7, 0.2, 1],

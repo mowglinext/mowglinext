@@ -23,7 +23,7 @@ import {useMowProgress} from "../hooks/useMowProgress.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
 import {rasterizeMowProgress} from "../utils/mowProgress.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
-import {computeBatteryPercent} from "../utils/battery.ts";
+import {computeBatteryPercent, hasBatteryReading} from "../utils/battery.ts";
 import {deriveGpsStatus} from "../utils/gpsStatus.ts";
 import {deriveIsMoving} from "../utils/mowerMotion.ts";
 import {deriveChargeHold} from "../utils/chargeHold.ts";
@@ -85,6 +85,7 @@ function useMowerData() {
   return {
     state: stateName,
     battery: batteryPercent,
+    batteryKnown: hasBatteryReading(power.v_battery),
     charging: isCharging,
     emergency: isEmergency,
     gps: gpsStatus.percent,
@@ -93,7 +94,8 @@ function useMowerData() {
     // Battery charge current (shown while docked/charging) vs. blade motor
     // current (shown on the Blades tile) are DIFFERENT signals — keep them
     // separate so the Blades tile doesn't read the charger.
-    current: power.charge_current ?? 0,
+    current: typeof power.charge_current === "number" && Number.isFinite(power.charge_current)
+      ? power.charge_current : undefined,
     bladeCurrent: status.mower_esc_current ?? 0,
     rpm: status.mower_motor_rpm ?? 0,
     escTemp: status.mower_esc_temperature ?? 0,
@@ -257,13 +259,13 @@ export const MowgliNextPage = () => {
           background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
           WebkitBackgroundClip: 'text', backgroundClip: 'text',
           WebkitTextFillColor: 'transparent', color: 'transparent',
-        }}>{t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)})}</span></>
+        }}>{(data.batteryKnown ? t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)}) : '—')}</span></>
     : data.charging
       ? <>{t('mowgliNextPage.headlineChargingPrefix')}<span style={{
           background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
           WebkitBackgroundClip: 'text', backgroundClip: 'text',
           WebkitTextFillColor: 'transparent', color: 'transparent',
-        }}>{t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)})}</span></>
+        }}>{(data.batteryKnown ? t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)}) : '—')}</span></>
       : data.emergency
         ? <span style={{color: 'var(--rose, #FF6B7A)'}}>{t('mowgliNextPage.emergencyStop')}</span>
         : <>{t('mowgliNextPage.headlineIdlePrefix')}<em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>{t('mowgliNextPage.headlineIdleEmphasis')}</em>{t('mowgliNextPage.headlineIdleSuffix')}</>;
@@ -279,7 +281,7 @@ export const MowgliNextPage = () => {
           ? t('mowgliNextPage.sublineChargeHold')
           : t('mowgliNextPage.sublineManualChargeHold')
         : data.charging
-      ? t('mowgliNextPage.sublineCharging', {current: data.current.toFixed(1)})
+      ? t('mowgliNextPage.sublineCharging', {current: data.current?.toFixed(1) ?? '—'})
       : data.emergency
         ? t('mowgliNextPage.sublineEmergency')
         : t('mowgliNextPage.sublineIdle');
@@ -474,7 +476,7 @@ function HeroCard({
             </p>
           </div>
           <BatteryRing
-            percent={data.battery}
+            percent={data.batteryKnown ? data.battery : undefined}
             size={large ? 156 : 124}
             thickness={large ? 11 : 9}
             charging={data.charging}
@@ -483,7 +485,7 @@ function HeroCard({
               fontSize: large ? 38 : 30, fontWeight: 400, lineHeight: 1,
               color: 'var(--ink, #ECFFF4)', letterSpacing: '-0.02em',
             }}>
-              {Math.round(data.battery)}
+              {data.batteryKnown ? Math.round(data.battery) : "—"}
             </div>
             <div style={{
               fontSize: 10, color: 'rgba(236,255,244,0.42)',

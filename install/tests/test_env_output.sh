@@ -74,20 +74,15 @@ REQUIRED_KEYS=(
   GNSS_DEVICE_GID
   LIDAR_IMAGE
   MAVROS_IMAGE
-  OPENMOWER_IMAGE
   GUI_IMAGE
   HARDWARE_BACKEND
   MAVROS_ENABLED
+  MAVROS_BY_ID
+  MAVROS_PORT
   MAVROS_BAUD
   MAVROS_TGT_SYSTEM
   MAVROS_TGT_COMPONENT
   MAVROS_AUTOPILOT
-  OPENMOWER_ENABLED
-  OPENMOWER_LL_PORT
-  OPENMOWER_XESC_TYPE
-  OPENMOWER_XESC_LEFT_PORT
-  OPENMOWER_XESC_RIGHT_PORT
-  OPENMOWER_XESC_MOW_PORT
 )
 
 for key in "${REQUIRED_KEYS[@]}"; do
@@ -190,6 +185,9 @@ else
 " "$feature_env"
   assert_not_contains "legacy MowgliNext GPS_IMAGE is removed" "GPS_IMAGE=" "$feature_env"
   assert_contains "custom mowgli-ros2 image tag written" "MOWGLI_ROS2_IMAGE=ghcr.io/mowglinext/mowglinext/mowgli-ros2:feat-universal-gnss-integration" "$feature_env"
+  assert_contains "MAVROS image remains pinned independently" \
+    "MAVROS_IMAGE=ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:lyrical@sha256:96e23dca25c1a854af191e1a3c94ecad977c41af345733d56214cbac08195c94" \
+    "$feature_env"
 fi
 
 section "NTRIP env is written without leaking secrets to logs"
