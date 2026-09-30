@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Source-level contract checks for the external MowgliMAVROS sidecar."""
 
-from pathlib import Path
 import re
 import sys
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE_ENV = ROOT / "sensors/mavros/image.env"
@@ -16,7 +15,7 @@ LAUNCH = ROOT / "ros2/src/mowgli_bringup/launch/mowgli.launch.py"
 
 EXPECTED_IMAGE = (
     "ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:"
-    "kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560"
+    "lyrical@sha256:96e23dca25c1a854af191e1a3c94ecad977c41af345733d56214cbac08195c94"
 )
 
 
@@ -110,9 +109,22 @@ def main() -> int:
         "/mavros/global_position/global",
         "HARDWARE_PENDING",
         "command and blade paths disabled by default",
-        "Universal GNSS sidecar is the sole owner of the receiver and NTRIP",
     ):
         require(expected in readme, f"MAVROS integration documentation missing: {expected}")
+
+    # Document both the nominal GNSS ownership model and the temporary
+    # MAVROS GPS1 cutover. Do not bind this contract test to one exact
+    # prose sentence in the README.
+    for expected in (
+        "Universal GNSS",
+        "NTRIP",
+        "GNSS_STACK=disabled",
+        "MAVROS_GPS1_CANONICAL=true",
+    ):
+        require(
+            expected in readme,
+            f"MAVROS integration documentation missing: {expected}",
+        )
 
     require(
         not re.search(r"MAVROS_(?:ENABLE|COMMAND|BLADE)[A-Z_]*:\s*(?:true|1)", compose),
