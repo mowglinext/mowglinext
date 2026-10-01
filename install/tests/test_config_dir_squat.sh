@@ -34,6 +34,12 @@ SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"   # sources libs; sets DOCKER_DIR/INSTALL_DIR
 
+# sandbox_repo copies the current docker/ tree, including any tracked runtime
+# files. Remove the bind-mount sources inside THIS sandbox so the test really
+# reproduces the state where Docker creates a directory at a missing file path.
+rm -f "$DOCKER_DIR/config/cyclonedds.xml"
+rm -f "$DOCKER_DIR/config/mqtt/mosquitto.conf"
+
 # Simulate Docker's empty-dir squat at both bind-mounted file paths.
 mkdir -p "$DOCKER_DIR/config"
 mkdir -p "$DOCKER_DIR/config/cyclonedds.xml"
@@ -72,6 +78,15 @@ if grep -q "MaxAutoParticipantIndex" "$DOCKER_DIR/config/cyclonedds.xml" 2>/dev/
 else
   fail "healed cyclonedds.xml has the bundled default contents" \
     "MaxAutoParticipantIndex not found in materialised file"
+fi
+
+# Peer PruneDelay is unsupported by Cyclone DDS versions still used by some
+# deployed ROS images and makes rcl initialization fail instead of falling back.
+if grep -q 'PruneDelay=' "$DOCKER_DIR/config/cyclonedds.xml" 2>/dev/null; then
+  fail "healed cyclonedds.xml avoids unsupported Peer PruneDelay" \
+    "unsupported PruneDelay attribute found in materialised file"
+else
+  pass "healed cyclonedds.xml avoids unsupported Peer PruneDelay"
 fi
 
 test_summary
