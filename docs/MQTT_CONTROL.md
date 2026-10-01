@@ -181,13 +181,14 @@ state and every `sub_state_name`.
   "charge_current": 0.000,
   "charger_enabled": false,
   "charger_status": "idle",
-  "battery_pct": 90.9
+  "battery_pct": null
 }
 ```
 
-`battery_pct` is derived from `v_battery` over the 12.0–16.8 V 4S LiPo range and clamped to
-[0, 100] — the same formula `diagnostics_node` uses. `<prefix>/high_level_status.battery_percent`
-is the BT's own estimate and is the one the GUI dashboard shows; the two normally agree closely.
+`Power` has no canonical state-of-charge field, so `battery_pct` is always `null`.
+Use `<prefix>/high_level_status.battery_percent` for the configured voltage-derived
+battery estimate used by the behavior tree and GUI. This avoids introducing a
+backend-specific or fixed-voltage battery percentage in the power topic.
 
 ### `<prefix>/emergency`
 
