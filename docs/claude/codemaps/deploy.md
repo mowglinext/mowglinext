@@ -78,7 +78,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `compose/docker-compose.openmower.yml` | 52 | `openmower` (mowgli-openmower) — OpenMower LowLevel + xESC bridge sidecar, mounts `docker/config/mowgli` read-only at `/config` |
 | **`install/config/`** (seeds copied to `docker/config/`) | | |
 | `config/mowgli/mowgli_robot.yaml` | 79 | The SPARSE installed robot config seed (Invariant 15) |
-| `config/cyclonedds.xml` | ~45 | Loopback-only DDS: `AllowMulticast=false`, iface `lo`, `MaxAutoParticipantIndex=500`, unicast peer `localhost` with `PruneDelay="inf"` (Cyclone 11 otherwise stops re-announcing to a peer port after 30 s — a dropped boot-burst SPDP then leaves two participants blind to each other) |
+| `config/cyclonedds.xml` | ~45 | Loopback-only DDS: `AllowMulticast=false`, iface `lo`, `MaxAutoParticipantIndex=500`, unicast peer `localhost`; no `Peer PruneDelay` attribute because deployed Cyclone DDS versions may reject it during ROS initialization |
 | `config/mqtt/mosquitto.conf` | 18 | Anonymous listeners 1883 + 9001 (websockets) |
 | `config/mowgli/hardware_bridge.yaml` | 6 | **Dead copy** — launch reads the package share copy |
 | `config/mowgli/twist_mux.yaml` | 45 | **Dead copy** — launch reads the package share copy |
