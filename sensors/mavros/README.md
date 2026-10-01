@@ -7,14 +7,21 @@ MAVROS, its hardware bridge, battery observation, and ESC wheel odometry.
 
 ## GNSS ownership: nominal architecture and temporary cutover
 
-Nominal architecture: Universal GNSS owns the receiver, GNSS processing and
-NTRIP; MAVROS supplies the flight-controller transport. This is the target
-once Universal GNSS's `backend=mavros` and RTCM sink are complete.
+Universal GNSS already provides the optional MAVROS source adapter used by
+MowgliMAVROS for GPS1/GPS2 observations. The target architecture keeps
+Universal GNSS responsible for GNSS processing, source/provenance handling and
+NTRIP while MAVROS supplies the flight-controller transport.
+
+That path is not yet complete end to end for the MowgliNext public contract:
+the Universal GNSS MAVROS adapter still needs the RTCM injection path and the
+canonical `/gps/status` projection must preserve
+`mowgli_interfaces/msg/GnssStatus` rather than exposing the Universal GNSS
+message type directly.
 
 Temporary current state: `GNSS_STACK=disabled` with
 `MAVROS_GPS1_CANONICAL=true`, so MAVROS GPS1 is the sole canonical GPS
-publisher. Keep this cutover until the Universal GNSS MAVROS backend and RTCM
-sink are implemented and validated; do not run both GPS owners concurrently.
+publisher. Keep this cutover until the remaining canonical projection and RTCM
+path are implemented and validated; do not run both GPS owners concurrently.
 
 ## Image and compose boundary
 
