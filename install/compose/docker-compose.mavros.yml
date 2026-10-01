@@ -29,5 +29,4 @@ services:
       MAVROS_AUTOPILOT: ${MAVROS_AUTOPILOT:-ardupilot}
       # Opt-in temporary serial GPS1 canonical source; use only with GNSS stack disabled.
       MAVROS_GPS1_CANONICAL: ${MAVROS_GPS1_CANONICAL:-false}
-      MAVROS_NEUTRAL_TEST: ${MAVROS_NEUTRAL_TEST:-false}
     restart: unless-stopped
