@@ -1237,7 +1237,9 @@ export const DiagnosticsPage = () => {
                                 precision={0}
                                 suffix={batteryKnown ? "%" : undefined}
                                 valueStyle={{
-                                    color: batteryPercent < 20 ? colors.danger : batteryPercent < 50 ? colors.warning : undefined,
+                                    color: batteryKnown
+                                        ? batteryPercent < 20 ? colors.danger : batteryPercent < 50 ? colors.warning : undefined
+                                        : undefined,
                                 }}
                             />
                         </Col>
