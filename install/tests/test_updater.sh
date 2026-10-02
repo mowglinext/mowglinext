@@ -38,7 +38,10 @@ REPO_DIR="$ROOT"; INSTALL_DIR="$ROOT/install"
 source "$ROOT/install/lib/compose.sh"
 effective_gnss_backend() { echo disabled; }
 effective_gnss_stack() { echo disabled; }
+effective_gnss_source() { echo direct; }
 is_supported_gnss_backend() { return 0; }
+is_supported_gnss_source() { return 0; }
+list_supported_gnss_sources() { echo "direct mavros"; }
 
 is_supported_hardware_backend() {
   case "${1:-}" in
