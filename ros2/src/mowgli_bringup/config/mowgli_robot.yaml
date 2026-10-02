@@ -1,12 +1,19 @@
 # =============================================================================
-# mowgli_robot.yaml — Centralized robot-specific configuration
+# mowgli_robot.yaml — Versioned robot configuration defaults
 #
-# All physical, operational, and safety parameters for the Mowgli robot mower.
-# Inspired by OpenMower's mower_config.sh but in ROS2 YAML format.
+# This file contains the COMPLETE DEFAULT configuration shipped with MowgliNext.
 #
-# This file is the single source of truth for robot-specific values.
-# Other config files (nav2_params, coverage_planner, etc.) should reference
-# or be overridden by these values at launch time.
+# The installed per-robot configuration lives in:
+#   docker/config/mowgli/mowgli_robot.yaml
+#
+# That installed file is deliberately SPARSE and contains only operator choices
+# and calibration outputs. At launch, robot_config_util.load_robot_params()
+# deep-merges the installed sparse configuration OVER this template.
+#
+# To change a global default, edit this file.
+# To override a value for one robot, set it in the installed sparse file.
+# To restore an installed value to its default, delete that key from the sparse
+# file so it falls through to this template.
 # =============================================================================
 
 mowgli:

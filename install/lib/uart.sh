@@ -157,7 +157,9 @@ uart_overlay_for_device() {
 required_uart_overlays() {
   local n
 
-  n="$(uart_overlay_for_device "${GNSS_SERIAL_DEVICE:-}")" && printf '%s\n' "$n"
+  if [[ "${GNSS_SOURCE:-direct}" != "mavros" ]]; then
+    n="$(uart_overlay_for_device "${GNSS_SERIAL_DEVICE:-}")" && printf '%s\n' "$n"
+  fi
 
   if [[ "${LIDAR_ENABLED:-false}" == "true" ]]; then
     n="$(uart_overlay_for_device "${LIDAR_UART_DEVICE:-}")" && printf '%s\n' "$n"
