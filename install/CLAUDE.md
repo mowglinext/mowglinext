@@ -46,7 +46,7 @@ bash install/mowglinext.sh check            # diagnostics only (alias --check)
 bash install/mowglinext.sh uninstall        # remove everything (stack+images, updater, host files, checkout);
                                             # KEEPS the maps volume + docker/config/mowgli/mowgli_robot.yaml in place;
                                             # confirms on a tty, needs an explicit --yes without one (lib/uninstall.sh)
-# also: --lang= --gnss-baud= --gnss-receiver-family= --lidar-uart= --no-updater
+# also: --lang= --gnss-source=direct|mavros --gnss-baud= --gnss-receiver-family= --lidar-uart= --no-updater
 #       --gps= / --gps-uart= / --channel= / --tfluna* (deprecated, parsed and ignored)
 # The installer asks ONLY host wiring. Datum, NTRIP, the GNSS receiver profile
 # (family/baud/config apply) and LiDAR mounting are GUI-owned (onboarding wizard).
