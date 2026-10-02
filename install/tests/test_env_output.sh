@@ -48,6 +48,8 @@ REQUIRED_KEYS=(
   GNSS_BACKEND
   GNSS_STATUS_SOURCE
   GNSS_STACK
+  GNSS_SOURCE
+  GNSS_MAVROS_SOURCE
   GNSS_RECEIVER_FAMILY
   GNSS_TRANSPORT
   GNSS_SERIAL_DEVICE
@@ -83,6 +85,7 @@ REQUIRED_KEYS=(
   MAVROS_TGT_SYSTEM
   MAVROS_TGT_COMPONENT
   MAVROS_AUTOPILOT
+  MAVROS_GPS1_CANONICAL
 )
 
 for key in "${REQUIRED_KEYS[@]}"; do
@@ -98,6 +101,8 @@ section ".env values match the requested preset"
 ENV_CONTENT="$(cat "$ENV_FILE")"
 assert_contains "IMAGE_TAG=main (default)" "IMAGE_TAG=main" "$ENV_CONTENT"
 assert_contains "GNSS_STACK=universal (default)" "GNSS_STACK=universal" "$ENV_CONTENT"
+assert_contains "GNSS_SOURCE=direct (default)" "GNSS_SOURCE=direct" "$ENV_CONTENT"
+assert_contains "GNSS_MAVROS_SOURCE=gps1 (default)" "GNSS_MAVROS_SOURCE=gps1" "$ENV_CONTENT"
 assert_contains "GNSS_RECEIVER_FAMILY=auto (default)" "GNSS_RECEIVER_FAMILY=auto" "$ENV_CONTENT"
 assert_contains "GNSS_TRANSPORT=serial (default)" "GNSS_TRANSPORT=serial" "$ENV_CONTENT"
 assert_contains "GNSS_SERIAL_DEVICE=/dev/ttyAMA4 (derived)" "GNSS_SERIAL_DEVICE=/dev/ttyAMA4" "$ENV_CONTENT"
@@ -112,6 +117,7 @@ assert_contains "LIDAR_BAUD=230400 (preset)" "LIDAR_BAUD=230400" "$ENV_CONTENT"
 assert_contains "HARDWARE_BACKEND=mowgli (default)" "HARDWARE_BACKEND=mowgli" "$ENV_CONTENT"
 assert_contains "GNSS_BACKEND=universal (public runtime)" "GNSS_BACKEND=universal" "$ENV_CONTENT"
 assert_contains "GNSS_STATUS_SOURCE=universal (default)" "GNSS_STATUS_SOURCE=universal" "$ENV_CONTENT"
+assert_contains "MAVROS_GPS1_CANONICAL=false for direct GNSS" "MAVROS_GPS1_CANONICAL=false" "$ENV_CONTENT"
 assert_not_contains "retired TF-Luna keys are not written" "TFLUNA_" "$ENV_CONTENT"
 assert_contains "GNSS fallback comment explains .env role" "# GNSS_* values below are fallback-only first-boot defaults." "$ENV_CONTENT"
 assert_contains "GNSS fallback comment points to YAML/GUI" "# Active operator GNSS settings live in docker/config/mowgli/mowgli_robot.yaml and the GUI." "$ENV_CONTENT"
