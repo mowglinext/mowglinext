@@ -135,12 +135,12 @@ for forbidden in mowgli-tfluna-front mowgli-tfluna-edge mowgli-vesc; do
   fi
 done
 
-section "MAVROS and Universal GNSS are independent sidecars"
+section "MAVROS GNSS source uses the NTRIP-only Universal GNSS sidecar"
 
 MAVROS_REPO="$SANDBOX/repo_mavros"
 sandbox_repo "$MAVROS_REPO"
 harness_init "$MAVROS_REPO"
-harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=none
+harness_set_preset backend=mavros gnss_source=mavros gnss=auto lidar=none
 
 if ! harness_run; then
   fail "MAVROS harness_run" "non-zero exit"
@@ -148,12 +148,18 @@ else
   MAVROS_COMPOSE_FILE="$MAVROS_REPO/docker/docker-compose.yaml"
   MAVROS_CONTAINERS=$(grep -E '^\s+container_name:' "$MAVROS_COMPOSE_FILE" | awk '{print $2}' | sort)
   assert_contains "MAVROS sidecar is present" "mowgli-mavros" "$MAVROS_CONTAINERS"
-  assert_contains "Universal GNSS sidecar remains present" "mowgli-gps" "$MAVROS_CONTAINERS"
+  assert_contains "Universal GNSS NTRIP sidecar remains present" "mowgli-gps" "$MAVROS_CONTAINERS"
   assert_not_contains "no standalone NTRIP service remains" "mowgli-ntrip" "$MAVROS_CONTAINERS"
 
   MAVROS_FRAGMENT_CONTENT="$(cat "$MAVROS_REPO/install/compose/docker-compose.mavros.yml")"
-  assert_not_contains "MAVROS fragment has no standalone NTRIP launch" "mowgli_ntrip_client" "$MAVROS_FRAGMENT_CONTENT"
+  MAVROS_GNSS_FRAGMENT_CONTENT="$(cat "$MAVROS_REPO/install/compose/docker-compose.gps-mavros.yml")"
+  assert_not_contains "MAVROS fragment has no legacy standalone NTRIP launch" "mowgli_ntrip_client" "$MAVROS_FRAGMENT_CONTENT"
+  assert_contains "MAVROS receives GNSS_SOURCE" "GNSS_SOURCE:" "$MAVROS_FRAGMENT_CONTENT"
   assert_contains "MAVROS consumes its NTRIP-disabled config copy" "./docker/config/mavros:/ros2_ws/config:ro" "$MAVROS_FRAGMENT_CONTENT"
+  assert_contains "MAVROS GNSS fragment runs UG ntrip_node only" '"ntrip_node"' "$MAVROS_GNSS_FRAGMENT_CONTENT"
+  assert_contains "MAVROS GNSS fragment consumes MAVROS status" "/mavros/universal_gnss/%s/status" "$MAVROS_GNSS_FRAGMENT_CONTENT"
+  assert_contains "MAVROS GNSS fragment publishes canonical RTCM" '"rtcm:=/rtcm"' "$MAVROS_GNSS_FRAGMENT_CONTENT"
+  assert_not_contains "MAVROS GNSS fragment does not mount /dev" "- /dev:/dev" "$MAVROS_GNSS_FRAGMENT_CONTENT"
 
   MAVROS_CONFIG="$(cat "$MAVROS_REPO/docker/config/mavros/mowgli_robot.yaml")"
   assert_match "MAVROS runtime config disables NTRIP" '^[[:space:]]+ntrip_enabled:[[:space:]]+false[[:space:]]*$' "$MAVROS_CONFIG"
@@ -161,6 +167,8 @@ else
   MAVROS_ENV="$(cat "$MAVROS_REPO/docker/.env")"
   assert_contains "MAVROS mode preserves GNSS_BACKEND=universal" "GNSS_BACKEND=universal" "$MAVROS_ENV"
   assert_contains "MAVROS mode preserves GNSS_STACK=universal" "GNSS_STACK=universal" "$MAVROS_ENV"
+  assert_contains "MAVROS mode selects GNSS_SOURCE=mavros" "GNSS_SOURCE=mavros" "$MAVROS_ENV"
+  assert_contains "MAVROS mode enables canonical GPS1 projection" "MAVROS_GPS1_CANONICAL=true" "$MAVROS_ENV"
   assert_contains "MAVROS mode enables MAVROS" "MAVROS_ENABLED=true" "$MAVROS_ENV"
 fi
 

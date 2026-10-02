@@ -329,6 +329,7 @@ NON_INTERACTIVE_EXPLICIT=false
 # --no-updater: install without the host updater service (manual updates only).
 INSTALL_UPDATER=true
 CLI_PRESET=false
+GNSS_SOURCE_CLI_PRESET=false
 GNSS_RECEIVER_FAMILY_CLI_PRESET=false
 GNSS_CONNECTION_CLI_PRESET=false
 GNSS_SERIAL_DEVICE_CLI_PRESET=false
@@ -453,6 +454,59 @@ default_gnss_status_source() {
 
 default_gnss_stack() {
   printf 'universal\n'
+}
+
+default_gnss_source() {
+  # Preserve the historical direct-receiver behaviour when an existing .env
+  # predates GNSS_SOURCE. Fresh interactive MAVROS installs explicitly ask.
+  printf 'direct\n'
+}
+
+normalize_gnss_source() {
+  local source="${1:-}"
+
+  case "${source,,}" in
+    "")
+      default_gnss_source
+      ;;
+    direct|soc|host|companion)
+      printf 'direct\n'
+      ;;
+    mavros|pixhawk|fcu)
+      printf 'mavros\n'
+      ;;
+    *)
+      printf '%s\n' "${source,,}"
+      ;;
+  esac
+}
+
+list_supported_gnss_sources() {
+  printf 'direct mavros\n'
+}
+
+is_supported_gnss_source() {
+  case "${1:-}" in
+    direct|mavros) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+effective_gnss_source() {
+  local source
+  source="$(normalize_gnss_source "${1:-${GNSS_SOURCE:-}}")"
+
+  if ! is_supported_gnss_source "$source"; then
+    return 1
+  fi
+
+  # A MAVROS-owned receiver only exists when the hardware backend actually
+  # provides MAVROS. Direct GNSS remains valid with either hardware backend.
+  if [[ "$source" == "mavros" && "${HARDWARE_BACKEND:-mowgli}" != "mavros" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$source"
 }
 
 normalize_gnss_stack() {
@@ -622,6 +676,11 @@ gnss_transport_from_state() {
 }
 
 gnss_serial_device_from_state() {
+  if [[ "$(effective_gnss_source 2>/dev/null || default_gnss_source)" == "mavros" ]]; then
+    printf '\n'
+    return 0
+  fi
+
   if [[ -n "${GNSS_SERIAL_DEVICE:-}" ]]; then
     printf '%s\n' "$GNSS_SERIAL_DEVICE"
     return 0
@@ -870,6 +929,21 @@ parse_args() {
             ;;
         esac
         ;;
+      --gnss-source=*)
+        CLI_PRESET=true
+        GNSS_SOURCE_CLI_PRESET=true
+        local gnss_source_spec
+        gnss_source_spec="$(normalize_gnss_source "${1#*=}")"
+        case "$gnss_source_spec" in
+          direct|mavros)
+            GNSS_SOURCE="$gnss_source_spec"
+            ;;
+          *)
+            error "Unknown GNSS source: ${1#*=} (expected direct or mavros)"
+            exit 1
+            ;;
+        esac
+        ;;
       --gnss=*)
         CLI_PRESET=true
         GNSS_RECEIVER_FAMILY_CLI_PRESET=true
@@ -1099,6 +1173,7 @@ Options
   --image-tag=<main|dev|tag> Container image tag (default: follows the branch)
   --lang=<en|fr>             Installer language
   --backend=<mowgli|mavros>  Hardware backend (default: mowgli)
+  --gnss-source=<direct|mavros>  GNSS receiver attached to SoC or Pixhawk/MAVROS
   --gnss-connection=<uart|usb>  GNSS serial link (default: uart)
   --gnss-device=<path>       GNSS serial device (default: /dev/ttyAMA4 for uart)
   --gnss-baud=<n|auto>       GNSS serial baud (default: keep YAML value or 921600)

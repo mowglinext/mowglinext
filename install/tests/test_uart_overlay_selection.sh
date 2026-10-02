@@ -23,7 +23,7 @@ source "$SCRIPT_DIR/../lib/uart.sh"
 # Each case resets every variable required_uart_overlays() reads, so cases
 # cannot leak state into each other.
 reset_hardware_env() {
-  unset GNSS_SERIAL_DEVICE LIDAR_ENABLED LIDAR_UART_DEVICE \
+  unset GNSS_SOURCE GNSS_SERIAL_DEVICE LIDAR_ENABLED LIDAR_UART_DEVICE \
 
 }
 
@@ -50,6 +50,14 @@ LIDAR_UART_DEVICE="/dev/ttyAMA5"
 assert_eq "typical GNSS+LiDAR install needs exactly uart4+uart5" \
   "4
 5" "$(required_uart_overlays | sort -un)"
+
+section "GNSS provided by MAVROS claims no SoC UART"
+
+reset_hardware_env
+GNSS_SOURCE="mavros"
+GNSS_SERIAL_DEVICE="/dev/ttyAMA4"  # stale direct-GNSS value must be ignored
+LIDAR_ENABLED="false"
+assert_eq "MAVROS GNSS does not claim the stale GNSS UART" "" "$(required_uart_overlays)"
 
 section "LiDAR over USB claims nothing, even if LIDAR_ENABLED=true"
 

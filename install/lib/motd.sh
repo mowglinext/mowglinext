@@ -79,6 +79,7 @@ GNSS_SERIAL_DEVICE=\$(get_env_value GNSS_SERIAL_DEVICE)
 GNSS_SERIAL_BAUD=\$(get_env_value GNSS_SERIAL_BAUD)
 LIDAR_PORT=\$(get_env_value LIDAR_PORT)
 LIDAR_BAUD=\$(get_env_value LIDAR_BAUD)
+GNSS_SOURCE=\$(get_env_value GNSS_SOURCE)
 GNSS_NTRIP_ENABLED=\$(get_env_value GNSS_NTRIP_ENABLED)
 GNSS_RTCM_FORWARDING=\$(get_env_value GNSS_RTCM_FORWARDING)
 
@@ -106,7 +107,12 @@ echo ""
 echo -e "\${BOLD}Mowgli config\${NC}"
 echo "  ROS_DOMAIN : \${ROS_DOMAIN_ID:-${motd_not_set}}"
 echo "  MOWER_IP   : \${MOWER_IP:-${motd_not_set}}"
-echo "  GNSS       : \${GNSS_SERIAL_DEVICE:-${motd_not_set}} @ \${GNSS_SERIAL_BAUD:-?} (\${GNSS_RECEIVER_FAMILY:-auto})"
+echo "  GNSS src   : \${GNSS_SOURCE:-direct}"
+if [ "\${GNSS_SOURCE:-direct}" = "mavros" ]; then
+  echo "  GNSS       : Pixhawk / MAVROS"
+else
+  echo "  GNSS       : \${GNSS_SERIAL_DEVICE:-${motd_not_set}} @ \${GNSS_SERIAL_BAUD:-?} (\${GNSS_RECEIVER_FAMILY:-auto})"
+fi
 echo "  NTRIP      : \${GNSS_NTRIP_ENABLED:-false}"
 echo "  RTCM fwd   : \${GNSS_RTCM_FORWARDING:-true}"
 echo "  LiDAR      : \${LIDAR_PORT:-${motd_not_set}} @ \${LIDAR_BAUD:-?}"
