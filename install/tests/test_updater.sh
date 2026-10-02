@@ -38,13 +38,22 @@ REPO_DIR="$ROOT"; INSTALL_DIR="$ROOT/install"
 source "$ROOT/install/lib/compose.sh"
 effective_gnss_backend() { echo disabled; }
 effective_gnss_stack() { echo disabled; }
+effective_gnss_source() { echo direct; }
 is_supported_gnss_backend() { return 0; }
 # Same reason as the GNSS stub above: this file exercises compose.sh in
 # isolation, so every collaborator it calls has to be provided here. The real
 # definition lives in config.sh — the stack.sh source-set guard at the bottom
 # is what checks that compose.sh's dependencies are actually reachable in
 # production.
-is_supported_hardware_backend() { case "${1:-}" in mowgli|mavros|openmower) return 0;; *) return 1;; esac; }
+is_supported_gnss_source() { return 0; }
+list_supported_gnss_sources() { echo "direct mavros"; }
+
+is_supported_hardware_backend() {
+  case "${1:-}" in
+    mowgli|mavros|openmower) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 LIDAR_ENABLED=false
 MSG_UPDATER_HARDWARE_MANAGED='unsupported managed hardware'
 MSG_UPDATER_HARDWARE_LEGACY='preserving legacy hardware selection'
