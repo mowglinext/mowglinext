@@ -91,10 +91,12 @@ EOF
 build_dynamic_udev_rules() {
   local by_id_path=""
   local gnss_backend
+  local gnss_source
   local gnss_device
   local gnss_connection
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  gnss_source="$(effective_gnss_source 2>/dev/null || default_gnss_source)"
   gnss_device="$(gnss_serial_device_from_state)"
   gnss_connection="$(gnss_connection_from_serial_device "$gnss_device")"
 
@@ -121,7 +123,7 @@ build_dynamic_udev_rules() {
 
   # GPS principal. The /dev/gps symlink is a convenience for manual debugging;
   # the Universal GNSS sidecar uses GNSS_SERIAL_DEVICE directly.
-  if [ "$gnss_backend" != "disabled" ]; then
+  if [ "$gnss_backend" != "disabled" ] && [ "$gnss_source" = "direct" ]; then
     if [ "$gnss_connection" = "uart" ] && [ -n "$gnss_device" ]; then
       echo "KERNEL==\"$(basename "$gnss_device")\", SYMLINK+=\"gps\", MODE=\"0666\""
     elif [ -L "$gnss_device" ] && [ -e "$gnss_device" ]; then
@@ -180,15 +182,17 @@ install_udev_rules() {
 
   # Verify symlinks were created — UART devices may not exist until reboot
   local gnss_backend
+  local gnss_source
   local gnss_device
   local gnss_connection
   local needs_reboot=false
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  gnss_source="$(effective_gnss_source 2>/dev/null || default_gnss_source)"
   gnss_device="$(gnss_serial_device_from_state)"
   gnss_connection="$(gnss_connection_from_serial_device "$gnss_device")"
 
-  if [ "$gnss_backend" != "disabled" ] && [ "$gnss_connection" = "uart" ] && [ -n "$gnss_device" ]; then
+  if [ "$gnss_backend" != "disabled" ] && [ "$gnss_source" = "direct" ] && [ "$gnss_connection" = "uart" ] && [ -n "$gnss_device" ]; then
     if [ ! -e "$gnss_device" ]; then
       warn "GPS UART device $gnss_device does not exist yet (UART overlay needs reboot)"
       needs_reboot=true
@@ -197,7 +201,7 @@ install_udev_rules() {
     else
       info "GPS symlink: /dev/gps -> $(readlink -f /dev/gps)"
     fi
-  elif [ "$gnss_backend" != "disabled" ] && [ -n "$gnss_device" ]; then
+  elif [ "$gnss_backend" != "disabled" ] && [ "$gnss_source" = "direct" ] && [ -n "$gnss_device" ]; then
     if [ ! -e "$gnss_device" ]; then
       warn "GPS device $gnss_device does not exist"
     else
