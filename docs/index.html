@@ -3,589 +3,392 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MowgliNext — Open-Source ROS2 Robot Mower</title>
-  <meta name="description" content="Autonomous robot mower built on ROS2 Lyrical with RTK-GPS + IMU + wheel fusion through a GTSAM iSAM2 factor-graph localizer, behavior trees, and coverage planning. Open source, community driven.">
+  <title>MowgliNext — Open-source autonomous robot mower</title>
+  <meta name="description" content="Open-source autonomy for the robot mower you already own: RTK-GPS and LiDAR fused in a GTSAM factor graph, planned stripe coverage, a full web app and one-click updates. Built on ROS 2 Lyrical.">
+  <meta name="theme-color" content="#06120E">
+  <meta property="og:title" content="MowgliNext — the robot mower, re-engineered">
+  <meta property="og:description" content="Open-source autonomy for the mower you already own. Centimetre positioning, LiDAR vision, straight stripes.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://mowgli.garden/">
+  <meta property="og:image" content="https://mowgli.garden/screenshots/dashboard-idle.png">
   <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
-<!-- ─── Beta Banner ─────────────────────────────────── -->
-<div class="beta-banner">
-  <span class="beta-tag">v1.4.0</span>
-  Out now: update from the GUI, Home Assistant over MQTT, push notifications, remote access, ROS 2 Lyrical.
-  <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.4.0">Read the release notes</a>
-</div>
+<a class="skip-link" href="#main">Skip to content</a>
 
 <!-- ─── Navigation ──────────────────────────────────── -->
-<nav>
-  <div class="container">
-    <div class="logo"><img src="icon.svg" alt="" width="28" height="28" style="vertical-align: middle; margin-right: 8px;">Mowgli<span>Next</span></div>
-    <ul class="links">
+<header class="site-nav">
+  <nav class="wrap" aria-label="Primary">
+    <a class="brand" href="#top" aria-label="MowgliNext home">
+      <span class="brand-mark" aria-hidden="true">m</span>
+      <span class="brand-name">MowgliNext</span>
+    </a>
+    <ul class="nav-links">
       <li><a href="#whats-new">What's New</a></li>
-      <li><a href="#how-it-works">How It Works</a></li>
       <li><a href="#features">Features</a></li>
-      <li><a href="#getting-started">Get Started</a></li>
+      <li><a href="#app">App</a></li>
+      <li><a href="#hardware">Hardware</a></li>
       <li><a href="build/">Build Manual</a></li>
-      <li><a href="https://github.com/mowglinext/mowglinext/wiki">Wiki</a></li>
-      <li><a href="https://github.com/mowglinext/mowglinext">GitHub</a></li>
+      <li><a href="https://github.com/mowglinext/mowglinext/wiki">Docs</a></li>
     </ul>
-  </div>
-</nav>
+    <div class="nav-actions">
+      <a class="btn btn-sm" href="https://github.com/mowglinext/mowglinext" aria-label="GitHub">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>
+        <span class="btn-label">GitHub</span>
+      </a>
+      <a class="btn btn-sm" href="https://discord.gg/bQZYARVWW" aria-label="Discord">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7.5a14 14 0 0 1 8 0M7 17c1.6.9 3.3 1.3 5 1.3s3.4-.4 5-1.3M8.5 4.5C6.6 4.9 5 5.6 3.8 6.6 2.3 9.6 1.8 12.6 2.1 16c1.4 1.3 3 2.2 4.6 2.7l1.2-2M15.5 4.5c1.9.4 3.5 1.1 4.7 2.1 1.5 3 2 6 1.7 9.4-1.4 1.3-3 2.2-4.6 2.7l-1.2-2"/><circle cx="9" cy="12.5" r="1.2"/><circle cx="15" cy="12.5" r="1.2"/></svg>
+        <span class="btn-label">Discord</span>
+      </a>
+      <a class="btn btn-sm btn-primary" href="#getting-started">Install</a>
+    </div>
+  </nav>
+</header>
+
+<main id="main">
 
 <!-- ─── Hero ────────────────────────────────────────── -->
-<section class="hero">
-  <div class="container">
-    <!-- Animated mower scene -->
-    <div class="mower-scene">
-      <svg viewBox="0 0 800 200" class="mower-svg">
-        <!-- Grass -->
-        <rect x="0" y="140" width="800" height="60" fill="#166534" rx="4"/>
-        <rect x="0" y="135" width="800" height="20" fill="#22c55e" rx="4"/>
-
-        <!-- Mowed path (lighter) -->
-        <rect class="mowed-path" x="0" y="135" width="0" height="20" fill="#4ade80" rx="4">
-          <animate attributeName="width" from="0" to="800" dur="8s" repeatCount="indefinite"/>
-        </rect>
-
-        <!-- Mowing lines -->
-        <g class="mow-lines" opacity="0.3">
-          <line x1="0" y1="140" x2="0" y2="152" stroke="#86efac" stroke-width="1">
-            <animate attributeName="x1" from="40" to="840" dur="8s" repeatCount="indefinite"/>
-            <animate attributeName="x2" from="40" to="840" dur="8s" repeatCount="indefinite"/>
-          </line>
-        </g>
-
-        <!-- LiDAR scan cone -->
-        <g class="lidar-cone">
-          <path d="M0,110 L-60,50 A70,70 0 0,1 60,50 Z" fill="#22c55e" opacity="0.08">
-            <animateTransform attributeName="transform" type="translate" from="80,0" to="880,0" dur="8s" repeatCount="indefinite"/>
-          </path>
-          <path d="M0,110 L-40,65 A50,50 0 0,1 40,65 Z" fill="#22c55e" opacity="0.12">
-            <animateTransform attributeName="transform" type="translate" from="80,0" to="880,0" dur="8s" repeatCount="indefinite"/>
-          </path>
-          <!-- LiDAR rays -->
-          <g opacity="0.2">
-            <line x1="0" y1="110" x2="-50" y2="55" stroke="#22c55e" stroke-width="1">
-              <animateTransform attributeName="transform" type="translate" from="80,0" to="880,0" dur="8s" repeatCount="indefinite"/>
-            </line>
-            <line x1="0" y1="110" x2="-25" y2="48" stroke="#22c55e" stroke-width="1">
-              <animateTransform attributeName="transform" type="translate" from="80,0" to="880,0" dur="8s" repeatCount="indefinite"/>
-            </line>
-            <line x1="0" y1="110" x2="0" y2="45" stroke="#22c55e" stroke-width="1">
-              <animateTransform attributeName="transform" type="translate" from="80,0" to="880,0" dur="8s" repeatCount="indefinite"/>
-            </line>
-            <line x1="0" y1="110" x2="25" y2="48" stroke="#22c55e" stroke-width="1">
-              <animateTransform attributeName="transform" type="translate" from="80,0" to="880,0" dur="8s" repeatCount="indefinite"/>
-            </line>
-            <line x1="0" y1="110" x2="50" y2="55" stroke="#22c55e" stroke-width="1">
-              <animateTransform attributeName="transform" type="translate" from="80,0" to="880,0" dur="8s" repeatCount="indefinite"/>
-            </line>
-          </g>
-        </g>
-
-        <!-- GPS satellite signals -->
-        <g opacity="0.15">
-          <circle cx="650" cy="20" r="3" fill="#38bdf8"/>
-          <line x1="650" y1="23" x2="0" y2="100" stroke="#38bdf8" stroke-width="0.5" stroke-dasharray="4,4">
-            <animate attributeName="x2" from="80" to="880" dur="8s" repeatCount="indefinite"/>
-          </line>
-          <circle cx="720" cy="35" r="2" fill="#38bdf8"/>
-          <line x1="720" y1="37" x2="0" y2="100" stroke="#38bdf8" stroke-width="0.5" stroke-dasharray="4,4">
-            <animate attributeName="x2" from="85" to="885" dur="8s" repeatCount="indefinite"/>
-          </line>
-        </g>
-
-        <!-- Robot mower -->
-        <g class="mower-bot">
-          <animateTransform attributeName="transform" type="translate" from="80,0" to="880,0" dur="8s" repeatCount="indefinite"/>
-          <!-- Body -->
-          <rect x="-32" y="104" rx="10" ry="10" width="64" height="32" fill="#334155" stroke="#475569" stroke-width="1.5"/>
-          <!-- Wheels -->
-          <circle cx="-18" cy="138" r="8" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
-          <circle cx="18" cy="138" r="8" fill="#1e293b" stroke="#475569" stroke-width="1.5"/>
-          <!-- LiDAR dome -->
-          <circle cx="0" cy="102" r="6" fill="#22c55e"/>
-          <circle cx="0" cy="102" r="3" fill="#0f172a"/>
-          <!-- GPS antenna -->
-          <line x1="20" y1="104" x2="20" y2="90" stroke="#94a3b8" stroke-width="2"/>
-          <circle cx="20" cy="88" r="3" fill="#38bdf8"/>
-          <!-- Status LED -->
-          <circle cx="-12" cy="118" r="2.5" fill="#22c55e">
-            <animate attributeName="opacity" values="1;0.3;1" dur="1.5s" repeatCount="indefinite"/>
-          </circle>
-        </g>
-
-        <!-- Obstacle -->
-        <g>
-          <rect x="500" y="115" rx="4" ry="4" width="20" height="22" fill="#78716c" opacity="0.6"/>
-          <text x="510" y="110" text-anchor="middle" font-size="14" opacity="0.4">🪨</text>
-        </g>
-      </svg>
-    </div>
-
-    <h1>Mowgli<span>Next</span></h1>
-    <p class="tagline">
-      Your mower, but smarter. Open-source autonomous navigation built on ROS2 —
-      so your robot mower actually knows where it is, where it's going, and what's in the way.
-    </p>
-    <div class="buttons">
-      <a href="#getting-started" class="btn btn-primary">Get Started</a>
-      <a href="build/" class="btn btn-secondary">Build the Robot</a>
-      <a href="https://github.com/mowglinext/mowglinext" class="btn btn-secondary">View on GitHub</a>
-      <a href="https://github.com/mowglinext/mowglinext/wiki" class="btn btn-secondary">Read the Docs</a>
-    </div>
+<section class="wrap hero" id="top">
+  <a class="release-pill" href="https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0"><span>v1.5.0</span>Now mowing right to the edge →</a>
+  <h1 class="display h-xl">The robot mower, <em class="nowrap">re-engineered.</em></h1>
+  <p class="lede">Open-source autonomy for the mower you already own. Centimetre positioning, LiDAR vision, stripes as straight as a survey line.</p>
+  <div class="btn-row">
+    <a class="btn btn-primary" href="#getting-started">Install MowgliNext
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+    <a class="btn" href="#features">See it work</a>
   </div>
 </section>
 
-<!-- ─── What's New ──────────────────────────────────── -->
-<section class="whats-new" id="whats-new">
-  <div class="container">
-    <p class="release-pill">Release <strong>v1.4.0</strong> · September 2026</p>
-    <h2>The mower now looks after itself</h2>
-    <p class="section-subtitle">Checks for its own updates, tells your phone what it is doing, talks to Home Assistant, and is reachable from anywhere — privately.</p>
-    <div class="features-grid">
-
-      <div class="feature-card">
-        <div class="icon">🔄</div>
-        <h3>Update From the GUI</h3>
-        <p><strong>Settings → Updates</strong> checks for new releases every day and shows them in the notification bell. One reviewed click installs the whole stack — robot software, GUI and sensor drivers together — with a backup, a health check and automatic rollback, and only while the mower is idle with the blade off. Pin a version, follow Production or Development, or roll back.</p>
+<div class="hero-scene" role="img" aria-label="Animated 3D lawn: the robot leaves its dock and mows parallel stripes, turning at each end, while its LiDAR pulses">
+  <div class="world p3">
+    <div class="lawn p3">
+      <div class="lawn-grid"></div>
+      <div class="lawn-stripes">
+        <div class="stripe"></div><div class="stripe"></div><div class="stripe"></div><div class="stripe"></div><div class="stripe"></div>
       </div>
-
-      <div class="feature-card">
-        <div class="icon">🏠</div>
-        <h3>Home Assistant &amp; MQTT</h3>
-        <p>A real MQTT bridge, configured from the GUI: retained mowing status, battery and coverage, live GPS position, online/offline availability and a command topic. Works with the bundled broker or the one you already run. The topic contract is documented for any integration to build on.</p>
+      <div class="lawn-edge"></div>
+      <div class="tree p3" style="left: 700px; top: 90px;"><i class="shadow"></i><i class="c1"></i><i class="c2"></i><i class="c3"></i></div>
+      <div class="dock p3"><i class="top"></i><i class="front"></i><i class="side"></i><i class="led"></i></div>
+      <div class="robot p3">
+        <div class="ring"></div><div class="ring"></div>
+        <div class="shadow"></div>
+        <div class="body p3"><i class="back"></i><i class="front"></i><i class="left"></i><i class="right"></i><i class="top"></i><i class="lidar"></i></div>
       </div>
-
-      <div class="feature-card">
-        <div class="icon">📲</div>
-        <h3>Push Notifications</h3>
-        <p>Telegram, Pushover, ntfy or a JSON webhook. Know when the mower starts, finishes a zone, gets home, gets stuck, hits the emergency stop, waits for rain or GPS, or runs low on battery — in English or French, with a test button to prove the channel.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🌍</div>
-        <h3>Remote Access</h3>
-        <p>An optional, hardened Tailscale sidecar puts the web interface on your private tailnet with HTTPS — reachable from your phone anywhere, without opening a router port. Never public: no Funnel, no exposed login, userspace networking with every capability dropped.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">✂️</div>
-        <h3>Cross-Hatch Mowing</h3>
-        <p>Alternate the stripe angle by 90° every session, per area, so the lawn is not always cut in the same direction. See and override the next direction for each zone without interrupting a run.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🐢</div>
-        <h3>ROS 2 Lyrical</h3>
-        <p>Every image rebuilt on ROS 2 Lyrical and Ubuntu 26.04 with pinned source dependencies, plus a Cyclone DDS discovery fix, wheel gains that actually turn the inner wheel on tight arcs, and dock calibration that works on real receivers. The host OS does not change.</p>
-      </div>
-
-    </div>
-
-    <div class="release-callout">
-      <h3>Already running MowgliNext?</h3>
-      <p>Rerun the installer once to enable in-GUI updates, then open <strong>Settings → Updates</strong>. That replaces <code>mowgli-pull &amp;&amp; mowgli-up</code> for good.</p>
-      <code>curl -sSL https://mowgli.garden/install.sh | bash</code>
-      <p class="composer-note">Check <code>docker volume ls | grep mowgli_maps</code> first — if your map volume is not prefixed <code>install_</code>, set <code>COMPOSE_PROJECT_NAME</code> in <code>docker/.env</code> so the stack keeps its data. Full steps in the <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.4.0">release notes</a>.</p>
     </div>
   </div>
-</section>
+  <div class="telemetry t1" aria-hidden="true">Position · RTK Fixed</div>
+  <div class="telemetry t2" aria-hidden="true">LiDAR · 10 Hz</div>
+  <div class="telemetry t3" aria-hidden="true">Path · headland + stripes</div>
+</div>
 
-<!-- ─── How It Works ────────────────────────────────── -->
-<section class="how-it-works" id="how-it-works">
-  <div class="container">
-    <h2>How It Works</h2>
-    <div class="flow">
-      <div class="flow-step">
-        <div class="flow-icon">📡</div>
-        <h3>See</h3>
-        <p>LiDAR scans the surroundings 10x/second. Required for obstacle avoidance, and optionally builds a map that anchors the position when RTK drops out. RTK-GPS pinpoints position to centimeter accuracy.</p>
-      </div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-step">
-        <div class="flow-icon">🧠</div>
-        <h3>Think</h3>
-        <p>A behavior tree decides what to do: mow, dock, avoid obstacles, wait for rain to stop. Nav2 plans optimal paths. No random bouncing.</p>
-      </div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-step">
-        <div class="flow-icon">🔄</div>
-        <h3>Mow</h3>
-        <p>Fields2Cover plans headland rings and parallel swaths for every area, joined into one continuous path. The robot follows it with sub-centimeter accuracy, tracking progress and replanning around obstacles in real time.</p>
-      </div>
-    </div>
+<div class="wrap built-on" aria-label="Built on">
+  <span>ROS 2 Lyrical</span><span>Nav2</span><span>GTSAM</span><span>Fields2Cover v3</span><span>BehaviorTree.CPP</span><span>Cyclone DDS</span>
+</div>
+
+<!-- ─── What's new ──────────────────────────────────── -->
+<section class="wrap release" id="whats-new">
+  <div class="release-head">
+    <h2 class="display h-md">v1.5.0 — <em>mows to the edge.</em></h2>
+    <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0">Release notes · October 2026 →</a>
+  </div>
+  <div class="release-grid">
+    <div><strong>Mows to the edge</strong><p>The outer pass rides on the line you recorded, not 20 cm inside it.</p></div>
+    <div><strong>Row ends stay on the lawn</strong><p>Blade-on pivot turns where no arc fits, improvised turns around obstacles.</p></div>
+    <div><strong>Firmware settings, no custom build</strong><p>E-stop timings, charge ceiling, speed cap and tilt — clamped by the board.</p></div>
+    <div><strong>LiDAR ignore lines</strong><p>Draw a line along a hedge so soft vegetation no longer stops the mow.</p></div>
+    <div><strong>Home Assistant auto-discovery</strong><p>A native lawn-mower card, a Mow button per area, and sensors.</p></div>
+    <div><strong>Install, update, repair</strong><p>Real installer modes, GNSS in its own container, fleet mowing in beta.</p></div>
+  </div>
+  <div class="upgrade-note">
+    <p><strong>Already running MowgliNext?</strong> v1.5.0 changes the mainboard firmware protocol. In <strong>Settings → Updates</strong>: <em>Update the update service</em>, then <em>Review update</em> → <em>Install</em>, then <strong>Flash firmware</strong> when the new interface asks for it.</p>
+    <p>The mower now mows on the recorded boundary by default — if your perimeter is not drivable all the way round, read the <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0">release notes</a> first. Installed before v1.4.0? Rerun the installer once: <code>curl -sSL https://mowgli.garden/install.sh | bash</code></p>
   </div>
 </section>
 
 <!-- ─── Features ────────────────────────────────────── -->
-<section class="features" id="features">
-  <div class="container">
-    <h2>What Makes MowgliNext Different</h2>
-    <p class="section-subtitle">Everything the stack does today — the foundations, and what each release added on top.</p>
-    <div class="features-grid">
+<section class="wrap features" id="features" aria-label="Features">
 
-      <div class="feature-card">
-        <div class="icon">🗺️</div>
-        <h3>RTK Localization, No SLAM</h3>
-        <p>No SLAM needed. A single GTSAM iSAM2 factor-graph localizer (<code>fusion_graph</code>) fuses RTK-GPS + IMU + wheel odometry under REP-105, holding a centimetre-accurate map pose. When RTK drops out, an optional LiDAR map anchor localises the robot against the map it built under RTK, so the estimate rides through the outage.</p>
+  <article class="feature">
+    <div class="scene" role="img" aria-label="Satellites orbit above a grid while accuracy rings pulse around the robot">
+      <div class="vis p3">
+        <div class="plate grid-plate p3">
+          <div class="accuracy"></div><div class="accuracy"></div><div class="accuracy"></div>
+          <div class="crosshair-x"></div><div class="crosshair-y"></div>
+          <div class="mini-bot p3"><i class="front"></i><i class="right"></i><i class="top"></i></div>
+        </div>
+        <div class="orbit-plane p3">
+          <div class="orbit-path"></div>
+          <div class="orbit"><div class="sat s1"></div><div class="sat s2"></div><div class="sat s3"></div></div>
+        </div>
+        <div class="signal"></div><div class="signal d2"></div><div class="signal d3"></div>
       </div>
+      <span class="scene-label">fusion_graph · GTSAM iSAM2</span>
+    </div>
+    <div class="feature-copy">
+      <span class="eyebrow">01 · Positioning</span>
+      <h2 class="display h-md">Knows where it is. To the centimetre.</h2>
+      <p class="lede">RTK-GPS, IMU and wheels fused in one factor graph. When RTK drops, a LiDAR map keeps it anchored.</p>
+      <div class="chips"><span class="chip">u-blox · Unicore · NMEA</span><span class="chip">No SLAM</span><span class="chip">Bad-fix rejection</span></div>
+    </div>
+  </article>
 
-      <div class="feature-card">
-        <div class="icon">📡</div>
-        <h3>Factor-Graph Sensor Fusion</h3>
-        <p>One iSAM2 factor graph owns both the odometry and map frames. RTK-GPS, IMU heading, wheel odometry, and optional LiDAR all enter as factors — with a tight non-holonomic constraint on the wheel input for smooth, drift-resistant tracking, and a wrong-fix gate that rejects RTK jumps the wheels cannot explain.</p>
+  <article class="feature reverse">
+    <div class="feature-copy">
+      <span class="eyebrow">02 · Coverage</span>
+      <h2 class="display h-md">Straight stripes. Every single time.</h2>
+      <p class="lede">Headland rings on your recorded edge, then parallel swaths — one continuous path. Interrupted? It resumes at the exact spot.</p>
+      <div class="chips"><span class="chip">Fields2Cover v3</span><span class="chip">Cross-hatch</span><span class="chip">Resume per area</span></div>
+    </div>
+    <div class="scene" role="img" aria-label="A coverage path draws itself on a tilted lawn: a ring around the edge, then serpentine stripes, with the mower following it">
+      <div class="vis p3">
+        <div class="plate cov-plate p3">
+          <svg width="300" height="220" viewBox="0 0 300 220" aria-hidden="true">
+            <rect x="8" y="8" width="284" height="204" rx="12" fill="none" stroke="rgba(124,255,178,0.4)" stroke-width="1.2" stroke-dasharray="5 5"/>
+            <path class="draw" pathLength="1" d="M20 20 H280 V200 H20 V45 H255 A12.5 12.5 0 0 1 255 70 H45 A12.5 12.5 0 0 0 45 95 H255 A12.5 12.5 0 0 1 255 120 H45 A12.5 12.5 0 0 0 45 145 H255 A12.5 12.5 0 0 1 255 170 H45" fill="none" stroke="#24694A" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+            <path class="draw" pathLength="1" d="M20 20 H280 V200 H20 V45 H255 A12.5 12.5 0 0 1 255 70 H45 A12.5 12.5 0 0 0 45 95 H255 A12.5 12.5 0 0 1 255 120 H45 A12.5 12.5 0 0 0 45 145 H255 A12.5 12.5 0 0 1 255 170 H45" fill="none" stroke="#7CFFB2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="cov-bot"></div>
+        </div>
       </div>
+      <span class="scene-label">one continuous path · no cusps</span>
+    </div>
+  </article>
 
-      <div class="feature-card">
-        <div class="icon">🧠</div>
-        <h3>Behavior Trees</h3>
-        <p>Reactive, composable control logic using BehaviorTree.CPP v4. Emergency guards, docking, coverage, rain and battery pauses, resume after a restart — all orchestrated by a single tree you can watch live in the GUI.</p>
+  <article class="feature">
+    <div class="scene" role="img" aria-label="The robot's LiDAR sweeps as it drives, spots a tree and steers around it before rejoining its line">
+      <div class="vis p3">
+        <div class="plate obs-plate p3">
+          <svg width="360" height="240" viewBox="0 0 360 240" aria-hidden="true">
+            <path d="M10 120 H350" fill="none" stroke="rgba(233,242,236,0.25)" stroke-width="1.2" stroke-dasharray="4 6"/>
+            <path d="M10 120 H118 C148 120 150 58 180 58 C210 58 212 120 242 120 H350" fill="none" stroke="#7CFFB2" stroke-width="1.8"/>
+            <circle cx="180" cy="128" r="34" fill="none" stroke="#F5A523" stroke-width="1.2" stroke-dasharray="3 4"/>
+          </svg>
+          <div class="hit" style="left: 158px; top: 102px;"></div>
+          <div class="hit" style="left: 170px; top: 96px; animation-delay: .2s;"></div>
+          <div class="hit" style="left: 184px; top: 95px; animation-delay: .4s;"></div>
+          <div class="hit" style="left: 197px; top: 100px; animation-delay: .6s;"></div>
+          <div class="tree small p3" style="left: 180px; top: 128px;"><i class="c1"></i><i class="c2"></i><i class="c3"></i></div>
+          <div class="obs-bot p3"><div class="sweep"></div><div class="chassis"></div></div>
+        </div>
       </div>
+      <span class="scene-label">deviate laterally · rejoin the line</span>
+    </div>
+    <div class="feature-copy">
+      <span class="eyebrow">03 · Obstacles</span>
+      <h2 class="display h-md">Sees the tree. Goes around it.</h2>
+      <p class="lede">LiDAR steers around obstacles in real time instead of stopping, then rejoins the stripe. The same sensor keeps the robot localized when RTK drops out.</p>
+      <div class="chips"><span class="chip">LD19 · RPLIDAR · STL27L</span><span class="chip">Collision monitor</span><span class="chip">Dig detection</span></div>
+    </div>
+  </article>
 
-      <div class="feature-card">
-        <div class="icon">🚧</div>
-        <h3>Obstacle Avoidance</h3>
-        <p>Real-time collision monitor with polygon stop/slow zones. With LiDAR the coverage controller deviates laterally around obstacles instead of stopping; repeatedly seen obstacles become keepout proposals you accept or reject on the map.</p>
+  <article class="feature reverse">
+    <div class="feature-copy">
+      <span class="eyebrow">04 · Zones</span>
+      <h2 class="display h-md">Every lawn, in order.</h2>
+      <p class="lede">Record as many areas as you like, with obstacles and drive-only corridors between them. The stripe angle turns 90° each session.</p>
+      <div class="chips"><span class="chip">Multi-area</span><span class="chip">OpenMower map import</span><span class="chip">Fleet <span class="tag">beta</span></span></div>
+    </div>
+    <div class="scene" role="img" aria-label="Three lawn zones float stacked in 3D, each striped at a different angle, one filling as it is mowed">
+      <div class="vis p3">
+        <div class="zone-stack p3">
+          <div class="zone z1"></div>
+          <div class="zone z2"></div>
+          <div class="zone z3 p3"><i class="base"></i><i class="mowed"></i></div>
+        </div>
       </div>
+      <span class="scene-label">areas mowed in sequence · cross-hatched</span>
+    </div>
+  </article>
+</section>
 
-      <div class="feature-card">
-        <div class="icon">🕳️</div>
-        <h3>Dig Detection</h3>
-        <p>Spinning wheels with no GNSS motion means a dig, not progress. The bridge hard-stops on the wire, reverses out, stamps a keepout so the plan routes around the hole, and stops the mission if the same spot traps the robot three times.</p>
+<!-- ─── App ─────────────────────────────────────────── -->
+<section class="wrap app" id="app">
+  <div class="center-head">
+    <span class="eyebrow">05 · The app</span>
+    <h2 class="display h-lg">Your whole garden, live, in one place.</h2>
+    <p class="lede">Map editor, schedule, stats and live tuning. Laptop or phone, English or French.</p>
+  </div>
+  <div class="app-scene" role="img" aria-label="Screenshots of the MowgliNext web app floating in 3D: map editor behind, dashboard in the middle, phone view in front">
+    <div class="vis p3">
+      <div class="app-stack p3">
+        <img class="shot-map" src="screenshots/map.png" alt="" width="1440" height="900">
+        <img class="shot-dash" src="screenshots/dashboard-idle.png" alt="" width="1440" height="900">
+        <img class="shot-phone" src="screenshots/dashboard-mobile.png" alt="" width="390" height="844">
       </div>
-
-      <div class="feature-card">
-        <div class="icon">🗂️</div>
-        <h3>Multi-Area Mowing</h3>
-        <p>Record multiple mowing areas from your phone, with obstacles and navigation-only corridors. The robot mows them all sequentially on continuous headland-plus-stripe paths (Fields2Cover v3), tracks progress per cell, and resumes exactly where it stopped.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">✂️</div>
-        <h3>Cross-Hatch Mowing <span class="feature-badge">New in v1.4.0</span></h3>
-        <p>Alternate the stripe angle by 90° every session, per area, so the lawn is not always cut the same way. See and override the next direction for each zone without interrupting a run.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🔋</div>
-        <h3>Auto-Docking &amp; Charge Management</h3>
-        <p>Nav2 docking to the charger with one-click dock calibration from the GUI, undock via a safe back-up behaviour, critical-battery return with automatic resume once charged, and a manual "resume now" once the battery is above the floor.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">📅</div>
-        <h3>Scheduling, Rain &amp; Soil</h3>
-        <p>Weekly schedule grid, rain behaviour (ignore, dock, dock until dry, pause), and an optional IrriSense soil-moisture gate that skips a scheduled mow while the garden is still wet.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🔄</div>
-        <h3>Update From the GUI <span class="feature-badge">New in v1.4.0</span></h3>
-        <p>Settings → Updates checks for releases daily and installs the one you review — the whole stack together, with backup, verification and rollback, only while the mower is idle with the blade off.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🏠</div>
-        <h3>Home Assistant &amp; MQTT <span class="feature-badge">New in v1.4.0</span></h3>
-        <p>Retained mowing status, battery and coverage, live GPS position, online/offline availability and a command topic, on the bundled broker or yours. A documented topic contract for any integration.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">📲</div>
-        <h3>Push Notifications <span class="feature-badge">New in v1.4.0</span></h3>
-        <p>Telegram, Pushover, ntfy or a webhook tell you when the mower starts, finishes a zone, gets home, gets stuck, hits the emergency stop, waits for rain or GPS, or runs low on battery.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🌍</div>
-        <h3>Remote Access <span class="feature-badge">New in v1.4.0</span></h3>
-        <p>An optional, hardened Tailscale sidecar puts the web interface on your private tailnet with HTTPS. Reachable from anywhere, never public.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🌐</div>
-        <h3>Web GUI &amp; Diagnostics</h3>
-        <p>State-adaptive dashboard with hero card, live sparkline telemetry, radial gauges and health checks. Full Mapbox map editor, live ROS2 parameter tuning, logs, diagnostics, and firmware flashing from the browser. Dark &amp; light themes, responsive mobile layout, English and French. React + Go + WebSocket.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">📊</div>
-        <h3>Statistics &amp; History</h3>
-        <p>Automatic session recording with aggregate stats: area covered, time spent, blade hours, battery cycles. Review mowing history anytime, and record a ROS bag of a session for analysis.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">💡</div>
-        <h3>Status LED Ring</h3>
-        <p>An optional WS2812 ring shows the robot's state from across the garden — mowing, docking, charging, error — and dims to a configurable "still charged" glow once the battery is full.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🔌</div>
-        <h3>Your Existing Hardware</h3>
-        <p>Works with your stock YardForce board — no need to replace electronics. Add an RTK receiver (u-blox F9P, Unicore UM98x or any NMEA source), a LiDAR (LD19, STL27L, RPLIDAR A1) and an SBC, and import your existing OpenMower map.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🛡️</div>
-        <h3>Firmware-Owned Safety</h3>
-        <p>The STM32 firmware is the sole blade-safety authority: emergency stop, tilt, lift and stop-button latches, a wheel anti-dig gate and both motor loops run on the board. ROS2 can ask; the firmware decides.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🐳</div>
-        <h3>Docker Deploy</h3>
-        <p>One-command deployment with Docker Compose on Raspberry Pi 4/5, RK3566/RK3588 or any arm64/amd64 Linux box. Cyclone DDS for reliable inter-container communication on ARM boards. Every image on ROS 2 Lyrical.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🧪</div>
-        <h3>Simulation &amp; Tests</h3>
-        <p>A Webots world with the mower model runs the full stack on your laptop — record areas, plan coverage, dock — and the CI builds and tests every package on every pull request.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🔓</div>
-        <h3>Fully Open Source</h3>
-        <p>GPLv3 licensed. ROS2 stack, firmware, GUI, Docker configs — everything in one monorepo. Fork it, modify it, contribute back.</p>
-      </div>
-
     </div>
   </div>
 </section>
 
-<!-- ─── Dashboard Preview ──────────────────────────── -->
-<section class="dashboard-preview" id="dashboard">
-  <div class="container">
-    <h2>Dashboard</h2>
-    <p class="section-subtitle">State-adaptive hero card, live sparkline telemetry, and contextual actions — from any device.</p>
-    <div style="display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; margin-top: 32px;">
-      <img src="screenshots/dashboard-idle.png" alt="Dashboard — robot idle on the dock" style="border-radius: 12px; max-width: 720px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
-    </div>
-    <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-top: 24px;">
-      <img src="screenshots/schedule.png" alt="Schedule" style="border-radius: 10px; max-width: 350px; width: 48%; box-shadow: 0 4px 16px rgba(0,0,0,0.2);">
-      <img src="screenshots/stats.png" alt="Statistics" style="border-radius: 10px; max-width: 350px; width: 48%; box-shadow: 0 4px 16px rgba(0,0,0,0.2);">
-    </div>
+<!-- ─── Feature cards ───────────────────────────────── -->
+<section class="wrap cards" aria-label="More features">
+  <ul class="card-grid">
+    <li class="card"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg><strong>One-click updates</strong><span>Backup, health check, automatic rollback.</span></li>
+    <li class="card"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><strong>Home Assistant</strong><span>Auto-discovered over MQTT: lawn-mower card, areas, sensors.</span></li>
+    <li class="card"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8M10 20a2 2 0 0 0 4 0"/></svg><strong>Push notifications</strong><span>Telegram, Pushover, ntfy or a webhook.</span></li>
+    <li class="card"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><strong>Private remote access</strong><span>Tailscale with HTTPS. Never exposed.</span></li>
+    <li class="card"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 18a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.5 3.5 0 0 0 6.5 18zM8 21l1-2M12 21l1-2M16 21l1-2"/></svg><strong>Schedule, rain &amp; soil</strong><span>Weekly grid, rain rules, soil-moisture gate.</span></li>
+    <li class="card"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg><strong>Docks and recharges</strong><span>Returns on low battery, then picks up where it left off.</span></li>
+    <li class="card"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg><strong>Layered safety</strong><span>Collision monitor, dig detection, blade off in transit.</span></li>
+    <li class="card"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><strong>Simulation</strong><span>Run the full stack in Webots on your laptop.</span></li>
+  </ul>
+</section>
+
+<!-- ─── Hardware ────────────────────────────────────── -->
+<section class="wrap hardware" id="hardware">
+  <div class="split-head">
+    <h2 class="display h-md">Keeps your board. <em>Adds the brain.</em></h2>
+    <a href="build/">Open the build manual →</a>
+  </div>
+  <div class="hw-grid">
+    <div><span class="eyebrow-muted">Mower</span><strong>YardForce 500 / 500B</strong><span>stock mainboard</span></div>
+    <div><span class="eyebrow-muted">Compute</span><strong>Raspberry Pi 4 / 5</strong><span>RK3566 / RK3588, arm64 or amd64</span></div>
+    <div><span class="eyebrow-muted">RTK GNSS</span><strong>u-blox ZED-F9P</strong><span>Unicore UM98x, generic NMEA</span></div>
+    <div><span class="eyebrow-muted">LiDAR · obstacles + RTK backup</span><strong>LD06 / LD14 / LD19</strong><span>RPLIDAR A1–A3, STL27L</span></div>
+    <div><span class="eyebrow-muted">Other boards</span><strong>OpenMower v1 <span class="tag">soon</span></strong><span>Pixhawk via MAVROS <span class="tag">soon</span></span></div>
   </div>
 </section>
 
-<!-- ─── Architecture ────────────────────────────────── -->
-<section class="architecture" id="architecture">
-  <div class="container">
-    <h2>System Architecture</h2>
-    <div class="arch-diagram"><span class="accent">Web GUI</span> (:4006)                    <span class="accent">Foxglove</span> (:8765)
-    │                                  │
-    ▼                                  ▼
-┌──────────────────────────────────────────────────────┐
-│  <span class="highlight">ROS2 Lyrical Stack</span>                                     │
-│                                                      │
-│  ┌─────────────┐  ┌──────────┐  ┌─────────────────┐ │
-│  │  <span class="highlight">Nav2</span>        │  │<span class="highlight">ScanMatch</span> │  │  <span class="highlight">Behavior Tree</span>  │ │
-│  │  navigate    │  │  <span class="highlight">loop</span>    │  │  main_tree.xml  │ │
-│  │  dock/undock │  │ (LiDAR)  │  │  10 Hz tick     │ │
-│  │  coverage    │  │          │  │                 │ │
-│  └─────────────┘  └──────────┘  └─────────────────┘ │
-│  ┌─────────────┐  ┌──────────┐  ┌─────────────────┐ │
-│  │  <span class="highlight">Coverage</span>    │  │<span class="highlight">fusion_gr</span>│  │  <span class="highlight">Hardware</span>       │ │
-│  │  Planner     │  │ iSAM2 FG │  │  Bridge         │ │
-│  │  (F2C v3)    │  │GPS+IMU+LiDAR│  │  COBS serial    │ │
-│  └─────────────┘  └──────────┘  └────────┬────────┘ │
-└───────────────────────────────────────────┼──────────┘
-          │                │                │
-    ┌─────┴─────┐   ┌─────┴─────┐   ┌──────┴──────┐
-    │ <span class="accent">GPS</span>       │   │ <span class="accent">LiDAR</span>     │   │ <span class="accent">STM32</span>      │
-    │ u-blox    │   │ LD19      │   │ Firmware    │
-    │ ZED-F9P   │   │ /scan     │   │ Motors/IMU  │
-    │ RTK+NTRIP │   │           │   │ Blade safety│
-    └───────────┘   └───────────┘   └─────────────┘</div>
+<!-- ─── Install composer ────────────────────────────── -->
+<section class="wrap getting-started" id="getting-started">
+  <div class="split-head">
+    <h2 class="display h-md">One command to install. <em>One click to update.</em></h2>
+    <p class="lede" style="flex: 1 1 380px;">Pick your hardware, copy the command, paste it on the mower's board. Datum, NTRIP and the receiver profile are set later in the GUI onboarding wizard.</p>
   </div>
-</section>
 
-<!-- ─── Getting Started ─────────────────────────────── -->
-<section class="getting-started" id="getting-started">
-  <div class="container">
-    <h2>Get Started</h2>
-    <p class="section-subtitle">Pick your hardware, copy the command, paste it on your mower's board. Done.</p>
-
-    <div class="release-callout build-callout">
-      <h3>Building the robot from scratch?</h3>
-      <p>The <a href="build/"><strong>step-by-step build manual</strong></a> takes a stock YardForce 500 / 500B through parts, wiring, the compute board, IMU, RTK GNSS, LiDAR, firmware flashing, the installer and the first mow — one step at a time, in English or French, with steps filtered to your hardware. Then come back here to compose your install command.</p>
-      <a href="build/" class="btn btn-primary">Open the build manual</a>
-    </div>
-
-    <!-- ─── Install Composer ──────────────────────────── -->
+  <div class="composer-layout">
     <div class="composer">
 
-      <!-- Hardware backend -->
-      <div class="composer-group">
-        <h3>Hardware Backend</h3>
-        <p class="composer-hint">`mowgli` stays the stable default. `mavros` is an advanced Pixhawk path and disables the direct GNSS/GPS container selection below.</p>
+      <div class="composer-group" id="backend-group">
+        <h3><small>Step 1</small>Hardware backend</h3>
+        <p class="composer-hint">Mowgli is the supported backend. OpenMower boards and Pixhawk via MAVROS are coming soon.</p>
         <div class="composer-options" data-group="backend">
-          <button class="composer-option active" data-value="mowgli">
-            <span class="option-icon">🧩</span>
-            <span class="option-label">Mowgli</span>
-            <span class="option-desc">Default stable path — Mowgli STM32 hardware bridge</span>
+          <button class="composer-option active" data-value="mowgli" aria-pressed="true">
+            <span class="option-head"><span class="option-label">Mowgli</span></span>
+            <span class="option-desc">Default stable path — STM32 hardware bridge on the stock board</span>
           </button>
-          <button class="composer-option" data-value="mavros">
-            <span class="option-icon">🛩️</span>
-            <span class="option-badge">Advanced</span>
-            <span class="option-label">MAVROS</span>
+          <button class="composer-option" data-value="openmower" aria-pressed="false" disabled>
+            <span class="option-head"><span class="option-label">OpenMower</span><span class="tag">Soon</span></span>
+            <span class="option-desc">LowLevel board + xESC, on their own firmware</span>
+          </button>
+          <button class="composer-option" data-value="mavros" aria-pressed="false" disabled>
+            <span class="option-head"><span class="option-label">MAVROS</span><span class="tag">Soon</span></span>
             <span class="option-desc">Pixhawk via MAVROS — GPS comes from the flight controller</span>
           </button>
         </div>
       </div>
 
-      <!-- Universal GNSS -->
       <div class="composer-group" id="gnss-group">
-        <h3>Universal GNSS</h3>
-        <p class="composer-hint" id="gnss-group-hint">Universal GNSS is the only supported direct GNSS stack. Pick first-boot defaults for the receiver family and serial connection here; the active runtime GNSS config later lives in the GUI/YAML, and the installer will still ask for the exact device path and detect the receiver baud.</p>
+        <h3><small>Step 2</small>Universal GNSS</h3>
+        <p class="composer-hint" id="gnss-group-hint">Universal GNSS is the only supported direct GNSS stack. Pick the receiver family and serial link here; the receiver profile, datum and NTRIP are configured in the GUI onboarding wizard after the first start.</p>
         <div class="composer-options" data-group="gnssReceiverFamily">
-          <button class="composer-option active" data-value="auto">
-            <span class="option-icon">🛰️</span>
-            <span class="option-label">Auto</span>
-            <span class="option-desc">Let Universal GNSS auto-detect the receiver family at runtime</span>
+          <button class="composer-option active" data-value="auto" aria-pressed="true">
+            <span class="option-head"><span class="option-label">Auto</span></span>
+            <span class="option-desc">Detect the receiver family at runtime</span>
           </button>
-          <button class="composer-option" data-value="ublox">
-            <span class="option-icon">📍</span>
-            <span class="option-label">u-blox</span>
-            <span class="option-desc">Explicit u-blox receiver family selection</span>
+          <button class="composer-option" data-value="ublox" aria-pressed="false">
+            <span class="option-head"><span class="option-label">u-blox</span></span>
+            <span class="option-desc">ZED-F9P class receivers</span>
           </button>
-          <button class="composer-option" data-value="unicore">
-            <span class="option-icon">🧭</span>
-            <span class="option-label">Unicore / UM982</span>
-            <span class="option-desc">Explicit Unicore family selection for UM980/UM981/UM982-class receivers</span>
+          <button class="composer-option" data-value="unicore" aria-pressed="false">
+            <span class="option-head"><span class="option-label">Unicore / UM982</span></span>
+            <span class="option-desc">UM980 / UM981 / UM982</span>
           </button>
-          <button class="composer-option" data-value="nmea">
-            <span class="option-icon">📜</span>
-            <span class="option-label">Generic NMEA</span>
-            <span class="option-desc">Use the generic NMEA receiver-family mode</span>
+          <button class="composer-option" data-value="nmea" aria-pressed="false">
+            <span class="option-head"><span class="option-label">Generic NMEA</span></span>
+            <span class="option-desc">Any NMEA source</span>
           </button>
         </div>
         <div class="composer-options" data-group="gnssConnection">
-          <button class="composer-option active" data-value="uart">
-            <span class="option-icon">📡</span>
-            <span class="option-label">UART</span>
+          <button class="composer-option active" data-value="uart" aria-pressed="true">
+            <span class="option-head"><span class="option-label">UART</span></span>
             <span class="option-desc">Default for the Mowgli PCB serial header</span>
           </button>
-          <button class="composer-option" data-value="usb">
-            <span class="option-icon">🔌</span>
-            <span class="option-label">USB</span>
-            <span class="option-desc">Installer will prefer a stable /dev/serial/by-id path</span>
+          <button class="composer-option" data-value="usb" aria-pressed="false">
+            <span class="option-head"><span class="option-label">USB</span></span>
+            <span class="option-desc">Installer prefers a stable /dev/serial/by-id path</span>
           </button>
         </div>
       </div>
 
-      <!-- LiDAR -->
-      <div class="composer-group">
-        <h3>LiDAR Sensor</h3>
-        <p class="composer-hint">Required for obstacle avoidance and the optional LiDAR map anchor</p>
+      <div class="composer-group" id="lidar-group">
+        <h3><small>Step 3</small>LiDAR</h3>
+        <p class="composer-hint">LiDAR does two jobs: it steers the robot around obstacles, and it keeps the robot localized against its own map when RTK drops out. Without it the robot runs GPS-only.</p>
         <div class="composer-options" data-group="lidar">
-          <button class="composer-option active" data-value="ldlidar-uart">
-            <span class="option-icon">🔴</span>
-            <span class="option-label">LDLiDAR / UART</span>
+          <button class="composer-option active" data-value="ldlidar-uart" aria-pressed="true">
+            <span class="option-head"><span class="option-label">LDLiDAR / UART</span></span>
             <span class="option-desc">LD06, LD14, LD19 — PCB default</span>
           </button>
-          <button class="composer-option" data-value="ldlidar-usb">
-            <span class="option-icon">🔴</span>
-            <span class="option-label">LDLiDAR / USB</span>
+          <button class="composer-option" data-value="ldlidar-usb" aria-pressed="false">
+            <span class="option-head"><span class="option-label">LDLiDAR / USB</span></span>
             <span class="option-desc">LD06, LD14, LD19 via USB</span>
           </button>
-          <button class="composer-option" data-value="rplidar-uart">
-            <span class="option-icon">🟠</span>
-            <span class="option-label">RPLidar / UART</span>
+          <button class="composer-option" data-value="rplidar-uart" aria-pressed="false">
+            <span class="option-head"><span class="option-label">RPLidar / UART</span></span>
             <span class="option-desc">Slamtec A1, A2, A3</span>
           </button>
-          <button class="composer-option" data-value="rplidar-usb">
-            <span class="option-icon">🟠</span>
-            <span class="option-label">RPLidar / USB</span>
+          <button class="composer-option" data-value="rplidar-usb" aria-pressed="false">
+            <span class="option-head"><span class="option-label">RPLidar / USB</span></span>
             <span class="option-desc">Slamtec A1, A2, A3 via USB</span>
           </button>
-          <button class="composer-option" data-value="stl27l-uart">
-            <span class="option-icon">🟡</span>
-            <span class="option-badge">Experimental</span>
-            <span class="option-label">STL27L / UART</span>
-            <span class="option-desc">Driver is a stub — motion tests not run yet</span>
+          <button class="composer-option" data-value="stl27l-uart" aria-pressed="false">
+            <span class="option-head"><span class="option-label">STL27L / UART</span></span>
+            <span class="option-desc">LDRobot STL27L</span>
           </button>
-          <button class="composer-option" data-value="stl27l-usb">
-            <span class="option-icon">🟡</span>
-            <span class="option-badge">Experimental</span>
-            <span class="option-label">STL27L / USB</span>
-            <span class="option-desc">Driver is a stub — motion tests not run yet</span>
+          <button class="composer-option" data-value="stl27l-usb" aria-pressed="false">
+            <span class="option-head"><span class="option-label">STL27L / USB</span></span>
+            <span class="option-desc">LDRobot STL27L via USB</span>
           </button>
-          <button class="composer-option" data-value="none">
-            <span class="option-icon">❌</span>
-            <span class="option-label">None</span>
-            <span class="option-desc">No LiDAR</span>
+          <button class="composer-option" data-value="none" aria-pressed="false">
+            <span class="option-head"><span class="option-label">None</span></span>
+            <span class="option-desc">GPS-only — no obstacle avoidance, no RTK-loss fallback</span>
           </button>
         </div>
       </div>
 
-      <!-- Image channel -->
       <div class="composer-group" id="channel-group">
-        <h3>Release Channel</h3>
-        <p class="composer-hint">`main` is the stable channel. `dev` tracks the dev branch and pulls `:dev` container images — pick this if you want to iterate alongside upstream development.</p>
+        <h3><small>Step 4</small>Release channel</h3>
+        <p class="composer-hint"><code>main</code> is the stable channel. <code>dev</code> pulls <code>:dev</code> container images and checks out the dev branch.</p>
         <div class="composer-options" data-group="channel">
-          <button class="composer-option active" data-value="main">
-            <span class="option-icon">🟢</span>
-            <span class="option-label">main</span>
+          <button class="composer-option active" data-value="main" aria-pressed="true">
+            <span class="option-head"><span class="option-label">main</span></span>
             <span class="option-desc">Stable — built from the main branch</span>
           </button>
-          <button class="composer-option" data-value="dev">
-            <span class="option-icon">🧪</span>
-            <span class="option-badge">Iteration</span>
-            <span class="option-label">dev</span>
-            <span class="option-desc">Pulls `:dev` images and checks out the dev branch</span>
+          <button class="composer-option" data-value="dev" aria-pressed="false">
+            <span class="option-head"><span class="option-label">dev</span><span class="tag">Preview</span></span>
+            <span class="option-desc">Follow development</span>
           </button>
         </div>
       </div>
+    </div>
 
-      <!-- Generated command -->
-      <div class="composer-result">
-        <h3>Your install command</h3>
-        <p class="composer-hint">SSH into your Raspberry Pi and paste this command:</p>
-        <div class="composer-command-wrapper">
-          <code class="composer-command" id="install-command"></code>
+    <aside class="composer-output" aria-label="Your install command">
+      <div class="command-box">
+        <div class="command-bar">
+          <span class="eyebrow-muted">Your install command</span>
           <button class="composer-copy" id="copy-btn" title="Copy to clipboard">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
             <span id="copy-text">Copy</span>
           </button>
         </div>
-        <p class="composer-note">The installer will still ask for mower-specific settings (GPS datum, NTRIP, dock position) interactively.</p>
+        <div class="command-scroll">
+          <code class="composer-command" id="install-command"></code>
+        </div>
       </div>
-
-    </div>
-
-    <!-- Steps below composer -->
-    <div class="steps" style="margin-top: 48px;">
-      <div class="step">
-        <div class="step-number">1</div>
-        <h3>Configure &amp; Copy</h3>
-        <p>Pick your sensors above. The composer generates a one-line install command tailored to your hardware.</p>
-      </div>
-      <div class="step">
-        <div class="step-number">2</div>
-        <h3>Run on Your Board</h3>
-        <p>SSH into your mower's Raspberry Pi and paste the command. It installs Docker, drivers, and the full ROS2 stack.</p>
-      </div>
-      <div class="step">
-        <div class="step-number">3</div>
-        <h3>Open the GUI</h3>
-        <p>Once running, open the web interface to define mowing areas, monitor the robot, and fine-tune settings.</p>
-        <code>http://&lt;mower-ip&gt;:4006</code>
-      </div>
-      <div class="step">
-        <div class="step-number">4</div>
-        <h3>Stay Up to Date</h3>
-        <p>Settings → Updates checks for new releases every day and installs the one you review, with backup and rollback. No shell needed after the first install.</p>
-      </div>
-    </div>
-
+      <ol class="steps">
+        <li>SSH into the mower's computer and paste the command.</li>
+        <li>Open <code>http://&lt;mower-ip&gt;:4006</code> and follow onboarding.</li>
+        <li>Record your areas, press play.</li>
+        <li>From then on, update from Settings → Updates.</li>
+      </ol>
+      <p class="small-note">Building from a stock mower? Start with the <a href="build/">build manual</a>.</p>
+    </aside>
   </div>
 </section>
 
-<!-- ─── Composer JS ─────────────────────────────────── -->
 <script>
 (function() {
   var state = { backend: 'mowgli', gnssReceiverFamily: 'auto', gnssConnection: 'uart', lidar: 'ldlidar-uart', channel: 'main' };
@@ -654,8 +457,10 @@
       btn.addEventListener('click', function() {
         group.querySelectorAll('.composer-option').forEach(function(b) {
           b.classList.remove('active');
+          b.setAttribute('aria-pressed', 'false');
         });
         btn.classList.add('active');
+        btn.setAttribute('aria-pressed', 'true');
         state[groupName] = btn.dataset.value;
         updateCommand();
       });
@@ -678,109 +483,42 @@
 })();
 </script>
 
-<!-- ─── OpenMower Tribute ───────────────────────────── -->
-<section class="tribute" id="openmower">
-  <div class="container">
-    <h2>Standing on the Shoulders of OpenMower</h2>
-    <p class="tribute-text">
-      MowgliNext exists because of <a href="https://openmower.de/">OpenMower</a>.
-      They proved that robot mowers can be truly intelligent — not just bouncing randomly
-      or following a buried wire, but actually knowing where they are and planning where to go.
-      That inspiration sparked everything you see here.
-    </p>
-    <p class="tribute-text">
-      We're not trying to replace OpenMower — we're taking a different path.
-      OpenMower replaces the stock electronics with custom boards designed for the job.
-      Mowgli works with your existing hardware, adding capabilities on top.
-      As our ambitions grew, we needed a fresh ROS2 foundation to keep evolving —
-      and by going our own way, we give OpenMower more freedom to iterate too.
-    </p>
-    <p class="tribute-text">
-      Different paths, same goal: smarter mowers for everyone.
-      <br><strong>Thank you, OpenMower team.</strong>
-    </p>
-  </div>
-</section>
-
-<!-- ─── Acknowledgments ──────────────────────────────── -->
-<section class="acknowledgments">
-  <div class="container">
-    <h2>Thank You</h2>
-    <div class="thanks-grid">
-      <div class="thanks-card">
-        <div class="thanks-icon">🔧</div>
-        <h3><a href="https://github.com/cloudn1ne">cloudn1ne</a></h3>
-        <p>For the original Mowgli reverse engineering work — cracking open the YardForce hardware and showing us what's inside. None of this would exist without that first step.</p>
-      </div>
-      <div class="thanks-card">
-        <div class="thanks-icon">🌙</div>
-        <h3>nekraus</h3>
-        <p>For the countless late nights spent together getting things to actually work. Debugging hardware at 2am is better with a friend.</p>
-      </div>
-      <div class="thanks-card">
-        <div class="thanks-icon">🛠️</div>
-        <h3><a href="https://github.com/cedbossneo">cedbossneo</a></h3>
-        <p>For leading the MowgliNext stack — the factor-graph localizer, Nav2 navigation, coverage, behavior trees, and the web GUI. The engine room of the project.</p>
-      </div>
-      <div class="thanks-card">
-        <div class="thanks-icon">🛰️</div>
-        <h3><a href="https://github.com/Pepeuch">Pepeuch</a></h3>
-        <p>For the Universal GNSS &amp; Unicore integration and relentless field testing — chasing down GPS and coverage bugs on real hardware, in real gardens.</p>
-      </div>
-      <div class="thanks-card">
-        <div class="thanks-icon">🧪</div>
-        <h3><a href="https://github.com/tetiti20">tetiti20</a></h3>
-        <p>For steady testing, feedback, and bug reports that keep the rough edges honest and push the project forward release after release.</p>
-      </div>
-      <div class="thanks-card">
-        <div class="thanks-icon">🌍</div>
-        <h3><a href="https://openmower.de/">OpenMower</a></h3>
-        <p>For proving that robot mowers can be truly intelligent. You showed us what's possible and inspired an entire community of builders.</p>
-      </div>
-      <div class="thanks-card">
-        <div class="thanks-icon">🇫🇷</div>
-        <h3>Mowgli French Community</h3>
-        <p>For all your efforts — testing, feedback, bug reports, encouragement. You kept us going when things got hard.</p>
-      </div>
-      <div class="thanks-card">
-        <div class="thanks-icon">💚</div>
-        <h3>Every Mowgli User</h3>
-        <p>Every person who installed our firmware, filed a bug, asked a question, or just said "it works!" — you give us the courage to keep spending nights on this project.</p>
-      </div>
-    </div>
-    <p class="thanks-all">
-      …and everyone else who has contributed code, issues, and ideas —
-      <a href="https://github.com/mowglinext/mowglinext/graphs/contributors">see all contributors on GitHub</a>.
-    </p>
-  </div>
-</section>
-
 <!-- ─── Community ───────────────────────────────────── -->
-<section class="community" id="community">
-  <div class="container">
-    <h2>Community Powered</h2>
-    <p>
-      MowgliNext is built by the community. Join us — report bugs, suggest features,
-      or contribute code. Every contribution makes autonomous mowing better for everyone.
-    </p>
-    <div class="buttons">
-      <a href="https://github.com/mowglinext/mowglinext/discussions" class="btn btn-primary">Join Discussions</a>
-      <a href="https://github.com/mowglinext/mowglinext/blob/main/CONTRIBUTING.md" class="btn btn-secondary">Contributing Guide</a>
-      <a href="https://github.com/mowglinext/mowglinext/issues/new/choose" class="btn btn-secondary">Report a Bug</a>
+<section class="wrap community" id="community">
+  <div class="cta">
+    <h2 class="display h-lg">Built in the open. <em>Tested in real gardens.</em></h2>
+    <p class="lede">MowgliNext exists because <a href="https://openmower.de/">OpenMower</a> proved robot mowers can know where they are. We take a different path — keeping your existing hardware — toward the same goal.</p>
+    <div class="btn-row">
+      <a class="btn btn-primary" href="https://discord.gg/bQZYARVWW">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7.5a14 14 0 0 1 8 0M7 17c1.6.9 3.3 1.3 5 1.3s3.4-.4 5-1.3M8.5 4.5C6.6 4.9 5 5.6 3.8 6.6 2.3 9.6 1.8 12.6 2.1 16c1.4 1.3 3 2.2 4.6 2.7l1.2-2M15.5 4.5c1.9.4 3.5 1.1 4.7 2.1 1.5 3 2 6 1.7 9.4-1.4 1.3-3 2.2-4.6 2.7l-1.2-2"/><circle cx="9" cy="12.5" r="1.2"/><circle cx="15" cy="12.5" r="1.2"/></svg>
+        Join us on Discord</a>
+      <a class="btn" href="https://github.com/mowglinext/mowglinext">Star on GitHub</a>
+      <a class="btn" href="https://github.com/mowglinext/mowglinext/discussions">Discussions</a>
     </div>
+    <p class="thanks">Thank you to cloudn1ne for the original Mowgli reverse engineering, nekraus, cedbossneo, Pepeuch, tetiti20, the OpenMower team, the Mowgli French community and everyone who tests, reports and contributes — <a href="https://github.com/mowglinext/mowglinext/graphs/contributors">see all contributors</a>.</p>
   </div>
 </section>
+
+</main>
 
 <!-- ─── Footer ──────────────────────────────────────── -->
-<footer>
-  <div class="container">
-    <p>
-      MowgliNext is <a href="https://github.com/mowglinext/mowglinext/blob/main/LICENSE">GPLv3 licensed</a> — same as OpenMower, because open source is how we all win.
-      <br>
-      Built on <a href="https://docs.ros.org/en/lyrical/">ROS2 Lyrical</a>,
-      <a href="https://docs.nav2.org/">Nav2</a>, and
-      <a href="https://www.boost.org/">Boost</a>.
-    </p>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-brand">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">m</span><span class="brand-name">MowgliNext</span></a>
+      <p>GPLv3 — same as OpenMower, because open source is how we all win. Built on ROS 2 Lyrical, Nav2 and Boost.</p>
+    </div>
+    <ul class="footer-links">
+      <li><a href="#getting-started">Install</a></li>
+      <li><a href="build/">Build manual</a></li>
+      <li><a href="https://github.com/mowglinext/mowglinext/wiki">Wiki</a></li>
+      <li><a href="https://github.com/mowglinext/mowglinext/releases">Releases</a></li>
+      <li><a href="https://github.com/mowglinext/mowglinext/blob/main/CONTRIBUTING.md">Contributing</a></li>
+      <li><a href="https://github.com/mowglinext/mowglinext/issues/new/choose">Report a bug</a></li>
+      <li><a href="https://github.com/mowglinext/mowglinext">GitHub</a></li>
+      <li><a href="https://discord.gg/bQZYARVWW">Discord</a></li>
+      <li><a href="https://github.com/mowglinext/mowglinext/blob/main/LICENSE">License</a></li>
+    </ul>
   </div>
 </footer>
 

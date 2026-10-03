@@ -88,6 +88,11 @@ On mobile, the dashboard stacks vertically: compact hero card, live mini-map, 2x
 | **Logs** | Live container log viewer -- pick any container on the host (the `mowgli-*` ones carry an app label), tail it with a severity filter |
 | **Fleet** | Multi-robot coordination view -- robot identity, peer discovery, cross-robot commands and shared-map coordination for mowers covering one property (see `docs/MULTI_ROBOT.md`) |
 
+Live parameter writes require a reply from the bridge. If an update is reported as
+**unconfirmed**, the node may already have applied it: refresh the parameter list
+and check the current value before retrying. Bridges that do not reply can no
+longer report a successful write by simply echoing the requested value.
+
 ### Settings: Remote access section
 
 An on/off switch for the Tailscale sidecar, a node name, an optional write-only auth key (interactive login otherwise), an HTTPS-publishing toggle (Tailscale Serve, needs MagicDNS + HTTPS certificates enabled on the tailnet) and the pinned image. Below it a status card polls every 5 s while the section is open: image download → starting → **Login required** with an *Open Tailscale login* button, or **Connected** with the reachable URLs and a *Log out of tailnet* action. The settings live in the GUI database, not in `mowgli_robot.yaml`, and the page's single Save button covers them.

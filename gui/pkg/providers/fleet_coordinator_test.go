@@ -202,13 +202,17 @@ func serviceCalls(ros *types.MockRosProvider, service string) []types.ServiceCal
 	return out
 }
 
-func TestCoordinatorTick_DisabledIsInert(t *testing.T) {
+func TestCoordinatorTick_DisabledOnlyReconcilesAssignment(t *testing.T) {
 	rows := []FleetRobot{{Identity: RobotIdentity{ID: "b"}, Self: true, Online: true}}
 	c, _, ros := newTestCoordinator(t, &rows)
 
 	c.tick(time.Now())
 
-	assert.Empty(t, ros.ServiceCalls)
+	require.Len(t, ros.ServiceCalls, 1)
+	require.Equal(t, setFleetAssignmentService, ros.ServiceCalls[0].Service)
+	req := ros.ServiceCalls[0].Req.(*mowgli.SetFleetAssignmentReq)
+	assert.Empty(t, req.ExcludedAreas)
+	assert.Equal(t, int32(-1), req.PreferredStartIndex)
 	assert.Empty(t, ros.Publishes)
 	assert.False(t, c.Status().Enabled)
 }

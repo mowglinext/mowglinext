@@ -29,6 +29,7 @@
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "diagnostic_msgs/msg/key_value.hpp"
+#include "mowgli_monitoring/battery_percentage.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/qos.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -129,6 +130,8 @@ void DiagnosticsNode::declare_parameters()
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
   freshness_warn_sec_ = declare_parameter<double>("freshness_warn_sec", 5.0);
   freshness_error_sec_ = declare_parameter<double>("freshness_error_sec", 10.0);
+  battery_empty_voltage_ = declare_parameter<double>("battery_empty_voltage", 24.0);
+  battery_full_voltage_ = declare_parameter<double>("battery_full_voltage", 28.0);
   battery_warn_pct_ = declare_parameter<double>("battery_warn_pct", 20.0);
   battery_error_pct_ = declare_parameter<double>("battery_error_pct", 10.0);
   motor_temp_warn_c_ = declare_parameter<double>("motor_temp_warn_c", 60.0);
@@ -436,14 +439,10 @@ diagnostic_msgs::msg::DiagnosticStatus DiagnosticsNode::check_battery() const
 
   const auto& p = *state_.last_power;
 
-  // The hardware does not expose a percentage directly; derive it from the
-  // known LiPo 4S cell voltage range (full: 16.8V, empty: 12.0V).
-  constexpr double kVFull = 16.8;
-  constexpr double kVEmpty = 12.0;
+  // This is a voltage estimate, using the same pack endpoints as the BT.
   const double voltage = static_cast<double>(p.v_battery);
-
-  double percentage = 100.0 * (voltage - kVEmpty) / (kVFull - kVEmpty);
-  percentage = std::max(0.0, std::min(100.0, percentage));
+  const double percentage =
+      battery_percentage(voltage, battery_empty_voltage_, battery_full_voltage_);
 
   status.level = classify_battery(percentage, battery_warn_pct_, battery_error_pct_);
   status.message = fmt_float(percentage, 0) + "% (" + fmt_float(voltage, 2) + " V)";

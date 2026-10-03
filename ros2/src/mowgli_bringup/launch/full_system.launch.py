@@ -65,12 +65,6 @@ from robot_config_util import (  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
-    # Keep sidecar-internal GNSS transport/status channels out of Foxglove.
-    # This covers the current hidden topic prefix plus older visible names.
-    internal_gnss_topic_whitelist = (
-        r"^(?!/(?:_gps_internal|gps_internal|universal_gnss)(?:/.*)?$).*"
-    )
-
     # ------------------------------------------------------------------
     # Package directories
     # ------------------------------------------------------------------
@@ -691,6 +685,8 @@ def generate_launch_description() -> LaunchDescription:
                 # Follow the same authoritative LiDAR flag as the Nav stack so the
                 # health check reports "disabled" instead of a false "no scan" error.
                 "lidar_enabled": ParameterValue(use_lidar, value_type=bool),
+                "battery_empty_voltage": float(robot_params.get("battery_empty_voltage", 24.0)),
+                "battery_full_voltage": float(robot_params.get("battery_full_voltage", 28.0)),
             },
         ],
     )
@@ -719,6 +715,8 @@ def generate_launch_description() -> LaunchDescription:
                 # bundled mowgli-mqtt container: the mowgli service runs
                 # network_mode: host.
                 "mqtt_host": str(robot_params.get("mqtt_host", "localhost")),
+                "battery_empty_voltage": float(robot_params.get("battery_empty_voltage", 24.0)),
+                "battery_full_voltage": float(robot_params.get("battery_full_voltage", 28.0)),
                 "mqtt_port": int(robot_params.get("mqtt_port", 1883)),
                 "mqtt_username": str(robot_params.get("mqtt_username", "")),
                 "mqtt_password": str(robot_params.get("mqtt_password", "")),
@@ -748,35 +746,14 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # 10. Foxglove Bridge — WebSocket bridge for GUI and Foxglove Studio
     # ------------------------------------------------------------------
-    # Expose the public graph broadly, but keep sidecar-internal GNSS
-    # transport/status topics out of Foxglove so they do not leak into the
-    # GUI contract or trigger schema-resolution noise.
-    foxglove_bridge_node = Node(
+    # Reuse the standalone definition so buffer, recovery and graph-access
+    # settings also apply to the production GUI connection.
+    foxglove_bridge_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(bringup_dir, "launch", "foxglove_bridge.launch.py")
+        ),
         condition=IfCondition(enable_foxglove),
-        package="foxglove_bridge",
-        executable="foxglove_bridge",
-        name="foxglove_bridge",
-        output="screen",
-        parameters=[
-            {
-                "port": foxglove_port,
-                "address": "0.0.0.0",
-                "send_buffer_limit": 10000000,
-                "num_threads": 2,
-                "topic_whitelist": [internal_gnss_topic_whitelist],
-                "client_topic_whitelist": [internal_gnss_topic_whitelist],
-                "capabilities": [
-                    "clientPublish",
-                    "services",
-                    "connectionGraph",
-                    # Allow Foxglove Studio to read AND set ROS parameters live
-                    # (e.g. tuning controller_server / coverage critics in the
-                    # field). param_whitelist (default '.*') gates which params.
-                    "parameters",
-                    "parametersSubscribe",
-                ],
-            },
-        ],
+        launch_arguments={"port": foxglove_port, "num_threads": "2"}.items(),
     )
 
     # NOTE: docking_server is launched and lifecycle-managed by Nav2's
@@ -961,7 +938,7 @@ def generate_launch_description() -> LaunchDescription:
             calibrate_imu_yaw_node,
             diagnostics_node,
             mqtt_bridge_node,
-            foxglove_bridge_node,
+            foxglove_bridge_launch,
             led_ring_node,
             cmd_vel_relay_node,
             fleet_peer_obstacles_node,

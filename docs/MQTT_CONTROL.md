@@ -176,18 +176,20 @@ state and every `sub_state_name`.
 
 ```json
 {
-  "v_charge": 16.500,
-  "v_battery": 15.800,
+  "v_charge": 28.000,
+  "v_battery": 26.000,
   "charge_current": 0.000,
   "charger_enabled": false,
   "charger_status": "idle",
-  "battery_pct": 90.9
+  "battery_pct": 50.0
 }
 ```
 
-`battery_pct` is derived from `v_battery` over the 12.0–16.8 V 4S LiPo range and clamped to
-[0, 100] — the same formula `diagnostics_node` uses. `<prefix>/high_level_status.battery_percent`
-is the BT's own estimate and is the one the GUI dashboard shows; the two normally agree closely.
+`battery_pct` is derived from `v_battery` using the configured `battery_empty_voltage` and
+`battery_full_voltage` endpoints, then clamped to [0, 100]. The default 24–28 V range gives
+50% at 26 V, as shown above. `diagnostics_node` uses the same endpoints and formula.
+`<prefix>/high_level_status.battery_percent` is the BT's filtered voltage estimate and is
+the one the GUI dashboard shows; transient values can differ because of that filtering.
 
 ### `<prefix>/emergency`
 

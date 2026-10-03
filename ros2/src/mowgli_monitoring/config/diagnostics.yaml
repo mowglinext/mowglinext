@@ -9,7 +9,7 @@
     freshness_warn_sec: 5.0    # seconds
     freshness_error_sec: 10.0  # seconds
 
-    # Battery thresholds (derived from 4S LiPo voltage range 12.0–16.8 V).
+    # Battery thresholds (estimate uses configured battery_empty/full_voltage).
     battery_warn_pct: 20.0   # %  — below this → WARN
     battery_error_pct: 10.0  # %  — below this → ERROR
 

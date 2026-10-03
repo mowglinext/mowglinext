@@ -248,6 +248,8 @@ private:
   double freshness_error_sec_{10.0};
   double battery_warn_pct_{20.0};
   double battery_error_pct_{10.0};
+  double battery_empty_voltage_{24.0};
+  double battery_full_voltage_{28.0};
   double motor_temp_warn_c_{60.0};
   double motor_temp_error_c_{80.0};
   bool lidar_enabled_{false};

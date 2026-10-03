@@ -4293,7 +4293,7 @@
   "fleetPage": {
     "betaTag": "Bêta",
     "betaTitle": "Le multi-robot est une fonctionnalité bêta",
-    "betaBody": "La vue flotte et la tonte coordonnée n'ont pas encore été validées sur de vraies tondeuses. Gardez un œil sur les robots pendant vos essais et signalez ce que vous observez sur GitHub.",
+    "betaBody": "La vue flotte et la tonte coordonnée sont en bêta et continuent d'évoluer. Gardez un œil sur les robots pendant leur utilisation et signalez ce que vous observez sur GitHub.",
     "thisRobot": "ce robot",
     "openGui": "Ouvrir l'interface de ce robot",
     "removeConfirm": "Retirer {{robot}} de la flotte ? Il oubliera aussi ce robot.",

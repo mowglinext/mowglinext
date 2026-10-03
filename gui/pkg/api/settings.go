@@ -1471,7 +1471,13 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		existingYAML := map[string]any{}
 		file, err := os.ReadFile(string(configFilePath))
 		if err == nil {
-			_ = yaml.Unmarshal(file, &existingYAML)
+			if err := yaml.Unmarshal(file, &existingYAML); err != nil {
+				c.JSON(500, ErrorResponse{Error: "failed to parse existing YAML; repair the configuration before saving: " + err.Error()})
+				return
+			}
+		} else if !os.IsNotExist(err) {
+			c.JSON(500, ErrorResponse{Error: "failed to read existing YAML: " + err.Error()})
+			return
 		}
 
 		// Number-type hints must be captured from the document as it was READ,

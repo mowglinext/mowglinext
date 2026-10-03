@@ -24,7 +24,7 @@
 | Change the publish cadence | `create_timer()` `diagnostics_node.cpp:225–233`; `publish_rate` clamp to [0.1, 100] Hz at :139–145 |
 | LiDAR "disabled" vs "no scan" gating | `check_lidar()` `diagnostics_node.cpp:451–479`; `lidar_enabled` is injected from the `use_lidar` launch arg in `ros2/src/mowgli_bringup/launch/full_system.launch.py:531` and `sim_full_system.launch.py:247` |
 | Fused-pose ("EKF Map") status: rate window, flat/z checks | `on_fusion_odom()` `diagnostics_node.cpp:273–290` (5 s sliding-window rate); `check_fusion()` :545–618 (`flat_ok` <5° roll/pitch :579, `z_ok` <2 m :581) |
-| Battery % formula (4S LiPo 12.0–16.8 V) | `check_battery()` `diagnostics_node.cpp:407–414`; duplicated in `serialise_power()` `mqtt_bridge_node.cpp:656–661` |
+| Battery % formula / configured pack endpoints | `include/mowgli_monitoring/battery_percentage.hpp`, shared by `DiagnosticsNode::check_battery()` and `MqttBridgeNode::serialise_power()`; `full_system.launch.py` injects the same `battery_empty_voltage` / `battery_full_voltage` as the BT |
 | Which GUI code depends on a status `name` | `gui/web/src/utils/gpsStatus.ts:257` (exact `"GPS"`), `gui/web/src/components/settings/LocalizationSection.tsx:67–76` (regex `/lidar|laser ?scan/i` at :71), `gui/web/src/pages/DiagnosticsPage.tsx:219–225` (alerts = `level >= 1`), merge-by-name in `gui/web/src/hooks/useDiagnostics.ts` |
 | Add a field to an MQTT JSON payload | `serialise_status/power/emergency/position/diagnostics` `ros2/src/mowgli_monitoring/src/mqtt_bridge_node.cpp:616–737` — fixed `snprintf` buffers (512/256/256/128/512 B), strings must go through `json_escape()` :748 |
 | Add an outbound MQTT topic | `create_subscriptions()` `mqtt_bridge_node.cpp:431–482` (or the ROS2-side timer for a rate-limited one, see `on_timer()`); add a `serialise_*()` (public, in the "exposed for testing" section of `mqtt_bridge_node.hpp`) + a unit test in `test/test_mqtt_bridge.cpp`; `full_topic()` builds `<prefix>/<name>`; update the topic list comment in `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml:14–17` and [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md) |
@@ -47,6 +47,7 @@
 | `ros2/src/mowgli_monitoring/package.xml` | 31 | ament_cmake; deps rclcpp, diagnostic_msgs, sensor_msgs, nav_msgs, geometry_msgs, mowgli_interfaces. **No** `libmosquitto-dev` rosdep key |
 | `ros2/src/mowgli_monitoring/config/diagnostics.yaml` | 18 | `/**` defaults for `diagnostics_node` (rate + 6 thresholds; `lidar_enabled` is NOT here — launch injects it) |
 | `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml` | 26 | `/**` defaults for `mqtt_bridge_node` (broker, creds, client id, prefix, rate, ssl) |
+| `ros2/src/mowgli_monitoring/include/mowgli_monitoring/battery_percentage.hpp` | 25 | Shared voltage-derived battery estimate with configured endpoints and [0, 100] clamp |
 | `ros2/src/mowgli_monitoring/include/mowgli_monitoring/diagnostics_node.hpp` | 246 | `DiagnosticsState` snapshot struct, pure classifiers, `DiagnosticsNode` (check_* public for tests) |
 | `ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt_bridge_node.hpp` | ~425 | `IMqttClient` interface, `StubMqttClient`, `MosquittoMqttClient` (ifdef), `MqttBridgeNode` (+ client-injection ctor), `AreaSummary` |
 | `ros2/src/mowgli_monitoring/src/diagnostics_node.cpp` | 689 | Classifiers, subscriptions, 1 Hz aggregation, 9 `check_*()` functions |
@@ -54,10 +55,12 @@
 | `ros2/src/mowgli_monitoring/src/mqtt_bridge_node.cpp` | ~1240 | Stub + mosquitto clients, ROS→MQTT JSON serialisers, MQTT→`HighLevelControl`/`StartInArea` command paths, area-list poll |
 | `ros2/src/mowgli_monitoring/src/mqtt_bridge_main.cpp` | 31 | `rclcpp::spin(MqttBridgeNode)` |
 | `ros2/src/mowgli_monitoring/test/test_diagnostics.cpp` | 352 | gtest: classifier boundaries, status names/hardware_ids/levels, LiDAR gating |
+| `ros2/src/mowgli_monitoring/test/test_configured_battery.cpp` | 147 | Isolated gtest: real diagnostics and MQTT consumers use supported pack endpoints; clamp, diagnostic levels and invalid-range helper cases |
 | **Wiring outside the package (read-only context)** | | |
 | `ros2/src/mowgli_bringup/launch/full_system.launch.py` | — | :117–121 `enable_mqtt` arg; :176–177 config paths; :520–549 both `Node(...)` blocks |
 | `ros2/src/mowgli_bringup/launch/sim_full_system.launch.py` | — | :238–250 diagnostics in sim (`use_sim_time: True`, `lidar_enabled` from `use_lidar`) |
 | `ros2/src/mowgli_bringup/test/test_nodes_startup.launch.py` | — | :79–85 launches `diagnostics_node` bare; :178 requires `/diagnostics` advertised within 10 s |
+| `ros2/src/mowgli_bringup/test/test_battery_launch_config.py` | 43 | Executes actual launch endpoint expressions for BT, diagnostics and MQTT; verifies defaults, overrides and float types |
 | `ros2/src/mowgli_bringup/launch/mowgli.launch.py` | — | :257–264 remaps that produce `/hardware_bridge/{status,emergency,power}` and `/imu/data` |
 | `gui/pkg/providers/ros.go` | — | :54 GUI subscribes `/diagnostics` over foxglove_bridge (`"diagnostics"` channel) |
 
@@ -116,6 +119,7 @@ No actions used.
 | diagnostics | `publish_rate` | 1.0 Hz (clamped to [0.1,100] → 1.0) | `diagnostics_node.cpp:129`, :139 | `ros2/src/mowgli_monitoring/config/diagnostics.yaml:4` |
 | diagnostics | `freshness_warn_sec` / `freshness_error_sec` | 5.0 / 10.0 s (shared by HW bridge, IMU, LiDAR, odom, fusion, GPS-with-fix) | :130–131 | :9–10 |
 | diagnostics | `battery_warn_pct` / `battery_error_pct` | 20 / 10 % (`<=` comparisons) | :132–133 | :13–14 |
+| diagnostics + MQTT | `battery_empty_voltage` / `battery_full_voltage` | 24.0 / 28.0 V | Both nodes' `declare_parameters()` | Injected from the merged robot template by `full_system.launch.py` |
 | diagnostics | `motor_temp_warn_c` / `motor_temp_error_c` | 60 / 80 °C (`>=`, worst of ESC + motor) | :134–135 | :17–18 |
 | diagnostics | `lidar_enabled` | `false` — **not in yaml**; launch sets it from `use_lidar` | :136 | `full_system.launch.py:531` |
 | mqtt | `mqtt_host` / `mqtt_port` | `"localhost"` / 1883 | `mqtt_bridge_node.cpp:386–387` | `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml:4–5` **overridden** by `mowgli_robot.yaml.mqtt_host`/`mqtt_port` via `full_system.launch.py` (GUI Settings → MQTT) |
@@ -156,6 +160,8 @@ cd ros2 && make format
 Tests:
 | Test | What it pins |
 |------|--------------|
+| `ros2/src/mowgli_monitoring/test/test_configured_battery.cpp` (`ament_add_ros_isolated_gtest(test_configured_battery)`) | Real ROS power delivery to diagnostics and MQTT for 24–28, 24–28.5 and 21–28.5 V packs; percentages, clamp, diagnostic levels and retained MQTT output; invalid-range/non-finite-voltage helper behavior |
+| `ros2/src/mowgli_bringup/test/test_battery_launch_config.py` (`ament_add_pytest_test(test_battery_launch_config)`) | All three production consumers receive identical typed endpoints from the actual launch expressions, with template defaults and configured overrides |
 | `ros2/src/mowgli_monitoring/test/test_diagnostics.cpp` (`ament_add_gtest(test_diagnostics)`, `ros2/src/mowgli_monitoring/CMakeLists.txt:167–182`) | `classify_freshness` OK/WARN/ERROR incl. exact boundaries and `never=true`; `classify_battery` `<=` boundaries; `classify_temperature`; `level_name` incl. `UNKNOWN`; the 8 status names (`:227–236` — **omits `EKF Map`**) and non-empty `hardware_id`; levels ≤ STALE; `Hardware Bridge` = ERROR with no status; `lidar_enabled=false` → OK "LiDAR disabled", `true` → ERROR "No LiDAR scan received" |
 | `ros2/src/mowgli_bringup/test/test_nodes_startup.launch.py` (`add_launch_test`, `ros2/src/mowgli_bringup/CMakeLists.txt:46`) | `diagnostics_node` survives a 5 s soak, advertises `/diagnostics` within 10 s, exits 0 |
 | `ros2/src/mowgli_monitoring/test/test_mqtt_bridge.cpp` (`ament_add_gtest(test_mqtt_bridge)`) | Every `serialise_*()` function's exact JSON shape, `json_escape` edge cases, MQTT retained metadata/control rejection, and strict `parse_command_payload` boundaries (0/255/256/-1/non-numeric/whitespace/trailing garbage) — no broker or live node required, same pure-function isolation as `test_diagnostics.cpp` |
@@ -171,7 +177,7 @@ CI: `.github/workflows/ros2-ci.yml` — "Build workspace" (:335–341, whole-wor
 - **`mowgli_interfaces` fields** used here: `Status.{mower_status,is_charging,mow_enabled,mower_esc_status,mower_esc_temperature,mower_esc_current,mower_motor_temperature,mower_motor_rpm,raspberry_pi_power,esc_power,rain_detected,sound_module_available,sound_module_busy,ui_board_available}`, `Emergency.{active_emergency,latched_emergency,reason}`, `Power.{v_charge,v_battery,charge_current,charger_enabled,charger_status}`. Removing/renaming any of these breaks `diagnostics_node.cpp:347–349,385–387,419–425,635–664` and `serialise_*` in `mqtt_bridge_node.cpp:616–697`; `.msg` edits also require the GUI codegen step (`docs/claude/commands.md`).
 - **`HighLevelControl` command codes** (`ros2/src/mowgli_interfaces/srv/HighLevelControl.srv`) are what MQTT `<prefix>/command` payloads mean; the comment at `mqtt_bridge_node.cpp:536–537` lists examples and must track the `.srv`.
 - **`MapArea.name`/`is_navigation_area`** (`ros2/src/mowgli_interfaces/msg/MapArea.msg`) are what `<prefix>/areas` echoes; `is_navigation_area` filtering in `poll_areas_step()` must keep matching the GUI's own `splitMapAreas` split (`gui/pkg/providers/ros.go`) or the two "which areas are mowable" views diverge.
-- **Battery % formula** (16.8/12.0 V) is duplicated in `diagnostics_node.cpp:409–410` and `mqtt_bridge_node.cpp:657–658`; change both.
+- **Battery % formula** is shared in `battery_percentage.hpp`; keep both nodes' declared endpoint defaults aligned with the robot template and BT, and retain the launch-injection regression when changing configuration wiring.
 - **MQTT topic list** in `ros2/src/mowgli_monitoring/config/mqtt_bridge.yaml:14–17`, `mqtt_bridge_node.hpp`'s doc comment, and [`docs/MQTT_CONTROL.md`](../../MQTT_CONTROL.md) is documentation only — the truth is the `full_topic()` call sites in `mqtt_bridge_node.cpp`. Keep all of them in sync when adding a topic.
 - **`motor_temp_warn_c` / `motor_temp_error_c`** are referenced as the ONLY temperature surface by `install/scripts/migrate_openmower.py:117–122` and the template comment `ros2/src/mowgli_bringup/config/mowgli_robot.yaml:515–521`; do not move them into `mowgli_robot.yaml` without updating both.
 - **Adding a dependency**: `ros2/src/mowgli_monitoring/CMakeLists.txt` (find_package + the four `ament_target_dependencies` lists :73–80, :101–108, :122–129, :175–182) AND `ros2/src/mowgli_monitoring/package.xml`.

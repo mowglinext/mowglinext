@@ -64,6 +64,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gnss_launch_config test/test_gnss_launch_config.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_foxglove_launch_config test/test_foxglove_launch_config.py
+    TIMEOUT 30
+  )
   # The GNSS sidecar's embedded launcher (install/compose/docker-compose.gps.yml)
   # keeps its defaults equal to the template and needs no host-side config.
   ament_add_pytest_test(test_gnss_sidecar_launcher test/test_gnss_sidecar_launcher.py
@@ -97,6 +100,9 @@ if(BUILD_TESTING)
   # injections in the launch files (num_headland_passes, mowing_enabled,
   # dock_max_retries, dock_use_charger_detection). AST-based, no ROS2 runtime.
   ament_add_pytest_test(test_launch_injection test/test_launch_injection.py
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_battery_launch_config test/test_battery_launch_config.py
     TIMEOUT 30
   )
 

@@ -88,7 +88,10 @@ them, and renaming the project orphans the maps volume.
 ## Phase 3 — Coordinated mowing
 
 Enabled per fleet with the DB flag `fleet.coordination.enabled` (default off).
-Everything below is inert while it is off.
+While it is off, the coordinator only clears its local BT's fleet assignment.
+It does this on disable and after GUI startup, retrying at the two-second tick
+cadence until acknowledged, then remaining silent. This reconciles stale
+exclusions if the BT outlives a GUI restart; it sends no START/STOP commands.
 
 ### 3a. Shared map
 

@@ -92,13 +92,15 @@ export const useWS = <T>(
     });
 
     const teardown = () => {
-        if (muxUnsubscribeRef.current) {
-            muxUnsubscribeRef.current();
-            muxUnsubscribeRef.current = null;
-        }
+        // Removing the final topic closes the shared socket synchronously.
+        // Intentional teardown must not report that close as a stream error.
         if (muxStatusUnsubRef.current) {
             muxStatusUnsubRef.current();
             muxStatusUnsubRef.current = null;
+        }
+        if (muxUnsubscribeRef.current) {
+            muxUnsubscribeRef.current();
+            muxUnsubscribeRef.current = null;
         }
         if (pubUriRef.current !== null) {
             pubUriRef.current = null;

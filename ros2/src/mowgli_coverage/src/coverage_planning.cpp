@@ -94,8 +94,9 @@ constexpr double kSwathRemainderTolM = 0.02;
 // turn-around (buildConnector's production min radius is 0.20 m), so
 // it bought no arc it was added for, yet it let a connector centerline ride
 // 3 cm PAST the recorded line — invisible to the server's 0.05 m verify slack —
-// which erodes the keep-inside contract that is the SHIPPED mode at the default
-// chassis_safety_inset (0.20 m == robot_width/2). Companion to
+// which erodes the contract that no driven centerline crosses the recorded line
+// (true at every chassis_safety_inset, including the 0.0 default where ring 0
+// rides exactly ON it). Companion to
 // kClearanceClampMarginM (see the second anonymous namespace below).
 constexpr double kOnEdgeTolM = 0.001;
 
@@ -1206,7 +1207,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // measured from the rotated cell's bbox edge (outermost swath at op_width/2).
   // Same convention, two implementations. So the term applies with rings OFF
   // too; dropping it there does not remove a correction, it inserts an
-  // op_width/2 OUTWARD bias into every swath — at the shipped defaults
+  // op_width/2 OUTWARD bias into every swath — at the then-shipped defaults
   // (inset 0.20, op_width 0.16) that made "no rings" leave a 0.20 m uncut border
   // versus 0.12 m for 2 rings, i.e. the feature that promises to mow closer to
   // the edge mowed 8 cm FURTHER from it.
