@@ -58,14 +58,15 @@ var fusionGraphTriggerServices = map[string]string{
 
 func MowgliNextRoutes(r *gin.RouterGroup, provider types.IRosProvider) {
 	group := r.Group("/mowglinext")
-	ServiceRoute(group, provider)
+	teleop := newTeleopController(provider)
+	ServiceRoute(group, provider, teleop)
 	AddMapAreaRoute(group, provider)
 	SetDockingPointRoute(group, provider)
 	ClearMapRoute(group, provider)
 	ReplaceMapRoute(group, provider)
 	SubscriberRoute(group, provider)
 	MultiplexRoute(group, provider)
-	PublisherRoute(group, provider)
+	PublisherRoute(group, teleop)
 }
 
 // topicSubscribeInterval returns the throttle interval (ms, -1 = unthrottled)
@@ -279,32 +280,22 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // @Tags mowglinext
 // @Param topic path string true "topic to publish to, could be: joy"
 // @Router /mowglinext/publish/{topic} [get]
-func PublisherRoute(group *gin.RouterGroup, provider types.IRosProvider) {
+func PublisherRoute(group *gin.RouterGroup, teleop *teleopController) {
 	group.GET("/publish/:topic", func(c *gin.Context) {
-		var err error
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
+		client := &teleopClient{conn: conn}
+		teleop.register(client)
+		defer teleop.unregister(client)
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
-				c.Error(err)
 				break
 			}
-			var msgObj geometry.TwistStamped
-			err = json.Unmarshal(msg, &msgObj)
-			if err != nil {
-				log.Printf("PublisherRoute: unmarshal error: %v", err)
-				continue
-			}
-			err = provider.Publish("/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", &msgObj)
-			if err != nil {
-				log.Printf("PublisherRoute: publish error: %v", err)
-				// Don't break — foxglove may reconnect; keep the browser WebSocket alive
-				continue
-			}
+			teleop.handle(client, msg)
 		}
 	})
 }
@@ -504,7 +495,7 @@ func subscribe(provider types.IRosProvider, c *gin.Context, conn *websocket.Conn
 // @Success 200 {object} OkResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /mowglinext/call/{command} [post]
-func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
+func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider, teleop *teleopController) {
 	group.POST("/call/:command", func(c *gin.Context) {
 		command := c.Param("command")
 		// Bound every ROS service call: foxglove's CallService waits on
@@ -520,6 +511,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		switch command {
 		case "high_level_control":
 			var CallReq mowgli.HighLevelControlReq
+			var CallRes mowgli.HighLevelControlRes
 			err = c.BindJSON(&CallReq)
 			if err != nil {
 				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
@@ -527,11 +519,18 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			var res mowgli.HighLevelControlRes
-			err = provider.CallService(ctx, "/behavior_tree_node/high_level_control", &CallReq, &res, "mowgli_interfaces/srv/HighLevelControl")
-			if err == nil && !res.Success {
-				err = errors.New("high_level_control rejected the command")
-			}
+			// Every high-level transition except entering a teleop mode revokes
+			// browser drive ownership. Keep the ROS call and teleop gate update
+			// ordered with every other transition, including global STOP.
+			err = teleop.highLevelTransition(CallReq.Command, func() error {
+				if callErr := provider.CallService(ctx, "/behavior_tree_node/high_level_control", &CallReq, &CallRes, "mowgli_interfaces/srv/HighLevelControl"); callErr != nil {
+					return callErr
+				}
+				if !CallRes.Success {
+					return errors.New("high_level_control rejected the command")
+				}
+				return nil
+			})
 		case "emergency":
 			var CallReq mowgli.EmergencyStopReq
 			err = c.BindJSON(&CallReq)
@@ -540,6 +539,9 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				// the frontend's useMowerAction reads res.error from JSON.
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
+			}
+			if CallReq.Emergency != 0 {
+				teleop.globalStop()
 			}
 			err = provider.CallService(ctx, "/hardware_bridge/emergency_stop", &CallReq, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
 		case "mow_enabled":
@@ -579,6 +581,9 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
+			// Starting autonomous movement also ends any manual drive lease,
+			// regardless of whether the blade will be running.
+			teleop.globalStop()
 			var res mowgli.StartInAreaRes
 			err = provider.CallService(ctx, "/behavior_tree_node/start_in_area", &CallReq, &res, "mowgli_interfaces/srv/StartInArea")
 			if err == nil && !res.Success {
