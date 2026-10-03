@@ -167,8 +167,8 @@ int main(void) {
     assert(commit() == PARAM_COMMIT_WRITTEN);
     boot(); assert(erases == 0 && fw_params_get(FW_PARAM_TILT_MS) == 300.0f);
 
-    /* 6. Full log: commits report LOG_FULL; the next boot erases once and
-     *    rewrites the loaded values, so nothing is lost. */
+    /* 6. Full log: no boot may erase the only committed parameter copy.
+     *    Repeated boots and refused commits leave it byte-identical. */
     const size_t rec = fw_param_log_record_words(FW_PARAM_COUNT - 1u);
     wipe(rec * 3u); boot();
     for (int i = 0; i < 3; ++i) {
@@ -178,11 +178,66 @@ int main(void) {
     fw_params_set(FW_PARAM_TILT_MS, 200.0f);
     assert(commit() == PARAM_COMMIT_LOG_FULL);
     assert(last_store.records_left == 0);
-    boot();
-    assert(erases == 1 && fw_params_get(FW_PARAM_TILT_MS) == 102.0f);
-    assert(stored_record_value(FW_PARAM_TILT_MS) == 102.0f);
-    fw_params_request_report(FW_PARAM_ID_ALL); run(400);
-    assert(last_store.boot_source == PARAM_BOOT_FLASH_ERASED && last_store.records_left == 2);
+    uint32_t saved_flash[MAX_WORDS];
+    memcpy(saved_flash, flash, sizeof(flash));
+    /* Including failure at each would-be replacement word: there must be no
+     * erase or write to interrupt when a committed copy is retained. */
+    for (size_t word = 0; word <= rec; ++word) {
+        fail_program_at = (unsigned)word;
+        boot();
+        assert(erases == 0 && programs == 0);
+        assert(fw_params_get(FW_PARAM_TILT_MS) == 102.0f);
+        assert(stored_record_value(FW_PARAM_TILT_MS) == 102.0f);
+        assert(memcmp(saved_flash, flash, sizeof(flash)) == 0);
+        fw_params_request_report(FW_PARAM_ID_ALL); run(400);
+        assert(last_store.boot_source == PARAM_BOOT_FLASH && last_store.records_left == 0);
+        assert(last_store.last_commit == PARAM_COMMIT_LOG_FULL);
+        fw_params_request_report(FW_PARAM_TILT_MS); run(20);
+        assert(last_value.flags & PARAM_VALUE_FLAG_PERSISTED);
+        assert(commit() == PARAM_COMMIT_UNCHANGED);
+        fw_params_set(FW_PARAM_TILT_MS, 200.0f);
+        assert(commit() == PARAM_COMMIT_LOG_FULL);
+        fw_params_request_report(FW_PARAM_TILT_MS); run(20);
+        assert(!(last_value.flags & PARAM_VALUE_FLAG_PERSISTED));
+        assert(memcmp(saved_flash, flash, sizeof(flash)) == 0);
+    }
+    fail_program_at = 0;
+
+    /* Reset after every append word, including the final commit marker.
+     * Boot must retain the prior set until the new set is fully committed,
+     * without modifying either a full log or a torn append. */
+    for (size_t written = 0; written <= rec; ++written) {
+        wipe(rec * 2u); boot();
+        fw_params_set(FW_PARAM_TILT_MS, 321.0f);
+        assert(commit() == PARAM_COMMIT_WRITTEN);
+        fw_params_set(FW_PARAM_TILT_MS, 400.0f);
+        fw_params_request_commit();
+        run(1);  /* start the asynchronous append */
+        run((unsigned)written);
+        memcpy(saved_flash, flash, sizeof(flash));
+        boot();
+        assert(erases == 0 && programs == 0);
+        assert(fw_params_get(FW_PARAM_TILT_MS) == (written == rec ? 400.0f : 321.0f));
+        assert(memcmp(saved_flash, flash, sizeof(flash)) == 0);
+    }
+
+    /* An unlocatable torn tail after a valid record also blocks appending,
+     * but must never cause the preceding committed record to be erased. */
+    wipe(rec * 3u); boot();
+    fw_params_set(FW_PARAM_TILT_MS, 321.0f);
+    assert(commit() == PARAM_COMMIT_WRITTEN);
+    flash[rec] = FW_PARAM_LOG_MAGIC;  /* reset before the header word */
+    memcpy(saved_flash, flash, sizeof(flash));
+    for (int reboot = 0; reboot < 3; ++reboot) {
+        boot();
+        assert(erases == 0 && programs == 0 && fw_params_get(FW_PARAM_TILT_MS) == 321.0f);
+        fw_params_request_report(FW_PARAM_ID_ALL); run(400);
+        assert(last_store.boot_source == PARAM_BOOT_FLASH && last_store.records_left == 0);
+        assert(last_store.last_commit == PARAM_COMMIT_LOG_FULL);
+        fw_params_set(FW_PARAM_TILT_MS, 400.0f);
+        assert(commit() == PARAM_COMMIT_LOG_FULL);
+        assert(memcmp(saved_flash, flash, sizeof(flash)) == 0);
+    }
 
     /* 7. Foreign data (e.g. stock firmware leftovers): erased, defaults apply. */
     wipe(MAX_WORDS); flash[0] = 0x20005000u; flash[1] = 0x08000131u; boot();
@@ -208,7 +263,7 @@ int main(void) {
     fail_program_at = programs + 3u;
     assert(commit() == PARAM_COMMIT_ERROR && fw_params_get(FW_PARAM_TILT_MS) == 450.0f);
     fail_program_at = 0;
-    assert(commit() == PARAM_COMMIT_LOG_FULL);  /* no appends until a boot erase */
+    assert(commit() == PARAM_COMMIT_LOG_FULL);  /* no appends in this boot */
 
     assert(spacing_violations == 0);
     puts("PASS: fw_params boot load, envelope, reports, commit dedupe, torn write, full log, foreign data, flash faults");
