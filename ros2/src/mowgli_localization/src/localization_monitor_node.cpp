@@ -153,9 +153,8 @@ void LocalizationMonitorNode::on_absolute_pose(
     return;
   }
 
-  gps_rtk_fixed_ = (msg->flags & Flags::FLAG_GPS_RTK_FIXED) != 0u;
-  gps_rtk_active_ = gps_rtk_fixed_ || ((msg->flags & Flags::FLAG_GPS_RTK_FLOAT) != 0u) ||
-                    ((msg->flags & Flags::FLAG_GPS_RTK) != 0u);
+  gps_rtk_fixed_ = RtkFixedFromAbsolutePoseFlags(msg->flags);
+  gps_rtk_active_ = RtkActiveFromAbsolutePoseFlags(msg->flags);
 }
 
 // ---------------------------------------------------------------------------

@@ -68,6 +68,18 @@ from robot_config_util import (  # noqa: E402
 )
 
 
+def _gnss_status_pairing_window_s(gnss_source: str) -> float:
+    # Direct Universal GNSS delivery was measured at only a few milliseconds,
+    # so retain the historical 50 ms association window there.
+    #
+    # The MAVROS canonical adapter deliberately holds /gps/fix for 100 ms while
+    # it pairs the private UG fix with GPS_RAW_INT/GPS2_RAW ellipsoid altitude.
+    # Real ARM64/Pixhawk measurements on 2026-10-03 showed fix-minus-status
+    # delivery skew of ~101-104 ms normally and 123.3 ms worst observed.
+    # 150 ms keeps useful headroom without adding that latency to direct GNSS.
+    return 0.15 if gnss_source == "mavros" else 0.05
+
+
 def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # Package directories
@@ -261,6 +273,7 @@ def generate_launch_description() -> LaunchDescription:
         raise RuntimeError(
             f"GNSS_SOURCE must be 'direct' or 'mavros', got {gnss_source!r}"
         )
+    gnss_status_pairing_window_s = _gnss_status_pairing_window_s(gnss_source)
 
     gnss_bridge_node = None
     if gnss_stack == "universal" and gnss_source == "direct":
@@ -635,6 +648,7 @@ def generate_launch_description() -> LaunchDescription:
             {
                 "datum_lat": datum_lat,
                 "datum_lon": datum_lon,
+                "status_pairing_window_s": gnss_status_pairing_window_s,
             },
             {"use_sim_time": use_sim_time},
         ],
