@@ -25,7 +25,7 @@
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_behavior/utility_nodes.hpp"
 #include "mowgli_interfaces/srv/blade_control.hpp"
-#include "tf2_ros/buffer.h"
+#include "tf2_ros/buffer.hpp"
 #include <gtest/gtest.h>
 
 using namespace mowgli_behavior;
