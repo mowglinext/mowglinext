@@ -4,6 +4,7 @@
  * @brief The flexible-length LowLevel config packet and the hall string.
  */
 
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -23,6 +24,10 @@ TEST(LowLevelConfig, WireSizeMatchesOpenMower)
 TEST(LowLevelConfig, DefaultsAreUnknownSoTheBoardKeepsItsOwn)
 {
   const auto cfg = ll::DefaultConfig();
+  EXPECT_EQ(cfg.options.dfp_is_5v, ll::OptionState::UNDEFINED);
+  EXPECT_EQ(cfg.options.background_sounds, ll::OptionState::UNDEFINED);
+  EXPECT_EQ(cfg.options.ignore_charging_current, ll::OptionState::UNDEFINED);
+  EXPECT_EQ(cfg.rain_threshold, 0xFFFFu);
   EXPECT_FLOAT_EQ(cfg.v_charge_cutoff, -1.0f);
   EXPECT_EQ(cfg.lift_period, 0xFFFFu);
   EXPECT_EQ(cfg.volume, 0xFFu);
@@ -102,4 +107,67 @@ TEST(LowLevelConfig, TooShortPayloadReturnsDefaults)
   defaults.volume = 42u;
   const auto back = ll::ParseConfigPayload(junk, sizeof(junk), defaults);
   EXPECT_EQ(back.volume, 42u);
+}
+
+// The regression this whole builder exists for: with no operator override the
+// packet must be byte-identical to the all-undefined default, so the Pico keeps
+// OpenMower's own values. Sending MowgliNext's STM32 template instead once set
+// lift_period to 1000 ms against the board's 100 ms — a 10x slower lift e-stop,
+// saved to the Pico's flash.
+TEST(BuildHighLevelConfig, NoOverrideSendsNothingTheBoardWouldApply)
+{
+  const auto built = ll::BuildHighLevelConfig(ll::ConfigOverrides{});
+  const auto reference = ll::DefaultConfig();
+  EXPECT_EQ(std::memcmp(&built, &reference, sizeof(ll::HighLevelConfig)), 0);
+  EXPECT_EQ(built.lift_period, 0xFFFFu);
+  EXPECT_EQ(built.tilt_period, 0xFFFFu);
+  EXPECT_LT(built.v_charge_cutoff, 0.0f);
+  EXPECT_LT(built.i_charge_cutoff, 0.0f);
+  EXPECT_LT(built.v_battery_cutoff, 0.0f);
+  for (const auto& hall : built.hall_configs)
+  {
+    EXPECT_EQ(hall.mode, ll::HallMode::UNDEFINED);
+  }
+}
+
+TEST(BuildHighLevelConfig, ExplicitOverridesAreSentVerbatim)
+{
+  ll::ConfigOverrides o;
+  o.v_charge_cutoff = 29.5;
+  o.i_charge_cutoff = 1.0;
+  o.lift_period_ms = 0;  // 0 is a real value: "disable", not "unknown"
+  o.tilt_period_ms = 1800;
+  o.ignore_charging_current = 1;
+  o.language = "de";
+  o.emergency_input_config = "!L,!L,S,S";
+  const auto cfg = ll::BuildHighLevelConfig(o);
+  EXPECT_FLOAT_EQ(cfg.v_charge_cutoff, 29.5f);
+  EXPECT_FLOAT_EQ(cfg.i_charge_cutoff, 1.0f);
+  EXPECT_LT(cfg.v_battery_cutoff, 0.0f);  // untouched field stays unknown
+  EXPECT_EQ(cfg.lift_period, 0u);
+  EXPECT_EQ(cfg.tilt_period, 1800u);
+  EXPECT_EQ(cfg.options.ignore_charging_current, ll::OptionState::ON);
+  EXPECT_EQ(cfg.options.dfp_is_5v, ll::OptionState::UNDEFINED);
+  EXPECT_EQ(cfg.language[0], 'd');
+  EXPECT_EQ(cfg.hall_configs[2].mode, ll::HallMode::STOP);
+}
+
+TEST(BuildHighLevelConfig, PeriodsNeverCollideWithTheUnknownSentinel)
+{
+  ll::ConfigOverrides o;
+  o.lift_period_ms = 70000;
+  const auto cfg = ll::BuildHighLevelConfig(o);
+  EXPECT_EQ(cfg.lift_period, 0xFFFEu);
+}
+
+TEST(BuildHighLevelConfig, NonFiniteOrNegativeVoltagesStayUnknown)
+{
+  ll::ConfigOverrides o;
+  o.v_charge_cutoff = std::nan("");
+  o.v_battery_full = -3.0;
+  o.ignore_charging_current = 7;  // not a tri-state value
+  const auto cfg = ll::BuildHighLevelConfig(o);
+  EXPECT_LT(cfg.v_charge_cutoff, 0.0f);
+  EXPECT_LT(cfg.v_battery_full, 0.0f);
+  EXPECT_EQ(cfg.options.ignore_charging_current, ll::OptionState::UNDEFINED);
 }

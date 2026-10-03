@@ -8,6 +8,7 @@ hardware_bridge:
     ll_serial_port: "/dev/ttyAMA0"
     ll_baud_rate: 115200
     ll_rx_timeout_s: 2.0      # reopen the port after this long without bytes
+    ll_status_timeout_s: 0.5  # no status this long -> every motor held at zero
     ll_read_rate: 100.0       # Hz — serial read tick
 
     # ── motor controllers ─────────────────────────────────────────────────
@@ -82,16 +83,25 @@ hardware_bridge:
     imu_cal_samples: 200
     imu_cal_auto_rest_sec: 15.0
 
-    # ── LowLevel config packet (charge / battery protection, hall inputs) ──
-    max_charge_voltage: 29.4
-    max_charge_current: 1.2
-    battery_cutoff_voltage: 29.0
-    battery_empty_voltage: 24.0
-    battery_full_voltage: 28.0
-    both_wheels_lift_emergency_ms: 1000
-    one_wheel_lift_emergency_ms: 2000
-    ignore_charging_current: false
+    # ── dock detection ───────────────────────────────────────────────────
+    # On the dock = charger voltage at the contacts (OpenMower mower_logic's
+    # own rule). NOT the LowLevel charging bit, which is the charge relay.
+    docked_charge_voltage: 10.0
+
+    # ── LowLevel config packet ────────────────────────────────────────────
+    # -1 / "" = send "undefined": the Pico keeps the defaults OpenMower chose
+    # for this hardware (lift 100 ms, tilt 2500 ms, charge 30 V / 1.5 A,
+    # battery cutoff 29 V). It saves whatever it receives to flash and does
+    # not clamp, so set these only deliberately (openmower_ll_* robot keys).
+    ll_v_charge_cutoff: -1.0
+    ll_i_charge_cutoff: -1.0
+    ll_v_battery_cutoff: -1.0
+    ll_v_battery_empty: -1.0
+    ll_v_battery_full: -1.0
+    ll_lift_period_ms: -1
+    ll_tilt_period_ms: -1
+    ll_ignore_charging_current: -1   # -1 keep, 0 off, 1 on
     ll_language: "en"
     # OpenMower OM_EMERGENCY_INPUT_CONFIG, e.g. "!L,!L,S,S". Empty keeps the
-    # board's compiled hall configuration.
+    # board's hall configuration.
     emergency_input_config: ""

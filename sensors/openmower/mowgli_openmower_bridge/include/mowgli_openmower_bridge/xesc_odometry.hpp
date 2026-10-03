@@ -23,6 +23,22 @@
 namespace mowgli_openmower_bridge
 {
 
+/// Largest wheel-surface speed believed from a tick delta: four times the
+/// 0.5 m/s the stack ever commands. Anything faster is a counter
+/// DISCONTINUITY, not motion — an xESC brown-out restarts its tachometer at 0,
+/// and the unsigned difference then wraps to billions of ticks (the
+/// simulation measured a 2.2e7 m/s /wheel_odom spike from exactly that).
+constexpr double kMaxPlausibleWheelSpeedMps = 2.0;
+/// Absolute slack so a scheduling hiccup on a slow tick is never misread.
+constexpr int64_t kTickDeltaSlack = 50;
+
+[[nodiscard]] inline bool IsPlausibleTickDelta(int64_t delta, double ticks_per_meter, double dt_s)
+{
+  const double limit =
+      kMaxPlausibleWheelSpeedMps * ticks_per_meter * std::max(dt_s, 0.0) + kTickDeltaSlack;
+  return std::abs(static_cast<double>(delta)) <= limit;
+}
+
 struct WheelOdometrySample
 {
   double vx_mps{0.0};

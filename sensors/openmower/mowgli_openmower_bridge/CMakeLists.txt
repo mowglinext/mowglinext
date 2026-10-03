@@ -114,7 +114,8 @@ if(BUILD_TESTING)
       test_emergency_tracker
       test_lowlevel_config
       test_imu_bias_estimator
-      test_blade_policy)
+      test_blade_policy
+      test_power_semantics)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} mowgli_openmower_bridge_core)
   endforeach()
