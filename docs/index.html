@@ -180,7 +180,7 @@
     <div class="feature-copy">
       <span class="eyebrow">03 · Obstacles</span>
       <h2 class="display h-md">Sees the tree. Goes around it.</h2>
-      <p class="lede">LiDAR steers around obstacles in real time instead of stopping, then rejoins the stripe. New obstacles become map suggestions you approve.</p>
+      <p class="lede">LiDAR steers around obstacles in real time instead of stopping, then rejoins the stripe. The same sensor keeps the robot localized when RTK drops out.</p>
       <div class="chips"><span class="chip">LD19 · RPLIDAR · STL27L</span><span class="chip">Collision monitor</span><span class="chip">Dig detection</span></div>
     </div>
   </article>
@@ -247,7 +247,7 @@
     <div><span class="eyebrow-muted">Mower</span><strong>YardForce 500 / 500B</strong><span>stock mainboard</span></div>
     <div><span class="eyebrow-muted">Compute</span><strong>Raspberry Pi 4 / 5</strong><span>RK3566 / RK3588, arm64 or amd64</span></div>
     <div><span class="eyebrow-muted">RTK GNSS</span><strong>u-blox ZED-F9P</strong><span>Unicore UM98x, generic NMEA</span></div>
-    <div><span class="eyebrow-muted">LiDAR</span><strong>LD06 / LD14 / LD19</strong><span>RPLIDAR A1–A3, STL27L</span></div>
+    <div><span class="eyebrow-muted">LiDAR · obstacles + RTK backup</span><strong>LD06 / LD14 / LD19</strong><span>RPLIDAR A1–A3, STL27L</span></div>
     <div><span class="eyebrow-muted">Other boards</span><strong>OpenMower v1 <span class="tag">soon</span></strong><span>Pixhawk via MAVROS <span class="tag">soon</span></span></div>
   </div>
 </section>
@@ -316,7 +316,7 @@
 
       <div class="composer-group" id="lidar-group">
         <h3><small>Step 3</small>LiDAR</h3>
-        <p class="composer-hint">Needed for obstacle avoidance and the LiDAR map anchor. Without it the robot runs GPS-only.</p>
+        <p class="composer-hint">LiDAR does two jobs: it steers the robot around obstacles, and it keeps the robot localized against its own map when RTK drops out. Without it the robot runs GPS-only.</p>
         <div class="composer-options" data-group="lidar">
           <button class="composer-option active" data-value="ldlidar-uart" aria-pressed="true">
             <span class="option-head"><span class="option-label">LDLiDAR / UART</span></span>
@@ -344,7 +344,7 @@
           </button>
           <button class="composer-option" data-value="none" aria-pressed="false">
             <span class="option-head"><span class="option-label">None</span></span>
-            <span class="option-desc">GPS-only, no obstacle avoidance</span>
+            <span class="option-desc">GPS-only — no obstacle avoidance, no RTK-loss fallback</span>
           </button>
         </div>
       </div>
