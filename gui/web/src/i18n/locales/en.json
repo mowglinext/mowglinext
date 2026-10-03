@@ -4293,7 +4293,7 @@
   "fleetPage": {
     "betaTag": "Beta",
     "betaTitle": "Multi-robot support is a beta feature",
-    "betaBody": "The fleet view and coordinated mowing have not been validated on real mowers yet. Keep an eye on the robots while you try it, and report what you see on GitHub.",
+    "betaBody": "The fleet view and coordinated mowing are in beta and still evolving. Keep an eye on the robots while you use them, and report what you see on GitHub.",
     "thisRobot": "this robot",
     "openGui": "Open this robot's GUI",
     "removeConfirm": "Remove {{robot}} from the fleet? It will forget this robot too.",
