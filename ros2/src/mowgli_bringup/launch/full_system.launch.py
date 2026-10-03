@@ -256,9 +256,14 @@ def generate_launch_description() -> LaunchDescription:
     # The Universal GNSS receiver runtime stays in the gps sidecar.
     # This process owns only its public-topic contract adapter.
     gnss_stack = str(robot_params.get("gnss_stack", "universal")).strip().lower()
+    gnss_source = os.environ.get("GNSS_SOURCE", "direct").strip().lower()
+    if gnss_source not in ("direct", "mavros"):
+        raise RuntimeError(
+            f"GNSS_SOURCE must be 'direct' or 'mavros', got {gnss_source!r}"
+        )
 
     gnss_bridge_node = None
-    if gnss_stack == "universal":
+    if gnss_stack == "universal" and gnss_source == "direct":
         gnss_bridge_node = Node(
             package="mowgli_gnss_bridge",
             executable="universal_gnss_topic_bridge",

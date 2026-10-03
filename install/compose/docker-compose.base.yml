@@ -21,6 +21,8 @@ x-ros2-env: &ros2-env
   # independent of HARDWARE_BACKEND: MAVROS robots can still use the Universal
   # GNSS sidecar.
   GNSS_STACK: ${GNSS_STACK:-universal}
+  GNSS_SOURCE: ${GNSS_SOURCE:-direct}
+  GNSS_MAVROS_SOURCE: ${GNSS_MAVROS_SOURCE:-gps1}
   # full_system.launch.py reads these to pick the GNSS adapter; without them
   # the main container always saw the gps/UBX defaults, so unicore/NMEA installs
   # parsed the wrong backend in navsat_to_absolute_pose / gnss status.
