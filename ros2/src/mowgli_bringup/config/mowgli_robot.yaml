@@ -536,20 +536,22 @@ mowgli:
     # single perimeter pass, 2 for double, regardless of headland_width.
     # -1 (or any negative) = NONE — no perimeter rings at all (#429). The
     # back-and-forth swaths become the outermost driven pass. Three distances,
-    # easy to conflate — at the defaults below (chassis_safety_inset 0.20,
-    # op_width = tool_width − swath_overlap = 0.16):
-    #   * outermost swath CENTERLINE = chassis_safety_inset (0.20 m) inside the
-    #     recorded boundary — exactly the line ring 0 would have driven, because
-    #     F2C insets the outermost swath by op_width/2 the same way it insets
-    #     ring 0 (swath_generator_base.cpp sx[0] = 0.5*cov_width).
-    #   * uncut LATERAL band = 0.20 − 0.08 = ~0.12 m, the same band the rings
-    #     leave. Sideways, NONE does not mow closer to the edge, nor further.
-    #   * swath ENDS also land on that ~0.12 m line, because F2C clips each
-    #     sweep line to the planning cell. With rings on the ends sit far deeper
-    #     (the rings absorb that band), so at a ROW END the robot noses ~8 cm
-    #     closer to the boundary than it ever does with rings on. That is the
-    #     cost of having no apron, and it is head-on rather than parallel, where
-    #     chassis_safety_inset's half-chassis-width reasoning does not apply.
+    # easy to conflate — at the defaults below (chassis_safety_inset 0.0,
+    # op_width = tool_width − swath_overlap = 0.16, half cut width 0.09):
+    #   * outermost swath CENTERLINE = at most op_width/2 = 0.08 m inside the
+    #     recorded boundary. With rings, ring 0 rides ON the line instead (the
+    #     planner expands the field outward by op_width/2); without rings it
+    #     never expands the field (the offset is floored at 0), so NONE sits
+    #     8 cm further in. The two only coincide when
+    #     chassis_safety_inset >= op_width/2.
+    #   * uncut LATERAL band: none either way — 0.08 m is inside the 0.09 m
+    #     half cut width, so the blade still reaches the line.
+    #   * swath ENDS land ON the recorded line, because F2C clips each sweep
+    #     line to the planning cell and nothing shifts it. With rings on the
+    #     ends sit n_rings × op_width deeper, so at a ROW END the path runs
+    #     right up to the boundary head-on. That is the cost of having no
+    #     apron, and chassis_safety_inset's half-chassis-width reasoning
+    #     (lateral) does not apply to it.
     # Side effect: with no mowed apron beyond the swath ends, row-end U-turns
     # degrade to straight pivot-through corners instead of smooth arcs.
     # FIELD TEST OWED before trusting NONE on a real lawn (#429).

@@ -83,7 +83,6 @@ On mobile, the dashboard stacks vertically: compact hero card, live mini-map, 2x
 | **Statistics** | Hero stat cards (distance, hours, completion rate, runs), weekly bar chart, a year-of-mowing heatmap, zone coverage bars, session history table |
 | **Settings** | Grouped configuration editor (Appearance, Hardware, Drive Motor, NTRIP Corrections, GPS & Positioning, Sensors, **Localization**, Mowing, Docking, Battery, Safety, Obstacles, Navigation, Rain, Status LEDs, IrriSense, Remote access, Notifications, Advanced) |
 | **Parameters** | Live ROS2 parameter editor -- read and write running-node parameters without a restart, with a basic/middle/expert tier filter and a confirm step on dangerous keys |
-
 | **Onboarding** | First-time setup wizard (9 steps: welcome, robot model, firmware, NTRIP, GPS, datum, sensors, calibration, done) |
 | **Diagnostics** | Health hero + alert list, then tabs: System (containers, CPU temp, rosbag, raw `/diagnostics`), Localization (filtered pose, **Fusion Graph (iSAM2)**, heading sources), Robot (behavior tree + coverage, sensors), Calibration (config cross-checks, calibration status) |
 | **Logs** | Live container log viewer -- pick any container on the host (the `mowgli-*` ones carry an app label), tail it with a severity filter |

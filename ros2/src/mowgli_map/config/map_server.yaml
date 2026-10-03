@@ -178,10 +178,11 @@ map_server_node:
     # etc).
     #
     # This MUST stay a soft cost, never a lethal value:
-    #   * chassis_safety_inset defaults to the SAME 0.20 m. The outermost
-    #     coverage ring is planned exactly chassis_safety_inset inside the
-    #     line, so a lethal band here plus inflation_radius (0.20 m) would
-    #     swallow the ring itself and reopen the START_OCCUPIED skip cascade
+    #   * The outermost coverage ring is planned exactly
+    #     chassis_safety_inset inside the line — ON it at the 0.0 default
+    #     (0.20 m until 2026-09-16, the same width as this band) — so a
+    #     lethal band here plus inflation_radius (0.20 m) would swallow the
+    #     ring itself and reopen the START_OCCUPIED skip cascade
     #     (issue #487) -- a regression already paid for once (2026-07-23,
     #     the commit that introduced chassis_safety_inset in the first
     #     place to un-wedge that same ring).

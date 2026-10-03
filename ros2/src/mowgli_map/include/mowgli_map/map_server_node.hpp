@@ -890,8 +890,9 @@ private:
   ///
   /// This was a LETHAL band in an earlier version of this change and was
   /// reworked to mid-cost after review: lethal here collides with
-  /// chassis_safety_inset (both default to 0.20 m — the outermost coverage
-  /// ring is planned exactly chassis_safety_inset inside the line, so a
+  /// chassis_safety_inset (the outermost coverage ring is planned exactly
+  /// chassis_safety_inset inside the line — ON it at the 0.0 default, 0.20 m
+  /// until 2026-09-16 — so a
   /// lethal band there plus inflation_radius would swallow the ring itself
   /// and reopen the START_OCCUPIED skip cascade, issue #487) and would also
   /// wall off any area-to-area seam narrower than 2x the inflated margin.
