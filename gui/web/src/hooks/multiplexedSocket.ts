@@ -30,6 +30,14 @@ type StatusListener = (status: MultiplexStatus) => void;
 /** Minimum interval between "malformed frame" console warnings. */
 const DECODE_WARN_INTERVAL_MS = 10_000;
 
+const STREAM_SILENCE_MS = 30_000;
+// These topics normally publish continuously. Latched/on-change topics (map,
+// path, plan, etc.) may legitimately stay quiet indefinitely.
+const CONTINUOUS_TOPICS = new Set([
+    "status", "highLevelStatus", "gps", "gnssStatus", "pose", "imu", "ticks",
+    "wheelOdom", "lidar", "power", "diagnostics", "fusionDiag", "fusionRaw",
+]);
+
 interface ServerFrame {
     topic: string;
     data: unknown;
@@ -40,7 +48,7 @@ interface ClientOp {
     topic: string;
 }
 
-class MultiplexedSocket {
+export class MultiplexedSocket {
     private url: string;
     private ws: WebSocket | null = null;
     private state: "idle" | "connecting" | "open" = "idle";
@@ -50,6 +58,8 @@ class MultiplexedSocket {
     private pendingFirst = new WeakSet<Listener>();
     private reconnectAttempt = 0;
     private reconnectTimer: number | null = null;
+    private silenceTimer: number | null = null;
+    private lastFrameAt = 0;
     private statusListeners = new Set<StatusListener>();
     private lastDecodeWarnAt = 0;
 
@@ -107,6 +117,7 @@ class MultiplexedSocket {
         } else if (this.state === "open" && isFirstSubscriberForTopic) {
             this.send({op: "subscribe", topic});
         }
+        this.updateSilenceWatchdog();
 
         return () => this.unsubscribe(topic, listener);
     }
@@ -128,21 +139,17 @@ class MultiplexedSocket {
                 clearTimeout(this.reconnectTimer);
                 this.reconnectTimer = null;
             }
-            // Close the socket whether open OR still connecting — an in-flight
-            // handshake with no listeners left would otherwise become an
-            // orphan connection. onclose will not reconnect because the
-            // listeners map is now empty.
-            if (this.ws) {
-                try { this.ws.close(); } catch { /* ignore */ }
-            }
+            // Retire immediately: close events can be delayed or never arrive.
+            // A new subscriber must not inherit this closing socket.
+            this.disconnect();
         }
+        this.updateSilenceWatchdog();
     }
 
     private connect(): void {
         if (this.state !== "idle") return;
         if (this.listeners.size === 0) return;
         this.state = "connecting";
-        this.notifyStatus();
 
         const ws = new WebSocket(this.url);
         // Server frames are MessagePack binary; receive them as ArrayBuffer.
@@ -150,33 +157,41 @@ class MultiplexedSocket {
         this.ws = ws;
 
         ws.onopen = () => {
+            if (this.ws !== ws) return;
             // Every subscriber may have gone away during the handshake —
             // don't keep an orphan connection alive.
             if (this.listeners.size === 0) {
-                try { ws.close(); } catch { /* ignore */ }
+                this.disconnect();
                 return;
             }
             this.state = "open";
             this.reconnectAttempt = 0;
-            this.notifyStatus();
             // Re-subscribe to every topic that still has listeners.
             for (const topic of this.listeners.keys()) {
                 this.send({op: "subscribe", topic});
             }
+            this.updateSilenceWatchdog();
+            this.notifyStatus();
         };
 
         ws.onmessage = (e: MessageEvent) => {
+            if (this.ws !== ws) return;
             // MessagePack binary frame → {topic, data: <decoded object>}.
+            const data: unknown = e.data;
+            if (!(data instanceof ArrayBuffer)) return;
             let frame: ServerFrame;
             try {
-                if (!(e.data instanceof ArrayBuffer)) return;
-                frame = unpack(new Uint8Array(e.data)) as ServerFrame;
+                frame = unpack(new Uint8Array(data)) as ServerFrame;
+                if (!frame || typeof frame.topic !== "string" || !("data" in frame)) return;
             } catch (err) {
-                this.warnDecodeFailure(e.data, err);
+                this.warnDecodeFailure(data, err);
                 return;
             }
             const set = this.listeners.get(frame.topic);
             if (!set || set.size === 0) return;
+            // Transport liveness only: a cached ROS value is not evidence of a
+            // fresh physical observation. Use a monotonic clock for delivery.
+            this.lastFrameAt = performance.now();
             // Snapshot listeners so a callback that unsubscribes mid-iteration
             // does not affect the current dispatch.
             const snapshot = Array.from(set);
@@ -192,18 +207,63 @@ class MultiplexedSocket {
         };
 
         ws.onerror = () => {
-            try { ws.close(); } catch { /* ignore */ }
+            if (this.ws !== ws) return;
+            this.disconnect();
+            this.scheduleReconnect();
         };
 
         ws.onclose = () => {
-            this.ws = null;
-            this.state = "idle";
-            this.notifyStatus();
-            // Reconnect only if there's still something to listen for.
-            if (this.listeners.size > 0) {
-                this.scheduleReconnect();
-            }
+            if (this.ws !== ws) return;
+            this.disconnect();
+            this.scheduleReconnect();
         };
+        this.notifyStatus();
+    }
+
+    private disconnect(): void {
+        this.stopSilenceWatchdog();
+        const ws = this.ws;
+        this.ws = null;
+        this.state = "idle";
+        if (ws) {
+            // Neither delayed close events nor queued messages from a retired
+            // socket may affect its replacement.
+            ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+            try { ws.close(); } catch { /* best effort */ }
+        }
+        this.notifyStatus();
+    }
+
+    private stopSilenceWatchdog(): void {
+        if (this.silenceTimer != null) {
+            clearTimeout(this.silenceTimer);
+            this.silenceTimer = null;
+        }
+    }
+
+    private updateSilenceWatchdog(): void {
+        const expectsTraffic = Array.from(this.listeners.keys()).some(topic => CONTINUOUS_TOPICS.has(topic));
+        if (this.state !== "open" || !expectsTraffic) {
+            this.stopSilenceWatchdog();
+        } else if (this.silenceTimer == null) {
+            // Give a newly opened connection or newly enabled continuous
+            // subscription the full grace period, even after a quiet map view.
+            this.lastFrameAt = performance.now();
+            this.silenceTimer = window.setTimeout(() => this.checkSilence(), STREAM_SILENCE_MS);
+        }
+    }
+
+    private checkSilence(): void {
+        this.silenceTimer = null;
+        const remaining = STREAM_SILENCE_MS - (performance.now() - this.lastFrameAt);
+        if (remaining > 0) {
+            // Incoming frames update the timestamp without allocating a timer
+            // for every high-rate ROS message.
+            this.silenceTimer = window.setTimeout(() => this.checkSilence(), remaining);
+            return;
+        }
+        this.disconnect();
+        this.scheduleReconnect();
     }
 
     /**
@@ -226,6 +286,7 @@ class MultiplexedSocket {
     }
 
     private scheduleReconnect(): void {
+        if (this.state !== "idle" || this.listeners.size === 0) return;
         if (this.reconnectTimer != null) return;
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), 30000);
         this.reconnectAttempt += 1;
