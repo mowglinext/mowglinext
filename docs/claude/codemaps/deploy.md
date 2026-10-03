@@ -123,10 +123,9 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `docker/logs/*.py`, `docker/logs/mow_sessions/*.py` | 37–130 each | Ad-hoc field-analysis tools (`motion_test.py`, `yaw_compare.py`, `xtrack.py`, `analyze_swath_turns.py`, `square_test.py`, …) |
 | `docker/logs/mow_sessions/*.md` | 70 / 135 | Archived 2026-06-11 fusion-graph field reviews |
 | **`sensors/`** | | |
-| `sensors/gps/Dockerfile` | 91 | Universal GNSS sidecar image — **build context = repo root**; builds `mowgli_interfaces`, `universal_gnss_ros2`, `mowgli_gnss_bridge` + the `gnss_tools` CLI into `/opt/gnss_sidecar` |
-| `sensors/gps/start_gps.sh` | 599 | Image CMD: resolves config (YAML → env → default), applies the receiver profile, then runs `receiver_node` + topic bridge + optional `ntrip_node` |
-| `sensors/gps/universal_gnss_topic_bridge.py` | 406 | Retained Python bridge (`GNSS_BRIDGE_IMPL=python`) |
-| `sensors/gps/ros2_entrypoint.sh` | 12 | Sources `/opt/ros/lyrical` + `/opt/gnss_sidecar` |
+| `sensors/gps/Dockerfile`, `start_gps.sh`, `ros2_entrypoint.sh` | — | **Historical GNSS sidecar implementation; no longer built or deployed.** Runtime GNSS now uses the external `${UNIVERSAL_GNSS_IMAGE}` selected by the installer compose fragments. |
+| `sensors/mavros/{README.md,image.env,test_integration.py}` | — | Source-free MowgliNext integration contract for the independently built MowgliMAVROS sidecar: image pin, ownership/device/config documentation, and static validation. It does **not** build or vendor MowgliMAVROS. |
+| `sensors/gps/universal_gnss_topic_bridge.py` | 406 | Retained historical Python bridge implementation; not the deployed GNSS sidecar entrypoint. |
 | `sensors/gps/mowgli_gnss_bridge/src/universal_gnss_topic_bridge.cpp` | 489 | Default C++ bridge: universal→public enum/capability projection + diagnostics merge |
 | `sensors/gps/mowgli_gnss_bridge/include/mowgli_gnss_bridge/universal_gnss_topic_bridge.hpp` | 78 | Node class, pub/sub members, QoS contract |
 | `sensors/gps/mowgli_gnss_bridge/src/main.cpp` | 16 | `rclcpp::spin` entry |
@@ -148,11 +147,12 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 
 | `.env` key | Selects (file:line) | Container | Reaches the process as | Ends up as |
 |---|---|---|---|---|
-| `HARDWARE_BACKEND` = `mavros` | `compose.sh` L127 → `docker-compose.mavros.yml` | `mowgli-mavros` (no standalone `mowgli-ntrip` any more — removed `bfd44f1a`) | container env | forces `GNSS_BACKEND=disabled`, `GNSS_STACK=disabled` (`env.sh` L303–305) |
-| `HARDWARE_BACKEND` = `openmower` | `compose.sh` → `docker-compose.openmower.yml` | `mowgli-openmower` (+ `mowgli-gps` as usual) | container env; `mowgli.launch.py` reads `HARDWARE_BACKEND` and **skips `hardware_bridge_node`** for anything but `mowgli` | GNSS stays universal; `write_config` seeds `ticks_per_meter: 1600.0` once |
+| `HARDWARE_BACKEND` (`mowgli`\|`mavros`\|`openmower`) | `compose.sh` selects the robot hardware fragment | `mowgli-ros2` plus the selected hardware sidecar where applicable | container env | robot propulsion/IMU/battery hardware backend; **does not select the GNSS source** |
+| `GNSS_SOURCE` (`direct`\|`mavros`) | `compose.sh` selects `docker-compose.gps.yml` or `docker-compose.gps-mavros.yml` independently from `HARDWARE_BACKEND` | `mowgli-gps`, `mowgli-ros2`, `mowgli-mavros` | container env | `direct`: Universal GNSS owns the receiver; `mavros`: Universal GNSS consumes the selected MAVROS GNSS source and provides NTRIP/RTCM |
+| `GNSS_MAVROS_SOURCE` (`gps1`\|`gps2`) | MAVROS GNSS source selection | `mowgli-gps`, `mowgli-ros2`, `mowgli-mavros` | container env | selects `/mavros/universal_gnss/<gps1|gps2>/...` when `GNSS_SOURCE=mavros` |
+| `GNSS_STACK` (`universal`\|`disabled`), `GNSS_BACKEND` | installer/runtime compatibility contract | GNSS-capable services | container env | keeps Universal GNSS enablement independent from `HARDWARE_BACKEND`; direct receiver configuration itself comes from `mowgli_robot.yaml` |
+| `HARDWARE_BACKEND` = `openmower` | `compose.sh` → `docker-compose.openmower.yml` | `mowgli-openmower` (+ GNSS sidecar according to `GNSS_SOURCE`) | container env; `mowgli.launch.py` skips `hardware_bridge_node` for anything but `mowgli` | GNSS remains independently selected; `write_config` seeds `ticks_per_meter: 1600.0` once |
 | `OPENMOWER_LL_PORT`, `OPENMOWER_XESC_TYPE`, `OPENMOWER_XESC_{LEFT,RIGHT,MOW}_PORT`, `OPENMOWER_ENABLED` | `env.sh` `setup_env` | `mowgli-openmower` | container env → `openmower_bridge.launch.py` | defaults `/dev/ttyAMA0`, `xesc_mini`, `/dev/ttyAMA5`/`3`/`4` |
-| `GNSS_STACK` (`universal`\|`disabled`), `GNSS_BACKEND` | `compose.sh` L72–95 (`compose_gnss_service_name` → service `gps`) | `mowgli-gps` | `GNSS_STACK` env; `start_gps.sh` L389 rejects `disabled` | which sidecar (if any) runs |
-| — (removed 2026-09-19, `bfd44f1a`) | `GNSS_RECEIVER_FAMILY`/`GNSS_TRANSPORT`/`GNSS_SERIAL_DEVICE`/`GNSS_SERIAL_BAUD`/`GNSS_FRAME_ID`/`GNSS_NTRIP_*` no longer exist as compose env vars — `docker-compose.gps.yml`'s inline launcher reads `/config/mowgli_robot.yaml` directly and execs `ros2 launch universal_gnss_ros2 receiver_and_ntrip.launch.py`; `sensors/gps/start_gps.sh`'s `resolve_*`/`resolve_ntrip_*` functions are ORPHANED (not run in the deployed container) | `mowgli-gps` | n/a | n/a |
 | `LIDAR_ENABLED` + `LIDAR_TYPE` | `compose.sh` L102–117 | `mowgli-lidar` | — | **container presence only.** Deliberately NOT passed to `mowgli-ros2` (`docker-compose.base.yml` L13–17); the ROS-side LiDAR mode is `mowgli_robot.yaml:lidar_enabled` |
 | `LIDAR_LDLIDAR_IMAGE`/`LIDAR_RPLIDAR_IMAGE`/`LIDAR_STL27L_IMAGE` | `config.sh` `recompute_image_defaults` (per `LIDAR_TYPE`) | `mowgli-lidar` | image ref | — |
 | `LIDAR_PORT` / `LIDAR_BAUD` / `LIDAR_MODEL` | rplidar L26–27, stl27l L26–30 | `mowgli-lidar` | `serial_port:=`/`serial_baudrate:=` (rplidar) or `-p port_name/port_baudrate/product_name` (stl27l) | driver params. **ldlidar ignores them** — hardcoded in `sensors/lidar-ldlidar/ldlidar.yaml` L6–7 |
@@ -176,18 +176,19 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | Host path | Container path | Mode | Service |
 |---|---|---|---|
 | `./docker/config/mowgli` | `/ros2_ws/config` | **rw** | `mowgli` (base L52 — calibration write-back) |
-| `./docker/config/mowgli` | `/config` | ro | `gps` (gps L60; `start_gps.sh` reads `/config/mowgli_robot.yaml`) |
+| `./docker/config/mowgli` | `/config` | ro | `gps`; the external Universal GNSS runtime reads `/config/mowgli_robot.yaml` |
 | `./docker/config/mowgli` | `/mowgli_config` | rw | `gui` (gui L29) |
-| `./docker/config/mowgli` | `/ros2_ws/config` | ro | `ntrip` (mavros L42) |
 | `./docker/config/cyclonedds.xml` | `/cyclonedds.xml` | ro | every ROS service |
 | `./docker/config/om` / `./docker/config/db` / `./docker` | `/config` / `/db` / `/runtime_config` | ro / rw / rw | `gui` |
-| `/dev`, `/var/run/docker.sock` | same | — | privileged services / `gui` + `watchtower` |
+| `/dev`, `/var/run/docker.sock` | same | — | privileged hardware services / `gui` as required by their compose fragments |
 
 ### Sensor container topic contract
 
 | Container | Publishes | Notes |
 |---|---|---|
-| `mowgli-gps` | `/gps/fix` (`sensor_msgs/NavSatFix`), `/gps/status` (`mowgli_interfaces/GnssStatus`), `/rtcm` (`rtcm_msgs/Message`), `/diagnostics` | internal hops `/_gps_internal/universal/status` and `/_gps_internal/universal/rtcm` (`start_gps.sh` L417–418) are bridged to the public names |
+| `mowgli-gps` (`GNSS_SOURCE=direct`) | Universal GNSS receiver/status/fix/RTCM topics | External Universal GNSS receiver runtime; `mowgli-ros2` runs the Mowgli public-topic adapter for the direct path. |
+| `mowgli-gps` (`GNSS_SOURCE=mavros`) | `/rtcm` (`universal_gnss_msgs/RtcmFrame`) | NTRIP-only Universal GNSS runtime; subscribes to `/mavros/universal_gnss/<gps1|gps2>/status` for GGA/status and publishes RTCM for the MAVROS Universal GNSS plugin. |
+| `mowgli-mavros` | `/mavros/universal_gnss/<gps1|gps2>/status`, `/mavros/universal_gnss/<gps1|gps2>/fix`; subscribes `/rtcm` in MAVROS GNSS mode | Universal GNSS MAVROS plugin exposes the FCU GNSS through the canonical UG messages and forwards RTCM to the FCU as MAVLink `GPS_RTCM_DATA`. |
 | `mowgli-lidar` | `/scan` (`sensor_msgs/LaserScan`), `frame_id: lidar_link` | ldlidar remaps `~/scan`→`/scan` and lifecycle-autostarts |
 
 `mowgli_gnss_bridge` params (`universal_gnss_topic_bridge.cpp` L271–284): `backend` (`universal`), `receiver_family` (`auto`), `frame_id` (`gps_link`), `input_status_topic`, `output_status_topic`, `input_diagnostics_topic`, `input_rtcm_topic`, `output_rtcm_topic`. QoS: reliable depth 10 (status/diagnostics), depth 50 (RTCM).
@@ -221,13 +222,14 @@ bash install/mowglinext.sh --branch=dev --image-tag=dev --gnss=auto --gnss-conne
 # Simulation
 docker compose -f docker/docker-compose.simulation.yaml up dev-sim
 
-# Sensor images (gps needs the REPO ROOT as context)
-docker build -t mowgli-gps -f sensors/gps/Dockerfile .
+# Sensor images still owned by this repository
 docker build -t mowgli-lidar --target runtime sensors/lidar-ldlidar/
-GNSS_DRY_RUN=true GNSS_CONFIG_PATH=install/config/mowgli/mowgli_robot.yaml bash sensors/gps/start_gps.sh   # prints the commands, launches nothing
+
+# External sidecar contract
+python3 sensors/mavros/test_integration.py
 ```
 
-CI: sensor images build via `.github/workflows/sensors-{gps,openmower,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`, each calling the reusable `_sensor-docker.yml` (multi-arch amd64+arm64, push-by-digest then manifest merge; `sensors-gps.yml` and `sensors-openmower.yml` carry smoke tests plus a gtest job). `ros2-docker.yml` builds `mowgli-ros2`, `gui-docker.yml` builds `mowglinext-gui`. `ros2-ci.yml` watches `install/config/mowgli/**` (L9, L76) for the config-drift job. **No workflow runs `install/test_mowglinext.sh` or `install/tests/*` — run them by hand before touching the installer.** No workflow builds a `mavros` image, though `MAVROS_IMAGE` defaults to one.
+CI: LiDAR sensor images and the OpenMower image build through their dedicated sensor workflows and the reusable sensor Docker workflow. Universal GNSS is consumed as the external `${UNIVERSAL_GNSS_IMAGE}` and is not built from `sensors/gps/Dockerfile`. `sensors-mavros.yml` runs the source-level external-sidecar contract check and never builds or publishes MowgliMAVROS. `ros2-docker.yml` builds `mowgli-ros2`, `gui-docker.yml` builds `mowglinext-gui`. `ros2-ci.yml` watches `install/config/mowgli/**` (L9, L76) for the config-drift job. **No workflow runs `install/test_mowglinext.sh` or `install/tests/*` — run them by hand before touching the installer.**
 
 ## Change coupling — "if you change X, also update Y"
 
