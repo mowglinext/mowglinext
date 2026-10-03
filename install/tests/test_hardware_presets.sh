@@ -108,6 +108,7 @@ assert_eq "mavros/pixhawk GNSS: MAVROS_GPS1_CANONICAL=true" \
   "true" "$(env_value "$mavros_repo" MAVROS_GPS1_CANONICAL)"
 assert_eq "mavros/pixhawk GNSS: MAVROS_ENABLED=true" \
   "true" "$(env_value "$mavros_repo" MAVROS_ENABLED)"
+
 assert_eq "mavros/pixhawk GNSS: detected by-id path is the MAVROS port" \
   "/dev/serial/by-id/usb-Pixhawk-stub" \
   "$(env_value "$mavros_repo" MAVROS_PORT)"
@@ -123,6 +124,24 @@ case "$mavros_fragments" in
   *docker-compose.gps.yml*) fail "mavros/pixhawk GNSS: direct GPS fragment absent" ;;
   *) pass "mavros/pixhawk GNSS: direct GPS fragment absent" ;;
 esac
+
+# The legacy MAVROS_GPS1_CANONICAL variable is only a deprecated
+# consistency guard for GPS1. GPS2 canonical ownership is selected by
+# GNSS_SOURCE/GNSS_MAVROS_SOURCE and must leave the GPS1 guard false.
+mavros_gps2_repo="$SANDBOX/repo_mavros_gps2"
+sandbox_repo "$mavros_gps2_repo"
+harness_init "$mavros_gps2_repo"
+harness_set_preset backend=mavros gnss_source=mavros gnss=auto lidar=none
+GNSS_MAVROS_SOURCE="gps2"
+if harness_run; then
+  pass "mavros/GPS2 GNSS: harness_run succeeds"
+else
+  fail "mavros/GPS2 GNSS: harness_run succeeds"
+fi
+assert_eq "mavros/GPS2 GNSS: GNSS_MAVROS_SOURCE=gps2" \
+  "gps2" "$(env_value "$mavros_gps2_repo" GNSS_MAVROS_SOURCE)"
+assert_eq "mavros/GPS2 GNSS: deprecated GPS1 guard remains false" \
+  "false" "$(env_value "$mavros_gps2_repo" MAVROS_GPS1_CANONICAL)"
 
 # ── Pixhawk MAVROS backend + GPS directly on SoC ──────────────────────────
 section "HARDWARE_BACKEND=mavros + GNSS_SOURCE=direct"

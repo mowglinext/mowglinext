@@ -191,8 +191,8 @@ else
 " "$feature_env"
   assert_not_contains "legacy MowgliNext GPS_IMAGE is removed" "GPS_IMAGE=" "$feature_env"
   assert_contains "custom mowgli-ros2 image tag written" "MOWGLI_ROS2_IMAGE=ghcr.io/mowglinext/mowglinext/mowgli-ros2:feat-universal-gnss-integration" "$feature_env"
-  assert_contains "MAVROS image remains pinned independently" \
-    "MAVROS_IMAGE=ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:lyrical@sha256:96e23dca25c1a854af191e1a3c94ecad977c41af345733d56214cbac08195c94" \
+  assert_contains "MAVROS image remains independent from IMAGE_TAG" \
+    "MAVROS_IMAGE=ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:latest" \
     "$feature_env"
 fi
 

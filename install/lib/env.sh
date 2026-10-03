@@ -370,7 +370,9 @@ setup_env() {
   fi
   OPENMOWER_ENABLED="$enable_openmower"
 
-  if [[ "$HARDWARE_BACKEND" == "mavros" && "$GNSS_SOURCE" == "mavros" ]]; then
+  MAVROS_ENABLED="$enable_mavros"
+
+  if [[ "$HARDWARE_BACKEND" == "mavros" && "$GNSS_SOURCE" == "mavros" && "$GNSS_MAVROS_SOURCE" == "gps1" ]]; then
     MAVROS_GPS1_CANONICAL="true"
   else
     MAVROS_GPS1_CANONICAL="false"

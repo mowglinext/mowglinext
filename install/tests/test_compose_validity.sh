@@ -168,7 +168,7 @@ else
   assert_contains "MAVROS mode preserves GNSS_BACKEND=universal" "GNSS_BACKEND=universal" "$MAVROS_ENV"
   assert_contains "MAVROS mode preserves GNSS_STACK=universal" "GNSS_STACK=universal" "$MAVROS_ENV"
   assert_contains "MAVROS mode selects GNSS_SOURCE=mavros" "GNSS_SOURCE=mavros" "$MAVROS_ENV"
-  assert_contains "MAVROS mode enables canonical GPS1 projection" "MAVROS_GPS1_CANONICAL=true" "$MAVROS_ENV"
+  assert_contains "MAVROS GPS1 mode sets deprecated canonical consistency guard" "MAVROS_GPS1_CANONICAL=true" "$MAVROS_ENV"
   assert_contains "MAVROS mode enables MAVROS" "MAVROS_ENABLED=true" "$MAVROS_ENV"
 fi
 

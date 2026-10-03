@@ -350,7 +350,9 @@ check_mavros() {
 
   local mavros_state
   mavros_state="$(
-    docker_cmd exec mowgli-ros2 bash -lc       "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/state --once 2>/dev/null"       2>/dev/null || echo ""
+    docker_cmd exec mowgli-mavros bash -lc \
+      "source /opt/ros/lyrical/setup.bash && source /opt/mowgli/mavros/setup.bash && source /opt/mowgli/universal_gnss/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/state --once 2>/dev/null" \
+      2>/dev/null || echo ""
   )"
   if [[ -z "$mavros_state" ]]; then
     fail "No MAVROS state on /mavros/state"

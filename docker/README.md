@@ -189,7 +189,7 @@ ships; the full installer writes many more (`GNSS_*`, `LIDAR_TYPE`,
 | `MOWGLI_ROS2_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowgli-ros2:main` | Full ROS2 stack |
 | `GPS_IMAGE` | `ghcr.io/mowglinext/mowglinext/gps:main` | Universal GNSS sidecar + NTRIP client |
 | `LIDAR_IMAGE` | `ghcr.io/mowglinext/mowglinext/lidar-ldlidar:main` | LD19 LiDAR driver |
-| `MAVROS_IMAGE` | `ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:lyrical@sha256:96e23dca25c1a854af191e1a3c94ecad977c41af345733d56214cbac08195c94` | MAVROS bridge |
+| `MAVROS_IMAGE` | `ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:latest` | MAVROS bridge |
 | `GUI_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web GUI |
 | `OPENMOWER_IMAGE` | `ghcr.io/mowglinext/mowglinext/openmower:main` | OpenMower electronics bridge (`HARDWARE_BACKEND=openmower`) |
 For Universal GNSS, set `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...` — note that
