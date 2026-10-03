@@ -28,6 +28,8 @@ constexpr std::size_t kReadChunk = 512u;
 // OpenMower's LowLevel firmware streams status every 100 ms; a 1 s gap means
 // it rebooted or was reflashed, and our config must be pushed again.
 constexpr double kLlRestartGapS = 1.0;
+// Wheels still this long before a docked IMU calibration starts.
+constexpr double kDockedCalSettleS = 1.0;
 }  // namespace
 
 bool OpenMowerBridgeNode::lowlevel_alive() const
@@ -36,7 +38,7 @@ bool OpenMowerBridgeNode::lowlevel_alive() const
   {
     return false;
   }
-  return (now() - ll_last_status_).seconds() <= std::max(ll_rx_timeout_s_, kLlRestartGapS);
+  return (now() - ll_last_status_).seconds() <= ll_status_timeout_s_;
 }
 
 void OpenMowerBridgeNode::lowlevel_read_tick()
@@ -185,16 +187,22 @@ void OpenMowerBridgeNode::handle_ll_status(const uint8_t* data, std::size_t len)
   last_ll_emergency_bitmask_ = pkt.emergency_bitmask;
 
   const bool was_charging = is_charging_;
-  is_charging_ = (pkt.status_bitmask & mowgli_hardware::STATUS_BIT_CHARGING) != 0u;
+  // On the dock = charger voltage at the contacts, NOT status bit 2 (that is
+  // the charge relay, wrong off-dock on v0.13.x and on a full-battery dock on
+  // every firmware) — see power_semantics.hpp.
+  is_charging_ = IsDocked(pkt.v_charge, docked_charge_voltage_);
+  charge_relay_on_ = ChargeRelayOn(pkt.status_bitmask);
   if (is_charging_ && !was_charging)
   {
-    RCLCPP_INFO(get_logger(), "Charging contact detected");
+    // A fresh at-rest IMU bias on every dock visit — but not on the contact
+    // event itself: the robot is still creeping onto the contacts then, and
+    // an aborted attempt must be retried, not forgotten (handle_ll_imu).
+    RCLCPP_INFO(get_logger(), "Charging contact detected — IMU calibration armed");
+    docked_cal_pending_ = true;
   }
-  // Fresh at-rest IMU bias every time the robot lands on the charger.
-  if (is_charging_ && !was_charging && !imu_bias_.collecting())
+  else if (!is_charging_ && was_charging)
   {
-    imu_bias_.Start();
-    RCLCPP_INFO(get_logger(), "IMU bias calibration started (docked)");
+    docked_cal_pending_ = false;
   }
 
   publish_status_bundle(pkt);
@@ -283,8 +291,8 @@ void OpenMowerBridgeNode::publish_status_bundle(const mowgli_hardware::LlStatus&
     msg.v_charge = pkt.v_charge;
     msg.v_battery = pkt.v_system;
     msg.charge_current = pkt.charging_current;
-    msg.charger_enabled = is_charging_;
-    msg.charger_status = is_charging_ ? "charging" : "idle";
+    msg.charger_enabled = charge_relay_on_;
+    msg.charger_status = ChargerStatusString(Classify(is_charging_, charge_relay_on_));
     pub_power_->publish(msg);
   }
 
@@ -296,9 +304,18 @@ void OpenMowerBridgeNode::publish_status_bundle(const mowgli_hardware::LlStatus&
     msg.voltage = pkt.v_system;
     msg.current = is_charging_ ? std::abs(pkt.charging_current) : 0.0f;
     msg.percentage = mowgli_hardware::battery_percentage_from_firmware(pkt.batt_percentage);
-    msg.power_supply_status = is_charging_
-                                  ? sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_CHARGING
-                                  : sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_DISCHARGING;
+    switch (Classify(is_charging_, charge_relay_on_))
+    {
+      case ChargeState::kCharging:
+        msg.power_supply_status = sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_CHARGING;
+        break;
+      case ChargeState::kDockedNotCharging:
+        msg.power_supply_status = sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_NOT_CHARGING;
+        break;
+      case ChargeState::kUndocked:
+        msg.power_supply_status = sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_DISCHARGING;
+        break;
+    }
     msg.present = true;
     pub_battery_state_->publish(msg);
   }
@@ -327,27 +344,30 @@ void OpenMowerBridgeNode::handle_ll_imu(const uint8_t* data, std::size_t len)
                       pkt.gyro_rads[1],
                       pkt.gyro_rads[2]};
 
-  // Off-dock auto-calibration after a quiet window (container restarted
-  // mid-lawn, robot has not docked since).
   const bool at_rest = odometry_.stationary();
-  if (!imu_bias_.ready() && !imu_bias_.collecting() && !is_charging_)
+  if (!at_rest)
   {
-    if (at_rest)
+    wheels_still_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  }
+  else if (wheels_still_since_.nanoseconds() == 0)
+  {
+    wheels_still_since_ = now();
+  }
+  const double still_s =
+      wheels_still_since_.nanoseconds() == 0 ? 0.0 : (now() - wheels_still_since_).seconds();
+
+  if (!imu_bias_.collecting())
+  {
+    if (is_charging_ && docked_cal_pending_ && still_s >= kDockedCalSettleS)
     {
-      if (imu_at_rest_since_.nanoseconds() == 0)
-      {
-        imu_at_rest_since_ = now();
-      }
-      else if ((now() - imu_at_rest_since_).seconds() >= imu_cal_auto_rest_s_)
-      {
-        imu_bias_.Start();
-        imu_at_rest_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-        RCLCPP_INFO(get_logger(), "IMU bias calibration started (stationary off-dock)");
-      }
+      imu_bias_.Start();
+      RCLCPP_INFO(get_logger(), "IMU bias calibration started (docked, wheels still)");
     }
-    else
+    else if (!is_charging_ && !imu_bias_.ready() && still_s >= imu_cal_auto_rest_s_)
     {
-      imu_at_rest_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+      // Container restarted mid-lawn and the robot has not docked since.
+      imu_bias_.Start();
+      RCLCPP_INFO(get_logger(), "IMU bias calibration started (stationary off-dock)");
     }
   }
   if (imu_bias_.collecting())
@@ -355,10 +375,16 @@ void OpenMowerBridgeNode::handle_ll_imu(const uint8_t* data, std::size_t len)
     if (!at_rest)
     {
       imu_bias_.Abort();
-      RCLCPP_WARN(get_logger(), "IMU bias calibration aborted — wheels moved");
+      RCLCPP_WARN(get_logger(),
+                  "IMU bias calibration aborted — wheels moved%s",
+                  docked_cal_pending_ ? "; retried once they have been still for 1 s" : "");
     }
     else if (imu_bias_.Feed(raw))
     {
+      if (is_charging_)
+      {
+        docked_cal_pending_ = false;
+      }
       const ImuBias& b = imu_bias_.bias();
       RCLCPP_INFO(get_logger(),
                   "IMU bias ready: gyro (%.4f %.4f %.4f) rad/s accel (%.3f %.3f) m/s²",
@@ -512,11 +538,11 @@ void OpenMowerBridgeNode::service_config_handshake()
 
 void OpenMowerBridgeNode::send_heartbeat()
 {
-  const EmergencyEvaluation ev = emergency_.Evaluate(last_ll_emergency_bitmask_);
+  const HeartbeatBits bits = emergency_.NextHeartbeat();
   mowgli_hardware::LlHeartbeat pkt{};
   pkt.type = mowgli_hardware::PACKET_ID_LL_HEARTBEAT;
-  pkt.emergency_requested = ev.heartbeat_request ? 1u : 0u;
-  pkt.emergency_release_requested = ev.heartbeat_release ? 1u : 0u;
+  pkt.emergency_requested = bits.request ? 1u : 0u;
+  pkt.emergency_release_requested = bits.release ? 1u : 0u;
   lowlevel_send(reinterpret_cast<const uint8_t*>(&pkt), sizeof(pkt) - sizeof(uint16_t));
 }
 

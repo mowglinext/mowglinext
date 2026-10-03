@@ -66,3 +66,23 @@ TEST(WheelSpeedFilter, LowPassesTowardsRawSpeed)
   f.Reset();
   EXPECT_DOUBLE_EQ(f.value(), 0.0);
 }
+
+TEST(TickPlausibility, NormalMotionIsBelievedAtAnySpeedTheStackCommands)
+{
+  using mowgli_openmower_bridge::IsPlausibleTickDelta;
+  // 0.5 m/s for one 20 ms control tick at 1600 ticks/m = 16 ticks.
+  EXPECT_TRUE(IsPlausibleTickDelta(16, 1600.0, 0.02));
+  EXPECT_TRUE(IsPlausibleTickDelta(-16, 1600.0, 0.02));
+  // A late tick (100 ms) at 1.5 m/s is still motion.
+  EXPECT_TRUE(IsPlausibleTickDelta(240, 1600.0, 0.10));
+}
+
+TEST(TickPlausibility, ACounterResetIsADiscontinuity)
+{
+  using mowgli_openmower_bridge::IsPlausibleTickDelta;
+  // xESC 2040 brown-out: tacho_absolute restarts, the uint32 diff wraps.
+  EXPECT_FALSE(IsPlausibleTickDelta(4294960000LL, 1600.0, 0.02));
+  // xESC mini reboot: the signed tachometer drops back to 0 after 30 m.
+  EXPECT_FALSE(IsPlausibleTickDelta(-48000, 1600.0, 0.02));
+  EXPECT_FALSE(IsPlausibleTickDelta(200, 1600.0, 0.02));
+}

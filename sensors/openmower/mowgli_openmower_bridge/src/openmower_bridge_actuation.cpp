@@ -134,6 +134,25 @@ void OpenMowerBridgeNode::update_odometry(double dt_s)
     ticks[w] = static_cast<int64_t>(motor_sign(w)) * motors_[w]->telemetry().signed_ticks;
   }
 
+  // A controller that rebooted restarts its counter: re-prime instead of
+  // publishing the jump as motion (it would read as kilometres per second).
+  for (std::size_t w = 0; w < 2u; ++w)
+  {
+    if (wheel_ticks_primed_[w] &&
+        !IsPlausibleTickDelta(ticks[w] - prev_wheel_ticks_[w], ticks_per_meter_, dt_s))
+    {
+      RCLCPP_WARN(get_logger(),
+                  "%s wheel tick counter jumped by %lld ticks in %.0f ms — controller reset? "
+                  "Re-priming odometry instead of publishing it.",
+                  w == kLeft ? "Left" : "Right",
+                  static_cast<long long>(ticks[w] - prev_wheel_ticks_[w]),
+                  dt_s * 1000.0);
+      wheel_ticks_primed_ = {false, false};
+      odometry_.Reset();
+      break;
+    }
+  }
+
   // Per-wheel speed (for the velocity loops) and the diagnostic WheelTick.
   std::array<int64_t, 2> deltas{};
   for (std::size_t w = 0; w < 2u; ++w)
@@ -257,8 +276,8 @@ void OpenMowerBridgeNode::drive_blade(bool blade_allowed)
   // Mirrors hardware_bridge_node's mapping so the GUI and diagnostics read the
   // same vocabulary on both backends: the request never left the host ->
   // unknown; otherwise off, or the direction the operator asked for.
-  blade_requested_direction_ = !written           ? "unknown"
-                               : !blade_allowed   ? "off"
+  blade_requested_direction_ = !written               ? "unknown"
+                               : !blade_allowed       ? "off"
                                : mow_direction_ == 0u ? "forward"
                                : mow_direction_ == 1u ? "reverse"
                                                       : "unknown";

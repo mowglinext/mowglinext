@@ -11,9 +11,10 @@ Parameter layering (later wins):
   1. config/openmower_bridge.yaml            — package defaults
   2. OPENMOWER_* container environment       — ports, ESC type (installer)
   3. /config/mowgli_robot.yaml (sparse)      — per-robot kinematics, blade
-     inhibit, charge limits: the operator's file, read directly since this
-     container does not ship the mowgli_bringup template. Only keys that are
-     present are forwarded; absent keys keep the package default.
+     inhibit and explicit openmower_* overrides: the operator's file, read
+     directly since this container does not ship the mowgli_bringup template.
+     Only keys that are present are forwarded; absent keys keep the package
+     default (and, for the LowLevel config, the BOARD's own value).
 """
 
 import os
@@ -27,24 +28,36 @@ from launch_ros.actions import Node
 ROBOT_CONFIG_PATH = os.environ.get("OPENMOWER_ROBOT_CONFIG", "/config/mowgli_robot.yaml")
 
 # mowgli_robot.yaml key -> (node parameter, caster)
+#
+# Only HOST-side keys are shared with the STM32 backend. The LowLevel board's
+# own configuration (charge/battery cutoffs, lift/tilt periods, hall inputs)
+# is reachable ONLY through explicit openmower_ll_* keys: the Pico saves what
+# it receives to flash and does not clamp toward the safer side, so MowgliNext's
+# STM32 template values must never reach it. Mapping the template's
+# both_wheels_lift_emergency_ms (1000) onto lift_period once made the Pico's
+# lift e-stop ten times slower than its own 100 ms default.
 ROBOT_CONFIG_KEYS = {
+    # host side
     "ticks_per_meter": ("ticks_per_meter", float),
     "wheel_track": ("wheel_track", float),
     "max_mps": ("max_mps", float),
     "mowing_enabled": ("mowing_enabled", bool),
-    "max_charge_voltage": ("max_charge_voltage", float),
-    "max_charge_current": ("max_charge_current", float),
-    "battery_full_voltage": ("battery_full_voltage", float),
-    "battery_empty_voltage": ("battery_empty_voltage", float),
-    "one_wheel_lift_emergency_ms": ("one_wheel_lift_emergency_ms", int),
-    "both_wheels_lift_emergency_ms": ("both_wheels_lift_emergency_ms", int),
     "imu_cal_samples": ("imu_cal_samples", int),
     "imu_cal_auto_rest_sec": ("imu_cal_auto_rest_sec", float),
+    "openmower_docked_charge_voltage": ("docked_charge_voltage", float),
     "openmower_wheel_loop_enabled": ("wheel_loop_enabled", bool),
     "openmower_wheel_duty_per_mps": ("wheel_duty_per_mps", float),
     "openmower_wheel_kp": ("wheel_kp", float),
     "openmower_wheel_ki": ("wheel_ki", float),
     "openmower_blade_duty": ("blade_duty", float),
+    # LowLevel board configuration — absent = the board keeps its own value
+    "openmower_ll_v_charge_cutoff": ("ll_v_charge_cutoff", float),
+    "openmower_ll_i_charge_cutoff": ("ll_i_charge_cutoff", float),
+    "openmower_ll_v_battery_cutoff": ("ll_v_battery_cutoff", float),
+    "openmower_ll_v_battery_empty": ("ll_v_battery_empty", float),
+    "openmower_ll_v_battery_full": ("ll_v_battery_full", float),
+    "openmower_ll_lift_period_ms": ("ll_lift_period_ms", int),
+    "openmower_ll_tilt_period_ms": ("ll_tilt_period_ms", int),
     "openmower_emergency_input_config": ("emergency_input_config", str),
 }
 

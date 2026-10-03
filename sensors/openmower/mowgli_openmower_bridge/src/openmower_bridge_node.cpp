@@ -102,6 +102,13 @@ void OpenMowerBridgeNode::declare_parameters()
   ll_baud_rate_ = static_cast<int>(declare_parameter<int64_t>("ll_baud_rate", 115200));
   ll_rx_timeout_s_ = declare_parameter<double>("ll_rx_timeout_s", 2.0);
   require_finite_nonnegative_timeout(ll_rx_timeout_s_, "ll_rx_timeout_s");
+  // Actuation gate: the Pico streams status every 100 ms (and immediately on any
+  // latch change), so 0.5 s is five missed reports. While this is exceeded the
+  // bridge cannot see a stop button or a lift, so every motor is held at zero.
+  // It is deliberately much shorter than ll_rx_timeout_s, which only decides
+  // when to reopen the port.
+  ll_status_timeout_s_ = declare_parameter<double>("ll_status_timeout_s", 0.5);
+  require_finite_positive(ll_status_timeout_s_, "ll_status_timeout_s");
   xesc_type_ = declare_parameter<std::string>("xesc_type", "xesc_mini");
   if (xesc_type_ != "xesc_mini" && xesc_type_ != "xesc_2040")
   {
@@ -220,33 +227,28 @@ void OpenMowerBridgeNode::declare_parameters()
   imu_cal_auto_rest_s_ = declare_parameter<double>("imu_cal_auto_rest_sec", 15.0);
   imu_bias_ = ImuBiasEstimator(static_cast<std::size_t>(std::max(1, imu_cal_samples_)));
 
-  // -- LowLevel config packet (charge / battery protection, hall inputs) --
-  ll_config_ = lowlevel::DefaultConfig();
-  ll_config_.v_charge_cutoff =
-      static_cast<float>(declare_parameter<double>("max_charge_voltage", 29.4));
-  ll_config_.i_charge_cutoff =
-      static_cast<float>(declare_parameter<double>("max_charge_current", 1.2));
-  ll_config_.v_battery_cutoff =
-      static_cast<float>(declare_parameter<double>("battery_cutoff_voltage", 29.0));
-  ll_config_.v_battery_empty =
-      static_cast<float>(declare_parameter<double>("battery_empty_voltage", 24.0));
-  ll_config_.v_battery_full =
-      static_cast<float>(declare_parameter<double>("battery_full_voltage", 28.0));
-  const auto lift_ms = declare_parameter<int64_t>("both_wheels_lift_emergency_ms", 1000);
-  const auto tilt_ms = declare_parameter<int64_t>("one_wheel_lift_emergency_ms", 2000);
-  ll_config_.lift_period = static_cast<uint16_t>(std::clamp<int64_t>(lift_ms, 0, 0xFFFE));
-  ll_config_.tilt_period = static_cast<uint16_t>(std::clamp<int64_t>(tilt_ms, 0, 0xFFFE));
-  ll_config_.options.ignore_charging_current =
-      declare_parameter<bool>("ignore_charging_current", false) ? lowlevel::OptionState::ON
-                                                                : lowlevel::OptionState::OFF;
-  const auto language = declare_parameter<std::string>("ll_language", "en");
-  if (language.size() == 2u)
-  {
-    ll_config_.language[0] = language[0];
-    ll_config_.language[1] = language[1];
-  }
-  lowlevel::ApplyHallConfigString(ll_config_,
-                                  declare_parameter<std::string>("emergency_input_config", ""));
+  // -- dock detection (power_semantics.hpp) --
+  docked_charge_voltage_ =
+      declare_parameter<double>("docked_charge_voltage", kDefaultDockedChargeVoltage);
+  require_finite_positive(docked_charge_voltage_, "docked_charge_voltage");
+
+  // -- LowLevel config packet: every field defaults to "keep the board's own"
+  // (lowlevel_config.hpp BuildHighLevelConfig). The Pico saves what it gets to
+  // flash without clamping, so only an operator's explicit openmower_ll_* value
+  // is ever sent, never MowgliNext's STM32 template numbers.
+  lowlevel::ConfigOverrides overrides;
+  overrides.v_charge_cutoff = declare_parameter<double>("ll_v_charge_cutoff", -1.0);
+  overrides.i_charge_cutoff = declare_parameter<double>("ll_i_charge_cutoff", -1.0);
+  overrides.v_battery_cutoff = declare_parameter<double>("ll_v_battery_cutoff", -1.0);
+  overrides.v_battery_empty = declare_parameter<double>("ll_v_battery_empty", -1.0);
+  overrides.v_battery_full = declare_parameter<double>("ll_v_battery_full", -1.0);
+  overrides.lift_period_ms = declare_parameter<int64_t>("ll_lift_period_ms", -1);
+  overrides.tilt_period_ms = declare_parameter<int64_t>("ll_tilt_period_ms", -1);
+  overrides.ignore_charging_current =
+      static_cast<int>(declare_parameter<int64_t>("ll_ignore_charging_current", -1));
+  overrides.language = declare_parameter<std::string>("ll_language", "en");
+  overrides.emergency_input_config = declare_parameter<std::string>("emergency_input_config", "");
+  ll_config_ = lowlevel::BuildHighLevelConfig(overrides);
 }
 
 void OpenMowerBridgeNode::create_interfaces()

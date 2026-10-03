@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -65,9 +66,9 @@ struct HallConfig
 
 struct HighLevelConfig
 {
-  ConfigOptions options{OptionState::OFF,
-                        OptionState::OFF,
-                        OptionState::OFF,
+  ConfigOptions options{OptionState::UNDEFINED,
+                        OptionState::UNDEFINED,
+                        OptionState::UNDEFINED,
                         OptionState::UNDEFINED,
                         OptionState::UNDEFINED,
                         OptionState::UNDEFINED,
@@ -95,7 +96,9 @@ static_assert(sizeof(HighLevelConfig) ==
                   2u + 2u + 5u * 4u + 2u + 2u + 1u + 2u + 1u + kMaxHallInputs,
               "HighLevelConfig layout drifted from OpenMower's ll_high_level_config");
 
-/// Fresh config with every hall input UNDEFINED (board keeps its own).
+/// Fresh config with EVERY field undefined, so the board keeps its own value
+/// for all of them: the v1 firmware's applyConfig() starts from its compiled
+/// defaults and only takes over fields that are not -1 / 0xFFFF / UNDEFINED.
 [[nodiscard]] inline HighLevelConfig DefaultConfig()
 {
   HighLevelConfig cfg{};
@@ -155,6 +158,68 @@ inline void ApplyHallConfigString(HighLevelConfig& cfg, const std::string& spec)
     }
     start = comma + 1u;
   }
+}
+
+/**
+ * @brief Operator overrides for the LowLevel board's own configuration.
+ *
+ * Every member defaults to "not set". The Pico SAVES whatever it receives to
+ * flash and, unlike the Mowgli STM32, does not clamp toward the safer side —
+ * so nothing may be sent that the operator did not choose for THIS board.
+ * Never feed it MowgliNext's STM32 template values: e.g. the template's
+ * both_wheels_lift_emergency_ms (1000) would make the Pico's lift e-stop ten
+ * times slower than its own default (lift_period 100 ms).
+ */
+struct ConfigOverrides
+{
+  double v_charge_cutoff{-1.0};  ///< [V], < 0 = keep the board's
+  double i_charge_cutoff{-1.0};  ///< [A]
+  double v_battery_cutoff{-1.0};  ///< [V]
+  double v_battery_empty{-1.0};  ///< [V]
+  double v_battery_full{-1.0};  ///< [V]
+  int64_t lift_period_ms{-1};  ///< >= 2 wheels lifted, < 0 = keep, 0 = disable
+  int64_t tilt_period_ms{-1};  ///< one wheel lifted
+  int ignore_charging_current{-1};  ///< -1 keep, 0 off, 1 on
+  std::string language{"en"};  ///< the firmware always takes this one
+  std::string emergency_input_config;  ///< "" = keep the board's halls
+};
+
+[[nodiscard]] inline HighLevelConfig BuildHighLevelConfig(const ConfigOverrides& o)
+{
+  HighLevelConfig cfg = DefaultConfig();
+  const auto set_float = [](float& field, double v)
+  {
+    if (std::isfinite(v) && v >= 0.0)
+    {
+      field = static_cast<float>(v);
+    }
+  };
+  set_float(cfg.v_charge_cutoff, o.v_charge_cutoff);
+  set_float(cfg.i_charge_cutoff, o.i_charge_cutoff);
+  set_float(cfg.v_battery_cutoff, o.v_battery_cutoff);
+  set_float(cfg.v_battery_empty, o.v_battery_empty);
+  set_float(cfg.v_battery_full, o.v_battery_full);
+  // 0xFFFF is the "unknown" sentinel, so a real period caps one below it.
+  if (o.lift_period_ms >= 0)
+  {
+    cfg.lift_period = static_cast<uint16_t>(std::min<int64_t>(o.lift_period_ms, 0xFFFE));
+  }
+  if (o.tilt_period_ms >= 0)
+  {
+    cfg.tilt_period = static_cast<uint16_t>(std::min<int64_t>(o.tilt_period_ms, 0xFFFE));
+  }
+  if (o.ignore_charging_current == 0 || o.ignore_charging_current == 1)
+  {
+    cfg.options.ignore_charging_current =
+        o.ignore_charging_current == 1 ? OptionState::ON : OptionState::OFF;
+  }
+  if (o.language.size() == 2u)
+  {
+    cfg.language[0] = o.language[0];
+    cfg.language[1] = o.language[1];
+  }
+  ApplyHallConfigString(cfg, o.emergency_input_config);
+  return cfg;
 }
 
 /// `type` + struct bytes; the CRC is appended by PacketHandler::encode_packet.

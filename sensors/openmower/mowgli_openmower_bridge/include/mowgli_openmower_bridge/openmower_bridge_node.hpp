@@ -53,6 +53,7 @@
 #include "mowgli_openmower_bridge/imu_bias_estimator.hpp"
 #include "mowgli_openmower_bridge/lowlevel_config.hpp"
 #include "mowgli_openmower_bridge/motor_link.hpp"
+#include "mowgli_openmower_bridge/power_semantics.hpp"
 #include "mowgli_openmower_bridge/wheel_velocity_controller.hpp"
 #include "mowgli_openmower_bridge/xesc_odometry.hpp"
 #include <std_srvs/srv/set_bool.hpp>
@@ -108,7 +109,8 @@ private:
   // ---- parameters ----
   std::string ll_serial_port_;
   int ll_baud_rate_{115200};
-  double ll_rx_timeout_s_{2.0};
+  double ll_rx_timeout_s_{2.0};  ///< no bytes this long -> reopen the port
+  double ll_status_timeout_s_{0.5};  ///< no status this long -> actuators off
   double ll_read_rate_hz_{100.0};
   double control_rate_hz_{50.0};
   double heartbeat_rate_hz_{25.0};
@@ -150,8 +152,13 @@ private:
   rclcpp::Time ll_config_last_req_{0, 0, RCL_ROS_TIME};
   mowgli_hardware::HostFirmwareClockFit imu_clock_fit_;
   ImuBiasEstimator imu_bias_;
-  rclcpp::Time imu_at_rest_since_{0, 0, RCL_ROS_TIME};
-  bool is_charging_{false};
+  rclcpp::Time wheels_still_since_{0, 0, RCL_ROS_TIME};  ///< 0 while moving
+  /// Armed on dock arrival, cleared when a calibration COMPLETES there: an
+  /// abort (the robot creeps onto the contacts) retries once settled.
+  bool docked_cal_pending_{false};
+  bool is_charging_{false};  ///< ON THE DOCK — see power_semantics.hpp
+  bool charge_relay_on_{false};
+  double docked_charge_voltage_{kDefaultDockedChargeVoltage};
   uint8_t last_ll_status_bitmask_{0u};
   uint8_t last_ll_emergency_bitmask_{0u};
   EmergencyTracker emergency_;
