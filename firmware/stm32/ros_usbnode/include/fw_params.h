@@ -7,8 +7,9 @@
  * Lifecycle:
  *   1. fw_params_init() — at boot, BEFORE the window watchdog is armed: seeds
  *      every parameter with its compiled default, then overlays the newest
- *      valid record from the flash log. Erases (and rewrites) the log here if it
- *      is full or holds foreign data, because only here may erasing block.
+ *      valid record from the flash log. A full or unappendable log with a valid
+ *      record is retained and reports LOG_FULL. Erase is allowed only when no
+ *      valid record exists, because only here may erasing block.
  *   2. init_ROS() applies every group to the subsystems, so a board that never
  *      hears from the host still runs the persisted values.
  *   3. SET_PARAM (USB RX interrupt) -> fw_params_set(): coerce into the

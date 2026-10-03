@@ -83,7 +83,13 @@ board's flash (`PKT_ID_PARAM_COMMIT`), so the board boots on them before ROS2 co
 and a tuning change never needs a reflash. The firmware coerces every value into an
 absolute envelope compiled in `fw_param_catalog.h` (e.g. `max_mps` 0.1–0.6 m/s): a value
 may be stricter or looser than the default, never outside the envelope. The flash log is
-append-only and only erased at boot, before the window watchdog is armed.
+append-only. A full log or an unappendable tail with a valid record is retained
+across reboots and reports `PARAM_COMMIT_LOG_FULL`: new host values still apply
+in RAM, but cannot be persisted until the reserved log is deliberately reset.
+An unchanged committed set remains marked persisted. A normal firmware reflash
+does not reset this reserved region. Automatic compaction would need another
+persistent copy; boot only erases unusable data when no valid record exists,
+before the window watchdog is armed.
 
 ## Yaw-Rate Control — Gyro Loop in Firmware (Option C)
 

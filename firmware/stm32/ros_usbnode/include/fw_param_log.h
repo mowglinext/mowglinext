@@ -11,9 +11,9 @@
  * stalls the CPU for 20-40 ms (F103 page) up to seconds (F401 128 KB sector).
  * So the running firmware NEVER erases: it only programs one 32-bit word at a
  * time into already-erased space (tens of microseconds each). Erasing happens
- * at boot, before the watchdog is armed, and only when the log is full or
- * holds something that is not a valid record (e.g. leftovers of the stock
- * firmware).
+ * at boot, before the watchdog is armed, and only when no valid record exists
+ * (e.g. leftovers of the stock firmware). A full or unappendable log with a
+ * committed record is retained: erasing the only copy would not be power-safe.
  *
  * Record layout, in 32-bit words (erased flash reads 0xFFFFFFFF):
  *   [0]              FW_PARAM_LOG_MAGIC
