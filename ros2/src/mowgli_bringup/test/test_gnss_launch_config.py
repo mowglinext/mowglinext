@@ -139,3 +139,14 @@ def test_sim_uses_hardware_factor_graph_cadence() -> None:
     )[0]
 
     assert '"fusion_graph_node_period_s": "0.04"' in navigation_args
+
+
+def test_universal_bridge_is_direct_gnss_only() -> None:
+    launch_source = _read_launch_source("full_system.launch.py")
+
+    assert 'os.environ.get("GNSS_SOURCE", "direct")' in launch_source
+    assert 'gnss_source not in ("direct", "mavros")' in launch_source
+    assert (
+        'gnss_stack == "universal" and gnss_source == "direct"'
+        in launch_source
+    )
