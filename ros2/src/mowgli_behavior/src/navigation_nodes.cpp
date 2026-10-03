@@ -198,7 +198,7 @@ BT::NodeStatus SetNav2Lifecycle::tick()
   // No service client is created and no manage_nodes request is ever sent,
   // so behaviour is identical to a build without idle suspend.
   bool enabled = false;
-  config().blackboard->get<bool>("idle_nav2_suspend", enabled);
+  (void)config().blackboard->get<bool>("idle_nav2_suspend", enabled);
   if (!enabled)
   {
     return BT::NodeStatus::SUCCESS;

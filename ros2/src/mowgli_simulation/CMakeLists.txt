@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.22.1)
 project(mowgli_simulation)
 
 # Enforce C++20 globally even though this package contains no compiled sources,

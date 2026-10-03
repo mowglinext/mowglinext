@@ -427,7 +427,7 @@ BT::NodeStatus IsNewRain::tick()
 
   // rain_mode == 0 → operator disabled rain handling entirely.
   int rain_mode = 2;
-  config().blackboard->get<int>("rain_mode", rain_mode);
+  (void)config().blackboard->get<int>("rain_mode", rain_mode);
   if (rain_mode <= 0)
   {
     ctx->rain_first_detected_time = {};
@@ -448,7 +448,7 @@ BT::NodeStatus IsNewRain::tick()
   }
 
   double rain_debounce_sec = 0.0;
-  config().blackboard->get<double>("rain_debounce_sec", rain_debounce_sec);
+  (void)config().blackboard->get<double>("rain_debounce_sec", rain_debounce_sec);
 
   const auto now = std::chrono::steady_clock::now();
   if (ctx->rain_first_detected_time.time_since_epoch().count() == 0)
@@ -475,7 +475,7 @@ BT::NodeStatus IsRainModeAtLeast::tick()
     required = res.value();
   }
   int rain_mode = 2;
-  config().blackboard->get<int>("rain_mode", rain_mode);
+  (void)config().blackboard->get<int>("rain_mode", rain_mode);
   return (rain_mode >= required) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 

@@ -201,7 +201,10 @@ protected:
 
   bool reachedAt(const Pose2& robot_map)
   {
-    return checker_.isGoalReached(toOdom(robot_map), goal_, {}, {});
+    return checker_.isGoalReached(toOdom(robot_map),
+                                  goal_,
+                                  geometry_msgs::msg::Twist{},
+                                  nav_msgs::msg::Path{});
   }
 
   // Drive the robot along the path from s_from to s_to, one controller tick per

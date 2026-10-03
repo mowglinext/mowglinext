@@ -3075,7 +3075,7 @@ PlanCoverageArea::PlanCoverage::Goal PlanCoverageArea::buildGoal(
   // coverage geometry (operation_width, headland, insets) lives in the
   // coverage server's parameters, injected at launch from mowgli_robot.yaml.
   double mow_angle_deg = kMowAngleAutoDeg;
-  config().blackboard->get<double>("mow_angle_deg", mow_angle_deg);
+  (void)config().blackboard->get<double>("mow_angle_deg", mow_angle_deg);
   goal.mow_angle_deg = mow_angle_deg;
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   uint32_t area_index = 0;
