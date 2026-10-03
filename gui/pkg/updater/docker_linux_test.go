@@ -62,6 +62,23 @@ func (b *integrationBackend) Verify(ctx context.Context, images map[string]strin
 	}
 	return b.DockerBackend.Verify(ctx, images, d, change)
 }
+
+func (b *integrationBackend) VerifyWithPreexistingHealth(
+	ctx context.Context,
+	images map[string]string,
+	d *Deployment,
+	change *FirmwareProtocolChange,
+	issues []HealthIssue,
+) ([]HealthIssue, error) {
+	if b.failVerification && images["gui"] == b.target {
+		b.failVerification = false
+		_ = os.WriteFile(b.data, []byte("new incompatible data"), 0600)
+		return nil, errors.New("injected application failure")
+	}
+	return b.DockerBackend.VerifyWithPreexistingHealth(
+		ctx, images, d, change, issues)
+}
+
 func TestDockerTransactionRestoresImagesAndData(t *testing.T)    { runDockerTransaction(t, false, true) }
 func TestDockerReleaseTopologyFailureRestoresStack(t *testing.T) { runDockerTransaction(t, true, true) }
 func TestDockerReleaseTopologyCommitAndExplicitRollback(t *testing.T) {
