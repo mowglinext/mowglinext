@@ -248,7 +248,7 @@
     <div><span class="eyebrow-muted">Compute</span><strong>Raspberry Pi 4 / 5</strong><span>RK3566 / RK3588, arm64 or amd64</span></div>
     <div><span class="eyebrow-muted">RTK GNSS</span><strong>u-blox ZED-F9P</strong><span>Unicore UM98x, generic NMEA</span></div>
     <div><span class="eyebrow-muted">LiDAR</span><strong>LD06 / LD14 / LD19</strong><span>RPLIDAR A1–A3, STL27L</span></div>
-    <div><span class="eyebrow-muted">Other boards</span><strong>OpenMower v1 <span class="tag">experimental</span></strong><span>Pixhawk via MAVROS (advanced)</span></div>
+    <div><span class="eyebrow-muted">Other boards</span><strong>OpenMower v1 <span class="tag">soon</span></strong><span>Pixhawk via MAVROS <span class="tag">soon</span></span></div>
   </div>
 </section>
 
@@ -264,18 +264,18 @@
 
       <div class="composer-group" id="backend-group">
         <h3><small>Step 1</small>Hardware backend</h3>
-        <p class="composer-hint">`mowgli` is the stable default. `openmower` keeps stock OpenMower electronics on their own firmware behind a bridge. `mavros` is an advanced Pixhawk path and disables the direct GNSS selection below.</p>
+        <p class="composer-hint">Mowgli is the supported backend. OpenMower boards and Pixhawk via MAVROS are coming soon.</p>
         <div class="composer-options" data-group="backend">
           <button class="composer-option active" data-value="mowgli" aria-pressed="true">
             <span class="option-head"><span class="option-label">Mowgli</span></span>
             <span class="option-desc">Default stable path — STM32 hardware bridge on the stock board</span>
           </button>
-          <button class="composer-option" data-value="openmower" aria-pressed="false">
-            <span class="option-head"><span class="option-label">OpenMower</span><span class="tag">Experimental</span></span>
+          <button class="composer-option" data-value="openmower" aria-pressed="false" disabled>
+            <span class="option-head"><span class="option-label">OpenMower</span><span class="tag">Soon</span></span>
             <span class="option-desc">LowLevel board + xESC, on their own firmware</span>
           </button>
-          <button class="composer-option" data-value="mavros" aria-pressed="false">
-            <span class="option-head"><span class="option-label">MAVROS</span><span class="tag">Advanced</span></span>
+          <button class="composer-option" data-value="mavros" aria-pressed="false" disabled>
+            <span class="option-head"><span class="option-label">MAVROS</span><span class="tag">Soon</span></span>
             <span class="option-desc">Pixhawk via MAVROS — GPS comes from the flight controller</span>
           </button>
         </div>
@@ -351,7 +351,7 @@
 
       <div class="composer-group" id="channel-group">
         <h3><small>Step 4</small>Release channel</h3>
-        <p class="composer-hint">`main` is the stable channel. `dev` pulls `:dev` container images and checks out the dev branch.</p>
+        <p class="composer-hint"><code>main</code> is the stable channel. <code>dev</code> pulls <code>:dev</code> container images and checks out the dev branch.</p>
         <div class="composer-options" data-group="channel">
           <button class="composer-option active" data-value="main" aria-pressed="true">
             <span class="option-head"><span class="option-label">main</span></span>
