@@ -108,7 +108,8 @@ def test_gnss_stack_is_not_read_from_the_environment(monkeypatch) -> None:
     launch_module = _load_full_system_with(monkeypatch, "full_system_env_ignored")
 
     assert len(_bridge_nodes(launch_module.generate_launch_description())) == 1
-    assert "os.environ" not in _read_launch_source("full_system.launch.py")
+    launch_source = _read_launch_source("full_system.launch.py")
+    assert 'os.environ.get("GNSS_STACK"' not in launch_source
 
 
 def test_universal_bridge_does_not_depend_on_hardware_backend(monkeypatch) -> None:

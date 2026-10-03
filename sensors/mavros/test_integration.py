@@ -14,8 +14,7 @@ ENV = ROOT / "install/lib/env.sh"
 LAUNCH = ROOT / "ros2/src/mowgli_bringup/launch/mowgli.launch.py"
 
 EXPECTED_IMAGE = (
-    "ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:"
-    "lyrical@sha256:96e23dca25c1a854af191e1a3c94ecad977c41af345733d56214cbac08195c94"
+    "ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:latest"
 )
 
 
@@ -36,7 +35,7 @@ def main() -> int:
     env = read(ENV)
     launch = read(LAUNCH)
 
-    require(EXPECTED_IMAGE in image_env, "external image digest changed or is missing")
+    require(EXPECTED_IMAGE in image_env, "external development image reference changed or is missing")
     require(
         'source "$_mavros_image_env"' in config,
         "installer no longer sources the MAVROS image contract",
@@ -112,14 +111,14 @@ def main() -> int:
     ):
         require(expected in readme, f"MAVROS integration documentation missing: {expected}")
 
-    # Document both the nominal GNSS ownership model and the temporary
-    # MAVROS GPS1 cutover. Do not bind this contract test to one exact
-    # prose sentence in the README.
+    # Document the canonical GNSS ownership contract without binding the
+    # integration test to one exact prose sentence in the README.
     for expected in (
         "Universal GNSS",
         "NTRIP",
-        "GNSS_STACK=disabled",
-        "MAVROS_GPS1_CANONICAL=true",
+        "GNSS_SOURCE=mavros",
+        "GNSS_MAVROS_SOURCE=gps1|gps2",
+        "MAVROS_GPS1_CANONICAL",
     ):
         require(
             expected in readme,
