@@ -31,8 +31,7 @@ inline bool RtkActiveFromAbsolutePoseFlags(const std::uint16_t flags)
   // FLAG_GPS_RTK is the historical "GPS fix present" bit. It does NOT mean
   // that the solution is RTK. Only the explicit FLOAT/FIXED bits authorize
   // an RTK localization mode.
-  return (flags & (AbsolutePose::FLAG_GPS_RTK_FLOAT |
-                   AbsolutePose::FLAG_GPS_RTK_FIXED)) != 0u;
+  return (flags & (AbsolutePose::FLAG_GPS_RTK_FLOAT | AbsolutePose::FLAG_GPS_RTK_FIXED)) != 0u;
 }
 
 inline LocalizationMode EvaluateLocalizationMode(const bool observation_fresh,
