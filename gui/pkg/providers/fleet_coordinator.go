@@ -55,6 +55,7 @@ type FleetCoordinator struct {
 	identity func() (RobotIdentity, error)
 	now      func() time.Time
 
+	tickMu     sync.Mutex // serialize ticker and immediate settings/reset ticks
 	mu         sync.Mutex
 	memory     map[uint32]time.Time
 	lastPushed *FleetAssignment
@@ -62,6 +63,10 @@ type FleetCoordinator struct {
 	yield      yieldState
 	wasEnabled bool
 	lastError  string
+	// A disabled transition is not finished until the BT accepts the empty
+	// assignment. Failed calls may have applied, so retain explicit intent.
+	clearPending     bool
+	nextClearAttempt time.Time
 
 	stop chan struct{}
 	done chan struct{}
@@ -181,19 +186,43 @@ func (c *FleetCoordinator) Reset() error {
 
 // tick is one coordinator step; exposed unexported for tests.
 func (c *FleetCoordinator) tick(now time.Time) {
+	c.tickMu.Lock()
+	defer c.tickMu.Unlock()
+
 	settings := c.Settings()
 	if !settings.Enabled {
 		c.mu.Lock()
-		wasEnabled := c.wasEnabled
+		if c.wasEnabled {
+			c.clearPending = true
+			c.nextClearAttempt = now
+		}
 		c.wasEnabled = false
 		c.yield = yieldState{}
+		mustClear := c.clearPending && !now.Before(c.nextClearAttempt)
+		if mustClear {
+			c.nextClearAttempt = now.Add(coordinatorTick)
+		}
 		c.mu.Unlock()
-		if wasEnabled {
-			// Hand the whole lawn back to the local BT exactly once.
-			c.pushAssignment(FleetAssignment{Excluded: []uint32{}, PreferredStart: -1}, "coordination disabled", now)
+		if mustClear {
+			// Hand the whole lawn back, retrying at the bounded tick cadence
+			// until acknowledged. This never sends a motion command.
+			if c.pushAssignment(FleetAssignment{Excluded: []uint32{}, PreferredStart: -1}, "coordination disabled", now) {
+				c.mu.Lock()
+				c.clearPending = false
+				c.mu.Unlock()
+			}
 		}
 		return
 	}
+	c.mu.Lock()
+	if c.clearPending {
+		// Supersede the old clear intent. Its outcome was unknown, so force
+		// the current enabled assignment even if it matches the old cache.
+		c.clearPending = false
+		c.lastPushed = nil
+	}
+	c.wasEnabled = true
+	c.mu.Unlock()
 	rows, err := c.snapshot()
 	if err != nil {
 		c.setError("fleet snapshot: " + err.Error())
@@ -206,7 +235,6 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	self, peers := splitMembers(members)
 
 	c.mu.Lock()
-	c.wasEnabled = true
 	memory := updateCompletedMemory(c.memory, members, now, time.Duration(settings.CompletedTTLHours*float64(time.Hour)))
 	memoryChanged := !reflect.DeepEqual(memory, c.memory)
 	c.memory = memory
@@ -240,7 +268,7 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	}
 }
 
-func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now time.Time) {
+func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now time.Time) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), coordinatorCallTimeout)
 	defer cancel()
 	req := mowgli.SetFleetAssignmentReq{
@@ -251,11 +279,11 @@ func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now 
 	var res mowgli.SetFleetAssignmentRes
 	if err := c.ros.CallService(ctx, setFleetAssignmentService, &req, &res, setFleetAssignmentType); err != nil {
 		c.setError("set_fleet_assignment: " + err.Error())
-		return
+		return false
 	}
 	if !res.Success {
 		c.setError("set_fleet_assignment refused: " + res.Message)
-		return
+		return false
 	}
 	c.mu.Lock()
 	copyA := a
@@ -263,6 +291,7 @@ func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now 
 	c.lastPushAt = now
 	c.lastError = ""
 	c.mu.Unlock()
+	return true
 }
 
 // publishPeers republishes every online peer with a fix as a pose in OUR map
