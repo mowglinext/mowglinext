@@ -128,23 +128,6 @@ static void fw_params_mark_stored(const float *values) {
   }
 }
 
-/* Boot only: program a whole record synchronously (watchdog not armed yet). */
-static int fw_params_program_now(const float *values) {
-  uint32_t record[FW_PARAMS_RECORD_MAX_WORDS];
-  const size_t words = fw_params_encode(values, record);
-  if (words == 0u || s_next_free + words > fw_param_store_area_words()) {
-    return -1;
-  }
-  for (size_t w = 0; w < words; ++w) {
-    if (fw_param_store_program_word(s_next_free + w, record[w]) != 0) {
-      return -1;
-    }
-  }
-  s_next_free += words;
-  fw_params_mark_stored(values);
-  return 0;
-}
-
 static void fw_params_load_record(const uint32_t *record) {
   const size_t entries = fw_param_log_entry_count(record);
   for (size_t e = 0; e < entries; ++e) {
@@ -199,6 +182,16 @@ void fw_params_init(void) {
   s_next_free = scan.next_free;
 
   if (scan.needs_erase || s_next_free + fw_params_record_words() > area_words) {
+    if (loaded) {
+      /* No second persistent bank exists. Erasing here would destroy the
+       * only committed set before its replacement could be secured. Keep
+       * both full logs and unappendable tails intact across every reboot. */
+      s_next_free = area_words;
+      s_last_commit = PARAM_COMMIT_LOG_FULL;
+      debug_printf(" * Parameter log %s: retaining committed values\r\n",
+                   scan.needs_erase ? "invalid tail" : "full");
+      return;
+    }
     debug_printf(" * Parameter log %s: erasing\r\n", scan.needs_erase ? "invalid" : "full");
     if (fw_param_store_erase() != 0) {
       /* Leave nothing appendable: commits report LOG_FULL until a boot
@@ -211,9 +204,6 @@ void fw_params_init(void) {
     s_boot_source = PARAM_BOOT_FLASH_ERASED;
     for (size_t i = 0; i < FW_PARAM_COUNT; ++i) {
       s_stored_valid[i] = 0u;
-    }
-    if (loaded && fw_params_program_now(s_values) != 0) {
-      s_last_commit = PARAM_COMMIT_ERROR;
     }
   }
   debug_printf(" * Parameters: %s, %u valid record(s)\r\n",
@@ -303,8 +293,8 @@ static void fw_params_start_commit(void) {
   }
   const size_t words = fw_params_encode(snapshot, s_pending_record);
   if (words == 0u || s_next_free + words > fw_param_store_area_words()) {
-    /* The next boot erases the full log and rewrites the values it loaded;
-     * the host re-sends and re-commits its set after reconnecting. */
+    /* Preserve the last committed set. Without a second persistent bank a
+     * reboot cannot safely reclaim a full log; live values still apply. */
     s_last_commit = PARAM_COMMIT_LOG_FULL;
     s_store_report_pending = 1u;
     return;
@@ -319,8 +309,9 @@ static void fw_params_start_commit(void) {
 static void fw_params_step_commit(void) {
   if (fw_param_store_program_word(s_next_free + s_pending_pos, s_pending_record[s_pending_pos]) !=
       0) {
-    /* Most likely space that was not erased: stop appending until a boot
-     * erases the log (the record's CRC/commit word make it invisible). */
+    /* Most likely space that was not erased: stop appending for this boot
+     * (the record's CRC/commit word make it invisible). A later boot may
+     * append only if the scanner can locate safe erased space. */
     s_pending_active = 0u;
     s_next_free = fw_param_store_area_words();
     s_last_commit = PARAM_COMMIT_ERROR;
