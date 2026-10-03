@@ -151,3 +151,14 @@ def test_universal_bridge_is_direct_gnss_only() -> None:
         'gnss_stack == "universal" and gnss_source == "direct"'
         in launch_source
     )
+
+def test_gnss_status_pairing_window_matches_transport_latency() -> None:
+    launch_module = _load_module(
+        "full_system.launch.py", "full_system_gnss_pairing_window"
+    )
+
+    assert launch_module._gnss_status_pairing_window_s("direct") == 0.05
+    assert launch_module._gnss_status_pairing_window_s("mavros") == 0.15
+
+    launch_source = _read_launch_source("full_system.launch.py")
+    assert '"status_pairing_window_s": gnss_status_pairing_window_s' in launch_source

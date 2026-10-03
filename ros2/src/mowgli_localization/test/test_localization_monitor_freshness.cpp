@@ -69,6 +69,30 @@ TEST(LocalizationMonitorPolicy, FreshFloatAndGpsOnlySemanticsAreUnchanged)
   EXPECT_EQ(ml::EvaluateLocalizationMode(false, true, true), ml::LocalizationMode::DEAD_RECKONING);
 }
 
+TEST(LocalizationMonitorPolicy, GenericGpsFixBitDoesNotMasqueradeAsRtk)
+{
+  using AbsolutePose = mowgli_interfaces::msg::AbsolutePose;
+
+  EXPECT_FALSE(
+      ml::RtkFixedFromAbsolutePoseFlags(AbsolutePose::FLAG_GPS_RTK));
+  EXPECT_FALSE(
+      ml::RtkActiveFromAbsolutePoseFlags(AbsolutePose::FLAG_GPS_RTK));
+
+  EXPECT_TRUE(
+      ml::RtkActiveFromAbsolutePoseFlags(
+          AbsolutePose::FLAG_GPS_RTK | AbsolutePose::FLAG_GPS_RTK_FLOAT));
+  EXPECT_FALSE(
+      ml::RtkFixedFromAbsolutePoseFlags(
+          AbsolutePose::FLAG_GPS_RTK | AbsolutePose::FLAG_GPS_RTK_FLOAT));
+
+  EXPECT_TRUE(
+      ml::RtkActiveFromAbsolutePoseFlags(
+          AbsolutePose::FLAG_GPS_RTK | AbsolutePose::FLAG_GPS_RTK_FIXED));
+  EXPECT_TRUE(
+      ml::RtkFixedFromAbsolutePoseFlags(
+          AbsolutePose::FLAG_GPS_RTK | AbsolutePose::FLAG_GPS_RTK_FIXED));
+}
+
 TEST(PhysicalObservationFreshness, StartupBeforeFirstObservationIsStale)
 {
   freshness::PhysicalObservationTracker tracker;
