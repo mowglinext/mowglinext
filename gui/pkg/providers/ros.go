@@ -502,6 +502,7 @@ func (r *RosProvider) pollMap() {
 	defer cancel()
 
 	var allAreas []mowgli.MapArea
+	complete := false
 
 	// Fetch all areas (index 0..N until success=false)
 	for i := uint32(0); i < 100; i++ {
@@ -509,17 +510,22 @@ func (r *RosProvider) pollMap() {
 		var res mowgli.GetMowingAreaRes
 		err := r.CallService(ctx, "/map_server_node/get_mowing_area", &req, &res, "mowgli_interfaces/srv/GetMowingArea")
 		if err != nil {
-			if i == 0 {
-				logrus.WithError(err).WithField("index", i).Warn("pollMap: get_mowing_area failed — map_server_node may not be ready")
-			} else {
-				logrus.WithError(err).WithField("index", i).Warn("pollMap: get_mowing_area failed mid-iteration")
-			}
-			break
+			logrus.WithError(err).WithField("index", i).Warn(
+				"pollMap: refresh failed; retaining last complete map (stale)")
+			return
 		}
 		if !res.Success {
+			complete = true
 			break
 		}
 		allAreas = append(allAreas, res.Area)
+	}
+	// Only the service's end-of-list response establishes completeness. A
+	// transport failure or reaching the enumeration guard is not an empty or
+	// shortened map, and must not replace the last complete cached snapshot.
+	if !complete {
+		logrus.Warn("pollMap: refresh failed: area enumeration limit reached; retaining last complete map (stale)")
+		return
 	}
 
 	workingAreas, navAreas, workingIndices := splitMapAreas(allAreas)
