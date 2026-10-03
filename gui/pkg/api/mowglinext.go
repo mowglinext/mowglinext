@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"sync"
@@ -309,12 +311,39 @@ func PublisherRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	})
 }
 
+// compactMultiplexNumbers preserves JavaScript Number semantics: the browser's
+// MessagePack decoder returns BigInt for int64/uint64, so leave larger numbers
+// and signed zero as float64. json.Unmarshal owns these maps and slices.
+func compactMultiplexNumbers(value any) any {
+	switch v := value.(type) {
+	case float64:
+		if v == 0 && math.Signbit(v) {
+			return v
+		}
+		if v >= math.MinInt32 && v <= math.MaxUint32 && math.Trunc(v) == v {
+			if v < 0 {
+				return int32(v)
+			}
+			return uint32(v)
+		}
+	case []any:
+		for i := range v {
+			v[i] = compactMultiplexNumbers(v[i])
+		}
+	case map[string]any:
+		for key, item := range v {
+			v[key] = compactMultiplexNumbers(item)
+		}
+	}
+	return value
+}
+
 // MultiplexRoute multiplexes any number of topic subscriptions over one
 // WebSocket so a single browser tab does not need ~25 simultaneous TCP
 // connections. Wire format:
 //
-//	client → server: {"op": "subscribe"|"unsubscribe", "topic": "<key>"}
-//	server → client: {"topic": "<key>", "data": "<base64>"}
+//	client → server: JSON {"op": "subscribe"|"unsubscribe", "topic": "<key>"}
+//	server → client: MessagePack {"topic": "<key>", "data": <decoded object>}
 //
 // Per-topic throttling reuses topicSubscribeInterval. Unknown topics are
 // ignored. On disconnect, all live subscriptions are released.
@@ -351,9 +380,15 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			if err := json.Unmarshal(data, &obj); err != nil {
 				return
 			}
-			payload, err := msgpack.Marshal(map[string]interface{}{
+			// JSON numbers arrive as float64, including each OccupancyGrid
+			// cell. Only compact numbers that the browser decodes as Number:
+			// MessagePack int64/uint64 decode as BigInt in msgpackr.
+			var payload bytes.Buffer
+			encoder := msgpack.NewEncoder(&payload)
+			encoder.UseCompactInts(true)
+			err := encoder.Encode(map[string]interface{}{
 				"topic": topic,
-				"data":  obj,
+				"data":  compactMultiplexNumbers(obj),
 			})
 			if err != nil {
 				return
@@ -367,7 +402,7 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			// timeout/error, close the conn so the read loop unblocks and the
 			// deferred cleanup releases all subscriptions.
 			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-			if err := conn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
+			if err := conn.WriteMessage(websocket.BinaryMessage, payload.Bytes()); err != nil {
 				_ = conn.Close()
 			}
 		}
