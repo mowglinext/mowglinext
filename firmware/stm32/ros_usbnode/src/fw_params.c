@@ -195,7 +195,7 @@ void fw_params_init(void) {
     debug_printf(" * Parameter log %s: erasing\r\n", scan.needs_erase ? "invalid" : "full");
     if (fw_param_store_erase() != 0) {
       /* Leave nothing appendable: commits report LOG_FULL until a boot
-       * manages to erase. The loaded values still apply. */
+       * manages to erase. The compiled defaults still apply. */
       s_next_free = area_words;
       s_last_commit = PARAM_COMMIT_ERROR;
       return;
