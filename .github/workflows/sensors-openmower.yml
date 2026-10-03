@@ -152,3 +152,81 @@ jobs:
               | awk '{s+=$1} END {print s+0}')
           echo "gtest binaries: ${#gtest_xml[@]}, gtest cases executed: $n"
           test "$n" -gt 0 || { echo "mowgli_openmower_bridge ran ZERO gtest cases"; exit 1; }
+
+  # ---------------------------------------------------------------------------
+  # The v1 hardware simulation (sensors/openmower/sim/): the real bridge,
+  # through its production launch file, against an emulated LowLevel board
+  # and xESC controllers built from the firmware sources, then the real
+  # mowgli.launch.py beside it. Needs mowgli_bringup + its launch-time deps
+  # (robot_state_publisher, twist_mux, xacro) on top of the test job's set.
+  # ---------------------------------------------------------------------------
+  simulate:
+    name: Simulate OpenMower v1 hardware
+    runs-on: ubuntu-latest
+    container: ros:lyrical-ros-base
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            python3-colcon-common-extensions \
+            ros-lyrical-ament-cmake \
+            ros-lyrical-geometry-msgs \
+            ros-lyrical-nav-msgs \
+            ros-lyrical-rclcpp \
+            ros-lyrical-rosidl-default-generators \
+            ros-lyrical-rosidl-default-runtime \
+            ros-lyrical-sensor-msgs \
+            ros-lyrical-std-msgs \
+            ros-lyrical-std-srvs \
+            ros-lyrical-robot-state-publisher \
+            ros-lyrical-twist-mux \
+            ros-lyrical-xacro
+
+      - name: Build the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /ws/src
+          for p in mowgli_interfaces mowgli_hardware mowgli_bringup; do
+            cp -r "ros2/src/$p" "/ws/src/$p"
+          done
+          cp -r sensors/openmower/mowgli_openmower_bridge /ws/src/mowgli_openmower_bridge
+          chown -R ubuntu:ubuntu /ws
+          runuser -u ubuntu -- bash <<'BUILD'
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          cd /ws
+          colcon build \
+            --packages-select mowgli_interfaces mowgli_hardware mowgli_bringup mowgli_openmower_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTING=OFF -Wno-dev \
+            --event-handlers console_cohesion+
+          BUILD
+
+      - name: Run the simulation
+        shell: bash
+        run: |
+          mkdir -p /tmp/simlogs && chown ubuntu:ubuntu /tmp/simlogs
+          runuser -u ubuntu -- bash <<SIM
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          source /ws/install/setup.bash
+          export ROS_DOMAIN_ID=46
+          python3 "$GITHUB_WORKSPACE/sensors/openmower/sim/run_simulation.py" --logdir /tmp/simlogs
+          python3 "$GITHUB_WORKSPACE/sensors/openmower/sim/run_stack_integration.py" /tmp/simlogs
+          SIM
+
+      - name: Upload simulation logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: openmower-simulation-logs
+          path: /tmp/simlogs
