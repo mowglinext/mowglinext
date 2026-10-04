@@ -370,6 +370,18 @@ protected:
     return false;
   }
 
+  bool waitForBladeRequest(bool enabled, std::size_t after)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      if (hasBladeRequest(enabled, after))
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return hasBladeRequest(enabled, after);
+  }
+
   void reportBlade(double rpm, bool active = true)
   {
     std::lock_guard<std::mutex> lock(ctx->context_mutex);
@@ -449,6 +461,7 @@ TEST_F(FollowStripDigTest, LiveStalledBladeFailsWithoutBookingUncutGround)
   ctx->blade_ready_config = {1000.0, 0.1, 0.5};
   reportBlade(0.0);
   startFollowStrip({straightUnit(0.0, 1.0)});
+  const std::size_t requests_before_failure = bladeRequestCount();
   EXPECT_EQ(tickUntil(
                 [&]()
                 {
@@ -460,9 +473,8 @@ TEST_F(FollowStripDigTest, LiveStalledBladeFailsWithoutBookingUncutGround)
   EXPECT_EQ(follow->goalCount(), 0u);
   EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
   EXPECT_TRUE(ctx->completed_areas.empty());
-  ASSERT_GT(bladeRequestCount(), 0u);
   // Drain the final asynchronous OFF without re-ticking a failed tree.
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  ASSERT_TRUE(waitForBladeRequest(false, requests_before_failure));
   EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 0u);
 }
 
@@ -517,11 +529,11 @@ TEST_F(FollowStripDigTest, HaltWhileAwaitingReadinessStopsBladeAndCannotDispatch
                 },
                 0.2),
             BT::NodeStatus::RUNNING);
+  const std::size_t requests_before_halt = bladeRequestCount();
   tree->haltTree();
   reportBlade(3000.0);
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  ASSERT_TRUE(waitForBladeRequest(false, requests_before_halt));
   EXPECT_EQ(follow->goalCount(), 0u);
-  ASSERT_GT(bladeRequestCount(), 0u);
   EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 0u);
 }
 
