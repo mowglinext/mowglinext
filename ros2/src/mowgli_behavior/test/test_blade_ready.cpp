@@ -127,6 +127,43 @@ TEST_F(BladeReadyTest, NewEnableDiscardsEarlierReadiness)
   EXPECT_EQ(step(2.0, 12000000000), BladeReadyResult::kTelemetryReady);
 }
 
+TEST_F(BladeReadyTest, NewHandoffCannotReuseFrozenTelemetryWithPausedRosClock)
+{
+  begin();
+  EXPECT_EQ(step(0.1, 10100000000), BladeReadyResult::kWaiting);
+  EXPECT_EQ(step(0.5, 10500000000), BladeReadyResult::kTelemetryReady);
+  gate.start(start + std::chrono::seconds(1), 10500000000, 10500000000, true);
+  for (double elapsed : {1.1, 1.5, 3.0, 6.9})
+    EXPECT_EQ(step(elapsed, 10500000000, 3000.0, true, true, true, true, 10500000000),
+              BladeReadyResult::kWaiting);
+  EXPECT_EQ(step(7.0, 10500000000, 3000.0, true, true, true, true, 10500000000),
+            BladeReadyResult::kFailed);
+}
+
+TEST_F(BladeReadyTest, StickyProvenancePreventsFallbackAfterAStatusReset)
+{
+  begin(false, 0);
+  EXPECT_EQ(step(0.0, 0), BladeReadyResult::kWaiting);
+  gate.noteTelemetrySeen(true);  // report observed by callback, then reset before next tick
+  EXPECT_EQ(step(2.0, 0), BladeReadyResult::kWaiting);
+  EXPECT_EQ(step(6.0, 0), BladeReadyResult::kFailed);
+}
+
+TEST_F(BladeReadyTest, UniqueObservationSilenceResetsStabilityWhenRosClockPauses)
+{
+  begin();
+  EXPECT_EQ(step(0.1, 10100000000, 3000.0, true, true, true, true, 10100000000),
+            BladeReadyResult::kWaiting);
+  EXPECT_EQ(step(2.0, 10100000000, 3000.0, true, true, true, true, 10100000000),
+            BladeReadyResult::kWaiting);
+  EXPECT_EQ(step(2.1, 10200000000, 3000.0, true, true, true, true, 10200000000),
+            BladeReadyResult::kWaiting);
+  EXPECT_EQ(step(2.3, 10300000000, 3000.0, true, true, true, true, 10300000000),
+            BladeReadyResult::kWaiting);
+  EXPECT_EQ(step(2.5, 10400000000, 3000.0, true, true, true, true, 10400000000),
+            BladeReadyResult::kTelemetryReady);
+}
+
 TEST(BladeReadyConfig, RejectsInvalidAndUnboundedValues)
 {
   BladeReadyConfig config;
