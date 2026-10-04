@@ -62,6 +62,7 @@ def node_names(probe):
 
 
 def main():
+    sys.setswitchinterval(0.0005)  # see run_simulation.main
     logdir = sys.argv[1] if len(sys.argv) > 1 else tempfile.gettempdir()
     rclpy.init()
     R = Report()

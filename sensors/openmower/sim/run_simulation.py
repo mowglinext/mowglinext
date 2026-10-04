@@ -742,10 +742,12 @@ def s19b_starved(probe, rig, R, esc, bridge):
     with probe.lock:
         vx = [v for (t, v, _) in probe.odom if t >= t0]
     worst = max((abs(v) for v in vx), default=float('nan'))
-    ok = bool(vx) and worst < 0.45
+    # 2x the commanded speed: the bug this guards against read 2.5-4x
+    # (0.76-1.26 m/s); a starved runner's honest window noise reaches ~1.5x.
+    ok = bool(vx) and worst < 0.6
     if not ok:
         print('    diag: vx series ' + ' '.join(f'{v:.2f}' for v in vx), flush=True)
-    R.check(S, '/wheel_odom never reports a phantom speed (|vx| < 0.45 at 0.3 m/s)',
+    R.check(S, '/wheel_odom never reports a phantom speed (|vx| < 0.6 at 0.3 m/s)',
             ok, f'max |vx|={worst:.2f} m/s over {len(vx)} msgs')
     R.check(S, 'board did not latch (stall shorter than its 500 ms heartbeat timeout)',
             not rig.snapshot()['latch'])
@@ -861,6 +863,12 @@ def run_gui_config(R: Report, logdir: str):
 
 
 def main():
+    # The emulator thread stands in for microcontrollers that answer within a
+    # millisecond, but it shares the GIL with the probe's executor threads.
+    # With Python's default 5 ms switch interval a starved runner made it
+    # answer tens of ms late, and the bridge's (correct) timing then measured
+    # the EMULATOR's latency as speed noise. Switch every 0.5 ms instead.
+    sys.setswitchinterval(0.0005)
     ap = argparse.ArgumentParser()
     ap.add_argument('--esc', choices=['xesc_mini', 'xesc_2040', 'both'], default='both')
     ap.add_argument('--only', nargs='*', help='scenario function names')
