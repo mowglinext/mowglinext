@@ -880,6 +880,23 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, map[string]interface{}{"message": res.Message})
 				return
 			}
+		case "reset_firmware_param_store":
+			// This action only arms an explicit, request-id-correlated reset
+			// marker. The GUI waits for the matching firmware status before it
+			// offers the separate reboot action.
+			type TriggerRes struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
+			var res TriggerRes
+			err = provider.CallService(ctx, "/hardware_bridge/reset_firmware_param_store", &struct{}{}, &res, "std_srvs/srv/Trigger")
+			if err == nil && !res.Success {
+				err = errors.New(res.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": res.Message})
+				return
+			}
 		case "clear_dig_escalation":
 			// Operator override for a latched repeat-dig escalation
 			// (Status.dig_escalated) — see dig_escalation.hpp. Distance-gated

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0 */
 /**
  * @file fw_params.c
- * @brief Runtime parameter table, host protocol v7 and flash persistence.
+ * @brief Runtime parameter table, host protocol v8 and flash persistence.
  *        See fw_params.h for the lifecycle.
  */
 #include "fw_params.h"
@@ -14,6 +14,7 @@
 #include "main.h"
 #include "drive_tuning_defaults.h"
 #include "fw_param_log.h"
+#include "fw_param_reset.h"
 #include "fw_param_store.h"
 #include "mowgli_comms.h"
 
@@ -23,6 +24,7 @@ _Static_assert(FW_PARAM_COUNT <= FW_PARAM_LOG_MAX_ENTRIES, "record entry limit")
 /* Minimum spacing between two reports: a GET_PARAM(ALL) answer is ~25 packets,
  * and the USB TX queue drops (never blocks) when full. */
 #define FW_PARAMS_REPORT_SPACING_MS 5u
+#define FW_PARAMS_RESET_STATUS_INTERVAL_MS 1000u
 
 #define FW_PARAMS_RECORD_MAX_WORDS \
   (FW_PARAM_LOG_HEADER_WORDS + 2u * FW_PARAM_COUNT + FW_PARAM_LOG_TRAILER_WORDS)
@@ -40,6 +42,11 @@ static volatile uint8_t s_store_report_pending;
 static volatile uint8_t s_unknown_report_pending;
 static volatile uint16_t s_unknown_report_id;
 static volatile uint8_t s_commit_requested;
+static volatile uint8_t s_reset_requested;
+static volatile uint32_t s_reset_request_id;
+static volatile uint8_t s_reset_armed;
+static volatile uint8_t s_reset_blocked;
+static volatile uint32_t s_last_reset_request_id;
 
 static uint8_t s_boot_source = PARAM_BOOT_DEFAULTS;
 static uint8_t s_last_commit = PARAM_COMMIT_NONE;
@@ -53,6 +60,18 @@ static size_t s_pending_pos;
 static uint8_t s_pending_active;
 
 static uint32_t s_last_report_ms;
+static uint32_t s_last_reset_status_ms;
+
+static uint8_t fw_params_area_is_erased(void) {
+  const uint32_t *area = fw_param_store_area();
+  const size_t words = fw_param_store_area_words();
+  for (size_t i = 0; i < words; ++i) {
+    if (area[i] != FW_PARAM_LOG_ERASED) {
+      return 0u;
+    }
+  }
+  return 1u;
+}
 
 static float fw_params_compiled_default(uint16_t id) {
   switch (id) {
@@ -154,6 +173,12 @@ void fw_params_init(void) {
   s_last_commit = PARAM_COMMIT_NONE;
   s_pending_active = 0u;
   s_commit_requested = 0u;
+  s_reset_requested = 0u;
+  s_reset_request_id = 0u;
+  s_reset_armed = 0u;
+  s_reset_blocked = 0u;
+  s_last_reset_request_id = fw_param_reset_last_request_id();
+  s_last_reset_status_ms = 0u;
   s_dirty_groups = 0u;
   s_report_pending = 0u;
   s_store_report_pending = 0u;
@@ -172,6 +197,31 @@ void fw_params_init(void) {
 
   const uint32_t *area = fw_param_store_area();
   const size_t area_words = fw_param_store_area_words();
+
+  /* An explicit request is consumed before the watchdog is armed. Keep the
+   * retained RTC ID if marker clearing fails; this blocks commits in this boot
+   * and leaves the bounded duplicate check available. */
+  if (fw_param_reset_is_pending()) {
+    s_reset_request_id = s_last_reset_request_id;
+    s_reset_armed = 1u;
+    s_next_free = area_words;
+    if (fw_param_store_erase() == 0 && fw_params_area_is_erased() &&
+        fw_param_reset_clear(s_reset_request_id)) {
+      s_boot_source = PARAM_BOOT_FLASH_ERASED;
+      s_next_free = 0u;
+      s_reset_armed = 0u;
+      s_last_commit = PARAM_COMMIT_NONE;
+      debug_printf(" * Explicit parameter reset %lu: flash erased\r\n",
+                   (unsigned long)s_reset_request_id);
+    } else {
+      s_reset_blocked = 1u;
+      s_last_commit = PARAM_COMMIT_RESET_PENDING;
+      debug_printf(" * Explicit parameter reset %lu: retry required\r\n",
+                   (unsigned long)s_reset_request_id);
+    }
+    return;
+  }
+
   const fw_param_log_scan_t scan = fw_param_log_scan(area, area_words);
   uint8_t loaded = 0u;
   if (scan.last_valid >= 0) {
@@ -263,7 +313,49 @@ void fw_params_request_report(uint16_t id) {
   s_report_pending |= (1u << (uint32_t)index);
 }
 
-void fw_params_request_commit(void) { s_commit_requested = 1u; }
+void fw_params_request_commit(void) {
+  if (s_reset_armed || s_reset_blocked) {
+    s_last_commit = s_reset_armed ? PARAM_COMMIT_RESET_PENDING
+                                  : PARAM_COMMIT_ERROR;
+    s_store_report_pending = 1u;
+    return;
+  }
+  s_commit_requested = 1u;
+}
+
+uint8_t fw_params_request_reset(uint32_t request_id) {
+  if (request_id == 0u) {
+    return 0u;
+  }
+  if (s_reset_armed) {
+    if (s_reset_request_id != request_id) {
+      return 0u;
+    }
+    s_store_report_pending = 1u;
+    return 1u;
+  }
+  if (s_reset_blocked) {
+    return 0u;
+  }
+  if (s_reset_requested) {
+    return (uint8_t)(s_reset_request_id == request_id);
+  }
+  if (s_last_reset_request_id == request_id) {
+    return 0u;
+  }
+  s_reset_request_id = request_id;
+  s_reset_requested = 1u;
+  return 1u;
+}
+
+void fw_params_report_reset_rejected(void) {
+  if (s_reset_armed) {
+    s_last_commit = PARAM_COMMIT_RESET_PENDING;
+  } else {
+    s_last_commit = PARAM_COMMIT_ERROR;
+  }
+  s_store_report_pending = 1u;
+}
 
 static void fw_params_queue_all_reports(void) {
   __disable_irq();
@@ -273,6 +365,12 @@ static void fw_params_queue_all_reports(void) {
 }
 
 static void fw_params_start_commit(void) {
+  if (s_reset_armed || s_reset_blocked) {
+    s_last_commit = s_reset_armed ? PARAM_COMMIT_RESET_PENDING
+                                  : PARAM_COMMIT_ERROR;
+    s_store_report_pending = 1u;
+    return;
+  }
   float snapshot[FW_PARAM_COUNT];
   __disable_irq();
   memcpy(snapshot, s_values, sizeof(snapshot));
@@ -372,6 +470,7 @@ static void fw_params_send_store_status(void) {
   const size_t records_left = free_words / fw_params_record_words();
   pkt.records_left = (uint16_t)(records_left > 0xFFFFu ? 0xFFFFu : records_left);
   pkt.param_count = (uint16_t)FW_PARAM_COUNT;
+  pkt.reset_request_id = s_last_reset_request_id;
   mowgli_comms_send(&pkt, sizeof(pkt));
 }
 
@@ -407,11 +506,58 @@ static void fw_params_send_one_report(void) {
 }
 
 void fw_params_service(uint32_t now_ms) {
-  if (s_pending_active) {
+  if (s_reset_requested) {
+    const uint32_t request_id = s_reset_request_id;
+    /* An older in-progress append may leave a harmless torn tail, but no word
+     * is programmed after the reset intent has been accepted. Keep the queued
+     * flag set while RTC writes are in flight: a USB interrupt may repeat this
+     * ID, but cannot replace the owner with a different reset request. */
+    s_pending_active = 0u;
+    s_commit_requested = 0u;
+    if (fw_param_reset_arm(request_id)) {
+      s_reset_armed = 1u;
+      s_last_reset_request_id = request_id;
+      s_last_commit = PARAM_COMMIT_RESET_PENDING;
+    } else {
+      s_reset_blocked = 1u;
+      if (fw_param_reset_is_pending() &&
+          fw_param_reset_last_request_id() == request_id) {
+        s_reset_armed = 1u;
+        s_last_reset_request_id = request_id;
+        s_last_commit = PARAM_COMMIT_RESET_PENDING;
+      } else {
+        s_last_commit = PARAM_COMMIT_ERROR;
+      }
+    }
+    if (s_reset_armed) {
+      s_last_reset_status_ms = now_ms;
+    }
+    /* Publish the armed/blocked state before releasing request ownership. */
+    s_reset_requested = 0u;
+    s_store_report_pending = 1u;
+  }
+
+  if (s_reset_armed || s_reset_blocked) {
+    if (s_commit_requested) {
+      s_commit_requested = 0u;
+      s_last_commit = s_reset_armed ? PARAM_COMMIT_RESET_PENDING
+                                    : PARAM_COMMIT_ERROR;
+      s_store_report_pending = 1u;
+    }
+    s_pending_active = 0u;
+  } else if (s_pending_active) {
     fw_params_step_commit();
   } else if (s_commit_requested) {
     s_commit_requested = 0u;
     fw_params_start_commit();
+  }
+  if (s_reset_armed &&
+      (uint32_t)(now_ms - s_last_reset_status_ms) >=
+          FW_PARAMS_RESET_STATUS_INTERVAL_MS) {
+    s_last_reset_status_ms = now_ms;
+    /* Queue the existing status packet only. Do not alter last_commit here:
+     * failed, unarmed reset requests must remain ERROR. */
+    s_store_report_pending = 1u;
   }
   if ((uint32_t)(now_ms - s_last_report_ms) >= FW_PARAMS_REPORT_SPACING_MS) {
     s_last_report_ms = now_ms;
