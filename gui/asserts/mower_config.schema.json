@@ -1447,6 +1447,77 @@
           "description": "How old the last-motion direction may be [s]. Too short is fail-safe (no motion); too long risks acting on a direction that no longer describes how the robot arrived. Hard ceiling 300 in code."
         }
       }
+    },
+    "openmower_settings": {
+      "title": "OpenMower Hardware",
+      "type": "object",
+      "properties": {
+        "openmower_ll_port": {
+          "type": "string",
+          "title": "LowLevel Board Port",
+          "description": "Serial device of the OpenMower LowLevel (Pico) board (HARDWARE_BACKEND=openmower). Stock OpenMower v1 on a Raspberry Pi 4 with kernel >= 6.1.28: /dev/ttyAMA0. Applied when the OpenMower bridge restarts. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_type": {
+          "type": "string",
+          "title": "Motor Controller Type",
+          "enum": [
+            "xesc_mini",
+            "xesc_2040"
+          ],
+          "description": "Which xESC drives the wheels and blade: xesc_mini (VESC protocol) or xesc_2040 (COBS protocol). A wrong choice leaves every motor silent (the bridge reports firmware_compatible = false). No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_left_port": {
+          "type": "string",
+          "title": "Left Wheel Controller Port",
+          "description": "Serial device of the left drive xESC. Stock OpenMower v1: /dev/ttyAMA5. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_right_port": {
+          "type": "string",
+          "title": "Right Wheel Controller Port",
+          "description": "Serial device of the right drive xESC. Stock OpenMower v1: /dev/ttyAMA3. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_mow_port": {
+          "type": "string",
+          "title": "Blade Controller Port",
+          "description": "Serial device of the blade xESC. Stock OpenMower v1: /dev/ttyAMA4. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_emergency_input_config": {
+          "type": "string",
+          "title": "Emergency Inputs",
+          "default": "",
+          "description": "OpenMower OM_EMERGENCY_INPUT_CONFIG: what each of the board's four hall inputs is (L = lift, S = stop, ! = active low), e.g. \"!L,!L,S,S\". Empty keeps the board's own wiring (YardForce). Safety-relevant: a wrong mapping can hide a lift or stop sensor."
+        },
+        "openmower_wheel_loop_enabled": {
+          "type": "boolean",
+          "title": "Closed-Loop Wheel Speed",
+          "default": true,
+          "description": "The xESC only takes a duty cycle, so the bridge closes a per-wheel speed loop on the tachometer. Off = OpenMower's own open-loop mapping (speed x duty-per-m/s)."
+        },
+        "openmower_wheel_duty_per_mps": {
+          "type": "number",
+          "title": "Duty per m/s",
+          "default": 1.0,
+          "minimum": 0.1,
+          "maximum": 5.0,
+          "description": "Feed-forward: duty cycle (0..1) per m/s of wheel speed. 1.0 is OpenMower's own mapping."
+        },
+        "openmower_wheel_kp": {
+          "type": "number",
+          "title": "Wheel Loop Kp",
+          "default": 0.5,
+          "minimum": 0.0,
+          "maximum": 10.0,
+          "description": "Proportional gain of the host-side wheel loop [duty per m/s of error]. Unlike the STM32's wheel_pid_kp this is in duty, not PWM counts."
+        },
+        "openmower_wheel_ki": {
+          "type": "number",
+          "title": "Wheel Loop Ki",
+          "default": 2.0,
+          "minimum": 0.0,
+          "maximum": 50.0,
+          "description": "Integral gain of the host-side wheel loop [duty per (m/s x s)]."
+        }
+      }
     }
   }
 }

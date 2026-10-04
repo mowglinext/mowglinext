@@ -19,6 +19,7 @@ import { restartRos2 } from "../utils/containers.ts";
 import { useContainerRestart } from "../hooks/useContainerRestart.ts";
 import { SettingsNav } from "../components/settings/SettingsNav.tsx";
 import { HardwareSection } from "../components/settings/HardwareSection.tsx";
+import { HardwareBackendSection } from "../components/settings/HardwareBackendSection.tsx";
 import { DriveMotorSection } from "../components/settings/DriveMotorSection.tsx";
 import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { PositioningSection } from "../components/settings/PositioningSection.tsx";
@@ -54,6 +55,9 @@ import {
     START_ESCAPE_GROUP,
     TURN_SPEED_GROUP,
     YAW_LOOP_GROUP,
+    OPENMOWER_WHEEL_LOOP_GROUP,
+    OPENMOWER_WIRING_GROUP,
+    groupForBackend,
     type SettingsFieldGroup,
 } from "../components/settings/settingsFieldGroups.ts";
 
@@ -99,6 +103,8 @@ export const SettingsPage = () => {
         acceptPersistedValues,
         revert,
         gpsRestarting,
+        hardwareBackend,
+        backendDefaultOverrides,
     } = useSettingsManager();
 
     // Long-running: container restart + rosbridge reconnect. Disable button
@@ -160,8 +166,12 @@ export const SettingsPage = () => {
         .filter(key => matchesSearch(key))
         .map(key => ({section, key, label: settingSearchText(key, t)[0] || key}))) : [];
 
+    // Each card shows only what exists on this robot's hardware backend.
     const renderFieldCards = (...groups: SettingsFieldGroup[]) =>
-        groups.map((group) => (
+        groups
+            .map((group) => groupForBackend(group, hardwareBackend))
+            .filter((group): group is SettingsFieldGroup => group !== null)
+            .map((group) => (
             <SettingsFieldCard
                 key={group.id}
                 group={group}
@@ -194,10 +204,19 @@ export const SettingsPage = () => {
                         hasDefault={hasDefault}
                         onReset={resetToDefault}
                         revealAdvanced={!!targetField || !!searchQuery}
+                        backendDefaultOverrides={backendDefaultOverrides}
                     />
                 );
-            case "drive_motor":
+            case "hardware_backend":
                 return (
+                    <HardwareBackendSection backend={hardwareBackend}>
+                        {renderFieldCards(OPENMOWER_WIRING_GROUP)}
+                    </HardwareBackendSection>
+                );
+            case "drive_motor":
+                // The STM32 drive calibration and PID (PWM counts) exist only on
+                // the Mowgli board; OpenMower's xESC gets a host-side duty loop.
+                return hardwareBackend === "mowgli" ? (
                     <>
                         <DriveMotorSection
                             values={values}
@@ -206,6 +225,8 @@ export const SettingsPage = () => {
                         />
                         {renderFieldCards(YAW_LOOP_GROUP)}
                     </>
+                ) : (
+                    <>{renderFieldCards(OPENMOWER_WHEEL_LOOP_GROUP)}</>
                 );
             case "ntrip":
                 return <NtripSection values={values} onChange={handleChange} />;
@@ -279,7 +300,7 @@ export const SettingsPage = () => {
                     <>
                         <SafetySection values={values} onChange={handleChange} />
                         {renderFieldCards(FIRMWARE_SAFETY_GROUP)}
-                        <FirmwareParamsCard />
+                        {hardwareBackend === "mowgli" ? <FirmwareParamsCard /> : null}
                     </>
                 );
             case "obstacles":

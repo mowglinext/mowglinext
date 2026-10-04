@@ -4,6 +4,7 @@ import { ToolOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 import { MOWER_MODELS } from "../../constants/mowerModels.ts";
+import { presetValuesForBackend } from "../../constants/hardwareBackends.ts";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Text, Paragraph } = Typography;
@@ -13,6 +14,8 @@ type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
     onBulkChange: (changes: Record<string, any>) => void;
+    /** Settings whose default the robot's hardware backend replaces. */
+    backendDefaultOverrides?: Record<string, unknown>;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
     onReset?: (key: string) => void;
@@ -23,6 +26,7 @@ export const HardwareSection: React.FC<Props> = ({
     revealAdvanced = false,
     onChange,
     onBulkChange,
+    backendDefaultOverrides = {},
     isOverridden,
     hasDefault,
     onReset,
@@ -47,7 +51,7 @@ export const HardwareSection: React.FC<Props> = ({
         onChange("mower_model", model);
         const preset = MOWER_MODELS.find((m) => m.value === model);
         if (preset?.defaults && Object.keys(preset.defaults).length > 0) {
-            onBulkChange(preset.defaults);
+            onBulkChange(presetValuesForBackend(preset.defaults, backendDefaultOverrides));
         }
     };
 

@@ -3861,6 +3861,10 @@
       "drivePidUpdateFailedDescription": "Restart ROS2 to apply the new drive-motor PID gains.",
       "saveFailed": "Failed to save settings",
       "savedApplyingLive": "Saved. Applying the drive settings to the running robot…"
+    },
+    "hardware_backend": {
+      "label": "Hardware Backend",
+      "description": "Which hardware bridge drives the robot, and the settings only it has (serial ports, motor controllers)"
     }
   },
   "displayMode": {
@@ -4379,6 +4383,46 @@
     "start_blocked_escape_signal_max_age_s": {
       "label": "Escape Signal Max Age",
       "tooltip": "How old the last-motion direction may be [s]. Too short is fail-safe (no motion); too long risks acting on a direction that no longer describes how the robot arrived. Hard ceiling 300 in code."
+    },
+    "openmower_xesc_type": {
+      "label": "Motor controller",
+      "tooltip": "xesc_mini (VESC protocol) or xesc_2040. A wrong choice leaves every motor silent: Diagnostics then reports the firmware as incompatible."
+    },
+    "openmower_ll_port": {
+      "label": "LowLevel board port",
+      "tooltip": "Serial device of the OpenMower LowLevel (Pico) board. Stock OpenMower v1: /dev/ttyAMA0."
+    },
+    "openmower_xesc_left_port": {
+      "label": "Left wheel controller port",
+      "tooltip": "Serial device of the left drive xESC. Stock OpenMower v1: /dev/ttyAMA5."
+    },
+    "openmower_xesc_right_port": {
+      "label": "Right wheel controller port",
+      "tooltip": "Serial device of the right drive xESC. Stock OpenMower v1: /dev/ttyAMA3."
+    },
+    "openmower_xesc_mow_port": {
+      "label": "Blade controller port",
+      "tooltip": "Serial device of the blade xESC. Stock OpenMower v1: /dev/ttyAMA4."
+    },
+    "openmower_emergency_input_config": {
+      "label": "Emergency inputs",
+      "tooltip": "What each of the LowLevel board's four hall inputs is (L = lift, S = stop, ! = active low), e.g. !L,!L,S,S. Empty keeps the board's own wiring. A wrong mapping can hide a lift or stop sensor."
+    },
+    "openmower_wheel_loop_enabled": {
+      "label": "Closed-loop wheel speed",
+      "tooltip": "Off = OpenMower's own open-loop mapping (speed × duty per m/s), without tachometer feedback."
+    },
+    "openmower_wheel_duty_per_mps": {
+      "label": "Duty per m/s",
+      "tooltip": "Feed-forward: duty cycle (0–1) per m/s of wheel speed. 1.0 is OpenMower's own mapping."
+    },
+    "openmower_wheel_kp": {
+      "label": "Wheel loop Kp",
+      "tooltip": "Proportional gain [duty per m/s of speed error]. Unlike the STM32 wheel PID this is in duty, not PWM counts."
+    },
+    "openmower_wheel_ki": {
+      "label": "Wheel loop Ki",
+      "tooltip": "Integral gain [duty per (m/s × s) of speed error]."
     }
   },
   "settingsFieldGroups": {
@@ -4426,6 +4470,14 @@
     "startEscape": {
       "title": "Start-Pose Escape",
       "description": "Last-resort nudge when the robot stands on a keepout cell and every plan from its own pose is refused."
+    },
+    "openmowerWiring": {
+      "title": "OpenMower Electronics",
+      "description": "How the OpenMower LowLevel board and the three xESC motor controllers are connected. Until you set a value here, the one chosen in the installer applies. Takes effect when ROS2 is restarted."
+    },
+    "openmowerWheelLoop": {
+      "title": "OpenMower Wheel Speed Loop",
+      "description": "The xESC only takes a duty cycle, so the OpenMower bridge closes a per-wheel speed loop on the wheel tachometers. Takes effect when ROS2 is restarted."
     }
   },
   "firmwareParams": {
@@ -4614,5 +4666,20 @@
       "6": "The robot must be charging on its dock with mowing stopped.",
       "7": "The dock pose was not fully saved. Review the reported error before retrying."
     }
+  },
+  "settingsHardwareBackend": {
+    "active": "Active backend",
+    "names": {
+      "mowgli": "Mowgli board (STM32)",
+      "openmower": "OpenMower v1 (LowLevel board + xESC)",
+      "mavros": "Pixhawk (MAVROS)"
+    },
+    "descriptions": {
+      "mowgli": "The Mowgli STM32 firmware drives the motors and owns blade and emergency safety. It needs no wiring settings here.",
+      "openmower": "The stock OpenMower electronics keep their own firmware; a bridge container drives them. Settings MowgliNext already has (charge limits, lift delays, ticks per metre…) stay in their usual sections and are applied to the OpenMower hardware.",
+      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer."
+    },
+    "choiceNote": "The backend is chosen when installing the robot.",
+    "openmowerRestartNote": "The OpenMower bridge reads these settings when it starts: use \"Restart ROS2\" after saving, which restarts the bridge too."
   }
 }

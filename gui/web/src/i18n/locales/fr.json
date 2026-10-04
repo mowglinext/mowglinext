@@ -3857,6 +3857,10 @@
       "drivePidUpdateFailedDescription": "Redémarrez ROS2 pour appliquer les nouveaux gains PID des moteurs.",
       "saveFailed": "Échec de l'enregistrement des réglages",
       "savedApplyingLive": "Enregistré. Application des réglages moteurs au robot en cours…"
+    },
+    "hardware_backend": {
+      "label": "Matériel",
+      "description": "Quel pont matériel pilote le robot, et les réglages qui lui sont propres (ports série, contrôleurs moteur)"
     }
   },
   "displayMode": {
@@ -4379,6 +4383,46 @@
     "start_blocked_escape_signal_max_age_s": {
       "label": "Âge max du signal (dégagement)",
       "tooltip": "Âge maximal de la direction du dernier mouvement [s]. Trop court est sans risque (aucun mouvement) ; trop long risque d'agir sur une direction qui ne décrit plus l'arrivée du robot. Plafond codé en dur : 300."
+    },
+    "openmower_xesc_type": {
+      "label": "Contrôleur moteur",
+      "tooltip": "xesc_mini (protocole VESC) ou xesc_2040. Un mauvais choix laisse tous les moteurs muets : les Diagnostics indiquent alors un firmware incompatible."
+    },
+    "openmower_ll_port": {
+      "label": "Port de la carte LowLevel",
+      "tooltip": "Périphérique série de la carte LowLevel (Pico) OpenMower. OpenMower v1 d'origine : /dev/ttyAMA0."
+    },
+    "openmower_xesc_left_port": {
+      "label": "Port du contrôleur roue gauche",
+      "tooltip": "Périphérique série du xESC de la roue gauche. OpenMower v1 d'origine : /dev/ttyAMA5."
+    },
+    "openmower_xesc_right_port": {
+      "label": "Port du contrôleur roue droite",
+      "tooltip": "Périphérique série du xESC de la roue droite. OpenMower v1 d'origine : /dev/ttyAMA3."
+    },
+    "openmower_xesc_mow_port": {
+      "label": "Port du contrôleur de lame",
+      "tooltip": "Périphérique série du xESC de la lame. OpenMower v1 d'origine : /dev/ttyAMA4."
+    },
+    "openmower_emergency_input_config": {
+      "label": "Entrées d'urgence",
+      "tooltip": "Rôle de chacune des quatre entrées à effet Hall de la carte LowLevel (L = soulèvement, S = arrêt, ! = actif bas), par ex. !L,!L,S,S. Vide = câblage propre à la carte. Une erreur peut masquer un capteur de soulèvement ou d'arrêt."
+    },
+    "openmower_wheel_loop_enabled": {
+      "label": "Vitesse des roues en boucle fermée",
+      "tooltip": "Désactivé = conversion en boucle ouverte d'OpenMower (vitesse × rapport cyclique par m/s), sans retour tachymètre."
+    },
+    "openmower_wheel_duty_per_mps": {
+      "label": "Rapport cyclique par m/s",
+      "tooltip": "Anticipation : rapport cyclique (0–1) par m/s de vitesse de roue. 1,0 est la conversion d'OpenMower."
+    },
+    "openmower_wheel_kp": {
+      "label": "Kp de la boucle roue",
+      "tooltip": "Gain proportionnel [rapport cyclique par m/s d'erreur]. Contrairement au PID roue STM32, il s'exprime en rapport cyclique, pas en pas de PWM."
+    },
+    "openmower_wheel_ki": {
+      "label": "Ki de la boucle roue",
+      "tooltip": "Gain intégral [rapport cyclique par (m/s × s) d'erreur]."
     }
   },
   "settingsFieldGroups": {
@@ -4426,6 +4470,14 @@
     "startEscape": {
       "title": "Dégagement de la pose de départ",
       "description": "Dernier recours quand le robot se tient sur une cellule interdite et que tout plan depuis sa propre pose est refusé."
+    },
+    "openmowerWiring": {
+      "title": "Électronique OpenMower",
+      "description": "Branchement de la carte LowLevel OpenMower et des trois contrôleurs moteur xESC. Tant qu'aucune valeur n'est définie ici, celle choisie dans l'installateur s'applique. Pris en compte au redémarrage de ROS2."
+    },
+    "openmowerWheelLoop": {
+      "title": "Boucle de vitesse des roues OpenMower",
+      "description": "Le xESC ne reçoit qu'un rapport cyclique : le pont OpenMower ferme une boucle de vitesse par roue sur les tachymètres. Pris en compte au redémarrage de ROS2."
     }
   },
   "firmwareParams": {
@@ -4614,5 +4666,20 @@
       "6": "Le robot doit être en charge sur sa base, tonte arrêtée.",
       "7": "La position de la base n’a pas été entièrement enregistrée. Consultez l’erreur avant de réessayer."
     }
+  },
+  "settingsHardwareBackend": {
+    "active": "Pont matériel actif",
+    "names": {
+      "mowgli": "Carte Mowgli (STM32)",
+      "openmower": "OpenMower v1 (carte LowLevel + xESC)",
+      "mavros": "Pixhawk (MAVROS)"
+    },
+    "descriptions": {
+      "mowgli": "Le firmware STM32 Mowgli pilote les moteurs et garde la sécurité de la lame et des arrêts d'urgence. Aucun réglage de câblage n'est nécessaire ici.",
+      "openmower": "L'électronique OpenMower d'origine garde son propre firmware ; un conteneur pont la pilote. Les réglages que MowgliNext possède déjà (limites de charge, délais de soulèvement, impulsions par mètre…) restent dans leurs sections habituelles et sont appliqués au matériel OpenMower.",
+      "mavros": "Un contrôleur de vol pilote le robot via le conteneur MAVROS, configuré par l'installateur."
+    },
+    "choiceNote": "Le pont matériel est choisi à l'installation du robot.",
+    "openmowerRestartNote": "Le pont OpenMower lit ces réglages au démarrage : utilisez « Redémarrer ROS2 » après l'enregistrement, ce qui redémarre aussi le pont."
   }
 }
