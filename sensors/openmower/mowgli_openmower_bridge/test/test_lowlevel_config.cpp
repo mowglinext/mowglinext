@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "mowgli_hardware/ll_datatypes.hpp"
@@ -130,34 +131,89 @@ TEST(BuildHighLevelConfig, NoOverrideSendsNothingTheBoardWouldApply)
   }
 }
 
-TEST(BuildHighLevelConfig, ExplicitOverridesAreSentVerbatim)
+TEST(BuildHighLevelConfig, InEnvelopeValuesAreSentVerbatim)
 {
+  // OpenMower's own factory values, as an OpenMower install seeds them.
   ll::ConfigOverrides o;
-  o.v_charge_cutoff = 29.5;
-  o.i_charge_cutoff = 1.0;
-  o.lift_period_ms = 0;  // 0 is a real value: "disable", not "unknown"
-  o.tilt_period_ms = 1800;
+  o.i_charge_cutoff = 1.2;
+  o.v_battery_cutoff = 29.0;
+  o.v_battery_empty = 24.0;
+  o.v_battery_full = 28.0;
+  o.lift_period_ms = 100;
+  o.tilt_period_ms = 2500;
   o.ignore_charging_current = 1;
   o.language = "de";
   o.emergency_input_config = "!L,!L,S,S";
-  const auto cfg = ll::BuildHighLevelConfig(o);
-  EXPECT_FLOAT_EQ(cfg.v_charge_cutoff, 29.5f);
-  EXPECT_FLOAT_EQ(cfg.i_charge_cutoff, 1.0f);
-  EXPECT_LT(cfg.v_battery_cutoff, 0.0f);  // untouched field stays unknown
-  EXPECT_EQ(cfg.lift_period, 0u);
-  EXPECT_EQ(cfg.tilt_period, 1800u);
+  std::vector<std::string> rejected;
+  const auto cfg = ll::BuildHighLevelConfig(o, &rejected);
+  EXPECT_TRUE(rejected.empty());
+  EXPECT_LT(cfg.v_charge_cutoff, 0.0f);  // no MowgliNext equivalent: the board's own
+  EXPECT_FLOAT_EQ(cfg.i_charge_cutoff, 1.2f);
+  EXPECT_FLOAT_EQ(cfg.v_battery_cutoff, 29.0f);
+  EXPECT_FLOAT_EQ(cfg.v_battery_empty, 24.0f);
+  EXPECT_FLOAT_EQ(cfg.v_battery_full, 28.0f);
+  EXPECT_EQ(cfg.lift_period, 100u);
+  EXPECT_EQ(cfg.tilt_period, 2500u);
   EXPECT_EQ(cfg.options.ignore_charging_current, ll::OptionState::ON);
   EXPECT_EQ(cfg.options.dfp_is_5v, ll::OptionState::UNDEFINED);
   EXPECT_EQ(cfg.language[0], 'd');
   EXPECT_EQ(cfg.hall_configs[2].mode, ll::HallMode::STOP);
 }
 
-TEST(BuildHighLevelConfig, PeriodsNeverCollideWithTheUnknownSentinel)
+// The Pico takes a 0 ms period as "disabled" and saves it to flash: the
+// envelope (the STM32 firmware's own, fw_param_catalog.h) must refuse it.
+TEST(BuildHighLevelConfig, AZeroPeriodCanNeverDisableALiftEStop)
 {
   ll::ConfigOverrides o;
-  o.lift_period_ms = 70000;
-  const auto cfg = ll::BuildHighLevelConfig(o);
-  EXPECT_EQ(cfg.lift_period, 0xFFFEu);
+  o.lift_period_ms = 0;
+  o.tilt_period_ms = 0;
+  std::vector<std::string> rejected;
+  const auto cfg = ll::BuildHighLevelConfig(o, &rejected);
+  EXPECT_EQ(cfg.lift_period, 0xFFFFu);
+  EXPECT_EQ(cfg.tilt_period, 0xFFFFu);
+  EXPECT_EQ(rejected.size(), 2u);
+}
+
+TEST(BuildHighLevelConfig, OutOfEnvelopeValuesKeepTheBoardsOwn)
+{
+  ll::ConfigOverrides o;
+  o.i_charge_cutoff = 2.0;  // above the 1.2 A validated maximum
+  o.v_battery_cutoff = 30.0;  // above 7S at 4.2 V/cell
+  o.lift_period_ms = 3001;
+  o.tilt_period_ms = 70000;
+  std::vector<std::string> rejected;
+  const auto cfg = ll::BuildHighLevelConfig(o, &rejected);
+  EXPECT_LT(cfg.i_charge_cutoff, 0.0f);
+  EXPECT_LT(cfg.v_battery_cutoff, 0.0f);
+  EXPECT_EQ(cfg.lift_period, 0xFFFFu);
+  EXPECT_EQ(cfg.tilt_period, 0xFFFFu);
+  EXPECT_EQ(rejected.size(), 4u);
+}
+
+TEST(BuildHighLevelConfig, EnvelopeBoundsAreInclusive)
+{
+  ll::ConfigOverrides o;
+  o.i_charge_cutoff = 0.1;
+  o.v_battery_cutoff = 29.4;
+  o.lift_period_ms = 10;
+  o.tilt_period_ms = 5000;
+  std::vector<std::string> rejected;
+  const auto cfg = ll::BuildHighLevelConfig(o, &rejected);
+  EXPECT_TRUE(rejected.empty());
+  EXPECT_EQ(cfg.lift_period, 10u);
+  EXPECT_EQ(cfg.tilt_period, 5000u);
+}
+
+TEST(BuildHighLevelConfig, InvertedBatteryGaugeIsRefusedAsAPair)
+{
+  ll::ConfigOverrides o;
+  o.v_battery_empty = 28.0;
+  o.v_battery_full = 24.0;
+  std::vector<std::string> rejected;
+  const auto cfg = ll::BuildHighLevelConfig(o, &rejected);
+  EXPECT_LT(cfg.v_battery_empty, 0.0f);
+  EXPECT_LT(cfg.v_battery_full, 0.0f);
+  EXPECT_EQ(rejected.size(), 1u);
 }
 
 TEST(BuildHighLevelConfig, NonFiniteOrNegativeVoltagesStayUnknown)

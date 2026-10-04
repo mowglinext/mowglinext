@@ -1286,17 +1286,11 @@ EOF
   [[ "${LIDAR_ENABLED:-false}" == "true" ]] && lidar_on="true"
   _yaml_patch_key "$yaml_file" lidar_enabled "$lidar_on" || return 1
 
-  # OpenMower v1 electronics count wheel ticks on the xESC hall sensors
-  # (OM_WHEEL_TICKS_PER_M, 1600/m on a YardForce 500), not on the Mowgli STM32
-  # encoders the seed's 399.0 describes. This path only runs when the file is
-  # being CREATED (an existing one returned early above), so it is a first-
-  # install seed: an operator's later calibration is never overwritten. A robot
-  # switched to this backend on an existing file keeps its value and must check
-  # it by hand (sensors/openmower/README.md).
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
-    _yaml_patch_key "$yaml_file" ticks_per_meter "1600.0" || return 1
-    info "OpenMower backend: seeded ticks_per_meter=1600.0 (xESC hall ticks)"
-  fi
+  # No per-backend seeding: OpenMower's different defaults (xESC hall ticks,
+  # the LowLevel board's own lift/tilt/charge values) live in
+  # ros2/src/mowgli_bringup/config/backends/openmower.yaml, which every
+  # consumer layers between the template and this sparse file. Writing them
+  # here would pin them and break the GUI's reset-to-default.
 
   # The Universal GNSS sidecar reads mowgli_robot.yaml itself (see
   # install/compose/docker-compose.gps.yml): no derived parameter file.

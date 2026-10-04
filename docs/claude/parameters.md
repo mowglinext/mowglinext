@@ -34,7 +34,7 @@ Operator-facing rule of thumb: **the GUI only ever writes `mowgli_robot.yaml`.**
 
 ## mowgli_robot.yaml keys
 
-All 171 template keys. `L###` = line in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`. **GUI** = present in `mower_config.schema.json` (section name), or `no` — a `no` key still shows up in Settings → *Advanced* once it exists in the installed file (`gui/web/src/hooks/useSettingsManager.ts:679` `advancedKeys`). **Life** = `launch` (injected at launch, restart to apply), `dynamic` (also honoured live via `ros2 param set`), `INERT` (never injected — node compiled default wins), `sidecar` (consumed outside ROS2).
+All 202 template keys. `L###` = line in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`. **GUI** = present in `mower_config.schema.json` (section name), or `no` — a `no` key still shows up in Settings → *Advanced* once it exists in the installed file (`gui/web/src/hooks/useSettingsManager.ts:679` `advancedKeys`). **Life** = `launch` (injected at launch, restart to apply), `dynamic` (also honoured live via `ros2 param set`), `INERT` (never injected — node compiled default wins), `sidecar` (consumed outside ROS2).
 
 ### Dig obstacle proposals
 
@@ -337,6 +337,21 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `led_charge_complete_indicator_scale` | 0.15 | Status LEDs | launch |
 | `led_charge_complete_indicator_ids` | `""` (string, comma-separated) | Status LEDs | launch |
 | `led_spi_speed_hz` (L737) | 2400000 (3 SPI bits per WS2812 bit — do not retune) | Status LEDs | launch |
+
+### Hardware backend — defaults that follow `HARDWARE_BACKEND`, and the OpenMower-only keys
+
+`config/backends/<backend>.yaml` replaces a few template DEFAULTS for one backend, layered `template <- backend <- installed` by `robot_config_util.load_robot_config`, the OpenMower bridge launch file, and the GUI (`gui/asserts/backend_defaults.json`, `pkg/api/settings_backend.go`). Shared keys keep their name on every backend.
+
+| Key | Template | `openmower.yaml` | OpenMower consumer |
+|-----|----------|------------------|--------------------|
+| `ticks_per_meter` | 399.0 | **1600.0** | bridge odometry (xESC hall ticks) |
+| `both_wheels_lift_emergency_ms` | 1000 | **100** | LowLevel `lift_period` |
+| `one_wheel_lift_emergency_ms` | 2000 | **2500** | LowLevel `tilt_period` |
+| `max_charge_voltage` | 29.4 | **29.0** | LowLevel `v_battery_cutoff` |
+| `max_charge_current` | 1.2 | — | LowLevel `i_charge_cutoff` |
+| `battery_full_voltage` / `battery_empty_voltage` | 28.0 / 24.0 | — | LowLevel battery gauge |
+
+The bridge refuses any LowLevel value outside the STM32 firmware envelope (`lowlevel_config.hpp`). OpenMower-only keys (template defaults = `openmower_bridge.yaml`, pinned by `sensors/openmower/mowgli_openmower_bridge/test/test_launch_config.py`; GUI **Settings → Hardware Backend** and **Drive Motor**): `openmower_ll_port`, `openmower_xesc_type`, `openmower_xesc_{left,right,mow}_port` (no GUI schema default on purpose: until set, `docker/.env` `OPENMOWER_*` applies and is what the GUI shows), `openmower_emergency_input_config`, `openmower_wheel_loop_enabled`, `openmower_wheel_duty_per_mps`, `openmower_wheel_kp`, `openmower_wheel_ki`. No mowgli-ros2 node reads them.
 
 ### Read by a launch file but absent from the template
 

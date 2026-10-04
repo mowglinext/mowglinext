@@ -9,6 +9,8 @@ on:
       - 'ros2/src/mowgli_interfaces'
       - 'ros2/src/mowgli_interfaces/**'
       - 'ros2/src/mowgli_hardware/**'
+      - 'ros2/src/mowgli_bringup/config/mowgli_robot.yaml'
+      - 'ros2/src/mowgli_bringup/config/backends/openmower.yaml'
       - '.github/workflows/sensors-openmower.yml'
       - '.github/workflows/_sensor-docker.yml'
   workflow_dispatch:
@@ -45,6 +47,8 @@ jobs:
         test -f "$(ros2 pkg prefix mowgli_openmower_bridge)/share/mowgli_openmower_bridge/launch/openmower_bridge.launch.py"
         test -f "$(ros2 pkg prefix mowgli_openmower_bridge)/share/mowgli_openmower_bridge/config/openmower_bridge.yaml"
         test -x /start_openmower.sh
+        test -f /opt/openmower_bridge/mowgli_robot.template.yaml
+        test -f /opt/openmower_bridge/backend_defaults.yaml
         python3 - <<'PY'
         from mowgli_interfaces.msg import Status, Emergency, Power, WheelTick
         from mowgli_interfaces.srv import MowerControl, EmergencyStop
@@ -134,6 +138,14 @@ jobs:
             --event-handlers console_cohesion+
           colcon test-result --verbose
           BUILD
+
+      - name: Test the launch-file parameter layering
+        shell: bash
+        run: |
+          set -eo pipefail
+          apt-get install -y --no-install-recommends python3-pytest python3-yaml
+          source /opt/ros/lyrical/setup.bash
+          python3 -m pytest -q sensors/openmower/mowgli_openmower_bridge/test/test_launch_config.py
 
       - name: Assert the gtests actually ran
         shell: bash

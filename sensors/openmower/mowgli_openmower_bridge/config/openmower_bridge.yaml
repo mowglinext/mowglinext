@@ -89,10 +89,14 @@ hardware_bridge:
     docked_charge_voltage: 10.0
 
     # ── LowLevel config packet ────────────────────────────────────────────
-    # -1 / "" = send "undefined": the Pico keeps the defaults OpenMower chose
-    # for this hardware (lift 100 ms, tilt 2500 ms, charge 30 V / 1.5 A,
-    # battery cutoff 29 V). It saves whatever it receives to flash and does
-    # not clamp, so set these only deliberately (openmower_ll_* robot keys).
+    # -1 / "" = send "undefined": the Pico keeps its own value. The launch
+    # file fills these from the SHARED settings (max_charge_current,
+    # max_charge_voltage, *_lift_emergency_ms, battery_*_voltage), whose
+    # OpenMower defaults are the board's own (config/backends/openmower.yaml
+    # in mowgli_bringup). The Pico saves what it receives to flash without
+    # clamping; lowlevel_config.hpp refuses anything outside the STM32
+    # firmware's envelope. ll_v_charge_cutoff (charger input) and the options
+    # have no MowgliNext equivalent and stay the board's.
     ll_v_charge_cutoff: -1.0
     ll_i_charge_cutoff: -1.0
     ll_v_battery_cutoff: -1.0

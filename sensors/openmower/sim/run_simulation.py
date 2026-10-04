@@ -34,6 +34,7 @@ from geometry_msgs.msg import TwistStamped
 from mowgli_interfaces.msg import Emergency, HighLevelStatus, Power, Status
 from mowgli_interfaces.srv import EmergencyStop, HighLevelControl, MowerControl
 from nav_msgs.msg import Odometry
+from rcl_interfaces.srv import GetParameters
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -45,6 +46,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openmower_v1_emulator import OpenMowerV1Rig  # noqa: E402
 
 AUTONOMOUS, IDLE = 2, 1
+# The robot-config template the image ships (Dockerfile COPY), from this checkout.
+ROBOT_TEMPLATE = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', '..', '..',
+    'ros2', 'src', 'mowgli_bringup', 'config', 'mowgli_robot.yaml'))
+BACKEND_DEFAULTS = os.path.join(os.path.dirname(ROBOT_TEMPLATE), 'backends', 'openmower.yaml')
 DRIVES = ('left', 'right')
 
 
@@ -104,6 +110,7 @@ class Probe(Node):
         self.clear_dig = self.create_client(Trigger, '/hardware_bridge/clear_dig_escalation')
         self.reboot = self.create_client(Trigger, '/hardware_bridge/reboot_board')
         self.fw_debug = self.create_client(SetBool, '/hardware_bridge/set_firmware_debug')
+        self.get_params = self.create_client(GetParameters, '/hardware_bridge/get_parameters')
         self.create_timer(0.05, self._publish_cmd)
         self.create_timer(0.5, self._publish_hl)
 
@@ -134,20 +141,26 @@ class Probe(Node):
         res.success = True
         return res
 
+    # The scenario thread sets cmd / hl_state at any time: read each ONCE. A
+    # check-then-read let `stop_driving`'s `cmd = None` land in between, the
+    # unpack raised inside the executor, and spin() died with every
+    # subscription (a whole controller run then failed in cascade).
     def _publish_cmd(self):
-        if self.cmd is None:
+        cmd = self.cmd
+        if cmd is None:
             return
         m = TwistStamped()
         m.header.stamp = self.get_clock().now().to_msg()
         m.header.frame_id = 'base_link'
-        m.twist.linear.x, m.twist.angular.z = self.cmd
+        m.twist.linear.x, m.twist.angular.z = cmd
         self.cmd_pub.publish(m)
 
     def _publish_hl(self):
-        if self.hl_state is None:
+        state = self.hl_state
+        if state is None:
             return
         m = HighLevelStatus()
-        m.state = self.hl_state
+        m.state = state
         self.hl_pub.publish(m)
 
     # helpers
@@ -169,6 +182,21 @@ class Probe(Node):
         while not fut.done() and time.monotonic() < t_end:
             time.sleep(0.01)
         return fut.result() if fut.done() else None
+
+
+def spin_in_background(executor):
+    """Spin on a daemon thread; a callback exception is a harness bug, so say
+    so loudly instead of silently ending every subscription."""
+    def run():
+        try:
+            executor.spin()
+        except Exception:  # noqa: BLE001 — report, then stop
+            print('!!! probe executor crashed — every later check is void:', flush=True)
+            traceback.print_exc()
+            raise
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread
 
 
 def wait_for(pred, timeout: float, period: float = 0.02) -> bool:
@@ -197,17 +225,20 @@ def mower(probe, enabled: int, direction: int):
 # ---------------------------------------------------------------------------
 
 
-def start_bridge(rig, esc_type, workdir, log_path):
+def start_bridge(rig, esc_type, workdir, log_path, extra_yaml='', env_override=None):
     cfg = os.path.join(workdir, 'mowgli_robot.yaml')
     with open(cfg, 'w', encoding='utf-8') as fh:
-        # The operator's SPARSE file: host-side kinematics only. No openmower_ll_*
-        # key, so the board must keep its own configuration.
-        fh.write('mowgli:\n  ros__parameters:\n'
-                 '    ticks_per_meter: 1600.0\n    wheel_track: 0.325\n    mowing_enabled: true\n')
+        # The operator's SPARSE file as a fresh install leaves it: nothing
+        # about the drive or the board. ticks_per_meter and the board's
+        # safety values must come from the OpenMower backend defaults.
+        fh.write('mowgli:\n  ros__parameters:\n    mowing_enabled: true\n' + extra_yaml)
     env = dict(os.environ,
                OPENMOWER_LL_PORT=rig.paths['ll'], OPENMOWER_XESC_LEFT_PORT=rig.paths['left'],
                OPENMOWER_XESC_RIGHT_PORT=rig.paths['right'], OPENMOWER_XESC_MOW_PORT=rig.paths['mow'],
-               OPENMOWER_XESC_TYPE=esc_type, OPENMOWER_ROBOT_CONFIG=cfg)
+               OPENMOWER_XESC_TYPE=esc_type, OPENMOWER_ROBOT_CONFIG=cfg,
+               OPENMOWER_ROBOT_TEMPLATE=ROBOT_TEMPLATE,
+               OPENMOWER_BACKEND_DEFAULTS=BACKEND_DEFAULTS)
+    env.update(env_override or {})
     log = open(log_path, 'w', encoding='utf-8')
     return subprocess.Popen(['ros2', 'launch', 'mowgli_openmower_bridge', 'openmower_bridge.launch.py'],
                             env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -216,6 +247,19 @@ def start_bridge(rig, esc_type, workdir, log_path):
 # ---------------------------------------------------------------------------
 # Scenarios
 # ---------------------------------------------------------------------------
+
+
+def _bridge_param(probe, name):
+    """A parameter of the running bridge node (None if unavailable)."""
+    if not probe.get_params.wait_for_service(timeout_sec=5.0):
+        return None
+    req = GetParameters.Request()
+    req.names = [name]
+    fut = probe.get_params.call_async(req)
+    if not wait_for(fut.done, 5.0) or fut.result() is None or not fut.result().values:
+        return None
+    v = fut.result().values[0]
+    return {1: v.bool_value, 2: v.integer_value, 3: v.double_value, 4: v.string_value}.get(v.type)
 
 
 def drive(probe, rig, vx, wz, seconds):
@@ -247,20 +291,23 @@ def s01_boot(probe, rig, R, esc):
             f'{len(rig.ll.config_requests)} request(s)')
     if rig.ll.config_requests:
         rcv = rig.ll.config_requests[0][1]
-        undefined = (rcv['lift_period'] == 0xFFFF and rcv['tilt_period'] == 0xFFFF
-                     and rcv['v_charge_cutoff'] < 0 and rcv['i_charge_cutoff'] < 0
-                     and rcv['v_battery_cutoff'] < 0 and rcv['v_battery_empty'] < 0
-                     and rcv['v_battery_full'] < 0 and all(h[0] == 3 for h in rcv['halls'])
-                     and rcv['dfp_is_5v'] == 2 and rcv['ignore_charging_current'] == 2)
-        R.check(S, 'config sent leaves EVERY board setting undefined (no STM32 template values)',
-                undefined, f"lift={rcv['lift_period']:#x} v_charge={rcv['v_charge_cutoff']}")
+        R.check(S, 'board config comes from the shared settings + OpenMower defaults '
+                '(lift 100 / tilt 2500 ms, 29.0 V, 1.2 A)',
+                rcv['lift_period'] == 100 and rcv['tilt_period'] == 2500
+                and abs(rcv['v_battery_cutoff'] - 29.0) < 1e-3 and abs(rcv['i_charge_cutoff'] - 1.2) < 1e-3,
+                f"lift={rcv['lift_period']} tilt={rcv['tilt_period']} "
+                f"v_bat={rcv['v_battery_cutoff']:.2f} i={rcv['i_charge_cutoff']:.2f}")
+        R.check(S, 'no MowgliNext equivalent -> left undefined (charger-input cutoff, halls, options)',
+                rcv['v_charge_cutoff'] < 0 and all(h[0] == 3 for h in rcv['halls'])
+                and rcv['dfp_is_5v'] == 2 and rcv['ignore_charging_current'] == 2,
+                f"v_charge={rcv['v_charge_cutoff']}")
     c = rig.ll.config
-    R.check(S, "board kept its own lift/tilt periods (100 / 2500 ms)",
+    R.check(S, "board runs OpenMower's own lift/tilt periods (100 / 2500 ms)",
             c['lift_period'] == 100 and c['tilt_period'] == 2500,
             f"lift={c['lift_period']} tilt={c['tilt_period']}")
-    R.check(S, 'board kept its own charge limits (30 V / 1.5 A / 29 V)',
-            abs(c['v_charge_cutoff'] - 30) < 1e-3 and abs(c['i_charge_cutoff'] - 1.5) < 1e-3
-            and abs(c['v_battery_cutoff'] - 29) < 1e-3)
+    R.check(S, 'board kept its own charger-input cutoff (30 V)', abs(c['v_charge_cutoff'] - 30) < 1e-3)
+    R.check(S, 'ticks_per_meter from the OpenMower defaults (1600, not the STM32 399)',
+            _bridge_param(probe, 'ticks_per_meter') == 1600.0, f"{_bridge_param(probe, 'ticks_per_meter')}")
     hb = [t for (t, _, _) in rig.ll.heartbeats if t > rig.now_ms() - 3000]
     gaps = [b - a for a, b in zip(hb, hb[1:])]
     R.check(S, 'heartbeat never gaps near the 500 ms board timeout',
@@ -580,14 +627,18 @@ def s16_docking(probe, rig, R, esc):
             f'{took:.1f} s')
     time.sleep(1.5)  # crossing the threshold is not removal: check steady state
     steady, n = probe.mean_since('imu', time.monotonic() - 1.0, 1)
-    R.check(S, 'steady-state residual after calibration < 0.002 rad/s', n > 30 and abs(steady) < 0.002,
+    # n only proves the stream is alive (a loaded runner delivers fewer of the
+    # 50 Hz samples); the residual is the check.
+    R.check(S, 'steady-state residual after calibration < 0.002 rad/s', n > 20 and abs(steady) < 0.002,
             f'gz={steady:+.5f} over {n}')
     t = time.monotonic() - 2.0
     vx, n = probe.mean_since('odom', t, 1)
     R.check(S, '/wheel_odom held at zero on the dock (Invariant 11)', n > 5 and abs(vx) < 1e-9)
     with rig.lock:
         rig.ll.v_battery = 29.3  # above the board's 29 V cutoff -> relay opens
-    ok = wait_for(lambda: not probe.get('power').charger_enabled, 3)
+    # /battery_state publishes slower than /power: wait for the whole picture.
+    ok = wait_for(lambda: not probe.get('power').charger_enabled
+                  and probe.get('battery').power_supply_status == BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING, 5)
     st, pw, b = probe.get('status'), probe.get('power'), probe.get('battery')
     R.check(S, 'battery full: relay open but STILL docked',
             ok and st.is_charging and pw.charger_status == 'docked, not charging'
@@ -654,6 +705,28 @@ def s19_contract(probe, rig, R, esc):
             f'last mode {modes[-1] if modes else None}')
 
 
+def s19b_starved(probe, rig, R, esc, bridge):
+    """The bridge process is starved for 350 ms mid-drive (a loaded Pi, a GC
+    pause in a neighbour): under every 500 ms watchdog, so the robot keeps
+    going. /wheel_odom must still report the true speed afterwards — the 1.x
+    bridge divided three periods of ticks by one clamped control period."""
+    S = 'bridge starved 350 ms'
+    drive(probe, rig, 0.3, 0.0, 3.0)
+    t0 = time.monotonic()
+    os.killpg(bridge.pid, signal.SIGSTOP)
+    time.sleep(0.35)
+    os.killpg(bridge.pid, signal.SIGCONT)
+    time.sleep(1.5)
+    with probe.lock:
+        vx = [v for (t, v, _) in probe.odom if t >= t0]
+    worst = max((abs(v) for v in vx), default=float('nan'))
+    R.check(S, '/wheel_odom never reports a phantom speed (|vx| < 0.45 at 0.3 m/s)',
+            bool(vx) and worst < 0.45, f'max |vx|={worst:.2f} m/s over {len(vx)} msgs')
+    R.check(S, 'board did not latch (stall shorter than its 500 ms heartbeat timeout)',
+            not rig.snapshot()['latch'])
+    stop_driving(probe, rig)
+
+
 def s20_crash(probe, rig, R, esc, bridge):
     S = 'bridge crash'
     drive(probe, rig, 0.3, 0.0, 2.5)
@@ -689,8 +762,7 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
     probe = Probe()
     ex = MultiThreadedExecutor(num_threads=4)
     ex.add_node(probe)
-    spin = threading.Thread(target=ex.spin, daemon=True)
-    spin.start()
+    spin_in_background(ex)
     try:
         for sc in SCENARIOS:
             if only and sc.__name__ not in only:
@@ -702,9 +774,57 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
                 R.check(sc.__name__, 'scenario raised', False, f'{exc!r}')
                 traceback.print_exc()
             probe.cmd = None
+        if not only or 's19b_starved' in only:
+            print(f'-- {esc} / s19b_starved', flush=True)
+            s19b_starved(probe, rig, R, esc, bridge)
         if not only or 's20_crash' in only:
             print(f'-- {esc} / s20_crash', flush=True)
             s20_crash(probe, rig, R, esc, bridge)
+    finally:
+        try:
+            os.killpg(bridge.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        ex.shutdown()
+        probe.destroy_node()
+        rig.close()
+
+
+def run_gui_config(R: Report, logdir: str):
+    """Settings saved in the GUI (mowgli_robot.yaml) win over the installer's
+    docker/.env: here .env names the wrong ESC protocol and dead ports, the yaml
+    the real ones, plus one deliberate LowLevel override."""
+    S = 'gui config'
+    print(f'\n========== {S} ==========', flush=True)
+    workdir = tempfile.mkdtemp(prefix='omsim-gui-')
+    rig = OpenMowerV1Rig(workdir, 'xesc_2040')
+    rig.start()
+    yaml_keys = (f"    openmower_ll_port: \"{rig.paths['ll']}\"\n"
+                 '    openmower_xesc_type: "xesc_2040"\n'
+                 f"    openmower_xesc_left_port: \"{rig.paths['left']}\"\n"
+                 f"    openmower_xesc_right_port: \"{rig.paths['right']}\"\n"
+                 f"    openmower_xesc_mow_port: \"{rig.paths['mow']}\"\n"
+                 '    both_wheels_lift_emergency_ms: 200\n'
+                 '    one_wheel_lift_emergency_ms: 0\n')
+    stale_env = {'OPENMOWER_LL_PORT': '/dev/null-ll', 'OPENMOWER_XESC_LEFT_PORT': '/dev/null-l',
+                 'OPENMOWER_XESC_RIGHT_PORT': '/dev/null-r', 'OPENMOWER_XESC_MOW_PORT': '/dev/null-m',
+                 'OPENMOWER_XESC_TYPE': 'xesc_mini'}
+    bridge = start_bridge(rig, 'xesc_2040', workdir, os.path.join(logdir, 'bridge-gui-config.log'),
+                          extra_yaml=yaml_keys, env_override=stale_env)
+    probe = Probe()
+    ex = MultiThreadedExecutor(num_threads=2)
+    ex.add_node(probe)
+    spin_in_background(ex)
+    try:
+        ok = wait_for(lambda: probe.get('status') is not None and probe.get('status').firmware_compatible, 20)
+        R.check(S, 'connects through the yaml ports + ESC type, not the stale .env', ok,
+                probe.get('status').firmware_version if probe.get('status') else 'no Status')
+        ok = wait_for(lambda: rig.ll.config['lift_period'] == 200, 5)
+        c = rig.ll.config
+        R.check(S, 'the operator\'s both_wheels_lift_emergency_ms reached the board', ok,
+                f"lift={c['lift_period']}")
+        R.check(S, 'a 0 ms one-wheel period (= disabled on the Pico) is refused; the board keeps 2500',
+                c['tilt_period'] == 2500, f"tilt={c['tilt_period']}")
     finally:
         try:
             os.killpg(bridge.pid, signal.SIGKILL)
@@ -729,6 +849,8 @@ def main():
             before = len(R.rows)
             run_one(esc, R, args.logdir, args.only)
             R.rows[before:] = [(f'{esc} / {s}', n, ok, d) for (s, n, ok, d) in R.rows[before:]]
+        if not args.only or 'gui_config' in args.only:
+            run_gui_config(R, args.logdir)
     finally:
         rclpy.shutdown()
     total, bad = len(R.rows), R.failed

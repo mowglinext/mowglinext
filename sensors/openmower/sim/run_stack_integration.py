@@ -38,7 +38,8 @@ from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openmower_v1_emulator import OpenMowerV1Rig  # noqa: E402
-from run_simulation import AUTONOMOUS, Probe, Report, estop, start_bridge, wait_for  # noqa: E402
+from run_simulation import (  # noqa: E402
+    AUTONOMOUS, Probe, Report, estop, spin_in_background, start_bridge, wait_for)
 
 
 def launch_mowgli(backend: str, log_path: str):
@@ -73,7 +74,7 @@ def main():
                                          durability=DurabilityPolicy.TRANSIENT_LOCAL))
     ex = MultiThreadedExecutor(num_threads=4)
     ex.add_node(probe)
-    threading.Thread(target=ex.spin, daemon=True).start()
+    spin_in_background(ex)
     teleop_cmd: dict = {'v': None}
 
     def pump_teleop():

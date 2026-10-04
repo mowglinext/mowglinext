@@ -174,7 +174,13 @@ case "$openmower_fragments" in
 esac
 
 openmower_yaml="$openmower_repo/docker/config/mowgli/mowgli_robot.yaml"
-assert_match "openmower backend: ticks_per_meter seeded for xESC hall ticks" "ticks_per_meter: 1600.0" "$(grep -E '^[[:space:]]+ticks_per_meter:' "$openmower_yaml")"
+# OpenMower's own defaults come from the backend overlay
+# (mowgli_bringup/config/backends/openmower.yaml), never from seeding.
+if grep -qE '^[[:space:]]+ticks_per_meter:' "$openmower_yaml"; then
+  fail "openmower backend: ticks_per_meter is not seeded" "$(grep -E '^[[:space:]]+ticks_per_meter:' "$openmower_yaml")"
+else
+  pass "openmower backend: ticks_per_meter is not seeded"
+fi
 assert_match "openmower backend: the sparse config keeps lidar_enabled" "lidar_enabled: true" "$(grep -E '^[[:space:]]+lidar_enabled:' "$openmower_yaml")"
 
 test_summary
