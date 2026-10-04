@@ -74,8 +74,14 @@ static float charger_clamp_current(float i) {
 }
 
 void charger_set_charge_limits(float max_voltage, float max_current) {
+  const float previous_max_voltage = g_max_charge_voltage;
   g_max_charge_voltage = charger_clamp_voltage(max_voltage);
   g_max_charge_current = charger_clamp_current(max_current);
+  /* Resume constant current only when the effective end target increases. */
+  if (charger_state == CHARGER_STATE_CHARGING_CV &&
+      previous_max_voltage < charge_end_voltage && g_max_charge_voltage > previous_max_voltage) {
+    charger_state = CHARGER_STATE_CHARGING_CC;
+  }
 }
 
 /******************************************************************************
@@ -210,6 +216,9 @@ void charger_set_charge_limits(float max_voltage, float max_current) {
 void ChargeController(void)
 {                        
   static uint32_t timestamp = 0;
+  const float max_charge_voltage = g_max_charge_voltage;
+  const float effective_end_voltage = charge_end_voltage < max_charge_voltage
+      ? charge_end_voltage : max_charge_voltage;
 
   /*charger disconnected force idle state*/
   if(( chargerInputVoltage < MIN_DOCKED_VOLTAGE) ){
@@ -239,16 +248,16 @@ void ChargeController(void)
 
     case CHARGER_STATE_CHARGING_CC:
         // cap charge current at 1.5 Amps
-        if ((battery_voltage > charge_end_voltage && (chargecontrol_pwm_val > 0)) || ((current > g_max_charge_current) && (chargecontrol_pwm_val > 39)))
+        if (((battery_voltage > effective_end_voltage || charge_voltage > max_charge_voltage) && (chargecontrol_pwm_val > 0)) || ((current > g_max_charge_current) && (chargecontrol_pwm_val > 39)))
         {
             chargecontrol_pwm_val--;
         }
-        if ((battery_voltage < charge_end_voltage) && (current < g_max_charge_current) && (chargecontrol_pwm_val < 1350))
+        if ((battery_voltage < effective_end_voltage) && (charge_voltage < max_charge_voltage) && (current < g_max_charge_current) && (chargecontrol_pwm_val < 1350))
         {
             chargecontrol_pwm_val++;
         }
 
-        if(charge_voltage >= charge_end_voltage) {
+        if(charge_voltage >= effective_end_voltage) {
             charger_state = CHARGER_STATE_CHARGING_CV;
         }
 
@@ -256,11 +265,11 @@ void ChargeController(void)
 
     case CHARGER_STATE_CHARGING_CV:
         // set PWM to approach 29.4V  charge voltage
-        if ((battery_voltage < charge_end_voltage) && (charge_voltage < (g_max_charge_voltage)) && (chargecontrol_pwm_val < 1350))
+        if ((battery_voltage < effective_end_voltage) && (charge_voltage < max_charge_voltage) && (chargecontrol_pwm_val < 1350))
         {
           chargecontrol_pwm_val++;
         }
-        if ((battery_voltage > charge_end_voltage && (chargecontrol_pwm_val > 0)) || (charge_voltage > (g_max_charge_voltage) && (chargecontrol_pwm_val > 39)))
+        if ((battery_voltage > effective_end_voltage && (chargecontrol_pwm_val > 0)) || (charge_voltage > max_charge_voltage && (chargecontrol_pwm_val > 39)))
         {
           chargecontrol_pwm_val--;
         }

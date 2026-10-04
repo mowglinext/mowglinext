@@ -47,6 +47,9 @@ jobs:
       - name: Test F401 USB recovery and stale command isolation
         run: python3 firmware/scripts/test_usb_recovery.py
 
+      - name: Test charger state machine
+        run: python3 firmware/scripts/test_charger.py
+
       - name: Validate published firmware permutations and release builds
         run: python3 firmware/scripts/test_package_release.py
 
