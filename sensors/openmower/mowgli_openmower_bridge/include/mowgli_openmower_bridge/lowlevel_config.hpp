@@ -161,14 +161,16 @@ inline void ApplyHallConfigString(HighLevelConfig& cfg, const std::string& spec)
 }
 
 /**
- * @brief Operator overrides for the LowLevel board's own configuration.
+ * @brief Values for the LowLevel board's own configuration.
  *
- * Every member defaults to "not set". The Pico SAVES whatever it receives to
- * flash and, unlike the Mowgli STM32, does not clamp toward the safer side —
- * so nothing may be sent that the operator did not choose for THIS board.
- * Never feed it MowgliNext's STM32 template values: e.g. the template's
- * both_wheels_lift_emergency_ms (1000) would make the Pico's lift e-stop ten
- * times slower than its own default (lift_period 100 ms).
+ * Every member defaults to "not set" (the board keeps its own value). The
+ * launch file fills the shared MowgliNext settings in (max_charge_current,
+ * max_charge_voltage, *_lift_emergency_ms, battery_*_voltage — the same keys
+ * the GUI edits for the STM32), and an OpenMower install seeds OpenMower's own
+ * values for them. The Pico SAVES what it receives to flash and, unlike the
+ * Mowgli STM32, does not clamp — so BuildHighLevelConfig enforces the STM32
+ * firmware's own envelope (fw_param_catalog.h) here and refuses anything
+ * outside it, including a 0 ms period, which the Pico takes as "disabled".
  */
 struct ConfigOverrides
 {
@@ -177,37 +179,109 @@ struct ConfigOverrides
   double v_battery_cutoff{-1.0};  ///< [V]
   double v_battery_empty{-1.0};  ///< [V]
   double v_battery_full{-1.0};  ///< [V]
-  int64_t lift_period_ms{-1};  ///< >= 2 wheels lifted, < 0 = keep, 0 = disable
-  int64_t tilt_period_ms{-1};  ///< one wheel lifted
+  int64_t lift_period_ms{-1};  ///< >= 2 wheels lifted [ms], < 0 = keep
+  int64_t tilt_period_ms{-1};  ///< one wheel lifted [ms]
   int ignore_charging_current{-1};  ///< -1 keep, 0 off, 1 on
   std::string language{"en"};  ///< the firmware always takes this one
   std::string emergency_input_config;  ///< "" = keep the board's halls
 };
 
-[[nodiscard]] inline HighLevelConfig BuildHighLevelConfig(const ConfigOverrides& o)
+/// The STM32 firmware's absolute envelope (fw_param_catalog.h), applied to
+/// the same settings on the Pico. Battery empty/full only drive the board's
+/// LED gauge; their bound is a plausibility check for a 7S pack.
+namespace envelope
+{
+constexpr double kChargeVoltageMin = 25.2;
+constexpr double kChargeVoltageMax = 29.4;
+constexpr double kChargeCurrentMin = 0.1;
+constexpr double kChargeCurrentMax = 1.2;
+constexpr int64_t kTripMinMs = 10;
+constexpr int64_t kOneWheelLiftMaxMs = 5000;
+constexpr int64_t kBothWheelsLiftMaxMs = 3000;
+constexpr double kBatteryGaugeMin = 18.0;
+constexpr double kBatteryGaugeMax = 30.0;
+}  // namespace envelope
+
+/**
+ * @brief The config packet for @p o. A value that is set but outside the
+ *        envelope is NOT sent (the board keeps its own) and is named in
+ *        @p rejected, so the node can say why.
+ */
+[[nodiscard]] inline HighLevelConfig BuildHighLevelConfig(
+    const ConfigOverrides& o, std::vector<std::string>* rejected = nullptr)
 {
   HighLevelConfig cfg = DefaultConfig();
-  const auto set_float = [](float& field, double v)
+  const auto reject = [rejected](const std::string& what)
   {
-    if (std::isfinite(v) && v >= 0.0)
+    if (rejected != nullptr)
     {
-      field = static_cast<float>(v);
+      rejected->push_back(what);
     }
   };
-  set_float(cfg.v_charge_cutoff, o.v_charge_cutoff);
-  set_float(cfg.i_charge_cutoff, o.i_charge_cutoff);
-  set_float(cfg.v_battery_cutoff, o.v_battery_cutoff);
-  set_float(cfg.v_battery_empty, o.v_battery_empty);
-  set_float(cfg.v_battery_full, o.v_battery_full);
-  // 0xFFFF is the "unknown" sentinel, so a real period caps one below it.
-  if (o.lift_period_ms >= 0)
+  const auto set_float = [&reject](float& field, double v, double lo, double hi, const char* name)
   {
-    cfg.lift_period = static_cast<uint16_t>(std::min<int64_t>(o.lift_period_ms, 0xFFFE));
-  }
-  if (o.tilt_period_ms >= 0)
+    if (!std::isfinite(v) || v < 0.0)
+    {
+      return;  // not set
+    }
+    if (v < lo || v > hi)
+    {
+      reject(std::string(name) + "=" + std::to_string(v));
+      return;
+    }
+    field = static_cast<float>(v);
+  };
+  const auto set_period = [&reject](uint16_t& field, int64_t ms, int64_t hi, const char* name)
   {
-    cfg.tilt_period = static_cast<uint16_t>(std::min<int64_t>(o.tilt_period_ms, 0xFFFE));
+    if (ms < 0)
+    {
+      return;  // not set
+    }
+    if (ms < envelope::kTripMinMs || ms > hi)
+    {
+      reject(std::string(name) + "=" + std::to_string(ms));
+      return;
+    }
+    field = static_cast<uint16_t>(ms);
+  };
+  set_float(
+      cfg.v_charge_cutoff, o.v_charge_cutoff, envelope::kChargeVoltageMin, 30.0, "v_charge_cutoff");
+  set_float(cfg.i_charge_cutoff,
+            o.i_charge_cutoff,
+            envelope::kChargeCurrentMin,
+            envelope::kChargeCurrentMax,
+            "max_charge_current");
+  set_float(cfg.v_battery_cutoff,
+            o.v_battery_cutoff,
+            envelope::kChargeVoltageMin,
+            envelope::kChargeVoltageMax,
+            "max_charge_voltage");
+  if (std::isfinite(o.v_battery_empty) && std::isfinite(o.v_battery_full) &&
+      o.v_battery_empty >= 0.0 && o.v_battery_full >= 0.0 && o.v_battery_empty >= o.v_battery_full)
+  {
+    reject("battery_empty_voltage >= battery_full_voltage");
   }
+  else
+  {
+    set_float(cfg.v_battery_empty,
+              o.v_battery_empty,
+              envelope::kBatteryGaugeMin,
+              envelope::kBatteryGaugeMax,
+              "battery_empty_voltage");
+    set_float(cfg.v_battery_full,
+              o.v_battery_full,
+              envelope::kBatteryGaugeMin,
+              envelope::kBatteryGaugeMax,
+              "battery_full_voltage");
+  }
+  set_period(cfg.lift_period,
+             o.lift_period_ms,
+             envelope::kBothWheelsLiftMaxMs,
+             "both_wheels_lift_emergency_ms");
+  set_period(cfg.tilt_period,
+             o.tilt_period_ms,
+             envelope::kOneWheelLiftMaxMs,
+             "one_wheel_lift_emergency_ms");
   if (o.ignore_charging_current == 0 || o.ignore_charging_current == 1)
   {
     cfg.options.ignore_charging_current =

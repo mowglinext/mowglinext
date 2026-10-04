@@ -74,6 +74,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       ros-lyrical-std-srvs
 
 COPY --from=builder /ws/install /opt/openmower_bridge
+# The robot-config TEMPLATE (Invariant 15): the launch file deep-merges the
+# operator's sparse mowgli_robot.yaml over it, exactly like mowgli-ros2, so a
+# key the GUI shows as "default" has the same value in this container.
+COPY ros2/src/mowgli_bringup/config/mowgli_robot.yaml /opt/openmower_bridge/mowgli_robot.template.yaml
+COPY ros2/src/mowgli_bringup/config/backends/openmower.yaml /opt/openmower_bridge/backend_defaults.yaml
 
 COPY sensors/openmower/ros2_entrypoint.sh /ros2_entrypoint.sh
 COPY sensors/openmower/start_openmower.sh /start_openmower.sh

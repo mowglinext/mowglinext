@@ -232,10 +232,11 @@ void OpenMowerBridgeNode::declare_parameters()
       declare_parameter<double>("docked_charge_voltage", kDefaultDockedChargeVoltage);
   require_finite_positive(docked_charge_voltage_, "docked_charge_voltage");
 
-  // -- LowLevel config packet: every field defaults to "keep the board's own"
-  // (lowlevel_config.hpp BuildHighLevelConfig). The Pico saves what it gets to
-  // flash without clamping, so only an operator's explicit openmower_ll_* value
-  // is ever sent, never MowgliNext's STM32 template numbers.
+  // -- LowLevel config packet. The launch file maps the shared MowgliNext
+  // settings onto these (max_charge_current, max_charge_voltage,
+  // *_lift_emergency_ms, battery_*_voltage); -1 = keep the board's own. The
+  // Pico saves what it gets to flash without clamping, so BuildHighLevelConfig
+  // refuses anything outside the STM32 firmware's envelope.
   lowlevel::ConfigOverrides overrides;
   overrides.v_charge_cutoff = declare_parameter<double>("ll_v_charge_cutoff", -1.0);
   overrides.i_charge_cutoff = declare_parameter<double>("ll_i_charge_cutoff", -1.0);
@@ -248,7 +249,14 @@ void OpenMowerBridgeNode::declare_parameters()
       static_cast<int>(declare_parameter<int64_t>("ll_ignore_charging_current", -1));
   overrides.language = declare_parameter<std::string>("ll_language", "en");
   overrides.emergency_input_config = declare_parameter<std::string>("emergency_input_config", "");
-  ll_config_ = lowlevel::BuildHighLevelConfig(overrides);
+  std::vector<std::string> rejected;
+  ll_config_ = lowlevel::BuildHighLevelConfig(overrides, &rejected);
+  for (const auto& what : rejected)
+  {
+    RCLCPP_WARN(get_logger(),
+                "LowLevel config: %s is outside the safety envelope; the board keeps its own value",
+                what.c_str());
+  }
 }
 
 void OpenMowerBridgeNode::create_interfaces()
