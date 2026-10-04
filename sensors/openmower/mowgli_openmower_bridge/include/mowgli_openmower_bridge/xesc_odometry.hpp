@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <optional>
 
 namespace mowgli_openmower_bridge
@@ -140,26 +141,27 @@ private:
 };
 
 /**
- * @brief Per-wheel measured speed for the velocity loop: a first-order
- *        low-pass in TIME, not per sample.
+ * @brief Per-wheel measured speed for the velocity loop: total ticks over
+ *        total time in a short sliding window.
  *
- * Each sample weighs 1 - exp(-dt / tau): proportional to the time it covers.
- * A fixed per-sample weight averages tick/dt RATIOS instead, and whenever a
- * sample's ticks do not cover exactly its dt (a controller sampled slightly
- * before the poll that read it, a jittery poll period) that average is biased
- * upward — 1.08 m/s for a true 0.30 in the unit test, 0.23 m/s of real
- * ground speed for a 0.30 command on a loaded CI runner, because the loop
- * believed the wheel was faster than it was.
+ * Ticks and the interval they are divided by never line up exactly (a
+ * controller samples a little before the poll that reads it, the poll period
+ * jitters), so one sample reads low and the next high. Any per-SAMPLE
+ * average of those ratios is biased upward — even an exponential weight in
+ * time, which saturates for samples comparable to its time constant — and
+ * the loop then drives the wheel slower than commanded (0.23-0.28 m/s for a
+ * 0.30 command on a loaded CI runner). The sum over a window does not care
+ * how the ticks were split between samples.
  */
 class WheelSpeedFilter
 {
 public:
-  /// 0.056 s = the weight the former per-sample 0.3 gave a nominal 20 ms tick.
-  static constexpr double kDefaultTimeConstantS = 0.056;
+  /// Long enough to span several 20 ms samples, short enough for the loop.
+  static constexpr double kDefaultWindowS = 0.08;
 
   WheelSpeedFilter() = default;
 
-  explicit WheelSpeedFilter(double time_constant_s) : tau_s_(std::max(time_constant_s, 1e-3))
+  explicit WheelSpeedFilter(double window_s) : window_s_(std::max(window_s, 1e-3))
   {
   }
 
@@ -169,14 +171,25 @@ public:
     {
       return value_;
     }
-    const double raw = static_cast<double>(d_ticks) / ticks_per_meter / dt_s;
-    const double weight = 1.0 - std::exp(-dt_s / tau_s_);
-    value_ += weight * (raw - value_);
+    samples_.push_back({d_ticks, dt_s});
+    sum_ticks_ += d_ticks;
+    sum_dt_ += dt_s;
+    // Keep the newest sample even when it alone exceeds the window (a stall).
+    while (samples_.size() > 1u && sum_dt_ - samples_.front().dt_s >= window_s_)
+    {
+      sum_ticks_ -= samples_.front().d_ticks;
+      sum_dt_ -= samples_.front().dt_s;
+      samples_.pop_front();
+    }
+    value_ = static_cast<double>(sum_ticks_) / ticks_per_meter / sum_dt_;
     return value_;
   }
 
   void Reset()
   {
+    samples_.clear();
+    sum_ticks_ = 0;
+    sum_dt_ = 0.0;
     value_ = 0.0;
   }
 
@@ -186,7 +199,16 @@ public:
   }
 
 private:
-  double tau_s_{kDefaultTimeConstantS};
+  struct Sample
+  {
+    int64_t d_ticks;
+    double dt_s;
+  };
+
+  double window_s_{kDefaultWindowS};
+  std::deque<Sample> samples_;
+  int64_t sum_ticks_{0};
+  double sum_dt_{0.0};
   double value_{0.0};
 };
 
