@@ -57,7 +57,9 @@ export const MowerStatus = () => {
     const gpsColor =
         gpsStatus.fixType === "RTK_FIX" ? colors.primary :
         gpsStatus.fixType === "RTK_FLOAT" ? colors.warning :
-        gpsStatus.fixType === "GPS_FIX" ? colors.warning :
+        gpsStatus.fixType === "DGPS" ? colors.warning :
+        gpsStatus.fixType === "3D_FIX" ? colors.warning :
+        gpsStatus.fixType === "2D_FIX" ? colors.warning :
         colors.danger;
 
     const batteryPercent = computeBatteryPercent(

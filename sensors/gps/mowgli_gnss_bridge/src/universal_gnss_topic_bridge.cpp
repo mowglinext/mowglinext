@@ -36,6 +36,12 @@ std::uint8_t toPublicFixType(std::uint8_t universal_fix_type)
       return PublicGnssStatus::FIX_TYPE_RTK_FIXED;
     case UniversalGnssStatus::FIX_TYPE_DEAD_RECKONING:
       return PublicGnssStatus::FIX_TYPE_DEAD_RECKONING;
+    case UniversalGnssStatus::FIX_TYPE_2D_FIX:
+      return PublicGnssStatus::FIX_TYPE_2D_FIX;
+    case UniversalGnssStatus::FIX_TYPE_3D_FIX:
+      return PublicGnssStatus::FIX_TYPE_3D_FIX;
+    case UniversalGnssStatus::FIX_TYPE_DGPS:
+      return PublicGnssStatus::FIX_TYPE_DGPS;
     default:
       return PublicGnssStatus::FIX_TYPE_NO_FIX;
   }
@@ -124,13 +130,19 @@ float fixTypeQuality(std::uint8_t public_fix_type)
 {
   switch (public_fix_type) {
     case PublicGnssStatus::FIX_TYPE_GPS_FIX:
-      return 25.0F;
+      return 0.0F;
+    case PublicGnssStatus::FIX_TYPE_2D_FIX:
+      return 20.0F;
+    case PublicGnssStatus::FIX_TYPE_3D_FIX:
+      return 40.0F;
+    case PublicGnssStatus::FIX_TYPE_DGPS:
+      return 60.0F;
     case PublicGnssStatus::FIX_TYPE_RTK_FLOAT:
-      return 50.0F;
+      return 80.0F;
     case PublicGnssStatus::FIX_TYPE_RTK_FIXED:
       return 100.0F;
     case PublicGnssStatus::FIX_TYPE_DEAD_RECKONING:
-      return 10.0F;
+      return 0.0F;
     case PublicGnssStatus::FIX_TYPE_NO_FIX:
     default:
       return 0.0F;
