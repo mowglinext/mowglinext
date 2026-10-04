@@ -139,13 +139,27 @@ private:
   double tyre_travelled_m_{0.0};
 };
 
-/// Per-wheel measured speed with a first-order low-pass, for the velocity loop.
+/**
+ * @brief Per-wheel measured speed for the velocity loop: a first-order
+ *        low-pass in TIME, not per sample.
+ *
+ * Each sample weighs 1 - exp(-dt / tau): proportional to the time it covers.
+ * A fixed per-sample weight averages tick/dt RATIOS instead, and whenever a
+ * sample's ticks do not cover exactly its dt (a controller sampled slightly
+ * before the poll that read it, a jittery poll period) that average is biased
+ * upward — 1.08 m/s for a true 0.30 in the unit test, 0.23 m/s of real
+ * ground speed for a 0.30 command on a loaded CI runner, because the loop
+ * believed the wheel was faster than it was.
+ */
 class WheelSpeedFilter
 {
 public:
+  /// 0.056 s = the weight the former per-sample 0.3 gave a nominal 20 ms tick.
+  static constexpr double kDefaultTimeConstantS = 0.056;
+
   WheelSpeedFilter() = default;
 
-  explicit WheelSpeedFilter(double alpha) : alpha_(std::clamp(alpha, 0.0, 1.0))
+  explicit WheelSpeedFilter(double time_constant_s) : tau_s_(std::max(time_constant_s, 1e-3))
   {
   }
 
@@ -156,7 +170,8 @@ public:
       return value_;
     }
     const double raw = static_cast<double>(d_ticks) / ticks_per_meter / dt_s;
-    value_ += alpha_ * (raw - value_);
+    const double weight = 1.0 - std::exp(-dt_s / tau_s_);
+    value_ += weight * (raw - value_);
     return value_;
   }
 
@@ -171,7 +186,7 @@ public:
   }
 
 private:
-  double alpha_{0.3};
+  double tau_s_{kDefaultTimeConstantS};
   double value_{0.0};
 };
 
