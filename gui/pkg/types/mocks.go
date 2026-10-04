@@ -126,6 +126,12 @@ func (m *MockRosProvider) Publish(topic string, msgType string, msg interface{})
 	return m.PublishErr
 }
 
+func (m *MockRosProvider) GetPublishes() []PublishCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]PublishCall(nil), m.Publishes...)
+}
+
 func (m *MockRosProvider) GetParameters(_ context.Context, _ []string) ([]RosParameter, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
