@@ -10,6 +10,7 @@
 
 #include "mowgli_hardware/serial_port.hpp"
 #include "mowgli_openmower_bridge/motor_link.hpp"
+#include "mowgli_openmower_bridge/request_stamps.hpp"
 #include "mowgli_openmower_bridge/vesc_protocol.hpp"
 
 namespace mowgli_openmower_bridge
@@ -60,6 +61,8 @@ private:
   bool fw_known_{false};
   SteadyClock::time_point last_reconnect_attempt_{};
   SteadyClock::time_point last_fw_request_{};
+  /// When each outstanding COMM_GET_VALUES went out: a reply's sample time.
+  RequestStampQueue values_requests_;
 };
 
 }  // namespace mowgli_openmower_bridge

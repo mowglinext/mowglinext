@@ -41,6 +41,7 @@ void XescMiniLink::Poll(SteadyClock::time_point now)
     deframer_ = vesc::Deframer{};
     telemetry_.has_status = false;
     fw_known_ = false;
+    values_requests_.Clear();
   }
 
   uint8_t buf[kReadChunk];
@@ -79,9 +80,9 @@ void XescMiniLink::Poll(SteadyClock::time_point now)
       SendFrame(vesc::BuildFwVersionRequest());
     }
   }
-  else
+  else if (SendFrame(vesc::BuildGetValuesRequest()))
   {
-    SendFrame(vesc::BuildGetValuesRequest());
+    values_requests_.OnRequest(now);
   }
 
   telemetry_.connected =
@@ -99,7 +100,9 @@ void XescMiniLink::HandlePayload(const vesc::ParsedPayload& parsed, SteadyClock:
       return;
     case vesc::PayloadKind::kValues:
       telemetry_.has_status = true;
-      telemetry_.last_status = now;
+      // The values were measured when the request arrived, not at this poll
+      // (request_stamps.hpp): odometry divides by the interval between these.
+      telemetry_.last_status = values_requests_.OnResponse(now);
       telemetry_.voltage_in = parsed.values.voltage_in;
       telemetry_.temp_pcb = parsed.values.temp_pcb;
       telemetry_.temp_motor = parsed.values.temp_motor;

@@ -4,6 +4,8 @@
  * @brief Windowed wheel odometry from signed tick counters.
  */
 
+#include <cmath>
+
 #include "mowgli_openmower_bridge/xesc_odometry.hpp"
 #include <gtest/gtest.h>
 
@@ -57,14 +59,45 @@ TEST(XescOdometry, ResetRePrimes)
   EXPECT_TRUE(odom.stationary());
 }
 
-TEST(WheelSpeedFilter, LowPassesTowardsRawSpeed)
+TEST(WheelSpeedFilter, LowPassesTowardsRawSpeedWithItsTimeConstant)
 {
-  WheelSpeedFilter f(0.5);
-  EXPECT_NEAR(f.Update(20, 1000.0, 0.02), 0.5, 1e-9);  // raw 1.0 m/s, half way
-  EXPECT_NEAR(f.Update(20, 1000.0, 0.02), 0.75, 1e-9);
-  EXPECT_NEAR(f.Update(0, 1000.0, 0.0), 0.75, 1e-9);  // zero dt keeps value
+  WheelSpeedFilter f(0.05);
+  const double a = 1.0 - std::exp(-0.02 / 0.05);
+  EXPECT_NEAR(f.Update(20, 1000.0, 0.02), a * 1.0, 1e-9);  // raw 1.0 m/s
+  EXPECT_NEAR(f.Update(0, 1000.0, 0.0), a * 1.0, 1e-9);  // zero dt keeps value
   f.Reset();
   EXPECT_DOUBLE_EQ(f.value(), 0.0);
+}
+
+// The regression: when the ticks of a sample do not cover exactly the
+// interval they are divided by (a controller sampled a little before the poll
+// that read it, and the poll period jitters), a per-SAMPLE weight averages
+// ratios, which over-weights the short intervals and biases the speed UP —
+// the wheel loop then under-drives the robot (0.23 m/s for a 0.30 m/s command
+// on a loaded CI runner). Weighting each sample by the time it covers keeps
+// the long-run estimate at the true rate.
+TEST(WheelSpeedFilter, MisalignedJitteryIntervalsDoNotBiasTheSpeed)
+{
+  WheelSpeedFilter f(0.05);
+  // True speed 0.3 m/s at 1600 ticks/m = 480 ticks/s. Poll intervals
+  // alternate 5 ms / 35 ms, and each poll reads the ticks of the PREVIOUS
+  // interval.
+  double sum = 0.0;
+  int n = 0;
+  double prev_dt = 0.02;
+  for (int i = 0; i < 2000; ++i)
+  {
+    const double dt = (i % 2 == 0) ? 0.005 : 0.035;
+    const auto ticks = static_cast<int64_t>(std::llround(480.0 * prev_dt));
+    (void)f.Update(ticks, 1600.0, dt);
+    prev_dt = dt;
+    if (i >= 1000)
+    {
+      sum += f.value();
+      ++n;
+    }
+  }
+  EXPECT_NEAR(sum / n, 0.3, 0.015);
 }
 
 TEST(TickPlausibility, NormalMotionIsBelievedAtAnySpeedTheStackCommands)
