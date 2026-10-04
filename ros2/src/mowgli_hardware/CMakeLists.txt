@@ -308,6 +308,14 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  ament_add_gtest(test_firmware_param_store_reset_gate
+    test/test_firmware_param_store_reset_gate.cpp
+  )
+  target_include_directories(test_firmware_param_store_reset_gate
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
   # ---- test_hardware_bridge_parameters ----
   # Includes the node implementation to exercise ROS's actual read-only
   # parameter contract while a missing serial device keeps the test hardware-free.
