@@ -94,6 +94,7 @@ def _build(filename, **overrides):
             "IfCondition": Action,
             "LaunchConfiguration": Configuration,
             "PythonExpression": Action,
+            "EnvironmentVariable": Action,
             "ParameterValue": Parameter,
             "Node": Node,
             "get_package_share_directory": lambda package: str(
