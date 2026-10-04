@@ -59,14 +59,27 @@ TEST(XescOdometry, ResetRePrimes)
   EXPECT_TRUE(odom.stationary());
 }
 
-TEST(WheelSpeedFilter, LowPassesTowardsRawSpeedWithItsTimeConstant)
+TEST(WheelSpeedFilter, ReportsTicksOverTimeInItsWindow)
 {
-  WheelSpeedFilter f(0.05);
-  const double a = 1.0 - std::exp(-0.02 / 0.05);
-  EXPECT_NEAR(f.Update(20, 1000.0, 0.02), a * 1.0, 1e-9);  // raw 1.0 m/s
-  EXPECT_NEAR(f.Update(0, 1000.0, 0.0), a * 1.0, 1e-9);  // zero dt keeps value
+  WheelSpeedFilter f(0.08);
+  EXPECT_NEAR(f.Update(20, 1000.0, 0.02), 1.0, 1e-9);  // 20 mm in 20 ms
+  EXPECT_NEAR(f.Update(0, 1000.0, 0.02), 0.5, 1e-9);  // 20 mm in 40 ms
+  EXPECT_NEAR(f.Update(0, 1000.0, 0.0), 0.5, 1e-9);  // zero dt keeps value
+  // Older samples leave the 80 ms window.
+  for (int i = 0; i < 4; ++i)
+  {
+    (void)f.Update(0, 1000.0, 0.02);
+  }
+  EXPECT_NEAR(f.value(), 0.0, 1e-9);
   f.Reset();
   EXPECT_DOUBLE_EQ(f.value(), 0.0);
+}
+
+TEST(WheelSpeedFilter, AStallLongerThanTheWindowStillMeasuresTheStall)
+{
+  WheelSpeedFilter f(0.08);
+  (void)f.Update(6, 1000.0, 0.02);
+  EXPECT_NEAR(f.Update(105, 1000.0, 0.35), 0.3, 1e-9);  // 105 mm in 350 ms
 }
 
 // The regression: when the ticks of a sample do not cover exactly the
@@ -78,7 +91,7 @@ TEST(WheelSpeedFilter, LowPassesTowardsRawSpeedWithItsTimeConstant)
 // the long-run estimate at the true rate.
 TEST(WheelSpeedFilter, MisalignedJitteryIntervalsDoNotBiasTheSpeed)
 {
-  WheelSpeedFilter f(0.05);
+  WheelSpeedFilter f(0.08);
   // True speed 0.3 m/s at 1600 ticks/m = 480 ticks/s. Poll intervals
   // alternate 5 ms / 35 ms, and each poll reads the ticks of the PREVIOUS
   // interval.
@@ -97,7 +110,7 @@ TEST(WheelSpeedFilter, MisalignedJitteryIntervalsDoNotBiasTheSpeed)
       ++n;
     }
   }
-  EXPECT_NEAR(sum / n, 0.3, 0.015);
+  EXPECT_NEAR(sum / n, 0.3, 0.005);
 }
 
 TEST(TickPlausibility, NormalMotionIsBelievedAtAnySpeedTheStackCommands)

@@ -176,6 +176,17 @@ class Probe(Node):
             data = [s[idx] for s in getattr(self, series) if s[0] >= since]
         return (statistics.fmean(data), len(data)) if data else (float('nan'), 0)
 
+    def time_weighted_mean(self, series: str, since: float, idx: int):
+        """Each message weighted by the time since the previous one: the
+        distance-per-time a consumer integrating vx * dt sees. A plain mean
+        of jittery windows is biased up (0.03 + 0.71 averages 0.37)."""
+        with self.lock:
+            data = [(s[0], s[idx]) for s in getattr(self, series) if s[0] >= since]
+        if len(data) < 2:
+            return float('nan'), len(data)
+        num = sum(v * (t - t_prev) for (t_prev, _), (t, v) in zip(data, data[1:]))
+        return num / (data[-1][0] - data[0][0]), len(data)
+
     def call(self, client, request, timeout=5.0):
         if not client.wait_for_service(timeout_sec=timeout):
             return None
@@ -359,7 +370,7 @@ def s03_straight(probe, rig, R, esc):
     t_meas, t_meas_ms, x_meas = time.monotonic(), rig.now_ms(), rig.snapshot()['x']
     time.sleep(2.0)
     snap = rig.snapshot()
-    odom_vx, n = probe.mean_since('odom', t_meas, 1)
+    odom_vx, n = probe.time_weighted_mean('odom', t_meas, 1)
     if abs(snap['v'] - 0.30) >= 0.03 or abs(odom_vx - snap['v']) >= 0.03:
         print('    diag: ' + _drive_diagnostics(probe, rig, t_meas, t_meas_ms, x_meas), flush=True)
     R.check(S, 'true ground speed tracks 0.30 m/s (closed loop beats the 0.85 motor gain)',
