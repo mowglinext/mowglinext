@@ -325,6 +325,21 @@ protected:
     return blade_requests.at(i);
   }
 
+  // Server callbacks may lag the local pause state and include an earlier OFF.
+  // Wait for the intended command, rather than treating any new request as ON.
+  bool hasBladeRequest(bool enabled, std::size_t after)
+  {
+    std::lock_guard<std::mutex> lock(blade_mutex);
+    for (std::size_t i = after; i < blade_requests.size(); ++i)
+    {
+      if (static_cast<bool>(blade_requests[i].mow_enabled) == enabled)
+      {
+        return true;
+      }
+    }
+    return false;
+  }
+
   void reportBlade(double rpm, bool active = true)
   {
     std::lock_guard<std::mutex> lock(ctx->context_mutex);
@@ -756,12 +771,14 @@ TEST_F(FollowStripDigTest, ShortScanDropoutCutsAndRestoresBladeWithoutReplacingC
   ASSERT_EQ(tickUntil(
                 [&]()
                 {
-                  return ctx->coverage_scan_paused && bladeRequestCount() > requests_before_pause &&
-                         sawStatus("SCAN_PAUSED");
+                  return ctx->coverage_scan_paused &&
+                         hasBladeRequest(false, requests_before_pause) && sawStatus("SCAN_PAUSED");
                 },
                 3.0),
             BT::NodeStatus::RUNNING);
-  EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 0u);
+  ASSERT_TRUE(hasBladeRequest(false, requests_before_pause));
+  ASSERT_TRUE(ctx->coverage_scan_paused);
+  EXPECT_FALSE(hasBladeRequest(true, requests_before_pause));
   EXPECT_EQ(follow->goalCount(), 1u);
   EXPECT_FALSE(follow->isCanceling(0));
   EXPECT_EQ(navigate->goalCount(), 0u);
@@ -778,7 +795,11 @@ TEST_F(FollowStripDigTest, ShortScanDropoutCutsAndRestoresBladeWithoutReplacingC
   ASSERT_EQ(tickUntil(
                 [&]()
                 {
-                  if (ctx->coverage_scan_paused || bladeRequestCount() <= requests_before_resume)
+                  {
+                    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+                    ctx->last_scan_time = std::chrono::steady_clock::now();
+                  }
+                  if (ctx->coverage_scan_paused || !hasBladeRequest(true, requests_before_resume))
                   {
                     return false;
                   }
@@ -788,7 +809,8 @@ TEST_F(FollowStripDigTest, ShortScanDropoutCutsAndRestoresBladeWithoutReplacingC
                 },
                 3.0),
             BT::NodeStatus::RUNNING);
-  EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 1u);
+  ASSERT_TRUE(hasBladeRequest(true, requests_before_resume));
+  ASSERT_FALSE(ctx->coverage_scan_paused);
   EXPECT_EQ(follow->goalCount(), 1u);
   EXPECT_FALSE(follow->isCanceling(0));
   EXPECT_EQ(navigate->goalCount(), 0u);
@@ -816,10 +838,12 @@ TEST_F(FollowStripDigTest, ScanPauseSurvivesABladeOffTransitToTheNextUnit)
   ASSERT_EQ(tickUntil(
                 [&]()
                 {
-                  return ctx->coverage_scan_paused && bladeRequestCount() > requests_before_pause;
+                  return ctx->coverage_scan_paused && hasBladeRequest(false, requests_before_pause);
                 },
                 3.0),
             BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(hasBladeRequest(false, requests_before_pause));
+  ASSERT_TRUE(ctx->coverage_scan_paused);
   const std::size_t first_blade_off = bladeRequestCount() - 1;
   ASSERT_EQ(bladeRequest(first_blade_off).mow_enabled, 0u);
 
@@ -862,17 +886,19 @@ TEST_F(FollowStripDigTest, ScanPauseSurvivesABladeOffTransitToTheNextUnit)
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   EXPECT_TRUE(ctx->coverage_scan_paused);
-  EXPECT_EQ(bladeRequestCount(), requests_before_resume);
+  EXPECT_FALSE(hasBladeRequest(true, requests_before_resume));
   ASSERT_EQ(tickUntil(
                 [&]()
                 {
                   std::lock_guard<std::mutex> lock(ctx->context_mutex);
                   ctx->last_scan_time = std::chrono::steady_clock::now();
-                  return !ctx->coverage_scan_paused && bladeRequestCount() > requests_before_resume;
+                  return !ctx->coverage_scan_paused &&
+                         hasBladeRequest(true, requests_before_resume);
                 },
                 3.0),
             BT::NodeStatus::RUNNING);
-  EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 1u);
+  ASSERT_TRUE(hasBladeRequest(true, requests_before_resume));
+  ASSERT_FALSE(ctx->coverage_scan_paused);
   EXPECT_EQ(follow->goalCount(), 1u);
   ASSERT_EQ(tickUntil(
                 [&]()
@@ -1008,7 +1034,7 @@ TEST_F(FollowStripDigTest, StaleScanDuringTransitKeepsBladeOffUntilFreshWindowAf
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   EXPECT_TRUE(ctx->coverage_scan_paused);
-  EXPECT_EQ(bladeRequestCount(), requests_before_fresh_window);
+  EXPECT_FALSE(hasBladeRequest(true, requests_before_fresh_window));
 
   ASSERT_EQ(tickUntil(
                 [&]()
@@ -1016,11 +1042,12 @@ TEST_F(FollowStripDigTest, StaleScanDuringTransitKeepsBladeOffUntilFreshWindowAf
                   std::lock_guard<std::mutex> lock(ctx->context_mutex);
                   ctx->last_scan_time = std::chrono::steady_clock::now();
                   return !ctx->coverage_scan_paused &&
-                         bladeRequestCount() > requests_before_fresh_window;
+                         hasBladeRequest(true, requests_before_fresh_window);
                 },
                 3.0),
             BT::NodeStatus::RUNNING);
-  EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 1u);
+  ASSERT_TRUE(hasBladeRequest(true, requests_before_fresh_window));
+  ASSERT_FALSE(ctx->coverage_scan_paused);
   EXPECT_EQ(follow->goalCount(), 1u);
   ASSERT_EQ(tickUntil(
                 [&]()
