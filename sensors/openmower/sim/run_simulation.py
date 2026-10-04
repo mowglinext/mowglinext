@@ -347,6 +347,13 @@ def s02_boot_latch(probe, rig, R, esc):
     stop_driving(probe, rig)
 
 
+def forward_speed(a: dict, b: dict) -> float:
+    """Mean speed along the robot's heading between two snapshots."""
+    dx, dy = b['x'] - a['x'], b['y'] - a['y']
+    heading = 0.5 * (a['theta'] + b['theta'])
+    return (dx * math.cos(heading) + dy * math.sin(heading)) / ((b['t'] - a['t']) / 1000.0)
+
+
 def _drive_diagnostics(probe, rig, since_mono: float, since_ms: float, x_since: float) -> str:
     """What the controllers and the plant actually saw since a moment — printed
     with a failing speed check, so a CI-only miss shows its cause."""
@@ -367,15 +374,19 @@ def s03_straight(probe, rig, R, esc):
     S = 'straight line'
     x0 = rig.snapshot()['x']
     drive(probe, rig, 0.30, 0.0, 4.0)
-    t_meas, t_meas_ms, x_meas = time.monotonic(), rig.now_ms(), rig.snapshot()['x']
+    s0 = rig.snapshot()
+    t_meas, t_meas_ms, x_meas = time.monotonic(), s0['t'], s0['x']
     time.sleep(2.0)
     snap = rig.snapshot()
-    odom_vx, n = probe.time_weighted_mean('odom', t_meas, 1)
-    if abs(snap['v'] - 0.30) >= 0.03 or abs(odom_vx - snap['v']) >= 0.03:
+    # Means over the window: an instantaneous plant speed or a single odometry
+    # window is just jitter on a loaded runner.
+    plant_v = forward_speed(s0, snap)
+    odom_vx, n = probe.mean_since('odom', t_meas, 1)
+    if abs(plant_v - 0.30) >= 0.03 or abs(odom_vx - plant_v) >= 0.03:
         print('    diag: ' + _drive_diagnostics(probe, rig, t_meas, t_meas_ms, x_meas), flush=True)
     R.check(S, 'true ground speed tracks 0.30 m/s (closed loop beats the 0.85 motor gain)',
-            abs(snap['v'] - 0.30) < 0.03, f"plant v={snap['v']:.3f} m/s")
-    R.check(S, '/wheel_odom vx matches the ground', abs(odom_vx - snap['v']) < 0.03,
+            abs(plant_v - 0.30) < 0.03, f"plant mean v={plant_v:.3f} m/s")
+    R.check(S, '/wheel_odom vx matches the ground', abs(odom_vx - plant_v) < 0.03,
             f'odom vx={odom_vx:.3f} over {n} msgs')
     R.check(S, 'no spurious rotation', abs(snap['w']) < 0.05, f"w={snap['w']:.3f}")
     R.check(S, 'real wiring: left duty > 0, right duty < 0',
@@ -387,16 +398,20 @@ def s03_straight(probe, rig, R, esc):
 
 def s04_pivot(probe, rig, R, esc):
     S = 'pivot'
-    drive(probe, rig, 0.0, 0.6, 5.0)
-    t_meas = time.monotonic() - 2.0
+    drive(probe, rig, 0.0, 0.6, 3.0)
+    t_meas, s0 = time.monotonic(), rig.snapshot()
+    time.sleep(2.0)
     snap = rig.snapshot()
+    # Mean yaw rate over the window (2 s at 0.6 rad/s never wraps past pi).
+    plant_w = math.atan2(math.sin(snap['theta'] - s0['theta']), math.cos(snap['theta'] - s0['theta'])) \
+        / ((snap['t'] - s0['t']) / 1000.0)
     odom_w, _ = probe.mean_since('odom', t_meas, 2)
     imu_w, _ = probe.mean_since('imu', t_meas, 1)
-    R.check(S, 'true yaw rate tracks +0.6 rad/s, counter-clockwise', abs(snap['w'] - 0.6) < 0.08,
-            f"plant w={snap['w']:+.3f}")
-    R.check(S, '/wheel_odom angular.z agrees in sign and size', abs(odom_w - snap['w']) < 0.08,
+    R.check(S, 'true yaw rate tracks +0.6 rad/s, counter-clockwise', abs(plant_w - 0.6) < 0.08,
+            f"plant mean w={plant_w:+.3f}")
+    R.check(S, '/wheel_odom angular.z agrees in sign and size', abs(odom_w - plant_w) < 0.08,
             f'odom w={odom_w:+.3f}')
-    R.check(S, '/imu/data gyro z agrees in sign and size', abs(imu_w - snap['w']) < 0.08,
+    R.check(S, '/imu/data gyro z agrees in sign and size', abs(imu_w - plant_w) < 0.08,
             f'imu gz={imu_w:+.3f}')
     R.check(S, 'no translation', abs(snap['v']) < 0.03, f"v={snap['v']:+.3f}")
     stop_driving(probe, rig)
@@ -701,7 +716,9 @@ def s17_old_firmware(probe, rig, R, esc):
     R.check(S, '...yet the bridge does NOT call it docked', not probe.get('status').is_charging)
     drive(probe, rig, 0.3, 0.0, 4.0)
     vx, n = probe.mean_since('odom', time.monotonic() - 1.5, 1)
-    R.check(S, '/wheel_odom is NOT zeroed while mowing', n > 5 and abs(vx - 0.3) < 0.04, f'vx={vx:.3f}')
+    # Zeroed (Invariant 11 misapplied) would read 0.0; the speed itself is
+    # checked in the straight-line scenario.
+    R.check(S, '/wheel_odom is NOT zeroed while mowing', n > 5 and vx > 0.15, f'vx={vx:.3f}')
     stop_driving(probe, rig)
     with rig.lock:
         rig.ll.generation = 'v1-fw'
@@ -751,26 +768,30 @@ def s19b_starved(probe, rig, R, esc, bridge):
     bridge divided three periods of ticks by one clamped control period."""
     S = 'bridge starved 350 ms'
     drive(probe, rig, 0.3, 0.0, 3.0)
-    t0 = time.monotonic()
+    t0, s0 = time.monotonic(), rig.snapshot()
     os.killpg(bridge.pid, signal.SIGSTOP)
     time.sleep(0.35)
     os.killpg(bridge.pid, signal.SIGCONT)
     time.sleep(1.5)
+    snap = rig.snapshot()
     with probe.lock:
         vx = [v for (t, v, _) in probe.odom if t >= t0]
-    # The bug's signature is ONE window at ~3.5x between normal ones (a 350 ms
-    # stall divided by a clamped 100 ms): a 3-window mean of ~0.55. Honest
-    # jitter on a starved runner comes in compensating pairs (0.03 then 0.71,
-    # ticks one window late) whose 3-window mean stayed <= 0.43 on CI.
-    triples = [abs(sum(vx[i:i + 3])) / 3.0 for i in range(len(vx) - 2)]
-    worst = max(triples, default=float('nan'))
-    ok = bool(triples) and worst < 0.5
-    if not ok:
+    plant_v = forward_speed(s0, snap)
+    odom_v = statistics.fmean(vx) if vx else float('nan')
+    worst = max((abs(v) for v in vx), default=float('nan'))
+    # The exact arithmetic (a 350 ms stall divided by 350 ms, not by a clamped
+    # control period) is pinned by WheelTickSampler.AStalledBridgeMeasures-
+    # TheWholeStall; here, what a consumer of the running bridge can see.
+    R.check(S, 'the robot kept driving through the stall', abs(plant_v - 0.3) < 0.05,
+            f'plant mean v={plant_v:.3f} m/s')
+    R.check(S, '/wheel_odom agrees with the ground on average', abs(odom_v - plant_v) < 0.05,
+            f'odom mean {odom_v:.3f} over {len(vx)} msgs')
+    if not worst < MAX_PLAUSIBLE_WHEEL_SPEED_MPS:
         print('    diag: vx series ' + ' '.join(f'{v:.2f}' for v in vx), flush=True)
-    R.check(S, '/wheel_odom never reports a phantom speed (3-window mean < 0.5 at 0.3 m/s)',
-            ok, f'max 3-window mean={worst:.2f} m/s over {len(vx)} msgs')
+    R.check(S, f'no physically impossible window (< {MAX_PLAUSIBLE_WHEEL_SPEED_MPS} m/s)',
+            worst < MAX_PLAUSIBLE_WHEEL_SPEED_MPS, f'max |vx|={worst:.2f} m/s')
     R.check(S, 'board did not latch (stall shorter than its 500 ms heartbeat timeout)',
-            not rig.snapshot()['latch'])
+            not snap['latch'])
     stop_driving(probe, rig)
 
 

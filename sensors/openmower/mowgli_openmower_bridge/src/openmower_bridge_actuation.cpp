@@ -84,7 +84,7 @@ void OpenMowerBridgeNode::control_tick()
     {
       RCLCPP_INFO(get_logger(), "Drive controllers connected: %s", motor_summary().c_str());
       odometry_.Reset();
-      wheel_ticks_primed_ = {false, false};
+      tick_sampler_.Reset();
     }
     else
     {
@@ -140,59 +140,42 @@ void OpenMowerBridgeNode::update_odometry()
     ticks[w] = static_cast<int64_t>(motor_sign(w)) * telemetry.signed_ticks;
     stamps[w] = telemetry.last_status;
   }
-  // Wait until BOTH controllers reported since the last sample, so the two
-  // wheels' deltas cover the same stretch of time.
-  if (wheel_ticks_primed_[kLeft] && wheel_ticks_primed_[kRight] &&
-      (stamps[kLeft] <= prev_status_stamp_[kLeft] || stamps[kRight] <= prev_status_stamp_[kRight]))
+  const WheelTickStep step = tick_sampler_.Feed(ticks, stamps, ticks_per_meter_);
+  switch (step.kind)
   {
-    return;
-  }
-  std::array<double, 2> dt_w{};
-  for (std::size_t w = 0; w < 2u; ++w)
-  {
-    dt_w[w] = std::chrono::duration<double>(stamps[w] - prev_status_stamp_[w]).count();
-  }
-
-  // A controller that rebooted restarts its counter: re-prime instead of
-  // publishing the jump as motion (it would read as kilometres per second).
-  for (std::size_t w = 0; w < 2u; ++w)
-  {
-    if (wheel_ticks_primed_[w] &&
-        !IsPlausibleTickDelta(ticks[w] - prev_wheel_ticks_[w], ticks_per_meter_, dt_w[w]))
-    {
+    case WheelTickStep::Kind::kWaiting:
+      return;
+    case WheelTickStep::Kind::kPrimed:
+      wheel_speed_[kLeft].Reset();
+      wheel_speed_[kRight].Reset();
+      return;
+    case WheelTickStep::Kind::kReset:
+      // A controller that rebooted restarts its counter: re-primed instead of
+      // publishing the jump as motion (it would read as kilometres per second).
       RCLCPP_WARN(get_logger(),
                   "%s wheel tick counter jumped by %lld ticks in %.0f ms — controller reset? "
                   "Re-priming odometry instead of publishing it.",
-                  w == kLeft ? "Left" : "Right",
-                  static_cast<long long>(ticks[w] - prev_wheel_ticks_[w]),
-                  dt_w[w] * 1000.0);
-      wheel_ticks_primed_ = {false, false};
+                  step.reset_wheel == static_cast<int>(kLeft) ? "Left" : "Right",
+                  static_cast<long long>(step.reset_jump),
+                  step.dt_s[static_cast<std::size_t>(step.reset_wheel)] * 1000.0);
       odometry_.Reset();
       // The loop's integral was built against a wheel that may not have been
       // driving through the reset: start the speed loops clean.
-      for (auto& loop : wheel_loops_)
+      for (std::size_t w = 0; w < 2u; ++w)
       {
-        loop.Reset();
+        wheel_loops_[w].Reset();
+        wheel_speed_[w].Reset();
       }
+      return;
+    case WheelTickStep::Kind::kSample:
       break;
-    }
   }
 
   // Per-wheel speed (for the velocity loops) and the diagnostic WheelTick.
-  std::array<int64_t, 2> deltas{};
+  const std::array<int64_t, 2>& deltas = step.deltas;
+  const std::array<double, 2>& dt_w = step.dt_s;
   for (std::size_t w = 0; w < 2u; ++w)
   {
-    if (!wheel_ticks_primed_[w])
-    {
-      wheel_ticks_primed_[w] = true;
-      prev_wheel_ticks_[w] = ticks[w];
-      prev_status_stamp_[w] = stamps[w];
-      wheel_speed_[w].Reset();
-      continue;
-    }
-    deltas[w] = ticks[w] - prev_wheel_ticks_[w];
-    prev_wheel_ticks_[w] = ticks[w];
-    prev_status_stamp_[w] = stamps[w];
     (void)wheel_speed_[w].Update(deltas[w], ticks_per_meter_, dt_w[w]);
     wheel_tick_magnitude_[w] += static_cast<uint32_t>(std::abs(deltas[w]));
     if (deltas[w] > 0)

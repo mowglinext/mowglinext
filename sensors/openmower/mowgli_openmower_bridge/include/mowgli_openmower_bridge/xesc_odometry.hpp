@@ -15,6 +15,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -39,6 +41,96 @@ constexpr int64_t kTickDeltaSlack = 50;
       kMaxPlausibleWheelSpeedMps * ticks_per_meter * std::max(dt_s, 0.0) + kTickDeltaSlack;
   return std::abs(static_cast<double>(delta)) <= limit;
 }
+
+/// One step of WheelTickSampler.
+struct WheelTickStep
+{
+  enum class Kind
+  {
+    kWaiting,  ///< not both controllers reported since the last sample
+    kPrimed,  ///< first reading (or after a reset): baseline stored
+    kSample,  ///< deltas + the time each wheel's ticks cover
+    kReset,  ///< a counter discontinuity: re-primed on the current reading
+  };
+  Kind kind{Kind::kWaiting};
+  std::array<int64_t, 2> deltas{};
+  std::array<double, 2> dt_s{};
+  int reset_wheel{-1};  ///< kReset: which wheel jumped
+  int64_t reset_jump{0};  ///< kReset: by how many ticks
+};
+
+/**
+ * @brief Pairs each wheel's tick delta with the time it actually covers.
+ *
+ * The interval is the time between the two STATUS samples the ticks came
+ * from (MotorTelemetry::last_status), never the bridge's control period: a
+ * bridge stalled for 350 ms then reads 350 ms worth of ticks over 350 ms
+ * instead of over one clamped 100 ms period (a 3.5x phantom speed). A sample
+ * is only formed once BOTH controllers reported, so the two wheels cover the
+ * same stretch of time; a delta no wheel could produce is a controller reset
+ * (IsPlausibleTickDelta) and re-primes instead of being published.
+ */
+class WheelTickSampler
+{
+public:
+  using TimePoint = std::chrono::steady_clock::time_point;
+
+  [[nodiscard]] WheelTickStep Feed(const std::array<int64_t, 2>& ticks,
+                                   const std::array<TimePoint, 2>& stamps,
+                                   double ticks_per_meter)
+  {
+    WheelTickStep step{};
+    if (!primed_)
+    {
+      Prime(ticks, stamps);
+      step.kind = WheelTickStep::Kind::kPrimed;
+      return step;
+    }
+    if (stamps[0] <= prev_stamps_[0] || stamps[1] <= prev_stamps_[1])
+    {
+      return step;  // kWaiting
+    }
+    for (std::size_t w = 0; w < 2u; ++w)
+    {
+      step.deltas[w] = ticks[w] - prev_ticks_[w];
+      step.dt_s[w] = std::chrono::duration<double>(stamps[w] - prev_stamps_[w]).count();
+    }
+    for (std::size_t w = 0; w < 2u; ++w)
+    {
+      if (!IsPlausibleTickDelta(step.deltas[w], ticks_per_meter, step.dt_s[w]))
+      {
+        step.kind = WheelTickStep::Kind::kReset;
+        step.reset_wheel = static_cast<int>(w);
+        step.reset_jump = step.deltas[w];
+        step.deltas = {0, 0};
+        Prime(ticks, stamps);
+        return step;
+      }
+    }
+    prev_ticks_ = ticks;
+    prev_stamps_ = stamps;
+    step.kind = WheelTickStep::Kind::kSample;
+    return step;
+  }
+
+  /// Next Feed() only primes (a link reconnected).
+  void Reset()
+  {
+    primed_ = false;
+  }
+
+private:
+  void Prime(const std::array<int64_t, 2>& ticks, const std::array<TimePoint, 2>& stamps)
+  {
+    primed_ = true;
+    prev_ticks_ = ticks;
+    prev_stamps_ = stamps;
+  }
+
+  bool primed_{false};
+  std::array<int64_t, 2> prev_ticks_{};
+  std::array<TimePoint, 2> prev_stamps_{};
+};
 
 struct WheelOdometrySample
 {

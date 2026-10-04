@@ -251,7 +251,7 @@ the twist_mux teleop lane reaching the emulated wheels, the STM32 bridge still
 starting for `mowgli`, and an unknown backend aborting the launch.
 
 Writing the emulator from the firmware sources, and running it on a loaded CI
-runner, found six bridge bugs that the unit tests could not see; all are fixed
+runner, found seven bridge bugs that the unit tests could not see; all are fixed
 and now covered by both layers:
 
 1. **Charging bit read as "docked"** — would zero `/wheel_odom` while mowing on v0.13.x firmware.
@@ -259,7 +259,8 @@ and now covered by both layers:
 3. **Release request kept armed while a stop button was held** — the latch dropped by itself on release.
 4. **2 s blind window after a LowLevel link loss** — now 0.5 s.
 5. **A controller reboot published as a 2.2e7 m/s odometry spike**, and a single creeping tick at dock contact skipping that visit's IMU calibration.
-6. **Phantom speed after a stall** — wheel speed and `/wheel_odom` divided the ticks by the control period, clamped to 100 ms: a bridge starved for 300 ms reported 0.8 m/s while driving at 0.3. Timing now comes from the controllers' own status packets.
+6. **Phantom speed after a stall** — wheel speed and `/wheel_odom` divided the ticks by the control period, clamped to 100 ms: a bridge starved for 300 ms reported 0.8 m/s while driving at 0.3. Ticks are now divided by the time between the controllers' own status samples (`WheelTickSampler`); the xESC mini's replies carry the time of their request (`RequestStampQueue`).
+7. **Robot driven 10–25 % too slow on a busy machine** — the wheel loop averaged tick/time *ratios* per sample, which is biased upward whenever ticks and intervals do not line up exactly; it measured 0.30 m/s while the robot did 0.23. Speed is now total ticks over total time in an 80 ms window.
 
 
 ## Build · test
