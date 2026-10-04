@@ -532,6 +532,19 @@ Declared **without** a yaml line (code defaults only, tune via `ros2 param set` 
 | `COMPOSE_PROJECT_NAME` | named-volume prefix (`install_mowgli_maps`) | all | **keep stable** — renaming orphans persisted maps |
 | `MOWER_IP`, `DISABLE_BLUETOOTH`, `GPS_PROTOCOL` | host/ser2net helpers | — | `GPS_PROTOCOL` and `GNSS_BACKEND`/`HARDWARE_BACKEND` are passed into `mowgli-ros2` but **nothing there reads them** |
 
+### Coverage blade readiness
+
+Coverage dispatch also reads `blade_ready_min_rpm` (1000.0),
+`blade_spinup_delay_sec` (1.5, telemetry-unavailable fallback after ON response),
+and `blade_ready_timeout_sec` (6.0, at most 30 seconds). Template defaults are
+in `mowgli_robot.yaml`; `full_system.launch.py` injects them into
+`behavior_tree_node`'s `BTContext::blade_ready_config`. The GUI schema mirrors
+them and exposes them in Advanced settings. All are startup-only. The BT also
+receives the existing `mowing_enabled` dry-run choice so it can deliberately
+follow coverage without requiring blade RPM; hardware still enforces inhibition.
+Read `docs/BLADE_READY_VALIDATION.md` for timestamp identity, failure semantics,
+scope and the pending physical acceptance procedure.
+
 ## Recipe: adding a new parameter
 
 Follow all six steps, in order. Skipping step 2 is the classic failure: the key shows up in the GUI, the operator edits it, and the robot keeps running the compiled default forever (see every `INERT` row above).

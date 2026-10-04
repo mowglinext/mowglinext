@@ -188,7 +188,7 @@ private:
     // "firmware-incompatible (proto=0 — reflash)".
     status.firmware_compatible = true;
     status.firmware_version = "sim";
-    status.mower_esc_status = 0;
+    status.mower_esc_status = mow_enabled_ ? 1u : 0u;
     status.mower_esc_temperature = 25.0f;
     status.mower_esc_current = mow_enabled_ ? 0.5f : 0.0f;
     status.mower_motor_temperature = mow_enabled_ ? 30.0f : 25.0f;
