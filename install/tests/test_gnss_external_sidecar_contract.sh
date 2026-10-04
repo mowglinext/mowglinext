@@ -9,13 +9,15 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/lib/framework.sh"
 
 compose_file="$REPO_DIR/install/compose/docker-compose.gps.yml"
+compose_mavros_file="$REPO_DIR/install/compose/docker-compose.gps-mavros.yml"
 config_file="$REPO_DIR/install/lib/config.sh"
 stack_file="$REPO_DIR/docker/stack.sh"
 env_example="$REPO_DIR/docker/.env.example"
 
-section "External Universal GNSS v0.7.2-rc2 sidecar contract"
+section "External Universal GNSS v0.7.2-rc4 sidecar contract"
 
 compose_content="$(<"$compose_file")"
+compose_mavros_content="$(<"$compose_mavros_file")"
 assert_contains "gps service consumes external Universal GNSS image" \
   'image: ${UNIVERSAL_GNSS_IMAGE:-ghcr.io/pepeuch/universal-gnss-ros2-lyrical:' "$compose_content"
 assert_not_contains "gps service no longer consumes MowgliNext GPS_IMAGE" \
@@ -42,7 +44,9 @@ required_vars="$(grep -oE '\$\{[A-Z_0-9]+\}' "$compose_file" | sort -u | tr '\n'
 assert_eq "every compose variable of the gps fragment has a default" "" "$required_vars"
 assert_contains "fragment image default is pinned to the deployment descriptor digest" \
   "@$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json")}" "$compose_content"
-assert_contains "v0.7.2-rc2 combined receiver/NTRIP launch is used" \
+assert_contains "MAVROS-mode fragment image default matches the deployment descriptor digest" \
+  "@$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json")" "$compose_mavros_content"
+assert_contains "v0.7.2-rc4 combined receiver/NTRIP launch is used" \
   'receiver_and_ntrip.launch.py' "$compose_content"
 assert_contains "NTRIP enable state is a launch argument derived from the yaml" \
   '"ntrip_enabled:=" + ("true" if ntrip else "false")' "$compose_content"
@@ -54,12 +58,18 @@ assert_contains "bridge RTCM topic stays internal to Universal GNSS" \
   'rtcm_topic:=/universal_gnss_receiver/rtcm' "$compose_content"
 
 config_content="$(<"$config_file")"
-assert_contains "MowgliNext pins v0.7.2-rc2 Lyrical image independently" \
-  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.2-rc2@sha256:dfe4a886b2692e8e4985e9ef262181525fa66eca431562590e96a7d2e16b86c0
+assert_contains "MowgliNext pins v0.7.2-rc4 Lyrical image independently" \
+  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.2-rc4@sha256:488bdeb99083f83a42f2dd75d356f02afdc505e076552fe76718b0ae949d55c1
 "' "$config_content"
 # The installer default and the deployment descriptor name the SAME image; the
 # digest is what makes the pin real, so a bump must touch both or fail here.
 descriptor_digest="$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json" 2>/dev/null || true)"
+descriptor_version="$(python3 -c 'import json,sys; print(next(i["version"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json" 2>/dev/null || true)"
+descriptor_ref="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:${descriptor_version:-MISSING-VERSION}@${descriptor_digest:-MISSING-DIGEST}"
+assert_contains "direct-GNSS compose tag and digest match the deployment descriptor" \
+  "$descriptor_ref" "$compose_content"
+assert_contains "MAVROS-mode compose tag and digest match the deployment descriptor" \
+  "$descriptor_ref" "$compose_mavros_content"
 # A digest is "sha256:" + 64 hex. The parity checks below compare strings, so a
 # typo copied to every file ("ssha256:") satisfied them all while docker refused
 # the reference ("unsupported digest algorithm") — the gps container could not
@@ -70,7 +80,7 @@ else
   fail "deployment descriptor gps digest is a well-formed sha256 digest" "got '${descriptor_digest:-}'"
 fi
 malformed_refs="$(grep -hoE 'universal-gnss-ros2-lyrical:[A-Za-z0-9._-]+@[^"[:space:]}]+' \
-  "$compose_file" "$config_file" "$env_example" | grep -vE '@sha256:[0-9a-f]{64}$' || true)"
+  "$compose_file" "$compose_mavros_file" "$config_file" "$env_example" | grep -vE '@sha256:[0-9a-f]{64}$' || true)"
 assert_eq "every pinned Universal GNSS image reference uses a well-formed digest" "" "$malformed_refs"
 assert_contains "installer default is pinned to the deployment descriptor digest" \
   "@${descriptor_digest:-MISSING-DIGEST}\"" "$config_content"
@@ -82,8 +92,8 @@ assert_contains "stack regen rebuilds sidecar runtime config" \
   'regenerate_sidecar_runtime_configs' "$stack_content"
 
 env_example_content="$(<"$env_example")"
-assert_contains "example uses v0.7.2-rc2 Lyrical image" \
-  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.2-rc2@sha256:dfe4a886b2692e8e4985e9ef262181525fa66eca431562590e96a7d2e16b86c0
+assert_contains "example uses v0.7.2-rc4 Lyrical image" \
+  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.2-rc4@sha256:488bdeb99083f83a42f2dd75d356f02afdc505e076552fe76718b0ae949d55c1
 ' "$env_example_content"
 
 test_summary
