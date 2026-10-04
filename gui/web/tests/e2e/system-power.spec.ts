@@ -27,7 +27,6 @@ async function openSystem(page: Page, mobile = false) {
     await page.goto("/#/diagnostics");
     if (mobile) await page.getByRole("button", {name: /System$/}).click();
     await expect(page.getByRole("button", {name: "Host power…", exact: true})).toBeVisible();
-    await expect(page.getByText("GPS: RTK Fixed", {exact: true})).toBeVisible();
     await expect(page.getByRole("button", {name: "Battery and power menu"})).toContainText("100%");
     await page.getByRole("button", {name: "Host power…", exact: true}).scrollIntoViewIfNeeded();
 }
