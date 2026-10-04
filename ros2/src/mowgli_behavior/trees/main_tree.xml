@@ -598,8 +598,12 @@
         <!-- ============================================================
              b. Mowing (COMMAND_START = 1)
              ============================================================ -->
-        <Sequence name="MowingSequence">
+        <!-- Re-check the operator command throughout startup as well as coverage.
+             Keep the work in a memory Sequence so completed preflight/undock
+             steps are not replayed while a later action is RUNNING. -->
+        <ReactiveSequence name="MowingSequence">
           <IsCommand command="1"/>
+          <Sequence name="MowingAction">
 
           <!-- Wait for Nav2 to be fully active. Polled check: finishes in
                ~50 ms once the four lifecycle_manager_navigation nodes
@@ -1270,9 +1274,9 @@
                * ReactiveSequence re-checks IsCommand(1) every tick, so a
                  new operator command (HOME, cancel, delete-maps, …) halts
                  the in-flight DockRobot instead of holding the BT hostage
-                 for the full retry budget. The plain parent <Sequence>
-                 only evaluates IsCommand(1) on entry, so without this
-                 wrapper the terminal dock was un-interruptible — the
+                 for the full retry budget. Before the mission-wide command
+                 guard, the plain parent <Sequence> evaluated IsCommand(1)
+                 only on entry, so the terminal dock was un-interruptible — the
                  "Mowing Complete, nothing responds" lockup.
                * ReactiveFallback(IsCharging) short-circuits the moment the
                  charging pins engage, even if opennav_docking hasn't
@@ -1311,7 +1315,8 @@
               <ClearCommand/>
             </Sequence>
           </ReactiveSequence>
-        </Sequence>
+          </Sequence>
+        </ReactiveSequence>
 
         <!-- ============================================================
              c. Home (COMMAND_HOME = 2)
