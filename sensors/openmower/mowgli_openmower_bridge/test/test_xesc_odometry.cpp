@@ -4,6 +4,7 @@
  * @brief Windowed wheel odometry from signed tick counters.
  */
 
+#include <chrono>
 #include <cmath>
 
 #include "mowgli_openmower_bridge/xesc_odometry.hpp"
@@ -131,4 +132,83 @@ TEST(TickPlausibility, ACounterResetIsADiscontinuity)
   // xESC mini reboot: the signed tachometer drops back to 0 after 30 m.
   EXPECT_FALSE(IsPlausibleTickDelta(-48000, 1600.0, 0.02));
   EXPECT_FALSE(IsPlausibleTickDelta(200, 1600.0, 0.02));
+}
+
+namespace
+{
+using mowgli_openmower_bridge::WheelTickSampler;
+using mowgli_openmower_bridge::WheelTickStep;
+using Kind = mowgli_openmower_bridge::WheelTickStep::Kind;
+using TP = WheelTickSampler::TimePoint;
+
+TP At(int ms)
+{
+  return TP{} + std::chrono::milliseconds(1000 + ms);
+}
+}  // namespace
+
+TEST(WheelTickSampler, FirstReadingOnlyPrimes)
+{
+  WheelTickSampler s;
+  EXPECT_EQ(s.Feed({100, 200}, {At(0), At(0)}, 1600.0).kind, Kind::kPrimed);
+}
+
+TEST(WheelTickSampler, TicksAreDividedByTheTimeBetweenTheirStatusSamples)
+{
+  WheelTickSampler s;
+  (void)s.Feed({0, 0}, {At(0), At(0)}, 1600.0);
+  const WheelTickStep step = s.Feed({10, 9}, {At(20), At(18)}, 1600.0);
+  ASSERT_EQ(step.kind, Kind::kSample);
+  EXPECT_EQ(step.deltas[0], 10);
+  EXPECT_EQ(step.deltas[1], 9);
+  EXPECT_NEAR(step.dt_s[0], 0.020, 1e-12);
+  EXPECT_NEAR(step.dt_s[1], 0.018, 1e-12);
+}
+
+// The regression: a bridge frozen for 350 ms reads 350 ms of motion. Its
+// interval must be 350 ms (0.3 m/s), not one clamped control period.
+TEST(WheelTickSampler, AStalledBridgeMeasuresTheWholeStall)
+{
+  WheelTickSampler s;
+  (void)s.Feed({0, 0}, {At(0), At(0)}, 1600.0);
+  // 0.3 m/s x 0.35 s x 1600 ticks/m = 168 ticks.
+  const WheelTickStep step = s.Feed({168, 168}, {At(350), At(350)}, 1600.0);
+  ASSERT_EQ(step.kind, Kind::kSample);
+  EXPECT_NEAR(static_cast<double>(step.deltas[0]) / 1600.0 / step.dt_s[0], 0.3, 1e-9);
+}
+
+TEST(WheelTickSampler, WaitsUntilBothControllersReported)
+{
+  WheelTickSampler s;
+  (void)s.Feed({0, 0}, {At(0), At(0)}, 1600.0);
+  EXPECT_EQ(s.Feed({10, 0}, {At(20), At(0)}, 1600.0).kind, Kind::kWaiting);
+  const WheelTickStep step = s.Feed({20, 19}, {At(40), At(38)}, 1600.0);
+  ASSERT_EQ(step.kind, Kind::kSample);
+  EXPECT_EQ(step.deltas[0], 20);  // the left wheel's two reports, together
+  EXPECT_NEAR(step.dt_s[0], 0.040, 1e-12);
+  EXPECT_NEAR(step.dt_s[1], 0.038, 1e-12);
+}
+
+TEST(WheelTickSampler, ACounterResetRePrimesInsteadOfPublishing)
+{
+  WheelTickSampler s;
+  (void)s.Feed({5000, 5000}, {At(0), At(0)}, 1600.0);
+  const WheelTickStep reset = s.Feed({0, 5010}, {At(20), At(20)}, 1600.0);
+  ASSERT_EQ(reset.kind, Kind::kReset);
+  EXPECT_EQ(reset.reset_wheel, 0);
+  EXPECT_EQ(reset.reset_jump, -5000);
+  EXPECT_EQ(reset.deltas[0], 0);
+  // The reset reading is the new baseline.
+  const WheelTickStep next = s.Feed({10, 5020}, {At(40), At(40)}, 1600.0);
+  ASSERT_EQ(next.kind, Kind::kSample);
+  EXPECT_EQ(next.deltas[0], 10);
+  EXPECT_EQ(next.deltas[1], 10);
+}
+
+TEST(WheelTickSampler, ResetMakesTheNextReadingPrime)
+{
+  WheelTickSampler s;
+  (void)s.Feed({0, 0}, {At(0), At(0)}, 1600.0);
+  s.Reset();
+  EXPECT_EQ(s.Feed({999999, 0}, {At(20), At(20)}, 1600.0).kind, Kind::kPrimed);
 }

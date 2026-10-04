@@ -174,10 +174,8 @@ private:
   std::array<std::unique_ptr<MotorLink>, 3> motors_{};
   std::array<WheelVelocityController, 2> wheel_loops_{};
   std::array<WheelSpeedFilter, 2> wheel_speed_{};
-  std::array<int64_t, 2> prev_wheel_ticks_{};
-  std::array<bool, 2> wheel_ticks_primed_{};
-  /// Status-packet time of the ticks in prev_wheel_ticks_ (odometry timing).
-  std::array<SteadyClock::time_point, 2> prev_status_stamp_{};
+  /// Pairs tick deltas with the time their status samples cover.
+  WheelTickSampler tick_sampler_;
   std::array<uint32_t, 2> wheel_tick_magnitude_{};
   std::array<uint8_t, 2> wheel_tick_direction_{1u, 1u};
   XescOdometry odometry_{1600.0, 0.325};
