@@ -1740,6 +1740,8 @@ private:
       else
       {
         // Normal mode or stop button: full emergency
+        if (stop_active || lift_active || latch_active)
+          blade_intent_authorized_ = false;
         msg.active_emergency = stop_active || lift_active;
         msg.latched_emergency = latch_active;
         fw_latched_emergency_ = latch_active;
@@ -4053,9 +4055,11 @@ private:
     in.enable_allowed = !lift_detected_ && !waiting_blade_resume_;
     in.intent_authorized = blade_intent_authorized_;
     in.emergency_active = emergency;
+    const auto max_blade_status_age_ns =
+        static_cast<std::int64_t>(blade_reassert_cfg_.max_blade_status_age_s * 1.0e9);
     in.blade_status_fresh =
-        blade_status_time_.nanoseconds() != 0 &&
-        (now() - blade_status_time_).seconds() <= blade_reassert_cfg_.max_blade_status_age_s;
+        have_blade_status_ &&
+        steady_receipt_is_fresh(now_ns, last_blade_status_steady_ns_, max_blade_status_age_ns);
     in.blade_active = blade_active_;
     in.cmd_vel_age_s = age_s(last_cmd_vel_packet_ns_);
     in.since_last_blade_cmd_s = age_s(last_blade_cmd_ns_);
@@ -4109,6 +4113,7 @@ private:
     if (req->emergency != 0u)
     {
       cancelBladeResume();
+      blade_intent_authorized_ = false;
       RCLCPP_WARN(get_logger(), "Emergency stop requested via service.");
       emergency_active_ = true;
     }
