@@ -362,7 +362,7 @@ protected:
     std::lock_guard<std::mutex> lock(blade_mutex);
     for (std::size_t i = after; i < blade_requests.size(); ++i)
     {
-      if (static_cast<bool>(blade_requests[i].mow_enabled) == enabled)
+      if (blade_requests[i].mow_enabled == (enabled ? 1u : 0u))
       {
         return true;
       }
