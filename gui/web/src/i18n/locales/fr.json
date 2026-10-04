@@ -1451,6 +1451,12 @@
     "stats": "Stats"
   },
   "gpsStatus": {
+    "compactUnknown": "—",
+    "compact2d": "2D",
+    "compact3d": "3D",
+    "compactDgps": "DGPS",
+    "compactRtkFloat": "FLOAT",
+    "compactRtkFixed": "FIX",
     "rtkFixed": "RTK fixe",
     "rtkFloat": "RTK flottant",
     "gpsFix": "GPS simple",

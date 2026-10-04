@@ -23,7 +23,7 @@ describe("GnssLiveStatusSummaryCard", () => {
         renderCard(undefined, "auto");
 
         expect(screen.getByText(en.settingsGnssLiveStatus.cardTitle)).toBeInTheDocument();
-        expect(screen.getByText(en.gpsStatus.noGps)).toBeInTheDocument();
+        expect(screen.getByText(en.gpsStatus.compactUnknown)).toBeInTheDocument();
         expect(screen.getAllByText(en.settingsGnssLiveStatus.unknown).length).toBeGreaterThan(0);
         expect(screen.getByText("auto")).toBeInTheDocument();
         expect(screen.queryByText(en.settingsGnssLiveStatus.satelliteSectionTitle)).not.toBeInTheDocument();

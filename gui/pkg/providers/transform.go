@@ -122,6 +122,9 @@ const (
 	mowgliFixTypeRTKFloat       = 2
 	mowgliFixTypeRTKFixed       = 3
 	mowgliFixTypeDeadReckoning  = 4
+	mowgliFixType2DFix          = 5
+	mowgliFixType3DFix          = 6
+	mowgliFixTypeDGPS           = 7
 	mowgliRtkModeUnknown        = 0
 	mowgliRtkModeNone           = 1
 	mowgliRtkModeFloat          = 2
@@ -156,6 +159,9 @@ const (
 	universalFixTypeRTKFloat       = 3
 	universalFixTypeRTKFixed       = 4
 	universalFixTypeDeadReckoning  = 5
+	universalFixType2DFix          = 6
+	universalFixType3DFix          = 7
+	universalFixTypeDGPS           = 8
 	universalRtkModeUnknown        = 0
 	universalRtkModeNone           = 1
 	universalRtkModeFloat          = 2
@@ -399,6 +405,12 @@ func mapUniversalGnssFixType(fixType uint8) uint8 {
 		return mowgliFixTypeRTKFixed
 	case universalFixTypeDeadReckoning:
 		return mowgliFixTypeDeadReckoning
+	case universalFixType2DFix:
+		return mowgliFixType2DFix
+	case universalFixType3DFix:
+		return mowgliFixType3DFix
+	case universalFixTypeDGPS:
+		return mowgliFixTypeDGPS
 	case universalFixTypeUnknown, universalFixTypeNoFix:
 		fallthrough
 	default:
@@ -426,11 +438,17 @@ func qualityPercentForFixType(fixType uint8) float32 {
 	case mowgliFixTypeRTKFixed:
 		return 100.0
 	case mowgliFixTypeRTKFloat:
-		return 50.0
+		return 80.0
+	case mowgliFixTypeDGPS:
+		return 60.0
+	case mowgliFixType3DFix:
+		return 40.0
+	case mowgliFixType2DFix:
+		return 20.0
 	case mowgliFixTypeGPSFix:
-		return 25.0
+		return 0.0
 	case mowgliFixTypeDeadReckoning:
-		return 10.0
+		return 0.0
 	default:
 		return 0.0
 	}
