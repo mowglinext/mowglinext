@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -235,6 +236,17 @@ public:
 
 private:
   using WrappedResult = rclcpp_action::ClientGoalHandle<BackUpAction>::WrappedResult;
+  friend struct BackUpTestAccess;
+
+  // One slot per dispatch: a halt can precede the goal response, and a late
+  // response must cancel that old goal even after this BT node is restarted.
+  struct GoalDispatch
+  {
+    std::mutex mutex;
+    bool halted{false};
+    GoalHandle::SharedPtr handle;
+  };
+  std::shared_ptr<GoalDispatch> goal_dispatch_;
 
   rclcpp_action::Client<BackUpAction>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;

@@ -126,6 +126,7 @@ if(BUILD_TESTING)
   # colcon tests packages in parallel, and on one shared DDS domain the test
   # processes discover each other's nodes (docs/claude/testing-ci.md).
   find_package(ament_cmake_ros REQUIRED)
+  find_package(tinyxml2 REQUIRED)
   # Exclude uncrustify — we use clang-format (see .clang-format)
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
@@ -1013,6 +1014,25 @@ if(BUILD_TESTING)
   target_compile_definitions(test_dig_obstruction_recovery PRIVATE
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
+
+  # Execute the real mowing startup control flow with deterministic external
+  # actions, and exercise BackUp cancellation before goal-handle collection.
+  ament_add_ros_isolated_gtest(test_startup_pause
+    test/test_startup_pause.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+  )
+  target_include_directories(test_startup_pause PUBLIC include)
+  target_compile_definitions(test_startup_pause PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+  target_link_libraries(test_startup_pause ${behavior_node_dependencies} tinyxml2::tinyxml2)
+
+  ament_add_ros_isolated_gtest(test_backup_pause
+    test/test_backup_pause.cpp
+    src/navigation_nodes.cpp
+  )
+  target_include_directories(test_backup_pause PUBLIC include)
+  target_link_libraries(test_backup_pause ${behavior_node_dependencies})
 
 endif()
 
