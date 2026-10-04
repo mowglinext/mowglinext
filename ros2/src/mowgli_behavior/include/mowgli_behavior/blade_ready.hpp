@@ -65,6 +65,7 @@ public:
     telemetry_seen_ = telemetry_seen || previous_stamp_ns > 0;
     good_since_.reset();
     accepted_since_.reset();
+    last_observation_time_.reset();
   }
 
   BladeReadyResult step(const BladeReadyConfig& config,
@@ -99,8 +100,18 @@ public:
                       source_age <= BladeReadyConfig::kMaxAgeSec && delivery_fresh && requested &&
                       active && std::isfinite(rpm) && rpm >= config.min_rpm;
     const bool new_sample = stamp_ns > last_stamp_ns_;
+    // General Status receipt can stay live while the identified blade
+    // observation is frozen (including a paused ROS clock). A resumed stream
+    // must establish a new stable window, rather than inherit that silence.
+    if (last_observation_time_ &&
+        std::chrono::duration<double>(now - *last_observation_time_).count() >
+            BladeReadyConfig::kMaxAgeSec)
+      good_since_.reset();
     if (new_sample)
+    {
       last_stamp_ns_ = stamp_ns;
+      last_observation_time_ = now;
+    }
     if (!good)
     {
       good_since_.reset();
@@ -124,6 +135,7 @@ private:
   bool telemetry_seen_{false};
   std::optional<Clock::time_point> good_since_;
   std::optional<Clock::time_point> accepted_since_;
+  std::optional<Clock::time_point> last_observation_time_;
 };
 
 }  // namespace mowgli_behavior
