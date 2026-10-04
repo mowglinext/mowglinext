@@ -707,7 +707,16 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   // again. Do not resume here even if the scan is fresh now: no continuous
   // fresh window was observed during the transit.
   if (!blade_dispatch_pending_)
+  {
     stepScanPause(ctx, /*allow_resume=*/false);
+    if (blade_ready_)
+    {
+      // A previous goal's permission is not a new physical observation. Even
+      // if the blade stayed ON, require fresh reports for this handoff.
+      blade_ready_ = false;
+      beginBladeReadyWait(ctx);
+    }
+  }
 
   // Mowing resumes on this segment — make sure the blade is on (it may have
   // been switched off for a preceding inter-segment transit) — unless the
@@ -1882,22 +1891,11 @@ void FollowStrip::setBladeEnabled(bool enabled)
     blade_requested_on_ = command.enabled;
     blade_enable_sent_ = false;
     blade_ready_ = false;
-    blade_ready_from_telemetry_ = false;
     blade_command_result_.reset();
   }
   if (new_transition && command.enabled)
   {
-    int64_t previous_stamp_ns;
-    bool telemetry_seen;
-    {
-      std::lock_guard<std::mutex> lock(ctx->context_mutex);
-      previous_stamp_ns = rclcpp::Time(ctx->latest_status.blade_status_stamp).nanoseconds();
-      telemetry_seen = ctx->blade_telemetry_seen;
-    }
-    blade_ready_gate_.start(std::chrono::steady_clock::now(),
-                            ctx->node->now().nanoseconds(),
-                            previous_stamp_ns,
-                            telemetry_seen);
+    beginBladeReadyWait(ctx);
     blade_command_result_ = std::make_shared<std::atomic<int>>(-1);
   }
   if (!(new_transition ? blade_client_->wait_for_service(std::chrono::milliseconds(200))
@@ -1927,6 +1925,21 @@ void FollowStrip::setBladeEnabled(bool enabled)
     blade_client_->async_send_request(req);
 }
 
+void FollowStrip::beginBladeReadyWait(const std::shared_ptr<BTContext>& ctx)
+{
+  int64_t previous_stamp_ns;
+  bool telemetry_seen;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    previous_stamp_ns = rclcpp::Time(ctx->latest_status.blade_status_stamp).nanoseconds();
+    telemetry_seen = ctx->blade_telemetry_seen;
+  }
+  blade_ready_gate_.start(std::chrono::steady_clock::now(),
+                          ctx->node->now().nanoseconds(),
+                          previous_stamp_ns,
+                          telemetry_seen);
+}
+
 bool FollowStrip::bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx)
 {
   if (!ctx->mowing_enabled || ctx->blade_direction.operatorInhibited())
@@ -1946,23 +1959,6 @@ bool FollowStrip::bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx)
                          BladeReadyConfig::kMaxAgeSec;
   }
   const int accepted = blade_command_result_ ? blade_command_result_->load() : -1;
-  const int64_t stamp_ns = rclcpp::Time(status.blade_status_stamp).nanoseconds();
-  const int64_t ros_now_ns = ctx->node->now().nanoseconds();
-  if (blade_ready_)
-  {
-    const double age = static_cast<double>(ros_now_ns - stamp_ns) / 1e9;
-    if (accepted == 1 &&
-        ((stamp_ns == 0 && !telemetry_seen) ||
-         (blade_ready_from_telemetry_ && stamp_ns > 0 && age >= 0.0 &&
-          age <= BladeReadyConfig::kMaxAgeSec && delivery_fresh && status.mow_enabled &&
-          status.mower_esc_status != 0 && std::isfinite(status.mower_motor_rpm) &&
-          status.mower_motor_rpm >= ctx->blade_ready_config.min_rpm)))
-      return true;
-    // New dispatch after lost readiness: require a new stable observation,
-    // with a fresh bounded wait. Never keep a successful timer after telemetry appears.
-    blade_ready_ = false;
-    blade_ready_gate_.start(now, ros_now_ns, stamp_ns, telemetry_seen);
-  }
   const auto result =
       accepted == 0 ? BladeReadyResult::kFailed
                     : blade_ready_gate_.step(ctx->blade_ready_config,
@@ -1985,7 +1981,6 @@ bool FollowStrip::bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx)
   if (result == BladeReadyResult::kWaiting)
     return false;
   blade_ready_ = true;
-  blade_ready_from_telemetry_ = result == BladeReadyResult::kTelemetryReady;
   RCLCPP_INFO(ctx->node->get_logger(),
               "FollowStrip: blade ready via %s",
               result == BladeReadyResult::kTelemetryReady ? "fresh blade telemetry"

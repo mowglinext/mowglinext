@@ -10,6 +10,8 @@ reports spanning 0.3 seconds. Both `blade_status_stamp` source age and monotonic
 status delivery age must be at most 1 second. General `Status.stamp` updates or
 cached republications do not establish blade readiness. The firmware's RPM
 packet is an unsigned magnitude; forward and reverse use the same threshold.
+If the blade stayed ON across two goals, the new handoff still requires new
+distinct reports; it cannot inherit an earlier goal's readiness permission.
 
 If no blade-controller report has ever arrived since the behavior node started,
 the legacy timer waits `blade_spinup_delay_sec` after a successful ON response.

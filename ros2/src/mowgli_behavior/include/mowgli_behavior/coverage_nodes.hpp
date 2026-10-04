@@ -284,6 +284,7 @@ public:
 private:
   void setBladeEnabled(bool enabled);
   bool bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx);
+  void beginBladeReadyWait(const std::shared_ptr<BTContext>& ctx);
   // Cancel every in-flight follow / transit goal, reset the transit state
   // machine and switch the blade off. Shared by onHalted() and yieldToFleet().
   void abortActiveGoals(const std::shared_ptr<BTContext>& ctx);
@@ -621,7 +622,6 @@ private:
   bool blade_requested_on_{false};
   bool blade_enable_sent_{false};
   bool blade_ready_{false};
-  bool blade_ready_from_telemetry_{false};
   bool blade_dispatch_pending_{false};
   bool blade_gate_failed_{false};
   std::shared_ptr<std::atomic<int>> blade_command_result_;
