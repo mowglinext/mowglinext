@@ -355,6 +355,10 @@ def generate_launch_description() -> LaunchDescription:
             {"transit_speed": float(robot_params.get("transit_speed", 0.25))},
             {"mowing_speed": float(robot_params.get("mowing_speed", 0.2))},
             {"blade_auto_reverse": bool(robot_params.get("blade_auto_reverse", False))},
+            {"mowing_enabled": bool(robot_params.get("mowing_enabled", True))},
+            {"blade_ready_min_rpm": float(robot_params.get("blade_ready_min_rpm", 1000.0))},
+            {"blade_spinup_delay_sec": float(robot_params.get("blade_spinup_delay_sec", 1.5))},
+            {"blade_ready_timeout_sec": float(robot_params.get("blade_ready_timeout_sec", 6.0))},
             # mow_angle_deg: operator swath direction. -1 (negative) = AUTO
             # (coverage server picks the swath-count-minimising angle); 0..179 =
             # fixed swath angle in degrees. Read by PlanCoverageArea::buildGoal

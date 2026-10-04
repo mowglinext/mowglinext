@@ -520,7 +520,7 @@ BT::NodeStatus FollowStrip::onStart()
   // cut it again in sendCurrentSwath cycled the blade on every retry of a
   // START_OCCUPIED pass (2026-09-10).
   const double first_gap = distanceToSegmentStart(ctx);
-  blade_spinup_pending_ = !unit_exhausted_by_dig_ && bladeSpinupBeforeFirstUnit(first_gap);
+  const bool start_blade = !unit_exhausted_by_dig_ && bladeSpinupBeforeFirstUnit(first_gap);
   // The coverage ATTEMPT begins here whether the blade spins up now or only
   // after a blade-off transit: the cross-hatch phase is consumed by trying, not
   // by physical rotation, so record it before the spin-up decision below.
@@ -528,19 +528,20 @@ BT::NodeStatus FollowStrip::onStart()
   scan_pause_ = ScanPauseState{};
   ctx->coverage_scan_paused = false;
   last_scan_pause_tick_ = std::chrono::steady_clock::time_point{};
-  setBladeEnabled(blade_spinup_pending_);
-  blade_start_time_ = std::chrono::steady_clock::now();
+  blade_dispatch_pending_ = false;
+  blade_gate_failed_ = false;
+  setBladeEnabled(start_blade);
   goal_sent_ = false;
 
-  if (blade_spinup_pending_)
+  if (start_blade)
   {
     RCLCPP_INFO(ctx->node->get_logger(),
                 "FollowStrip: area %u, %zu segments (%zu already done); "
-                "blade enabled, waiting %.1fs for spinup",
+                "blade requested, awaiting readiness (timeout %.1fs)",
                 area_idx_,
                 swaths_.size(),
                 ctx->area_completed_swaths[area_idx_].size(),
-                kBladeSpinupDelaySec);
+                ctx->blade_ready_config.timeout_sec);
   }
   else
   {
@@ -694,6 +695,7 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   const DrivableRun run = nextDrivableRun(swaths_[swath_idx_].poses, 0, digs.points, digs.radius_m);
   if (run.start != 0)
   {
+    blade_dispatch_pending_ = false;
     swath_goal_sent_ = false;
     return sendCurrentSwath(ctx);
   }
@@ -704,16 +706,20 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   // send briefly re-enables the blade before the next onRunning tick cuts it
   // again. Do not resume here even if the scan is fresh now: no continuous
   // fresh window was observed during the transit.
-  stepScanPause(ctx, /*allow_resume=*/false);
+  if (!blade_dispatch_pending_)
+    stepScanPause(ctx, /*allow_resume=*/false);
 
   // Mowing resumes on this segment — make sure the blade is on (it may have
   // been switched off for a preceding inter-segment transit) — unless the
   // scan stream is currently down: the scan pause owns the blade until the
   // LiDAR is back (the regular per-tick step re-enables it).
-  if (!scan_pause_.paused)
-  {
-    setBladeEnabled(true);
-  }
+  blade_dispatch_pending_ = true;
+  if (scan_pause_.paused)
+    return true;
+  setBladeEnabled(true);
+  if (!bladeReadyForDispatch(ctx))
+    return true;
+  blade_dispatch_pending_ = false;
 
   Nav2FollowPath::Goal goal;
   goal.path = swaths_[swath_idx_];
@@ -852,6 +858,7 @@ void FollowStrip::logSegmentTracking(const std::shared_ptr<BTContext>& ctx, cons
 
 bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
 {
+  blade_dispatch_pending_ = false;
   if (swath_idx_ >= swaths_.size())
   {
     return false;
@@ -1218,13 +1225,10 @@ BT::NodeStatus FollowStrip::onRunning()
     return BT::NodeStatus::SUCCESS;
   };
 
-  // Wait for blade spin-up (only if the blade was started), then dispatch the
-  // first segment.
+  // Transit decisions run immediately with the blade off. Every actual mowing
+  // dispatch goes through sendFollowGoal's shared readiness barrier.
   if (!goal_sent_)
   {
-    auto elapsed = std::chrono::steady_clock::now() - blade_start_time_;
-    if (blade_spinup_pending_ && elapsed < std::chrono::duration<double>(kBladeSpinupDelaySec))
-      return BT::NodeStatus::RUNNING;
     goal_sent_ = true;
     sendCurrentSwath(ctx);
     return BT::NodeStatus::RUNNING;
@@ -1286,6 +1290,25 @@ BT::NodeStatus FollowStrip::onRunning()
       return advance();
     case DigRecoveryStep::kIdle:
       break;
+  }
+
+  if (blade_gate_failed_)
+  {
+    // Readiness failure is not a completed/skipped swath. Preserve progress
+    // and use the normal tree failure recovery, without booking uncut ground.
+    abortActiveGoals(ctx);
+    return BT::NodeStatus::FAILURE;
+  }
+  if (blade_dispatch_pending_)
+  {
+    stepScanPause(ctx);
+    sendFollowGoal(ctx);
+    if (blade_gate_failed_)
+    {
+      abortActiveGoals(ctx);
+      return BT::NodeStatus::FAILURE;
+    }
+    return BT::NodeStatus::RUNNING;
   }
 
   // Short LiDAR dropout while a coverage goal is active: cut the blade, keep
@@ -1716,6 +1739,7 @@ BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, 
 
 void FollowStrip::abortActiveGoals(const std::shared_ptr<BTContext>& ctx)
 {
+  blade_dispatch_pending_ = false;
   if (follow_accept_)
   {
     std::lock_guard<std::mutex> lk(follow_accept_->mutex);
@@ -1808,6 +1832,10 @@ bool FollowStrip::stepScanPause(const std::shared_ptr<BTContext>& ctx, bool allo
       break;
     case ScanPauseAction::kResume:
       setBladeEnabled(true);
+      // Preserve the established short-dropout protocol for a goal already
+      // running. Pending NEW dispatches still have to prove blade readiness.
+      if (follow_handle_ && !blade_dispatch_pending_ && !transit_active_ && !transit_pending_)
+        blade_ready_ = true;
       publishCoverageScanPause(ctx, false);
       RCLCPP_INFO(ctx->node->get_logger(),
                   "FollowStrip: LiDAR stream back (fresh for %.1fs) — blade ON, resuming "
@@ -1835,12 +1863,45 @@ void FollowStrip::setBladeEnabled(bool enabled)
 
   // Selection records tree intent even if discovery/send is unavailable; a
   // retry must keep the same direction, and an undelivered OFF still wins.
-  const auto command = ctx->blade_direction.forMowerCommand(enabled, ctx->blade_auto_reverse);
+  const auto command =
+      ctx->blade_direction.forMowerCommand(enabled && ctx->mowing_enabled, ctx->blade_auto_reverse);
+  if (command.enabled && blade_requested_on_ && blade_enable_sent_)
+    return;  // one ON per transition; retries must not restart the gate
   if (!blade_client_)
   {
     blade_client_ = ctx->bladeClient();
   }
-  if (!blade_client_->wait_for_service(std::chrono::milliseconds(200)))
+  const bool new_transition = !command.enabled || !blade_requested_on_;
+  if (new_transition && blade_request_id_)
+  {
+    blade_client_->remove_pending_request(*blade_request_id_);
+    blade_request_id_.reset();
+  }
+  if (new_transition)
+  {
+    blade_requested_on_ = command.enabled;
+    blade_enable_sent_ = false;
+    blade_ready_ = false;
+    blade_ready_from_telemetry_ = false;
+    blade_command_result_.reset();
+  }
+  if (new_transition && command.enabled)
+  {
+    int64_t previous_stamp_ns;
+    bool telemetry_seen;
+    {
+      std::lock_guard<std::mutex> lock(ctx->context_mutex);
+      previous_stamp_ns = rclcpp::Time(ctx->latest_status.blade_status_stamp).nanoseconds();
+      telemetry_seen = ctx->blade_telemetry_seen;
+    }
+    blade_ready_gate_.start(std::chrono::steady_clock::now(),
+                            ctx->node->now().nanoseconds(),
+                            previous_stamp_ns,
+                            telemetry_seen);
+    blade_command_result_ = std::make_shared<std::atomic<int>>(-1);
+  }
+  if (!(new_transition ? blade_client_->wait_for_service(std::chrono::milliseconds(200))
+                       : blade_client_->service_is_ready()))
     return;
 
   auto req = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
@@ -1850,7 +1911,86 @@ void FollowStrip::setBladeEnabled(bool enabled)
               "FollowStrip: requested mow_enabled=%s, direction=%u",
               command.enabled ? "true" : "false",
               req->mow_direction);
-  blade_client_->async_send_request(req);
+  if (command.enabled)
+  {
+    const auto slot = blade_command_result_;
+    const auto future = blade_client_->async_send_request(
+        req,
+        [slot](rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedFuture response)
+        {
+          slot->store(response.get()->success ? 1 : 0);
+        });
+    blade_request_id_ = future.request_id;
+    blade_enable_sent_ = true;
+  }
+  else
+    blade_client_->async_send_request(req);
+}
+
+bool FollowStrip::bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx)
+{
+  if (!ctx->mowing_enabled || ctx->blade_direction.operatorInhibited())
+    return true;  // preserve explicit operator OFF / non-cutting coverage
+  const auto now = std::chrono::steady_clock::now();
+  mowgli_interfaces::msg::Status status;
+  bool delivery_fresh;
+  bool telemetry_seen;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    status = ctx->latest_status;
+    telemetry_seen = ctx->blade_telemetry_seen;
+    blade_ready_gate_.noteTelemetrySeen(telemetry_seen);
+    delivery_fresh = ctx->last_status_time.time_since_epoch().count() != 0 &&
+                     now >= ctx->last_status_time &&
+                     std::chrono::duration<double>(now - ctx->last_status_time).count() <=
+                         BladeReadyConfig::kMaxAgeSec;
+  }
+  const int accepted = blade_command_result_ ? blade_command_result_->load() : -1;
+  const int64_t stamp_ns = rclcpp::Time(status.blade_status_stamp).nanoseconds();
+  const int64_t ros_now_ns = ctx->node->now().nanoseconds();
+  if (blade_ready_)
+  {
+    const double age = static_cast<double>(ros_now_ns - stamp_ns) / 1e9;
+    if (accepted == 1 &&
+        ((stamp_ns == 0 && !telemetry_seen) ||
+         (blade_ready_from_telemetry_ && stamp_ns > 0 && age >= 0.0 &&
+          age <= BladeReadyConfig::kMaxAgeSec && delivery_fresh && status.mow_enabled &&
+          status.mower_esc_status != 0 && std::isfinite(status.mower_motor_rpm) &&
+          status.mower_motor_rpm >= ctx->blade_ready_config.min_rpm)))
+      return true;
+    // New dispatch after lost readiness: require a new stable observation,
+    // with a fresh bounded wait. Never keep a successful timer after telemetry appears.
+    blade_ready_ = false;
+    blade_ready_gate_.start(now, ros_now_ns, stamp_ns, telemetry_seen);
+  }
+  const auto result =
+      accepted == 0 ? BladeReadyResult::kFailed
+                    : blade_ready_gate_.step(ctx->blade_ready_config,
+                                             now,
+                                             ctx->node->now().nanoseconds(),
+                                             rclcpp::Time(status.blade_status_stamp).nanoseconds(),
+                                             delivery_fresh,
+                                             status.mow_enabled,
+                                             status.mower_esc_status != 0,
+                                             status.mower_motor_rpm,
+                                             accepted == 1);
+  if (result == BladeReadyResult::kFailed)
+  {
+    blade_gate_failed_ = true;
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "FollowStrip: blade did not become ready; coverage goal withheld, blade OFF");
+    setBladeEnabled(false);
+    return false;
+  }
+  if (result == BladeReadyResult::kWaiting)
+    return false;
+  blade_ready_ = true;
+  blade_ready_from_telemetry_ = result == BladeReadyResult::kTelemetryReady;
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "FollowStrip: blade ready via %s",
+              result == BladeReadyResult::kTelemetryReady ? "fresh blade telemetry"
+                                                          : "legacy timer (no blade telemetry)");
+  return true;
 }
 
 void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx)
