@@ -96,13 +96,14 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `gui/pkg/api/system.go` | 101 | CPU temp, host reboot/poweroff via `nsenter` |
 | `gui/pkg/api/utils.go` | 65 | `unmarshalROSMessage` (mapstructure, case/underscore-insensitive), `snakeToCamel` |
 | `gui/pkg/api/params.go` | 64 | Live ROS2 parameter list/set |
-| `gui/pkg/api/setup.go` | 61 | `/setup/flashBoard` SSE stream around `FlashFirmware` |
+| `gui/pkg/api/setup.go` | 95 | `/setup/flashBoard` SSE stream around `FlashFirmware`; `flashStreamEvent` lifts `types.FlashStageMarker` lines out of the log as `stage` events (JSON `FlashStageEvent`), everything else is a `message` |
 | `gui/pkg/api/tiles.go` | 47 | Reverse proxy `/tiles/*` → `system.map.tileServer` |
 | `gui/pkg/api/types.go` | 31 | `OkResponse`, `ErrorResponse`, small DTOs |
 | **pkg/providers/** | | |
 | `gui/pkg/providers/ros.go` | 586 | `RosProvider` (IRosProvider): `topicMap`, lazy upstream subscribe, per-listener mailbox `RosSubscriber`, map polling, dock pose cache, param passthrough |
 | `gui/pkg/providers/transform.go` | 509 | Per-topic adapters NavSatFix→AbsolutePose, Odometry→AbsolutePose, universal GnssStatus→mowgli shape, LaserScan decimation (≤360 beams) |
-| `gui/pkg/providers/firmware.go` | 373 | Flash routing (prebuilt/custom/Vermut), openocd + platformio invocations, post-flash handshake check |
+| `gui/pkg/providers/firmware.go` | 468 | Flash routing (prebuilt/custom/Vermut), openocd + platformio invocations, post-flash handshake check |
+| `gui/pkg/providers/firmware_progress.go` | 62 | Per-path stage plans (`prebuiltFlashStages` / `customFlashStages` / `vermutFlashStages`) and `flashProgress.enter(key)`, which writes the one marker line per stage the GUI progress bar keys on; stage keys are the `flashBoard.stages.*` i18n keys |
 | `gui/pkg/providers/docker.go` | 339 | Docker SDK wrapper (list/logs/start/stop/restart/inspect/run/exec) |
 | `gui/pkg/providers/session_tracker.go` | 333 | Mowing session state machine from `highLevelStatus` + odometer from `wheelOdom`; keeps last 500 |
 | `gui/pkg/providers/remote_access.go` | ~420 | `RemoteAccessProvider`: reconcile loop for `mowgli-remote` (spec-hash label decides start vs recreate), `tailscale status --json` projection, logout |
@@ -134,7 +135,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `gui/pkg/types/ros.go` | 51 | `IRosProvider`, `RosParameter` |
 | `gui/pkg/types/soil.go` | 49 | `SoilStatus.BlocksScheduledMowing()`, `ISoilProvider` |
 | `gui/pkg/types/docker.go` | 76 | `IDockerProvider`, run/exec specs |
-| `gui/pkg/types/firmware.go` | 45 | `IFirmwareProvider`, `FirmwareConfig` (JSON body of flashBoard) |
+| `gui/pkg/types/firmware.go` | 85 | `IFirmwareProvider`, `FirmwareConfig` (JSON body of flashBoard), `FlashStageMarker` + `FlashStageEvent` (stage SSE payload) |
 | `gui/pkg/types/db.go` | 15 | `IDBProvider` |
 | `gui/pkg/types/homekit.go` | 5 | `IHAProvider` |
 | `gui/pkg/types/mocks.go` | 145 | `MockDBProvider`, `MockRosProvider` (records `ServiceCalls`, `Dispatch`) used by all api/provider tests |

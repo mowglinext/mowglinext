@@ -119,6 +119,8 @@ func (fp *FirmwareProvider) FlashFirmware(writer io.Writer, config types.Firmwar
 }
 
 func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareConfig) error {
+	progress := newFlashProgress(writer, customFlashStages)
+	progress.enter(flashStageClone)
 	_, _ = writer.Write([]byte("------> Cloning repository " + config.Repository + "@" + config.Branch + "...\n"))
 	//Clone git repository, checkout branch, build board.h, build firmware with platformio, flash firmware with platformio
 	referenceName := plumbing.ReferenceName("refs/heads/" + config.Branch)
@@ -149,6 +151,7 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 	}
 	pioProjectDir := os.TempDir() + "/mowgli/" + firmwareDir + "/stm32/ros_usbnode"
 	//Build board.h
+	progress.enter(flashStageConfigure)
 	_, _ = writer.Write([]byte("------> Building board.h...\n"))
 	boardTemplated, err := fp.buildBoardHeader(pioProjectDir+"/include/board.h.template", config)
 	if err != nil {
@@ -162,6 +165,7 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> board.h built\n"))
 	//Build firmware
+	progress.enter(flashStageBuild)
 	_, _ = writer.Write([]byte("------> Building firmware...\n"))
 	pioEnv, err := firmwareEnvironment(config.BoardType, config.FirmwareTarget)
 	if err != nil {
@@ -189,6 +193,7 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 		_, _ = writer.Write([]byte("------> Build produced no firmware.elf at " + elfPath + "\n"))
 		return xerrors.Errorf("firmware.elf not found after build: %w", statErr)
 	}
+	progress.enter(flashStageFlash)
 	_, _ = writer.Write([]byte("------> Flashing firmware (openocd program+verify)...\n"))
 	cmd = execabs.Command("/bin/bash", "-c", openocdProgramCmd(config.BoardType, elfPath))
 	cmd.Stdout = writer
@@ -215,6 +220,8 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 		return xerrors.Errorf("invalid firmware file: %q", config.File)
 	}
 
+	progress := newFlashProgress(writer, vermutFlashStages)
+	progress.enter(flashStageDownload)
 	_, _ = writer.Write([]byte("------> Downloading firmware...\n"))
 	cmd := execabs.Command("/bin/bash", "-c", "wget -O "+os.TempDir()+"/firmware.zip "+config.File)
 	cmd.Stdout = writer
@@ -226,6 +233,7 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> Firmware downloaded\n"))
 
+	progress.enter(flashStageUnzip)
 	_, _ = writer.Write([]byte("------> Unzipping firmware...\n"))
 	cmd = execabs.Command("/bin/bash", "-c", "unzip -o "+os.TempDir()+"/firmware.zip -d "+os.TempDir()+"/firmware")
 	cmd.Stdout = writer
@@ -237,6 +245,7 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> Firmware unzipped\n"))
 
+	progress.enter(flashStageFlash)
 	_, _ = writer.Write([]byte("------> Flashing firmware...\n"))
 	// Flash over the ST-Link/V2 USB dongle (interface/stlink.cfg), the same
 	// transport the proven `platformio run -t upload` path uses. Do NOT bit-bang
@@ -353,6 +362,8 @@ func validateFirmwareTargetSelection(model, board, panel, target string) error {
 //  3. post-flash protocol/version check vs the manifest (the wrong-for-board net,
 //     the strongest available since the firmware carries no board self-ID).
 func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.FirmwareConfig) error {
+	progress := newFlashProgress(writer, prebuiltFlashStages)
+	progress.enter(flashStageManifest)
 	_, _ = writer.Write([]byte("------> Fetching firmware manifest...\n"))
 	manifest, source, err := fetchInstallFirmwareManifest(buildinfo.Current().Version)
 	if err != nil {
@@ -374,6 +385,7 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 		entry.File, entry.Board, entry.ProtocolVersion, entry.FwVersion)
 
 	binPath := os.TempDir() + "/firmware_prebuilt.bin"
+	progress.enter(flashStageDownload)
 	_, _ = fmt.Fprintf(writer, "------> Downloading + verifying (sha256) %s...\n", entry.URL)
 	if err := downloadAndVerify(entry, binPath); err != nil {
 		_, _ = fmt.Fprintf(writer, "------> %v\n", err)
@@ -381,6 +393,7 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 	}
 	_, _ = writer.Write([]byte("------> Firmware downloaded and checksum verified\n"))
 
+	progress.enter(flashStageFlash)
 	_, _ = writer.Write([]byte("------> Flashing firmware (openocd program+verify)...\n"))
 	// Flash over the ST-Link/V2 USB dongle (interface/stlink.cfg), the same
 	// transport the proven `platformio run -t upload` path uses (platformio.ini:
@@ -400,6 +413,7 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 	}
 	_, _ = writer.Write([]byte("------> Firmware flashed and byte-verified\n"))
 
+	progress.enter(flashStageVerify)
 	fp.postFlashProtocolCheck(writer, entry)
 	return nil
 }

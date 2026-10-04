@@ -9,6 +9,23 @@ type IFirmwareProvider interface {
 	AvailableFirmware() (FirmwareAvailability, error)
 }
 
+// FlashStageMarker prefixes the ONE line the flash provider writes into its
+// log stream when it enters a new stage. The line's remainder is a JSON
+// FlashStageEvent. The /setup/flashBoard SSE handler turns such a line into a
+// `stage` event instead of a `message`, which is what lets the GUI draw a
+// progress bar over an otherwise free-form openocd/platformio log without
+// changing the io.Writer contract of IFirmwareProvider.
+const FlashStageMarker = "@@flash-stage "
+
+// FlashStageEvent describes where a flash is in its plan. Stages is the full
+// ordered plan for the path taken (prebuilt / custom build / Vermut differ), so
+// the GUI can render every step up front; Current is the 0-based index of the
+// stage just entered.
+type FlashStageEvent struct {
+	Stages  []string `json:"stages"`
+	Current int      `json:"current"`
+}
+
 // FirmwareAvailability is the prebuilt firmware a flash would install for the
 // saved board selection.
 type FirmwareAvailability struct {

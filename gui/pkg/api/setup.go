@@ -2,9 +2,11 @@ package api
 
 import (
 	"bufio"
-	"github.com/mowglinext/mowglinext/pkg/types"
-	"github.com/gin-gonic/gin"
 	"io"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
 func SetupRoutes(r *gin.RouterGroup, provider types.IFirmwareProvider) {
@@ -75,8 +77,19 @@ func FlashBoard(r *gin.RouterGroup, provider types.IFirmwareProvider) gin.IRoute
 				c.SSEvent("error", err2.Error())
 				return false
 			}
-			c.SSEvent("message", string(line))
+			event, payload := flashStreamEvent(string(line))
+			c.SSEvent(event, payload)
 			return true
 		})
 	})
+}
+
+// flashStreamEvent classifies one line of the flash log for the SSE stream: a
+// line the provider marked as a stage transition becomes a `stage` event
+// carrying the JSON FlashStageEvent, every other line is a plain log `message`.
+func flashStreamEvent(line string) (event, payload string) {
+	if strings.HasPrefix(line, types.FlashStageMarker) {
+		return "stage", strings.TrimPrefix(line, types.FlashStageMarker)
+	}
+	return "message", line
 }

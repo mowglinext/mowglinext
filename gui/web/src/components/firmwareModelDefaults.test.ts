@@ -1,15 +1,20 @@
 import {describe, expect, it} from "vitest";
 import {
+    FIRMWARE_MODEL_DEFAULTS,
     applyFirmwareModelDefaults,
     firmwareDefaultsForModel,
     manualOverridesFromProvenance,
+    modelIdentifiesFirmwareTarget,
 } from "./firmwareModelDefaults.ts";
+import {BOARD_OPTIONS, PANEL_OPTIONS, VERMUT_BOARD} from "./firmwareTargets.ts";
 
 describe("firmware model defaults", () => {
-    it("maps the canonical YardForce 500 permutation", () => {
+    it("maps the YardForce 500 to the stock Mowgli mainboard and panel", () => {
         expect(firmwareDefaultsForModel("YardForce500")).toEqual({
+            boardType: "BOARD_YARDFORCE500",
             panelType: "PANEL_TYPE_YARDFORCE_500_CLASSIC",
         });
+        expect(modelIdentifiesFirmwareTarget("YardForce500")).toBe(true);
     });
 
     it("maps the canonical YardForce 500B permutation", () => {
@@ -29,10 +34,40 @@ describe("firmware model defaults", () => {
             .not.toBe("Yardforce500B");
     });
 
-    it.each(["CUSTOM", "LUV1000RI", "unknown", undefined])(
+    it("maps the LUV1000RI to the board and panel the firmware names after it", () => {
+        expect(firmwareDefaultsForModel("LUV1000RI")).toEqual({
+            boardType: "BOARD_LUV1000RI",
+            panelType: "PANEL_TYPE_YARDFORCE_LUV1000RI",
+        });
+    });
+
+    it("fills only the panel for the 900 ECO, whose mainboard is not recorded", () => {
+        expect(firmwareDefaultsForModel("YardForce900ECO")).toEqual({
+            panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
+        });
+        expect(modelIdentifiesFirmwareTarget("YardForce900ECO")).toBe(false);
+    });
+
+    it("never derives the OpenMower Vermut board from a model", () => {
+        for (const defaults of Object.values(FIRMWARE_MODEL_DEFAULTS)) {
+            expect(defaults.boardType).not.toBe(VERMUT_BOARD);
+        }
+    });
+
+    it("only derives boards and panels the pickers also offer", () => {
+        const boards = new Set(BOARD_OPTIONS.map((o) => o.value));
+        const panels = new Set(PANEL_OPTIONS.map((o) => o.value));
+        for (const defaults of Object.values(FIRMWARE_MODEL_DEFAULTS)) {
+            if (defaults.boardType) expect(boards.has(defaults.boardType)).toBe(true);
+            if (defaults.panelType) expect(panels.has(defaults.panelType)).toBe(true);
+        }
+    });
+
+    it.each(["CUSTOM", "YardForceSA650", "Sabo", "unknown", undefined])(
         "does not guess for unsupported model %s",
         (model) => {
             expect(firmwareDefaultsForModel(model)).toBeUndefined();
+            expect(modelIdentifiesFirmwareTarget(model)).toBe(false);
             expect(applyFirmwareModelDefaults(model, {
                 boardType: "BOARD_YARDFORCE500",
                 panelType: "PANEL_TYPE_YARDFORCE_500_CLASSIC",

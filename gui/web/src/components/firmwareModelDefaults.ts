@@ -1,10 +1,15 @@
 /**
- * Firmware targets that are safe to infer from the selected mower model.
+ * Firmware targets inferred from the mower model the operator picked during
+ * onboarding — the flash flow must not ask for a board and panel a second
+ * time when the model already identifies them.
  *
- * These are only the fields that can be safely inferred from the published
- * firmware permutations in firmware/scripts/package_release.py. Models
- * without an unambiguous published mapping are intentionally absent: the
- * firmware flashing UI must not guess for them.
+ * Board + panel come from the firmware's own names (board.h.template,
+ * panel.h) and, where one exists, the published prebuilt permutations in
+ * firmware/scripts/package_release.py. A model whose controller board the
+ * firmware does not know (SA650, Sabo, CUSTOM) maps to nothing, and the UI
+ * falls back to the manual target pickers; a partial mapping (900 ECO: the
+ * panel is known, the mainboard is not) fills what it can and asks for the
+ * rest. Nothing here is guessed.
  */
 export type FirmwareSelection = {
     boardType?: string;
@@ -25,9 +30,11 @@ export type FirmwareModelDefaults = Readonly<Pick<FirmwareSelection, "boardType"
 
 export const FIRMWARE_MODEL_DEFAULTS: Readonly<Record<string, FirmwareModelDefaults>> = {
     YardForce500: {
-        // YardForce500 is shared by the Vermut and Mowgli controller variants;
-        // the mechanical mower model does not identify the board. The panel
-        // is common to both classic variants and is safe to infer.
+        // The stock YardForce 500 mainboard running Mowgli firmware. The
+        // OpenMower "Vermut" replacement board for the same chassis is a
+        // different host stack (its own branch), so it is never derived —
+        // an operator who fitted one overrides the target by hand.
+        boardType: "BOARD_YARDFORCE500",
         panelType: "PANEL_TYPE_YARDFORCE_500_CLASSIC",
     },
     YardForce500B: {
@@ -39,6 +46,18 @@ export const FIRMWARE_MODEL_DEFAULTS: Readonly<Record<string, FirmwareModelDefau
         panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
         firmwareTarget: "BiltemaRM1000",
     },
+    LUV1000RI: {
+        // The firmware names both the board and the panel after this model.
+        // There is no prebuilt (and no PlatformIO env yet), so the flash
+        // flow steers to the custom build path for it.
+        boardType: "BOARD_LUV1000RI",
+        panelType: "PANEL_TYPE_YARDFORCE_LUV1000RI",
+    },
+    YardForce900ECO: {
+        // The 900 ECO panel is known; which mainboard it drives is not
+        // recorded in the firmware, so the board stays a manual choice.
+        panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
+    },
 };
 
 export const firmwareDefaultsForModel = (
@@ -46,6 +65,12 @@ export const firmwareDefaultsForModel = (
 ): FirmwareModelDefaults | undefined => {
     if (typeof mowerModel !== "string") return undefined;
     return FIRMWARE_MODEL_DEFAULTS[mowerModel];
+};
+
+/** True when the model alone identifies both the board and the panel. */
+export const modelIdentifiesFirmwareTarget = (mowerModel: unknown): boolean => {
+    const defaults = firmwareDefaultsForModel(mowerModel);
+    return !!defaults?.boardType && !!defaults?.panelType;
 };
 
 /**
