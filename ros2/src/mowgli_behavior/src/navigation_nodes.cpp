@@ -766,7 +766,25 @@ BT::NodeStatus BackUp::onStart()
 
   RCLCPP_INFO(ctx->node->get_logger(), "BackUp: reversing %.2fm at %.2f m/s", dist, speed);
 
-  goal_handle_future_ = action_client_->async_send_goal(goal_msg);
+  goal_dispatch_ = std::make_shared<GoalDispatch>();
+  rclcpp_action::Client<BackUpAction>::SendGoalOptions options;
+  options.goal_response_callback =
+      [dispatch = goal_dispatch_,
+       client = std::weak_ptr<rclcpp_action::Client<BackUpAction>>(action_client_),
+       logger = ctx->node->get_logger()](GoalHandle::SharedPtr handle)
+  {
+    bool halted;
+    {
+      std::lock_guard<std::mutex> lock(dispatch->mutex);
+      dispatch->handle = handle;
+      halted = dispatch->halted;
+    }
+    if (halted)
+    {
+      cancelGoalQuietly(client.lock(), handle, logger, "BackUp");
+    }
+  };
+  goal_handle_future_ = action_client_->async_send_goal(goal_msg, options);
   goal_handle_ = nullptr;
   result_requested_ = false;
   return BT::NodeStatus::RUNNING;
@@ -818,10 +836,17 @@ BT::NodeStatus BackUp::onRunning()
 
 void BackUp::onHalted()
 {
-  if (goal_handle_)
+  GoalHandle::SharedPtr handle;
+  if (goal_dispatch_)
+  {
+    std::lock_guard<std::mutex> lock(goal_dispatch_->mutex);
+    goal_dispatch_->halted = true;
+    handle = goal_dispatch_->handle;
+  }
+  if (handle)
   {
     auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-    cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "BackUp");
+    cancelGoalQuietly(action_client_, handle, ctx->node->get_logger(), "BackUp");
     RCLCPP_INFO(ctx->node->get_logger(), "BackUp: halted, goal cancelled");
   }
   goal_handle_ = nullptr;
