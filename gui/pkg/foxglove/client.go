@@ -18,6 +18,7 @@ const (
 	defaultReconnectDelay = 1 * time.Second
 	maxReconnectDelay     = 30 * time.Second
 	callServiceTimeout    = 10 * time.Second
+	defaultWriteTimeout   = 5 * time.Second
 )
 
 // subscriberEntry associates a caller-supplied ID with its callback.
@@ -114,6 +115,7 @@ type Client struct {
 
 	reconnectDelay time.Duration
 	maxReconnect   time.Duration
+	writeTimeout   time.Duration
 
 	subIDCounter  atomic.Uint32
 	callIDCounter atomic.Uint32
@@ -175,6 +177,7 @@ func NewClient(url string) *Client {
 		done:           make(chan struct{}),
 		reconnectDelay: defaultReconnectDelay,
 		maxReconnect:   maxReconnectDelay,
+		writeTimeout:   defaultWriteTimeout,
 		dialer: websocket.Dialer{
 			Subprotocols: []string{"foxglove.sdk.v1"},
 		},
@@ -227,9 +230,10 @@ func (c *Client) Close() error {
 		return nil
 	}
 
-	err := c.conn.WriteMessage(
+	err := c.conn.WriteControl(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(c.writeTimeout),
 	)
 	closeErr := c.conn.Close()
 	c.connected.Store(false)
@@ -320,6 +324,9 @@ func (c *Client) Unsubscribe(topic, id string) {
 
 	if len(filtered) == 0 {
 		delete(c.subscribers, topic)
+		c.pendingMu.Lock()
+		delete(c.pendingTopics, topic)
+		c.pendingMu.Unlock()
 
 		// Snapshot and clear subscriptionID under the write lock — the same
 		// field is read by handleMessageData and written by subscribeTopic on
@@ -401,12 +408,7 @@ func (c *Client) Publish(topic string, msg interface{}, schemaName ...string) er
 	binary.LittleEndian.PutUint32(buf[1:5], chanID)
 	copy(buf[5:], data)
 
-	c.connMu.Lock()
-	defer c.connMu.Unlock()
-	if c.conn == nil {
-		return fmt.Errorf("foxglove: Publish: no connection")
-	}
-	return c.conn.WriteMessage(websocket.BinaryMessage, buf)
+	return c.writeMessage(websocket.BinaryMessage, buf)
 }
 
 // CallService invokes a ROS2 service and blocks until a response arrives or
@@ -464,13 +466,7 @@ func (c *Client) CallService(ctx context.Context, service string, args interface
 	copy(buf[13:13+len(encoding)], encoding)
 	copy(buf[13+len(encoding):], cdrData)
 
-	c.connMu.Lock()
-	if c.conn == nil {
-		c.connMu.Unlock()
-		return nil, fmt.Errorf("foxglove: CallService: no connection")
-	}
-	err = c.conn.WriteMessage(websocket.BinaryMessage, buf)
-	c.connMu.Unlock()
+	err = c.writeMessage(websocket.BinaryMessage, buf)
 	if err != nil {
 		return nil, fmt.Errorf("foxglove: CallService send: %w", err)
 	}
@@ -514,37 +510,51 @@ func (c *Client) writeJSON(v interface{}) error {
 		return fmt.Errorf("foxglove: marshal: %w", err)
 	}
 
+	return c.writeMessage(websocket.TextMessage, data)
+}
+
+// Every writer shares connMu. A stalled bridge must not hold that lock (or
+// the subscription lock) indefinitely. Gorilla considers a timed-out write
+// terminal; close the socket so readPump triggers the existing reconnect and
+// desired subscriptions are replayed on the replacement connection.
+func (c *Client) writeMessage(messageType int, data []byte) error {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
 	if c.conn == nil {
-		return fmt.Errorf("foxglove: writeJSON: no connection")
+		return fmt.Errorf("foxglove: write: no connection")
 	}
-	return c.conn.WriteMessage(websocket.TextMessage, data)
+	if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+		_ = c.conn.Close()
+		return err
+	}
+	err := c.conn.WriteMessage(messageType, data)
+	if err != nil {
+		_ = c.conn.Close()
+	}
+	return err
 }
 
 func (c *Client) readPump() {
-	defer func() {
-		c.connected.Store(false)
-		c.connMu.Lock()
-		if c.conn != nil {
-			_ = c.conn.Close()
-			c.conn = nil
-		}
-		c.connMu.Unlock()
-		// A response can only arrive on the socket that carried the request.
-		// Without this, a call in flight when foxglove_bridge restarts (or the
-		// link drops) sat there until its caller's deadline and surfaced as a
-		// bare "context deadline exceeded" a minute later.
-		c.failPendingCalls("connection to foxglove_bridge lost before the response arrived")
-		logrus.Info("foxglove: readPump exiting")
-	}()
-
 	c.connMu.Lock()
 	conn := c.conn
 	c.connMu.Unlock()
 	if conn == nil {
 		return
 	}
+	defer func() {
+		c.connMu.Lock()
+		if c.conn == conn {
+			_ = conn.Close()
+			// Finish calls from this transport before making reconnect visible.
+			// Otherwise a replacement can register a call in the gap and have
+			// its response slot failed by the previous read pump's cleanup.
+			c.failPendingCalls("connection to foxglove_bridge lost before the response arrived")
+			c.conn = nil
+			c.connected.Store(false)
+		}
+		c.connMu.Unlock()
+		logrus.Info("foxglove: readPump exiting")
+	}()
 
 	for {
 		select {
@@ -714,9 +724,11 @@ func (c *Client) handleAdvertise(adv serverAdvertise) {
 			continue
 		}
 
-		c.subMu.RLock()
+		// Serialize the desired-state check with Subscribe/Unsubscribe. A
+		// late advertise must not recreate a subscription just removed by
+		// the last listener while this write was waiting for connMu.
+		c.subMu.Lock()
 		hasSubs := len(c.subscribers[topic]) > 0
-		c.subMu.RUnlock()
 
 		if hasSubs {
 			c.subscribeTopic(topic)
@@ -724,6 +736,7 @@ func (c *Client) handleAdvertise(adv serverAdvertise) {
 			delete(c.pendingTopics, topic)
 			c.pendingMu.Unlock()
 		}
+		c.subMu.Unlock()
 	}
 }
 

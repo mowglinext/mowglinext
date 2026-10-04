@@ -179,6 +179,22 @@ func (r *RosSubscriber) run() {
 // RosProvider – IRosProvider implementation backed by foxglove WebSocket
 // ---------------------------------------------------------------------------
 
+type rosClient interface {
+	Connect(context.Context) error
+	Subscribe(string, string, string, func(json.RawMessage), ...int) error
+	Unsubscribe(string, string)
+	CallService(context.Context, string, interface{}, ...string) (json.RawMessage, error)
+	Publish(string, interface{}, ...string) error
+	GetParameters(context.Context, []string) ([]foxglove.Parameter, error)
+	SetParameters(context.Context, []foxglove.Parameter) ([]foxglove.Parameter, error)
+}
+
+type foxgloveSubscription struct {
+	// Serializes reconciliation for one key, never while holding RosProvider.mtx.
+	mtx        sync.Mutex
+	subscribed bool
+}
+
 // RosProvider implements types2.IRosProvider using a foxglove WebSocket
 // client. All topic access uses logical keys defined in topicMap; the actual
 // ROS2 topic names are an internal concern.
@@ -191,13 +207,13 @@ func (r *RosSubscriber) run() {
 // and /wheel_odom no longer chew CPU when the browser is closed and the
 // optional MQTT/HomeKit providers are disabled.
 type RosProvider struct {
-	client      *foxglove.Client
+	client      rosClient
 	cmdVelRelay *cmdVelRelayClient
 
-	mtx                sync.Mutex
-	subscribers        map[string]map[string]*RosSubscriber // logicalKey -> id -> subscriber
-	lastMessage        map[string][]byte                    // logicalKey -> last JSON bytes
-	foxgloveSubscribed map[string]bool                      // logicalKey -> upstream-subscribed?
+	mtx                   sync.Mutex
+	subscribers           map[string]map[string]*RosSubscriber // logicalKey -> id -> subscriber
+	lastMessage           map[string][]byte                    // logicalKey -> last JSON bytes
+	foxgloveSubscriptions map[string]*foxgloveSubscription     // logicalKey -> reconciliation state
 
 	// Cached docking pose from map_server_node (guarded by mtx)
 	dockPoseSet bool
@@ -269,13 +285,13 @@ func NewRosProvider(dbProvider types2.IDBProvider) types2.IRosProvider {
 	cmdVelRelayURL := "ws://localhost:8766"
 
 	r := &RosProvider{
-		client:             foxglove.NewClient(foxgloveURL),
-		cmdVelRelay:        newCmdVelRelayClient(cmdVelRelayURL),
-		subscribers:        make(map[string]map[string]*RosSubscriber),
-		lastMessage:        make(map[string][]byte),
-		foxgloveSubscribed: make(map[string]bool),
-		dbProvider:         dbProvider,
-		sessionTracker:     NewSessionTracker(dbProvider),
+		client:                foxglove.NewClient(foxgloveURL),
+		cmdVelRelay:           newCmdVelRelayClient(cmdVelRelayURL),
+		subscribers:           make(map[string]map[string]*RosSubscriber),
+		lastMessage:           make(map[string][]byte),
+		foxgloveSubscriptions: make(map[string]*foxgloveSubscription),
+		dbProvider:            dbProvider,
+		sessionTracker:        NewSessionTracker(dbProvider),
 	}
 
 	go func() {
@@ -289,18 +305,47 @@ func NewRosProvider(dbProvider types2.IDBProvider) types2.IRosProvider {
 	return r
 }
 
-// ensureFoxgloveSubscribed subscribes the foxglove client to the ROS2 topic
-// backing logicalKey if it isn't already. No-op for virtual keys (empty
-// MsgType) or unknown keys. Caller must hold r.mtx.
-func (r *RosProvider) ensureFoxgloveSubscribed(logicalKey string) {
-	if r.foxgloveSubscribed[logicalKey] {
-		return
-	}
+// reconcileFoxgloveSubscription applies the latest downstream listener state.
+// Bridge I/O must never hold the provider lock: the read pump also needs it to
+// fan out messages. Recheck after each operation so an unsubscribe racing a
+// subscribe cannot leave a live listener detached (or an unused topic active).
+func (r *RosProvider) reconcileFoxgloveSubscription(logicalKey string) {
 	def, ok := topicMap[logicalKey]
 	if !ok || def.MsgType == "" {
 		return
 	}
+	r.mtx.Lock()
+	if r.foxgloveSubscriptions == nil {
+		r.foxgloveSubscriptions = make(map[string]*foxgloveSubscription)
+	}
+	state := r.foxgloveSubscriptions[logicalKey]
+	if state == nil {
+		state = &foxgloveSubscription{}
+		r.foxgloveSubscriptions[logicalKey] = state
+	}
+	r.mtx.Unlock()
+	state.mtx.Lock()
+	defer state.mtx.Unlock()
+	for {
+		r.mtx.Lock()
+		wanted := len(r.subscribers[logicalKey]) > 0
+		r.mtx.Unlock()
+		if wanted == state.subscribed {
+			return
+		}
+		if wanted {
+			if err := r.subscribeFoxglove(logicalKey, def); err != nil {
+				logrus.Errorf("RosProvider: subscribe %s (%s): %v", def.ROS2Topic, logicalKey, err)
+				return
+			}
+		} else {
+			r.client.Unsubscribe(def.ROS2Topic, "gui-"+logicalKey)
+		}
+		state.subscribed = wanted
+	}
+}
 
+func (r *RosProvider) subscribeFoxglove(logicalKey string, def topicDef) error {
 	key := logicalKey // capture for closure
 	var cb func(json.RawMessage)
 	if adapt, ok := foxgloveAdapters[key]; ok {
@@ -323,32 +368,7 @@ func (r *RosProvider) ensureFoxgloveSubscribed(logicalKey string) {
 	if dec, ok := upstreamDecimationMs[key]; ok {
 		subOpts = append(subOpts, dec)
 	}
-	if err := r.client.Subscribe(def.ROS2Topic, def.MsgType, "gui-"+key, cb, subOpts...); err != nil {
-		logrus.Errorf("RosProvider: subscribe %s (%s): %v", def.ROS2Topic, key, err)
-		return
-	}
-	r.foxgloveSubscribed[key] = true
-	logrus.Infof("RosProvider: subscribed to %s as '%s'", def.ROS2Topic, key)
-}
-
-// maybeUnsubscribeFoxglove drops the upstream foxglove subscription for
-// logicalKey if no downstream listeners remain. Caller must hold r.mtx.
-func (r *RosProvider) maybeUnsubscribeFoxglove(logicalKey string) {
-	if !r.foxgloveSubscribed[logicalKey] {
-		return
-	}
-	if subs := r.subscribers[logicalKey]; len(subs) > 0 {
-		return
-	}
-	def, ok := topicMap[logicalKey]
-	if !ok || def.MsgType == "" {
-		return
-	}
-	r.client.Unsubscribe(def.ROS2Topic, "gui-"+logicalKey)
-	delete(r.foxgloveSubscribed, logicalKey)
-	// Drop the cached last-message — stale once we stop receiving updates.
-	delete(r.lastMessage, logicalKey)
-	logrus.Infof("RosProvider: unsubscribed from %s (no listeners)", def.ROS2Topic)
+	return r.client.Subscribe(def.ROS2Topic, def.MsgType, "gui-"+key, cb, subOpts...)
 }
 
 // fanOut stores msg as the latest value for logicalKey and delivers it to all
@@ -601,7 +621,6 @@ func (r *RosProvider) CallService(ctx context.Context, service string, req any, 
 // topic also triggers the upstream foxglove_bridge subscription.
 func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func(msg []byte)) error {
 	r.mtx.Lock()
-	defer r.mtx.Unlock()
 
 	if r.subscribers[topic] == nil {
 		r.subscribers[topic] = make(map[string]*RosSubscriber)
@@ -611,14 +630,12 @@ func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func
 		r.subscribers[topic][id] = NewRosSubscriber(topic, id, interval, cb)
 	}
 
-	// Subscribe upstream on first listener for this logical key. Safe to call
-	// repeatedly — ensureFoxgloveSubscribed short-circuits on the second hit.
-	r.ensureFoxgloveSubscribed(topic)
-
 	// Replay the most recent message so the subscriber is immediately usable.
 	if last, ok := r.lastMessage[topic]; ok {
 		r.subscribers[topic][id].Publish(last)
 	}
+	r.mtx.Unlock()
+	r.reconcileFoxgloveSubscription(topic)
 	return nil
 }
 
@@ -627,22 +644,29 @@ func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func
 // foxglove_bridge subscription is dropped too.
 func (r *RosProvider) UnSubscribe(topic string, id string) {
 	r.mtx.Lock()
-	defer r.mtx.Unlock()
 
 	subs, ok := r.subscribers[topic]
 	if !ok {
+		r.mtx.Unlock()
 		return
 	}
 	sub, exists := subs[id]
 	if !exists {
+		r.mtx.Unlock()
 		return
 	}
 	sub.Close()
 	delete(subs, id)
 	if len(subs) == 0 {
 		delete(r.subscribers, topic)
-		r.maybeUnsubscribeFoxglove(topic)
+		if def, ok := topicMap[topic]; ok && def.MsgType != "" {
+			// Live telemetry is stale once the last listener leaves. Virtual
+			// topics keep their existing internal polling/cache semantics.
+			delete(r.lastMessage, topic)
+		}
 	}
+	r.mtx.Unlock()
+	r.reconcileFoxgloveSubscription(topic)
 }
 
 // Publish sends msg to the named ROS2 topic. For /cmd_vel_teleop the relay
