@@ -334,13 +334,32 @@ def s02_boot_latch(probe, rig, R, esc):
     stop_driving(probe, rig)
 
 
+def _drive_diagnostics(probe, rig, since_mono: float, since_ms: float, x_since: float) -> str:
+    """What the controllers and the plant actually saw since a moment — printed
+    with a failing speed check, so a CI-only miss shows its cause."""
+    snap = rig.snapshot()
+    with rig.lock:
+        cmds = [(t, d) for (t, d) in rig.escs['left'].commands if t >= since_ms]
+    span_s = max((snap['t'] - since_ms) / 1000.0, 1e-6)
+    gaps = [b[0] - a[0] for a, b in zip(cmds, cmds[1:])]
+    duty = statistics.fmean(d for _, d in cmds) if cmds else float('nan')
+    applied, _ = probe.mean_since('applied', since_mono, 1)
+    odom, n_odom = probe.mean_since('odom', since_mono, 1)
+    return (f"left cmds {len(cmds) / span_s:.0f}/s (max gap {max(gaps, default=float('nan')):.0f} ms), "
+            f"mean duty {duty:+.3f}, applied {applied:.3f}, odom {odom:.3f} ({n_odom} msgs), "
+            f"plant mean {(snap['x'] - x_since) / span_s:.3f} m/s")
+
+
 def s03_straight(probe, rig, R, esc):
     S = 'straight line'
     x0 = rig.snapshot()['x']
-    drive(probe, rig, 0.30, 0.0, 6.0)
-    t_meas = time.monotonic() - 2.0
+    drive(probe, rig, 0.30, 0.0, 4.0)
+    t_meas, t_meas_ms, x_meas = time.monotonic(), rig.now_ms(), rig.snapshot()['x']
+    time.sleep(2.0)
     snap = rig.snapshot()
     odom_vx, n = probe.mean_since('odom', t_meas, 1)
+    if abs(snap['v'] - 0.30) >= 0.03 or abs(odom_vx - snap['v']) >= 0.03:
+        print('    diag: ' + _drive_diagnostics(probe, rig, t_meas, t_meas_ms, x_meas), flush=True)
     R.check(S, 'true ground speed tracks 0.30 m/s (closed loop beats the 0.85 motor gain)',
             abs(snap['v'] - 0.30) < 0.03, f"plant v={snap['v']:.3f} m/s")
     R.check(S, '/wheel_odom vx matches the ground', abs(odom_vx - snap['v']) < 0.03,
@@ -587,8 +606,11 @@ def s15_esc_reboot(probe, rig, R, esc):
     with probe.lock:
         vx = [v for (t, v, _) in probe.odom if t >= t0]
     worst = max((abs(v) for v in vx), default=float('nan'))
+    ok = bool(vx) and worst < 0.6
+    if not ok:
+        print('    diag: vx series ' + ' '.join(f'{v:.2f}' for v in vx), flush=True)
     R.check(S, 'no odometry spike from the counter reset (|vx| stays < 0.6 m/s)',
-            bool(vx) and worst < 0.6, f'max |vx|={worst:.2f} m/s over {len(vx)} msgs')
+            ok, f'max |vx|={worst:.2f} m/s over {len(vx)} msgs')
     if esc == 'xesc_2040':
         R.check(S, 'settings re-sent after the reboot', wait_for(lambda: rig.escs['left'].settings_received, 2))
     R.check(S, 'still drives straight after it', wait_for(lambda: abs(rig.snapshot()['v'] - 0.3) < 0.05, 4),
@@ -720,8 +742,11 @@ def s19b_starved(probe, rig, R, esc, bridge):
     with probe.lock:
         vx = [v for (t, v, _) in probe.odom if t >= t0]
     worst = max((abs(v) for v in vx), default=float('nan'))
+    ok = bool(vx) and worst < 0.45
+    if not ok:
+        print('    diag: vx series ' + ' '.join(f'{v:.2f}' for v in vx), flush=True)
     R.check(S, '/wheel_odom never reports a phantom speed (|vx| < 0.45 at 0.3 m/s)',
-            bool(vx) and worst < 0.45, f'max |vx|={worst:.2f} m/s over {len(vx)} msgs')
+            ok, f'max |vx|={worst:.2f} m/s over {len(vx)} msgs')
     R.check(S, 'board did not latch (stall shorter than its 500 ms heartbeat timeout)',
             not rig.snapshot()['latch'])
     stop_driving(probe, rig)
