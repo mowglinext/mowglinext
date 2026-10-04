@@ -691,7 +691,9 @@ TEST_F(FollowStripDigTest, DigDuringReadinessWaitCannotDispatchWhileItsNewTransi
   ASSERT_EQ(navigate->goalCount(), 2u);
   EXPECT_EQ(follow->goalCount(), 0u);
   const auto resume = navigate->goal(1)->pose.pose.position;
-  EXPECT_GT(resume.x, 2.0 + kRadius);
+  EXPECT_FALSE(insideDigZone(resume.x, resume.y, {{2.0, 0.0}}, kRadius));
+  EXPECT_GT(resume.x, 2.0);
+  EXPECT_NEAR(resume.x, 2.0 + kRadius, kStep);
   EXPECT_EQ(tickUntil(
                 [&]()
                 {
@@ -712,7 +714,8 @@ TEST_F(FollowStripDigTest, DigDuringReadinessWaitCannotDispatchWhileItsNewTransi
                 },
                 2.0),
             BT::NodeStatus::RUNNING);
-  EXPECT_EQ(follow->goalCount(), 1u);
+  ASSERT_EQ(follow->goalCount(), 1u);
+  EXPECT_FALSE(pathTouchesZone(follow->goal(0)->path, {2.0, 0.0}));
 }
 
 TEST_F(FollowStripDigTest, ShortScanDropoutCutsAndRestoresBladeWithoutReplacingCoverageGoal)
