@@ -82,6 +82,11 @@ public:
     operator_inhibit_ = false;
   }
 
+  bool operatorInhibited() const
+  {
+    return operator_inhibit_;
+  }
+
   void endSession()
   {
     direction_.reset();

@@ -15,6 +15,7 @@
 | Change tree structure / a guard | `ros2/src/mowgli_behavior/trees/main_tree.xml` (Root `ReactiveSequence`: EmergencyGuard → SensorSafetyGuard → BoundaryGuard → LocalizationGuard → GPSModeSelector → Nav2ResumeGuard → MainLogic) |
 | Add a subscriber / service / param to the node | `ros2/src/mowgli_behavior/src/behavior_tree_node.cpp` (`setupSubscribers` :140, `setupServiceServer` :543, `setupBehaviorTree` :807) |
 | Shared state read by nodes (`ctx->…`) | `ros2/src/mowgli_behavior/include/mowgli_behavior/bt_context.hpp` (`BTContext`; thread-safety contract :77-103) |
+| Blade readiness before a new coverage goal (#666) | `include/mowgli_behavior/blade_ready.hpp`, `coverage_nodes.cpp` (`sendFollowGoal`, `bladeReadyForDispatch`); pure `test_blade_ready` and tick-level `test_follow_strip_dig`; limits and physical procedure: `docs/BLADE_READY_VALIDATION.md` |
 | High-level command handling (`COMMAND_*`, `~/start_in_area`) | `behavior_tree_node.cpp` :547-608 (`COMMAND_S2`→`COMMAND_START` normalisation :561) |
 | `HighLevelStatus` publish + 1 Hz republish with live fields | `src/status_nodes.cpp` (`PublishHighLevelStatus`), `src/status_snapshot.cpp` (`withLiveStatusFields`), `behavior_tree_node.cpp` :694-721 |
 | Coverage loop (area iteration, plan, follow, resume) | `src/coverage_nodes.cpp`: `GetNextUnmowedArea` :1461+, `PlanCoverageArea` :1888+, `FollowStrip` :147-1240, `TransitToStrip` :1247+ |
