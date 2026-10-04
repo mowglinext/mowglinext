@@ -743,6 +743,28 @@
           "default": false,
           "description": "Choose a random blade direction per mowing session, including manual mowing. Keep it through pauses, transits and recharge. Consecutive sessions may choose the same direction; restarting ROS2 starts a new selection. Requires bidirectional blades and firmware with safe stopped reversal support. Takes effect after a ROS2 restart."
         },
+        "blade_ready_min_rpm": {
+          "type": "number",
+          "title": "Blade Ready RPM",
+          "default": 1000.0,
+          "exclusiveMinimum": 0,
+          "description": "Minimum RPM in fresh, active blade-controller reports before a new coverage goal starts. Required for 0.3 seconds. Verify on your blade and firmware. Applied after ROS2 restart."
+        },
+        "blade_spinup_delay_sec": {
+          "type": "number",
+          "title": "Blade Spin-up Fallback Delay",
+          "default": 1.5,
+          "exclusiveMinimum": 0,
+          "description": "Wait in seconds after the blade ON service response, used only when no blade-controller telemetry has ever arrived. Stale or low-RPM reports never use this fallback. Must be shorter than Blade Ready Timeout. Applied after ROS2 restart."
+        },
+        "blade_ready_timeout_sec": {
+          "type": "number",
+          "title": "Blade Ready Timeout",
+          "default": 6.0,
+          "maximum": 30.0,
+          "exclusiveMinimum": 0.3,
+          "description": "Maximum wait in seconds before withholding the coverage goal and requesting blade OFF. Must exceed Blade Spin-up Fallback Delay. Applied after ROS2 restart."
+        },
         "mowing_speed": {
           "type": "number",
           "title": "Mowing Speed",
