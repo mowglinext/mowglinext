@@ -94,7 +94,7 @@ void OpenMowerBridgeNode::control_tick()
 
   if (drives_ok)
   {
-    update_odometry(dt_s);
+    update_odometry();
   }
 
   const bool ll_alive = lowlevel_alive();
@@ -126,12 +126,31 @@ void OpenMowerBridgeNode::control_tick()
   service_config_handshake();
 }
 
-void OpenMowerBridgeNode::update_odometry(double dt_s)
+void OpenMowerBridgeNode::update_odometry()
 {
+  // Timing comes from the controllers' own status packets, not from the
+  // control tick: a control thread starved for 300 ms would otherwise divide
+  // three periods of ticks by one (clamped) period and publish a phantom
+  // 2-3x speed — seen on a loaded CI runner, and just as possible on a busy Pi.
   std::array<int64_t, 2> ticks{};
+  std::array<SteadyClock::time_point, 2> stamps{};
   for (std::size_t w = 0; w < 2u; ++w)
   {
-    ticks[w] = static_cast<int64_t>(motor_sign(w)) * motors_[w]->telemetry().signed_ticks;
+    const auto& telemetry = motors_[w]->telemetry();
+    ticks[w] = static_cast<int64_t>(motor_sign(w)) * telemetry.signed_ticks;
+    stamps[w] = telemetry.last_status;
+  }
+  // Wait until BOTH controllers reported since the last sample, so the two
+  // wheels' deltas cover the same stretch of time.
+  if (wheel_ticks_primed_[kLeft] && wheel_ticks_primed_[kRight] &&
+      (stamps[kLeft] <= prev_status_stamp_[kLeft] || stamps[kRight] <= prev_status_stamp_[kRight]))
+  {
+    return;
+  }
+  std::array<double, 2> dt_w{};
+  for (std::size_t w = 0; w < 2u; ++w)
+  {
+    dt_w[w] = std::chrono::duration<double>(stamps[w] - prev_status_stamp_[w]).count();
   }
 
   // A controller that rebooted restarts its counter: re-prime instead of
@@ -139,16 +158,22 @@ void OpenMowerBridgeNode::update_odometry(double dt_s)
   for (std::size_t w = 0; w < 2u; ++w)
   {
     if (wheel_ticks_primed_[w] &&
-        !IsPlausibleTickDelta(ticks[w] - prev_wheel_ticks_[w], ticks_per_meter_, dt_s))
+        !IsPlausibleTickDelta(ticks[w] - prev_wheel_ticks_[w], ticks_per_meter_, dt_w[w]))
     {
       RCLCPP_WARN(get_logger(),
                   "%s wheel tick counter jumped by %lld ticks in %.0f ms — controller reset? "
                   "Re-priming odometry instead of publishing it.",
                   w == kLeft ? "Left" : "Right",
                   static_cast<long long>(ticks[w] - prev_wheel_ticks_[w]),
-                  dt_s * 1000.0);
+                  dt_w[w] * 1000.0);
       wheel_ticks_primed_ = {false, false};
       odometry_.Reset();
+      // The loop's integral was built against a wheel that may not have been
+      // driving through the reset: start the speed loops clean.
+      for (auto& loop : wheel_loops_)
+      {
+        loop.Reset();
+      }
       break;
     }
   }
@@ -161,12 +186,14 @@ void OpenMowerBridgeNode::update_odometry(double dt_s)
     {
       wheel_ticks_primed_[w] = true;
       prev_wheel_ticks_[w] = ticks[w];
+      prev_status_stamp_[w] = stamps[w];
       wheel_speed_[w].Reset();
       continue;
     }
     deltas[w] = ticks[w] - prev_wheel_ticks_[w];
     prev_wheel_ticks_[w] = ticks[w];
-    (void)wheel_speed_[w].Update(deltas[w], ticks_per_meter_, dt_s);
+    prev_status_stamp_[w] = stamps[w];
+    (void)wheel_speed_[w].Update(deltas[w], ticks_per_meter_, dt_w[w]);
     wheel_tick_magnitude_[w] += static_cast<uint32_t>(std::abs(deltas[w]));
     if (deltas[w] > 0)
     {
@@ -189,7 +216,8 @@ void OpenMowerBridgeNode::update_odometry(double dt_s)
   wt.wheel_ticks_rr = wheel_tick_magnitude_[kRight];
   pub_wheel_ticks_->publish(wt);
 
-  const auto sample = odometry_.Update(ticks[kLeft], ticks[kRight], dt_s);
+  const auto sample =
+      odometry_.Update(ticks[kLeft], ticks[kRight], 0.5 * (dt_w[kLeft] + dt_w[kRight]));
   if (!sample)
   {
     return;

@@ -98,7 +98,7 @@ private:
 
   // ---- actuation + odometry (openmower_bridge_actuation.cpp) ----
   void control_tick();
-  void update_odometry(double dt_s);
+  void update_odometry();
   void drive_wheels(double dt_s, bool wheels_allowed);
   void drive_blade(bool blade_allowed);
   void publish_cmd_vel_applied(double vx, double wz);
@@ -176,6 +176,8 @@ private:
   std::array<WheelSpeedFilter, 2> wheel_speed_{};
   std::array<int64_t, 2> prev_wheel_ticks_{};
   std::array<bool, 2> wheel_ticks_primed_{};
+  /// Status-packet time of the ticks in prev_wheel_ticks_ (odometry timing).
+  std::array<SteadyClock::time_point, 2> prev_status_stamp_{};
   std::array<uint32_t, 2> wheel_tick_magnitude_{};
   std::array<uint8_t, 2> wheel_tick_direction_{1u, 1u};
   XescOdometry odometry_{1600.0, 0.325};
