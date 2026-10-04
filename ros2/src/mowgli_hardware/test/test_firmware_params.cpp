@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0
 //
 // Unit tests for FirmwareParamTracker: the bridge's record of what it asked
-// the STM32 for versus what the firmware reports it applied (protocol v7).
+// the STM32 for versus what the firmware reports it applied (protocol v8).
 
 #include <cmath>
 
@@ -100,14 +100,36 @@ TEST(FirmwareParamTracker, ResetForgetsReportsButKeepsRequests)
   LlParamStoreStatus store{};
   store.boot_source = mowgli_hardware::PARAM_BOOT_FLASH;
   store.records_left = 12;
-  EXPECT_TRUE(tracker.on_store_status(store));
-  EXPECT_FALSE(tracker.on_store_status(store));
+  EXPECT_TRUE(tracker.on_store_status(store, 1u));
+  EXPECT_FALSE(tracker.on_store_status(store, 2u));
+  EXPECT_EQ(tracker.store_status_sequence(), 2u);
 
   tracker.reset_reports();
   EXPECT_EQ(tracker.boot_source(), FirmwareParamTracker::kBootUnknown);
   EXPECT_FALSE(tracker.states().at(kTilt).reported);
   EXPECT_TRUE(tracker.states().at(kTilt).requested_valid);
   EXPECT_EQ(tracker.unreported().size(), 1u);
+  EXPECT_EQ(tracker.reset_request_id(), 0u);
+  EXPECT_EQ(tracker.store_status_sequence(), 0u);
+}
+
+TEST(FirmwareParamTracker, TracksTheLatestRetainedResetIdAndPendingState)
+{
+  FirmwareParamTracker tracker;
+  LlParamStoreStatus store{};
+  store.boot_source = mowgli_hardware::PARAM_BOOT_FLASH;
+  store.last_commit = mowgli_hardware::PARAM_COMMIT_RESET_PENDING;
+  store.reset_request_id = 0x12345678u;
+
+  EXPECT_TRUE(tracker.on_store_status(store, 1u));
+  EXPECT_EQ(tracker.last_commit(), mowgli_hardware::PARAM_COMMIT_RESET_PENDING);
+  EXPECT_EQ(tracker.reset_request_id(), 0x12345678u);
+  EXPECT_FALSE(tracker.on_store_status(store, 2u));
+  EXPECT_EQ(tracker.store_status_sequence(), 2u);
+
+  store.last_commit = mowgli_hardware::PARAM_COMMIT_NONE;
+  EXPECT_TRUE(tracker.on_store_status(store, 3u));
+  EXPECT_EQ(tracker.reset_request_id(), 0x12345678u);
 }
 
 TEST(FirmwareParamTracker, NamesCoverEveryFirmwareParameter)

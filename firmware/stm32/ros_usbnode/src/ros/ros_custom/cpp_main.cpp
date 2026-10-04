@@ -45,6 +45,7 @@
 #include "mowgli_protocol.h"
 #include "drive_tuning_defaults.h"
 #include "fw_params.h"
+#include "fw_param_reset.h"
 #include "i2c.h"
 #include "cmd_vel_safety.hpp"
 
@@ -529,7 +530,7 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
 }
 
 /* ---------------------------------------------------------------------------
- * Runtime parameters (protocol v7). Handlers run in USB RX interrupt context:
+ * Runtime parameters (protocol v8). Handlers run in USB RX interrupt context:
  * they only store the coerced value (fw_params_set). The subsystems are updated
  * from the main loop by apply_param_groups(), one group at a time, so no loop
  * ever sees a half-applied set.
@@ -558,6 +559,43 @@ static void on_param_commit(const uint8_t *data, size_t len) {
   }
   if (data[1] == PKT_PARAM_COMMIT_MAGIC) {
     fw_params_request_commit();
+  }
+}
+
+/* An explicit reset is accepted only with fresh feedback and every firmware
+ * stop predicate satisfied. The callback only queues the request; RTC marker
+ * writes are done by fw_params_service() from the main loop. The flash erase
+ * itself runs at the following boot, before the window watchdog is armed. */
+static void on_param_store_reset(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_param_store_reset_t) - 2u) {
+    return;
+  }
+  pkt_param_store_reset_t pkt;
+  memcpy(&pkt, data, sizeof(pkt) - 2u);
+  if (pkt.magic != PKT_PARAM_STORE_RESET_MAGIC || pkt.request_id == 0u) {
+    fw_params_report_reset_rejected();
+    return;
+  }
+
+  fw_param_reset_safety_t safety = {};
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  safety.firmware_idle =
+      main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ? 1u : 0u;
+  safety.drive_feedback_healthy = DRIVEMOTOR_FeedbackHealthy() ? 1u : 0u;
+  safety.blade_feedback_healthy = BLADEMOTOR_FeedbackHealthy() ? 1u : 0u;
+  safety.left_target_mps = left_target_mps;
+  safety.right_target_mps = right_target_mps;
+  safety.left_measured_speed = left_wheel_speed_val;
+  safety.right_measured_speed = right_wheel_speed_val;
+  safety.blade_target_on = target_blade_on_off;
+  safety.blade_active = BLADEMOTOR_bActivated ? 1u : 0u;
+  safety.blade_reported_rpm = BLADEMOTOR_u16RPM;
+  __set_PRIMASK(primask);
+
+  if (!fw_param_reset_is_safe(&safety) ||
+      !fw_params_request_reset(pkt.request_id)) {
+    fw_params_report_reset_rejected();
   }
 }
 
@@ -1690,6 +1728,8 @@ extern "C" void init_ROS() {
   mowgli_comms_register_handler(PKT_ID_SET_PARAM, on_set_param);
   mowgli_comms_register_handler(PKT_ID_GET_PARAM, on_get_param);
   mowgli_comms_register_handler(PKT_ID_PARAM_COMMIT, on_param_commit);
+  mowgli_comms_register_handler(PKT_ID_PARAM_STORE_RESET,
+                                on_param_store_reset);
   mowgli_comms_register_handler(PKT_ID_CONFIG_REQ, on_config_req);
 
   // Initialise timers

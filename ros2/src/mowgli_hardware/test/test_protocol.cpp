@@ -118,7 +118,7 @@ TEST(ProtocolSizes, RebootPacketSize)
 
 TEST(ProtocolSizes, RuntimeParameterPacketSizes)
 {
-  // Protocol v7 generic runtime parameters — must match the firmware
+  // Protocol v8 generic runtime parameters — must match the firmware
   // pkt_set_param_t / pkt_get_param_t / pkt_param_commit_t / pkt_param_value_t
   // / pkt_param_store_status_t asserts in mowgli_protocol.h.
   EXPECT_EQ(sizeof(LlSetParam), 9u);  // type(1) + id(2) + value(4) + crc(2)
@@ -127,7 +127,8 @@ TEST(ProtocolSizes, RuntimeParameterPacketSizes)
   // type(1) + id(2) + status(1) + flags(1) + value/default/min/max(16) + crc(2)
   EXPECT_EQ(sizeof(LlParamValue), 23u);
   // type(1) + boot(1) + commit(1) + records_left(2) + param_count(2) + crc(2)
-  EXPECT_EQ(sizeof(LlParamStoreStatus), 9u);
+  EXPECT_EQ(sizeof(LlParamStoreStatus), 13u);
+  EXPECT_EQ(sizeof(LlParamStoreReset), 8u);
 }
 
 TEST(ProtocolSizes, ConfigPacketSizes)
