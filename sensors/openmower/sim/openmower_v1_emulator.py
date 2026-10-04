@@ -715,18 +715,26 @@ class OpenMowerV1Rig:
         while not self._stop.is_set():
             time.sleep(self.PERIOD_S)
             t = time.monotonic()
-            dt = min(t - last, 0.05)
+            elapsed = t - last
             last = t
             now = (t - self._t0) * 1000.0
             with self.lock:
                 for esc in self.escs.values():
                     esc.service(now)
                 self.ll.service(now)
-                for name in ('left', 'right'):
-                    self.motors[name].step(dt, self.escs[name].effective_duty(now))
-                self.motors['mow'].step(dt, self.escs['mow'].effective_duty(now))
-                # Real wiring: right wheel forward on a NEGATIVE controller duty.
-                self.plant.step(dt, self.motors['left'].speed, -self.motors['right'].speed)
+                # Integrate ALL the elapsed wall time, in small substeps. A
+                # starved thread (a 2-vCPU CI runner, the GIL shared with the
+                # ROS probe) used to cap the step at 50 ms and silently drop
+                # the rest: the simulated robot then moved slower than wall
+                # time, and every speed check compared two different clocks.
+                steps = max(1, math.ceil(elapsed / self.PERIOD_S))
+                dt = elapsed / steps
+                duty = {n: self.escs[n].effective_duty(now) for n in ('left', 'right', 'mow')}
+                for _ in range(steps):
+                    for name in ('left', 'right', 'mow'):
+                        self.motors[name].step(dt, duty[name])
+                    # Real wiring: right wheel forward on a NEGATIVE controller duty.
+                    self.plant.step(dt, self.motors['left'].speed, -self.motors['right'].speed)
 
     # --- observation helpers (thread-safe) --------------------------------
     def snapshot(self) -> dict:
