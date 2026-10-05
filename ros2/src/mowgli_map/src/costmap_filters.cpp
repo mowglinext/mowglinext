@@ -88,6 +88,7 @@ void MapServerNode::publish_keepout_mask()
 {
   if (areas_.empty())
   {
+    transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
     return;
   }
 
@@ -434,6 +435,7 @@ void MapServerNode::publish_keepout_mask()
 
   cached_keepout_mask_ = mask;
   keepout_mask_pub_->publish(mask);
+  publish_transit_geometry();
 
   // Publish filter info only once (transient_local latches it for late
   // subscribers).  Republishing every cycle causes Nav2 KeepoutFilter to
@@ -451,6 +453,52 @@ void MapServerNode::publish_keepout_mask()
     keepout_filter_info_pub_->publish(info);
     keepout_filter_info_sent_ = true;
   }
+}
+
+void MapServerNode::publish_transit_geometry()
+{
+  visualization_msgs::msg::MarkerArray snapshot;
+  const auto append =
+      [&](const geometry_msgs::msg::Polygon& polygon, const std::string& kind, double margin)
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = map_frame_;
+    marker.header.stamp = get_clock()->now();
+    marker.ns = kind;
+    marker.id = static_cast<int>(snapshot.markers.size());
+    marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.pose.orientation.w = 1;
+    // For obstacle rings the line width carries the same explicit body margin
+    // as the keepout mask; for allowed rings it is visualization only.
+    marker.scale.x = margin;
+    marker.color.a = 1;
+    marker.color.g = kind == "obstacle" ? 0 : 1;
+    marker.color.r = kind == "obstacle" ? 1 : 0;
+    for (const auto& p : polygon.points)
+    {
+      geometry_msgs::msg::Point point;
+      point.x = p.x;
+      point.y = p.y;
+      marker.points.push_back(point);
+    }
+    snapshot.markers.push_back(std::move(marker));
+  };
+  for (const auto& area : areas_)
+  {
+    append(area.polygon, "area", 0.01);
+    for (const auto& obstacle : area.obstacles)
+      if (!obstacle.pending)
+        append(obstacle.polygon, "obstacle", std::max(0.0, keepout_obstacle_margin_m_));
+  }
+  for (const auto& obstacle : obstacle_polygons_)
+    append(obstacle, "obstacle", std::max(0.0, keepout_obstacle_margin_m_));
+  if (has_dock_exclusion_)
+  {
+    append(dock_corridor_polygon_, "dock_corridor", 0.01);
+    append(dock_body_polygon_, "obstacle", 0);
+  }
+  transit_geometry_pub_->publish(snapshot);
 }
 
 }  // namespace mowgli_map

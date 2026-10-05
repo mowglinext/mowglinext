@@ -24,6 +24,7 @@ find_package(nav2_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
 find_package(nav2_ros_common REQUIRED)
+find_package(nav2_smac_planner REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -48,6 +49,7 @@ add_library(${PROJECT_NAME} SHARED
   src/ftc_controller_turn_fallback.cpp
   src/ftc_controller_plugin.cpp
   src/path_progress_goal_checker.cpp
+  src/authorized_transit_planner.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -68,6 +70,7 @@ target_link_libraries(${PROJECT_NAME}
   ${nav2_costmap_2d_TARGETS}
   ${nav2_util_TARGETS}
   ${nav2_ros_common_TARGETS}
+  ${nav2_smac_planner_TARGETS}
   ${nav_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${pluginlib_TARGETS}
@@ -82,6 +85,7 @@ target_link_libraries(${PROJECT_NAME}
 # pluginlib needs the export macro defined.
 pluginlib_export_plugin_description_file(nav2_core ftc_controller_plugin.xml)
 pluginlib_export_plugin_description_file(nav2_core goal_checker_plugin.xml)
+pluginlib_export_plugin_description_file(nav2_core planner_plugin.xml)
 
 # ---------------------------------------------------------------------------
 # Install
@@ -100,7 +104,7 @@ install(
 )
 
 install(
-  FILES ftc_controller_plugin.xml goal_checker_plugin.xml
+  FILES ftc_controller_plugin.xml goal_checker_plugin.xml planner_plugin.xml
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -122,6 +126,9 @@ if(BUILD_TESTING)
   # colcon tests packages in parallel, and on one shared DDS domain the test
   # processes discover each other's nodes (docs/claude/testing-ci.md).
   find_package(ament_cmake_ros REQUIRED)
+
+  ament_add_ros_isolated_gtest(test_authorized_transit test/test_authorized_transit.cpp)
+  target_link_libraries(test_authorized_transit ${PROJECT_NAME})
 
   ament_add_ros_isolated_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
   target_link_libraries(test_lyrical_goal_checker ${PROJECT_NAME})
@@ -316,6 +323,7 @@ ament_export_dependencies(
   nav2_costmap_2d
   nav2_util
   nav2_ros_common
+  nav2_smac_planner
   nav_msgs
   geometry_msgs
   pluginlib

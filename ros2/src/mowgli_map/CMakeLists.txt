@@ -56,6 +56,7 @@ target_include_directories(mowgli_map_lib PUBLIC
 )
 
 target_link_libraries(mowgli_map_lib
+  ${visualization_msgs_TARGETS}
   ${rclcpp_TARGETS}
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
