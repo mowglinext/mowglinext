@@ -48,6 +48,35 @@ USBD_HandleTypeDef hUsbDeviceFS;
  */
 /* USER CODE BEGIN 0 */
 
+void USB_DEVICE_Detach(void)
+{
+#if BOARD_YARDFORCE500_VARIANT_B
+  /* SDIS alone does not produce a host-visible detach on every F401 board.
+   * Reuse the D+ low technique used at boot, with the wait owned by the main
+   * loop state machine so safety/watchdog servicing never stops. */
+  GPIO_InitTypeDef gpio = {0};
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12, GPIO_PIN_RESET);
+  gpio.Pin = GPIO_PIN_12;
+  gpio.Mode = GPIO_MODE_OUTPUT_PP;
+  gpio.Pull = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &gpio);
+#endif
+}
+
+void USB_DEVICE_Attach(void)
+{
+#if BOARD_YARDFORCE500_VARIANT_B
+  GPIO_InitTypeDef gpio = {0};
+  gpio.Pin = GPIO_PIN_12;
+  gpio.Mode = GPIO_MODE_AF_PP;
+  gpio.Pull = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  gpio.Alternate = GPIO_AF10_OTG_FS;
+  HAL_GPIO_Init(GPIOA, &gpio);
+#endif
+}
+
 /* USER CODE END 0 */
 
 /*

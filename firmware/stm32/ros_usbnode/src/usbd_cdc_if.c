@@ -26,6 +26,7 @@
 #include "mowgli_protocol.h"
 #include "mowgli_comms.h"
 #include "usbd_core.h"
+#include "usb_device.h"
 #include <stdatomic.h>
 #include <signal.h>
 
@@ -681,8 +682,15 @@ void CDC_ServiceRecovery(void)
             HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
             return;
         }
+        /* USBD_Stop hides LL_Stop errors and still frees the class. Check the
+         * low-level stop before allowing that ownership boundary. */
+        if (USBD_LL_Stop(&hUsbDevice) != USBD_OK) {
+            HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
+            return;
+        }
         s_usbRecoveryState = CDC_USB_DETACHED;
         (void)USBD_Stop(&hUsbDevice);
+        USB_DEVICE_Detach();
         hUsbDevice.dev_state = USBD_STATE_DEFAULT;
         CDC_EnterRecoveryHold();
         s_rxtail = s_rxhead;
@@ -697,7 +705,15 @@ void CDC_ServiceRecovery(void)
                HAL_GetTick() - s_usbDetachTick >= CDC_USB_DETACH_MS) {
         s_usbRecoveryState = CDC_USB_ENUMERATING;
         HAL_NVIC_ClearPendingIRQ(OTG_FS_IRQn);
-        (void)USBD_Start(&hUsbDevice);
+        USB_DEVICE_Attach();
+        if (USBD_Start(&hUsbDevice) != USBD_OK) {
+            /* Remain held and retry asynchronously; do not accept RX or TX on
+             * a device whose low-level driver did not restart. */
+            USB_DEVICE_Detach();
+            s_usbRecoveryState = CDC_USB_DETACHED;
+            s_usbDetachTick = HAL_GetTick();
+            return;
+        }
         HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
         /* Do not clear the hold until CDC_Init during host enumeration. */
     }

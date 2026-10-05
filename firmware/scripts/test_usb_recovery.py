@@ -51,6 +51,8 @@ static USBD_CDC_HandleTypeDef klass;
 USBD_HandleTypeDef hUsbDeviceFS = { &klass, USBD_STATE_CONFIGURED };
 static uint32_t tick, primask, ipsr;
 static unsigned irq_enabled=1, stops, starts, submits, clears, aborts;
+static unsigned detached_pin;
+static unsigned fail_start, fail_stop;
 static uint8_t *hardware_buffer;
 static uint32_t hardware_length;
 static uint32_t HAL_GetTick(void) { return tick; }
@@ -74,6 +76,11 @@ static uint8_t USBD_CDC_TransmitPacket(USBD_HandleTypeDef *d) {
 }
 static uint8_t USBD_Stop(USBD_HandleTypeDef *d);
 static uint8_t USBD_Start(USBD_HandleTypeDef *d);
+static uint8_t USBD_LL_Stop(USBD_HandleTypeDef *d) {
+    (void)d; assert(!irq_enabled && !primask); return fail_stop ? USBD_FAIL : USBD_OK;
+}
+static void USB_DEVICE_Detach(void) { assert(!irq_enabled && !primask && !hUsbDeviceFS.pClassData); detached_pin=1; }
+static void USB_DEVICE_Attach(void) { assert(!irq_enabled && !primask); detached_pin=0; }
 '''
 
 TEST = r'''
@@ -87,7 +94,9 @@ static uint8_t USBD_Stop(USBD_HandleTypeDef *d) {
     return USBD_OK;
 }
 static uint8_t USBD_Start(USBD_HandleTypeDef *d) {
-    (void)d; assert(!primask && !ipsr && !irq_enabled); ++starts; return USBD_OK;
+    (void)d; assert(!primask && !ipsr && !irq_enabled && !detached_pin); ++starts;
+    if (fail_start) { fail_start=0; return USBD_FAIL; }
+    return USBD_OK;
 }
 static void receive(void) {
     uint8_t b=0; uint32_t n=1;
@@ -130,8 +139,12 @@ int main(void) {
     assert(!stops); // never stop from IRQ/global critical section
     CDC_Receive(encoded,&encoded_size);
     assert(!commands && s_rx_write==encoded_len); // pending RX was rejected
+    fail_stop=1; CDC_ServiceRecovery();
+    assert(!stops && irq_enabled && klass.TxState && s_rx_write==encoded_len);
+    fail_stop=0;
     CDC_ServiceRecovery();
     assert(stops==1 && aborts==1 && !irq_enabled && !CDC_TXQueue_GetReadAvailable());
+    assert(detached_pin);
     assert(hUsbDeviceFS.dev_state==USBD_STATE_DEFAULT && !CDC_ShouldSendTelemetry());
     assert(s_rx_write==0); // Stop itself discarded pre-detach command assembly
     oldtail=s_txtail;
@@ -141,6 +154,7 @@ int main(void) {
     tick=850; CDC_ServiceRecovery(); assert(!starts);
     tick=851; CDC_ServiceRecovery();
     assert(starts==1 && clears==1 && irq_enabled && s_txRecoveryHold);
+    assert(!detached_pin);
     CDC_ServiceRecovery(); assert(stops==1 && starts==1);
     CDC_NotifyUsbReset(); receive(); assert(s_txRecoveryHold);
     configure(); assert(!s_txRecoveryHold && CDC_ShouldSendTelemetry());
@@ -166,10 +180,16 @@ int main(void) {
     tick=11502; receive(); CDC_Transmit(old,sizeof(old)); CDC_ServiceRecovery();
     assert(stops==3);
 
+    tick=11752; fail_start=1; CDC_ServiceRecovery();
+    assert(s_usbRecoveryState==CDC_USB_DETACHED && detached_pin && !irq_enabled);
+    unsigned attempts=starts;
+    tick=12001; CDC_ServiceRecovery(); assert(starts==attempts);
+    tick=12002; CDC_ServiceRecovery(); assert(starts==attempts+1 && irq_enabled && s_txRecoveryHold);
+
     // Tick wrap still honours the detach interval.
     tick=UINT32_MAX-100; s_usbDetachTick=tick; s_usbRecoveryState=CDC_USB_DETACHED;
-    irq_enabled=0; tick=148; CDC_ServiceRecovery(); assert(starts==2);
-    tick=149; CDC_ServiceRecovery(); assert(starts==3);
+    irq_enabled=0; attempts=starts; tick=148; CDC_ServiceRecovery(); assert(starts==attempts);
+    tick=149; CDC_ServiceRecovery(); assert(starts==attempts+1);
     puts("PASS: production USB timeout quiesces before reuse; asynchronous re-enumeration, callback fencing, host liveness, cooldown and tick wrap");
 }
 '''
