@@ -6,6 +6,7 @@ libeigen3-dev
 libfmt-dev
 libceres-dev
 libhdf5-dev
+libhdf5-openmpi-dev
 librange-v3-dev
 libtbb-dev
 libompl-dev
