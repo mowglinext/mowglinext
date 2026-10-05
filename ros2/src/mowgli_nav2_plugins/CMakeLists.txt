@@ -25,6 +25,7 @@ find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
 find_package(nav2_ros_common REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(tf2 REQUIRED)
@@ -48,6 +49,7 @@ add_library(${PROJECT_NAME} SHARED
   src/ftc_controller_turn_fallback.cpp
   src/ftc_controller_plugin.cpp
   src/path_progress_goal_checker.cpp
+  src/garden_keepout_layer.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -69,6 +71,7 @@ target_link_libraries(${PROJECT_NAME}
   ${nav2_util_TARGETS}
   ${nav2_ros_common_TARGETS}
   ${nav_msgs_TARGETS}
+  ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${pluginlib_TARGETS}
   ${tf2_TARGETS}
@@ -82,6 +85,7 @@ target_link_libraries(${PROJECT_NAME}
 # pluginlib needs the export macro defined.
 pluginlib_export_plugin_description_file(nav2_core ftc_controller_plugin.xml)
 pluginlib_export_plugin_description_file(nav2_core goal_checker_plugin.xml)
+pluginlib_export_plugin_description_file(nav2_costmap_2d costmap_plugins.xml)
 
 # ---------------------------------------------------------------------------
 # Install
@@ -100,7 +104,7 @@ install(
 )
 
 install(
-  FILES ftc_controller_plugin.xml goal_checker_plugin.xml
+  FILES ftc_controller_plugin.xml goal_checker_plugin.xml costmap_plugins.xml
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -122,6 +126,9 @@ if(BUILD_TESTING)
   # colcon tests packages in parallel, and on one shared DDS domain the test
   # processes discover each other's nodes (docs/claude/testing-ci.md).
   find_package(ament_cmake_ros REQUIRED)
+  find_package(nav2_smac_planner REQUIRED)
+  ament_add_ros_isolated_gtest(test_garden_costmap test/test_garden_costmap.cpp TIMEOUT 180)
+  target_link_libraries(test_garden_costmap ${PROJECT_NAME} ${nav2_smac_planner_TARGETS})
 
   ament_add_ros_isolated_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
   target_link_libraries(test_lyrical_goal_checker ${PROJECT_NAME})
@@ -317,6 +324,7 @@ ament_export_dependencies(
   nav2_util
   nav2_ros_common
   nav_msgs
+  std_srvs
   geometry_msgs
   pluginlib
   tf2

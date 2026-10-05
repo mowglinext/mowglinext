@@ -36,14 +36,7 @@ global_costmap:
       # only the static_layer cells are. See the global_costmap block in
       # nav2_params_base.yaml; test_nav2_params.py pins this in both variants.
       # fleet_layer sits before inflation_layer so a peer's footprint IS inflated.
-      plugins: ["static_layer", "fleet_layer", "inflation_layer", "keepout_filter"]
-
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        enabled: true
-        map_topic: "/no_lidar_static_map"
-        subscribe_to_updates: false
-        transform_tolerance: 0.5
+      plugins: ["fleet_layer", "inflation_layer", "keepout_filter"]
 
       # fleet_layer: the other fleet members' footprints as lethal cells
       # (docs/MULTI_ROBOT.md). Without a LiDAR nothing else on this robot can
@@ -55,9 +48,9 @@ global_costmap:
       # layer name on purpose: CI forbids obstacle_layer + static_layer in one
       # costmap. Marking only; the cloud is republished at 5 Hz, empty when the
       # robot is alone, so the source never goes stale. Keep the two copies
-      # identical (test_nav2_params.py checks both).
+      # observation settings identical (test_nav2_params.py checks both).
       fleet_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
+        plugin: "mowgli_nav2_plugins::RecentObstacleLayer"
         enabled: true
         observation_sources: fleet_peers
         fleet_peers:

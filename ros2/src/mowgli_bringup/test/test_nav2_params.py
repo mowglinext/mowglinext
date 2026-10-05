@@ -1470,7 +1470,7 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
     order — flipping it back makes every coverage line next to a drawn obstacle
     un-plannable again."""
     for loader, first in ((_load_params, "obstacle_layer"),
-                          (_load_no_lidar_params, "static_layer")):
+                          (_load_no_lidar_params, "fleet_layer")):
         gc = loader()["global_costmap"]["global_costmap"]["ros__parameters"]
         plugins = gc["plugins"]
         # Source layers first (the no-LiDAR variant also carries the fleet
@@ -1483,6 +1483,22 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
         )
         lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
         assert "keepout_filter" not in lc["plugins"]  # Invariant 5
+
+
+def test_global_grid_is_garden_sized_with_bounded_recent_sources() -> None:
+    for loader, source in ((_load_params, "obstacle_layer"),
+                           (_load_no_lidar_params, "fleet_layer")):
+        gc = loader()["global_costmap"]["global_costmap"]["ros__parameters"]
+        lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
+        assert gc["rolling_window"] is False
+        assert lc["rolling_window"] is True
+        assert gc["resolution"] == GLOBAL_COSTMAP_RESOLUTION_M == 0.08
+        assert gc["keepout_filter"]["plugin"] == "mowgli_nav2_plugins::GardenKeepoutLayer"
+        assert gc["keepout_filter"]["max_cells"] == 4000000
+        assert gc[source]["plugin"] == "mowgli_nav2_plugins::RecentObstacleLayer"
+        for name in gc[source]["observation_sources"].split():
+            assert 0 < gc[source][name]["observation_persistence"] <= 2.0
+        assert "static_layer" not in gc["plugins"]
 
 
 def test_global_costmap_resolution_matches_the_launch_constant() -> None:
@@ -1713,7 +1729,9 @@ def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
         assert len(found) == 1, f"{cm}: expected exactly one fleet source"
         layer, _, src = found[0]
         assert layer == "fleet_layer"
-        assert params[layer]["plugin"] == "nav2_costmap_2d::ObstacleLayer"
+        expected = ("mowgli_nav2_plugins::RecentObstacleLayer" if cm == "global_costmap"
+                    else "nav2_costmap_2d::ObstacleLayer")
+        assert params[layer]["plugin"] == expected
         assert src["marking"] is True and src["clearing"] is False
         plugins = params["plugins"]
         assert plugins.index("fleet_layer") < plugins.index("inflation_layer"), (
@@ -1721,4 +1739,6 @@ def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
         )
     local = merged["local_costmap"]["local_costmap"]["ros__parameters"]["fleet_layer"]
     glob = merged["global_costmap"]["global_costmap"]["ros__parameters"]["fleet_layer"]
-    assert local == glob, "the two fleet_layer copies in nav2_params_no_lidar.yaml drifted apart"
+    assert {k: v for k, v in local.items() if k != "plugin"} == {
+        k: v for k, v in glob.items() if k != "plugin"
+    }, "local/global fleet observation configurations drifted apart"

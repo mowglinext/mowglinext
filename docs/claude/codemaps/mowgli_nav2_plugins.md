@@ -6,6 +6,11 @@
 
 > Lyrical API: full plans enter `newPathReceived`; local processed plans do not replace FTC progress. The goal checker transforms the costmap-frame query into the full-plan frame and exposes both XY and XY+yaw checks. Regression tests: `test/test_lyrical_goal_checker.cpp`; end-approach rule (short sub-paths FTC parks short of): `test/test_path_progress_end_approach.cpp`.
 
+Global fixed-grid geometry and mandatory authorization are owned by `GardenKeepoutLayer` in
+`garden_keepout_layer.hpp/.cpp`. `RecentObstacleLayer` rebuilds global marks from
+current observation buffers. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md)
+for geometry synchronization, recovery toggles, budgets and hardware acceptance.
+
 ## Where to look
 
 | Task | Start here |

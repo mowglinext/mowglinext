@@ -8,6 +8,10 @@
 > tracked obstacles the operator can promote. Index generated 2026-09-03 at f21729e9;
 > regenerate when files are added/removed. Loaded on demand from `ros2/CLAUDE.md`.
 
+Garden extents include dock geometry and preserve resolution within `max_grid_cells`.
+Map edits publish an empty keepout mask until the settled raster is ready; the latched
+`~/planning_grid_error` reports allocation refusal. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md).
+
 ## Where to look
 | Task | Start here |
 |------|------------|
