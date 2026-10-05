@@ -476,6 +476,51 @@ TEST_F(AreaTypeTest, AreaIdSurvivesSaveLoadRoundTrip)
   std::remove(tmp_path.c_str());
 }
 
+TEST_F(AreaTypeTest, ReloadWithSameExtentRecentersTheGrid)
+{
+  ASSERT_TRUE(add_area("near", make_rect(-2, -2, 2, 2), false));
+  const auto before_size = node_->map().getSize();
+  const std::string path = "/tmp/mowgli_garden_recenter.dat";
+  {
+    std::ofstream file(path);
+    file << "area_count: 1\narea_0_name: distant\narea_0_id: 1\n"
+            "area_0_polygon: 38,-2;42,-2;42,2;38,2\n";
+  }
+  node_->load_areas_for_test(path);
+  std::remove(path.c_str());
+  EXPECT_TRUE((node_->map().getSize() == before_size).all());
+  EXPECT_DOUBLE_EQ(node_->map().getPosition().x(), 40);
+  EXPECT_DOUBLE_EQ(node_->map().getResolution(), .1);
+  const auto mask = node_->build_keepout_mask_for_test();
+  EXPECT_GT(mask.info.origin.position.x, 30);
+}
+
+TEST_F(AreaTypeTest, DockCorridorIsIncludedInGardenExtent)
+{
+  node_.reset();
+  rclcpp::NodeOptions opts;
+  opts.append_parameter_override("dock_pose_x", -40.0);
+  opts.append_parameter_override("dock_pose_y", -20.0);
+  opts.append_parameter_override("resolution", .1);
+  node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
+  ASSERT_TRUE(add_area("distant_lawn", make_rect(35, 10, 40, 15), false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_LT(mask.info.origin.position.x, -43);
+  EXPECT_LT(mask.info.origin.position.y, -20);
+  EXPECT_GT(mask.info.origin.position.x + mask.info.width * mask.info.resolution, 40);
+}
+
+TEST_F(AreaTypeTest, ResourceErrorIsExplicitAndMaskClosesWithoutCoarsening)
+{
+  const auto before_size = node_->map().getSize();
+  ASSERT_TRUE(add_area("oversized", make_rect(0, 0, 1000, 1000), false));
+  EXPECT_NE(node_->planning_grid_error_for_test().find("max_grid_cells"), std::string::npos);
+  EXPECT_TRUE((node_->map().getSize() == before_size).all());
+  EXPECT_DOUBLE_EQ(node_->map().getResolution(), .1);
+  EXPECT_TRUE(node_->build_keepout_mask_for_test().data.empty());
+}
+
 TEST_F(AreaTypeTest, ReAddingAnAreaWithAnExplicitIdPreservesIt)
 {
   // Simulates the GUI's edit/delete flow: clear_map, then re-add every area
