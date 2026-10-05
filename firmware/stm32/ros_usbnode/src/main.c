@@ -655,6 +655,8 @@ int main(void)
       WATCHDOG_Refresh();
     }
 
+    CDC_ServiceRecovery();
+
     if (NBT_handler(&main_drivemotor_nbt))
     {
       WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_DRIVEMOTOR_10MS);

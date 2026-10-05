@@ -57,6 +57,9 @@
 #define CDC_RX_DATA_HANDLED 1
 #define CDC_RX_DATA_NOTHANDLED 0
 
+/* Main-loop-only, nonblocking USB recovery service. */
+void CDC_ServiceRecovery(void);
+
 #ifndef USE_USB_FS
 // if you are using USB_HS uncomment the following define
 // it is here because ST forgot to define it for USB FS

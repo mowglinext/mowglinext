@@ -44,6 +44,9 @@ jobs:
       - name: Test runtime parameters and their flash persistence
         run: python3 firmware/scripts/test_fw_params.py
 
+      - name: Test F401 USB recovery and stale command isolation
+        run: python3 firmware/scripts/test_usb_recovery.py
+
       - name: Validate published firmware permutations and release builds
         run: python3 firmware/scripts/test_package_release.py
 
