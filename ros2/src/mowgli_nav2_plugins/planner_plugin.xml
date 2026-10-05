@@ -1,0 +1,7 @@
+<library path="mowgli_nav2_plugins">
+  <class name="mowgli_nav2_plugins/AuthorizedTransitPlanner"
+         type="mowgli_nav2_plugins::AuthorizedTransitPlanner"
+         base_class_type="nav2_core::GlobalPlanner">
+    <description>Smac 2D transit constrained to the closed recorded-area union.</description>
+  </class>
+</library>
