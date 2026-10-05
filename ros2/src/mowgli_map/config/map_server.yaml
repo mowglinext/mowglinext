@@ -1,6 +1,9 @@
 map_server_node:
   ros__parameters:
     resolution: 0.05
+    # Preserve fine mask resolution. Refuse larger allocations explicitly;
+    # /map_server_node/planning_grid_error reports the failure and transit stays closed.
+    max_grid_cells: 4000000
     map_size_x: 20.0
     map_size_y: 20.0
     map_frame: "map"

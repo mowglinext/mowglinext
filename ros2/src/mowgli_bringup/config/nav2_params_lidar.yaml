@@ -23,12 +23,15 @@ global_costmap:
       plugins: ["obstacle_layer", "inflation_layer", "keepout_filter"]
 
       obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
+        plugin: "mowgli_nav2_plugins::RecentObstacleLayer"
         enabled: true
-        # No persistence: heading drift causes wall duplicates
-        observation_persistence: 0.0
+        # Fixed global grid: recent observations rebuild the source layer each
+        # tick. Source-level persistence below bounds retained marks to 2 s.
         observation_sources: scan_filtered
         scan_filtered:
+          # Rebuilt each global update from scans no older than two seconds.
+          observation_persistence: 2.0
+          expected_update_rate: 0.5
           topic: /scan_costmap
           # Subscribe to the IMU-tilt-filtered /scan_costmap stream from
           # costmap_scan_filter_node — NOT raw /scan. This is the local
