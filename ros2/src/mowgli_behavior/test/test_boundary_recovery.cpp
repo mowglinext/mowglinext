@@ -74,6 +74,7 @@ protected:
 
     ctx_ = std::make_shared<BTContext>();
     ctx_->node = client_node_;
+    ctx_->boundary_recovery_tree_xml = "explicit_boundary_recovery.xml";
     blackboard_ = BT::Blackboard::create();
     blackboard_->set("context", ctx_);
     factory_.registerNodeType<NavigateInsideBoundary>("NavigateInsideBoundary");
@@ -109,8 +110,9 @@ protected:
     navigate_server_ = rclcpp_action::create_server<NavigateAction>(
         server_node_,
         "/navigate_to_pose",
-        [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const NavigateAction::Goal>)
+        [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const NavigateAction::Goal> goal)
         {
+          EXPECT_EQ(goal->behavior_tree, ctx_->boundary_recovery_tree_xml);
           events_.push_back("navigate_goal");
           return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         },
