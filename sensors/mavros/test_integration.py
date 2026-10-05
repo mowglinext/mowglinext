@@ -12,6 +12,9 @@ CONFIG = ROOT / "install/lib/config.sh"
 COMPOSE = ROOT / "install/compose/docker-compose.mavros.yml"
 ENV = ROOT / "install/lib/env.sh"
 LAUNCH = ROOT / "ros2/src/mowgli_bringup/launch/mowgli.launch.py"
+SETTINGS_BACKEND = ROOT / "gui/pkg/api/settings_backend.go"
+PARAMS_API = ROOT / "gui/pkg/api/params.go"
+FRONTEND_BACKENDS = ROOT / "gui/web/src/constants/hardwareBackends.ts"
 
 EXPECTED_IMAGE = (
     "ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:latest"
@@ -34,6 +37,9 @@ def main() -> int:
     compose = read(COMPOSE)
     env = read(ENV)
     launch = read(LAUNCH)
+    settings_backend = read(SETTINGS_BACKEND)
+    params_api = read(PARAMS_API)
+    frontend_backends = read(FRONTEND_BACKENDS)
 
     require(EXPECTED_IMAGE in image_env, "external development image reference changed or is missing")
     require(
@@ -108,8 +114,26 @@ def main() -> int:
         "/mavros/global_position/global",
         "HARDWARE_PENDING",
         "command and blade paths disabled by default",
+        "Pepeuch/mowglimavros@7282fd4",
+        "mavros/esc_wheel_odometry.ticks_per_meter",
+        "mavros/esc_wheel_odometry.track_width_m",
+        "pending_image",
     ):
         require(expected in readme, f"MAVROS integration documentation missing: {expected}")
+
+    for expected in (
+        '"ticks_per_meter": {Parameter: "mavros/esc_wheel_odometry.ticks_per_meter", Runtime: "pending_image"}',
+        '"wheel_track":     {Parameter: "mavros/esc_wheel_odometry.track_width_m", Runtime: "pending_image"}',
+    ):
+        require(expected in settings_backend, f"GUI backend MAVROS route missing: {expected}")
+    require(
+        'route.Runtime == "pending_image"' in params_api,
+        "generic parameter API must reject pending MAVROS live routes",
+    )
+    require(
+        'route.runtime === "available"' in frontend_backends,
+        "frontend must not apply pending MAVROS parameter routes",
+    )
 
     # Document the canonical GNSS ownership contract without binding the
     # integration test to one exact prose sentence in the README.

@@ -86,6 +86,29 @@ MowgliNext passes no command- or blade-enable override. Hardware acceptance is
 `HARDWARE_PENDING` and this integration does not alter ArduPilot, motion, or
 blade behavior.
 
+## Wheel-odometry configuration contract (image pending)
+
+The intended routing is defined from
+[`Pepeuch/mowglimavros@7282fd4`](https://github.com/Pepeuch/mowglimavros/tree/7282fd473286b33d937baac164a3fb5974b45428/ros2/src/mavros_esc_wheel_odometry):
+
+- MowgliNext keeps one canonical `ticks_per_meter` value in
+  `mowgli_robot.yaml` for every hardware backend.
+- With `HARDWARE_BACKEND=mowgli`, its live destination remains
+  `hardware_bridge.ticks_per_meter`; the existing STM32 PID/feed-forward
+  settings and tuning tool are unchanged.
+- With `HARDWARE_BACKEND=mavros`, the intended live destinations are
+  `mavros/esc_wheel_odometry.ticks_per_meter` and
+  `mavros/esc_wheel_odometry.track_width_m` (from canonical `wheel_track`).
+  No Mowgli `wheel_pid_*` value is routed or exposed as a drive control.
+
+The GUI/API advertises the MAVROS destinations as `pending_image` and only
+persists the canonical YAML values for now. The current published sidecar does
+not contain the `feat/esc-odometry` runtime, and that branch's launch file does
+not yet load MowgliNext's derived runtime YAML. Actual startup/live routing is
+therefore `HARDWARE_PENDING` until a reviewed image is built and deployed.
+This phase deliberately does not require `/wheel_odom`, ESC diagnostics, or
+live ROS parameter services.
+
 The published image above is the current deployment baseline. MowgliMAVROS has
 not yet been repinned and republished against Universal GNSS dev
 `ef31c4c95a8e831d2c926a5557298806505d52a7`; this directory does not claim

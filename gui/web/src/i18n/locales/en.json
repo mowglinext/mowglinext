@@ -63,6 +63,16 @@
       "unavailable": "Unavailable"
     }
   },
+  "settingsHardwareBackend": {
+    "title": "Hardware backend",
+    "active": "Active bridge",
+    "names": {
+      "mowgli": "Mowgli STM32",
+      "mavros": "Pixhawk via MAVROS"
+    },
+    "mavrosTitle": "MAVROS wheel calibration",
+    "mavrosPending": "ticks_per_meter remains the single calibration setting. It is intended to route to mavros/esc_wheel_odometry.ticks_per_meter, with wheel_track routed to track_width_m. Live routing is pending the feat/esc-odometry image; saving now persists configuration only. Mowgli PID and feed-forward controls are unavailable on this backend."
+  },
   "updates": {
     "title": "Versions & updates",
     "shortTitle": "Versions",

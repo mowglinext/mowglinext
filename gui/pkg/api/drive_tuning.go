@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -322,9 +322,10 @@ func DriveTuningRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider, dockerP
 		dockerProvider: dockerProvider,
 	}
 	group := r.Group("/tools/drive")
-	group.POST("/ff-calibration/start", manager.postFeedForwardStart())
-	group.POST("/pid-tuning/start", manager.postPIDStart())
-	group.POST("/tuning/rollback", manager.postRollback())
+	backendGuard := requireMowgliHardwareBackend(dbProvider)
+	group.POST("/ff-calibration/start", backendGuard, manager.postFeedForwardStart())
+	group.POST("/pid-tuning/start", backendGuard, manager.postPIDStart())
+	group.POST("/tuning/rollback", backendGuard, manager.postRollback())
 	group.GET("/tuning/status", manager.getStatus())
 	group.GET("/tuning/report/latest", manager.getLatestReport())
 }

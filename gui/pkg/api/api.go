@@ -49,7 +49,7 @@ func NewAPI(dbProvider types.IDBProvider, dockerProvider types.IDockerProvider, 
 	DiagnosticsRoutes(apiGroup, dockerProvider, rosProvider, dbProvider)
 	RosbagRoutes(apiGroup, dockerProvider)
 	WeatherRoutes(apiGroup, dbProvider)
-	ParamsRoutes(apiGroup, rosProvider)
+	ParamsRoutes(apiGroup, rosProvider, dbProvider)
 	NtripRoutes(apiGroup)
 	CalibrationRoutes(apiGroup, rosProvider, dbProvider)
 	DriveTuningRoutes(apiGroup, dbProvider, dockerProvider)

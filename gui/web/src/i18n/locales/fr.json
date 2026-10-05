@@ -63,6 +63,16 @@
       "unavailable": "Indisponible"
     }
   },
+  "settingsHardwareBackend": {
+    "title": "Pont matériel",
+    "active": "Pont actif",
+    "names": {
+      "mowgli": "STM32 Mowgli",
+      "mavros": "Pixhawk via MAVROS"
+    },
+    "mavrosTitle": "Étalonnage des roues MAVROS",
+    "mavrosPending": "ticks_per_meter reste le réglage d'étalonnage unique. Il doit être routé vers mavros/esc_wheel_odometry.ticks_per_meter, et wheel_track vers track_width_m. Le routage en direct attend l'image feat/esc-odometry ; l'enregistrement ne fait pour l'instant que persister la configuration. Les commandes PID et feed-forward Mowgli ne sont pas disponibles avec ce backend."
+  },
   "updates": {
     "title": "Versions et mises à jour",
     "shortTitle": "Versions",

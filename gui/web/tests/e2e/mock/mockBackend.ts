@@ -14,6 +14,25 @@ const DEFAULT_REST: Record<string, unknown> = {
     "/api/settings/yaml": {},
     "/api/settings/yaml/defaults": {},
     "/api/settings/schema": {properties: {}},
+    "/api/settings/hardware-backend": {
+        backend: "mowgli",
+        supported: ["mowgli", "mavros"],
+        runtime_routing: "available",
+        parameter_routes: {
+            ticks_per_meter: {parameter: "hardware_bridge.ticks_per_meter", runtime: "available"},
+            wheel_pid_kp: {parameter: "hardware_bridge.wheel_pid_kp", runtime: "available"},
+            wheel_pid_ki: {parameter: "hardware_bridge.wheel_pid_ki", runtime: "available"},
+            wheel_pid_kd: {parameter: "hardware_bridge.wheel_pid_kd", runtime: "available"},
+            wheel_pid_integral_limit: {
+                parameter: "hardware_bridge.wheel_pid_integral_limit",
+                runtime: "available",
+            },
+            wheel_pid_pwm_per_mps: {
+                parameter: "hardware_bridge.wheel_pid_pwm_per_mps",
+                runtime: "available",
+            },
+        },
+    },
     "/api/weather": {current: {temp_c: 19, condition: "clear", is_raining: false}, daily: []},
     "/api/diagnostics/snapshot": {coverage: [], crossChecks: {status: "ok", warnings: []}, containers: []},
     "/api/diagnostics/sessions": {sessions: []},

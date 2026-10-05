@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +17,7 @@ import (
 func newParamsRouter(ros types.IRosProvider) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	ParamsRoutes(r.Group("/api"), ros)
+	ParamsRoutes(r.Group("/api"), ros, types.NewMockDBProvider())
 	return r
 }
 
@@ -97,4 +97,43 @@ func TestSetParams_RejectsEmpty(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSetParams_MavrosRejectsMowgliWheelPid(t *testing.T) {
+	ros := types.NewMockRosProvider()
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	ParamsRoutes(r.Group("/api"), ros, backendTestDB(t, "mavros"))
+	body, _ := json.Marshal(SetParamsRequest{Parameters: []types.RosParameter{
+		{Name: "hardware_bridge.wheel_pid_kp", Value: 10.0},
+	}})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/params", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Empty(t, ros.SetParams)
+}
+
+func TestSetParams_MavrosRejectsPendingImageRoutes(t *testing.T) {
+	for _, name := range []string{
+		"mavros/esc_wheel_odometry.ticks_per_meter",
+		"mavros/esc_wheel_odometry.track_width_m",
+	} {
+		ros := types.NewMockRosProvider()
+		gin.SetMode(gin.TestMode)
+		r := gin.New()
+		ParamsRoutes(r.Group("/api"), ros, backendTestDB(t, "mavros"))
+		body, _ := json.Marshal(SetParamsRequest{Parameters: []types.RosParameter{
+			{Name: name, Value: 401.5},
+		}})
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/params", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusConflict, w.Code, name)
+		assert.Empty(t, ros.SetParams, name)
+	}
 }
