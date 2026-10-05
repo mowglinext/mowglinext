@@ -40,6 +40,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int64.hpp>
 #include <tf2/exceptions.hpp>
 #include <tf2_ros/buffer.hpp>
@@ -128,6 +129,10 @@ public:
   double tool_width() const
   {
     return tool_width_;
+  }
+  const std::string& planning_grid_error_for_test() const
+  {
+    return planning_grid_error_;
   }
 
   /// Test-only: add a verified tool pose to the accumulated footprint.
@@ -634,6 +639,7 @@ private:
   /// Does nothing if mowing_area_polygon_ has fewer than 3 points.
   /// Caller must hold map_mutex_.
   void publish_keepout_mask();
+  void invalidate_keepout_mask();
 
   /// Check if the robot is outside all allowed polygons and publish violation.
   void check_boundary_violation(double x, double y);
@@ -811,6 +817,9 @@ private:
 
   // ── Parameters ────────────────────────────────────────────────────────────
   double resolution_;
+  int64_t max_grid_cells_{4000000};
+  std::string planning_grid_error_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr planning_grid_error_pub_;
   double map_size_x_;
   double map_size_y_;
   std::string map_frame_;

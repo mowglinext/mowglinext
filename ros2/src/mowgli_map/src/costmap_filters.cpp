@@ -84,10 +84,24 @@ raster::CellAxes MapServerNode::make_cell_axes(const grid_map::GridMap& map, boo
   return axes;
 }
 
+void MapServerNode::invalidate_keepout_mask()
+{
+  nav_msgs::msg::OccupancyGrid mask;
+  mask.header.stamp = now();
+  mask.header.frame_id = map_frame_;
+  // Empty means authorization is unavailable, NOT an empty/free garden.
+  cached_keepout_mask_ = mask;
+  keepout_mask_pub_->publish(mask);
+}
+
 void MapServerNode::publish_keepout_mask()
 {
-  if (areas_.empty())
+  std_msgs::msg::String error;
+  error.data = planning_grid_error_;
+  planning_grid_error_pub_->publish(error);
+  if (areas_.empty() || !planning_grid_error_.empty())
   {
+    invalidate_keepout_mask();
     return;
   }
 
