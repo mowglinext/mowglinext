@@ -72,6 +72,7 @@
 #include <mowgli_interfaces/srv/set_area_coverage_lines.hpp>
 #include <mowgli_interfaces/srv/set_docking_point.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace mowgli_map
 {
@@ -650,6 +651,9 @@ private:
   /// Caller must hold map_mutex_.
   void publish_keepout_mask();
   void invalidate_keepout_mask();
+  /// Called with map_mutex_ held: complete transit authorization snapshot.
+  void publish_transit_geometry();
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr transit_geometry_pub_;
 
   /// Check if the robot is outside all allowed polygons and publish violation.
   void check_boundary_violation(double x, double y);

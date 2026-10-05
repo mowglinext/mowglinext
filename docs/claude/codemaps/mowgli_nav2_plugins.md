@@ -13,6 +13,12 @@ for geometry synchronization, recovery toggles, budgets and hardware acceptance.
 
 ## Where to look
 
+Normal transit planning is now `include/mowgli_nav2_plugins/authorized_transit_planner.hpp`
+and `src/authorized_transit_planner.cpp`: pinned Smac 2D with a private obstacle
+view and continuous polygon-union checks. `transit_geometry.hpp` owns the pure
+geometry rules; `test_authorized_transit.cpp` runs the real planner regressions.
+See `docs/TRANSIT_AUTHORIZATION.md` for terminal exceptions and recovery.
+
 | Task | Start here |
 |------|------------|
 | Carrot speed target / accel ramp / carrot lead cap (1.0 m) | `ros2/src/mowgli_nav2_plugins/src/ftc_controller.cpp` `update_control_point()` (L1176) + `distanceLookahead()` (L1144) |

@@ -89,6 +89,71 @@ protected:
   std::shared_ptr<mowgli_map::MapServerNode> node_;
 };
 
+TEST_F(MapServerTest, TransitGeometryPublishesCompleteSnapshotAndInvalidatesOnEdit)
+{
+  auto observer = std::make_shared<rclcpp::Node>("transit_geometry_observer");
+  visualization_msgs::msg::MarkerArray::ConstSharedPtr latest;
+  auto subscription = observer->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      rclcpp::QoS(1).transient_local(),
+      [&](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+      {
+        latest = message;
+      });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(observer);
+  const auto wait_for = [&](bool empty)
+  {
+    for (int i = 0; i < 200; ++i)
+    {
+      executor.spin_some();
+      if (latest && latest->markers.empty() == empty)
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+  };
+  const auto rectangle = [](float x0, float y0, float x1, float y1)
+  {
+    geometry_msgs::msg::Polygon polygon;
+    for (const auto& xy :
+         std::vector<std::pair<float, float>>{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}})
+    {
+      geometry_msgs::msg::Point32 p;
+      p.x = xy.first;
+      p.y = xy.second;
+      polygon.points.push_back(p);
+    }
+    return polygon;
+  };
+  auto request = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+  request->area.name = "lawn";
+  request->area.area = rectangle(-2, -2, 2, 2);
+  request->area.obstacles.push_back(rectangle(0.4F, 0.4F, 0.6F, 0.6F));
+  auto response = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+  node_->add_area_for_test(request, response);
+  ASSERT_TRUE(response->success);
+  ASSERT_TRUE(wait_for(true));
+  node_->build_keepout_mask_for_test();
+  ASSERT_TRUE(wait_for(false));
+  ASSERT_EQ(latest->markers.size(), 2U);
+  EXPECT_EQ(latest->markers[0].ns, "area");
+  EXPECT_EQ(latest->markers[1].ns, "obstacle");
+  EXPECT_EQ(latest->markers[0].header.frame_id, "map");
+  EXPECT_EQ(latest->markers[0].points.size(), 4U);
+  request->area.name = "navigation";
+  request->area.is_navigation_area = true;
+  request->is_navigation_area = true;
+  request->area.area = rectangle(2, -1, 4, 1);
+  request->area.obstacles.clear();
+  node_->add_area_for_test(request, response);
+  ASSERT_TRUE(response->success);
+  ASSERT_TRUE(wait_for(true));
+  node_->build_keepout_mask_for_test();
+  ASSERT_TRUE(wait_for(false));
+  EXPECT_EQ(latest->markers.size(), 3U);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test 1 — grid_map creation with correct layers
 // ─────────────────────────────────────────────────────────────────────────────
