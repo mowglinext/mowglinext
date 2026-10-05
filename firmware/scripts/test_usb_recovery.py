@@ -79,8 +79,34 @@ static uint8_t USBD_Start(USBD_HandleTypeDef *d);
 static uint8_t USBD_LL_Stop(USBD_HandleTypeDef *d) {
     (void)d; assert(!irq_enabled && !primask); return fail_stop ? USBD_FAIL : USBD_OK;
 }
-static void USB_DEVICE_Detach(void) { assert(!irq_enabled && !primask && !hUsbDeviceFS.pClassData); detached_pin=1; }
-static void USB_DEVICE_Attach(void) { assert(!irq_enabled && !primask); detached_pin=0; }
+typedef struct { unsigned Pin, Mode, Pull, Speed, Alternate; } GPIO_InitTypeDef;
+#define GPIOA 1
+#define GPIO_PIN_12 4096
+#define GPIO_PIN_RESET 0
+#define GPIO_MODE_OUTPUT_PP 1
+#define GPIO_MODE_AF_PP 2
+#define GPIO_NOPULL 0
+#define GPIO_SPEED_FREQ_LOW 0
+#define GPIO_SPEED_FREQ_VERY_HIGH 3
+#define GPIO_AF10_OTG_FS 10
+#define USB_OTG_GCCFG_PWRDWN (1u<<16)
+static struct { unsigned GCCFG; } usb_regs = { USB_OTG_GCCFG_PWRDWN };
+#define USB_OTG_FS (&usb_regs)
+static void HAL_GPIO_WritePin(unsigned p, unsigned pin, unsigned v) {
+    assert(p==GPIOA && pin==GPIO_PIN_12 && v==GPIO_PIN_RESET && !(usb_regs.GCCFG&USB_OTG_GCCFG_PWRDWN));
+}
+static void HAL_GPIO_Init(unsigned p, GPIO_InitTypeDef *g) {
+    assert(p==GPIOA && g->Pin==GPIO_PIN_12 && !g->Pull && !irq_enabled && !primask);
+    if (g->Mode==GPIO_MODE_OUTPUT_PP) {
+        assert(!hUsbDeviceFS.pClassData && !(usb_regs.GCCFG&USB_OTG_GCCFG_PWRDWN) && g->Speed==GPIO_SPEED_FREQ_LOW);
+        detached_pin=1;
+    } else {
+        assert(g->Mode==GPIO_MODE_AF_PP && g->Alternate==GPIO_AF10_OTG_FS && g->Speed==GPIO_SPEED_FREQ_VERY_HIGH);
+        detached_pin=0;
+    }
+}
+static void USB_DEVICE_Detach(void);
+static void USB_DEVICE_Attach(void);
 '''
 
 TEST = r'''
@@ -94,7 +120,7 @@ static uint8_t USBD_Stop(USBD_HandleTypeDef *d) {
     return USBD_OK;
 }
 static uint8_t USBD_Start(USBD_HandleTypeDef *d) {
-    (void)d; assert(!primask && !ipsr && !irq_enabled && !detached_pin); ++starts;
+    (void)d; assert(!primask && !ipsr && !irq_enabled && !detached_pin && (usb_regs.GCCFG&USB_OTG_GCCFG_PWRDWN)); ++starts;
     if (fail_start) { fail_start=0; return USBD_FAIL; }
     return USBD_OK;
 }
@@ -214,7 +240,10 @@ def main():
         comms = ''
         for name in ['cobs.c', 'crc16.c', 'mowgli_comms.c']:
             comms += re.sub(r'^#include "[^"]+".*$', '', (FW / 'src' / name).read_text(), flags=re.M)
-        (out / 'test.c').write_text(SHIM + header + comms + source + TEST)
+        usb = (FW / 'src/usb_device.c').read_text()
+        helpers = usb[usb.index('void USB_DEVICE_Detach(void)'):usb.index('/* USER CODE END 0 */')]
+        helpers = helpers.replace('void USB_DEVICE_', 'static void USB_DEVICE_')
+        (out / 'test.c').write_text(SHIM + header + comms + helpers + source + TEST)
         binary = out / ('test.exe' if os.name == 'nt' else 'test')
         subprocess.run([args.cc] + args.cc_arg + ['-std=c11', '-Wall', '-Wextra', '-Werror',
                         '-I' + str(FW / 'include'), str(out / 'test.c'), '-o', str(binary)], check=True)
