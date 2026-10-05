@@ -52,6 +52,23 @@ def _controller_section(params: dict) -> dict:
     return params["controller_server"]["ros__parameters"]
 
 
+@pytest.mark.parametrize("overlay", ["nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"])
+def test_transit_authorization_and_explicit_recovery_are_separate(overlay: str) -> None:
+    params = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml(overlay))
+    planner = params["planner_server"]["ros__parameters"]
+    assert planner["planner_plugins"] == ["GridBased", "BoundaryRecovery"]
+    assert planner["GridBased"]["plugin"] == "mowgli_nav2_plugins/AuthorizedTransitPlanner"
+    assert planner["GridBased"]["downsample_costmap"] is False
+    assert planner["GridBased"]["tolerance"] == 0.0
+    assert planner["BoundaryRecovery"]["plugin"] == "nav2_smac_planner::SmacPlanner2D"
+    trees = os.path.join(os.path.dirname(__file__), "..", "..", "mowgli_behavior", "trees")
+    for filename in ("navigate_to_pose.xml", "navigate_to_pose_transit.xml"):
+        with open(os.path.join(trees, filename), encoding="utf-8") as stream:
+            assert "BoundaryRecovery" not in stream.read()
+    with open(os.path.join(trees, "navigate_inside_boundary.xml"), encoding="utf-8") as stream:
+        assert 'planner_id="BoundaryRecovery"' in stream.read()
+
+
 # The coverage goal-checker was migrated off SimpleGoalChecker/StoppedGoalChecker
 # (commit 4bae0567) to PathProgressGoalChecker. The old "xy_goal_tolerance must
 # be <= mower_width" and "stateful must be true" guards belonged to the

@@ -13,6 +13,10 @@ Map edits publish an empty keepout mask until the settled raster is ready; the l
 `~/planning_grid_error` reports allocation refusal. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md).
 
 ## Where to look
+
+Transit geometry snapshots and dock/obstacle rings are published by
+`costmap_filters.cpp::publish_transit_geometry` after the complete keepout mask.
+`area_manager.cpp` invalidates snapshots while recorded geometry is edited.
 | Task | Start here |
 |------|------------|
 | Add / rename a `map_server_node` publisher, subscriber, service or parameter | `ros2/src/mowgli_map/src/map_server_node.cpp` constructor `MapServerNode::MapServerNode` (L51-493); members in `include/mowgli_map/map_server_node.hpp` (L515-889) |

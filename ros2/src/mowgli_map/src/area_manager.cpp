@@ -707,6 +707,9 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
 
 void MapServerNode::publish_recorded_area_polygons()
 {
+  // A map edit invalidates transit until the debounced complete mask and
+  // geometry snapshot have been rebuilt. The LiDAR filter keeps its own topic.
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
   mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
   msg.header.stamp = get_clock()->now();
   msg.header.frame_id = "map";
@@ -1475,6 +1478,7 @@ void MapServerNode::on_set_docking_point(
     std::lock_guard<std::mutex> lock(map_mutex_);
     rebuild_dock_polygons();
     masks_dirty_ = true;
+    transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
   }
   resize_map_to_areas();
   defer_mask_rebuild();
@@ -2647,6 +2651,7 @@ void MapServerNode::defer_mask_rebuild()
   invalidate_keepout_mask();
   std::lock_guard<std::mutex> lock(map_mutex_);
   mask_rebuild_not_before_ = std::chrono::steady_clock::now() + kMapEditSettle;
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
 }
 
 void MapServerNode::apply_area_classifications()

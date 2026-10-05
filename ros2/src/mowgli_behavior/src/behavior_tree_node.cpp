@@ -1172,6 +1172,10 @@ private:
     {
       const auto transit_xml =
           std::filesystem::path(tree_file).parent_path() / "navigate_to_pose_transit.xml";
+      const auto recovery_xml =
+          std::filesystem::path(tree_file).parent_path() / "navigate_inside_boundary.xml";
+      if (std::filesystem::exists(recovery_xml))
+        context_->boundary_recovery_tree_xml = recovery_xml.string();
       if (std::filesystem::exists(transit_xml))
       {
         context_->transit_tree_xml = transit_xml.string();

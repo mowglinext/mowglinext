@@ -767,6 +767,8 @@ struct BTContext
   /// (stopped_goal_checker, which opennav_docking still needs). Set once by
   /// behavior_tree_node from the main tree's directory.
   std::string transit_tree_xml;
+  /// Dedicated planner selection for explicit BoundaryGuard recovery only.
+  std::string boundary_recovery_tree_xml;
 
   /// Goal-checker instance the coverage controller is dispatched with.
   ///

@@ -670,6 +670,13 @@ BT::NodeStatus NavigateInsideBoundary::SendNav2Goal()
   goal_msg.pose.header.stamp = ctx->node->now();
   goal_msg.pose.header.frame_id = "map";
   goal_msg.pose.pose = recovery_pose_;
+  if (ctx->boundary_recovery_tree_xml.empty())
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(), "Boundary recovery tree unavailable");
+    pending_nav_result_ = BT::NodeStatus::FAILURE;
+    return BeginReEnableKeepout();
+  }
+  goal_msg.behavior_tree = ctx->boundary_recovery_tree_xml;
 
   goal_handle_future_ = action_client_->async_send_goal(goal_msg);
 
