@@ -10,7 +10,9 @@
 - [Garden global costmap](../GARDEN_GLOBAL_COSTMAP.md) — **current**, contributor: fixed
   global geometry, edit/readiness synchronization, resource budgets, observation clearing
   and hardware acceptance procedure.
-
+- [Transit authorization](../TRANSIT_AUTHORIZATION.md) — **current**, operator/contributor:
+  normal transit polygon authorization, bounded terminal legs, explicit recovery,
+  and required physical acceptance procedure.
 
 - [Nav2 Lyrical controller review](../NAV2_LYRICAL_CONTROLLER_REVIEW.md) — **current**, contributor:
   why FTC stays the coverage controller after the Lyrical migration, what Nav2 1.5.1 actually adds
