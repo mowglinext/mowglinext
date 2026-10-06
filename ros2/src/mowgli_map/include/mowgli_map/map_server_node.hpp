@@ -267,6 +267,12 @@ public:
     on_load_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
   }
 
+  /// Test-only: exercise the same clear operation used by GUI map replacement.
+  void clear_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_clear_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+
   /// Test-only: current area-list generation (mowglinext#637 phase 2).
   uint64_t area_list_generation_for_test() const
   {
