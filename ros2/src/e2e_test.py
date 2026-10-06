@@ -565,6 +565,9 @@ class E2ETestNode(Node):
             GnssStatus.FIX_TYPE_RTK_FLOAT: "RTK_FLOAT",
             GnssStatus.FIX_TYPE_RTK_FIXED: "RTK_FIXED",
             GnssStatus.FIX_TYPE_DEAD_RECKONING: "DEAD_RECKONING",
+            GnssStatus.FIX_TYPE_2D_FIX: "2D_FIX",
+            GnssStatus.FIX_TYPE_3D_FIX: "3D_FIX",
+            GnssStatus.FIX_TYPE_DGPS: "DGPS",
         }
         state = names.get(msg.fix_type, f"UNKNOWN({msg.fix_type})")
         if not self.metrics.gps_states or self.metrics.gps_states[-1][1] != state:

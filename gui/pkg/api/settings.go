@@ -140,6 +140,7 @@ func SettingsRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider) {
 	GetSettingsSchema(r, dbProvider)
 	GetSettingsYAML(r, dbProvider)
 	GetSettingsYAMLDefaults(r, dbProvider)
+	GetSettingsHardwareBackend(r, dbProvider)
 	PostSettingsYAML(r, dbProvider)
 	GetSettingsStatus(r, dbProvider)
 	PostSettingsStatus(r, dbProvider)
@@ -845,6 +846,10 @@ func gnssCompatFromFlat(flat map[string]any, schemaDefaults map[string]any) map[
 
 func gnssRuntimeEnvFallbackFromFlat(flat map[string]any, schemaDefaults map[string]any) map[string]string {
 	compat := gnssCompatFromFlat(flat, schemaDefaults)
+	if stringValue(flat["gnss_stack"], gnssSchemaDefaultString(schemaDefaults, "gnss_stack", "universal")) == "disabled" {
+		compat["GNSS_STACK"] = "disabled"
+		compat["GNSS_STATUS_SOURCE"] = "external"
+	}
 	return map[string]string{
 		"GNSS_STACK":                compat["GNSS_STACK"],
 		"GNSS_STATUS_SOURCE":        compat["GNSS_STATUS_SOURCE"],

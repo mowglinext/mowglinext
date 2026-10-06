@@ -92,6 +92,7 @@ def _build(filename, **overrides):
             "IncludeLaunchDescription": Include,
             "PythonLaunchDescriptionSource": Action,
             "IfCondition": Action,
+            "EnvironmentVariable": lambda _name, default_value=None: default_value,
             "LaunchConfiguration": Configuration,
             "PythonExpression": Action,
             "ParameterValue": Parameter,
@@ -104,14 +105,19 @@ def _build(filename, **overrides):
             ),
         }
     )
-    function = next(
+    tree = _parse(filename)
+
+    functions = [
         item
-        for item in _parse(filename).body
+        for item in tree.body
         if isinstance(item, ast.FunctionDef)
-        and item.name == "generate_launch_description"
-    )
-    exec(  # noqa: S102
-        compile(ast.Module(body=[function], type_ignores=[]), filename, "exec"),
+        and item.name in {
+            "_gnss_status_pairing_window_s",
+            "generate_launch_description",
+        }
+    ]
+    exec(
+        compile(ast.Module(body=functions, type_ignores=[]), filename, "exec"),
         namespace,
     )
     description = namespace["generate_launch_description"]()

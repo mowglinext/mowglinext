@@ -1,7 +1,51 @@
 #!/usr/bin/env bash
 
+select_mavros_gnss_source() {
+  local allow_existing="${1:-false}"
+  local normalized=""
+  local default_choice="1"
+
+  if [[ -n "${GNSS_SOURCE:-}" ]]; then
+    normalized="$(normalize_gnss_source "$GNSS_SOURCE")"
+  fi
+
+  if [[ "$allow_existing" == "true" && ( "$normalized" == "mavros" || "$normalized" == "direct" ) ]]; then
+    GNSS_SOURCE="$normalized"
+    info "$MSG_MAVROS_GNSS_SOURCE_EXISTING $GNSS_SOURCE"
+    return 0
+  fi
+
+  [[ "$normalized" == "direct" ]] && default_choice="2"
+
+  echo ""
+  echo "$MSG_MAVROS_GNSS_SOURCE_TITLE"
+  echo "  [1] $MSG_MAVROS_GNSS_SOURCE_PIXHAWK"
+  echo "  [2] $MSG_MAVROS_GNSS_SOURCE_SOC"
+  echo ""
+  prompt "$MSG_CHOICE" "$default_choice"
+
+  case "$REPLY" in
+    1|mavros|pixhawk)
+      export GNSS_SOURCE="mavros"
+      export GNSS_STATUS_SOURCE="external"
+      ;;
+    2|direct|soc)
+      export GNSS_SOURCE="direct"
+      export GNSS_STATUS_SOURCE="universal"
+      ;;
+    *)
+      error "$MSG_MAVROS_GNSS_SOURCE_INVALID"
+      return 1
+      ;;
+  esac
+
+  info "$MSG_MAVROS_GNSS_SOURCE_SELECTED $GNSS_SOURCE"
+}
+
 configure_mavros_backend_details() {
   local allow_existing="${1:-false}"
+
+  select_mavros_gnss_source "$allow_existing" || return 1
 
   if [[ "$allow_existing" == "true" && ( "${MAVROS_AUTOPILOT:-}" == "ardupilot" || "${MAVROS_AUTOPILOT:-}" == "px4" ) ]]; then
     info "Using MAVROS autopilot preset/default: ${MAVROS_AUTOPILOT}"
@@ -21,6 +65,7 @@ configure_mavros_backend_details() {
 
   if [[ "$allow_existing" == "true" && -n "${MAVROS_BY_ID:-}" && -e "${MAVROS_BY_ID}" ]]; then
     info "Using existing MAVROS device: ${MAVROS_BY_ID}"
+    export MAVROS_PORT="$MAVROS_BY_ID"
     return 0
   fi
 
@@ -52,6 +97,7 @@ select_hardware_backend() {
     case "${HARDWARE_BACKEND}" in
       mowgli)
         export HARDWARE_BACKEND="mowgli"
+        export GNSS_SOURCE="direct"
         export MAVROS_BY_ID=""
         info "Hardware backend pre-configured: Mowgli STM32 board"
         return 0
@@ -80,6 +126,7 @@ select_hardware_backend() {
   case "$choice" in
     1)
       export HARDWARE_BACKEND="mowgli"
+      export GNSS_SOURCE="direct"
       export MAVROS_BY_ID=""
       info "Selected backend: Mowgli STM32 board"
       ;;
@@ -189,6 +236,7 @@ detect_mavros_by_id() {
   fi
 
   export MAVROS_BY_ID="${candidates[$((choice - 1))]}"
+  export MAVROS_PORT="$MAVROS_BY_ID"
   info "Selected MAVROS device: ${MAVROS_BY_ID}"
 }
 select_mavros_autopilot() {

@@ -22,6 +22,8 @@ import {
     YAW_LOOP_GROUP,
     groupKeys,
 } from "../components/settings/settingsFieldGroups.ts";
+import { liveHardwareParameters, settingsSectionsForBackend } from "../constants/hardwareBackends.ts";
+import { useHardwareBackend } from "./useHardwareBackend.ts";
 
 /** A section that saves outside mowgli_robot.yaml but wants the page's Save button. */
 export interface ExternalSaver {
@@ -323,6 +325,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
 export const useSettingsManager = () => {
     const { t } = useTranslation();
     const guiApi = useApi();
+    const hardware = useHardwareBackend();
     const { notification } = App.useApp();
     const [savedValues, setSavedValues] = useState<Record<string, any>>({});
     const [localValues, setLocalValues] = useState<Record<string, any>>({});
@@ -511,13 +514,15 @@ export const useSettingsManager = () => {
                 dirtyKeys.has("dock_pose_x") ||
                 dirtyKeys.has("dock_pose_y") ||
                 dirtyKeys.has("dock_pose_yaw");
-            const driveKeys = [
-                "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
-                "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
-            ];
-            const liveHardwareKeys = ["ticks_per_meter", ...driveKeys];
-            const liveHardwareDirty = liveHardwareKeys.some((k) => dirtyKeys.has(k));
-            const requiresRosRestart = [...dirtyKeys].some(key => !liveHardwareKeys.includes(key));
+            const liveParameters = liveHardwareParameters(
+                dirtyKeys,
+                localValues,
+                hardware.parameterRoutes,
+            );
+            const routedHardwareKeys = new Set(Object.keys(hardware.parameterRoutes));
+            const requiresRosRestart = [...dirtyKeys].some(
+                (key) => !routedHardwareKeys.has(key),
+            );
             const hasDirtyChanges = dirtyKeys.size > 0;
             const externalSavers = Object.values(externalSaversRef.current).filter((x) => x.dirtyCount > 0);
             if (!hasDirtyChanges && !shouldRestartGps && externalSavers.length === 0) {
@@ -610,33 +615,27 @@ export const useSettingsManager = () => {
                     });
                 }
             }
-            // Push live-tunable wheel/drive parameters to the running
-            // hardware_bridge node so they take effect immediately (no
-            // restart). yamlCreate above persisted them to mowgli_robot.yaml
-            // for the next boot; this sets the live ROS params too. The
-            // hardware_bridge callback applies ticks_per_meter in-process and
-            // re-sends the full drive runtime tuning packet to the STM32 firmware.
-            if (hasDirtyChanges && liveHardwareDirty) {
-                const parameters = liveHardwareKeys
-                    .filter((k) => dirtyKeys.has(k) && k in localValues)
-                    .map((k) => ({ name: `hardware_bridge.${k}`, value: Number(localValues[k]) }));
-                if (parameters.length > 0) {
-                    try {
-                        await guiApi.request({
-                            path: "/params",
-                            method: "POST",
-                            type: ContentType.Json,
-                            format: "json",
-                            body: { parameters },
-                        });
-                    } catch (e: any) {
-                        setRestartRequired(true);
-                        notification.warning({
-                            message: t("settingsSections.toasts.drivePidUpdateFailed"),
-                            description: e?.message ??
-                                t("settingsSections.toasts.drivePidUpdateFailedDescription"),
-                        });
-                    }
+            // Push only routes the backend reports as available. For Mowgli
+            // these are the established hardware_bridge calibration/PID
+            // parameters. MAVROS routes remain present in the contract as
+            // pending_image, so saves persist YAML without calling a ROS
+            // parameter service until that image is actually available.
+            if (hasDirtyChanges && liveParameters.length > 0) {
+                try {
+                    await guiApi.request({
+                        path: "/params",
+                        method: "POST",
+                        type: ContentType.Json,
+                        format: "json",
+                        body: { parameters: liveParameters },
+                    });
+                } catch (e: any) {
+                    setRestartRequired(true);
+                    notification.warning({
+                        message: t("settingsSections.toasts.drivePidUpdateFailed"),
+                        description: e?.message ??
+                            t("settingsSections.toasts.drivePidUpdateFailedDescription"),
+                    });
                 }
             }
         } catch (e: any) {
@@ -647,7 +646,7 @@ export const useSettingsManager = () => {
         } finally {
             setSaving(false);
         }
-    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, t]);
+    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, t, hardware.parameterRoutes]);
 
     const savePartialValues = useCallback(async (
         partialValues: Record<string, any>,
@@ -778,11 +777,12 @@ export const useSettingsManager = () => {
     );
 
     return {
-        sections: SECTION_DEFINITIONS,
+        sections: settingsSectionsForBackend(SECTION_DEFINITIONS, hardware.backend),
+        hardwareBackend: hardware,
         values: localValues,
         savedValues,
         defaults,
-        loading,
+        loading: loading || hardware.loading,
         saving,
         gpsRestarting: gpsRestart.pending,
         isDirty,

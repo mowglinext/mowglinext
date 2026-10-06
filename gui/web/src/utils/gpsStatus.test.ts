@@ -21,21 +21,34 @@ import {
 import {gnssStatusSamples} from '../test/mocks.tsx';
 
 describe('deriveGpsStatus', () => {
-    it('maps RTK fixed status to the highest quality label', () => {
-        const status: GnssStatus = {fix_type: GnssStatusConstants.FIX_TYPE_RTK_FIXED};
-        expect(deriveGpsStatus(status)).toEqual({
-            fixType: 'RTK_FIX',
-            label: en.gpsStatus.rtkFixed,
-            percent: 100,
+    it.each([
+        [GnssStatusConstants.FIX_TYPE_NO_FIX, 'NO_FIX', en.gpsStatus.compactUnknown, 0],
+        [GnssStatusConstants.FIX_TYPE_2D_FIX, '2D_FIX', en.gpsStatus.compact2d, 20],
+        [GnssStatusConstants.FIX_TYPE_3D_FIX, '3D_FIX', en.gpsStatus.compact3d, 40],
+        [GnssStatusConstants.FIX_TYPE_DGPS, 'DGPS', en.gpsStatus.compactDgps, 60],
+        [GnssStatusConstants.FIX_TYPE_RTK_FLOAT, 'RTK_FLOAT', en.gpsStatus.compactRtkFloat, 80],
+        [GnssStatusConstants.FIX_TYPE_RTK_FIXED, 'RTK_FIX', en.gpsStatus.compactRtkFixed, 100],
+    ] as const)('maps canonical numeric fix type %s explicitly', (fixType, expectedType, label, percent) => {
+        expect(deriveGpsStatus({fix_type: fixType})).toEqual({
+            fixType: expectedType,
+            label,
+            percent,
         });
     });
 
-    it('maps plain GPS fix status', () => {
-        const status: GnssStatus = {fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX};
-        expect(deriveGpsStatus(status)).toEqual({
-            fixType: 'GPS_FIX',
-            label: en.gpsStatus.gpsFix,
-            percent: 25,
+    it('maps unknown and legacy-unspecified solution types to an em dash', () => {
+        expect(deriveGpsStatus({fix_type: 255, fix_valid: true})).toEqual({
+            fixType: 'UNKNOWN',
+            label: en.gpsStatus.compactUnknown,
+            percent: 0,
+        });
+        expect(deriveGpsStatus({
+            fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+            fix_valid: true,
+        })).toEqual({
+            fixType: 'UNKNOWN',
+            label: en.gpsStatus.compactUnknown,
+            percent: 0,
         });
     });
     it('prefers RTK fixed mode over plain GPS fix type', () => {
@@ -47,7 +60,7 @@ describe('deriveGpsStatus', () => {
 
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'RTK_FIX',
-            label: en.gpsStatus.rtkFixed,
+            label: en.gpsStatus.compactRtkFixed,
             percent: 100,
         });
     });
@@ -61,40 +74,57 @@ describe('deriveGpsStatus', () => {
 
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'RTK_FLOAT',
-            label: en.gpsStatus.rtkFloat,
-            percent: 50,
+            label: en.gpsStatus.compactRtkFloat,
+            percent: 80,
         });
     });
+
+    it.each([
+        GnssStatusConstants.FIX_TYPE_RTK_FLOAT,
+        GnssStatusConstants.FIX_TYPE_RTK_FIXED,
+    ])('fails closed when RTK mode NONE conflicts with stale RTK fix type %s', (fixType) => {
+        expect(deriveGpsStatus({
+            fix_valid: true,
+            fix_type: fixType,
+            rtk_mode: GnssStatusConstants.RTK_MODE_NONE,
+        })).toEqual({
+            fixType: 'UNKNOWN',
+            label: en.gpsStatus.compactUnknown,
+            percent: 0,
+        });
+    });
+
     it('prefers fix_valid=false over stale fix_type values', () => {
         const status: GnssStatus = {
-            fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+            fix_type: GnssStatusConstants.FIX_TYPE_RTK_FIXED,
+            rtk_mode: GnssStatusConstants.RTK_MODE_FIXED,
             fix_valid: false,
         };
 
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'NO_FIX',
-            label: en.gpsStatus.noGps,
+            label: en.gpsStatus.compactUnknown,
             percent: 0,
         });
     });
 
-    it('does not show no-fix when fix_valid=true but fix_type is missing or stale', () => {
+    it('does not reinterpret NO_FIX as a partial string match when fix_valid=true', () => {
         const status: GnssStatus = {
             fix_type: GnssStatusConstants.FIX_TYPE_NO_FIX,
             fix_valid: true,
         };
 
         expect(deriveGpsStatus(status)).toEqual({
-            fixType: 'GPS_FIX',
-            label: en.gpsStatus.gpsFix,
-            percent: 25,
+            fixType: 'NO_FIX',
+            label: en.gpsStatus.compactUnknown,
+            percent: 0,
         });
     });
 
     it('falls back to no-fix when typed status is absent', () => {
         expect(deriveGpsStatus(undefined)).toEqual({
-            fixType: 'NO_FIX',
-            label: en.gpsStatus.noGps,
+            fixType: 'UNKNOWN',
+            label: en.gpsStatus.compactUnknown,
             percent: 0,
         });
     });
@@ -245,8 +275,8 @@ describe('deriveGpsStatus', () => {
     it('treats the Generic NMEA sample as RTK float from public rtk_mode without renaming fields', () => {
         expect(deriveGpsStatus(gnssStatusSamples.nmea_gga_fix_quality_float)).toEqual({
             fixType: 'RTK_FLOAT',
-            label: en.gpsStatus.rtkFloat,
-            percent: 50,
+            label: en.gpsStatus.compactRtkFloat,
+            percent: 80,
         });
     });
 

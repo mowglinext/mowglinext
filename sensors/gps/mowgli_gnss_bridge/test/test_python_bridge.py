@@ -134,6 +134,26 @@ def _project(tracker: CorrectionDiagnosticTracker, now: float) -> PublicGnssStat
 
 class PythonBridgeContractTest(unittest.TestCase):
 
+    def test_explicit_solution_types_and_ordinal_quality_are_preserved(self) -> None:
+        cases = (
+            (UniversalGnssStatus.FIX_TYPE_2D_FIX, PublicGnssStatus.FIX_TYPE_2D_FIX, 20.0),
+            (UniversalGnssStatus.FIX_TYPE_3D_FIX, PublicGnssStatus.FIX_TYPE_3D_FIX, 40.0),
+            (UniversalGnssStatus.FIX_TYPE_DGPS, PublicGnssStatus.FIX_TYPE_DGPS, 60.0),
+            (UniversalGnssStatus.FIX_TYPE_RTK_FLOAT, PublicGnssStatus.FIX_TYPE_RTK_FLOAT, 80.0),
+            (UniversalGnssStatus.FIX_TYPE_RTK_FIXED, PublicGnssStatus.FIX_TYPE_RTK_FIXED, 100.0),
+        )
+
+        for universal_type, public_type, quality in cases:
+            with self.subTest(universal_type=universal_type):
+                bridge = _make_bridge()
+                incoming = UniversalGnssStatus()
+                incoming.fix_valid = True
+                incoming.fix_type = universal_type
+                bridge._on_status(incoming)
+                public = bridge._status_pub.messages[-1]
+                self.assertEqual(public.fix_type, public_type)
+                self.assertEqual(public.quality_percent, quality)
+
     def test_receipt_stamp_and_sequence_match_cpp_contract_vector(self) -> None:
         bridge = _make_bridge()
         incoming = UniversalGnssStatus()

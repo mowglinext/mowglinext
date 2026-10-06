@@ -127,6 +127,9 @@ namespace mower_msgs
       enum { FIX_TYPE_RTK_FLOAT = 2 };
       enum { FIX_TYPE_RTK_FIXED = 3 };
       enum { FIX_TYPE_DEAD_RECKONING = 4 };
+      enum { FIX_TYPE_2D_FIX = 5 };
+      enum { FIX_TYPE_3D_FIX = 6 };
+      enum { FIX_TYPE_DGPS = 7 };
       enum { RTK_MODE_UNKNOWN = 0 };
       enum { RTK_MODE_NONE = 1 };
       enum { RTK_MODE_FLOAT = 2 };
@@ -1086,7 +1089,7 @@ namespace mower_msgs
     }
 
     virtual const char * getType() override { return "mower_msgs/GnssStatus"; };
-    virtual const char * getMD5() override { return "a8334728d1511fd48b6b5c85cf2a331e"; };
+    virtual const char * getMD5() override { return "b78b9b2a6de8230b1adb86ac7b5d9fd6"; };
 
   };
 

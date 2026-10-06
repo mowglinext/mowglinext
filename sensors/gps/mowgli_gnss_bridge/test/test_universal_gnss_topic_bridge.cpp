@@ -6,9 +6,11 @@
 // node end-to-end (publish Universal messages, assert the republished public
 // contract) so the port stays field-exact with the reference Python node.
 
+#include <array>
 #include <chrono>
 #include <memory>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -117,6 +119,23 @@ TEST_F(BridgeTest, StatusIsMappedToPublicContract)
   // Unset upstream stays 0, which selects the receipt-stamp compatibility mode
   // in mowgli_interfaces/gnss_observation_freshness.hpp.
   EXPECT_EQ(received.position_observation_sequence, 0U);
+
+  const std::array<std::tuple<std::uint8_t, std::uint8_t, float>, 3> solution_cases{{
+    {UniversalGnssStatus::FIX_TYPE_2D_FIX, PublicGnssStatus::FIX_TYPE_2D_FIX, 20.0F},
+    {UniversalGnssStatus::FIX_TYPE_3D_FIX, PublicGnssStatus::FIX_TYPE_3D_FIX, 40.0F},
+    {UniversalGnssStatus::FIX_TYPE_DGPS, PublicGnssStatus::FIX_TYPE_DGPS, 60.0F},
+  }};
+  for (const auto & [universal_type, public_type, quality] : solution_cases) {
+    in.fix_type = universal_type;
+    in.rtk_mode = UniversalGnssStatus::RTK_MODE_NONE;
+    got = false;
+    ASSERT_TRUE(spinUntil(exec, [&]() {
+        status_pub->publish(in);
+        return got && received.fix_type == public_type;
+    }));
+    EXPECT_EQ(received.fix_type, public_type);
+    EXPECT_FLOAT_EQ(received.quality_percent, quality);
+  }
 
   exec.remove_node(helper);
   exec.remove_node(bridge);

@@ -72,13 +72,14 @@ preset_key_loaded() {
 # (gnss_config_apply at container start) and the GUI; the values recorded here
 # are first-boot defaults only. There is deliberately no baud probing.
 configure_gps() {
-  step "GNSS serial link"
+  step "GNSS source / serial link"
 
   if declare -F apply_existing_yaml_gnss_state >/dev/null 2>&1; then
     apply_existing_yaml_gnss_state
   fi
 
   : "${GNSS_BACKEND:=universal}"
+  : "${GNSS_SOURCE:=$(default_gnss_source)}"
   : "${GNSS_STATUS_SOURCE:=universal}"
   : "${GNSS_STACK:=universal}"
   : "${GNSS_TRANSPORT:=serial}"
@@ -89,6 +90,16 @@ configure_gps() {
 
   local serial_preconfigured=false
   local connection
+  local gnss_source
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" ]]; then
+    GNSS_SOURCE="direct"
+  fi
+  if ! gnss_source="$(effective_gnss_source 2>/dev/null)"; then
+    error "Invalid GNSS_SOURCE=${GNSS_SOURCE:-unset} for HARDWARE_BACKEND=${HARDWARE_BACKEND:-mowgli}"
+    return 1
+  fi
+  GNSS_SOURCE="$gnss_source"
 
   if [[ "$(effective_gnss_backend "${GNSS_BACKEND:-universal}")" == "disabled" ]]; then
     info "Direct GNSS configuration disabled for HARDWARE_BACKEND=${HARDWARE_BACKEND:-mowgli}"
@@ -105,6 +116,18 @@ configure_gps() {
 
   GNSS_BACKEND="universal"
   GNSS_STACK="universal"
+
+  if [[ "$GNSS_SOURCE" == "mavros" ]]; then
+    GNSS_STATUS_SOURCE="external"
+    GNSS_TRANSPORT="serial"
+    GNSS_RECEIVER_FAMILY="auto"
+    GNSS_SERIAL_DEVICE=""
+    GNSS_SERIAL_BAUD=""
+    GNSS_CONNECTION_HINT=""
+    info "GNSS source: Pixhawk/MAVROS; skipping direct GNSS serial configuration"
+    return 0
+  fi
+
   GNSS_STATUS_SOURCE="universal"
   GNSS_TRANSPORT="serial"
   GNSS_RECEIVER_FAMILY="$(normalize_gnss_receiver_family "${GNSS_RECEIVER_FAMILY:-auto}")"

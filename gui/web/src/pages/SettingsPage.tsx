@@ -19,6 +19,7 @@ import { restartRos2 } from "../utils/containers.ts";
 import { useContainerRestart } from "../hooks/useContainerRestart.ts";
 import { SettingsNav } from "../components/settings/SettingsNav.tsx";
 import { HardwareSection } from "../components/settings/HardwareSection.tsx";
+import { HardwareBackendCard } from "../components/settings/HardwareBackendCard.tsx";
 import { DriveMotorSection } from "../components/settings/DriveMotorSection.tsx";
 import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { PositioningSection } from "../components/settings/PositioningSection.tsx";
@@ -99,6 +100,7 @@ export const SettingsPage = () => {
         acceptPersistedValues,
         revert,
         gpsRestarting,
+        hardwareBackend,
     } = useSettingsManager();
 
     // Long-running: container restart + rosbridge reconnect. Disable button
@@ -186,15 +188,18 @@ export const SettingsPage = () => {
                 );
             case "hardware":
                 return (
-                    <HardwareSection
-                        values={values}
-                        onChange={handleChange}
-                        onBulkChange={handleBulkChange}
-                        isOverridden={isOverridden}
-                        hasDefault={hasDefault}
-                        onReset={resetToDefault}
-                        revealAdvanced={!!targetField || !!searchQuery}
-                    />
+                    <>
+                        <HardwareBackendCard info={hardwareBackend} />
+                        <HardwareSection
+                            values={values}
+                            onChange={handleChange}
+                            onBulkChange={handleBulkChange}
+                            isOverridden={isOverridden}
+                            hasDefault={hasDefault}
+                            onReset={resetToDefault}
+                            revealAdvanced={!!targetField || !!searchQuery}
+                        />
+                    </>
                 );
             case "drive_motor":
                 return (
@@ -279,7 +284,7 @@ export const SettingsPage = () => {
                     <>
                         <SafetySection values={values} onChange={handleChange} />
                         {renderFieldCards(FIRMWARE_SAFETY_GROUP)}
-                        <FirmwareParamsCard />
+                        {hardwareBackend.backend === "mowgli" ? <FirmwareParamsCard /> : null}
                     </>
                 );
             case "obstacles":

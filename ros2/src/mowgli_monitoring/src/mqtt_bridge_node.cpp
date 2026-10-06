@@ -1444,8 +1444,8 @@ std::string MqttBridgeNode::serialise_status(const mowgli_interfaces::msg::Statu
 }
 
 std::string MqttBridgeNode::serialise_power(const mowgli_interfaces::msg::Power& msg,
-                                            double empty_voltage,
-                                            double full_voltage)
+                                             double empty_voltage,
+                                             double full_voltage)
 {
   const double voltage = static_cast<double>(msg.v_battery);
   const double pct = battery_percentage(voltage, empty_voltage, full_voltage);
@@ -1645,6 +1645,12 @@ const char* FixTypeName(uint8_t fix_type)
       return "RTK_FIXED";
     case GnssStatus::FIX_TYPE_DEAD_RECKONING:
       return "DEAD_RECKONING";
+    case GnssStatus::FIX_TYPE_2D_FIX:
+      return "2D_FIX";
+    case GnssStatus::FIX_TYPE_3D_FIX:
+      return "3D_FIX";
+    case GnssStatus::FIX_TYPE_DGPS:
+      return "DGPS";
     default:
       return "UNKNOWN";
   }

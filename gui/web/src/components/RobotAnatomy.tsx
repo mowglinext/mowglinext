@@ -57,8 +57,23 @@ function partInfo(part: Part, inputs: AnatomyInputs, t: TFunction): PartInfo {
     case 'battery':
       return {
         label: t('robotAnatomy.battery'),
-        value: <><span className="diagnostics-battery-percent">{inputs.batteryPct.toFixed(0)}</span>% · <span className="diagnostics-battery-voltage">{inputs.vBattery.toFixed(1)}</span> V</>,
-        tone: boolTone(inputs.batteryPct > 20),
+        value: Number.isFinite(inputs.batteryPct) && Number.isFinite(inputs.vBattery)
+          ? (
+              <>
+                <span className="diagnostics-battery-percent">
+                  {inputs.batteryPct.toFixed(0)}
+                </span>
+                % ·{" "}
+                <span className="diagnostics-battery-voltage">
+                  {inputs.vBattery.toFixed(1)}
+                </span>{" "}
+                V
+              </>
+            )
+          : "—",
+        tone: Number.isFinite(inputs.batteryPct)
+          ? boolTone(inputs.batteryPct > 20)
+          : "unknown",
       };
     case 'blade':
       return {label: t('robotAnatomy.blade'), value: inputs.bladeOn ? t('robotAnatomy.spinning') : t('robotAnatomy.off'), tone: boolTone(!inputs.bladeOn)};
@@ -168,7 +183,9 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
             <text x={166} y={166} textAnchor="end" fontSize={9} fontWeight={600} fill={colors.text}>
               {inputs.batteryPct.toFixed(0)}
             </text>
-            <text x={168} y={166} textAnchor="start" fontSize={9} fontWeight={600} fill={colors.text}>%</text>
+            <text x={160} y={166} textAnchor="middle" fontSize={9} fontWeight={600} fill={colors.text}>
+              {Number.isFinite(inputs.batteryPct) ? `${inputs.batteryPct.toFixed(0)}%` : "—"}
+            </text>
           </g>
 
           {/* Blade (center, below IMU) */}
