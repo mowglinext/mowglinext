@@ -24,6 +24,8 @@ struct PathProjection
   double arc_m;
   double distance_m;
   double segment_length_m;
+  double tangent_x;
+  double tangent_y;
 };
 
 /// Arc length from the first pose to each pose (element 0 is 0).
@@ -87,7 +89,9 @@ std::optional<PathProjection> projectToArcWindow(
     {
       best = PathProjection{clipped_start + projection * (clipped_end - clipped_start),
                             distance,
-                            segment_length};
+                            segment_length,
+                            segment_x / segment_length,
+                            segment_y / segment_length};
     }
   }
   return best;
@@ -537,15 +541,28 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
           const double high_water_arc_m =
               boundary_arc_m + *pending_progress_boundary_high_water_offset_m_;
           const double min_tracking_arc = std::max(0.0, high_water_arc_m - search_window_m);
-          const double max_tracking_arc = std::min(total_arc, high_water_arc_m + search_window_m);
+          const double max_tracking_arc =
+              std::min(total_arc, high_water_arc_m + query_motion + kMinProgressQueryMotionM);
           const auto current_projection = projectToArcWindow(
               path_poses_, path_arc_m_, progress_pose.position, min_tracking_arc, max_tracking_arc);
           if (current_projection &&
               current_projection->distance_m <= pending_progress_boundary_radius_m_ + 1e-9)
           {
-            *pending_progress_boundary_high_water_offset_m_ =
-                std::max(*pending_progress_boundary_high_water_offset_m_,
-                         current_projection->arc_m - boundary_arc_m);
+            const double query_dx =
+                previous_progress_query ? query_x - previous_progress_query->x : 0.0;
+            const double query_dy =
+                previous_progress_query ? query_y - previous_progress_query->y : 0.0;
+            const double forward_motion =
+                query_dx * current_projection->tangent_x + query_dy * current_projection->tangent_y;
+            // A nearby return leg can win the wider projection on a loop even
+            // when the robot only moved sideways. Credit a new high-water arc
+            // only when the observed displacement points along that segment.
+            if (current_projection->arc_m <= high_water_arc_m + 1e-9 || forward_motion > 1e-9)
+            {
+              *pending_progress_boundary_high_water_offset_m_ =
+                  std::max(*pending_progress_boundary_high_water_offset_m_,
+                           current_projection->arc_m - boundary_arc_m);
+            }
             query_passed_boundary = *pending_progress_boundary_high_water_offset_m_ -
                                         *pending_progress_boundary_origin_offset_m_ >=
                                     pending_progress_boundary_minimum_motion_m_ - 1e-9;
