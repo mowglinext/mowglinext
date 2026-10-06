@@ -167,6 +167,82 @@ TEST_F(MapServerTest, GridMapHasAllRequiredLayers)
   EXPECT_TRUE(m.exists(std::string(mowgli_map::layers::CLASSIFICATION)));
 }
 
+TEST_F(MapServerTest, GuiAreaReplacementPreservesCalibratedDockGeometry)
+{
+  node_.reset();
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("resolution", 0.1);
+  options.append_parameter_override("areas_file_path", "");
+  options.append_parameter_override("dock_pose_x", -3.0);
+  options.append_parameter_override("dock_pose_y", -4.0);
+  node_ = std::make_shared<mowgli_map::MapServerNode>(options);
+  auto observer = std::make_shared<rclcpp::Node>("dock_geometry_replace_observer");
+  visualization_msgs::msg::MarkerArray::ConstSharedPtr latest;
+  auto subscription = observer->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      rclcpp::QoS(1).transient_local(),
+      [&](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+      {
+        latest = message;
+      });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(observer);
+  const auto wait_for_snapshot = [&]
+  {
+    for (int i = 0; i < 200; ++i)
+    {
+      executor.spin_some();
+      if (latest && latest->markers.size() == 3)
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+  };
+  auto request = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+  request->area.name = "lawn";
+  for (const auto& xy : std::vector<std::pair<float, float>>{{-2, -2}, {2, -2}, {2, 2}, {-2, 2}})
+  {
+    geometry_msgs::msg::Point32 point;
+    point.x = xy.first;
+    point.y = xy.second;
+    request->area.area.points.push_back(point);
+  }
+  auto added = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+  node_->add_area_for_test(request, added);
+  ASSERT_TRUE(added->success);
+  const auto before = node_->build_keepout_mask_for_test();
+  ASSERT_TRUE(wait_for_snapshot());
+  const auto dock_before = latest->markers;
+  latest.reset();
+
+  auto cleared = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->clear_map_for_test(cleared);
+  ASSERT_TRUE(cleared->success);
+  node_->add_area_for_test(request, added);
+  ASSERT_TRUE(added->success);
+  const auto after = node_->build_keepout_mask_for_test();
+  ASSERT_TRUE(wait_for_snapshot());
+  EXPECT_TRUE(node_->docking_pose_set_for_test());
+  EXPECT_EQ(node_->docking_pose_for_test().position.x, -3.0);
+  EXPECT_EQ(node_->docking_pose_for_test().position.y, -4.0);
+  ASSERT_EQ(latest->markers.size(), dock_before.size());
+  for (std::size_t i = 0; i < dock_before.size(); ++i)
+  {
+    EXPECT_EQ(latest->markers[i].ns, dock_before[i].ns);
+    EXPECT_EQ(latest->markers[i].points, dock_before[i].points);
+  }
+  const auto corridor_cost = [](const nav_msgs::msg::OccupancyGrid& mask)
+  {
+    const auto x =
+        static_cast<unsigned>((-4.2 - mask.info.origin.position.x) / mask.info.resolution);
+    const auto y =
+        static_cast<unsigned>((-4.0 - mask.info.origin.position.y) / mask.info.resolution);
+    return mask.data.at(static_cast<std::size_t>(y) * mask.info.width + x);
+  };
+  EXPECT_EQ(corridor_cost(before), 0);
+  EXPECT_EQ(corridor_cost(after), 0);
+}
+
 TEST_F(MapServerTest, GridMapGeometryIsCorrect)
 {
   std::lock_guard<std::mutex> lock(node_->map_mutex());
