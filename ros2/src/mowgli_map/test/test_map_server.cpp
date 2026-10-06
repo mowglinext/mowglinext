@@ -14,12 +14,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -308,6 +310,65 @@ static int8_t mask_at(const nav_msgs::msg::OccupancyGrid& m, double x, double y)
     return -2;  // out of bounds sentinel
   }
   return m.data[static_cast<std::size_t>(row) * m.info.width + col];
+}
+
+TEST_F(AreaTypeTest, SuccessfulMapLoadRepublishesInvalidatedMaskOnNextTimerTick)
+{
+  node_.reset();
+  const std::string dir = std::getenv("TEST_TMPDIR") ? std::getenv("TEST_TMPDIR") : "/tmp";
+  const std::string path = dir + "/mowgli_load_map_timer";
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("resolution", 0.1);
+  options.append_parameter_override("areas_file_path", "");
+  options.append_parameter_override("map_file_path", path);
+  node_ = std::make_shared<mowgli_map::MapServerNode>(options);
+  auto observer = std::make_shared<rclcpp::Node>("load_map_mask_observer");
+  nav_msgs::msg::OccupancyGrid::ConstSharedPtr latest;
+  auto subscription = observer->create_subscription<nav_msgs::msg::OccupancyGrid>(
+      "/keepout_mask",
+      rclcpp::QoS(1).transient_local(),
+      [&](nav_msgs::msg::OccupancyGrid::ConstSharedPtr message)
+      {
+        latest = message;
+      });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(observer);
+  const auto wait_for_mask = [&](bool empty)
+  {
+    for (int i = 0; i < 200; ++i)
+    {
+      executor.spin_some();
+      if (latest && latest->data.empty() == empty)
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+  };
+  ASSERT_TRUE(add_area("lawn", make_rect(-2, -2, 2, 2), false));
+  // Let the real map-edit debounce expire, then use the normal timer path to
+  // publish and clear masks_dirty_. No direct mask-builder call is involved.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1600));
+  node_->publish_mow_progress_for_test();
+  ASSERT_TRUE(wait_for_mask(false));
+  const auto before = *latest;
+  auto saved = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->save_map_for_test(saved);
+  ASSERT_TRUE(saved->success) << saved->message;
+
+  latest.reset();
+  auto loaded = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->load_map_for_test(loaded);
+  ASSERT_TRUE(loaded->success) << loaded->message;
+  ASSERT_TRUE(wait_for_mask(true)) << "load must invalidate the previously latched mask";
+
+  latest.reset();
+  node_->publish_mow_progress_for_test();
+  ASSERT_TRUE(wait_for_mask(false)) << "the next normal timer tick must restore authorization";
+  EXPECT_EQ(latest->info, before.info);
+  EXPECT_EQ(latest->data, before.data);
+  EXPECT_EQ(mask_at(*latest, 0, 0), 0);
+  std::remove((path + ".yaml").c_str());
+  std::remove((path + ".dat").c_str());
 }
 
 TEST_F(AreaTypeTest, NavigationAreaIsNotStoredAsMowing)
