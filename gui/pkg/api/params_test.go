@@ -116,7 +116,7 @@ func TestSetParams_MavrosRejectsMowgliWheelPid(t *testing.T) {
 	assert.Empty(t, ros.SetParams)
 }
 
-func TestSetParams_MavrosRejectsPendingImageRoutes(t *testing.T) {
+func TestSetParams_MavrosAllowsWheelOdometryRoutes(t *testing.T) {
 	for _, name := range []string{
 		"mavros/esc_wheel_odometry.ticks_per_meter",
 		"mavros/esc_wheel_odometry.track_width_m",
@@ -133,7 +133,7 @@ func TestSetParams_MavrosRejectsPendingImageRoutes(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		r.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusConflict, w.Code, name)
-		assert.Empty(t, ros.SetParams, name)
+		assert.Equal(t, http.StatusOK, w.Code, name)
+		require.Len(t, ros.SetParams, 1, name)
 	}
 }

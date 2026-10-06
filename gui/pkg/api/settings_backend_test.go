@@ -207,12 +207,12 @@ func TestHardwareBackendMavrosPublishesSourceContractRoutes(t *testing.T) {
 	var response HardwareBackendResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	assert.Equal(t, "mavros", response.Backend)
-	assert.Equal(t, "pending_image", response.RuntimeRouting)
+	assert.Equal(t, "available", response.RuntimeRouting)
 	assert.ElementsMatch(t, []string{"mowgli", "mavros", "openmower"}, response.Supported)
 
 	assert.Equal(t, HardwareParameterRoute{
 		Parameter: "mavros/esc_wheel_odometry.ticks_per_meter",
-		Runtime:   "pending_image",
+		Runtime:   "available",
 	}, response.ParameterRoutes["ticks_per_meter"])
 	assert.Equal(t, "mavros/esc_wheel_odometry.track_width_m", response.ParameterRoutes["wheel_track"].Parameter)
 

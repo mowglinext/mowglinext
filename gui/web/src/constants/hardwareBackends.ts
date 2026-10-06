@@ -52,11 +52,21 @@ export const presetValuesForBackend = (
     return out;
 };
 
-/** Only the Mowgli STM32 backend exposes the legacy drive-motor section. */
+/**
+ * All three hardware backends expose the Drive section.
+ * SettingsPage selects the appropriate controls for each backend.
+ */
 export const settingsSectionsForBackend = <T extends { id: string }>(
     sections: readonly T[],
     backend: HardwareBackend,
-): T[] => sections.filter((section) => backend === "mowgli" || section.id !== "drive_motor");
+): T[] => {
+    switch (backend) {
+        case "mowgli":
+        case "mavros":
+        case "openmower":
+            return [...sections];
+    }
+};
 
 /**
  * Build ROS parameter updates only for routes confirmed as live. A pending
@@ -67,5 +77,14 @@ export const liveHardwareParameters = (
     values: Record<string, unknown>,
     routes: Record<string, HardwareParameterRoute>,
 ) => Object.entries(routes)
-    .filter(([key, route]) => route.runtime === "available" && dirtyKeys.has(key) && key in values)
-    .map(([key, route]) => ({ name: route.parameter, value: Number(values[key]) }));
+    .filter(([key, route]) =>
+        route.runtime === "available" &&
+        dirtyKeys.has(key) &&
+        key in values
+    )
+    .map(([key, route]) => ({
+        name: route.parameter,
+        value: typeof values[key] === "boolean"
+            ? values[key]
+            : Number(values[key]),
+    }));

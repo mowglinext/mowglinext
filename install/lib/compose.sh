@@ -41,6 +41,8 @@ ensure_default_configs() {
   # file left by an earlier install is dead weight holding the NTRIP password.
   rm -rf "$DOCKER_DIR/config/universal_gnss"
   fix_path_type_conflict "$DOCKER_DIR/config/mavros/mowgli_robot.yaml" "file"
+  fix_path_type_conflict "$DOCKER_DIR/config/mavros/esc_wheel_odometry.yaml" "file"
+  fix_path_type_conflict "$DOCKER_DIR/config/mavros/hardware_bridge.yaml" "file"
 
   if [ ! -f "$DOCKER_DIR/config/mqtt/mosquitto.conf" ]; then
     cp "$defaults/mqtt/mosquitto.conf" "$DOCKER_DIR/config/mqtt/mosquitto.conf"

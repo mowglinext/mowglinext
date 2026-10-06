@@ -1577,6 +1577,10 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
+		if err := writeMavrosRuntimeConfig(dbProvider); err != nil {
+			c.JSON(500, ErrorResponse{Error: "settings saved, but MAVROS runtime config failed: " + err.Error()})
+			return
+		}
 
 		envFilePath, err := dbProvider.Get("system.mower.runtimeEnvFile")
 		if err == nil && len(envFilePath) > 0 {

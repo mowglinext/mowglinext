@@ -55,13 +55,18 @@ func setParams(rosProvider types.IRosProvider, dbProvider types.IDBProvider) gin
 		}
 		if activeHardwareBackendForDB(dbProvider) == "mavros" {
 			for _, parameter := range req.Parameters {
-				if strings.HasPrefix(parameter.Name, "hardware_bridge.wheel_pid_") {
+				name := strings.TrimPrefix(parameter.Name, "/")
+				if strings.HasPrefix(name, "hardware_bridge.wheel_pid_") {
 					c.JSON(http.StatusConflict, ErrorResponse{Error: "Mowgli wheel PID/feed-forward parameters are unavailable for HARDWARE_BACKEND=mavros"})
 					return
 				}
-				for _, route := range hardwareParameterRoutes["mavros"] {
-					if route.Runtime == "pending_image" && parameter.Name == route.Parameter {
-						c.JSON(http.StatusConflict, ErrorResponse{Error: "MAVROS wheel parameter routing is pending the feat/esc-odometry image; persist the canonical setting only"})
+				if name == "hardware_bridge.blade_control_enabled" && parameter.Value != false {
+					c.JSON(http.StatusConflict, ErrorResponse{Error: "MAVROS blade control remains disabled"})
+					return
+				}
+				if name == "hardware_bridge.manual_control_enabled" || name == "hardware_bridge.wheel_lift_safety_enabled" {
+					if _, ok := parameter.Value.(bool); !ok {
+						c.JSON(http.StatusBadRequest, ErrorResponse{Error: "MAVROS enable parameters must be boolean"})
 						return
 					}
 				}
@@ -73,6 +78,14 @@ func setParams(rosProvider types.IRosProvider, dbProvider types.IDBProvider) gin
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: err.Error()})
 			return
+		}
+		if activeHardwareBackendForDB(dbProvider) == "mavros" {
+			for _, parameter := range req.Parameters {
+				if !parameterWasApplied(updated, parameter) {
+					c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: "MAVROS parameter update was not confirmed: " + parameter.Name})
+					return
+				}
+			}
 		}
 		c.JSON(http.StatusOK, ParamsListResponse{Parameters: updated})
 	}

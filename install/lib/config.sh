@@ -1272,11 +1272,55 @@ PY
 write_mavros_runtime_config() {
   local source="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local target="$DOCKER_DIR/config/mavros/mowgli_robot.yaml"
+  local odometry_target="$DOCKER_DIR/config/mavros/esc_wheel_odometry.yaml"
+  local bridge_target="$DOCKER_DIR/config/mavros/hardware_bridge.yaml"
+  local robot_template="$REPO_DIR/ros2/src/mowgli_bringup/config/mowgli_robot.yaml"
 
   mkdir -p "$(dirname "$target")"
   cp "$source" "$target"
   # Universal GNSS is the sole NTRIP owner.
   _yaml_patch_key "$target" ntrip_enabled false || return 1
+  [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]] || return 0
+
+  # The sidecar receives only its dedicated plugin parameters.  Resolve the
+  # canonical values here from the complete ROS template plus the operator's
+  # sparse runtime file; never make the sidecar parse mower configuration.
+  _yaml_python "$source" "$robot_template" "$odometry_target" "$bridge_target" <<'PY'
+import math
+import sys
+from pathlib import Path
+
+import yaml
+
+sparse_path, template_path, target_path, bridge_path = map(Path, sys.argv[1:5])
+
+def parameters(path):
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return data.get("mowgli", {}).get("ros__parameters", {})
+
+effective = dict(parameters(template_path))
+effective.update(parameters(sparse_path))
+values = {
+    "ticks_per_meter": effective.get("ticks_per_meter"),
+    "track_width_m": effective.get("wheel_track"),
+}
+for name, value in values.items():
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"effective {name} must be a finite positive number")
+values = {name: float(value) for name, value in values.items()}
+
+payload = {"/**/esc_wheel_odometry": {"ros__parameters": values}}
+target_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+bridge_values = {
+    "manual_control_enabled": effective["mavros_manual_control_enabled"],
+    "wheel_lift_safety_enabled": effective["mavros_wheel_lift_safety_enabled"],
+    "blade_control_enabled": False,
+}
+for name, value in bridge_values.items():
+    if not isinstance(value, bool):
+        raise ValueError(f"effective {name} must be boolean")
+bridge_path.write_text(yaml.safe_dump({"hardware_bridge": {"ros__parameters": bridge_values}}, sort_keys=False), encoding="utf-8")
+PY
 }
 
 runtime_gnss_config_value() {
@@ -1378,4 +1422,3 @@ EOF
 run_mower_configuration_step() {
   ensure_default_configs && write_config
 }
-
