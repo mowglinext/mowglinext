@@ -373,30 +373,32 @@ jobs:
 
       # Only opennav_coverage_msgs (the action types) is used from the
       # opennav_coverage submodule; the upstream server subpackages are pinned
-      # to F2C 1.2.1 and must NOT be built (they #include fields2cover.h from
-      # the v1 install). The Docker image drops the same COLCON_IGNORE markers
-      # (Dockerfile stage); mirror that here or opennav_coverage fails the build.
-      - name: COLCON_IGNORE upstream opennav_coverage subpackages
+      # to F2C 1.2.1 and must NOT be built.
+      - name: COLCON_IGNORE external workspace packages
         run: |
           for p in opennav_coverage opennav_coverage_bt opennav_coverage_demo \
                    opennav_coverage_navigator opennav_row_coverage; do
             touch "src/opennav_coverage/$p/COLCON_IGNORE" 2>/dev/null || true
           done
-          # The generic upstream CMake root otherwise shadows gnss_ros2 and
-          # builds driver tools. The GPS image owns that separate workspace.
+
+          # Universal GNSS and MowgliMAVROS are external sidecars. Their
+          # packages must not be discovered as part of the MowgliNext workspace.
           touch src/external/universal-gnss/COLCON_IGNORE
+          touch src/external/mowglimavros/COLCON_IGNORE
 
       - name: Install rosdep dependencies
         run: |
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
           source /opt/lyrical_vendor/local_setup.bash
           sudo apt-get update
+
           # libmosquitto has no rosdep key (see ros2/Dockerfile). Without it
           # mowgli_monitoring silently compiles the StubMqttClient instead of
           # the shipped MosquittoMqttClient, which is how PR #604 passed CI
           # while the image build failed. -DMOWGLI_REQUIRE_MOSQUITTO=ON below
           # turns that silent fallback into a configure error.
           sudo apt-get install -y --no-install-recommends libmosquitto-dev
+
           rosdep update --rosdistro ${{ env.ROS_DISTRO }}
           # skip-keys:
           # - grid_map, Beluga and Smac come from /opt/lyrical_vendor
