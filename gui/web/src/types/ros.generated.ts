@@ -264,6 +264,7 @@ export const enum FirmwareParamsConstants {
   COMMIT_PENDING = 3,
   COMMIT_LOG_FULL = 4,
   COMMIT_ERROR = 5,
+  COMMIT_RESET_PENDING = 6,
 };
 
 export type FirmwareParams = {
@@ -272,6 +273,8 @@ export type FirmwareParams = {
   boot_source?: number;
   last_commit?: number;
   records_left?: number;
+  reset_request_id?: number;
+  store_status_sequence?: number;
   params?: FirmwareParam[];
 };
 

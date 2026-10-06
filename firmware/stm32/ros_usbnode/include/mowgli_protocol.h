@@ -63,9 +63,13 @@ extern "C" {
  * append-only flash log (fw_param_log.h) that is re-applied at boot, before the
  * host connects. Breaking: 0x54-0x57 are no longer handled — never reuse those
  * ids.
+ * v8 adds an explicitly requested, request-id guarded parameter-log reset
+ * (0x5B). It is armed only while the board is stopped and is carried out at
+ * the next boot before the watchdog starts. A log with a committed record is
+ * never erased automatically.
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 7u
+#define MOWGLI_PROTOCOL_VERSION 8u
 
 /* ---------------------------------------------------------------------------
  * Firmware version (semantic version of THIS firmware build).
@@ -174,6 +178,9 @@ extern "C" {
  *  every reconnect burst without wearing the flash. */
 #define PKT_ID_PARAM_COMMIT 0x5Au
 #define PKT_PARAM_COMMIT_MAGIC 0xC5u
+/** Explicitly reset the parameter flash log at next boot. */
+#define PKT_ID_PARAM_STORE_RESET 0x5Bu
+#define PKT_PARAM_STORE_RESET_MAGIC 0xD3u
 
 /* ---------------------------------------------------------------------------
  * status_bitmask bit definitions  (pkt_status_t::status_bitmask)
@@ -519,6 +526,22 @@ typedef struct {
   uint16_t crc;  /**< CRC-16 CCITT over preceding bytes */
 } pkt_param_commit_t;
 
+/**
+ * @brief Arm an explicit next-boot parameter-log reset — Host -> Firmware.
+ *
+ * Wire size: 8 bytes (must match LlParamStoreReset in ll_datatypes.hpp).
+ * request_id is nonzero and unique for each operator reset action. The
+ * firmware compares it with the currently retained RTC ID; this is bounded
+ * duplicate protection, not durable history (an interrupted later arm can
+ * partially replace the retained ID before its marker becomes valid).
+ */
+typedef struct {
+  uint8_t type;        /**< PKT_ID_PARAM_STORE_RESET */
+  uint8_t magic;       /**< Must equal PKT_PARAM_STORE_RESET_MAGIC (0xD3) */
+  uint32_t request_id; /**< Nonzero ID for this explicit reset action */
+  uint16_t crc;        /**< CRC-16 CCITT over preceding bytes */
+} pkt_param_store_reset_t;
+
 /** pkt_param_value_t::flags */
 #define PARAM_VALUE_FLAG_PERSISTED 0x01u /**< applied value == the one in flash */
 #define PARAM_VALUE_FLAG_VOLATILE 0x02u  /**< never persisted (re-measured) */
@@ -546,15 +569,16 @@ typedef struct {
 /** pkt_param_store_status_t::boot_source */
 #define PARAM_BOOT_DEFAULTS 0u    /**< no valid record: compiled defaults */
 #define PARAM_BOOT_FLASH 1u       /**< values loaded from the flash log */
-#define PARAM_BOOT_FLASH_ERASED 2u /**< log was full or foreign; erased at boot */
+#define PARAM_BOOT_FLASH_ERASED 2u /**< explicitly reset, or invalid data without a valid record */
 
 /** pkt_param_store_status_t::last_commit */
 #define PARAM_COMMIT_NONE 0u      /**< no commit since boot */
 #define PARAM_COMMIT_WRITTEN 1u   /**< new record programmed */
 #define PARAM_COMMIT_UNCHANGED 2u /**< identical to the stored set: skipped */
 #define PARAM_COMMIT_PENDING 3u   /**< programming in progress */
-#define PARAM_COMMIT_LOG_FULL 4u  /**< no room: erased + rewritten at next boot */
+#define PARAM_COMMIT_LOG_FULL 4u  /**< no room: operator reset is required */
 #define PARAM_COMMIT_ERROR 5u     /**< flash program error */
+#define PARAM_COMMIT_RESET_PENDING 6u /**< reset armed or boot reset unresolved */
 
 /**
  * @brief Flash persistence state — Firmware -> Host
@@ -568,6 +592,7 @@ typedef struct {
   uint8_t last_commit;    /**< PARAM_COMMIT_* */
   uint16_t records_left;  /**< full records that still fit before an erase */
   uint16_t param_count;   /**< parameters this firmware knows */
+  uint32_t reset_request_id; /**< retained reset ID, not durable request history; zero if blank */
   uint16_t crc;           /**< CRC-16 CCITT over preceding bytes */
 } pkt_param_store_status_t;
 
@@ -704,6 +729,10 @@ _Static_assert(offsetof(pkt_get_param_t, param_id) == 1u,
 
 _Static_assert(sizeof(pkt_param_commit_t) == 4u,
                "pkt_param_commit_t layout unexpected");
+_Static_assert(sizeof(pkt_param_store_reset_t) == 8u,
+               "pkt_param_store_reset_t layout unexpected");
+_Static_assert(offsetof(pkt_param_store_reset_t, request_id) == 2u,
+               "pkt_param_store_reset_t.request_id offset unexpected");
 
 _Static_assert(sizeof(pkt_param_value_t) == 23u,
                "pkt_param_value_t layout unexpected");
@@ -724,8 +753,10 @@ _Static_assert(offsetof(pkt_param_value_t, max_value) == 17u,
 _Static_assert(offsetof(pkt_param_value_t, crc) == 21u,
                "pkt_param_value_t.crc offset unexpected");
 
-_Static_assert(sizeof(pkt_param_store_status_t) == 9u,
+_Static_assert(sizeof(pkt_param_store_status_t) == 13u,
                "pkt_param_store_status_t layout unexpected");
+_Static_assert(offsetof(pkt_param_store_status_t, reset_request_id) == 7u,
+               "pkt_param_store_status_t.reset_request_id offset unexpected");
 _Static_assert(offsetof(pkt_param_store_status_t, records_left) == 3u,
                "pkt_param_store_status_t.records_left offset unexpected");
 _Static_assert(offsetof(pkt_param_store_status_t, param_count) == 5u,
