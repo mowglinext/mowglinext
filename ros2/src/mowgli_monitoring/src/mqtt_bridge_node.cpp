@@ -1444,8 +1444,8 @@ std::string MqttBridgeNode::serialise_status(const mowgli_interfaces::msg::Statu
 }
 
 std::string MqttBridgeNode::serialise_power(const mowgli_interfaces::msg::Power& msg,
-                                             double empty_voltage,
-                                             double full_voltage)
+                                            double empty_voltage,
+                                            double full_voltage)
 {
   const double voltage = static_cast<double>(msg.v_battery);
   const double pct = battery_percentage(voltage, empty_voltage, full_voltage);

@@ -320,8 +320,7 @@ TEST(SerialisePower, ClampsBatteryPercentToZeroAndHundred)
 {
   mowgli_interfaces::msg::Power below{};
   below.v_battery = 20.0f;  // below the default empty voltage (24.0)
-  EXPECT_NE(MqttBridgeNode::serialise_power(below).find("\"battery_pct\":0.0"),
-            std::string::npos);
+  EXPECT_NE(MqttBridgeNode::serialise_power(below).find("\"battery_pct\":0.0"), std::string::npos);
 
   mowgli_interfaces::msg::Power above{};
   above.v_battery = 30.0f;  // above the default full voltage (28.0)
@@ -334,8 +333,7 @@ TEST(SerialisePower, EscapesChargerStatusString)
   mowgli_interfaces::msg::Power msg{};
   msg.charger_status = "fault: \"overcurrent\"";
   const std::string json = MqttBridgeNode::serialise_power(msg);
-  EXPECT_NE(json.find(R"("charger_status":"fault: \"overcurrent\"")"),
-            std::string::npos);
+  EXPECT_NE(json.find(R"("charger_status":"fault: \"overcurrent\"")"), std::string::npos);
 }
 
 // ===========================================================================
