@@ -222,7 +222,7 @@ BT::NodeStatus FollowStrip::onStart()
   // back to full_path or raw segments only for compatibility with older servers.
   swaths_.clear();
   swath_base_.clear();
-  resume_start_idx_ = 0;
+  swath_resume_start_indices_.clear();
   path_progress_idx_ = 0;
   total_path_poses_ = 0;
   area_idx_ = (ctx->current_area >= 0) ? static_cast<uint32_t>(ctx->current_area) : 0u;
@@ -285,6 +285,7 @@ BT::NodeStatus FollowStrip::onStart()
   // Prefix-sum base offsets (from ORIGINAL unit sizes) and the concatenation
   // length — the resume cursor is an index into this concatenation.
   swath_base_.assign(units.size(), 0);
+  swath_resume_start_indices_.assign(units.size(), 0);
   {
     std::size_t acc = 0;
     for (std::size_t i = 0; i < units.size(); ++i)
@@ -338,11 +339,13 @@ BT::NodeStatus FollowStrip::onStart()
 
   // RESUME: if an earlier pass was interrupted mid-path (recharge / preempt /
   // controller abort / restart), map the persisted absolute cursor (index into
-  // the concatenation of all units) to (unit k, local offset). Units 0..k-1 are
-  // marked done so the skip-loop advances past them, and unit k is trimmed so we
-  // resume mid-unit. F2C is deterministic, so the re-planned units are identical
-  // and the cursor is stable. For a single unit this reduces to trimming the
-  // already-driven prefix. Guard against a stale/last-pose cursor.
+  // the concatenation of all units) to (unit k, local offset). Unit k is trimmed
+  // so we resume mid-unit. Earlier units are skipped only when their completion
+  // was recorded in area_completed_swaths: a unit may have been deliberately
+  // left incomplete after its blade-off transit failed. F2C is deterministic,
+  // so the re-planned units are identical and the cursor is stable. For a single
+  // unit this reduces to trimming the already-driven prefix. Guard against a
+  // stale/last-pose cursor.
   {
     auto it = ctx->area_resume_pose_index.find(area_idx_);
     if (it != ctx->area_resume_pose_index.end())
@@ -353,13 +356,9 @@ BT::NodeStatus FollowStrip::onStart()
       const ResumeLocation rl = resolveResumeLocation(units, cursor, total_path_poses_);
       if (rl.valid)
       {
-        for (std::size_t j = 0; j < rl.unit; ++j)
-        {
-          ctx->area_completed_swaths[area_idx_].insert(j);  // fully-driven units
-        }
         if (rl.local > 0)
         {
-          resume_start_idx_ = rl.local;
+          swath_resume_start_indices_[rl.unit] = rl.local;
           nav_msgs::msg::Path trimmed;
           trimmed.header = units[rl.unit].header;
           trimmed.poses.assign(units[rl.unit].poses.begin() + static_cast<std::ptrdiff_t>(rl.local),
@@ -641,7 +640,10 @@ float FollowStrip::livePercent() const
   // base offset + how far into that (possibly trimmed) unit we got. Monotonic as
   // the robot advances across sub-paths, so the percentage climbs smoothly.
   const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
-  const std::size_t absolute = base + resume_start_idx_ + path_progress_idx_;
+  const std::size_t trim_offset = (swath_idx_ < swath_resume_start_indices_.size())
+                                      ? swath_resume_start_indices_[swath_idx_]
+                                      : 0;
+  const std::size_t absolute = base + trim_offset + path_progress_idx_;
   return coveragePercentFromCursor(absolute, total_path_poses_);
 }
 
@@ -654,7 +656,10 @@ void FollowStrip::persistResumeCursor(const std::shared_ptr<BTContext>& ctx)
   // Cursor is an index into the CONCATENATION of all units: the current unit's
   // base offset + how far into that (possibly trimmed) unit we got.
   const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
-  const std::size_t absolute = base + resume_start_idx_ + path_progress_idx_;
+  const std::size_t trim_offset = (swath_idx_ < swath_resume_start_indices_.size())
+                                      ? swath_resume_start_indices_[swath_idx_]
+                                      : 0;
+  const std::size_t absolute = base + trim_offset + path_progress_idx_;
   recordInterruptedCoverageProgress(*ctx, area_idx_, absolute, total_path_poses_);
   RCLCPP_INFO(ctx->node->get_logger(),
               "FollowStrip: area %u interrupted at pose %zu/%zu (%.0f%%) — resume cursor saved",
@@ -1082,7 +1087,6 @@ BT::NodeStatus FollowStrip::onRunning()
     // cursor from the previous unit would corrupt the next unit's progress and
     // the persisted resume index.
     path_progress_idx_ = 0;
-    resume_start_idx_ = 0;
     // The detour budget is per-segment — a fresh unit gets its own full budget.
     detours_used_ = 0;
     unit_resumes_without_progress_ = 0;
@@ -1543,9 +1547,12 @@ BT::NodeStatus FollowStrip::onRunning()
       status == action_msgs::msg::GoalStatus::STATUS_CANCELED)
   {
     logSegmentTracking(ctx, "ended early");
-    const std::size_t unit_reached = resume_start_idx_ + path_progress_idx_;
+    const std::size_t trim_offset = (swath_idx_ < swath_resume_start_indices_.size())
+                                        ? swath_resume_start_indices_[swath_idx_]
+                                        : 0;
+    const std::size_t unit_reached = trim_offset + path_progress_idx_;
     const std::size_t unit_full =
-        resume_start_idx_ + (swath_idx_ < swaths_.size() ? swaths_[swath_idx_].poses.size() : 0);
+        trim_offset + (swath_idx_ < swaths_.size() ? swaths_[swath_idx_].poses.size() : 0);
     const double frac =
         unit_full > 0 ? static_cast<double>(unit_reached) / static_cast<double>(unit_full) : 0.0;
     // DETOUR-AND-CONTINUE: FTC likely aborted because it is blocked by an
@@ -1802,11 +1809,10 @@ void FollowStrip::setBladeEnabled(bool enabled)
 
 void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx)
 {
-  // Trim the current unit to [idx, end). Fold idx into resume_start_idx_ so the
-  // absolute cursor (swath_base + resume_start_idx + progress) stays a consistent
-  // index into the concatenation.
+  // Trim the current unit to [idx, end). Fold idx into its resume offset so the
+  // absolute cursor stays a consistent index into the concatenation.
   const auto& poses = swaths_[swath_idx_].poses;
-  resume_start_idx_ += idx;
+  swath_resume_start_indices_[swath_idx_] += idx;
   nav_msgs::msg::Path remainder;
   remainder.header = swaths_[swath_idx_].header;
   remainder.poses.assign(poses.begin() + static_cast<std::ptrdiff_t>(idx), poses.end());
@@ -1818,7 +1824,7 @@ void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t 
   // the new first pose (follow_handle_ is null then), so a preempt mid-transit
   // must still resume PAST the skipped span rather than back at the stuck pose.
   const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
-  ctx->area_resume_pose_index[area_idx_] = base + resume_start_idx_;
+  ctx->area_resume_pose_index[area_idx_] = base + swath_resume_start_indices_[swath_idx_];
   saveCoverageResumeState(*ctx);
 }
 

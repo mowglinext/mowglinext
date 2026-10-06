@@ -868,6 +868,87 @@ TEST_F(FollowStripDigTest, NearEndAbortPreservesResumeWithoutCompleting)
   EXPECT_TRUE(ctx->completed_areas.empty());
 }
 
+TEST_F(FollowStripDigTest, ResumeDoesNotCompleteEarlierUnitSkippedAfterTransitFailure)
+{
+  const auto skipped_unit = straightUnit(2.0, 4.0);
+  const auto interrupted_unit = straightUnit(4.0, 10.0);
+  geometry_msgs::msg::Point failed_start;
+  failed_start.x = skipped_unit.poses.front().pose.position.x;
+  failed_start.y = skipped_unit.poses.front().pose.position.y;
+  ctx->transit_to_strip_failed_at = failed_start;
+
+  startFollowStrip({skipped_unit, interrupted_unit});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty())
+      << "a failed transit must leave the first unit incomplete";
+
+  // Reach the second unit and let its live progress cursor persist on halt.
+  setRobot(4.0, 0.0);
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  for (double x = 4.25; x <= 6.0 + 1e-9; x += 0.25)
+  {
+    setRobot(x, 0.0);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  }
+  tree->haltTree();
+  ASSERT_GT(ctx->area_resume_pose_index.at(0), skipped_unit.poses.size());
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+
+  // The cursor maps into unit 1, but unit 0 was never verified complete, so it
+  // must be selected for a blade-off transit again on resume.
+  startFollowStrip({skipped_unit, interrupted_unit});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 2;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_DOUBLE_EQ(navigate->goal(1)->pose.pose.position.x,
+                   skipped_unit.poses.front().pose.position.x);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+
+  // Interrupt before that retried unit has moved. Its cursor must be zero even
+  // though the later unit's resume offset was retained for that later unit.
+  setRobot(2.0, 0.0);
+  navigate->succeed(1);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 2;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  tree->haltTree();
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 0u);
+
+  // A further resume must dispatch the first unit from its actual beginning;
+  // the later unit's trim offset must not silently skip its first 1.45 m.
+  startFollowStrip({skipped_unit, interrupted_unit});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 3;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_DOUBLE_EQ(follow->goal(2)->path.poses.front().pose.position.x,
+                   skipped_unit.poses.front().pose.position.x);
+}
+
 // The contrasting terminal result remains the only ordinary completion path:
 // it clears an old resume cursor, records the unit, and retires a one-unit area.
 TEST_F(FollowStripDigTest, SuccessClearsResumeAndCompletesArea)
