@@ -439,11 +439,6 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
       const double query_x = progress_pose.position.x;
       const double query_y = progress_pose.position.y;
 
-      const double remaining_after_boundary = path_arc_m_.back() - path_arc_m_[search_boundary];
-      // A boundary already inside the goal tolerance must not convert a small
-      // endpoint correction into path progress. Keep the complete remaining
-      // arc (before remainingPathLength's next-segment projection) for this
-      // admission check.
       double local_segment_length = std::sqrt(incoming_length_sq);
       for (size_t i = search_boundary + 1; i < n; ++i)
       {
@@ -464,7 +459,7 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
       // a query far down the outgoing leg is on the path, but is not evidence
       // that the robot traversed this search frontier.
       const double local_boundary_radius =
-          std::min(search_window_m, std::max(0.05, 3.0 * local_segment_length));
+          std::min(search_window_m, std::max(0.10, 3.0 * local_segment_length));
       const double boundary_arc_m = path_arc_m_[search_boundary];
       const auto local_projection =
           projectToArcWindow(path_poses_,
@@ -473,11 +468,31 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
                              std::max(0.0, boundary_arc_m - local_boundary_radius),
                              std::min(path_arc_m_.back(), boundary_arc_m + local_boundary_radius));
       const double boundary_distance = std::hypot(query_x - boundary.x, query_y - boundary.y);
-      const bool boundary_has_room_to_recover =
-          boundary_is_final_path_pose || remaining_after_boundary > xy_goal_tolerance_;
+      // Exclude origins near the true endpoint in XY, even when a loop makes
+      // the local boundary projection choose an earlier coincident segment.
+      // This prevents endpoint correction from proving traversal, while still
+      // allowing recovery when a short path has less than the goal tolerance
+      // remaining at this artificial boundary.
+      double last_nonzero_segment_length = 0.0;
+      for (size_t i = n - 1; i > 0; --i)
+      {
+        const double segment_length = path_arc_m_[i] - path_arc_m_[i - 1];
+        if (segment_length > 0.0)
+        {
+          last_nonzero_segment_length = segment_length;
+          break;
+        }
+      }
+      const double endpoint_exclusion_m =
+          std::min(local_boundary_radius, std::max(0.05, last_nonzero_segment_length));
+      const auto& endpoint = path_poses_.back().pose.position;
+      const double endpoint_distance = std::hypot(query_x - endpoint.x, query_y - endpoint.y);
+      const bool query_is_away_from_endpoint =
+          local_projection && endpoint_distance > endpoint_exclusion_m + 1e-9;
       const bool locally_at_boundary =
-          local_projection && boundary_distance <= local_boundary_radius &&
-          local_projection->distance_m <= local_boundary_radius && boundary_has_room_to_recover;
+          local_projection && boundary_distance <= local_boundary_radius + 1e-9 &&
+          local_projection->distance_m <= local_boundary_radius + 1e-9 &&
+          query_is_away_from_endpoint;
       bool just_latched_boundary = false;
       if ((!pending_progress_boundary_ || *pending_progress_boundary_ != search_boundary ||
            !pending_progress_boundary_origin_offset_m_) &&
@@ -526,14 +541,14 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
           const auto current_projection = projectToArcWindow(
               path_poses_, path_arc_m_, progress_pose.position, min_tracking_arc, max_tracking_arc);
           if (current_projection &&
-              current_projection->distance_m <= pending_progress_boundary_radius_m_)
+              current_projection->distance_m <= pending_progress_boundary_radius_m_ + 1e-9)
           {
             *pending_progress_boundary_high_water_offset_m_ =
                 std::max(*pending_progress_boundary_high_water_offset_m_,
                          current_projection->arc_m - boundary_arc_m);
             query_passed_boundary = *pending_progress_boundary_high_water_offset_m_ -
                                         *pending_progress_boundary_origin_offset_m_ >=
-                                    pending_progress_boundary_minimum_motion_m_;
+                                    pending_progress_boundary_minimum_motion_m_ - 1e-9;
           }
         }
       }
