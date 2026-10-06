@@ -110,6 +110,8 @@ type FirmwareParams struct {
 	BootSource                uint8                          `json:"boot_source"`
 	LastCommit                uint8                          `json:"last_commit"`
 	RecordsLeft               uint16                         `json:"records_left"`
+	ResetRequestId            uint32                         `json:"reset_request_id"`
+	StoreStatusSequence       uint32                         `json:"store_status_sequence"`
 	Params                    []FirmwareParam                `json:"params"`
 }
 

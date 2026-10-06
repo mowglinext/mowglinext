@@ -131,6 +131,24 @@ func TestServiceRoute_FusionGraphTriggers(t *testing.T) {
 	}
 }
 
+func TestServiceRoute_ResetFirmwareParamStore(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		_ = json.Unmarshal([]byte(`{"success":true,"message":"request_id=305419896; reset request sent"}`), res)
+	}
+	router := setupMowgliNextRouter(mock)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/mowglinext/call/reset_firmware_param_store", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "request_id=305419896")
+	require.Len(t, mock.ServiceCalls, 1)
+	assert.Equal(t, "/hardware_bridge/reset_firmware_param_store", mock.ServiceCalls[0].Service)
+}
+
 func TestServiceRoute_FusionGraphClearLidarMap_ServiceError(t *testing.T) {
 	mock := types.NewMockRosProvider()
 	mock.ServiceErr = assert.AnError

@@ -68,6 +68,12 @@ import {useThemeMode} from "../theme/ThemeContext.tsx";
 // (blank) map, so the misconfiguration is obvious rather than silent.
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined || "pk.eyJ1IjoiY2VkYm9zc25lbyIsImEiOiJjbGxldjB4aDEwOW5vM3BxamkxeWRwb2VoIn0.WOccbQZZyO1qfAgNxnHAnA";
 
+// Mapbox GL stops zooming at 22 unless told otherwise; 24 is its hard ceiling.
+// The extra two levels (4x closer) let the operator place and edit very small
+// hand-drawn obstacles. The vector overlays stay sharp; the satellite imagery
+// is simply overscaled past its native resolution.
+const MAP_MAX_ZOOM = 24;
+
 // Stable ordering is required because Mapbox mounts image markers as their
 // selected assets change: dock base < mower < dock tongue foreground.
 const MAP_IMAGE_LAYER_Z_INDEX = {dockBase: 998, mower: 999, dockForeground: 1000} as const;
@@ -1539,6 +1545,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                          }}
                                                          style={{width: '100%', height: '100%'}}
                                                          mapStyle={useSatellite ? "mapbox://styles/mapbox/satellite-streets-v12" : "mapbox://styles/mapbox/dark-v11"}
+                                                         maxZoom={MAP_MAX_ZOOM}
                                                          onLoad={onMapLoad}
                                                          onClick={handleMapClick}
                                                          interactiveLayerIds={DYN_OBSTACLE_INTERACTIVE_LAYERS}

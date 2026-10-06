@@ -218,6 +218,7 @@ export const MowgliNextPage = () => {
     data.state, data.battery, data.batteryManualResumePercent, data.batteryLowPercent,
     data.batteryFullPercent, data.coverageSessionActive,
   );
+  const isResumingMowing = data.state === "RESUMING_UNDOCKING";
 
   // ── ETA estimate ──
   //
@@ -241,6 +242,8 @@ export const MowgliNextPage = () => {
   // gets its ETA/mowing copy instead of falling through to the idle text.
   const headline = data.scanPaused
     ? <>{t('mowgliNextPage.headlineScanPausedPrefix')}<em style={{fontStyle: 'italic', color: 'var(--amber, #FFB84D)'}}>{t('mowgliNextPage.headlineScanPausedEmphasis')}</em>{t('mowgliNextPage.headlineScanPausedSuffix')}</>
+    : isResumingMowing
+      ? t('mowgliNextPage.headlineResumingMowing')
     : data.isMoving
     ? (remainingMin > 0
         ? <>{t('mowgliNextPage.headlineUntilHomePrefix')}<span style={{
@@ -267,11 +270,13 @@ export const MowgliNextPage = () => {
 
   const subline = data.scanPaused
     ? t('mowgliNextPage.sublineScanPaused')
+    : isResumingMowing
+      ? t('mowgliNextPage.sublineResumingMowing')
     : data.isMoving
       ? t('mowgliNextPage.sublineMoving', {gps: data.gpsLabel.toLowerCase(), area: data.currentArea ?? t('mowgliNextPage.activeZone')})
       : chargeHold
         ? chargeHold.autoResume
-          ? t('mowgliNextPage.sublineChargeHold', {full: data.batteryFullPercent, manual: chargeHold.manualResumePercent})
+          ? t('mowgliNextPage.sublineChargeHold')
           : t('mowgliNextPage.sublineManualChargeHold')
         : data.charging
       ? t('mowgliNextPage.sublineCharging', {current: data.current.toFixed(1)})

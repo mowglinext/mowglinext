@@ -186,8 +186,17 @@ func (s *SchedulerProvider) wakeStartupRetry() {
 	}
 }
 
+// describeScheduleClock names the clock schedules are matched against. A schedule's
+// HH:mm is compared with this process's local time, so a container left on UTC
+// fires an 08:15 schedule at 10:15 CEST; logging it once at startup makes that
+// visible without having to run `date` inside the container.
+func describeScheduleClock(now time.Time) string {
+	return fmt.Sprintf("evaluating schedules in time zone %s (now %s)", now.Location(), now.Format("15:04 MST"))
+}
+
 func (s *SchedulerProvider) run() {
 	startedAt := time.Now()
+	logrus.Infof("Scheduler: %s", describeScheduleClock(startedAt))
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 

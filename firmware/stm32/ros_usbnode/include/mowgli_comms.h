@@ -116,6 +116,10 @@ typedef void (*packet_handler_t)(const uint8_t *data, size_t len);
  */
 void mowgli_comms_init(void);
 
+/** Discard partial RX framing at a USB session boundary. Call with USB RX
+ * excluded; registered handlers and diagnostic counters are preserved. */
+void mowgli_comms_reset_rx(void);
+
 /**
  * @brief Feed raw bytes received from USB CDC into the comms layer.
  *
