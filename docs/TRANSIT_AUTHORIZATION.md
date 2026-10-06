@@ -16,11 +16,17 @@ rings are forbidden and `scale.x` is their explicit clearance margin in metres
 (zero for the dock body). An empty array invalidates transit during map
 replacement; the debounced keepout rebuild publishes the complete snapshot.
 No timestamp is used as a freshness timeout or an observation identity.
+Replacing the area list retains the separately calibrated dock pose, corridor
+and forbidden dock body; the GUI's clear/add/save sequence does not remove it.
 
 Only start/goal terminal legs can leave the union: at most 0.15 m outside,
 connected to an authorized grid anchor within 0.30 m of the endpoint. An
-outside endpoint must have a uniquely nearest intended polygon, enter it once,
-and remain in it until its anchor. Terminal legs never create search cells.
+outside endpoint must have a uniquely nearest boundary location, enter the
+union of rings sharing that location once, and remain in it until its anchor.
+Adjoining or overlapping rings with the same closest boundary point represent
+one intended boundary. Distinct equally near boundary points are ambiguous,
+even when their rings connect elsewhere, and reject the terminal connection.
+Terminal legs never create search cells.
 Starts/goals on polygon edges connect to an interior grid anchor even when
 grid alignment puts the endpoint cell centre outside. Obstacles still block
 these legs. A missing connection fails planning without unrestricted fallback.
@@ -35,6 +41,8 @@ remain separate from ordinary transit.
 
 Stop the mission before editing or replacing a map. Invalidation rejects new
 plans; a controller already following a path may retain it until replanning.
+Controller deviations, autonomous backoff and bounded recovery/docking
+execution are tracked in [#924](https://github.com/mowglinext/mowglinext/issues/924).
 
 ## Physical acceptance
 
