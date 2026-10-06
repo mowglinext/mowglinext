@@ -235,6 +235,16 @@ protected:
     return false;
   }
 
+  std::size_t maxReachedIndex() const
+  {
+    return checker_.max_reached_index_;
+  }
+
+  void setXyGoalTolerance(double tolerance)
+  {
+    checker_.xy_goal_tolerance_ = tolerance;
+  }
+
   std::shared_ptr<nav2::LifecycleNode> node_;
   PathProgressGoalChecker checker_;
   std::vector<Pose2> path_;
@@ -261,6 +271,234 @@ TEST_F(PathProgressEndApproachTest, FieldSubPathParkedShortOfTheEndIsReached)
     EXPECT_GE(fired_at, length - kXyTolM - 1e-6);
     EXPECT_TRUE(reachedWhileParkedAt(parked));
   }
+}
+
+TEST_F(PathProgressEndApproachTest, FirstQueryAtSearchBoundaryRecoversAfterRobotPassesIt)
+{
+  for (const double first_query : {0.286, 0.296})
+  {
+    SCOPED_TRACE(first_query);
+    loadPath(withFtcTail(straightPath(201, 0.03)));
+    const double length = pathLength(path_);
+
+    // Index 10 (0.30 m) is the nearest pose, but the robot has not passed the
+    // artificial boundary yet. Keep the anti-jump guard in place.
+    EXPECT_FALSE(reachedAt(pointAt(path_, first_query)));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+
+    // Sampling phase can put the next query more than half a pose beyond the
+    // boundary. It still crosses locally and must release the stuck window.
+    const double after_boundary = first_query + 0.02;
+    EXPECT_FALSE(reachedAt(pointAt(path_, after_boundary)));
+    EXPECT_EQ(maxReachedIndex(), 10u);
+
+    // Normal forward motion can then carry the bounded cursor to the goal.
+    EXPECT_GE(driveAlong(after_boundary + 0.02, length), 0.0);
+    EXPECT_GT(maxReachedIndex(), 10u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, SearchBoundaryRecoversAcrossAPivotCorner)
+{
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 1.25, 0.0, 0.125);
+  path.push_back({1.25, 0.0, M_PI / 2.0});  // outgoing twin at the pivot corner
+  appendLine(path, 1.25, 0.0, 1.25, 1.25, 0.125);
+  loadPath(path);
+
+  // The corner is the artificial search boundary at index 10. Repeated
+  // positions at the pivot cannot prove the outgoing leg has been traversed.
+  EXPECT_FALSE(reachedAt({1.24, 0.0, 0.0}));
+  EXPECT_FALSE(reachedAt({1.25, 0.0, M_PI / 2.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+
+  // Projection on the incoming leg remains exactly 1.0, but motion down the
+  // outgoing leg is a valid local crossing of that same search frontier.
+  EXPECT_FALSE(reachedAt({1.25, 0.02, M_PI / 2.0}));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, FirstQuerySlightlyPastBoundaryRecoversOnLongPath)
+{
+  loadPath(withFtcTail(straightPath(201, 0.03)));
+  const double length = pathLength(path_);
+
+  // A first localized query may arrive just beyond the window. Do not advance
+  // on that observation alone; a later local forward query proves motion.
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.306)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.326)));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+  EXPECT_GE(driveAlong(0.346, length), 0.0);
+  EXPECT_GT(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, SmallForwardSamplesAccumulateAtSearchBoundary)
+{
+  loadPath(withFtcTail(straightPath(201, 0.03)));
+
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.306)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.316)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.326)));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, LocalOffsetAtBoundaryRecovers)
+{
+  loadPath(withFtcTail(straightPath(201, 0.03)));
+
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.360)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.370)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.380)));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, SmallSamplesPastBoundaryAccumulateBeyondLocalProjection)
+{
+  loadPath(withFtcTail(straightPath(201, 0.03)));
+
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.379)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.389)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.399)));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, SingleObservationOutsideLocalBoundaryRadiusDoesNotAdvance)
+{
+  loadPath(withFtcTail(straightPath(201, 0.03)));
+
+  for (const double x : {0.430, 0.450})
+  {
+    EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, DistantBoundaryObservationDoesNotPoisonLocalRecovery)
+{
+  loadPath(withFtcTail(straightPath(201, 0.03)));
+
+  EXPECT_FALSE(reachedAt(pointAt(path_, 1.100)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.306)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.316)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.326)));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, BoundaryProjectionCannotCompleteNearEndReplay)
+{
+  loadPath(withFtcTail(straightPath(20, 0.06)));
+  const double length = pathLength(path_);
+  const Pose2 endpoint = path_.back();
+
+  // The artificial boundary leaves 0.54 m, just outside the shipped 0.50 m
+  // tolerance. remainingPathLength() could subtract the next 0.06 m segment,
+  // so boundary recovery must not make endpoint correction sufficient.
+  EXPECT_FALSE(reachedAt(endpoint));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({length + 0.025, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+}
+
+TEST_F(PathProgressEndApproachTest, DistantJumpCannotReuseAValidBoundaryOrigin)
+{
+  loadPath(withFtcTail(straightPath(20, 0.06)));
+
+  for (const double x : {0.600, 1.140, 1.165})
+  {
+    EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, NearEndRecoveryAccumulatesAcrossAdjacentSegmentEnd)
+{
+  loadPath(withFtcTail(straightPath(20, 0.06)));
+
+  for (const double x : {0.645, 0.655})
+  {
+    EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+  EXPECT_TRUE(reachedAt({0.665, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, NearEndRecoveryCanStartBeyondAdjacentSegment)
+{
+  loadPath(withFtcTail(straightPath(20, 0.06)));
+
+  EXPECT_FALSE(reachedAt({0.675, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({0.685, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_TRUE(reachedAt({0.695, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, EndpointCorrectionDoesNotReleaseBoundaryInsideTolerance)
+{
+  setXyGoalTolerance(0.20);
+  loadPath(withFtcTail(straightPath(12, 0.10)));
+
+  for (const double x : {1.079, 1.100})
+  {
+    EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, EndpointJitterFarBeyondSearchBoundaryDoesNotReleaseIt)
+{
+  loadPath(withFtcTail(straightPath(21, 0.06)));
+
+  for (const double x : {1.170, 1.195, 1.160})
+  {
+    EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, DistantPointOnOutgoingPivotLegDoesNotLatchBoundary)
+{
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 0.60, 0.0, 0.06);
+  path.push_back({0.60, 0.0, M_PI / 2.0});
+  appendLine(path, 0.60, 0.0, 0.60, 0.60, 0.06);
+  loadPath(withFtcTail(path));
+
+  for (const Pose2 query : {
+           Pose2{0.590, 0.570, 0.0},
+           Pose2{0.615, 0.570, 0.0},
+           Pose2{0.590, 0.570, 0.0},
+           Pose2{0.590, 0.595, 0.0},
+       })
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, LocalMotionRecoversAfterLocalizationCorrectionPastBoundary)
+{
+  loadPath(withFtcTail(straightPath(201, 0.03)));
+  const double length = pathLength(path_);
+
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.0)));
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.306)));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt(pointAt(path_, 0.326)));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+  EXPECT_GE(driveAlong(0.346, length), 0.0);
 }
 
 // The stationary robot the field bag shows: FTC already FINISHED, the checker is
