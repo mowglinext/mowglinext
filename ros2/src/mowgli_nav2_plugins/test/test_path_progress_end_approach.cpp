@@ -369,7 +369,7 @@ TEST_F(PathProgressEndApproachTest, SmallSamplesPastBoundaryAccumulateBeyondLoca
   EXPECT_EQ(maxReachedIndex(), 10u);
 }
 
-TEST_F(PathProgressEndApproachTest, SingleObservationOutsideLocalBoundaryRadiusDoesNotAdvance)
+TEST_F(PathProgressEndApproachTest, ObservationsOutsideLocalBoundaryRadiusDoNotAdvance)
 {
   loadPath(withFtcTail(straightPath(201, 0.03)));
 
@@ -378,6 +378,33 @@ TEST_F(PathProgressEndApproachTest, SingleObservationOutsideLocalBoundaryRadiusD
     EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
     EXPECT_EQ(maxReachedIndex(), 0u);
   }
+}
+
+TEST_F(PathProgressEndApproachTest, OffsetStartCanRecoverAndReachTheEnd)
+{
+  loadPath(withFtcTail(straightPath(201, 0.03)));
+  const double length = pathLength(path_);
+
+  // Start 10 cm beyond the artificial boundary, just outside the old 9 cm
+  // neighborhood, then keep moving forward in 2 cm samples.
+  EXPECT_FALSE(reachedAt({0.400, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({0.420, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+  EXPECT_GE(driveAlong(0.440, length), 0.0);
+  EXPECT_GT(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, ShortPathBoundaryRecoversInsideGoalTolerance)
+{
+  loadPath(withFtcTail(straightPath(24, 0.03)));
+
+  // The artificial boundary itself has less than 0.50 m left, but a local
+  // start and forward crossing still need to release the bounded cursor.
+  EXPECT_FALSE(reachedAt({0.286, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_TRUE(reachedAt({0.306, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 10u);
 }
 
 TEST_F(PathProgressEndApproachTest, DistantBoundaryObservationDoesNotPoisonLocalRecovery)
@@ -445,12 +472,46 @@ TEST_F(PathProgressEndApproachTest, NearEndRecoveryCanStartBeyondAdjacentSegment
   EXPECT_EQ(maxReachedIndex(), 10u);
 }
 
+TEST_F(PathProgressEndApproachTest, NearEndRecoveryCanStartWithinGoalTolerance)
+{
+  setXyGoalTolerance(0.20);
+  loadPath(withFtcTail(straightPath(12, 0.10)));
+
+  EXPECT_FALSE(reachedAt({0.979, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_TRUE(reachedAt({1.100, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, MotionBelowRecoveryThresholdDoesNotReleaseBoundary)
+{
+  loadPath(withFtcTail(straightPath(201, 0.03)));
+
+  for (const double x : {0.379, 0.389, 0.392})
+  {
+    EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
 TEST_F(PathProgressEndApproachTest, EndpointCorrectionDoesNotReleaseBoundaryInsideTolerance)
 {
   setXyGoalTolerance(0.20);
   loadPath(withFtcTail(straightPath(12, 0.10)));
 
   for (const double x : {1.079, 1.100})
+  {
+    EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, EndpointCorrectionCannotReleaseAWindowJustBeforeGoal)
+{
+  setXyGoalTolerance(0.20);
+  loadPath(withFtcTail(straightPath(14, 0.10)));
+
+  for (const double x : {1.279, 1.300})
   {
     EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
     EXPECT_EQ(maxReachedIndex(), 0u);
@@ -464,6 +525,30 @@ TEST_F(PathProgressEndApproachTest, EndpointJitterFarBeyondSearchBoundaryDoesNot
   for (const double x : {1.170, 1.195, 1.160})
   {
     EXPECT_FALSE(reachedAt({x, 0.0, 0.0}));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, EndpointJitterCannotSeedRecoveryOnAClosedPath)
+{
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 0.30, 0.0, 0.03);
+  appendLine(path, 0.30, 0.0, 0.42, 0.0, 0.03);
+  appendLine(path, 0.42, 0.0, 0.42, 0.075, 0.025);
+  appendLine(path, 0.42, 0.075, 0.30, 0.075, 0.03);
+  appendLine(path, 0.30, 0.075, 0.30, 0.0, 0.025);
+  loadPath(withFtcTail(path));
+
+  // The terminal pose overlaps the artificial boundary. Its local path-arc
+  // projection is the earlier segment, so endpoint geometry must prevent that
+  // query and nearby jitter from creating recovery evidence.
+  for (const Pose2 query : {
+           Pose2{0.30, 0.0, 0.0},
+           Pose2{0.32, 0.0, 0.0},
+           Pose2{0.34, 0.0, 0.0},
+       })
+  {
+    EXPECT_FALSE(reachedAt(query));
     EXPECT_EQ(maxReachedIndex(), 0u);
   }
 }
