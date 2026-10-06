@@ -39,24 +39,12 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop, onRearm,
   const primaryPlaying = phase === "playing";
   const primaryAlert = phase === "alert";
   const manualResumeEligible = !!chargeHold?.autoResume && chargeHold.batteryPercent >= chargeHold.manualResumePercent;
-  const chargeHoldMessage = chargeHold?.autoResume
-    ? t("actionCluster.chargeHold", {
-        message: chargeHold.stateName === "CRITICAL_BATTERY_CHARGING"
-          ? t("actionCluster.criticalChargeHold")
-          : t("actionCluster.lowChargeHold"),
-        full: chargeHold.batteryFullPercent,
-        resumeAt: chargeHold.manualResumePercent,
-      })
-    : t("actionCluster.manualChargeHold");
 
   // A charge hold is an active mowing session parked by the battery guards,
   // unlike an ordinary idle mower that happens to be charging on the dock.
   if (chargeHold) {
     return (
       <div style={{display: "flex", flexDirection: "column", alignItems: "center", gap: 10}}>
-        <div style={{fontSize: 12, lineHeight: 1.45, color: "var(--ink-2)", textAlign: "center", maxWidth: 380}}>
-          {chargeHoldMessage}
-        </div>
         <div style={{display: "flex", alignItems: "center", justifyContent: "center", gap: 14}}>
           <SecondaryButton ariaLabel={t("actionCluster.emergencyStop")} onClick={onStop} tone="danger" displayMode={displayMode}>
             <AlertTriangle size={20} strokeWidth={2.2}/>
@@ -66,13 +54,11 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop, onRearm,
                 <Play size={32} strokeWidth={2.4} fill="currentColor" style={{marginLeft: 3}}/>
               </PrimaryButton>
               <span style={{fontSize: 11, fontWeight: 600, color: "var(--ink-2)"}}>{t("actionCluster.resumeNow")}</span>
+              <span style={{fontSize: 11, lineHeight: 1.3, color: "var(--ink-2)", textAlign: "center"}}>{t("actionCluster.resumeAvailable", {percent: chargeHold.manualResumePercent})}</span>
             </div>}
-          <div style={{display: "flex", flexDirection: "column", alignItems: "center", gap: 5}}>
-            <SecondaryButton ariaLabel={t("actionCluster.cancelMowing")} onClick={onCancelMowing ?? onPause} tone="default" displayMode={displayMode}>
-              <Square size={18} strokeWidth={2.2} fill="currentColor"/>
-            </SecondaryButton>
-            <span style={{fontSize: 11, fontWeight: 600, color: "var(--ink-2)"}}>{t("actionCluster.cancelMowing")}</span>
-          </div>
+          <SecondaryButton ariaLabel={t("actionCluster.cancelMowing")} onClick={onCancelMowing ?? onPause} tone="default" displayMode={displayMode}>
+            <Square size={18} strokeWidth={2.2} fill="currentColor"/>
+          </SecondaryButton>
         </div>
       </div>
     );

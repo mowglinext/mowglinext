@@ -47,6 +47,7 @@
 #include "cpp_main.h"
 #include "ringbuffer.h"
 #include "fw_params.h"
+#include "fw_param_reset.h"
 
 static void WATCHDOG_vInit(void);
 static void WATCHDOG_Refresh(void);
@@ -515,9 +516,11 @@ int main(void)
   LED_Init();
   BOOT_BlinkResetCause(g_boot_reset_csr);
   DB_TRACE(" * LED initialized\r\n");
-  // Runtime parameters: compiled defaults, then the values persisted in flash.
-  // Must run before WATCHDOG_vInit(): it may erase the parameter log, which
-  // blocks far longer than the window watchdog allows.
+  // Runtime parameters: establish backup-register access before checking an
+  // explicit reset marker, then load defaults or the persisted set. The only
+  // flash erase runs here, before WATCHDOG_vInit(), because it can block far
+  // longer than the window watchdog allows.
+  fw_param_reset_backup_init();
   fw_params_init();
   TIM2_Init();
   ADC_Charging_Init();
@@ -654,6 +657,8 @@ int main(void)
       WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_WATCHDOG_REFRESH);
       WATCHDOG_Refresh();
     }
+
+    CDC_ServiceRecovery();
 
     if (NBT_handler(&main_drivemotor_nbt))
     {

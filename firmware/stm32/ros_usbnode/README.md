@@ -81,6 +81,29 @@ close and reopen the device (`serial_rx_timeout_s`), so a flash or a board reboo
 self-heals. If you are talking to the port with your own tool instead, unplug and
 replug the USB cable to settle things.
 
+## F401 USB self-recovery diagnostics
+
+The F401 builds count successful automatic USB recoveries in
+`CDC_GetUsbRecoveryCount()` (`s_usbRecoveryCount` for a debugger). The count is
+volatile, resets on MCU boot and advances only when the host configures CDC
+after a firmware-initiated detach/restart. Ordinary host resets/configurations
+and failed stop/start attempts do not increment it.
+
+Existing SWO debug output emits a main-loop summary after the first recovery,
+then at most once per 30 seconds, aggregating later recoveries:
+
+```text
+[FW_DIAG] USB recoveries=3 busy_stuck=5 missing_completion=5 tick=30900
+```
+
+The latter two counters count detected TX stalls, not successful recoveries;
+`tick` is the report's uptime in milliseconds. Repeated stop/start failures do
+not print. Capture SWO through a trace-capable probe connected to the SWO pin
+(see **Serial Debugging** below); output is best-effort and may be dropped on
+backpressure. The counter remains readable even without trace capture. These
+are firmware debug diagnostics, not ROS logs or new wire packets. Host USB
+disconnect logs alone cannot distinguish self-recovery from a reboot/unplug.
+
 ## Drive the bot
 
 Manual driving goes through twist_mux on `/cmd_vel_teleop` (priority 20, above

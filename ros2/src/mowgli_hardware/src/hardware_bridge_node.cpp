@@ -61,7 +61,9 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -78,6 +80,7 @@
 #include "mowgli_hardware/dig_detector.hpp"
 #include "mowgli_hardware/dig_escalation.hpp"
 #include "mowgli_hardware/drive_gain_sanity.hpp"
+#include "mowgli_hardware/firmware_param_store_reset_gate.hpp"
 #include "mowgli_hardware/firmware_params.hpp"
 #include "mowgli_hardware/gnss_hardware_status.hpp"
 #include "mowgli_hardware/imu_liveness.hpp"
@@ -1075,6 +1078,8 @@ private:
           const std::string previous_state_name = current_mode_state_name_;
           current_mode_ = msg->state;
           current_mode_state_name_ = msg->state_name;
+          have_high_level_status_ = true;
+          last_high_level_status_steady_ns_ = steadyNowNs();
           if (previous_mode != current_mode_ || previous_state_name != current_mode_state_name_)
           {
             RCLCPP_INFO(get_logger(),
@@ -1128,6 +1133,16 @@ private:
                std::shared_ptr<std_srvs::srv::Trigger::Response> res)
         {
           on_reboot_board(req, res);
+        });
+
+    // Explicit operator recovery for a full/corrupt parameter log. This only
+    // arms a one-shot firmware marker; it never erases flash in this session.
+    srv_reset_firmware_param_store_ = create_service<std_srvs::srv::Trigger>(
+        "~/reset_firmware_param_store",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+               std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+        {
+          on_reset_firmware_param_store(req, res);
         });
 
     srv_set_firmware_debug_ = create_service<std_srvs::srv::SetBool>(
@@ -1312,6 +1327,12 @@ private:
     cancelBladeResume();
     packet_handler_.reset_receive_state();
     odometry_publisher_.reset();
+    have_board_status_ = false;
+    have_high_level_status_ = false;
+    have_odometry_ = false;
+    have_blade_status_ = false;
+    have_host_velocity_target_ = false;
+    have_param_store_status_ = false;
   }
 
   void close_serial_for_reconnect()
@@ -1345,6 +1366,7 @@ private:
       // A reboot or reflash forgets nothing the board stored, but every report
       // must be re-read: publish "unreported" until the new ones arrive.
       firmware_params_.reset_reports();
+      store_status_sequence_ = 0u;
       publish_firmware_params();
       RCLCPP_INFO(get_logger(), "Serial port re-opened successfully.");
     }
@@ -1374,6 +1396,7 @@ private:
       }
       packet_handler_.feed(buf, static_cast<std::size_t>(n));
       last_serial_rx_time_ = now();
+      last_serial_rx_steady_ns_ = steadyNowNs();
     }
 
     // Dead-link watchdog: the STM32 streams continuously whenever it is up, so
@@ -1561,6 +1584,10 @@ private:
     LlStatus pkt{};
     std::memcpy(&pkt, data, sizeof(LlStatus));
 
+    have_board_status_ = true;
+    board_initialized_ = (pkt.status_bitmask & STATUS_BIT_INITIALIZED) != 0u;
+    last_board_status_steady_ns_ = steadyNowNs();
+
     const auto stamp = now();
 
     // ---- Status message ----
@@ -1713,6 +1740,8 @@ private:
       else
       {
         // Normal mode or stop button: full emergency
+        if (stop_active || lift_active || latch_active)
+          blade_intent_authorized_ = false;
         msg.active_emergency = stop_active || lift_active;
         msg.latched_emergency = latch_active;
         fw_latched_emergency_ = latch_active;
@@ -2516,6 +2545,10 @@ private:
 
     LlOdometry pkt{};
     std::memcpy(&pkt, data, sizeof(LlOdometry));
+    have_odometry_ = true;
+    last_odometry_steady_ns_ = steadyNowNs();
+    actual_left_velocity_mm_s_ = pkt.left_velocity_mm_s;
+    actual_right_velocity_mm_s_ = pkt.right_velocity_mm_s;
     odometry_publisher_.handle_packet(pkt, ticks_per_meter_, wheel_track_, is_charging_);
   }
 
@@ -2833,6 +2866,20 @@ private:
                     sizeof(LlParamCommit) - sizeof(uint16_t));
   }
 
+  bool send_param_store_reset(uint32_t request_id)
+  {
+    if (!serial_ || !serial_->is_open() || request_id == 0u)
+    {
+      return false;
+    }
+    LlParamStoreReset pkt{};
+    pkt.type = PACKET_ID_LL_PARAM_STORE_RESET;
+    pkt.magic = kLlParamStoreResetMagic;
+    pkt.request_id = request_id;
+    return send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                           sizeof(LlParamStoreReset) - sizeof(uint16_t));
+  }
+
   // The firmware answers GET_PARAM(ALL) at a bounded rate and its USB TX queue
   // drops rather than blocks: re-ask a few times for anything still missing.
   void recheck_firmware_param_reports()
@@ -2909,21 +2956,30 @@ private:
     }
     LlParamStoreStatus pkt{};
     std::memcpy(&pkt, data, sizeof(LlParamStoreStatus));
-    if (!firmware_params_.on_store_status(pkt))
+    have_param_store_status_ = true;
+    if (++store_status_sequence_ == 0u)
     {
-      return;
+      ++store_status_sequence_;
     }
-    if (pkt.last_commit == PARAM_COMMIT_ERROR)
+    const bool changed = firmware_params_.on_store_status(pkt, store_status_sequence_);
+    if (changed && pkt.last_commit == PARAM_COMMIT_ERROR)
     {
       RCLCPP_ERROR(get_logger(),
-                   "Firmware could not write its parameter flash: the values apply until the "
-                   "board reboots, then it falls back to the last stored set.");
+                   "Firmware reported a parameter-store failure or rejected a reset request. "
+                   "Check per-parameter persisted flags; unstored values may revert after reboot.");
     }
-    else if (pkt.last_commit == PARAM_COMMIT_LOG_FULL)
+    else if (changed && pkt.last_commit == PARAM_COMMIT_LOG_FULL)
     {
       RCLCPP_WARN(get_logger(),
-                  "Firmware parameter log is full: the board erases it at its next boot and "
-                  "this node re-sends and re-commits the values after reconnecting.");
+                  "Firmware parameter log is full. An explicit operator reset request is required "
+                  "before the next boot.");
+    }
+    else if (changed && pkt.last_commit == PARAM_COMMIT_RESET_PENDING)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "Firmware reports parameter-store reset request %u armed or unresolved; "
+                  "a completed boot reset is not yet confirmed.",
+                  pkt.reset_request_id);
     }
     publish_firmware_params();
   }
@@ -2940,6 +2996,8 @@ private:
     msg.boot_source = firmware_params_.boot_source();
     msg.last_commit = firmware_params_.last_commit();
     msg.records_left = firmware_params_.records_left();
+    msg.reset_request_id = firmware_params_.reset_request_id();
+    msg.store_status_sequence = firmware_params_.store_status_sequence();
     for (const auto& [id, state] : firmware_params_.states())
     {
       mowgli_interfaces::msg::FirmwareParam param;
@@ -2976,6 +3034,108 @@ private:
     send_reboot_command();
     res->success = true;
     res->message = "reboot request sent; board will reset within ~1 s";
+  }
+
+  static bool steady_receipt_is_fresh(int64_t now_ns, int64_t receipt_ns, int64_t max_age_ns)
+  {
+    return receipt_ns > 0 && now_ns >= receipt_ns && now_ns - receipt_ns <= max_age_ns;
+  }
+
+  static uint32_t random_reset_request_id()
+  {
+    static std::mutex mutex;
+    static std::mt19937 generator(
+        []()
+        {
+          std::random_device source;
+          std::seed_seq seed{source(), source(), source(), source()};
+          return std::mt19937(seed);
+        }());
+    std::lock_guard<std::mutex> lock(mutex);
+    std::uniform_int_distribution<uint32_t> distribution(1u, std::numeric_limits<uint32_t>::max());
+    return distribution(generator);
+  }
+
+  FirmwareParamStoreResetState firmware_param_store_reset_state() const
+  {
+    constexpr int64_t kSerialFreshNs = 1'000'000'000;
+    constexpr int64_t kBoardStatusFreshNs = 1'500'000'000;
+    constexpr int64_t kHighLevelFreshNs = 2'000'000'000;
+    constexpr int64_t kOdometryFreshNs = 500'000'000;
+    constexpr int64_t kBladeFreshNs = 1'500'000'000;
+    constexpr int64_t kCommandWatchdogFreshNs = 500'000'000;
+    constexpr double kStoppedCommandEpsilon = 1.0e-3;
+    constexpr int16_t kStoppedWheelSpeedMmPerS = 5;
+    const int64_t now_ns = steadyNowNs();
+
+    FirmwareParamStoreResetState state;
+    state.serial_open = serial_ && serial_->is_open();
+    state.serial_fresh = steady_receipt_is_fresh(now_ns, last_serial_rx_steady_ns_, kSerialFreshNs);
+    state.protocol_compatible = fw_handshake_done_ && fw_compatible_;
+    state.board_status_fresh =
+        have_board_status_ &&
+        steady_receipt_is_fresh(now_ns, last_board_status_steady_ns_, kBoardStatusFreshNs);
+    state.board_initialized = board_initialized_;
+    state.high_level_status_fresh =
+        have_high_level_status_ &&
+        steady_receipt_is_fresh(now_ns, last_high_level_status_steady_ns_, kHighLevelFreshNs);
+    state.idle = current_mode_ == HL_MODE_IDLE;
+    state.odometry_fresh =
+        have_odometry_ &&
+        steady_receipt_is_fresh(now_ns, last_odometry_steady_ns_, kOdometryFreshNs);
+
+    const int64_t command_age_ns = now_ns - last_host_velocity_target_steady_ns_;
+    const bool command_known = have_host_velocity_target_ && command_age_ns >= 0;
+    const bool command_reports_zero =
+        std::abs(last_host_velocity_target_vx_) <= kStoppedCommandEpsilon &&
+        std::abs(last_host_velocity_target_wz_) <= kStoppedCommandEpsilon;
+    const bool command_watchdog_expired = command_age_ns > kCommandWatchdogFreshNs;
+    state.wheel_targets_zero = command_known && (command_reports_zero || command_watchdog_expired);
+    state.wheels_stationary = odometry_publisher_.wheels_stationary();
+    state.actual_wheel_speeds_zero =
+        std::abs(actual_left_velocity_mm_s_) <= kStoppedWheelSpeedMmPerS &&
+        std::abs(actual_right_velocity_mm_s_) <= kStoppedWheelSpeedMmPerS;
+    state.blade_status_fresh =
+        have_blade_status_ &&
+        steady_receipt_is_fresh(now_ns, last_blade_status_steady_ns_, kBladeFreshNs);
+    state.blade_target_off = !mow_enabled_ && !waiting_blade_resume_ && !dig_escaping_;
+    state.blade_inactive = !blade_active_;
+    state.blade_rpm_zero = blade_rpm_ == 0.0F;
+    state.reset_already_pending =
+        have_param_store_status_ && firmware_params_.last_commit() == PARAM_COMMIT_RESET_PENDING;
+    return state;
+  }
+
+  void on_reset_firmware_param_store(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                                     std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+  {
+    const auto state = firmware_param_store_reset_state();
+    const auto block_reason = firmware_param_store_reset_block_reason(state);
+    if (block_reason != FirmwareParamStoreResetBlockReason::kNone)
+    {
+      res->success = false;
+      res->message = std::string(firmware_param_store_reset_block_message(block_reason));
+      return;
+    }
+
+    uint32_t request_id = 0u;
+    do
+    {
+      request_id = random_reset_request_id();
+    } while (request_id == last_reset_request_id_sent_ ||
+             request_id == firmware_params_.reset_request_id());
+    last_reset_request_id_sent_ = request_id;
+
+    if (!send_param_store_reset(request_id))
+    {
+      res->success = false;
+      res->message = "failed to send the explicit parameter-store reset request";
+      return;
+    }
+
+    res->success = true;
+    res->message = "request_id=" + std::to_string(request_id) +
+                   "; reset request sent; waiting for matching firmware confirmation before reboot";
   }
 
   void on_set_firmware_debug(const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
@@ -3037,6 +3197,8 @@ private:
     blade_active_ = pkt.is_active != 0u;
     blade_rpm_ = static_cast<float>(pkt.rpm);
     blade_status_time_ = now();
+    have_blade_status_ = true;
+    last_blade_status_steady_ns_ = steadyNowNs();
     blade_temperature_ = pkt.temperature;
     blade_esc_current_ = blade_current_amps(pkt);
   }
@@ -3801,11 +3963,18 @@ private:
     pkt.linear_x = wire_vx;
     pkt.angular_z = wire_wz;
 
-    // Stamped for blade_reassert_tick: the firmware only accepts a blade ON
-    // within its CMD_VEL watchdog window, measured from this packet.
     if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
                         sizeof(LlCmdVel) - sizeof(uint16_t)))
-      last_cmd_vel_packet_ns_ = steadyNowNs();
+    {
+      // Both consumers track the successfully written packet, not an attempted
+      // send: blade re-assert freshness and parameter-reset target safety.
+      const int64_t sent_ns = steadyNowNs();
+      last_cmd_vel_packet_ns_ = sent_ns;
+      have_host_velocity_target_ = true;
+      last_host_velocity_target_vx_ = wire_vx;
+      last_host_velocity_target_wz_ = wire_wz;
+      last_host_velocity_target_steady_ns_ = sent_ns;
+    }
 
     // Exact host command represented by the packet above. The firmware keeps
     // final authority and may still reject motion because of an emergency or
@@ -3886,9 +4055,11 @@ private:
     in.enable_allowed = !lift_detected_ && !waiting_blade_resume_;
     in.intent_authorized = blade_intent_authorized_;
     in.emergency_active = emergency;
+    const auto max_blade_status_age_ns =
+        static_cast<std::int64_t>(blade_reassert_cfg_.max_blade_status_age_s * 1.0e9);
     in.blade_status_fresh =
-        blade_status_time_.nanoseconds() != 0 &&
-        (now() - blade_status_time_).seconds() <= blade_reassert_cfg_.max_blade_status_age_s;
+        have_blade_status_ &&
+        steady_receipt_is_fresh(now_ns, last_blade_status_steady_ns_, max_blade_status_age_ns);
     in.blade_active = blade_active_;
     in.cmd_vel_age_s = age_s(last_cmd_vel_packet_ns_);
     in.since_last_blade_cmd_s = age_s(last_blade_cmd_ns_);
@@ -3942,6 +4113,7 @@ private:
     if (req->emergency != 0u)
     {
       cancelBladeResume();
+      blade_intent_authorized_ = false;
       RCLCPP_WARN(get_logger(), "Emergency stop requested via service.");
       emergency_active_ = true;
     }
@@ -4103,6 +4275,7 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr srv_mower_control_;
   rclcpp::Service<mowgli_interfaces::srv::EmergencyStop>::SharedPtr srv_emergency_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reboot_board_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reset_firmware_param_store_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_set_firmware_debug_;
 
   // Client (not server, unlike the srv_* members above): calls
@@ -4126,6 +4299,7 @@ private:
   // Serial-link RX watchdog (auto-reconnect on flash / board reboot / unplug).
   double serial_rx_timeout_s_{2.0};
   rclcpp::Time last_serial_rx_time_{0, 0, RCL_ROS_TIME};
+  std::int64_t last_serial_rx_steady_ns_{0};
   double high_level_rate_{2.0};
 
   std::unique_ptr<SerialPort> serial_;
@@ -4180,9 +4354,12 @@ private:
   int stop_button_ms_{100};
   int play_clear_ms_{2000};
   int imu_inclination_threshold_{56};
-  // Runtime parameter bookkeeping (protocol v7): requested vs applied.
+  // Runtime parameter bookkeeping (protocol v8): requested vs applied.
   FirmwareParamTracker firmware_params_;
   rclcpp::Publisher<mowgli_interfaces::msg::FirmwareParams>::SharedPtr pub_firmware_params_;
+  bool have_param_store_status_{false};
+  uint32_t last_reset_request_id_sent_{0u};
+  uint32_t store_status_sequence_{0u};
   static constexpr double kParamReportTimeoutS = 3.0;
   static constexpr int kMaxParamReportRetries = 3;
   int param_report_retries_{kMaxParamReportRetries};
@@ -4253,6 +4430,19 @@ private:
   bool is_charging_{false};
   uint8_t current_mode_{0};
   std::string current_mode_state_name_{"UNSET"};
+  bool have_board_status_{false};
+  bool board_initialized_{false};
+  std::int64_t last_board_status_steady_ns_{0};
+  bool have_high_level_status_{false};
+  std::int64_t last_high_level_status_steady_ns_{0};
+  bool have_odometry_{false};
+  std::int64_t last_odometry_steady_ns_{0};
+  int16_t actual_left_velocity_mm_s_{0};
+  int16_t actual_right_velocity_mm_s_{0};
+  bool have_host_velocity_target_{false};
+  float last_host_velocity_target_vx_{0.0F};
+  float last_host_velocity_target_wz_{0.0F};
+  std::int64_t last_host_velocity_target_steady_ns_{0};
   uint8_t last_sent_mode_{255};
   std::string last_sent_mode_state_name_{"UNSET"};
   uint8_t gps_quality_{0};
@@ -4269,6 +4459,8 @@ private:
   std::string blade_requested_direction_{"unknown"};
   float blade_rpm_{0.0f};
   rclcpp::Time blade_status_time_{0, 0, RCL_ROS_TIME};
+  bool have_blade_status_{false};
+  std::int64_t last_blade_status_steady_ns_{0};
   float blade_temperature_{0.0f};
   float blade_esc_current_{0.0f};
   uint8_t last_reset_cause_{RESET_CAUSE_UNKNOWN};

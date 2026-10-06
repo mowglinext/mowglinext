@@ -352,7 +352,8 @@ private:
   // does not abandon the area).
   void persistResumeCursor(const std::shared_ptr<BTContext>& ctx);
   // Smooth live coverage percent (0..100) from the current pose cursor
-  // (swath_base_[swath_idx_] + resume_start_idx_ + path_progress_idx_) over
+  // (swath_base_[swath_idx_] + swath_resume_start_indices_[swath_idx_] +
+  // path_progress_idx_) over
   // total_path_poses_. Monotonic within an area; recomputed every following tick
   // so the GUI %-readout climbs smoothly rather than jumping per sub-path.
   float livePercent() const;
@@ -462,13 +463,12 @@ private:
   // stays comparable to area_path_pose_count. For a single unit this is {0} and
   // the bookkeeping reduces to the original single-path behaviour.
   std::vector<std::size_t> swath_base_;
-  // Resume-cursor bookkeeping. resume_start_idx_ = trim offset WITHIN the
-  // currently-driven unit (swaths_[swath_idx_]) where this run begins (non-zero
-  // only for the one unit a mid-unit resume trimmed); path_progress_idx_ =
-  // furthest pose reached within the currently-driven (trimmed) unit;
-  // total_path_poses_ = concatenation length (percent denominator). Both reset
-  // to 0 on advance() to the next unit.
-  std::size_t resume_start_idx_ = 0;
+  // Resume-cursor bookkeeping. Each entry is the trim offset WITHIN that unit
+  // where this run begins (non-zero for a unit resumed mid-path); keeping these
+  // offsets per unit matters when an earlier incomplete unit is retried first.
+  // path_progress_idx_ is the furthest pose reached within the currently-driven
+  // (trimmed) unit; total_path_poses_ is the original concatenation length.
+  std::vector<std::size_t> swath_resume_start_indices_;
   std::size_t path_progress_idx_ = 0;
   std::size_t total_path_poses_ = 0;
   // Area being mowed (from ctx->current_area) — keys the swath-completion
