@@ -423,6 +423,10 @@ COPY sensors/gps/mowgli_gnss_bridge/ src/mowgli_gnss_bridge/
 # unwanted driver tools; the schema-only overlay is built in Stage 0d instead.
 RUN touch src/external/universal-gnss/COLCON_IGNORE
 
+# MowgliMAVROS is vendored as an external sidecar submodule. Its ROS packages
+# are built in the dedicated MAVROS image, not in the MowgliNext ROS workspace.
+RUN touch src/external/mowglimavros/COLCON_IGNORE
+
 # Skip every opennav_coverage subpackage except _msgs. The upstream server
 # is pinned to F2C 1.2.1 (no TrapezoidalDecomp / generateHeadlandSwaths /
 # planPathForConnection); we use mowgli_coverage with F2C v3 instead, and
