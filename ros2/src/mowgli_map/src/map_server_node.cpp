@@ -262,7 +262,6 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       create_publisher<nav_msgs::msg::OccupancyGrid>("/keepout_mask", transient_qos);
   planning_grid_error_pub_ =
       create_publisher<std_msgs::msg::String>("~/planning_grid_error", transient_qos);
-  invalidate_keepout_mask();
 
   lidar_ignore_corridors_pub_ = create_publisher<mowgli_interfaces::msg::LidarIgnoreCorridorArray>(
       "/mowgli/lidar_ignore_corridors", transient_qos);
@@ -271,6 +270,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       "/mowgli/recorded_area_polygons", transient_qos);
   transit_geometry_pub_ =
       create_publisher<visualization_msgs::msg::MarkerArray>("~/transit_geometry", transient_qos);
+  invalidate_keepout_mask();
 
   // ── Subscribers ──────────────────────────────────────────────────────────
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(

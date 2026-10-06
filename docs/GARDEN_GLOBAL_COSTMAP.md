@@ -21,6 +21,8 @@ closes the grid immediately until the next mask application.
 
 Map loading/replacement and dock placement invalidate the latched mask before
 rebuilding it. An empty mask means unavailable authorization, never a free map.
+Successful grid loading schedules the normal timer rebuild on its next tick.
+Area-list replacement retains the separately calibrated dock pose and geometry.
 Map replacement still publishes only one complete raster after its 1.5 s settle
 window. The map server now compares both size and center when fitting geometry,
 so a same-size replacement at a different location recenters correctly.
@@ -46,6 +48,8 @@ Local obstacle handling and collision-monitor settings are unchanged.
 Map edits should be performed with autonomous motion stopped. This change gates
 new planning against unavailable authorization; it does not cancel an already
 dispatched controller path independently of the navigation behavior tree.
+Execution authorization, controller deviations and recovery/docking exceptions
+remain tracked in [#924](https://github.com/mowglinext/mowglinext/issues/924).
 
 ## Software checks
 
@@ -56,15 +60,21 @@ startup/resize/edit closure, recovery clearing, malformed/resource-limited
 masks, and removed sensor marks including inflation. Marking/clearing and
 marking-only cases represent the two global sensor configurations; they do not
 constitute a sensor-driver or physical robot test.
+The integrated suite also uses `AuthorizedTransitPlanner` with real DDS geometry
+snapshots on the garden-sized grid: distant detours in both directions remain
+authorized along every segment, disconnected soft slack cannot become a shortcut,
+same-cell requests obey authorization, and empty geometry rejects new plans.
 
 Map-server tests cover dock-inclusive extents, same-size reload/recenter,
 allocation refusal without coarsening, and closed masks during a burst of edits.
+The saved-grid reload regression exercises service callbacks and the normal timer
+path, observing empty-mask invalidation followed by complete republication.
 Configuration tests pin both overlays' fixed global/rolling local geometry and
 bounded observation policy.
 
 ## Release hardware acceptance — HARDWARE_REQUIRED
 
-No measurements from supported ARM hardware have been acquired. The weakest
+The current repairs have no supported-ARM acceptance measurements. The weakest
 supported board and unit must be identified before this can become
 `HARDWARE_PENDING`; desktop tests do not establish ARM resource headroom.
 

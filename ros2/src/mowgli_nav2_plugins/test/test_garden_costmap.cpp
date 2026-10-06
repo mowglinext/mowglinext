@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <thread>
 
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <nav2_smac_planner/smac_planner_2d.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
+#include "mowgli_nav2_plugins/authorized_transit_planner.hpp"
 #include "mowgli_nav2_plugins/garden_keepout_layer.hpp"
 #include <gtest/gtest.h>
 
@@ -89,10 +91,19 @@ protected:
     planner_node->declare_parameter("GridBased.smoother.max_its", 0);
     planner_node->declare_parameter("GridBased.max_planning_time", 5.0);
     planner.configure(planner_node, "GridBased", costmap->getTfBuffer(), costmap);
+    planner_node->declare_parameter("Authorized.tolerance", 0.0);
+    planner_node->declare_parameter("Authorized.max_planning_time", 5.0);
+    authorized.configure(planner_node, "Authorized", costmap->getTfBuffer(), costmap);
+    geometry_node = std::make_shared<rclcpp::Node>("garden_geometry");
+    geometry_pub = geometry_node->create_publisher<visualization_msgs::msg::MarkerArray>(
+        "/map_server_node/transit_geometry", rclcpp::QoS(1).transient_local());
   }
   void TearDown() override
   {
     planner.cleanup();
+    authorized.cleanup();
+    geometry_pub.reset();
+    geometry_node.reset();
     keepout.reset();
     obstacles.reset();
     costmap->on_cleanup(rclcpp_lifecycle::State());
@@ -112,12 +123,123 @@ protected:
     EXPECT_TRUE(m->worldToMap(x, y, mx, my));
     return m->getCost(mx, my);
   }
+  void geometry(const std::vector<mowgli_nav2_plugins::transit::Ring>& rings)
+  {
+    visualization_msgs::msg::MarkerArray snapshot;
+    for (const auto& ring : rings)
+    {
+      visualization_msgs::msg::Marker marker;
+      marker.header.frame_id = "map";
+      marker.ns = "area";
+      marker.action = marker.ADD;
+      for (const auto& p : ring)
+      {
+        geometry_msgs::msg::Point point;
+        point.x = p.x;
+        point.y = p.y;
+        marker.points.push_back(point);
+      }
+      snapshot.markers.push_back(marker);
+    }
+    for (int i = 0; i < 200 && geometry_pub->get_subscription_count() == 0; ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ASSERT_GT(geometry_pub->get_subscription_count(), 0U);
+    geometry_pub->publish(snapshot);
+    // This lifecycle node's only subscription is the planner's geometry input.
+    // Deliver the real DDS snapshot, including an empty invalidation.
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(planner_node->get_node_base_interface());
+    executor.spin_once(std::chrono::seconds(2));
+  }
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap;
   std::shared_ptr<mowgli_nav2_plugins::GardenKeepoutLayer> keepout;
   std::shared_ptr<mowgli_nav2_plugins::RecentObstacleLayer> obstacles;
   nav2::LifecycleNode::SharedPtr planner_node;
   nav2_smac_planner::SmacPlanner2D planner;
+  mowgli_nav2_plugins::AuthorizedTransitPlanner authorized;
+  rclcpp::Node::SharedPtr geometry_node;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr geometry_pub;
 };
+
+TEST_P(GardenCostmapTest, AuthorizedPlannerUsesDistantDetourAndRejectsDisconnectedSlack)
+{
+  using namespace mowgli_nav2_plugins::transit;
+  const auto rectangle = [](double x0, double y0, double x1, double y1) -> Ring
+  {
+    return {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}};
+  };
+  Geometry exact;
+  exact.allowed = {rectangle(-2, -2, 2, 2),
+                   rectangle(70, -2, 74, 2),
+                   rectangle(0, 0, 1, 40),
+                   rectangle(0, 39, 72, 40),
+                   rectangle(71, 0, 72, 40)};
+  auto m = mask(-5, -5, 1700, 1000);
+  // Soft costs throughout reproduce the permissive body-slack substrate;
+  // exact geometry must still force the long connected detour.
+  std::fill(m->data.begin(), m->data.end(), 50);
+  apply(m);
+  geometry(exact.allowed);
+  const auto same_cell = authorized.createPlan(pose(.51, .1),
+                                               pose(.52, .1),
+                                               {},
+                                               []
+                                               {
+                                                 return false;
+                                               });
+  ASSERT_FALSE(same_cell.poses.empty());
+  EXPECT_THROW(authorized.createPlan(pose(35, 0),
+                                     pose(35.01, 0),
+                                     {},
+                                     []
+                                     {
+                                       return false;
+                                     }),
+               nav2_core::NoValidPathCouldBeFound);
+  for (const auto& ends : std::vector<std::pair<Pose, Pose>>{{pose(.5, 0), pose(71.5, 0)},
+                                                             {pose(71.5, 0), pose(.5, 0)}})
+  {
+    const auto path = authorized.createPlan(ends.first,
+                                            ends.second,
+                                            {},
+                                            []
+                                            {
+                                              return false;
+                                            });
+    ASSERT_GT(path.poses.size(), 2U);
+    EXPECT_TRUE(std::any_of(path.poses.begin(),
+                            path.poses.end(),
+                            [](const auto& p)
+                            {
+                              return p.pose.position.y > 35;
+                            }));
+    for (std::size_t i = 1; i < path.poses.size(); ++i)
+    {
+      const auto& a = path.poses[i - 1].pose.position;
+      const auto& b = path.poses[i].pose.position;
+      EXPECT_TRUE(exact.segmentAuthorized({a.x, a.y}, {b.x, b.y}));
+    }
+  }
+  exact.allowed.resize(2);  // unchanged raster costs cannot authorize a shortcut
+  geometry(exact.allowed);
+  EXPECT_THROW(authorized.createPlan(pose(.5, 0),
+                                     pose(71.5, 0),
+                                     {},
+                                     []
+                                     {
+                                       return false;
+                                     }),
+               nav2_core::NoValidPathCouldBeFound);
+  geometry({});
+  EXPECT_THROW(authorized.createPlan(pose(.5, 0),
+                                     pose(.8, 0),
+                                     {},
+                                     []
+                                     {
+                                       return false;
+                                     }),
+               nav2_core::NoValidPathCouldBeFound);
+}
 
 TEST_P(GardenCostmapTest, DistantGoalAndDetourAvailableFromBothStarts)
 {
