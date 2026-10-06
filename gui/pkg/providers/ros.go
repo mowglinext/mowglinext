@@ -45,9 +45,9 @@ var topicMap = map[string]topicDef{
 	"imu":                 {"/imu/data", "sensor_msgs/msg/Imu"},
 	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
 	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
-	"map":                 {"", ""},                                     // virtual – populated via map_server services
+	"map":                 {"", ""}, // virtual – populated via map_server services
 	"path":                {"/coverage/plan_preview", "mowgli_interfaces/msg/CoveragePlanPreview"},
-	"plan":                {"/plan", "nav_msgs/msg/Path"},               // infrequent event
+	"plan":                {"/plan", "nav_msgs/msg/Path"}, // infrequent event
 	"power":               {"/hardware_bridge/power", "mowgli_interfaces/msg/Power"},
 	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"}, // safety-critical
 	"lidar":               {"/scan", "sensor_msgs/msg/LaserScan"},                            // large message
@@ -74,6 +74,11 @@ var topicMap = map[string]topicDef{
 	// Latched: what the STM32 actually runs for every runtime parameter, its
 	// envelope and whether it is persisted in the board's flash (protocol v7).
 	"firmwareParams": {"/hardware_bridge/firmware_params", "mowgli_interfaces/msg/FirmwareParams"},
+	// Native MAVROS inventory surfaces. VehicleInfo is exposed by the
+	// sys_status plugin through a service rather than a topic, so the provider
+	// republishes that unmodified service response as a virtual GUI stream.
+	"mavrosState":       {"/mavros/state", "mavros_msgs/msg/State"},
+	"mavrosVehicleInfo": {"", ""},
 }
 
 // TopicKeys returns every logical topic key the provider can subscribe to, so
@@ -228,6 +233,11 @@ type RosProvider struct {
 	// notifier receives highLevelStatus + map payloads for push notifications;
 	// nil until AttachNotifier (guarded by mtx).
 	notifier *NotificationProvider
+
+	// The MAVROS vehicle-info service is polled only while a browser is
+	// listening. This keeps the established Mowgli backend completely idle on
+	// MAVROS-only ROS surfaces.
+	mavrosVehicleInfoPollCancel context.CancelFunc
 }
 
 // AttachNotifier routes highLevelStatus and map payloads to the notification
@@ -405,6 +415,49 @@ func (r *RosProvider) fanOut(logicalKey string, msg []byte) {
 			r.notifier.EnqueueMap(append([]byte(nil), msg...))
 		}
 	}
+}
+
+func (r *RosProvider) startMavrosVehicleInfoPolling() {
+	r.mtx.Lock()
+	if r.mavrosVehicleInfoPollCancel != nil || len(r.subscribers["mavrosVehicleInfo"]) == 0 {
+		r.mtx.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.mavrosVehicleInfoPollCancel = cancel
+	r.mtx.Unlock()
+
+	go func() {
+		poll := func() {
+			callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer callCancel()
+			result, err := r.client.CallService(
+				callCtx,
+				"/mavros/vehicle_info_get",
+				map[string]interface{}{"sysid": 0, "compid": 0, "get_all": false},
+				"mavros_msgs/srv/VehicleInfoGet",
+			)
+			if err != nil {
+				if ctx.Err() == nil {
+					logrus.Debugf("RosProvider: MAVROS vehicle_info_get unavailable: %v", err)
+				}
+				return
+			}
+			r.fanOut("mavrosVehicleInfo", []byte(result))
+		}
+
+		poll()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				poll()
+			}
+		}
+	}()
 }
 
 // initDockPoseSubscription subscribes to the map_server_node's docking_pose
@@ -636,6 +689,9 @@ func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func
 	}
 	r.mtx.Unlock()
 	r.reconcileFoxgloveSubscription(topic)
+	if topic == "mavrosVehicleInfo" {
+		r.startMavrosVehicleInfoPolling()
+	}
 	return nil
 }
 
@@ -659,6 +715,10 @@ func (r *RosProvider) UnSubscribe(topic string, id string) {
 	delete(subs, id)
 	if len(subs) == 0 {
 		delete(r.subscribers, topic)
+		if topic == "mavrosVehicleInfo" && r.mavrosVehicleInfoPollCancel != nil {
+			r.mavrosVehicleInfoPollCancel()
+			r.mavrosVehicleInfoPollCancel = nil
+		}
 		if def, ok := topicMap[topic]; ok && def.MsgType != "" {
 			// Live telemetry is stale once the last listener leaves. Virtual
 			// topics keep their existing internal polling/cache semantics.

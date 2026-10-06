@@ -10,3 +10,10 @@ The [integration checkpoint](docs/MAVROS_INTEGRATION_CHECKPOINT_20260929.md) rec
 4. [ ] Complete HERE4/CAN2 node124, compass and final RTK/RTCM diagnosis independently of the canonical GPS1/GPS2 transport selection. Do not label a receiver as RTK without validated RTK status.
 5. [ ] Install/prove hardware E-stop and guarded drive/steering/mower isolation and feedback. Keep `manual_control_enabled=false` and `blade_control_enabled=false` until separate physical acceptance. The prior one-ARM trial failed `Arm: Battery 1 unhealthy`; resolve its cause without bypass.
 6. [ ] Publish and pin the production multiarch Lyrical image, verify rollback, and repeat deployment acceptance against an immutable digest before release. Humble compatibility is deferred until the repository refactor.
+
+## Autopilot firmware lifecycle
+
+- [ ] Add autopilot firmware update/flash support for both official firmware and custom Mowgli firmware.
+- [ ] Detect the flight-controller board and installed firmware version reliably before selecting an image.
+- [ ] Provide explicit image selection, flash, recovery and rollback workflows with hardware-specific safety gates.
+- [ ] Add a future heartbeat/device-info equivalent to the STM32 firmware so the autopilot and native Mowgli backends can eventually share one hardware-inventory model. This is a future protocol change, not part of the current MAVROS GUI exposure.
