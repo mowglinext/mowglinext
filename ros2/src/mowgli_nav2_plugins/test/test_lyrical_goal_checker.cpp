@@ -66,6 +66,11 @@ protected:
     return checker_.xy_goal_tolerance_;
   }
 
+  std::size_t maxReachedIndex() const
+  {
+    return checker_.max_reached_index_;
+  }
+
   std::shared_ptr<nav2::LifecycleNode> node_;
   PathProgressGoalChecker checker_;
   geometry_msgs::msg::Pose goal_;
@@ -111,6 +116,20 @@ TEST_F(PathProgressGoalCheckerTest, NearEndReplayNeedsProgressBeforeProximityCom
         jittered_goal, replay_goal, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}))
         << "endpoint correction " << tick;
   }
+
+  // This bounded sequence has positive motion from the first query but less
+  // than the required accumulated forward displacement. Per-tick thresholds
+  // would incorrectly release the search boundary on the final sample.
+  checker_.reset();
+  setPath(replay);
+  for (const double x : {1.1, 1.088, 1.112, 1.125})
+  {
+    auto query = replay_goal;
+    query.position.x = x;
+    EXPECT_FALSE(checker_.isGoalReached(
+        query, replay_goal, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  }
+  EXPECT_EQ(maxReachedIndex(), 0u);
 
   // On a fresh replay, actual forward motion is still required before normal
   // progress-gated completion can occur — right up to the deliberate
