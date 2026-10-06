@@ -86,34 +86,77 @@ MowgliNext passes no command- or blade-enable override. Hardware acceptance is
 `HARDWARE_PENDING` and this integration does not alter ArduPilot, motion, or
 blade behavior.
 
-## Wheel-odometry configuration contract (image pending)
+## Wheel-odometry configuration contract
 
-The intended routing is defined from
-[`Pepeuch/mowglimavros@7282fd4`](https://github.com/Pepeuch/mowglimavros/tree/7282fd473286b33d937baac164a3fb5974b45428/ros2/src/mavros_esc_wheel_odometry):
+The sidecar contract is defined by
+[`Pepeuch/mowglimavros@b92925b`](https://github.com/Pepeuch/mowglimavros/tree/b92925b2bc969585350b824ac066004eae903e3b/ros2/src/mavros_esc_wheel_odometry):
 
 - MowgliNext keeps one canonical `ticks_per_meter` value in
   `mowgli_robot.yaml` for every hardware backend.
 - With `HARDWARE_BACKEND=mowgli`, its live destination remains
   `hardware_bridge.ticks_per_meter`; the existing STM32 PID/feed-forward
   settings and tuning tool are unchanged.
-- With `HARDWARE_BACKEND=mavros`, the intended live destinations are
+- With `HARDWARE_BACKEND=mavros`, the live destinations are
   `mavros/esc_wheel_odometry.ticks_per_meter` and
   `mavros/esc_wheel_odometry.track_width_m` (from canonical `wheel_track`).
   No Mowgli `wheel_pid_*` value is routed or exposed as a drive control.
 
-The GUI/API advertises the MAVROS destinations as `pending_image` and only
-persists the canonical YAML values for now. The current published sidecar does
-not contain the `feat/esc-odometry` runtime, and that branch's launch file does
-not yet load MowgliNext's derived runtime YAML. Actual startup/live routing is
-therefore `HARDWARE_PENDING` until a reviewed image is built and deployed.
-This phase deliberately does not require `/wheel_odom`, ESC diagnostics, or
-live ROS parameter services.
+At boot, the installer resolves `ticks_per_meter` and `wheel_track` from the
+complete ROS template plus the operator's sparse `mowgli_robot.yaml`, then
+writes the sidecar-only `esc_wheel_odometry.yaml`. The sidecar launch loads it
+after its packaged defaults. This keeps the sidecar from parsing the Mowgli
+robot configuration and preserves template fallbacks for sparse installations.
 
-The published image above is the current deployment baseline. MowgliMAVROS has
-not yet been repinned and republished against Universal GNSS dev
-`ef31c4c95a8e831d2c926a5557298806505d52a7`; this directory does not claim
-otherwise. Updating that external repository and replacing this digest is a
-separate follow-up.
+The GUI persists these canonical values and applies them through the MAVROS
+parameter service when it is available. Its MAVROS Drive page exposes only
+wheel-odometry calibration, an explicit traction opt-in and live source/tick diagnostics; it never
+offers STM32 PID, feed-forward, or flash actions.
+
+`/wheel_ticks` is projected from validated signed motor-revolution observations
+only. It uses the established magnitude-plus-direction `WheelTick` convention;
+the fixed-point transport scale is paired with `wheel_tick_factor`, so no wheel
+radius, gear ratio, or physical calibration is inferred. Target validation of
+the source, geometry and calibrated metric odometry remains `HARDWARE_PENDING`.
+
+The RTK calibration card records independent `/wheel_ticks` and `/gps/fix`
+observations through the existing GUI provider. The operator drives a straight
+2–10 m pass using the existing manual controls. The result is the mean of
+left/right motor revolutions divided by RTK distance, independent of the old
+calibration or `/wheel_odom`. It rejects lost RTK Fixed, stale/unpaired data,
+direction changes, source/epoch/segment changes, curves and inconsistent wheels.
+Apply changes and persists only `ticks_per_meter`, with live confirmation.
+
+`mavros_manual_control_enabled` defaults to `false`. Its explicit GUI confirmation
+enables `/hardware_bridge.manual_control_enabled`; it never arms the FCU. Nonzero
+commands still require a connected, already armed FCU, a released physical Safety
+Switch and no active/latched emergency. `blade_control_enabled` remains `false`.
+`mavros_wheel_lift_safety_enabled` defaults to `true` and maps to
+`/hardware_bridge.wheel_lift_safety_enabled`. Disabling it requires GUI confirmation;
+raw left/right lift telemetry remains visible and physical Safety always applies.
+Both settings persist in dedicated `hardware_bridge.yaml` and reload at boot.
+
+## Safety wiring and target acceptance
+
+The verified software contract reads Safety from `MOTOR_OUTPUTS` in MAVROS
+`/mavros/sys_status`: absent from `sensors_present` means Unknown; present with
+the enabled bit clear means Engaged; present with it set means Released.
+Wheel-lift observation uses the existing `/uas1/mavlink_source` AP_Button stream.
+The GUI shows one lifted wheel orange and two red, including with protection off.
+
+Keep the installation's verified physical Safety Switch wiring. This integration
+does not establish a connector pinout or electrical polarity for another FCU.
+Hall wheel-lift wiring remains `HARDWARE_PENDING`: the exact GPIOs, supply and
+signal voltage, pull-ups, polarity and isolation must be confirmed on the actual
+board before connection. No pinout is inferred here.
+
+Exact baseline capture, read-only commands and acceptance procedure are in
+[`VALIDATION.md`](VALIDATION.md). New sidecar graph/build acceptance remains
+`ENVIRONMENT_PENDING` where MAVROS message/MAVLink dependencies are absent;
+the already established motor feedback evidence is not re-audited.
+
+The floating published image remains the deployment baseline. Its exact target
+image digest and robot acceptance are separate follow-up evidence; this source
+contract does not claim that a robot has received this change.
 
 ## Validation
 

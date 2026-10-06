@@ -32,12 +32,10 @@ var hardwareParameterRoutes = map[string]map[string]HardwareParameterRoute{
 		"wheel_pid_pwm_per_mps":    {Parameter: "hardware_bridge.wheel_pid_pwm_per_mps", Runtime: "available"},
 	},
 	"mavros": {
-		// Contract baseline: Pepeuch/mowglimavros feat/esc-odometry at
-		// 7282fd473286b33d937baac164a3fb5974b45428. The plugin owns the
-		// /mavros/esc_wheel_odometry parameter service. The new image is not
-		// built/deployed yet, so these routes are intentional but runtime-pending.
-		"ticks_per_meter": {Parameter: "mavros/esc_wheel_odometry.ticks_per_meter", Runtime: "pending_image"},
-		"wheel_track":     {Parameter: "mavros/esc_wheel_odometry.track_width_m", Runtime: "pending_image"},
+		"ticks_per_meter":                  {Parameter: "mavros/esc_wheel_odometry.ticks_per_meter", Runtime: "available"},
+		"wheel_track":                      {Parameter: "mavros/esc_wheel_odometry.track_width_m", Runtime: "available"},
+		"mavros_manual_control_enabled":    {Parameter: "hardware_bridge.manual_control_enabled", Runtime: "available"},
+		"mavros_wheel_lift_safety_enabled": {Parameter: "hardware_bridge.wheel_lift_safety_enabled", Runtime: "available"},
 	},
 }
 
@@ -85,15 +83,11 @@ type HardwareBackendResponse struct {
 func GetSettingsHardwareBackend(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes {
 	return r.GET("/settings/hardware-backend", func(c *gin.Context) {
 		backend := activeHardwareBackendForDB(dbProvider)
-		runtimeRouting := "available"
-		if backend == "mavros" {
-			runtimeRouting = "pending_image"
-		}
 		c.JSON(200, HardwareBackendResponse{
 			Backend:         backend,
 			Supported:       append([]string(nil), supportedHardwareBackends...),
 			ParameterRoutes: hardwareParameterRoutes[backend],
-			RuntimeRouting:  runtimeRouting,
+			RuntimeRouting:  "available",
 		})
 	})
 }

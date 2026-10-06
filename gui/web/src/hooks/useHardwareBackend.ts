@@ -11,7 +11,7 @@ const FALLBACK: HardwareBackendInfo = {
     backend: DEFAULT_HARDWARE_BACKEND,
     // Preserve the pre-backend-aware Mowgli live-update behavior if this
     // best-effort metadata request fails. A successful MAVROS response always
-    // replaces these routes with persistence-only pending_image routes.
+    // replaces these routes with backend-specific live destinations.
     parameterRoutes: {
         ticks_per_meter: { parameter: "hardware_bridge.ticks_per_meter", runtime: "available" },
         wheel_pid_kp: { parameter: "hardware_bridge.wheel_pid_kp", runtime: "available" },

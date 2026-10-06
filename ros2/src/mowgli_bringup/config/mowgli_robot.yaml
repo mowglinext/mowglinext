@@ -93,6 +93,10 @@ mowgli:
     wheel_track: 0.325         # centre-to-centre (from OpenMower).
                                # Read by hardware_bridge_node and URDF.
                                # MUST match firmware physical assumption.
+    # External MAVROS backend only. Traction requires explicit operator opt-in;
+    # this never arms the FCU. Blade control remains disabled.
+    mavros_manual_control_enabled: false
+    mavros_wheel_lift_safety_enabled: true
     wheel_x_offset: 0.0       # drive wheels at base_link (wheel axis centre)
     chassis_center_x: 0.18    # chassis geometric centre forward of wheel axis (m)
                                # with chassis_length 0.60 → rear bumper -0.12,

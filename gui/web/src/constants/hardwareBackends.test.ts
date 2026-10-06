@@ -2,23 +2,21 @@ import { describe, expect, it } from "vitest";
 import { liveHardwareParameters, settingsSectionsForBackend } from "./hardwareBackends.ts";
 
 describe("hardware backend settings", () => {
-    it("keeps the Mowgli drive section and hides it for MAVROS", () => {
+    it("keeps the Drive section for both backends", () => {
         const sections = [{ id: "hardware" }, { id: "drive_motor" }, { id: "navigation" }];
         expect(settingsSectionsForBackend(sections, "mowgli")).toEqual(sections);
-        expect(settingsSectionsForBackend(sections, "mavros")).toEqual([
-            { id: "hardware" }, { id: "navigation" },
-        ]);
+        expect(settingsSectionsForBackend(sections, "mavros")).toEqual(sections);
     });
 
     it("routes the canonical calibration without leaking Mowgli PID", () => {
         const routes = {
             ticks_per_meter: {
                 parameter: "mavros/esc_wheel_odometry.ticks_per_meter",
-                runtime: "pending_image" as const,
+                runtime: "available" as const,
             },
             wheel_track: {
                 parameter: "mavros/esc_wheel_odometry.track_width_m",
-                runtime: "pending_image" as const,
+                runtime: "available" as const,
             },
         };
         expect(routes.ticks_per_meter.parameter).toBe("mavros/esc_wheel_odometry.ticks_per_meter");
@@ -28,7 +26,10 @@ describe("hardware backend settings", () => {
             { ticks_per_meter: 401.5, wheel_track: 0.325, wheel_pid_kp: 10 },
             routes,
         );
-        expect(parameters).toEqual([]);
+        expect(parameters).toEqual([
+            { name: "mavros/esc_wheel_odometry.ticks_per_meter", value: 401.5 },
+            { name: "mavros/esc_wheel_odometry.track_width_m", value: 0.325 },
+        ]);
     });
 
     it("preserves the existing Mowgli live parameter requests", () => {
@@ -48,6 +49,18 @@ describe("hardware backend settings", () => {
             { name: "hardware_bridge.ticks_per_meter", value: 399 },
             { name: "hardware_bridge.wheel_pid_kp", value: 10 },
             { name: "hardware_bridge.wheel_pid_pwm_per_mps", value: 282.135 },
+        ]);
+    });
+    it("preserves MAVROS safety and traction boolean values", () => {
+        const routes = {
+            mavros_manual_control_enabled: { parameter: "hardware_bridge.manual_control_enabled", runtime: "available" as const },
+            mavros_wheel_lift_safety_enabled: { parameter: "hardware_bridge.wheel_lift_safety_enabled", runtime: "available" as const },
+        };
+        expect(liveHardwareParameters(new Set(Object.keys(routes)), {
+            mavros_manual_control_enabled: false, mavros_wheel_lift_safety_enabled: true,
+        }, routes)).toEqual([
+            { name: "hardware_bridge.manual_control_enabled", value: false },
+            { name: "hardware_bridge.wheel_lift_safety_enabled", value: true },
         ]);
     });
 });

@@ -71,7 +71,36 @@
       "mavros": "Pixhawk via MAVROS"
     },
     "mavrosTitle": "MAVROS wheel calibration",
-    "mavrosPending": "ticks_per_meter remains the single calibration setting. It is intended to route to mavros/esc_wheel_odometry.ticks_per_meter, with wheel_track routed to track_width_m. Live routing is pending the feat/esc-odometry image; saving now persists configuration only. Mowgli PID and feed-forward controls are unavailable on this backend."
+    "mavrosPending": "Wheel calibration is applied live to the MAVROS odometry plugin. Mowgli PID and feed-forward controls are unavailable on this backend."
+  },
+  "settingsMavrosDrive": {
+    "notice": {
+      "title": "MAVROS drive calibration",
+      "description": "Wheel odometry calibration and an explicit traction opt-in are available for this backend. Mowgli STM32 PID, feed-forward and flash controls are not used."
+    },
+    "calibration": {"title": "Wheel odometry", "ticksPerMeter": "Motor ticks per metre", "wheelTrack": "Wheel track (m)"},
+    "odometry": {"title": "Live MAVROS odometry", "source": "Source", "status": "Status", "leftTicks": "Left motor ticks", "rightTicks": "Right motor ticks"},
+    "status": {"live": "Live", "unavailable": "Unavailable or stale"}
+  },
+  "settingsMavrosSafety": {
+    "title": "MAVROS safety", "switch": "Safety Switch", "left": "Wheel lift left", "right": "Wheel lift right",
+    "physicalSafety": "The physical Safety Switch always remains authoritative. It cannot be bypassed here.",
+    "protection": "Wheel lift protection", "liveProtection": "Protection reported by the sidecar", "on": "On", "off": "Off",
+    "disableTitle": "Disable wheel lift protection?",
+    "disableDescription": "Both lifted wheels will no longer assert the wheel lift emergency. Lift telemetry stays visible and the physical Safety Switch remains active. Save to apply.",
+    "states": {"unknown": "Unknown", "engaged": "Engaged", "released": "Released", "ground": "On ground", "lifted": "Lifted"}
+  },
+  "settingsMavrosTraction": {
+    "title": "Enable MAVROS traction commands",
+    "description": "Disabled by default. Enabling forwards traction commands only when the FCU is connected, already armed and its Safety Switch is released. Blade control remains disabled.",
+    "confirmTitle": "Enable traction commands?",
+    "confirmDescription": "Confirm that traction mapping has been validated and the area is safe. This setting never arms the FCU and does not bypass safety. Save to apply."
+  },
+  "settingsMavrosCalibration": {
+    "title": "RTK wheel calibration", "instructions": "Start recording with RTK Fixed and fresh wheel feedback. Drive a straight 2–10 m pass using the existing manual controls in another tab, stop, then finish recording. The measured motor revolutions and independent RTK distance determine ticks_per_meter. Applying saves only this value; PID and feed-forward are untouched.",
+    "state": "State", "samples": "Paired observations", "distance": "RTK distance", "proposal": "Proposed motor ticks per metre",
+    "start": "Start recording", "finish": "Finish recording", "apply": "Apply ticks_per_meter", "unavailable": "Calibration service unavailable",
+    "states": {"idle": "Idle", "recording": "Recording", "ready": "Ready to apply", "applied": "Applied and saved", "failed": "Measurement rejected"}
   },
   "updates": {
     "title": "Versions & updates",

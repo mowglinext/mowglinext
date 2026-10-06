@@ -21,6 +21,8 @@ import { SettingsNav } from "../components/settings/SettingsNav.tsx";
 import { HardwareSection } from "../components/settings/HardwareSection.tsx";
 import { HardwareBackendCard } from "../components/settings/HardwareBackendCard.tsx";
 import { DriveMotorSection } from "../components/settings/DriveMotorSection.tsx";
+import { MavrosDriveSection } from "../components/settings/MavrosDriveSection.tsx";
+import { MavrosSafetySection } from "../components/settings/MavrosSafetySection.tsx";
 import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { PositioningSection } from "../components/settings/PositioningSection.tsx";
 import { SensorsSection } from "../components/settings/SensorsSection.tsx";
@@ -204,12 +206,18 @@ export const SettingsPage = () => {
             case "drive_motor":
                 return (
                     <>
-                        <DriveMotorSection
-                            values={values}
-                            onChange={handleChange}
-                            acceptPersistedValues={acceptPersistedValues}
-                        />
-                        {renderFieldCards(YAW_LOOP_GROUP)}
+                        {hardwareBackend.backend === "mavros" ? (
+                            <MavrosDriveSection values={values} onChange={handleChange} acceptPersistedValues={acceptPersistedValues} />
+                        ) : (
+                            <>
+                                <DriveMotorSection
+                                    values={values}
+                                    onChange={handleChange}
+                                    acceptPersistedValues={acceptPersistedValues}
+                                />
+                                {renderFieldCards(YAW_LOOP_GROUP)}
+                            </>
+                        )}
                     </>
                 );
             case "ntrip":
@@ -280,6 +288,7 @@ export const SettingsPage = () => {
                     </>
                 );
             case "safety":
+                if (hardwareBackend.backend === "mavros") return <MavrosSafetySection values={values} onChange={handleChange} />;
                 return (
                     <>
                         <SafetySection values={values} onChange={handleChange} />

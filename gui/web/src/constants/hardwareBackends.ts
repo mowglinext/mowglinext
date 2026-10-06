@@ -19,7 +19,13 @@ export const normalizeHardwareBackend = (value: unknown): HardwareBackend =>
 export const settingsSectionsForBackend = <T extends { id: string }>(
     sections: readonly T[],
     backend: HardwareBackend,
-): T[] => sections.filter((section) => backend === "mowgli" || section.id !== "drive_motor");
+): T[] => {
+    switch (backend) {
+        case "mowgli":
+        case "mavros":
+            return [...sections];
+    }
+};
 
 export const liveHardwareParameters = (
     dirtyKeys: ReadonlySet<string>,
@@ -27,4 +33,4 @@ export const liveHardwareParameters = (
     routes: Record<string, HardwareParameterRoute>,
 ) => Object.entries(routes)
     .filter(([key, route]) => route.runtime === "available" && dirtyKeys.has(key) && key in values)
-    .map(([key, route]) => ({ name: route.parameter, value: Number(values[key]) }));
+    .map(([key, route]) => ({ name: route.parameter, value: typeof values[key] === "boolean" ? values[key] : Number(values[key]) }));

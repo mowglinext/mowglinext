@@ -71,7 +71,36 @@
       "mavros": "Pixhawk via MAVROS"
     },
     "mavrosTitle": "Étalonnage des roues MAVROS",
-    "mavrosPending": "ticks_per_meter reste le réglage d'étalonnage unique. Il doit être routé vers mavros/esc_wheel_odometry.ticks_per_meter, et wheel_track vers track_width_m. Le routage en direct attend l'image feat/esc-odometry ; l'enregistrement ne fait pour l'instant que persister la configuration. Les commandes PID et feed-forward Mowgli ne sont pas disponibles avec ce backend."
+    "mavrosPending": "L’étalonnage des roues est appliqué en direct au plugin d’odométrie MAVROS. Les commandes PID et feed-forward STM32 Mowgli ne sont pas disponibles avec ce backend."
+  },
+  "settingsMavrosDrive": {
+    "notice": {
+      "title": "Étalonnage de propulsion MAVROS",
+      "description": "Ce backend propose l’étalonnage de l’odométrie roue et une activation explicite de la traction. Les commandes PID, feed-forward et flash du STM32 Mowgli ne sont pas utilisées."
+    },
+    "calibration": {"title": "Odométrie roue", "ticksPerMeter": "Ticks moteur par mètre", "wheelTrack": "Voie des roues (m)"},
+    "odometry": {"title": "Odométrie MAVROS en direct", "source": "Source", "status": "État", "leftTicks": "Ticks moteur gauche", "rightTicks": "Ticks moteur droit"},
+    "status": {"live": "En direct", "unavailable": "Indisponible ou périmé"}
+  },
+  "settingsMavrosSafety": {
+    "title": "Sécurité MAVROS", "switch": "Safety Switch", "left": "Soulèvement roue gauche", "right": "Soulèvement roue droite",
+    "physicalSafety": "Le Safety Switch physique reste toujours l’autorité de sécurité. Il ne peut pas être contourné ici.",
+    "protection": "Protection contre le soulèvement", "liveProtection": "Protection déclarée par le sidecar", "on": "Activée", "off": "Désactivée",
+    "disableTitle": "Désactiver la protection contre le soulèvement ?",
+    "disableDescription": "Deux roues levées ne déclencheront plus l’arrêt d’urgence de soulèvement. La télémétrie reste visible et le Safety Switch physique reste actif. Enregistrez pour appliquer.",
+    "states": {"unknown": "Inconnu", "engaged": "Engagé", "released": "Relâché", "ground": "Au sol", "lifted": "Levée"}
+  },
+  "settingsMavrosTraction": {
+    "title": "Activer les commandes de traction MAVROS",
+    "description": "Désactivées par défaut. L’activation transmet les commandes de traction uniquement si le FCU est connecté, déjà armé et son Safety Switch relâché. La commande de lame reste désactivée.",
+    "confirmTitle": "Activer les commandes de traction ?",
+    "confirmDescription": "Confirmez que le mapping de traction a été validé et que la zone est sûre. Ce réglage n’arme jamais le FCU et ne contourne aucune sécurité. Enregistrez pour appliquer."
+  },
+  "settingsMavrosCalibration": {
+    "title": "Étalonnage des roues par RTK", "instructions": "Démarrez l’enregistrement avec RTK Fixed et un retour roue frais. Effectuez une passe rectiligne de 2 à 10 m avec les commandes manuelles existantes dans un autre onglet, arrêtez-vous, puis terminez l’enregistrement. Les révolutions moteur observées et la distance RTK indépendante déterminent ticks_per_meter. L’application enregistre uniquement cette valeur ; PID et feed-forward restent inchangés.",
+    "state": "État", "samples": "Observations appariées", "distance": "Distance RTK", "proposal": "Ticks moteur par mètre proposés",
+    "start": "Démarrer l’enregistrement", "finish": "Terminer l’enregistrement", "apply": "Appliquer ticks_per_meter", "unavailable": "Service d’étalonnage indisponible",
+    "states": {"idle": "Au repos", "recording": "Enregistrement", "ready": "Prêt à appliquer", "applied": "Appliqué et enregistré", "failed": "Mesure rejetée"}
   },
   "updates": {
     "title": "Versions et mises à jour",

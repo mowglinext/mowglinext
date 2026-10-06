@@ -86,9 +86,20 @@ def main() -> int:
         "MAVROS config must be derived from the Mowgli config",
     )
     require(
-        '_yaml_patch_key "$target" ntrip_enabled false' in mavros_config_body
-        and mavros_config_body.count("_yaml_patch_key") == 1,
-        "MAVROS derived config must override only ntrip_enabled",
+        '_yaml_patch_key "$target" ntrip_enabled false' in mavros_config_body,
+        "MAVROS derived config must disable only sidecar NTRIP ownership",
+    )
+    for expected in (
+        'odometry_target="$DOCKER_DIR/config/mavros/esc_wheel_odometry.yaml"',
+        'robot_template="$REPO_DIR/ros2/src/mowgli_bringup/config/mowgli_robot.yaml"',
+        '"ticks_per_meter": effective.get("ticks_per_meter")',
+        '"track_width_m": effective.get("wheel_track")',
+        'payload = {"/**/esc_wheel_odometry": {"ros__parameters": values}}',
+    ):
+        require(expected in config, f"MAVROS odometry config contract missing: {expected}")
+    require(
+        'write_mavros_runtime_config' in config and 'esc_wheel_odometry.yaml' in config,
+        "MAVROS odometry runtime config is not generated",
     )
 
     require(
@@ -114,21 +125,24 @@ def main() -> int:
         "/mavros/global_position/global",
         "HARDWARE_PENDING",
         "command and blade paths disabled by default",
-        "Pepeuch/mowglimavros@7282fd4",
+        "Pepeuch/mowglimavros@b92925b",
         "mavros/esc_wheel_odometry.ticks_per_meter",
         "mavros/esc_wheel_odometry.track_width_m",
-        "pending_image",
+        "wheel-odometry calibration",
     ):
         require(expected in readme, f"MAVROS integration documentation missing: {expected}")
 
-    for expected in (
-        '"ticks_per_meter": {Parameter: "mavros/esc_wheel_odometry.ticks_per_meter", Runtime: "pending_image"}',
-        '"wheel_track":     {Parameter: "mavros/esc_wheel_odometry.track_width_m", Runtime: "pending_image"}',
+    for key, parameter in (
+        ("ticks_per_meter", "mavros/esc_wheel_odometry.ticks_per_meter"),
+        ("wheel_track", "mavros/esc_wheel_odometry.track_width_m"),
+        ("mavros_manual_control_enabled", "hardware_bridge.manual_control_enabled"),
+        ("mavros_wheel_lift_safety_enabled", "hardware_bridge.wheel_lift_safety_enabled"),
     ):
-        require(expected in settings_backend, f"GUI backend MAVROS route missing: {expected}")
+        expected = rf'"{key}":\s*\{{Parameter: "{re.escape(parameter)}", Runtime: "available"\}}'
+        require(re.search(expected, settings_backend), f"GUI backend MAVROS route missing: {key}")
     require(
-        'route.Runtime == "pending_image"' in params_api,
-        "generic parameter API must reject pending MAVROS live routes",
+        'route.Runtime == "pending_image"' not in params_api,
+        "generic parameter API must not retain pending MAVROS route rejection",
     )
     require(
         'route.runtime === "available"' in frontend_backends,

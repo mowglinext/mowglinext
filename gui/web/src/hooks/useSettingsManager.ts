@@ -98,6 +98,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "dashboard",
         description: "settingsSections.drive_motor.description",
         keys: [
+            "mavros_manual_control_enabled",
             "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
             "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
             ...groupKeys(YAW_LOOP_GROUP),
@@ -212,6 +213,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "safety",
         description: "settingsSections.safety.description",
         keys: [
+            "mavros_wheel_lift_safety_enabled",
             // motor_temp_high_c / motor_temp_low_c REMOVED (issue #195): no
             // layer of the stack implements a thermal blade cutoff — the
             // firmware only measures and reports blade temperature. The real
@@ -615,20 +617,17 @@ export const useSettingsManager = () => {
                     });
                 }
             }
-            // Push only routes the backend reports as available. For Mowgli
-            // these are the established hardware_bridge calibration/PID
-            // parameters. MAVROS routes remain present in the contract as
-            // pending_image, so saves persist YAML without calling a ROS
-            // parameter service until that image is actually available.
+            // Push only routes the active backend reports as available.
             if (hasDirtyChanges && liveParameters.length > 0) {
                 try {
-                    await guiApi.request({
+                    const liveResponse = await guiApi.request({
                         path: "/params",
                         method: "POST",
                         type: ContentType.Json,
                         format: "json",
                         body: { parameters: liveParameters },
                     });
+                    if (hardware.backend === "mavros" && liveResponse.error) throw new Error((liveResponse.error as { error?: string }).error ?? "ROS parameter update failed");
                 } catch (e: any) {
                     setRestartRequired(true);
                     notification.warning({
@@ -646,7 +645,7 @@ export const useSettingsManager = () => {
         } finally {
             setSaving(false);
         }
-    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, t, hardware.parameterRoutes]);
+    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, t, hardware.parameterRoutes, hardware.backend]);
 
     const savePartialValues = useCallback(async (
         partialValues: Record<string, any>,
@@ -777,7 +776,9 @@ export const useSettingsManager = () => {
     );
 
     return {
-        sections: settingsSectionsForBackend(SECTION_DEFINITIONS, hardware.backend),
+        sections: settingsSectionsForBackend(SECTION_DEFINITIONS, hardware.backend).map((section) =>
+            hardware.backend === "mavros" && section.id === "drive_motor"
+                ? { ...section, description: "settingsMavrosDrive.notice.description" } : section),
         hardwareBackend: hardware,
         values: localValues,
         savedValues,
