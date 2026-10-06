@@ -70,6 +70,7 @@
 #include <mowgli_interfaces/srv/promote_obstacle.hpp>
 #include <mowgli_interfaces/srv/set_docking_point.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace mowgli_map
 {
@@ -254,6 +255,12 @@ public:
   void load_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
   {
     on_load_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+
+  /// Test-only: exercise the same clear operation used by GUI map replacement.
+  void clear_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_clear_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
   }
 
   /// Test-only: current area-list generation (mowglinext#637 phase 2).
@@ -628,6 +635,9 @@ private:
   /// Caller must hold map_mutex_.
   void publish_keepout_mask();
   void invalidate_keepout_mask();
+  /// Called with map_mutex_ held: complete transit authorization snapshot.
+  void publish_transit_geometry();
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr transit_geometry_pub_;
 
   /// Check if the robot is outside all allowed polygons and publish violation.
   void check_boundary_violation(double x, double y);

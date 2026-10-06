@@ -269,6 +269,8 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 
   recorded_area_polygons_pub_ = create_publisher<mowgli_interfaces::msg::RecordedAreaPolygonArray>(
       "/mowgli/recorded_area_polygons", transient_qos);
+  transit_geometry_pub_ =
+      create_publisher<visualization_msgs::msg::MarkerArray>("~/transit_geometry", transient_qos);
 
   // ── Subscribers ──────────────────────────────────────────────────────────
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
