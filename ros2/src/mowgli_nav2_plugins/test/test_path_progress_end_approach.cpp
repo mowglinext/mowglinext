@@ -553,6 +553,31 @@ TEST_F(PathProgressEndApproachTest, EndpointJitterCannotSeedRecoveryOnAClosedPat
   }
 }
 
+TEST_F(PathProgressEndApproachTest, LateralJitterCannotSwitchRecoveryOntoReturnLeg)
+{
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 0.30, 0.0, 0.03);
+  appendLine(path, 0.30, 0.0, 0.42, 0.0, 0.03);
+  appendLine(path, 0.42, 0.0, 0.42, 0.075, 0.025);
+  appendLine(path, 0.42, 0.075, 0.30, 0.075, 0.03);
+  appendLine(path, 0.30, 0.075, 0.30, 0.0, 0.025);
+  loadPath(withFtcTail(path));
+
+  // The forward and return legs are close in XY. Lateral-only motion toward
+  // the return leg must not project to its much-later path arc and release
+  // the artificial search boundary.
+  for (const Pose2 query : {
+           Pose2{0.38, 0.034, 0.0},
+           Pose2{0.379, 0.040, 0.0},
+           Pose2{0.373, 0.046, 0.0},
+           Pose2{0.367, 0.052, 0.0},
+       })
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
 TEST_F(PathProgressEndApproachTest, DistantPointOnOutgoingPivotLegDoesNotLatchBoundary)
 {
   std::vector<Pose2> path;
