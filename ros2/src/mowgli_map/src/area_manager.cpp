@@ -469,8 +469,8 @@ void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPt
   }
   areas_.clear();
   obstacle_polygons_.clear();
-  docking_pose_set_ = false;
-  has_dock_exclusion_ = false;
+  // The calibrated dock belongs to mowgli_robot.yaml, not the area list.
+  // GUI replacement uses clear_map + add_area, so retain its pose and geometry.
   keepout_filter_info_sent_ = false;
   speed_filter_info_sent_ = false;
   masks_dirty_ = true;
