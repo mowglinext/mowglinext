@@ -318,6 +318,148 @@ TEST_F(PathProgressEndApproachTest, SearchBoundaryRecoversAcrossAPivotCorner)
   EXPECT_EQ(maxReachedIndex(), 10u);
 }
 
+TEST_F(PathProgressEndApproachTest, SearchBoundaryRecoversAfterPivotShortOfCorner)
+{
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 1.25, 0.0, 0.125);
+  path.push_back({1.25, 0.0, M_PI / 2.0});
+  appendLine(path, 1.25, 0.0, 1.25, 1.25, 0.125);
+  loadPath(path);
+
+  // FTC may pivot within 2 cm of the corner. The outgoing-leg projection must
+  // still earn recovery from the actual forward motion after that short stop.
+  EXPECT_FALSE(reachedAt({1.231, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({1.231, 0.01, M_PI / 2.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({1.231, 0.02, M_PI / 2.0}));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, PivotRecoveryUsesRecentApproachFromSlightlyEarlierLatch)
+{
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 1.25, 0.0, 0.125);
+  path.push_back({1.25, 0.0, M_PI / 2.0});
+  appendLine(path, 1.25, 0.0, 1.25, 1.25, 0.125);
+  loadPath(path);
+
+  EXPECT_FALSE(reachedAt({1.225, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({1.231, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({1.231, 0.01, M_PI / 2.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({1.231, 0.02, M_PI / 2.0}));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+
+  loadPath(path);
+  EXPECT_FALSE(reachedAt({1.231, 0.0, 0.0}));
+  EXPECT_FALSE(reachedAt({1.231, 0.006, M_PI / 2.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({1.231, 0.026, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({1.231, 0.046, M_PI / 2.0}));
+  EXPECT_EQ(maxReachedIndex(), 10u);
+}
+
+TEST_F(PathProgressEndApproachTest, PivotRetraceCannotAccumulateBoundaryMotion)
+{
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 1.25, 0.0, 0.125);
+  path.push_back({1.25, 0.0, M_PI / 2.0});
+  appendLine(path, 1.25, 0.0, 1.25, 1.25, 0.125);
+  loadPath(path);
+
+  for (const Pose2 query : {Pose2{1.241, 0.0, 0.0},
+                            Pose2{1.241, 0.010, M_PI / 2.0},
+                            Pose2{1.241, 0.0, 0.0},
+                            Pose2{1.241, 0.010, M_PI / 2.0},
+                            Pose2{1.241, 0.0, 0.0},
+                            Pose2{1.241, 0.010, M_PI / 2.0},
+                            Pose2{1.241, 0.0, 0.0},
+                            Pose2{1.241, 0.010, M_PI / 2.0},
+                            Pose2{1.241, 0.0, 0.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+  for (const double y : {0.010, 0.020, 0.030})
+  {
+    reachedAt({1.241, y, M_PI / 2.0});
+  }
+  EXPECT_EQ(maxReachedIndex(), 10u);
+
+  loadPath(path);
+  // Retracing incoming-leg motion after a short outgoing pivot must erase
+  // that motion from the displacement evidence even though the tangent turns.
+  for (const Pose2 query : {
+           Pose2{1.231, 0.0, 0.0},
+           Pose2{1.241, 0.0, 0.0},
+           Pose2{1.241, 0.006, M_PI / 2.0},
+           Pose2{1.231, 0.006, 0.0},
+           Pose2{1.231, 0.012, M_PI / 2.0},
+       })
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, SmallStepsRecoverAcrossOverlappingReversePivot)
+{
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 1.25, 0.0, 0.125);
+  path.push_back({1.25, 0.0, M_PI});
+  appendLine(path, 1.25, 0.0, 0.25, 0.0, 0.125);
+  loadPath(path);
+
+  EXPECT_FALSE(reachedAt({1.25, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({1.24, 0.0, M_PI}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  EXPECT_FALSE(reachedAt({1.23, 0.0, M_PI}));
+  EXPECT_GT(maxReachedIndex(), 0u);
+}
+
+TEST_F(PathProgressEndApproachTest, LoopReturnMotionIsNotCancelledByEarlierOppositeLeg)
+{
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 0.30, 0.0, 0.10);
+  path.push_back({0.30, 0.0, M_PI / 2.0});
+  path.push_back({0.30, 0.01, M_PI / 2.0});
+  path.push_back({0.30, 0.01, M_PI});
+  appendLine(path, 0.30, 0.01, -0.40, 0.01, 0.05);
+  loadPath(path);
+  setXyGoalTolerance(0.10);
+
+  EXPECT_FALSE(reachedAt({0.105, 0.01, M_PI}));
+  const std::size_t boundary_index = maxReachedIndex();
+  EXPECT_FALSE(reachedAt({0.095, 0.01, M_PI}));
+  EXPECT_EQ(maxReachedIndex(), boundary_index);
+  EXPECT_FALSE(reachedAt({0.085, 0.01, M_PI}));
+  EXPECT_GT(maxReachedIndex(), boundary_index);
+}
+
+TEST_F(PathProgressEndApproachTest, BoundaryRecoversAfterShortObliquePivot)
+{
+  constexpr double pivot_yaw = 100.0 * M_PI / 180.0;
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 0.36, 0.0, 0.03);
+  path.push_back({0.36, 0.0, pivot_yaw});
+  appendLine(path, 0.36, 0.0, 0.36 + 0.65 * std::cos(pivot_yaw), 0.65 * std::sin(pivot_yaw), 0.03);
+  loadPath(path);
+
+  EXPECT_FALSE(reachedAt({0.341, 0.0, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+  for (const double distance : {0.0051, 0.0102, 0.0153, 0.0204})
+  {
+    EXPECT_FALSE(reachedAt(
+        {0.341 + distance * std::cos(pivot_yaw), distance * std::sin(pivot_yaw), pivot_yaw}));
+  }
+  EXPECT_GE(maxReachedIndex(), 10u);
+}
+
 TEST_F(PathProgressEndApproachTest, FirstQuerySlightlyPastBoundaryRecoversOnLongPath)
 {
   loadPath(withFtcTail(straightPath(201, 0.03)));
@@ -576,6 +718,171 @@ TEST_F(PathProgressEndApproachTest, LateralJitterCannotSwitchRecoveryOntoReturnL
     EXPECT_FALSE(reachedAt(query));
     EXPECT_EQ(maxReachedIndex(), 0u);
   }
+
+  loadPath(withFtcTail(path));
+  // Slightly growing forward/backward endpoint jitter must not accumulate
+  // more progress than the net high-water arc advance.
+  for (const double x : {0.380, 0.386, 0.380, 0.387, 0.380, 0.388})
+  {
+    EXPECT_FALSE(reachedAt({x, 0.034, 0.0}));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+
+  constexpr double shallow_jitter_yaw = 4.9 * M_PI / 180.0;
+  std::vector<Pose2> shallow_jitter_path;
+  appendLine(shallow_jitter_path, 0.0, 0.0, 0.60, 0.0, 0.06);
+  appendLine(shallow_jitter_path, 0.60, 0.0, 0.65, 0.0, 0.05);
+  shallow_jitter_path.push_back({0.65, 0.0, shallow_jitter_yaw});
+  appendLine(shallow_jitter_path,
+             0.65,
+             0.0,
+             0.65 + 0.30 * std::cos(shallow_jitter_yaw),
+             0.30 * std::sin(shallow_jitter_yaw),
+             0.06);
+  loadPath(withFtcTail(shallow_jitter_path));
+  for (const Pose2 query : {Pose2{0.660, -0.160, 0.0},
+                            Pose2{0.660, -0.080, 0.0},
+                            Pose2{0.660, 0.000, 0.0},
+                            Pose2{0.660, 0.080, 0.0},
+                            Pose2{0.660, 0.160, 0.0},
+                            Pose2{0.666, 0.160, 0.0},
+                            Pose2{0.660, 0.160, 0.0},
+                            Pose2{0.667, 0.160, 0.0},
+                            Pose2{0.660, 0.160, 0.0},
+                            Pose2{0.668, 0.160, 0.0},
+                            Pose2{0.660, 0.163, 0.0},
+                            Pose2{0.666, 0.163, 0.0},
+                            Pose2{0.660, 0.166, 0.0},
+                            Pose2{0.666, 0.166, 0.0},
+                            Pose2{0.660, 0.169, 0.0},
+                            Pose2{0.666, 0.169, 0.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+
+  loadPath(withFtcTail(path));
+  for (const Pose2 query : {Pose2{0.386, 0.034, 0.0}, Pose2{0.386, 0.061, 0.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+
+  loadPath(withFtcTail(path));
+  for (const Pose2 query : {Pose2{0.386, 0.034, 0.0}, Pose2{0.386, 0.061, M_PI / 2.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+
+  constexpr double outgoing_yaw = 40.0 * M_PI / 180.0;
+  const Pose2 outgoing_end{0.42 + 0.075 * std::cos(outgoing_yaw),
+                           0.075 * std::sin(outgoing_yaw),
+                           outgoing_yaw};
+  std::vector<Pose2> diagonal_path;
+  appendLine(diagonal_path, 0.0, 0.0, 0.30, 0.0, 0.03);
+  appendLine(diagonal_path, 0.30, 0.0, 0.42, 0.0, 0.03);
+  diagonal_path.push_back({0.42, 0.0, outgoing_yaw});
+  appendLine(diagonal_path, 0.42, 0.0, outgoing_end.x, outgoing_end.y, 0.025);
+  appendLine(diagonal_path, outgoing_end.x, outgoing_end.y, 0.30, 0.075, 0.03);
+  appendLine(diagonal_path, 0.30, 0.075, 0.30, 0.0, 0.025);
+  loadPath(withFtcTail(diagonal_path));
+  for (const Pose2 query : {Pose2{0.386, 0.020, 0.0}, Pose2{0.386, 0.045, 0.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+
+  constexpr double shallow_yaw = 19.0 * M_PI / 180.0;
+  const Pose2 shallow_end{0.42 + 0.075 * std::cos(shallow_yaw),
+                          0.075 * std::sin(shallow_yaw),
+                          shallow_yaw};
+  std::vector<Pose2> shallow_path;
+  appendLine(shallow_path, 0.0, 0.0, 0.30, 0.0, 0.03);
+  appendLine(shallow_path, 0.30, 0.0, 0.39, 0.0, 0.03);
+  shallow_path.push_back({0.39, 0.0, shallow_yaw});
+  appendLine(shallow_path, 0.39, 0.0, shallow_end.x, shallow_end.y, 0.025);
+  appendLine(shallow_path, shallow_end.x, shallow_end.y, 0.30, 0.075, 0.03);
+  appendLine(shallow_path, 0.30, 0.075, 0.30, 0.0, 0.025);
+  loadPath(withFtcTail(shallow_path));
+  for (const Pose2 query : {Pose2{0.383, 0.019, 0.0}, Pose2{0.383, 0.067, 0.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+
+  loadPath(withFtcTail(shallow_path));
+  for (const Pose2 query : {Pose2{0.374, -0.040, 0.0}, Pose2{0.374, 0.035, 0.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+}
+
+TEST_F(PathProgressEndApproachTest, LateralDriftCannotProjectOntoShallowOutgoingSegment)
+{
+  constexpr double outgoing_yaw = 4.9 * M_PI / 180.0;
+  std::vector<Pose2> path;
+  appendLine(path, 0.0, 0.0, 0.60, 0.0, 0.06);
+  appendLine(path, 0.60, 0.0, 0.65, 0.0, 0.05);
+  path.push_back({0.65, 0.0, outgoing_yaw});
+  appendLine(
+      path, 0.65, 0.0, 0.65 + 0.30 * std::cos(outgoing_yaw), 0.30 * std::sin(outgoing_yaw), 0.06);
+  loadPath(withFtcTail(path));
+
+  for (const Pose2 query : {Pose2{0.660, -0.160, 0.0},
+                            Pose2{0.660, -0.080, 0.0},
+                            Pose2{0.660, 0.000, 0.0},
+                            Pose2{0.660, 0.080, 0.0},
+                            Pose2{0.660, 0.160, 0.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+  EXPECT_FALSE(reachedAt({0.666, 0.160, 0.0}));
+  EXPECT_EQ(maxReachedIndex(), 0u);
+
+  loadPath(withFtcTail(path));
+  for (const Pose2 query : {Pose2{0.660, -0.160, 0.0},
+                            Pose2{0.660, -0.080, 0.0},
+                            Pose2{0.660, 0.000, 0.0},
+                            Pose2{0.660, 0.020, 0.0},
+                            Pose2{0.669, 0.020, 0.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+
+  std::vector<Pose2> recovery_path;
+  appendLine(recovery_path, 0.0, 0.0, 0.60, 0.0, 0.06);
+  appendLine(recovery_path, 0.60, 0.0, 0.65, 0.0, 0.05);
+  recovery_path.push_back({0.65, 0.0, outgoing_yaw});
+  appendLine(recovery_path,
+             0.65,
+             0.0,
+             0.65 + 0.80 * std::cos(outgoing_yaw),
+             0.80 * std::sin(outgoing_yaw),
+             0.06);
+  loadPath(withFtcTail(recovery_path));
+  for (const Pose2 query : {Pose2{0.660, -0.160, 0.0},
+                            Pose2{0.660, -0.080, 0.0},
+                            Pose2{0.660, 0.000, 0.0},
+                            Pose2{0.660, 0.080, 0.0},
+                            Pose2{0.660, 0.160, 0.0}})
+  {
+    EXPECT_FALSE(reachedAt(query));
+    EXPECT_EQ(maxReachedIndex(), 0u);
+  }
+  const Pose2 recovery_origin{0.660, 0.160, outgoing_yaw};
+  EXPECT_FALSE(reachedAt(recovery_origin));
+  for (int step = 1; step <= 5; ++step)
+  {
+    const double distance = 0.02 * step;
+    EXPECT_FALSE(reachedAt({recovery_origin.x + distance * std::cos(outgoing_yaw),
+                            recovery_origin.y + distance * std::sin(outgoing_yaw),
+                            outgoing_yaw}));
+  }
+  EXPECT_GT(maxReachedIndex(), 10u);
 }
 
 TEST_F(PathProgressEndApproachTest, DistantPointOnOutgoingPivotLegDoesNotLatchBoundary)

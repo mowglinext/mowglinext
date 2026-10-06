@@ -145,6 +145,11 @@ private:
   std::optional<size_t> pending_progress_boundary_;
   std::optional<double> pending_progress_boundary_origin_offset_m_;
   std::optional<double> pending_progress_boundary_high_water_offset_m_;
+  // Accumulate signed displacement only when the query follows an eligible
+  // local path tangent, so rejected lateral motion cannot become evidence.
+  double pending_progress_boundary_origin_tangent_x_{0.0};
+  double pending_progress_boundary_origin_tangent_y_{0.0};
+  double pending_progress_boundary_forward_motion_m_{0.0};
   double pending_progress_boundary_radius_m_{0.0};
   double pending_progress_boundary_minimum_motion_m_{0.0};
   // A controller may ask isGoalReached repeatedly without moving. Do not let
