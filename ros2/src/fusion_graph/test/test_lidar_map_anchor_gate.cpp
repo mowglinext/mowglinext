@@ -100,3 +100,49 @@ TEST(LidarMapAnchorGate, StaleSampleResetsTheDisengageDwell)
   EXPECT_EQ(d.state, LidarAnchorState::kAnchoring);
   EXPECT_EQ(g.Step(0.0, true, 2.5).state, LidarAnchorState::kMapping);
 }
+
+// A robot that does not move (docked without charger voltage, paused, waiting
+// for RTK) must not keep writing the same scene: its pose estimate drifts
+// (gyro yaw, Float jitter) and the repeats smear into false walls. Only the
+// first scan is written until the robot has travelled the minimum distance.
+TEST(LidarMapAnchorGate, StationaryRobotWritesOnlyItsFirstScan)
+{
+  LidarMapAnchorGate g(true, 0.3, 0.5, 1.0, 0.10);
+  EXPECT_TRUE(g.Step(0.0, true, 1.0, 5.0, 5.0).insert_scan);
+  for (double t = 1.5; t < 600.0; t += 0.5)
+  {
+    ASSERT_FALSE(g.Step(0.0, true, t, 5.0, 5.0).insert_scan) << "re-inserted at t=" << t;
+  }
+  EXPECT_EQ(g.state(), LidarAnchorState::kMapping);  // still mapping, just not writing
+}
+
+// Motion re-arms insertion once the travel since the last WRITTEN scan reaches
+// the threshold — measured from that scan, not from the previous step.
+TEST(LidarMapAnchorGate, TravelSinceLastInsertReArmsInsertion)
+{
+  LidarMapAnchorGate g(true, 0.3, 0.5, 1.0, 0.10);
+  EXPECT_TRUE(g.Step(0.0, true, 1.0, 0.0, 0.0).insert_scan);
+  EXPECT_FALSE(g.Step(0.0, true, 2.0, 0.06, 0.0).insert_scan);  // 6 cm: not yet
+  EXPECT_TRUE(g.Step(0.0, true, 3.0, 0.06, 0.09).insert_scan);  // ~10.8 cm from the first
+  EXPECT_FALSE(g.Step(0.0, true, 4.0, 0.06, 0.12).insert_scan);  // 3 cm from the second
+}
+
+// Both conditions hold together: moving fast does not bypass the rate limit.
+TEST(LidarMapAnchorGate, TravelDoesNotBypassTheInsertPeriod)
+{
+  LidarMapAnchorGate g(true, 0.3, 0.5, 1.0, 0.10);
+  EXPECT_TRUE(g.Step(0.0, true, 1.0, 0.0, 0.0).insert_scan);
+  EXPECT_FALSE(g.Step(0.0, true, 1.2, 1.0, 0.0).insert_scan);
+  EXPECT_TRUE(g.Step(0.0, true, 1.5, 1.0, 0.0).insert_scan);
+}
+
+// The travel gate does not change when the map learns: stale RTK still
+// freezes learning even for a moving robot.
+TEST(LidarMapAnchorGate, TravelGateDoesNotOverrideStaleRtk)
+{
+  LidarMapAnchorGate g(true, 0.3, 0.5, 1.0, 0.10);
+  EXPECT_TRUE(g.Step(0.0, true, 1.0, 0.0, 0.0).insert_scan);
+  const auto d = g.Step(5.0, true, 2.0, 3.0, 0.0);
+  EXPECT_FALSE(d.insert_scan);
+  EXPECT_EQ(d.state, LidarAnchorState::kAnchoring);
+}

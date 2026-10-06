@@ -382,6 +382,9 @@ fusion_graph_node:
     lidar_map_tile_size_m: 10.0          # persistent tiles in datum coordinates
     lidar_map_radius_tiles: 2           # bounded 5 x 5 tiles, 50 x 50 m at defaults
     lidar_map_insert_period_s: 0.5        # insert a scan into the grid at most every 0.5 s
+    lidar_map_insert_min_travel_m: 0.10   # ...and only after the robot moved this far: a still robot
+                                          # (docked without charger voltage, paused) would re-write the
+                                          # same scene at a drifting pose and grow false walls
     lidar_map_rebuild_period_s: 5.0       # publish local grid; PF rebuild deferred until computation
     lidar_anchor_max_rate_hz: 5.0
     lidar_anchor_calibration_period_s: 60.0

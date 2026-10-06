@@ -45,6 +45,7 @@ void FusionGraphNode::DeclareParameters()
   lidar_map_tile_size_m_ = declare_parameter<double>("lidar_map_tile_size_m", 10.0);
   lidar_map_radius_tiles_ = declare_parameter<int>("lidar_map_radius_tiles", 2);
   lidar_map_insert_period_s_ = declare_parameter<double>("lidar_map_insert_period_s", 0.5);
+  lidar_map_insert_min_travel_m_ = declare_parameter<double>("lidar_map_insert_min_travel_m", 0.10);
   lidar_map_rebuild_period_s_ = declare_parameter<double>("lidar_map_rebuild_period_s", 5.0);
   // 1.0 s, not 0.3: a 5 Hz receiver whose stamps arrive ~80 ms old sits at
   // ~0.28 s of age just before every next fix — 0.3 flapped on timer phase.
@@ -124,7 +125,8 @@ void FusionGraphNode::DeclareParameters()
     lidar_anchor_gate_.emplace(true,
                                lidar_anchor_engage_age_s_,
                                lidar_map_insert_period_s_,
-                               lidar_anchor_disengage_dwell_s_);
+                               lidar_anchor_disengage_dwell_s_,
+                               lidar_map_insert_min_travel_m_);
   }
 
   // 180° yaw-flip recovery from COG (see fusion_graph_node.hpp).
@@ -213,7 +215,7 @@ void FusionGraphNode::DeclareParameters()
     };
     if (!lidar_compute_gate_.ValidConfiguration() ||
         !ValidLidarAnchorParams(lidar_anchor_validator_) || !positive(lidar_map_insert_period_s_) ||
-        !nonnegative(lidar_map_rebuild_period_s_) ||
+        !nonnegative(lidar_map_rebuild_period_s_) || !nonnegative(lidar_map_insert_min_travel_m_) ||
         !nonnegative(lidar_anchor_disengage_dwell_s_) ||
         !nonnegative(lidar_anchor_undock_dwell_s_) || !nonnegative(lidar_anchor_floor_quantile_) ||
         lidar_anchor_floor_quantile_ > 1.0 || !positive(lidar_anchor_sigma_floor_param_m_) ||

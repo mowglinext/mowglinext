@@ -57,7 +57,8 @@ void FusionGraphNode::ResetLidarTiming()
     lidar_anchor_gate_.emplace(true,
                                lidar_anchor_engage_age_s_,
                                lidar_map_insert_period_s_,
-                               lidar_anchor_disengage_dwell_s_);
+                               lidar_anchor_disengage_dwell_s_,
+                               lidar_map_insert_min_travel_m_);
 }
 
 void FusionGraphNode::PollLidarSubmaps(double x, double y)
@@ -286,7 +287,8 @@ void FusionGraphNode::OnLidarMapImport(nav_msgs::msg::OccupancyGrid::ConstShared
     lidar_anchor_gate_.emplace(true,
                                lidar_anchor_engage_age_s_,
                                lidar_map_insert_period_s_,
-                               lidar_anchor_disengage_dwell_s_);
+                               lidar_anchor_disengage_dwell_s_,
+                               lidar_map_insert_min_travel_m_);
   lidar_map_import_pending_ = true;
   RCLCPP_INFO(get_logger(),
               "LiDAR map import dispatched (%u x %u)",
@@ -312,7 +314,8 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   }
   const Sophus::SE2d dr_now = lidar_scan_dr_;
   const bool map_has_structure = lidar_map_occupied_cells_ > 0;
-  const auto d = lidar_anchor_gate_->Step(rtk_age_s, map_has_structure, now_s);
+  const auto d = lidar_anchor_gate_->Step(
+      rtk_age_s, map_has_structure, now_s, dr_now.translation().x(), dr_now.translation().y());
 
   // Publish the grid once at startup, whatever the state: it is latched, and
   // the GUI map page draws the map instead of the raw scan points only once a
