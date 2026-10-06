@@ -32,6 +32,41 @@ TEST(TransitGeometry, TerminalExceptionsAreBoundedAndTiedToOneArea)
   EXPECT_FALSE(geometry.terminal({-0.1, 1}, {0.25, 1}, 0.15));
   EXPECT_FALSE(geometry.terminal({-0.1, -0.3}, {-0.25, 0.1}, 0.15));
 }
+TEST(TransitGeometry, SharedNearestBoundaryMatchesTheSinglePolygonUnion)
+{
+  Geometry single;
+  single.allowed = {rectangle(-1, 0, 1, 1)};
+  for (const auto& rings :
+       std::vector<std::vector<Ring>>{{rectangle(-1, 0, 0, 1), rectangle(0, 0, 1, 1)},
+                                      {rectangle(-1, 0, 0.2, 1), rectangle(-0.2, 0, 1, 1)}})
+  {
+    Geometry geometry;
+    geometry.allowed = rings;
+    for (const Point anchor : {Point{-0.04, 0.96}, Point{0, 0.96}, Point{0.04, 0.96}})
+    {
+      EXPECT_TRUE(single.terminal({0, 1.1}, anchor, 0.15));
+      EXPECT_TRUE(geometry.terminal({0, 1.1}, anchor, 0.15));
+      EXPECT_FALSE(geometry.terminal({0, 1.16}, anchor, 0.15));
+    }
+  }
+}
+TEST(TransitGeometry, DistinctNearestBoundariesRemainAmbiguousEvenWhenJoinedElsewhere)
+{
+  Geometry geometry;
+  geometry.allowed = {rectangle(-1, 0, -0.1, 1), rectangle(0.1, 0, 1, 1)};
+  for (bool connected : {false, true})
+  {
+    if (connected)
+      geometry.allowed.push_back(rectangle(-1, 0, 1, 0.2));
+    EXPECT_FALSE(geometry.terminal({0, 0.8}, {-0.14, 0.8}, 0.15));
+    EXPECT_FALSE(geometry.terminal({0, 0.8}, {0.14, 0.8}, 0.15));
+  }
+  // The same U-shaped union represented by one ring has the same ambiguity.
+  geometry.allowed = {
+      {{-1, 0}, {1, 0}, {1, 1}, {0.1, 1}, {0.1, 0.2}, {-0.1, 0.2}, {-0.1, 1}, {-1, 1}}};
+  EXPECT_FALSE(geometry.terminal({0, 0.8}, {-0.14, 0.8}, 0.15));
+  EXPECT_FALSE(geometry.terminal({0, 0.8}, {0.14, 0.8}, 0.15));
+}
 TEST(TransitGeometry, ObstaclesRejectWholeSegmentsIncludingMargin)
 {
   Geometry geometry;
@@ -163,6 +198,37 @@ TEST_F(AuthorizedTransitPlannerTest, BoundaryAndOutsideTerminalsRemainPlannableO
   EXPECT_NO_THROW(plan(-4, 0, 4, 10));
   EXPECT_NO_THROW(plan(-4.1, 1, 4.1, 9));
   EXPECT_THROW(plan(-4.3, 1, 0, 9), nav2_core::NoValidPathCouldBeFound);
+}
+TEST_F(AuthorizedTransitPlannerTest, OutsideSharedBoundaryTerminalsRemainPlannableOnAdverseGrid)
+{
+  for (const auto& rings :
+       std::vector<std::vector<Ring>>{{rectangle(-1, 0, 0, 1), rectangle(0, 0, 1, 1)},
+                                      {rectangle(-1, 0, 0.2, 1), rectangle(-0.2, 0, 1, 1)}})
+  {
+    geometry(rings);
+    for (bool outside_start : {true, false})
+    {
+      const auto path = outside_start ? plan(0, 1.1, 0.7, 0.5) : plan(0.7, 0.5, 0, 1.1);
+      ASSERT_GT(path.poses.size(), 2U);
+      const auto& anchor = path.poses[outside_start ? 1 : path.poses.size() - 2].pose.position;
+      Geometry exact;
+      exact.allowed = rings;
+      EXPECT_TRUE(exact.terminal({0, 1.1}, {anchor.x, anchor.y}, 0.15));
+      EXPECT_LE(transit::distance({0, 1.1}, {anchor.x, anchor.y}), 0.30);
+      auto interior = path;
+      interior.poses.erase(interior.poses.begin());
+      interior.poses.pop_back();
+      EXPECT_TRUE(authorized(interior));
+    }
+  }
+}
+TEST_F(AuthorizedTransitPlannerTest, EquidistantGapTerminalsRemainRejected)
+{
+  geometry({rectangle(-1, 0, -0.1, 1), rectangle(0.1, 0, 1, 1)});
+  EXPECT_THROW(plan(0, 0.8, -0.7, 0.5), nav2_core::NoValidPathCouldBeFound);
+  EXPECT_THROW(plan(0.7, 0.5, 0, 0.8), nav2_core::NoValidPathCouldBeFound);
+  geometry({rectangle(-1, 0, -0.1, 1), rectangle(0.1, 0, 1, 1), rectangle(-1, 0, 1, 0.2)});
+  EXPECT_THROW(plan(0, 0.8, -0.7, 0.5), nav2_core::NoValidPathCouldBeFound);
 }
 TEST_F(AuthorizedTransitPlannerTest, NarrowNavigationAndClosedSeamsRemainUsable)
 {

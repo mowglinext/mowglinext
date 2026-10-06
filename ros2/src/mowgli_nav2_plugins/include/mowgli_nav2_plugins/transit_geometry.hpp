@@ -27,14 +27,18 @@ inline double distance(Point a, Point b)
 {
   return std::hypot(a.x - b.x, a.y - b.y);
 }
-inline double edgeDistance(Point p, Point a, Point b)
+inline Point closestOnEdge(Point p, Point a, Point b)
 {
   const double length2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y);
   const double t =
       length2 == 0
           ? 0
           : std::clamp(((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / length2, 0.0, 1.0);
-  return distance(p, interpolate(a, b, t));
+  return interpolate(a, b, t);
+}
+inline double edgeDistance(Point p, Point a, Point b)
+{
+  return distance(p, closestOnEdge(p, a, b));
 }
 inline bool inside(Point p, const Ring& ring)
 {
@@ -150,34 +154,55 @@ struct Geometry
     return true;
   }
   // Only the terminal-to-area leg may leave the union. It must enter the
-  // uniquely nearest intended polygon once and remain in it until its anchor.
+  // uniquely nearest boundary location once and remain in the union of rings
+  // sharing that location until its anchor. A seam is not a competing boundary.
   bool terminal(Point endpoint, Point anchor, double outside_limit) const
   {
     if (authorized(endpoint))
       return segmentAuthorized(endpoint, anchor) && segmentClear(endpoint, anchor);
     double nearest = INFINITY;
-    const Ring* intended = nullptr;
-    bool ambiguous = false;
+    for (const auto& ring : allowed)
+      nearest = std::min(nearest, ringDistance(endpoint, ring));
+    if (!std::isfinite(nearest) || nearest > outside_limit)
+      return false;
+    std::vector<Ring> intended;
+    Point nearest_point{};
+    bool found_point = false;
     for (const auto& ring : allowed)
     {
-      const double d = ringDistance(endpoint, ring);
-      if (d + kEpsilon < nearest)
+      if (std::abs(ringDistance(endpoint, ring) - nearest) > kEpsilon)
+        continue;
+      intended.push_back(ring);
+      for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
       {
-        nearest = d;
-        intended = &ring;
-        ambiguous = false;
+        const auto q = closestOnEdge(endpoint, ring[j], ring[i]);
+        if (std::abs(distance(endpoint, q) - nearest) > kEpsilon)
+          continue;
+        // Distinct nearest points remain ambiguous even if their rings are
+        // joined elsewhere: connectivity must not authorize crossing a gap.
+        if (found_point && distance(q, nearest_point) > kEpsilon)
+          return false;
+        if (!found_point)
+          nearest_point = q;
+        found_point = true;
       }
-      else if (std::abs(d - nearest) <= kEpsilon)
-        ambiguous = true;
     }
-    if (!intended || ambiguous || nearest > outside_limit || !inside(anchor, *intended) ||
-        !segmentClear(endpoint, anchor))
+    const auto in_intended = [&](Point p)
+    {
+      return std::any_of(intended.begin(),
+                         intended.end(),
+                         [&](const auto& r)
+                         {
+                           return inside(p, r);
+                         });
+    };
+    if (!found_point || !in_intended(anchor) || !segmentClear(endpoint, anchor))
       return false;
-    const auto ts = cuts(endpoint, anchor, {*intended});
+    const auto ts = cuts(endpoint, anchor, intended);
     bool entered = false;
     for (std::size_t i = 1; i < ts.size(); ++i)
     {
-      const bool in = inside(interpolate(endpoint, anchor, (ts[i - 1] + ts[i]) / 2), *intended);
+      const bool in = in_intended(interpolate(endpoint, anchor, (ts[i - 1] + ts[i]) / 2));
       if (entered && !in)
         return false;
       if (!in && distance(endpoint, interpolate(endpoint, anchor, ts[i])) > outside_limit)
