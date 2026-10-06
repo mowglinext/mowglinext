@@ -73,7 +73,21 @@ type Config = {
     firmwareSelectionModel?: string
 }
 
-export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: string }) => {
+/**
+ * `page` (default): the onboarding wizard step — the action bar is pinned to
+ * the bottom of the screen and the form scrolls in a fixed-height pane.
+ * `modal`: embedded in a dialog (Settings → Updates) — a fixed bar would
+ * escape the dialog and float at the bottom of the viewport, so the actions
+ * stay in the normal flow under a content pane that sizes to its content.
+ */
+export type FlashBoardVariant = "page" | "modal";
+
+export const FlashBoardComponent = (props: {
+    onNext: () => void;
+    mowerModel?: string;
+    variant?: FlashBoardVariant;
+}) => {
+    const inModal = props.variant === "modal";
     const isMobile = useIsMobile();
     const {colors} = useThemeMode();
     const {t} = useTranslation();
@@ -434,7 +448,9 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
     // Show config form
     return <Form form={form}>
         <Row>
-            <Col span={24} style={{height: isMobile ? "auto" : "55vh", overflowY: isMobile ? undefined : "auto", paddingBottom: isMobile ? 80 : undefined}}>
+            <Col span={24} style={inModal
+                ? {maxHeight: "60vh", overflowY: "auto"}
+                : {height: isMobile ? "auto" : "55vh", overflowY: isMobile ? undefined : "auto", paddingBottom: isMobile ? 80 : undefined}}>
                 <FormLayout layout="vertical">
                     {!showTargetPicker && (
                         <FlashTargetSummary
@@ -738,7 +754,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     />
                 </FormLayout>
             </Col>
-            <Col span={24} style={{
+            <Col span={24} data-testid="flash-actions" style={inModal ? {marginTop: 16} : {
                 position: "fixed",
                 bottom: isMobile ? 'calc(56px + env(safe-area-inset-bottom, 0px))' : 20,
                 left: isMobile ? 0 : undefined,

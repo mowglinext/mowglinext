@@ -38,10 +38,10 @@ vi.mock("react-terminal-ui", () => ({
     TerminalOutput: ({children}: {children: ReactNode}) => <div>{children}</div>,
 }));
 
-const renderComponent = (mowerModel?: string) => render(
+const renderComponent = (mowerModel?: string, variant?: "page" | "modal") => render(
     <ThemeProvider>
         <App>
-            <FlashBoardComponent mowerModel={mowerModel} onNext={vi.fn()} />
+            <FlashBoardComponent mowerModel={mowerModel} onNext={vi.fn()} variant={variant} />
         </App>
     </ThemeProvider>,
 );
@@ -386,5 +386,33 @@ describe("FlashBoardComponent flash progress", () => {
 
         expect(document.querySelectorAll(".ant-steps-item")).toHaveLength(0);
         expect(screen.getByTestId("flash-status-line")).toHaveTextContent("Starting…");
+    });
+});
+
+// Settings → Updates opens this component in a Modal. The onboarding page pins
+// the action bar to the screen with position:fixed, which inside a dialog
+// escapes it and floats at the bottom of the viewport, below the dialog.
+describe("FlashBoardComponent layout variants", () => {
+    beforeEach(() => {
+        state.savedConfig = "";
+        state.settingsModel = "YardForce500";
+        state.settingsError = false;
+    });
+
+    it("pins the action bar to the screen on the onboarding page", async () => {
+        renderComponent("YardForce500");
+        await waitFor(() => expect(flashButton()).toBeEnabled());
+
+        expect(screen.getByTestId("flash-actions").style.position).toBe("fixed");
+    });
+
+    it("keeps the action bar inside the dialog in the modal variant", async () => {
+        renderComponent("YardForce500", "modal");
+        await waitFor(() => expect(flashButton()).toBeEnabled());
+
+        const actions = screen.getByTestId("flash-actions");
+        expect(actions.style.position).not.toBe("fixed");
+        expect(actions.contains(flashButton())).toBe(true);
+        expect(actions.contains(buttonByText("Skip"))).toBe(true);
     });
 });
