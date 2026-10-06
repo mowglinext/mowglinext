@@ -489,6 +489,10 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
     }
     dat.close();
 
+    // Invalidation replaced the latched mask with an empty one. A completed
+    // load must schedule its replacement even if the previous mask was clean.
+    masks_dirty_ = true;
+    mask_rebuild_not_before_ = {};
     res->success = true;
     res->message = "Map loaded from " + map_file_path_;
     RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
@@ -512,8 +516,8 @@ void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPt
   }
   areas_.clear();
   obstacle_polygons_.clear();
-  docking_pose_set_ = false;
-  has_dock_exclusion_ = false;
+  // The calibrated dock belongs to mowgli_robot.yaml, not the area list.
+  // GUI replacement uses clear_map + add_area, so retain its pose and geometry.
   keepout_filter_info_sent_ = false;
   speed_filter_info_sent_ = false;
   masks_dirty_ = true;

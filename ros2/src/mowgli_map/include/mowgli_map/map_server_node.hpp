@@ -256,6 +256,16 @@ public:
   void save_areas_guarded_for_test(const std::string& path);
   void load_areas_for_test(const std::string& path);
 
+  /// Test-only: exercise map persistence through the real service callbacks.
+  void save_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_save_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+  void load_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_load_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+
   /// Test-only: current area-list generation (mowglinext#637 phase 2).
   uint64_t area_list_generation_for_test() const
   {
