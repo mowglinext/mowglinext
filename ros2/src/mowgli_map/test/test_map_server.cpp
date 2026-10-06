@@ -465,6 +465,14 @@ TEST_F(AreaTypeTest, SuccessfulMapLoadRepublishesInvalidatedMaskOnNextTimerTick)
   node_ = std::make_shared<mowgli_map::MapServerNode>(options);
   auto observer = std::make_shared<rclcpp::Node>("load_map_mask_observer");
   nav_msgs::msg::OccupancyGrid::ConstSharedPtr latest;
+  visualization_msgs::msg::MarkerArray::ConstSharedPtr latest_geometry;
+  auto geometry_subscription = observer->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      rclcpp::QoS(1).transient_local(),
+      [&](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+      {
+        latest_geometry = message;
+      });
   auto subscription = observer->create_subscription<nav_msgs::msg::OccupancyGrid>(
       "/keepout_mask",
       rclcpp::QoS(1).transient_local(),
@@ -485,31 +493,57 @@ TEST_F(AreaTypeTest, SuccessfulMapLoadRepublishesInvalidatedMaskOnNextTimerTick)
     }
     return false;
   };
+  const auto wait_for_geometry = [&](bool empty)
+  {
+    for (int i = 0; i < 200; ++i)
+    {
+      executor.spin_some();
+      if (latest_geometry && latest_geometry->markers.empty() == empty)
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+  };
   ASSERT_TRUE(add_area("lawn", make_rect(-2, -2, 2, 2), false));
   // Let the real map-edit debounce expire, then use the normal timer path to
   // publish and clear masks_dirty_. No direct mask-builder call is involved.
   std::this_thread::sleep_for(std::chrono::milliseconds(1600));
   node_->publish_mow_progress_for_test();
   ASSERT_TRUE(wait_for_mask(false));
+  ASSERT_TRUE(wait_for_geometry(false));
   const auto before = *latest;
   auto saved = std::make_shared<std_srvs::srv::Trigger::Response>();
   node_->save_map_for_test(saved);
   ASSERT_TRUE(saved->success) << saved->message;
 
   latest.reset();
+  latest_geometry.reset();
   auto loaded = std::make_shared<std_srvs::srv::Trigger::Response>();
   node_->load_map_for_test(loaded);
   ASSERT_TRUE(loaded->success) << loaded->message;
   ASSERT_TRUE(wait_for_mask(true)) << "load must invalidate the previously latched mask";
+  ASSERT_TRUE(wait_for_geometry(true));
 
   latest.reset();
   node_->publish_mow_progress_for_test();
   ASSERT_TRUE(wait_for_mask(false)) << "the next normal timer tick must restore authorization";
+  ASSERT_TRUE(wait_for_geometry(false));
   EXPECT_EQ(latest->info, before.info);
   EXPECT_EQ(latest->data, before.data);
   EXPECT_EQ(mask_at(*latest, 0, 0), 0);
   std::remove((path + ".yaml").c_str());
   std::remove((path + ".dat").c_str());
+  // A failed reload must not retain either previously valid authorization view.
+  latest.reset();
+  latest_geometry.reset();
+  node_->load_map_for_test(loaded);
+  ASSERT_FALSE(loaded->success);
+  ASSERT_TRUE(wait_for_mask(true));
+  ASSERT_TRUE(wait_for_geometry(true));
+  node_->publish_mow_progress_for_test();
+  executor.spin_some();
+  EXPECT_TRUE(latest->data.empty());
+  EXPECT_TRUE(latest_geometry->markers.empty());
 }
 
 TEST_F(AreaTypeTest, NavigationAreaIsNotStoredAsMowing)
