@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -18,6 +19,14 @@ type controlledSubscriptions struct {
 	ops               []string
 	beforeSubscribe   func(string) error
 	beforeUnsubscribe func(string)
+	callService       func(context.Context, string, interface{}, ...string) (json.RawMessage, error)
+}
+
+func (c *controlledSubscriptions) CallService(ctx context.Context, service string, request interface{}, serviceType ...string) (json.RawMessage, error) {
+	if c.callService == nil {
+		return nil, errors.New("unexpected service call")
+	}
+	return c.callService(ctx, service, request, serviceType...)
 }
 
 func (c *controlledSubscriptions) Subscribe(topic, msgType, id string, cb func(json.RawMessage), opts ...int) error {
@@ -198,4 +207,35 @@ func TestRosProviderFailedRegistrationCanBeRetried(t *testing.T) {
 	require.NoError(t, r.Subscribe("status", "two", 0, func([]byte) {}))
 	require.Len(t, client.active, 1)
 	require.Len(t, client.ops, 1)
+}
+
+func TestRosProviderMavrosVehicleInfoUsesNativeServiceLazily(t *testing.T) {
+	client := &controlledSubscriptions{}
+	r := newSubscriptionProvider(t, client)
+	called := make(chan struct{}, 1)
+	client.callService = func(_ context.Context, service string, request interface{}, serviceType ...string) (json.RawMessage, error) {
+		require.Equal(t, "/mavros/vehicle_info_get", service)
+		require.Equal(t, []string{"mavros_msgs/srv/VehicleInfoGet"}, serviceType)
+		require.Equal(t, map[string]interface{}{"sysid": 0, "compid": 0, "get_all": false}, request)
+		called <- struct{}{}
+		return json.RawMessage(`{"success":true,"vehicles":[{"autopilot":3,"flight_sw_version":67438079}]}`), nil
+	}
+
+	// An ordinary Mowgli subscriber must not touch a MAVROS-only service.
+	require.NoError(t, r.Subscribe("status", "native", 0, func([]byte) {}))
+	select {
+	case <-called:
+		t.Fatal("MAVROS service called without a MAVROS inventory listener")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	received := make(chan []byte, 1)
+	require.NoError(t, r.Subscribe("mavrosVehicleInfo", "browser", 0, func(msg []byte) { received <- msg }))
+	select {
+	case msg := <-received:
+		require.JSONEq(t, `{"success":true,"vehicles":[{"autopilot":3,"flight_sw_version":67438079}]}`, string(msg))
+	case <-time.After(time.Second):
+		t.Fatal("native MAVROS vehicle info response was not delivered")
+	}
+	r.UnSubscribe("mavrosVehicleInfo", "browser")
 }

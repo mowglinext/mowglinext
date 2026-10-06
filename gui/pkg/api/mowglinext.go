@@ -107,7 +107,8 @@ func topicSubscribeInterval(topic string) (int, bool) {
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",
 		"coverageResumeAvailable", "coverageSession",
-		"fusionDiag", "dockCalibrationStatus", "firmwareParams":
+		"fusionDiag", "dockCalibrationStatus", "firmwareParams",
+		"mavrosState", "mavrosVehicleInfo":
 		return -1, true
 	default:
 		return -1, false

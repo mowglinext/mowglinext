@@ -10,6 +10,8 @@ import './UpdatesSection.css';
 import {UpdateChecks} from './UpdateChecks';
 import {HostUpdaterPanel} from './HostUpdaterPanel';
 import {FirmwareUpdateCard} from './FirmwareUpdateCard';
+import {MavrosFirmwareCard} from './MavrosFirmwareCard';
+import {useHardwareBackend} from '../../hooks/useHardwareBackend';
 
 const {Text} = Typography;
 const order = ['robot', 'gui', 'gps', 'lidar', 'tfluna-front', 'tfluna-edge', 'mavros', 'ntrip', 'mqtt', 'watchtower', 'vesc'];
@@ -19,6 +21,7 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
     const [advanced, setAdvanced] = useState(false);
     const {data, loading, error, refresh} = useInstalledVersions();
     const firmware = useFirmwareInventory();
+    const hardware = useHardwareBackend();
     const servedBuild = useServedWebBuild();
     const components = [...(data?.components ?? [])].sort((a, b) => order.indexOf(a.component ?? '') - order.indexOf(b.component ?? ''));
     const unknown = t('updates.unknown');
@@ -48,7 +51,8 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
             {error && <Alert type="warning" showIcon message={t('updates.fetchFailed')} description={data ? t('updates.showingPrevious') : undefined}/>}
             {data && !data.docker_available && <Alert type="warning" showIcon message={t('updates.dockerUnavailable')}/>}
             {browserBuildDiffers(browserBuild, servedBuild ?? {}) && <Alert type="warning" showIcon message={t('updates.browserStale')} action={<Button onClick={() => window.location.reload()}>{t('updates.reloadBrowser')}</Button>}/>}
-            <HostUpdaterPanel advanced={advanced} inventory={components} firmwareProtocol={firmware.data.firmware_protocol_version}/>
+            <HostUpdaterPanel advanced={advanced} inventory={components}
+                firmwareProtocol={!hardware.loading && hardware.backend === 'mowgli' ? firmware.data.firmware_protocol_version : undefined}/>
             {advanced && <details className="update-diagnostics"><summary>{t('hostUpdater.diagnostics')}</summary><UpdateChecks/>
             {advanced && <div className="installed-version-toolbar"><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => void refresh()}>{t('updates.refresh')}</Button>{data && <Typography.Paragraph style={{margin: 0}} copyable={{text: versionDetails, tooltips: [t('updates.copy'), t('updates.copied')]}}>{t('updates.copy')}</Typography.Paragraph>}</div>}
             {advanced && <Card title={t('updates.installedSoftware')} size="small">
@@ -61,8 +65,10 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
             </dl><Text type="secondary">{t('updates.browserMeaning')}</Text></Card>}
             {advanced && data?.observed_at && <Text type="secondary">{t('updates.observed', {time: new Date(data.observed_at).toLocaleString()})}</Text>}
             </details>}
-            <FirmwareUpdateCard firmwareVersion={firmware.data.firmware_version} protocolVersion={firmware.data.firmware_protocol_version}
-                state={firmware.state} configuredModel={configuredModel} advanced={advanced}/>
+            {!hardware.loading && (hardware.backend === 'mavros'
+                ? <MavrosFirmwareCard/>
+                : <FirmwareUpdateCard firmwareVersion={firmware.data.firmware_version} protocolVersion={firmware.data.firmware_protocol_version}
+                    state={firmware.state} configuredModel={configuredModel} advanced={advanced}/>)}
 
         </div>
     );

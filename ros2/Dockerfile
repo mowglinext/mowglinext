@@ -232,6 +232,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-lyrical-diagnostic-updater \
     # Foxglove Bridge (WebSocket bridge for GUI and Foxglove Studio)
     ros-lyrical-foxglove-bridge \
+    # Schema/typesupport only: foxglove_bridge runs in this image while the
+    # MAVROS node lives in its sidecar. The GUI reads /mavros/state and calls
+    # /mavros/vehicle_info_get through that bridge.
+    ros-lyrical-mavros-msgs \
     # RTCM message definitions for the public /rtcm topic
     ros-lyrical-rtcm-msgs \
     # tinyxml2 (required at runtime by BehaviorTree.CPP)

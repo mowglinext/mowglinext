@@ -40,6 +40,13 @@ import {DigEscalationBanner} from "../components/dashboard/DigEscalationBanner.t
 import {isCoverageScanPaused} from "../components/dashboard/scanPaused.ts";
 import {WeatherChip} from "../concept/components/WeatherChip.tsx";
 import {useWeather} from "../hooks/useWeather.ts";
+import {useHardwareBackend} from "../hooks/useHardwareBackend.ts";
+import {
+  formatMavrosBoardIdentity,
+  formatMavrosFirmwareVersion,
+  mavrosAutopilotName,
+  useMavrosInfo,
+} from "../hooks/useMavrosInfo.ts";
 import {NoiseTexture} from "../concept/components/NoiseTexture.tsx";
 import {staggerParent, riseFade, popIn, springSnap} from "../concept/motion.ts";
 
@@ -127,6 +134,8 @@ export const MowgliNextPage = () => {
   const {modal, notification} = App.useApp();
   const mowerAction = useMowerAction();
   const data = useMowerData();
+  const hardware = useHardwareBackend();
+  const mavros = useMavrosInfo(!hardware.loading && hardware.backend === "mavros");
   const {snapshot} = useDiagnosticsSnapshot();
   const map = useMowingMap();
   const odom = useFusionOdom();
@@ -391,7 +400,7 @@ export const MowgliNextPage = () => {
             </motion.div>
             <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} onViewMap={() => navigate("/map")}/></motion.div>
             <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
-            <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
+            <motion.div variants={riseFade}><HealthCard data={data} hardware={hardware} mavros={mavros}/></motion.div>
           </div>
         ) : (
           <div style={{display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 22, alignItems: 'start'}}>
@@ -405,7 +414,7 @@ export const MowgliNextPage = () => {
                   large
                 />
               </motion.div>
-              <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
+              <motion.div variants={riseFade}><HealthCard data={data} hardware={hardware} mavros={mavros}/></motion.div>
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
               <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} height={300} onViewMap={() => navigate("/map")}/></motion.div>
@@ -680,7 +689,14 @@ function StatTile({label, value, unit, hint, accent, icon}: StatTileProps) {
 
 type HealthRow = {k: string; ok: boolean; note: string; action?: ReactNode};
 
-function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
+type DashboardHardware = ReturnType<typeof useHardwareBackend>;
+type DashboardMavros = ReturnType<typeof useMavrosInfo>;
+
+export function HealthCard({data, hardware, mavros}: {
+  data: ReturnType<typeof useMowerData>;
+  hardware: DashboardHardware;
+  mavros: DashboardMavros;
+}) {
   const {t} = useTranslation();
   const navigate = useNavigate();
   const weather = useWeather();
@@ -693,10 +709,13 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
     {k: t('mowgliNextPage.motorTemp', {temp: data.motorTemp.toFixed(0)}),
                               ok: data.motorTemp < 55,    note: data.motorTemp >= 55 ? t('mowgliNextPage.runningHot') : t('mowgliNextPage.nominal')},
   ];
+  // STM32 firmware compatibility belongs exclusively to the native Mowgli
+  // backend. MAVROS leaves those Status fields unset/false, which must never
+  // be interpreted as an incompatible autopilot firmware.
   // Firmware compatibility row — only shown once the bridge has reported a
   // verdict (firmwareCompatible !== null). When incompatible, it reads red and
   // tells the operator to reflash; mowing is blocked by PreFlightCheck.
-  if (data.firmwareCompatible !== null) {
+  if (!hardware.loading && hardware.backend === "mowgli" && data.firmwareCompatible !== null) {
     rows.push({
       k: data.firmwareCompatible
         ? t('mowgliNextPage.firmwareOk')
@@ -717,6 +736,25 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
         </Button>
       ),
     });
+  }
+  if (!hardware.loading && hardware.backend === "mavros") {
+    const provider = mavrosAutopilotName(mavros.vehicle?.autopilot);
+    const firmware = formatMavrosFirmwareVersion(mavros.vehicle);
+    const board = formatMavrosBoardIdentity(mavros.vehicle);
+    rows.push({
+      k: mavros.state.connected
+        ? t('mowgliNextPage.mavrosFcuConnected')
+        : t('mowgliNextPage.mavrosFcuDisconnected'),
+      ok: mavros.state.connected === true,
+      note: [provider, firmware].filter(Boolean).join(' · ') || t('mowgliNextPage.mavrosWaitingInfo'),
+    });
+    if (board) {
+      rows.push({
+        k: t('mowgliNextPage.mavrosAutopilotBoard'),
+        ok: mavros.state.connected === true,
+        note: board,
+      });
+    }
   }
   return (
     <GlassCard padding={20}>
