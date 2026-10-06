@@ -531,9 +531,8 @@ TEST_F(AreaTypeTest, SuccessfulMapLoadRepublishesInvalidatedMaskOnNextTimerTick)
   EXPECT_EQ(latest->info, before.info);
   EXPECT_EQ(latest->data, before.data);
   EXPECT_EQ(mask_at(*latest, 0, 0), 0);
-  std::remove((path + ".yaml").c_str());
   std::remove((path + ".dat").c_str());
-  // A failed reload must not retain either previously valid authorization view.
+  // A data-file failure after grid invalidation must keep both views closed.
   latest.reset();
   latest_geometry.reset();
   node_->load_map_for_test(loaded);
@@ -544,6 +543,7 @@ TEST_F(AreaTypeTest, SuccessfulMapLoadRepublishesInvalidatedMaskOnNextTimerTick)
   executor.spin_some();
   EXPECT_TRUE(latest->data.empty());
   EXPECT_TRUE(latest_geometry->markers.empty());
+  std::remove((path + ".yaml").c_str());
 }
 
 TEST_F(AreaTypeTest, NavigationAreaIsNotStoredAsMowing)
