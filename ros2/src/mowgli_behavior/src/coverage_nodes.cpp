@@ -1652,9 +1652,15 @@ void FollowStrip::onHalted()
   // Preempt (recharge, e-stop, command change) mid-path: capture how far we got
   // and persist the resume cursor so the next dispatch continues from here
   // rather than re-mowing the whole area from the start.
-  if (follow_handle_ && total_path_poses_ > 0)
+  if (total_path_poses_ > 0 && swath_idx_ < swaths_.size())
   {
-    updateProgress(ctx);
+    // Selection is already valid while a blade-off transit or the asynchronous
+    // goal response is pending. Persist that logical cursor even without a
+    // handle; transit motion must not be counted as coverage progress.
+    if (follow_handle_ && !transit_active_ && !transit_pending_)
+    {
+      updateProgress(ctx);
+    }
     persistResumeCursor(ctx);
   }
   abortActiveGoals(ctx);
@@ -1662,9 +1668,12 @@ void FollowStrip::onHalted()
 
 BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, bool mid_pass)
 {
-  if (mid_pass && follow_handle_ && total_path_poses_ > 0)
+  if (mid_pass && total_path_poses_ > 0 && swath_idx_ < swaths_.size())
   {
-    updateProgress(ctx);
+    if (follow_handle_ && !transit_active_ && !transit_pending_)
+    {
+      updateProgress(ctx);
+    }
     persistResumeCursor(ctx);
   }
   abortActiveGoals(ctx);
@@ -1821,9 +1830,8 @@ void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t 
   path_progress_idx_ = 0;
   truncated_at_.reset();  // it indexed the untrimmed unit
 
-  // Persist the moved cursor now: onHalted cannot persist during the transit to
-  // the new first pose (follow_handle_ is null then), so a preempt mid-transit
-  // must still resume PAST the skipped span rather than back at the stuck pose.
+  // Persist the moved cursor now as well as on halt: a preempt or process restart
+  // during transit must resume PAST the skipped span, not at the stuck pose.
   const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
   ctx->area_resume_pose_index[area_idx_] = base + swath_resume_start_indices_[swath_idx_];
   saveCoverageResumeState(*ctx);
