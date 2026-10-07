@@ -2514,6 +2514,36 @@
     "modelConfirmCancel": "Cancel"
   },
   "settingsDriveMotor": {
+    "odometry": {
+      "sectionDescription": "Wheel odometry calibration",
+      "label": "Odometry calibration",
+      "start": "Start odometry calibration",
+      "modalTitle": "Calibrate odometry",
+      "ticksPerMeter": "Ticks per metre",
+      "passCoefficient": "Pass coefficient: {{value}} ticks/m",
+      "wheelMeasurements": "Wheel transport counts: left {{left}}, right {{right}}",
+      "savedLiveDescription": "Saving stores ticks_per_meter in mowgli_robot.yaml and applies its floating-point value to MAVROS wheel odometry.",
+      "assistantSummary": "This assistant calibrates wheel odometry through straight test passes. Use a clear, level area and keep emergency stop within reach. Review the distance and whether to apply the result before starting.",
+      "motionDescription": "Stamped velocity commands on /cmd_vel_tuning pass through twist_mux to /cmd_vel. The robot stops between motion segments. All passes use the current ticks_per_meter as their reference.",
+      "workflowDescription": "The robot runs straight passes through /cmd_vel, measures wheel rotations/ticks and compares odometry against RTK/GNSS distance when available. The assistant calculates a new ticks_per_meter and writes measurements and recommendations to a YAML report. Applying the value is optional.",
+      "applyTitle": "A successful run will save the recommended odometry coefficient",
+      "applyDescription": "Only ticks_per_meter will be applied to MAVROS wheel odometry and saved in mowgli_robot.yaml, preserving its floating-point precision.",
+      "reportOnlyDescription": "The assistant will generate a YAML report using the current ticks_per_meter as reference. No robot parameters will be changed and no permanent configuration changes will be applied.",
+      "started": "Odometry calibration started",
+      "startFailed": "Failed to start odometry calibration",
+      "validation": {
+        "noPasses": "No odometry passes recorded yet.",
+        "failed": "Odometry calibration did not complete successfully. Review the report failure details.",
+        "noMotion": "An odometry pass stalled or produced no wheel motion. Check wheel observations and mechanics.",
+        "noReference": "No valid RTK/GNSS-backed odometry distance was accepted.",
+        "incompleteReference": "Some odometry passes lack a valid accepted RTK/GNSS distance. Review the measurement coverage.",
+        "validated": "Validated odometry with distance error {{errorPct}}%.",
+        "excessiveError": "Odometry distance error {{errorPct}}% exceeds the accepted 2.0% threshold.",
+        "stability": "Odometry calibration has a motion stability warning (distance error {{errorPct}}%). Review the wheel measurements.",
+        "measurement": "Odometry calibration completed with measurement warnings (distance error {{errorPct}}%). Review the pass notes."
+      },
+      "rollbackDescription": "Restore only the backed-up ticks_per_meter in MAVROS wheel odometry and mowgli_robot.yaml."
+    },
     "savedLiveTitle": "Saved and applied live",
     "savedLiveDescription": "Saving stores these in mowgli_robot.yaml and pushes them to the drive controller immediately — no ROS2 restart needed. They persist across reboots: on every boot the robot re-sends the saved values to the firmware. (The firmware itself has no storage, so it runs its built-in defaults only for the brief moment before the controller reconnects, then re-validates and clamps the values you saved.)",
     "wheelVelocityPid": "Wheel Velocity PID",

@@ -200,7 +200,7 @@ export const HardwareSection: React.FC<Props> = ({
                                 <InputNumber aria-label={t("settingsHardware.encoderTicksPerMeter")} aria-description={t("settingsHardware.encoderTicksPerMeterTooltip")}  id="setting-ticks_per_meter"
                                     value={values.ticks_per_meter}
                                     onChange={(v) => onChange("ticks_per_meter", v)}
-                                    step={0.001} precision={3} style={{ width: "100%" }}
+                                    step={0.001} style={{ width: "100%" }}
                                 />
                             </Form.Item>
                         </Col>

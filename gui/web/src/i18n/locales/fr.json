@@ -2510,6 +2510,36 @@
     "modelConfirmCancel": "Annuler"
   },
   "settingsDriveMotor": {
+    "odometry": {
+      "sectionDescription": "Calibration de l'odométrie des roues",
+      "label": "Calibration odométrie",
+      "start": "Démarrer la calibration odométrie",
+      "modalTitle": "Calibrer l'odométrie",
+      "ticksPerMeter": "Ticks par mètre",
+      "passCoefficient": "Coefficient de la passe : {{value}} ticks/m",
+      "wheelMeasurements": "Comptages transportés des roues : gauche {{left}}, droite {{right}}",
+      "savedLiveDescription": "La sauvegarde conserve ticks_per_meter dans mowgli_robot.yaml et applique sa valeur flottante à l'odométrie des roues MAVROS.",
+      "assistantSummary": "Cet assistant calibre l'odométrie des roues par des passes rectilignes. Utilisez une zone dégagée et plane, avec l'arrêt d'urgence à portée. Vérifiez la distance et le choix d'appliquer le résultat avant de démarrer.",
+      "motionDescription": "Les commandes de vitesse horodatées sur /cmd_vel_tuning passent par twist_mux vers /cmd_vel. Le robot s'arrête entre les segments de mouvement. Toutes les passes utilisent la valeur actuelle de ticks_per_meter comme référence.",
+      "workflowDescription": "Le robot effectue des passes rectilignes via /cmd_vel, mesure les rotations/ticks des roues et compare l'odométrie à la distance RTK/GNSS lorsqu'elle est disponible. L'assistant calcule un nouveau ticks_per_meter et écrit les mesures et recommandations dans un rapport YAML. L'application de la valeur est optionnelle.",
+      "applyTitle": "Une passe réussie sauvegardera le coefficient d'odométrie recommandé",
+      "applyDescription": "Seul ticks_per_meter sera appliqué à l'odométrie des roues MAVROS et sauvegardé dans mowgli_robot.yaml, en conservant sa précision flottante.",
+      "reportOnlyDescription": "L'assistant générera un rapport YAML en utilisant la valeur actuelle de ticks_per_meter comme référence. Aucun paramètre du robot ni aucune configuration permanente ne seront modifiés.",
+      "started": "Calibration odométrie démarrée",
+      "startFailed": "Impossible de démarrer la calibration odométrie",
+      "validation": {
+        "noPasses": "Aucune passe d'odométrie enregistrée pour le moment.",
+        "failed": "La calibration d'odométrie ne s'est pas terminée correctement. Consultez les détails de l'échec dans le rapport.",
+        "noMotion": "Une passe d'odométrie a calé ou n'a produit aucun mouvement des roues. Vérifiez les observations des roues et la mécanique.",
+        "noReference": "Aucune distance d'odométrie valide basée sur une référence RTK/GNSS n'a été acceptée.",
+        "incompleteReference": "Certaines passes d'odométrie n'ont pas de distance RTK/GNSS valide acceptée. Vérifiez la couverture des mesures.",
+        "validated": "Odométrie validée avec une erreur de distance de {{errorPct}} %.",
+        "excessiveError": "L'erreur de distance odométrique de {{errorPct}} % dépasse le seuil accepté de 2,0 %.",
+        "stability": "La calibration d'odométrie présente un avertissement de stabilité du mouvement (erreur de distance {{errorPct}} %). Vérifiez les mesures des roues.",
+        "measurement": "La calibration d'odométrie s'est terminée avec des avertissements de mesure (erreur de distance {{errorPct}} %). Consultez les notes des passes."
+      },
+      "rollbackDescription": "Restaurer uniquement le ticks_per_meter sauvegardé dans l'odométrie des roues MAVROS et mowgli_robot.yaml."
+    },
     "savedLiveTitle": "Sauvegardé et appliqué en direct",
     "savedLiveDescription": "La sauvegarde enregistre ces valeurs dans mowgli_robot.yaml et les transmet immédiatement au contrôleur de déplacement — aucun redémarrage de ROS2 nécessaire. Elles persistent après un redémarrage : à chaque démarrage, le robot renvoie les valeurs sauvegardées au firmware. (Le firmware lui-même n'a aucun stockage, il utilise donc ses valeurs par défaut intégrées uniquement pendant le bref instant avant la reconnexion du contrôleur, puis revalide et borne les valeurs que vous avez sauvegardées.)",
     "wheelVelocityPid": "PID de vitesse des roues",
