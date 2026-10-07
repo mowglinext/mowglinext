@@ -299,6 +299,10 @@ if(BUILD_TESTING)
   ament_add_ros_isolated_gtest(test_ftc_speed_limit test/test_ftc_speed_limit.cpp)
   target_link_libraries(test_ftc_speed_limit ${PROJECT_NAME})
 
+  # #924 acceptance baseline: intentionally red until execution authorization.
+  ament_add_ros_isolated_gtest(test_motion_authorization test/test_motion_authorization.cpp)
+  target_link_libraries(test_motion_authorization ${PROJECT_NAME})
+
   add_executable(lattice_replay test/lattice_replay.cpp)
   target_link_libraries(lattice_replay ${PROJECT_NAME})
 endif()
