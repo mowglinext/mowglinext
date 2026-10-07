@@ -47,7 +47,14 @@ var feedForwardPersistedParamKeys = map[string]struct{}{
 // may persist: the FF allowlist above for feed-forward runs, everything for
 // the PID pass (which genuinely tunes the gains). A new map is returned; the
 // input is never mutated.
-func persistedParamsForMode(mode driveTuningMode, proposed map[string]float64) map[string]float64 {
+func persistedParamsForMode(mode driveTuningMode, proposed map[string]float64, backend ...string) map[string]float64 {
+	if len(backend) > 0 && backend[0] == "mavros" {
+		out := make(map[string]float64, 1)
+		if value, ok := proposed["ticks_per_meter"]; ok {
+			out["ticks_per_meter"] = value
+		}
+		return out
+	}
 	if mode != driveTuningModeFeedForward {
 		out := make(map[string]float64, len(proposed))
 		for key, value := range proposed {
@@ -177,6 +184,7 @@ type driveTuningRollbackResponse struct {
 }
 
 type driveTuningReport struct {
+	Recommended     map[string]float64       `json:"recommended,omitempty" yaml:"recommended"`
 	GeneratedAt     string                   `json:"generated_at" yaml:"generated_at"`
 	Mode            string                   `json:"mode" yaml:"mode"`
 	Profile         string                   `json:"profile" yaml:"profile"`
@@ -226,6 +234,9 @@ type driveTuningDrivetrain struct {
 }
 
 type driveTuningTrialReport struct {
+	TicksPerMeter               *float64 `json:"ticks_per_meter,omitempty" yaml:"ticks_per_meter"`
+	LeftTicksSeen               int64    `json:"left_ticks_seen,omitempty" yaml:"left_ticks_seen"`
+	RightTicksSeen              int64    `json:"right_ticks_seen,omitempty" yaml:"right_ticks_seen"`
 	Name                        string   `json:"name" yaml:"name"`
 	Phase                       string   `json:"phase" yaml:"phase"`
 	TargetSpeed                 float64  `json:"target_speed" yaml:"target_speed"`
@@ -256,6 +267,7 @@ type driveTuningJob struct {
 	mu         sync.Mutex
 	id         string
 	mode       driveTuningMode
+	backend    string
 	state      driveTuningRunState
 	startedAt  string
 	finishedAt string
@@ -343,8 +355,9 @@ func (m *driveTuningManager) postFeedForwardStart() gin.HandlerFunc {
 			return
 		}
 
-		commandArgs, reportPath := buildFeedForwardCommand(normalized, activeHardwareBackendForDB(m.dbProvider))
-		job, err := m.startJob(driveTuningModeFeedForward, normalized.Apply, reportPath, commandArgs)
+		backend := activeHardwareBackendForDB(m.dbProvider)
+		commandArgs, reportPath := buildFeedForwardCommand(normalized, backend)
+		job, err := m.startJob(driveTuningModeFeedForward, normalized.Apply, reportPath, commandArgs, backend)
 		if err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, errDriveTuningAlreadyRunning) {
@@ -449,6 +462,7 @@ func (m *driveTuningManager) postRollback() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "backup file did not contain drive parameters"})
 			return
 		}
+		backup.Parameters = persistedParamsForMode(driveTuningModePID, backup.Parameters, activeHardwareBackendForDB(m.dbProvider))
 		if err := persistRobotYamlUpdates(m.dbProvider, floatMapToAnyMap(backup.Parameters)); err != nil {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 			return
@@ -517,7 +531,7 @@ func (m *driveTuningManager) getLatestReport() gin.HandlerFunc {
 
 var errDriveTuningAlreadyRunning = errors.New("a drive tuning job is already running")
 
-func (m *driveTuningManager) startJob(mode driveTuningMode, apply bool, reportPath string, commandArgs []string) (*driveTuningJob, error) {
+func (m *driveTuningManager) startJob(mode driveTuningMode, apply bool, reportPath string, commandArgs []string, backend ...string) (*driveTuningJob, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.current != nil {
@@ -528,9 +542,14 @@ func (m *driveTuningManager) startJob(mode driveTuningMode, apply bool, reportPa
 	}
 
 	jobID := fmt.Sprintf("%s-%d", mode, time.Now().UTC().Unix())
+	hardwareBackend := "mowgli"
+	if len(backend) > 0 {
+		hardwareBackend = backend[0]
+	}
 	job := &driveTuningJob{
 		id:         jobID,
 		mode:       mode,
+		backend:    hardwareBackend,
 		state:      driveTuningRunRunning,
 		startedAt:  time.Now().UTC().Format(time.RFC3339),
 		apply:      apply,
@@ -603,7 +622,7 @@ func (m *driveTuningManager) runJob(job *driveTuningJob, commandArgs []string) {
 	job.appendLog("\nSaved report: " + job.reportPath + "\n")
 
 	if job.apply {
-		toPersist := persistedParamsForMode(job.mode, report.ProposedParams)
+		toPersist := persistedParamsForMode(job.mode, report.ProposedParams, job.backend)
 		if err := persistRobotYamlUpdates(m.dbProvider, floatMapToAnyMap(toPersist)); err != nil {
 			job.appendLog("\nYAML persistence error: " + err.Error() + "\n")
 			job.finish(driveTuningRunWarning, &exitCode, "drive tuning applied live, but mowgli_robot.yaml persistence failed")
@@ -637,6 +656,7 @@ func (m *driveTuningManager) buildStatusResponse(ctx context.Context) (driveTuni
 	ffSummary := driveTuningValidationSummary{Status: driveTuningStatusNotValidated}
 	pidSummary := driveTuningValidationSummary{Status: driveTuningStatusNotValidated}
 	var latestMeta *driveTuningLatestReportMeta
+	backend := activeHardwareBackendForDB(m.dbProvider)
 
 	for _, reportPath := range reportPaths {
 		raw, report, err := m.readReport(ctx, containerDetails.ID, reportPath)
@@ -655,10 +675,14 @@ func (m *driveTuningManager) buildStatusResponse(ctx context.Context) (driveTuni
 		switch driveTuningMode(report.Mode) {
 		case driveTuningModeFeedForward:
 			if ffSummary.Status == driveTuningStatusNotValidated {
-				ffSummary = evaluateFeedForwardReport(report, reportPath)
+				if backend == "mavros" {
+					ffSummary = evaluateOdometryReport(report, reportPath)
+				} else {
+					ffSummary = evaluateFeedForwardReport(report, reportPath)
+				}
 			}
 		case driveTuningModePID:
-			if pidSummary.Status == driveTuningStatusNotValidated {
+			if backend != "mavros" && pidSummary.Status == driveTuningStatusNotValidated {
 				pidSummary = evaluatePIDReport(report, reportPath)
 			}
 		}
@@ -915,6 +939,7 @@ func listDriveReportPaths(ctx context.Context, dockerProvider types.IDockerProvi
 }
 
 func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]any) error {
+	mavros := activeHardwareBackendForDB(dbProvider) == "mavros"
 	configFilePath, err := dbProvider.Get("system.mower.yamlConfigFile")
 	if err != nil {
 		return err
@@ -935,9 +960,11 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 	if err == nil {
 		defaults := map[string]any{}
 		extractDefaults(schema, defaults)
-		for key, value := range defaults {
-			if _, exists := existing[key]; !exists {
-				existing[key] = value
+		if !mavros {
+			for key, value := range defaults {
+				if _, exists := existing[key]; !exists {
+					existing[key] = value
+				}
 			}
 		}
 		nodeMappings = extractNodeMappings(schema)
@@ -964,7 +991,15 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 	if err := os.MkdirAll(filepath.Dir(string(configFilePath)), 0o755); err != nil {
 		return err
 	}
-	return writePreservingPerms(string(configFilePath), []byte(driveTuningYamlHeader+string(out)))
+	if err := writePreservingPerms(string(configFilePath), []byte(driveTuningYamlHeader+string(out))); err != nil {
+		return err
+	}
+	if mavros {
+		if ticks, ok := asFloat64(payload["ticks_per_meter"]); ok {
+			return writeMavrosRuntimeConfig(dbProvider, ticks)
+		}
+	}
+	return nil
 }
 
 func floatMapToAnyMap(values map[string]float64) map[string]any {
@@ -992,6 +1027,58 @@ func waitForContainerExec(ctx context.Context, dockerProvider types.IDockerProvi
 		case <-ticker.C:
 		}
 	}
+}
+
+// evaluateOdometryReport assesses distance observations, independently of speed
+// tracking. The shared API still transports its summary in feed_forward.
+func evaluateOdometryReport(report *driveTuningReport, reportPath string) driveTuningValidationSummary {
+	summary := func(status driveTuningValidationStatus, message string) driveTuningValidationSummary {
+		return driveTuningValidationSummary{Status: status, Message: message,
+			GeneratedAt: report.GeneratedAt, ReportPath: reportPath}
+	}
+	trials := filterTrialsByPhase(report.Trials, "odometry")
+	if len(trials) == 0 {
+		return summary(driveTuningStatusNotValidated, "No odometry passes recorded yet.")
+	}
+	if report.FailureMessage != "" {
+		return summary(driveTuningStatusWarning, "Odometry calibration did not complete successfully. Review the report failure details.")
+	}
+	errors := []float64{}
+	incompleteReference := false
+	measurementWarnings := false
+	oscillationWarning := false
+	for _, trial := range trials {
+		if trial.StallDetected || (trial.OdomDistanceM != nil && *trial.OdomDistanceM <= 0) {
+			return summary(driveTuningStatusWarning, "An odometry pass stalled or produced no wheel motion. Check wheel observations and mechanics.")
+		}
+		measurementWarnings = measurementWarnings || len(trial.Warnings) > 0 || trial.TrialQuality == "warning" || trial.TrialQuality == "poor"
+		oscillationWarning = oscillationWarning ||
+			driveTuningWarningOscillation(driveTuningOscillationSeverity(trial.OscillationSeverity, trial.OscillationDetected), trial.OscillationDetected) ||
+			driveTuningWarningOscillation(driveTuningOscillationSeverity(trial.LiveOscillationSeverity, trial.LiveOscillationDetected), trial.LiveOscillationDetected)
+		if !trial.RTKAccepted || trial.RTKDistanceM == nil || trial.OdomDistanceM == nil ||
+			!isFiniteFloat64(*trial.RTKDistanceM) || !isFiniteFloat64(*trial.OdomDistanceM) || *trial.RTKDistanceM <= 1e-6 {
+			incompleteReference = true
+			continue
+		}
+		errors = append(errors, absFloat(*trial.OdomDistanceM-*trial.RTKDistanceM) / *trial.RTKDistanceM)
+	}
+	if len(errors) == 0 {
+		return summary(driveTuningStatusWarning, "No valid RTK/GNSS-backed odometry distance was accepted.")
+	}
+	errorPct := maxFloatSlice(errors) * 100
+	if errorPct > 2.0 {
+		return summary(driveTuningStatusWarning, fmt.Sprintf("Odometry distance error %.1f%% exceeds the accepted 2.0%% threshold.", errorPct))
+	}
+	if incompleteReference {
+		return summary(driveTuningStatusWarning, "Some odometry passes lack a valid accepted RTK/GNSS distance. Review the measurement coverage.")
+	}
+	if oscillationWarning {
+		return summary(driveTuningStatusWarning, fmt.Sprintf("Odometry calibration has a motion stability warning (distance error %.1f%%). Review the wheel measurements.", errorPct))
+	}
+	if measurementWarnings {
+		return summary(driveTuningStatusWarning, fmt.Sprintf("Odometry calibration completed with measurement warnings (distance error %.1f%%). Review the pass notes.", errorPct))
+	}
+	return summary(driveTuningStatusValidated, fmt.Sprintf("Validated odometry with distance error %.1f%%.", errorPct))
 }
 
 func evaluateFeedForwardReport(report *driveTuningReport, reportPath string) driveTuningValidationSummary {
@@ -1412,7 +1499,9 @@ func sanitizeDriveTuningReport(report *driveTuningReport) {
 	report.CurrentParams = sanitizeFloat64Map(report.CurrentParams)
 	report.StartingParams = sanitizeFloat64Map(report.StartingParams)
 	report.ProposedParams = sanitizeFloat64Map(report.ProposedParams)
+	report.Recommended = sanitizeFloat64Map(report.Recommended)
 	for index := range report.Trials {
+		report.Trials[index].TicksPerMeter = sanitizeFloat64Ptr(report.Trials[index].TicksPerMeter)
 		report.Trials[index].TargetSpeed = sanitizeFloat64Value(report.Trials[index].TargetSpeed)
 		report.Trials[index].MeasuredSpeedMean = sanitizeFloat64Value(report.Trials[index].MeasuredSpeedMean)
 		report.Trials[index].Overshoot = sanitizeFloat64Value(report.Trials[index].Overshoot)

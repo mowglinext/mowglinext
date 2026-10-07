@@ -33,6 +33,7 @@ import yaml
 
 from .drive_pid_math import (
     DrivePidParams,
+    OdometryParams,
     LiveStallDiagnostic,
     OscillationAssessment,
     SpeedSample,
@@ -280,12 +281,10 @@ class DrivePidTuner(Node):
         self._failure_message: str | None = None
         self._failure_status_snapshot: dict[str, Any] | None = None
 
-        self._parameter_client = AsyncParameterClient(self, args.hardware_node)
-        self._odometry_parameter_client = (
-            AsyncParameterClient(self, args.odometry_node)
-            if args.hardware_backend == "mavros"
-            else self._parameter_client
+        self._parameter_client = AsyncParameterClient(
+            self, args.odometry_node if args.hardware_backend == "mavros" else args.hardware_node
         )
+        self._odometry_parameter_client = self._parameter_client
         self._high_level_client = self.create_client(
             HighLevelControl,
             "/behavior_tree_node/high_level_control",
@@ -442,7 +441,7 @@ class DrivePidTuner(Node):
 
     def run(self) -> int:
         if self._args.hardware_backend == "mavros" and self._args.mode != "ff" and not self._args.rollback:
-            raise RuntimeError("The MAVROS backend supports feed-forward/odometry calibration only.")
+            raise RuntimeError("The MAVROS backend supports odometry calibration only.")
         self.get_logger().info(
             f"Using cmd_vel topic {self._cmd_topic} for mode {self._args.mode}."
         )
@@ -555,7 +554,9 @@ class DrivePidTuner(Node):
                 self._stop_robot()
             finally:
                 if session_started:
-                    if not keep_final_live:
+                    if not keep_final_live and (
+                        self._args.hardware_backend != "mavros" or self._args.apply
+                    ):
                         try:
                             self._apply_drive_pid_params(current_params)
                         except Exception as exc:  # pragma: no cover - best effort cleanup
@@ -600,12 +601,8 @@ class DrivePidTuner(Node):
 
     def _wait_for_initial_state(self) -> None:
         if not self._parameter_client.wait_for_services(timeout_sec=10.0):
-            raise RuntimeError(f"Parameter services for {self._args.hardware_node} are not ready.")
-        if (
-            self._args.hardware_backend == "mavros"
-            and not self._odometry_parameter_client.wait_for_services(timeout_sec=10.0)
-        ):
-            raise RuntimeError(f"Parameter services for {self._args.odometry_node} are not ready.")
+            node = self._args.odometry_node if self._args.hardware_backend == "mavros" else self._args.hardware_node
+            raise RuntimeError(f"Parameter services for {node} are not ready.")
         deadline = time.monotonic() + 8.0
         while time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
@@ -642,6 +639,8 @@ class DrivePidTuner(Node):
         return bool(self._args.reset_to_profile or self._args.force_profile)
 
     def _profile_reference_params(self) -> DrivePidParams | None:
+        if self._args.hardware_backend == "mavros":
+            return None
         if self._args.profile == "custom":
             return None
         return PROFILE_PRESETS[self._args.profile]
@@ -662,6 +661,8 @@ class DrivePidTuner(Node):
         return updates
 
     def _resolve_starting_params(self, current_params: DrivePidParams) -> DrivePidParams:
+        if self._args.hardware_backend == "mavros":
+            return current_params
         params = current_params
         profile_reference = self._profile_reference_params()
         if self._should_reset_to_profile() and profile_reference is not None:
@@ -703,6 +704,11 @@ class DrivePidTuner(Node):
         starting_params: DrivePidParams,
         profile_reference_params: DrivePidParams | None,
     ) -> None:
+        if self._args.hardware_backend == "mavros":
+            self.get_logger().info(
+                f"Using current odometry ticks_per_meter={current_params.ticks_per_meter!r} as reference."
+            )
+            return
         self.get_logger().info("Using live hardware_bridge parameters as initial tuning baseline")
         self.get_logger().info(f"initial ticks_per_meter={current_params.ticks_per_meter:.3f}")
         self.get_logger().info(f"initial wheel_pid_pwm_per_mps={current_params.wheel_pid_pwm_per_mps:.3f}")
@@ -924,6 +930,9 @@ class DrivePidTuner(Node):
         self,
         working_params: DrivePidParams,
     ) -> tuple[DrivePidParams, list[TrialMetrics], list[str]]:
+        # Keep the historical ff entrypoint/API; MAVROS only fits odometry.
+        if self._args.hardware_backend == "mavros":
+            return self._run_odometry_session(working_params)
         trials: list[TrialMetrics] = []
         reasons: list[str] = []
         params = working_params
@@ -957,36 +966,15 @@ class DrivePidTuner(Node):
             )
             next_ticks = params.ticks_per_meter
             if trial.rtk_accepted and trial.rtk_distance_m is not None and trial.odom_distance_m is not None:
-                if self._args.hardware_backend == "mavros":
-                    motor_revolutions = 0.5 * (
-                        abs(trial.left_ticks_seen) + abs(trial.right_ticks_seen)
-                    ) / 1000.0
-                    next_ticks = clamp(
-                        mavros_ticks_per_meter_from_motor_revolutions(
-                            trial.left_ticks_seen,
-                            trial.right_ticks_seen,
-                            trial.rtk_distance_m,
-                        ),
-                        1.0,
-                        2500.0,
-                    )
-                    radius = self._robot_hardware_config.wheel_radius_m
-                    radius_note = "unknown wheel radius" if radius is None else f"wheel radius {radius:.4f} m"
-                    reasons.append(
-                        f"Pass {pass_index + 1}: ticks_per_meter -> {next_ticks:.3f} from "
-                        f"{motor_revolutions:.3f} integrated ESC motor revolutions (RPM), "
-                        f"{trial.rtk_distance_m:.3f} m RTK, {radius_note}."
-                    )
-                else:
-                    next_ticks = clamp(
-                        params.ticks_per_meter * (trial.odom_distance_m / max(trial.rtk_distance_m, 1e-6)),
-                        100.0,
-                        2500.0,
-                    )
-                    reasons.append(
-                        f"Pass {pass_index + 1}: ticks_per_meter -> {next_ticks:.3f} from odom/reference "
-                        f"{trial.odom_distance_m:.3f}/{trial.rtk_distance_m:.3f} m."
-                    )
+                next_ticks = clamp(
+                    params.ticks_per_meter * (trial.odom_distance_m / max(trial.rtk_distance_m, 1e-6)),
+                    100.0,
+                    2500.0,
+                )
+                reasons.append(
+                    f"Pass {pass_index + 1}: ticks_per_meter -> {next_ticks:.3f} from odom/reference "
+                    f"{trial.odom_distance_m:.3f}/{trial.rtk_distance_m:.3f} m."
+                )
             elif self._latest_gnss_status is not None:
                 raise RuntimeError(
                     "RTK/GPS was present but no trustworthy ground-distance estimate was accepted during the feed-forward pass."
@@ -1006,7 +994,7 @@ class DrivePidTuner(Node):
             next_pwm = clamp(
                 params.wheel_pid_pwm_per_mps * (target_speed / max(measured_speed, 1e-6)),
                 50.0,
-                4000.0 if self._args.hardware_backend == "mavros" else 600.0,
+                600.0,
             )
             reasons.append(
                 f"Pass {pass_index + 1}: wheel_pid_pwm_per_mps -> {next_pwm:.3f} from target/measured "
@@ -1033,6 +1021,48 @@ class DrivePidTuner(Node):
                 else:
                     self._hold_zero(self._args.stop_between_tests)
         return params, trials, reasons
+
+    def _run_odometry_session(
+        self, params: OdometryParams,
+    ) -> tuple[OdometryParams, list[TrialMetrics], list[str]]:
+        trials: list[TrialMetrics] = []
+        coefficients: list[float] = []
+        reasons: list[str] = []
+        speed = self._feedforward_test_speed()
+        duration = self._feedforward_duration(speed)
+        self.get_logger().info(f"Odometry calibration: {self._args.passes} straight pass(es).")
+        for index in range(self._args.passes):
+            trial = self._run_speed_trial(
+                name=f"odom_pass_{index + 1}_{speed:.2f}mps",
+                phase="odometry",
+                initial_speed=0.0,
+                target_speed=speed,
+                params=params,
+                duration_s=duration,
+            )
+            trials.append(trial)
+            if trial.stall_detected:
+                raise RuntimeError("Odometry calibration observed no wheel motion.")
+            if trial.rtk_accepted and trial.rtk_distance_m is not None:
+                coefficient = mavros_ticks_per_meter_from_motor_revolutions(
+                    trial.left_ticks_seen, trial.right_ticks_seen, trial.rtk_distance_m
+                )
+                if not math.isfinite(coefficient) or coefficient <= 0.0:
+                    raise RuntimeError("Odometry calibration produced an invalid ticks_per_meter.")
+                coefficients.append(coefficient)
+                reasons.append(f"Pass {index + 1}: ticks_per_meter -> {coefficient!r} from wheel rotations/reference distance.")
+            elif self._latest_gnss_status is not None:
+                raise RuntimeError("No trustworthy RTK/GNSS distance was accepted during the odometry pass.")
+            else:
+                reasons.append(f"Pass {index + 1}: reference unavailable, leaving ticks_per_meter unchanged.")
+            # All passes use the same live reference, including report-only runs.
+            if index < self._args.passes - 1:
+                if self._args.auto_turn:
+                    self._turn_around()
+                else:
+                    self._hold_zero(self._args.stop_between_tests)
+        recommended = sum(coefficients) / len(coefficients) if coefficients else params.ticks_per_meter
+        return OdometryParams(recommended), trials, reasons
 
     def _run_pid_session(
         self,
@@ -1099,24 +1129,13 @@ class DrivePidTuner(Node):
     # Parameter handling
     # ------------------------------------------------------------------
 
-    def _get_drive_pid_params(self) -> DrivePidParams:
+    def _get_drive_pid_params(self) -> DrivePidParams | OdometryParams:
         if self._args.hardware_backend == "mavros":
             ticks_future = self._odometry_parameter_client.get_parameters(["ticks_per_meter"])
             ticks_response = self._wait_for_future(
                 ticks_future, timeout_s=10.0, description="get MAVROS ticks_per_meter"
             )
-            scale_future = self._parameter_client.get_parameters(["manual_control_linear_scale"])
-            scale_response = self._wait_for_future(
-                scale_future, timeout_s=10.0, description="get MAVROS manual control scale"
-            )
-            return DrivePidParams(
-                ticks_per_meter=ticks_response.values[0].double_value,
-                wheel_pid_kp=0.0,
-                wheel_pid_ki=0.0,
-                wheel_pid_kd=0.0,
-                wheel_pid_integral_limit=0.0,
-                wheel_pid_pwm_per_mps=scale_response.values[0].double_value,
-            )
+            return OdometryParams(float(ticks_response.values[0].double_value))
         future = self._parameter_client.get_parameters(list(PARAMETER_NAMES))
         response = self._wait_for_future(future, timeout_s=10.0, description="get_parameters")
         values = {
@@ -1125,11 +1144,10 @@ class DrivePidTuner(Node):
         }
         return DrivePidParams.from_mapping(values)
 
-    def _apply_drive_pid_params(self, params: DrivePidParams) -> None:
+    def _apply_drive_pid_params(self, params: DrivePidParams | OdometryParams) -> None:
         if self._args.hardware_backend == "mavros":
             updates = (
                 (self._odometry_parameter_client, "ticks_per_meter", params.ticks_per_meter),
-                (self._parameter_client, "manual_control_linear_scale", params.wheel_pid_pwm_per_mps),
             )
             for client, name, value in updates:
                 future = client.set_parameters([Parameter(name, value=value)])
@@ -1162,19 +1180,21 @@ class DrivePidTuner(Node):
         self._backup_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "saved_at": _now_iso(),
-            "node": self._args.hardware_node,
+            "node": self._args.odometry_node if self._args.hardware_backend == "mavros" else self._args.hardware_node,
             "parameters": params.to_dict(),
         }
         self._backup_path.write_text(yaml.safe_dump(payload, sort_keys=True), encoding="utf-8")
         self.get_logger().info(f"Saved parameter backup to {self._backup_path}")
 
-    def _load_backup(self) -> DrivePidParams:
+    def _load_backup(self) -> DrivePidParams | OdometryParams:
         if not self._backup_path.exists():
             raise RuntimeError(f"Backup file not found: {self._backup_path}")
         payload = yaml.safe_load(self._backup_path.read_text(encoding="utf-8")) or {}
         parameters = payload.get("parameters")
         if not isinstance(parameters, dict):
             raise RuntimeError(f"Invalid backup file: {self._backup_path}")
+        if self._args.hardware_backend == "mavros":
+            return OdometryParams.from_mapping(parameters)
         return DrivePidParams.from_mapping(parameters)
 
     # ------------------------------------------------------------------
@@ -1498,8 +1518,12 @@ class DrivePidTuner(Node):
                         "with warning-level trial quality and conservative recommendations."
                         if recorder.phase == "pid" and analysis.severity == "severe" and not will_abort
                         else (
-                            "Live oscillation is treated as a calibration warning in ff mode."
-                            if recorder.phase == "feedforward" and not will_abort
+                            (
+                                "Live oscillation is treated as an odometry calibration warning."
+                                if recorder.phase == "odometry" else
+                                "Live oscillation is treated as a calibration warning in ff mode."
+                            )
+                            if recorder.phase in ("feedforward", "odometry") and not will_abort
                             else (
                                 "Peak live speed exceeded the runaway safety threshold, so the trial was aborted."
                                 if decision.unsafe_speed_detected
@@ -1713,7 +1737,7 @@ class DrivePidTuner(Node):
                     reason="odom_received_then_stopped",
                     message=f"Lost /wheel_odom updates during {recorder.name}.",
                 )
-        if recorder.phase == "feedforward" and self._latest_gnss_status is not None:
+        if recorder.phase in ("feedforward", "odometry") and self._latest_gnss_status is not None:
             gnss = self._latest_gnss_status
             require_fixed = not self._args.allow_rtk_float
             mode_ok = gnss.rtk_mode == GnssStatus.RTK_MODE_FIXED
@@ -2090,13 +2114,13 @@ class DrivePidTuner(Node):
         working_params: DrivePidParams,
         profile_reference_params: DrivePidParams | None,
     ) -> None:
-        print("=== DRIVE PID TUNER DRY RUN ===")
+        print("=== ODOMETRY CALIBRATION DRY RUN ===" if self._args.hardware_backend == "mavros" else "=== DRIVE PID TUNER DRY RUN ===")
         print(f"mode: {self._args.mode}")
         print(f"profile: {self._args.profile}")
         print(f"profile reset before pass 1: {'yes' if self._should_reset_to_profile() else 'no'}")
         print(f"cmd topic: {self._cmd_topic}")
         print(f"backup file: {self._backup_path}")
-        print(f"feedforward speeds: {[f'{s:.2f}' for s in self._phase_speeds()]}")
+        print(f"test speeds: {[f'{s:.2f}' for s in self._phase_speeds()]}")
         print(f"odom timeout: {self._args.odom_timeout:.2f} s")
         print(f"startup grace: {self._args.startup_grace:.2f} s")
         if self._latest_status is not None and self._latest_status.is_charging:
@@ -2117,7 +2141,7 @@ class DrivePidTuner(Node):
         reasons: list[str],
         profile_reference_params: DrivePidParams | None,
     ) -> None:
-        print("\n=== DRIVE PID TUNER SUMMARY ===")
+        print("\n=== ODOMETRY CALIBRATION SUMMARY ===" if self._args.hardware_backend == "mavros" else "\n=== DRIVE PID TUNER SUMMARY ===")
         print(f"mode: {self._args.mode}")
         print(f"profile: {self._args.profile}")
         print(f"profile reset before pass 1: {'yes' if self._should_reset_to_profile() else 'no'}")
@@ -2206,6 +2230,19 @@ class DrivePidTuner(Node):
         }
         if profile_reference_params is not None:
             payload["profile_reference_params"] = profile_reference_params.to_dict()
+        if self._args.hardware_backend == "mavros":
+            # mode=ff is retained only for the shared GUI/API report parser.
+            payload["hardware_backend"] = "mavros"
+            payload["calibration_scope"] = "odometry"
+            payload["hardware_node"] = self._args.odometry_node
+            payload["initial_baseline_source"] = "live_odometry"
+            payload["recommended"] = proposed_params.to_dict()
+            for entry, trial in zip(payload["trials"], trials):
+                entry.pop("integral_saturation_suspected", None)
+                if trial.rtk_accepted and trial.rtk_distance_m is not None:
+                    entry["ticks_per_meter"] = mavros_ticks_per_meter_from_motor_revolutions(
+                        trial.left_ticks_seen, trial.right_ticks_seen, trial.rtk_distance_m
+                    )
         if failure_message is not None:
             payload["failure_message"] = failure_message
         output_path.write_text(

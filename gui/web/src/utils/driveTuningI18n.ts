@@ -6,6 +6,11 @@ type RegexTranslation = {
 };
 
 const EXACT_TRANSLATIONS: Record<string, string> = {
+    "No odometry passes recorded yet.": "settingsDriveMotor.odometry.validation.noPasses",
+    "Odometry calibration did not complete successfully. Review the report failure details.": "settingsDriveMotor.odometry.validation.failed",
+    "An odometry pass stalled or produced no wheel motion. Check wheel observations and mechanics.": "settingsDriveMotor.odometry.validation.noMotion",
+    "No valid RTK/GNSS-backed odometry distance was accepted.": "settingsDriveMotor.odometry.validation.noReference",
+    "Some odometry passes lack a valid accepted RTK/GNSS distance. Review the measurement coverage.": "settingsDriveMotor.odometry.validation.incompleteReference",
     "Failed to fetch drive tuning status": "settingsDriveMotor.backend.statusFetchFailed",
     "rollback requires confirm=true": "settingsDriveMotor.backend.errors.rollbackRequiresConfirm",
     "a drive tuning job is already running": "settingsDriveMotor.backend.errors.jobAlreadyRunning",
@@ -34,6 +39,22 @@ const EXACT_TRANSLATIONS: Record<string, string> = {
 };
 
 const REGEX_TRANSLATIONS: RegexTranslation[] = [
+    {
+        pattern: /^Validated odometry with distance error ([0-9.]+)%\.$/,
+        render: (t, match) => t("settingsDriveMotor.odometry.validation.validated", { errorPct: match[1] }),
+    },
+    {
+        pattern: /^Odometry distance error ([0-9.]+)% exceeds the accepted 2.0% threshold\.$/,
+        render: (t, match) => t("settingsDriveMotor.odometry.validation.excessiveError", { errorPct: match[1] }),
+    },
+    {
+        pattern: /^Odometry calibration has a motion stability warning \(distance error ([0-9.]+)%\)\. Review the wheel measurements\.$/,
+        render: (t, match) => t("settingsDriveMotor.odometry.validation.stability", { errorPct: match[1] }),
+    },
+    {
+        pattern: /^Odometry calibration completed with measurement warnings \(distance error ([0-9.]+)%\)\. Review the pass notes\.$/,
+        render: (t, match) => t("settingsDriveMotor.odometry.validation.measurement", { errorPct: match[1] }),
+    },
     {
         pattern: /^drive tuning finished, but the report could not be read: (.+)$/,
         render: (t, match) => t("settingsDriveMotor.backend.errors.reportReadAfterRun", { error: match[1] }),

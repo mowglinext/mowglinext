@@ -12,7 +12,7 @@ import (
 
 // Keep the dedicated sidecar files synchronized after GUI saves as well as
 // installer runs. Defaults come from the template-derived GUI schema.
-func writeMavrosRuntimeConfig(db types.IDBProvider) error {
+func writeMavrosRuntimeConfig(db types.IDBProvider, calibrationTicks ...float64) error {
 	if activeHardwareBackendForDB(db) != "mavros" {
 		return nil
 	}
@@ -48,6 +48,41 @@ func writeMavrosRuntimeConfig(db types.IDBProvider) error {
 			return fmt.Errorf("invalid %s", canonical)
 		}
 		odometry[target] = yamlFloatScalar(v)
+	}
+	if len(calibrationTicks) > 0 {
+		// Calibration changes only the coefficient: preserve runtime geometry,
+		// all other plugin settings and the hardware_bridge file byte-for-byte.
+		path := filepath.Join(filepath.Dir(string(envPath)), "config", "mavros", "esc_wheel_odometry.yaml")
+		payload := map[string]any{"/**/esc_wheel_odometry": map[string]any{"ros__parameters": odometry}}
+		existing, readErr := os.ReadFile(path)
+		if readErr == nil {
+			if err := yaml.Unmarshal(existing, &payload); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(readErr) {
+			return readErr
+		}
+		node, ok := payload["/**/esc_wheel_odometry"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("invalid MAVROS odometry runtime node")
+		}
+		parameters, ok := node["ros__parameters"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("invalid MAVROS odometry runtime parameters")
+		}
+		value := calibrationTicks[0]
+		if !isFiniteFloat64(value) || value <= 0 {
+			return fmt.Errorf("invalid calibration ticks_per_meter")
+		}
+		parameters["ticks_per_meter"] = yamlFloatScalar(value)
+		out, err := yaml.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		return writePreservingPerms(path, out)
 	}
 	linearScale, ok := asFloat64(flat["wheel_pid_pwm_per_mps"])
 	if !ok || math.IsNaN(linearScale) || math.IsInf(linearScale, 0) || linearScale <= 0 {

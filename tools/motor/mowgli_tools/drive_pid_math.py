@@ -122,6 +122,20 @@ WHEEL_PID_KD_MAX = 50.0
 
 
 @dataclass(frozen=True)
+class OdometryParams:
+    """The only active calibration parameter for the MAVROS backend."""
+
+    ticks_per_meter: float
+
+    def to_dict(self) -> dict[str, float]:
+        return {"ticks_per_meter": _require_finite_float("ticks_per_meter", self.ticks_per_meter)}
+
+    @classmethod
+    def from_mapping(cls, mapping: dict[str, Any]) -> "OdometryParams":
+        return cls(_require_finite_float("ticks_per_meter", mapping["ticks_per_meter"]))
+
+
+@dataclass(frozen=True)
 class DrivePidParams:
     ticks_per_meter: float
     wheel_pid_kp: float

@@ -774,7 +774,11 @@ export const useSettingsManager = () => {
     );
 
     return {
-        sections: settingsSectionsForBackend(SECTION_DEFINITIONS, hardware.backend),
+        sections: settingsSectionsForBackend(SECTION_DEFINITIONS, hardware.backend).map(section =>
+            hardware.backend === "mavros" && section.id === "drive_motor"
+                ? { ...section, description: "settingsDriveMotor.odometry.sectionDescription" }
+                : section
+        ),
         hardwareBackend: hardware,
         values: localValues,
         savedValues,
