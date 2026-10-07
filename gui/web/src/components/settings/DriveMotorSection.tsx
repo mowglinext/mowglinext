@@ -38,6 +38,7 @@ type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
     acceptPersistedValues?: (values: Record<string, any>) => void;
+    hardwareBackend?: string;
 };
 
 const DRIVE_PARAM_KEYS = [
@@ -106,7 +107,7 @@ const pickPersistedDriveValues = (report: Record<string, any> | undefined) => {
     return picked;
 };
 
-export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPersistedValues }) => {
+export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPersistedValues, hardwareBackend = "mowgli" }) => {
     const { t } = useTranslation();
     const { formatAbsolute } = useTimeFormat();
     // "never" rather than the em-dash placeholder: an absent calibration
@@ -114,6 +115,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
     const formatJobTimestamp = (value?: string): string =>
         value ? formatAbsolute(value) : t("settingsDriveMotor.common.never");
     const { notification, modal } = App.useApp();
+    const isMavros = hardwareBackend === "mavros";
     const emergency = useEmergency();
     const status = useStatus();
     const dockingSensor = useDockingSensor();
@@ -401,12 +403,12 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                 <Text type="secondary">{translatedFeedForwardSummary}</Text>
                             </Space>
                         </Descriptions.Item>
-                        <Descriptions.Item label={t("settingsDriveMotor.summary.pid.label")}>
+                        {!isMavros && <Descriptions.Item label={t("settingsDriveMotor.summary.pid.label")}>
                             <Space wrap>
                                 {statusTag(t, pidSummary?.status ?? "not_validated")}
                                 <Text type="secondary">{translatedPidSummary}</Text>
                             </Space>
-                        </Descriptions.Item>
+                        </Descriptions.Item>}
                         <Descriptions.Item label={t("settingsDriveMotor.summary.currentJob.label")}>
                             <Space wrap>
                                 {jobTag(t, tuningStatus?.job?.state)}
@@ -434,9 +436,9 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         <Button type="primary" onClick={() => setFfOpen(true)} disabled={runningJob || isEmergencyActive}>
                             {t("settingsDriveMotor.actions.startFeedForward")}
                         </Button>
-                        <Button onClick={() => setPidOpen(true)} disabled={runningJob || isEmergencyActive}>
+                        {!isMavros && <Button onClick={() => setPidOpen(true)} disabled={runningJob || isEmergencyActive}>
                             {t("settingsDriveMotor.actions.startPid")}
-                        </Button>
+                        </Button>}
                         <Button icon={<FileTextOutlined />} onClick={openLatestReport} loading={loadingLatestReport}>
                             {t("settingsDriveMotor.actions.viewLastReport")}
                         </Button>
@@ -480,7 +482,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                 </Space>
             </Card>
 
-            <Card size="small" style={{ marginBottom: 16 }}>
+            {!isMavros && <Card size="small" style={{ marginBottom: 16 }}>
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
                     <div>
                         <Text strong style={{ fontSize: 14 }}>
@@ -536,7 +538,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         </Row>
                     </Form>
                 </Space>
-            </Card>
+            </Card>}
 
             <Card size="small" title={t("settingsDriveMotor.feedforward")} style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
@@ -549,8 +551,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                 <InputNumber aria-label={t("settingsDriveMotor.pwmPerMps") + ", PWM"} aria-description={t("settingsDriveMotor.pwmPerMpsTooltip")}  id="setting-wheel_pid_pwm_per_mps"
                                     value={values.wheel_pid_pwm_per_mps}
                                     onChange={(v) => onChange("wheel_pid_pwm_per_mps", v)}
-                                    min={50} max={600} step={0.001} precision={3}
-                                    style={{ width: "100%" }} addonAfter="PWM"
+                                    min={50} max={isMavros ? 4000 : 600} step={0.001} precision={3}
+                                    style={{ width: "100%" }} addonAfter={isMavros ? "MANUAL/m/s" : "PWM"}
                                 />
                             </Form.Item>
                         </Col>
@@ -678,7 +680,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                 </Space>
             </Modal>
 
-            <Modal
+            {!isMavros && <Modal
                 title={t("settingsDriveMotor.pidModal.title")}
                 open={pidOpen}
                 onCancel={() => setPidOpen(false)}
@@ -784,7 +786,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         />
                     )}
                 </Space>
-            </Modal>
+            </Modal>}
 
             <Modal
                 title={t("settingsDriveMotor.report.title")}

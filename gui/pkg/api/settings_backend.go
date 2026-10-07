@@ -32,10 +32,10 @@ var hardwareParameterRoutes = map[string]map[string]HardwareParameterRoute{
 		"wheel_pid_pwm_per_mps":    {Parameter: "hardware_bridge.wheel_pid_pwm_per_mps", Runtime: "available"},
 	},
 	"mavros": {
-		"ticks_per_meter":                  {Parameter: "mavros/esc_wheel_odometry.ticks_per_meter", Runtime: "available"},
-		"wheel_track":                      {Parameter: "mavros/esc_wheel_odometry.track_width_m", Runtime: "available"},
-		"mavros_manual_control_enabled":    {Parameter: "hardware_bridge.manual_control_enabled", Runtime: "available"},
-		"mavros_wheel_lift_safety_enabled": {Parameter: "hardware_bridge.wheel_lift_safety_enabled", Runtime: "available"},
+		"ticks_per_meter":       {Parameter: "mavros/esc_wheel_odometry.ticks_per_meter", Runtime: "available"},
+		"wheel_track":           {Parameter: "mavros/esc_wheel_odometry.track_width_m", Runtime: "available"},
+		"wheel_pid_pwm_per_mps": {Parameter: "hardware_bridge.manual_control_linear_scale", Runtime: "available"},
+		"mowing_enabled":        {Parameter: "hardware_bridge.mowing_enabled", Runtime: "restart_required"},
 	},
 }
 

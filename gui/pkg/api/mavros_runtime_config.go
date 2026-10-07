@@ -49,13 +49,17 @@ func writeMavrosRuntimeConfig(db types.IDBProvider) error {
 		}
 		odometry[target] = yamlFloatScalar(v)
 	}
-	bridge := map[string]any{"blade_control_enabled": false}
-	for canonical, target := range map[string]string{"mavros_manual_control_enabled": "manual_control_enabled", "mavros_wheel_lift_safety_enabled": "wheel_lift_safety_enabled"} {
-		v, ok := flat[canonical].(bool)
-		if !ok {
-			return fmt.Errorf("invalid %s", canonical)
-		}
-		bridge[target] = v
+	linearScale, ok := asFloat64(flat["wheel_pid_pwm_per_mps"])
+	if !ok || math.IsNaN(linearScale) || math.IsInf(linearScale, 0) || linearScale <= 0 {
+		return fmt.Errorf("invalid wheel_pid_pwm_per_mps")
+	}
+	mowingEnabled, ok := flat["mowing_enabled"].(bool)
+	if !ok {
+		return fmt.Errorf("invalid mowing_enabled")
+	}
+	bridge := map[string]any{
+		"manual_control_linear_scale": yamlFloatScalar(linearScale),
+		"mowing_enabled":              mowingEnabled,
 	}
 	dir := filepath.Join(filepath.Dir(string(envPath)), "config", "mavros")
 	if err = os.MkdirAll(dir, 0755); err != nil {

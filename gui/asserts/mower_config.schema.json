@@ -99,18 +99,6 @@
           "default": 399.0,
           "description": "Encoder ticks per metre of wheel travel."
         },
-        "mavros_manual_control_enabled": {
-          "type": "boolean",
-          "title": "MAVROS traction commands",
-          "default": false,
-          "description": "Explicit opt-in to traction commands. Does not arm the FCU or bypass its safety switch."
-        },
-        "mavros_wheel_lift_safety_enabled": {
-          "type": "boolean",
-          "title": "MAVROS wheel lift protection",
-          "default": true,
-          "description": "Enable wheel lift emergency protection; telemetry remains visible when disabled."
-        },
         "tool_width": {
           "type": "number",
           "title": "Mowing Tool Width",

@@ -50,6 +50,7 @@ from .drive_pid_math import (
     integrate_distance,
     is_warning_oscillation_severity,
     max_oscillation_severity,
+    mavros_ticks_per_meter_from_motor_revolutions,
     oscillation_severity_rank,
     recommend_drive_pid_params,
     recommend_pid_only_params,
@@ -207,6 +208,10 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="TwistStamped topic used for the test commands. Defaults to /cmd_vel_tuning so drive tuning does not share /cmd_vel_teleop.")
     parser.add_argument("--hardware-node", type=str, default="hardware_bridge",
                         help="Node name used by the hardware parameter client.")
+    parser.add_argument("--hardware-backend", choices=("mowgli", "mavros"), default="mowgli",
+                        help="Parameter mapping used by the active hardware backend.")
+    parser.add_argument("--odometry-node", type=str, default="/mavros/esc_wheel_odometry",
+                        help="MAVROS ESC odometry node holding ticks_per_meter.")
     parser.add_argument("--rtk-accuracy-threshold", type=float, default=0.05,
                         help="Maximum horizontal accuracy (m) for RTK validation.")
     parser.add_argument("--allow-rtk-float", action="store_true",
@@ -276,6 +281,11 @@ class DrivePidTuner(Node):
         self._failure_status_snapshot: dict[str, Any] | None = None
 
         self._parameter_client = AsyncParameterClient(self, args.hardware_node)
+        self._odometry_parameter_client = (
+            AsyncParameterClient(self, args.odometry_node)
+            if args.hardware_backend == "mavros"
+            else self._parameter_client
+        )
         self._high_level_client = self.create_client(
             HighLevelControl,
             "/behavior_tree_node/high_level_control",
@@ -431,6 +441,8 @@ class DrivePidTuner(Node):
     # ------------------------------------------------------------------
 
     def run(self) -> int:
+        if self._args.hardware_backend == "mavros" and self._args.mode != "ff" and not self._args.rollback:
+            raise RuntimeError("The MAVROS backend supports feed-forward/odometry calibration only.")
         self.get_logger().info(
             f"Using cmd_vel topic {self._cmd_topic} for mode {self._args.mode}."
         )
@@ -589,6 +601,11 @@ class DrivePidTuner(Node):
     def _wait_for_initial_state(self) -> None:
         if not self._parameter_client.wait_for_services(timeout_sec=10.0):
             raise RuntimeError(f"Parameter services for {self._args.hardware_node} are not ready.")
+        if (
+            self._args.hardware_backend == "mavros"
+            and not self._odometry_parameter_client.wait_for_services(timeout_sec=10.0)
+        ):
+            raise RuntimeError(f"Parameter services for {self._args.odometry_node} are not ready.")
         deadline = time.monotonic() + 8.0
         while time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
@@ -940,15 +957,36 @@ class DrivePidTuner(Node):
             )
             next_ticks = params.ticks_per_meter
             if trial.rtk_accepted and trial.rtk_distance_m is not None and trial.odom_distance_m is not None:
-                next_ticks = clamp(
-                    params.ticks_per_meter * (trial.odom_distance_m / max(trial.rtk_distance_m, 1e-6)),
-                    100.0,
-                    2500.0,
-                )
-                reasons.append(
-                    f"Pass {pass_index + 1}: ticks_per_meter -> {next_ticks:.3f} from odom/reference "
-                    f"{trial.odom_distance_m:.3f}/{trial.rtk_distance_m:.3f} m."
-                )
+                if self._args.hardware_backend == "mavros":
+                    motor_revolutions = 0.5 * (
+                        abs(trial.left_ticks_seen) + abs(trial.right_ticks_seen)
+                    ) / 1000.0
+                    next_ticks = clamp(
+                        mavros_ticks_per_meter_from_motor_revolutions(
+                            trial.left_ticks_seen,
+                            trial.right_ticks_seen,
+                            trial.rtk_distance_m,
+                        ),
+                        1.0,
+                        2500.0,
+                    )
+                    radius = self._robot_hardware_config.wheel_radius_m
+                    radius_note = "unknown wheel radius" if radius is None else f"wheel radius {radius:.4f} m"
+                    reasons.append(
+                        f"Pass {pass_index + 1}: ticks_per_meter -> {next_ticks:.3f} from "
+                        f"{motor_revolutions:.3f} integrated ESC motor revolutions (RPM), "
+                        f"{trial.rtk_distance_m:.3f} m RTK, {radius_note}."
+                    )
+                else:
+                    next_ticks = clamp(
+                        params.ticks_per_meter * (trial.odom_distance_m / max(trial.rtk_distance_m, 1e-6)),
+                        100.0,
+                        2500.0,
+                    )
+                    reasons.append(
+                        f"Pass {pass_index + 1}: ticks_per_meter -> {next_ticks:.3f} from odom/reference "
+                        f"{trial.odom_distance_m:.3f}/{trial.rtk_distance_m:.3f} m."
+                    )
             elif self._latest_gnss_status is not None:
                 raise RuntimeError(
                     "RTK/GPS was present but no trustworthy ground-distance estimate was accepted during the feed-forward pass."
@@ -968,7 +1006,7 @@ class DrivePidTuner(Node):
             next_pwm = clamp(
                 params.wheel_pid_pwm_per_mps * (target_speed / max(measured_speed, 1e-6)),
                 50.0,
-                600.0,
+                4000.0 if self._args.hardware_backend == "mavros" else 600.0,
             )
             reasons.append(
                 f"Pass {pass_index + 1}: wheel_pid_pwm_per_mps -> {next_pwm:.3f} from target/measured "
@@ -1062,6 +1100,23 @@ class DrivePidTuner(Node):
     # ------------------------------------------------------------------
 
     def _get_drive_pid_params(self) -> DrivePidParams:
+        if self._args.hardware_backend == "mavros":
+            ticks_future = self._odometry_parameter_client.get_parameters(["ticks_per_meter"])
+            ticks_response = self._wait_for_future(
+                ticks_future, timeout_s=10.0, description="get MAVROS ticks_per_meter"
+            )
+            scale_future = self._parameter_client.get_parameters(["manual_control_linear_scale"])
+            scale_response = self._wait_for_future(
+                scale_future, timeout_s=10.0, description="get MAVROS manual control scale"
+            )
+            return DrivePidParams(
+                ticks_per_meter=ticks_response.values[0].double_value,
+                wheel_pid_kp=0.0,
+                wheel_pid_ki=0.0,
+                wheel_pid_kd=0.0,
+                wheel_pid_integral_limit=0.0,
+                wheel_pid_pwm_per_mps=scale_response.values[0].double_value,
+            )
         future = self._parameter_client.get_parameters(list(PARAMETER_NAMES))
         response = self._wait_for_future(future, timeout_s=10.0, description="get_parameters")
         values = {
@@ -1071,6 +1126,24 @@ class DrivePidTuner(Node):
         return DrivePidParams.from_mapping(values)
 
     def _apply_drive_pid_params(self, params: DrivePidParams) -> None:
+        if self._args.hardware_backend == "mavros":
+            updates = (
+                (self._odometry_parameter_client, "ticks_per_meter", params.ticks_per_meter),
+                (self._parameter_client, "manual_control_linear_scale", params.wheel_pid_pwm_per_mps),
+            )
+            for client, name, value in updates:
+                future = client.set_parameters([Parameter(name, value=value)])
+                response = self._wait_for_future(
+                    future, timeout_s=10.0, description=f"set MAVROS {name}"
+                )
+                failures = [
+                    result.reason or "unknown reason"
+                    for result in response.results
+                    if not result.successful
+                ]
+                if failures:
+                    raise RuntimeError(f"Failed to apply MAVROS {name}: {failures}")
+            return
         ros_params = [
             Parameter(name, value=value)
             for name, value in params.to_dict().items()

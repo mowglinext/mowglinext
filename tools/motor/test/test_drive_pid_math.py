@@ -27,12 +27,25 @@ from mowgli_tools.drive_pid_math import (
     evaluate_live_oscillation_abort,
     finite_or_none,
     half_turn_target_yaw,
+    mavros_ticks_per_meter_from_motor_revolutions,
     recommend_drive_pid_params,
     recommend_pid_only_params,
     sanitize_finite_data,
     wrap_angle_rad,
     yaw_error_to_target,
 )
+
+
+def test_mavros_scale_uses_integrated_motor_revolutions_and_rtk_distance() -> None:
+    # WheelTick carries motor revolutions scaled by 1000. Unequal wheels are
+    # averaged, so 12 and 10 revolutions over 2 m produce 5.5 rev/m.
+    assert mavros_ticks_per_meter_from_motor_revolutions(12000, 10000, 2.0) == 5.5
+    assert mavros_ticks_per_meter_from_motor_revolutions(-12000, -10000, 2.0) == 5.5
+
+
+def test_mavros_scale_rejects_nonpositive_rtk_distance() -> None:
+    with pytest.raises(ValueError):
+        mavros_ticks_per_meter_from_motor_revolutions(1000, 1000, 0.0)
 
 
 def _params() -> DrivePidParams:

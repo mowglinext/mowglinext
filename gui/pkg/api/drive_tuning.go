@@ -323,9 +323,9 @@ func DriveTuningRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider, dockerP
 	}
 	group := r.Group("/tools/drive")
 	backendGuard := requireMowgliHardwareBackend(dbProvider)
-	group.POST("/ff-calibration/start", backendGuard, manager.postFeedForwardStart())
+	group.POST("/ff-calibration/start", manager.postFeedForwardStart())
 	group.POST("/pid-tuning/start", backendGuard, manager.postPIDStart())
-	group.POST("/tuning/rollback", backendGuard, manager.postRollback())
+	group.POST("/tuning/rollback", manager.postRollback())
 	group.GET("/tuning/status", manager.getStatus())
 	group.GET("/tuning/report/latest", manager.getLatestReport())
 }
@@ -343,7 +343,7 @@ func (m *driveTuningManager) postFeedForwardStart() gin.HandlerFunc {
 			return
 		}
 
-		commandArgs, reportPath := buildFeedForwardCommand(normalized)
+		commandArgs, reportPath := buildFeedForwardCommand(normalized, activeHardwareBackendForDB(m.dbProvider))
 		job, err := m.startJob(driveTuningModeFeedForward, normalized.Apply, reportPath, commandArgs)
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -423,7 +423,7 @@ func (m *driveTuningManager) postRollback() gin.HandlerFunc {
 			return
 		}
 
-		command := buildRollbackExecCommand()
+		command := buildRollbackExecCommand(activeHardwareBackendForDB(m.dbProvider))
 		execution, err := m.dockerProvider.ContainerExec(ctx, containerDetails.ID, types.ContainerExecSpec{
 			Cmd: command,
 			Env: []string{
@@ -793,7 +793,7 @@ func normalizePIDRequest(req drivePIDTuningStartRequest) (drivePIDTuningStartReq
 	return req, nil
 }
 
-func buildFeedForwardCommand(req driveFFCalibrationStartRequest) ([]string, string) {
+func buildFeedForwardCommand(req driveFFCalibrationStartRequest, backend ...string) ([]string, string) {
 	reportPath := driveReportPath(driveTuningModeFeedForward)
 	args := []string{
 		"--mode", "ff",
@@ -808,6 +808,13 @@ func buildFeedForwardCommand(req driveFFCalibrationStartRequest) ([]string, stri
 		"--turn-direction", req.TurnDirection,
 		"--output", reportPath,
 		"--backup-file", driveTuningBackupFile,
+	}
+	if len(backend) > 0 && backend[0] == "mavros" {
+		args = append(args,
+			"--hardware-backend", "mavros",
+			"--hardware-node", "/hardware_bridge",
+			"--odometry-node", "/mavros/esc_wheel_odometry",
+		)
 	}
 	// Deliberately NO --custom-kp/ki/kd/integral-limit: the FF run drives on
 	// the live hardware_bridge gains (template defaults unless the operator
@@ -848,10 +855,17 @@ func buildPIDCommand(req drivePIDTuningStartRequest) ([]string, string) {
 	return buildDriveTuningExecCommand(args), reportPath
 }
 
-func buildRollbackExecCommand() []string {
+func buildRollbackExecCommand(backend ...string) []string {
 	args := []string{
 		"--rollback",
 		"--backup-file", driveTuningBackupFile,
+	}
+	if len(backend) > 0 && backend[0] == "mavros" {
+		args = append(args,
+			"--hardware-backend", "mavros",
+			"--hardware-node", "/hardware_bridge",
+			"--odometry-node", "/mavros/esc_wheel_odometry",
+		)
 	}
 	return buildDriveTuningExecCommand(args)
 }
