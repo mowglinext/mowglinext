@@ -7,6 +7,8 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -141,6 +143,13 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
                     std::placeholders::_1,
                     std::placeholders::_2,
                     std::placeholders::_3));
+  preview_coverage_service_ = create_service<mowgli_interfaces::srv::PreviewCoverage>(
+      "~/preview_coverage",
+      std::bind(&CoverageServer::previewCoverage,
+                this,
+                std::placeholders::_1,
+                std::placeholders::_2,
+                std::placeholders::_3));
   correct_recorded_obstacle_service_ =
       create_service<mowgli_interfaces::srv::CorrectRecordedObstacle>(
           "~/correct_recorded_obstacle",
@@ -181,6 +190,7 @@ nav2::CallbackReturn CoverageServer::on_cleanup(const rclcpp_lifecycle::State& /
   RCLCPP_INFO(get_logger(), "Cleaning up %s", get_name());
   action_server_.reset();
   preview_obstacle_clearance_service_.reset();
+  preview_coverage_service_.reset();
   correct_recorded_obstacle_service_.reset();
   return nav2::CallbackReturn::SUCCESS;
 }
@@ -444,6 +454,44 @@ double pathLength(const nav_msgs::msg::Path& path)
 
 }  // namespace
 
+namespace
+{
+// The operator's start point as a planner hint. A point that is not a finite pair is
+// no hint at all (the planner then starts where it always did) rather than an error.
+std::optional<std::pair<double, double>> startHint(bool has_start_point, double x, double y)
+{
+  if (!has_start_point || !std::isfinite(x) || !std::isfinite(y))
+  {
+    return std::nullopt;
+  }
+  return std::make_pair(x, y);
+}
+}  // namespace
+
+CoverageServer::LivePlanParams CoverageServer::readLivePlanParams()
+{
+  LivePlanParams live;
+  // chassis_safety_inset is how far INSIDE the recorded boundary the outermost
+  // headland ring's centerline sits; negative values are nonsensical (the
+  // on-the-line outward expansion is applied inside planBoustrophedon), so clamp
+  // at 0. See planCoverage for why there is deliberately no robot_width/2 floor.
+  live.effective_inset = std::max(get_parameter("chassis_safety_inset").as_double(), 0.0);
+  live.min_swath_length = get_parameter("min_swath_length").as_double();
+  // Drawn-obstacle margin. The clamp mirrors the launch-injection band so a stray
+  // `ros2 param set` cannot inflate holes past the field.
+  live.obstacle_margin = std::clamp(get_parameter("obstacle_margin").as_double(), 0.0, 1.0);
+  // Robot's minimum trackable turning radius — floors both the ring-corner
+  // fillets inside the planner and the turn-around connectors.
+  live.min_turning_radius = get_parameter("min_turning_radius").as_double();
+  // How many headland passes a turn-around connector may cross (issue #497).
+  live.connector_max_headland_passes =
+      static_cast<int>(get_parameter("connector_max_headland_passes").as_int());
+  // Perimeter/headland travel winding (#335): 0 = planner default, 1 = CW,
+  // 2 = CCW.
+  live.ring_direction = static_cast<int>(get_parameter("ring_direction").as_int());
+  return live;
+}
+
 void CoverageServer::planCoverage()
 {
   const auto start_time = now();
@@ -469,12 +517,38 @@ void CoverageServer::planCoverage()
   try
   {
     // Geometry knobs read LIVE so they're `ros2 param set`-tunable between
-    // plans (field iteration without a node restart).
-    const double configured_inset = get_parameter("chassis_safety_inset").as_double();
-    const double min_swath_length = get_parameter("min_swath_length").as_double();
+    // plans (field iteration without a node restart). One shared reader with
+    // previewCoverage, so the GUI's line preview plans with exactly these.
+    // One planner run at a time: a GUI line preview (previewCoverage) and a real
+    // plan never run Fields2Cover/GDAL side by side.
+    const std::lock_guard<std::mutex> plan_lock(plan_mutex_);
+    const LivePlanParams live = readLivePlanParams();
+    const double min_swath_length = live.min_swath_length;
     // Perimeter/headland travel winding (#335): 0 = planner default, 1 = CW,
-    // 2 = CCW. Read live so it is field-tunable per plan.
-    const int ring_direction = static_cast<int>(get_parameter("ring_direction").as_int());
+    // 2 = CCW. Read live so it is field-tunable per plan. A goal may carry its
+    // own winding for ONE area (the behavior tree sets it from the area's
+    // per-area override); a goal that does not — every goal built before the
+    // field existed — plans with the live parameter, exactly as before. An
+    // unknown value is ignored rather than failing the plan or guessing.
+    // Where the route starts, if the operator chose (the outermost ring is then driven
+    // first, from that point). Without one, the planner starts where it always did.
+    const auto start_hint = startHint(goal->has_start_point, goal->start_x, goal->start_y);
+    int ring_direction = live.ring_direction;
+    if (goal->override_ring_direction)
+    {
+      if (goal->ring_direction >= 0 && goal->ring_direction <= 2)
+      {
+        ring_direction = goal->ring_direction;
+      }
+      else
+      {
+        RCLCPP_WARN(get_logger(),
+                    "plan_coverage: ignoring unknown per-area ring_direction %d, using the "
+                    "live parameter (%d)",
+                    goal->ring_direction,
+                    live.ring_direction);
+      }
+    }
     const double mow_angle_rad =
         (goal->mow_angle_deg < 0.0) ? -1.0 : goal->mow_angle_deg * M_PI / 180.0;
 
@@ -493,24 +567,22 @@ void CoverageServer::planCoverage()
     // guarantee holds through U-turns too (a turn no longer bulges op_width/2 past
     // the perimeter ring). Negative values are nonsensical (the on-the-line
     // outward expansion is applied inside planBoustrophedon), so clamp at 0.
-    const double effective_inset = std::max(configured_inset, 0.0);
+    const double effective_inset = live.effective_inset;
 
     // Drawn-obstacle margin, read live like the other geometry knobs. Clamp
     // mirrors the launch-injection band so a stray `ros2 param set` cannot
     // inflate holes past the field.
-    const double obstacle_margin =
-        std::clamp(get_parameter("obstacle_margin").as_double(), 0.0, 1.0);
+    const double obstacle_margin = live.obstacle_margin;
 
     f2c::types::Cell cell = buildCellFromGoal(*goal, obstacle_margin);
 
     // Robot's minimum trackable turning radius — floors both the ring-corner
     // fillets inside the planner and the turn-around connectors below. Read
     // live so it stays field-tunable per plan.
-    const double min_turning_radius = get_parameter("min_turning_radius").as_double();
+    const double min_turning_radius = live.min_turning_radius;
     // How many headland passes a turn-around connector may cross (issue
     // #497), read live like the other connector geometry knobs.
-    const int connector_max_headland_passes =
-        static_cast<int>(get_parameter("connector_max_headland_passes").as_int());
+    const int connector_max_headland_passes = live.connector_max_headland_passes;
 
     const auto t_plan0 = now();
     BoustrophedonPlan plan = planBoustrophedon(cell,
@@ -523,7 +595,8 @@ void CoverageServer::planCoverage()
                                                ring_direction,
                                                min_turning_radius,
                                                goal->perpendicular,
-                                               connector_max_headland_passes);
+                                               connector_max_headland_passes,
+                                               start_hint);
     const double plan_ms = 1e3 * (now() - t_plan0).seconds();
 
     // Instrumentation (no behaviour change): surface every piece the planner
@@ -693,7 +766,9 @@ void CoverageServer::planCoverage()
                                                   kConnectorStep,
                                                   &connector_stats,
                                                   swath_turn_boundary,
-                                                  pivot_limits);
+                                                  pivot_limits,
+                                                  /*pin_first_subpath=*/start_hint.has_value() &&
+                                                      !plan.rings.empty());
     const double subpaths_ms = 1e3 * (now() - t_subpaths0).seconds();
 
     result->full_path.header = header;
@@ -981,6 +1056,115 @@ void CoverageServer::previewObstacleClearance(
       out.points.push_back(pt);
     }
     response->buffered.push_back(std::move(out));
+  }
+}
+
+void CoverageServer::previewCoverage(
+    const std::shared_ptr<rmw_request_id_s> /*request_header*/,
+    const std::shared_ptr<mowgli_interfaces::srv::PreviewCoverage::Request> request,
+    std::shared_ptr<mowgli_interfaces::srv::PreviewCoverage::Response> response)
+{
+  try
+  {
+    const std::lock_guard<std::mutex> plan_lock(plan_mutex_);
+    const LivePlanParams live = readLivePlanParams();
+
+    // < 0 asks for whatever a real plan would use right now.
+    const int ring_direction =
+        request->ring_direction < 0 ? live.ring_direction : request->ring_direction;
+    if (ring_direction > 2)
+    {
+      response->success = false;
+      response->message =
+          "ring_direction must be 0 (planner default), 1 (clockwise) or 2 (counter-clockwise)";
+      return;
+    }
+
+    // A PlanCoverage goal is only the carrier here: buildCellFromGoal and
+    // planBoustrophedon are the exact calls planCoverage makes, so the preview
+    // cannot drift from what a real plan produces.
+    mowgli_interfaces::action::PlanCoverage::Goal goal;
+    goal.outer_boundary = request->outer_boundary;
+    goal.obstacles = request->obstacles;
+    goal.mow_angle_deg = request->mow_angle_deg;
+    goal.perpendicular = request->perpendicular;
+    const double mow_angle_rad =
+        (goal.mow_angle_deg < 0.0) ? -1.0 : goal.mow_angle_deg * M_PI / 180.0;
+
+    const f2c::types::Cell cell = buildCellFromGoal(goal, live.obstacle_margin);
+    const BoustrophedonPlan plan =
+        planBoustrophedon(cell,
+                          operation_width_,
+                          default_headland_width_,
+                          num_headland_passes_,
+                          live.effective_inset,
+                          mow_angle_rad,
+                          live.min_swath_length,
+                          ring_direction,
+                          live.min_turning_radius,
+                          goal.perpendicular,
+                          live.connector_max_headland_passes,
+                          startHint(request->has_start_point, request->start_x, request->start_y));
+
+    if (plan.rings.empty() && plan.swaths.empty())
+    {
+      response->success = false;
+      response->message = "field too small after insets (chassis_safety_inset=" +
+                          std::to_string(live.effective_inset) + "m)";
+      return;
+    }
+
+    const CoveragePreview preview = summarisePlanForPreview(plan);
+    auto to_polygon = [](const std::vector<std::pair<double, double>>& pts)
+    {
+      geometry_msgs::msg::Polygon polygon;
+      polygon.points.reserve(pts.size());
+      for (const auto& pt : pts)
+      {
+        geometry_msgs::msg::Point32 p;
+        p.x = static_cast<float>(pt.first);
+        p.y = static_cast<float>(pt.second);
+        polygon.points.push_back(p);
+      }
+      return polygon;
+    };
+    response->rings.reserve(preview.rings.size());
+    for (const auto& ring : preview.rings)
+    {
+      response->rings.push_back(to_polygon(ring));
+    }
+    response->swaths.reserve(preview.swaths.size());
+    for (const auto& swath : preview.swaths)
+    {
+      response->swaths.push_back(to_polygon({swath.first, swath.second}));
+    }
+    response->mow_angle_deg = preview.swath_angle_deg;
+    response->headland_passes = preview.headland_passes;
+    response->ring_direction = ring_direction;
+    response->planned_fraction = preview.planned_fraction;
+    response->field_area_m2 = preview.field_area_m2;
+    response->dropped_pieces = static_cast<uint32_t>(preview.dropped_pieces);
+    // Where the route really starts: the outermost ring's first point, which is the
+    // operator's start point snapped onto that ring. With the rings off there is no
+    // ring to start on, so the hint does nothing and the route starts at the first swath.
+    response->start_adjustable = !plan.rings.empty();
+    if (!plan.rings.empty() && !plan.rings.front().empty())
+    {
+      response->start_x = plan.rings.front().front().first;
+      response->start_y = plan.rings.front().front().second;
+    }
+    else if (!plan.swaths.empty())
+    {
+      response->start_x = plan.swaths.front().first.first;
+      response->start_y = plan.swaths.front().first.second;
+    }
+    response->success = true;
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_WARN(get_logger(), "preview_coverage: %s", e.what());
+    response->success = false;
+    response->message = e.what();
   }
 }
 

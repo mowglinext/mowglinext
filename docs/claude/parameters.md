@@ -133,7 +133,7 @@ The five `wheel_pid_*` defaults are pinned in lockstep across template ↔ `mowg
 | `local_inflation_inscribed_radius` | -1.0 (derive from footprint) | `local_costmap.inflation_layer.custom_inscribed_radius` `navigation.launch.py`; when >= 0 it also replaces the chassis-derived `inflation_radius` floor | Obstacles | launch |
 | `undock_distance` (L432) | 1.5 | BT BackUp `full_system.launch.py:232`; dock-calib `:492` | Docking | launch |
 | `undock_speed` (L433) | 0.16 | BT BackUp `full_system.launch.py:231`; dock-calib `:493` | Docking | launch |
-| `mow_angle_deg` (L338) | -1.0 (auto) | BT `full_system.launch.py:250` → `PlanCoverage` goal | Mowing | launch |
+| `mow_angle_deg` (L338) | -1.0 (auto) | BT `full_system.launch.py:250` → `PlanCoverage` goal; an area can override it (`MapArea.has_mow_angle`, Map page "mowing lines", `area_coverage_lines.hpp`) | Mowing | launch |
 | `mow_cross_hatch` | false | BT → per-area persisted phase → `PlanCoverage.perpendicular` | Mowing | launch; next-area overrides use `coverage_orientation` service |
 
 ### LocalizationGuard (BT pause/resume on GNSS quality)

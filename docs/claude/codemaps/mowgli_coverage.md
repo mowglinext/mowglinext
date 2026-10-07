@@ -31,8 +31,32 @@ below predates this change.
   exact deterministic replay, wider-turn efficiency, and protected ring winding.
 - `test/fixtures/isabey.hpp`: float32 map-frame geometry from the supplied 2026-10-05
   export; raw outer ring plus ten active obstacles, no pending proposals or dock data.
-- CMake registers `test_coverage_planning`, `test_pivot_joins`, and
-  `test_coverage_route`. Run with `colcon test --packages-select mowgli_coverage
+- **Line preview (GUI map editor "Mowing lines").** `~/preview_coverage`
+  (`mowgli_interfaces/srv/PreviewCoverage.srv`, `CoverageServer::previewCoverage`) is a
+  read-only dry run of the SAME `buildCellFromGoal` + `planBoustrophedon` calls a real
+  plan makes, taking the swath angle, cross-hatch flag and perimeter winding from the
+  request (`ring_direction < 0` = the live parameter) instead of the saved settings. The
+  geometry knobs come from the one `readLivePlanParams()` that `planCoverage` also uses,
+  so the preview cannot drift from a real plan; a `plan_mutex_` keeps the two from
+  running Fields2Cover side by side. It returns rings and swaths in DRIVE ORDER
+  (`summarisePlanForPreview` simplifies the 0.10 m-dense rings with Douglas-Peucker at
+  2 cm and folds the heading into [0, 180)); turn-around connectors are deliberately not
+  part of it. Nothing is queued and the robot does not move. GUI route `preview_coverage`,
+  overlay `useCoveragePreview` + `CoveragePreviewPanel`. Test `test/test_coverage_preview.cpp`.
+- **Operator-chosen start point.** `planBoustrophedon(..., start_hint)` (optional, default none =
+  bit-for-bit the historical plan) and `PlanCoverage` goal `has_start_point` / `start_x` / `start_y`.
+  The route always starts on the OUTERMOST headland ring: `pickRingClosure` (public, pure) closes
+  every ring on the straight side nearest the hint, at the nearest point kept `max(0.5 m, 2.5 ×
+  min_turn_radius)` clear of both corners (a short side closes at its midpoint) — never on a
+  corner, which is what the field report of 2026-07 (ring-to-ring stalls) forbids; with no hint it
+  is the midpoint of the longest side, exactly as before. With a hint the largest loop of the
+  outermost pass (the perimeter, not a ring round a hole) is moved to `plan.rings[0]`, and
+  `buildContinuousSubPaths(..., pin_first_subpath)` → `orderSubPathsForMinimalTransit(...,
+  pin_first_seed)` stops the seed search moving the first sub-path. Rings off = no ring to start on:
+  the hint is ignored and `PreviewCoverage.start_adjustable` is false. The preview answers with the
+  real `start_x/y` (the snapped point). Tests `test/test_start_point.cpp`.
+- CMake registers `test_coverage_planning`, `test_pivot_joins`, `test_start_point`, `test_coverage_preview`
+  and `test_coverage_route`. Run with `colcon test --packages-select mowgli_coverage
   --return-code-on-test-failure`. Local standalone replay against real F2C 3.0.0 passes
   93 tests; it does not exercise the ROS action server or the physical robot.
 
@@ -84,6 +108,7 @@ is the safety acceptance condition. Existing footprint/pivot gates remain tested
 | `ros2/src/mowgli_coverage/src/coverage_planning.cpp` | ~2.1k | F2C pipeline (`planBoustrophedon`), Dubins connectors, fillets, sub-path builder, ring sanitization/buffering |
 | `ros2/src/mowgli_coverage/src/main.cpp` | 15 | `rclcpp::spin` of `CoverageServer` |
 | `ros2/src/mowgli_coverage/test/test_coverage_planning.cpp` | ~2.3k | 45 gtests against the REAL F2C v3 library (no ROS) — see Build, test, run |
+| `ros2/src/mowgli_coverage/test/test_coverage_preview.cpp` | ~270 | 12 gtests: `summarisePlanForPreview` (ring simplification stays within tolerance and keeps the winding, heading folded into [0, 180), swath order, counts) plus real-planner checks (requested heading, auto, perpendicular, CW/CCW, alternating swaths) |
 | `ros2/src/mowgli_coverage/test/test_pivot_joins.cpp` | ~480 | 17 gtests: pivot joins (synthetic two-swath joins, whole-field rectangles at -1/AUTO/1 rings, drawn obstacle), corner contract, `pivotSweepFits`, `pathHeadings`, rings-off invalid-cell repair |
 
 No README, launch file, or config YAML lives in this package. Node defaults live in

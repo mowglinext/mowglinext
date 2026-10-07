@@ -17,10 +17,12 @@
 #define MOWGLI_COVERAGE__COVERAGE_SERVER_HPP_
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/srv/correct_recorded_obstacle.hpp"
+#include "mowgli_interfaces/srv/preview_coverage.hpp"
 #include "mowgli_interfaces/srv/preview_obstacle_clearance.hpp"
 #include "nav2_ros_common/lifecycle_node.hpp"
 #include "nav2_ros_common/simple_action_server.hpp"
@@ -46,9 +48,34 @@ protected:
   nav2::CallbackReturn on_shutdown(const rclcpp_lifecycle::State& state) override;
 
 private:
+  // The geometry knobs a plan reads LIVE (so they are `ros2 param set`-tunable
+  // between plans). One reader shared by planCoverage and previewCoverage: the
+  // preview must plan with exactly what a real plan would use, and two copies of
+  // these reads would drift.
+  struct LivePlanParams
+  {
+    double effective_inset;  // chassis_safety_inset, clamped at 0
+    double min_swath_length;
+    double obstacle_margin;  // clamped to [0, 1]
+    double min_turning_radius;
+    int connector_max_headland_passes;
+    int ring_direction;  // 0 planner default, 1 CW, 2 CCW
+  };
+  LivePlanParams readLivePlanParams();
+
   // Action callback. Pulls the active goal, runs planBoustrophedon, converts
   // the plan to per-segment nav_msgs/Paths, and succeeds/terminates the goal.
   void planCoverage();
+
+  // Dry run of the planner for the GUI map editor's line preview: the same
+  // planBoustrophedon call as planCoverage, with the swath angle and perimeter
+  // winding taken from the request, answered as rings + swaths in drive order.
+  // Read-only and stateless — nothing is queued and nothing moves. See
+  // previewObstacleClearance below for why request_header exists.
+  void previewCoverage(
+      const std::shared_ptr<rmw_request_id_s> request_header,
+      const std::shared_ptr<mowgli_interfaces::srv::PreviewCoverage::Request> request,
+      std::shared_ptr<mowgli_interfaces::srv::PreviewCoverage::Response> response);
 
   // Read-only utility service: buffers each input obstacle polygon outward by
   // the live obstacle_margin, exactly as buildCellFromGoal does for a real
@@ -86,6 +113,10 @@ private:
       preview_obstacle_clearance_service_;
   nav2::ServiceServer<mowgli_interfaces::srv::CorrectRecordedObstacle>::SharedPtr
       correct_recorded_obstacle_service_;
+  nav2::ServiceServer<mowgli_interfaces::srv::PreviewCoverage>::SharedPtr preview_coverage_service_;
+
+  // Serialises planner runs (planCoverage vs previewCoverage) — see planCoverage.
+  std::mutex plan_mutex_;
 
   // Static parameters (snapshot at on_configure). Geometry knobs that are
   // field-tuned (chassis_safety_inset) are read LIVE in planCoverage instead.

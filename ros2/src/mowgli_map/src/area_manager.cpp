@@ -106,6 +106,20 @@ geometry_msgs::msg::Polygon MapServerNode::parse_polygon_string(const std::strin
   return poly;
 }
 
+namespace
+{
+std::vector<std::pair<double, double>> polygon_pairs(const geometry_msgs::msg::Polygon& polygon)
+{
+  std::vector<std::pair<double, double>> pairs;
+  pairs.reserve(polygon.points.size());
+  for (const auto& pt : polygon.points)
+  {
+    pairs.emplace_back(static_cast<double>(pt.x), static_cast<double>(pt.y));
+  }
+  return pairs;
+}
+}  // namespace
+
 void MapServerNode::load_areas_from_params()
 {
   // Declare area parameter arrays with empty defaults.
@@ -488,6 +502,47 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
   entry.name = req->area.name;
   entry.polygon = polygon_msg;
   entry.is_navigation_area = req->is_navigation_area;
+  // Per-area coverage lines ride through the GUI's rebuild flow (clear_map +
+  // add_area per area) exactly like the id: an area the operator did not touch
+  // must keep its angle and winding. An invalid pair is dropped, not fatal — the
+  // area then simply follows the robot-wide settings.
+  {
+    const auto check = CheckCoverageLines(req->area.has_mow_angle,
+                                          req->area.mow_angle_deg,
+                                          req->area.has_ring_direction,
+                                          req->area.ring_direction,
+                                          req->area.has_start_point,
+                                          req->area.start_x,
+                                          req->area.start_y);
+    if (check.ok)
+    {
+      entry.coverage_lines = check.lines;
+      // A start point that no longer lies near the (possibly reshaped) area is dropped
+      // on its own: the angle and winding stay.
+      if (entry.coverage_lines.has_start_point &&
+          !StartPointNearPolygon(polygon_pairs(polygon_msg),
+                                 entry.coverage_lines.start_x,
+                                 entry.coverage_lines.start_y))
+      {
+        RCLCPP_WARN(
+            get_logger(),
+            "AddArea('%s'): dropping the start point (%.2f, %.2f), it is not near the area.",
+            entry.name.c_str(),
+            entry.coverage_lines.start_x,
+            entry.coverage_lines.start_y);
+        entry.coverage_lines.has_start_point = false;
+        entry.coverage_lines.start_x = 0.0;
+        entry.coverage_lines.start_y = 0.0;
+      }
+    }
+    else
+    {
+      RCLCPP_WARN(get_logger(),
+                  "AddArea('%s'): ignoring invalid coverage-line overrides: %s",
+                  entry.name.c_str(),
+                  check.message.c_str());
+    }
+  }
   // mowglinext#637: preserve a caller-supplied id when re-adding an area
   // that already had one — the GUI's edit/delete flow rebuilds the WHOLE
   // area list (clear_map + add_area per area) even when the operator only
@@ -620,6 +675,101 @@ void MapServerNode::publish_recorded_area_polygons()
   recorded_area_polygons_pub_->publish(msg);
 }
 
+void MapServerNode::on_set_area_coverage_lines(
+    const mowgli_interfaces::srv::SetAreaCoverageLines::Request::SharedPtr req,
+    mowgli_interfaces::srv::SetAreaCoverageLines::Response::SharedPtr res)
+{
+  const auto check = CheckCoverageLines(req->has_mow_angle,
+                                        req->mow_angle_deg,
+                                        req->has_ring_direction,
+                                        req->ring_direction,
+                                        req->has_start_point,
+                                        req->start_x,
+                                        req->start_y);
+  if (!check.ok)
+  {
+    res->success = false;
+    res->message = check.message;
+    RCLCPP_WARN(get_logger(), "set_area_coverage_lines: %s", check.message.c_str());
+    return;
+  }
+
+  std::string area_name;
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    // Addressed by the STABLE id: the GUI's edit flow rebuilds the whole list
+    // and can shift every index between the render that offered this and now.
+    const auto it = std::find_if(areas_.begin(),
+                                 areas_.end(),
+                                 [&req](const AreaEntry& entry)
+                                 {
+                                   return entry.id == req->id && req->id != 0;
+                                 });
+    if (it == areas_.end())
+    {
+      res->success = false;
+      res->message = "no area with id " + std::to_string(req->id);
+      RCLCPP_WARN(get_logger(), "set_area_coverage_lines: %s", res->message.c_str());
+      return;
+    }
+    if (it->is_navigation_area)
+    {
+      res->success = false;
+      res->message = "navigation areas are not mowed, so they have no coverage lines";
+      RCLCPP_WARN(get_logger(), "set_area_coverage_lines: %s", res->message.c_str());
+      return;
+    }
+    // The start point must belong to THIS area. Refused rather than dropped: the operator
+    // asked for it, so silently ignoring it would look like it worked.
+    if (check.lines.has_start_point && !StartPointNearPolygon(polygon_pairs(it->polygon),
+                                                              check.lines.start_x,
+                                                              check.lines.start_y))
+    {
+      res->success = false;
+      res->message = "the start point is not near this area";
+      RCLCPP_WARN(get_logger(), "set_area_coverage_lines: %s", res->message.c_str());
+      return;
+    }
+    it->coverage_lines = check.lines;
+    area_name = it->name;
+  }
+
+  const std::string angle_text = check.lines.has_mow_angle
+                                     ? std::to_string(check.lines.mow_angle_deg) + " deg"
+                                     : std::string("robot-wide");
+  const std::string direction_text =
+      check.lines.has_ring_direction ? std::to_string(static_cast<int>(check.lines.ring_direction))
+                                     : std::string("robot-wide");
+  RCLCPP_INFO(get_logger(),
+              "Area '%s' (id %u) coverage lines: angle %s, ring direction %s.",
+              area_name.c_str(),
+              req->id,
+              angle_text.c_str(),
+              direction_text.c_str());
+
+  // Unlike an add_area burst this is one deliberate edit, so persist now and
+  // report a failed save instead of swallowing it: the operator is told the
+  // setting did not stick rather than finding out at the next restart.
+  if (!areas_file_path_.empty())
+  {
+    try
+    {
+      save_areas_to_file(areas_file_path_);
+    }
+    catch (const std::exception& ex)
+    {
+      res->success = false;
+      res->message = std::string("applied in memory but could not be saved: ") + ex.what();
+      RCLCPP_ERROR(get_logger(), "set_area_coverage_lines: %s", res->message.c_str());
+      return;
+    }
+  }
+  // No grid or keepout work: only plan parameters changed, not geometry. The
+  // generation bump tells other clients (a second GUI tab) to refetch the list.
+  bump_area_list_generation();
+  res->success = true;
+}
+
 void MapServerNode::bump_area_list_generation()
 {
   ++area_list_generation_;
@@ -642,6 +792,13 @@ void MapServerNode::on_get_mowing_area(
     res->area.area = entry.polygon;
     res->area.is_navigation_area = entry.is_navigation_area;
     res->area.id = entry.id;  // mowglinext#637 — see MapArea.msg's doc comment
+    res->area.has_mow_angle = entry.coverage_lines.has_mow_angle;
+    res->area.mow_angle_deg = entry.coverage_lines.mow_angle_deg;
+    res->area.has_ring_direction = entry.coverage_lines.has_ring_direction;
+    res->area.ring_direction = entry.coverage_lines.ring_direction;
+    res->area.has_start_point = entry.coverage_lines.has_start_point;
+    res->area.start_x = entry.coverage_lines.start_x;
+    res->area.start_y = entry.coverage_lines.start_y;
 
     // `obstacles` holds APPLIED keepouts only — it is what PlanCoverageArea
     // turns into coverage holes, so a PENDING proposal must never appear in
@@ -1903,6 +2060,31 @@ void MapServerNode::save_areas_to_file(const std::string& path, bool allow_empty
     // *reader* still treats it as optional (see load_areas_from_file) so a
     // pre-#637 file written by an older binary keeps loading.
     out << "area_" << i << "_id: " << area.id << "\n";
+    // Per-area coverage lines are OPTIONAL on both sides: only an area that
+    // overrides something writes them, so an untouched map is byte-identical to
+    // what older binaries wrote and read, and an older binary reading a newer
+    // file just ignores the extra keys.
+    if (area.coverage_lines.has_mow_angle)
+    {
+      out << "area_" << i << "_mow_angle_deg: " << area.coverage_lines.mow_angle_deg << "\n";
+    }
+    if (area.coverage_lines.has_ring_direction)
+    {
+      out << "area_" << i
+          << "_ring_direction: " << static_cast<int>(area.coverage_lines.ring_direction) << "\n";
+    }
+    if (area.coverage_lines.has_start_point)
+    {
+      // Metres to the millimetre: the file's default 6 significant digits would round a
+      // coordinate like 123.4567 m to 123.457 and the start would drift on every cycle.
+      const auto old_flags = out.flags();
+      const auto old_precision = out.precision();
+      out << std::fixed << std::setprecision(3) << "area_" << i
+          << "_start_x: " << area.coverage_lines.start_x << "\n"
+          << "area_" << i << "_start_y: " << area.coverage_lines.start_y << "\n";
+      out.flags(old_flags);
+      out.precision(old_precision);
+    }
     // PENDING obstacles (wheel-slip dig proposals) are deliberately NOT
     // written: they are inert until the operator accepts them through
     // ~/promote_obstacle. Count only what we actually write, and keep the
@@ -2065,6 +2247,51 @@ void MapServerNode::load_areas_from_file(const std::string& path)
     // it can recover next_area_id_ from the highest id ACTUALLY present
     // first, rather than one area at a time.
     entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));
+    // Optional on read: absent in every file saved before per-area coverage
+    // lines existed, and for any area that follows the robot-wide settings.
+    // Presence of the key IS the has_* flag. Re-validated rather than trusted:
+    // a hand-edited file must not smuggle a winding the planner does not know.
+    {
+      const bool has_angle = kv.count(prefix + "_mow_angle_deg") != 0;
+      const bool has_dir = kv.count(prefix + "_ring_direction") != 0;
+      // A start point needs BOTH coordinates; one without the other is ignored.
+      const bool has_start =
+          kv.count(prefix + "_start_x") != 0 && kv.count(prefix + "_start_y") != 0;
+      const auto check =
+          CheckCoverageLines(has_angle,
+                             has_angle ? get_double(prefix + "_mow_angle_deg", 0.0) : 0.0,
+                             has_dir,
+                             static_cast<uint8_t>(
+                                 std::clamp(get_int(prefix + "_ring_direction", 0), 0, 255)),
+                             has_start,
+                             has_start ? get_double(prefix + "_start_x", 0.0) : 0.0,
+                             has_start ? get_double(prefix + "_start_y", 0.0) : 0.0);
+      if (check.ok)
+      {
+        entry.coverage_lines = check.lines;
+        if (entry.coverage_lines.has_start_point &&
+            !StartPointNearPolygon(polygon_pairs(entry.polygon),
+                                   entry.coverage_lines.start_x,
+                                   entry.coverage_lines.start_y))
+        {
+          RCLCPP_WARN(get_logger(),
+                      "Area '%s': ignoring a start point that is not near the area in %s.",
+                      entry.name.c_str(),
+                      path.c_str());
+          entry.coverage_lines.has_start_point = false;
+          entry.coverage_lines.start_x = 0.0;
+          entry.coverage_lines.start_y = 0.0;
+        }
+      }
+      else
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Area '%s': ignoring invalid coverage-line overrides in %s: %s",
+                    entry.name.c_str(),
+                    path.c_str(),
+                    check.message.c_str());
+      }
+    }
 
     const int obs_count = get_int(prefix + "_obstacle_count", 0);
     for (int j = 0; j < obs_count; ++j)
@@ -2266,6 +2493,18 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
     for (auto& obstacle : area.obstacles)
     {
       reproject_polygon(obstacle.polygon);
+    }
+    // The operator's start point is a map-frame coordinate like any polygon vertex: it
+    // must move with the map, or after a datum change it points at the wrong side of the
+    // garden and the route starts somewhere the operator never chose.
+    if (area.coverage_lines.has_start_point)
+    {
+      wgs84::ReprojectEnu(file_datum_lat,
+                          file_datum_lon,
+                          datum_lat_,
+                          datum_lon_,
+                          area.coverage_lines.start_x,
+                          area.coverage_lines.start_y);
     }
   }
   // LidarIgnoreCorridor polylines are map-frame metres anchored to the same

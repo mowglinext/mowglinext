@@ -585,6 +585,22 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
+  # ---- test_area_coverage_lines ----
+  # Pure: which swath angle / perimeter winding an area is planned with (its own
+  # override, else the robot-wide setting).
+  ament_add_gtest(test_area_coverage_lines
+    test/test_area_coverage_lines.cpp
+  )
+
+  target_include_directories(test_area_coverage_lines PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_area_coverage_lines
+    ${mowgli_interfaces_TARGETS}
+  )
+
   # ---- test_dig_skip ----
   # Pure: session dig skip zones (which coverage poses are skipped around a
   # recorded dig point) + the wait for the bridge's bounded reverse.

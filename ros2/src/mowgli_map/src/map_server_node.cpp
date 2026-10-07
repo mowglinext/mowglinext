@@ -400,6 +400,14 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         on_add_area(req, res);
       });
 
+  set_area_coverage_lines_srv_ = create_service<mowgli_interfaces::srv::SetAreaCoverageLines>(
+      "~/set_area_coverage_lines",
+      [this](const mowgli_interfaces::srv::SetAreaCoverageLines::Request::SharedPtr req,
+             mowgli_interfaces::srv::SetAreaCoverageLines::Response::SharedPtr res)
+      {
+        on_set_area_coverage_lines(req, res);
+      });
+
   get_mowing_area_srv_ = create_service<mowgli_interfaces::srv::GetMowingArea>(
       "~/get_mowing_area",
       [this](const mowgli_interfaces::srv::GetMowingArea::Request::SharedPtr req,

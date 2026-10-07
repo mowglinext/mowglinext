@@ -255,6 +255,63 @@ func TestReplaceMap_FailureAtAnyAddRestoresThePreviousMap(t *testing.T) {
 	}
 }
 
+func TestReplaceMap_RollbackKeepsAnAreasOwnCoverageLines(t *testing.T) {
+	// Arrange: a live area with its own mow angle and perimeter winding; the
+	// replacement fails on its first add_area, so the old map is restored.
+	old := testArea("old", 7)
+	old.Area.HasMowAngle = true
+	old.Area.MowAngleDeg = 35
+	old.Area.HasRingDirection = true
+	old.Area.RingDirection = 2
+	srv := newFakeMapServer(old)
+	srv.failNth(mapServiceAddArea, 1, errDeadline)
+
+	// Act
+	err := replaceMapInternal(context.Background(), srv, &mowgli.ReplaceMapReq{Areas: []mowgli.ReplaceMapArea{testArea("new", 0)}})
+
+	// Assert: the restore re-adds the snapshot, which must carry the overrides,
+	// otherwise a failed save would quietly reset the area to the robot-wide settings.
+	require.Error(t, err)
+	require.Len(t, srv.live, 1)
+	assert.True(t, srv.live[0].Area.HasMowAngle)
+	assert.Equal(t, 35.0, srv.live[0].Area.MowAngleDeg)
+	assert.True(t, srv.live[0].Area.HasRingDirection)
+	assert.Equal(t, uint8(2), srv.live[0].Area.RingDirection)
+}
+
+func TestReplaceMap_PassesAnAreasCoverageLinesToMapServer(t *testing.T) {
+	srv := newFakeMapServer()
+	area := testArea("lawn", 3)
+	area.Area.HasMowAngle = true
+	area.Area.MowAngleDeg = 0 // a real 0 degrees, not "unset"
+	area.Area.HasRingDirection = true
+	area.Area.RingDirection = 0 // a real planner-default winding
+
+	require.NoError(t, replaceMapInternal(context.Background(), srv, &mowgli.ReplaceMapReq{Areas: []mowgli.ReplaceMapArea{area}}))
+
+	require.Len(t, srv.live, 1)
+	assert.True(t, srv.live[0].Area.HasMowAngle)
+	assert.Equal(t, 0.0, srv.live[0].Area.MowAngleDeg)
+	assert.True(t, srv.live[0].Area.HasRingDirection)
+}
+
+func TestReplaceMap_RollbackKeepsAnAreasStartPoint(t *testing.T) {
+	old := testArea("old", 7)
+	old.Area.HasStartPoint = true
+	old.Area.StartX = 4.5
+	old.Area.StartY = -1.25
+	srv := newFakeMapServer(old)
+	srv.failNth(mapServiceAddArea, 1, errDeadline)
+
+	err := replaceMapInternal(context.Background(), srv, &mowgli.ReplaceMapReq{Areas: []mowgli.ReplaceMapArea{testArea("new", 0)}})
+
+	require.Error(t, err)
+	require.Len(t, srv.live, 1)
+	assert.True(t, srv.live[0].Area.HasStartPoint, "a failed save must not reset where the route starts")
+	assert.Equal(t, 4.5, srv.live[0].Area.StartX)
+	assert.Equal(t, -1.25, srv.live[0].Area.StartY)
+}
+
 func TestReplaceMap_SerializesConcurrentReplacementThroughRollback(t *testing.T) {
 	server := newBarrierMapServer(testArea("old", 1))
 	requestA := &mowgli.ReplaceMapReq{Areas: []mowgli.ReplaceMapArea{testArea("a1", 0), testArea("a2", 0)}}

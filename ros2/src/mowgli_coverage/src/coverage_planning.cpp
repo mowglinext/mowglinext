@@ -1124,6 +1124,110 @@ static f2c::types::Swaths generateEvenSwaths(f2c::sg::BruteForce& bf,
   return bf.generateSwaths(angle, op_width, cell);
 }
 
+RingClosure pickRingClosure(const std::vector<std::pair<double, double>>& open_loop,
+                            const std::optional<std::pair<double, double>>& hint,
+                            double min_turn_radius)
+{
+  RingClosure out;
+  const std::size_t n = open_loop.size();
+  if (n == 0)
+  {
+    return out;
+  }
+  if (n == 1)
+  {
+    out.point = open_loop.front();
+    return out;
+  }
+  const auto side_end = [&](std::size_t j) -> const std::pair<double, double>&
+  {
+    return open_loop[(j + 1) % n];
+  };
+
+  if (!hint)
+  {
+    // Historical choice, bit-for-bit: the midpoint of the longest side, first one on a tie.
+    double longest = -1.0;
+    for (std::size_t j = 0; j < n; ++j)
+    {
+      const auto& a = open_loop[j];
+      const auto& b = side_end(j);
+      const double len = std::hypot(b.first - a.first, b.second - a.second);
+      if (len > longest)
+      {
+        longest = len;
+        out.edge = j;
+      }
+    }
+    out.point = {(open_loop[out.edge].first + side_end(out.edge).first) * 0.5,
+                 (open_loop[out.edge].second + side_end(out.edge).second) * 0.5};
+    return out;
+  }
+
+  // A closure may only sit on a REAL side. F2C's outermost ring has rounded corners, which
+  // arrive as chains of tiny sides: a hint at a corner would otherwise pick one of those, and
+  // the ring would close ON the corner — exactly what this function exists to avoid. So sides
+  // shorter than min_side are skipped (the longest side always qualifies). A loop made only of
+  // short sides (a smooth, hand-drawn curve) keeps every side that is at least half the longest.
+  double longest = 0.0;
+  for (std::size_t j = 0; j < n; ++j)
+  {
+    const auto& a = open_loop[j];
+    const auto& b = side_end(j);
+    longest = std::max(longest, std::hypot(b.first - a.first, b.second - a.second));
+  }
+  const double min_side = std::min(1.0, 0.5 * longest);
+
+  // The nearest such side (distance to the SEGMENT, lowest index on a tie).
+  double best = std::numeric_limits<double>::infinity();
+  for (std::size_t j = 0; j < n; ++j)
+  {
+    const auto& a = open_loop[j];
+    const auto& b = side_end(j);
+    if (std::hypot(b.first - a.first, b.second - a.second) < min_side)
+    {
+      continue;
+    }
+    const double dx = b.first - a.first;
+    const double dy = b.second - a.second;
+    const double len2 = dx * dx + dy * dy;
+    const double t =
+        len2 < 1e-12
+            ? 0.0
+            : std::clamp(((hint->first - a.first) * dx + (hint->second - a.second) * dy) / len2,
+                         0.0,
+                         1.0);
+    const double d =
+        std::hypot(hint->first - (a.first + t * dx), hint->second - (a.second + t * dy));
+    if (d < best - 1e-12)
+    {
+      best = d;
+      out.edge = j;
+    }
+  }
+
+  const auto& a = open_loop[out.edge];
+  const auto& b = side_end(out.edge);
+  const double len = std::hypot(b.first - a.first, b.second - a.second);
+  if (len < 1e-9)
+  {
+    out.point = a;
+    return out;
+  }
+  const double ux = (b.first - a.first) / len;
+  const double uy = (b.second - a.second) / len;
+  // Keep clear of both ends so the closure stays on the straight part, away from the
+  // corner fillets (which round with up to 2 * min_turn_radius). A side too short to
+  // leave that room closes at its midpoint.
+  const double keep_off = std::min(0.5 * len, std::max(0.5, 2.5 * min_turn_radius));
+  const double lo = keep_off;
+  const double hi = len - keep_off;
+  const double along = (hint->first - a.first) * ux + (hint->second - a.second) * uy;
+  const double t_along = (lo >= hi) ? 0.5 * len : std::clamp(along, lo, hi);
+  out.point = {a.first + ux * t_along, a.second + uy * t_along};
+  return out;
+}
+
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,
@@ -1134,7 +1238,8 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     int ring_direction,
                                     double min_turn_radius,
                                     bool perpendicular,
-                                    int connector_max_headland_passes)
+                                    int connector_max_headland_passes,
+                                    const std::optional<std::pair<double, double>>& start_hint)
 {
   BoustrophedonPlan plan;
   // Polygon area the planned-coverage fraction is taken over (the operator's
@@ -1432,6 +1537,8 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     const auto headland_passes =
         hl.generateHeadlandSwaths(safe_cells, op_width, n_rings, /*dir_out2in=*/true);
     t_headland_ms = elapsedMs(t_headland0);
+    bool first_pass = true;
+    std::size_t first_pass_rings = 0;  // loops kept from the OUTERMOST pass
     for (const auto& pass_lines : headland_passes)
     {
       auto loops = ringPassToLoops(pass_lines);
@@ -1493,27 +1600,16 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
           if (sparse.size() >= 5)
           {
             sparse.pop_back();  // open the closed loop for rotation
-            std::size_t le = 0;
-            double le_len = -1.0;
-            for (std::size_t j = 0; j < sparse.size(); ++j)
-            {
-              const auto& a = sparse[j];
-              const auto& b = sparse[(j + 1) % sparse.size()];
-              const double len = std::hypot(b.first - a.first, b.second - a.second);
-              if (len > le_len)
-              {
-                le_len = len;
-                le = j;
-              }
-            }
+            // The closure side: the longest one (the historical choice) or, with a
+            // start hint, the one nearest it — see pickRingClosure.
+            const RingClosure closure = pickRingClosure(sparse, start_hint, min_turn_radius);
+            const std::size_t le = closure.edge;
             // New start = the longest edge's midpoint. Rotate so the loop begins
             // at the vertex AFTER the edge (v_{le+1}) and stitch the midpoint on
             // both ends: mid → v_{le+1} → … → v_le → mid. (Rotating to v_le
             // instead would make the path step BACKWARD from mid to v_le — a
             // 180° reversal baked into the ring.)
-            const std::pair<double, double> mid{
-                (sparse[le].first + sparse[(le + 1) % sparse.size()].first) * 0.5,
-                (sparse[le].second + sparse[(le + 1) % sparse.size()].second) * 0.5};
+            const std::pair<double, double> mid = closure.point;
             std::rotate(sparse.begin(),
                         sparse.begin() + static_cast<std::ptrdiff_t>((le + 1) % sparse.size()),
                         sparse.end());
@@ -1538,6 +1634,46 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 
         ring_strip_area += perim * op_width;
         plan.rings.push_back(std::move(loop));
+      }
+      if (first_pass)
+      {
+        first_pass_rings = plan.rings.size();
+        first_pass = false;
+      }
+    }
+
+    // The operator chose where the route starts: it must start on the OUTER
+    // perimeter. A field with holes yields several loops in the outermost pass (the
+    // perimeter plus one around each obstacle) and the route begins with
+    // plan.rings[0], so put the largest loop of that pass — the perimeter — first.
+    // Only with a hint: without one the order is exactly what F2C produced.
+    if (start_hint && first_pass_rings > 1)
+    {
+      const auto area_of = [](const std::vector<std::pair<double, double>>& loop)
+      {
+        double twice = 0.0;
+        for (std::size_t i = 0; i + 1 < loop.size(); ++i)
+        {
+          twice += loop[i].first * loop[i + 1].second - loop[i + 1].first * loop[i].second;
+        }
+        return std::abs(twice);
+      };
+      std::size_t outer = 0;
+      double outer_area = area_of(plan.rings[0]);
+      for (std::size_t i = 1; i < first_pass_rings; ++i)
+      {
+        const double a = area_of(plan.rings[i]);
+        if (a > outer_area)
+        {
+          outer_area = a;
+          outer = i;
+        }
+      }
+      if (outer != 0)
+      {
+        std::rotate(plan.rings.begin(),
+                    plan.rings.begin() + static_cast<std::ptrdiff_t>(outer),
+                    plan.rings.begin() + static_cast<std::ptrdiff_t>(outer) + 1);
       }
     }
   }
@@ -1796,7 +1932,8 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     double step,
     ConnectorStats* stats,
     const std::vector<std::pair<double, double>>& swath_turn_boundary,
-    const PivotJoinLimits& pivot_limits)
+    const PivotJoinLimits& pivot_limits,
+    bool pin_first_subpath)
 {
   // Flatten the plan into ordered drivable segments (densified polylines),
   // rings first (outermost → inner) then the swaths.
@@ -2317,12 +2454,13 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
   // Sub-path DRIVE ORDER: see orderSubPathsForMinimalTransit's doc comment —
   // extracted to its own pure, unit-testable function (mowgli_coverage
   // convention for decision logic like this; see test_coverage_planning.cpp).
-  return orderSubPathsForMinimalTransit(std::move(out), ring_subpath_count);
+  return orderSubPathsForMinimalTransit(std::move(out), ring_subpath_count, pin_first_subpath);
 }
 
 std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTransit(
     std::vector<std::vector<std::pair<double, double>>> sub_paths,
-    std::size_t preserve_direction_count)
+    std::size_t preserve_direction_count,
+    bool pin_first_seed)
 {
   // Minimize the blade-off Nav2 transit BETWEEN sub-paths. Sub-paths arrive in
   // swath-chain order; on a multi-hole field that leaves the driver
@@ -2437,7 +2575,10 @@ std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTrans
   };
 
   constexpr std::size_t kMaxSeedSearchSize = 40;
-  const std::size_t seed_count = sub_paths.size() <= kMaxSeedSearchSize ? sub_paths.size() : 1;
+  // pin_first_seed: the operator chose where the route starts, so sub-path 0 stays first
+  // (seed 0 only) and only the order of the rest is optimised.
+  const std::size_t seed_count =
+      (!pin_first_seed && sub_paths.size() <= kMaxSeedSearchSize) ? sub_paths.size() : 1;
   SeedResult best = chainFromSeed(0);
   for (std::size_t seed = 1; seed < seed_count; ++seed)
   {
@@ -2888,6 +3029,106 @@ f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in)
   // a self-touch boost::geometry rejects. makeRingValid returns the boost-valid
   // equivalent, or the deduped ring unchanged if the repair degenerates.
   return makeRingValid(out);
+}
+
+namespace
+{
+// Douglas-Peucker over indices [lo, hi] of `pts`, marking the vertices to keep.
+// Iterative (explicit stack): a densified ring has thousands of vertices and a
+// pathological one must not be able to blow the call stack.
+void markKeptVertices(const std::vector<std::pair<double, double>>& pts,
+                      double tolerance,
+                      std::vector<bool>& keep)
+{
+  std::vector<std::pair<std::size_t, std::size_t>> stack;
+  stack.emplace_back(0, pts.size() - 1);
+  while (!stack.empty())
+  {
+    const auto [lo, hi] = stack.back();
+    stack.pop_back();
+    if (hi <= lo + 1)
+    {
+      continue;
+    }
+    const double ax = pts[lo].first, ay = pts[lo].second;
+    const double dx = pts[hi].first - ax, dy = pts[hi].second - ay;
+    const double len2 = dx * dx + dy * dy;
+    double worst = -1.0;
+    std::size_t worst_i = lo;
+    for (std::size_t i = lo + 1; i < hi; ++i)
+    {
+      const double px = pts[i].first - ax, py = pts[i].second - ay;
+      // Distance to the chord SEGMENT, not to its infinite line: a ring that
+      // doubles back on itself must not lose a vertex that is collinear with the
+      // chord yet far beyond its end. A zero-length chord (a closed loop's first
+      // and last vertex coincide) measures to the anchor itself (t stays 0).
+      const double t = (len2 < 1e-12) ? 0.0 : std::clamp((px * dx + py * dy) / len2, 0.0, 1.0);
+      const double dist = std::hypot(px - t * dx, py - t * dy);
+      if (dist > worst)
+      {
+        worst = dist;
+        worst_i = i;
+      }
+    }
+    if (worst > tolerance)
+    {
+      keep[worst_i] = true;
+      stack.emplace_back(lo, worst_i);
+      stack.emplace_back(worst_i, hi);
+    }
+  }
+}
+
+std::vector<std::pair<double, double>> simplifyPolyline(
+    const std::vector<std::pair<double, double>>& pts, double tolerance)
+{
+  if (pts.size() <= 2 || tolerance <= 0.0)
+  {
+    return pts;
+  }
+  std::vector<bool> keep(pts.size(), false);
+  keep.front() = true;  // endpoints are always kept: a ring keeps its start and closure
+  keep.back() = true;
+  markKeptVertices(pts, tolerance, keep);
+  std::vector<std::pair<double, double>> out;
+  for (std::size_t i = 0; i < pts.size(); ++i)
+  {
+    if (keep[i])
+    {
+      out.push_back(pts[i]);
+    }
+  }
+  return out;
+}
+}  // namespace
+
+CoveragePreview summarisePlanForPreview(const BoustrophedonPlan& plan, double simplify_tolerance_m)
+{
+  CoveragePreview preview;
+  preview.rings.reserve(plan.rings.size());
+  for (const auto& loop : plan.rings)
+  {
+    auto simplified = simplifyPolyline(loop, simplify_tolerance_m);
+    if (simplified.size() >= 2)
+    {
+      preview.rings.push_back(std::move(simplified));
+    }
+  }
+  preview.swaths = plan.swaths;
+
+  // Heading in [0, 180): a swath has no sense of direction, and serpentine order
+  // alternates it anyway, so 200 degrees and 20 degrees are the same lines.
+  double deg = std::fmod(plan.swath_angle_rad * 180.0 / M_PI, 180.0);
+  if (deg < 0.0)
+  {
+    deg += 180.0;
+  }
+  preview.swath_angle_deg = deg;
+  preview.headland_passes = plan.n_headland_passes;
+  preview.planned_fraction = plan.diagnostics.planned_fraction;
+  preview.field_area_m2 = plan.diagnostics.field_area;
+  preview.dropped_pieces = plan.diagnostics.drops.size();
+  return preview;
 }
 
 }  // namespace mowgli_coverage

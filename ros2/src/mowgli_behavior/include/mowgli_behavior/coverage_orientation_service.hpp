@@ -25,6 +25,7 @@
 #include <string>
 #include <utility>
 
+#include "mowgli_behavior/area_coverage_lines.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_interfaces/srv/coverage_orientation.hpp"
@@ -179,7 +180,11 @@ public:
     Service::Response response;
     response.success = true;
     response.enabled = ctx->mow_cross_hatch;
-    ctx->node->get_parameter_or("mow_angle_deg", response.base_angle_deg, -1.0);
+    // The base heading this area is actually planned with: its own override when
+    // it has one (Map page "mowing lines"), else the robot-wide mow_angle_deg.
+    double robot_wide_angle_deg = -1.0;
+    ctx->node->get_parameter_or("mow_angle_deg", robot_wide_angle_deg, -1.0);
+    response.base_angle_deg = ResolveCoverageLines(area->area, robot_wide_angle_deg).mow_angle_deg;
     response.current_active = state.session_perpendicular.has_value() ||
                               ctx->base_orientation_areas.count(req.area_index);
     response.current_perpendicular = state.session_perpendicular.value_or(false);

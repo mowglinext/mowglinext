@@ -1,0 +1,25 @@
+# Set (or clear) one mowing area's own coverage-line settings: the swath angle and
+# the perimeter winding. Each value is an override of the robot-wide
+# mow_angle_deg / mow_direction; has_* = false removes the override so the area
+# follows the robot-wide setting again.
+#
+# Addressed by the area's STABLE id (MapArea.id), never by index: the GUI's
+# edit flow rebuilds the area list wholesale and can shift every index.
+#
+# This is a plain edit of persisted map data: it is saved to areas.dat and only
+# changes the NEXT plan of that area. The behavior tree plans an area once per
+# visit and re-plans on resume with a cursor into that plan, so changing an area
+# while the robot is mowing it would make the resume cursor point into a
+# different plan. The GUI therefore only offers this while the robot is not
+# mowing; the server itself does not know the behavior tree's state.
+uint32 id                       # MapArea.id of the area to change
+bool has_mow_angle              # false = clear the override (use the robot-wide mow_angle_deg)
+float64 mow_angle_deg           # degrees, folded into [0, 180) by the server; negative = AUTO for this area; ignored when has_mow_angle is false
+bool has_ring_direction         # false = clear the override (use the robot-wide ring_direction)
+uint8 ring_direction            # 0 planner default, 1 clockwise, 2 counter-clockwise; ignored when has_ring_direction is false
+bool has_start_point            # false = clear the override (the planner's own start)
+float64 start_x                 # map-frame metres; must lie inside the area or within a few metres of its recorded line; ignored when has_start_point is false
+float64 start_y
+---
+bool success
+string message                  # failure reason when success == false (unknown id, bad values, save failure)
