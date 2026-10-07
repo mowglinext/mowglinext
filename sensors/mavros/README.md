@@ -126,14 +126,19 @@ calibration or `/wheel_odom`. It rejects lost RTK Fixed, stale/unpaired data,
 direction changes, source/epoch/segment changes, curves and inconsistent wheels.
 Apply changes and persists only `ticks_per_meter`, with live confirmation.
 
-`mavros_manual_control_enabled` defaults to `false`. Its explicit GUI confirmation
-enables `/hardware_bridge.manual_control_enabled`; it never arms the FCU. Nonzero
-commands still require a connected, already armed FCU, a released physical Safety
-Switch and no active/latched emergency. `blade_control_enabled` remains `false`.
-`mavros_wheel_lift_safety_enabled` defaults to `true` and maps to
-`/hardware_bridge.wheel_lift_safety_enabled`. Disabling it requires GUI confirmation;
-raw left/right lift telemetry remains visible and physical Safety always applies.
-Both settings persist in dedicated `hardware_bridge.yaml` and reload at boot.
+MAVROS manual control is always available when the MAVROS backend is selected:
+finite `/cmd_vel` commands are forwarded to `/mavros/manual_control/send`
+independently of the FCU `armed` state. There is no manual-control opt-in flag.
+
+`mow_enable` maps to FCU ARM/DISARM. `mowing_enabled=false` suppresses blade ARM
+requests but does not inhibit traction; DISARM requests are always forwarded.
+The physical separation between blade authorization and traction is configured
+in ArduPilot.
+
+Safety and emergency states remain authoritative: an active Safety/E-stop forces
+neutral traction, requests HOLD and DISARM, while wheel-lift and tilt conditions
+apply the configured blade-safety policy. Raw safety/lift telemetry remains
+available for diagnostics.
 
 ## Safety wiring and target acceptance
 

@@ -135,8 +135,6 @@ def main() -> int:
     for key, parameter in (
         ("ticks_per_meter", "mavros/esc_wheel_odometry.ticks_per_meter"),
         ("wheel_track", "mavros/esc_wheel_odometry.track_width_m"),
-        ("mavros_manual_control_enabled", "hardware_bridge.manual_control_enabled"),
-        ("mavros_wheel_lift_safety_enabled", "hardware_bridge.wheel_lift_safety_enabled"),
     ):
         expected = rf'"{key}":\s*\{{Parameter: "{re.escape(parameter)}", Runtime: "available"\}}'
         require(re.search(expected, settings_backend), f"GUI backend MAVROS route missing: {key}")

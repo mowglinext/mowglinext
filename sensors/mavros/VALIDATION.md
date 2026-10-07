@@ -31,9 +31,6 @@ mavros_ros() {
 mavros_ros node info /hardware_bridge
 mavros_ros param get /mavros/esc_wheel_odometry ticks_per_meter
 mavros_ros param get /mavros/esc_wheel_odometry track_width_m
-mavros_ros param get /hardware_bridge manual_control_enabled
-mavros_ros param get /hardware_bridge wheel_lift_safety_enabled
-mavros_ros param get /hardware_bridge blade_control_enabled
 mavros_ros topic info /wheel_ticks --verbose
 mavros_ros topic echo /wheel_ticks --once
 mavros_ros topic echo /mavros/state --once
