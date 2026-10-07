@@ -134,16 +134,14 @@ describe("hardware backend settings", () => {
             { name: "hardware_bridge.wheel_pid_pwm_per_mps", value: 282.135 },
         ]);
     });
-    it("preserves MAVROS safety and traction boolean values", () => {
+    it("routes MAVROS feed-forward through the shared canonical value", () => {
         const routes = {
-            mavros_manual_control_enabled: { parameter: "hardware_bridge.manual_control_enabled", runtime: "available" as const },
-            mavros_wheel_lift_safety_enabled: { parameter: "hardware_bridge.wheel_lift_safety_enabled", runtime: "available" as const },
+            wheel_pid_pwm_per_mps: { parameter: "hardware_bridge.manual_control_linear_scale", runtime: "available" as const },
         };
         expect(liveHardwareParameters(new Set(Object.keys(routes)), {
-            mavros_manual_control_enabled: false, mavros_wheel_lift_safety_enabled: true,
+            wheel_pid_pwm_per_mps: 282.135,
         }, routes)).toEqual([
-            { name: "hardware_bridge.manual_control_enabled", value: false },
-            { name: "hardware_bridge.wheel_lift_safety_enabled", value: true },
+            { name: "hardware_bridge.manual_control_linear_scale", value: 282.135 },
         ]);
     });
 });

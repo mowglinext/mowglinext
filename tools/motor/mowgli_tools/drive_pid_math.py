@@ -14,6 +14,24 @@ def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+def mavros_ticks_per_meter_from_motor_revolutions(
+    left_scaled_revolutions: int,
+    right_scaled_revolutions: int,
+    rtk_distance_m: float,
+    *,
+    transport_scale: float = 1000.0,
+) -> float:
+    """Fit ESC motor revolutions per metre from WheelTick and RTK distance."""
+    distance = _require_finite_float("rtk_distance_m", rtk_distance_m)
+    scale = _require_finite_float("transport_scale", transport_scale)
+    if distance <= 0.0 or scale <= 0.0:
+        raise ValueError("RTK distance and transport scale must be positive")
+    mean_revolutions = 0.5 * (
+        abs(int(left_scaled_revolutions)) + abs(int(right_scaled_revolutions))
+    ) / scale
+    return mean_revolutions / distance
+
+
 def wrap_angle_rad(angle_rad: float) -> float:
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 

@@ -22,8 +22,6 @@ import { HardwareSection } from "../components/settings/HardwareSection.tsx";
 import { HardwareBackendSection } from "../components/settings/HardwareBackendSection.tsx";
 import { HardwareBackendCard } from "../components/settings/HardwareBackendCard.tsx";
 import { DriveMotorSection } from "../components/settings/DriveMotorSection.tsx";
-import { MavrosDriveSection } from "../components/settings/MavrosDriveSection.tsx";
-import { MavrosSafetySection } from "../components/settings/MavrosSafetySection.tsx";
 import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { PositioningSection } from "../components/settings/PositioningSection.tsx";
 import { SensorsSection } from "../components/settings/SensorsSection.tsx";
@@ -240,8 +238,9 @@ export const SettingsPage = () => {
                             values={values}
                             onChange={handleChange}
                             acceptPersistedValues={acceptPersistedValues}
+                            hardwareBackend={hardwareBackend.backend}
                         />
-                        {renderFieldCards(YAW_LOOP_GROUP)}
+                        {hardwareBackend.backend === "mowgli" && renderFieldCards(YAW_LOOP_GROUP)}
                     </>
                 );
             case "ntrip":

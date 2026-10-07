@@ -1312,13 +1312,13 @@ values = {name: float(value) for name, value in values.items()}
 payload = {"/**/esc_wheel_odometry": {"ros__parameters": values}}
 target_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 bridge_values = {
-    "manual_control_enabled": effective["mavros_manual_control_enabled"],
-    "wheel_lift_safety_enabled": effective["mavros_wheel_lift_safety_enabled"],
-    "blade_control_enabled": False,
+    "manual_control_linear_scale": effective["wheel_pid_pwm_per_mps"],
+    "mowing_enabled": effective["mowing_enabled"],
 }
-for name, value in bridge_values.items():
-    if not isinstance(value, bool):
-        raise ValueError(f"effective {name} must be boolean")
+if not isinstance(bridge_values["manual_control_linear_scale"], (int, float)) or isinstance(bridge_values["manual_control_linear_scale"], bool) or not math.isfinite(bridge_values["manual_control_linear_scale"]) or bridge_values["manual_control_linear_scale"] <= 0:
+    raise ValueError("effective manual_control_linear_scale must be a finite positive number")
+if not isinstance(bridge_values["mowing_enabled"], bool):
+    raise ValueError("effective mowing_enabled must be boolean")
 bridge_path.write_text(yaml.safe_dump({"hardware_bridge": {"ros__parameters": bridge_values}}, sort_keys=False), encoding="utf-8")
 PY
 }

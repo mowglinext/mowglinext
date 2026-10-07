@@ -206,6 +206,7 @@ func TestHardwareBackendMavrosPublishesSourceContractRoutes(t *testing.T) {
 
 	var response HardwareBackendResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+
 	assert.Equal(t, "mavros", response.Backend)
 	assert.Equal(t, "available", response.RuntimeRouting)
 	assert.ElementsMatch(t, []string{"mowgli", "mavros", "openmower"}, response.Supported)
@@ -214,11 +215,30 @@ func TestHardwareBackendMavrosPublishesSourceContractRoutes(t *testing.T) {
 		Parameter: "mavros/esc_wheel_odometry.ticks_per_meter",
 		Runtime:   "available",
 	}, response.ParameterRoutes["ticks_per_meter"])
-	assert.Equal(t, "mavros/esc_wheel_odometry.track_width_m", response.ParameterRoutes["wheel_track"].Parameter)
 
+	assert.Equal(t,
+		"mavros/esc_wheel_odometry.track_width_m",
+		response.ParameterRoutes["wheel_track"].Parameter,
+	)
+
+	// MAVROS shared feed-forward tuning.
+	assert.Equal(t,
+		"hardware_bridge.manual_control_linear_scale",
+		response.ParameterRoutes["wheel_pid_pwm_per_mps"].Parameter,
+	)
+
+	// MAVROS blade authorization.
+	assert.Equal(t,
+		"hardware_bridge.mowing_enabled",
+		response.ParameterRoutes["mowing_enabled"].Parameter,
+	)
+
+	// STM32-only PID parameters must not be routed to MAVROS.
 	for _, key := range []string{
-		"wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
-		"wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
+		"wheel_pid_kp",
+		"wheel_pid_ki",
+		"wheel_pid_kd",
+		"wheel_pid_integral_limit",
 	} {
 		assert.NotContains(t, response.ParameterRoutes, key)
 	}
@@ -279,18 +299,18 @@ func TestMowgliAllowsDriveToolMiddleware(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, w.Code)
 }
 
-func TestMavrosDriveCommandRoutesFailBeforeStartingAJob(t *testing.T) {
+func TestMavrosAllowsSharedFeedForwardAndRollbackButRejectsPID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	DriveTuningRoutes(router.Group("/api"), backendTestDB(t, "mavros"), nil)
 
-	for _, path := range []string{
-		"/api/tools/drive/ff-calibration/start",
-		"/api/tools/drive/pid-tuning/start",
-		"/api/tools/drive/tuning/rollback",
+	for path, expected := range map[string]int{
+		"/api/tools/drive/ff-calibration/start": http.StatusBadRequest,
+		"/api/tools/drive/pid-tuning/start":     http.StatusConflict,
+		"/api/tools/drive/tuning/rollback":      http.StatusBadRequest,
 	} {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
-		assert.Equal(t, http.StatusConflict, w.Code, path)
+		assert.Equal(t, expected, w.Code, path)
 	}
 }

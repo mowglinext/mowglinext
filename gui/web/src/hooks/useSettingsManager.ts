@@ -114,7 +114,6 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "dashboard",
         description: "settingsSections.drive_motor.description",
         keys: [
-            "mavros_manual_control_enabled",
             "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
             "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
             ...groupKeys(YAW_LOOP_GROUP),
@@ -231,7 +230,6 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "safety",
         description: "settingsSections.safety.description",
         keys: [
-            "mavros_wheel_lift_safety_enabled",
             // motor_temp_high_c / motor_temp_low_c REMOVED (issue #195): no
             // layer of the stack implements a thermal blade cutoff — the
             // firmware only measures and reports blade temperature. The real
@@ -833,9 +831,7 @@ export const useSettingsManager = () => {
 
 
     return {
-        sections: settingsSectionsForBackend(SECTION_DEFINITIONS, hardware.backend).map((section) =>
-            hardware.backend === "mavros" && section.id === "drive_motor"
-                ? { ...section, description: "settingsMavrosDrive.notice.description" } : section),
+        sections: settingsSectionsForBackend(SECTION_DEFINITIONS, hardware.backend),
         hardwareBackend: hardware,
         backendDefaultOverrides: hardware.defaultOverrides,
         values: localValues,

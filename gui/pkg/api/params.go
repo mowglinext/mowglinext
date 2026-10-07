@@ -29,6 +29,16 @@ type SetParamsRequest struct {
 	Parameters []types.RosParameter `json:"parameters"`
 }
 
+func parameterWasApplied(updated []types.RosParameter, want types.RosParameter) bool {
+	for _, parameter := range updated {
+		if strings.TrimPrefix(parameter.Name, "/") == strings.TrimPrefix(want.Name, "/") &&
+			valuesEqual(parameter.Value, want.Value) {
+			return true
+		}
+	}
+	return false
+}
+
 func getParams(rosProvider types.IRosProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
@@ -59,16 +69,6 @@ func setParams(rosProvider types.IRosProvider, dbProvider types.IDBProvider) gin
 				if strings.HasPrefix(name, "hardware_bridge.wheel_pid_") {
 					c.JSON(http.StatusConflict, ErrorResponse{Error: "Mowgli wheel PID/feed-forward parameters are unavailable for HARDWARE_BACKEND=mavros"})
 					return
-				}
-				if name == "hardware_bridge.blade_control_enabled" && parameter.Value != false {
-					c.JSON(http.StatusConflict, ErrorResponse{Error: "MAVROS blade control remains disabled"})
-					return
-				}
-				if name == "hardware_bridge.manual_control_enabled" || name == "hardware_bridge.wheel_lift_safety_enabled" {
-					if _, ok := parameter.Value.(bool); !ok {
-						c.JSON(http.StatusBadRequest, ErrorResponse{Error: "MAVROS enable parameters must be boolean"})
-						return
-					}
 				}
 			}
 		}

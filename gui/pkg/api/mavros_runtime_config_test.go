@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestMavrosRuntimeConfigSparseDefaultsOptInAndBladeDisabled(t *testing.T) {
+func TestMavrosRuntimeConfigMapsSharedFeedForwardAndBladeAuthorization(t *testing.T) {
 	chdirToGuiRoot(t)
 	resetSchemaCache()
 	t.Cleanup(resetSchemaCache)
@@ -23,11 +24,8 @@ func TestMavrosRuntimeConfigSparseDefaultsOptInAndBladeDisabled(t *testing.T) {
 	require.NoError(t, db.Set("system.mower.yamlConfigFile", []byte(path)))
 	env, _ := db.Get("system.mower.runtimeEnvFile")
 	dir := filepath.Join(filepath.Dir(string(env)), "config", "mavros")
-	for _, optIn := range []bool{false, true} {
-		yamlText := "mowgli:\n  ros__parameters:\n    ticks_per_meter: 512.125\n"
-		if optIn {
-			yamlText += "    mavros_manual_control_enabled: true\n    mavros_wheel_lift_safety_enabled: false\n"
-		}
+	for _, mowingEnabled := range []bool{false, true} {
+		yamlText := fmt.Sprintf("mowgli:\n  ros__parameters:\n    ticks_per_meter: 512.125\n    wheel_pid_pwm_per_mps: 321.5\n    mowing_enabled: %t\n", mowingEnabled)
 		require.NoError(t, os.WriteFile(path, []byte(yamlText), 0600))
 		require.NoError(t, writeMavrosRuntimeConfig(db))
 		raw, err := os.ReadFile(filepath.Join(dir, "esc_wheel_odometry.yaml"))
@@ -41,25 +39,8 @@ func TestMavrosRuntimeConfigSparseDefaultsOptInAndBladeDisabled(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, yaml.Unmarshal(raw, &doc))
 		p = doc["hardware_bridge"].(map[string]any)["ros__parameters"].(map[string]any)
-		require.Equal(t, optIn, p["manual_control_enabled"])
-		require.Equal(t, !optIn, p["wheel_lift_safety_enabled"])
-		require.Equal(t, false, p["blade_control_enabled"])
-	}
-}
-func TestMavrosEnableRoutesKeepBooleanTypesAndRejectBladeEnable(t *testing.T) {
-	for _, name := range []string{"hardware_bridge.manual_control_enabled", "/hardware_bridge.wheel_lift_safety_enabled"} {
-		ros := types.NewMockRosProvider()
-		db := backendTestDB(t, "mavros")
-		routes := gin.New()
-		ParamsRoutes(routes.Group("/api"), ros, db)
-		for _, enabled := range []bool{false, true} {
-			w := paramsRequest(routes, name, enabled)
-			require.Equal(t, 200, w.Code, w.Body.String())
-			last := ros.SetParams[len(ros.SetParams)-1]
-			require.Equal(t, enabled, last[0].Value)
-		}
-		require.Equal(t, 400, paramsRequest(routes, name, 1).Code)
-		require.Equal(t, 409, paramsRequest(routes, "hardware_bridge.blade_control_enabled", true).Code)
+		require.Equal(t, 321.5, p["manual_control_linear_scale"])
+		require.Equal(t, mowingEnabled, p["mowing_enabled"])
 	}
 }
 func paramsRequest(r *gin.Engine, name string, value any) *httptest.ResponseRecorder {
