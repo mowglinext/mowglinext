@@ -20,6 +20,8 @@ import { useContainerRestart } from "../hooks/useContainerRestart.ts";
 import { SettingsNav } from "../components/settings/SettingsNav.tsx";
 import { HardwareSection } from "../components/settings/HardwareSection.tsx";
 import { HardwareBackendCard } from "../components/settings/HardwareBackendCard.tsx";
+import { HardwareViewSwitcher } from "../components/settings/HardwareViewSwitcher.tsx";
+import { FcuFeatureTool } from "../components/settings/FcuFeatureTool.tsx";
 import { DriveMotorSection } from "../components/settings/DriveMotorSection.tsx";
 import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { PositioningSection } from "../components/settings/PositioningSection.tsx";
@@ -188,7 +190,7 @@ export const SettingsPage = () => {
                 );
             case "hardware":
                 return (
-                    <>
+                    <HardwareViewSwitcher backend={hardwareBackend.backend} fcu={<FcuFeatureTool/>} chassis={<>
                         <HardwareBackendCard info={hardwareBackend} />
                         <HardwareSection
                             values={values}
@@ -199,7 +201,7 @@ export const SettingsPage = () => {
                             onReset={resetToDefault}
                             revealAdvanced={!!targetField || !!searchQuery}
                         />
-                    </>
+                    </>}/>
                 );
             case "drive_motor":
                 return (

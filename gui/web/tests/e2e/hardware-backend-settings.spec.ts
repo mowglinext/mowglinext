@@ -15,7 +15,7 @@ test.beforeEach(async ({page}) => {
     await page.addInitScript(() => localStorage.setItem("mowglinext.lang", "en"));
 });
 
-test("MAVROS shows canonical calibration without Mowgli drive controls", async ({page}) => {
+test("MAVROS shows the FCU tool and canonical calibration without Mowgli drive controls", async ({page}) => {
     const posts: string[] = [];
     page.on("request", request => {
         if (request.method() === "POST") posts.push(new URL(request.url()).pathname);
@@ -44,8 +44,8 @@ test("MAVROS shows canonical calibration without Mowgli drive controls", async (
     await page.goto("/#/settings");
 
     await expect(page.getByText("Pixhawk via MAVROS")).toBeVisible();
-    await expect(page.getByText(/Live routing is pending/)).toBeVisible();
-    await expect(page.getByRole("menuitem", {name: "Drive Motor"})).toHaveCount(0);
+    await expect(page.locator(".ant-segmented").getByText("FCU", {exact: true})).toBeVisible();
+    await expect(page.getByRole("menuitem", {name: "Drive Motor"})).toHaveCount(1);
     await expect(page.getByText("Encoder Ticks/Meter", {exact: true})).toBeVisible();
 
     const ticksField = page.locator(".ant-form-item")
@@ -55,6 +55,12 @@ test("MAVROS shows canonical calibration without Mowgli drive controls", async (
     await page.getByRole("button", {name: /Save \(1 changes\)/}).click();
     await expect.poll(() => posts.filter(path => path === "/api/settings/yaml").length).toBe(1);
     expect(posts).not.toContain("/api/params");
+
+    await page.getByRole("menuitem", {name: "Drive Motor"}).click();
+    await expect(page.getByText("Wheel odometry calibration", {exact: true})).toBeVisible();
+    await expect(page.getByText("Wheel Velocity PID", {exact: true})).toHaveCount(0);
+    await expect(page.getByRole("button", {name: "Start odometry/feed-forward calibration"})).toHaveCount(0);
+    await expect(page.getByRole("button", {name: "Start odometry calibration"})).toBeVisible();
 
     await page.getByRole("menuitem", {name: "Safety"}).click();
     await expect(page.getByText("Firmware Parameters", {exact: true})).toHaveCount(0);
@@ -82,6 +88,7 @@ test("Mowgli keeps its drive controls", async ({page}) => {
     await page.goto("/#/settings");
 
     await expect(page.getByText("Mowgli STM32")).toBeVisible();
+    await expect(page.locator(".ant-segmented").getByText("FCU", {exact: true})).toHaveCount(0);
     await page.getByRole("menuitem", {name: "Drive Motor"}).click();
     await expect(page.getByText("Wheel Velocity PID", {exact: true})).toBeVisible();
     await expect(page.getByRole("button", {name: "Start odometry/feed-forward calibration"})).toBeVisible();
