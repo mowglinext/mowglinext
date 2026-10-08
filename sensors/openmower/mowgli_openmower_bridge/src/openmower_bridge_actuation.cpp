@@ -84,6 +84,9 @@ void OpenMowerBridgeNode::control_tick()
     {
       RCLCPP_INFO(get_logger(), "Drive controllers connected: %s", motor_summary().c_str());
       odometry_.Reset();
+      // Its firmware-clock history belongs to the samples before the gap
+      // (same fix as the STM32 bridge's OdometryPublisher::reset, #878).
+      odom_clock_fit_.Reset();
       tick_sampler_.Reset();
     }
     else
@@ -159,6 +162,9 @@ void OpenMowerBridgeNode::update_odometry()
                   static_cast<long long>(step.reset_jump),
                   step.dt_s[static_cast<std::size_t>(step.reset_wheel)] * 1000.0);
       odometry_.Reset();
+      // Its firmware-clock history belongs to the samples before the gap
+      // (same fix as the STM32 bridge's OdometryPublisher::reset, #878).
+      odom_clock_fit_.Reset();
       // The loop's integral was built against a wheel that may not have been
       // driving through the reset: start the speed loops clean.
       for (std::size_t w = 0; w < 2u; ++w)
