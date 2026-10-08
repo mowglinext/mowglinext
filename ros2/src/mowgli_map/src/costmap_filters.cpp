@@ -92,6 +92,7 @@ void MapServerNode::invalidate_keepout_mask()
   // Empty means authorization is unavailable, NOT an empty/free garden.
   cached_keepout_mask_ = mask;
   keepout_mask_pub_->publish(mask);
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
 }
 
 void MapServerNode::publish_keepout_mask()
@@ -102,8 +103,6 @@ void MapServerNode::publish_keepout_mask()
   if (areas_.empty() || !planning_grid_error_.empty())
   {
     invalidate_keepout_mask();
-    transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
-    transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
     return;
   }
 
