@@ -123,8 +123,9 @@ class Probe(Node):
         return cb
 
     def _on_odom(self, msg):
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         with self.lock:
-            self.odom.append((time.monotonic(), msg.twist.twist.linear.x, msg.twist.twist.angular.z))
+            self.odom.append((time.monotonic(), msg.twist.twist.linear.x, msg.twist.twist.angular.z, stamp))
             self.odom = self.odom[-2000:]
 
     def _on_imu(self, msg):
@@ -176,12 +177,13 @@ class Probe(Node):
             data = [s[idx] for s in getattr(self, series) if s[0] >= since]
         return (statistics.fmean(data), len(data)) if data else (float('nan'), 0)
 
-    def time_weighted_mean(self, series: str, since: float, idx: int):
-        """Each message weighted by the time since the previous one: the
-        distance-per-time a consumer integrating vx * dt sees. A plain mean
-        of jittery windows is biased up (0.03 + 0.71 averages 0.37)."""
+    def odom_distance_mean(self, since: float, idx: int):
+        """Distance over time from /wheel_odom: each message's rate times the
+        interval its header stamp covers, which is what a consumer integrating
+        the odometry gets. A plain mean of jittery windows is biased up (0.03 +
+        0.71 averages 0.37), and receive times carry the probe's own latency."""
         with self.lock:
-            data = [(s[0], s[idx]) for s in getattr(self, series) if s[0] >= since]
+            data = [(s[3], s[idx]) for s in self.odom if s[0] >= since]
         if len(data) < 2:
             return float('nan'), len(data)
         num = sum(v * (t - t_prev) for (t_prev, _), (t, v) in zip(data, data[1:]))
@@ -381,7 +383,7 @@ def s03_straight(probe, rig, R, esc):
     # Means over the window: an instantaneous plant speed or a single odometry
     # window is just jitter on a loaded runner.
     plant_v = forward_speed(s0, snap)
-    odom_vx, n = probe.mean_since('odom', t_meas, 1)
+    odom_vx, n = probe.odom_distance_mean(t_meas, 1)
     if abs(plant_v - 0.30) >= 0.03 or abs(odom_vx - plant_v) >= 0.03:
         print('    diag: ' + _drive_diagnostics(probe, rig, t_meas, t_meas_ms, x_meas), flush=True)
     R.check(S, 'true ground speed tracks 0.30 m/s (closed loop beats the 0.85 motor gain)',
@@ -405,7 +407,7 @@ def s04_pivot(probe, rig, R, esc):
     # Mean yaw rate over the window (2 s at 0.6 rad/s never wraps past pi).
     plant_w = math.atan2(math.sin(snap['theta'] - s0['theta']), math.cos(snap['theta'] - s0['theta'])) \
         / ((snap['t'] - s0['t']) / 1000.0)
-    odom_w, _ = probe.mean_since('odom', t_meas, 2)
+    odom_w, _ = probe.odom_distance_mean(t_meas, 2)
     imu_w, _ = probe.mean_since('imu', t_meas, 1)
     R.check(S, 'true yaw rate tracks +0.6 rad/s, counter-clockwise', abs(plant_w - 0.6) < 0.08,
             f"plant mean w={plant_w:+.3f}")
@@ -632,7 +634,7 @@ def s15_esc_reboot(probe, rig, R, esc):
         rig.escs['left'].reboot()   # counters back to 0
     time.sleep(2.0)
     with probe.lock:
-        vx = [v for (t, v, _) in probe.odom if t >= t0]
+        vx = [v for (t, v, *_) in probe.odom if t >= t0]
     worst = max((abs(v) for v in vx), default=float('nan'))
     # The bug published the counter jump itself (2.2e7 m/s). A starved runner
     # also produces honest 50 ms windows at 2-3x (ticks landing one window
@@ -775,9 +777,9 @@ def s19b_starved(probe, rig, R, esc, bridge):
     time.sleep(1.5)
     snap = rig.snapshot()
     with probe.lock:
-        vx = [v for (t, v, _) in probe.odom if t >= t0]
+        vx = [v for (t, v, *_) in probe.odom if t >= t0]
     plant_v = forward_speed(s0, snap)
-    odom_v = statistics.fmean(vx) if vx else float('nan')
+    odom_v, _ = probe.odom_distance_mean(t0, 1)
     worst = max((abs(v) for v in vx), default=float('nan'))
     # The exact arithmetic (a 350 ms stall divided by 350 ms, not by a clamped
     # control period) is pinned by WheelTickSampler.AStalledBridgeMeasures-
