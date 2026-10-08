@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: GPL-3.0
 
+#include <cstring>
+
 #include <rclcpp/rclcpp.hpp>
 
 #include "mowgli_hardware/cobs.hpp"
@@ -88,6 +90,10 @@ struct HardwareBridgeBladeStatusTestPeer
   static void makeCmdVelFresh(HardwareBridgeNode& node)
   {
     node.last_cmd_vel_packet_ns_ = steadyNowNs() - 10'000'000;
+  }
+  static void ageCmdVel(HardwareBridgeNode& node, std::int64_t age_ns)
+  {
+    node.last_cmd_vel_packet_ns_ = steadyNowNs() - age_ns;
   }
   static void prepareReassertAfterDisconnect(HardwareBridgeNode& node)
   {
@@ -366,6 +372,52 @@ TEST_F(BladeLiftRecovery, FreshSendAndTelemetryReassertOneCorrectBladeOn)
   EXPECT_EQ(drain(), (std::vector<std::pair<uint8_t, uint8_t>>{{1, 1}}));
   Peer::reassertTick(*node);
   EXPECT_TRUE(drain().empty());
+}
+
+TEST_F(BladeLiftRecovery, StaleVelocityGetsAZeroPacketBeforeExplicitBladeOn)
+{
+  Peer::control(*node, 1, 1);
+
+  const auto packets = drainPackets();
+  ASSERT_EQ(packets.size(), 2u);
+  ASSERT_EQ(packets[0].size(), sizeof(LlCmdVel));
+  ASSERT_EQ(packets[1].size(), sizeof(LlCmdBlade));
+  EXPECT_EQ(packets[0][0], PACKET_ID_LL_CMD_VEL);
+  EXPECT_EQ(packets[1][0], PACKET_ID_LL_CMD_BLADE);
+  LlCmdVel velocity{};
+  std::memcpy(&velocity, packets[0].data(), sizeof(velocity));
+  EXPECT_FLOAT_EQ(velocity.linear_x, 0.0f);
+  EXPECT_FLOAT_EQ(velocity.angular_z, 0.0f);
+  LlCmdBlade blade{};
+  std::memcpy(&blade, packets[1].data(), sizeof(blade));
+  EXPECT_EQ(blade.blade_on, 1u);
+  EXPECT_EQ(blade.blade_dir, 1u);
+}
+
+TEST_F(BladeLiftRecovery, ReassertAfterLongIdleWritesAZeroBeforeBladeOn)
+{
+  Peer::control(*node, 1, 1);
+  drainPackets();
+  Peer::bladeStatus(*node, 0);
+  Peer::ageBladeCommand(*node, 1'000'000'000);
+  Peer::ageCmdVel(*node, 1'000'000'000);
+
+  Peer::reassertTick(*node);
+
+  const auto packets = drainPackets();
+  ASSERT_EQ(packets.size(), 2u);
+  ASSERT_EQ(packets[0].size(), sizeof(LlCmdVel));
+  ASSERT_EQ(packets[1].size(), sizeof(LlCmdBlade));
+  EXPECT_EQ(packets[0][0], PACKET_ID_LL_CMD_VEL);
+  EXPECT_EQ(packets[1][0], PACKET_ID_LL_CMD_BLADE);
+  LlCmdVel velocity{};
+  std::memcpy(&velocity, packets[0].data(), sizeof(velocity));
+  EXPECT_FLOAT_EQ(velocity.linear_x, 0.0f);
+  EXPECT_FLOAT_EQ(velocity.angular_z, 0.0f);
+  LlCmdBlade blade{};
+  std::memcpy(&blade, packets[1].data(), sizeof(blade));
+  EXPECT_EQ(blade.blade_on, 1u);
+  EXPECT_EQ(blade.blade_dir, 1u);
 }
 
 TEST_F(BladeLiftRecovery, ServiceStopAndReleaseBetweenTicksNeedsNewExplicitOn)
