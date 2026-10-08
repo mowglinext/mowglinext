@@ -20,7 +20,7 @@ export const useHardwareBackend = (): HardwareBackendInfo & { loading: boolean }
 
     useEffect(() => {
         let cancelled = false;
-        (async () => {
+        void (async () => {
             try {
                 const res = await guiApi.request({
                     path: "/settings/hardware-backend",
