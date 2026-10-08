@@ -62,14 +62,19 @@ and behavior sources are built from this checkout, without any production edits.
 18.1.8 checks both new test files. Standalone CMake/CTest builds use the same ament test registrations
 as the colcon reproduction above.
 
-The final controller run reports **12 cases: 2 passing controls, 10 failing safety assertions, no fixture
-errors**. Both modes produce the same counterexamples:
+The controller target includes positive controls for both forward translation and the same pi/2
+PRE_ROTATE used by the forbidden-sweep case. The negative translation checks cover both the axle
+boundary and the complete chassis sweep through a hole beside an otherwise permitted axle path.
+Both obstacle modes run every scenario.
+The final controller run reports **16 cases: 4 passing controls, 12 failing safety assertions,
+no fixture errors**. Both modes produce the same counterexamples:
 
 | Required check | Observed output on this baseline |
 |---|---|
 | Missing / unknown geometry | Forward peak `0.18 m/s`, where zero is required |
 | Explicit all-forbidden replacement during execution | Forward peak `0.20 m/s`, where zero is required |
 | Complete intended translation segment | Axle `x=0.6883385908` to `x=0.7075047318` crosses forbidden `x=0.70` |
+| Complete translating chassis sweep | Axle `x=0.060` to `x=0.075` remains permitted; the body sweep reaches `x=0.605`, intersecting the hole starting at `x=0.600` |
 | Forbidden PRE_ROTATE footprint sweep | Angular peak `0.8 rad/s`, where zero is required |
 | Missing recovery geometry with valid arming/blade/direction | Escape publishes `-0.10 m/s` on `/cmd_vel_nav`, where zero is required |
 
@@ -86,8 +91,10 @@ restoring `main_tree.xml` to the committed LF bytes made them pass, with no Git/
 The full GPL headers in the new tests pass the copyright checker. These environment corrections are
 not production patches or softened safety assertions.
 
-Independent Sol review of the final tests/CMake changes has no remaining findings. Hosted CI is the
-remaining external check; the ROS2 build/test job is expected to be red solely on the two new targets.
+Independent Sol reviews of the original tests/CMake changes and the added rotation control and
+chassis-translation case have no remaining findings. Hosted CI evidence for the current PR head is
+recorded in the canonical PR body. The ROS2 build/test job is expected to be red solely on the two
+authorization targets, with the positive controls and existing suite passing.
 
 ## Acceptance scenarios and evidence
 
@@ -101,14 +108,25 @@ rejection; it cannot erase nonzero output from an earlier tick.
 | `UnknownGeometryMustNotAuthorizeNominalMotion` | An all-unknown grid cannot authorize motion | FTC outgoing Twist after confirmed DDS receipt, both modes |
 | `RevokedGeometryMustStopAnAlreadyDispatchedPath` | Replacing a clear grid with all-forbidden geometry revokes the active path | FTC outgoing Twist; no new plan dispatch, both modes |
 | `NominalCoverageMustNotCommandAcrossForbiddenBoundary` | Intended translation cannot cross a forbidden reference-point boundary | Straight commanded 0.1 s segments, kinematic TF feedback, both modes |
+| `TranslationMustRejectAKeepoutInTheChassisSweep` | The complete translating chassis cannot intersect a hole even with a permitted reference-point path | Exact rectangular sweep of each straight 0.1 s command, both modes |
 | `PreRotateMustRejectAForbiddenFootprintSweep` | A forbidden hole must block the complete rotation, even when both endpoint bodies fit | FTC angular output in PRE_ROTATE, both modes |
 | `MissingRecoveryGeometryMustNotPublishNonzeroMotion` | Arming/blade/direction evidence alone cannot authorize a recovery envelope | Real EscapeStartBlocked `/cmd_vel_nav` output |
 | `ClearGeometryControlProducesForwardMotion` | The fixture can exercise ordinary clear-space motion | Positive FTC control, both modes |
+| `ClearGeometryControlProducesPreRotation` | The same rotation must produce an angular command when authorized | Same initial body/pose and pi/2 plan as the forbidden-sweep case, clear grid, both modes |
 
 The translation fixture starts at axle `(0,0)` with the complete body inside the clear region.
 The forbidden half-plane starts at `x=0.70`; the nominal path points along +X. Every emitted command
 is integrated as a straight 0.1 s intended segment and the new axle TF is fed back to the real controller.
 This is an intended-command counterexample, not a measured physical excursion.
+
+The chassis-translation fixture starts with the same rear-axle body at yaw zero and follows +X.
+Its forbidden hole is `[0.60,0.70] × [0.20,0.25] m`. The entire axle path at `y=0` is outside the hole,
+and the initial body ends at `x=0.53`, before the hole. The hole is inside the body's lateral span
+`[-0.275,0.275]`. For each straight 0.1 s command, the exact complete-body sweep is
+`[min(axle endpoints)-0.17,max(axle endpoints)+0.53] × [-0.275,0.275]`.
+The independent assertion rejects any positive-area intersection with the hole; it permits rejection
+before intersection and does not require motion along an invalid body path. This is a hole violation,
+so the approved outer-boundary overhang policy does not apply. Curved swept trajectories remain untested.
 
 The rotational fixture uses the shipped chassis polygon relative to the rear axle:
 front `0.53 m`, rear `-0.17 m`, half-width `0.275 m`, zero additional padding.
@@ -130,7 +148,7 @@ tests describe their limited invariants; passing them does not prove the complet
 | Motion owner / purpose | Existing verifier and guard coverage | Remaining evidence / gap |
 |---|---|---|
 | Coverage server: swaths, connectors, joins | Real F2C planning tests cover concavity, holes, joins, edge overhang and planner pivot sweeps (`test_coverage_planning`, `test_pivot_joins`) | Static: final residual verification logs errors then returns success. No residual-failure fixture reproduced here |
-| FTC nominal coverage | Local obstacle/body checks and BT boundary monitor; clear-space control in this PR | New missing/unknown/revocation/translation acceptance tests |
+| FTC nominal coverage | Local obstacle/body checks and BT boundary monitor; clear-space forward/rotation controls in this PR | New missing/unknown/revocation/axle-boundary/full-chassis-translation acceptance tests |
 | FTC lateral skirt | `test_obstacle_deviation`, `test_ftc_lattice_solver` constrain off-plan offsets | Static: global cells ≥99 block; unknown becomes free. No revision binding; nominal-line geometry is not independently checked |
 | FTC PIVOT, PRE_ROTATE, POST_ROTATE, oscillation recovery | Planner pivot feasibility, local PIVOT sweep and `test_ftc_pivot`; oscillation helper tests | New PRE_ROTATE hole test only. Other runtime rotation states and outer-overhang policy remain untested here |
 | FTC reverse escape / turn fallback | Existing rear-clear/budget tests and real closed-loop `test_ftc_turn_fallback_controller` | No separately verified authorized reverse envelope. Turn fallback zone/collision checks do not establish ownership/revision semantics |

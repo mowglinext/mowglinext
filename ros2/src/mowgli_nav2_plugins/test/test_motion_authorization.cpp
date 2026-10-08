@@ -297,6 +297,24 @@ TEST_P(MotionAuthorization, ClearGeometryControlProducesForwardMotion)
   EXPECT_GT(PeakForward(), 0.0);
 }
 
+TEST_P(MotionAuthorization, ClearGeometryControlProducesPreRotation)
+{
+  // Same initial pose, body and pi/2 plan as the forbidden-sweep case below;
+  // only the keepout is absent. Blocking every rotation cannot satisfy both.
+  ASSERT_NO_FATAL_FAILURE(Deliver(Grid(0)));
+  controller_.newPathReceived(Plan(std::acos(-1.0) / 2.0));
+  double angular_peak = 0.0;
+  for (int i = 0; i < 10; ++i)
+  {
+    const auto cmd = Tick();
+    ASSERT_TRUE(std::isfinite(cmd.linear.x));
+    ASSERT_TRUE(std::isfinite(cmd.angular.z));
+    EXPECT_DOUBLE_EQ(cmd.linear.x, 0.0);  // PRE_ROTATE must turn in place.
+    angular_peak = std::max(angular_peak, cmd.angular.z);
+  }
+  EXPECT_GT(angular_peak, 0.0) << "Authorized pi/2 rotation must produce an angular command";
+}
+
 TEST_P(MotionAuthorization, MissingGeometryMustNotAuthorizeNominalMotion)
 {
   // No geometry publication, no docking/recovery exception, valid pose/TF.
@@ -375,6 +393,52 @@ TEST_P(MotionAuthorization, PreRotateMustRejectAForbiddenFootprintSweep)
   ASSERT_LT((0.325 + 0.375) / std::sqrt(2.0), 0.53);
   controller_.newPathReceived(Plan(std::acos(-1.0) / 2.0));
   ExpectNoMotion();
+}
+
+TEST_P(MotionAuthorization, TranslationMustRejectAKeepoutInTheChassisSweep)
+{
+  auto grid = Grid(0);
+  // Hole [0.60,0.70] x [0.20,0.25]. The +X axle path at y=0 is clear,
+  // as is the initial body (front x=0.53). The hole lies inside the body's
+  // lateral span, so translating past axle x=0.07 would drive the chassis
+  // through it. A hole cannot use the approved outer-boundary overhang policy.
+  for (unsigned int mx = 112; mx < 114; ++mx)
+  {
+    grid.data[104 * grid.info.width + mx] = 100;
+  }
+  ASSERT_NO_FATAL_FAILURE(Deliver(grid, 0.625, 0.225, 254));
+  constexpr double front = 0.53;
+  constexpr double rear = -0.17;
+  constexpr double half_width = 0.275;
+  constexpr double hole_min_x = 0.60;
+  constexpr double hole_max_x = 0.70;
+  ASSERT_LT(front, hole_min_x);  // Initial complete body does not touch the hole.
+  ASSERT_LT(0.0, 0.20);  // Every axle segment at y=0 avoids the hole.
+  ASSERT_LT(0.25, half_width);  // Positive lateral overlap with the complete body.
+  for (int i = 0; i < 60; ++i)
+  {
+    try
+    {
+      const auto cmd = Tick();
+      ASSERT_TRUE(std::isfinite(cmd.linear.x));
+      ASSERT_TRUE(std::isfinite(cmd.angular.z));
+      ASSERT_NEAR(cmd.angular.z, 0.0, 1e-9);  // Pure translation oracle.
+      const double next_x = robot_x_ + 0.1 * cmd.linear.x;
+      // At yaw=0 the exact full-body sweep of this straight segment is
+      // [min(axle endpoints)+rear, max(axle endpoints)+front] x [-width,width].
+      // Reject positive-area intersection, independently of controller checks.
+      const double sweep_min_x = std::min(robot_x_, next_x) + rear;
+      const double sweep_max_x = std::max(robot_x_, next_x) + front;
+      ASSERT_TRUE(sweep_max_x <= hole_min_x || sweep_min_x >= hole_max_x)
+          << "Chassis sweep intersects keepout: axle x=" << robot_x_ << " -> " << next_x
+          << ", body sweep x=[" << sweep_min_x << "," << sweep_max_x << "]";
+      robot_x_ = next_x;
+    }
+    catch (const nav2_core::ControllerException&)
+    {
+      break;  // Rejection before any chassis intersection is allowed.
+    }
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(LidarModes,
