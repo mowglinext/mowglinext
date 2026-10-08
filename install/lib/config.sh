@@ -1290,7 +1290,8 @@ EOF
   # the LowLevel board's own lift/tilt/charge values) live in
   # ros2/src/mowgli_bringup/config/backends/openmower.yaml, which every
   # consumer layers between the template and this sparse file. Writing them
-  # here would pin them and break the GUI's reset-to-default.
+  # here would pin them and break the GUI's reset-to-default — which is also
+  # why the seed carries no ticks_per_meter.
 
   # The Universal GNSS sidecar reads mowgli_robot.yaml itself (see
   # install/compose/docker-compose.gps.yml): no derived parameter file.
