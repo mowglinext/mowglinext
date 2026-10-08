@@ -42,6 +42,7 @@ TEST(BladeReassert, WaitsWhileCmdVelIsStale)
 {
   auto in = dropped_request_while_driving();
   in.cmd_vel_age_s = 1.5;
+  EXPECT_TRUE(mh::blade_reassert_due(in));
   EXPECT_FALSE(mh::should_reassert_blade_on(in));
   EXPECT_TRUE(mh::blade_intent_mismatch(in));
 

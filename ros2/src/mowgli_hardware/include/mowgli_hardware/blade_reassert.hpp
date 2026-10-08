@@ -29,8 +29,10 @@
 //     (#763). `intent_authorized` is dropped on any emergency and only an
 //     explicit MowerControl ON sets it again;
 //   * never while the lift handling owns the blade (`enable_allowed`);
-//   * never on a stale CMD_VEL: the firmware would read that ON as an OFF, so a
-//     blind periodic re-send would STOP a blade that is running.
+//   * never send ON against a stale CMD_VEL: when stale, the bridge first sends
+//     a zero-velocity stop packet and retries ON only if that packet was written
+//     within the firmware window; a blind stale re-send would STOP a running
+//     blade.
 
 #ifndef MOWGLI_HARDWARE__BLADE_REASSERT_HPP_
 #define MOWGLI_HARDWARE__BLADE_REASSERT_HPP_
@@ -71,13 +73,21 @@ constexpr bool blade_intent_mismatch(const BladeReassertInputs& in)
   return in.mow_enabled && in.enable_allowed && in.blade_status_fresh && !in.blade_active;
 }
 
+// True when an authorized retry is due. The bridge must send a zero CMD_VEL
+// first when the velocity stream is stale, then send the blade ON only if that
+// stop packet was written freshly enough for the firmware gate.
+constexpr bool blade_reassert_due(const BladeReassertInputs& in,
+                                  const BladeReassertConfig& cfg = {})
+{
+  return blade_intent_mismatch(in) && in.intent_authorized && !in.emergency_active &&
+         in.since_last_blade_cmd_s >= cfg.min_interval_s;
+}
+
 // True when a blade ON should be sent again now.
 constexpr bool should_reassert_blade_on(const BladeReassertInputs& in,
                                         const BladeReassertConfig& cfg = {})
 {
-  return blade_intent_mismatch(in) && in.intent_authorized && !in.emergency_active &&
-         in.cmd_vel_age_s <= cfg.max_cmd_vel_age_s &&
-         in.since_last_blade_cmd_s >= cfg.min_interval_s;
+  return blade_reassert_due(in, cfg) && in.cmd_vel_age_s <= cfg.max_cmd_vel_age_s;
 }
 
 }  // namespace mowgli_hardware

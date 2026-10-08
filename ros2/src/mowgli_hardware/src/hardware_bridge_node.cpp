@@ -4027,7 +4027,10 @@ private:
     // Repeated BT ONs must not bypass the lift-clear delay. Protective OFFs
     // leave the desired direction intact; explicit OFF cancels recovery above.
     const bool enable_now = mow_enabled_ && !lift_detected_ && !waiting_blade_resume_;
-    send_blade_command(enable_now ? 1u : 0u, desired_blade_direction_);
+    if (enable_now && !emergency_active_ && !fw_latched_emergency_)
+      send_blade_on_with_fresh_velocity();
+    else
+      send_blade_command(enable_now ? 1u : 0u, desired_blade_direction_);
 
     // The request was accepted and acted on — a suppressed enable is a
     // configured behaviour, not a failure.
@@ -4072,15 +4075,17 @@ private:
     if (blade_mismatch_since_ns_ == 0)
       blade_mismatch_since_ns_ = now_ns;
 
-    if (should_reassert_blade_on(in, blade_reassert_cfg_))
+    if (blade_reassert_due(in, blade_reassert_cfg_))
     {
+      const bool velocity_was_stale = in.cmd_vel_age_s > blade_reassert_cfg_.max_cmd_vel_age_s;
       RCLCPP_INFO_THROTTLE(get_logger(),
                            *get_clock(),
                            2000,
                            "Blade ON re-asserted: mow_enabled=true but the firmware reports the "
-                           "blade stopped (last cmd_vel %.0f ms ago).",
+                           "blade stopped%s (last cmd_vel %.0f ms ago).",
+                           velocity_was_stale ? " after a zero-velocity stop" : "",
                            in.cmd_vel_age_s * 1e3);
-      send_blade_command(1, desired_blade_direction_);
+      send_blade_on_with_fresh_velocity();
       return;
     }
 
@@ -4099,6 +4104,29 @@ private:
                          "%s.",
                          age_s(blade_mismatch_since_ns_),
                          reason);
+  }
+
+  // Firmware accepts a blade ON only when a CMD_VEL packet arrived recently.
+  // During readiness, collision_monitor may suppress repeated zeros after its
+  // idle timeout, so create a fresh zero at the hardware boundary when needed.
+  // This is always a stop command; once the controller starts, its normal
+  // velocity stream takes over. Never send the blade ON unless the stop packet
+  // (if required) was successfully written inside the firmware freshness window.
+  void send_blade_on_with_fresh_velocity()
+  {
+    const auto max_age_ns =
+        static_cast<std::int64_t>(blade_reassert_cfg_.max_cmd_vel_age_s * 1.0e9);
+    const auto fresh_cmd_vel = [this, max_age_ns]()
+    {
+      const auto now_ns = steadyNowNs();
+      return last_cmd_vel_packet_ns_ != 0 && now_ns >= last_cmd_vel_packet_ns_ &&
+             now_ns - last_cmd_vel_packet_ns_ <= max_age_ns;
+    };
+
+    if (!fresh_cmd_vel())
+      send_cmd_vel_packet(0.0, 0.0);
+    if (fresh_cmd_vel())
+      send_blade_command(1, desired_blade_direction_);
   }
 
   void cancelBladeResume()
