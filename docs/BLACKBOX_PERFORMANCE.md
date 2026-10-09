@@ -95,9 +95,17 @@ still affected maximum elapsed ingress time (0.101 s).
   saturated rejection 27.15 ns/op (mostly dropped calls, not normal throughput).
 - Independent strong review found no remaining blockers or requested fixes and
   independently reran six focused regression groups successfully.
+- GitHub's Linux `Go Tests (gui backend)` job passed the full `go test ./...`
+  suite at implementation commit `2480a75c` (37 seconds). Final local frontend
+  typechecking and full lint pass (zero errors, 897 existing warnings).
+  A full Windows frontend run was stopped after prolonged host contention and
+  failures in existing eslint-config/remote-access tests; it is not claimed as
+  passing. The focused new panel/locale tests passed; Linux frontend CI remains
+  the authoritative full-suite check.
 
-Full Linux suite/race execution and a supported SBC/ROS runtime comparison remain
-merge prerequisites. Windows cannot execute the full API suite because existing
+Focused Linux recorder/API race execution is added to GUI CI. Its result and a
+supported SBC/ROS runtime comparison remain merge prerequisites. Windows cannot
+execute the full API suite because existing
 file-ownership code uses Linux-only `syscall.Stat_t`; no C race toolchain, usable
 local Linux Docker daemon or WSL runtime was available. Actual filesystem ENOSPC
 and disk reserve probing require Linux: local tests inject write failures and
