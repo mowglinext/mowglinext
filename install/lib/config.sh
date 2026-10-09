@@ -621,6 +621,16 @@ gnss_transport_from_state() {
   printf '%s\n' "${transport,,}"
 }
 
+# On OpenMower v1 the GPS sits on ttyAMA2 (open_mower_ros, kernel >= 6.1.28);
+# ttyAMA4 — the usual GNSS port — is the mow xESC there.
+default_gnss_uart_device() {
+  if [[ "${HARDWARE_BACKEND:-}" == "openmower" ]]; then
+    printf '/dev/ttyAMA2\n'
+  else
+    printf '/dev/ttyAMA4\n'
+  fi
+}
+
 gnss_serial_device_from_state() {
   if [[ -n "${GNSS_SERIAL_DEVICE:-}" ]]; then
     printf '%s\n' "$GNSS_SERIAL_DEVICE"
@@ -629,7 +639,7 @@ gnss_serial_device_from_state() {
 
   case "$(gnss_connection_from_serial_device)" in
     usb)  printf '/dev/serial/by-id/usb-stub\n' ;;
-    *)    printf '/dev/ttyAMA4\n' ;;
+    *)    default_gnss_uart_device ;;
   esac
 }
 
@@ -1100,7 +1110,8 @@ Options
   --lang=<en|fr>             Installer language
   --backend=<mowgli|mavros>  Hardware backend (default: mowgli)
   --gnss-connection=<uart|usb>  GNSS serial link (default: uart)
-  --gnss-device=<path>       GNSS serial device (default: /dev/ttyAMA4 for uart)
+  --gnss-device=<path>       GNSS serial device (default for uart: /dev/ttyAMA4,
+                             /dev/ttyAMA2 with --backend=openmower)
   --gnss-baud=<n|auto>       GNSS serial baud (default: keep YAML value or 921600)
   --gnss-receiver-family=<auto|ublox|unicore|nmea>  First-boot receiver family
   --lidar=<none|ldlidar-uart|ldlidar-usb|rplidar-uart|rplidar-usb|stl27l-uart|stl27l-usb>
@@ -1246,7 +1257,7 @@ write_config() {
 
   : "${GNSS_RECEIVER_FAMILY:=auto}"
   : "${GNSS_TRANSPORT:=serial}"
-  : "${GNSS_SERIAL_DEVICE:=/dev/ttyAMA4}"
+  : "${GNSS_SERIAL_DEVICE:=$(default_gnss_uart_device)}"
   : "${GNSS_SERIAL_BAUD:=921600}"
   : "${GNSS_FRAME_ID:=gps_link}"
 

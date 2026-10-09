@@ -62,6 +62,7 @@ MSG_UART_SELECT="Select UART port"
 MSG_UART_MANUAL="Enter manually"
 MSG_UART_MANUAL_PROMPT="UART device path?"
 MSG_UART_INVALID="Invalid choice"
+MSG_UART_PORT_TAKEN="%s cannot use %s: the %s controller is wired there. Pick another port (or USB)."
 MSG_UART_AFTER_REBOOT="available after reboot"
 
 # ── GPS (gps.sh) ──

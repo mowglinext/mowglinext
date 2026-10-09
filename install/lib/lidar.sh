@@ -22,7 +22,7 @@ configure_lidar() {
 
     # For UART connections, always let user confirm/change the port
     if [[ "${LIDAR_CONNECTION:-}" == "uart" ]]; then
-      pick_uart_port "${LIDAR_UART_DEVICE:-/dev/ttyAMA5}"
+      pick_free_uart_port "${LIDAR_UART_DEVICE:-/dev/ttyAMA5}" "LiDAR" || return 1
       LIDAR_UART_DEVICE="$REPLY"
     fi
   elif [[ "${NON_INTERACTIVE:-false}" == "true" && -z "${LIDAR_TYPE:-}" ]]; then
@@ -100,7 +100,7 @@ configure_lidar() {
           ;;
         2)
           LIDAR_CONNECTION="uart"
-          pick_uart_port "/dev/ttyAMA5"
+          pick_free_uart_port "/dev/ttyAMA5" "LiDAR" || return 1
           LIDAR_UART_DEVICE="$REPLY"
           ;;
         *)
