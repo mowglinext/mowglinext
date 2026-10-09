@@ -695,11 +695,12 @@ def s16_docking(probe, rig, R, esc):
     with rig.lock:
         rig.ll.v_battery = 29.3  # above the board's 29 V cutoff -> relay opens
     # /battery_state publishes slower than /power: wait for the whole picture.
-    ok = wait_for(lambda: not probe.get('power').charger_enabled
+    ok = wait_for(lambda: probe.get('power').charger_status == 'docked, not charging'
                   and probe.get('battery').power_supply_status == BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING, 5)
     st, pw, b = probe.get('status'), probe.get('power'), probe.get('battery')
+    # Power.charger_enabled is the behaviour tree's is_charging: on the dock.
     R.check(S, 'battery full: relay open but STILL docked',
-            ok and st.is_charging and pw.charger_status == 'docked, not charging'
+            ok and st.is_charging and pw.charger_enabled
             and b.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING,
             f'is_charging={st.is_charging} relay={pw.charger_enabled} "{pw.charger_status}"')
     with rig.lock:
@@ -715,9 +716,19 @@ def s17_old_firmware(probe, rig, R, esc):
         rig.ll.generation = 'v0.13'
     # The relay last opened in the docking scenario; the firmware only retries
     # after CHARGING_RETRY_MILLIS (10 s).
-    ok = wait_for(lambda: probe.get('power').charger_enabled, 13)
-    R.check(S, 'old firmware reports the relay ON off the dock (after its 10 s retry)', ok)
-    R.check(S, '...yet the bridge does NOT call it docked', not probe.get('status').is_charging)
+    with rig.lock:
+        rig.ll.charge_current_offset = 0.05  # what the field robot's sensor reads off the dock
+    ok = wait_for(lambda: rig.ll.charging_allowed, 13)
+    R.check(S, 'old firmware closes the relay off the dock (after its 10 s retry)', ok)
+    time.sleep(0.5)
+    st, pw = probe.get('status'), probe.get('power')
+    # Field report 2026-10-09: the relay bit in Power.charger_enabled made the
+    # behaviour tree show "charging" mid-lawn (status_snapshot.cpp reads it).
+    R.check(S, '...yet nothing calls it docked or charging',
+            not st.is_charging and not pw.charger_enabled and pw.charger_status == 'idle',
+            f'is_charging={st.is_charging} charger_enabled={pw.charger_enabled} "{pw.charger_status}"')
+    R.check(S, 'the 0.05 A sensor offset is not reported as a charge current',
+            pw.charge_current == 0.0, f'charge_current={pw.charge_current:.3f}')
     drive(probe, rig, 0.3, 0.0, 4.0)
     vx, n = probe.mean_since('odom', time.monotonic() - 1.5, 1)
     # Zeroed (Invariant 11 misapplied) would read 0.0; the speed itself is
@@ -726,6 +737,7 @@ def s17_old_firmware(probe, rig, R, esc):
     stop_driving(probe, rig)
     with rig.lock:
         rig.ll.generation = 'v1-fw'
+        rig.ll.charge_current_offset = 0.0
 
 
 def s18_buttons(probe, rig, R, esc):

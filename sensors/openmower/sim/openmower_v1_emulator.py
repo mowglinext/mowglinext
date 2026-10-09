@@ -403,6 +403,7 @@ class LowLevelBoard:
         self.v_charge = 0.2
         self.v_battery = 27.0
         self.charging_allowed = False
+        self.charge_current_offset = 0.0  # the real sensor reads ~0.05 A of nothing
         self._charging_disabled_ms = -1e12
         self.gyro_bias_z = 0.0
         self.paused = False                    # cable unplugged: no bytes either way
@@ -422,7 +423,7 @@ class LowLevelBoard:
 
     def charging_current(self) -> float:
         docked = self.v_charge >= 3.0
-        return 1.0 if (docked and self.charging_allowed) else 0.0
+        return (1.0 if (docked and self.charging_allowed) else 0.0) + self.charge_current_offset
 
     # --- firmware loop ----------------------------------------------------
     def service(self, now: float):
