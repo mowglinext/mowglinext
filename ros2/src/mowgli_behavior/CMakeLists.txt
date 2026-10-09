@@ -264,6 +264,11 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
+  ament_add_ros_isolated_gtest(test_escape_authorization
+    test/test_escape_authorization.cpp src/escape_nodes.cpp)
+  target_include_directories(test_escape_authorization PRIVATE include)
+  target_link_libraries(test_escape_authorization ${behavior_node_dependencies})
+
   # ---- test_docking_boundary_exempt ----
   # Regression for "Mowing Complete → robot stops short of the dock": exercises
   # the IsDocking condition and the BoundaryGuard whitelist logic that exempts
