@@ -231,6 +231,64 @@ TEST_F(MotionGeometryReload, NegativeAreaCountRejectsReplacement)
   ExpectRevokedAfterFailedReload("area_count: -1\n");
 }
 
+TEST_F(MotionGeometryReload, MissingObstacleCountCannotHideDeclaredHole)
+{
+  ExpectRevokedAfterFailedReload(
+      "area_count: 1\narea_0_polygon: -3,-3;3,-3;3,3;-3,3\n"
+      "area_0_obstacle_0: -1,-1;1,-1;1,1;-1,1\n");
+}
+
+TEST_F(MotionGeometryReload, ZeroObstacleCountCannotHideDeclaredHole)
+{
+  ExpectRevokedAfterFailedReload(ValidArea() + "area_0_obstacle_0: -1,-1;1,-1;1,1;-1,1\n");
+}
+
+TEST_F(MotionGeometryReload, WhitespaceAroundIndexedKeyCannotHideDeclaredHole)
+{
+  ExpectRevokedAfterFailedReload(ValidArea() + "  area_0_obstacle_0 \t: -1,-1;1,-1;1,1;-1,1\n");
+}
+
+TEST_F(MotionGeometryReload, UndersizedObstacleCountCannotHideLaterHole)
+{
+  ExpectRevokedAfterFailedReload(ValidArea() +
+                                 "area_0_obstacle_count: 1\n"
+                                 "area_0_obstacle_0: -2,-2;-1,-2;-1,-1;-2,-1\n"
+                                 "area_0_obstacle_1: 0,0;1,0;1,1;0,1\n");
+}
+
+TEST_F(MotionGeometryReload, MissingAreaCountCannotHideDeclaredArea)
+{
+  ExpectRevokedAfterFailedReload("area_0_polygon: -3,-3;3,-3;3,3;-3,3\n");
+}
+
+TEST_F(MotionGeometryReload, UndersizedAreaCountCannotHideLaterArea)
+{
+  ExpectRevokedAfterFailedReload(ValidArea() + "area_1_polygon: 4,-3;6,-3;6,3;4,3\n");
+}
+
+TEST_F(MotionGeometryReload, NoncanonicalHoleIndexCannotHideDeclaredHole)
+{
+  ExpectRevokedAfterFailedReload(ValidArea() +
+                                 "area_0_obstacle_count: 1\n"
+                                 "area_0_obstacle_0: -2,-2;-1,-2;-1,-1;-2,-1\n"
+                                 "area_0_obstacle_00: 0,0;1,0;1,1;0,1\n");
+}
+
+TEST_F(MotionGeometryReload, LegacyMapWithoutOptionalHoleCountRemainsUsable)
+{
+  StartWithPublishedValidGeometry();
+  Write("area_count: 1\narea_0_polygon: -3,-3;3,-3;3,3;-3,3\n");
+  ASSERT_NO_THROW(node_->load_areas_for_test(path_));
+  const auto before = received_.size();
+  node_->build_keepout_mask_for_test();
+  ObserveNewPublication(before);
+  ASSERT_EQ(received_.back().markers.size(), 1u);
+  const auto snapshot = mowgli_interfaces::motion::Snapshot::parse(received_.back());
+  ASSERT_TRUE(snapshot->valid);
+  const mowgli_interfaces::motion::Ring body{{-0.1, -0.1}, {0.1, -0.1}, {0.1, 0.1}, {-0.1, 0.1}};
+  EXPECT_TRUE(snapshot->permits({0, 0, 0}, body, 0.1, 0, 1, true));
+}
+
 TEST_F(MotionGeometryReload, CoordinateNumberTailCannotBeSilentlyAccepted)
 {
   ExpectRevokedAfterFailedReload(ValidArea() +
