@@ -6,9 +6,17 @@
 // require continuously fresh Fixed for the dwell before learning resumes.
 // LidarComputeGate separately owns PF scheduling and reseeding. These states
 // describe mapping availability, not permission to compute or apply a factor.
+//
+// Insertion is gated on MOTION as well as time: a scan is written only once the
+// robot has travelled min_insert_travel_m (odometry translation) since the last
+// written scan. A robot standing still — on the dock with no charger voltage,
+// paused, waiting for RTK — sees the same scene every period while its pose
+// estimate slowly drifts (gyro yaw, RTK Float jitter); writing that scene again
+// and again at a drifting pose smears it into false walls. Moving re-arms it.
 
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 namespace fusion_graph
@@ -34,19 +42,27 @@ public:
   LidarMapAnchorGate(bool enabled,
                      double engage_age_s,
                      double insert_period_s,
-                     double disengage_dwell_s = 1.0)
+                     double disengage_dwell_s = 1.0,
+                     double min_insert_travel_m = 0.0)
       : enabled_(enabled),
         engage_age_s_(engage_age_s),
         insert_period_s_(insert_period_s),
-        disengage_dwell_s_(disengage_dwell_s)
+        disengage_dwell_s_(disengage_dwell_s),
+        min_insert_travel_m_(min_insert_travel_m)
   {
   }
 
   // rtk_fixed_age_s: seconds since the last accepted RTK-Fixed receipt
   // (a large value when none was ever received). map_has_structure: the grid
   // exports at least one occupied cell. now_s: ROS time; reconstruct this gate
-  // when its clock epoch changes.
-  LidarAnchorDecision Step(double rtk_fixed_age_s, bool map_has_structure, double now_s)
+  // when its clock epoch changes. odom_x/odom_y: the robot's odometry-frame
+  // position (wheel + gyro dead reckoning — it does not move while the wheels
+  // do not), compared against the position of the last written scan.
+  LidarAnchorDecision Step(double rtk_fixed_age_s,
+                           bool map_has_structure,
+                           double now_s,
+                           double odom_x = 0.0,
+                           double odom_y = 0.0)
   {
     LidarAnchorDecision d;
     if (!enabled_)
@@ -71,9 +87,18 @@ public:
       }
       fresh_since_s_ = -1.0;
       state_ = LidarAnchorState::kMapping;
-      d.insert_scan = (now_s - last_insert_s_) >= insert_period_s_;
+      const bool period_elapsed = (now_s - last_insert_s_) >= insert_period_s_;
+      const bool moved =
+          !have_insert_pose_ ||
+          std::hypot(odom_x - last_insert_x_, odom_y - last_insert_y_) >= min_insert_travel_m_;
+      d.insert_scan = period_elapsed && moved;
       if (d.insert_scan)
+      {
         last_insert_s_ = now_s;
+        last_insert_x_ = odom_x;
+        last_insert_y_ = odom_y;
+        have_insert_pose_ = true;
+      }
     }
     else if (!map_has_structure)
     {
@@ -99,8 +124,12 @@ private:
   double engage_age_s_;
   double insert_period_s_;
   double disengage_dwell_s_;
+  double min_insert_travel_m_;
   LidarAnchorState state_ = LidarAnchorState::kDisabled;
   double last_insert_s_ = -1e9;
+  bool have_insert_pose_ = false;  // first scan is always allowed
+  double last_insert_x_ = 0.0;
+  double last_insert_y_ = 0.0;
   double fresh_since_s_ = -1.0;  // when Fixed became fresh again while anchoring; <0 = not yet
 };
 
