@@ -106,6 +106,7 @@ export function FirmwareUpdateCard({
                 onCancel={() => setFlashOpen(false)}
             >
                 <FlashBoardComponent
+                    variant="modal"
                     mowerModel={configuredModel}
                     onNext={() => {
                         setFlashOpen(false);
