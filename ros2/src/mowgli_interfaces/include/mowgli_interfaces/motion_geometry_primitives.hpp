@@ -4,15 +4,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
+
+#include "mowgli_interfaces/motion_geometry_types.hpp"
+#include <boost/multiprecision/cpp_int.hpp>
 
 namespace mowgli_interfaces::motion
 {
-struct Point
-{
-  double x, y;
-};
-using Ring = std::vector<Point>;
 constexpr double kEpsilon = 1e-8;
 
 inline Point interpolate(Point a, Point b, double t)
@@ -72,24 +71,69 @@ inline double ringDistance(Point p, const Ring& ring)
 inline std::vector<double> cuts(Point a, Point b, const std::vector<Ring>& rings)
 {
   std::vector<double> result{0, 1};
-  const Point d{b.x - a.x, b.y - a.y};
-  const double length2 = d.x * d.x + d.y * d.y;
+  const long double dx = static_cast<long double>(b.x) - a.x;
+  const long double dy = static_cast<long double>(b.y) - a.y;
   for (const auto& ring : rings)
     for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
     {
-      const Point e{ring[i].x - ring[j].x, ring[i].y - ring[j].y};
-      const Point q{ring[j].x - a.x, ring[j].y - a.y};
-      const double denominator = cross(d, e);
-      if (std::abs(denominator) > kEpsilon)
+      const long double ex = static_cast<long double>(ring[i].x) - ring[j].x;
+      const long double ey = static_cast<long double>(ring[i].y) - ring[j].y;
+      const long double qx = static_cast<long double>(ring[j].x) - a.x;
+      const long double qy = static_cast<long double>(ring[j].y) - a.y;
+      const long double denominator = dx * ey - dy * ex;
+      // Absolute determinant thresholds miss real shallow crossings. Bound
+      // subtraction/product rounding by coordinate scale, then resolve only
+      // ambiguous determinants exactly (binary doubles are exact rationals).
+      const long double error = 16 * std::numeric_limits<long double>::epsilon() *
+                                ((std::abs(a.x) + std::abs(b.x)) * std::abs(ey) +
+                                 (std::abs(a.y) + std::abs(b.y)) * std::abs(ex) +
+                                 (std::abs(ring[i].x) + std::abs(ring[j].x)) * std::abs(dy) +
+                                 (std::abs(ring[i].y) + std::abs(ring[j].y)) * std::abs(dx));
+      const long double numerator_t = qx * ey - qy * ex;
+      const long double numerator_u = qx * dy - qy * dx;
+      const long double error_t = 16 * std::numeric_limits<long double>::epsilon() *
+                                  ((std::abs(ring[j].x) + std::abs(a.x)) * std::abs(ey) +
+                                   (std::abs(ring[j].y) + std::abs(a.y)) * std::abs(ex) +
+                                   (std::abs(ring[i].x) + std::abs(ring[j].x)) * std::abs(qy) +
+                                   (std::abs(ring[i].y) + std::abs(ring[j].y)) * std::abs(qx));
+      const long double error_u = 16 * std::numeric_limits<long double>::epsilon() *
+                                  ((std::abs(ring[j].x) + std::abs(a.x)) * std::abs(dy) +
+                                   (std::abs(ring[j].y) + std::abs(a.y)) * std::abs(dx) +
+                                   (std::abs(b.x) + std::abs(a.x)) * std::abs(qy) +
+                                   (std::abs(b.y) + std::abs(a.y)) * std::abs(qx));
+      // Resolve poorly conditioned intersection fractions exactly as well.
+      // The fast branch's fraction error is far below the boundary tolerance.
+      const long double fraction_resolution = std::abs(denominator) * 1e-14L;
+      if (std::abs(denominator) > error && error < fraction_resolution &&
+          error_t < fraction_resolution && error_u < fraction_resolution)
       {
-        const double t = cross(q, e) / denominator, u = cross(q, d) / denominator;
+        const long double t = numerator_t / denominator;
+        const long double u = numerator_u / denominator;
         if (t >= 0 && t <= 1 && u >= 0 && u <= 1)
-          result.push_back(t);
+          result.push_back(static_cast<double>(t));
       }
-      else if (length2 > 0 && std::abs(cross(q, d)) <= kEpsilon)
+      else
       {
-        for (auto p : {ring[j], ring[i]})
-          result.push_back(std::clamp(((p.x - a.x) * d.x + (p.y - a.y) * d.y) / length2, 0.0, 1.0));
+        using Exact = boost::multiprecision::cpp_rational;
+        const Exact edx = Exact(b.x) - Exact(a.x), edy = Exact(b.y) - Exact(a.y);
+        const Exact eex = Exact(ring[i].x) - Exact(ring[j].x);
+        const Exact eey = Exact(ring[i].y) - Exact(ring[j].y);
+        const Exact eqx = Exact(ring[j].x) - Exact(a.x), eqy = Exact(ring[j].y) - Exact(a.y);
+        const Exact determinant = edx * eey - edy * eex;
+        if (determinant != 0)
+        {
+          const Exact t = (eqx * eey - eqy * eex) / determinant;
+          const Exact u = (eqx * edy - eqy * edx) / determinant;
+          if (t >= 0 && t <= 1 && u >= 0 && u <= 1)
+            result.push_back(t.convert_to<double>());
+        }
+        else if (edx * edx + edy * edy > 0 && eqx * edy - eqy * edx == 0)
+          for (auto p : {ring[j], ring[i]})
+          {
+            const Exact t = ((Exact(p.x) - Exact(a.x)) * edx + (Exact(p.y) - Exact(a.y)) * edy) /
+                            (edx * edx + edy * edy);
+            result.push_back(std::clamp(t.convert_to<double>(), 0.0, 1.0));
+          }
       }
     }
   std::sort(result.begin(), result.end());
@@ -129,6 +173,8 @@ struct Geometry
   {
     if (!authorized(a) || !authorized(b))
       return false;
+    if (a.x == b.x && a.y == b.y)
+      return true;
     const auto ts = cuts(a, b, allowed);
     for (std::size_t i = 1; i < ts.size(); ++i)
       if (!authorized(interpolate(a, b, (ts[i - 1] + ts[i]) / 2)))
