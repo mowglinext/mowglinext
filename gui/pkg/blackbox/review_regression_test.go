@@ -8,6 +8,23 @@ import (
 	"time"
 )
 
+func TestZeroAvailableMemoryIsKnownPressure(t *testing.T) {
+	s := parseMemoryInfo([]byte("MemTotal: 131072 kB\nMemAvailable: 0 kB\n"))
+	if !s.known || s.available != 0 || s.total != 128<<20 {
+		t.Fatalf("zero availability parsed as unknown: %+v", s)
+	}
+	r, _ := testRecorder(t)
+	r.mu.Lock()
+	r.applyPressure(s)
+	r.mu.Unlock()
+	if !r.Status().MemoryPressure {
+		t.Fatal("exhausted host did not suspend telemetry")
+	}
+	if parseMemoryInfo([]byte("MemTotal: 131072 kB\n")).known {
+		t.Fatal("missing availability field parsed as valid")
+	}
+}
+
 func TestQueuedObservationRespectsLoweredMessageLimit(t *testing.T) {
 	r, _ := testRecorder(t)
 	cfg := r.Status().Config
