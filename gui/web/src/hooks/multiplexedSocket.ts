@@ -38,14 +38,60 @@ const CONTINUOUS_TOPICS = new Set([
     "wheelOdom", "lidar", "power", "diagnostics", "fusionDiag", "fusionRaw",
 ]);
 
+/**
+ * Topics that only feed pictures and that publish CONTINUOUSLY or periodically: the
+ * mow-progress grid (republished every couple of seconds), the scan, the pose and the raw
+ * sensor streams. Nobody looks at them while the tab is hidden, and they are the bulk of the
+ * bytes over the mower's wifi — weakest exactly where it mows. They are unsubscribed while
+ * the tab is hidden and resubscribed when it is shown again; the next frame follows within
+ * moments, so the page is complete again at once.
+ *
+ * Deliberately NOT here:
+ *  - anything background code acts on — highLevelStatus, status, emergency, power,
+ *    diagnostics, gps/gnssStatus — which drive notifications, the battery gauge and the
+ *    app shell even when the tab is not in front;
+ *  - topics that publish only ON CHANGE (map, plan, path, obstacles, recordingTrajectory,
+ *    lidarMap, cogHeading, magYaw): the server forgets its copy once the last listener
+ *    leaves, so after a resubscribe they could stay empty until the next change.
+ *    Pausing them needs the server to keep its latest message first.
+ */
+export const PAUSE_WHEN_HIDDEN = new Set([
+    "mowProgress", "lidar", "pose", "fusionRaw", "imu", "ticks", "wheelOdom",
+]);
+
+/**
+ * Occupancy-grid topics the server can send as PATCHES (gui/pkg/api/grid_delta.go): after one
+ * full grid only the cells that changed, which while mowing is a few dozen of over a million.
+ * The browser keeps the grid and applies each patch, so listeners still receive a complete
+ * grid object. A patch that does not fit what is held (a frame was lost) is dropped and a full
+ * grid is requested, so a wrong picture can never persist.
+ */
+export const DELTA_TOPICS = new Set(["mowProgress", "lidarMap"]);
+
+interface GridPatch {
+    /** The seq the held grid must have for this patch to apply. */
+    base: number;
+    seq: number;
+    header?: unknown;
+    /** gaps[i] = distance from the previous changed index (from 0 for the first). */
+    gaps: number[];
+    vals: number[];
+}
+
+type HeldGrid = Record<string, unknown> & {data: number[]};
+
 interface ServerFrame {
     topic: string;
-    data: unknown;
+    data?: unknown;
+    /** Present on the full grid frames of a delta subscription. */
+    seq?: number;
+    patch?: GridPatch;
 }
 
 interface ClientOp {
-    op: "subscribe" | "unsubscribe";
+    op: "subscribe" | "unsubscribe" | "resync";
     topic: string;
+    delta?: boolean;
 }
 
 export class MultiplexedSocket {
@@ -62,9 +108,39 @@ export class MultiplexedSocket {
     private lastFrameAt = 0;
     private statusListeners = new Set<StatusListener>();
     private lastDecodeWarnAt = 0;
+    // True while the tab is hidden: the PAUSE_WHEN_HIDDEN topics are then not
+    // subscribed on the server, although their listeners stay registered.
+    private hidden = false;
+    // The grid each delta topic currently holds, and the topics we asked a full grid for.
+    private grids = new Map<string, {seq: number; grid: HeldGrid}>();
+    private resyncing = new Set<string>();
 
     constructor(url: string) {
         this.url = url;
+    }
+
+    /** Whether the server should currently be streaming this topic to us. */
+    private isServed(topic: string): boolean {
+        return !(this.hidden && PAUSE_WHEN_HIDDEN.has(topic));
+    }
+
+    /**
+     * Tell the socket whether the tab is in front. Hidden: stop the visual-only
+     * topics on the server. Shown: start them again (the server replays its latest
+     * message per topic, so the first frame is a complete picture).
+     */
+    setHidden(hidden: boolean): void {
+        if (hidden === this.hidden) return;
+        this.hidden = hidden;
+        if (this.state === "open") {
+            for (const topic of this.listeners.keys()) {
+                if (PAUSE_WHEN_HIDDEN.has(topic)) {
+                    this.send({op: hidden ? "unsubscribe" : "subscribe", topic});
+                }
+            }
+        }
+        if (!hidden) this.lastFrameAt = performance.now();
+        this.updateSilenceWatchdog();
     }
 
     /** Current status for the shared connection ("closed" when idle). */
@@ -114,7 +190,7 @@ export class MultiplexedSocket {
 
         if (this.state === "idle") {
             this.connect();
-        } else if (this.state === "open" && isFirstSubscriberForTopic) {
+        } else if (this.state === "open" && isFirstSubscriberForTopic && this.isServed(topic)) {
             this.send({op: "subscribe", topic});
         }
         this.updateSilenceWatchdog();
@@ -129,7 +205,8 @@ export class MultiplexedSocket {
         this.pendingFirst.delete(listener);
         if (set.size === 0) {
             this.listeners.delete(topic);
-            if (this.state === "open") {
+            this.forgetGrid(topic);
+            if (this.state === "open" && this.isServed(topic)) {
                 this.send({op: "unsubscribe", topic});
             }
         }
@@ -168,7 +245,7 @@ export class MultiplexedSocket {
             this.reconnectAttempt = 0;
             // Re-subscribe to every topic that still has listeners.
             for (const topic of this.listeners.keys()) {
-                this.send({op: "subscribe", topic});
+                if (this.isServed(topic)) this.send({op: "subscribe", topic});
             }
             this.updateSilenceWatchdog();
             this.notifyStatus();
@@ -182,13 +259,20 @@ export class MultiplexedSocket {
             let frame: ServerFrame;
             try {
                 frame = unpack(new Uint8Array(data)) as ServerFrame;
-                if (!frame || typeof frame.topic !== "string" || !("data" in frame)) return;
+                if (!frame || typeof frame.topic !== "string" || !("data" in frame || "patch" in frame)) return;
             } catch (err) {
                 this.warnDecodeFailure(data, err);
                 return;
             }
             const set = this.listeners.get(frame.topic);
             if (!set || set.size === 0) return;
+            let payload: unknown = frame.data;
+            if (frame.patch !== undefined) {
+                payload = this.applyGridPatch(frame.topic, frame.patch);
+                if (payload === undefined) return; // not applicable: a full grid was requested
+            } else if (typeof frame.seq === "number") {
+                this.rememberGrid(frame.topic, frame.seq, frame.data);
+            }
             // Transport liveness only: a cached ROS value is not evidence of a
             // fresh physical observation. Use a monotonic clock for delivery.
             this.lastFrameAt = performance.now();
@@ -199,7 +283,7 @@ export class MultiplexedSocket {
                 const isFirst = this.pendingFirst.has(cb);
                 if (isFirst) this.pendingFirst.delete(cb);
                 try {
-                    cb(frame.data, isFirst);
+                    cb(payload, isFirst);
                 } catch (err) {
                     console.error("MultiplexedSocket: listener threw", err);
                 }
@@ -221,6 +305,8 @@ export class MultiplexedSocket {
     }
 
     private disconnect(): void {
+        this.grids.clear();
+        this.resyncing.clear();
         this.stopSilenceWatchdog();
         const ws = this.ws;
         this.ws = null;
@@ -242,7 +328,8 @@ export class MultiplexedSocket {
     }
 
     private updateSilenceWatchdog(): void {
-        const expectsTraffic = Array.from(this.listeners.keys()).some(topic => CONTINUOUS_TOPICS.has(topic));
+        // A topic paused with the tab hidden is silent by design, not by failure.
+        const expectsTraffic = Array.from(this.listeners.keys()).some(topic => CONTINUOUS_TOPICS.has(topic) && this.isServed(topic));
         if (this.state !== "open" || !expectsTraffic) {
             this.stopSilenceWatchdog();
         } else if (this.silenceTimer == null) {
@@ -296,8 +383,54 @@ export class MultiplexedSocket {
         }, delay);
     }
 
+    private forgetGrid(topic: string): void {
+        this.grids.delete(topic);
+        this.resyncing.delete(topic);
+    }
+
+    private rememberGrid(topic: string, seq: number, grid: unknown): void {
+        this.resyncing.delete(topic);
+        if (grid && typeof grid === "object" && Array.isArray((grid as {data?: unknown}).data)) {
+            this.grids.set(topic, {seq, grid: grid as HeldGrid});
+        } else {
+            this.grids.delete(topic);
+        }
+    }
+
+    /** The grid with the patch applied, or undefined (after asking for a full grid) when it does not fit. */
+    private applyGridPatch(topic: string, patch: GridPatch): HeldGrid | undefined {
+        const held = this.grids.get(topic);
+        if (!held || held.seq !== patch.base || !Array.isArray(patch.gaps) || !Array.isArray(patch.vals)
+            || patch.gaps.length !== patch.vals.length) {
+            this.requestFullGrid(topic);
+            return undefined;
+        }
+        const data = held.grid.data;
+        let at = 0;
+        for (let i = 0; i < patch.gaps.length; i++) {
+            at += patch.gaps[i];
+            if (at < 0 || at >= data.length) {
+                this.requestFullGrid(topic);
+                return undefined;
+            }
+            data[at] = patch.vals[i];
+        }
+        held.seq = patch.seq;
+        // A new top-level object (consumers may compare references), the same cell array.
+        held.grid = {...held.grid, header: patch.header ?? held.grid.header};
+        return held.grid;
+    }
+
+    private requestFullGrid(topic: string): void {
+        this.grids.delete(topic);
+        if (this.resyncing.has(topic)) return;
+        this.resyncing.add(topic);
+        this.send({op: "resync", topic});
+    }
+
     private send(op: ClientOp): void {
         if (!this.ws || this.state !== "open") return;
+        if (op.op === "subscribe" && DELTA_TOPICS.has(op.topic)) op = {...op, delta: true};
         try {
             this.ws.send(JSON.stringify(op));
         } catch (err) {
@@ -316,7 +449,12 @@ function multiplexUrl(): string {
 
 export function getMultiplexedSocket(): MultiplexedSocket {
     if (singleton == null) {
-        singleton = new MultiplexedSocket(multiplexUrl());
+        const socket = new MultiplexedSocket(multiplexUrl());
+        if (typeof document !== "undefined") {
+            socket.setHidden(document.hidden);
+            document.addEventListener("visibilitychange", () => socket.setHidden(document.hidden));
+        }
+        singleton = socket;
     }
     return singleton;
 }
