@@ -280,5 +280,15 @@ TEST(MotionSweeps, LargeRecordedPolygonPermitsStationaryCompletePivot)
   const auto elapsed =
       std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
   std::cout << "stationary pivot polygon_vertices=32768 checks=3 mean_us=" << elapsed / 3 << '\n';
+  for (const double omega : {0.0, 1e-12, 0.2})
+  {
+    const auto began = std::chrono::steady_clock::now();
+    for (int i = 0; i < 100; ++i)
+      ASSERT_TRUE(geometry->permits({0, 0, 0}, kBody, 0.2, omega, 0.1, true));
+    const auto duration =
+        std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - began).count();
+    std::cout << "translation polygon_vertices=32768 omega=" << omega
+              << " checks=100 mean_us=" << duration / 100 << '\n';
+  }
 }
 }  // namespace
