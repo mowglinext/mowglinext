@@ -786,6 +786,18 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     slot->last_error_m = error_m;
     slot->last_index = index;
   };
+  follow_accept_ = std::make_shared<FollowAcceptSlot>();
+  follow_opts.goal_response_callback =
+      [slot = follow_accept_,
+       client = std::weak_ptr(follow_client_)](const FollowGoalHandle::SharedPtr& handle)
+  {
+    std::lock_guard<std::mutex> lk(slot->mutex);
+    auto live = client.lock();
+    if (slot->abandoned && handle && live)
+    {
+      live->async_cancel_goal(handle);
+    }
+  };
   follow_future_ = follow_client_->async_send_goal(goal, follow_opts);
   swath_goal_sent_ = true;
   follow_goal_ever_sent_ = true;
@@ -1465,6 +1477,7 @@ BT::NodeStatus FollowStrip::onRunning()
     if (follow_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
       return BT::NodeStatus::RUNNING;
     follow_handle_ = follow_future_.get();
+    follow_accept_.reset();
     if (!follow_handle_)
     {
       RCLCPP_WARN(ctx->node->get_logger(),
@@ -1652,7 +1665,7 @@ void FollowStrip::onHalted()
   // Preempt (recharge, e-stop, command change) mid-path: capture how far we got
   // and persist the resume cursor so the next dispatch continues from here
   // rather than re-mowing the whole area from the start.
-  if (follow_handle_ && total_path_poses_ > 0)
+  if ((follow_handle_ || follow_accept_) && total_path_poses_ > 0)
   {
     updateProgress(ctx);
     persistResumeCursor(ctx);
@@ -1662,7 +1675,7 @@ void FollowStrip::onHalted()
 
 BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, bool mid_pass)
 {
-  if (mid_pass && follow_handle_ && total_path_poses_ > 0)
+  if (mid_pass && (follow_handle_ || follow_accept_) && total_path_poses_ > 0)
   {
     updateProgress(ctx);
     persistResumeCursor(ctx);
@@ -1682,6 +1695,17 @@ BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, 
 
 void FollowStrip::abortActiveGoals(const std::shared_ptr<BTContext>& ctx)
 {
+  if (follow_accept_)
+  {
+    std::lock_guard<std::mutex> lk(follow_accept_->mutex);
+    follow_accept_->abandoned = true;
+    if (!follow_handle_ && follow_future_.valid() &&
+        follow_future_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
+    {
+      follow_handle_ = follow_future_.get();  // accepted already: cancel it below
+    }
+  }
+  follow_accept_.reset();
   if (follow_handle_)
   {
     try

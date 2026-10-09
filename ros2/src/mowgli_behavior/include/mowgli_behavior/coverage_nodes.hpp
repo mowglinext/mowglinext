@@ -105,6 +105,17 @@ constexpr double kTransitToStripUnknownGapM = 30.0;
 /// shared_ptr so the callback never touches a destroyed node, and behind a
 /// mutex so a future Reentrant callback group cannot race the BT tick (today
 /// they are serialized — see bt_context.hpp).
+/// A FollowCoveragePath goal between async_send_goal and its acceptance. The BT
+/// only reads the goal handle on its next tick, so a halt in that window would
+/// otherwise neither persist the cursor nor cancel the goal — which the server
+/// then accepts and drives with nobody watching. The goal-response callback and
+/// the halt meet here under the mutex: whichever comes second cancels.
+struct FollowAcceptSlot
+{
+  std::mutex mutex;
+  bool abandoned = false;
+};
+
 struct TransitResultSlot
 {
   std::mutex mutex;
@@ -387,6 +398,8 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr coverage_plan_pub_;
   std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
   FollowGoalHandle::SharedPtr follow_handle_;
+  /// Set while a sent follow goal has no handle yet (see FollowAcceptSlot).
+  std::shared_ptr<FollowAcceptSlot> follow_accept_;
 
   /// Terminal verdicts from the result callbacks. Polling a goal handle is not
   /// enough: a goal the server finishes in the same instant it accepts it can

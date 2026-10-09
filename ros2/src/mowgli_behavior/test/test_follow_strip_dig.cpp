@@ -42,6 +42,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -126,8 +127,15 @@ public:
     server_ = rclcpp_action::create_server<ActionT>(
         node,
         name,
-        [](const rclcpp_action::GoalUUID&, std::shared_ptr<const typename ActionT::Goal>)
+        [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const typename ActionT::Goal>)
         {
+          std::unique_lock<std::mutex> lock(mutex_);
+          ++requests_;
+          accept_cv_.wait(lock,
+                          [this]()
+                          {
+                            return !hold_accept_;
+                          });
           return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         },
         [](const std::shared_ptr<Handle>)
@@ -139,6 +147,23 @@ public:
           std::lock_guard<std::mutex> lock(mutex_);
           handles_.push_back(handle);
         });
+  }
+
+  /// While held, a goal request is received but not answered: the client's
+  /// goal handle stays pending (the window between send and acceptance).
+  void holdAccept(bool hold)
+  {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      hold_accept_ = hold;
+    }
+    accept_cv_.notify_all();
+  }
+
+  std::size_t requestCount()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return requests_;
   }
 
   std::size_t goalCount()
@@ -180,6 +205,9 @@ public:
 private:
   typename rclcpp_action::Server<ActionT>::SharedPtr server_;
   std::mutex mutex_;
+  std::condition_variable accept_cv_;
+  bool hold_accept_ = false;
+  std::size_t requests_ = 0;
   std::vector<std::shared_ptr<Handle>> handles_;
 };
 
@@ -228,6 +256,8 @@ protected:
 
   void TearDown() override
   {
+    follow->holdAccept(false);
+    navigate->holdAccept(false);
     tree.reset();
     executor->cancel();
     if (spinner.joinable())
@@ -947,6 +977,38 @@ TEST_F(FollowStripDigTest, ResumeDoesNotCompleteEarlierUnitSkippedAfterTransitFa
             BT::NodeStatus::RUNNING);
   EXPECT_DOUBLE_EQ(follow->goal(2)->path.poses.front().pose.position.x,
                    skipped_unit.poses.front().pose.position.x);
+}
+
+// A halt between sending the coverage goal and the server accepting it (the
+// BT only reads the handle on its next tick) must still save the cursor, and
+// the goal the server accepts afterwards must be cancelled — not driven with
+// nobody watching it.
+TEST_F(FollowStripDigTest, HaltBeforeAcceptanceSavesCursorAndCancelsTheLateGoal)
+{
+  follow->holdAccept(true);
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->requestCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 0u);
+
+  tree->haltTree();
+  EXPECT_EQ(ctx->area_resume_pose_index.count(0), 1u)
+      << "a halt while the goal is in flight must persist the resume cursor";
+
+  follow->holdAccept(false);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < deadline &&
+         !(follow->goalCount() == 1 && follow->isCanceling(0)))
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(follow->goalCount(), 1u);
+  EXPECT_TRUE(follow->isCanceling(0)) << "the goal accepted after the halt must be cancelled";
 }
 
 // The contrasting terminal result remains the only ordinary completion path:
