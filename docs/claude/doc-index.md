@@ -13,6 +13,9 @@
 - [Transit authorization](../TRANSIT_AUTHORIZATION.md) — **current**, operator/contributor:
   normal transit polygon authorization, bounded terminal legs, explicit recovery,
   and required physical acceptance procedure.
+- [Automatic blackbox](../BLACKBOX.md) — **current**, operator/contributor:
+  passive RAM recorder, triggers, Diagnostics controls, resource/storage limits
+  and target-system validation procedure.
 
 - [Nav2 Lyrical controller review](../NAV2_LYRICAL_CONTROLLER_REVIEW.md) — **current**, contributor:
   why FTC stays the coverage controller after the Lyrical migration, what Nav2 1.5.1 actually adds
