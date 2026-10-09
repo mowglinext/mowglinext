@@ -20,6 +20,7 @@
 // changing the on-disk formats or service interfaces.
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cmath>
 #include <cstdarg>
@@ -45,6 +46,8 @@
 #include "mowgli_map/dock_set_gates.hpp"
 #include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
+#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/geometries.hpp>
 #include <fcntl.h>
 #include <grid_map_ros/GridMapRosConverter.hpp>
 #include <unistd.h>
@@ -72,6 +75,46 @@ bool is_datum_set(double lat, double lon)
   return std::abs(lat) > kDatumUnsetEpsilonDeg || std::abs(lon) > kDatumUnsetEpsilonDeg;
 }
 
+bool whitespace_only(const std::string& value, std::size_t from)
+{
+  return std::all_of(value.begin() + static_cast<std::ptrdiff_t>(from),
+                     value.end(),
+                     [](unsigned char character)
+                     {
+                       return std::isspace(character) != 0;
+                     });
+}
+
+bool valid_declared_ring(const geometry_msgs::msg::Polygon& ring)
+{
+  if (ring.points.size() < 3)
+  {
+    return false;
+  }
+  namespace bg = boost::geometry;
+  bg::model::polygon<bg::model::d2::point_xy<double>> polygon;
+  for (const auto& point : ring.points)
+  {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+    {
+      return false;
+    }
+    polygon.outer().emplace_back(point.x, point.y);
+  }
+  // Accept either winding and an optional repeated closing vertex, exactly
+  // as the execution snapshot does. Do not repair malformed ring topology.
+  bg::correct(polygon);
+  return bg::is_valid(polygon) && std::abs(bg::area(polygon)) > 1e-10;
+}
+
+void require_declared_ring(const geometry_msgs::msg::Polygon& ring, const std::string& name)
+{
+  if (!valid_declared_ring(ring))
+  {
+    throw std::invalid_argument("Invalid declared polygon: " + name);
+  }
+}
+
 }  // namespace
 
 // The x/y/yaw splice-in-place writer moved to mowgli_interfaces::
@@ -94,14 +137,24 @@ geometry_msgs::msg::Polygon MapServerNode::parse_polygon_string(const std::strin
   {
     std::istringstream coord_stream(point_str);
     std::string x_str, y_str;
-    if (std::getline(coord_stream, x_str, ',') && std::getline(coord_stream, y_str, ','))
+    std::string extra;
+    if (std::count(point_str.begin(), point_str.end(), ',') != 1 ||
+        !std::getline(coord_stream, x_str, ',') || !std::getline(coord_stream, y_str, ',') ||
+        std::getline(coord_stream, extra, ','))
     {
-      geometry_msgs::msg::Point32 p;
-      p.x = std::stof(x_str);
-      p.y = std::stof(y_str);
-      p.z = 0.0f;
-      poly.points.push_back(p);
+      throw std::invalid_argument("Polygon point must contain exactly one x,y pair");
     }
+    std::size_t x_end = 0, y_end = 0;
+    geometry_msgs::msg::Point32 p;
+    p.x = std::stof(x_str, &x_end);
+    p.y = std::stof(y_str, &y_end);
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !whitespace_only(x_str, x_end) ||
+        !whitespace_only(y_str, y_end))
+    {
+      throw std::invalid_argument("Polygon coordinates must be complete finite numbers");
+    }
+    p.z = 0.0f;
+    poly.points.push_back(p);
   }
   return poly;
 }
@@ -154,6 +207,7 @@ void MapServerNode::load_areas_from_params()
     AreaEntry entry;
     entry.name = area_names[i];
     entry.polygon = parse_polygon_string(area_polygons[i]);
+    require_declared_ring(entry.polygon, area_names[i]);
     entry.is_navigation_area = (i < area_is_navigation.size()) && area_is_navigation[i];
 
     if (entry.polygon.points.size() < 3)
@@ -174,16 +228,12 @@ void MapServerNode::load_areas_from_params()
       while (std::getline(obs_stream, obs_str, '|'))
       {
         auto obs_poly = parse_polygon_string(obs_str);
-        // Dedup on load so pre-existing stacked duplicates (from the old
-        // no-dedup promote path) collapse to a single keepout.
-        if (obs_poly.points.size() >= 3 &&
-            !has_duplicate_obstacle_entry(entry.obstacles, obs_poly, kObstacleDedupEpsilonM) &&
-            !has_duplicate_obstacle(obstacle_polygons_, obs_poly, kObstacleDedupEpsilonM))
-        {
-          entry.obstacles.push_back(make_obstacle_entry(
-              obs_poly, {}, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER, false));
-          obstacle_polygons_.push_back(obs_poly);
-        }
+        require_declared_ring(obs_poly, area_names[i] + " obstacle");
+        // Every declared forbidden ring is authoritative. Centroid proximity
+        // cannot establish geometric equivalence and can erase distinct holes.
+        entry.obstacles.push_back(make_obstacle_entry(
+            obs_poly, {}, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER, false));
+        obstacle_polygons_.push_back(obs_poly);
       }
     }
 
@@ -490,10 +540,16 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
 {
   const auto& polygon_msg = req->area.area;
 
-  if (polygon_msg.points.size() < 3)
+  if (!valid_declared_ring(polygon_msg) || std::any_of(req->area.obstacles.begin(),
+                                                       req->area.obstacles.end(),
+                                                       [](const auto& obstacle)
+                                                       {
+                                                         return !valid_declared_ring(obstacle);
+                                                       }))
   {
     res->success = false;
-    RCLCPP_WARN(get_logger(), "add_area: polygon must have at least 3 points.");
+    RCLCPP_WARN(get_logger(),
+                "add_area: every declared area/obstacle must be a valid finite ring.");
     return;
   }
 
@@ -2217,7 +2273,27 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   auto get_int = [&](const std::string& key, int def) -> int
   {
     auto it = kv.find(key);
-    return (it != kv.end()) ? std::stoi(it->second) : def;
+    if (it == kv.end())
+    {
+      return def;
+    }
+    std::size_t end = 0;
+    const int value = std::stoi(it->second, &end);
+    if (!whitespace_only(it->second, end))
+    {
+      throw std::invalid_argument("Incomplete integer: " + key);
+    }
+    return value;
+  };
+
+  auto get_count = [&](const std::string& key) -> int
+  {
+    const int count = get_int(key, 0);
+    if (count < 0)
+    {
+      throw std::invalid_argument("Negative declared count: " + key);
+    }
+    return count;
   };
 
   auto get_double = [&](const std::string& key, double def) -> double
@@ -2232,199 +2308,223 @@ void MapServerNode::load_areas_from_file(const std::string& path)
     return (it != kv.end()) ? it->second : std::string{};
   };
 
-  // Clear existing areas and reload from file.
-  areas_.clear();
-  obstacle_polygons_.clear();
-
-  const int area_count = get_int("area_count", 0);
-  for (int i = 0; i < area_count; ++i)
+  // Opening/reading the file above cannot change live geometry; keep the
+  // existing parameter-map fallback when a persisted file is absent. Revoke
+  // before replacing any live state or performing fallible field conversion.
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
+  try
   {
-    const std::string prefix = "area_" + std::to_string(i);
-    AreaEntry entry;
-    entry.name = get_str(prefix + "_name");
-    entry.polygon = parse_polygon_string(get_str(prefix + "_polygon"));
-    entry.is_navigation_area = (get_int(prefix + "_is_navigation", 0) != 0);
-    // Optional on read (mowglinext#637): absent in any file saved before
-    // this field existed. Left at 0 here; the migration block below mints
-    // real ids for every area still at 0 once the whole file is loaded, so
-    // it can recover next_area_id_ from the highest id ACTUALLY present
-    // first, rather than one area at a time.
-    entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));
-    // Optional on read: absent in every file saved before per-area coverage
-    // lines existed, and for any area that follows the robot-wide settings.
-    // Presence of the key IS the has_* flag. Re-validated rather than trusted:
-    // a hand-edited file must not smuggle a winding the planner does not know.
+    // Clear existing areas and reload from file.
+    areas_.clear();
+    obstacle_polygons_.clear();
+
+    const int area_count = get_count("area_count");
+    for (int i = 0; i < area_count; ++i)
     {
-      const bool has_angle = kv.count(prefix + "_mow_angle_deg") != 0;
-      const bool has_dir = kv.count(prefix + "_ring_direction") != 0;
-      // A start point needs BOTH coordinates; one without the other is ignored.
-      const bool has_start =
-          kv.count(prefix + "_start_x") != 0 && kv.count(prefix + "_start_y") != 0;
-      const auto check =
-          CheckCoverageLines(has_angle,
-                             has_angle ? get_double(prefix + "_mow_angle_deg", 0.0) : 0.0,
-                             has_dir,
-                             static_cast<uint8_t>(
-                                 std::clamp(get_int(prefix + "_ring_direction", 0), 0, 255)),
-                             has_start,
-                             has_start ? get_double(prefix + "_start_x", 0.0) : 0.0,
-                             has_start ? get_double(prefix + "_start_y", 0.0) : 0.0);
-      if (check.ok)
+      const std::string prefix = "area_" + std::to_string(i);
+      AreaEntry entry;
+      entry.name = get_str(prefix + "_name");
+      entry.polygon = parse_polygon_string(get_str(prefix + "_polygon"));
+      require_declared_ring(entry.polygon, prefix);
+      entry.is_navigation_area = (get_int(prefix + "_is_navigation", 0) != 0);
+      // Optional on read (mowglinext#637): absent in any file saved before
+      // this field existed. Left at 0 here; the migration block below mints
+      // real ids for every area still at 0 once the whole file is loaded, so
+      // it can recover next_area_id_ from the highest id ACTUALLY present
+      // first, rather than one area at a time.
+      entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));
+      // Optional on read: absent in every file saved before per-area coverage
+      // lines existed, and for any area that follows the robot-wide settings.
+      // Presence of the key IS the has_* flag. Re-validated rather than trusted:
+      // a hand-edited file must not smuggle a winding the planner does not know.
       {
-        entry.coverage_lines = check.lines;
-        if (entry.coverage_lines.has_start_point &&
-            !StartPointNearPolygon(polygon_pairs(entry.polygon),
-                                   entry.coverage_lines.start_x,
-                                   entry.coverage_lines.start_y))
+        const bool has_angle = kv.count(prefix + "_mow_angle_deg") != 0;
+        const bool has_dir = kv.count(prefix + "_ring_direction") != 0;
+        // A start point needs BOTH coordinates; one without the other is ignored.
+        const bool has_start =
+            kv.count(prefix + "_start_x") != 0 && kv.count(prefix + "_start_y") != 0;
+        const auto check =
+            CheckCoverageLines(has_angle,
+                               has_angle ? get_double(prefix + "_mow_angle_deg", 0.0) : 0.0,
+                               has_dir,
+                               static_cast<uint8_t>(
+                                   std::clamp(get_int(prefix + "_ring_direction", 0), 0, 255)),
+                               has_start,
+                               has_start ? get_double(prefix + "_start_x", 0.0) : 0.0,
+                               has_start ? get_double(prefix + "_start_y", 0.0) : 0.0);
+        if (check.ok)
+        {
+          entry.coverage_lines = check.lines;
+          if (entry.coverage_lines.has_start_point &&
+              !StartPointNearPolygon(polygon_pairs(entry.polygon),
+                                     entry.coverage_lines.start_x,
+                                     entry.coverage_lines.start_y))
+          {
+            RCLCPP_WARN(get_logger(),
+                        "Area '%s': ignoring a start point that is not near the area in %s.",
+                        entry.name.c_str(),
+                        path.c_str());
+            entry.coverage_lines.has_start_point = false;
+            entry.coverage_lines.start_x = 0.0;
+            entry.coverage_lines.start_y = 0.0;
+          }
+        }
+        else
         {
           RCLCPP_WARN(get_logger(),
-                      "Area '%s': ignoring a start point that is not near the area in %s.",
+                      "Area '%s': ignoring invalid coverage-line overrides in %s: %s",
                       entry.name.c_str(),
-                      path.c_str());
-          entry.coverage_lines.has_start_point = false;
-          entry.coverage_lines.start_x = 0.0;
-          entry.coverage_lines.start_y = 0.0;
+                      path.c_str(),
+                      check.message.c_str());
         }
       }
-      else
-      {
-        RCLCPP_WARN(get_logger(),
-                    "Area '%s': ignoring invalid coverage-line overrides in %s: %s",
-                    entry.name.c_str(),
-                    path.c_str(),
-                    check.message.c_str());
-      }
-    }
 
-    const int obs_count = get_int(prefix + "_obstacle_count", 0);
-    for (int j = 0; j < obs_count; ++j)
-    {
-      const std::string obs_prefix = prefix + "_obstacle_" + std::to_string(j);
-      auto obs_poly = parse_polygon_string(get_str(obs_prefix));
-      // Identity is optional: a file written before #502 has no _name/_source
-      // lines, and every obstacle in it is by definition an operator-drawn
-      // keepout. Never pending — nothing pending is ever written.
-      const std::string obs_name = get_str(obs_prefix + "_name");
-      const auto obs_source = static_cast<uint8_t>(
-          get_int(obs_prefix + "_source", mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER));
-      // Dedup on load so pre-existing stacked duplicates collapse to one.
-      if (obs_poly.points.size() >= 3 &&
-          !has_duplicate_obstacle_entry(entry.obstacles, obs_poly, kObstacleDedupEpsilonM))
+      const int obs_count = get_count(prefix + "_obstacle_count");
+      for (int j = 0; j < obs_count; ++j)
       {
+        const std::string obs_prefix = prefix + "_obstacle_" + std::to_string(j);
+        auto obs_poly = parse_polygon_string(get_str(obs_prefix));
+        require_declared_ring(obs_poly, obs_prefix);
+        // Identity is optional: a file written before #502 has no _name/_source
+        // lines, and every obstacle in it is by definition an operator-drawn
+        // keepout. Never pending — nothing pending is ever written.
+        const std::string obs_name = get_str(obs_prefix + "_name");
+        const auto obs_source = static_cast<uint8_t>(
+            get_int(obs_prefix + "_source", mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER));
+        // Retain every valid declared hole, including distinct rings with the
+        // same or nearby centroid. Runtime promotion has its own policy.
         entry.obstacles.push_back(make_obstacle_entry(obs_poly, obs_name, obs_source, false));
       }
-    }
 
-    if (entry.polygon.points.size() >= 3)
-    {
-      RCLCPP_INFO(get_logger(),
-                  "Loaded area '%s': %zu vertices, %s, %zu obstacles",
-                  entry.name.c_str(),
-                  entry.polygon.points.size(),
-                  entry.is_navigation_area ? "navigation" : "mowing",
-                  entry.obstacles.size());
-      areas_.push_back(std::move(entry));
-    }
-  }
-
-  lidar_ignore_corridors_.clear();
-  const int lidar_corridor_count = get_int("lidar_corridor_count", 0);
-  for (int i = 0; i < lidar_corridor_count; ++i)
-  {
-    const std::string prefix = "lidar_corridor_" + std::to_string(i);
-    auto polyline = parse_polygon_string(get_str(prefix + "_polyline"));
-    if (polyline.points.size() < 2)
-    {
-      continue;
-    }
-    LidarIgnoreCorridorEntry entry;
-    entry.name = get_str(prefix + "_name");
-    entry.polyline = std::move(polyline);
-    entry.width_m = std::clamp(get_double(prefix + "_width_m", 0.40),
-                               kMinLidarIgnoreCorridorWidthM,
-                               kMaxLidarIgnoreCorridorWidthM);
-    entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));
-    lidar_ignore_corridors_.push_back(std::move(entry));
-  }
-  {
-    uint32_t max_corridor_id = 0;
-    for (const auto& corridor : lidar_ignore_corridors_)
-    {
-      max_corridor_id = std::max(max_corridor_id, corridor.id);
-    }
-    next_lidar_corridor_id_ = static_cast<uint32_t>(get_int("next_lidar_corridor_id", 1));
-    next_lidar_corridor_id_ = std::max(next_lidar_corridor_id_, max_corridor_id + 1);
-  }
-  RCLCPP_INFO(get_logger(), "Loaded %zu LiDAR-ignore corridor(s).", lidar_ignore_corridors_.size());
-
-  // Dock pose is loaded from mowgli_robot.yaml at construction, never
-  // from areas.dat. Old areas.dat files may still contain dock_x/dock_qw
-  // keys — they are ignored on purpose.
-
-  // Area-id migration (mowglinext#637): recover next_area_id_ as
-  // max(loaded ids) + 1 — same recovery shape obstacle_tracker_node uses
-  // for its own persisted next_id_ — then mint fresh ids for any area
-  // still at 0: either a pre-#637 file, or (defensively) a legacy in-memory
-  // entry that reached here some other way. Re-save immediately so the
-  // file is stamped from here on, the same "adopt on first load" shape
-  // migrate_areas_datum uses below for the datum stamp.
-  {
-    uint32_t max_id = 0;
-    bool any_unassigned = false;
-    for (const auto& area : areas_)
-    {
-      max_id = std::max(max_id, area.id);
-      any_unassigned = any_unassigned || (area.id == 0);
-    }
-    next_area_id_ = static_cast<uint32_t>(get_int("next_area_id", 0));
-    next_area_id_ = std::max(next_area_id_, max_id + 1);
-    if (any_unassigned)
-    {
-      for (auto& area : areas_)
+      if (entry.polygon.points.size() >= 3)
       {
-        if (area.id == 0)
+        RCLCPP_INFO(get_logger(),
+                    "Loaded area '%s': %zu vertices, %s, %zu obstacles",
+                    entry.name.c_str(),
+                    entry.polygon.points.size(),
+                    entry.is_navigation_area ? "navigation" : "mowing",
+                    entry.obstacles.size());
+        areas_.push_back(std::move(entry));
+      }
+    }
+
+    lidar_ignore_corridors_.clear();
+    const int lidar_corridor_count = get_count("lidar_corridor_count");
+    for (int i = 0; i < lidar_corridor_count; ++i)
+    {
+      const std::string prefix = "lidar_corridor_" + std::to_string(i);
+      auto polyline = parse_polygon_string(get_str(prefix + "_polyline"));
+      if (polyline.points.size() < 2)
+      {
+        continue;
+      }
+      LidarIgnoreCorridorEntry entry;
+      entry.name = get_str(prefix + "_name");
+      entry.polyline = std::move(polyline);
+      entry.width_m = std::clamp(get_double(prefix + "_width_m", 0.40),
+                                 kMinLidarIgnoreCorridorWidthM,
+                                 kMaxLidarIgnoreCorridorWidthM);
+      entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));
+      lidar_ignore_corridors_.push_back(std::move(entry));
+    }
+    {
+      uint32_t max_corridor_id = 0;
+      for (const auto& corridor : lidar_ignore_corridors_)
+      {
+        max_corridor_id = std::max(max_corridor_id, corridor.id);
+      }
+      next_lidar_corridor_id_ = static_cast<uint32_t>(get_int("next_lidar_corridor_id", 1));
+      next_lidar_corridor_id_ = std::max(next_lidar_corridor_id_, max_corridor_id + 1);
+    }
+    RCLCPP_INFO(get_logger(),
+                "Loaded %zu LiDAR-ignore corridor(s).",
+                lidar_ignore_corridors_.size());
+
+    // Dock pose is loaded from mowgli_robot.yaml at construction, never
+    // from areas.dat. Old areas.dat files may still contain dock_x/dock_qw
+    // keys — they are ignored on purpose.
+
+    // Area-id migration (mowglinext#637): recover next_area_id_ as
+    // max(loaded ids) + 1 — same recovery shape obstacle_tracker_node uses
+    // for its own persisted next_id_ — then mint fresh ids for any area
+    // still at 0: either a pre-#637 file, or (defensively) a legacy in-memory
+    // entry that reached here some other way. Re-save immediately so the
+    // file is stamped from here on, the same "adopt on first load" shape
+    // migrate_areas_datum uses below for the datum stamp.
+    {
+      uint32_t max_id = 0;
+      bool any_unassigned = false;
+      for (const auto& area : areas_)
+      {
+        max_id = std::max(max_id, area.id);
+        any_unassigned = any_unassigned || (area.id == 0);
+      }
+      next_area_id_ = static_cast<uint32_t>(get_int("next_area_id", 0));
+      next_area_id_ = std::max(next_area_id_, max_id + 1);
+      if (any_unassigned)
+      {
+        for (auto& area : areas_)
         {
-          area.id = next_area_id_++;
+          if (area.id == 0)
+          {
+            area.id = next_area_id_++;
+          }
+        }
+        RCLCPP_INFO(get_logger(),
+                    "areas file %s has area(s) with no stable id (mowglinext#637) — "
+                    "assigning and re-saving.",
+                    path.c_str());
+        try
+        {
+          save_areas_to_file(path);
+        }
+        catch (const std::exception& ex)
+        {
+          RCLCPP_WARN(get_logger(),
+                      "Could not re-save %s with area ids: %s",
+                      path.c_str(),
+                      ex.what());
         }
       }
-      RCLCPP_INFO(get_logger(),
-                  "areas file %s has area(s) with no stable id (mowglinext#637) — "
-                  "assigning and re-saving.",
-                  path.c_str());
-      try
-      {
-        save_areas_to_file(path);
-      }
-      catch (const std::exception& ex)
-      {
-        RCLCPP_WARN(get_logger(),
-                    "Could not re-save %s with area ids: %s",
-                    path.c_str(),
-                    ex.what());
-      }
     }
-  }
 
-  // Datum-change migration (issue #216): if the file was recorded against a
-  // different datum than the one this node was launched with, re-project the
-  // just-loaded polygons + the dock pose into the new datum frame and
-  // re-stamp the file. Runs BEFORE resize_map_to_areas so the grid is sized
-  // around the migrated coordinates.
+    // Datum-change migration (issue #216): if the file was recorded against a
+    // different datum than the one this node was launched with, re-project the
+    // just-loaded polygons + the dock pose into the new datum frame and
+    // re-stamp the file. Runs BEFORE resize_map_to_areas so the grid is sized
+    // around the migrated coordinates.
+    {
+      const double nan = std::numeric_limits<double>::quiet_NaN();
+      migrate_areas_datum(get_double("datum_lat", nan), get_double("datum_lon", nan), path);
+    }
+
+    // Resize map to fit new areas and reset masks.
+    resize_map_to_areas();
+    keepout_filter_info_sent_ = false;
+    speed_filter_info_sent_ = false;
+    masks_dirty_ = true;
+    // Harmless if migrate_areas_datum already published above (transient_local
+    // — a redundant publish is a no-op for subscribers); unconditional so a
+    // load with no migration still announces the loaded corridor list.
+    publish_lidar_ignore_corridors();
+    publish_recorded_area_polygons();
+  }
+  catch (...)
   {
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    migrate_areas_datum(get_double("datum_lat", nan), get_double("datum_lon", nan), path);
+    // Parsing may fail after one or more areas have already been inserted. Drop
+    // that partial replacement too, so a pending mask timer cannot accidentally
+    // republish it as valid geometry. A corrected successful reload restores
+    // permission through the regular keepout/geometry publication path.
+    areas_.clear();
+    obstacle_polygons_.clear();
+    lidar_ignore_corridors_.clear();
+    classification_dirty_ = true;
+    masks_dirty_ = true;
+    transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
+    publish_lidar_ignore_corridors();
+    publish_recorded_area_polygons();
+    throw;
   }
-
-  // Resize map to fit new areas and reset masks.
-  resize_map_to_areas();
-  keepout_filter_info_sent_ = false;
-  speed_filter_info_sent_ = false;
-  masks_dirty_ = true;
-  // Harmless if migrate_areas_datum already published above (transient_local
-  // — a redundant publish is a no-op for subscribers); unconditional so a
-  // load with no migration still announces the loaded corridor list.
-  publish_lidar_ignore_corridors();
-  publish_recorded_area_polygons();
 }
 
 void MapServerNode::migrate_areas_datum(double file_datum_lat,

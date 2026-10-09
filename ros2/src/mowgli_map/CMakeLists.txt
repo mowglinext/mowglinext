@@ -180,6 +180,11 @@ if(BUILD_TESTING)
     test/test_map_server.cpp
   )
 
+  ament_add_ros_isolated_gtest(test_motion_geometry_reload
+    test/test_motion_geometry_reload.cpp
+  )
+  target_link_libraries(test_motion_geometry_reload mowgli_map_lib)
+
   target_link_libraries(test_map_server
     mowgli_map_lib
   )
