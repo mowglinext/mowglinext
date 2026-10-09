@@ -34,6 +34,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -46,11 +47,24 @@
 #include <nav2_ros_common/lifecycle_node.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "motion_fixture.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include <gtest/gtest.h>
 #include <rcl/time.h>
+
+namespace mowgli_nav2_plugins
+{
+struct FTCSpeedLimitTestAccess
+{
+  static bool GeometryReady(FTCController& controller)
+  {
+    std::lock_guard<std::mutex> lock(controller.authorization_mutex_);
+    return controller.authorization_ != nullptr;
+  }
+};
+}  // namespace mowgli_nav2_plugins
 
 namespace
 {
@@ -162,12 +176,18 @@ public:
     // Controlled clock: every control cycle is exactly kDt.
     clock_ = node_->get_clock();
     EXPECT_EQ(rcl_enable_ros_time_override(clock_->get_clock_handle()), RCL_RET_OK);
+    EXPECT_EQ(rcl_enable_ros_time_override(costmap_->get_clock()->get_clock_handle()), RCL_RET_OK);
     SetTime(1000.0);
     PublishStaticTf();
     PublishRobotTf();
 
     ftc_.configure(node_, kPlugin, tf_, costmap_);
     ftc_.activate();
+    EXPECT_TRUE(mn::test::supplyLawn(node_,
+                                     [this]()
+                                     {
+                                       return mn::FTCSpeedLimitTestAccess::GeometryReady(ftc_);
+                                     }));
 
     probe_ = std::make_shared<rclcpp::Node>("progress_probe");
     probe_sub_ = probe_->create_subscription<nav_msgs::msg::Path>(
@@ -182,6 +202,10 @@ public:
 
   ~Harness()
   {
+    if (loop_count_ > 0)
+      std::cout << "FTC kinematic ticks=" << loop_count_ << " mean_us=" << loop_us_ / loop_count_
+                << " max_us=" << loop_max_us_ << " finished=" << finished_
+                << " lethal_samples=" << steps_in_lethal_ << '\n';
     ftc_.deactivate();
     ftc_.cleanup();
     costmap_->cleanup();
@@ -232,7 +256,14 @@ public:
     geometry_msgs::msg::TwistStamped cmd;
     try
     {
+      const auto begin = std::chrono::steady_clock::now();
       cmd = ftc_.computeVelocityCommands(Pose{}, odom, nullptr, nav_msgs::msg::Path{}, goal_);
+      const double micros =
+          std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin)
+              .count();
+      loop_us_ += micros;
+      loop_max_us_ = std::max(loop_max_us_, micros);
+      ++loop_count_;
     }
     catch (const nav2_core::ControllerException& e)
     {
@@ -313,6 +344,9 @@ public:
   double yaw_{0.0};
 
 private:
+  double loop_us_{0};
+  double loop_max_us_{0};
+  int loop_count_{0};
   void DeclareFtcParams(const Options& opt)
   {
     const auto set = [this](const std::string& key, const rclcpp::ParameterValue& value)
@@ -366,6 +400,8 @@ private:
   {
     t_ = t;
     EXPECT_EQ(rcl_set_ros_time_override(clock_->get_clock_handle(), Ns(t)), RCL_RET_OK);
+    EXPECT_EQ(rcl_set_ros_time_override(costmap_->get_clock()->get_clock_handle(), Ns(t)),
+              RCL_RET_OK);
   }
 
   geometry_msgs::msg::TransformStamped Tf(
