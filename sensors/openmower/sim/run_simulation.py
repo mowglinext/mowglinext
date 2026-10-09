@@ -834,7 +834,7 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
     probe = Probe()
     ex = MultiThreadedExecutor(num_threads=4)
     ex.add_node(probe)
-    spin_in_background(ex)
+    spinner = spin_in_background(ex)
     try:
         for sc in SCENARIOS:
             if only and sc.__name__ not in only:
@@ -858,6 +858,9 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
         except ProcessLookupError:
             pass
         ex.shutdown()
+        # Join before rclpy.shutdown/exit: a daemon spinner still inside rclpy
+        # at interpreter teardown segfaults the run (exit 139 after a green run).
+        spinner.join(timeout=5.0)
         probe.destroy_node()
         rig.close()
 
@@ -886,7 +889,7 @@ def run_gui_config(R: Report, logdir: str):
     probe = Probe()
     ex = MultiThreadedExecutor(num_threads=2)
     ex.add_node(probe)
-    spin_in_background(ex)
+    spinner = spin_in_background(ex)
     try:
         ok = wait_for(lambda: probe.get('status') is not None and probe.get('status').firmware_compatible, 20)
         R.check(S, 'connects through the yaml ports + ESC type, not the stale .env', ok,
@@ -903,6 +906,9 @@ def run_gui_config(R: Report, logdir: str):
         except ProcessLookupError:
             pass
         ex.shutdown()
+        # Join before rclpy.shutdown/exit: a daemon spinner still inside rclpy
+        # at interpreter teardown segfaults the run (exit 139 after a green run).
+        spinner.join(timeout=5.0)
         probe.destroy_node()
         rig.close()
 
