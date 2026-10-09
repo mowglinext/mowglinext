@@ -659,6 +659,7 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
 
 void MapServerNode::publish_recorded_area_polygons()
 {
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
   mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
   msg.header.stamp = get_clock()->now();
   msg.header.frame_id = "map";
@@ -1427,6 +1428,7 @@ void MapServerNode::on_set_docking_point(
     std::lock_guard<std::mutex> lock(map_mutex_);
     rebuild_dock_polygons();
     masks_dirty_ = true;
+    transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
   }
   apply_area_classifications();
 
@@ -1819,6 +1821,7 @@ std::optional<size_t> MapServerNode::accept_pending_obstacle(uint32_t pending_id
         // apply_promoted_obstacle.
         obstacle_polygons_.push_back(obs.polygon);
         masks_dirty_ = true;
+        transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
         accepted_area = i;
         break;
       }
@@ -2593,6 +2596,7 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
 void MapServerNode::defer_mask_rebuild()
 {
   std::lock_guard<std::mutex> lock(map_mutex_);
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
   mask_rebuild_not_before_ = std::chrono::steady_clock::now() + kMapEditSettle;
 }
 
