@@ -87,9 +87,22 @@ Until a port is saved in the GUI, the GUI shows the installer's value. The
 bridge reads them at start-up: **Restart ROS2** after saving (it restarts the
 `mowgli-openmower` container too). `OPENMOWER_IMAGE` stays an installer key.
 
-The installer enables `uart1…uart5` overlays and disables Bluetooth, which is
-what OpenMowerOS does too. On an older kernel (< 6.1.28) OpenMower used
-`ttyAMA4/2/3` for left/right/mow — set the ports accordingly.
+The installer prepares the Pi the way OpenMowerOS does
+(`stage-openmower/10-pi-serial`, `15-pi-config`), then asks for a reboot:
+
+- `enable_uart=1`, `dtoverlay=disable-bt` and one `dtoverlay=uartN` per port
+  in use — `uart3/4/5` for the xESCs, `uart2` for the GPS;
+- the kernel console is removed from `cmdline.txt` (backup
+  `cmdline.txt.mowgli.bak`) and the `serial-getty` logins on those UARTs are
+  masked — Ubuntu ships `console=serial0`, which otherwise prints the boot log
+  into the LowLevel board on `ttyAMA0`;
+- the GNSS defaults to `/dev/ttyAMA2` (the board's GPS UART; `ttyAMA4`, the
+  usual GNSS port, is the mow xESC here), and a GNSS or LiDAR port an xESC or
+  the LowLevel board already uses is refused. Every Pi UART is wired on this
+  board, so a LiDAR must be a USB one.
+
+On an older kernel (< 6.1.28) OpenMower used `ttyAMA4/2/3` for
+left/right/mow and `ttyAMA1` for the GPS — set the ports accordingly.
 
 ## Settings: shared with every backend, OpenMower defaults
 

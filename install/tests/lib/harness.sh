@@ -207,7 +207,7 @@ harness_set_preset() {
             GNSS_CONNECTION_HINT="uart"
             case "${GNSS_SERIAL_DEVICE:-}" in
               /dev/ttyAMA*|/dev/ttyS*|/dev/ttyTHS*|/dev/ttyHS*) ;;
-              *) GNSS_SERIAL_DEVICE="/dev/ttyAMA4" ;;
+              *) GNSS_SERIAL_DEVICE="$(default_gnss_uart_device)" ;;
             esac
             ;;
         esac

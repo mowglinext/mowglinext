@@ -137,14 +137,76 @@ uart_overlay_for_device() {
   esac
 }
 
+# OpenMower v1 (HARDWARE_BACKEND=openmower) wires its LowLevel board and three
+# xESC controllers to Pi UARTs (configure_openmower_backend_details). One
+# "<device> <role>" line each; nothing for any other backend.
+openmower_uart_assignments() {
+  [[ "${HARDWARE_BACKEND:-}" == "openmower" ]] || return 0
+  printf '%s %s\n' \
+    "${OPENMOWER_LL_PORT:-/dev/ttyAMA0}" "OpenMower-LowLevel" \
+    "${OPENMOWER_XESC_LEFT_PORT:-/dev/ttyAMA5}" "OpenMower-xESC-left" \
+    "${OPENMOWER_XESC_RIGHT_PORT:-/dev/ttyAMA3}" "OpenMower-xESC-right" \
+    "${OPENMOWER_XESC_MOW_PORT:-/dev/ttyAMA4}" "OpenMower-xESC-mow"
+}
+
+# The OpenMower controller already wired to a device (fails when none is).
+openmower_uart_owner() {
+  local wanted="${1:-}" dev role
+  [[ -n "$wanted" ]] || return 1
+  while read -r dev role; do
+    if [[ "$dev" == "$wanted" ]]; then
+      printf '%s\n' "$role"
+      return 0
+    fi
+  done < <(openmower_uart_assignments)
+  return 1
+}
+
+# Fails (with the reason) when an OpenMower controller is already wired to the
+# port a peripheral was given — two drivers on one UART corrupt both links.
+uart_port_is_free() {
+  local dev="${1:-}" what="${2:-device}" owner
+  if owner="$(openmower_uart_owner "$dev")"; then
+    # shellcheck disable=SC2059
+    error "$(printf "${MSG_UART_PORT_TAKEN:-%s cannot use %s: the %s controller is wired there.}" "$what" "$dev" "$owner")"
+    return 1
+  fi
+  return 0
+}
+
+# pick_uart_port, re-asked while the choice collides with an OpenMower
+# controller (a non-interactive run cannot be re-asked: it fails instead).
+pick_free_uart_port() {
+  local default_device="$1" what="$2"
+  while true; do
+    pick_uart_port "$default_device"
+    uart_port_is_free "$REPLY" "$what" && return 0
+    [[ "${NON_INTERACTIVE:-false}" == "true" ]] && return 1
+  done
+}
+
+# Every serial device the configured hardware will open, one per line.
+configured_uart_devices() {
+  [[ -n "${GNSS_SERIAL_DEVICE:-}" ]] && printf '%s\n' "$GNSS_SERIAL_DEVICE"
+  if [[ "${LIDAR_ENABLED:-false}" == "true" && -n "${LIDAR_UART_DEVICE:-}" ]]; then
+    printf '%s\n' "$LIDAR_UART_DEVICE"
+  fi
+  local dev _role
+  while read -r dev _role; do
+    printf '%s\n' "$dev"
+  done < <(openmower_uart_assignments)
+}
+
 # Which of the five Raspberry Pi UART overlays the hardware CONFIGURED so far
 # this run actually needs — derived from the exact port the operator picked
 # for each peripheral (`pick_uart_port`, `GNSS_SERIAL_DEVICE` /
 # `LIDAR_UART_DEVICE`), not a fixed
 # per-peripheral assumption: real installs don't always land a given
 # peripheral on the same header pin (e.g. a Pi 5 install that wired the LiDAR
-# to ttyAMA2 instead of the common default ttyAMA5). Nothing here ever claims
-# uart1 — no peripheral in this codebase is assigned to it today.
+# to ttyAMA2 instead of the common default ttyAMA5). The OpenMower backend
+# adds its three xESC ports (uart3/4/5 by default; its LowLevel board is on
+# ttyAMA0, which needs no overlay). Nothing here ever claims uart1 — no
+# peripheral in this codebase is assigned to it today.
 #
 # Must run AFTER GPS/LiDAR/rangefinder configuration (mowglinext.sh calls
 # this step after those, not before) so these variables are populated;
@@ -163,7 +225,82 @@ required_uart_overlays() {
     n="$(uart_overlay_for_device "${LIDAR_UART_DEVICE:-}")" && printf '%s\n' "$n"
   fi
 
+  local dev _role
+  while read -r dev _role; do
+    n="$(uart_overlay_for_device "$dev")" && printf '%s\n' "$n"
+  done < <(openmower_uart_assignments)
+  return 0
+}
 
+# Drops every kernel console bound to the primary UART from a cmdline.txt
+# line (stdin -> stdout): "console=serial0,115200 console=tty1 root=..." keeps
+# only "console=tty1 root=...". Ubuntu and Raspberry Pi OS both ship
+# console=serial0, which prints the boot log into whatever is wired there.
+strip_serial_console_args() {
+  sed -E 's/(^|[[:space:]])console=(serial0|ttyAMA0|ttyS0)(,[^[:space:]]*)?/ /g' |
+    awk '{$1=$1; print}'
+}
+
+get_boot_cmdline_file() {
+  local config_file cmdline
+  config_file="$(get_boot_config_file)" || return 1
+  cmdline="$(dirname "$config_file")/cmdline.txt"
+  [ -f "$cmdline" ] || return 1
+  printf '%s\n' "$cmdline"
+}
+
+# A UART a peripheral is wired to must not also carry the kernel console or a
+# login prompt (serial-getty): the OpenMower LowLevel board on ttyAMA0 would
+# read the boot log and the getty would answer its frames. Same steps as
+# OpenMowerOS (stage-openmower/10-pi-serial). Takes effect after the reboot
+# the overlays already need.
+free_uarts_from_serial_console() {
+  if ! platform_supports_pi_uart_overlays; then
+    return 0
+  fi
+
+  local devices dev primary_in_use=false
+  devices="$(configured_uart_devices | sort -u)"
+  [[ -n "$devices" ]] || return 0
+  while IFS= read -r dev; do
+    case "$dev" in
+      /dev/ttyAMA0 | /dev/serial0 | /dev/ttyS0) primary_in_use=true ;;
+    esac
+  done <<< "$devices"
+
+  require_root_for "serial console"
+
+  local gettys=()
+  while IFS= read -r dev; do
+    case "$dev" in
+      /dev/ttyAMA* | /dev/ttyS*) gettys+=("serial-getty@$(basename "$dev").service") ;;
+    esac
+  done <<< "$devices"
+
+  if [[ "$primary_in_use" == "true" ]]; then
+    gettys+=("serial-getty@serial0.service" "serial-getty@ttyAMA0.service" "serial-getty@ttyS0.service")
+    local cmdline current stripped
+    if cmdline="$(get_boot_cmdline_file)"; then
+      current="$(cat "$cmdline")"
+      stripped="$(printf '%s\n' "$current" | strip_serial_console_args)"
+      if [[ "$stripped" != "$current" ]]; then
+        [ -f "${cmdline}.mowgli.bak" ] || $SUDO cp "$cmdline" "${cmdline}.mowgli.bak"
+        printf '%s\n' "$stripped" | $SUDO tee "$cmdline" > /dev/null
+        info "Removed the serial console from ${cmdline} (backup: ${cmdline}.mowgli.bak)"
+      else
+        info "No serial console on the primary UART"
+      fi
+    fi
+  fi
+
+  if command -v systemctl >/dev/null 2>&1 && [ "${#gettys[@]}" -gt 0 ]; then
+    local svc
+    for svc in $(printf '%s\n' "${gettys[@]}" | sort -u); do
+      $SUDO systemctl disable --now "$svc" >/dev/null 2>&1 || true
+      $SUDO systemctl mask "$svc" >/dev/null 2>&1 || true
+    done
+    info "Masked serial logins on the UARTs in use"
+  fi
 }
 
 enable_all_platform_uarts() {
@@ -194,6 +331,8 @@ enable_all_platform_uarts() {
       append_config_line_if_missing "dtoverlay=uart${n}"
     done <<< "$overlays"
   fi
+
+  free_uarts_from_serial_console
 
   # Bluetooth toujours désactivé dans Mowgli II
   disable_bluetooth_for_uart
