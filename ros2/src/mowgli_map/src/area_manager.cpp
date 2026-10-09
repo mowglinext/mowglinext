@@ -1874,6 +1874,7 @@ std::optional<size_t> MapServerNode::accept_pending_obstacle(uint32_t pending_id
         // apply_promoted_obstacle.
         obstacle_polygons_.push_back(obs.polygon);
         masks_dirty_ = true;
+        transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
         accepted_area = i;
         break;
       }
@@ -2666,6 +2667,7 @@ void MapServerNode::defer_mask_rebuild()
 {
   invalidate_keepout_mask();
   std::lock_guard<std::mutex> lock(map_mutex_);
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
   mask_rebuild_not_before_ = std::chrono::steady_clock::now() + kMapEditSettle;
   transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
 }
