@@ -43,6 +43,7 @@ Phase 2 work — until that lands the helpers below may not see live data.
 """
 
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -57,12 +58,21 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 import yaml
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from robot_config_util import chassis_footprint, load_robot_params  # noqa: E402
+
 
 def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # Package directories
     # ------------------------------------------------------------------
     bringup_dir = get_package_share_directory("mowgli_bringup")
+    robot_params = load_robot_params(bringup_dir, "/ros2_ws/config/mowgli_robot.yaml")
+    front_x, rear_x, half_width = chassis_footprint(robot_params)
+    motion_footprint = [
+        front_x, half_width, front_x, -half_width,
+        rear_x, -half_width, rear_x, half_width,
+    ]
     simulation_dir = get_package_share_directory("mowgli_simulation")
     behavior_dir = get_package_share_directory("mowgli_behavior")
     map_dir = get_package_share_directory("mowgli_map")
@@ -210,7 +220,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             behavior_params,
-            {"use_sim_time": True},
+            {"use_sim_time": True, "motion_footprint": motion_footprint},
         ],
     )
 
