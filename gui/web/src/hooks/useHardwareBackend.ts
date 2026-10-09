@@ -6,7 +6,7 @@ import {
     normalizeHardwareBackend,
 } from "../constants/hardwareBackends.ts";
 
-const FALLBACK: HardwareBackendInfo = { backend: DEFAULT_HARDWARE_BACKEND, defaultOverrides: {} };
+const FALLBACK: HardwareBackendInfo = { backend: DEFAULT_HARDWARE_BACKEND, defaultOverrides: {}, robotName: "" };
 
 /**
  * The robot's hardware backend. Falls back to "mowgli" (the stock path) while
@@ -28,12 +28,20 @@ export const useHardwareBackend = (): HardwareBackendInfo & { loading: boolean }
                     format: "json",
                 });
                 if (cancelled || res.error) return;
-                const data = (res.data ?? {}) as { backend?: unknown; default_overrides?: unknown };
+                const data = (res.data ?? {}) as {
+                    backend?: unknown;
+                    default_overrides?: unknown;
+                    robot_name?: unknown;
+                };
                 const overrides =
                     data.default_overrides && typeof data.default_overrides === "object"
                         ? (data.default_overrides as Record<string, unknown>)
                         : {};
-                setInfo({ backend: normalizeHardwareBackend(data.backend), defaultOverrides: overrides });
+                setInfo({
+                    backend: normalizeHardwareBackend(data.backend),
+                    defaultOverrides: overrides,
+                    robotName: typeof data.robot_name === "string" ? data.robot_name.trim() : "",
+                });
             } catch {
                 /* keep the mowgli fallback */
             } finally {

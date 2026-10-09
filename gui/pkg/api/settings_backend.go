@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/providers"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"gopkg.in/yaml.v3"
 )
@@ -192,6 +193,9 @@ type HardwareBackendResponse struct {
 	// (config/backends/<backend>.yaml). A mower-model preset must not write
 	// these: the preset describes the machine, not its electronics.
 	DefaultOverrides map[string]any `json:"default_overrides"`
+	// RobotName is robot_name from the installed config (or its default):
+	// the header badge shows it beside the backend.
+	RobotName string `json:"robot_name"`
 }
 
 // GetSettingsHardwareBackend reports the active hardware backend.
@@ -209,6 +213,7 @@ func GetSettingsHardwareBackend(r *gin.RouterGroup, dbProvider types.IDBProvider
 			Backend:          backend,
 			Supported:        append([]string(nil), supportedHardwareBackends...),
 			DefaultOverrides: backendDefaults(backend),
+			RobotName:        providers.ReadRobotName(dbProvider),
 		})
 	})
 }
