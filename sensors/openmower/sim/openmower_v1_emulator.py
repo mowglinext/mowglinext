@@ -605,13 +605,15 @@ class Xesc2040(_Esc):
         self.tacho_abs = 0
         self._last_tick_int = 0
 
-    def service(self, now: float):
+    def receive(self, now: float):
         for body in self.reader.feed(self.port.read()):
             if body[0] == 2 and len(body) == 9:
                 self._record(now, struct.unpack('<d', body[1:9])[0])
             elif body[0] == 3 and len(body) == 34:
                 self.settings_received = True
                 self.settings_count += 1
+
+    def transmit(self, now: float):
         tick = int(self.motor.ticks)
         diff = tick - self._last_tick_int
         if diff:
@@ -634,6 +636,8 @@ class XescMini(_Esc):
     def __init__(self, port: PtyPort, motor):
         super().__init__(port, motor)
         self.reader = VescReader()
+        self._pending_values = 0
+        self._ticks_at_receive = 0.0
 
     def effective_duty(self, now: float) -> float:
         return self.motor.duty if now - self.last_command_ms <= self.TIMEOUT_MSEC else 0.0
@@ -642,7 +646,8 @@ class XescMini(_Esc):
         self.motor.ticks = 0.0
         self.last_command_ms = -1e12
 
-    def service(self, now: float):
+    def receive(self, now: float):
+        self._ticks_at_receive = self.motor.ticks
         for p in self.reader.feed(self.port.read()):
             if p[0] == 5 and len(p) >= 5:
                 self._record(now, struct.unpack('>i', p[1:5])[0] / 100000.0)
@@ -651,12 +656,21 @@ class XescMini(_Esc):
             if p[0] == 0:
                 self.port.write(vesc_frame(bytes([0, 5, 3]) + b'xESC-mini\x00'))
             elif p[0] == 4:
-                self.port.write(vesc_frame(self._values(now)))
+                self._pending_values += 1
 
-    def _values(self, now: float) -> bytes:
+    def transmit(self, now: float):
+        # Requests that queued up while this thread was starved arrived spread
+        # over the stall; the real controller answers each one at once, so
+        # answer the k-th of n with the count reached k/n of the way through
+        # the elapsed time, not all of them with the count from its end.
+        n, self._pending_values = self._pending_values, 0
+        before, after = self._ticks_at_receive, self.motor.ticks
+        for k in range(1, n + 1):
+            self.port.write(vesc_frame(self._values(now, int(before + (after - before) * k / n))))
+
+    def _values(self, now: float, tacho: int) -> bytes:
         duty = self.effective_duty(now)
         speed = getattr(self.motor, 'speed', 0.0)
-        tacho = int(self.motor.ticks)
         p = bytearray(60)
         p[0] = 4
         struct.pack_into('>h', p, 1, 350)                               # temp_mos 35.0
@@ -720,7 +734,7 @@ class OpenMowerV1Rig:
             now = (t - self._t0) * 1000.0
             with self.lock:
                 for esc in self.escs.values():
-                    esc.service(now)
+                    esc.receive(now)
                 self.ll.service(now)
                 # Integrate ALL the elapsed wall time, in small substeps. A
                 # starved thread (a 2-vCPU CI runner, the GIL shared with the
@@ -735,6 +749,13 @@ class OpenMowerV1Rig:
                         self.motors[name].step(dt, duty[name])
                     # Real wiring: right wheel forward on a NEGATIVE controller duty.
                     self.plant.step(dt, self.motors['left'].speed, -self.motors['right'].speed)
+                # Report AFTER integrating: a status sent before it would carry
+                # the counts from before a stall, and the next one the whole
+                # stall's ticks at a normal 20 ms spacing — a jump no real
+                # controller produces, which the bridge rightly drops as a
+                # counter reset (and the speed loop then overshoots).
+                for esc in self.escs.values():
+                    esc.transmit(now)
 
     # --- observation helpers (thread-safe) --------------------------------
     def snapshot(self) -> dict:
