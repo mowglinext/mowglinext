@@ -2255,6 +2255,10 @@ void MapServerNode::load_areas_from_file(const std::string& path)
       continue;
     }
     std::string key = line.substr(0, colon_pos);
+    const auto key_start = key.find_first_not_of(" \t\r");
+    if (key_start == std::string::npos || key[key_start] == '#')
+      continue;
+    key = key.substr(key_start, key.find_last_not_of(" \t\r") - key_start + 1);
     std::string val = line.substr(colon_pos + 1);
     // Trim leading whitespace from value.
     auto start = val.find_first_not_of(" \t");
@@ -2319,6 +2323,39 @@ void MapServerNode::load_areas_from_file(const std::string& path)
     obstacle_polygons_.clear();
 
     const int area_count = get_count("area_count");
+    // A count is not permission to discard other declared geometry. Validate
+    // every indexed record before the count-bounded parsing loops: missing or
+    // undersized counts must not silently remove an area or forbidden hole.
+    const auto checked_index = [](const std::string& text, int count, const std::string& key)
+    {
+      if (text.empty() || !std::all_of(text.begin(),
+                                       text.end(),
+                                       [](unsigned char character)
+                                       {
+                                         return std::isdigit(character) != 0;
+                                       }))
+        throw std::invalid_argument("Invalid declared index: " + key);
+      const auto index = std::stoull(text);
+      if (text != std::to_string(index) || index >= static_cast<unsigned long long>(count))
+        throw std::invalid_argument("Declared index outside count: " + key);
+      return static_cast<int>(index);
+    };
+    for (const auto& [key, value] : kv)
+    {
+      if (key.rfind("area_", 0) != 0 || key == "area_count")
+        continue;
+      const auto separator = key.find('_', 5);
+      if (separator == std::string::npos)
+        throw std::invalid_argument("Incomplete area record: " + key);
+      const int area_index = checked_index(key.substr(5, separator - 5), area_count, key);
+      const auto field = key.substr(separator + 1);
+      if (field.rfind("obstacle_", 0) == 0 && field != "obstacle_count")
+      {
+        const auto obstacle_record = field.substr(9);
+        const int count = get_count("area_" + std::to_string(area_index) + "_obstacle_count");
+        checked_index(obstacle_record.substr(0, obstacle_record.find('_')), count, key);
+      }
+    }
     for (int i = 0; i < area_count; ++i)
     {
       const std::string prefix = "area_" + std::to_string(i);
