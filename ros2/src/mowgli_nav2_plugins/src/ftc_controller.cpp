@@ -31,6 +31,7 @@
 #include <tf2_ros/transform_listener.hpp>
 
 #include "mowgli_interfaces/ftc_abort_reason.hpp"
+#include "mowgli_interfaces/motion_authorization.hpp"
 #include "mowgli_nav2_plugins/ftc_carrot_lead.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_obstacle_wait.hpp"
@@ -68,6 +69,16 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
 
   declareParameters(node);
 
+  authorization_sub_ = node->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      [this](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+      {
+        auto next = mowgli_interfaces::motion::Snapshot::parse(*message);
+        std::lock_guard<std::mutex> lock(authorization_mutex_);
+        authorization_ = std::move(next);
+      },
+      rclcpp::QoS(1).transient_local());
+
   // Publishers (created as lifecycle-aware, activated/deactivated with the node).
   global_point_pub_ =
       node->create_publisher<geometry_msgs::msg::PoseStamped>(plugin_name_ + "/global_point",
@@ -91,19 +102,31 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
       "/global_costmap/costmap",
       [this](const nav_msgs::msg::OccupancyGrid::SharedPtr og)
       {
+        const std::size_t n = static_cast<std::size_t>(og->info.width) * og->info.height;
+        if (n == 0 || n != og->data.size() || !std::isfinite(og->info.resolution) ||
+            og->info.resolution <= 0 || !std::isfinite(og->info.origin.position.x) ||
+            !std::isfinite(og->info.origin.position.y) || og->header.frame_id.empty() ||
+            og->info.origin.orientation.x != 0 || og->info.origin.orientation.y != 0 ||
+            og->info.origin.orientation.z != 0 || og->info.origin.orientation.w != 1)
+        {
+          std::lock_guard<std::mutex> lock(boundary_mutex_);
+          boundary_costmap_.reset();
+          boundary_frame_.clear();
+          return;
+        }
         auto cm = std::make_unique<nav2_costmap_2d::Costmap2D>(og->info.width,
                                                                og->info.height,
                                                                og->info.resolution,
                                                                og->info.origin.position.x,
                                                                og->info.origin.position.y);
         unsigned char* char_map = cm->getCharMap();
-        const std::size_t n = static_cast<std::size_t>(og->info.width) * og->info.height;
         for (std::size_t i = 0; i < n; ++i)
         {
           // OccupancyGrid 100/99 = lethal/inscribed (keepout boundary or a
           // global obstacle — both are things we must not skirt into);
-          // unknown (-1) and free → 0.
-          char_map[i] = (og->data[i] >= 99) ? 254u : 0u;
+          // Unknown remains blocked for the separate deviation guard. This
+          // raster never supplies polygon execution permission.
+          char_map[i] = og->data[i] < 0 ? 255u : (og->data[i] >= 99 ? 254u : 0u);
         }
         std::lock_guard<std::mutex> lock(boundary_mutex_);
         boundary_costmap_ = std::move(cm);
@@ -145,6 +168,11 @@ void FTCController::cleanup()
   obstacle_marker_pub_.reset();
   boundary_costmap_sub_.reset();
   blade_status_sub_.reset();
+  authorization_sub_.reset();
+  {
+    std::lock_guard<std::mutex> lock(authorization_mutex_);
+    authorization_.reset();
+  }
   {
     std::lock_guard<std::mutex> lock(boundary_mutex_);
     boundary_costmap_.reset();
@@ -1063,6 +1091,60 @@ double FTCController::maxLinearSpeed() const
   return std::min(base_max_cmd_vel_speed_, external_cap);
 }
 
+void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command)
+{
+  // Zero commands never depend on authorization, TF or the presence of a map.
+  if (command.linear.x == 0 && command.angular.z == 0)
+    return;
+  std::lock_guard<std::mutex> lock(authorization_mutex_);
+  if (!authorization_ || !authorization_->valid)
+    throw nav2_core::ControllerException("FTCController: missing/invalid motion geometry");
+  geometry_msgs::msg::PoseStamped robot;
+  if (!costmap_ros_->getRobotPose(robot))
+    throw nav2_core::ControllerException("FTCController: no current pose for authorization");
+  try
+  {
+    robot = tf_buffer_->transform(robot, "map", tf2::durationFromSec(0.0));
+  }
+  catch (const tf2::TransformException&)
+  {
+    throw nav2_core::ControllerException("FTCController: no map transform for authorization");
+  }
+  const double age = (clock_->now() - rclcpp::Time(robot.header.stamp)).seconds();
+  const auto& q = robot.pose.orientation;
+  const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+  if (!std::isfinite(age) || age < -0.1 || age > 0.3 || !std::isfinite(norm) ||
+      std::abs(norm - 1) > 1e-3)
+    throw nav2_core::ControllerException("FTCController: invalid/stale authorization pose");
+  mowgli_interfaces::motion::Ring footprint;
+  for (const auto& point : costmap_ros_->getRobotFootprint())
+    footprint.push_back({point.x, point.y});
+  const mowgli_interfaces::motion::Pose pose{robot.pose.position.x,
+                                             robot.pose.position.y,
+                                             tf2::getYaw(robot.pose.orientation)};
+  // The intended-command horizon is 0.1 s (shipped controller: 10 Hz).
+  // This is not a downstream command lease or a stopping-distance guarantee.
+  bool permitted =
+      authorization_->permits(pose, footprint, command.linear.x, command.angular.z, 0.1, true);
+  if (permitted && command.linear.x == 0 && command.angular.z != 0 &&
+      (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT ||
+       current_state_ == PlannerState::POST_ROTATE))
+  {
+    // Refuse to start a rotation whose later body sweep is forbidden. Include
+    // the remaining intended heading, not only the first outgoing tick.
+    const double heading_error = std::atan2(std::sin(angle_error_), std::cos(angle_error_));
+    double turn = std::abs(heading_error);
+    if (command.angular.z * heading_error < 0)
+      turn = 2 * M_PI - turn;
+    // Geometry is independent of rotation speed. Normalize the verifier's
+    // angular rate so a legitimate slow rotation cannot hit its time budget.
+    permitted = authorization_->permits(
+        pose, footprint, 0, std::copysign(1.0, command.angular.z), turn, true);
+  }
+  if (!permitted)
+    throw nav2_core::ControllerException("FTCController: intended chassis sweep is unauthorized");
+}
+
 // ── computeVelocityCommands ───────────────────────────────────────────────────
 
 geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
@@ -1084,6 +1166,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   {
     const double max_speed = maxLinearSpeed();
     cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
+    authorizeCommand(cmd_vel.twist);
     return cmd_vel;
   };
 
