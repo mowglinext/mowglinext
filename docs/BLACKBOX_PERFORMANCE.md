@@ -74,7 +74,7 @@ still affected maximum elapsed ingress time (0.101 s).
 
 ## Automated verification
 
-- 23 recorder tests pass, including rolling expiry, manual/automatic pre/post
+- 24 recorder tests pass, including rolling expiry, manual/automatic pre/post
   capture, coalescing, concurrent ingress/triggers, missing publishers, payload
   timestamp discontinuities, oversize/invalid/burst telemetry, pressure/recovery,
   injected write failure, atomic publication failure, interrupted shutdown,

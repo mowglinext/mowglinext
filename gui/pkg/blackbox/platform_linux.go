@@ -14,24 +14,7 @@ func sampleResources() resourceSample {
 	if err != nil {
 		return resourceSample{}
 	}
-	s := resourceSample{}
-	for _, line := range strings.Split(string(data), "\n") {
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		n, err := strconv.ParseInt(parts[1], 10, 64)
-		if err != nil {
-			continue
-		}
-		switch parts[0] {
-		case "MemTotal:":
-			s.total = n * 1024
-		case "MemAvailable:":
-			s.available = n * 1024
-		}
-	}
-	s.known = s.total > 0 && s.available > 0
+	s := parseMemoryInfo(data)
 	// cgroup v2 and v1 account for the container's actual budget, not the SBC
 	// model or host RAM. Unlimited sentinel values are ignored.
 	for _, pair := range [][2]string{{"/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"}, {"/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes"}} {

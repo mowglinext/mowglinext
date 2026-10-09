@@ -1,5 +1,35 @@
 package blackbox
 
+import (
+	"strconv"
+	"strings"
+)
+
+func parseMemoryInfo(data []byte) resourceSample {
+	s := resourceSample{}
+	availableFound := false
+	for _, line := range strings.Split(string(data), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		n, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || n < 0 {
+			continue
+		}
+		switch parts[0] {
+		case "MemTotal:":
+			s.total = n * 1024
+		case "MemAvailable:":
+			s.available = n * 1024
+			availableFound = true
+		}
+	}
+	// Zero is a valid pressure sample; distinguish it from a missing field.
+	s.known = s.total > 0 && availableFound
+	return s
+}
+
 type resourceSample struct {
 	total, available int64
 	known            bool
