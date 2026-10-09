@@ -222,6 +222,9 @@ void ChargeController(void)
 
   /*charger disconnected force idle state*/
   if(( chargerInputVoltage < MIN_DOCKED_VOLTAGE) ){
+    if (charger_state == CHARGER_STATE_CONNECTED) {
+      HAL_GPIO_WritePin(TF4_GPIO_PORT, TF4_PIN, 1); /* Restore powerbus after aborted offset measurement. */
+    }
     charger_state = CHARGER_STATE_IDLE;
   }
     
