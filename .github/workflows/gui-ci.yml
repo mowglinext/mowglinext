@@ -132,3 +132,8 @@ jobs:
 
       - name: Go tests
         run: go test ./...
+
+      - name: Blackbox concurrency (race)
+        run: |
+          go test -race ./pkg/blackbox
+          go test -race ./pkg/api -run Blackbox
