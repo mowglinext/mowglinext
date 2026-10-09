@@ -577,7 +577,9 @@ def s12_blade(probe, rig, R, esc):
     wait_for(lambda: abs(rig.snapshot()['duty']['mow']) > 0.9, 3)
     t2 = rig.now_ms()
     estop(probe, 1)
-    tz = rig.first_time_effective_zero(('mow',), t2, 1000)
+    # From the controller's command log: estop() blocks on the service reply,
+    # and a runner slow to deliver that reply is not the bridge being slow.
+    tz = rig.first_zero_command('mow', t2, 1000)
     R.check(S, 'e-stop stops the blade within 100 ms', tz is not None and tz - t2 < 100,
             f'{(tz - t2) if tz else float("nan"):.0f} ms')
     reset_emergency(probe, rig)

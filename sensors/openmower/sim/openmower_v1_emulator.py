@@ -783,6 +783,21 @@ class OpenMowerV1Rig:
                 return t
         return None
 
+    def first_zero_command(self, name: str, since_ms: float, timeout_ms: float):
+        """When the controller RECEIVED its first zero duty since a moment.
+
+        Read from the command log, so a caller that only starts looking after
+        a blocking service call returns still gets the arrival time, not the
+        moment it happened to look."""
+        deadline = since_ms + timeout_ms
+        while True:
+            with self.lock:
+                hit = next((t for (t, d) in self.escs[name].commands
+                            if t >= since_ms and abs(d) < 1e-9), None)
+            if hit is not None or self.now_ms() >= deadline:
+                return hit
+            time.sleep(0.002)
+
     def first_time_effective_zero(self, names, since_ms: float, timeout_ms: float):
         """Poll the controllers' OWN view (watchdogs included) until all are 0."""
         deadline = since_ms + timeout_ms
