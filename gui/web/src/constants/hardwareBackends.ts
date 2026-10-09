@@ -14,6 +14,8 @@ export interface HardwareBackendInfo {
      * OpenMower xESC's ticks_per_meter.
      */
     defaultOverrides: Record<string, unknown>;
+    /** robot_name from the installed config ("" while unknown). */
+    robotName: string;
 }
 
 export const normalizeHardwareBackend = (value: unknown): HardwareBackend =>

@@ -71,7 +71,7 @@ The Rev4 motor adapter (`xesc_yfr4`) is not supported yet.
 
 Device paths default to OpenMower's own for kernels ≥ 6.1.28. The installer
 writes its choice to `docker/.env`; after that they are changed in the GUI
-(**Settings → Hardware Backend**), never by editing a file:
+(**Settings → Hardware** (backend card at the top)), never by editing a file:
 
 | GUI field (`mowgli_robot.yaml` key) | Installer key (`docker/.env`) | Default | Meaning |
 |-------------------------------------|-------------------------------|---------|---------|
