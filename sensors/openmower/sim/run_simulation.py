@@ -577,7 +577,9 @@ def s12_blade(probe, rig, R, esc):
     wait_for(lambda: abs(rig.snapshot()['duty']['mow']) > 0.9, 3)
     t2 = rig.now_ms()
     estop(probe, 1)
-    tz = rig.first_time_effective_zero(('mow',), t2, 1000)
+    # From the controller's command log: estop() blocks on the service reply,
+    # and a runner slow to deliver that reply is not the bridge being slow.
+    tz = rig.first_zero_command('mow', t2, 1000)
     R.check(S, 'e-stop stops the blade within 100 ms', tz is not None and tz - t2 < 100,
             f'{(tz - t2) if tz else float("nan"):.0f} ms')
     reset_emergency(probe, rig)
@@ -693,11 +695,12 @@ def s16_docking(probe, rig, R, esc):
     with rig.lock:
         rig.ll.v_battery = 29.3  # above the board's 29 V cutoff -> relay opens
     # /battery_state publishes slower than /power: wait for the whole picture.
-    ok = wait_for(lambda: not probe.get('power').charger_enabled
+    ok = wait_for(lambda: probe.get('power').charger_status == 'docked, not charging'
                   and probe.get('battery').power_supply_status == BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING, 5)
     st, pw, b = probe.get('status'), probe.get('power'), probe.get('battery')
+    # Power.charger_enabled is the behaviour tree's is_charging: on the dock.
     R.check(S, 'battery full: relay open but STILL docked',
-            ok and st.is_charging and pw.charger_status == 'docked, not charging'
+            ok and st.is_charging and pw.charger_enabled
             and b.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_NOT_CHARGING,
             f'is_charging={st.is_charging} relay={pw.charger_enabled} "{pw.charger_status}"')
     with rig.lock:
@@ -713,9 +716,19 @@ def s17_old_firmware(probe, rig, R, esc):
         rig.ll.generation = 'v0.13'
     # The relay last opened in the docking scenario; the firmware only retries
     # after CHARGING_RETRY_MILLIS (10 s).
-    ok = wait_for(lambda: probe.get('power').charger_enabled, 13)
-    R.check(S, 'old firmware reports the relay ON off the dock (after its 10 s retry)', ok)
-    R.check(S, '...yet the bridge does NOT call it docked', not probe.get('status').is_charging)
+    with rig.lock:
+        rig.ll.charge_current_offset = 0.05  # what the field robot's sensor reads off the dock
+    ok = wait_for(lambda: rig.ll.charging_allowed, 13)
+    R.check(S, 'old firmware closes the relay off the dock (after its 10 s retry)', ok)
+    time.sleep(0.5)
+    st, pw = probe.get('status'), probe.get('power')
+    # Field report 2026-10-09: the relay bit in Power.charger_enabled made the
+    # behaviour tree show "charging" mid-lawn (status_snapshot.cpp reads it).
+    R.check(S, '...yet nothing calls it docked or charging',
+            not st.is_charging and not pw.charger_enabled and pw.charger_status == 'idle',
+            f'is_charging={st.is_charging} charger_enabled={pw.charger_enabled} "{pw.charger_status}"')
+    R.check(S, 'the 0.05 A sensor offset is not reported as a charge current',
+            pw.charge_current == 0.0, f'charge_current={pw.charge_current:.3f}')
     drive(probe, rig, 0.3, 0.0, 4.0)
     vx, n = probe.mean_since('odom', time.monotonic() - 1.5, 1)
     # Zeroed (Invariant 11 misapplied) would read 0.0; the speed itself is
@@ -724,6 +737,7 @@ def s17_old_firmware(probe, rig, R, esc):
     stop_driving(probe, rig)
     with rig.lock:
         rig.ll.generation = 'v1-fw'
+        rig.ll.charge_current_offset = 0.0
 
 
 def s18_buttons(probe, rig, R, esc):
@@ -832,7 +846,7 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
     probe = Probe()
     ex = MultiThreadedExecutor(num_threads=4)
     ex.add_node(probe)
-    spin_in_background(ex)
+    spinner = spin_in_background(ex)
     try:
         for sc in SCENARIOS:
             if only and sc.__name__ not in only:
@@ -856,6 +870,9 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
         except ProcessLookupError:
             pass
         ex.shutdown()
+        # Join before rclpy.shutdown/exit: a daemon spinner still inside rclpy
+        # at interpreter teardown segfaults the run (exit 139 after a green run).
+        spinner.join(timeout=5.0)
         probe.destroy_node()
         rig.close()
 
@@ -884,7 +901,7 @@ def run_gui_config(R: Report, logdir: str):
     probe = Probe()
     ex = MultiThreadedExecutor(num_threads=2)
     ex.add_node(probe)
-    spin_in_background(ex)
+    spinner = spin_in_background(ex)
     try:
         ok = wait_for(lambda: probe.get('status') is not None and probe.get('status').firmware_compatible, 20)
         R.check(S, 'connects through the yaml ports + ESC type, not the stale .env', ok,
@@ -901,6 +918,9 @@ def run_gui_config(R: Report, logdir: str):
         except ProcessLookupError:
             pass
         ex.shutdown()
+        # Join before rclpy.shutdown/exit: a daemon spinner still inside rclpy
+        # at interpreter teardown segfaults the run (exit 139 after a green run).
+        spinner.join(timeout=5.0)
         probe.destroy_node()
         rig.close()
 

@@ -290,8 +290,14 @@ void OpenMowerBridgeNode::publish_status_bundle(const mowgli_hardware::LlStatus&
     msg.stamp = stamp;
     msg.v_charge = pkt.v_charge;
     msg.v_battery = pkt.v_system;
-    msg.charge_current = pkt.charging_current;
-    msg.charger_enabled = charge_relay_on_;
+    msg.charge_current = ReportedChargeCurrent(is_charging_, pkt.charging_current);
+    // charger_enabled is what the behaviour tree reports as
+    // HighLevelStatus.is_charging (status_snapshot.cpp), and what the STM32
+    // bridge fills from its charger-contact bit: ON THE DOCK. Never the
+    // relay — v0.13 firmware keeps it closed while mowing (power_semantics.hpp),
+    // which showed "charging" in the middle of the lawn. The relay stays
+    // visible in charger_status.
+    msg.charger_enabled = is_charging_;
     msg.charger_status = ChargerStatusString(Classify(is_charging_, charge_relay_on_));
     pub_power_->publish(msg);
   }

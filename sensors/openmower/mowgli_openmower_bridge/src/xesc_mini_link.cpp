@@ -45,6 +45,7 @@ void XescMiniLink::Poll(SteadyClock::time_point now)
   }
 
   uint8_t buf[kReadChunk];
+  SteadyClock::time_point read_at = now;  // when the replies below were read
   while (true)
   {
     const ssize_t n = serial_.read(buf, kReadChunk);
@@ -59,6 +60,7 @@ void XescMiniLink::Poll(SteadyClock::time_point now)
     {
       break;
     }
+    read_at = SteadyClock::now();
     deframer_.Feed(buf, static_cast<std::size_t>(n));
   }
 
@@ -66,7 +68,7 @@ void XescMiniLink::Poll(SteadyClock::time_point now)
   {
     if (const auto parsed = vesc::ParsePayload(payload->data(), payload->size()))
     {
-      HandlePayload(*parsed, now);
+      HandlePayload(*parsed, read_at);
     }
   }
 
@@ -82,7 +84,10 @@ void XescMiniLink::Poll(SteadyClock::time_point now)
   }
   else if (SendFrame(vesc::BuildGetValuesRequest()))
   {
-    values_requests_.OnRequest(now);
+    // The time the request actually left, not the control tick's start: a
+    // bridge stalled in between would otherwise date the reply (values
+    // measured on arrival) to before the stall — see xesc_2040_link.cpp.
+    values_requests_.OnRequest(SteadyClock::now());
   }
 
   telemetry_.connected =

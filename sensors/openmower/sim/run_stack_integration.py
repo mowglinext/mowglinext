@@ -75,7 +75,7 @@ def main():
                                          durability=DurabilityPolicy.TRANSIENT_LOCAL))
     ex = MultiThreadedExecutor(num_threads=4)
     ex.add_node(probe)
-    spin_in_background(ex)
+    spinner = spin_in_background(ex)
     teleop_cmd: dict = {'v': None}
 
     def pump_teleop():
@@ -154,6 +154,9 @@ def main():
             f'exit={rc}')
 
     ex.shutdown()
+    # Join before rclpy.shutdown/exit: a daemon spinner still inside rclpy
+    # at interpreter teardown segfaults the run (exit 139 after a green run).
+    spinner.join(timeout=5.0)
     probe.destroy_node()
     rclpy.shutdown()
     total, bad = len(R.rows), R.failed
