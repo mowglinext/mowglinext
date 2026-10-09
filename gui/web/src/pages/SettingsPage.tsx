@@ -143,7 +143,9 @@ export const SettingsPage = () => {
     }, [sections, searchQuery, matchesSearch, t]);
 
     // Sections merged into "weather" keep their old links working.
-    const LEGACY_SECTIONS: Record<string, string> = { rain: "weather", irrisense: "weather" };
+    const LEGACY_SECTIONS: Record<string, string> = {
+        rain: "weather", irrisense: "weather", hardware_backend: "hardware",
+    };
     const rawSection = searchParams.get('section') ?? 'hardware';
     const requestedSection = LEGACY_SECTIONS[rawSection] ?? rawSection;
     const activeSection = visibleSections.find(section => section.id === requestedSection)?.id
@@ -196,6 +198,10 @@ export const SettingsPage = () => {
                 );
             case "hardware":
                 return (
+                    <>
+                    <HardwareBackendSection backend={hardwareBackend}>
+                        {renderFieldCards(OPENMOWER_WIRING_GROUP)}
+                    </HardwareBackendSection>
                     <HardwareSection
                         values={values}
                         onChange={handleChange}
@@ -206,12 +212,7 @@ export const SettingsPage = () => {
                         revealAdvanced={!!targetField || !!searchQuery}
                         backendDefaultOverrides={backendDefaultOverrides}
                     />
-                );
-            case "hardware_backend":
-                return (
-                    <HardwareBackendSection backend={hardwareBackend}>
-                        {renderFieldCards(OPENMOWER_WIRING_GROUP)}
-                    </HardwareBackendSection>
+                    </>
                 );
             case "drive_motor":
                 // The STM32 drive calibration and PID (PWM counts) exist only on

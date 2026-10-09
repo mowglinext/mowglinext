@@ -40,7 +40,6 @@ export type SettingsSection =
     | "updates"
     | "appearance"
     | "hardware"
-    | "hardware_backend"
     | "drive_motor"
     | "ntrip"
     | "positioning"
@@ -92,16 +91,10 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "wheel_x_offset", "chassis_center_x", "chassis_length", "chassis_width",
             "chassis_height", "chassis_mass_kg", "caster_radius", "caster_track",
             "ticks_per_meter", "tool_width", "blade_radius",
+            // The hardware backend's own wiring (ports, controller type), in
+            // the same section: one place for "what this robot is made of".
+            ...groupKeys(OPENMOWER_WIRING_GROUP),
         ],
-    },
-    {
-        id: "hardware_backend",
-        label: "settingsSections.hardware_backend.label",
-        icon: "api",
-        description: "settingsSections.hardware_backend.description",
-        // The active backend's own hardware (ports, controller type). Shown
-        // for every backend: on mowgli it says there is nothing to wire.
-        keys: [...groupKeys(OPENMOWER_WIRING_GROUP)],
     },
     {
         id: "drive_motor",
