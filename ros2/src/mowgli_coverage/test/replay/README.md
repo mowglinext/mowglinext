@@ -87,6 +87,8 @@ saves both snapshots and its first differing JSON location. Timing notes are
 excluded. Full snapshots are compressed; summaries contain SHA-256 stage/output
 hashes, pose/swath/ring/transit counts, path/endpoint-link lengths, connector
 outcomes, planner/connector times and process peak RSS.
+Use a fresh output directory for each comparison. A timeout or process failure
+returns nonzero and may leave a partial report; never treat it as a completed run.
 
 The diagnostic input hash binds transported and normalized geometry, all supplied
 parameters and recorded build provenance. It is **not used by production**.

@@ -61,7 +61,12 @@ unchanged to preserve #924 ownership.
 
 Local Windows validation: seven Python unit tests ran; six passed and the POSIX
 process-group test was skipped. These test comparison and timeout behavior,
-not Fields2Cover. Clang-format 18 is required for all changed C++ lines.
+not Fields2Cover. All 26 generated fixture schemas passed a separate audit with
+Isabey discovery mocked. A mocked runner exercised 20 stable records across five
+cases and correctly rejected an injected divergence (four records, two distinct
+outputs, exit 1). These are comparator checks, not real planner replay.
+Clang-format 18.1.8 changed-lines and Git whitespace checks passed. Initial CI
+formatting and cppcheck jobs passed.
 
 The candidate C++ build, five existing planner suites, trace-passivity tests,
 104-call registered replay matrix and Release/Debug/RelWithDebInfo comparisons
@@ -78,6 +83,11 @@ Independent source reviews examined Fields2Cover determinism and the replay
 implementation. Confirmed replay fixes include the server's rings-dependent
 start-hint pin condition, process-tree timeout cleanup and bitwise trace parity
 tests for holes, multiple cells, perpendicular swaths and pivot joins.
+Incremental-build provenance dependencies were added after review identified
+stale source/header hashes. Initial ARM64 Docker CI stopped at dependency
+resolution because this Draft used the CMake package name as a rosdep key; the
+manifest now uses the verified `nlohmann-json-dev` key. Candidate compilation
+had not begun in that job.
 
 ## Integration and resume risks
 
