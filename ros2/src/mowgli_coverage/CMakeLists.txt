@@ -185,6 +185,10 @@ if(BUILD_TESTING)
   ament_add_test(replay_runner_unit GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/test_runner.py")
+  ament_add_test(replay_provenance_unit GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    ENV "REPLAY_CMAKE=${CMAKE_COMMAND}"
+    COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/test_provenance.py")
   ament_add_test(replay_matrix GENERATE_RESULT_FOR_RETURN_CODE_ZERO TIMEOUT 600
     COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/run_replay.py"

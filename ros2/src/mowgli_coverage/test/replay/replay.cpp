@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "../fixtures/isabey.hpp"
+#include "coverage_replay_provenance.hpp"
 #include "gdal.h"
 #include "geos_c.h"
 #include "mowgli_coverage/coverage_planning.hpp"

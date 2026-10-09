@@ -61,7 +61,10 @@ unchanged to preserve #924 ownership.
 
 Local Windows validation: seven Python unit tests ran; six passed and the POSIX
 process-group test was skipped. These test comparison and timeout behavior,
-not Fields2Cover. All 26 generated fixture schemas passed a separate audit with
+not Fields2Cover. Five additional provenance regressions passed using real
+CMake 4.2.0: exact hashes, source/header edits, unchanged timestamps, packed-ref
+commits and archive overrides. These do not compile C++.
+All 26 generated fixture schemas passed a separate audit with
 Isabey discovery mocked. A mocked runner exercised 20 stable records across five
 cases and correctly rejected an injected divergence (four records, two distinct
 outputs, exit 1). These are comparator checks, not real planner replay.
@@ -83,8 +86,9 @@ Independent source reviews examined Fields2Cover determinism and the replay
 implementation. Confirmed replay fixes include the server's rings-dependent
 start-hint pin condition, process-tree timeout cleanup and bitwise trace parity
 tests for holes, multiple cells, perpendicular swaths and pivot joins.
-Incremental-build provenance dependencies were added after review identified
-stale source/header hashes. Initial ARM64 Docker CI stopped at dependency
+Build-time provenance generation was added after review identified stale
+source/header hashes and a packed-to-loose Git-ref transition. Unchanged values
+preserve the generated header timestamp. Initial ARM64 Docker CI stopped at dependency
 resolution because this Draft used the CMake package name as a rosdep key; the
 manifest now uses the verified `nlohmann-json-dev` key. Candidate compilation
 had not begun in that job.

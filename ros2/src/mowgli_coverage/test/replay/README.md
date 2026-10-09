@@ -29,7 +29,7 @@ python3 ros2/src/mowgli_coverage/test/replay/run_replay.py \
 
 Build types `Debug` and `RelWithDebInfo` use the same commands with separate build
 directories. The normal package's ament suite runs `test_planning_trace`, the
-Python runner tests and a 26-fixture replay matrix with two repetitions in each
+Python runner/provenance tests and a 26-fixture replay matrix with two repetitions in each
 of two fresh processes (104 planning calls). Larger stress runs use the commands
 above. These are registered checks, not a statement that they have passed.
 The standalone suite builds all five existing planner test files unchanged.
@@ -108,6 +108,9 @@ charging snapshot allocation to ordinary planner performance. Compare exact
 output hashes, fingerprints and geometry metrics before interpreting timing/RSS.
 RSS includes the process and JSON output; endpoint links are straight-line
 distances, **not Nav2 routes or measured blade-off robot travel**.
+For source archives, supply `-DREPLAY_REVISION=<hex commit>`; the build refuses
+to invent a revision when Git metadata is absent. Source/header hashes and Git
+revision refresh at build time, including incremental and packed-ref updates.
 
 Record the F2C source commit, actual compiler flags (the pinned CMake
 `ALLOW_PARALLELIZATION=ON` option alone does not define the C++ macro), library
