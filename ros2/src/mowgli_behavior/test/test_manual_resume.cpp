@@ -63,6 +63,7 @@ using mowgli_behavior::IsManualResumeRequested;
 using mowgli_behavior::isResumableHoldState;
 using mowgli_behavior::judgeChargeProgress;
 using mowgli_behavior::kNoChargeSaturationPct;
+using mowgli_behavior::startClearsSingleAreaMode;
 
 namespace
 {
@@ -211,16 +212,37 @@ TEST(ManualResumeHelperTest, ResumableHoldStateIsExactlyPlainIdle)
   // clearSingleAreaMode()-ing it.
   EXPECT_TRUE(isResumableHoldState("IDLE"));
 
-  // Everything else keeps the historical unconditional-clear-on-Start
-  // behavior: IDLE_DOCKED (session ended or never started — EndSession
-  // already cleared the target), both charge-hold states (a low-battery dock
-  // or emergency kept the session alive without EndSession — the operator's
-  // next Start explicitly does expect the whole lawn), and any other state.
+  // Everything else is NOT a plain pause: IDLE_DOCKED (session ended or never
+  // started — EndSession already cleared the target), both charge-hold states
+  // (those are handled by startClearsSingleAreaMode below) and any other state.
   EXPECT_FALSE(isResumableHoldState("IDLE_DOCKED"));
   EXPECT_FALSE(isResumableHoldState("CHARGING"));
   EXPECT_FALSE(isResumableHoldState("CRITICAL_BATTERY_CHARGING"));
   EXPECT_FALSE(isResumableHoldState("MOWING"));
   EXPECT_FALSE(isResumableHoldState(""));
+}
+
+TEST(ManualResumeHelperTest, ResumingTheSameRunKeepsTheSingleAreaClip)
+{
+  // Field report 2026-10-05: a targeted run on area 2, almost done, was
+  // interrupted by the battery guard. Play ("Resume now") in the charge hold
+  // cleared the clip, so the resumed mow restarted at area 0 on a full-lawn
+  // plan. A manual resume out of either charge hold continues the SAME run.
+  EXPECT_FALSE(startClearsSingleAreaMode("CHARGING"));
+  EXPECT_FALSE(startClearsSingleAreaMode("CRITICAL_BATTERY_CHARGING"));
+
+  // So does Pause -> Play (field report 2026-09-18).
+  EXPECT_FALSE(startClearsSingleAreaMode("IDLE"));
+}
+
+TEST(ManualResumeHelperTest, AFreshStartStillClearsAStaleSingleAreaClip)
+{
+  // "Start" from a finished or never-started session, or with no status yet,
+  // means the whole lawn: a stale clip must not survive it.
+  EXPECT_TRUE(startClearsSingleAreaMode("IDLE_DOCKED"));
+  EXPECT_TRUE(startClearsSingleAreaMode("MOWING"));
+  EXPECT_TRUE(startClearsSingleAreaMode("CHARGER_FAILED"));
+  EXPECT_TRUE(startClearsSingleAreaMode(""));
 }
 
 // ---------------------------------------------------------------------------
