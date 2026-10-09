@@ -33,6 +33,7 @@
 #include "mowgli_behavior/detour_resume.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/scan_pause.hpp"
+#include "mowgli_behavior/strip_progress.hpp"
 #include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
@@ -468,6 +469,10 @@ private:
   // Sub-paths recorded MOWED during THIS pass. Distinct from
   // ctx->area_completed_swaths[area].size(), which is cumulative across passes.
   std::size_t swaths_mowed_this_pass_ = 0;
+  // Planned path this pass left un-mowed on purpose (obstacle detours, controller turn-fallback
+  // rejoins). The unit counters above cannot show it: a unit that was mostly detoured around
+  // is still booked mowed, so the end-of-pass message reports this tally too.
+  SkippedPathTally skipped_tally_;
   bool swath_goal_sent_ = false;
   // Absolute start index of each swaths_ unit within the CONCATENATION of all
   // units (== full_path). swath_base_[k] = sum of the ORIGINAL (untrimmed) pose
