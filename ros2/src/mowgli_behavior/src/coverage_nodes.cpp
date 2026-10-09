@@ -397,6 +397,7 @@ BT::NodeStatus FollowStrip::onStart()
   swaths_skipped_ = 0;
   swaths_skipped_start_occupied_ = 0;
   swaths_mowed_this_pass_ = 0;
+  skipped_tally_ = SkippedPathTally{};
   transit_active_ = false;
   transit_pending_ = false;
   transit_abort_seen_ = false;
@@ -623,6 +624,11 @@ void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
                     swaths_.size(),
                     path_progress_idx_,
                     *k);
+        if (*k > path_progress_idx_)
+        {
+          skipped_tally_.addRejoin(*k - path_progress_idx_,
+                                   pathLengthBetween(poses, path_progress_idx_, *k));
+        }
         path_progress_idx_ = *k;
       }
     }
@@ -1188,12 +1194,27 @@ BT::NodeStatus FollowStrip::onRunning()
                   area_idx_);
       return BT::NodeStatus::FAILURE;
     }
-    RCLCPP_INFO(ctx->node->get_logger(),
-                "FollowStrip: area %u pass done (%zu/%zu swaths mowed, %zu skipped this pass)",
-                area_idx_,
-                done.size(),
-                swaths_.size(),
-                swaths_skipped_);
+    if (skipped_tally_.any())
+    {
+      // "swaths mowed" counts units: say plainly how much of the plan was left behind.
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: area %u pass done (%zu/%zu swaths mowed, %zu skipped this pass) "
+                  "— NOT all of it was mowed: %s",
+                  area_idx_,
+                  done.size(),
+                  swaths_.size(),
+                  swaths_skipped_,
+                  describeSkippedPath(skipped_tally_).c_str());
+    }
+    else
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowStrip: area %u pass done (%zu/%zu swaths mowed, %zu skipped this pass)",
+                  area_idx_,
+                  done.size(),
+                  swaths_.size(),
+                  swaths_skipped_);
+    }
     return BT::NodeStatus::SUCCESS;
   };
 
@@ -2182,19 +2203,26 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
   const geometry_msgs::msg::Point stuck_point = poses[stuck].pose.position;
 
   // Poses [stuck..idx) span the obstacle gap and are left un-mowed this pass
-  // (physically unreachable).
+  // (physically unreachable). Measured BEFORE trimUnitAt rewrites `poses`: idx also counts the
+  // poses already driven before the stuck pose, so only idx - stuck is truly left behind.
+  const std::size_t gap_poses = idx > stuck ? idx - stuck : 0;
+  const double gap_m = pathLengthBetween(poses, stuck, idx);
   ++detours_used_;
+  skipped_tally_.addDetour(gap_poses, gap_m);
   trimUnitAt(ctx, idx);
   last_detour_stuck_point_ = stuck_point;
 
   RCLCPP_WARN(ctx->node->get_logger(),
               "FollowStrip: obstacle blocked unit %zu/%zu — DETOUR %zu/%zu: blade-off transit "
-              "around it to resume pose (skipped %zu poses), then resuming coverage",
+              "around it to resume pose %zu (%zu poses / %.2f m left un-mowed), then resuming "
+              "coverage",
               swath_idx_ + 1,
               swaths_.size(),
               detours_used_,
               max_detours_per_segment_,
-              idx);
+              idx,
+              gap_poses,
+              gap_m);
 
   // Reuse the EXISTING blade-off inter-segment transit machinery. The resume
   // pose is >= kDetourMinSkipM (> kSegmentTransitGap) from the robot, so
