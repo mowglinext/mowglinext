@@ -100,11 +100,6 @@ inline bool sameTransitTarget(double ax, double ay, double bx, double by)
 /// deadline of a 30 m transit (transitDeadlineSec) — bounded, and generous.
 constexpr double kTransitToStripUnknownGapM = 30.0;
 
-/// Latest NavigateToPose result, filled by the result_callback registered at
-/// dispatch (FollowStrip's sub-path transits, TransitToStrip). Held behind a
-/// shared_ptr so the callback never touches a destroyed node, and behind a
-/// mutex so a future Reentrant callback group cannot race the BT tick (today
-/// they are serialized — see bt_context.hpp).
 /// A FollowCoveragePath goal between async_send_goal and its acceptance. The BT
 /// only reads the goal handle on its next tick, so a halt in that window would
 /// otherwise neither persist the cursor nor cancel the goal — which the server
@@ -116,6 +111,11 @@ struct FollowAcceptSlot
   bool abandoned = false;
 };
 
+/// Latest NavigateToPose result, filled by the result_callback registered at
+/// dispatch (FollowStrip's sub-path transits, TransitToStrip). Held behind a
+/// shared_ptr so the callback never touches a destroyed node, and behind a
+/// mutex so a future Reentrant callback group cannot race the BT tick (today
+/// they are serialized — see bt_context.hpp).
 struct TransitResultSlot
 {
   std::mutex mutex;
