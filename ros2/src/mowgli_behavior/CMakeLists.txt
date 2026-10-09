@@ -716,6 +716,18 @@ if(BUILD_TESTING)
     ${geometry_msgs_TARGETS}
   )
 
+  # ---- test_dock_stall ----
+  # DockRobot cancels a dock approach that stands still (the garage edge over
+  # the dock, 2026-10-06); the detector is pure and ROS-free.
+  ament_add_gtest(test_dock_stall
+    test/test_dock_stall.cpp
+  )
+
+  target_include_directories(test_dock_stall PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_unit_resume ----
   ament_add_gtest(test_unit_resume
     test/test_unit_resume.cpp

@@ -15,6 +15,9 @@
 
 #include "mowgli_behavior/docking_nodes.hpp"
 
+#include <chrono>
+#include <mutex>
+
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/dock_alignment.hpp"
@@ -106,6 +109,7 @@ BT::NodeStatus DockRobot::onStart()
   goal_msg.navigate_to_staging_pose = true;
 
   last_feedback_state_ = DockAction::Feedback::NONE;
+  stall_detector_.Reset();
 
   auto send_goal_options = rclcpp_action::Client<DockAction>::SendGoalOptions{};
   send_goal_options.feedback_callback =
@@ -185,8 +189,51 @@ BT::NodeStatus DockRobot::onRunning()
       return BT::NodeStatus::FAILURE;
 
     default:
+      if (approach_stalled(ctx))
+      {
+        // The server is still driving the approach but the chassis has not moved: something
+        // physical is in the way (field 2026-10-06: the garage edge over the dock, 0.29 m
+        // short, pushed against for 30 s). Stop and report; do NOT let the server retry, a
+        // retry would drive into the same edge. FAILURE takes the tree's existing dock-failure
+        // path, which publishes NAV_TO_DOCK_FAILED and so raises the "blocked" notification.
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "DockRobot: DOCK BLOCKED — the dock approach has not moved or turned for "
+                    "%.0f s while the dock server is controlling it and the mower is not "
+                    "charging (an obstacle such as the garage edge is in the way at fused "
+                    "pose %.2f, %.2f). Cancelling the dock attempt, no retry",
+                    kDockStallWindowS,
+                    ctx->fused_x,
+                    ctx->fused_y);
+        cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "DockRobot");
+        goal_handle_.reset();
+        ctx->docking_active = false;
+        return BT::NodeStatus::FAILURE;
+      }
       return BT::NodeStatus::RUNNING;
   }
+}
+
+bool DockRobot::approach_stalled(const std::shared_ptr<BTContext>& ctx)
+{
+  // Only while the server is actually driving the final approach. NAV_TO_STAGING has its own
+  // Nav2 recovery, and WAIT_FOR_CHARGE legitimately stands still waiting for the charger.
+  if (last_feedback_state_.load() != DockAction::Feedback::CONTROLLING)
+  {
+    stall_detector_.Reset();
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  const auto now = std::chrono::steady_clock::now();
+  const double pose_age_s = std::chrono::duration<double>(now - ctx->fused_pose_time).count();
+  // Charging means the contacts are made: that is a dock, not a blockage.
+  if (ctx->latest_power.charger_enabled || !ctx->fused_pose_valid ||
+      pose_age_s > kDockStallMaxPoseAgeS)
+  {
+    stall_detector_.Reset();
+    return false;
+  }
+  const double now_s = std::chrono::duration<double>(now.time_since_epoch()).count();
+  return stall_detector_.Update(now_s, ctx->fused_x, ctx->fused_y, ctx->fused_yaw);
 }
 
 void DockRobot::onHalted()

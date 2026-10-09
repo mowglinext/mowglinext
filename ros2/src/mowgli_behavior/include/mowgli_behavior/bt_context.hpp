@@ -586,6 +586,15 @@ struct BTContext
   double gps_x{0.0};
   double gps_y{0.0};
 
+  /// Latest fused (GNSS-anchored) pose in the map frame, from /odometry/filtered_map, with
+  /// its receipt time. DockRobot's stall check reads it: a spinning wheel reports travel the
+  /// chassis never made, the fused pose does not.
+  double fused_x{0.0};
+  double fused_y{0.0};
+  double fused_yaw{0.0};
+  std::chrono::steady_clock::time_point fused_pose_time{};
+  bool fused_pose_valid{false};
+
   // -----------------------------------------------------------------------
   // GPS quality classification (derived from gps_quality / fix_type)
   // -----------------------------------------------------------------------

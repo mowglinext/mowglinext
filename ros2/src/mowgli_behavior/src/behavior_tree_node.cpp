@@ -468,6 +468,13 @@ private:
               std::sqrt(std::max({msg->pose.covariance[0], msg->pose.covariance[7], 0.0}));
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           loc_obs_.fused_sigma_xy_m = sigma;
+          const auto& q = msg->pose.pose.orientation;
+          context_->fused_x = msg->pose.pose.position.x;
+          context_->fused_y = msg->pose.pose.position.y;
+          context_->fused_yaw =
+              std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+          context_->fused_pose_time = std::chrono::steady_clock::now();
+          context_->fused_pose_valid = true;
           updateLocalizationHealthLocked();
         });
 
