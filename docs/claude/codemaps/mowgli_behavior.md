@@ -54,7 +54,7 @@
 | `trees/navigate_to_pose.xml` | 79 | Nav2 `bt_navigator` tree: ControllerSelector/GoalCheckerSelector/PlannerSelector + replan only if path invalid, RoundRobin recovery |
 | **`include/mowgli_behavior/`** | | |
 | `action_nodes.hpp` | 33 | Umbrella header; declares `registerAllNodes()` |
-| `bt_context.hpp` | ~885 | `BTContext` shared via blackboard key `"context"`; `clearSingleAreaMode()`; dispatch budgets `kMaxAreaAttempts=5`, `kMaxStartBlockedAttempts=3`, `kMaxGuardHaltedPasses=30`; live `coverage_scan_paused` and `coverage_plausibility_warning` status overlays |
+| `bt_context.hpp` | ~885 | `BTContext` shared via blackboard key `"context"`; `clearSingleAreaMode()` (a plain START clears the single-area clip unless `startClearsSingleAreaMode()` says it continues the SAME run: Pause→Play from `IDLE`, or a manual "Resume now" out of a `CHARGING` / `CRITICAL_BATTERY_CHARGING` hold); dispatch budgets `kMaxAreaAttempts=5`, `kMaxStartBlockedAttempts=3`, `kMaxGuardHaltedPasses=30`; live `coverage_scan_paused` and `coverage_plausibility_warning` status overlays |
 | `condition_nodes.hpp` | 830 | 25 `BT::ConditionNode` classes + ports |
 | `coverage_nodes.hpp` | ~610 | `FollowStrip`, `TransitToStrip`, `DetourAroundObstacle`, `GetNextUnmowedArea`, `PlanCoverageArea`; pure helpers `resolveResumeLocation`, `refreshSwathProgress`, `coveragePercentFromCursor`, `forwardSkipIndex`; `kMowAngleAutoDeg=-1` |
 | `mow_coverage_plausibility.hpp` | ~180 | Pure, ROS-free: `ComputeMowedFraction`, `PointInPolygon`, `MowProgressGridView`, `kMinPlausibleMowedFraction=0.5`, `kMowedCellThreshold=50` (issue #680, coverage-completion cross-check) |
