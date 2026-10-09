@@ -1953,6 +1953,7 @@ FollowStrip::DigRecoveryStep FollowStrip::stepDigRecovery(const std::shared_ptr<
     if (dig_recovery_was_following_ && !follow_handle_ && ready(follow_future_))
     {
       follow_handle_ = follow_future_.get();
+      follow_accept_.reset();
     }
     if (!dig_recovery_was_following_ && transit_active_ && !nav_handle_ && ready(nav_future_))
     {
