@@ -454,6 +454,17 @@ struct PivotJoinLimits
 // when pivot joins are disabled or the recorded boundary is missing.
 bool pivotSweepFits(double x, double y, const PivotJoinLimits& limits);
 
+// Turn every zero-radius corner of `pts` sharper than `min_turn_rad` into a
+// pivot corner (a bit-exact twin, see coverage_geometry.hpp) where
+// pivotSweepFits() allows it. Existing twins and every other pose are kept
+// unchanged; with pivots disabled (sweep_radius <= 0) `pts` is returned as is.
+// Used on finished sub-paths, after fillets: a corner left sharp there is one
+// FTC would otherwise drive as a curve, sweeping the chassis nose wide.
+std::vector<std::pair<double, double>> pivotSharpCorners(
+    const std::vector<std::pair<double, double>>& pts,
+    double min_turn_rad,
+    const PivotJoinLimits& limits);
+
 // Yaw of every pose of a drivable sub-path, honouring the pivot corner
 // contract: a pose followed by a pose at the SAME position (a pivot corner)
 // takes the INCOMING heading, its twin the outgoing one; every other pose takes
