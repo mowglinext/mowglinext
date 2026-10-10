@@ -259,6 +259,17 @@ export const HardwareSection: React.FC<Props> = ({
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
+                            <Form.Item htmlFor="setting-chassis_z_offset" data-setting-key="chassis_z_offset"
+                                label={fieldLabel("chassis_z_offset", t("settingsHardware.chassisZOffset"))}
+                                tooltip={t("settingsHardware.chassisZOffsetTooltip")}>
+                                <InputNumber id="setting-chassis_z_offset" aria-label={t("settingsHardware.chassisZOffset") + ", m"}
+                                    aria-description={t("settingsHardware.chassisZOffsetTooltip")}
+                                    value={values.chassis_z_offset == null ? undefined : Number(values.chassis_z_offset)}
+                                    onChange={v=>{if(v != null) onChange("chassis_z_offset",v);}}
+                                    min={-.3} max={.3} step={.005} precision={3} style={{width:"100%"}} addonAfter="m"/>
+                            </Form.Item>
+                        </Col>
+                        <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-chassis_center_x" data-setting-key="chassis_center_x" label={fieldLabel("chassis_center_x", t("settingsHardware.chassisCenterX"))} tooltip={t("settingsHardware.chassisCenterXTooltip")}>
                                 <InputNumber aria-label={t("settingsHardware.chassisCenterX") + ", m"} aria-description={t("settingsHardware.chassisCenterXTooltip")}  id="setting-chassis_center_x"
                                     value={values.chassis_center_x}

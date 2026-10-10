@@ -46,3 +46,17 @@ it("uses explicit caster axle placement and retains automatic geometry when rese
     expect(previewRobotGeometry(live,{caster_x_offset:0}).casterXOffset).toBe(0);
     expect(previewRobotGeometry(live,{caster_x_offset:-1,chassis_length:.8}).casterXOffset).toBeCloseTo(.55);
 });
+
+it("moves only the shell when editing vertical offset and preserves that offset on height edits",()=>{
+    const live=parseRobotUrdf(ROBOT_URDF)!;
+    const next=previewRobotGeometry(live,{chassis_z_offset:-.06});
+    expect(next.chassisCenterZ).toBeCloseTo(.035);
+    expect(next.baseHeight).toBe(.19);
+    expect(next.wheelZ).toBe(live.wheelZ);
+    expect(next.casterZ).toBe(live.casterZ);
+    expect(next.bladeZ).toBe(live.bladeZ);
+    expect(next.sensors).toEqual(live.sensors);
+    const taller=previewRobotGeometry(live,{chassis_height:.24});
+    expect(taller.chassisCenterZ!-.24/2).toBeCloseTo(-.05);
+    expect(previewRobotGeometry(live,{chassis_z_offset:0}).chassisCenterZ).toBeCloseTo(.095);
+});

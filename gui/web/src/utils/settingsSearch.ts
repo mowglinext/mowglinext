@@ -238,6 +238,7 @@ const FIELD_TEXT: Record<string, string[]> = {
     "chassis_width": [
         "settingsHardware.chassisWidth"
     ],
+    "chassis_z_offset": ["settingsHardware.chassisZOffset", "settingsHardware.chassisZOffsetTooltip"],
     "chassis_height": [
         "settingsHardware.chassisHeight"
     ],

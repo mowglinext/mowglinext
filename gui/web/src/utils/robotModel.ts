@@ -119,7 +119,12 @@ export function previewRobotGeometry(live: RobotGeometry, values: Record<string,
     if (configuredCasterX !== undefined && configuredCasterX !== -1) next.casterXOffset = configuredCasterX;
     else if (configuredCasterX === -1 || next.baseLength !== live.baseLength || next.chassisCenterX !== live.chassisCenterX || next.casterRadius !== live.casterRadius)
         next.casterXOffset = next.chassisCenterX + next.baseLength/2 - next.casterRadius;
-    if (next.baseHeight !== live.baseHeight) next.chassisCenterZ = next.baseHeight/2;
+    const shellOffset = read("chassis_z_offset");
+    // An omitted setting retains the running URDF's bottom position, including
+    // custom robots; edited height must not silently reset vertical placement.
+    const liveBottom = (live.chassisCenterZ ?? live.baseHeight/2) - live.baseHeight/2;
+    if (shellOffset !== undefined || next.baseHeight !== live.baseHeight)
+        next.chassisCenterZ = next.baseHeight/2 + (shellOffset ?? liveBottom);
     if (next.wheelRadius !== live.wheelRadius || next.casterRadius !== live.casterRadius)
         next.casterZ = -next.wheelRadius + next.casterRadius;
     if (next.chassisCenterX !== live.chassisCenterX) next.bladeX = next.chassisCenterX;

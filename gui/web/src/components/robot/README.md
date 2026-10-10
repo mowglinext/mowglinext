@@ -97,3 +97,28 @@ Latest artwork corrections (built-in ImageGen edits/generations):
 ROS validation: non-root Docker xacro tests exercise automatic, positive, zero
 and negative caster positions. GUI schema/template/default-type parity tests
 run in a non-root Go container. This feature has not been deployed to .118.
+
+## Chassis vertical placement
+
+`chassis_z_offset` places the bottom of the shell relative to the rear axle.
+The YardForce 500/500B starting value is **-0.050 m**, estimated from the supplied
+Classic 500/500B photos, not measured. With the configured 0.100 m wheel radius
+and 0.190 m body height, this puts the bottom 0.050 m and top 0.240 m above ground.
+The value is editable in Hardware → Chassis & Geometry, mirrored in the schema
+and passed through launch to both URDF body visual/collision origins. It does
+not move base_link, wheels, casters, blade or sensor frames and does not change
+the 2D navigation footprint. Other populated mower presets explicitly retain
+zero offset; custom/sparse configurations inherit the template unless overridden.
+
+The live map uses the running URDF. Hardware/Sensors previews show edited values;
+save and restart ROS before the running model reflects a changed offset.
+Changing body height preserves the configured bottom position.
+
+Physical validation: **HARDWARE_REQUIRED** for the photo-estimated value.
+Baseline: codex/layered-mower with chassis_z_offset=-0.050, YardForce500/B preset,
+wheel_radius=0.100, chassis_height=0.190. No firmware or robot was accessed.
+Procedure: on the intended Yardforce unit, powered off on a level surface with
+blades removed, measure ground to the lowest body skirt and highest shell point.
+Compare against 50 mm and 240 mm; a discrepancy over 5 mm rejects this provisional
+fit and calls for adjusting the offset and/or body height to the measurements.
+These measurements are not a prerequisite to using this illustrative preview.

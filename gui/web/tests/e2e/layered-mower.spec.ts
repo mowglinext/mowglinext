@@ -6,7 +6,7 @@ import {SHELLS} from "../../src/components/robot/shellAssets";
 import {ROBOT_URDF} from "../../src/test/robotUrdf";
 const base=SCENARIOS[0];
 const shots="screenshots.local/layered-mower";
-const settings={mower_model:"YardForce500",chassis_length:.6,chassis_width:.45,chassis_height:.19,
+const settings={mower_model:"YardForce500",chassis_length:.6,chassis_width:.45,chassis_height:.19,chassis_z_offset:-.05,
     chassis_center_x:.18,wheel_radius:.1,wheel_width:.04,wheel_track:.325,wheel_x_offset:0,
     caster_radius:.03,caster_track:.36,blade_radius:.09,gps_x:.3,gps_y:0,gps_z:.2,
     lidar_x:0,lidar_y:.024,lidar_z:.3,lidar_yaw:3.1408,imu_x:.18,imu_y:-.195,imu_z:.095};
@@ -155,4 +155,20 @@ test("all shell dimensions describe opaque chassis edges, excluding atlas margin
     await expect(top).toHaveAttribute("height","0.6");
     await expect(side).toHaveAttribute("width","0.6");
     await expect(side).toHaveAttribute("height","0.19");
+});
+
+test("Yardforce vertical offset lowers the shell without shrinking it or moving axles",async({page})=>{
+    await page.goto("/#/settings?section=hardware");
+    const side=page.getByTestId("mower-side");
+    const shell=side.locator('[data-layer="shell-art"]');
+    await expect(shell).toHaveAttribute("height","0.19");
+    expect(Number(await shell.getAttribute("y"))).toBeCloseTo(-.14);
+    const wheelTransform=await side.locator('[data-layer="wheels"] > g').getAttribute("transform");
+    await page.getByText("Chassis & Geometry",{exact:true}).click();
+    const input=page.getByRole("spinbutton",{name:"Chassis vertical offset, m"});
+    await input.fill("-0.06");await input.press("Tab");
+    expect(Number(await shell.getAttribute("y"))).toBeCloseTo(-.13);
+    await expect(shell).toHaveAttribute("height","0.19");
+    await expect(side.locator('[data-layer="wheels"] > g')).toHaveAttribute("transform",wheelTransform!);
+    await expect(side.locator('[data-sensor="gps"]')).toHaveAttribute("data-z","0.2");
 });

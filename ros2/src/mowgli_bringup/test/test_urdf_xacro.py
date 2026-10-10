@@ -62,3 +62,25 @@ def test_caster_offset_reaches_both_axles_and_auto_preserves_placement() -> None
             origin = robot.find(f"./joint[@name='front_{side}_caster_joint']/origin")
             assert origin is not None
             assert abs(float(origin.attrib["xyz"].split()[0]) - expected) < 1e-9
+
+
+def test_chassis_offset_moves_body_only_and_retains_dimensions() -> None:
+    snapshots = []
+    for offset in (-0.05, 0.0):
+        result = subprocess.run(
+            ["xacro", str(_XACRO_FILE), f"chassis_z_offset:={offset}",
+             "chassis_height:=0.19", "wheel_radius:=0.1"],
+            check=True, capture_output=True, text=True,
+        )
+        robot = ET.fromstring(result.stdout)
+        for kind in ("visual", "collision"):
+            body = robot.find(f"./link[@name='base_link']/{kind}")
+            assert body is not None
+            z = float(body.find("origin").attrib["xyz"].split()[2])
+            height = float(body.find("geometry/box").attrib["size"].split()[2])
+            assert height == 0.19
+            assert abs(z - height / 2 - offset) < 1e-9
+            assert abs(0.1 + z - height / 2 - (0.1 + offset)) < 1e-9
+        snapshots.append({j.attrib["name"]: ET.tostring(j) for j in robot.findall("joint")})
+    # Changing shell Z must not relocate base_link, axles, blade or sensors.
+    assert snapshots[0] == snapshots[1]

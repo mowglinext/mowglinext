@@ -63,6 +63,8 @@
   <xacro:arg name="chassis_length"   default="0.60"/>
   <xacro:arg name="chassis_width"    default="0.40"/>
   <xacro:arg name="chassis_height"   default="0.19"/>
+  <!-- Shell bottom relative to axle; photo-estimated YardForce default. -->
+  <xacro:arg name="chassis_z_offset" default="-0.05"/>
   <xacro:arg name="chassis_mass_kg"  default="8.76"/>
   <xacro:arg name="chassis_center_x" default="0.20"/>
   <!-- 0.1 m = mowgli_robot.yaml's wheel_radius default (measured 2026-09-05).
@@ -85,6 +87,7 @@
   <xacro:property name="base_length"      value="$(arg chassis_length)"/>
   <xacro:property name="base_width"       value="$(arg chassis_width)"/>
   <xacro:property name="base_height"      value="$(arg chassis_height)"/>
+  <xacro:property name="chassis_z_offset" value="$(arg chassis_z_offset)"/>
   <xacro:property name="chassis_cx"       value="$(arg chassis_center_x)"/>
 
   <xacro:property name="wheel_radius"     value="$(arg wheel_radius)"/>
@@ -171,7 +174,7 @@
   <link name="base_link">
     <visual>
       <!-- Chassis centre offset forward from wheel axis -->
-      <origin xyz="${chassis_cx} 0 ${base_height/2}" rpy="0 0 0"/>
+      <origin xyz="${chassis_cx} 0 ${base_height/2 + chassis_z_offset}" rpy="0 0 0"/>
       <geometry>
         <box size="${base_length} ${base_width} ${base_height}"/>
       </geometry>
@@ -180,7 +183,7 @@
       </material>
     </visual>
     <collision>
-      <origin xyz="${chassis_cx} 0 ${base_height/2}" rpy="0 0 0"/>
+      <origin xyz="${chassis_cx} 0 ${base_height/2 + chassis_z_offset}" rpy="0 0 0"/>
       <geometry>
         <box size="${base_length} ${base_width} ${base_height}"/>
       </geometry>

@@ -2447,7 +2447,9 @@
     "modelConfirmCancel": "Annuler",
     "casterXOffset": "Position avant/arrière des roulettes",
     "casterXOffsetTooltip": "Position X de l’axe des roulettes depuis base_link (essieu arrière), en mètres ; positive vers l’avant. Le mode automatique place le pneu à l’avant du châssis. Enregistrez et redémarrez ROS pour actualiser le modèle.",
-    "casterAuto": "Automatique selon le châssis"
+    "casterAuto": "Automatique selon le châssis",
+    "chassisZOffset": "Décalage vertical du châssis",
+    "chassisZOffsetTooltip": "Bas de la carrosserie par rapport à l’essieu arrière : une valeur négative abaisse la carrosserie. La valeur Yardforce −0,050 m est estimée sur photos et donne 50 mm de garde au sol avec des roues de 100 mm de rayon. Enregistrez et redémarrez ROS ; roues et capteurs restent indépendants."
   },
   "settingsDriveMotor": {
     "savedLiveTitle": "Sauvegardé et appliqué en direct",

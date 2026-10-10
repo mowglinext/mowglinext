@@ -2451,7 +2451,9 @@
     "modelConfirmCancel": "Cancel",
     "casterXOffset": "Caster front/back position",
     "casterXOffsetTooltip": "Caster axle X from base_link (rear axle), in metres; positive is forward. Automatic places the tyre at the chassis front. Save and restart ROS to update the running model.",
-    "casterAuto": "Automatic from chassis"
+    "casterAuto": "Automatic from chassis",
+    "chassisZOffset": "Chassis vertical offset",
+    "chassisZOffsetTooltip": "Body bottom relative to the rear axle: negative lowers the body. The Yardforce default −0.050 m is estimated from photos, giving 50 mm ground clearance with 100 mm wheel radius. Save and restart ROS; wheel and sensor positions are independent."
   },
   "settingsDriveMotor": {
     "savedLiveTitle": "Saved and applied live",

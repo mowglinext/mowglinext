@@ -28,6 +28,7 @@
     "chassis_mass_kg": "number",
     "chassis_safety_inset": "number",
     "chassis_width": "number",
+    "chassis_z_offset": "number",
     "connector_max_headland_passes": "integer",
     "coverage_xy_tolerance": "number",
     "datum_lat": "number",

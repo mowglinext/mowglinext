@@ -69,6 +69,14 @@
           "default": 0.45,
           "description": "Chassis width in metres."
         },
+        "chassis_z_offset": {
+          "type": "number",
+          "title": "Chassis Vertical Offset",
+          "default": -0.05,
+          "minimum": -0.3,
+          "maximum": 0.3,
+          "description": "Body bottom relative to rear axle in metres. Negative lowers the shell; zero puts its bottom at axle height. The -0.05 YardForce 500/500B default is a provisional estimate from photos. Does not move wheel or sensor frames. Restart ROS after saving."
+        },
         "chassis_height": {
           "type": "number",
           "title": "Chassis Height",
