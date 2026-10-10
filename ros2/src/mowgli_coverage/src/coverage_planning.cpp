@@ -1927,11 +1927,19 @@ std::pair<double, double> clampInsideRing(double x,
 std::vector<std::pair<double, double>> pivotSharpCorners(
     const std::vector<std::pair<double, double>>& pts,
     double min_turn_rad,
-    const PivotJoinLimits& limits)
+    const PivotJoinLimits& limits,
+    std::vector<bool>* is_twin)
 {
   if (pts.size() < 3 || limits.sweep_radius <= 0.0)
   {
     return pts;
+  }
+  const bool track = is_twin != nullptr && is_twin->size() == pts.size();
+  std::vector<bool> twin_out;
+  if (track)
+  {
+    twin_out.reserve(pts.size() + 16);
+    twin_out.push_back((*is_twin)[0]);
   }
   const auto same = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
   {
@@ -1943,6 +1951,10 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
   for (std::size_t i = 1; i + 1 < pts.size(); ++i)
   {
     out.push_back(pts[i]);
+    if (track)
+    {
+      twin_out.push_back((*is_twin)[i]);
+    }
     // Already a corner twin (either half): leave it to the contract.
     if (same(pts[i], pts[i - 1]) || same(pts[i], pts[i + 1]))
     {
@@ -1956,9 +1968,18 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
     if (turn > min_turn_rad && pivotSweepFits(pts[i].first, pts[i].second, limits))
     {
       out.push_back(pts[i]);  // bit-exact twin: FTC stops here and rotates in place
+      if (track)
+      {
+        twin_out.push_back(true);
+      }
     }
   }
   out.push_back(pts.back());
+  if (track)
+  {
+    twin_out.push_back(is_twin->back());
+    *is_twin = std::move(twin_out);
+  }
   return out;
 }
 
@@ -2455,12 +2476,6 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     }
     auto rounded = roundSharpCorners(
         sp, boundary, plan.safe_holes, kCornerThreshold, fillet_r, min_radius, step);
-    // A corner the fillet could not round is still a zero-radius corner. FTC
-    // drives one as a curve unless it is a pivot corner, sweeping the nose wide
-    // of the plan — field 2026-10-10: a 147° spike and a hairpin of the outer
-    // ring, both against a hedge, wedged FTC five times. Turn it in place
-    // instead, where the pivot sweep fits (pivotSweepFits, as for pivot joins).
-    rounded = pivotSharpCorners(rounded, kSharpCornerPivotRad, pivot_limits);
     // Pivot corner twins, marked BEFORE the clamp below. Up to here the only
     // bit-exact consecutive duplicates are the twins appendPivotJoin emitted:
     // the densifiers skip zero-length steps, the connectors drop their start,
@@ -2488,6 +2503,13 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
         pt = clampInsideRing(pt.first, pt.second, boundary, kClearanceClampMarginM);
       }
     }
+    // A corner the fillet could not round is still a zero-radius corner. FTC
+    // drives one as a curve unless it is a pivot corner, sweeping the nose wide
+    // of the plan (field 2026-10-10: 65 such ring corners, FTC wedged against
+    // the hedge at three of them). Turn it in place instead, where the pivot
+    // sweep fits (pivotSweepFits, as for pivot joins). After the clamp, so the
+    // sweep is judged at the pose the robot will actually drive.
+    rounded = pivotSharpCorners(rounded, kSharpCornerPivotRad, pivot_limits, &is_twin);
     // Connector discontinuities were split before rounding, so every remaining
     // join in this sub-path is either part of an original segment, tangent to a
     // real connector arc, or an explicit pivot corner.

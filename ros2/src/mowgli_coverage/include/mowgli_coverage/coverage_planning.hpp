@@ -460,10 +460,13 @@ bool pivotSweepFits(double x, double y, const PivotJoinLimits& limits);
 // unchanged; with pivots disabled (sweep_radius <= 0) `pts` is returned as is.
 // Used on finished sub-paths, after fillets: a corner left sharp there is one
 // FTC would otherwise drive as a curve, sweeping the chassis nose wide.
+// `is_twin`, when given with one flag per pose, is kept in step (new twins
+// flagged true) for enforcePivotCornerContract.
 std::vector<std::pair<double, double>> pivotSharpCorners(
     const std::vector<std::pair<double, double>>& pts,
     double min_turn_rad,
-    const PivotJoinLimits& limits);
+    const PivotJoinLimits& limits,
+    std::vector<bool>* is_twin = nullptr);
 
 // Yaw of every pose of a drivable sub-path, honouring the pivot corner
 // contract: a pose followed by a pose at the SAME position (a pivot corner)
