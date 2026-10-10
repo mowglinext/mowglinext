@@ -185,6 +185,14 @@ void MapServerNode::load_areas_from_params()
   const auto area_obstacles =
       declare_parameter<std::vector<std::string>>("area_obstacles", std::vector<std::string>{});
 
+  // Omitted trailing obstacle entries mean no holes. Extra entries have no
+  // owning area and must never silently disappear from the permission map.
+  if (area_obstacles.size() > area_names.size())
+  {
+    throw std::invalid_argument(
+        "area_obstacles contains entries without an owning area_names entry");
+  }
+
   if (area_names.empty())
   {
     RCLCPP_WARN(get_logger(),

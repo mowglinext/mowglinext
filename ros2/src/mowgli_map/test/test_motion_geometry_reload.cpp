@@ -437,4 +437,66 @@ TEST_F(MotionGeometryReload, ParameterMapPreservesDistinctSameCentroidDeclaredHo
   ExpectBothDeclaredHolesProtected(published.back(), {0.8, 0, 0}, {0, 0.8, 0});
   executor_.remove_node(parameter_node);
 }
+
+TEST_F(MotionGeometryReload, OrphanParameterObstacleEntriesRejectStartup)
+{
+  for (const bool lawn_present : {false, true})
+  {
+    rclcpp::NodeOptions options;
+    options.append_parameter_override("areas_file_path", std::string{});
+    options.append_parameter_override("map_file_path", std::string{});
+    options.append_parameter_override("robot_yaml_path", path_ + ".robot.yaml");
+    if (lawn_present)
+    {
+      options.append_parameter_override("area_names", std::vector<std::string>{"lawn"});
+      options.append_parameter_override("area_polygons",
+                                        std::vector<std::string>{"-3,-3;3,-3;3,3;-3,3"});
+    }
+    options.append_parameter_override("area_obstacles",
+                                      lawn_present
+                                          ? std::vector<std::string>{"", "-1,-1;1,-1;1,1;-1,1"}
+                                          : std::vector<std::string>{"-1,-1;1,-1;1,1;-1,1"});
+    EXPECT_THROW(std::make_shared<mowgli_map::MapServerNode>(options), std::invalid_argument);
+  }
+}
+
+TEST_F(MotionGeometryReload, OmittedTrailingParameterObstacleEntriesPreserveLegalMotion)
+{
+  rclcpp::NodeOptions options;
+  options.arguments({"--ros-args", "-r", "__node:=trailing_parameter_geometry_map"});
+  options.append_parameter_override("resolution", 0.20);
+  options.append_parameter_override("areas_file_path", std::string{});
+  options.append_parameter_override("map_file_path", std::string{});
+  options.append_parameter_override("robot_yaml_path", path_ + ".robot.yaml");
+  options.append_parameter_override("area_names", std::vector<std::string>{"first", "second"});
+  options.append_parameter_override("area_polygons",
+                                    std::vector<std::string>{"-3,-3;3,-3;3,3;-3,3",
+                                                             "3,-3;6,-3;6,3;3,3"});
+  options.append_parameter_override("area_obstacles",
+                                    std::vector<std::string>{"-1,-1;1,-1;1,1;-1,1"});
+  auto parameter_node = std::make_shared<mowgli_map::MapServerNode>(options);
+  std::vector<Geometry> published;
+  auto subscription =
+      observer_->create_subscription<Geometry>("/trailing_parameter_geometry_map/transit_geometry",
+                                               rclcpp::QoS(1).transient_local().reliable(),
+                                               [&published](Geometry::ConstSharedPtr geometry)
+                                               {
+                                                 published.push_back(*geometry);
+                                               });
+  executor_.add_node(parameter_node);
+  parameter_node->build_keepout_mask_for_test();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while ((published.empty() || published.back().markers.empty()) &&
+         std::chrono::steady_clock::now() < deadline)
+    Pump();
+  ASSERT_FALSE(published.empty());
+  const auto snapshot = mowgli_interfaces::motion::Snapshot::parse(published.back());
+  ASSERT_TRUE(snapshot->valid);
+  // Parameter holes are also retained in the existing global obstacle list.
+  ASSERT_EQ(snapshot->holes.size(), 2u);
+  const mowgli_interfaces::motion::Ring body{{-0.1, -0.1}, {0.1, -0.1}, {0.1, 0.1}, {-0.1, 0.1}};
+  EXPECT_FALSE(snapshot->permits({0, 0, 0}, body, 0.1, 0, 1, true));
+  EXPECT_TRUE(snapshot->permits({4, 0, 0}, body, 0.1, 0, 1, true));
+  executor_.remove_node(parameter_node);
+}
 }  // namespace
