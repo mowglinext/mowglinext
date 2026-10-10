@@ -1791,7 +1791,9 @@
   "mapOffsetPanel": {
     "mapOffset": "Décalage de la carte",
     "mapRotation": "Rotation de la carte",
-    "resetToNorthUp": "Réinitialiser vers le nord"
+    "resetToNorthUp": "Réinitialiser vers le nord",
+    "lockRotation": "Verrouiller la rotation de la carte",
+    "unlockRotation": "Déverrouiller la rotation de la carte"
   },
   "mapEditArea": {
     "areaTypeMowing": "Zone de tonte",

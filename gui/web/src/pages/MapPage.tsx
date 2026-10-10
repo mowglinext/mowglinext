@@ -25,6 +25,7 @@ import {useMapEditHistory} from "./map/hooks/useMapEditHistory.ts";
 import {useMapOffset} from "./map/hooks/useMapOffset.ts";
 import {useMapBearing} from "./map/hooks/useMapBearing.ts";
 import {useMapBearingCamera} from "./map/hooks/useMapBearingCamera.ts";
+import {MAP_ROTATION_LOCKED_KEY, mapRotationLocked} from "./map/hooks/mapRotationConfig.ts";
 import {useManualMode} from "./map/hooks/useManualMode.ts";
 import {useMapEditing, type ShrinkMemory} from "./map/hooks/useMapEditing.ts";
 import {useObstacleOriginals} from "./map/hooks/useObstacleOriginals.ts";
@@ -126,7 +127,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         type: "FeatureCollection",
         features: []
     })
-    const {config, setConfig} = useConfig(["gui.map.offset.x", "gui.map.offset.y", "gui.map.display.bearing", "gui.map.mower.appearance", "gui.map.dock.appearance"])
+    const {config, setConfig} = useConfig(["gui.map.offset.x", "gui.map.offset.y", "gui.map.display.bearing", MAP_ROTATION_LOCKED_KEY, "gui.map.mower.appearance", "gui.map.dock.appearance"])
     const envs = useEnv()
     const guiApi = useApi()
     const obstacleOriginals = useObstacleOriginals();
@@ -274,8 +275,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // Extracted hooks
     const {offsetX, offsetY, handleOffsetX, handleOffsetY} = useMapOffset({config, setConfig, notification});
     const {bearing, handleBearing} = useMapBearing({config, setConfig, notification});
+    const rotationLocked = mapRotationLocked(config);
 
-    const onMapLoad = useMapBearingCamera({mapInstanceRef, bearing, onBearingChange: handleBearing, interactive: !compact});
+    const onMapLoad = useMapBearingCamera({
+        mapInstanceRef,
+        bearing,
+        onBearingChange: handleBearing,
+        interactive: !compact,
+        rotationLocked,
+    });
 
     const _datumLon = parseFloat(settings["datum_lon"] ?? 0)
     const _datumLat = parseFloat(settings["datum_lat"] ?? 0)
@@ -1926,6 +1934,10 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onToggleObstacleClearance={() => obstacleClearancePreview.setEnabled((v) => !v)}
                         showCoveragePreview={coveragePreview.enabled}
                         onToggleCoveragePreview={() => coveragePreview.setEnabled((v) => !v)}
+                        rotationLocked={rotationLocked}
+                        onToggleRotationLocked={() => void setConfig({
+                            [MAP_ROTATION_LOCKED_KEY]: String(!rotationLocked),
+                        })}
                         mowerAppearanceId={mowerAppearance.id}
                         onMowerAppearanceChange={handleMowerAppearanceChange}
                         dockAppearanceId={dockAppearance.id}
@@ -2151,7 +2163,14 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                     title: t('mapOffsetPanel.mapRotation'),
                                     content: (
                                         <div style={{padding: '4px 12px 12px'}}>
-                                            <MapRotationPanel bearing={bearing} onChangeBearing={handleBearing}/>
+                                            <MapRotationPanel
+                                                bearing={bearing}
+                                                onChangeBearing={handleBearing}
+                                                rotationLocked={rotationLocked}
+                                                onChangeRotationLocked={(locked) => void setConfig({
+                                                    [MAP_ROTATION_LOCKED_KEY]: String(locked),
+                                                })}
+                                            />
                                         </div>
                                     ),
                                 },
