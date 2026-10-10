@@ -28,7 +28,7 @@ export interface MowerAppearance {
     mowerImage?: MapImageAppearance;
 }
 
-export type DockAppearanceId = "marker" | "generic" | "biltema-rm1000";
+export type DockAppearanceId = "marker" | "styled" | "generic" | "biltema-rm1000";
 
 export interface DockAppearance {
     id: DockAppearanceId;
@@ -62,6 +62,7 @@ export const MOWER_APPEARANCES: Record<MowerAppearanceId, MowerAppearance> = {
 
 export const DOCK_APPEARANCES: Record<DockAppearanceId, DockAppearance> = {
     marker: {id: "marker", labelKey: "mapToolbar.dockAppearanceMarker"},
+    styled: {id: "styled", labelKey: "mowerVisual.dockStyle"},
     generic: {
         id: "generic",
         labelKey: "mapToolbar.dockAppearanceGeneric",
@@ -107,6 +108,7 @@ export function getAvailableDockAppearances(mowerAppearanceId: MowerAppearanceId
 }
 
 export function resolveDockAppearance(value: unknown, mowerAppearanceId: MowerAppearanceId): DockAppearance {
+    if (value === "styled") return DOCK_APPEARANCES.styled;
     if (value !== "generic" && value !== "biltema-rm1000") return DOCK_APPEARANCES.marker;
     const appearance = DOCK_APPEARANCES[value];
     if (appearance.onlyForMowerAppearance && appearance.onlyForMowerAppearance !== mowerAppearanceId) {

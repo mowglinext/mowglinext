@@ -27,10 +27,11 @@ describe("mower appearance registry", () => {
     });
 
     it("offers the generic dock to every mower and the branded dock only for the RM1000", () => {
-        expect(getAvailableDockAppearances("urdf").map(({id}) => id)).toEqual(["marker", "generic"]);
+        expect(getAvailableDockAppearances("urdf").map(({id}) => id)).toEqual(["marker", "styled", "generic"]);
         expect(getAvailableDockAppearances("biltema-rm1000").map(({id}) => id)).toEqual([
-            "marker", "generic", "biltema-rm1000",
+            "marker", "styled", "generic", "biltema-rm1000",
         ]);
+        expect(resolveDockAppearance("styled", "urdf").id).toBe("styled");
         expect(resolveDockAppearance(undefined, "urdf").id).toBe("marker");
         expect(resolveDockAppearance("stale", "biltema-rm1000").id).toBe("marker");
         expect(resolveDockAppearance("biltema-rm1000", "urdf").id).toBe("marker");

@@ -70,6 +70,7 @@ It is the radius around a session dig point inside which FollowStrip skips cover
 | `chassis_length` (L24) | 0.60 | xacro `mowgli.launch.py:94`; Nav2 footprint `navigation.launch.py:304` | Hardware | launch |
 | `chassis_width` (L25) | 0.45 | xacro `mowgli.launch.py:95`; footprint `navigation.launch.py:305`; `map_server.chassis_width` `full_system.launch.py:389`; `coverage_server.robot_width` `navigation.launch.py:930` | Hardware | launch |
 | `chassis_height` (L26) | 0.19 | xacro `mowgli.launch.py:96` | Hardware | launch |
+| `chassis_z_offset` | -0.05 (provisional Yardforce photo estimate) | Body bottom relative to rear axle; xacro visual/collision only | Hardware | launch |
 | `chassis_mass_kg` (L27) | 8.76 | xacro `mowgli.launch.py:97` (base_link inertial; pinned by `test_urdf_xacro.py`) | Hardware | launch |
 | `wheel_radius` | 0.1 | xacro `mowgli.launch.py:99` → `base_z_offset` (base_link height above ground, so every sensor z) + wheel visuals. Nothing else; odometry uses `ticks_per_meter`. Was 0.04475 (xacro default 0.093) until 2026-09-05 | Hardware | launch |
 | `wheel_width` (L31) | 0.04 | xacro `mowgli.launch.py:100` | Hardware | launch |
@@ -79,6 +80,7 @@ It is the radius around a session dig point inside which FollowStrip skips cover
 | `ticks_per_meter` (L43) | 399.0 | `hardware_bridge.ticks_per_meter` `mowgli.launch.py:210` (host odom + re-sent to STM32) | Hardware | launch |
 | `caster_radius` (L190) | 0.03 | xacro `mowgli.launch.py:103` | Hardware | launch |
 | `caster_track` (L191) | 0.36 | xacro `mowgli.launch.py:104` | Hardware | launch |
+| `caster_x_offset` | -1.0 (auto) | xacro `mowgli.launch.py`; caster axle X from base_link, metres | Hardware | launch |
 | `blade_radius` (L194) | 0.09 | xacro `mowgli.launch.py:105` (`blade_link`) | Hardware | launch |
 | `tool_width` (L195) | 0.18 | `map_server.tool_width` `full_system.launch.py:426` (mow-progress stamp radius); `coverage_server.operation_width = tool_width − swath_overlap` `navigation.launch.py:924`. Fallback single-sourced as `DEFAULT_TOOL_WIDTH_M` (`robot_config_util.py:48`) — **Invariant 6** | Hardware | launch |
 
