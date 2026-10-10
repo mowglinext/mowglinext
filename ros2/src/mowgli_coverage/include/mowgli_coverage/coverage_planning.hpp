@@ -561,11 +561,10 @@ std::vector<std::pair<double, double>> buildContinuousPath(
 //                        position twice in a row. Every OTHER near-coincident
 //                        pose pair is collapsed, enabled or not, so a
 //                        zero-length step in a sub-path always means a pivot.
-//   pin_first_subpath  — optional, defaults to false (every existing call site is
-//                        unaffected). true keeps the sub-path that starts with
-//                        plan.rings[0] as the FIRST one driven, whatever would
-//                        shorten the blade-off transit: the operator chose where the
-//                        route starts, so the seed search is not allowed to move it.
+//   pin_first_subpath  — optional, defaults to false. Ring-bearing plans always
+//                        keep the plan.rings[0] sub-path first; true also pins
+//                        sub-path 0 for a ring-free direct call where the operator
+//                        selected the starting path.
 std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,
@@ -579,25 +578,24 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
 
 // Reorders a set of FINISHED, hole-free sub-path polylines (as produced by
 // buildContinuousSubPaths above, which calls this internally) to minimize the
-// total blade-off Nav2 transit between them — trying every sub-path as the
-// starting point, not just the first, and entering every other sub-path from
-// whichever end is nearer. Pure function of the sub-path geometries alone (no
-// robot position), so it stays deterministic: a fixed input always returns
-// the same output, which is what lets the BT resume coverage by sub-path
-// index across re-plans of the same field. See its own doc comment
-// (coverage_planning.cpp) for the full rationale and the O(n^3)
-// kMaxSeedSearchSize bound. Returns the input unchanged (same order and
-// direction) when no reordering would shorten the total transit.
-// The first preserve_direction_count input paths may move in the sequence but
-// may not reverse. The builder protects ALL paths containing headland rings,
-// including obstacle loops; sub-path 0 always retains its historical protection.
+// total blade-off Nav2 transit between them. Ring-free plans try every sub-path
+// as the starting point and may enter later sub-paths from whichever end is
+// nearer. A fixed input always returns the same result, preserving the BT's
+// resume-by-index contract. See the implementation comment for the O(n^3)
+// kMaxSeedSearchSize bound.
 //
-// pin_first_seed: when true the seed is NOT searched: sub-path 0 stays the first
-// one driven (and forward), and only the order of the rest is optimised. Used when
-// the operator chose where the route starts.
+// The first ring_bearing_count input paths contain headland geometry. They stay
+// as a prefix, keep their original direction, and input 0 (the outermost-ring
+// path) stays first. Interior-only paths are optimized only after every
+// ring-bearing path, so transit minimization cannot interrupt headland-first
+// mowing. Default 1 retains the direct-call contract that path 0 is a perimeter
+// path; pass 0 for a known ring-free set.
+//
+// pin_first_seed: for a ring-free set, true disables seed search so sub-path 0
+// stays first. A ring-bearing set already starts with its outermost-ring path.
 std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTransit(
     std::vector<std::vector<std::pair<double, double>>> sub_paths,
-    std::size_t preserve_direction_count = 1,
+    std::size_t ring_bearing_count = 1,
     bool pin_first_seed = false);
 
 // 2-D point-in-polygon (ray casting) against `ring`, a list of (x, y)

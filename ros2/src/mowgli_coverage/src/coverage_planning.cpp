@@ -2528,7 +2528,7 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
 
 std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTransit(
     std::vector<std::vector<std::pair<double, double>>> sub_paths,
-    std::size_t preserve_direction_count,
+    std::size_t ring_bearing_count,
     bool pin_first_seed)
 {
   // Minimize the blade-off Nav2 transit BETWEEN sub-paths. Sub-paths arrive in
@@ -2543,8 +2543,8 @@ std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTrans
   //     U-turns (the hazard the seed-from-BoustrophedonOrder note in
   //     buildContinuousSubPaths guards); driving the same polyline backwards
   //     moves nothing.
-  //   * The SEED (which sub-path drives first) is tried at every candidate, not
-  //     pinned to the input's own first element (mowglinext#818: with only 2
+  //   * With NO rings, the SEED (which sub-path drives first) is tried at every
+  //     candidate, not pinned to the input's own first element (mowglinext#818: with only 2
   //     sub-paths, a fixed seed=0 can only ever reverse the OTHER one — it
   //     structurally cannot discover that starting from the other sub-path
   //     gives a shorter link, field-measured as a single 9.78 m gap on an
@@ -2562,11 +2562,14 @@ std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTrans
   //     covers the reverse-the-other-one case the single-seed version had,
   //     plus every case where the BEST link is to the seed's normally-unused
   //     front end via a different sub-path arriving there first.
-  //   * All ring-bearing sub-paths retain their ORIGINAL winding. Rings arrive
-  //     before swaths, so the builder supplies the number of ring-bearing paths
-  //     at the start of the input, including a mixed ring/swath path. Protecting
-  //     only sub-path 0 let later obstacle loops silently reverse mow_direction.
-  //     Direct callers keep the historical sub-path-0 protection by default.
+  //   * All ring-bearing sub-paths retain their ORIGINAL winding AND stay ahead
+  //     of every interior-only path. Rings arrive before swaths, so the builder
+  //     supplies the number of ring-bearing paths at the start of the input,
+  //     including a mixed ring/swath path. The OUTERMOST-ring path is input 0
+  //     and remains the seed. This preserves the mower's headland-first contract:
+  //     a global transit optimum must not mow interior rows, relocate to the
+  //     perimeter, then return to the interior. Protecting direction alone was
+  //     insufficient because it still allowed the whole ring path to move.
   //   * Bounded to kMaxSeedSearchSize sub-paths (O(n^3) — every seed reruns the
   //     O(n^2) chain): a pathological multi-hole field with more lobes than that
   //     falls back to the single-seed=0 search instead, which is still a
@@ -2597,6 +2600,7 @@ std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTrans
     std::vector<bool> reversed_flag;
     double transit;
   };
+  const std::size_t protected_count = std::min(ring_bearing_count, sub_paths.size());
   auto chainFromSeed = [&](std::size_t seed) -> SeedResult
   {
     SeedResult result{{seed}, std::vector<bool>(sub_paths.size(), false), 0.0};
@@ -2608,7 +2612,17 @@ std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTrans
       std::size_t best = 0;
       bool best_rev = false;
       double best_d = std::numeric_limits<double>::max();
-      for (std::size_t j = 0; j < sub_paths.size(); ++j)
+      // Finish the ring-bearing prefix before considering an interior-only
+      // path. Once that prefix is consumed, search the whole unused remainder.
+      const bool rings_remain =
+          std::any_of(used.begin(),
+                      used.begin() + static_cast<std::ptrdiff_t>(protected_count),
+                      [](bool value)
+                      {
+                        return !value;
+                      });
+      const std::size_t candidate_end = rings_remain ? protected_count : sub_paths.size();
+      for (std::size_t j = 0; j < candidate_end; ++j)
       {
         if (used[j])
         {
@@ -2622,7 +2636,7 @@ std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTrans
           best_rev = false;
         }
         // Preserve the operator's winding on every path containing a ring.
-        if (j < std::max(std::size_t{1}, preserve_direction_count))
+        if (j < std::max(std::size_t{1}, protected_count))
         {
           continue;
         }
@@ -2644,10 +2658,13 @@ std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTrans
   };
 
   constexpr std::size_t kMaxSeedSearchSize = 40;
-  // pin_first_seed: the operator chose where the route starts, so sub-path 0 stays first
-  // (seed 0 only) and only the order of the rest is optimised.
+  // A ring-bearing plan always starts with input 0, which carries the outermost
+  // perimeter. pin_first_seed applies the same rule to a ring-free caller that
+  // explicitly selected its starting path.
   const std::size_t seed_count =
-      (!pin_first_seed && sub_paths.size() <= kMaxSeedSearchSize) ? sub_paths.size() : 1;
+      (protected_count == 0 && !pin_first_seed && sub_paths.size() <= kMaxSeedSearchSize)
+          ? sub_paths.size()
+          : 1;
   SeedResult best = chainFromSeed(0);
   for (std::size_t seed = 1; seed < seed_count; ++seed)
   {
