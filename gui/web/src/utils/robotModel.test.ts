@@ -60,3 +60,27 @@ it("moves only the shell when editing vertical offset and preserves that offset 
     expect(taller.chassisCenterZ!-.24/2).toBeCloseTo(-.05);
     expect(previewRobotGeometry(live,{chassis_z_offset:0}).chassisCenterZ).toBeCloseTo(.095);
 });
+
+
+it("preserves sensor visual offsets when unchanged joint settings are previewed",()=>{
+    const xml=ROBOT_URDF.replace('<link name="gps_link"><visual>',
+        '<link name="gps_link"><visual><origin xyz="0.02 0 0.03"/>');
+    const live=parseRobotUrdf(xml)!;
+    expect(live.sensors!.find(s=>s.id==="gps")).toMatchObject({x:.32,z:.23});
+    const preview=previewRobotGeometry(live,{gps_x:.3,gps_y:0,gps_z:.2});
+    expect(preview.sensors!.find(s=>s.id==="gps")).toEqual(live.sensors!.find(s=>s.id==="gps"));
+});
+
+it("rotates visual offsets about the edited joint and matches the resulting URDF",()=>{
+    const xml=ROBOT_URDF.replace('<link name="imu_link"><visual>',
+        '<link name="imu_link"><visual><origin xyz="0.02 0.01 0.03"/>');
+    const live=parseRobotUrdf(xml)!;
+    const edited={imu_x:.25,imu_y:.04,imu_z:.12,imu_roll:.4,imu_pitch:-.3,imu_yaw:1.2};
+    const expected=parseRobotUrdf(xml.replace('0.18 -0.195 0.095','0.25 0.04 0.12')
+        .replace('rpy="0 0 0"/></joint>','rpy="0.4 -0.3 1.2"/></joint>'))!;
+    const preview=previewRobotGeometry(live,edited);
+    expect(preview.sensors!.find(s=>s.id==="imu")).toEqual(expected.sensors!.find(s=>s.id==="imu"));
+    // Feeding a preview through a second edit must not accumulate the offset.
+    expect(previewRobotGeometry(preview,edited)).toEqual(preview);
+    expect(live.sensors!.find(s=>s.id==="imu")!.mount).toEqual({x:.18,y:-.195,z:.095});
+});

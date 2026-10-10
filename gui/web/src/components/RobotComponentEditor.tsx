@@ -331,6 +331,19 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const bounds = dragBounds ?? assemblyBounds(robot, "top", .12);
     const svgWidth = isMobile ? 340 : 520;
     const svgHeight = isMobile ? 380 : 480;
+    const [svgUnitsPerPixel, setSvgUnitsPerPixel] = useState(1);
+    useEffect(() => {
+        const svg=svgRef.current;
+        if (!svg) return;
+        const update=()=>{
+            const width=svg.getBoundingClientRect().width;
+            if (width>0) setSvgUnitsPerPixel(svgWidth/width);
+        };
+        update();
+        const observer=new ResizeObserver(update);
+        observer.observe(svg);
+        return ()=>observer.disconnect();
+    }, [svgWidth]);
     const SCALE = Math.min(svgWidth/bounds.width, svgHeight/bounds.height);
     const cx = (svgWidth-bounds.width*SCALE)/2-bounds.x*SCALE;
     const cy = (svgHeight-bounds.height*SCALE)/2-bounds.y*SCALE;
@@ -343,12 +356,16 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     }, [SCALE]);
 
     const getSensorValue = useCallback(
-        (meta: SensorMeta): SensorConfig => ({
-            x: values[meta.xKey] ?? robot.sensors?.find(s=>s.id === meta.id)?.x ?? 0,
-            y: values[meta.yKey] ?? robot.sensors?.find(s=>s.id === meta.id)?.y ?? 0,
-            yaw: meta.yawKey ? (values[meta.yawKey] ?? robot.sensors?.find(s=>s.id === meta.id)?.yaw ?? 0) : 0,
-            z: values[meta.zKey] ?? robot.sensors?.find(s=>s.id === meta.id)?.z ?? 0,
-        }),
+        (meta: SensorMeta): SensorConfig => {
+            const sensor=robot.sensors?.find(s=>s.id === meta.id);
+            const mount=sensor?.mount ?? sensor;
+            return {
+                x: values[meta.xKey] ?? mount?.x ?? 0,
+                y: values[meta.yKey] ?? mount?.y ?? 0,
+                yaw: meta.yawKey ? (values[meta.yawKey] ?? sensor?.yaw ?? 0) : 0,
+                z: values[meta.zKey] ?? mount?.z ?? 0,
+            };
+        },
         [values, robot.sensors]
     );
 
@@ -474,14 +491,16 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             const yawEndX = sx - Math.sin(val.yaw) * yawLineLen;
             const yawEndY = sy - Math.cos(val.yaw) * yawLineLen;
 
-            const handleDist = 0.08 * SCALE;
+            // Keep 48 CSS-pixel hit targets disjoint even when a large robot
+            // or outboard sensor makes the automatically fitted model small.
+            const HIT_R = 24 * svgUnitsPerPixel;
+            const handleDist = Math.max(0.08 * SCALE, 2 * HIT_R + 8 * svgUnitsPerPixel);
             const handleX = sx - Math.sin(val.yaw) * handleDist;
             const handleY = sy - Math.cos(val.yaw) * handleDist;
 
             // Transparent ≥44px touch target behind the small visible glyph so
             // dragging works on phones (Apple HIG / Material both call for 44px
             // minimum tap targets). The visible square/circle stays small.
-            const HIT_R = 24; // 48px diameter
             const handleFill = mode === "dark" ? colors.bgElevated : colors.bgCard;
 
             return (
@@ -561,7 +580,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                 </g>
             );
         },
-        [cx, cy, SCALE, robot, visual.transparent, dragging, rotating, hoveredSensor, getSensorValue, handlePointerDown, handleRotateDown, mode, colors, toSvg]
+        [cx, cy, SCALE, svgUnitsPerPixel, robot, visual.transparent, dragging, rotating, hoveredSensor, getSensorValue, handlePointerDown, handleRotateDown, mode, colors, toSvg]
     );
 
     // Scale labels

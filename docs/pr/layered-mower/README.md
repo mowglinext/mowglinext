@@ -63,3 +63,5 @@ as the 500 settings example; map geometry comes from that description.
 All four desktop/mobile docked/undocked Playwright cases passed, including
 coincident docked anchors, compact WebP asset budgets and unchanged artwork
 while the mower pose updates. Screenshots were visually inspected.
+
+Sensor-editor screenshots refreshed after the review fixes for independent drag/yaw targets and joint-relative visual origins.

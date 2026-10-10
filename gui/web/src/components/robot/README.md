@@ -227,3 +227,22 @@ within 5 mm supports the current values; a larger discrepancy rejects them for
 that unit and calls for a measured override. Perspective photos alone cannot
 settle those absolute measurements. No parameter or artwork was changed by
 this audit.
+
+
+## Review regression fixes
+
+Sensor drag and yaw handles keep separate 48 CSS-pixel hit targets when the
+model is fitted to the editor, including narrow mobile layouts and large custom
+chassis. A ResizeObserver converts those screen dimensions into SVG coordinates.
+The regression test drags the LiDAR centre on a 1.2 m chassis without changing
+yaw, then rotates it without changing position.
+
+Sensor geometry retains its joint mounting point separately from its local
+visual origin. Settings edit the mount/rotation; the preview recomputes the
+rotated visual offset, matching the processed URDF used by the map. Unchanged
+settings, combined mounting rotations and repeated previews have regression
+coverage. Input fallbacks use joint coordinates rather than artwork centres.
+
+Validation: 29 focused unit tests, 15 settings/map browser tests and three PR
+gallery captures pass; TypeScript, focused lint (zero errors) and production
+build pass. Sensor-editor screenshots refreshed after these changes.

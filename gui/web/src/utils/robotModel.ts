@@ -6,6 +6,9 @@ export type SensorGeometry = {
     x: number; y: number; z: number;
     roll: number; pitch: number; yaw: number;
     length: number; width: number; height: number;
+    // Settings edit the joint; artwork is centred at joint + rotated visual offset.
+    mount?: {x: number; y: number; z: number};
+    visualOffset?: [number, number, number];
 };
 export type RobotView = "top" | "side";
 export type Bounds = {x: number; y: number; width: number; height: number};
@@ -75,7 +78,8 @@ export function parseRobotUrdf(xml: string): RobotGeometry | null {
                 ? [2 * positive(c.getAttribute("radius")), 2 * positive(c.getAttribute("radius")), positive(c.getAttribute("length"))] : [];
             if (dims.length !== 3 || dims.some(n => n <= 0)) return null;
             sensors.push({id, x: p[0]+ox, y: p[1]+oy, z: p[2]+oz,
-                roll: rpy[0], pitch: rpy[1], yaw: rpy[2], length: dims[0], width: dims[1], height: dims[2]});
+                roll: rpy[0], pitch: rpy[1], yaw: rpy[2], length: dims[0], width: dims[1], height: dims[2],
+                mount: {x:p[0],y:p[1],z:p[2]}, visualOffset: [offset[0],offset[1],offset[2]]});
         }
         return {
             baseLength: size[0], baseWidth: size[1], baseHeight: size[2],
@@ -131,10 +135,18 @@ export function previewRobotGeometry(live: RobotGeometry, values: Record<string,
     if (next.wheelRadius !== live.wheelRadius) next.bladeZ = (live.bladeZ ?? 0) + live.wheelRadius - next.wheelRadius;
     next.sensors = live.sensors?.map(sensor => {
         const s = {...sensor};
-        for (const axis of ["x", "y", "z", "roll", "pitch", "yaw"] as const) {
+        const mount = {...(sensor.mount ?? {x:sensor.x,y:sensor.y,z:sensor.z})};
+        for (const axis of ["x", "y", "z"] as const) {
+            const n = read(sensor.id + "_" + axis);
+            if (n !== undefined) mount[axis] = n;
+        }
+        for (const axis of ["roll", "pitch", "yaw"] as const) {
             const n = read(sensor.id + "_" + axis);
             if (n !== undefined) s[axis] = n;
         }
+        const [ox,oy,oz] = rotatePoint(sensor.visualOffset ?? [0,0,0],[s.roll,s.pitch,s.yaw]);
+        s.x=mount.x+ox; s.y=mount.y+oy; s.z=mount.z+oz;
+        if (sensor.mount) s.mount=mount;
         return s;
     });
     return next;
