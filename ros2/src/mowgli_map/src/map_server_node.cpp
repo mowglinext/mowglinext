@@ -55,6 +55,9 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 {
   // ── Declare and read parameters ──────────────────────────────────────────
   resolution_ = declare_parameter<double>("resolution", 0.05);
+  max_grid_cells_ = declare_parameter<int64_t>("max_grid_cells", 4000000);
+  if (!std::isfinite(resolution_) || resolution_ <= 0.0 || max_grid_cells_ <= 0)
+    throw std::runtime_error("Invalid map resolution or max_grid_cells resource budget");
   map_size_x_ = declare_parameter<double>("map_size_x", 20.0);
   map_size_y_ = declare_parameter<double>("map_size_y", 20.0);
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
@@ -257,12 +260,17 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 
   keepout_mask_pub_ =
       create_publisher<nav_msgs::msg::OccupancyGrid>("/keepout_mask", transient_qos);
+  planning_grid_error_pub_ =
+      create_publisher<std_msgs::msg::String>("~/planning_grid_error", transient_qos);
 
   lidar_ignore_corridors_pub_ = create_publisher<mowgli_interfaces::msg::LidarIgnoreCorridorArray>(
       "/mowgli/lidar_ignore_corridors", transient_qos);
 
   recorded_area_polygons_pub_ = create_publisher<mowgli_interfaces::msg::RecordedAreaPolygonArray>(
       "/mowgli/recorded_area_polygons", transient_qos);
+  transit_geometry_pub_ =
+      create_publisher<visualization_msgs::msg::MarkerArray>("~/transit_geometry", transient_qos);
+  invalidate_keepout_mask();
 
   // ── Subscribers ──────────────────────────────────────────────────────────
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
@@ -591,7 +599,9 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
     }
   }
 
-  // Resize map to fit loaded areas (if any).
+  // Build dock geometry before sizing: its approach may be far from the areas.
+  if (docking_pose_set_)
+    rebuild_dock_polygons();
   resize_map_to_areas();
 
   // No baseline area_list_generation_ publish here: it is not persisted and

@@ -40,6 +40,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int64.hpp>
 #include <tf2/exceptions.hpp>
 #include <tf2_ros/buffer.hpp>
@@ -71,6 +72,7 @@
 #include <mowgli_interfaces/srv/set_area_coverage_lines.hpp>
 #include <mowgli_interfaces/srv/set_docking_point.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace mowgli_map
 {
@@ -128,6 +130,10 @@ public:
   double tool_width() const
   {
     return tool_width_;
+  }
+  const std::string& planning_grid_error_for_test() const
+  {
+    return planning_grid_error_;
   }
 
   /// Test-only: add a verified tool pose to the accumulated footprint.
@@ -250,6 +256,22 @@ public:
   /// a file with areas by an empty map.
   void save_areas_guarded_for_test(const std::string& path);
   void load_areas_for_test(const std::string& path);
+
+  /// Test-only: exercise map persistence through the real service callbacks.
+  void save_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_save_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+  void load_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_load_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+
+  /// Test-only: exercise the same clear operation used by GUI map replacement.
+  void clear_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_clear_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
 
   /// Test-only: current area-list generation (mowglinext#637 phase 2).
   uint64_t area_list_generation_for_test() const
@@ -634,6 +656,10 @@ private:
   /// Does nothing if mowing_area_polygon_ has fewer than 3 points.
   /// Caller must hold map_mutex_.
   void publish_keepout_mask();
+  void invalidate_keepout_mask();
+  /// Called with map_mutex_ held: complete transit authorization snapshot.
+  void publish_transit_geometry();
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr transit_geometry_pub_;
 
   /// Check if the robot is outside all allowed polygons and publish violation.
   void check_boundary_violation(double x, double y);
@@ -811,6 +837,9 @@ private:
 
   // ── Parameters ────────────────────────────────────────────────────────────
   double resolution_;
+  int64_t max_grid_cells_{4000000};
+  std::string planning_grid_error_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr planning_grid_error_pub_;
   double map_size_x_;
   double map_size_y_;
   std::string map_frame_;
