@@ -239,7 +239,7 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 			// A protocol-first upgrade can leave the old ROS bridge incompatible.
 			// This verdict proves only safe maintenance entry from live telemetry;
 			// it must never authorize motion or release the maintenance gate.
-			result.MaintenanceReady = status.FirmwareProtocolVersion > 0
+			result.MaintenanceReady = status.FirmwareProtocolVersion > 0 || !firmwareProtocolApplies()
 			result.Ready = result.MaintenanceReady && status.FirmwareCompatible
 			if !result.Ready {
 				result.Reason = "Firmware communication is incompatible"
@@ -252,6 +252,15 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 		c.JSON(200, result)
 	})
 }
+
+// firmwareProtocolApplies is false on the OpenMower backend: its bridge talks
+// to the stock LowLevel and xESC firmware, so it reports protocol 0, and
+// firmware_compatible alone says it reaches the boards. Read from the
+// container's HARDWARE_BACKEND (docker-compose.base.yml), like the bridge's.
+func firmwareProtocolApplies() bool {
+	return activeHardwareBackend(nil) != "openmower"
+}
+
 func updateSampleFresh(stamp, now time.Time) bool {
 	return !stamp.IsZero() && now.Sub(stamp) < 3*time.Second && now.Sub(stamp) > -time.Second
 }

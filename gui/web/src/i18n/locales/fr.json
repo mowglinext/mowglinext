@@ -4011,8 +4011,13 @@
     "selectionPending": "Les choix matériels ont changé dans l’installateur. Vérifiez l’installation pour appliquer les changements de conteneurs.",
     "selectionHelp": "Les conteneurs suivent les choix matériels enregistrés par l’installateur.",
     "hardware": {
+      "backend": "Carte",
       "gnss": "GPS",
       "lidar": "LiDAR"
+    },
+    "backendChoice": {
+      "none": "Mowgli",
+      "openmower": "OpenMower v1"
     },
     "disabled": "Désactivé",
     "enabled": "Activé",

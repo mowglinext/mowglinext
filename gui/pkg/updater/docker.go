@@ -233,7 +233,7 @@ func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, ove
 	if err != nil {
 		return nil, err
 	}
-	if _, err := firmwareProtocolChange(ready.FirmwareProtocol, d, opts); err != nil {
+	if _, err := b.checkFirmwareProtocol(ready.FirmwareProtocol, d, opts); err != nil {
 		return nil, err
 	}
 	c, _, err := b.model(ctx)
@@ -403,6 +403,9 @@ func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
 // full compatibility except under that same acknowledged change. Older GUI
 // endpoints fail closed.
 func (b DockerBackend) PrepareUpdate(ctx context.Context, p Plan) error {
+	if b.FirmwareProtocolExempt() {
+		return b.enterMaintenance(ctx, 0, nil)
+	}
 	return b.enterMaintenance(ctx, p.Target.FirmwareProtocol, p.FirmwareProtocolChange)
 }
 

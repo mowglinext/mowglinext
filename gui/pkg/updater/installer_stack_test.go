@@ -3,6 +3,7 @@ package updater
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -273,5 +274,65 @@ func TestInstallStackRegenerateOverridesActiveRelease(t *testing.T) {
 	}
 	if rel, _ := os.ReadFile(filepath.Join(b.Config.Directory, "stack-release.json")); strings.TrimSpace(string(rel)) != "null" {
 		t.Fatalf("release record not cleared after manual regeneration: %s", rel)
+	}
+}
+
+func TestInstallerBackendChoiceFollowsDotEnv(t *testing.T) {
+	for backend, want := range map[string]string{"": "none", "mowgli": "none", "openmower": "openmower", "mavros": ""} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("HARDWARE_BACKEND="+backend+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := installerBackendChoice(dir)
+		if want == "" {
+			if err == nil {
+				t.Fatalf("%q: a backend with no release stack was accepted as %q", backend, got)
+			}
+			continue
+		}
+		if err != nil || got != want {
+			t.Fatalf("%q: got %q, %v; want %q", backend, got, err, want)
+		}
+	}
+}
+
+// The backend is re-read from .env on every installer run, never preserved:
+// a robot moved back to the Mowgli board must lose the OpenMower bridge, and
+// a Mowgli robot's selection must not grow a key (that would show "installer
+// change pending" on every Mowgli robot).
+func TestInstallStackRendersTheBackendFromDotEnv(t *testing.T) {
+	b, source, _ := installStackFixture(t)
+	env := filepath.Join(b.Config.Directory, ".env")
+	compose := filepath.Join(b.Config.Directory, "docker-compose.yaml")
+	run := func(backend string) (StackSelection, string) {
+		t.Helper()
+		body := "MOWGLI_ROS2_IMAGE=example/ros2:dev\nGUI_IMAGE=example/gui:dev\nOPENMOWER_IMAGE=example/openmower:dev\nHARDWARE_BACKEND=" + backend + "\n"
+		if err := os.WriteFile(env, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.InstallStack(context.Background(), source, installChoices, true); err != nil {
+			t.Fatalf("%s: %v", backend, err)
+		}
+		var selection StackSelection
+		data, err := os.ReadFile(filepath.Join(b.Config.Directory, "stack-selection.json"))
+		if err == nil {
+			err = json.Unmarshal(data, &selection)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		rendered, err := os.ReadFile(compose)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return selection, string(rendered)
+	}
+	selection, rendered := run("openmower")
+	if selection.Options["backend"] != "openmower" || !strings.Contains(rendered, "mowgli-openmower") {
+		t.Fatalf("OpenMower robot: selection %v, bridge rendered %v", selection.Options, strings.Contains(rendered, "mowgli-openmower"))
+	}
+	selection, rendered = run("mowgli")
+	if _, ok := selection.Options["backend"]; ok || strings.Contains(rendered, "mowgli-openmower") {
+		t.Fatalf("back on the Mowgli board: selection %v, bridge still rendered %v", selection.Options, strings.Contains(rendered, "mowgli-openmower"))
 	}
 }

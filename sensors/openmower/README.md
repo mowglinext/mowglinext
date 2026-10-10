@@ -104,6 +104,16 @@ The installer prepares the Pi the way OpenMowerOS does
 On an older kernel (< 6.1.28) OpenMower used `ttyAMA4/2/3` for
 left/right/mow and `ttyAMA1` for the GPS — set the ports accordingly.
 
+### Updates
+
+The host updater manages this backend like the Mowgli board: the installer
+installs it (`bash install/mowglinext.sh --only=updater` adds it to an existing
+install), and each release ships the `openmower` image with the rest of the
+stack. The release's mainboard firmware protocol is the Mowgli STM32 one and is
+not checked here (the bridge reports 0); an update still waits for the mower
+to be idle, stopped and blade-off, with the bridge reaching the LowLevel board
+and both drive xESCs (`firmware_compatible`). See `docs/UPDATES.md`.
+
 ## Settings: shared with every backend, OpenMower defaults
 
 A setting MowgliNext already has keeps its MowgliNext key and its usual place

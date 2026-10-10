@@ -91,12 +91,12 @@ MSG_MOTD_LOCAL_IP="IP locale"
 MSG_MOTD_NOT_SET="non defini"
 MSG_MOTD_RUNNING="actif(s)"
 
-MSG_UPDATER_STACK_BACKEND="Les mises à jour gérées prennent en charge le matériel Mowgli."
+MSG_UPDATER_STACK_BACKEND="Les mises à jour gérées prennent en charge le matériel Mowgli et OpenMower v1."
 MSG_UPDATE_MANUAL_UPDATER="Le service de mise a jour est installe. Cette mise a jour manuelle regenere docker-compose.yaml depuis ce depot et laisse les images suivre les tags de .env au lieu de la version epinglee par le service ; Reglages > Mises a jour signalera l'installation comme divergente jusqu'a la prochaine version geree, qui adoptera le resultat."
 MSG_UPDATE_MANUAL_PINS="Epingles d'images du service (docker/update-images.json) mises de cote en copie datee ; les images suivent maintenant docker/.env."
 MSG_UPDATER_DIRECTORY_MISMATCH="Le service de mise a jour est configure pour un autre repertoire que cette execution. Lancez l'installateur depuis le chemin utilise a son installation (MOWGLI_HOME=<ce chemin>), ou reenregistrez-le avec --only=updater."
-MSG_UPDATER_HARDWARE_LEGACY="Ces choix matériels nécessitent le parcours d'installation existant (MAVROS, OpenMower, TF-Luna ou VESC). Les conteneurs sélectionnés sont conservés ; les mises à jour coordonnées ne sont pas activées."
-MSG_UPDATER_HARDWARE_MANAGED="Cette installation utilise déjà les mises à jour gérées. Les choix MAVROS, OpenMower, TF-Luna et VESC nécessitent une migration explicite ; les fichiers d'exécution n'ont pas été régénérés."
+MSG_UPDATER_HARDWARE_LEGACY="Ces choix matériels nécessitent le parcours d'installation existant (MAVROS). Les conteneurs sélectionnés sont conservés ; les mises à jour coordonnées ne sont pas activées."
+MSG_UPDATER_HARDWARE_MANAGED="Cette installation utilise déjà les mises à jour gérées. Le choix MAVROS nécessite une migration explicite ; les fichiers d'exécution n'ont pas été régénérés."
 MSG_UPDATER_STACK_REVIEW="Choix matériels enregistrés. Consultez les mises à jour logicielles pour appliquer les changements de conteneurs ; la définition installée a été conservée."
 
 # Compose baseline / legacy adoption (install/lib/compose.sh)

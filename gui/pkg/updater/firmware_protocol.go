@@ -3,6 +3,10 @@ package updater
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 // FirmwareProtocolChange records that a reviewed deployment speaks another
@@ -32,6 +36,27 @@ type FirmwareProtocolMismatch struct {
 
 func (e FirmwareProtocolMismatch) Error() string {
 	return fmt.Sprintf("target requires a different mainboard firmware protocol (running %d, update requires %d); flash the matching firmware first, or confirm the firmware change to install now and flash from the new interface", e.Running, e.Required)
+}
+
+// FirmwareProtocolExempt is true on the OpenMower backend. Its bridge talks to
+// the stock OpenMower LowLevel and xESC firmware, so a release's
+// firmware_protocol (the Mowgli STM32 wire protocol) does not describe that
+// board, and the bridge reports protocol 0. The mower readiness verdict
+// (fresh, idle, stationary, blade-off, firmware_compatible) still applies in
+// full. Read from the host's docker/.env, the installer's choice, so that no
+// GUI response can waive the check on a Mowgli board.
+func (b DockerBackend) FirmwareProtocolExempt() bool {
+	env, err := godotenv.Read(filepath.Join(b.Config.Directory, ".env"))
+	return err == nil && strings.TrimSpace(env["HARDWARE_BACKEND"]) == "openmower"
+}
+
+// checkFirmwareProtocol is firmwareProtocolChange, waived where the release's
+// protocol does not describe the board (FirmwareProtocolExempt).
+func (b DockerBackend) checkFirmwareProtocol(running int, d Deployment, opts PlanOptions) (*FirmwareProtocolChange, error) {
+	if b.FirmwareProtocolExempt() {
+		return nil, nil
+	}
+	return firmwareProtocolChange(running, d, opts)
 }
 
 var errFirmwareProtocolUnavailable = errors.New("mainboard firmware protocol is unavailable; the bridge must complete its firmware handshake before an update can be reviewed")

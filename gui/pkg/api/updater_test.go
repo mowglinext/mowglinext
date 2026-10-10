@@ -142,6 +142,42 @@ func TestUpdateReadinessRequiresLiveStoppedHardware(t *testing.T) {
 	}
 }
 
+// The OpenMower bridge talks to stock firmware and reports protocol 0; there,
+// firmware_compatible (LowLevel + xESCs answering) is the whole firmware
+// verdict. Every other backend still needs the STM32 handshake.
+func TestUpdateReadinessOnOpenMowerNeedsNoMowgliProtocol(t *testing.T) {
+	for _, test := range []struct {
+		backend    string
+		compatible bool
+		want       bool
+	}{
+		{"openmower", true, true},
+		{"openmower", false, false},
+		{"mowgli", true, false},
+		{"", true, false},
+	} {
+		t.Setenv("HARDWARE_BACKEND", test.backend)
+		ros := types.NewMockRosProvider()
+		r := gin.New()
+		UpdaterRoutes(r.Group("/api"), ros)
+		now := time.Now()
+		stamp := map[string]any{"sec": now.Unix(), "nanosec": now.Nanosecond()}
+		emit := func(topic string, data any) { body, _ := json.Marshal(data); ros.Dispatch(topic, body) }
+		emit("highLevelStatus", map[string]any{"state": 1})
+		emit("wheelOdom", map[string]any{"header": map[string]any{"stamp": stamp}})
+		emit("status", map[string]any{"stamp": stamp, "blade_status_stamp": stamp, "firmware_protocol_version": 0, "firmware_compatible": test.compatible, "mow_enabled": false, "mower_motor_rpm": 0})
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/api/system/update-readiness", nil))
+		var result updater.Readiness
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Ready != test.want || result.FirmwareProtocol != 0 {
+			t.Fatalf("%q compatible=%v: %+v", test.backend, test.compatible, result)
+		}
+	}
+}
+
 // fakeUpdater serves a minimal /v1/state on a unix socket, like the host updater.
 type fakeUpdater struct {
 	mu        sync.Mutex
