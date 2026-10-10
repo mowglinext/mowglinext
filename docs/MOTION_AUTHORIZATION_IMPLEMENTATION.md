@@ -224,7 +224,8 @@ The reviewer explicitly retained the full-#924 and hardware acceptance gaps.
 
 ## Simulation and resource limitations
 
-No Webots mission was executed. After Docker/WSL recovery and moving large
+An unchanged Webots E2E harness was executed, without a completed mission.
+After Docker/WSL recovery and moving large
 scratch artifacts to D:, Webots R2025a and the repository-pinned driver/control
 revision `db4a77c84ee91445d39de9a631e5b57a888814e2` built and ran in a separate
 bridge-networked container as UID 1000, ROS domain 170, with no robot devices,
@@ -247,11 +248,31 @@ the current map executable/library; `/map` is not required for this wall-timer
 publication. Native startup tests establish that separately. The docking
 loader failure was traced to case-insensitive Windows bind lookup: Webots'
 `libController.so` shadowed ROS's `libcontroller.so`. Corrected loader order
-resolves docking symbols while preserving Webots dependencies. A strict
-per-node lifecycle retry remains in progress after correcting a non-executable
-temporary mount. The existing E2E harness has not been invoked. Controller
-activation is simulated-hardware startup evidence, not a mowing, docking or
-recovery mission.
+resolves docking symbols while preserving Webots dependencies. Small Webots
+controller libraries were staged in executable native `/tmp`, preserving
+case-sensitive lookup and Linux IPC. Attempt 13 verified all eight navigation
+lifecycle nodes, including docking, active; both drive controllers active;
+and the genuine configured geometry delivered from the current map executable.
+An initial CLI snapshot exhausted CycloneDDS participant indices; a later
+snapshot returned all eight active states. Readiness used explicit node states,
+not the generic lifecycle-manager log message.
+
+The unchanged no-LiDAR E2E harness used its documented 3000-second budget,
+accepted START, undocked and completed heading calibration. At 60 seconds it
+reported approximately 1.0 m traveled, pose `(-0.96, 0.00)`, and zero coverage
+path poses. The cached `df018f11` coverage executable generated a 9947-pose,
+82-segment plan, then aborted with `double free or corruption (!prev)` and
+exit code -6. Its missing heartbeat shut down the navigation group. No coverage
+trajectory was followed, and no mowing/HOME/docking completion is claimed.
+This mixed-baseline failure does not establish a regression in current
+production coverage source; its cause remains unconfirmed.
+
+The owned container was stopped after C: fell to approximately 97 MiB free,
+below the 200 MB build/run floor. Later live verification found approximately
+489 MiB available again. The next bounded recovery step is a current coverage
+build/install against compatible dependencies on D:, followed by the same
+strict-readiness mission harness. The validation worker is pursuing that step;
+no production change or physical deployment is authorized by simulation results.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
