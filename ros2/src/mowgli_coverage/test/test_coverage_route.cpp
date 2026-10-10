@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -205,4 +207,138 @@ TEST(CoverageRoute, IsabeyPivotsSharpCornersOnlyWhereTheSweepFits)
       }
   // 54 on the robot's plan of this lawn (field 2026-10-10); 0 before.
   EXPECT_GE(pivots, 40u);
+}
+
+namespace
+{
+// The shipped footprint: 2 x robot_config_util.chassis_half_width (0.45 m
+// chassis + 0.05 m margin each side), what coverage_server is injected with.
+constexpr double kChassisWidthM = 0.55;
+
+std::vector<Point> exteriorOf(const f2c::types::Cell& cell)
+{
+  std::vector<Point> points;
+  const auto exterior = cell.getGeometry(0);
+  for (std::size_t i = 0; i < exterior.size(); ++i)
+    points.emplace_back(exterior.getGeometry(i).getX(), exterior.getGeometry(i).getY());
+  return points;
+}
+}  // namespace
+
+TEST(NarrowBoundaryTongues, ADeadEndTongueNarrowerThanTheChassisIsRemoved)
+{
+  // 6 x 4 m lawn with a 0.30 m-wide, 1.5 m-long wedge out of its top side.
+  const f2c::types::Cell field(
+      ring({{0, 0}, {6, 0}, {6, 4}, {3.3, 4}, {3.15, 5.5}, {3.0, 4}, {0, 4}}));
+  double removed = -1.0;
+  const auto cleaned = coverage::removeNarrowBoundaryTongues(field, kChassisWidthM, &removed);
+  EXPECT_NEAR(removed, 0.5 * 0.30 * 1.5, 1e-3);
+  EXPECT_NEAR(cleaned.area(), 24.0, 1e-3);
+  for (const auto& [x, y] : exteriorOf(cleaned))
+    EXPECT_LE(y, 4.0 + 1e-6) << "vertex (" << x << ", " << y << ") is still in the tongue";
+}
+
+TEST(NarrowBoundaryTongues, OrdinaryFieldsWideTonguesAndNecksAreUnchanged)
+{
+  const std::vector<Path> unchanged{
+      // Plain rectangle: the mitred opening must restore every corner.
+      {{0, 0}, {6, 0}, {6, 4}, {0, 4}},
+      // A 1.0 m-wide tongue is lawn the robot fits into.
+      {{0, 0}, {6, 0}, {6, 4}, {3.5, 4}, {3.5, 5.5}, {2.5, 5.5}, {2.5, 4}, {0, 4}},
+      // Two lawns joined by a 0.30 m passage: a neck, not a tongue.
+      {{0, 0},
+       {4, 0},
+       {4, 1.85},
+       {5, 1.85},
+       {5, 0},
+       {9, 0},
+       {9, 4},
+       {5, 4},
+       {5, 2.15},
+       {4, 2.15},
+       {4, 4},
+       {0, 4}},
+      // An L with a 60° corner.
+      {{0, 0}, {6, 0}, {6, 2}, {2 + 4 / std::tan(M_PI / 3), 2}, {2, 6}, {0, 6}},
+  };
+  for (const auto& points : unchanged)
+  {
+    const f2c::types::Cell field(ring(points));
+    double removed = -1.0;
+    const auto cleaned = coverage::removeNarrowBoundaryTongues(field, kChassisWidthM, &removed);
+    EXPECT_EQ(removed, 0.0);
+    EXPECT_EQ(exteriorOf(cleaned), exteriorOf(field)) << "an ordinary field was rewritten";
+  }
+}
+
+TEST(NarrowBoundaryTongues, HolesAreKeptAndZeroWidthIsOff)
+{
+  f2c::types::Cell field(ring({{0, 0}, {6, 0}, {6, 4}, {3.3, 4}, {3.15, 5.5}, {3.0, 4}, {0, 4}}));
+  field.addRing(ring({{1, 1}, {2, 1}, {2, 2}, {1, 2}}));
+  const auto cleaned = coverage::removeNarrowBoundaryTongues(field, kChassisWidthM);
+  ASSERT_EQ(cleaned.size(), 2u);
+  EXPECT_NEAR(cleaned.area(), 23.0, 1e-3);
+
+  double removed = -1.0;
+  const auto off = coverage::removeNarrowBoundaryTongues(field, 0.0, &removed);
+  EXPECT_EQ(removed, 0.0);
+  EXPECT_EQ(exteriorOf(off), exteriorOf(field));
+}
+
+// Field 2026-10-10 on this lawn: the recorded line runs a ~0.4 m wedge into the
+// charging station, tip at the dock pose (6.27, 2.80). The outer ring followed
+// it and pivoted at the tip against the station; the robot stalled there and
+// the ring unit was lost twice in one mow. With the chassis width given, no
+// driven pose comes near the tip any more.
+TEST(CoverageRoute, IsabeyRingsStayOutOfTheDockTongue)
+{
+  const auto recorded = isabeyRings();
+  f2c::types::Cell field(ring(recorded.front()));
+  coverage::PivotJoinLimits limits;
+  limits.recorded_boundary = recorded.front();
+  limits.recorded_obstacles.assign(recorded.begin() + 1, recorded.end());
+  limits.sweep_radius = limits.boundary_margin = std::hypot(0.53, 0.275);
+  for (const auto& obstacle : limits.recorded_obstacles)
+    field.addRing(coverage::bufferRingOutward(ring(obstacle), 0.389));
+  const Point tip{6.27278, 2.79832};
+
+  // Closest driven pose, and closest pivot corner, to the tongue's tip.
+  auto nearest = [&](const Paths& paths, bool pivots_only)
+  {
+    double best = 1e9;
+    for (const auto& path : paths)
+      for (std::size_t i = 0; i < path.size(); ++i)
+        if (!pivots_only || (i > 0 && path[i] == path[i - 1]))
+          best = std::min(best, distance(path[i], tip));
+    return best;
+  };
+  const auto before = coverage::planBoustrophedon(field, 0.16, 0.18, 5, 0.0, -1.0, 0.15);
+  const auto before_paths = coverage::buildContinuousSubPaths(
+      before, before.connector_clearance_boundary, 0.20, 0.20, 0.03, nullptr, {}, limits);
+  ASSERT_LT(nearest(before_paths, false), 0.01) << "fixture no longer reproduces the field case";
+  ASSERT_LT(nearest(before_paths, true), 0.01) << "the field case pivoted at the tip";
+
+  const auto plan = coverage::planBoustrophedon(
+      field, 0.16, 0.18, 5, 0.0, -1.0, 0.15, 0, 0.20, false, 0, std::nullopt, kChassisWidthM);
+  const auto paths = coverage::buildContinuousSubPaths(
+      plan, plan.connector_clearance_boundary, 0.20, 0.20, 0.03, nullptr, {}, limits);
+  ASSERT_FALSE(paths.empty());
+  // The wedge is cut back to where it is as wide as the chassis (0.22 m from
+  // the tip here), and nothing turns in place inside what is left of it.
+  EXPECT_GT(nearest(paths, false), 0.20);
+  EXPECT_GT(nearest(paths, true), 0.40);
+  for (const auto& loop : plan.rings)
+    for (const auto& p : loop)
+      EXPECT_GT(distance(p, tip), 0.20) << "ring vertex in the dock tongue";
+  EXPECT_EQ(paths,
+            coverage::buildContinuousSubPaths(
+                plan, plan.connector_clearance_boundary, 0.20, 0.20, 0.03, nullptr, {}, limits))
+      << "resume-by-index requires identical re-plans";
+  for (const auto& note : plan.diagnostics.notes)
+    std::printf("[isabey] %s\n", note.c_str());
+  std::printf("[isabey] without: %zu paths %.1f m; with tongue removal: %zu paths %.1f m\n",
+              before_paths.size(),
+              length(before_paths),
+              paths.size(),
+              length(paths));
 }

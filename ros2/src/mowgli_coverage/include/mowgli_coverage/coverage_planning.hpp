@@ -249,6 +249,11 @@ struct BoustrophedonPlan
 std::optional<double> longestValidSwathAngle(const f2c::types::Swaths& swaths);
 
 //
+//   min_boundary_feature_width — optional (default 0: off, bit-for-bit the
+//                historical behaviour). The chassis width: dead-end tongues of
+//                the recorded boundary narrower than it are removed before
+//                planning (removeNarrowBoundaryTongues).
+//
 //   start_hint — optional (default: none, which is bit-for-bit the historical
 //                behaviour). A map-frame point near the OUTERMOST headland ring:
 //                every ring then closes (starts and ends) on the straight side
@@ -268,7 +273,8 @@ BoustrophedonPlan planBoustrophedon(
     double min_turn_radius = 0.20,
     bool perpendicular = false,
     int connector_max_headland_passes = 0,
-    const std::optional<std::pair<double, double>>& start_hint = std::nullopt);
+    const std::optional<std::pair<double, double>>& start_hint = std::nullopt,
+    double min_boundary_feature_width = 0.0);
 
 // Where a closed headland ring starts and ends — the ring's "closure". `open_loop`
 // is the ring's corner vertices WITHOUT the repeated closing vertex (>= 3).
@@ -636,6 +642,27 @@ f2c::types::LinearRing bufferRingOutward(const f2c::types::LinearRing& in, doubl
 // which the caller MUST treat as failure, never as "no correction needed".
 // distance <= 0 returns dedupClosedRing(in) unchanged. Pure function.
 f2c::types::LinearRing erodeRingInward(const f2c::types::LinearRing& in, double distance);
+
+// Remove the DEAD-END TONGUES of a field's exterior that are narrower than
+// `min_width` (the chassis width): the parts a morphological opening of the
+// exterior by min_width/2 (mitred joins, so ordinary corners are restored
+// exactly) takes away and that touch the rest of the field on one side only.
+// Field 2026-10-10: the recorded boundary ran a ~0.4 m wedge into the charging
+// station (the area was recorded from the dock); the outer headland ring
+// followed it, a pivot corner was placed at its tip against the station, and
+// the robot stalled there and lost the whole ring unit twice in one mow.
+//
+// NECKS are kept: a narrow piece joining two wider parts of the field is a
+// passage, and removing it would split the lawn. Holes (drawn obstacles) are
+// carried over unchanged. A field with nothing narrower than min_width is
+// returned UNCHANGED (same vertices — the plan and the resume cursor stay
+// bit-identical), as is any input the opening cannot handle (invalid shell,
+// an exterior that erodes away entirely, a result that would not be a single
+// valid polygon). `removed_area`, when given, receives the area taken away
+// (0 when nothing changed). Pure function — testable.
+f2c::types::Cell removeNarrowBoundaryTongues(const f2c::types::Cell& in,
+                                             double min_width,
+                                             double* removed_area = nullptr);
 
 }  // namespace mowgli_coverage
 

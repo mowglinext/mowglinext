@@ -166,6 +166,7 @@ Declared in `on_configure` (`coverage_server.cpp:53-105`). "Injected" = overwrit
 | `obstacle_margin` | 0.0 | `obstacle_margin` (template 0.389) floored at `robot_config_util.planning_obstacle_margin_floor`, capped 1.0; server re-clamps `coverage_server.cpp:473-474` | LIVE |
 | `pivot_sweep_radius` | 0.0 (= pivot joins DISABLED) | `robot_config_util.chassis_circumscribed_radius(rp)` (0.597 m shipped) → `navigation.launch.py` `cov_params` | LIVE |
 | `boundary_soft_margin` | 0.0 | `robot_config_util.boundary_soft_margin(rp)` = `enforce_boundary_margin_m` (fallback 0.40) floored at the circumscribed radius — the same band `full_system.launch.py` gives map_server | LIVE |
+| `footprint_half_width` | 0.0 (= narrow boundary tongues KEPT) | `robot_config_util.chassis_half_width(rp)` (0.275 m shipped) → `navigation.launch.py` `cov_params`; dead-end tongues of the recorded line narrower than 2× this are not planned (`removeNarrowBoundaryTongues`, field 2026-10-10 dock wedge) | LIVE |
 | `action_server_result_timeout` | 15.0 | not injected | configure |
 | `use_sim_time` | false | `nav2_params_base.yaml:1152` | configure |
 
