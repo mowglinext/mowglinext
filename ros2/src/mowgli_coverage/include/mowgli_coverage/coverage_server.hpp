@@ -60,6 +60,7 @@ private:
     double min_turning_radius;
     int connector_max_headland_passes;
     int ring_direction;  // 0 planner default, 1 CW, 2 CCW
+    double footprint_width;  // 2 x footprint_half_width, 0 = keep narrow tongues
   };
   LivePlanParams readLivePlanParams();
 

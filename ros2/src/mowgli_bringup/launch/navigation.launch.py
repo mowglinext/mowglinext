@@ -1147,6 +1147,13 @@ def generate_launch_description() -> LaunchDescription:
         # splits into a blade-off transit, the 2026-09-21 128-sub-path plan).
         cov_params["pivot_sweep_radius"] = chassis_circumscribed_radius(rp)
         cov_params["boundary_soft_margin"] = boundary_soft_margin(rp)
+        # NARROW BOUNDARY TONGUES: a dead-end tongue of the recorded line
+        # narrower than the footprint (2 x this) is not planned — the outer
+        # ring drove into one and pivoted at its tip against the charging
+        # station (field 2026-10-10, the ring unit lost twice in one mow).
+        # The footprint half-width every collision check uses, DERIVED; the
+        # node's 0.0 default keeps the recorded line as drawn.
+        cov_params["footprint_half_width"] = chassis_half_width(rp)
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w", prefix="mowgli_nav2_", suffix=".yaml", delete=False)

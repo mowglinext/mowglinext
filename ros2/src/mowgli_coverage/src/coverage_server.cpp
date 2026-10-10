@@ -121,6 +121,11 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
   // was never told the chassis size never pivots. Read live per plan.
   declare_double("pivot_sweep_radius", 0.0);
   declare_double("boundary_soft_margin", 0.0);
+  // NARROW BOUNDARY TONGUES (removeNarrowBoundaryTongues): dead-end tongues of
+  // the recorded line narrower than the footprint (2 x this) are not planned.
+  // Injected at launch as robot_config_util.chassis_half_width; the 0.0 default
+  // plans the recorded line as drawn. Read live per plan.
+  declare_double("footprint_half_width", 0.0);
 
   // Lyrical's SimpleActionServer owns the standard ROS action options.
   // Result retention starts after completion; it is not a planning deadline.
@@ -489,6 +494,8 @@ CoverageServer::LivePlanParams CoverageServer::readLivePlanParams()
   // Perimeter/headland travel winding (#335): 0 = planner default, 1 = CW,
   // 2 = CCW.
   live.ring_direction = static_cast<int>(get_parameter("ring_direction").as_int());
+  // Dead-end boundary tongues narrower than the footprint are not planned.
+  live.footprint_width = 2.0 * std::max(0.0, get_parameter("footprint_half_width").as_double());
   return live;
 }
 
@@ -596,7 +603,8 @@ void CoverageServer::planCoverage()
                                                min_turning_radius,
                                                goal->perpendicular,
                                                connector_max_headland_passes,
-                                               start_hint);
+                                               start_hint,
+                                               live.footprint_width);
     const double plan_ms = 1e3 * (now() - t_plan0).seconds();
 
     // Instrumentation (no behaviour change): surface every piece the planner
@@ -1104,7 +1112,8 @@ void CoverageServer::previewCoverage(
                           live.min_turning_radius,
                           goal.perpendicular,
                           live.connector_max_headland_passes,
-                          startHint(request->has_start_point, request->start_x, request->start_y));
+                          startHint(request->has_start_point, request->start_x, request->start_y),
+                          live.footprint_width);
 
     if (plan.rings.empty() && plan.swaths.empty())
     {
