@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -282,6 +283,8 @@ public:
 
 private:
   void setBladeEnabled(bool enabled);
+  bool bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx);
+  void beginBladeReadyWait(const std::shared_ptr<BTContext>& ctx);
   // Cancel every in-flight follow / transit goal, reset the transit state
   // machine and switch the blade off. Shared by onHalted() and yieldToFleet().
   void abortActiveGoals(const std::shared_ptr<BTContext>& ctx);
@@ -615,12 +618,14 @@ private:
   // to a >kSegmentTransitGap segment start blade-on.
   static constexpr double kTransitServerWaitSec = 5.0;
 
-  // Blade spinup delay — wait before sending the FIRST segment goal
-  static constexpr double kBladeSpinupDelaySec = 1.5;
-  std::chrono::steady_clock::time_point blade_start_time_;
-  /// False when the first unit needs a blade-off transit: the blade stays off
-  /// on start and the spin-up wait is skipped (bladeSpinupBeforeFirstUnit).
-  bool blade_spinup_pending_{true};
+  BladeReadyGate blade_ready_gate_;
+  bool blade_requested_on_{false};
+  bool blade_enable_sent_{false};
+  bool blade_ready_{false};
+  bool blade_dispatch_pending_{false};
+  bool blade_gate_failed_{false};
+  std::shared_ptr<std::atomic<int>> blade_command_result_;
+  std::optional<int64_t> blade_request_id_;
   /// Transit watchdog (transitDeadlineSec): started when a blade-off transit
   /// goal is sent; on expiry the goal is cancelled ONCE and the existing
   /// aborted/cancelled path skips the unit.

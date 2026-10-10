@@ -191,6 +191,9 @@ private:
                                     {
                                       std::lock_guard<std::mutex> lock(context_->context_mutex);
                                       context_->latest_status = *msg;
+                                      context_->blade_telemetry_seen =
+                                          context_->blade_telemetry_seen ||
+                                          rclcpp::Time(msg->blade_status_stamp).nanoseconds() > 0;
                                       // Arrival time, so a consumer can tell a
                                       // live blade state from a dead stream
                                       // (issue #487 escape motion).
@@ -1227,6 +1230,13 @@ private:
     context_->transit_speed = declare_parameter<double>("transit_speed", 0.2);
     context_->mowing_speed = declare_parameter<double>("mowing_speed", 0.2);
     context_->blade_auto_reverse = declare_parameter<bool>("blade_auto_reverse", false);
+    context_->mowing_enabled = declare_parameter<bool>("mowing_enabled", true);
+    context_->blade_ready_config.min_rpm = declare_parameter<double>("blade_ready_min_rpm", 1000.0);
+    context_->blade_ready_config.fallback_sec =
+        declare_parameter<double>("blade_spinup_delay_sec", 1.5);
+    context_->blade_ready_config.timeout_sec =
+        declare_parameter<double>("blade_ready_timeout_sec", 6.0);
+    context_->blade_ready_config.validate();
 
     // Rain delay: parameter in minutes, blackboard in seconds.
     const double rain_delay_minutes = declare_parameter<double>("rain_delay_minutes", 30.0);

@@ -292,6 +292,25 @@ def test_mowgli_launch_passes_mowing_enabled_to_hardware_bridge() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "key,default,configured",
+    [
+        ("blade_ready_min_rpm", 1000.0, 1800.0),
+        ("blade_spinup_delay_sec", 1.5, 3.0),
+        ("blade_ready_timeout_sec", 6.0, 8.0),
+        ("mowing_enabled", True, False),
+    ],
+)
+def test_full_system_injects_blade_readiness(key, default, configured) -> None:
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    values = _node_parameter_values(call, key)
+    assert len(values) == 1
+    expression = compile(ast.Expression(body=values[0]), "launch", "eval")
+    assert eval(expression, {"robot_params": {}}) == default
+    assert eval(expression, {"robot_params": {key: configured}}) == configured
+
+
 def test_full_system_injects_blade_auto_reverse() -> None:
     call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
     assert call is not None
