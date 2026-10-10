@@ -256,6 +256,9 @@ public:
   /// a file with areas by an empty map.
   void save_areas_guarded_for_test(const std::string& path);
   void load_areas_for_test(const std::string& path);
+  /// Calls the real ~/load_areas service handler (the runtime reload the GUI's
+  /// map-backup restore uses) and returns its response.
+  std_srvs::srv::Trigger::Response load_areas_service_for_test();
 
   /// Test-only: exercise map persistence through the real service callbacks.
   void save_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
@@ -786,8 +789,23 @@ private:
   /// untouched.
   static void commit_file_atomically(const std::string& tmp_path, const std::string& path);
 
+  /// Which datum frame the in-memory dock pose is expressed in when a load
+  /// finds an areas.dat stamped with a different datum.
+  enum class DockPoseFrame
+  {
+    /// Boot: the dock pose comes from mowgli_robot.yaml, written under the
+    /// same (old) datum as areas.dat, so it migrates together with the map.
+    kSameAsFile,
+    /// Runtime reload (~/load_areas, e.g. a map-backup restore): the datum is
+    /// a launch parameter, so the in-memory dock pose is already in the
+    /// current frame — migrated at boot, or set by calibration. Moving it
+    /// again would shift the dock by the datum delta and persist the error.
+    kAlreadyCurrent,
+  };
+
   /// Load areas and docking point from a YAML file.
-  void load_areas_from_file(const std::string& path);
+  void load_areas_from_file(const std::string& path,
+                            DockPoseFrame dock_frame = DockPoseFrame::kSameAsFile);
 
   /// Datum-change migration (issue #216). areas.dat is stamped with the
   /// datum its metre coordinates were recorded against. When the stamp
@@ -801,8 +819,13 @@ private:
   ///
   /// @param file_datum_lat/lon  Stamp parsed from areas.dat (NaN if absent).
   /// @param path                areas.dat path, for the re-stamping save.
+  /// @param dock_frame          kSameAsFile also migrates (and persists) the
+  ///                            dock pose; kAlreadyCurrent leaves it alone.
   /// Caller must NOT hold map_mutex_.
-  void migrate_areas_datum(double file_datum_lat, double file_datum_lon, const std::string& path);
+  void migrate_areas_datum(double file_datum_lat,
+                           double file_datum_lon,
+                           const std::string& path,
+                           DockPoseFrame dock_frame);
 
   /// Reapply area classifications to the map grid (called after loading areas).
   /// Takes map_mutex_; clears classification_dirty_.

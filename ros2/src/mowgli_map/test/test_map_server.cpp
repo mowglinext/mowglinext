@@ -2177,7 +2177,9 @@ protected:
         << "    dock_pose_yaw: " << yaw << "\n";
   }
 
-  std::shared_ptr<mowgli_map::MapServerNode> make_node(double datum_lat, double datum_lon) const
+  std::shared_ptr<mowgli_map::MapServerNode> make_node(double datum_lat,
+                                                       double datum_lon,
+                                                       const std::string& areas_file = "") const
   {
     rclcpp::NodeOptions opts;
     opts.append_parameter_override("resolution", 0.1);
@@ -2186,7 +2188,7 @@ protected:
     opts.append_parameter_override("map_frame", "map");
     opts.append_parameter_override("tool_width", 0.2);
     opts.append_parameter_override("map_file_path", "");
-    opts.append_parameter_override("areas_file_path", "");
+    opts.append_parameter_override("areas_file_path", areas_file);
     opts.append_parameter_override("publish_rate", 1.0);
     opts.append_parameter_override("datum_lat", datum_lat);
     opts.append_parameter_override("datum_lon", datum_lon);
@@ -2343,6 +2345,61 @@ TEST_F(DatumMigrationTest, DatumChangeReprojectsAreasObstaclesAndDock)
   const auto poly2 = area_polygon(*node, 0);
   EXPECT_NEAR(poly2.points[0].x, poly.points[0].x, 1e-4);
   EXPECT_NEAR(poly2.points[0].y, poly.points[0].y, 1e-4);
+}
+
+// The GUI's map-backup restore (#887) writes an older areas.dat into place and
+// calls ~/load_areas at runtime. A backup recorded BEFORE the datum moved is
+// stamped with the old datum, so its polygons must be re-projected — but the
+// dock pose is already in the current frame (it was migrated at boot or set by
+// calibration under the current datum) and must NOT shift by the datum delta.
+TEST_F(DatumMigrationTest, RuntimeReloadOfOldBackupMovesAreasButNotDock)
+{
+  const std::string backup_path = areas_path_ + ".backup";
+  {
+    auto node = make_node(kOldLat, kOldLon);
+    add_area(*node, "lawn", make_rect(-2, -2, 2, 2));
+    node->save_areas_for_test(backup_path);
+  }
+
+  // The stack runs with the NEW datum; dock (1, 2) is in the new frame, both in
+  // memory and in mowgli_robot.yaml. No areas.dat exists yet at boot.
+  std::remove(areas_path_.c_str());
+  auto node = make_node(kNewLat, kNewLon, areas_path_);
+  ASSERT_TRUE(node->docking_pose_set_for_test());
+
+  // Restore: the backup lands as areas.dat, then the runtime reload.
+  {
+    std::ifstream in(backup_path, std::ios::binary);
+    std::ofstream out(areas_path_, std::ios::binary | std::ios::trunc);
+    out << in.rdbuf();
+  }
+  const auto res = node->load_areas_service_for_test();
+  ASSERT_TRUE(res.success) << res.message;
+
+  // Polygons re-projected into the current frame, exactly as at boot…
+  const auto poly = area_polygon(*node, 0);
+  ASSERT_EQ(poly.points.size(), 4U);
+  double ex = -2.0;
+  double ey = -2.0;
+  expected_reproject(kOldLat, kOldLon, kNewLat, kNewLon, ex, ey);
+  EXPECT_NEAR(poly.points[0].x, ex, 1e-3);
+  EXPECT_NEAR(poly.points[0].y, ey, 1e-3);
+  EXPECT_GT(std::abs(poly.points[0].x - (-2.0)), 1.0);
+
+  // …but the dock stays put, in memory and on disk.
+  const auto& dock = node->docking_pose_for_test();
+  EXPECT_NEAR(dock.position.x, 1.0, 1e-9);
+  EXPECT_NEAR(dock.position.y, 2.0, 1e-9);
+  const std::string yaml = read_file(yaml_path_);
+  EXPECT_NEAR(yaml_scalar(yaml, "dock_pose_x"), 1.0, 1e-9);
+  EXPECT_NEAR(yaml_scalar(yaml, "dock_pose_y"), 2.0, 1e-9);
+
+  // areas.dat is re-stamped, so the next boot does not migrate it again.
+  const std::string content = read_file(areas_path_);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lat"), kNewLat, 1e-9);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lon"), kNewLon, 1e-9);
+
+  std::remove(backup_path.c_str());
 }
 
 TEST_F(DatumMigrationTest, AStartPointMovesWithTheMapWhenTheDatumChanges)
