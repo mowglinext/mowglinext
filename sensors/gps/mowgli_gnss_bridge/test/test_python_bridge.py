@@ -132,6 +132,10 @@ def _project(tracker: CorrectionDiagnosticTracker, now: float) -> PublicGnssStat
     return status
 
 
+# A forwarding entry whose last RTCM frame is fresh: frames are still flowing.
+_FLOWING = {'last_frame_age_s': '0.01'}
+
+
 class PythonBridgeContractTest(unittest.TestCase):
 
     def test_receipt_stamp_and_sequence_match_cpp_contract_vector(self) -> None:
@@ -235,6 +239,97 @@ class PythonCorrectionTrackerParityTest(unittest.TestCase):
                 PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_INVALID,
                 drop,
             )
+
+    @staticmethod
+    def _forwarding(message: str, stamp: int, **values: str) -> DiagnosticArray:
+        array = DiagnosticArray()
+        array.header.stamp.sec = stamp
+        array.status = [
+            _status('universal_gnss/rtcm_forwarding', 'serial:/dev/ttyUSB0', message, **values)
+        ]
+        return array
+
+    def test_old_write_errors_with_flowing_frames_are_not_an_error(self) -> None:
+        # Field 2026-10-06: write_error_count sat at 55 for the rest of the container's life.
+        write_errors = 'RTCM forwarding write errors observed'
+        tracker = CorrectionDiagnosticTracker(300.0)
+        tracker.update(
+            self._forwarding(write_errors, 1, write_error_count='55', **_FLOWING), 100.0
+        )
+        self.assertEqual(
+            _project(tracker, 100.0).correction_stream_status,
+            PublicGnssStatus.CORRECTION_STREAM_STATUS_ACTIVE,
+        )
+
+    def test_a_freshly_increasing_write_error_count_is_still_an_error(self) -> None:
+        write_errors = 'RTCM forwarding write errors observed'
+        tracker = CorrectionDiagnosticTracker(300.0)
+        tracker.update(
+            self._forwarding(write_errors, 1, write_error_count='55', **_FLOWING), 100.0
+        )
+        tracker.update(
+            self._forwarding(write_errors, 2, write_error_count='56', **_FLOWING), 110.0
+        )
+        self.assertEqual(
+            _project(tracker, 110.0).correction_stream_status,
+            PublicGnssStatus.CORRECTION_STREAM_STATUS_ERROR,
+        )
+        tracker.update(
+            self._forwarding(write_errors, 3, write_error_count='56', **_FLOWING), 169.0
+        )
+        self.assertEqual(
+            _project(tracker, 169.0).correction_stream_status,
+            PublicGnssStatus.CORRECTION_STREAM_STATUS_ERROR,
+        )
+        tracker.update(
+            self._forwarding(write_errors, 4, write_error_count='56', **_FLOWING), 171.0
+        )
+        self.assertEqual(
+            _project(tracker, 171.0).correction_stream_status,
+            PublicGnssStatus.CORRECTION_STREAM_STATUS_ACTIVE,
+        )
+
+    def test_write_errors_stay_an_error_when_flow_cannot_be_confirmed(self) -> None:
+        write_errors = 'RTCM forwarding write errors observed'
+        for values in (
+            {'last_frame_age_s': '0.01'},  # no counter
+            {'write_error_count': '55'},  # no frame age
+            {'write_error_count': '55', 'last_frame_age_s': '30.0'},  # stalled
+        ):
+            tracker = CorrectionDiagnosticTracker(300.0)
+            tracker.update(self._forwarding(write_errors, 1, **values), 100.0)
+            self.assertEqual(
+                _project(tracker, 100.0).correction_stream_status,
+                PublicGnssStatus.CORRECTION_STREAM_STATUS_ERROR,
+                values,
+            )
+
+    def test_a_restarted_receiver_forgets_an_old_increase(self) -> None:
+        write_errors = 'RTCM forwarding write errors observed'
+        tracker = CorrectionDiagnosticTracker(300.0)
+        tracker.update(
+            self._forwarding(write_errors, 1, write_error_count='55', **_FLOWING), 100.0
+        )
+        tracker.update(
+            self._forwarding(write_errors, 2, write_error_count='56', **_FLOWING), 101.0
+        )
+        tracker.update(
+            self._forwarding(
+                'RTCM forwarding active', 3, write_error_count='0', **_FLOWING
+            ),
+            105.0,
+        )
+        self.assertEqual(
+            _project(tracker, 105.0).correction_stream_status,
+            PublicGnssStatus.CORRECTION_STREAM_STATUS_ACTIVE,
+        )
+        tracker.update(
+            self._forwarding(write_errors, 4, write_error_count='1', **_FLOWING), 106.0
+        )
+        self.assertEqual(
+            _project(tracker, 106.0).correction_stream_status,
+            PublicGnssStatus.CORRECTION_STREAM_STATUS_ERROR,
+        )
 
     def test_transport_response_forwarding_and_invalid_semantics_are_distinct(self) -> None:
         connected = CorrectionDiagnosticTracker(2.0)

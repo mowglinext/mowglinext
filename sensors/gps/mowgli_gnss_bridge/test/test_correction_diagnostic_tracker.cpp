@@ -105,6 +105,30 @@ Array receiverSnapshot(const char * message, std::int32_t stamp = 20)
   return diagnostics;
 }
 
+// Receiver forwarding entry with the cumulative write_error_count and last_frame_age_s the
+// Universal GNSS receiver publishes; a nullptr leaves that value out.
+Array receiverForwarding(
+  const char * message, const char * write_errors, const char * frame_age, std::int32_t stamp)
+{
+  Array diagnostics;
+  diagnostics.header.stamp.sec = stamp;
+  Status status = makeStatus("universal_gnss/rtcm_forwarding", "serial:/dev/ttyUSB0", message);
+  const auto add = [&status](const char * key, const char * value) {
+      if (value != nullptr) {
+        diagnostic_msgs::msg::KeyValue item;
+        item.key = key;
+        item.value = value;
+        status.values.push_back(item);
+      }
+    };
+  add("write_error_count", write_errors);
+  add("last_frame_age_s", frame_age);
+  diagnostics.status = {status};
+  return diagnostics;
+}
+
+constexpr char kWriteErrors[] = "RTCM forwarding write errors observed";
+
 PublicGnssStatus project(
   const CorrectionDiagnosticTracker & tracker, CorrectionDiagnosticTracker::TimePoint now)
 {
@@ -135,6 +159,86 @@ void setStationId(Array & array, const char * entry_name, const char * station_i
 }
 
 }  // namespace
+
+// Field 2026-10-06: one transient failed write left write_error_count at 55 for the rest of
+// the container's life while 56 000 frames kept flowing, and the GUI showed a permanent
+// correction-stream ERROR that only a restart cleared. Old write errors are history.
+TEST(CorrectionDiagnosticTrackerTest, OldWriteErrorsWithFlowingFramesAreNotAnError)
+{
+  CorrectionDiagnosticTracker tracker(std::chrono::seconds(300));
+  const auto t0 = CorrectionDiagnosticTracker::TimePoint{} + std::chrono::seconds(100);
+  tracker.update(receiverForwarding(kWriteErrors, "55", "0.01", 1), t0);
+
+  EXPECT_EQ(
+    project(tracker, t0).correction_stream_status,
+    PublicGnssStatus::CORRECTION_STREAM_STATUS_ACTIVE);
+  tracker.update(receiverForwarding(kWriteErrors, "55", "0.02", 2), t0 + std::chrono::seconds(30));
+  EXPECT_EQ(
+    project(tracker, t0 + std::chrono::seconds(30)).correction_stream_status,
+    PublicGnssStatus::CORRECTION_STREAM_STATUS_ACTIVE);
+}
+
+TEST(CorrectionDiagnosticTrackerTest, AFreshlyIncreasingWriteErrorCountIsStillAnError)
+{
+  CorrectionDiagnosticTracker tracker(std::chrono::seconds(300));
+  const auto t0 = CorrectionDiagnosticTracker::TimePoint{} + std::chrono::seconds(100);
+  tracker.update(receiverForwarding(kWriteErrors, "55", "0.01", 1), t0);
+  const auto t_increase = t0 + std::chrono::seconds(10);
+  tracker.update(receiverForwarding(kWriteErrors, "56", "0.01", 2), t_increase);
+
+  EXPECT_EQ(
+    project(tracker, t_increase).correction_stream_status,
+    PublicGnssStatus::CORRECTION_STREAM_STATUS_ERROR);
+
+  // Still failing 59 s later, recovered once the count has been steady for 60 s.
+  tracker.update(
+    receiverForwarding(kWriteErrors, "56", "0.01", 3), t_increase + std::chrono::seconds(59));
+  EXPECT_EQ(
+    project(tracker, t_increase + std::chrono::seconds(59)).correction_stream_status,
+    PublicGnssStatus::CORRECTION_STREAM_STATUS_ERROR);
+  tracker.update(
+    receiverForwarding(kWriteErrors, "56", "0.01", 4), t_increase + std::chrono::seconds(61));
+  EXPECT_EQ(
+    project(tracker, t_increase + std::chrono::seconds(61)).correction_stream_status,
+    PublicGnssStatus::CORRECTION_STREAM_STATUS_ACTIVE);
+}
+
+TEST(CorrectionDiagnosticTrackerTest, WriteErrorsStayAnErrorWhenFlowCannotBeConfirmed)
+{
+  const auto t0 = CorrectionDiagnosticTracker::TimePoint{} + std::chrono::seconds(100);
+  const auto expect_error = [&t0](const char * count, const char * frame_age) {
+      CorrectionDiagnosticTracker tracker(std::chrono::seconds(300));
+      tracker.update(receiverForwarding(kWriteErrors, count, frame_age, 1), t0);
+      EXPECT_EQ(
+        project(tracker, t0).correction_stream_status,
+        PublicGnssStatus::CORRECTION_STREAM_STATUS_ERROR)
+        << "count=" << (count != nullptr ? count : "-")
+        << " frame_age=" << (frame_age != nullptr ? frame_age : "-");
+    };
+  expect_error(nullptr, "0.01");   // no counter: cannot tell history from a live failure
+  expect_error("55", nullptr);     // no frame age: flow unconfirmed
+  expect_error("55", "30.0");    // last frame long ago: the forwarding is stalled
+}
+
+TEST(CorrectionDiagnosticTrackerTest, ARestartedReceiverForgetsAnOldIncrease)
+{
+  CorrectionDiagnosticTracker tracker(std::chrono::seconds(300));
+  const auto t0 = CorrectionDiagnosticTracker::TimePoint{} + std::chrono::seconds(100);
+  tracker.update(receiverForwarding(kWriteErrors, "55", "0.01", 1), t0);
+  tracker.update(receiverForwarding(kWriteErrors, "56", "0.01", 2), t0 + std::chrono::seconds(1));
+  // The container restarted: counter back to 0, forwarding healthy again.
+  tracker.update(
+    receiverForwarding("RTCM forwarding active", "0", "0.01", 3), t0 + std::chrono::seconds(5));
+  EXPECT_EQ(
+    project(tracker, t0 + std::chrono::seconds(5)).correction_stream_status,
+    PublicGnssStatus::CORRECTION_STREAM_STATUS_ACTIVE);
+  // A new write error after the restart is a live failure again.
+  tracker.update(
+    receiverForwarding(kWriteErrors, "1", "0.01", 4), t0 + std::chrono::seconds(6));
+  EXPECT_EQ(
+    project(tracker, t0 + std::chrono::seconds(6)).correction_stream_status,
+    PublicGnssStatus::CORRECTION_STREAM_STATUS_ERROR);
+}
 
 TEST(CorrectionDiagnosticTrackerTest, HealthyDynamicFlowDoesNotRequireGlonass1230)
 {

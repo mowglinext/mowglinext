@@ -80,6 +80,10 @@ NTRIP corrections
     `baseline_length_m`, and `baseline_solution_status`
   - diagnostics-derived correction-stream state is exposed separately through
     `correction_stream_status`
+    (`ERROR` when the receiver reports RTCM forwarding write errors, but only while
+    the receiver's cumulative `write_error_count` has gone up within the last 60 s or
+    the frame flow cannot be confirmed; an old, unchanged count with frames still
+    flowing shows `ACTIVE`, because that counter only resets when the container restarts)
   - RTCM semantic MSM summary data is exposed separately through
     `msm_summary_*`
   - legacy `heading_deg`, `heading_accuracy_deg`, and

@@ -178,6 +178,9 @@ class CorrectionDiagnosticTracker:
     _NTRIP_PREFIX = "universal_gnss_ntrip/"
     _RECEIVER_PREFIX = "universal_gnss/"
     _SEMANTIC_FRESHNESS_S = 5.0
+    # How long after the receiver's cumulative write_error_count last INCREASED forwarding
+    # still counts as failing (see the C++ tracker: the counter only resets on a restart).
+    _WRITE_ERROR_RECENT_S = 60.0
 
     def __init__(self, timeout_s: float) -> None:
         if not math.isfinite(timeout_s) or timeout_s <= 0.0:
@@ -187,6 +190,8 @@ class CorrectionDiagnosticTracker:
         self._receiver: _CorrectionSnapshot | None = None
         self._ntrip_stamp_watermark_ns: int | None = None
         self._receiver_stamp_watermark_ns: int | None = None
+        self._write_error_count: int | None = None
+        self._write_error_increase_at: float | None = None
 
     @staticmethod
     def _stamp_ns(msg: DiagnosticArray) -> int | None:
@@ -236,6 +241,43 @@ class CorrectionDiagnosticTracker:
                 received_at=received_at,
             ),
         )
+        if valid and prefix == self._RECEIVER_PREFIX:
+            self._track_write_errors(entries, received_at)
+
+    def _track_write_errors(
+        self, entries: dict[str, tuple[str, dict[str, str]]], received_at: float
+    ) -> None:
+        """Remember when the cumulative write_error_count last went UP; a drop = restart."""
+        forwarding = entries.get("universal_gnss/rtcm_forwarding")
+        if forwarding is None:
+            return
+        count = _parse_diagnostic_uint(forwarding[1].get("write_error_count"))
+        if count is None:
+            return
+        previous = self._write_error_count
+        if previous is not None:
+            if count > previous:
+                self._write_error_increase_at = received_at
+            elif count < previous:
+                self._write_error_increase_at = None
+        self._write_error_count = count
+
+    def _write_errors_are_historic(
+        self, forwarding: tuple[str, dict[str, str]], now: float
+    ) -> bool:
+        """Old write errors with frames still flowing; fail-closed when unsure."""
+        message, values = forwarding
+        if "write error" not in message.lower() or self._write_error_count is None:
+            return False
+        age_s = _parse_diagnostic_float(values.get("last_frame_age_s"))
+        if age_s is None or not 0.0 <= age_s <= self._SEMANTIC_FRESHNESS_S:
+            return False
+        if (
+            self._write_error_increase_at is not None
+            and now - self._write_error_increase_at < self._WRITE_ERROR_RECENT_S
+        ):
+            return False
+        return True
 
     def update(self, msg: DiagnosticArray, received_at: float | None = None) -> None:
         now = time.monotonic() if received_at is None else received_at
@@ -439,6 +481,16 @@ class CorrectionDiagnosticTracker:
             )
         if forwarding is not None and forwarding_owner is not None:
             public_msg.correction_stream_status = _correction_stream_status_from_message(forwarding[0])
+            if (
+                public_msg.correction_stream_status
+                == PublicGnssStatus.CORRECTION_STREAM_STATUS_ERROR
+                and receiver is not None
+                and forwarding_owner is receiver
+                and self._write_errors_are_historic(forwarding, current_time)
+            ):
+                public_msg.correction_stream_status = (
+                    PublicGnssStatus.CORRECTION_STREAM_STATUS_ACTIVE
+                )
             public_msg.correction_forwarding_source = forwarding_owner.source
             if public_msg.correction_stream_status != PublicGnssStatus.CORRECTION_STREAM_STATUS_UNKNOWN:
                 public_msg.value_flags |= PublicGnssStatus.CAP_CORRECTION_STREAM

@@ -30,6 +30,11 @@ using PublicGnssStatus = mowgli_interfaces::msg::GnssStatus;
 constexpr char kNtripPrefix[] = "universal_gnss_ntrip/";
 constexpr char kReceiverPrefix[] = "universal_gnss/";
 constexpr double kSemanticFreshnessSeconds = 5.0;
+// How long after the receiver's write_error_count last INCREASED forwarding still counts
+// as failing. The counter itself is cumulative and only resets when the receiver node
+// restarts, so the message text alone ("write errors observed") would keep the stream in
+// ERROR for the whole life of the container after one transient failed write.
+constexpr double kWriteErrorRecentSeconds = 60.0;
 
 /// Cached (message, key/value) pair for one DiagnosticStatus entry.
 struct DiagnosticEntry
@@ -51,6 +56,10 @@ struct OwnerState
 {
   std::optional<Snapshot> snapshot;
   std::optional<std::int64_t> stamp_watermark_ns;
+  // Receiver owner only: last seen cumulative rtcm_forwarding write_error_count and when it
+  // last went UP (steady clock, receipt time).
+  std::optional<std::uint32_t> last_write_error_count;
+  std::optional<CorrectionDiagnosticTracker::TimePoint> last_write_error_increase;
 };
 
 struct Observation
@@ -276,6 +285,58 @@ bool isFresh(
   return now - snapshot->received_at < timeout;
 }
 
+/// Remember when the receiver's cumulative write_error_count last increased. A counter that
+/// goes DOWN means the receiver node restarted: forget the old increase.
+void trackWriteErrors(OwnerState & owner, CorrectionDiagnosticTracker::TimePoint received_at)
+{
+  if (!owner.snapshot.has_value() || !owner.snapshot->valid) {
+    return;
+  }
+  const DiagnosticEntry * forwarding =
+    findEntry(*owner.snapshot, "universal_gnss/rtcm_forwarding");
+  std::uint32_t count = 0;
+  if (forwarding == nullptr || !parseUint(lookup(*forwarding, "write_error_count"), count)) {
+    return;
+  }
+  if (owner.last_write_error_count.has_value()) {
+    if (count > *owner.last_write_error_count) {
+      owner.last_write_error_increase = received_at;
+    } else if (count < *owner.last_write_error_count) {
+      owner.last_write_error_increase.reset();
+    }
+  }
+  owner.last_write_error_count = count;
+}
+
+/// True when the forwarding entry only reports write errors that are OLD: the counter is
+/// known, has not increased for kWriteErrorRecentSeconds, and frames are still flowing.
+/// Fail-closed: a missing counter or a missing/stale last_frame_age_s keeps the ERROR.
+bool writeErrorsAreHistoric(
+  const OwnerState & owner, const DiagnosticEntry & forwarding,
+  CorrectionDiagnosticTracker::TimePoint now)
+{
+  if (!contains(toLower(forwarding.message), "write error")) {
+    return false;
+  }
+  if (!owner.last_write_error_count.has_value()) {
+    return false;
+  }
+  float frame_age_s = 0.0F;
+  if (!parseFloat(lookup(forwarding, "last_frame_age_s"), frame_age_s) || frame_age_s < 0.0F ||
+    frame_age_s > static_cast<float>(kSemanticFreshnessSeconds))
+  {
+    return false;
+  }
+  if (owner.last_write_error_increase.has_value()) {
+    const auto recent = std::chrono::duration_cast<CorrectionDiagnosticTracker::Clock::duration>(
+      std::chrono::duration<double>(kWriteErrorRecentSeconds));
+    if (now - *owner.last_write_error_increase < recent) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::uint8_t correctionStreamStatusFromMessage(const std::string & message)
 {
   const std::string normalized = toLower(strip(message));
@@ -473,6 +534,7 @@ public:
   {
     updateOwner(ntrip_, diagnostics, kNtripPrefix, received_at);
     updateOwner(receiver_, diagnostics, kReceiverPrefix, received_at);
+    trackWriteErrors(receiver_, received_at);
   }
 
   void apply(PublicGnssStatus & status, TimePoint now) const
@@ -511,6 +573,13 @@ public:
     }
     if (forwarding != nullptr && forwarding_owner != nullptr) {
       status.correction_stream_status = correctionStreamStatusFromMessage(forwarding->message);
+      // Old write errors with frames still flowing are history, not a live failure.
+      if (status.correction_stream_status == PublicGnssStatus::CORRECTION_STREAM_STATUS_ERROR &&
+        current_receiver != nullptr && forwarding_owner == current_receiver &&
+        writeErrorsAreHistoric(receiver_, *forwarding, now))
+      {
+        status.correction_stream_status = PublicGnssStatus::CORRECTION_STREAM_STATUS_ACTIVE;
+      }
       status.correction_forwarding_source = forwarding_owner->source;
       if (status.correction_stream_status != PublicGnssStatus::CORRECTION_STREAM_STATUS_UNKNOWN) {
         status.value_flags |= PublicGnssStatus::CAP_CORRECTION_STREAM;
