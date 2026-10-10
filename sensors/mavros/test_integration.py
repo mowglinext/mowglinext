@@ -112,9 +112,13 @@ def main() -> int:
     )
 
     require('executable="hardware_bridge_node"' in launch, "native bridge declaration missing")
+    # The native STM32 bridge must run only for the Mowgli backend.
+    # The launch file uses a named constant so the same condition also
+    # excludes the OpenMower sidecar.
     require(
-        'condition=IfCondition(EqualsSubstitution(hardware_backend, "mowgli"))' in launch,
-        "native bridge must be excluded in MAVROS mode",
+        'NATIVE_BRIDGE_BACKEND = "mowgli"' in launch
+        and 'condition=IfCondition(EqualsSubstitution(hardware_backend, NATIVE_BRIDGE_BACKEND))' in launch,
+        "native bridge must be excluded in MAVROS and OpenMower modes",
     )
     for executable in ('executable="robot_state_publisher"', 'executable="twist_mux"'):
         require(executable in launch, f"main-stack node missing: {executable}")
