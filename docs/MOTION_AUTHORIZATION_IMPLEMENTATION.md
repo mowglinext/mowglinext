@@ -7,6 +7,8 @@ stack-wide autonomous-motion invariant or physical containment.
 ## Baselines and checkpoint
 
 - Branch: `feat/924-motion-authorization`, isolated worktree `.motion-924`.
+- Draft PR: [#950](https://github.com/mowglinext/mowglinext/pull/950), against
+  `dev`; no merge, ready-for-review transition or physical deployment performed.
 - Base: `dev` `9f39497f26f4759a0b26e601904710fb934beb65`.
 - Original #942 regression source: `ddd49d9f59e202c265d5aca5e0d1154b79a721af`.
   Its branch and Draft PR were not modified. The original assertions and
@@ -14,7 +16,9 @@ stack-wide autonomous-motion invariant or physical containment.
   supply the geometry required by the production interface.
 - Production checkpoint: `26926295`. Final-source native checks passed:
   navigation 22/22, behavior 46/46 and map 12/12 CTest targets. Later changes
-  record test latency and update documentation; production is unchanged.
+  record test latency and update documentation; motion production is unchanged.
+  Packaging checkpoint `0f66cd8c` adds Boost headers and visualization_msgs to
+  the five thin sensor build dependency lists after CI exposed missing Boost.
 - #905 (`26a2515d`) and #906 (`a04c4219`) were open and unmerged when inspected.
   This imports #905-compatible raw MarkerArray publication and segment logic,
   not its transit planner or another geometry grid. Coordinate the overlapping
@@ -162,18 +166,41 @@ deadline guarantees or whole-stack CPU/memory overhead measurements. Across
 2596.15 ms on the implementation. This includes setup/teardown and scheduler
 variation; it is not isolated verifier CPU overhead or per-tick latency.
 
+One additional paired process probe used `os.wait4` to obtain resource usage
+for each actual test PID, avoiding inherited shell child-accounting. The five
+controller scenarios passed again: baseline CPU user+system 2.441 s, peak RSS
+58.6 MiB; implementation 2.959 s, peak RSS 60.1 MiB. The geometry-only 18-case
+process passed with 0.824 s CPU and 32.2 MiB peak RSS. These single-process
+samples include fixtures/frameworks, are sensitive to scheduling, and do not
+isolate verifier overhead or predict a deployed stack's memory consumption.
+
 Configuration/launch/URDF checks: **253 passed**, including both real full-system
 launch builders with non-default chassis dimensions. These use lightweight
 ROS launch adapters and execute the production builder code; they do not start
 Nav2 or Webots. Firmware's 24 generated interface headers were checked, and Go
 and TypeScript consumers regenerated with no drift in Linux under `LC_ALL=C`.
+The additional existing OpenMower launch checks passed **11/11**. Repaired
+sensor workflow YAML and all five explicit build dependency lists were checked.
+Clean sensor CI at `0f66cd8c` passed GNSS (11 actual GoogleTest cases and
+9 Python cases) and OpenMower (78 actual GoogleTest cases and 11 Python cases),
+including newly generated interfaces and installed-consumer builds. OpenMower
+amd64 and arm64 image builds and smoke tests also passed. The CI counter that
+greps every XML `tests` attribute counts nested attributes twice; the case
+counts here use GTest's actual executed-case output. The [full ROS workspace
+Build & Test job](https://github.com/mowglinext/mowglinext/actions/runs/38010152519/job/114088099001)
+also passed at `0f66cd8c`: 14 source packages built and tested, with colcon
+reporting 3105 tests, 0 errors, 0 failures and 369 skipped. That colcon total
+includes framework/linter results and is not an additional GoogleTest count.
+Despite the job's historical `ROS2 kilted` name, its actual setup is Lyrical.
 
 Native builds use Docker image `be2f6e79c62e`, Ubuntu 26.04, ROS Lyrical,
 `/opt/lyrical_vendor` and UID/GID 1000:1000. Generated message interfaces are
 unchanged; source packages and added shared headers are rebuilt separately
 against the image's cached generated-interface prefix. Full clean workspace,
 coverage-planner package and physical hardware builds are not established by
-these focused checks. Local logs live in `.validation/`, excluded from Git.
+those local focused checks. The separate CI workspace build covers the source
+ROS packages, including coverage; it does not build firmware or prove Webots
+missions or physical behavior. Local logs live in `.validation/`, excluded from Git.
 Fresh final `mowgli_interfaces` CMake configuration also passed, finding
 visualization_msgs and Boost 1.90.0. This validates configuration/export wiring,
 not a new generated-message compilation or a clean installed-consumer build.
@@ -208,8 +235,12 @@ be built safely within the remaining roughly 0.5 GB on C:. A subsequent isolated
 recovery attempt uses a fresh D: scratch directory and separate bridge-networked
 container (UID 1000, ROS domain 170, no robot devices or published ports). Its
 pinned public driver source fetch succeeded; runtime dependencies were extracted
-there. X11/Qt startup and compatible driver integration are still being checked.
-This setup work does not count as a Webots mission or current-stack evidence.
+there. Non-root Xvfb/Qt startup succeeded and Webots printed `R2025a` with a
+normal exit. The pinned driver is compiling against Lyrical. The tested current
+Nav2, behavior and map package installations and unchanged generated interfaces
+were separately staged on D: for overlay verification. Compatible driver and
+current-stack integration are still being checked. App startup does not count
+as a Webots mission or current-stack motion evidence.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
@@ -217,6 +248,30 @@ and fixture collision checks. They do not constitute full mowing, connected
 area, dock/undock/HOME/charging-resume missions or post-mux hardware-output tests.
 Mission completion, coverage percentage, final-command boundary violations and
 whole-stack CPU/memory overhead therefore remain unmeasured.
+
+The existing [OpenMower software hardware simulation](https://github.com/mowglinext/mowglinext/actions/runs/38010148929)
+did execute on `0f66cd8c`: **178/179 checks passed** on its first attempt.
+The failing `xesc_2040` 350 ms process-starvation scenario measured 0.224 m/s
+instead of the unchanged 0.300 +/- 0.050 m/s progress requirement. Odometry
+agreement, plausibility and board latch checks in that scenario passed. The
+bridge/emulator/scenario sources are unchanged against the dev baseline; this
+does not by itself explain the timing failure. The unchanged second attempt
+passed **179/179 board/ESC checks and 10/10 stack seam checks**, with both
+starvation scenes observing 0.299 m/s. The first unexplained miss is retained
+as a repeatability limitation; no test, assertion or source was changed.
+The preceding [dev simulation run](https://github.com/mowglinext/mowglinext/actions/runs/37965865987)
+at `5733a399` passed 179/179 board/ESC checks and 10/10 stack seam checks;
+the inspected bridge, simulation, hardware, message-schema and seam-launch
+sources match this work's `9f39497f` dev baseline. It observed 0.300 and
+0.299 m/s in the two starvation scenes. Its runner/runtime are separate evidence,
+not an identical-host controlled comparison or an explanation of this failure.
+The subsequent mux/bridge stack-integration script did not execute on the
+first attempt because the board script returned failure. On the second attempt,
+the real launch/mux/bridge moved emulated wheels through its teleop input and
+stopped them after input release (970 ms observed, unchanged 1700 ms bound).
+This emulates the OpenMower board/controllers
+and charging/e-stop behavior; it is neither a Webots mowing mission nor evidence
+for the FTC/Escape final-output invariant. No assertion was weakened.
 
 ## Unresolved safety and functionality acceptance
 
