@@ -1527,7 +1527,8 @@ void MapServerNode::on_load_areas(const std_srvs::srv::Trigger::Request::SharedP
 
   try
   {
-    load_areas_from_file(areas_file_path_);
+    // Runtime reload: the dock pose is already in the current datum frame.
+    load_areas_from_file(areas_file_path_, DockPoseFrame::kAlreadyCurrent);
     apply_area_classifications();
     res->success = planning_grid_error_.empty();
     res->message = res->success ? "Areas loaded from " + areas_file_path_ : planning_grid_error_;
@@ -2227,7 +2228,7 @@ void MapServerNode::save_areas_to_file(const std::string& path, bool allow_empty
   commit_file_atomically(tmp_path, path);
 }
 
-void MapServerNode::load_areas_from_file(const std::string& path)
+void MapServerNode::load_areas_from_file(const std::string& path, DockPoseFrame dock_frame)
 {
   std::ifstream in(path);
   if (!in.is_open())
@@ -2464,7 +2465,10 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   // around the migrated coordinates.
   {
     const double nan = std::numeric_limits<double>::quiet_NaN();
-    migrate_areas_datum(get_double("datum_lat", nan), get_double("datum_lon", nan), path);
+    migrate_areas_datum(get_double("datum_lat", nan),
+                        get_double("datum_lon", nan),
+                        path,
+                        dock_frame);
   }
 
   // Resize map to fit new areas and reset masks.
@@ -2482,7 +2486,8 @@ void MapServerNode::load_areas_from_file(const std::string& path)
 
 void MapServerNode::migrate_areas_datum(double file_datum_lat,
                                         double file_datum_lon,
-                                        const std::string& path)
+                                        const std::string& path,
+                                        DockPoseFrame dock_frame)
 {
   namespace wgs84 = mowgli_interfaces::wgs84;
 
@@ -2582,7 +2587,18 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
 
   // The dock pose rides with the map. Yaw is unchanged — both old and new
   // frames are north-aligned ENU, so a datum move is a pure translation.
-  if (docking_pose_set_)
+  // Only on the boot load, though: on a runtime reload (e.g. restoring a map
+  // backup recorded before the datum moved) the dock pose is already in the
+  // current frame and must stay where calibration put it.
+  if (docking_pose_set_ && dock_frame == DockPoseFrame::kAlreadyCurrent)
+  {
+    RCLCPP_INFO(get_logger(),
+                "Datum migration on a runtime reload: dock pose (%.3f, %.3f) is already in "
+                "the current datum frame — left unchanged.",
+                docking_pose_.position.x,
+                docking_pose_.position.y);
+  }
+  else if (docking_pose_set_)
   {
     double east = docking_pose_.position.x;
     double north = docking_pose_.position.y;
@@ -2763,6 +2779,14 @@ void MapServerNode::save_areas_guarded_for_test(const std::string& path)
 void MapServerNode::load_areas_for_test(const std::string& path)
 {
   load_areas_from_file(path);
+}
+
+std_srvs::srv::Trigger::Response MapServerNode::load_areas_service_for_test()
+{
+  auto req = std::make_shared<std_srvs::srv::Trigger::Request>();
+  auto res = std::make_shared<std_srvs::srv::Trigger::Response>();
+  on_load_areas(req, res);
+  return *res;
 }
 
 }  // namespace mowgli_map
