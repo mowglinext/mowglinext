@@ -76,6 +76,7 @@ def _build(filename, **overrides):
         for name in (
             "DEFAULT_TOOL_WIDTH_M",
             "chassis_circumscribed_radius",
+            "chassis_footprint",
             "dig_proposal_radius",
             "dig_skip_radius",
             "keepout_obstacle_margin",
