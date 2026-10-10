@@ -1,8 +1,12 @@
 package blackbox
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +26,146 @@ func TestZeroAvailableMemoryIsKnownPressure(t *testing.T) {
 	}
 	if parseMemoryInfo([]byte("MemTotal: 131072 kB\n")).known {
 		t.Fatal("missing availability field parsed as valid")
+	}
+}
+
+func TestRetentionAppliesAfterSettingsAndRestartWithoutNewCapture(t *testing.T) {
+	for _, mode := range []string{"count settings", "byte settings", "disabled count restart", "disabled byte restart"} {
+		t.Run(mode, func(t *testing.T) {
+			r, clock := testRecorder(t)
+			cfg := r.Status().Config
+			cfg.MaxSnapshots = 2
+			configureRecorder(t, r, cfg)
+			for i := 0; i < 2; i++ {
+				if _, ok := r.Trigger("manual"); !ok {
+					t.Fatal("manual capture rejected")
+				}
+				finishTestCapture(t, r, clock)
+			}
+			if strings.Contains(mode, "byte") {
+				files, err := r.List()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, file := range files {
+					if err := os.Truncate(filepath.Join(r.dir, file.Name), 3<<20); err != nil {
+						t.Fatal(err)
+					}
+				}
+				cfg.MaxDiskBytes = 4 << 20
+			} else {
+				cfg.MaxSnapshots = 1
+			}
+			target := r
+			restarted := strings.Contains(mode, "restart")
+			if restarted {
+				if err := r.Close(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				cfg.Enabled = false
+				var err error
+				target, err = New(r.dir, cfg, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer target.Close(context.Background())
+				waitFor(t, func() bool { return target.Status().Phase != "pruning" })
+			} else {
+				configureRecorder(t, r, cfg)
+			}
+			files, err := target.List()
+			if err != nil || len(files) != 1 {
+				t.Fatalf("retention not applied: files=%v err=%v", files, err)
+			}
+			expectedCompleted := uint64(2)
+			if restarted {
+				expectedCompleted = 0
+			}
+			if target.Status().CompletedSnapshots != expectedCompleted {
+				t.Fatal("maintenance counted as capture")
+			}
+		})
+	}
+}
+
+func TestRetentionFailureIsReportedAndCanRetrySameSettings(t *testing.T) {
+	r, _ := testRecorder(t)
+	dir := r.dir
+	moved := dir + ".moved"
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, []byte("injected storage failure"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := r.Status().Config
+	cfg.MaxSnapshots = 1
+	if err := r.Configure(cfg); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return r.Status().Phase == "ready" })
+	if r.Status().LastError == "" || r.Status().CompletedSnapshots != 0 {
+		t.Fatal("retention failure hidden or counted as capture")
+	}
+	ingest(t, r, "odom", `{"x":1}`)
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(moved, dir); err != nil {
+		t.Fatal(err)
+	}
+	configureRecorder(t, r, cfg)
+	if r.Status().BufferedRecords != 1 {
+		t.Fatal("retention maintenance discarded RAM history")
+	}
+}
+
+func TestFailedReplacementPreservesCompletedEvidence(t *testing.T) {
+	for _, failure := range []string{"exclusive create", "rename", "disk reserve"} {
+		t.Run(failure, func(t *testing.T) {
+			r, clock := testRecorder(t)
+			cfg := r.Status().Config
+			cfg.MaxSnapshots = 1
+			configureRecorder(t, r, cfg)
+			ingest(t, r, "odom", `{"x":1}`)
+			r.Trigger("manual")
+			old := finishTestCapture(t, r, clock)
+			oldBytes, err := os.ReadFile(filepath.Join(r.dir, old.Name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failure == "disk reserve" {
+				r.mu.Lock()
+				r.freeDisk = func(string) (int64, bool) { return 0, true }
+				r.mu.Unlock()
+			}
+			id, ok := r.Trigger("manual")
+			if !ok {
+				t.Fatal("replacement rejected")
+			}
+			switch failure {
+			case "exclusive create":
+				err = os.WriteFile(filepath.Join(r.dir, id+".jsonl.partial"), []byte("injected collision"), 0600)
+			case "rename":
+				err = os.Mkdir(filepath.Join(r.dir, id+".jsonl"), 0700)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			clock.Add(int64(3 * time.Second))
+			waitFor(t, func() bool { return r.Status().Phase == "ready" })
+			if r.Status().LastError == "" {
+				t.Fatal("injected replacement failure not reported")
+			}
+			files, err := r.List()
+			if err != nil || len(files) != 1 || files[0].Name != old.Name {
+				t.Fatalf("old recording lost: files=%v err=%v", files, err)
+			}
+			current, err := os.ReadFile(filepath.Join(r.dir, old.Name))
+			if err != nil || !bytes.Equal(current, oldBytes) {
+				t.Fatal("old evidence changed during failed replacement")
+			}
+		})
 	}
 }
 
@@ -107,9 +251,7 @@ func TestConfigurePreservesPrehistoryAcrossSameAndRetentionOnlyChanges(t *testin
 		cfg.MaxSnapshots = got - 1
 	}
 	cfg.MaxDiskBytes /= 2
-	if err := r.Configure(cfg); err != nil {
-		t.Fatalf("configure retention-only changes: %v", err)
-	}
+	configureRecorder(t, r, cfg)
 	if got := r.Status().BufferedRecords; got != 1 {
 		t.Fatalf("prehistory after configuration changes = %d records, want 1", got)
 	}
@@ -149,9 +291,7 @@ func TestConfigurePreservesEmergencyEdge(t *testing.T) {
 			// Move beyond cooldown so a reset edge would produce an accepted capture.
 			clock.Add(int64(61 * time.Second))
 			cfg := tt.update(r.Status().Config)
-			if err := r.Configure(cfg); err != nil {
-				t.Fatalf("configure: %v", err)
-			}
+			configureRecorder(t, r, cfg)
 			ingest(t, r, "emergency", `{"active_emergency":true,"latched_emergency":true}`)
 			status := r.Status()
 			if status.Phase != "ready" || status.CoalescedTriggers != 0 {
@@ -223,9 +363,7 @@ func TestPersistRetainsIncomingSnapshotWhenWallClockMovesBackwards(t *testing.T)
 	r, _ := testRecorder(t)
 	cfg := r.Status().Config
 	cfg.MaxSnapshots = 1
-	if err := r.Configure(cfg); err != nil {
-		t.Fatal(err)
-	}
+	configureRecorder(t, r, cfg)
 
 	makeCapture := func(timestamp string) *capture {
 		t.Helper()

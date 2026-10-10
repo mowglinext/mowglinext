@@ -37,6 +37,32 @@ export interface BlackboxStatus {
     topics: {topic: string; last_received_at?: string}[];
 }
 
+const isObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null;
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const optionalString = (value: unknown) => value === undefined || typeof value === "string";
+
+// The panel shares Diagnostics with unrelated tools. A missing, old or malformed
+// endpoint must become a local error rather than crash the whole page.
+function isBlackboxStatus(value: unknown): value is BlackboxStatus {
+    if (!isObject(value) || !isObject(value.config)) return false;
+    const config = value.config;
+    return typeof config.enabled === "boolean"
+        && ["pre_seconds", "post_seconds", "memory_bytes", "max_message_bytes", "max_snapshots", "max_disk_bytes",
+            "cooldown_seconds", "min_free_disk_bytes"].every(key => isNumber(config[key]))
+        && typeof value.phase === "string" && typeof value.memory_pressure === "boolean"
+        && [value.buffered_seconds, value.buffered_bytes, value.effective_memory_bytes, value.dropped_messages].every(isNumber)
+        && optionalString(value.warning) && optionalString(value.last_error)
+        && Array.isArray(value.topics) && value.topics.every(topic => isObject(topic)
+            && typeof topic.topic === "string" && optionalString(topic.last_received_at))
+        && Array.isArray(value.recordings) && value.recordings.every(recording => isObject(recording)
+            && typeof recording.name === "string" && /^[a-zA-Z0-9._-]+$/.test(recording.name)
+            && typeof recording.triggered_at === "string" && Number.isFinite(Date.parse(recording.triggered_at))
+            && Array.isArray(recording.reasons) && recording.reasons.every(reason => typeof reason === "string")
+            && [recording.size, recording.actual_pre_seconds, recording.actual_post_seconds, recording.capture_dropped_messages].every(isNumber)
+            && typeof recording.interrupted === "boolean");
+}
+
 function errorMessage(error: unknown): string {
     if (error instanceof Error) return error.message;
     const response = error as {error?: string | {error?: string}};
@@ -50,7 +76,8 @@ export function useBlackbox() {
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const refresh = useCallback(async () => {
-        const response = await api.request<BlackboxStatus>({path: "/tools/blackbox/status", method: "GET", format: "json"});
+        const response = await api.request<unknown>({path: "/tools/blackbox/status", method: "GET", format: "json"});
+        if (!isBlackboxStatus(response.data)) throw new Error("Invalid blackbox status response");
         setStatus(response.data);
         setError(null);
     }, [api]);

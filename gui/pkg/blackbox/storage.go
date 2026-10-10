@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,48 +16,52 @@ import (
 
 var snapshotName = regexp.MustCompile(`^blackbox-[0-9]{8}T[0-9]{6}\.[0-9]{9}Z-[0-9a-f]{16}\.jsonl$`)
 
-func prepareDirectory(dir string) error {
+func prepareDirectory(dir string) (bool, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
+		return false, err
 	}
 	info, err := os.Lstat(dir)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("blackbox storage must be a real directory")
+		return false, errors.New("blackbox storage must be a real directory")
 	}
 	// Interrupted writes are never listed as completed recordings. Cleanup only
 	// our exact temporary naming convention, never manual rosbag data.
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer root.Close()
 	f, err := root.Open(".")
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer f.Close()
+	hasCompleted := false
 	for inspected := 0; inspected < 2048; {
 		entries, readErr := f.ReadDir(128)
 		inspected += len(entries)
 		for _, entry := range entries {
 			name := entry.Name()
+			if snapshotName.MatchString(name) && entry.Type().IsRegular() {
+				hasCompleted = true
+			}
 			if strings.HasSuffix(name, ".partial") && snapshotName.MatchString(strings.TrimSuffix(name, ".partial")) {
 				if err := root.Remove(name); err != nil {
-					return fmt.Errorf("cleanup interrupted blackbox: %w", err)
+					return false, fmt.Errorf("cleanup interrupted blackbox: %w", err)
 				}
 			}
 		}
 		if readErr == io.EOF {
-			return nil
+			return hasCompleted, nil
 		}
 		if readErr != nil {
-			return readErr
+			return false, readErr
 		}
 	}
-	return errors.New("too many entries in blackbox directory")
+	return false, errors.New("too many entries in blackbox directory")
 }
 
 func (r *Recorder) Open(name string) (*os.File, error) {
@@ -155,24 +160,19 @@ func (r *Recorder) List() ([]Snapshot, error) {
 	return nil, errors.New("too many entries in blackbox directory")
 }
 
-// prune counts only completed recorder files. It is run on the disk worker,
-// never the collector. A corrupt header must still count toward disk retention.
-func (r *Recorder) prune(cfg Config, incoming int64) error {
-	root, err := os.OpenRoot(r.dir)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
+type storageEntry struct {
+	name string
+	size int64
+}
+
+// Corrupt headers still count toward retention. All scans have a hard entry bound.
+func scanCompleted(root *os.Root) ([]storageEntry, int64, error) {
 	f, err := root.Open(".")
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	defer f.Close()
-	type entry struct {
-		name string
-		size int64
-	}
-	var files []entry
+	var files []storageEntry
 	var total int64
 	for inspected := 0; inspected < 2048; {
 		entries, readErr := f.ReadDir(128)
@@ -183,41 +183,60 @@ func (r *Recorder) prune(cfg Config, incoming int64) error {
 			}
 			info, err := e.Info()
 			if err != nil {
-				return err
+				return nil, 0, err
 			}
 			if !info.Mode().IsRegular() {
 				continue
 			}
-			files = append(files, entry{e.Name(), info.Size()})
+			if info.Size() > math.MaxInt64-total {
+				return nil, 0, errors.New("blackbox storage size overflow")
+			}
+			files = append(files, storageEntry{e.Name(), info.Size()})
 			total += info.Size()
 		}
 		if readErr == io.EOF {
 			break
 		}
 		if readErr != nil {
-			return readErr
+			return nil, 0, readErr
 		}
 		if inspected >= 2048 {
-			return errors.New("too many entries in blackbox directory")
+			return nil, 0, errors.New("too many entries in blackbox directory")
 		}
 	}
+	return files, total, nil
+}
+
+// prune runs on the disk worker, never the collector.
+func (r *Recorder) prune(cfg Config, keep string) error {
+	root, err := os.OpenRoot(r.dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	files, total, err := scanCompleted(root)
+	if err != nil {
+		return err
+	}
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
-	allowedCount := cfg.MaxSnapshots
-	if incoming > 0 {
-		allowedCount--
-	} // reserve a count slot before publishing
+	count := len(files)
 	for _, file := range files {
-		if len(files) <= allowedCount && total+incoming <= cfg.MaxDiskBytes {
+		if count <= cfg.MaxSnapshots && total <= cfg.MaxDiskBytes {
 			break
 		}
-		if err := root.Remove(file.name); err != nil && !os.IsNotExist(err) {
+		// Keep the newly published capture even after a backwards wall-clock
+		// step. Older evidence is removed only after its replacement is complete.
+		if file.name == keep {
+			continue
+		}
+		if err := r.removeCompleted(root, file.name); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		total -= file.size
-		files = files[1:]
+		count--
 	}
-	if incoming > cfg.MaxDiskBytes {
-		return errors.New("blackbox snapshot exceeds disk limit")
+	if count > cfg.MaxSnapshots || total > cfg.MaxDiskBytes {
+		return errors.New("cannot satisfy blackbox retention limits")
 	}
 	return nil
 }
@@ -226,6 +245,9 @@ type limitWriter struct {
 	writer    io.Writer
 	remaining int64
 }
+
+// A snapshot may be complete even when its subsequent retention cleanup fails.
+type publishedError struct{ error }
 
 func (w *limitWriter) Write(p []byte) (int, error) {
 	if int64(len(p)) > w.remaining {
@@ -242,10 +264,7 @@ func (r *Recorder) persist(c *capture) error {
 	if estimate > c.metadata.Config.MaxDiskBytes {
 		return errors.New("blackbox capture too large for configured storage")
 	}
-	if err := r.prune(c.metadata.Config, estimate); err != nil {
-		return err
-	}
-	free, known := diskFree(r.dir)
+	free, known := r.freeDisk(r.dir)
 	if known && (free < c.metadata.Config.MinFreeDiskBytes || free-c.metadata.Config.MinFreeDiskBytes < estimate) {
 		return errors.New("insufficient free disk space for blackbox snapshot")
 	}
@@ -254,6 +273,16 @@ func (r *Recorder) persist(c *capture) error {
 		return err
 	}
 	defer root.Close()
+	files, total, err := scanCompleted(root)
+	if err != nil {
+		return err
+	}
+	// One replacement may exceed retention until cleanup completes. If cleanup
+	// failed, refuse another publication until settings retry/delete restores
+	// the limit; repeated incidents must never grow storage indefinitely.
+	if len(files) > c.metadata.Config.MaxSnapshots || total > c.metadata.Config.MaxDiskBytes {
+		return errors.New("blackbox retention exceeded; retry cleanup or delete recordings before saving another snapshot")
+	}
 	name := c.metadata.CaptureID + ".jsonl"
 	temp := name + ".partial"
 	f, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
@@ -313,5 +342,8 @@ func (r *Recorder) persist(c *capture) error {
 		_ = directory.Sync()
 		_ = directory.Close()
 	}
-	return r.prune(c.metadata.Config, 0)
+	if err := r.prune(c.metadata.Config, name); err != nil {
+		return publishedError{err}
+	}
+	return nil
 }
