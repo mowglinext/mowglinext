@@ -34,7 +34,7 @@ TEST(Xesc2040Protocol, PacketSizesAndOffsets)
 
 TEST(Xesc2040Link, AccumulatesSignedTicksFromDirection)
 {
-  Xesc2040Link link("/nonexistent/port", Xesc2040Settings{}, [](const std::string&) {});
+  Xesc2040Link link("/nonexistent/port", Xesc2040Settings{}, 4, [](const std::string&) {});
   const auto t0 = SteadyClock::now();
 
   x::StatusPacket pkt{};
@@ -58,7 +58,7 @@ TEST(Xesc2040Link, AccumulatesSignedTicksFromDirection)
 
 TEST(Xesc2040Link, SurvivesTachoWraparound)
 {
-  Xesc2040Link link("/nonexistent/port", Xesc2040Settings{}, [](const std::string&) {});
+  Xesc2040Link link("/nonexistent/port", Xesc2040Settings{}, 4, [](const std::string&) {});
   const auto t0 = SteadyClock::now();
   x::StatusPacket pkt{};
   pkt.message_type = x::kMsgTypeStatus;
@@ -71,7 +71,7 @@ TEST(Xesc2040Link, SurvivesTachoWraparound)
 
 TEST(Xesc2040Link, CopiesTelemetryFields)
 {
-  Xesc2040Link link("/nonexistent/port", Xesc2040Settings{}, [](const std::string&) {});
+  Xesc2040Link link("/nonexistent/port", Xesc2040Settings{}, 4, [](const std::string&) {});
   x::StatusPacket pkt{};
   pkt.message_type = x::kMsgTypeStatus;
   pkt.fw_version_major = 1u;
@@ -97,7 +97,7 @@ TEST(Xesc2040Link, CopiesTelemetryFields)
 
 TEST(Xesc2040Link, SendDutyWithoutPortFailsCleanly)
 {
-  Xesc2040Link link("/nonexistent/port", Xesc2040Settings{}, [](const std::string&) {});
+  Xesc2040Link link("/nonexistent/port", Xesc2040Settings{}, 4, [](const std::string&) {});
   EXPECT_FALSE(link.SendDuty(0.3));
   link.Poll(SteadyClock::now());
   EXPECT_FALSE(link.telemetry().connected);

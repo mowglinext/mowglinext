@@ -228,7 +228,7 @@ func (b DockerBackend) planBundle(ctx context.Context, d Deployment, overrides m
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := firmwareProtocolChange(ready.FirmwareProtocol, d, opts); err != nil {
+	if _, err := b.checkFirmwareProtocol(ready.FirmwareProtocol, d, opts); err != nil {
 		return nil, nil, err
 	}
 	current, _, err := b.model(ctx)

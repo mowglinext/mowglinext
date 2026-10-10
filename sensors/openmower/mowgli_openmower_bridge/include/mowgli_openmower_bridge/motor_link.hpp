@@ -31,7 +31,7 @@ struct MotorTelemetry
   double temp_motor{0.0};
   double current_in{0.0};
   double duty{0.0};
-  double rpm{0.0};  ///< shaft rpm when the controller reports it, else 0
+  double rpm{0.0};  ///< shaft speed, rpm >= 0 (direction is not carried here)
   uint32_t fault_code{0u};
   int64_t signed_ticks{0};
   uint8_t fw_major{0u};

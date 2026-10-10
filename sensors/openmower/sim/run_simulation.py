@@ -559,9 +559,18 @@ def s12_blade(probe, rig, R, esc):
     R.check(S, 'Status.mow_enabled + blade_requested_direction "reverse"',
             st.mow_enabled and st.blade_requested_direction == 'reverse', st.blade_requested_direction)
     wait_for(lambda: rig.snapshot()['blade_rpm'] > 2000, 3)
-    wait_for(lambda: probe.get('status').mower_motor_rpm > 1000 or esc == 'xesc_2040', 2)
+    # Status.mower_motor_rpm is a SPEED (the STM32 sends a uint16): map_server
+    # stamps mow progress only above mow_progress_min_blade_rpm (1000), and the
+    # GUI shows the blade off at <= 0. The 2040 reports no speed of its own.
+    R.check(S, 'Status.mower_motor_rpm reports the spinning blade',
+            wait_for(lambda: probe.get('status').mower_motor_rpm > 1000, 2),
+            f"{probe.get('status').mower_motor_rpm:.0f} rpm (plant {rig.snapshot()['blade_rpm']:.0f})")
     mower(probe, 1, 0)
     R.check(S, 'direction 0 reverses the duty', wait_for(lambda: rig.snapshot()['duty']['mow'] < -0.9, 2))
+    wait_for(lambda: rig.snapshot()['blade_rpm'] < -2000, 3)
+    R.check(S, '...and the reversed blade still reads as spinning (speed, not direction)',
+            wait_for(lambda: probe.get('status').mower_motor_rpm > 1000, 2),
+            f"{probe.get('status').mower_motor_rpm:.0f} rpm (plant {rig.snapshot()['blade_rpm']:.0f})")
     t0 = rig.now_ms()
     probe.hl_state = IDLE
     tz = rig.first_time_effective_zero(('mow',), t0, 2000)

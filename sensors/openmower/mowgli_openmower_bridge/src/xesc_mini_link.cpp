@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "mowgli_openmower_bridge/blade_speed.hpp"
+
 namespace mowgli_openmower_bridge
 {
 
@@ -113,7 +115,7 @@ void XescMiniLink::HandlePayload(const vesc::ParsedPayload& parsed, SteadyClock:
       telemetry_.temp_motor = parsed.values.temp_motor;
       telemetry_.current_in = parsed.values.current_in;
       telemetry_.duty = parsed.values.duty;
-      telemetry_.rpm = parsed.values.erpm / static_cast<double>(pole_pairs_);
+      telemetry_.rpm = ShaftRpmFromErpm(parsed.values.erpm, pole_pairs_);
       telemetry_.fault_code = parsed.values.fault_code;
       // The VESC tachometer is already a signed cumulative count.
       telemetry_.signed_ticks = parsed.values.tacho;

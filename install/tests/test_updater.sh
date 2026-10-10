@@ -40,12 +40,13 @@ is_supported_hardware_backend() { case "${1:-}" in mowgli|mavros|openmower) retu
 LIDAR_ENABLED=false
 MSG_UPDATER_HARDWARE_MANAGED='unsupported managed hardware'
 MSG_UPDATER_HARDWARE_LEGACY='preserving legacy hardware selection'
-for choice in mowgli mavros; do
-  HARDWARE_BACKEND=mowgli
-  [[ "$choice" == mavros ]] && HARDWARE_BACKEND=mavros
+# Managed releases cover the Mowgli board and the OpenMower v1 bridge; MAVROS
+# keeps the legacy path.
+for choice in mowgli openmower mavros; do
+  HARDWARE_BACKEND="$choice"
   rm -f -- "$sandbox/.updater-managed"
   check_updater_hardware
-  if [[ "$choice" != mowgli ]]; then
+  if [[ "$choice" == mavros ]]; then
     ! updater_hardware_supported
     install_host_updater
     [[ ! -e "$sandbox/.updater-managed" ]]

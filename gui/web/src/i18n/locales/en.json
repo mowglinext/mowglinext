@@ -4011,8 +4011,13 @@
     "selectionPending": "Installer hardware choices have changed. Review installation to apply the container changes.",
     "selectionHelp": "Containers follow your saved installer hardware choices.",
     "hardware": {
+      "backend": "Board",
       "gnss": "GPS",
       "lidar": "LiDAR"
+    },
+    "backendChoice": {
+      "none": "Mowgli",
+      "openmower": "OpenMower v1"
     },
     "disabled": "Off",
     "enabled": "On",
