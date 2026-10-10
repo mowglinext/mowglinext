@@ -1,5 +1,5 @@
 import React from "react";
-import { Alert, Card, Col, Form, InputNumber, Row, Select, Switch, Typography } from "antd";
+import { Alert, Card, Col, Form, Input, InputNumber, Row, Select, Switch, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 import type { SettingsFieldGroup, SettingsFieldSpec } from "./settingsFieldGroups.ts";
@@ -18,6 +18,9 @@ export interface SettingsFieldCardProps {
 }
 
 const asBool = (value: SettingValue): boolean => value === true || value === "true";
+
+const optionLabel = (option: number | string): string =>
+    typeof option === "number" && option > 0 ? `+${option}` : `${option}`;
 
 /**
  * Renders one declarative group of mowgli_robot.yaml settings (see
@@ -49,14 +52,27 @@ export const SettingsFieldCard: React.FC<SettingsFieldCardProps> = ({
             case "select":
                 return (
                     <Select
-                        value={typeof value === "number" ? value : undefined}
-                        onChange={(next: number) => onChange(field.key, next)}
+                        value={
+                            typeof value === "number" || typeof value === "string" ? value : undefined
+                        }
+                        onChange={(next: number | string) => onChange(field.key, next)}
                         options={field.options.map((option) => ({
                             value: option,
-                            label: option > 0 ? `+${option}` : `${option}`,
+                            label: optionLabel(option),
                         }))}
                         aria-label={label}
                         style={{ width: "100%" }}
+                    />
+                );
+            case "text":
+                return (
+                    <Input
+                        value={typeof value === "string" ? value : ""}
+                        onChange={(event) => onChange(field.key, event.target.value)}
+                        placeholder={field.placeholder}
+                        aria-label={label}
+                        spellCheck={false}
+                        autoComplete="off"
                     />
                 );
             case "number":

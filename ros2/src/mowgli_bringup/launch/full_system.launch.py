@@ -44,7 +44,11 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import (
+    EnvironmentVariable,
+    LaunchConfiguration,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -116,6 +120,12 @@ def generate_launch_description() -> LaunchDescription:
         default_value="/dev/mowgli",
         description="Serial port for the hardware bridge.",
     )
+    hardware_backend_arg = DeclareLaunchArgument(
+        "hardware_backend",
+        default_value=EnvironmentVariable("HARDWARE_BACKEND", default_value="mowgli"),
+        description="Hardware backend: mowgli, mavros or openmower. Only mowgli "
+        "launches the in-tree hardware_bridge_node (see mowgli.launch.py).",
+    )
 
     enable_mqtt_arg = DeclareLaunchArgument(
         "enable_mqtt",
@@ -166,6 +176,7 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     use_sim_time = LaunchConfiguration("use_sim_time")
     serial_port = LaunchConfiguration("serial_port")
+    hardware_backend = LaunchConfiguration("hardware_backend")
     enable_mqtt = LaunchConfiguration("enable_mqtt")
     enable_foxglove = LaunchConfiguration("enable_foxglove")
     foxglove_port = LaunchConfiguration("foxglove_port")
@@ -281,6 +292,7 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "use_sim_time": use_sim_time,
             "serial_port": serial_port,
+            "hardware_backend": hardware_backend,
         }.items(),
     )
 
@@ -473,6 +485,17 @@ def generate_launch_description() -> LaunchDescription:
             {
                 "battery_manual_resume_percent": float(
                     robot_params.get("battery_manual_resume_percent", 30.0)
+                )
+            },
+            # Charge-hold exit: besides battery_full_percent the charge current
+            # must have tapered to this (blackboard {battery_charge_tail_current_a}
+            # -> IsChargeCurrentBelow in both charge-wait loops). It was declared
+            # in behavior_tree_node.cpp and listed in the template, but never
+            # injected here, so an operator value silently never reached the node
+            # (found 2026-10-05: a 0.3 A setting would have left the robot at 0.08).
+            {
+                "battery_charge_tail_current_a": float(
+                    robot_params.get("battery_charge_tail_current_a", 0.08)
                 )
             },
         ],
@@ -920,6 +943,7 @@ def generate_launch_description() -> LaunchDescription:
             # Arguments
             use_sim_time_arg,
             serial_port_arg,
+            hardware_backend_arg,
             enable_mqtt_arg,
             enable_foxglove_arg,
             foxglove_port_arg,

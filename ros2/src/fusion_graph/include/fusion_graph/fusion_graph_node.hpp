@@ -406,6 +406,7 @@ private:
   double lidar_map_tile_size_m_ = 10.0;
   int lidar_map_radius_tiles_ = 2;
   double lidar_map_insert_period_s_ = 0.5;
+  double lidar_map_insert_min_travel_m_ = 0.10;
   double lidar_map_rebuild_period_s_ = 5.0;
   double lidar_anchor_engage_age_s_ = 1.0;
   double lidar_anchor_apply_age_s_ = 20.0;

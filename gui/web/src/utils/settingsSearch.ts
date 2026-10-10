@@ -47,6 +47,10 @@ const FIELD_TEXT: Record<string, string[]> = {
         "settingsBattery.manualResume",
         "settingsBattery.manualResumeTooltip"
     ],
+    "battery_charge_tail_current_a": [
+        "settingsBattery.chargeTail",
+        "settingsBattery.chargeTailTooltip"
+    ],
     "mowing_speed": [
         "settingsMowing.mowingSpeed",
         "settingsMowing.mowingSpeedTooltip"

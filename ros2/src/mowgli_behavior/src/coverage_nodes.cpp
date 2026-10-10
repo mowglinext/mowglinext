@@ -23,6 +23,8 @@
 #include <limits>
 
 #include "action_msgs/msg/goal_status.hpp"
+#include "mowgli_behavior/area_coverage_lines.hpp"
+#include "mowgli_behavior/blocked_stretch.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/coverage_preview.hpp"
@@ -396,6 +398,7 @@ BT::NodeStatus FollowStrip::onStart()
   swaths_skipped_ = 0;
   swaths_skipped_start_occupied_ = 0;
   swaths_mowed_this_pass_ = 0;
+  skipped_tally_ = SkippedPathTally{};
   transit_active_ = false;
   transit_pending_ = false;
   transit_abort_seen_ = false;
@@ -622,6 +625,11 @@ void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
                     swaths_.size(),
                     path_progress_idx_,
                     *k);
+        if (*k > path_progress_idx_)
+        {
+          skipped_tally_.addRejoin(*k - path_progress_idx_,
+                                   pathLengthBetween(poses, path_progress_idx_, *k));
+        }
         path_progress_idx_ = *k;
       }
     }
@@ -784,6 +792,18 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
         {error_m, static_cast<double>(fb->tracking_feedback.heading_tracking_error), index});
     slot->last_error_m = error_m;
     slot->last_index = index;
+  };
+  follow_accept_ = std::make_shared<FollowAcceptSlot>();
+  follow_opts.goal_response_callback =
+      [slot = follow_accept_,
+       client = std::weak_ptr(follow_client_)](const FollowGoalHandle::SharedPtr& handle)
+  {
+    std::lock_guard<std::mutex> lk(slot->mutex);
+    auto live = client.lock();
+    if (slot->abandoned && handle && live)
+    {
+      live->async_cancel_goal(handle);
+    }
   };
   follow_future_ = follow_client_->async_send_goal(goal, follow_opts);
   swath_goal_sent_ = true;
@@ -1175,12 +1195,27 @@ BT::NodeStatus FollowStrip::onRunning()
                   area_idx_);
       return BT::NodeStatus::FAILURE;
     }
-    RCLCPP_INFO(ctx->node->get_logger(),
-                "FollowStrip: area %u pass done (%zu/%zu swaths mowed, %zu skipped this pass)",
-                area_idx_,
-                done.size(),
-                swaths_.size(),
-                swaths_skipped_);
+    if (skipped_tally_.any())
+    {
+      // "swaths mowed" counts units: say plainly how much of the plan was left behind.
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: area %u pass done (%zu/%zu swaths mowed, %zu skipped this pass) "
+                  "— NOT all of it was mowed: %s",
+                  area_idx_,
+                  done.size(),
+                  swaths_.size(),
+                  swaths_skipped_,
+                  describeSkippedPath(skipped_tally_).c_str());
+    }
+    else
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowStrip: area %u pass done (%zu/%zu swaths mowed, %zu skipped this pass)",
+                  area_idx_,
+                  done.size(),
+                  swaths_.size(),
+                  swaths_skipped_);
+    }
     return BT::NodeStatus::SUCCESS;
   };
 
@@ -1453,6 +1488,14 @@ BT::NodeStatus FollowStrip::onRunning()
                                   {prior_stuck_point.x, prior_stuck_point.y});
         }
       }
+      // issue #607: the detour budget is spent and its last resume transit
+      // failed. Skip only the blocked stretch, not the rest of the unit — a
+      // unit can carry every headland ring of the lawn (field 2026-10-10: a
+      // 4 m hairpin against a hedge dropped 382 m of a 1016 m plan here).
+      if (!start_pose_blocked && had_detour_in_flight && resumeUnitPastBlockedStretch(ctx))
+      {
+        return BT::NodeStatus::RUNNING;
+      }
       ++swaths_skipped_;
       return advance();
     }
@@ -1464,6 +1507,7 @@ BT::NodeStatus FollowStrip::onRunning()
     if (follow_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
       return BT::NodeStatus::RUNNING;
     follow_handle_ = follow_future_.get();
+    follow_accept_.reset();
     if (!follow_handle_)
     {
       RCLCPP_WARN(ctx->node->get_logger(),
@@ -1563,6 +1607,22 @@ BT::NodeStatus FollowStrip::onRunning()
     // the per-segment budget is not spent — otherwise fall through to the
     // existing skip. tryStartDetour reuses the inter-segment transit machinery,
     // so the blade is provably OFF for the crossing (structural gap guard).
+    // The detour budget bounds ONE obstacle stretch, not a whole unit: a unit
+    // can be hundreds of metres of hedge-side ring (issue #607). Real progress
+    // since the last detour / resume (the unit is trimmed at each, so
+    // path_progress_idx_ counts only what was driven since) refills it.
+    if (detours_used_ > 0 && swath_idx_ < swaths_.size() &&
+        pathLengthBetween(swaths_[swath_idx_].poses, 0, path_progress_idx_) >= kDetourBudgetResetM)
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowStrip: unit %zu/%zu drove >= %.0f m since the last detour — detour "
+                  "budget refilled (%zu used before)",
+                  swath_idx_ + 1,
+                  swaths_.size(),
+                  kDetourBudgetResetM,
+                  detours_used_);
+      detours_used_ = 0;
+    }
     if (tryStartDetour(ctx))
     {
       follow_handle_.reset();
@@ -1651,7 +1711,7 @@ void FollowStrip::onHalted()
   // Preempt (recharge, e-stop, command change) mid-path: capture how far we got
   // and persist the resume cursor so the next dispatch continues from here
   // rather than re-mowing the whole area from the start.
-  if (follow_handle_ && total_path_poses_ > 0)
+  if ((follow_handle_ || follow_accept_) && total_path_poses_ > 0)
   {
     updateProgress(ctx);
     persistResumeCursor(ctx);
@@ -1661,7 +1721,7 @@ void FollowStrip::onHalted()
 
 BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, bool mid_pass)
 {
-  if (mid_pass && follow_handle_ && total_path_poses_ > 0)
+  if (mid_pass && (follow_handle_ || follow_accept_) && total_path_poses_ > 0)
   {
     updateProgress(ctx);
     persistResumeCursor(ctx);
@@ -1681,6 +1741,17 @@ BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, 
 
 void FollowStrip::abortActiveGoals(const std::shared_ptr<BTContext>& ctx)
 {
+  if (follow_accept_)
+  {
+    std::lock_guard<std::mutex> lk(follow_accept_->mutex);
+    follow_accept_->abandoned = true;
+    if (!follow_handle_ && follow_future_.valid() &&
+        follow_future_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
+    {
+      follow_handle_ = follow_future_.get();  // accepted already: cancel it below
+    }
+  }
+  follow_accept_.reset();
   if (follow_handle_)
   {
     try
@@ -1928,6 +1999,7 @@ FollowStrip::DigRecoveryStep FollowStrip::stepDigRecovery(const std::shared_ptr<
     if (dig_recovery_was_following_ && !follow_handle_ && ready(follow_future_))
     {
       follow_handle_ = follow_future_.get();
+      follow_accept_.reset();
     }
     if (!dig_recovery_was_following_ && transit_active_ && !nav_handle_ && ready(nav_future_))
     {
@@ -2156,19 +2228,26 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
   const geometry_msgs::msg::Point stuck_point = poses[stuck].pose.position;
 
   // Poses [stuck..idx) span the obstacle gap and are left un-mowed this pass
-  // (physically unreachable).
+  // (physically unreachable). Measured BEFORE trimUnitAt rewrites `poses`: idx also counts the
+  // poses already driven before the stuck pose, so only idx - stuck is truly left behind.
+  const std::size_t gap_poses = idx > stuck ? idx - stuck : 0;
+  const double gap_m = pathLengthBetween(poses, stuck, idx);
   ++detours_used_;
+  skipped_tally_.addDetour(gap_poses, gap_m);
   trimUnitAt(ctx, idx);
   last_detour_stuck_point_ = stuck_point;
 
   RCLCPP_WARN(ctx->node->get_logger(),
               "FollowStrip: obstacle blocked unit %zu/%zu — DETOUR %zu/%zu: blade-off transit "
-              "around it to resume pose (skipped %zu poses), then resuming coverage",
+              "around it to resume pose %zu (%zu poses / %.2f m left un-mowed), then resuming "
+              "coverage",
               swath_idx_ + 1,
               swaths_.size(),
               detours_used_,
               max_detours_per_segment_,
-              idx);
+              idx,
+              gap_poses,
+              gap_m);
 
   // Reuse the EXISTING blade-off inter-segment transit machinery. The resume
   // pose is >= kDetourMinSkipM (> kSegmentTransitGap) from the robot, so
@@ -2177,6 +2256,59 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
   // obstacle. The transit_active_ handler then re-dispatches FollowCoveragePath
   // (blade back on) for the trimmed remainder. If that transit itself fails, the
   // handler skips the unit — the same fail-safe as any inter-segment transit.
+  swath_goal_sent_ = false;
+  transit_pending_ = false;
+  transit_active_ = false;
+  return sendCurrentSwath(ctx);
+}
+
+bool FollowStrip::resumeUnitPastBlockedStretch(const std::shared_ptr<BTContext>& ctx)
+{
+  if (swath_idx_ >= swaths_.size())
+  {
+    return false;
+  }
+  const auto& poses = swaths_[swath_idx_].poses;
+  const std::size_t unit_poses = poses.size();
+  // The unit was trimmed at the failed target, so poses[0] is that target and
+  // the robot reached nothing of it.
+  const std::optional<std::size_t> idx =
+      resumePastBlockedStretch(poses, 0, ctx->session_failed_transit_targets);
+  const std::size_t resume_idx = idx.value_or(unit_poses);
+  const UnitResumeDecision resume =
+      DecideUnitResume(unit_poses, 0, resume_idx, unit_resumes_without_progress_);
+  unit_resumes_without_progress_ = resume.consecutive;
+  if (!resume.resume)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: unit %zu/%zu — no resume past the blocked stretch (%s, %zu resumes "
+                "without progress) — skipping the rest of the unit",
+                swath_idx_ + 1,
+                swaths_.size(),
+                idx.has_value() ? "no-progress budget spent or too little left"
+                                : "nothing clear left",
+                unit_resumes_without_progress_);
+    return false;
+  }
+
+  const double gap_m = pathLengthBetween(poses, 0, resume_idx);
+  skipped_tally_.addDetour(resume_idx, gap_m);
+  const geometry_msgs::msg::Point blocked_target = poses.front().pose.position;
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "FollowStrip: unit %zu/%zu — detours exhausted on this stretch; skipping %zu poses / "
+              "%.2f m past it and resuming the rest of the unit (%zu poses, no-progress resumes: "
+              "%zu)",
+              swath_idx_ + 1,
+              swaths_.size(),
+              resume_idx,
+              gap_m,
+              unit_poses - resume_idx,
+              unit_resumes_without_progress_);
+  trimUnitAt(ctx, resume_idx);
+  // Book this as a detour leg too: if its transit fails, the failure handler
+  // records the target, comes back here and moves further on, bounded by the
+  // no-progress budget above.
+  last_detour_stuck_point_ = blocked_target;
   swath_goal_sent_ = false;
   transit_pending_ = false;
   transit_active_ = false;
@@ -3223,9 +3355,19 @@ PlanCoverageArea::PlanCoverage::Goal PlanCoverageArea::buildGoal(
   // from the blackboard here, falling back to AUTO if unset. The rest of the
   // coverage geometry (operation_width, headland, insets) lives in the
   // coverage server's parameters, injected at launch from mowgli_robot.yaml.
+  //
+  // An area may override both the angle and the perimeter winding (set from the
+  // Map page's "mowing lines" preview): an area that overrides nothing is
+  // planned exactly as before — see area_coverage_lines.hpp.
   double mow_angle_deg = kMowAngleAutoDeg;
   (void)config().blackboard->get<double>("mow_angle_deg", mow_angle_deg);
-  goal.mow_angle_deg = mow_angle_deg;
+  const CoverageLineChoice lines = ResolveCoverageLines(area, mow_angle_deg);
+  goal.mow_angle_deg = lines.mow_angle_deg;
+  goal.override_ring_direction = lines.override_ring_direction;
+  goal.ring_direction = lines.ring_direction;
+  goal.has_start_point = lines.has_start_point;
+  goal.start_x = lines.start_x;
+  goal.start_y = lines.start_y;
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   uint32_t area_index = 0;
   getInput<uint32_t>("area_index", area_index);

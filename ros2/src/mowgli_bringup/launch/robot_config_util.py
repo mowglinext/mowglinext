@@ -15,7 +15,10 @@
 #   * a key ABSENT from the installed config falls through to the template
 #     default — this is exactly how the GUI's "reset to default" works
 #     (it deletes the key from the installed file);
-#   * an install/site decision or an explicit GUI override still wins.
+#   * an install/site decision or an explicit GUI override still wins;
+#   * a hardware backend may replace a few DEFAULTS that are wrong for its
+#     hardware (config/backends/<HARDWARE_BACKEND>.yaml, layered between the
+#     template and the installed file), so "default" follows the backend.
 #
 # Nodes therefore always receive a COMPLETE parameter set, exactly as before
 # the split — only the on-disk installed file is now allowed to be sparse.
@@ -459,31 +462,59 @@ def deep_merge(base, override):
     return out
 
 
-def load_robot_config(bringup_dir, runtime_path=DEFAULT_RUNTIME_PATH):
-    """Return the merged full mowgli_robot config dict (template <- runtime).
+DEFAULT_HARDWARE_BACKEND = "mowgli"
+_BACKEND_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
-    ``bringup_dir`` is the mowgli_bringup share directory
-    (get_package_share_directory("mowgli_bringup")).
+
+def resolve_hardware_backend(environ=None):
+    """The active hardware backend (HARDWARE_BACKEND, default ``mowgli``).
+
+    Every mowgli-ros2 container receives it from docker-compose.base.yml.
+    Anything that is not a plain lower-case identifier resolves to the default
+    rather than becoming part of a file path.
     """
-    template_path = os.path.join(bringup_dir, "config", "mowgli_robot.yaml")
-    template = {}
-    if os.path.isfile(template_path):
-        with open(template_path, "r") as handle:
-            template = yaml.safe_load(handle) or {}
-    runtime = {}
-    if os.path.isfile(runtime_path):
-        with open(runtime_path, "r") as handle:
-            runtime = yaml.safe_load(handle) or {}
-    return deep_merge(template, runtime)
+    env = os.environ if environ is None else environ
+    name = str(env.get("HARDWARE_BACKEND", "") or "").strip().lower()
+    if not name or not set(name) <= _BACKEND_NAME_CHARS:
+        return DEFAULT_HARDWARE_BACKEND
+    return name
 
 
-def load_robot_params(bringup_dir, runtime_path=DEFAULT_RUNTIME_PATH):
+def backend_defaults_path(bringup_dir, hardware_backend):
+    """config/backends/<backend>.yaml (may not exist: no overlay)."""
+    return os.path.join(bringup_dir, "config", "backends", f"{hardware_backend}.yaml")
+
+
+def _load_yaml_file(path):
+    if not os.path.isfile(path):
+        return {}
+    with open(path, "r") as handle:
+        return yaml.safe_load(handle) or {}
+
+
+def load_robot_config(bringup_dir, runtime_path=DEFAULT_RUNTIME_PATH, hardware_backend=None):
+    """Return the merged full mowgli_robot config dict.
+
+    template <- backend defaults (config/backends/<backend>.yaml) <- runtime.
+    ``bringup_dir`` is the mowgli_bringup share directory
+    (get_package_share_directory("mowgli_bringup")); ``hardware_backend``
+    defaults to resolve_hardware_backend().
+    """
+    backend = hardware_backend or resolve_hardware_backend()
+    template = _load_yaml_file(os.path.join(bringup_dir, "config", "mowgli_robot.yaml"))
+    overlay = _load_yaml_file(backend_defaults_path(bringup_dir, backend))
+    runtime = _load_yaml_file(runtime_path)
+    return deep_merge(deep_merge(template, overlay), runtime)
+
+
+def load_robot_params(bringup_dir, runtime_path=DEFAULT_RUNTIME_PATH, hardware_backend=None):
     """Return the merged mowgli.ros__parameters dict the launch files inject.
 
-    Always complete: every template key is present, with installed-config
-    values layered on top. Missing runtime file -> pure template defaults.
+    Always complete: every template key is present, with the backend's
+    defaults and then the installed-config values layered on top. Missing
+    runtime file -> template + backend defaults.
     """
-    cfg = load_robot_config(bringup_dir, runtime_path)
+    cfg = load_robot_config(bringup_dir, runtime_path, hardware_backend)
     return cfg.get("mowgli", {}).get("ros__parameters", {})
 
 

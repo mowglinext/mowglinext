@@ -16,12 +16,15 @@ import {
     DOCK_DETECTION_GROUP,
     FIRMWARE_SAFETY_GROUP,
     LOCALIZATION_GUARD_GROUP,
+    OPENMOWER_WHEEL_LOOP_GROUP,
+    OPENMOWER_WIRING_GROUP,
     REVERSE_ESCAPE_GROUP,
     START_ESCAPE_GROUP,
     TURN_SPEED_GROUP,
     YAW_LOOP_GROUP,
     groupKeys,
 } from "../components/settings/settingsFieldGroups.ts";
+import { useHardwareBackend } from "./useHardwareBackend.ts";
 
 /** A section that saves outside mowgli_robot.yaml but wants the page's Save button. */
 export interface ExternalSaver {
@@ -88,6 +91,9 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "wheel_x_offset", "chassis_center_x", "chassis_length", "chassis_width",
             "chassis_height", "chassis_mass_kg", "caster_radius", "caster_track",
             "ticks_per_meter", "tool_width", "blade_radius",
+            // The hardware backend's own wiring (ports, controller type), in
+            // the same section: one place for "what this robot is made of".
+            ...groupKeys(OPENMOWER_WIRING_GROUP),
         ],
     },
     {
@@ -99,6 +105,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
             "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
             ...groupKeys(YAW_LOOP_GROUP),
+            ...groupKeys(OPENMOWER_WHEEL_LOOP_GROUP),
         ],
     },
     {
@@ -201,6 +208,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "battery_full_voltage", "battery_empty_voltage", "battery_critical_voltage",
             "battery_full_percent", "battery_low_percent", "battery_critical_percent",
             "battery_critical_recovery_percent", "battery_manual_resume_percent",
+            "battery_charge_tail_current_a",
             ...groupKeys(CHARGE_LIMITS_GROUP),
         ],
     },
@@ -354,6 +362,7 @@ export const useSettingsManager = () => {
     });
     const [searchQuery, setSearchQuery] = useState("");
     const initialLoadDone = useRef(false);
+    const hardware = useHardwareBackend();
 
     // Load values on mount
     useEffect(() => {
@@ -515,7 +524,10 @@ export const useSettingsManager = () => {
                 "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
                 "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
             ];
-            const liveHardwareKeys = ["ticks_per_meter", ...driveKeys];
+            // Live push to the Mowgli STM32 bridge only: on another backend
+            // these parameters do not exist on the node named hardware_bridge
+            // (the OpenMower bridge reads them at start-up).
+            const liveHardwareKeys = hardware.backend === "mowgli" ? ["ticks_per_meter", ...driveKeys] : [];
             const liveHardwareDirty = liveHardwareKeys.some((k) => dirtyKeys.has(k));
             const requiresRosRestart = [...dirtyKeys].some(key => !liveHardwareKeys.includes(key));
             const hasDirtyChanges = dirtyKeys.size > 0;
@@ -647,7 +659,7 @@ export const useSettingsManager = () => {
         } finally {
             setSaving(false);
         }
-    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, t]);
+    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, t, hardware.backend]);
 
     const savePartialValues = useCallback(async (
         partialValues: Record<string, any>,
@@ -779,6 +791,8 @@ export const useSettingsManager = () => {
 
     return {
         sections: SECTION_DEFINITIONS,
+        hardwareBackend: hardware.backend,
+        backendDefaultOverrides: hardware.defaultOverrides,
         values: localValues,
         savedValues,
         defaults,

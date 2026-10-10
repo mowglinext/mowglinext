@@ -2,7 +2,7 @@ import {formatArea} from "../utils/areaLabel.ts";
 import {mowingAreaIndexById} from "../utils/mapAreaIndex.ts";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import {useApi} from "../hooks/useApi.ts";
-import {App} from "antd";
+import {App, Button} from "antd";
 import turfArea from "@turf/area";
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
@@ -38,18 +38,28 @@ import {EditAreaModal} from "./map/components/EditAreaModal.tsx";
 import {AreasListPanel} from "./map/components/AreasListPanel.tsx";
 import {TrackedObstaclesPanel} from "./map/components/TrackedObstaclesPanel.tsx";
 import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.tsx";
-import {CORRIDOR_COLOR, LidarCorridorsPanel} from "./map/components/LidarCorridorsPanel.tsx";
+import {CORRIDOR_COLOR, LidarCorridorsInfo, LidarCorridorsPanel} from "./map/components/LidarCorridorsPanel.tsx";
+import {MapSidebarAccordion} from "./map/components/MapSidebarAccordion.tsx";
 import {EditLidarCorridorModal} from "./map/components/EditLidarCorridorModal.tsx";
 import {DEFAULT_CORRIDOR_WIDTH_M, useLidarCorridors} from "./map/hooks/useLidarCorridors.ts";
 import {buildCorridorSideRuns, dropLiveVertex, simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
 import {useObstacleClearancePreview} from "./map/hooks/useObstacleClearancePreview.ts";
+import {useCoveragePreview} from "./map/hooks/useCoveragePreview.ts";
+import {useCoverageResumeAvailable} from "../hooks/useCoverageResumeAvailable.ts";
+import {CoveragePreviewPanel} from "./map/components/CoveragePreviewPanel.tsx";
+import {CoverageStartMarker} from "./map/components/CoverageStartMarker.tsx";
+import type {AreaOverrideFields} from "./map/coveragePreview.ts";
 import {calculateMapViewportBounds} from "./map/utils/mapViewport.ts";
 
 // Distinct from the red drawn-obstacle fill, so the toggleable
 // clearance-preview outline is never mistaken for it.
 const OBSTACLE_CLEARANCE_PREVIEW_COLOR = '#faad14';
+// Mowing-lines overlay: perimeter rounds and swaths need to stay distinct from
+// each other and from the amber clearance outline, on satellite imagery.
+const COVERAGE_RING_COLOR = '#00d8ff';
+const COVERAGE_SWATH_COLOR = '#ffe14a';
 import {extractObstacleProposals, isDigProposal} from "./map/utils/obstacleProposals.ts";
-import {MapOffsetPanel} from "./map/components/MapOffsetPanel.tsx";
+import {MapOffsetPanel, MapRotationPanel} from "./map/components/MapOffsetPanel.tsx";
 import {MapImageMarker} from "./map/components/MapImageMarker.tsx";
 import {getMowerHeadingRad, hasValidMapPosition} from "./map/components/mapImageMarkerMath.ts";
 import {buildMapDisplayFeatures} from "./map/mapDisplayFeatures.ts";
@@ -61,6 +71,9 @@ import {useMapBackups} from "./map/hooks/useMapBackups.ts";
 import {JoystickOverlay} from "./map/components/JoystickOverlay.tsx";
 import {useIsMobile} from "../hooks/useIsMobile.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
+import {useFleetPeers} from "../hooks/useFleetPeers.ts";
+import {useRobotDescription} from "../hooks/useRobotDescription.ts";
+import {FLEET_PEER_COLOR, peerDisplayFeatures, peerMapPoses} from "../utils/fleetPeers.ts";
 
 
 // Mapbox access token comes from the build env only — no hardcoded fallback.
@@ -306,6 +319,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         },
         LAYER_COLORS.dockHeading,
     ), [features, offsetX, offsetY, datum, LAYER_COLORS, mowerImageReady, dockImageReady]);
+
+    // The other robots of the fleet (docs/MULTI_ROBOT.md), drawn with this
+    // robot's silhouette in their own colour and named.
+    const fleetRobots = useFleetPeers();
+    const robotGeometry = useRobotDescription();
+    const mapDisplayData = useMemo(() => {
+        const peers = peerDisplayFeatures(peerMapPoses(fleetRobots, datum), offsetX, offsetY, datum, robotGeometry);
+        return peers.length ? {...displayFeatures, features: [...displayFeatures.features, ...peers]} : displayFeatures;
+    }, [displayFeatures, fleetRobots, datum, offsetX, offsetY, robotGeometry]);
 
     // Layers for the persistent tracked-obstacle polygons (feature_type
     // 'dyn-obstacle', carried in the same display-features source). Rendered as
@@ -913,6 +935,60 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     );
     const obstacleClearancePreview = useObstacleClearancePreview(obstacleFeaturesList, datum, offsetX, offsetY);
 
+    // The "mowing lines" overlay: the real planner's rings and swaths for one
+    // area, with a mow angle / perimeter direction to try before saving.
+    const mowingAreaFeaturesList = useMemo(
+        (): MowingAreaFeature[] => Object.values(features).filter((f): f is MowingAreaFeature => f instanceof MowingAreaFeature),
+        [features],
+    );
+    // An edit of an area's mowing lines goes into the edit session like moving a polygon corner,
+    // so it is saved by Save map (which round-trips these fields), dropped by Cancel, and covered
+    // by undo/redo (the snapshots carry the area). A NEW area object replaces the old one: that is
+    // the same object the server map data holds, and changing it would survive a Cancel.
+    const commitCoverageLines = useCallback((featureId: string, overrides: Required<AreaOverrideFields>) => {
+        setFeatures((old) => {
+            const feature = old[featureId];
+            if (!(feature instanceof MowingAreaFeature) || !feature.area) return old;
+            feature.area = {...feature.area, ...overrides};
+            return {...old};
+        });
+    }, []);
+    const coveragePreview = useCoveragePreview({
+        areas: mowingAreaFeaturesList,
+        obstacles: obstacleFeaturesList,
+        datum,
+        offsetX,
+        offsetY,
+        globalAngleDeg: Number(settings.mow_angle_deg ?? -1),
+        globalDirection: Number(settings.mow_direction ?? 0),
+        preferredAreaId: editMap ? selectedFeatureIds[0] : undefined,
+        // The lines can only be changed while the map is edited, and are then part of that
+        // edit: Save map keeps them, Cancel and undo drop them.
+        editMode: editMap,
+        onCommit: commitCoverageLines,
+        savedAreas: map?.working_area,
+    });
+    const coverageResumeAvailable = useCoverageResumeAvailable();
+    const coveragePreviewAreaLabel = (index: number, name: string) =>
+        name || t('mapAreasList.unnamedArea', {index: index + 1});
+
+    // Desktop sidebar: one section open at a time, Mowing areas by default.
+    const [sidebarOpen, setSidebarOpen] = useState<string | null>('areas');
+    // A section that is folded must not hide what the operator just asked for: turning
+    // the mowing-lines overlay on (toolbar) or starting to draw a LiDAR-ignore line
+    // (whose Finish/Cancel buttons live in that section) opens it. Adjusting state
+    // while rendering on a change is React's documented alternative to an effect.
+    const [prevPreviewEnabled, setPrevPreviewEnabled] = useState(coveragePreview.enabled);
+    if (coveragePreview.enabled !== prevPreviewEnabled) {
+        setPrevPreviewEnabled(coveragePreview.enabled);
+        if (coveragePreview.enabled) setSidebarOpen('lines');
+    }
+    const [prevCorridorDrawing, setPrevCorridorDrawing] = useState(corridorDrawing);
+    if (corridorDrawing !== prevCorridorDrawing) {
+        setPrevCorridorDrawing(corridorDrawing);
+        if (corridorDrawing) setSidebarOpen('lidar');
+    }
+
     // The gl-draw feature currently being drawn for a corridor: it is added to
     // gl-draw's OWN store the instant draw_line_string mode starts (onSetup)
     // and kept live-updated on every tap — reading it back via the public
@@ -1400,7 +1476,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onSelectionChange={() => {}}
                         onOpenDetails={() => {}}
                     />
-                    <Source type={"geojson"} id={"display-features"} data={displayFeatures}>
+                    <Source type={"geojson"} id={"display-features"} data={mapDisplayData}>
                         <Layer type={"line"} id={"display-lines"} filter={['==', ['geometry-type'], 'LineString']}
                             layout={{'line-cap': 'round', 'line-join': 'round'}}
                             paint={{
@@ -1422,6 +1498,20 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'circle-color': LAYER_COLORS.dock,
                                 'circle-stroke-color': LAYER_COLORS.halo,
                                 'circle-stroke-width': 2,
+                            }}/>
+                        <Layer type={"symbol"} id={"fleet-peer-label"}
+                            filter={['==', ['get', 'feature_type'], 'fleet-peer']}
+                            layout={{
+                                'text-field': ['get', 'name'],
+                                'text-size': 11,
+                                'text-font': ['Open Sans Bold'],
+                                'text-offset': [0, 1.4],
+                                'text-anchor': 'top',
+                            }}
+                            paint={{
+                                'text-color': FLEET_PEER_COLOR,
+                                'text-halo-color': LAYER_COLORS.halo,
+                                'text-halo-width': 1.5,
                             }}/>
                         <Layer type={"symbol"} id={"dock-label"}
                             filter={['==', ['get', 'feature_type'], 'dock']}
@@ -1583,7 +1673,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onOpenDetails={onDrawOpenDetails}
                     />
                     {/* Display-only features: mower, dock, heading, paths */}
-                    <Source type={"geojson"} id={"display-features"} data={displayFeatures}>
+                    <Source type={"geojson"} id={"display-features"} data={mapDisplayData}>
                         <Layer type={"line"} id={"display-lines"} filter={['==', ['geometry-type'], 'LineString']}
                             layout={{'line-cap': 'round', 'line-join': 'round'}}
                             paint={{
@@ -1605,6 +1695,20 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'circle-color': LAYER_COLORS.dock,
                                 'circle-stroke-color': LAYER_COLORS.halo,
                                 'circle-stroke-width': 2,
+                            }}/>
+                        <Layer type={"symbol"} id={"fleet-peer-label"}
+                            filter={['==', ['get', 'feature_type'], 'fleet-peer']}
+                            layout={{
+                                'text-field': ['get', 'name'],
+                                'text-size': 11,
+                                'text-font': ['Open Sans Bold'],
+                                'text-offset': [0, 1.4],
+                                'text-anchor': 'top',
+                            }}
+                            paint={{
+                                'text-color': FLEET_PEER_COLOR,
+                                'text-halo-color': LAYER_COLORS.halo,
+                                'text-halo-width': 1.5,
                             }}/>
                         <Layer type={"symbol"} id={"dock-label"}
                             filter={['==', ['get', 'feature_type'], 'dock']}
@@ -1674,6 +1778,48 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 layout={{'line-cap': 'round', 'line-join': 'round'}}
                                 paint={{'line-color': OBSTACLE_CLEARANCE_PREVIEW_COLOR, 'line-width': 2, 'line-dasharray': [1, 1.5]}}/>
                         </Source>
+                    )}
+                    {/* Mowing lines: the planner's headland rings and swaths for the chosen
+                        area. Arrowheads are polygons drawn to scale (no font/sprite needed)
+                        and show the driving direction; the green dot is where it starts. */}
+                    {coveragePreview.enabled && (
+                        <>
+                            <Source type={"geojson"} id={"coverage-preview-lines"} data={coveragePreview.layers.lines}>
+                                <Layer type={"line"} id={"coverage-preview-swaths"}
+                                    filter={['==', ['get', 'kind'], 'swath']}
+                                    layout={{'line-cap': 'butt', 'line-join': 'round'}}
+                                    paint={{'line-color': COVERAGE_SWATH_COLOR, 'line-width': 1.5, 'line-opacity': 0.9}}/>
+                                <Layer type={"line"} id={"coverage-preview-rings"}
+                                    filter={['==', ['get', 'kind'], 'ring']}
+                                    layout={{'line-cap': 'round', 'line-join': 'round'}}
+                                    paint={{'line-color': COVERAGE_RING_COLOR, 'line-width': 2, 'line-opacity': 0.95}}/>
+                            </Source>
+                            <Source type={"geojson"} id={"coverage-preview-arrows"} data={coveragePreview.layers.arrows}>
+                                <Layer type={"fill"} id={"coverage-preview-arrow-fill"}
+                                    filter={['in', ['get', 'kind'], ['literal', ['ring-arrow', 'swath-arrow']]]}
+                                    paint={{
+                                        'fill-color': ['match', ['get', 'kind'], 'ring-arrow', COVERAGE_RING_COLOR, COVERAGE_SWATH_COLOR],
+                                        'fill-opacity': 1,
+                                    }}/>
+                                <Layer type={"line"} id={"coverage-preview-arrow-outline"}
+                                    filter={['in', ['get', 'kind'], ['literal', ['ring-arrow', 'swath-arrow']]]}
+                                    paint={{'line-color': '#000000', 'line-width': 1, 'line-opacity': 0.7}}/>
+                            </Source>
+                            {/* Where the route starts: draggable. The planner snaps the dropped point onto
+                                the outermost ring and answers with the real start, so the dot always shows
+                                what the robot will do. Hidden with the rings off (nothing to start on). */}
+                            {coveragePreview.startLonLat && coveragePreview.startAdjustable && (
+                                <CoverageStartMarker
+                                    longitude={coveragePreview.startLonLat[0]}
+                                    latitude={coveragePreview.startLonLat[1]}
+                                    ring={coveragePreview.outerRingLonLat}
+                                    settledCount={coveragePreview.settledCount}
+                                    draggable={editMap}
+                                    onMove={coveragePreview.moveStartTo}
+                                    title={t('coveragePreview.startMarkerTitle')}
+                                />
+                            )}
+                        </>
                     )}
                     {/* The actual ignored band (width_m), under everything else so the
                         centerline / vertex handles / draft points stay legible on top.
@@ -1778,6 +1924,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onToggleSatellite={() => setUseSatellite(!useSatellite)}
                         showObstacleClearance={obstacleClearancePreview.enabled}
                         onToggleObstacleClearance={() => obstacleClearancePreview.setEnabled((v) => !v)}
+                        showCoveragePreview={coveragePreview.enabled}
+                        onToggleCoveragePreview={() => coveragePreview.setEnabled((v) => !v)}
                         mowerAppearanceId={mowerAppearance.id}
                         onMowerAppearanceChange={handleMowerAppearanceChange}
                         dockAppearanceId={dockAppearance.id}
@@ -1800,13 +1948,20 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 {/* Mobile: obstacle proposals need an accept/reject surface too — the
                     operator is usually standing next to the robot with a phone. The
                     mobile toolbar lives at the bottom, so this card takes the top. */}
-                {isMobile && !editMap && obstacleProposals.length > 0 && (
-                    <div style={{position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10, maxHeight: '40%', overflowY: 'auto', background: colors.glassBackground, borderRadius: 14, border: colors.glassBorder, boxShadow: colors.glassShadow}}>
-                        <ObstacleProposalsPanel
-                            proposals={obstacleProposals}
-                            selectedProposalId={selectedProposalId}
-                            onHoverProposal={setSelectedProposalId}
-                        />
+                {isMobile && ((!editMap && obstacleProposals.length > 0) || coveragePreview.enabled) && (
+                    <div style={{position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10, maxHeight: '45%', overflowY: 'auto', background: colors.glassBackground, borderRadius: 14, border: colors.glassBorder, boxShadow: colors.glassShadow}}>
+                        {!editMap && (
+                            <ObstacleProposalsPanel
+                                proposals={obstacleProposals}
+                                selectedProposalId={selectedProposalId}
+                                onHoverProposal={setSelectedProposalId}
+                            />
+                        )}
+                        {coveragePreview.enabled && (
+                            <div style={{borderTop: !editMap && obstacleProposals.length > 0 ? `1px solid ${colors.borderSubtle}` : undefined}}>
+                                <CoveragePreviewPanel preview={coveragePreview} areaLabel={coveragePreviewAreaLabel} resumeAvailable={coverageResumeAvailable}/>
+                            </div>
+                        )}
                     </div>
                 )}
                 {/* Desktop: Edit mode — left vertical toolbar */}
@@ -1855,6 +2010,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             onToggleSatellite={() => setUseSatellite(!useSatellite)}
                             showObstacleClearance={obstacleClearancePreview.enabled}
                             onToggleObstacleClearance={() => obstacleClearancePreview.setEnabled((v) => !v)}
+                            showCoveragePreview={coveragePreview.enabled}
+                            onToggleCoveragePreview={() => coveragePreview.setEnabled((v) => !v)}
                             onManualMode={handleManualMode}
                             onStopManualMode={handleStopManualMode}
                             onBackupMap={handleBackupMap}
@@ -1866,69 +2023,140 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         />
                     </div>
                 )}
-                {/* Desktop: Right panel — areas list + offset */}
+                {/* Desktop: Right panel — collapsible sections, one open at a time */}
                 {!isMobile && (
                     <div style={{position: 'absolute', top: 12, right: 16, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 0, width: 240, maxHeight: 'calc(100% - 32px)', background: colors.glassBackground, backdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, WebkitBackdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, overflow: 'hidden'}}>
-                        <AreasListPanel
-                            areas={areasList}
-                            onAreaClick={editMap ? handleAreaSelect : undefined}
-                            onReorder={editMap ? handleReorder : undefined}
-                            selectedId={editMap ? selectedFeatureIds[0] : undefined}
+                        <MapSidebarAccordion
+                            openKey={sidebarOpen}
+                            onOpenChange={setSidebarOpen}
+                            sections={[
+                                {
+                                    key: 'areas',
+                                    title: t('mapAreasList.areasHeader', {count: areasList.filter(a => a.ftype === 'workarea').length}),
+                                    content: areasList.every(a => a.ftype === 'obstacle') ? (
+                                        <div style={{padding: 12, fontSize: 13, color: colors.textSecondary}}>{t('mapSidebar.noAreas')}</div>
+                                    ) : (
+                                        <AreasListPanel
+                                            areas={areasList.filter(a => a.ftype !== 'obstacle')}
+                                            hideHeader
+                                            onAreaClick={editMap ? handleAreaSelect : undefined}
+                                            onReorder={editMap ? handleReorder : undefined}
+                                            selectedId={editMap ? selectedFeatureIds[0] : undefined}
+                                        />
+                                    ),
+                                },
+                                {
+                                    key: 'obstacles',
+                                    title: t('mapSidebar.obstacles'),
+                                    badge: areasList.filter(a => a.ftype === 'obstacle').length + dynamicObstacles.length + obstacleProposals.length,
+                                    content: areasList.every(a => a.ftype !== 'obstacle') && dynamicObstacles.length === 0 && obstacleProposals.length === 0 ? (
+                                        <div style={{padding: 12, fontSize: 13, color: colors.textSecondary}}>{t('mapSidebar.noObstacles')}</div>
+                                    ) : (
+                                        <>
+                                            {areasList.some(a => a.ftype === 'obstacle') && (
+                                                <div>
+                                                    <div style={{
+                                                        padding: '8px 12px',
+                                                        fontSize: 12,
+                                                        fontWeight: 600,
+                                                        color: colors.muted,
+                                                        textTransform: 'uppercase',
+                                                        letterSpacing: '0.05em',
+                                                        borderBottom: `1px solid ${colors.borderSubtle}`,
+                                                    }}>
+                                                        {t('mapSidebar.drawnObstacles', {count: areasList.filter(a => a.ftype === 'obstacle').length})}
+                                                    </div>
+                                                    <AreasListPanel
+                                                        areas={areasList.filter(a => a.ftype === 'obstacle')}
+                                                        hideHeader
+                                                        onAreaClick={editMap ? handleAreaSelect : undefined}
+                                                        selectedId={editMap ? selectedFeatureIds[0] : undefined}
+                                                    />
+                                                </div>
+                                            )}
+                                            {dynamicObstacles.length > 0 && (
+                                                <div style={{borderTop: areasList.some(a => a.ftype === 'obstacle') ? `1px solid ${colors.borderSubtle}` : undefined}}>
+                                                    <TrackedObstaclesPanel
+                                                        obstacles={dynamicObstacles}
+                                                        obstacleAreaIndex={obstacleAreaIndex}
+                                                        areaNames={obstacleAreaNames}
+                                                        selectedObstacleId={selectedObstacleId}
+                                                        onHoverObstacle={setSelectedObstacleId}
+                                                    />
+                                                </div>
+                                            )}
+                                            {obstacleProposals.length > 0 && (
+                                                <div style={{borderTop: areasList.some(a => a.ftype === 'obstacle') || dynamicObstacles.length > 0 ? `1px solid ${colors.borderSubtle}` : undefined}}>
+                                                    <ObstacleProposalsPanel
+                                                        proposals={obstacleProposals}
+                                                        selectedProposalId={selectedProposalId}
+                                                        onHoverProposal={setSelectedProposalId}
+                                                    />
+                                                </div>
+                                            )}
+                                        </>
+                                    ),
+                                },
+                                {
+                                    key: 'lines',
+                                    title: t('mapSidebar.mowingLines'),
+                                    content: coveragePreview.enabled ? (
+                                        <CoveragePreviewPanel preview={coveragePreview} areaLabel={coveragePreviewAreaLabel} resumeAvailable={coverageResumeAvailable}/>
+                                    ) : (
+                                        <div style={{padding: '4px 12px 12px'}}>
+                                            <div style={{fontSize: 12, color: colors.textSecondary, marginBottom: 8}}>{t('mapSidebar.mowingLinesOff')}</div>
+                                            <Button size="small" onClick={() => coveragePreview.setEnabled(true)}>{t('mapSidebar.mowingLinesShow')}</Button>
+                                        </div>
+                                    ),
+                                },
+                                {
+                                    key: 'lidar',
+                                    title: t('mapLidarCorridors.header', {count: lidarCorridors.corridors.length}),
+                                    extra: <LidarCorridorsInfo editable={editMap}/>,
+                                    content: (
+                                        <LidarCorridorsPanel
+                                            hideHeader
+                                            corridors={lidarCorridors.corridors}
+                                            busy={lidarCorridors.busy}
+                                            editable={editMap}
+                                            drawing={corridorDrawing}
+                                            onFinishDraw={handleFinishDrawingCorridor}
+                                            onCancelDraw={handleCancelDrawingCorridor}
+                                            onSelect={(index) => {
+                                                const c = lidarCorridors.corridors[index];
+                                                if (c) handleAreaSelect(corridorDrawId(c));
+                                            }}
+                                            selectedIndex={selectedCorridorIndex >= 0 ? selectedCorridorIndex : null}
+                                            onSmooth={() => handleReshapeSelectedCorridor((pts) => smoothPolyline(pts))}
+                                            onSimplify={() => handleReshapeSelectedCorridor((pts) => simplifyPolyline(pts))}
+                                        />
+                                    ),
+                                },
+                                {
+                                    key: 'offset',
+                                    title: t('mapOffsetPanel.mapOffset'),
+                                    content: (
+                                        <div style={{padding: '4px 12px 12px'}}>
+                                            <MapOffsetPanel
+                                                offsetX={offsetX}
+                                                offsetY={offsetY}
+                                                onChangeX={handleOffsetX}
+                                                onChangeY={handleOffsetY}
+                                            />
+                                        </div>
+                                    ),
+                                },
+                                {
+                                    key: 'rotation',
+                                    title: t('mapOffsetPanel.mapRotation'),
+                                    content: (
+                                        <div style={{padding: '4px 12px 12px'}}>
+                                            <MapRotationPanel bearing={bearing} onChangeBearing={handleBearing}/>
+                                        </div>
+                                    ),
+                                },
+                            ]}
                         />
-                        {dynamicObstacles.length > 0 && (
-                            <div style={{borderTop: `1px solid ${colors.borderSubtle}`}}>
-                                <TrackedObstaclesPanel
-                                    obstacles={dynamicObstacles}
-                                    obstacleAreaIndex={obstacleAreaIndex}
-                                    areaNames={obstacleAreaNames}
-                                    selectedObstacleId={selectedObstacleId}
-                                    onHoverObstacle={setSelectedObstacleId}
-                                />
-                            </div>
-                        )}
-                        {obstacleProposals.length > 0 && (
-                            <div style={{borderTop: `1px solid ${colors.borderSubtle}`}}>
-                                <ObstacleProposalsPanel
-                                    proposals={obstacleProposals}
-                                    selectedProposalId={selectedProposalId}
-                                    onHoverProposal={setSelectedProposalId}
-                                />
-                            </div>
-                        )}
-                        {/* This wrapper must itself be a shrinkable flex participant
-                            (flex + minHeight:0), same as AreasListPanel's own root div
-                            above — otherwise it sizes to its content's natural (auto)
-                            height regardless of the panel's internal flex:1 list, the
-                            list never gets a bounded height to overflow against, and
-                            long corridor lists silently clip against this column's
-                            overflow:hidden instead of scrolling. */}
-                        <div style={{borderTop: `1px solid ${colors.borderSubtle}`, display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0}}>
-                            <LidarCorridorsPanel
-                                corridors={lidarCorridors.corridors}
-                                busy={lidarCorridors.busy}
-                                editable={editMap}
-                                drawing={corridorDrawing}
-                                onFinishDraw={handleFinishDrawingCorridor}
-                                onCancelDraw={handleCancelDrawingCorridor}
-                                onSelect={(index) => {
-                                    const c = lidarCorridors.corridors[index];
-                                    if (c) handleAreaSelect(corridorDrawId(c));
-                                }}
-                                selectedIndex={selectedCorridorIndex >= 0 ? selectedCorridorIndex : null}
-                                onSmooth={() => handleReshapeSelectedCorridor((pts) => smoothPolyline(pts))}
-                                onSimplify={() => handleReshapeSelectedCorridor((pts) => simplifyPolyline(pts))}
-                            />
-                        </div>
-                        <div style={{borderTop: `1px solid ${colors.borderSubtle}`, padding: 8}}>
-                            <MapOffsetPanel
-                                offsetX={offsetX}
-                                offsetY={offsetY}
-                                bearing={bearing}
-                                onChangeX={handleOffsetX}
-                                onChangeY={handleOffsetY}
-                                onChangeBearing={handleBearing}
-                            />
-                        </div>
                     </div>
                 )}
             </div>

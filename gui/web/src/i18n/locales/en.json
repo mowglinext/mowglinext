@@ -1632,6 +1632,8 @@
     "satellite": "Satellite",
     "showObstacleClearance": "Show obstacle clearance preview",
     "hideObstacleClearance": "Hide obstacle clearance preview",
+    "showCoveragePreview": "Show mowing lines",
+    "hideCoveragePreview": "Hide mowing lines",
     "flattenMap": "Flatten map",
     "tilt3dView": "Tilt 3D view",
     "areaRecording": "Area Recording",
@@ -1681,6 +1683,8 @@
     "satellite": "Satellite",
     "showObstacleClearance": "Show obstacle clearance preview",
     "hideObstacleClearance": "Hide obstacle clearance preview",
+    "showCoveragePreview": "Show mowing lines",
+    "hideCoveragePreview": "Hide mowing lines",
     "areaRecording": "Area Recording",
     "mowNextArea": "Resume mowing",
     "continue": "Resume mowing",
@@ -1741,6 +1745,52 @@
     "size": "Size",
     "emoji": "Emoji",
     "add": "Add"
+  },
+  "coveragePreview": {
+    "title": "Mowing lines",
+    "hint": "Shows how the robot will mow the selected area: the perimeter rounds (kopakker) and the lines across it. Arrows show the driving direction.",
+    "area": "Area",
+    "angle": "Mow angle",
+    "angleModeGlobal": "Robot-wide ({{value}})",
+    "angleModeAuto": "Auto",
+    "angleModeFixed": "Fixed angle",
+    "angleAuto": "auto",
+    "angleDeg": "{{deg}}°",
+    "angleAutoNow": "Auto (now {{deg}}°)",
+    "direction": "Perimeter direction",
+    "directionGlobal": "Robot-wide ({{value}})",
+    "directionDefault": "Default",
+    "directionClockwise": "Clockwise",
+    "directionCounterClockwise": "Counter-clockwise",
+    "swaths": "{{count}} lines",
+    "rings": "{{count}} perimeter rounds",
+    "coverage": "{{percent}}% of the area planned",
+    "calculating": "Calculating…",
+    "failed": "The planner could not draw lines for this area.",
+    "noAreas": "Draw a mowing area first.",
+    "ownSettings": "This area has its own lines.",
+    "followsRobotWide": "This area follows the robot-wide settings.",
+    "resumeWarning": "A paused mow was found. After saving the map, choose Start fresh instead of Resume: resuming plans this area again.",
+    "startPoint": "Start point",
+    "startAutomatic": "Automatic: the middle of the longest side.",
+    "startCustom": "You chose where mowing starts.",
+    "startHint": "Drag the green dot to change where mowing starts. It always starts on the outermost round and snaps onto it.",
+    "startReset": "Back to automatic",
+    "startNeedsRings": "A start point needs the perimeter rounds. Without them mowing starts at the first line.",
+    "startMarkerTitle": "Drag to move where mowing starts",
+    "editHint": "Changes here are part of this map edit: Save map keeps them, Cancel drops them.",
+    "viewHint": "Choose Edit map to change the angle, direction or start point."
+  },
+  "mapSidebar": {
+    "collapse": "collapse",
+    "expand": "expand",
+    "obstacles": "Obstacles",
+    "drawnObstacles": "Drawn obstacles ({{count}})",
+    "noObstacles": "No obstacles detected and no proposals waiting.",
+    "mowingLines": "Mowing lines",
+    "mowingLinesOff": "Shows how the robot will mow an area, so you can try an angle or direction before it mows.",
+    "mowingLinesShow": "Show mowing lines",
+    "noAreas": "Draw a mowing area first."
   },
   "mapOffsetPanel": {
     "mapOffset": "Map Offset",
@@ -2746,7 +2796,9 @@
     "criticalRecovery": "Critical Recovery",
     "criticalRecoveryTooltip": "Leave the critical-battery state once recharged above this %. Hysteresis upper bound, must be greater than Critical.",
     "manualResume": "Manual Resume",
-    "manualResumeTooltip": "Pressing Play while the robot is charging mid-session resumes mowing only above this %. Must be greater than Low (Dock) or the robot re-docks within minutes."
+    "manualResumeTooltip": "Pressing Play while the robot is charging mid-session resumes mowing only above this %. Must be greater than Low (Dock) or the robot re-docks within minutes.",
+    "chargeTail": "Charge Tail Current",
+    "chargeTailTooltip": "After a mid-session recharge the robot resumes only once the charge current has dropped to this value (A), as well as reaching Full %. Higher resumes earlier with a slightly less full pack. Default 0.08 A matches the firmware's end-of-charge current."
   },
   "settingsSafety": {
     "alertMessage": "Safety settings protect the robot and its surroundings",
@@ -2821,7 +2873,7 @@
     "connectorMaxHeadlandPassesTooltip": "How many of the Headland Passes rings a turn-around may cross, counted from the inner field outward. Unlimited = turns may use the whole headland apron, out to the outermost ring. Set it below Headland Passes (e.g. 2 with 3 passes configured) to keep the outermost ring(s) a no-turn zone, so U-turns stay further from the recorded boundary and clear of nearby objects — at the cost of more straight/blade-off connector fallbacks where the remaining apron is too narrow for a turn-around arc to fit. Only applies with a forced (non-Auto, non-None) Headland Passes count. Wired to coverage_server.connector_max_headland_passes.",
     "connectorMaxHeadlandPassesUnlimited": "Unlimited",
     "mowDirection": "Perimeter Direction",
-    "mowDirectionTooltip": "Travel direction around the perimeter/headland rings. Set it so a side-mounted blade stays on the cut side. Auto keeps the planner's natural winding. Wired to coverage_server.ring_direction.",
+    "mowDirectionTooltip": "Travel direction around the perimeter/headland rings. Set it so a side-mounted blade stays on the cut side. Auto keeps the planner's natural winding. Wired to coverage_server.ring_direction. To see the effect, open the Map page and choose Show mowing lines.",
     "mowDirectionAuto": "Auto (planner default)",
     "mowDirectionCw": "Clockwise",
     "mowDirectionCcw": "Counter-clockwise",
@@ -2832,7 +2884,7 @@
     "crossHatch": "Cross-hatch mowing",
     "crossHatchTooltip": "Alternate each area's stripes by 90° when that area is mowed again, relative to Auto or the fixed angle. Pauses, recharge and restarts keep the current orientation. Boundary passes are unchanged. Restart ROS2 after changing this setting.",
     "mowAngleDeg": "Mow Angle",
-    "mowAngleDegTooltip": "Swath (mowing line) direction. Enable Auto to let the planner pick the swath-count-minimising angle, or set a fixed angle of 0–179°.",
+    "mowAngleDegTooltip": "Swath (mowing line) direction. Enable Auto to let the planner pick the swath-count-minimising angle, or set a fixed angle of 0–179°. The Map page can show the resulting lines (Show mowing lines) and set a different angle or direction for one area.",
     "mowAngleAuto": "Auto",
     "mowAngleFixed": "Fixed",
     "mowAngle": "Mow Angle",
@@ -3722,7 +3774,7 @@
     },
     "hardware": {
       "label": "Hardware",
-      "description": "Robot model, wheels, chassis, and blade dimensions"
+      "description": "Hardware backend and its wiring, robot model, wheels, chassis, and blade dimensions"
     },
     "drive_motor": {
       "label": "Drive Motor",
@@ -3945,7 +3997,7 @@
     "customComponent": "Custom version",
     "localService": "Locally managed",
     "removedByRelease": "Removed by selected release",
-    "separateUpdate": "Updated separately",
+    "separateUpdate": "Updated automatically with the next release",
     "agentVersion": "Update service version",
     "serviceSelectionUnsupported": "Update the host updater to enable individual container selection.",
     "noCompatibleComponent": "No compatible alternative is published for this component.",
@@ -3959,8 +4011,13 @@
     "selectionPending": "Installer hardware choices have changed. Review installation to apply the container changes.",
     "selectionHelp": "Containers follow your saved installer hardware choices.",
     "hardware": {
+      "backend": "Board",
       "gnss": "GPS",
       "lidar": "LiDAR"
+    },
+    "backendChoice": {
+      "none": "Mowgli",
+      "openmower": "OpenMower v1"
     },
     "disabled": "Off",
     "enabled": "On",
@@ -4026,6 +4083,7 @@
     "pin": "Pin this deployment; continue notifying about newer builds",
     "review": "Review update",
     "updateAgent": "Update the update service",
+    "updatingAgentFirst": "Updating the update service first: the new version is checked by its own updater…",
     "agentHelp": "The updater will restart separately from the containers. Its launcher retains the previous binary if the new version fails to start.",
     "history": "Deployment history",
     "rollback": "Restore previous deployment",
@@ -4327,6 +4385,46 @@
     "start_blocked_escape_signal_max_age_s": {
       "label": "Escape Signal Max Age",
       "tooltip": "How old the last-motion direction may be [s]. Too short is fail-safe (no motion); too long risks acting on a direction that no longer describes how the robot arrived. Hard ceiling 300 in code."
+    },
+    "openmower_xesc_type": {
+      "label": "Motor controller",
+      "tooltip": "xesc_mini (VESC protocol) or xesc_2040. A wrong choice leaves every motor silent: Diagnostics then reports the firmware as incompatible."
+    },
+    "openmower_ll_port": {
+      "label": "LowLevel board port",
+      "tooltip": "Serial device of the OpenMower LowLevel (Pico) board. Stock OpenMower v1: /dev/ttyAMA0."
+    },
+    "openmower_xesc_left_port": {
+      "label": "Left wheel controller port",
+      "tooltip": "Serial device of the left drive xESC. Stock OpenMower v1: /dev/ttyAMA5."
+    },
+    "openmower_xesc_right_port": {
+      "label": "Right wheel controller port",
+      "tooltip": "Serial device of the right drive xESC. Stock OpenMower v1: /dev/ttyAMA3."
+    },
+    "openmower_xesc_mow_port": {
+      "label": "Blade controller port",
+      "tooltip": "Serial device of the blade xESC. Stock OpenMower v1: /dev/ttyAMA4."
+    },
+    "openmower_emergency_input_config": {
+      "label": "Emergency inputs",
+      "tooltip": "What each of the LowLevel board's four hall inputs is (L = lift, S = stop, ! = active low), e.g. !L,!L,S,S. Empty keeps the board's own wiring. A wrong mapping can hide a lift or stop sensor."
+    },
+    "openmower_wheel_loop_enabled": {
+      "label": "Closed-loop wheel speed",
+      "tooltip": "Off = OpenMower's own open-loop mapping (speed × duty per m/s), without tachometer feedback."
+    },
+    "openmower_wheel_duty_per_mps": {
+      "label": "Duty per m/s",
+      "tooltip": "Feed-forward: duty cycle (0–1) per m/s of wheel speed. 1.0 is OpenMower's own mapping."
+    },
+    "openmower_wheel_kp": {
+      "label": "Wheel loop Kp",
+      "tooltip": "Proportional gain [duty per m/s of speed error]. Unlike the STM32 wheel PID this is in duty, not PWM counts."
+    },
+    "openmower_wheel_ki": {
+      "label": "Wheel loop Ki",
+      "tooltip": "Integral gain [duty per (m/s × s) of speed error]."
     }
   },
   "settingsFieldGroups": {
@@ -4374,6 +4472,14 @@
     "startEscape": {
       "title": "Start-Pose Escape",
       "description": "Last-resort nudge when the robot stands on a keepout cell and every plan from its own pose is refused."
+    },
+    "openmowerWiring": {
+      "title": "OpenMower Electronics",
+      "description": "How the OpenMower LowLevel board and the three xESC motor controllers are connected. Until you set a value here, the one chosen in the installer applies. Takes effect when ROS2 is restarted."
+    },
+    "openmowerWheelLoop": {
+      "title": "OpenMower Wheel Speed Loop",
+      "description": "The xESC only takes a duty cycle, so the OpenMower bridge closes a per-wheel speed loop on the wheel tachometers. Takes effect when ROS2 is restarted."
     }
   },
   "firmwareParams": {
@@ -4562,5 +4668,26 @@
       "6": "The robot must be charging on its dock with mowing stopped.",
       "7": "The dock pose was not fully saved. Review the reported error before retrying."
     }
+  },
+  "settingsHardwareBackend": {
+    "active": "Active backend",
+    "names": {
+      "mowgli": "Mowgli board (STM32)",
+      "openmower": "OpenMower v1 (LowLevel board + xESC)",
+      "mavros": "Pixhawk (MAVROS)"
+    },
+    "descriptions": {
+      "mowgli": "The Mowgli STM32 firmware drives the motors and owns blade and emergency safety. It needs no wiring settings here.",
+      "openmower": "The stock OpenMower electronics keep their own firmware; a bridge container drives them. Settings MowgliNext already has (charge limits, lift delays, ticks per metre…) stay in their usual sections and are applied to the OpenMower hardware.",
+      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer."
+    },
+    "choiceNote": "The backend is chosen when installing the robot.",
+    "openmowerRestartNote": "The OpenMower bridge reads these settings when it starts: use \"Restart ROS2\" after saving, which restarts the bridge too.",
+    "shortNames": {
+      "mowgli": "Mowgli",
+      "openmower": "OpenMower v1",
+      "mavros": "MAVROS"
+    },
+    "badgeTooltip": "Hardware backend: {{name}} — open the hardware settings"
   }
 }

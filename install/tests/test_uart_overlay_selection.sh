@@ -17,15 +17,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/framework.sh
 source "$SCRIPT_DIR/lib/framework.sh"
+# shellcheck source=../lib/common.sh
+source "$SCRIPT_DIR/../lib/common.sh"
+# shellcheck source=../lib/config.sh
+source "$SCRIPT_DIR/../lib/config.sh"   # default_gnss_uart_device
 # shellcheck source=../lib/uart.sh
 source "$SCRIPT_DIR/../lib/uart.sh"
 
 # Each case resets every variable required_uart_overlays() reads, so cases
 # cannot leak state into each other.
 reset_hardware_env() {
-  unset GNSS_SERIAL_DEVICE LIDAR_ENABLED LIDAR_UART_DEVICE \
-
+  unset GNSS_SERIAL_DEVICE LIDAR_ENABLED LIDAR_UART_DEVICE HARDWARE_BACKEND \
+    OPENMOWER_LL_PORT OPENMOWER_XESC_LEFT_PORT OPENMOWER_XESC_RIGHT_PORT OPENMOWER_XESC_MOW_PORT
 }
+
+# uart.sh reports through common.sh's helpers; only their output matters here.
+error() { printf 'ERROR: %s\n' "$*"; }
+info() { :; }
 
 section "uart_overlay_for_device() maps ttyAMA1-5, and nothing else"
 
@@ -74,5 +82,71 @@ LIDAR_ENABLED="true"
 LIDAR_UART_DEVICE="/dev/ttyAMA2"   # not the common-default ttyAMA5
 assert_eq "overlay follows the ACTUAL picked port, not a fixed per-peripheral table" \
   "2" "$(required_uart_overlays)"
+
+section "OpenMower v1: the three xESC ports claim their overlays, the LowLevel port none"
+
+reset_hardware_env
+HARDWARE_BACKEND="openmower"
+GNSS_SERIAL_DEVICE="$(default_gnss_uart_device)"
+assert_eq "OpenMower GNSS defaults to ttyAMA2 (open_mower_ros, kernel >= 6.1.28)" \
+  "/dev/ttyAMA2" "$GNSS_SERIAL_DEVICE"
+assert_eq "OpenMower install needs uart2 (GPS) + uart3/4/5 (xESC)" \
+  "2
+3
+4
+5" "$(required_uart_overlays | sort -un)"
+
+reset_hardware_env
+HARDWARE_BACKEND="openmower"
+OPENMOWER_XESC_LEFT_PORT="/dev/ttyAMA1"
+assert_eq "a re-wired xESC claims the overlay of its actual port" \
+  "1
+3
+4" "$(required_uart_overlays | sort -un)"
+
+reset_hardware_env
+assert_eq "another backend keeps the usual GNSS default" "/dev/ttyAMA4" "$(default_gnss_uart_device)"
+GNSS_SERIAL_DEVICE="/dev/ttyAMA4"
+assert_eq "another backend claims no xESC overlay" "4" "$(required_uart_overlays)"
+
+section "A peripheral cannot take a port an OpenMower controller is wired to"
+
+reset_hardware_env
+HARDWARE_BACKEND="openmower"
+assert_eq "ttyAMA4 belongs to the mow xESC" "OpenMower-xESC-mow" "$(openmower_uart_owner /dev/ttyAMA4)"
+assert_eq "ttyAMA0 belongs to the LowLevel board" "OpenMower-LowLevel" "$(openmower_uart_owner /dev/ttyAMA0)"
+assert_exit_nonzero "ttyAMA2 is free for the GPS" openmower_uart_owner /dev/ttyAMA2
+assert_exit_nonzero "GNSS on the mow xESC port is refused" uart_port_is_free /dev/ttyAMA4 GNSS
+assert_contains "the refusal names the controller" "OpenMower-xESC-mow" "$(uart_port_is_free /dev/ttyAMA4 GNSS)"
+assert_exit_zero "a USB GNSS is never refused" uart_port_is_free /dev/serial/by-id/usb-u-blox-if00 GNSS
+reset_hardware_env
+assert_exit_zero "without OpenMower every port is free" uart_port_is_free /dev/ttyAMA4 GNSS
+
+section "configured_uart_devices() lists every UART the stack will open"
+
+reset_hardware_env
+HARDWARE_BACKEND="openmower"
+GNSS_SERIAL_DEVICE="/dev/ttyAMA2"
+assert_eq "GNSS + LowLevel + three xESC" \
+  "/dev/ttyAMA0
+/dev/ttyAMA2
+/dev/ttyAMA3
+/dev/ttyAMA4
+/dev/ttyAMA5" "$(configured_uart_devices | sort -u)"
+
+section "strip_serial_console_args() frees the primary UART, keeps everything else"
+
+assert_eq "Ubuntu cmdline: serial0 console removed, tty1 kept" \
+  "dwc_otg.lpm_enable=0 console=tty1 root=LABEL=writable rootwait fixrtc" \
+  "$(printf 'console=serial0,115200 dwc_otg.lpm_enable=0 console=tty1 root=LABEL=writable rootwait fixrtc\n' | strip_serial_console_args)"
+assert_eq "ttyAMA0 with a mode suffix and ttyS0 removed" \
+  "console=tty1 root=/dev/mmcblk0p2" \
+  "$(printf 'console=ttyAMA0,115200n8 console=ttyS0 console=tty1 root=/dev/mmcblk0p2\n' | strip_serial_console_args)"
+assert_eq "no serial console -> line unchanged" \
+  "console=tty1 root=/dev/mmcblk0p2 quiet" \
+  "$(printf 'console=tty1 root=/dev/mmcblk0p2 quiet\n' | strip_serial_console_args)"
+assert_eq "a USB serial console is left alone" \
+  "console=ttyUSB0,115200 root=/dev/sda2" \
+  "$(printf 'console=ttyUSB0,115200 root=/dev/sda2\n' | strip_serial_console_args)"
 
 test_summary

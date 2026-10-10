@@ -6,25 +6,51 @@
 // the ROS2 template by schema_template_parity_test.go). The min/max below are
 // input guards only and mirror the clamps the consumers apply themselves.
 
-export type SettingsFieldSpec =
-    | { key: string; kind: "switch" }
-    | { key: string; kind: "select"; options: number[] }
-    | {
-          key: string;
-          kind: "number";
-          min: number;
-          max: number;
-          step: number;
-          precision: number;
-          unit?: string;
-      };
+import { appliesToBackend, HardwareBackend } from "../../constants/hardwareBackends.ts";
+
+type FieldBase = {
+    key: string;
+    /** Hardware backends this field means something on (absent = all). */
+    backends?: readonly HardwareBackend[];
+};
+
+export type SettingsFieldSpec = FieldBase &
+    (
+        | { kind: "switch" }
+        | { kind: "select"; options: (number | string)[] }
+        | { kind: "text"; placeholder?: string }
+        | {
+              kind: "number";
+              min: number;
+              max: number;
+              step: number;
+              precision: number;
+              unit?: string;
+          }
+    );
 
 export interface SettingsFieldGroup {
     id: string;
     /** Physical-motion / safety-relevant group: renders a warning banner. */
     isSafetyRelevant?: boolean;
+    /** Hardware backends this group means something on (absent = all). */
+    backends?: readonly HardwareBackend[];
     fields: SettingsFieldSpec[];
 }
+
+/**
+ * The group as shown on `backend`: null when it does not apply there, else
+ * only its fields that do (a STM32-only trip delay is meaningless behind the
+ * OpenMower LowLevel board, which has no such setting).
+ */
+export const groupForBackend = (
+    group: SettingsFieldGroup,
+    backend: HardwareBackend,
+): SettingsFieldGroup | null => {
+    if (!appliesToBackend(group.backends, backend)) return null;
+    const fields = group.fields.filter((f) => appliesToBackend(f.backends, backend));
+    return fields.length > 0 ? { ...group, fields } : null;
+};
 
 const num = (
     key: string,
@@ -33,11 +59,16 @@ const num = (
     step: number,
     precision: number,
     unit?: string,
-): SettingsFieldSpec => ({ key, kind: "number", min, max, step, precision, unit });
+    backends?: readonly HardwareBackend[],
+): SettingsFieldSpec => ({ key, kind: "number", min, max, step, precision, unit, backends });
+
+/** Settings only the Mowgli STM32 firmware implements. */
+const STM32_ONLY: readonly HardwareBackend[] = ["mowgli"];
 
 export const YAW_LOOP_GROUP: SettingsFieldGroup = {
     id: "yawLoop",
     isSafetyRelevant: true,
+    backends: STM32_ONLY,
     fields: [
         { key: "yaw_loop_enabled", kind: "switch" },
         num("yaw_kp", 0, 5, 0.01, 2),
@@ -58,18 +89,51 @@ export const CHARGE_LIMITS_GROUP: SettingsFieldGroup = {
 
 // Bounds = the firmware's absolute envelope (fw_param_catalog.h). The
 // firmware coerces anything outside it and reports what it applied
-// (FirmwareParamsCard).
+// (FirmwareParamsCard). On OpenMower the bridge feeds the lift delays to the
+// LowLevel board (lift / tilt period) under the SAME envelope
+// (lowlevel_config.hpp); the board has no counterpart for the others (its
+// stop button is a fixed 20 ms, and v1 has no IMU tilt e-stop).
 export const FIRMWARE_SAFETY_GROUP: SettingsFieldGroup = {
     id: "firmwareSafety",
     isSafetyRelevant: true,
     fields: [
         num("max_mps", 0.1, 0.6, 0.01, 2, "m/s"),
-        num("one_wheel_lift_emergency_ms", 10, 5000, 10, 0, "ms"),
-        num("both_wheels_lift_emergency_ms", 10, 3000, 10, 0, "ms"),
-        num("tilt_emergency_ms", 10, 1000, 10, 0, "ms"),
-        num("stop_button_emergency_ms", 10, 250, 10, 0, "ms"),
-        num("play_button_clear_emergency_ms", 500, 10000, 100, 0, "ms"),
-        num("imu_inclination_threshold", 44, 64, 1, 0),
+        num("one_wheel_lift_emergency_ms", 10, 5000, 10, 0, "ms", ["mowgli", "openmower"]),
+        num("both_wheels_lift_emergency_ms", 10, 3000, 10, 0, "ms", ["mowgli", "openmower"]),
+        num("tilt_emergency_ms", 10, 1000, 10, 0, "ms", STM32_ONLY),
+        num("stop_button_emergency_ms", 10, 250, 10, 0, "ms", STM32_ONLY),
+        num("play_button_clear_emergency_ms", 500, 10000, 100, 0, "ms", STM32_ONLY),
+        num("imu_inclination_threshold", 44, 64, 1, 0, undefined, STM32_ONLY),
+    ],
+};
+
+// OpenMower v1 electronics: how the LowLevel board and the three xESC are
+// wired. Defaults come from the installer (docker/.env) until set here.
+export const OPENMOWER_WIRING_GROUP: SettingsFieldGroup = {
+    id: "openmowerWiring",
+    isSafetyRelevant: true,
+    backends: ["openmower"],
+    fields: [
+        { key: "openmower_xesc_type", kind: "select", options: ["xesc_mini", "xesc_2040"] },
+        { key: "openmower_ll_port", kind: "text", placeholder: "/dev/ttyAMA0" },
+        { key: "openmower_xesc_left_port", kind: "text", placeholder: "/dev/ttyAMA5" },
+        { key: "openmower_xesc_right_port", kind: "text", placeholder: "/dev/ttyAMA3" },
+        { key: "openmower_xesc_mow_port", kind: "text", placeholder: "/dev/ttyAMA4" },
+        { key: "openmower_emergency_input_config", kind: "text", placeholder: "!L,!L,S,S" },
+    ],
+};
+
+// The bridge's host-side wheel loop (the xESC only takes a duty cycle). The
+// STM32's wheel_pid_* gains are PWM counts and do not transfer.
+export const OPENMOWER_WHEEL_LOOP_GROUP: SettingsFieldGroup = {
+    id: "openmowerWheelLoop",
+    isSafetyRelevant: true,
+    backends: ["openmower"],
+    fields: [
+        { key: "openmower_wheel_loop_enabled", kind: "switch" },
+        num("openmower_wheel_duty_per_mps", 0.1, 5, 0.05, 2),
+        num("openmower_wheel_kp", 0, 10, 0.05, 2),
+        num("openmower_wheel_ki", 0, 50, 0.1, 2),
     ],
 };
 
@@ -166,6 +230,8 @@ export const ALL_FIELD_GROUPS: SettingsFieldGroup[] = [
     AREA_RECORDING_GROUP,
     BEHAVIOR_TREE_GROUP,
     START_ESCAPE_GROUP,
+    OPENMOWER_WIRING_GROUP,
+    OPENMOWER_WHEEL_LOOP_GROUP,
 ];
 
 export const groupKeys = (group: SettingsFieldGroup): string[] =>

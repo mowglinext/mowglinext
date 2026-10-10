@@ -1628,6 +1628,8 @@
     "satellite": "Satellite",
     "showObstacleClearance": "Afficher l'aperçu de la marge d'obstacle",
     "hideObstacleClearance": "Masquer l'aperçu de la marge d'obstacle",
+    "showCoveragePreview": "Afficher les lignes de tonte",
+    "hideCoveragePreview": "Masquer les lignes de tonte",
     "flattenMap": "Aplatir la carte",
     "tilt3dView": "Vue 3D inclinée",
     "areaRecording": "Enregistrement de zone",
@@ -1677,6 +1679,8 @@
     "satellite": "Satellite",
     "showObstacleClearance": "Afficher l'aperçu de la marge d'obstacle",
     "hideObstacleClearance": "Masquer l'aperçu de la marge d'obstacle",
+    "showCoveragePreview": "Afficher les lignes de tonte",
+    "hideCoveragePreview": "Masquer les lignes de tonte",
     "areaRecording": "Enregistrement de zone",
     "mowNextArea": "Reprendre la tonte",
     "continue": "Reprendre la tonte",
@@ -1737,6 +1741,52 @@
     "size": "Taille",
     "emoji": "Emoji",
     "add": "Ajouter"
+  },
+  "coveragePreview": {
+    "title": "Lignes de tonte",
+    "hint": "Montre comment le robot tondra la zone sélectionnée : les tours de périmètre (bordure) et les lignes qui la traversent. Les flèches indiquent le sens de déplacement.",
+    "area": "Zone",
+    "angle": "Angle de tonte",
+    "angleModeGlobal": "Global du robot ({{value}})",
+    "angleModeAuto": "Auto",
+    "angleModeFixed": "Angle fixe",
+    "angleAuto": "auto",
+    "angleDeg": "{{deg}}°",
+    "angleAutoNow": "Auto (actuellement {{deg}}°)",
+    "direction": "Sens du périmètre",
+    "directionGlobal": "Global du robot ({{value}})",
+    "directionDefault": "Par défaut",
+    "directionClockwise": "Sens horaire",
+    "directionCounterClockwise": "Sens antihoraire",
+    "swaths": "{{count}} lignes",
+    "rings": "{{count}} tours de périmètre",
+    "coverage": "{{percent}} % de la zone planifiée",
+    "calculating": "Calcul en cours…",
+    "failed": "Le planificateur n'a pas pu tracer de lignes pour cette zone.",
+    "noAreas": "Dessinez d'abord une zone de tonte.",
+    "ownSettings": "Cette zone a ses propres lignes.",
+    "followsRobotWide": "Cette zone suit les paramètres globaux du robot.",
+    "resumeWarning": "Une tonte en pause a été trouvée. Après avoir enregistré la carte, choisissez Recommencer plutôt que Reprendre : la reprise replanifie cette zone.",
+    "startPoint": "Point de départ",
+    "startAutomatic": "Automatique : le milieu du plus long côté.",
+    "startCustom": "Vous avez choisi où la tonte commence.",
+    "startHint": "Faites glisser le point vert pour changer où la tonte commence. Elle commence toujours sur le tour le plus extérieur et s'y aligne.",
+    "startReset": "Revenir à l'automatique",
+    "startNeedsRings": "Un point de départ nécessite les tours de périmètre. Sans eux, la tonte commence à la première ligne.",
+    "startMarkerTitle": "Faites glisser pour changer où la tonte commence",
+    "editHint": "Les changements ici font partie de cette modification de la carte : Enregistrer la carte les garde, Annuler les abandonne.",
+    "viewHint": "Choisissez Modifier la carte pour changer l'angle, le sens ou le point de départ."
+  },
+  "mapSidebar": {
+    "collapse": "replier",
+    "expand": "déplier",
+    "obstacles": "Obstacles",
+    "drawnObstacles": "Obstacles dessinés ({{count}})",
+    "noObstacles": "Aucun obstacle détecté et aucune proposition en attente.",
+    "mowingLines": "Lignes de tonte",
+    "mowingLinesOff": "Montre comment le robot va tondre une zone, pour essayer un angle ou un sens avant de tondre.",
+    "mowingLinesShow": "Afficher les lignes de tonte",
+    "noAreas": "Dessinez d'abord une zone de tonte."
   },
   "mapOffsetPanel": {
     "mapOffset": "Décalage de la carte",
@@ -2742,7 +2792,9 @@
     "criticalRecovery": "Récupération critique",
     "criticalRecoveryTooltip": "Quitter l'état batterie critique une fois rechargée au-dessus de ce %. Borne supérieure d'hystérésis, doit être supérieure à Critique.",
     "manualResume": "Reprise manuelle",
-    "manualResumeTooltip": "Appuyer sur Lecture pendant une recharge en cours de session ne reprend la tonte qu'au-dessus de ce %. Doit être supérieur à Faible (accostage), sinon le robot retourne à la base en quelques minutes."
+    "manualResumeTooltip": "Appuyer sur Lecture pendant une recharge en cours de session ne reprend la tonte qu'au-dessus de ce %. Doit être supérieur à Faible (accostage), sinon le robot retourne à la base en quelques minutes.",
+    "chargeTail": "Courant de fin de charge",
+    "chargeTailTooltip": "Après une recharge en cours de session, le robot ne reprend que lorsque le courant de charge est tombé à cette valeur (A), en plus d'avoir atteint le % Plein. Plus élevé = reprise plus tôt avec une batterie un peu moins pleine. Par défaut 0,08 A, comme le courant de fin de charge du firmware."
   },
   "settingsSafety": {
     "alertMessage": "Les réglages de sécurité protègent le robot et son environnement",
@@ -2817,7 +2869,7 @@
     "connectorMaxHeadlandPassesTooltip": "Nombre d'anneaux de tournière (Passes de tournière) qu'un virage peut traverser, en comptant depuis le champ intérieur vers l'extérieur. Illimité = les virages peuvent utiliser toute la bande de tournière, jusqu'à l'anneau le plus extérieur. Réglez une valeur inférieure aux Passes de tournière (par ex. 2 pour 3 passes configurées) pour garder le(s) anneau(x) le(s) plus extérieur(s) sans virage, afin que les demi-tours restent plus loin de la limite enregistrée et à l'écart des objets proches — au prix de davantage de connecteurs droits ou de coupures sans lame lorsque la bande restante est trop étroite pour un virage en arc. Ne s'applique qu'avec un nombre de Passes de tournière forcé (ni Auto, ni Aucune). Relié à coverage_server.connector_max_headland_passes.",
     "connectorMaxHeadlandPassesUnlimited": "Illimité",
     "mowDirection": "Sens de tonte du périmètre",
-    "mowDirectionTooltip": "Sens de déplacement autour des anneaux de périmètre/tournière. Réglez-le pour qu'une lame déportée sur le côté reste du côté à tondre. Auto conserve le sens naturel du planificateur. Relié à coverage_server.ring_direction.",
+    "mowDirectionTooltip": "Sens de déplacement autour des anneaux de périmètre/tournière. Réglez-le pour qu'une lame déportée sur le côté reste du côté à tondre. Auto conserve le sens naturel du planificateur. Relié à coverage_server.ring_direction. Pour voir l'effet, ouvrez la page Carte et choisissez Afficher les lignes de tonte.",
     "mowDirectionAuto": "Auto (défaut du planificateur)",
     "mowDirectionCw": "Sens horaire",
     "mowDirectionCcw": "Sens anti-horaire",
@@ -2828,7 +2880,7 @@
     "crossHatch": "Tonte croisée",
     "crossHatchTooltip": "Alterner les bandes de chaque zone de 90° lorsque cette zone est à nouveau tondue, par rapport à Auto ou à l’angle fixe. Les pauses, recharges et redémarrages conservent l’orientation. Les passages de bordure restent inchangés. Redémarrer ROS2 après modification.",
     "mowAngleDeg": "Angle de tonte",
-    "mowAngleDegTooltip": "Direction des bandes de tonte. Activez Auto pour laisser le planificateur choisir l'angle qui minimise le nombre de bandes, ou fixez un angle de 0 à 179°.",
+    "mowAngleDegTooltip": "Direction des bandes de tonte. Activez Auto pour laisser le planificateur choisir l'angle qui minimise le nombre de bandes, ou fixez un angle de 0 à 179°. La page Carte peut afficher les lignes obtenues (Afficher les lignes de tonte) et définir un autre angle ou sens pour une zone.",
     "mowAngleAuto": "Auto",
     "mowAngleFixed": "Fixe",
     "mowAngle": "Angle de tonte",
@@ -3718,7 +3770,7 @@
     },
     "hardware": {
       "label": "Matériel",
-      "description": "Modèle de robot, roues, châssis et dimensions de la lame"
+      "description": "Backend matériel et son câblage, modèle, roues, châssis et dimensions de la lame"
     },
     "drive_motor": {
       "label": "Moteurs",
@@ -3945,7 +3997,7 @@
     "customComponent": "Version personnalisée",
     "localService": "Géré localement",
     "removedByRelease": "Supprimé par la version choisie",
-    "separateUpdate": "Mis à jour séparément",
+    "separateUpdate": "Mis à jour automatiquement avec la prochaine version",
     "agentVersion": "Version du service de mise à jour",
     "serviceSelectionUnsupported": "Mettez à jour le service de mise à jour pour choisir la version de chaque conteneur.",
     "noCompatibleComponent": "Aucune autre version compatible publiée pour ce composant.",
@@ -3959,8 +4011,13 @@
     "selectionPending": "Les choix matériels ont changé dans l’installateur. Vérifiez l’installation pour appliquer les changements de conteneurs.",
     "selectionHelp": "Les conteneurs suivent les choix matériels enregistrés par l’installateur.",
     "hardware": {
+      "backend": "Carte",
       "gnss": "GPS",
       "lidar": "LiDAR"
+    },
+    "backendChoice": {
+      "none": "Mowgli",
+      "openmower": "OpenMower v1"
     },
     "disabled": "Désactivé",
     "enabled": "Activé",
@@ -4026,6 +4083,7 @@
     "pin": "Épingler ce déploiement et signaler les nouvelles versions",
     "review": "Examiner la mise à jour",
     "updateAgent": "Mettre à jour le service de mise à jour",
+    "updatingAgentFirst": "Mise à jour du service de mise à jour d’abord : la nouvelle version est vérifiée par son propre service…",
     "agentHelp": "Le programme redémarre séparément des conteneurs. Son lanceur conserve le binaire précédent si la nouvelle version ne démarre pas.",
     "history": "Historique des déploiements",
     "rollback": "Restaurer le déploiement précédent",
@@ -4327,6 +4385,46 @@
     "start_blocked_escape_signal_max_age_s": {
       "label": "Âge max du signal (dégagement)",
       "tooltip": "Âge maximal de la direction du dernier mouvement [s]. Trop court est sans risque (aucun mouvement) ; trop long risque d'agir sur une direction qui ne décrit plus l'arrivée du robot. Plafond codé en dur : 300."
+    },
+    "openmower_xesc_type": {
+      "label": "Contrôleur moteur",
+      "tooltip": "xesc_mini (protocole VESC) ou xesc_2040. Un mauvais choix laisse tous les moteurs muets : les Diagnostics indiquent alors un firmware incompatible."
+    },
+    "openmower_ll_port": {
+      "label": "Port de la carte LowLevel",
+      "tooltip": "Périphérique série de la carte LowLevel (Pico) OpenMower. OpenMower v1 d'origine : /dev/ttyAMA0."
+    },
+    "openmower_xesc_left_port": {
+      "label": "Port du contrôleur roue gauche",
+      "tooltip": "Périphérique série du xESC de la roue gauche. OpenMower v1 d'origine : /dev/ttyAMA5."
+    },
+    "openmower_xesc_right_port": {
+      "label": "Port du contrôleur roue droite",
+      "tooltip": "Périphérique série du xESC de la roue droite. OpenMower v1 d'origine : /dev/ttyAMA3."
+    },
+    "openmower_xesc_mow_port": {
+      "label": "Port du contrôleur de lame",
+      "tooltip": "Périphérique série du xESC de la lame. OpenMower v1 d'origine : /dev/ttyAMA4."
+    },
+    "openmower_emergency_input_config": {
+      "label": "Entrées d'urgence",
+      "tooltip": "Rôle de chacune des quatre entrées à effet Hall de la carte LowLevel (L = soulèvement, S = arrêt, ! = actif bas), par ex. !L,!L,S,S. Vide = câblage propre à la carte. Une erreur peut masquer un capteur de soulèvement ou d'arrêt."
+    },
+    "openmower_wheel_loop_enabled": {
+      "label": "Vitesse des roues en boucle fermée",
+      "tooltip": "Désactivé = conversion en boucle ouverte d'OpenMower (vitesse × rapport cyclique par m/s), sans retour tachymètre."
+    },
+    "openmower_wheel_duty_per_mps": {
+      "label": "Rapport cyclique par m/s",
+      "tooltip": "Anticipation : rapport cyclique (0–1) par m/s de vitesse de roue. 1,0 est la conversion d'OpenMower."
+    },
+    "openmower_wheel_kp": {
+      "label": "Kp de la boucle roue",
+      "tooltip": "Gain proportionnel [rapport cyclique par m/s d'erreur]. Contrairement au PID roue STM32, il s'exprime en rapport cyclique, pas en pas de PWM."
+    },
+    "openmower_wheel_ki": {
+      "label": "Ki de la boucle roue",
+      "tooltip": "Gain intégral [rapport cyclique par (m/s × s) d'erreur]."
     }
   },
   "settingsFieldGroups": {
@@ -4374,6 +4472,14 @@
     "startEscape": {
       "title": "Dégagement de la pose de départ",
       "description": "Dernier recours quand le robot se tient sur une cellule interdite et que tout plan depuis sa propre pose est refusé."
+    },
+    "openmowerWiring": {
+      "title": "Électronique OpenMower",
+      "description": "Branchement de la carte LowLevel OpenMower et des trois contrôleurs moteur xESC. Tant qu'aucune valeur n'est définie ici, celle choisie dans l'installateur s'applique. Pris en compte au redémarrage de ROS2."
+    },
+    "openmowerWheelLoop": {
+      "title": "Boucle de vitesse des roues OpenMower",
+      "description": "Le xESC ne reçoit qu'un rapport cyclique : le pont OpenMower ferme une boucle de vitesse par roue sur les tachymètres. Pris en compte au redémarrage de ROS2."
     }
   },
   "firmwareParams": {
@@ -4562,5 +4668,26 @@
       "6": "Le robot doit être en charge sur sa base, tonte arrêtée.",
       "7": "La position de la base n’a pas été entièrement enregistrée. Consultez l’erreur avant de réessayer."
     }
+  },
+  "settingsHardwareBackend": {
+    "active": "Pont matériel actif",
+    "names": {
+      "mowgli": "Carte Mowgli (STM32)",
+      "openmower": "OpenMower v1 (carte LowLevel + xESC)",
+      "mavros": "Pixhawk (MAVROS)"
+    },
+    "descriptions": {
+      "mowgli": "Le firmware STM32 Mowgli pilote les moteurs et garde la sécurité de la lame et des arrêts d'urgence. Aucun réglage de câblage n'est nécessaire ici.",
+      "openmower": "L'électronique OpenMower d'origine garde son propre firmware ; un conteneur pont la pilote. Les réglages que MowgliNext possède déjà (limites de charge, délais de soulèvement, impulsions par mètre…) restent dans leurs sections habituelles et sont appliqués au matériel OpenMower.",
+      "mavros": "Un contrôleur de vol pilote le robot via le conteneur MAVROS, configuré par l'installateur."
+    },
+    "choiceNote": "Le pont matériel est choisi à l'installation du robot.",
+    "openmowerRestartNote": "Le pont OpenMower lit ces réglages au démarrage : utilisez « Redémarrer ROS2 » après l'enregistrement, ce qui redémarre aussi le pont.",
+    "shortNames": {
+      "mowgli": "Mowgli",
+      "openmower": "OpenMower v1",
+      "mavros": "MAVROS"
+    },
+    "badgeTooltip": "Backend matériel : {{name}} — ouvrir les réglages matériel"
   }
 }

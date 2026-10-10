@@ -140,6 +140,7 @@ func SettingsRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider) {
 	GetSettingsSchema(r, dbProvider)
 	GetSettingsYAML(r, dbProvider)
 	GetSettingsYAMLDefaults(r, dbProvider)
+	GetSettingsHardwareBackend(r, dbProvider)
 	PostSettingsYAML(r, dbProvider)
 	GetSettingsStatus(r, dbProvider)
 	PostSettingsStatus(r, dbProvider)
@@ -1391,6 +1392,9 @@ func GetSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRout
 
 		responseFlat := cloneFlatMap(doc.Flat)
 		applyUniversalGnssCompatibility(responseFlat, loadSchemaDefaults(dbProvider))
+		if activeHardwareBackend(doc.RuntimeEnv) == "openmower" {
+			applyOpenMowerRuntimeFallbacks(responseFlat, doc.RuntimeEnv)
+		}
 
 		c.JSON(200, responseFlat)
 	})
@@ -1436,6 +1440,9 @@ func GetSettingsYAMLDefaults(r *gin.RouterGroup, dbProvider types.IDBProvider) g
 		}
 		defaults := map[string]any{}
 		extractDefaults(schema, defaults)
+		// On a robot whose backend changes some defaults, "default" means the
+		// backend's value (config/backends/<backend>.yaml, Invariant 15).
+		applyBackendDefaults(defaults, activeHardwareBackend(loadRuntimeEnv(dbProvider)))
 		c.JSON(200, defaults)
 	})
 }
@@ -1494,6 +1501,10 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		defaults := map[string]any{}
 		if err == nil {
 			extractDefaults(schema, defaults)
+			// Backend-aware, exactly like GET /settings/yaml/defaults: a value
+			// equal to the BACKEND's default is pruned, so the robot falls back
+			// to that same value.
+			applyBackendDefaults(defaults, activeHardwareBackend(loadRuntimeEnv(dbProvider)))
 			for key, value := range defaults {
 				if _, exists := existing[key]; !exists {
 					existing[key] = value

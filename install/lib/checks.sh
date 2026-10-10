@@ -10,6 +10,7 @@ container_name_for_service() {
     gui)          printf 'mowgli-gui\n' ;;
     mosquitto)    printf 'mowgli-mqtt\n' ;;
     mavros)       printf 'mowgli-mavros\n' ;;
+    openmower)    printf 'mowgli-openmower\n' ;;
     ntrip)        printf 'mowgli-ntrip\n' ;;
     *)            return 1 ;;
   esac
@@ -49,6 +50,12 @@ expected_runtime_services() {
     services+=(mavros)
   fi
 
+  # OpenMower electronics: the bridge sidecar replaces mowgli-ros2's
+  # hardware_bridge_node. GNSS is unaffected — it stays with the sidecar above.
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    services+=(openmower)
+  fi
+
   if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
     services+=(lidar)
   fi
@@ -77,6 +84,12 @@ check_devices() {
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     devices+=("${MAVROS_PORT:-/dev/mavros}:Pixhawk MAVROS serial")
+  elif [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    devices+=("${OPENMOWER_LL_PORT:-/dev/ttyAMA0}:OpenMower LowLevel board")
+    devices+=("${OPENMOWER_XESC_LEFT_PORT:-/dev/ttyAMA5}:OpenMower left xESC")
+    devices+=("${OPENMOWER_XESC_RIGHT_PORT:-/dev/ttyAMA3}:OpenMower right xESC")
+    devices+=("${OPENMOWER_XESC_MOW_PORT:-/dev/ttyAMA4}:OpenMower mow xESC")
+    devices+=("${gnss_device}:GPS receiver")
   else
     devices+=("/dev/mowgli:Mowgli STM32 board")
   fi
@@ -207,7 +220,7 @@ check_generated_gps_yaml_alignment() {
   yaml_ntrip_enabled="$(yaml_gps_value "$yaml_file" ntrip_enabled)"
 
   _describe_gnss_resolution "GNSS receiver family" "$yaml_receiver_family" "${GNSS_RECEIVER_FAMILY:-}" "auto"
-  _describe_gnss_resolution "GNSS serial device" "$yaml_serial_device" "${GNSS_SERIAL_DEVICE:-}" "/dev/ttyAMA4"
+  _describe_gnss_resolution "GNSS serial device" "$yaml_serial_device" "${GNSS_SERIAL_DEVICE:-}" "$(default_gnss_uart_device)"
   _describe_gnss_resolution "GNSS serial baud" "$yaml_serial_baud" "${GNSS_SERIAL_BAUD:-}" "921600"
   _describe_gnss_resolution "GNSS frame_id" "$yaml_frame_id" "${GNSS_FRAME_ID:-}" "gps_link"
   _describe_gnss_resolution "GNSS NTRIP enabled" "$yaml_ntrip_enabled" "${GNSS_NTRIP_ENABLED:-}" "true"
@@ -266,6 +279,11 @@ check_containers() {
 
 check_firmware() {
   step "Check: Mowgli firmware"
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    info "OpenMower backend: the LowLevel board keeps its own firmware; check the bridge with: $(print_logs_command_for_container mowgli-openmower 50)"
+    return 0
+  fi
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     info "MAVROS backend: skipping direct Mowgli firmware check"

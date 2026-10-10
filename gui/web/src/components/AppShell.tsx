@@ -12,6 +12,7 @@ import {MowerStatus} from "./MowerStatus.tsx";
 import {NotificationBell} from "./NotificationBell.tsx";
 import {LanguageSwitcher} from "./LanguageSwitcher.tsx";
 import {LiveStatusStrip} from "./LiveStatusStrip.tsx";
+import {HardwareBackendBadge} from "./HardwareBackendBadge.tsx";
 import {IOSInstallBanner} from "./IOSInstallBanner.tsx";
 import {useIOSInstallPrompt} from "../hooks/useIOSInstallPrompt.ts";
 import {useAutoNotifications} from "../hooks/useNotificationCenter.tsx";
@@ -169,7 +170,10 @@ export function AppShell() {
             <LanguageSwitcher/>
             <NotificationBell/>
           </div>
-          <div style={{width:'100%', display:'flex', justifyContent:'flex-end', marginTop:4}}><MowerStatus/></div>
+          <div style={{width:'100%', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginTop:4}}>
+            <HardwareBackendBadge/>
+            <MowerStatus/>
+          </div>
         </header>
 
         <main style={{
@@ -246,6 +250,7 @@ export function AppShell() {
             )}
           </div>
           <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
+            <HardwareBackendBadge/>
             <LanguageSwitcher/>
             <NotificationBell/>
             <MowerStatus/>

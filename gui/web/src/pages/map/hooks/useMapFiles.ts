@@ -129,6 +129,23 @@ export function useMapFiles({
                 // touched. Undefined for a genuinely new (never-saved) area,
                 // which is exactly when a fresh id should be minted.
                 id: f instanceof MapAreaFeature ? f.area?.id : undefined,
+                // The same goes for the area's own mow angle / perimeter
+                // winding (Map page "mowing lines"): map_server rebuilds the
+                // list from this payload, so leaving them out would silently
+                // reset every area to the robot-wide settings on any map save.
+                // Undefined for a never-saved area, which has no overrides yet.
+                ...(f instanceof MapAreaFeature && f.area
+                    ? {
+                        has_mow_angle: f.area.has_mow_angle,
+                        mow_angle_deg: f.area.mow_angle_deg,
+                        has_ring_direction: f.area.has_ring_direction,
+                        ring_direction: f.area.ring_direction,
+                        // And where the route starts.
+                        has_start_point: f.area.has_start_point,
+                        start_x: f.area.start_x,
+                        start_y: f.area.start_y,
+                    }
+                    : {}),
             };
         }
 

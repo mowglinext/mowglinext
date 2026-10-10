@@ -10,12 +10,16 @@ import './UpdatesSection.css';
 import {UpdateChecks} from './UpdateChecks';
 import {HostUpdaterPanel} from './HostUpdaterPanel';
 import {FirmwareUpdateCard} from './FirmwareUpdateCard';
+import {useHardwareBackend} from '../../hooks/useHardwareBackend';
 
 const {Text} = Typography;
-const order = ['robot', 'gui', 'gps', 'lidar', 'tfluna-front', 'tfluna-edge', 'mavros', 'ntrip', 'mqtt', 'watchtower', 'vesc'];
+const order = ['robot', 'openmower', 'gui', 'gps', 'lidar', 'tfluna-front', 'tfluna-edge', 'mavros', 'ntrip', 'mqtt', 'watchtower', 'vesc'];
 
 export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
     const {t} = useTranslation();
+    // Only the Mowgli STM32 is flashed from here; other backends keep their
+    // own firmware (OpenMower: untouched LowLevel + xESC).
+    const {backend} = useHardwareBackend();
     const [advanced, setAdvanced] = useState(false);
     const {data, loading, error, refresh} = useInstalledVersions();
     const firmware = useFirmwareInventory();
@@ -61,8 +65,8 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
             </dl><Text type="secondary">{t('updates.browserMeaning')}</Text></Card>}
             {advanced && data?.observed_at && <Text type="secondary">{t('updates.observed', {time: new Date(data.observed_at).toLocaleString()})}</Text>}
             </details>}
-            <FirmwareUpdateCard firmwareVersion={firmware.data.firmware_version} protocolVersion={firmware.data.firmware_protocol_version}
-                state={firmware.state} configuredModel={configuredModel} advanced={advanced}/>
+            {backend === 'mowgli' && <FirmwareUpdateCard firmwareVersion={firmware.data.firmware_version} protocolVersion={firmware.data.firmware_protocol_version}
+                state={firmware.state} configuredModel={configuredModel} advanced={advanced}/>}
 
         </div>
     );

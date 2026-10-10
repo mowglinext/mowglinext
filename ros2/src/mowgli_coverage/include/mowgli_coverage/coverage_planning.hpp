@@ -248,17 +248,82 @@ struct BoustrophedonPlan
 // Deterministic Auto heading; degenerate clips never define an angle.
 std::optional<double> longestValidSwathAngle(const f2c::types::Swaths& swaths);
 
-BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
-                                    double op_width,
-                                    double headland_width,
-                                    int num_headland_passes_override,
-                                    double chassis_safety_inset,
-                                    double mow_angle_rad,
-                                    double min_swath_length,
-                                    int ring_direction = 0,
-                                    double min_turn_radius = 0.20,
-                                    bool perpendicular = false,
-                                    int connector_max_headland_passes = 0);
+//
+//   start_hint — optional (default: none, which is bit-for-bit the historical
+//                behaviour). A map-frame point near the OUTERMOST headland ring:
+//                every ring then closes (starts and ends) on the straight side
+//                nearest the hint instead of on the longest side (see
+//                pickRingClosure), and plan.rings[0] is guaranteed to be the
+//                outer perimeter, so the route starts there. Ignored with the
+//                ring stage off (no ring to start on).
+BoustrophedonPlan planBoustrophedon(
+    const f2c::types::Cell& field_cell,
+    double op_width,
+    double headland_width,
+    int num_headland_passes_override,
+    double chassis_safety_inset,
+    double mow_angle_rad,
+    double min_swath_length,
+    int ring_direction = 0,
+    double min_turn_radius = 0.20,
+    bool perpendicular = false,
+    int connector_max_headland_passes = 0,
+    const std::optional<std::pair<double, double>>& start_hint = std::nullopt);
+
+// Where a closed headland ring starts and ends — the ring's "closure". `open_loop`
+// is the ring's corner vertices WITHOUT the repeated closing vertex (>= 3).
+// `edge` is the index of the side the closure sits on (side i runs vertex i →
+// vertex i+1) and `point` is the closure itself, strictly inside that side.
+struct RingClosure
+{
+  std::size_t edge = 0;
+  std::pair<double, double> point{0.0, 0.0};
+};
+
+// Without a hint: the midpoint of the LONGEST side — the historical choice, kept
+// exactly: a closure on a corner is the one vertex the corner fillet can never
+// round, and the ring-to-ring junction then demanded a full corner turn (field
+// report 2026-07, the robot stalling after every ring).
+// With a hint: the side NEAREST the hint (among real sides: those shorter than 1 m, such as
+// the chain of tiny sides that makes a rounded corner, are skipped), and on it the point
+// nearest the hint,
+// kept at least `keep_off` from both ends of that side (so the closure stays on
+// the straight part, clear of the corner fillets). A side too short to leave
+// room for that falls back to its midpoint. Never lands on a corner.
+// Deterministic: ties go to the lowest edge index.
+RingClosure pickRingClosure(const std::vector<std::pair<double, double>>& open_loop,
+                            const std::optional<std::pair<double, double>>& hint,
+                            double min_turn_radius);
+
+// A plan reduced to what the GUI's map-editor line preview draws: the headland
+// rings and the swaths, in DRIVE order, plus the numbers that explain them.
+// Pure data (std types only) so it is unit-testable without ROS.
+struct CoveragePreview
+{
+  // Closed headland loops, outermost first, vertices in the order the robot
+  // drives them (so the winding — the "perimeter direction" — is readable from
+  // the point order). Simplified: the planner densifies rings to ~0.10 m, which
+  // is useless to a screen and heavy to ship, so collinear points are dropped.
+  std::vector<std::vector<std::pair<double, double>>> rings;
+  // Straight swaths as {start, end}, in serpentine drive order (direction
+  // alternates), copied from the plan unchanged.
+  std::vector<std::pair<std::pair<double, double>, std::pair<double, double>>> swaths;
+  // Swath heading the planner actually used, in degrees within [0, 180) — this
+  // is what resolves an AUTO (negative) request.
+  double swath_angle_deg = 0.0;
+  int headland_passes = 0;
+  double planned_fraction = 0.0;
+  double field_area_m2 = 0.0;
+  std::size_t dropped_pieces = 0;
+};
+
+// Reduce `plan` for the preview. `simplify_tolerance_m` is the largest distance
+// a dropped ring vertex may lie from the simplified line (the default 2 cm is far
+// below anything visible at editor zoom). Closed loops stay closed, and the
+// first and last vertex of every ring are always kept, so a ring never loses its
+// start or its winding. Pure function.
+CoveragePreview summarisePlanForPreview(const BoustrophedonPlan& plan,
+                                        double simplify_tolerance_m = 0.02);
 
 // Per-plan accounting of how every segment-to-segment join was resolved by
 // buildConnector's radius-shrink search. Pure visibility — populating it
@@ -389,6 +454,20 @@ struct PivotJoinLimits
 // when pivot joins are disabled or the recorded boundary is missing.
 bool pivotSweepFits(double x, double y, const PivotJoinLimits& limits);
 
+// Turn every zero-radius corner of `pts` sharper than `min_turn_rad` into a
+// pivot corner (a bit-exact twin, see coverage_geometry.hpp) where
+// pivotSweepFits() allows it. Existing twins and every other pose are kept
+// unchanged; with pivots disabled (sweep_radius <= 0) `pts` is returned as is.
+// Used on finished sub-paths, after fillets: a corner left sharp there is one
+// FTC would otherwise drive as a curve, sweeping the chassis nose wide.
+// `is_twin`, when given with one flag per pose, is kept in step (new twins
+// flagged true) for enforcePivotCornerContract.
+std::vector<std::pair<double, double>> pivotSharpCorners(
+    const std::vector<std::pair<double, double>>& pts,
+    double min_turn_rad,
+    const PivotJoinLimits& limits,
+    std::vector<bool>* is_twin = nullptr);
+
 // Yaw of every pose of a drivable sub-path, honouring the pivot corner
 // contract: a pose followed by a pose at the SAME position (a pivot corner)
 // takes the INCOMING heading, its twin the outgoing one; every other pose takes
@@ -482,6 +561,11 @@ std::vector<std::pair<double, double>> buildContinuousPath(
 //                        position twice in a row. Every OTHER near-coincident
 //                        pose pair is collapsed, enabled or not, so a
 //                        zero-length step in a sub-path always means a pivot.
+//   pin_first_subpath  — optional, defaults to false (every existing call site is
+//                        unaffected). true keeps the sub-path that starts with
+//                        plan.rings[0] as the FIRST one driven, whatever would
+//                        shorten the blade-off transit: the operator chose where the
+//                        route starts, so the seed search is not allowed to move it.
 std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,
@@ -490,7 +574,8 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     double step,
     ConnectorStats* stats = nullptr,
     const std::vector<std::pair<double, double>>& swath_turn_boundary = {},
-    const PivotJoinLimits& pivot_limits = {});
+    const PivotJoinLimits& pivot_limits = {},
+    bool pin_first_subpath = false);
 
 // Reorders a set of FINISHED, hole-free sub-path polylines (as produced by
 // buildContinuousSubPaths above, which calls this internally) to minimize the
@@ -506,9 +591,14 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
 // The first preserve_direction_count input paths may move in the sequence but
 // may not reverse. The builder protects ALL paths containing headland rings,
 // including obstacle loops; sub-path 0 always retains its historical protection.
+//
+// pin_first_seed: when true the seed is NOT searched: sub-path 0 stays the first
+// one driven (and forward), and only the order of the rest is optimised. Used when
+// the operator chose where the route starts.
 std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTransit(
     std::vector<std::vector<std::pair<double, double>>> sub_paths,
-    std::size_t preserve_direction_count = 1);
+    std::size_t preserve_direction_count = 1,
+    bool pin_first_seed = false);
 
 // 2-D point-in-polygon (ray casting) against `ring`, a list of (x, y)
 // vertices. Open or closed ring; winding-independent. Used by the server to

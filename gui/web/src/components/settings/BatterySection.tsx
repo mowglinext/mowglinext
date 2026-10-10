@@ -281,6 +281,19 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                 />
                             </Form.Item>
                         </Col>
+                        <Col xs={8}>
+                            <Form.Item htmlFor="setting-battery_charge_tail_current_a" data-setting-key="battery_charge_tail_current_a"
+                                label={fieldLabel("battery_charge_tail_current_a", <Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.chargeTail")}</Text>)}
+                                tooltip={t("settingsBattery.chargeTailTooltip")}
+                            >
+                                <InputNumber aria-label={t("settingsBattery.chargeTail") + ", A"} aria-description={t("settingsBattery.chargeTailTooltip")}  id="setting-battery_charge_tail_current_a"
+                                    value={values.battery_charge_tail_current_a as number | undefined}
+                                    onChange={(v) => onChange("battery_charge_tail_current_a", v)}
+                                    min={0.02} max={1} step={0.01} precision={2}
+                                    style={{ width: "100%" }} addonAfter="A"
+                                />
+                            </Form.Item>
+                        </Col>
                     </Row>
                 </Form>
             </Card>

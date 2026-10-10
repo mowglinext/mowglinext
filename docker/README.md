@@ -190,6 +190,7 @@ ships; the full installer writes many more (`GNSS_*`, `LIDAR_TYPE`,
 | `GPS_IMAGE` | `ghcr.io/mowglinext/mowglinext/gps:main` | Universal GNSS sidecar + NTRIP client |
 | `LIDAR_IMAGE` | `ghcr.io/mowglinext/mowglinext/lidar-ldlidar:main` | LD19 LiDAR driver |
 | `MAVROS_IMAGE` | `ghcr.io/mowglinext/mowglinext/mavros:main` | MAVROS bridge |
+| `OPENMOWER_IMAGE` | `ghcr.io/mowglinext/mowglinext/openmower:main` | OpenMower electronics bridge (`HARDWARE_BACKEND=openmower`) |
 | `GUI_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web GUI |
 
 For Universal GNSS, set `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...` — note that

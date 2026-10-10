@@ -45,6 +45,7 @@
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_map/area_coverage_lines.hpp"
 #include "mowgli_map/dock_antenna_capture.hpp"
 #include "mowgli_map/map_types.hpp"
 #include "mowgli_map/mow_progress.hpp"
@@ -67,6 +68,7 @@
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
 #include <mowgli_interfaces/srv/get_recovery_point.hpp>
 #include <mowgli_interfaces/srv/promote_obstacle.hpp>
+#include <mowgli_interfaces/srv/set_area_coverage_lines.hpp>
 #include <mowgli_interfaces/srv/set_docking_point.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
@@ -229,6 +231,14 @@ public:
   /// Test-only: directly invoke the add_area service handler.
   void add_area_for_test(const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
                          mowgli_interfaces::srv::AddMowingArea::Response::SharedPtr res);
+
+  /// Test-only: directly invoke the set_area_coverage_lines service handler.
+  void set_area_coverage_lines_for_test(
+      const mowgli_interfaces::srv::SetAreaCoverageLines::Request::SharedPtr req,
+      mowgli_interfaces::srv::SetAreaCoverageLines::Response::SharedPtr res)
+  {
+    on_set_area_coverage_lines(req, res);
+  }
 
   /// Test-only: directly invoke get_mowing_area service handler.
   void get_mowing_area_for_test(const mowgli_interfaces::srv::GetMowingArea::Request::SharedPtr req,
@@ -403,6 +413,12 @@ private:
     /// PERSISTED and must stay stable across a restart — see
     /// next_area_id_'s doc comment for how it survives one.
     uint32_t id{0};
+    /// Optional per-area overrides of the robot-wide mow_angle_deg /
+    /// mow_direction (see area_coverage_lines.hpp). Persisted in areas.dat,
+    /// served by ~/get_mowing_area, changed by ~/set_area_coverage_lines. The
+    /// default (nothing overridden) is what every area written before these
+    /// fields existed means.
+    AreaCoverageLines coverage_lines;
   };
 
   /// An operator-drawn line along which costmap_scan_filter_node suppresses
@@ -506,6 +522,12 @@ private:
 
   void on_add_area(const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
                    mowgli_interfaces::srv::AddMowingArea::Response::SharedPtr res);
+
+  /// Set or clear one area's own mow angle / perimeter winding, addressed by the
+  /// stable MapArea.id. Persists immediately; changes only that area's NEXT plan.
+  void on_set_area_coverage_lines(
+      const mowgli_interfaces::srv::SetAreaCoverageLines::Request::SharedPtr req,
+      mowgli_interfaces::srv::SetAreaCoverageLines::Response::SharedPtr res);
 
   /// Increment area_list_generation_ and publish it on
   /// area_list_generation_pub_ (mowglinext#637 phase 2). Called once per
@@ -1337,6 +1359,8 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_map_srv_;
   rclcpp::Service<mowgli_interfaces::srv::AddMowingArea>::SharedPtr add_area_srv_;
   rclcpp::Service<mowgli_interfaces::srv::GetMowingArea>::SharedPtr get_mowing_area_srv_;
+  rclcpp::Service<mowgli_interfaces::srv::SetAreaCoverageLines>::SharedPtr
+      set_area_coverage_lines_srv_;
   rclcpp::Service<mowgli_interfaces::srv::SetDockingPoint>::SharedPtr set_docking_point_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr capture_dock_antenna_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_areas_srv_;

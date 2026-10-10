@@ -29,6 +29,8 @@ interface LidarCorridorsPanelProps {
     /// per-row delete any more (9+ lines made every row noisy, and the
     /// toolbar trash already deletes whatever's selected, line or area).
     onSelect: (index: number) => void;
+    /// The sidebar section header already carries the title and the info tooltip.
+    hideHeader?: boolean;
     /// Index of the line currently selected on the map, or null.
     selectedIndex: number | null;
     /// Round the selected line through its points / thin it out again.
@@ -36,45 +38,57 @@ interface LidarCorridorsPanelProps {
     onSimplify: () => void;
 }
 
+/// The "what is this / mind the safety" tooltip. Shown in the panel's own header, or
+/// in the sidebar section header when the panel's title is hidden.
+export const LidarCorridorsInfo = ({editable}: {editable: boolean}) => {
+    const {colors} = useThemeMode();
+    const {t} = useTranslation();
+    return (
+        <Tooltip
+            title={
+                <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+                    <div>{t('mapLidarCorridors.hint')}</div>
+                    <div style={{color: colors.warning}}>{t('mapLidarCorridors.safetyWarning')}</div>
+                    {!editable && <div>{t('mapLidarCorridors.lockedHint')}</div>}
+                </div>
+            }
+            overlayStyle={{maxWidth: 320}}
+        >
+            <InfoCircleOutlined style={{color: colors.muted, fontSize: 13, cursor: 'help'}}/>
+        </Tooltip>
+    );
+};
+
 /// Operator-drawn LiDAR-ignore lines. Inside a line's width the LiDAR returns
 /// are dropped for BOTH the costmap (FTC/Nav2 avoidance) and collision_monitor,
 /// so the robot follows the recorded boundary next to e.g. a hedge instead of
 /// being pushed off it. Everywhere else the LiDAR keeps working normally.
 export const LidarCorridorsPanel = ({
     corridors, busy, editable, drawing, onFinishDraw, onCancelDraw,
-    onSelect, selectedIndex, onSmooth, onSimplify,
+    onSelect, selectedIndex, onSmooth, onSimplify, hideHeader = false,
 }: LidarCorridorsPanelProps) => {
     const {colors} = useThemeMode();
     const {t} = useTranslation();
 
     return (
         <div style={{display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, flex: '1 1 auto'}}>
-            <div style={{
-                padding: '8px 12px',
-                fontSize: 12,
-                fontWeight: 600,
-                color: colors.muted,
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                borderBottom: `1px solid ${colors.borderSubtle}`,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-            }}>
-                <span style={{flex: 1, minWidth: 0}}>{t('mapLidarCorridors.header', {count: corridors.length})}</span>
-                <Tooltip
-                    title={
-                        <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-                            <div>{t('mapLidarCorridors.hint')}</div>
-                            <div style={{color: colors.warning}}>{t('mapLidarCorridors.safetyWarning')}</div>
-                            {!editable && <div>{t('mapLidarCorridors.lockedHint')}</div>}
-                        </div>
-                    }
-                    overlayStyle={{maxWidth: 320}}
-                >
-                    <InfoCircleOutlined style={{color: colors.muted, fontSize: 13, cursor: 'help'}}/>
-                </Tooltip>
-            </div>
+            {!hideHeader && (
+                <div style={{
+                    padding: '8px 12px',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: colors.muted,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    borderBottom: `1px solid ${colors.borderSubtle}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                }}>
+                    <span style={{flex: 1, minWidth: 0}}>{t('mapLidarCorridors.header', {count: corridors.length})}</span>
+                    <LidarCorridorsInfo editable={editable}/>
+                </div>
+            )}
             <div style={{overflowY: 'auto', flex: 1, minHeight: 0}} className="scrollbar-thin">
                 {corridors.map((corridor, index) => (
                     <div key={corridor.id ?? index}

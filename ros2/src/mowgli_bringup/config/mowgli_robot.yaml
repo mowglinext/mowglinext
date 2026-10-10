@@ -1151,3 +1151,30 @@ mowgli:
                                    # custom CA/client-cert param exists yet)
     mqtt_home_assistant_discovery_enabled: false  # retained discovery under
                                    # homeassistant/device/<derived-id>/config
+
+    # ── OpenMower backend (HARDWARE_BACKEND=openmower only) ─────────────────
+    # Only what has NO MowgliNext equivalent. Read ONLY by the OpenMower
+    # bridge sidecar (sensors/openmower), which deep-merges the installed
+    # config over THIS template like mowgli-ros2 does and also feeds its
+    # LowLevel board from the shared keys above (max_charge_*,
+    # *_lift_emergency_ms, battery_*_voltage). Values equal the bridge's
+    # package defaults — pinned by
+    # sensors/openmower/mowgli_openmower_bridge/test/test_launch_config.py.
+    #
+    # Wiring. The installer writes its choice to docker/.env (OPENMOWER_*),
+    # which wins over these defaults; a value saved in the GUI wins over both.
+    openmower_ll_port: "/dev/ttyAMA0"        # LowLevel (Pico) board
+    openmower_xesc_type: "xesc_mini"         # xesc_mini | xesc_2040
+    openmower_xesc_left_port: "/dev/ttyAMA5"
+    openmower_xesc_right_port: "/dev/ttyAMA3"
+    openmower_xesc_mow_port: "/dev/ttyAMA4"
+    # Host-side drive: the xESC only takes a duty cycle, so the bridge closes
+    # a per-wheel PI on the tachometer (false = OpenMower's open-loop mapping).
+    # The STM32 wheel_pid_* gains are PWM counts and do not transfer.
+    openmower_wheel_loop_enabled: true
+    openmower_wheel_duty_per_mps: 1.0
+    openmower_wheel_kp: 0.5
+    openmower_wheel_ki: 2.0
+    # The board's hall inputs (OpenMower OM_EMERGENCY_INPUT_CONFIG, e.g.
+    # "!L,!L,S,S"). Empty keeps the board's own (YardForce wiring).
+    openmower_emergency_input_config: ""

@@ -45,10 +45,13 @@ harness_init() {
         LIDAR_ENABLED LIDAR_TYPE LIDAR_MODEL LIDAR_CONNECTION \
         LIDAR_PORT LIDAR_UART_DEVICE LIDAR_BAUD LIDAR_IMAGE \
         MOWGLI_ROS2_IMAGE GPS_IMAGE UNIVERSAL_GNSS_IMAGE \
-        UNIVERSAL_GNSS_LOG_DIR UNIVERSAL_GNSS_EXPORT_DIR MAVROS_IMAGE GUI_IMAGE \
+        UNIVERSAL_GNSS_LOG_DIR UNIVERSAL_GNSS_EXPORT_DIR MAVROS_IMAGE \
+        OPENMOWER_IMAGE GUI_IMAGE \
         HARDWARE_BACKEND MAVROS_BY_ID MAVROS_PORT MAVROS_BAUD \
         MAVROS_GCS_URL MAVROS_TGT_SYSTEM MAVROS_TGT_COMPONENT \
         MAVROS_AUTOPILOT MAVROS_ENABLED \
+        OPENMOWER_ENABLED OPENMOWER_LL_PORT OPENMOWER_XESC_TYPE \
+        OPENMOWER_XESC_LEFT_PORT OPENMOWER_XESC_RIGHT_PORT OPENMOWER_XESC_MOW_PORT \
         CONFIG_NTRIP_ENABLED_EXPLICIT CONFIG_NTRIP_HOST_EXPLICIT \
         CONFIG_NTRIP_PORT_EXPLICIT CONFIG_NTRIP_USER_EXPLICIT \
         CONFIG_NTRIP_PASSWORD_EXPLICIT CONFIG_NTRIP_MOUNTPOINT_EXPLICIT \
@@ -163,6 +166,9 @@ harness_set_preset() {
           export MAVROS_PORT="${MAVROS_PORT:-/dev/mavros}"
           export MAVROS_BAUD="${MAVROS_BAUD:-921600}"
         fi
+        if [ "$val" = "openmower" ]; then
+          export OPENMOWER_XESC_TYPE="${OPENMOWER_XESC_TYPE:-xesc_mini}"
+        fi
         ;;
       gnss)
         case "$val" in
@@ -201,7 +207,7 @@ harness_set_preset() {
             GNSS_CONNECTION_HINT="uart"
             case "${GNSS_SERIAL_DEVICE:-}" in
               /dev/ttyAMA*|/dev/ttyS*|/dev/ttyTHS*|/dev/ttyHS*) ;;
-              *) GNSS_SERIAL_DEVICE="/dev/ttyAMA4" ;;
+              *) GNSS_SERIAL_DEVICE="$(default_gnss_uart_device)" ;;
             esac
             ;;
         esac

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -240,5 +242,38 @@ func TestLegacyGUIForcesProtocolChangeByOmission(t *testing.T) {
 	}
 	if state := settled(t, m); state.Job.Phase != "succeeded" {
 		t.Fatalf("%s: %s", state.Job.Phase, state.Job.Error)
+	}
+}
+
+// The release protocol is the Mowgli STM32 wire protocol: waived only when the
+// host's own docker/.env says the board is an OpenMower one.
+func TestFirmwareProtocolIsWaivedOnlyOnTheOpenMowerBackend(t *testing.T) {
+	target := Deployment{FirmwareProtocol: 7}
+	for _, test := range []struct {
+		env    string
+		exempt bool
+	}{
+		{"HARDWARE_BACKEND=openmower\n", true},
+		{"HARDWARE_BACKEND=mowgli\n", false},
+		{"", false},
+		{"-", false}, // no .env at all
+	} {
+		dir := t.TempDir()
+		if test.env != "-" {
+			if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(test.env), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b := DockerBackend{Config: HostConfig{Directory: dir}}
+		if b.FirmwareProtocolExempt() != test.exempt {
+			t.Fatalf("%q: exempt=%v", test.env, !test.exempt)
+		}
+		change, err := b.checkFirmwareProtocol(0, target, PlanOptions{})
+		if test.exempt && (err != nil || change != nil) {
+			t.Fatalf("%q: OpenMower plan refused: %v %v", test.env, change, err)
+		}
+		if !test.exempt && !errors.Is(err, errFirmwareProtocolUnavailable) {
+			t.Fatalf("%q: a board with no handshake was accepted: %v", test.env, err)
+		}
 	}
 }

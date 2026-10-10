@@ -35,9 +35,28 @@ export const containerAction = async (
     if (cmdRes.error) throw new Error(cmdRes.error.error);
 };
 
-/** Restart the ROS2 container */
-export const restartRos2 = (api: GuiApi) =>
-    containerAction(api, { name: "ros2" }, "restart");
+/** Hardware-bridge sidecars that read mowgli_robot.yaml at start-up. */
+const HARDWARE_BRIDGE_SIDECARS = ["mowgli-openmower"];
+
+/**
+ * Restart the ROS2 container, and the hardware-bridge sidecar when the robot
+ * runs one: it reads the same mowgli_robot.yaml at start-up, so a saved
+ * setting (ticks per metre, a serial port, a lift delay) only reaches the
+ * OpenMower hardware once it restarts too.
+ */
+export const restartRos2 = async (api: GuiApi): Promise<void> => {
+    await containerAction(api, { name: "ros2" }, "restart");
+    const res = await api.containers.containersList();
+    if (res.error) throw new Error(res.error.error);
+    const bare = (n: string) => n.replace(/^\//, "");
+    const sidecars = (res.data.containers ?? []).filter(
+        (c: ApiContainer) => !!c.id && (c.names ?? []).some((n) => HARDWARE_BRIDGE_SIDECARS.includes(bare(n))),
+    );
+    for (const sidecar of sidecars) {
+        const cmdRes = await api.containers.containersCreate(sidecar.id!, "restart");
+        if (cmdRes.error) throw new Error(cmdRes.error.error);
+    }
+};
 
 /** Restart the GUI container */
 export const restartGui = (api: GuiApi) =>

@@ -3,6 +3,7 @@ import {describe, expect, it, vi} from 'vitest';
 import {useMapFiles} from './useMapFiles';
 import {MowingAreaFeature, NavigationFeature} from '../../../types/map.ts';
 import type {Api} from '../../../api/Api.ts';
+import {parseMapBackup} from '../utils/mapBackup.ts';
 
 vi.mock('react-i18next', () => ({useTranslation: () => ({t: (key: string) => key})}));
 
@@ -86,6 +87,79 @@ describe('useMapFiles handleSaveMap id round-trip', () => {
     });
 });
 
+// An area's own mow angle / perimeter winding ride the same rebuild: clear_map +
+// add_area per area. If the save drops them, every map save quietly resets every
+// area to the robot-wide settings.
+describe('useMapFiles handleSaveMap per-area coverage lines', () => {
+    const square = {points: [{x: 0, y: 0, z: 0}, {x: 1, y: 0, z: 0}, {x: 1, y: 1, z: 0}, {x: 0, y: 1, z: 0}]};
+
+    function area(id: string, mowingOrder: number, fields: Record<string, unknown>) {
+        const f = new MowingAreaFeature(id, mowingOrder);
+        f.setArea({name: 'Area ' + mowingOrder, area: square, ...fields}, 0, 0, [0, 0, 0]);
+        return f;
+    }
+
+    async function save(features: Record<string, MowingAreaFeature>) {
+        const putMowglinext = vi.fn().mockResolvedValue({});
+        const hook = renderHook(() => useMapFiles(backupOptions({
+            features,
+            editMap: true,
+            guiApi: {mowglinext: {putMowglinext}} as unknown as Api<unknown>,
+        })));
+        await act(async () => {
+            await hook.result.current.handleSaveMap();
+        });
+        return putMowglinext.mock.calls[0][0].areas as Array<{area: Record<string, unknown>}>;
+    }
+
+    it('sends each area\'s own angle and winding back', async () => {
+        const own = area('area-0-area-0', 1, {
+            id: 1, has_mow_angle: true, mow_angle_deg: 35, has_ring_direction: true, ring_direction: 2,
+        });
+        const sent = await save({[own.id]: own});
+        expect(sent[0].area).toMatchObject({
+            has_mow_angle: true, mow_angle_deg: 35, has_ring_direction: true, ring_direction: 2,
+        });
+    });
+
+    it('keeps 0 degrees and the planner-default winding as real overrides', async () => {
+        const zero = area('area-0-area-0', 1, {
+            id: 1, has_mow_angle: true, mow_angle_deg: 0, has_ring_direction: true, ring_direction: 0,
+        });
+        const sent = await save({[zero.id]: zero});
+        expect(sent[0].area).toMatchObject({
+            has_mow_angle: true, mow_angle_deg: 0, has_ring_direction: true, ring_direction: 0,
+        });
+    });
+
+    it('sends each area\'s own start point back, (0, 0) included', async () => {
+        const own = area('area-0-area-0', 1, {id: 1, has_start_point: true, start_x: 12.5, start_y: -3});
+        const origin = area('area-1-area-0', 2, {id: 2, has_start_point: true, start_x: 0, start_y: 0});
+        const plain = area('area-2-area-0', 3, {id: 3});
+        const sent = await save({[own.id]: own, [origin.id]: origin, [plain.id]: plain});
+        const byName = Object.fromEntries(sent.map((x) => [x.area.name as string, x.area]));
+        expect(byName['Area 1']).toMatchObject({has_start_point: true, start_x: 12.5, start_y: -3});
+        expect(byName['Area 2']).toMatchObject({has_start_point: true, start_x: 0, start_y: 0});
+        expect(byName['Area 3'].has_start_point).toBeFalsy();
+    });
+
+    it('keeps an area that follows the robot-wide settings following them', async () => {
+        const plain = area('area-0-area-0', 1, {id: 1});
+        const sent = await save({[plain.id]: plain});
+        expect(sent[0].area.has_mow_angle).toBeFalsy();
+        expect(sent[0].area.has_ring_direction).toBeFalsy();
+    });
+
+    it('does not treat each area as another\'s: overrides stay on their own area', async () => {
+        const a = area('area-0-area-0', 1, {id: 1, has_mow_angle: true, mow_angle_deg: 10});
+        const b = area('area-1-area-0', 2, {id: 2});
+        const sent = await save({[a.id]: a, [b.id]: b});
+        const byName = Object.fromEntries(sent.map((x) => [x.area.name as string, x.area]));
+        expect(byName['Area 1'].has_mow_angle).toBe(true);
+        expect(byName['Area 2'].has_mow_angle).toBeFalsy();
+    });
+});
+
 // Everything handleBackupMap does NOT care about. Shared by the two backup
 // tests below so the untyped antd `notification` stub is cast once.
 type BackupOverrides = Partial<Parameters<typeof useMapFiles>[0]>;
@@ -142,6 +216,56 @@ describe('useMapFiles backup carries the pre-shrink obstacle outlines', () => {
 
         const saved = JSON.parse(await blob!.text()) as {obstacle_originals: unknown};
         expect(saved.obstacle_originals).toEqual([kept]);
+    });
+});
+
+// An area's own mowing lines are part of the Map message, so "Backup map" carries them, and
+// "Restore map" followed by "Save map" must put them back on the same area.
+describe('useMapFiles backup and restore keep the mowing lines', () => {
+    const lines = {
+        has_mow_angle: true, mow_angle_deg: 35,
+        has_ring_direction: true, ring_direction: 2,
+        has_start_point: true, start_x: 9.5, start_y: 4,
+    };
+    const ring = {points: [{x: 0, y: 0, z: 0}, {x: 10, y: 0, z: 0}, {x: 10, y: 10, z: 0}, {x: 0, y: 10, z: 0}]};
+
+    it('writes them into map.json', async () => {
+        let blob: Blob | undefined;
+        Object.assign(window.URL, {createObjectURL: vi.fn((b: Blob) => { blob = b; return 'blob:x'; }), revokeObjectURL: vi.fn()});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        const hook = renderHook(() => useMapFiles(backupOptions({
+            map: {working_area: [{name: 'Voor', id: 7, area: ring, obstacles: [], is_navigation_area: false, ...lines}], navigation_areas: []},
+        })));
+        hook.result.current.handleBackupMap();
+
+        const saved = JSON.parse(await blob!.text()) as {working_area: Array<Record<string, unknown>>};
+        expect(saved.working_area[0]).toMatchObject({id: 7, ...lines});
+    });
+
+    it('a restored backup saved again keeps them on the same area', async () => {
+        // Backup text -> parse (what Restore map does) -> the area the editor holds -> the save payload.
+        const parsed = parseMapBackup(JSON.stringify({
+            working_area: [{name: 'Voor', id: 7, area: ring, obstacles: [], ...lines}],
+            navigation_areas: [],
+        }));
+        expect(parsed.ok).toBe(true);
+        if (!parsed.ok) return;
+        const restored = new MowingAreaFeature('area-0-area-0', 1);
+        restored.setArea(parsed.map.working_area![0], 0, 0, [0, 0, 0]);
+
+        const putMowglinext = vi.fn().mockResolvedValue({});
+        const hook = renderHook(() => useMapFiles(backupOptions({
+            features: {[restored.id]: restored},
+            editMap: true,
+            guiApi: {mowglinext: {putMowglinext}} as unknown as Api<unknown>,
+        })));
+        await act(async () => {
+            await hook.result.current.handleSaveMap();
+        });
+
+        const sent = putMowglinext.mock.calls[0][0].areas as Array<{area: Record<string, unknown>}>;
+        expect(sent[0].area).toMatchObject({id: 7, ...lines});
     });
 });
 

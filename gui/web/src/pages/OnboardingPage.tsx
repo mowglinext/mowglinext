@@ -32,6 +32,8 @@ import {
 import { RobotComponentEditor } from "../components/RobotComponentEditor.tsx";
 import { FlashBoardComponent } from "../components/FlashBoardComponent.tsx";
 import { MOWER_MODELS } from "../constants/mowerModels.ts";
+import { presetValuesForBackend } from "../constants/hardwareBackends.ts";
+import { useHardwareBackend } from "../hooks/useHardwareBackend.ts";
 import {
     restartGps,
     GPS_RESTART_KEYS,
@@ -144,6 +146,9 @@ type RobotModelStepProps = {
 
 const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
     const { t } = useTranslation();
+    // A model preset describes the machine; keys the hardware backend
+    // overrides (an OpenMower xESC's ticks per metre) take its default.
+    const { defaultOverrides, loading: backendLoading } = useHardwareBackend();
     const { colors } = useThemeMode();
     const selectedModel = values.mower_model || "YardForce500";
 
@@ -151,7 +156,7 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
         onChange("mower_model", model);
         const preset = MOWER_MODELS.find((m) => m.value === model);
         if (preset?.defaults) {
-            for (const [k, v] of Object.entries(preset.defaults)) {
+            for (const [k, v] of Object.entries(presetValuesForBackend(preset.defaults, defaultOverrides))) {
                 onChange(k, v);
             }
         }
@@ -161,10 +166,12 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
     // user who never taps a card leaves with mower_model unset (no preset
     // applied) even though the YardForce 500 card looks selected. We persist the
     // default so the highlighted card and the saved value always agree.
+    // Waits for the backend: applied earlier, the preset would write the
+    // STM32 ticks_per_meter on an OpenMower robot.
     useEffect(() => {
-        if (!values.mower_model) handleModelSelect("YardForce500");
+        if (!backendLoading && !values.mower_model) handleModelSelect("YardForce500");
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [backendLoading]);
 
     return (
         <div style={{ maxWidth: 760, margin: "0 auto" }}>

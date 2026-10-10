@@ -20,6 +20,7 @@ import {
     CloseOutlined,
     ImportOutlined,
     DeleteOutlined,
+    BarsOutlined,
     ExpandOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
@@ -50,6 +51,8 @@ interface MapToolbarProps {
     onToggleSatellite: () => void;
     showObstacleClearance?: boolean;
     onToggleObstacleClearance?: () => void;
+    showCoveragePreview?: boolean;
+    onToggleCoveragePreview?: () => void;
     onManualMode: () => Promise<void>;
     onStopManualMode: () => Promise<void>;
     onBackupMap: () => void;
@@ -79,6 +82,7 @@ export const MapToolbar = ({
     dockAppearanceId = "marker", onDockAppearanceChange = () => {},
     onEditMap, onToggleSatellite,
     showObstacleClearance = false, onToggleObstacleClearance,
+    showCoveragePreview = false, onToggleCoveragePreview,
     onManualMode, onStopManualMode,
     onBackupMap, onRestoreMap, onDownloadGeoJSON, onImportOpenMower, onResetMowingProgress,
     onMowArea, pitched, onTogglePitch,
@@ -118,6 +122,13 @@ export const MapToolbar = ({
                     key: "obstacleClearance",
                     icon: <ExpandOutlined />,
                     label: showObstacleClearance ? t("mapToolbar.hideObstacleClearance") : t("mapToolbar.showObstacleClearance"),
+                } satisfies NonNullable<MenuProps["items"]>[number]]
+                : []),
+            ...(onToggleCoveragePreview
+                ? [{
+                    key: "coveragePreview",
+                    icon: <BarsOutlined />,
+                    label: showCoveragePreview ? t("mapToolbar.hideCoveragePreview") : t("mapToolbar.showCoveragePreview"),
                 } satisfies NonNullable<MenuProps["items"]>[number]]
                 : []),
             ...(onTogglePitch
@@ -187,6 +198,7 @@ export const MapToolbar = ({
         switch (key) {
             case "satellite": onToggleSatellite(); break;
             case "obstacleClearance": onToggleObstacleClearance?.(); break;
+            case "coveragePreview": onToggleCoveragePreview?.(); break;
             case "pitch": onTogglePitch?.(); break;
             case "manual": safeCall(() => onManualMode()); break;
             case "stopManual": safeCall(() => onStopManualMode()); break;

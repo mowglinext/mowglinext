@@ -66,9 +66,11 @@ mowgli:
         dock_pose_y: 0.0
         dock_pose_yaw: 0.0
 
-        # Encoder scale — MUST match the firmware and the physical wheels.
-        # Calibrated per robot (drive-a-known-distance). Template default 399.0.
-        ticks_per_meter: 399.0
+        # Encoder scale (ticks_per_meter) — calibrated per robot (drive-a-known-
+        # distance), which writes it here. NOT seeded: the default depends on
+        # the hardware backend (399.0 Mowgli STM32 encoders in the template,
+        # 1600.0 OpenMower xESC hall ticks in config/backends/openmower.yaml),
+        # and a seeded value would pin the wrong one.
 
         # IMU mounting yaw offset (rad) — solved by the GUI's Auto-calibrate
         # button. 0 = uncalibrated.

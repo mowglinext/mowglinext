@@ -47,6 +47,7 @@
 | `launch/foxglove_bridge.launch.py` | 129 | Shared foxglove_bridge (1 MB send buffer, 2 s respawn), included by `full_system`; 2 production threads, automatic selection standalone |
 | **`config/`** | | |
 | `config/mowgli_robot.yaml` | 739 | TEMPLATE of every robot-param default (Invariant 15); installed sparse twin is `install/config/mowgli/mowgli_robot.yaml` |
+| `config/backends/<backend>.yaml` | — | per-`HARDWARE_BACKEND` DEFAULT overrides (only `openmower.yaml` today), layered template ← backend ← installed by `robot_config_util.load_robot_config`; never adds keys (`test_robot_config_util.py`); mirrored into the GUI by `gui/cmd/gen-backend-defaults` |
 | `config/nav2_params_base.yaml` | ~1.2k | Shared Nav2 base: bt_navigator, controller_server (FollowPath RPP / FollowCoveragePath FTC / goal+progress checkers), planner, smoother, behavior_server, costmaps, docking_server, collision_monitor I/O, coverage_server |
 | `config/nav2_params_lidar.yaml` | 284 | Overlay: `/scan_costmap` obstacle layers, `/scan_collision` collision_monitor polygons, `FollowPath.use_collision_detection: true` |
 | `config/nav2_params_no_lidar.yaml` | 80 | Overlay: `/no_lidar_static_map` static layers, FTC obstacle flags off, monitor pass-through, planner `costmap_update_timeout: 5.0` |

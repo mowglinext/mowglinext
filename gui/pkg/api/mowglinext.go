@@ -27,6 +27,16 @@ import (
 // block a delivery goroutine forever; on timeout the connection is closed.
 const wsWriteTimeout = 5 * time.Second
 
+// Frames at least this big are sent with permessage-deflate when the browser offers it.
+// The big ones are occupancy grids (mow progress, LiDAR map) that are almost all one
+// value, so they shrink by two orders of magnitude; small, frequent frames (pose, status)
+// are not worth the CPU. 4 KiB is well below any grid and above every status message.
+const wsCompressMinBytes = 4 * 1024
+
+// wsCompressionLevel favours speed: the mower's CPU is small and the win comes from
+// the redundancy of the data, not from squeezing the last byte.
+const wsCompressionLevel = 1
+
 func compactCoveragePreview(obj interface{}) {
 	message, ok := obj.(map[string]interface{})
 	if !ok {
@@ -46,6 +56,16 @@ func compactCoveragePreview(obj interface{}) {
 	}
 	message["xy"] = compact
 }
+
+// multiplexUpgrader is the upgrader the multiplex route uses. Identical to `upgrader`
+// except it negotiates permessage-deflate (RFC 7692) when the browser offers it, which
+// every current browser does; a client that does not simply gets uncompressed frames.
+// Only this route is opted in: it carries the large grids.
+var multiplexUpgrader = func() websocket.Upgrader {
+	u := upgrader
+	u.EnableCompression = true
+	return u
+}()
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize: 1024,
@@ -362,8 +382,9 @@ func compactMultiplexNumbers(value any) any {
 // WebSocket so a single browser tab does not need ~25 simultaneous TCP
 // connections. Wire format:
 //
-//	client → server: JSON {"op": "subscribe"|"unsubscribe", "topic": "<key>"}
-//	server → client: MessagePack {"topic": "<key>", "data": <decoded object>}
+//	client → server: JSON {"op": "subscribe"|"unsubscribe"|"resync", "topic": "<key>", "delta": <bool>}
+//	server → client: MessagePack {"topic": "<key>", "data": <decoded object>[, "seq": n]}
+//	                 or, for a delta subscription, {"topic": "<key>", "patch": {...}} (grid_delta.go)
 //
 // Per-topic throttling reuses topicSubscribeInterval. Unknown topics are
 // ignored. On disconnect, all live subscriptions are released.
@@ -374,20 +395,26 @@ func compactMultiplexNumbers(value any) any {
 // @Router /mowglinext/multiplex [get]
 func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	group.GET("/multiplex", func(c *gin.Context) {
-		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+		conn, err := multiplexUpgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
+		// A no-op unless the browser negotiated permessage-deflate.
+		_ = conn.SetCompressionLevel(wsCompressionLevel)
 
 		type subState struct {
 			id string
+			// delta is set for the occupancy-grid topics the browser asked to receive as
+			// patches (see grid_delta.go); nil for every other subscription.
+			delta *gridDelta
 		}
 		var stateMu sync.Mutex
 		state := map[string]*subState{}
 
 		var writeMu sync.Mutex
-		writeFrame := func(topic string, data []byte) {
+		// seq is set (one value) only on the full frames of a delta subscription.
+		writeFrame := func(topic string, data []byte, seq ...uint64) {
 			// Re-encode the frame as MessagePack and send it as a BINARY frame.
 			// `data` is the per-message snake_case JSON produced upstream; we
 			// decode it to a generic value and msgpack-encode {topic, data:obj}
@@ -411,10 +438,14 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			var payload bytes.Buffer
 			encoder := msgpack.NewEncoder(&payload)
 			encoder.UseCompactInts(true)
-			err := encoder.Encode(map[string]interface{}{
+			frame := map[string]interface{}{
 				"topic": topic,
 				"data":  compactMultiplexNumbers(obj),
-			})
+			}
+			if len(seq) > 0 {
+				frame["seq"] = seq[0]
+			}
+			err := encoder.Encode(frame)
 			if err != nil {
 				return
 			}
@@ -427,12 +458,54 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			// timeout/error, close the conn so the read loop unblocks and the
 			// deferred cleanup releases all subscriptions.
 			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			conn.EnableWriteCompression(payload.Len() >= wsCompressMinBytes)
 			if err := conn.WriteMessage(websocket.BinaryMessage, payload.Bytes()); err != nil {
 				_ = conn.Close()
 			}
 		}
 
-		subscribeTopic := func(topic string) {
+		writePatch := func(topic string, f gridFrame) {
+			var header interface{}
+			if len(f.Header) > 0 {
+				_ = json.Unmarshal(f.Header, &header)
+			}
+			var payload bytes.Buffer
+			encoder := msgpack.NewEncoder(&payload)
+			encoder.UseCompactInts(true)
+			if err := encoder.Encode(map[string]interface{}{
+				"topic": topic,
+				"patch": map[string]interface{}{
+					"base":   f.Base,
+					"seq":    f.Seq,
+					"header": compactMultiplexNumbers(header),
+					"gaps":   f.Gaps,
+					"vals":   f.Vals,
+				},
+			}); err != nil {
+				return
+			}
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			if err := conn.WriteMessage(websocket.BinaryMessage, payload.Bytes()); err != nil {
+				_ = conn.Close()
+			}
+		}
+
+		// sendGrid sends one grid message of a delta subscription as a patch or in full.
+		sendGrid := func(topic string, d *gridDelta, msg []byte) {
+			f, ok := d.next(msg)
+			switch {
+			case !ok:
+				writeFrame(topic, msg)
+			case f.Full:
+				writeFrame(topic, f.Raw, f.Seq)
+			default:
+				writePatch(topic, f)
+			}
+		}
+
+		subscribeTopic := func(topic string, delta bool) {
 			interval, known := topicSubscribeInterval(topic)
 			if !known {
 				log.Printf("MultiplexRoute: ignoring unknown topic %q", topic)
@@ -444,13 +517,21 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				return
 			}
 			id := uuid.Generate().String()
-			state[topic] = &subState{id: id}
+			sub := &subState{id: id}
+			if delta && gridDeltaTopics[topic] {
+				sub.delta = &gridDelta{}
+			}
+			state[topic] = sub
 			stateMu.Unlock()
 
 			// Throttling is enforced inside the RosSubscriber (coalescing,
 			// non-blocking) — NOT with a time.Sleep here, which used to block
 			// the per-topic delivery goroutine.
 			err := provider.Subscribe(topic, id, interval, func(msg []byte) {
+				if sub.delta != nil {
+					sendGrid(topic, sub.delta, msg)
+					return
+				}
 				writeFrame(topic, msg)
 			})
 			if err != nil {
@@ -494,6 +575,8 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		type clientMsg struct {
 			Op    string `json:"op"`
 			Topic string `json:"topic"`
+			// Delta asks for the occupancy-grid topics as patches (grid_delta.go).
+			Delta bool `json:"delta"`
 		}
 		for {
 			_, payload, err := conn.ReadMessage()
@@ -506,9 +589,19 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			}
 			switch m.Op {
 			case "subscribe":
-				subscribeTopic(m.Topic)
+				subscribeTopic(m.Topic, m.Delta)
 			case "unsubscribe":
 				unsubscribeTopic(m.Topic)
+			case "resync":
+				// The browser saw a patch it could not apply: send the grid again in full.
+				stateMu.Lock()
+				sub := state[m.Topic]
+				stateMu.Unlock()
+				if sub != nil && sub.delta != nil {
+					if f, ok := sub.delta.resync(); ok {
+						writeFrame(m.Topic, f.Raw, f.Seq)
+					}
+				}
 			}
 		}
 	})
@@ -688,6 +781,36 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, map[string]interface{}{"message": promoteRes.Message})
 				return
 			}
+		case "set_area_coverage_lines":
+			// Set or clear ONE mowing area's own swath angle and perimeter
+			// winding (opt-in overrides of the robot-wide mow_angle_deg /
+			// mow_direction). Addressed by the stable MapArea.id, never by
+			// index: the map save rebuilds the whole list. It is a plain map edit
+			// that only changes that area's NEXT plan; the Map page only offers
+			// it while the robot is not mowing, because a resume re-plans the
+			// area and its cursor would point into a different plan.
+			var linesReq mowgli.SetAreaCoverageLinesReq
+			if err = c.BindJSON(&linesReq); err != nil {
+				c.JSON(400, ErrorResponse{Error: err.Error()})
+				return
+			}
+			if linesReq.Id == 0 {
+				c.JSON(400, ErrorResponse{Error: "id is required: a new, never-saved area has no id yet"})
+				return
+			}
+			var linesRes mowgli.SetAreaCoverageLinesRes
+			err = provider.CallService(ctx,
+				"/map_server_node/set_area_coverage_lines",
+				&linesReq,
+				&linesRes,
+				"mowgli_interfaces/srv/SetAreaCoverageLines")
+			if err == nil && !linesRes.Success {
+				err = errors.New(linesRes.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": linesRes.Message})
+				return
+			}
 		case "preview_obstacle_clearance":
 			// Read-only: buffers each obstacle polygon outward by the LIVE
 			// obstacle_margin coverage_server is actually planning with
@@ -713,6 +836,71 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				if previewRes.Buffered == nil {
 					previewRes.Buffered = []geometry.Polygon{}
 				}
+				c.JSON(200, previewRes)
+				return
+			}
+		case "preview_coverage":
+			// Read-only dry run of coverage_server's planner for the Map page's
+			// "mowing lines" overlay: the same planBoustrophedon call a real
+			// PlanCoverage goal makes, but with the swath angle and perimeter
+			// winding taken from the request so the operator can try a value
+			// before saving it. Omitted angle/direction mean "auto" / "the live
+			// ring_direction parameter" — NOT 0, which is a real choice (0 deg,
+			// planner-default winding) — hence the pointers.
+			var previewReq struct {
+				OuterBoundary geometry.Polygon   `json:"outer_boundary"`
+				Obstacles     []geometry.Polygon `json:"obstacles"`
+				MowAngleDeg   *float64           `json:"mow_angle_deg"`
+				Perpendicular bool               `json:"perpendicular"`
+				RingDirection *int32             `json:"ring_direction"`
+				// Where the route starts: snapped onto the OUTERMOST headland ring.
+				// Omitted = the planner's own start.
+				HasStartPoint bool    `json:"has_start_point"`
+				StartX        float64 `json:"start_x"`
+				StartY        float64 `json:"start_y"`
+			}
+			if err = c.BindJSON(&previewReq); err != nil {
+				c.JSON(400, ErrorResponse{Error: err.Error()})
+				return
+			}
+			if len(previewReq.OuterBoundary.Points) < 3 {
+				c.JSON(400, ErrorResponse{Error: "outer_boundary needs at least 3 points"})
+				return
+			}
+			if previewReq.Obstacles == nil {
+				previewReq.Obstacles = []geometry.Polygon{}
+			}
+			previewCall := mowgli.PreviewCoverageReq{
+				OuterBoundary: previewReq.OuterBoundary,
+				Obstacles:     previewReq.Obstacles,
+				MowAngleDeg:   -1,
+				Perpendicular: previewReq.Perpendicular,
+				RingDirection: -1,
+				HasStartPoint: previewReq.HasStartPoint,
+				StartX:        previewReq.StartX,
+				StartY:        previewReq.StartY,
+			}
+			if previewReq.MowAngleDeg != nil {
+				previewCall.MowAngleDeg = *previewReq.MowAngleDeg
+			}
+			if previewReq.RingDirection != nil {
+				previewCall.RingDirection = *previewReq.RingDirection
+			}
+			var previewRes mowgli.PreviewCoverageRes
+			err = provider.CallService(ctx,
+				"/coverage_server/preview_coverage",
+				&previewCall,
+				&previewRes,
+				"mowgli_interfaces/srv/PreviewCoverage")
+			if err == nil {
+				if previewRes.Rings == nil {
+					previewRes.Rings = []geometry.Polygon{}
+				}
+				if previewRes.Swaths == nil {
+					previewRes.Swaths = []geometry.Polygon{}
+				}
+				// A planner refusal (field too small, bad direction) is a normal
+				// answer, not a transport error: the overlay shows its message.
 				c.JSON(200, previewRes)
 				return
 			}

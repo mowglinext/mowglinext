@@ -35,6 +35,12 @@ func TestSettingsFieldGroupKeysHaveSchemaDefaults(t *testing.T) {
 	extractDefaults(mustSchema(t), defaults)
 
 	for _, match := range matches {
+		if _, envBacked := openMowerRuntimeEnvKeys[match[1]]; envBacked {
+			// Deliberately default-less: until set, GET /settings/yaml shows
+			// the installer's docker/.env value (applyOpenMowerRuntimeFallbacks),
+			// and a schema default would let the writer prune an explicit choice.
+			continue
+		}
 		_, found := defaults[match[1]]
 		assert.True(t, found, "%s is rendered by a Settings field group but has no schema default", match[1])
 	}

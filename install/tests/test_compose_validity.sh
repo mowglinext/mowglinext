@@ -74,7 +74,7 @@ done
 
 # Negative: with HARDWARE_BACKEND=mowgli + GNSS_STACK=universal, mavros and
 # the MAVROS-only NTRIP sidecar must NOT be present.
-for forbidden in mowgli-mavros mowgli-ntrip; do
+for forbidden in mowgli-mavros mowgli-ntrip mowgli-openmower; do
   if printf '%s\n' "$CONTAINERS" | grep -qx "$forbidden"; then
     fail "service NOT present: $forbidden" "should not be in mowgli backend compose"
   else
