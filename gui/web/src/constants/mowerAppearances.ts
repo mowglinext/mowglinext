@@ -1,7 +1,7 @@
 /** Display-only mower imagery. Keep this separate from ROS hardware presets:
  * similar dimensions or electronics do not establish the external shell brand.
  */
-export type MowerAppearanceId = "urdf" | "biltema-rm1000";
+export type MowerAppearanceId = "urdf" | "generic" | "biltema-rm1000";
 
 export interface MapImageAppearance {
     src: string;
@@ -43,6 +43,23 @@ export const DOCK_FOREGROUND_CLIP_PATH = "polygon(43% 78%, 57% 78%, 68% 83%, 68%
 
 export const MOWER_APPEARANCES: Record<MowerAppearanceId, MowerAppearance> = {
     urdf: {id: "urdf", labelKey: "mapToolbar.mowerAppearanceUrdf"},
+    generic: {
+        id: "generic",
+        labelKey: "mapToolbar.mowerAppearanceGeneric",
+        mowerImage: {
+            src: "/assets/robots/generic/mower.webp",
+            altKey: "mapToolbar.mowerAppearanceGenericAlt",
+            // Nominal 0.57 m length, with matching width to preserve the artwork's
+            // aspect ratio. These are visual estimates, not hardware calibration.
+            visibleLengthM: 0.57,
+            visibleLengthFraction: 1235 / 1442,
+            visibleWidthM: 0.57 * 865 / 1235,
+            visibleWidthFraction: 865 / 1091,
+            // Padding-aware rear-axle estimate: the visible body center sits about
+            // 0.18 m ahead of the pose, matching the default URDF. Front is up.
+            poseAnchor: {x: 0.5, y: 0.77},
+        },
+    },
     "biltema-rm1000": {
         id: "biltema-rm1000",
         labelKey: "mapToolbar.mowerAppearanceBiltemaRm1000",
@@ -128,7 +145,7 @@ export function getDockAppearanceResetForMowerChange(
 
 /** Unknown/stale GUI values fail closed to the existing URDF drawing. */
 export function resolveMowerAppearance(value: unknown): MowerAppearance {
-    if (value === "biltema-rm1000") return MOWER_APPEARANCES["biltema-rm1000"];
+    if (value === "generic" || value === "biltema-rm1000") return MOWER_APPEARANCES[value];
     return MOWER_APPEARANCES.urdf;
 }
 

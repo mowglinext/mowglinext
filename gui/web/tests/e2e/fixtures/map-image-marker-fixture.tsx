@@ -4,12 +4,20 @@ import Map, {useMap} from "react-map-gl/mapbox";
 import mapboxgl from "mapbox-gl";
 import {DOCK_APPEARANCES, DOCK_FOREGROUND_CLIP_PATH, MOWER_APPEARANCES} from "../../../src/constants/mowerAppearances.ts";
 import {MapImageMarker} from "../../../src/pages/map/components/MapImageMarker.tsx";
+import {PALETTE} from "../../../src/theme/colors.ts";
 import "mapbox-gl/dist/mapbox-gl.css";
 
 const CENTER: [number, number] = [-122.4194, 37.7749];
-const STYLE = {version: 8 as const, sources: {}, layers: []};
+const STYLE = {
+    version: 8 as const,
+    sources: {},
+    layers: [{id: "background", type: "background" as const, paint: {"background-color": PALETTE.bgCanvas}}],
+};
 mapboxgl.accessToken = "pk.test-no-network-token";
-const IMAGE = MOWER_APPEARANCES["biltema-rm1000"].mowerImage!;
+// The same renderer fixture can preview either bundled mower without a robot.
+const generic = new URLSearchParams(window.location.search).get("mower") === "generic";
+const IMAGE = MOWER_APPEARANCES[generic ? "generic" : "biltema-rm1000"].mowerImage!;
+const MOWER_ALT = generic ? "Generic mower test image" : "RM1000 mower test image";
 
 declare global {
     interface Window {
@@ -24,7 +32,7 @@ declare global {
 function MarkerFixture() {
     const {current: map} = useMap();
     const [heading, setHeading] = useState(0);
-    const [dockAppearanceId, setDockAppearance] = useState<"generic" | "biltema-rm1000">("biltema-rm1000");
+    const [dockAppearanceId, setDockAppearance] = useState<"generic" | "biltema-rm1000">(generic ? "generic" : "biltema-rm1000");
     const dockImage = DOCK_APPEARANCES[dockAppearanceId].image!;
     if (map && !window.mapImageMarkerTest) {
         window.mapImageMarkerTest = {map, setHeading, setDockAppearance};
@@ -47,7 +55,7 @@ function MarkerFixture() {
             />
             <MapImageMarker
                 image={IMAGE}
-                alt="RM1000 mower test image"
+                alt={MOWER_ALT}
                 longitude={CENTER[0]}
                 latitude={CENTER[1]}
                 headingRad={heading}
@@ -75,7 +83,7 @@ function App() {
         <Map
             mapStyle={STYLE}
             initialViewState={{longitude: CENTER[0], latitude: CENTER[1], zoom: 19, bearing: 0, pitch: 0}}
-            style={{width: 1200, height: 800}}
+            style={{width: "100vw", height: "100vh"}}
             attributionControl={false}
             maxZoom={25}
         >

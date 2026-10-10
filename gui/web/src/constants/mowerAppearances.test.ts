@@ -15,8 +15,9 @@ describe("mower appearance registry", () => {
         expect(resolveMowerAppearance(undefined).id).toBe("urdf");
     });
 
-    it("keeps the URDF silhouette until the selected image is loaded and a pose exists", () => {
-        const appearance = resolveMowerAppearance("biltema-rm1000");
+    it.each(["generic", "biltema-rm1000"])("keeps the URDF silhouette until the %s image is loaded and a pose exists", (id) => {
+        const appearance = resolveMowerAppearance(id);
+        expect(appearance.id).toBe(id);
         const src = appearance.mowerImage!.src;
         expect(shouldDisplayMowerImage(appearance, undefined, true, true)).toBe(false);
         expect(shouldDisplayMowerImage(appearance, src, false, true)).toBe(false);
@@ -28,6 +29,7 @@ describe("mower appearance registry", () => {
 
     it("offers the generic dock to every mower and the branded dock only for the RM1000", () => {
         expect(getAvailableDockAppearances("urdf").map(({id}) => id)).toEqual(["marker", "generic"]);
+        expect(getAvailableDockAppearances("generic").map(({id}) => id)).toEqual(["marker", "generic"]);
         expect(getAvailableDockAppearances("biltema-rm1000").map(({id}) => id)).toEqual([
             "marker", "generic", "biltema-rm1000",
         ]);

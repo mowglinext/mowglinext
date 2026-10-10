@@ -1620,6 +1620,8 @@
     "actionFailed": "Action failed",
     "mowerAppearance": "Mower map image",
     "mowerAppearanceUrdf": "URDF silhouette (automatic fallback)",
+    "mowerAppearanceGeneric": "Generic mower (approx.)",
+    "mowerAppearanceGenericAlt": "Unbranded green robotic mower with a rear stop button",
     "mowerAppearanceBiltemaRm1000": "Biltema RM1000",
     "mowerAppearanceBiltemaRm1000Alt": "Biltema RM1000 mower",
     "dockAppearance": "Dock appearance",
