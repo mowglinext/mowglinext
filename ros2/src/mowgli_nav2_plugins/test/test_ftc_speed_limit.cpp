@@ -26,6 +26,7 @@
 #include <nav2_ros_common/lifecycle_node.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "motion_fixture.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
 #include <gtest/gtest.h>
 #include <rcl/time.h>
@@ -34,6 +35,11 @@ namespace mowgli_nav2_plugins
 {
 struct FTCSpeedLimitTestAccess
 {
+  static bool GeometryReady(FTCController& controller)
+  {
+    std::lock_guard<std::mutex> lock(controller.authorization_mutex_);
+    return controller.authorization_ != nullptr;
+  }
   static bool TurnFallbackReversing(const FTCController& controller)
   {
     return controller.turnFallbackReversing();
@@ -144,12 +150,19 @@ protected:
     tf_ = costmap_->getTfBuffer();
     clock_ = node_->get_clock();
     ASSERT_EQ(rcl_enable_ros_time_override(clock_->get_clock_handle()), RCL_RET_OK);
+    ASSERT_EQ(rcl_enable_ros_time_override(costmap_->get_clock()->get_clock_handle()), RCL_RET_OK);
     SetTime();
     SetTransform("map", "odom", 0.0, true);
     SetTransform("base_footprint", "base_link", 0.0, true);
     SetTransform("odom", "base_footprint", 0.0, false);
     controller_.configure(node_, kPlugin, tf_, costmap_);
     controller_.activate();
+    ASSERT_TRUE(mowgli_nav2_plugins::test::supplyLawn(
+        node_,
+        [this]()
+        {
+          return mowgli_nav2_plugins::FTCSpeedLimitTestAccess::GeometryReady(controller_);
+        }));
     controller_.newPathReceived(StraightPlan());
   }
 
@@ -210,6 +223,8 @@ protected:
   void SetTime()
   {
     ASSERT_EQ(rcl_set_ros_time_override(clock_->get_clock_handle(), time_ns_), RCL_RET_OK);
+    ASSERT_EQ(rcl_set_ros_time_override(costmap_->get_clock()->get_clock_handle(), time_ns_),
+              RCL_RET_OK);
   }
 
   void SetTransform(const std::string& parent, const std::string& child, double x, bool fixed)

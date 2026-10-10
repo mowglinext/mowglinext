@@ -59,6 +59,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
     chassis_circumscribed_radius,
+    chassis_footprint,
     dig_proposal_radius,
     dig_skip_radius,
     keepout_obstacle_margin,
@@ -198,6 +199,11 @@ def generate_launch_description() -> LaunchDescription:
     # key the installed config omits falls through to its versioned template
     # default (single source of truth).
     robot_params = load_robot_params(bringup_dir, _runtime_cfg_path)
+    front_x, rear_x, half_width = chassis_footprint(robot_params)
+    motion_footprint = [
+        front_x, half_width, front_x, -half_width,
+        rear_x, -half_width, rear_x, half_width,
+    ]
 
     # Free slack left OUTSIDE every area polygon before the keepout mask turns
     # lethal (map_server paints that band at the non-lethal kSoftPenaltyMaskCost
@@ -439,6 +445,7 @@ def generate_launch_description() -> LaunchDescription:
             # Defaults live in the in-package template mowgli_robot.yaml
             # (invariant 15); the fallbacks here must match it.
             {
+                "motion_footprint": motion_footprint,
                 "start_blocked_escape_enabled": bool(
                     robot_params.get("start_blocked_escape_enabled", True)
                 )

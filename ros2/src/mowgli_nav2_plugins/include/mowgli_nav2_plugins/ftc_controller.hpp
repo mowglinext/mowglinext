@@ -49,6 +49,12 @@
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
 #include <Eigen/Geometry>
 #include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
+
+namespace mowgli_interfaces::motion
+{
+struct Snapshot;
+}
 
 namespace mowgli_nav2_plugins
 {
@@ -97,6 +103,12 @@ public:
 
 private:
   friend struct FTCSpeedLimitTestAccess;
+
+  /// Final FTC output gate, after all speed floors and recovery commands.
+  void authorizeCommand(const geometry_msgs::msg::Twist& command);
+  std::mutex authorization_mutex_;
+  std::shared_ptr<const mowgli_interfaces::motion::Snapshot> authorization_;
+  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr authorization_sub_;
 
   // ── State machine ─────────────────────────────────────────────────────────
 

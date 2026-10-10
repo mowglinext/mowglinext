@@ -10,6 +10,18 @@
 
 ## Test map
 
+Motion-authorization additions for #924 are `test_motion_authorization` and
+`test_motion_sweeps` in `mowgli_nav2_plugins`, `test_escape_authorization` in
+`mowgli_behavior`, and `test_motion_geometry_reload` in `mowgli_map`. They run
+through the same package `colcon test` commands and ROS CI gate below. The
+closed-loop FTC fallback fixture provides kinematic controller evidence;
+it does not run Webots or establish physical stopping distance. See
+[`MOTION_AUTHORIZATION_IMPLEMENTATION.md`](../MOTION_AUTHORIZATION_IMPLEMENTATION.md)
+for the acceptance matrix and exact validation baseline. Bringup additionally
+registers `test_motion_footprint_launch.py`, which executes both production
+launch builders with configured chassis dimensions through lightweight launch
+adapters; it does not start a simulation.
+
 | Area | Test files | Framework | Exact local command | CI workflow |
 |---|---|---|---|---|
 | `fusion_graph` (30 suites) | `ros2/src/fusion_graph/test/test_*.cpp` | GoogleTest (`ament_add_gtest`, `CMakeLists.txt:145–252`) | `cd /ros2_ws && colcon test --packages-select fusion_graph --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |

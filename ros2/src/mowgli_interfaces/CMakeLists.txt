@@ -11,6 +11,8 @@ find_package(builtin_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(Boost REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 # Declare message files
@@ -91,6 +93,10 @@ target_include_directories(${PROJECT_NAME}_headers INTERFACE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
+target_link_libraries(${PROJECT_NAME}_headers INTERFACE
+  ${visualization_msgs_TARGETS}
+  Boost::headers
+)
 
 install(
   DIRECTORY include/
@@ -104,6 +110,6 @@ install(
 
 ament_export_include_directories(include)
 ament_export_targets(export_${PROJECT_NAME}_headers)
-ament_export_dependencies(rosidl_default_runtime)
+ament_export_dependencies(rosidl_default_runtime visualization_msgs Boost)
 
 ament_package()

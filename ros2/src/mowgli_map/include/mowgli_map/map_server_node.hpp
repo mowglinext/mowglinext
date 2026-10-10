@@ -71,6 +71,7 @@
 #include <mowgli_interfaces/srv/set_area_coverage_lines.hpp>
 #include <mowgli_interfaces/srv/set_docking_point.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace mowgli_map
 {
@@ -634,6 +635,9 @@ private:
   /// Does nothing if mowing_area_polygon_ has fewer than 3 points.
   /// Caller must hold map_mutex_.
   void publish_keepout_mask();
+  /// Same complete polygon snapshot consumed by #905's transit planner.
+  void publish_transit_geometry();
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr transit_geometry_pub_;
 
   /// Check if the robot is outside all allowed polygons and publish violation.
   void check_boundary_violation(double x, double y);

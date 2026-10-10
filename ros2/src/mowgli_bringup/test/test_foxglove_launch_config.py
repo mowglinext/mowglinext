@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 from test_launch_injection import _find_node_call, _parse
 
 BRINGUP = Path(__file__).resolve().parents[1]
@@ -65,7 +66,7 @@ def _resolve(value, context):
     return value
 
 
-def _build(filename, **overrides):
+def _build(filename, robot_params_override=None, **overrides):
     spec = importlib.util.spec_from_file_location(
         "foxglove_test_robot_config", BRINGUP / "launch" / "robot_config_util.py"
     )
@@ -76,6 +77,7 @@ def _build(filename, **overrides):
         for name in (
             "DEFAULT_TOOL_WIDTH_M",
             "chassis_circumscribed_radius",
+            "chassis_footprint",
             "dig_proposal_radius",
             "dig_skip_radius",
             "keepout_obstacle_margin",
@@ -87,6 +89,7 @@ def _build(filename, **overrides):
     namespace.update(
         {
             "os": os,
+            "yaml": yaml,
             "LaunchDescription": Description,
             "DeclareLaunchArgument": Declaration,
             "IncludeLaunchDescription": Include,
@@ -100,9 +103,12 @@ def _build(filename, **overrides):
             "get_package_share_directory": lambda package: str(
                 BRINGUP.parent / package
             ),
-            "load_robot_params": lambda share, runtime: config.load_robot_params(
-                share, str(BRINGUP / "test" / "absent-runtime-config.yaml")
-            ),
+            "load_robot_params": lambda share, runtime: {
+                **config.load_robot_params(
+                    share, str(BRINGUP / "test" / "absent-runtime-config.yaml")
+                ),
+                **(robot_params_override or {}),
+            },
         }
     )
     function = next(
