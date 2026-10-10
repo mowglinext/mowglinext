@@ -48,3 +48,18 @@ npx playwright test tests/e2e/layered-pr-gallery.spec.ts -g "chassis style galle
 ```
 
 The gallery capture test passed and the final screenshot was visually inspected.
+
+
+## Map views
+
+The map screenshots come from the real Map page with a plain local basemap and
+mock telemetry. `app-map-desktop-docked.png` and `app-map-mobile-docked.png`
+place the mower and dock at the same base-link pose/heading and show At base.
+`app-map-desktop.png` intentionally separates them by 0.8 m to reveal both
+assets and uses Idle status. This is not a live mower position report.
+
+The mock published URDF carries the same caster/sensor installation overrides
+as the 500 settings example; map geometry comes from that description.
+All four desktop/mobile docked/undocked Playwright cases passed, including
+coincident docked anchors, compact WebP asset budgets and unchanged artwork
+while the mower pose updates. Screenshots were visually inspected.

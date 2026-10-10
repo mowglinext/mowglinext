@@ -4,8 +4,17 @@ import {installMockBackend} from "./mock/mockBackend";
 import {SCENARIOS} from "./mock/scenarios";
 import {ROBOT_URDF} from "../../src/test/robotUrdf";
 const shots="screenshots.local/layered-mower";
-for(const mobile of [false,true])test(`full app map ${mobile ? "mobile" : "desktop"} with moving URDF assembly`,async({page})=>{
+// Published robot description for the same illustrative 500 installation used
+// in the settings screenshots. Map placement must come from URDF, not settings.
+const exampleUrdf=ROBOT_URDF
+    .replace('0.45 0.18 -0.07','0.40 0.15 -0.07')
+    .replace('0.3 0 0.2','0.15 0 0.148')
+    .replace('0 0.024 0.3','0.31 0 0.139')
+    .replace('0 0 3.1408','0 0 0')
+    .replace('0.18 -0.195 0.095','0.04 -0.09 0.015');
+for(const docked of [false,true])for(const mobile of [false,true])test(`full app map ${mobile ? "mobile" : "desktop"} with ${docked ? "docked" : "moving"} URDF assembly`,async({page})=>{
     test.setTimeout(60000);
+    const suffix=`${mobile ? "mobile" : "desktop"}${docked ? "-docked" : ""}`;
     mkdirSync(shots,{recursive:true});
     await page.setViewportSize(mobile ? {width:390,height:844} : {width:1440,height:1000});
     await page.addInitScript(()=>{
@@ -21,10 +30,12 @@ for(const mobile of [false,true])test(`full app map ${mobile ? "mobile" : "deskt
     await installMockBackend(page,{...SCENARIOS[0],rest:{
         "/api/settings/yaml":{datum_lat:48.1,datum_lon:11.5},
         "/api/config/keys/get":{"gui.map.mower.appearance":"urdf","gui.map.dock.appearance":"styled"},
-    },topics:{...SCENARIOS[0].topics,robotDescription:{data:ROBOT_URDF},pose:pose(0),map:{
-        dock_x:0,dock_y:-.8,dock_heading:Math.PI/2,
+    },topics:{...SCENARIOS[0].topics,robotDescription:{data:exampleUrdf},
+        highLevelStatus:{...(SCENARIOS[0].topics!.highLevelStatus as object),state_name:docked ? "IDLE_DOCKED" : "IDLE"},
+        pose:pose(0),map:{
+        dock_x:0,dock_y:docked ? 0 : -.8,dock_heading:Math.PI/2,
         working_area:[{id:1,name:"Preview lawn",area:{points:[{x:-1.8,y:-1.5},{x:1.8,y:-1.5},{x:1.8,y:1.5},{x:-1.8,y:1.5}]}}],
-    }},topicSequences:{pose:[pose(0),pose(.03),pose(.06),pose(.09),pose(.06),pose(.03)]}},{liveStatusIntervalMs:50});
+    }},topicSequences:{pose:docked ? [pose(0)] : [pose(0),pose(.03),pose(.06),pose(.09),pose(.06),pose(.03)]}},{liveStatusIntervalMs:50});
     await page.goto("/#/map");
     await page.addStyleTag({content:readFileSync("node_modules/mapbox-gl/dist/mapbox-gl.css","utf8")});
     const marker=page.getByTestId("assembled-mower-marker");
@@ -53,8 +64,12 @@ for(const mobile of [false,true])test(`full app map ${mobile ? "mobile" : "deskt
         return {durationMs:3000,artworkMutations:mutations,distinctPlacements:transforms.size,frameMedianMs:frames[Math.floor(frames.length*.5)],frameP95Ms:frames[Math.floor(frames.length*.95)],artworkElements:artwork.querySelectorAll("*").length,
             assetEncodedBytes:assets.reduce((sum,e)=>sum+e.encodedBodySize,0),assetFiles:[...new Set(assets.map(e=>e.name.split("/").pop()))]};
     });
-    writeFileSync(`${shots}/map-${mobile ? "mobile" : "desktop"}-metrics.json`,JSON.stringify({baseline:`${process.env.E2E_PRODUCTION ? "production" : "development"} app, local empty Mapbox basemap, mocked 20 Hz pose/status, efficient display mode`,cpuThrottle:mobile?4:1,...metrics},null,2));
-    expect(metrics.distinctPlacements).toBeGreaterThan(2);
+    writeFileSync(`${shots}/map-${suffix}-metrics.json`,JSON.stringify({baseline:`${process.env.E2E_PRODUCTION ? "production" : "development"} app, local empty Mapbox basemap, mocked 20 Hz pose/status, efficient display mode`,cpuThrottle:mobile?4:1,...metrics},null,2));
+    if(!docked)expect(metrics.distinctPlacements).toBeGreaterThan(2);
+    else {
+        const anchors=await page.locator("[data-testid=assembled-mower-marker], [data-testid=styled-dock-marker]").evaluateAll(nodes=>nodes.map(node=>node.closest(".mapboxgl-marker")!.getAttribute("style")!.match(/translate\([^)]*px[^)]*\)/g)?.join(" ")));
+        expect(anchors[0]).toEqual(anchors[1]);
+    }
     expect(metrics.artworkMutations).toBe(0);
     expect(metrics.assetFiles).not.toContain("blade-top.webp");
     expect(metrics.assetFiles).not.toContain("imu-top.webp");
@@ -66,7 +81,7 @@ for(const mobile of [false,true])test(`full app map ${mobile ? "mobile" : "deskt
     })));
     for(const d of dimensions)expect(Math.max(d.width,d.height)).toBeLessThanOrEqual(384);
     expect(errors).toEqual([]);
-    await page.screenshot({path:`${shots}/app-map-${mobile ? "mobile" : "desktop"}.png`,fullPage:true});
+    await page.screenshot({path:`${shots}/app-map-${suffix}.png`,fullPage:true});
     await cdp.send("Emulation.setCPUThrottlingRate",{rate:1});
     await page.evaluate(()=>{
         localStorage.setItem("mowgli.robot-visual.v1",JSON.stringify({style:"yardforce",transparent:true}));
@@ -76,5 +91,5 @@ for(const mobile of [false,true])test(`full app map ${mobile ? "mobile" : "deskt
     await page.evaluate(async()=>{
         await Promise.all([...document.querySelectorAll('image')].map(e=>{const img=new Image();img.src=e.getAttribute('href')!;return img.decode();}));
     });
-    await page.screenshot({path:`${shots}/app-map-${mobile ? "mobile" : "desktop"}-transparent.png`,fullPage:true});
+    await page.screenshot({path:`${shots}/app-map-${suffix}-transparent.png`,fullPage:true});
 });
