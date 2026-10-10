@@ -172,3 +172,37 @@ TEST(CoverageRoute, WiderTurnsSaveDistanceAndVisitEveryRow)
   }
 }
 }  // namespace
+
+// Field 2026-10-10 on this lawn: 65 ring corners sharper than 60° were driven
+// as curves and FTC wedged against the hedge at three of them. They are now
+// in-place pivots wherever the sweep fits — and NEVER where it does not: the
+// outer ring's hairpin at (1.99, 11.91) / (2.26, 10.67) lies 0.47 m from a
+// drawn obstacle, inside the 0.60 m sweep, and must stay a driven corner.
+TEST(CoverageRoute, IsabeyPivotsSharpCornersOnlyWhereTheSweepFits)
+{
+  const auto recorded = isabeyRings();
+  f2c::types::Cell field(ring(recorded.front()));
+  coverage::PivotJoinLimits limits;
+  limits.recorded_boundary = recorded.front();
+  limits.recorded_obstacles.assign(recorded.begin() + 1, recorded.end());
+  limits.sweep_radius = limits.boundary_margin = std::hypot(0.53, 0.275);
+  for (const auto& obstacle : limits.recorded_obstacles)
+    field.addRing(coverage::bufferRingOutward(ring(obstacle), 0.389));
+  const auto plan = coverage::planBoustrophedon(field, 0.16, 0.18, 5, 0.0, -1.0, 0.15);
+  const auto paths = coverage::buildContinuousSubPaths(
+      plan, plan.connector_clearance_boundary, 0.20, 0.20, 0.03, nullptr, {}, limits);
+
+  std::size_t pivots = 0;
+  for (const auto& path : paths)
+    for (std::size_t i = 1; i < path.size(); ++i)
+      if (path[i] == path[i - 1])
+      {
+        ++pivots;
+        EXPECT_TRUE(coverage::pivotSweepFits(path[i].first, path[i].second, limits))
+            << "pivot at (" << path[i].first << ", " << path[i].second << ") sweeps outside";
+        for (const Point hairpin : {Point{1.99, 11.91}, Point{2.26, 10.67}})
+          EXPECT_GT(distance(path[i], hairpin), 0.05) << "pivot beside the drawn obstacle";
+      }
+  // 54 on the robot's plan of this lawn (field 2026-10-10); 0 before.
+  EXPECT_GE(pivots, 40u);
+}
