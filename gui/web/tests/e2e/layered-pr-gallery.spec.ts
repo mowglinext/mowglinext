@@ -9,7 +9,7 @@ const output="screenshots.local/layered-mower/pr";
 const custom={mower_model:"CUSTOM",robot_name:"Angular custom concept",chassis_length:.66,chassis_width:.46,
     chassis_height:.18,chassis_z_offset:-.06,chassis_center_x:.18,wheel_radius:.10,wheel_width:.05,
     wheel_track:.30,wheel_x_offset:0,caster_radius:.04,caster_track:.28,caster_x_offset:.39,blade_radius:.115,tool_width:.23,ticks_per_meter:300,
-    gps_x:.16,gps_y:0,gps_z:.135,lidar_x:.32,lidar_y:0,lidar_z:.155,lidar_yaw:0,
+    gps_x:.16,gps_y:0,gps_z:0.13,lidar_x:.32,lidar_y:0,lidar_z:.131,lidar_yaw:0,
     imu_x:.035,imu_y:-.09,imu_z:.005,imu_yaw:0};
 for(const example of ["yardforce500","custom-angular"] as const){
     test(`PR screenshots ${example}`,async({page})=>{
@@ -21,8 +21,8 @@ for(const example of ["yardforce500","custom-angular"] as const){
                 // Example installation: preset chassis/drive geometry, with
                 // inset casters and a plausible roof-mounted sensor layout.
                 caster_x_offset:.40,caster_track:.30,
-                gps_x:.15,gps_y:0,gps_z:.165,
-                lidar_x:.31,lidar_y:0,lidar_z:.175,lidar_yaw:0,
+                gps_x:.15,gps_y:0,gps_z:0.148,
+                lidar_x:.31,lidar_y:0,lidar_z:.139,lidar_yaw:0,
                 imu_x:.04,imu_y:-.09,imu_z:.015,imu_yaw:0} : custom;
         await page.addInitScript(({style})=>{
             localStorage.setItem("mowglinext.lang","en");

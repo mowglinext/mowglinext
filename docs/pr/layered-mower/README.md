@@ -12,12 +12,12 @@ These are illustrative installations, not measurements of .118 or new presets.
 | Chassis centre X / bottom Z | .180 / -.050 | .180 / -.060 |
 | Drive wheel radius / width / centre track | .100 / .040 / .325 | .100 / .050 / .300 |
 | Caster radius / centre track / X | .030 / .300 / .400 | .040 / .280 / .390 |
-| GPS X / Y / Z | .150 / 0 / .165 | .160 / 0 / .135 |
-| LiDAR X / Y / Z | .310 / 0 / .175 | .320 / 0 / .155 |
+| GPS X / Y / Z | .150 / 0 / .148 | .160 / 0 / .130 |
+| LiDAR X / Y / Z | .310 / 0 / .139 | .320 / 0 / .131 |
 | IMU X / Y / Z | .040 / -.090 / .015 | .035 / -.090 / .005 |
 
 All sensor yaw values are zero. Coordinates are relative to the rear axle;
-X is forward, Y left and Z up. GPS and LiDAR sit above the chassis top; the IMU
+X is forward, Y left and Z up. GPS and LiDAR bases meet the local visible shell roof; the IMU
 is enclosed. Drive-wheel outer spans are 365 mm (500) and 350 mm (custom). Wheels and
 casters fit within the chassis plan bounds. The 500 retains the shipped chassis
 and drive-wheel dimensions, with example caster and sensor installation overrides.
