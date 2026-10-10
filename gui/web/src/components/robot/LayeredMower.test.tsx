@@ -1,6 +1,7 @@
 import {render} from "@testing-library/react";
-import {describe,it,expect} from "vitest";
+import {describe,it,expect,vi} from "vitest";
 import {LayeredMower} from "./LayeredMower";
+import * as projection from "./sensorArtworkProjection";
 import {SHELLS} from "./shellAssets";
 import {MOWER_STYLES} from "../../hooks/useMowerVisual";
 import {parseRobotUrdf,previewRobotGeometry} from "../../utils/robotModel";
@@ -41,4 +42,46 @@ it("renders a forward rolling caster and independent cutting disc",()=>{
     expect(Number(caster.getAttribute("height"))).toBeGreaterThan(Number(caster.getAttribute("width")));
     const disc=container.querySelector('[data-layer="blade"] [data-part-art="blade"]');
     expect(disc).not.toBeNull();
+});
+
+it("occludes wheels beneath the shell in side and top views",()=>{
+    for (const view of ["top","side"] as const) {
+        const {container,unmount}=render(<svg><LayeredMower robot={robot} style="yardforce" view={view} transparent={false}/></svg>);
+        const wheel=container.querySelector('[data-layer="wheels"]')!;
+        const shell=container.querySelector('[data-layer="shell"]')!;
+        expect(wheel.compareDocumentPosition(shell) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        unmount();
+    }
+});
+
+it("pose-only wrapper changes reuse sensor artwork, but geometry edits redraw",()=>{
+    const spy=vi.spyOn(projection,"sensorArtworkProjection");
+    const view=(pose:number,r=robot)=><svg data-pose={pose}><LayeredMower robot={r} style="yardforce" transparent={false}/></svg>;
+    const {rerender}=render(view(0));
+    const count=spy.mock.calls.length;
+    expect(count).toBeGreaterThan(0);
+    for(let i=1;i<=20;i++)rerender(view(i));
+    expect(spy).toHaveBeenCalledTimes(count);
+    rerender(view(21,{...robot,baseLength:.8}));
+    expect(spy.mock.calls.length).toBeGreaterThan(count);
+    spy.mockRestore();
+});
+
+it("solid map mode does not request concealed blade or IMU artwork",()=>{
+    const {container,rerender}=render(<svg><LayeredMower robot={robot} style="yardforce" transparent={false} internalDetails={false}/></svg>);
+    expect(container.querySelector('[data-part-art="blade"]')).toBeNull();
+    expect(container.querySelector('[data-sensor="imu"]')).toBeNull();
+    rerender(<svg><LayeredMower robot={robot} style="yardforce" transparent internalDetails/></svg>);
+    expect(container.querySelector('[data-part-art="blade"]')).not.toBeNull();
+    expect(container.querySelector('[data-sensor="imu"]')).not.toBeNull();
+});
+
+it("map derivatives retain all physical bounds and axle transforms",()=>{
+    const {container,rerender}=render(<svg><LayeredMower robot={robot} style="yardforce" transparent/></svg>);
+    const metricAttributes=()=>Array.from(container.querySelectorAll('[data-layer="shell-art"], [data-part-art] > svg, [data-layer="wheels"] > g')).map(node=>
+        ["x","y","width","height","viewBox","transform"].map(name=>node.getAttribute(name)));
+    const before=metricAttributes();
+    rerender(<svg><LayeredMower robot={robot} style="yardforce" transparent artwork="map"/></svg>);
+    expect(metricAttributes()).toEqual(before);
+    for(const image of container.querySelectorAll("image"))expect(image.getAttribute("href")).toMatch(/\/map\/.*\.webp$/);
 });

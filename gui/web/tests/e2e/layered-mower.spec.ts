@@ -3,6 +3,8 @@ import {mkdirSync} from "node:fs";
 import {installMockBackend} from "./mock/mockBackend";
 import {SCENARIOS} from "./mock/scenarios";
 import {SHELLS} from "../../src/components/robot/shellAssets";
+import {MOWER_MODELS} from "../../src/constants/mowerModels";
+import en from "../../src/i18n/locales/en.json" with {type:"json"};
 import {ROBOT_URDF} from "../../src/test/robotUrdf";
 const base=SCENARIOS[0];
 const shots="screenshots.local/layered-mower";
@@ -74,7 +76,7 @@ test("sensors desktop renders both views without console errors",async({page})=>
     await page.goto("/#/settings?section=sensors");
     await expect(page.getByTestId("mower-side")).toBeVisible();
     await page.getByRole("switch",{name:"Transparent shell"}).click();
-    await page.locator("[data-testid=sensor-placement]").screenshot({path:shots+"/sensors-desktop.png"});
+    await page.screenshot({path:shots+"/sensors-desktop.png",fullPage:true});
     expect(errors).toEqual([]);
 });
 
@@ -171,4 +173,60 @@ test("Yardforce vertical offset lowers the shell without shrinking it or moving 
     await expect(shell).toHaveAttribute("height","0.19");
     await expect(side.locator('[data-layer="wheels"] > g')).toHaveAttribute("transform",wheelTransform!);
     await expect(side.locator('[data-sensor="gps"]')).toHaveAttribute("data-z","0.2");
+});
+
+// Full application routes and real preset-selection controls; only robot I/O is
+// mocked. Do not present these as screenshots from a connected physical mower.
+test("full application hardware preset gallery on desktop and mobile",async({page})=>{
+    test.setTimeout(120000);
+    // Select presets independently per viewport: crossing the responsive
+    // breakpoint can remount the settings editor and discard unsaved drafts.
+    for(const mobile of [false,true]){
+        await page.setViewportSize(mobile ? {width:390,height:844} : {width:1440,height:1800});
+        await page.goto("/#/settings?section=hardware");
+        await page.reload();
+        await page.getByRole("combobox",{name:"Body style"}).press("ArrowDown");
+        await page.getByText("Yardforce-inspired",{exact:true}).last().click();
+        await page.getByRole("combobox",{name:"Body style"}).press("Escape");
+        await page.getByText("Chassis & Geometry",{exact:true}).click();
+        const selector=page.getByRole("radiogroup");
+        expect(await selector.evaluate(node=>!!(node.compareDocumentPosition(document.querySelector('[data-testid="mower-preview"]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+        await expect(page.getByTestId("mower-preview").locator('[data-layer="styled-dock"]')).toHaveCount(0);
+        for(const id of ["YardForce500B","YardForceSA650","LUV1000RI","Sabo","BiltemaRM1000"]){
+            const preset=MOWER_MODELS.find(m=>m.value===id)!;
+            const label=en.mowerModels[id as keyof typeof en.mowerModels].label;
+            await page.getByRole("radio",{name:label,exact:true}).click();
+            await page.getByRole("button",{name:"Apply preset",exact:true}).click();
+            await expect(page.getByRole("dialog")).toHaveCount(0);
+            await expect(page.getByRole("radio",{name:label,exact:true})).toHaveAttribute("aria-checked","true");
+            const side=page.getByTestId("mower-side");
+            if(Object.keys(preset.defaults).length){
+                await expect(side.locator('[data-layer="shell-art"]')).toHaveAttribute("height",String(preset.defaults.chassis_height));
+                expect(Number(await side.locator('[data-layer="shell-art"]').getAttribute("y"))).toBeCloseTo(-preset.defaults.chassis_z_offset-preset.defaults.chassis_height);
+                expect(Number(await page.getByRole("spinbutton",{name:"Wheel Track, m",exact:true}).inputValue())).toBe(preset.defaults.wheel_track);
+            }
+            await page.getByTestId("mower-preview").scrollIntoViewIfNeeded();
+            await page.evaluate(async()=>{
+                await Promise.all([...document.querySelectorAll('image')].map(e=>{const img=new Image();img.src=e.getAttribute('href')!;return img.decode();}));
+            });
+            if(mobile)await page.getByTestId("mower-top").evaluate(node=>node.scrollIntoView({block:"center"}));
+            await page.screenshot({path:`${shots}/app-${id}-${mobile ? "mobile" : "desktop"}.png`,fullPage:true});
+            if(mobile){
+                await side.evaluate(node=>node.scrollIntoView({block:"center"}));
+                await page.screenshot({path:`${shots}/app-${id}-mobile-side.png`,fullPage:true});
+            }
+        }
+    }
+});
+
+test("chassis height preserves the bottom offset and wheel spacing is the preset track",async({page})=>{
+    await page.goto("/#/settings?section=hardware");
+    await page.getByText("Chassis & Geometry",{exact:true}).click();
+    await page.locator("#setting-chassis_height").fill("0.25");
+    await page.locator("#setting-chassis_height").press("Tab");
+    const side=page.getByTestId("mower-side").locator('[data-layer="shell-art"]');
+    await expect(side).toHaveAttribute("height","0.25");
+    expect(Number(await side.getAttribute("y"))).toBeCloseTo(-.20);
+    const positions=await page.getByTestId("mower-top").locator('[data-layer="wheels"] > g').evaluateAll(nodes=>nodes.map(n=>Number(n.getAttribute("transform")!.match(/translate\(([^ ]+)/)![1])));
+    expect(positions[1]-positions[0]).toBeCloseTo(.325);
 });

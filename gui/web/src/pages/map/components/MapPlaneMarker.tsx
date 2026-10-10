@@ -25,7 +25,12 @@ export function MapPlaneMarker({bounds:b,longitude,latitude,headingRad,label,tes
             const scale=512*2**map.getZoom()/(2*Math.PI*6378137*Math.cos(latitude*Math.PI/180));
             const width=b.width*scale,height=b.height*scale;
             const transform=mapPlaneTransform(corners,width,height);
-            setPlacement(transform ? {width,height,transform} : undefined);
+            // A stationary camera/pose can emit repeated move/resize events.
+            // Keep the SVG subtree untouched when its projection is identical.
+            setPlacement(previous => transform
+                ? previous?.width === width && previous.height === height && previous.transform === transform
+                    ? previous : {width,height,transform}
+                : undefined);
         };
         update();
         map.on("move",update);

@@ -122,3 +122,66 @@ blades removed, measure ground to the lowest body skirt and highest shell point.
 Compare against 50 mm and 240 mm; a discrepancy over 5 mm rejects this provisional
 fit and calls for adjusting the offset and/or body height to the measurements.
 These measurements are not a prerequisite to using this illustrative preview.
+
+## Preset review and mobile map budget (2026-10-10)
+
+The Hardware preview follows the model picker; it no longer includes the dock.
+Wheel layers precede the shell in both views, so the opaque body hides the upper
+wheel while transparent mode reveals the same wheel at exactly the same axle.
+Height is the physical visible shell height, excluding image margins. With body
+height H and bottom offset O: axle-relative bottom = O, top = O + H, centre =
+O + H/2. Ground clearance adds the drive wheel radius. The Yardforce preset uses
+H=190 mm, O=-50 mm, radius=100 mm: bottom=50 mm, top=240 mm above ground.
+Its rear track is 325 mm centre-to-centre (365 mm outer tyre width), inside the
+450 mm body box. We do not alter drive geometry just to make an image look wider.
+The automatic rear-to-front-caster axle distance is 450 mm for that preset.
+
+The full application preset gallery actually selects YardForce500B, SA650,
+LUV1000RI, Sabo, and RM1000 through Hardware controls, independently on desktop
+and mobile. The legacy SA650/900ECO/LUV1000RI/Sabo presets still have 44.75 mm
+wheel radius, an unverified inherited value documented in mowerModels.ts;
+those very small rendered wheels faithfully expose that preset limitation.
+RM1000 has no geometry defaults and retains existing values (Sabo in this
+ordered gallery); it is NOT evidence for RM1000 physical dimensions.
+
+### Compact map artwork
+
+Only map markers use `public/assets/robots/layered/map/*-*.webp`; settings use
+the original PNG atlases. Source crop/reference rectangles remain authoritative.
+The derivative image is placed back into that exact pixel-coordinate rectangle,
+so reduced resolution changes neither the physical chassis edges nor axle,
+sensor, caster or blade anchors. Both opacity modes share the same derivatives.
+Generate after any source image or crop-metadata change, from gui/web:
+
+```sh
+node --experimental-strip-types scripts/generate-map-artwork.mjs
+```
+
+This deterministic crop/resize/WebP pipeline uses the existing pinned Playwright
+Chromium (install it with `npx playwright install chromium` if absent). Originals
+are never overwritten. Body/dock longest edge: 384 px; blade: 256 px; wheels and
+sensors: 128 px. WebP quality 0.85, preserved alpha. All 22 derivatives total
+189,832 bytes. No runtime image processing or new runtime dependency is added.
+
+Memoized assembly content is reused between poses, geometry bounds are memoized,
+and identical map projection updates preserve state. No sensor glow is enabled
+on the map. Opaque map mode omits concealed blade/IMU assets. Existing map display
+budgets remain 20/10/5 Hz for Visual/Balanced/Efficient. URDF XML is only parsed
+when the description changes, never for each pose.
+
+Production Chromium check: 390x844 viewport, 4x CPU throttle, local plain Mapbox
+basemap, mocked 20 Hz pose/status, Efficient mode, three-second sample. The
+Yardforce plus dock initial artwork is **50,536 bytes**, down from 6,608,981 bytes
+(99.2% less); 40 SVG descendants, zero artwork DOM mutations during movement.
+Median and p95 animation frame interval were about 16.7 ms. These are desktop
+browser emulation results, not a physical-phone or live satellite-map benchmark.
+Screenshots/JSON in screenshots.local/layered-mower include the full app chrome;
+all telemetry is fixture data and no mower was contacted. Full source imagery
+is retained for the larger settings previews.
+
+Verification: TypeScript/production build; 27 focused unit tests; 12 application
+Playwright cases including all four styles, five preset selections, mobile,
+height/offset/track, sensors and map; map projection fixture checks physical
+corners under zoom, heading, bearing and pitch. Map tests reject PNG requests,
+images above 384 px, and initial artwork transfers above 150 kB. Regeneration
+and hardware physical measurements remain distinct from this rendering evidence.

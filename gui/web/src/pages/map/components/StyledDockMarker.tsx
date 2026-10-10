@@ -7,6 +7,6 @@ export function StyledDockMarker({longitude,latitude,headingRad}: {longitude:num
     const {t}=useTranslation();
     return <MapPlaneMarker bounds={dockBounds("top")} longitude={longitude} latitude={latitude} headingRad={headingRad}
         label={t("mowerVisual.dockStyle")} testId="styled-dock-marker" zIndex={998}>
-        <DockGraphic/>
+        <DockGraphic artwork="map"/>
     </MapPlaneMarker>;
 }

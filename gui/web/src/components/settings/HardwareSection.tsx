@@ -71,7 +71,6 @@ export const HardwareSection: React.FC<Props> = ({
 
     return (
         <div>
-            <MowerPreview values={values}/>
             {/* Identity: the name the fleet view and the GUI show for this mower */}
             <Card size="small" style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
@@ -148,6 +147,8 @@ export const HardwareSection: React.FC<Props> = ({
                     </Row>
                 </Space>
             </Card>
+
+            <MowerPreview values={values}/>
 
             {/* Essential parameters (always visible) */}
             <Card

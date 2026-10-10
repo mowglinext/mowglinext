@@ -1,4 +1,3 @@
-import {DockPreview} from "./DockPreview";
 import {assemblyBounds} from "./assemblyBounds";
 import {Card, Flex, Select, Switch, Typography} from "antd";
 import {useTranslation} from "react-i18next";
@@ -53,6 +52,5 @@ export function MowerPreview({values, compact = false}: {values: Record<string, 
             </Typography.Text>
             <Typography.Text type="secondary" style={{fontSize:12}}>{t("mowerVisual.previewNote")}</Typography.Text>
         </>}
-        {!compact && <DockPreview/>}
     </Card>;
 }
