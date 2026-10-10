@@ -5,7 +5,8 @@
     "gps": "gnss-contract-1",
     "lidar-ldlidar": "scan-contract-1",
     "lidar-rplidar": "scan-contract-1",
-    "lidar-stl27l": "scan-contract-1"
+    "lidar-stl27l": "scan-contract-1",
+    "openmower": "hardware-bridge-1"
   },
   "gui_compatibility": "ros-gui-1",
   "components": [
@@ -49,6 +50,13 @@
       "type": "built",
       "context": "sensors/lidar-stl27l",
       "file": "sensors/lidar-stl27l/Dockerfile",
+      "target": ""
+    },
+    {
+      "name": "openmower",
+      "type": "built",
+      "context": ".",
+      "file": "sensors/openmower/Dockerfile",
       "target": ""
     }
   ]

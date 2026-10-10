@@ -5,6 +5,7 @@ import {Alert, Button, Card, Checkbox, Form, Input, Modal, Select, Segmented, Sp
 import {useTranslation} from 'react-i18next';
 import {useNavigate} from 'react-router-dom';
 import {type Deployment, type UpdatePlan, type UpdatePolicy, componentCompatibility, sameUpdaterBuild, updaterRequest, useHostUpdater} from '../../hooks/useHostUpdater';
+import {agentUpgradeFor, upgradeAgentAndWait} from "../../utils/updaterAgent.ts";
 import {UpdateChangelog} from './UpdateChangelog';
 
 const FIRMWARE_MISMATCH_ERROR = 'different mainboard firmware protocol';
@@ -30,6 +31,7 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
     const [agentPlan, setAgentPlan] = useState<Deployment>();
     const [rollbackOpen, setRollbackOpen] = useState(false);
     const [busy, setBusy] = useState(false);
+    const [updatingAgent, setUpdatingAgent] = useState(false);
     const [failure, setFailure] = useState<string>();
     const [customMode, setCustomMode] = useState(false);
     const [customImages, setCustomImages] = useState<Record<string,string>>({});
@@ -164,12 +166,25 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
                         {supportsFirmwareChange ? <Checkbox checked={firmwareChangeAccepted} disabled={pending || busy} onChange={e => setFirmwareChangeAccepted(e.target.checked)}>{t('hostUpdater.firmwareChangeAccept')}</Checkbox>
                             : <Typography.Text strong>{t('hostUpdater.firmwareChangeAgent')}</Typography.Text>}
                     </Space>}/>}
+                {updatingAgent && <Alert type="info" showIcon data-testid="updating-agent" message={t('hostUpdater.updatingAgentFirst')}/>}
                 <Space wrap className="update-actions">
                     <Button disabled={pending} loading={busy} onClick={() => void act(async () => {if (dirty && policy) {await updaterRequest('policy',policy);setSelected(undefined);setComponentSelected({});} await updaterRequest('check', {});})}>{t('hostUpdater.checkNow')}</Button>
                     <Button type="primary" disabled={pending || (custom ? !data.capabilities?.includes('custom-images') || !customAccepted || Object.keys(customImages).length === 0 || Object.values(customImages).some(v => !v.trim()) : !target || dirty || firmwareChangeBlocked || (sameDeployment && (!advanced || pinned === installedPin)))} loading={busy} onClick={() => void act(async () => {
                         setReviewAccepted(false); setFirmwareInstallAccepted(false);
                         if (custom) setPlan(await updaterRequest<UpdatePlan>('custom-plan', {images:customImages,acknowledged:customAccepted}));
-                        else if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {}), ...(supportsFirmwareChange ? {allow_firmware_protocol_change: firmwareChangeAccepted} : {})}));
+                        else if (target) {
+                            // The installed updater checks the release: run the release's own first.
+                            const agentRelease = agentUpgradeFor(target, data.agent, versions);
+                            if (agentRelease) {
+                                setUpdatingAgent(true);
+                                try {
+                                    await upgradeAgentAndWait(agentRelease, data.agent, {request: updaterRequest, sleep: ms => new Promise(resolve => setTimeout(resolve, ms)), now: Date.now});
+                                } finally {
+                                    setUpdatingAgent(false);
+                                }
+                            }
+                            setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {}), ...(supportsFirmwareChange ? {allow_firmware_protocol_change: firmwareChangeAccepted} : {})}));
+                        }
                     })}>{custom ? t('hostUpdater.downloadReview') : advanced && ['mixed', 'drifted'].includes(identity) && !hasOverrides ? t('hostUpdater.returnMatched') : t('hostUpdater.review')}</Button>
                 </Space>
                 <Typography.Text type="secondary">{t('hostUpdater.lastCheck', {time: date(data.state.last_check)})}</Typography.Text>
@@ -316,7 +331,7 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
                 {!plan.custom_images && <Typography.Text type="secondary">{plan.target.source.repository} · {plan.target.source.branch}</Typography.Text>}
                 {plan.stack ? <>
                     <Typography.Text type="secondary">{t('hostUpdater.selectionHelp')}</Typography.Text>
-                    <div>{Object.entries(plan.stack.selection.options).map(([key, value]) => <Tag key={key}>{t(`hostUpdater.hardware.${key}`, {defaultValue: key})}: {value === 'none' ? t('hostUpdater.disabled') : value === 'universal' ? t('hostUpdater.enabled') : value}</Tag>)}</div>
+                    <div>{Object.entries(plan.stack.selection.options).map(([key, value]) => <Tag key={key}>{t(`hostUpdater.hardware.${key}`, {defaultValue: key})}: {key === 'backend' ? t(`hostUpdater.backendChoice.${value}`, {defaultValue: value}) : value === 'none' ? t('hostUpdater.disabled') : value === 'universal' ? t('hostUpdater.enabled') : value}</Tag>)}</div>
                     <div data-testid="stack-changes">{plan.stack.changes.map(change => <div key={change.service} style={{display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6}}>
                         <Typography.Text>{component(change.service)}</Typography.Text>
                         <Tag color={change.action === 'add' ? 'green' : change.action === 'remove' ? 'orange' : undefined}>{t(`hostUpdater.stackActions.${change.action}`)}</Tag>

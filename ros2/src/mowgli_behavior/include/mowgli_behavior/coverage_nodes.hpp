@@ -301,6 +301,11 @@ private:
   // RUNNING); false when it should fall back to the abort-to-next path (no
   // costmap, abort not obstacle-related, no clear resume, or budget exhausted).
   bool tryStartDetour(const std::shared_ptr<BTContext>& ctx);
+  // A detour's resume transit failed and no further detour is possible: resume
+  // the SAME unit past the blocked stretch (blocked_stretch.hpp) instead of
+  // dropping the rest of it. False when nothing drivable is left or the
+  // no-progress resume budget is spent — the caller then skips the unit.
+  bool resumeUnitPastBlockedStretch(const std::shared_ptr<BTContext>& ctx);
   /// Trim the current unit to [idx, end) and persist the moved resume cursor.
   void trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx);
 

@@ -6,7 +6,7 @@
 
 ## Where to look
 
-Managed installer and updater share `install/compose/stack.json` via the Go `installer-stack` command. Releases ship a checksummed Compose bundle; installed releases survive older-checkout installer reruns. See `docs/UPDATES.md` for selection, ownership and migration constraints.
+Managed installer and updater share `install/compose/stack.json` via the Go `installer-stack` command. Its `backend` group (`none` = Mowgli board, `openmower` = `docker-compose.openmower.yml`) is derived by the worker from `docker/.env` `HARDWARE_BACKEND` on every run, never preserved; the OpenMower backend waives the release `firmware_protocol` check (`FirmwareProtocolExempt`), MAVROS stays unmanaged. Releases ship a checksummed Compose bundle; installed releases survive older-checkout installer reruns. See `docs/UPDATES.md` for selection, ownership and migration constraints.
 
 Coordinated updates: `install/deployment.json` owns the publication build list and per-image compatibility contracts and verified service projection. Installed Compose fragments declare `garden.mowgli.update.*` labels; absent optional services stay absent. See `docs/UPDATES.md` for dependency, health and supported persistence contracts.
 

@@ -200,6 +200,9 @@ void MapServerNode::load_areas_from_params()
 void MapServerNode::init_map()
 {
   std::lock_guard<std::mutex> lock(map_mutex_);
+  const double cells = std::ceil(map_size_x_ / resolution_) * std::ceil(map_size_y_ / resolution_);
+  if (!std::isfinite(cells) || map_size_x_ <= 0 || map_size_y_ <= 0 || cells > max_grid_cells_)
+    throw std::runtime_error("Initial map geometry exceeds max_grid_cells resource budget");
 
   map_ = grid_map::GridMap({std::string(layers::OCCUPANCY), std::string(layers::CLASSIFICATION)});
 
@@ -223,6 +226,7 @@ void MapServerNode::init_map()
 
 void MapServerNode::resize_map_to_areas()
 {
+  planning_grid_error_.clear();
   if (areas_.empty())
   {
     return;
@@ -234,15 +238,29 @@ void MapServerNode::resize_map_to_areas()
   double min_y = std::numeric_limits<double>::max();
   double max_y = std::numeric_limits<double>::lowest();
 
-  for (const auto& area : areas_)
+  const auto accumulate = [&](const geometry_msgs::msg::Polygon& polygon)
   {
-    for (const auto& pt : area.polygon.points)
+    for (const auto& pt : polygon.points)
     {
+      if (!std::isfinite(pt.x) || !std::isfinite(pt.y))
+      {
+        planning_grid_error_ = "Garden geometry has a non-finite coordinate; transit disabled";
+        continue;
+      }
       min_x = std::min(min_x, static_cast<double>(pt.x));
       max_x = std::max(max_x, static_cast<double>(pt.x));
       min_y = std::min(min_y, static_cast<double>(pt.y));
       max_y = std::max(max_y, static_cast<double>(pt.y));
     }
+  };
+  for (const auto& area : areas_)
+  {
+    accumulate(area.polygon);
+  }
+  if (has_dock_exclusion_)
+  {
+    accumulate(dock_body_polygon_);
+    accumulate(dock_corridor_polygon_);
   }
 
   // Add 5m margin on each side for navigation around the areas.
@@ -252,9 +270,27 @@ void MapServerNode::resize_map_to_areas()
   const double center_x = (min_x + max_x) * 0.5;
   const double center_y = (min_y + max_y) * 0.5;
 
+  const double nx = std::ceil(new_size_x / resolution_);
+  const double ny = std::ceil(new_size_y / resolution_);
+  if (!planning_grid_error_.empty() || !std::isfinite(nx) || !std::isfinite(ny) || nx <= 0 ||
+      ny <= 0 || nx > max_grid_cells_ || ny > max_grid_cells_ || nx * ny > max_grid_cells_)
+  {
+    if (planning_grid_error_.empty())
+      planning_grid_error_ = "Garden grid requires " + std::to_string(nx * ny) + " cells at " +
+                             std::to_string(resolution_) +
+                             " m; max_grid_cells=" + std::to_string(max_grid_cells_) +
+                             "; transit disabled (no coarsening or truncation)";
+    RCLCPP_ERROR(get_logger(), "%s", planning_grid_error_.c_str());
+    invalidate_keepout_mask();
+    masks_dirty_ = true;
+    return;
+  }
+
   // Only resize if the new size differs meaningfully from the current one.
   if (std::abs(new_size_x - map_size_x_) < resolution_ &&
-      std::abs(new_size_y - map_size_y_) < resolution_)
+      std::abs(new_size_y - map_size_y_) < resolution_ &&
+      std::abs(center_x - map_.getPosition().x()) < resolution_ * 0.5 &&
+      std::abs(center_y - map_.getPosition().y()) < resolution_ * 0.5)
   {
     return;
   }
@@ -403,10 +439,15 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
     }
     yaml.close();
 
-    if (rows_loaded <= 0 || cols_loaded <= 0)
+    if (rows_loaded <= 0 || cols_loaded <= 0 || !std::isfinite(res_loaded) || res_loaded <= 0 ||
+        !std::isfinite(sx) || !std::isfinite(sy) || sx <= 0 || sy <= 0 || !std::isfinite(pos_x) ||
+        !std::isfinite(pos_y) ||
+        std::ceil(sx / res_loaded) * std::ceil(sy / res_loaded) > max_grid_cells_)
     {
-      throw std::runtime_error("Invalid map dimensions in " + yaml_path);
+      throw std::runtime_error("Invalid map dimensions or max_grid_cells resource budget in " +
+                               yaml_path);
     }
+    invalidate_keepout_mask();
 
     std::lock_guard<std::mutex> lock(map_mutex_);
 
@@ -448,6 +489,10 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
     }
     dat.close();
 
+    // Invalidation replaced the latched mask with an empty one. A completed
+    // load must schedule its replacement even if the previous mask was clean.
+    masks_dirty_ = true;
+    mask_rebuild_not_before_ = {};
     res->success = true;
     res->message = "Map loaded from " + map_file_path_;
     RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
@@ -463,13 +508,16 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
 void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
                                  std_srvs::srv::Trigger::Response::SharedPtr res)
 {
+  invalidate_keepout_mask();
+  planning_grid_error_.clear();
   {
     std::lock_guard<std::mutex> lock(map_mutex_);
     clear_map_layers();
   }
   areas_.clear();
   obstacle_polygons_.clear();
-  docking_pose_set_ = false;
+  // The calibrated dock belongs to mowgli_robot.yaml, not the area list.
+  // GUI replacement uses clear_map + add_area, so retain its pose and geometry.
   keepout_filter_info_sent_ = false;
   speed_filter_info_sent_ = false;
   masks_dirty_ = true;
@@ -659,6 +707,9 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
 
 void MapServerNode::publish_recorded_area_polygons()
 {
+  // A map edit invalidates transit until the debounced complete mask and
+  // geometry snapshot have been rebuilt. The LiDAR filter keeps its own topic.
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
   mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
   msg.header.stamp = get_clock()->now();
   msg.header.frame_id = "map";
@@ -1427,7 +1478,10 @@ void MapServerNode::on_set_docking_point(
     std::lock_guard<std::mutex> lock(map_mutex_);
     rebuild_dock_polygons();
     masks_dirty_ = true;
+    transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
   }
+  resize_map_to_areas();
+  defer_mask_rebuild();
   apply_area_classifications();
 
   res->success = true;
@@ -1473,10 +1527,11 @@ void MapServerNode::on_load_areas(const std_srvs::srv::Trigger::Request::SharedP
 
   try
   {
-    load_areas_from_file(areas_file_path_);
+    // Runtime reload: the dock pose is already in the current datum frame.
+    load_areas_from_file(areas_file_path_, DockPoseFrame::kAlreadyCurrent);
     apply_area_classifications();
-    res->success = true;
-    res->message = "Areas loaded from " + areas_file_path_;
+    res->success = planning_grid_error_.empty();
+    res->message = res->success ? "Areas loaded from " + areas_file_path_ : planning_grid_error_;
     RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
   }
   catch (const std::exception& ex)
@@ -2173,13 +2228,14 @@ void MapServerNode::save_areas_to_file(const std::string& path, bool allow_empty
   commit_file_atomically(tmp_path, path);
 }
 
-void MapServerNode::load_areas_from_file(const std::string& path)
+void MapServerNode::load_areas_from_file(const std::string& path, DockPoseFrame dock_frame)
 {
   std::ifstream in(path);
   if (!in.is_open())
   {
     throw std::runtime_error("Cannot open " + path);
   }
+  invalidate_keepout_mask();
 
   // Parse all key-value pairs into a map.
   std::map<std::string, std::string> kv;
@@ -2409,7 +2465,10 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   // around the migrated coordinates.
   {
     const double nan = std::numeric_limits<double>::quiet_NaN();
-    migrate_areas_datum(get_double("datum_lat", nan), get_double("datum_lon", nan), path);
+    migrate_areas_datum(get_double("datum_lat", nan),
+                        get_double("datum_lon", nan),
+                        path,
+                        dock_frame);
   }
 
   // Resize map to fit new areas and reset masks.
@@ -2417,6 +2476,7 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   keepout_filter_info_sent_ = false;
   speed_filter_info_sent_ = false;
   masks_dirty_ = true;
+  defer_mask_rebuild();
   // Harmless if migrate_areas_datum already published above (transient_local
   // — a redundant publish is a no-op for subscribers); unconditional so a
   // load with no migration still announces the loaded corridor list.
@@ -2426,7 +2486,8 @@ void MapServerNode::load_areas_from_file(const std::string& path)
 
 void MapServerNode::migrate_areas_datum(double file_datum_lat,
                                         double file_datum_lon,
-                                        const std::string& path)
+                                        const std::string& path,
+                                        DockPoseFrame dock_frame)
 {
   namespace wgs84 = mowgli_interfaces::wgs84;
 
@@ -2526,7 +2587,18 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
 
   // The dock pose rides with the map. Yaw is unchanged — both old and new
   // frames are north-aligned ENU, so a datum move is a pure translation.
-  if (docking_pose_set_)
+  // Only on the boot load, though: on a runtime reload (e.g. restoring a map
+  // backup recorded before the datum moved) the dock pose is already in the
+  // current frame and must stay where calibration put it.
+  if (docking_pose_set_ && dock_frame == DockPoseFrame::kAlreadyCurrent)
+  {
+    RCLCPP_INFO(get_logger(),
+                "Datum migration on a runtime reload: dock pose (%.3f, %.3f) is already in "
+                "the current datum frame — left unchanged.",
+                docking_pose_.position.x,
+                docking_pose_.position.y);
+  }
+  else if (docking_pose_set_)
   {
     double east = docking_pose_.position.x;
     double north = docking_pose_.position.y;
@@ -2592,8 +2664,10 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
 
 void MapServerNode::defer_mask_rebuild()
 {
+  invalidate_keepout_mask();
   std::lock_guard<std::mutex> lock(map_mutex_);
   mask_rebuild_not_before_ = std::chrono::steady_clock::now() + kMapEditSettle;
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
 }
 
 void MapServerNode::apply_area_classifications()
@@ -2705,6 +2779,14 @@ void MapServerNode::save_areas_guarded_for_test(const std::string& path)
 void MapServerNode::load_areas_for_test(const std::string& path)
 {
   load_areas_from_file(path);
+}
+
+std_srvs::srv::Trigger::Response MapServerNode::load_areas_service_for_test()
+{
+  auto req = std::make_shared<std_srvs::srv::Trigger::Request>();
+  auto res = std::make_shared<std_srvs::srv::Trigger::Response>();
+  on_load_areas(req, res);
+  return *res;
 }
 
 }  // namespace mowgli_map

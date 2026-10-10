@@ -1,0 +1,11 @@
+<!-- Explicit BoundaryGuard recovery only. No PlannerSelector and no fallback
+     from ordinary transit into this lane. Existing guard owns keepout toggling,
+     timeout, cancellation, and re-enable on success/failure/halt. -->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <ComputePathToPose goal="{goal}" path="{path}" planner_id="BoundaryRecovery"/>
+      <FollowPath path="{path}" controller_id="FollowPath" goal_checker_id="stopped_goal_checker"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

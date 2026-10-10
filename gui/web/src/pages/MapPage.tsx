@@ -71,6 +71,9 @@ import {useMapBackups} from "./map/hooks/useMapBackups.ts";
 import {JoystickOverlay} from "./map/components/JoystickOverlay.tsx";
 import {useIsMobile} from "../hooks/useIsMobile.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
+import {useFleetPeers} from "../hooks/useFleetPeers.ts";
+import {useRobotDescription} from "../hooks/useRobotDescription.ts";
+import {FLEET_PEER_COLOR, peerDisplayFeatures, peerMapPoses} from "../utils/fleetPeers.ts";
 
 
 // Mapbox access token comes from the build env only — no hardcoded fallback.
@@ -316,6 +319,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         },
         LAYER_COLORS.dockHeading,
     ), [features, offsetX, offsetY, datum, LAYER_COLORS, mowerImageReady, dockImageReady]);
+
+    // The other robots of the fleet (docs/MULTI_ROBOT.md), drawn with this
+    // robot's silhouette in their own colour and named.
+    const fleetRobots = useFleetPeers();
+    const robotGeometry = useRobotDescription();
+    const mapDisplayData = useMemo(() => {
+        const peers = peerDisplayFeatures(peerMapPoses(fleetRobots, datum), offsetX, offsetY, datum, robotGeometry);
+        return peers.length ? {...displayFeatures, features: [...displayFeatures.features, ...peers]} : displayFeatures;
+    }, [displayFeatures, fleetRobots, datum, offsetX, offsetY, robotGeometry]);
 
     // Layers for the persistent tracked-obstacle polygons (feature_type
     // 'dyn-obstacle', carried in the same display-features source). Rendered as
@@ -1464,7 +1476,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onSelectionChange={() => {}}
                         onOpenDetails={() => {}}
                     />
-                    <Source type={"geojson"} id={"display-features"} data={displayFeatures}>
+                    <Source type={"geojson"} id={"display-features"} data={mapDisplayData}>
                         <Layer type={"line"} id={"display-lines"} filter={['==', ['geometry-type'], 'LineString']}
                             layout={{'line-cap': 'round', 'line-join': 'round'}}
                             paint={{
@@ -1486,6 +1498,20 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'circle-color': LAYER_COLORS.dock,
                                 'circle-stroke-color': LAYER_COLORS.halo,
                                 'circle-stroke-width': 2,
+                            }}/>
+                        <Layer type={"symbol"} id={"fleet-peer-label"}
+                            filter={['==', ['get', 'feature_type'], 'fleet-peer']}
+                            layout={{
+                                'text-field': ['get', 'name'],
+                                'text-size': 11,
+                                'text-font': ['Open Sans Bold'],
+                                'text-offset': [0, 1.4],
+                                'text-anchor': 'top',
+                            }}
+                            paint={{
+                                'text-color': FLEET_PEER_COLOR,
+                                'text-halo-color': LAYER_COLORS.halo,
+                                'text-halo-width': 1.5,
                             }}/>
                         <Layer type={"symbol"} id={"dock-label"}
                             filter={['==', ['get', 'feature_type'], 'dock']}
@@ -1647,7 +1673,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onOpenDetails={onDrawOpenDetails}
                     />
                     {/* Display-only features: mower, dock, heading, paths */}
-                    <Source type={"geojson"} id={"display-features"} data={displayFeatures}>
+                    <Source type={"geojson"} id={"display-features"} data={mapDisplayData}>
                         <Layer type={"line"} id={"display-lines"} filter={['==', ['geometry-type'], 'LineString']}
                             layout={{'line-cap': 'round', 'line-join': 'round'}}
                             paint={{
@@ -1669,6 +1695,20 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'circle-color': LAYER_COLORS.dock,
                                 'circle-stroke-color': LAYER_COLORS.halo,
                                 'circle-stroke-width': 2,
+                            }}/>
+                        <Layer type={"symbol"} id={"fleet-peer-label"}
+                            filter={['==', ['get', 'feature_type'], 'fleet-peer']}
+                            layout={{
+                                'text-field': ['get', 'name'],
+                                'text-size': 11,
+                                'text-font': ['Open Sans Bold'],
+                                'text-offset': [0, 1.4],
+                                'text-anchor': 'top',
+                            }}
+                            paint={{
+                                'text-color': FLEET_PEER_COLOR,
+                                'text-halo-color': LAYER_COLORS.halo,
+                                'text-halo-width': 1.5,
                             }}/>
                         <Layer type={"symbol"} id={"dock-label"}
                             filter={['==', ['get', 'feature_type'], 'dock']}

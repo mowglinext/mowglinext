@@ -4134,7 +4134,7 @@
     "customComponent": "Custom version",
     "localService": "Locally managed",
     "removedByRelease": "Removed by selected release",
-    "separateUpdate": "Updated separately",
+    "separateUpdate": "Updated automatically with the next release",
     "agentVersion": "Update service version",
     "serviceSelectionUnsupported": "Update the host updater to enable individual container selection.",
     "noCompatibleComponent": "No compatible alternative is published for this component.",
@@ -4148,8 +4148,13 @@
     "selectionPending": "Installer hardware choices have changed. Review installation to apply the container changes.",
     "selectionHelp": "Containers follow your saved installer hardware choices.",
     "hardware": {
+      "backend": "Board",
       "gnss": "GPS",
       "lidar": "LiDAR"
+    },
+    "backendChoice": {
+      "none": "Mowgli",
+      "openmower": "OpenMower v1"
     },
     "disabled": "Off",
     "enabled": "On",
@@ -4215,6 +4220,7 @@
     "pin": "Pin this deployment; continue notifying about newer builds",
     "review": "Review update",
     "updateAgent": "Update the update service",
+    "updatingAgentFirst": "Updating the update service first: the new version is checked by its own updater…",
     "agentHelp": "The updater will restart separately from the containers. Its launcher retains the previous binary if the new version fails to start.",
     "history": "Deployment history",
     "rollback": "Restore previous deployment",

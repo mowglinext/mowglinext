@@ -358,7 +358,8 @@ void OpenMowerBridgeNode::create_motor_links()
     if (xesc_type_ == "xesc_2040")
     {
       const auto settings = settings_from_params(*this, m == kMow ? "mow_xesc" : "drive_xesc");
-      motors_[m] = std::make_unique<Xesc2040Link>(xesc_ports_[m], settings, warn);
+      motors_[m] =
+          std::make_unique<Xesc2040Link>(xesc_ports_[m], settings, motor_pole_pairs_, warn);
     }
     else
     {

@@ -116,7 +116,8 @@ if(BUILD_TESTING)
       test_imu_bias_estimator
       test_blade_policy
       test_power_semantics
-      test_request_stamps)
+      test_request_stamps
+      test_blade_speed)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} mowgli_openmower_bridge_core)
   endforeach()

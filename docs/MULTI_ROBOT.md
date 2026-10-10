@@ -84,6 +84,12 @@ them, and renaming the project orphans the maps volume.
   GUI" link) and a fleet map with one marker per robot, projected with each
   robot's own datum. Data comes from `GET /api/fleet/robots` polled every 2 s.
 - Peer management (add by address, remove) lives on the same page.
+- The Map page (`MapPage.tsx`, full and compact) also draws every online
+  peer: this robot's URDF silhouette in purple (`FLEET_PEER_COLOR`) with the
+  peer's name, at its fused pose (`pose` = `/odometry/filtered_map`),
+  re-projected from the peer's datum into ours (`utils/fleetPeers.ts`).
+  `useFleetPeers` polls `GET /api/fleet/robots` every 2 s while there is a
+  peer and every 15 s while the robot is alone.
 
 ## Phase 3 — Coordinated mowing
 
