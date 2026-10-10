@@ -101,6 +101,21 @@ inline std::vector<double> cuts(Point a, Point b, const std::vector<Ring>& rings
                                    (std::abs(ring[j].y) + std::abs(a.y)) * std::abs(dx) +
                                    (std::abs(b.x) + std::abs(a.x)) * std::abs(qy) +
                                    (std::abs(b.y) + std::abs(a.y)) * std::abs(qx));
+      // A well-determined denominator can prove that an intersection lies
+      // outside either segment without resolving its fraction accurately.
+      // Dense distant edges otherwise fall back to rationals solely because
+      // their (irrelevant) fraction is large. Keep ambiguous crossings exact.
+      if (std::abs(denominator) > error)
+      {
+        const long double sign = denominator > 0 ? 1 : -1;
+        const long double nt = sign * numerator_t, nu = sign * numerator_u;
+        const long double d = std::abs(denominator);
+        const long double comparison_pad =
+            16 * std::numeric_limits<long double>::epsilon() * (std::abs(nt) + std::abs(nu) + d);
+        if (nt < -error_t - comparison_pad || nt > d + error + error_t + comparison_pad ||
+            nu < -error_u - comparison_pad || nu > d + error + error_u + comparison_pad)
+          continue;
+      }
       // Resolve poorly conditioned intersection fractions exactly as well.
       // The fast branch's fraction error is far below the boundary tolerance.
       const long double fraction_resolution = std::abs(denominator) * 1e-14L;
