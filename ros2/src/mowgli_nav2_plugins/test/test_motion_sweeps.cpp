@@ -324,4 +324,36 @@ TEST(MotionSweeps, RotatedTranslatedStraightSweepsRejectGapsAndPreserveSharedSea
             << "yaw=" << yaw << " offset=" << offset.x << ',' << offset.y << " gap=" << gap;
       }
 }
+
+TEST(MotionSweeps, DenselySubdividedAxisAlignedPolygonPreservesInteriorAndEdgeProgress)
+{
+  Message message;
+  Rectangle(message, -10, -10, 10, 10);
+  auto& points = message.markers.front().points;
+  const auto corners = points;
+  points.clear();
+  for (std::size_t edge = 0; edge < 4; ++edge)
+    for (int i = 0; i < 8192; ++i)
+    {
+      const auto& a = corners[edge];
+      const auto& b = corners[(edge + 1) % 4];
+      geometry_msgs::msg::Point point;
+      point.x = a.x + (b.x - a.x) * i / 8192;
+      point.y = a.y + (b.y - a.y) * i / 8192;
+      points.push_back(point);
+    }
+  const auto geometry = Snapshot::parse(message);
+  ASSERT_TRUE(geometry->valid);
+  for (const Pose pose : {Pose{0, 0, 0}, Pose{0, -10, 0}})
+  {
+    const auto began = std::chrono::steady_clock::now();
+    for (int i = 0; i < 100; ++i)
+      ASSERT_TRUE(geometry->permits(pose, kBody, 0.2, 0, 0.1, true));
+    const auto duration =
+        std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - began).count();
+    std::cout << "axis-aligned translation polygon_vertices=32768 y=" << pose.y
+              << " checks=100 mean_us=" << duration / 100 << '\n';
+  }
+  EXPECT_FALSE(geometry->permits({9.99, 0, 0}, kBody, 0.2, 0, 0.1, true));
+}
 }  // namespace
