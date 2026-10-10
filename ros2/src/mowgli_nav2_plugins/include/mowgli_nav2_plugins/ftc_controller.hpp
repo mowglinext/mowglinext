@@ -17,6 +17,8 @@
 #define MOWGLI_NAV2_PLUGINS__FTC_CONTROLLER_HPP_
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -31,6 +33,7 @@
 #include <nav2_core/goal_checker.hpp>
 #include <nav2_costmap_2d/costmap_2d.hpp>
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
+#include <nav2_msgs/msg/collision_monitor_state.hpp>
 #include <nav2_ros_common/lifecycle_node.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -42,6 +45,7 @@
 
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_nav2_plugins/ftc_blade_load.hpp"
+#include "mowgli_nav2_plugins/ftc_collision_monitor_hold.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
@@ -178,6 +182,11 @@ private:
   // Latest measured forward speed (odom feedback), cached from
   // computeVelocityCommands so update_control_point can detect a stall.
   double last_measured_fwd_speed_{0.0};
+  // Forward speed FTC commanded on the previous tick, and the timers of the
+  // collision_monitor hold detector (ftc_collision_monitor_hold.hpp).
+  double last_cmd_fwd_speed_{0.0};
+  double cm_held_s_{0.0};
+  double cm_stalled_s_{0.0};
   // True while the blade-load slowdown is holding the carrot's target speed
   // below the path speed: set in update_control_point, read in
   // calculate_velocity_commands to let the commanded speed follow the slowed
@@ -370,6 +379,11 @@ private:
   /// Apply lateral_deviation_ to current_control_point_ in-place.
   void applyLateralDeviationToCarrot();
 
+  /// True once collision_monitor has held a forward-commanded robot still for
+  /// cm_hold_s (cm_stall_only_s without a verdict). See
+  /// ftc_collision_monitor_hold.hpp.
+  bool collisionMonitorHoldConfirmed(double dt);
+
   /// Wait-before-abort gate for the AVOIDANCE-out-of-headroom path. Sets
   /// obstacle_waiting_=true (caller halts) until obstacle_wait_timeout_s
   /// has elapsed, then throws ControllerException. Returns true while
@@ -521,6 +535,14 @@ private:
   bool blade_active_{false};
   double blade_rpm_{0.0};
   rclcpp::Time blade_status_time_{0, 0, RCL_ROS_TIME};
+
+  // ── collision_monitor verdict (ftc_collision_monitor_hold.hpp) ─────────────
+  //
+  // collision_monitor publishes its action only when it changes, so the last
+  // value IS the current verdict. Written by the subscription callback, read on
+  // the control-loop thread.
+  rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr cm_state_sub_;
+  std::atomic<std::uint8_t> cm_action_{0};
 
   std::string plugin_name_;
 
@@ -721,6 +743,11 @@ private:
     /// the first clear tick and re-entered on the other side — the ±step
     /// left-right flap that never grows a deviation big enough to go around.
     double obstacle_clear_hold_s{1.5};
+    /// collision_monitor hold → WEDGED (ftc_collision_monitor_hold.hpp): seconds
+    /// stopped under a STOP/APPROACH verdict, and seconds stopped with no
+    /// verdict, before FTC treats the robot as blocked. <= 0 disables each.
+    double cm_hold_s{3.0};
+    double cm_stall_only_s{10.0};
     /// Confine lateral obstacle-avoidance deviation to the mowing zone. When
     /// true, the lateral-OFFSET checks also treat out-of-zone cells (lethal in
     /// the global keepout costmap) as blocked, so a skirt that would leave the
