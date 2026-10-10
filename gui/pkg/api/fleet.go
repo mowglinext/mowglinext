@@ -21,8 +21,8 @@ const fleetCallTimeout = 12 * time.Second
 // FleetRoutes registers /fleet/* on the API group.
 func FleetRoutes(r *gin.RouterGroup, fleet *providers.FleetProvider, coord *providers.FleetCoordinator) {
 	g := r.Group("/fleet")
-	g.GET("/coordination", func(c *gin.Context) { getFleetCoordination(c, coord) })
-	g.PUT("/coordination", func(c *gin.Context) { putFleetCoordination(c, coord) })
+	g.GET("/coordination", func(c *gin.Context) { getFleetCoordination(c, fleet, coord) })
+	g.PUT("/coordination", func(c *gin.Context) { putFleetCoordination(c, fleet, coord) })
 	g.POST("/coordination/reset", func(c *gin.Context) { postFleetCoordinationReset(c, fleet, coord) })
 	g.POST("/map/push", func(c *gin.Context) { postFleetMapPush(c, fleet) })
 	g.GET("/identity", func(c *gin.Context) { getFleetIdentity(c, fleet) })
@@ -210,6 +210,9 @@ func postFleetCall(c *gin.Context, fleet *providers.FleetProvider) {
 type FleetCoordinationResponse struct {
 	Settings providers.CoordinatorSettings `json:"settings"`
 	Status   providers.CoordinatorStatus   `json:"status"`
+	// The /fleet/peers publisher — live whenever a peer is registered,
+	// independent of the coordination toggle (docs/MULTI_ROBOT.md § 3c).
+	PeerFeed providers.PeerFeedStatus `json:"peer_feed"`
 }
 
 // getFleetCoordination returns coordinated-mowing settings + status.
@@ -219,8 +222,8 @@ type FleetCoordinationResponse struct {
 // @Produce json
 // @Success 200 {object} FleetCoordinationResponse
 // @Router /fleet/coordination [get]
-func getFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
-	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status()})
+func getFleetCoordination(c *gin.Context, fleet *providers.FleetProvider, coord *providers.FleetCoordinator) {
+	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status(), PeerFeed: fleet.PeerFeedStatus()})
 }
 
 // putFleetCoordination updates coordinated-mowing settings.
@@ -233,7 +236,7 @@ func getFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
 // @Success 200 {object} FleetCoordinationResponse
 // @Failure 400 {object} ErrorResponse
 // @Router /fleet/coordination [put]
-func putFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
+func putFleetCoordination(c *gin.Context, fleet *providers.FleetProvider, coord *providers.FleetCoordinator) {
 	var s providers.CoordinatorSettings
 	if err := c.BindJSON(&s); err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
@@ -243,7 +246,7 @@ func putFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status()})
+	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status(), PeerFeed: fleet.PeerFeedStatus()})
 }
 
 // postFleetCoordinationReset forgets the fleet session's completed areas and

@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
@@ -24,10 +23,8 @@ import (
 const (
 	coordinationSettingsKey   = "fleet.coordination"
 	coordinationMemoryKey     = "fleet.session.completed"
-	coordinatorTick           = 2 * time.Second
+	coordinatorTick           = 1 * time.Second
 	assignmentRefresh         = 30 * time.Second
-	fleetPeersTopic           = "/fleet/peers"
-	fleetPeersMsgType         = "geometry_msgs/msg/PoseArray"
 	setFleetAssignmentService = "/behavior_tree_node/set_fleet_assignment"
 	setFleetAssignmentType    = "mowgli_interfaces/srv/SetFleetAssignment"
 	highLevelControlService   = "/behavior_tree_node/high_level_control"
@@ -232,9 +229,15 @@ func (c *FleetCoordinator) tick(now time.Time) {
 		c.setError("fleet snapshot: " + err.Error())
 		return
 	}
+	// Positions are placed in OUR map frame; without a datum there is no
+	// frame, so the yield rule stands down (members keep a nil position).
+	var selfDatum LatLon
+	if id, err := c.identity(); err == nil {
+		selfDatum = LatLon{Lat: id.DatumLat, Lon: id.DatumLon}
+	}
 	members := make([]fleetMember, 0, len(rows))
 	for _, r := range rows {
-		members = append(members, memberFromRobot(r))
+		members = append(members, memberFromRobotAt(r, selfDatum, peerPoseMaxAge))
 	}
 	self, peers := splitMembers(members)
 
@@ -256,7 +259,6 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	if mustPush {
 		c.pushAssignment(assignment, "fleet coordinator", now)
 	}
-	c.publishPeers(peers)
 
 	next, action := decideYield(self, peers, yieldBefore, settings, now)
 	c.mu.Lock()
@@ -296,46 +298,6 @@ func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now 
 	c.lastError = ""
 	c.mu.Unlock()
 	return true
-}
-
-// publishPeers republishes every online peer with a fix as a pose in OUR map
-// frame; an empty array when alone, so fleet_peer_obstacles.py keeps a fresh,
-// empty cloud flowing to the costmap.
-func (c *FleetCoordinator) publishPeers(peers []fleetMember) {
-	id, err := c.identity()
-	if err != nil {
-		return
-	}
-	if id.DatumLat == 0 && id.DatumLon == 0 {
-		return // no map frame yet; nothing to project into
-	}
-	datum := LatLon{Lat: id.DatumLat, Lon: id.DatumLon}
-	stamp := c.now()
-	msg := poseArrayMsg{
-		Header: geometry.Header{
-			Stamp:   geometry.Stamp{Sec: uint32(stamp.Unix()), Nanosec: uint32(stamp.Nanosecond())},
-			FrameId: "map",
-		},
-		Poses: []geometry.Pose{},
-	}
-	for _, p := range peers {
-		if p.Pos == nil {
-			continue
-		}
-		x, y := enuFromDatum(datum, *p.Pos)
-		msg.Poses = append(msg.Poses, geometry.Pose{
-			Position:    geometry.Point{X: x, Y: y, Z: 0},
-			Orientation: geometry.Quaternion{W: 1},
-		})
-	}
-	if err := c.ros.Publish(fleetPeersTopic, fleetPeersMsgType, &msg); err != nil {
-		c.setError("publish /fleet/peers: " + err.Error())
-	}
-}
-
-type poseArrayMsg struct {
-	Header geometry.Header `json:"header"`
-	Poses  []geometry.Pose `json:"poses"`
 }
 
 func (c *FleetCoordinator) sendHighLevel(command uint8) {

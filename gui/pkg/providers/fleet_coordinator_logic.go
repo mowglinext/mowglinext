@@ -27,6 +27,15 @@ type CoordinatorSettings struct {
 	YieldDistanceM    float64 `json:"yield_distance_m"`
 	ResumeDistanceM   float64 `json:"resume_distance_m"`
 	CompletedTTLHours float64 `json:"completed_ttl_h"`
+	// Longest a yielded robot holds before resuming regardless of the peer:
+	// the deadlock breaker when the priority robot stopped in front of it
+	// (its own collision checks) and neither will move first. Both robots
+	// carry each other in their costmaps, so a resumed robot skirts the
+	// stopped one instead of hitting it.
+	YieldMaxHoldS float64 `json:"yield_max_hold_s"`
+	// After any resume, no new yield for this long: lets the resumed robot
+	// actually clear the peer instead of stop/start flapping at 3 m.
+	YieldCooldownS float64 `json:"yield_cooldown_s"`
 }
 
 // DefaultCoordinatorSettings: coordination OFF until the operator turns it on.
@@ -36,6 +45,8 @@ func DefaultCoordinatorSettings() CoordinatorSettings {
 		YieldDistanceM:    3.0,
 		ResumeDistanceM:   5.0,
 		CompletedTTLHours: 12.0,
+		YieldMaxHoldS:     45.0,
+		YieldCooldownS:    20.0,
 	}
 }
 
@@ -53,6 +64,12 @@ func (s CoordinatorSettings) Normalize() CoordinatorSettings {
 	if out.CompletedTTLHours <= 0 {
 		out.CompletedTTLHours = d.CompletedTTLHours
 	}
+	if out.YieldMaxHoldS <= 0 {
+		out.YieldMaxHoldS = d.YieldMaxHoldS
+	}
+	if out.YieldCooldownS <= 0 {
+		out.YieldCooldownS = d.YieldCooldownS
+	}
 	return out
 }
 
@@ -60,6 +77,12 @@ func (s CoordinatorSettings) Normalize() CoordinatorSettings {
 type LatLon struct {
 	Lat float64
 	Lon float64
+}
+
+// XY is a position in THIS robot's map frame (metres, x east, y north).
+type XY struct {
+	X float64
+	Y float64
 }
 
 // fleetMember is the slice of a FleetRobot the coordinator reasons about.
@@ -72,7 +95,9 @@ type fleetMember struct {
 	CurrentArea   int // -1 when none
 	Completed     []uint32
 	SessionActive bool
-	Pos           *LatLon
+	// Fresh position in our map frame (fused pose first, antenna fix as the
+	// fallback — see peerMapPoses); nil when unknown or stale.
+	Pos *XY
 }
 
 // FleetAssignment is what gets pushed to the local BT.
@@ -83,8 +108,10 @@ type FleetAssignment struct {
 
 const hlStateAutonomous = 2
 
-// memberFromRobot derives a fleetMember from a snapshot row (self included).
-func memberFromRobot(r FleetRobot) fleetMember {
+// memberFromRobotAt derives a fleetMember from a snapshot row (self
+// included), placing it in the map frame anchored at selfDatum. A zero
+// selfDatum means "no map frame yet": every position stays nil.
+func memberFromRobotAt(r FleetRobot, selfDatum LatLon, maxAge time.Duration) fleetMember {
 	m := fleetMember{ID: r.Identity.ID, Self: r.Self, Online: r.Online, CurrentArea: -1}
 	var hl struct {
 		State       *int   `json:"state"`
@@ -112,23 +139,15 @@ func memberFromRobot(r FleetRobot) fleetMember {
 			m.CurrentArea = *session.CurrentArea
 		}
 	}
-	// The "gps" key is the adapted AbsolutePose: latitude in pose.position.x,
-	// longitude in pose.position.y (transform.go adaptGPS).
-	var gps struct {
-		Pose struct {
-			Pose struct {
-				Position struct {
-					X float64 `json:"x"`
-					Y float64 `json:"y"`
-				} `json:"position"`
-			} `json:"pose"`
-		} `json:"pose"`
+	if selfDatum.Lat == 0 && selfDatum.Lon == 0 {
+		return m
 	}
-	if raw, ok := r.Topics["gps"]; ok && json.Unmarshal(raw, &gps) == nil {
-		lat, lon := gps.Pose.Pose.Position.X, gps.Pose.Pose.Position.Y
-		if lat != 0 || lon != 0 {
-			m.Pos = &LatLon{Lat: lat, Lon: lon}
-		}
+	// Same placement as the costmap feed, so the yield rule and the
+	// obstacle the other robot sees agree.
+	if p, ok := fusedMapPose(r, selfDatum, maxAge); ok {
+		m.Pos = &XY{X: p.X, Y: p.Y}
+	} else if p, ok := fixMapPose(r, selfDatum, maxAge); ok {
+		m.Pos = &XY{X: p.X, Y: p.Y}
 	}
 	return m
 }
@@ -236,7 +255,9 @@ func sameDatum(a, b LatLon) bool {
 // yieldState is the coordinator's memory of the proximity rule.
 type yieldState struct {
 	Yielded    bool
-	ClearSince time.Time
+	HoldSince  time.Time // when the hold started (max-hold deadlock breaker)
+	ClearSince time.Time // when the last priority peer left the resume radius
+	ResumedAt  time.Time // last resume this rule sent (re-yield cooldown)
 }
 
 // YieldAction is what the proximity rule wants sent to the local BT.
@@ -257,6 +278,13 @@ const yieldResumeHold = 3 * time.Second
 // Pause, Home, charging) is never resumed by this rule: we only resume what
 // we ourselves stopped, and only while the robot still sits where we left it
 // (IDLE with our stop reason still standing).
+//
+// Two bounds keep the rule from deadlocking with the costmap avoidance both
+// robots now run (docs/MULTI_ROBOT.md § 3c): a hold never lasts longer than
+// yield_max_hold_s (the priority robot may itself have stopped in front of
+// us on its collision checks, waiting for us to leave), and after any resume
+// no new yield is issued for yield_cooldown_s, so the resumed robot gets to
+// skirt the peer instead of stopping again at the same 3 m.
 func decideYield(self fleetMember, peers []fleetMember, st yieldState, s CoordinatorSettings, now time.Time) (yieldState, YieldAction) {
 	if self.Pos == nil {
 		return st, YieldNone
@@ -266,31 +294,37 @@ func decideYield(self fleetMember, peers []fleetMember, st yieldState, s Coordin
 		if !p.Autonomous || p.Pos == nil || !hasPriorityOver(p.ID, self.ID) {
 			continue
 		}
-		if d := distanceM(*self.Pos, *p.Pos); d < nearest {
+		if d := math.Hypot(p.Pos.X-self.Pos.X, p.Pos.Y-self.Pos.Y); d < nearest {
 			nearest = d
 		}
 	}
+	cooldown := time.Duration(s.YieldCooldownS * float64(time.Second))
 	if !st.Yielded {
-		if self.Autonomous && nearest < s.YieldDistanceM {
-			return yieldState{Yielded: true}, YieldStop
+		inCooldown := !st.ResumedAt.IsZero() && now.Sub(st.ResumedAt) < cooldown
+		if self.Autonomous && nearest < s.YieldDistanceM && !inCooldown {
+			return yieldState{Yielded: true, HoldSince: now, ResumedAt: st.ResumedAt}, YieldStop
 		}
 		return st, YieldNone
 	}
 	// We are holding. If the operator moved the robot on (it is autonomous
 	// again, or docked / charging), our hold is over without a resume.
 	if self.Autonomous || self.StateName == "CHARGING" || self.StateName == "MANUAL_CHARGING" || self.StateName == "RETURNING_HOME" {
-		return yieldState{}, YieldNone
+		return yieldState{ResumedAt: st.ResumedAt}, YieldNone
+	}
+	maxHold := time.Duration(s.YieldMaxHoldS * float64(time.Second))
+	if !st.HoldSince.IsZero() && now.Sub(st.HoldSince) >= maxHold {
+		return yieldState{ResumedAt: now}, YieldStart
 	}
 	if nearest < s.ResumeDistanceM {
-		return yieldState{Yielded: true}, YieldNone
+		return yieldState{Yielded: true, HoldSince: st.HoldSince, ResumedAt: st.ResumedAt}, YieldNone
 	}
 	if st.ClearSince.IsZero() {
-		return yieldState{Yielded: true, ClearSince: now}, YieldNone
+		return yieldState{Yielded: true, HoldSince: st.HoldSince, ClearSince: now, ResumedAt: st.ResumedAt}, YieldNone
 	}
 	if now.Sub(st.ClearSince) < yieldResumeHold {
 		return st, YieldNone
 	}
-	return yieldState{}, YieldStart
+	return yieldState{ResumedAt: now}, YieldStart
 }
 
 // assignmentEqual compares two assignments.

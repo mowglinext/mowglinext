@@ -25,20 +25,23 @@ var FleetTopics = []string{
 }
 
 const (
-	peerHTTPTimeout    = 5 * time.Second
-	peerDialTimeout    = 5 * time.Second
-	peerReconnectMin   = 2 * time.Second
-	peerReconnectMax   = 30 * time.Second
-	peerReadDeadline   = 20 * time.Second
-	peerPingPeriod     = 8 * time.Second
-	peerOnlineMaxAge   = 10 * time.Second
-	peerWriteDeadline  = 5 * time.Second
-	peerMaxFrameBytes  = 4 << 20
-	peerRegisterPath   = "/api/fleet/peers/register"
-	peerUnregisterPath = "/api/fleet/peers/unregister"
-	peerIdentityPath   = "/api/fleet/identity"
-	peerMultiplexPath  = "/api/mowglinext/multiplex"
-	peerCallPathPrefix = "/api/mowglinext/call/"
+	// Peers re-read each other's identity (name, datum, API version) at this
+	// cadence: the datum is what places a peer's fused pose in OUR map frame.
+	peerIdentityRefresh = 60 * time.Second
+	peerHTTPTimeout     = 5 * time.Second
+	peerDialTimeout     = 5 * time.Second
+	peerReconnectMin    = 2 * time.Second
+	peerReconnectMax    = 30 * time.Second
+	peerReadDeadline    = 20 * time.Second
+	peerPingPeriod      = 8 * time.Second
+	peerOnlineMaxAge    = 10 * time.Second
+	peerWriteDeadline   = 5 * time.Second
+	peerMaxFrameBytes   = 4 << 20
+	peerRegisterPath    = "/api/fleet/peers/register"
+	peerUnregisterPath  = "/api/fleet/peers/unregister"
+	peerIdentityPath    = "/api/fleet/identity"
+	peerMultiplexPath   = "/api/mowglinext/multiplex"
+	peerCallPathPrefix  = "/api/mowglinext/call/"
 )
 
 // peerCache is the last message seen per logical topic for one peer.
@@ -48,6 +51,7 @@ type peerCache struct {
 	stamps   map[string]time.Time
 	lastSeen time.Time
 	socketUp bool
+	identity *RobotIdentity
 }
 
 func newPeerCache() *peerCache {
@@ -68,17 +72,37 @@ func (c *peerCache) setSocket(up bool) {
 	c.socketUp = up
 }
 
-// snapshot returns an immutable copy of the cached topics plus liveness.
-func (c *peerCache) snapshot(now time.Time) (map[string]json.RawMessage, time.Time, bool) {
+func (c *peerCache) setIdentity(id RobotIdentity) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	copyID := id
+	c.identity = &copyID
+}
+
+// identitySnapshot returns the last identity the peer advertised, if any.
+func (c *peerCache) identitySnapshot() (RobotIdentity, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.identity == nil {
+		return RobotIdentity{}, false
+	}
+	return *c.identity, true
+}
+
+// snapshot returns an immutable copy of the cached topics, each topic's age
+// in seconds, the last receipt time and liveness.
+func (c *peerCache) snapshot(now time.Time) (map[string]json.RawMessage, map[string]float64, time.Time, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := make(map[string]json.RawMessage, len(c.topics))
+	ages := make(map[string]float64, len(c.topics))
 	for k, v := range c.topics {
 		out[k] = v
+		ages[k] = now.Sub(c.stamps[k]).Seconds()
 	}
 	hlAge := now.Sub(c.stamps["highLevelStatus"])
 	online := c.socketUp && !c.stamps["highLevelStatus"].IsZero() && hlAge <= peerOnlineMaxAge
-	return out, c.lastSeen, online
+	return out, ages, c.lastSeen, online
 }
 
 // peerClient keeps one WebSocket to a peer GUI's multiplex endpoint and
@@ -114,6 +138,26 @@ func newPeerClient(address string, now func() time.Time) *peerClient {
 
 func (p *peerClient) start() {
 	go p.run()
+	go p.identityLoop()
+}
+
+// identityLoop keeps the peer's advertised identity fresh (its datum places
+// its poses in our map frame; its name labels it). Best effort: an
+// unreachable peer simply keeps the last identity, or none.
+func (p *peerClient) identityLoop() {
+	for {
+		ctx, cancel := context.WithTimeout(p.ctx, peerHTTPTimeout)
+		id, err := fetchPeerIdentity(ctx, p.http, p.address)
+		cancel()
+		if err == nil {
+			p.cache.setIdentity(id)
+		}
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-time.After(peerIdentityRefresh):
+		}
+	}
 }
 
 func (p *peerClient) Close() {
