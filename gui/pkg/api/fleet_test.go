@@ -149,6 +149,8 @@ func TestFleet_SnapshotMirrorsPeerTopicsAndLiveness(t *testing.T) {
 	assert.Equal(t, providers.FleetAPIVersion, peer.Identity.APIVersion)
 	assert.JSONEq(t, `{"state":2,"state_name":"MOWING","current_area":1}`, string(peer.Topics["highLevelStatus"]))
 	assert.NotNil(t, peer.LastSeen)
+	assert.Equal(t, 48.0, peer.Identity.DatumLat, "the peer's live identity (datum) is mirrored for re-projection")
+	assert.LessOrEqual(t, peer.TopicAgeS["highLevelStatus"], 10.0, "topic ages are reported")
 }
 
 func TestFleet_CommandsProxyToPeerAndRunLocallyForSelf(t *testing.T) {

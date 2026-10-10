@@ -1,25 +1,34 @@
 # Nav2 parameters — GPS-only / no-LiDAR overlay (merged onto
 # nav2_params_base.yaml). Carries ONLY what differs from the LiDAR variant:
-# static-map costmap layers (no /scan obstacle source), a pass-through
-# collision_monitor (scan disabled), FollowPath collision detection off, and
-# a longer planner costmap_update_timeout (slow costmaps without LiDAR ticks).
+# static-map costmap layers (no /scan obstacle source) plus the fleet peers
+# layer, a collision_monitor whose only source is the fleet peer cloud, and a
+# longer planner costmap_update_timeout (slow costmaps without LiDAR ticks).
 # Everything else lives in the base. Deep-merged in navigation.launch.py.
+#
+# OBSTACLES WITHOUT A LIDAR: the only thing a GPS-only robot can ever see is
+# another fleet member (docs/MULTI_ROBOT.md § 3c — the GUI feeds the peers'
+# footprints into /fleet/peer_obstacles). Until 2026-10-10 the no-LiDAR
+# overlay kept every obstacle consumer OFF (no layer to read), so a peer in
+# the costmap changed nothing and the two mowers only had the coordinator's
+# stop rule between them, which stops ONE of them. The consumers are now ON,
+# exactly as in the LiDAR variant: with an empty lawn they see nothing and
+# behave as before; with a peer they stop short (RPP collision check,
+# collision_monitor approach) or skirt it (FTC deviation).
 
 controller_server:
   ros__parameters:
     FollowPath:
       primary_controller:
-        use_collision_detection: false       # no obstacle_layer without LiDAR
+        use_collision_detection: true        # local costmap = fleet peers only
 
-    # FollowCoveragePath is FTCController (from the base). Without LiDAR there is
-    # no local obstacle_layer to read, so FTC's costmap-based obstacle checking
-    # and lateral path deviation must be OFF — otherwise it queries an empty/
-    # static costmap. The PID path tracking is identical to the LiDAR variant;
-    # only these two obstacle flags differ (mirrors FollowPath.use_collision_
-    # detection above). collision_monitor + firmware remain the safety net.
+    # FollowCoveragePath is FTCController (from the base). The PID tracking is
+    # identical to the LiDAR variant; the obstacle flags are ON so a peer
+    # standing on the swath is skirted (lateral deviation) or stopped for,
+    # exactly like a LiDAR obstacle — the local costmap's fleet_layer is the
+    # only source, so on a lawn without peers this is a no-op.
     FollowCoveragePath:
-      check_obstacles: false
-      enable_obstacle_deviation: false
+      check_obstacles: true
+      enable_obstacle_deviation: true
 
 planner_server:
   ros__parameters:
@@ -48,11 +57,8 @@ global_costmap:
       # fleet_layer: the other fleet members' footprints as lethal cells
       # (docs/MULTI_ROBOT.md). Without a LiDAR nothing else on this robot can
       # see a peer, so BOTH costmaps carry it: Smac routes transit around a
-      # peer and the local lane refuses to drive into one. (The LiDAR variant
-      # keeps the source on the LOCAL obstacle_layer only because FTC's zone
-      # mask treats global-lethal cells as non-obstacles; FTC's obstacle flags
-      # are pinned off in this variant so that mask is moot here.) A distinct
-      # layer name on purpose: CI forbids obstacle_layer + static_layer in one
+      # peer and the local lane refuses to drive into one. A distinct layer
+      # name on purpose: CI forbids obstacle_layer + static_layer in one
       # costmap. Marking only; the cloud is republished at 5 Hz, empty when the
       # robot is alone, so the source never goes stale. Keep the two copies
       # identical (test_nav2_params.py checks both).
@@ -86,17 +92,7 @@ local_costmap:
         subscribe_to_updates: false
         transform_tolerance: 0.5
 
-      # fleet_layer: the other fleet members' footprints as lethal cells
-      # (docs/MULTI_ROBOT.md). Without a LiDAR nothing else on this robot can
-      # see a peer, so BOTH costmaps carry it: Smac routes transit around a
-      # peer and the local lane refuses to drive into one. (The LiDAR variant
-      # keeps the source on the LOCAL obstacle_layer only because FTC's zone
-      # mask treats global-lethal cells as non-obstacles; FTC's obstacle flags
-      # are pinned off in this variant so that mask is moot here.) A distinct
-      # layer name on purpose: CI forbids obstacle_layer + static_layer in one
-      # costmap. Marking only; the cloud is republished at 5 Hz, empty when the
-      # robot is alone, so the source never goes stale. Keep the two copies
-      # identical (test_nav2_params.py checks both).
+      # Second copy of the global fleet_layer above — keep them identical.
       fleet_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -117,7 +113,24 @@ local_costmap:
 
 collision_monitor:
   ros__parameters:
-    polygons: ["PolygonStop", "FootprintApproach"]
+    # No LiDAR: the ONLY thing this monitor can see is another fleet member,
+    # through the fleet peer cloud (docs/MULTI_ROBOT.md § 3c). One velocity-
+    # projected approach gate (same shape as the LiDAR variant's hard stop:
+    # it keys on the commanded direction, so it never freezes a reverse
+    # escape — issue #393); the static PolygonStop stays defined but OFF.
+    polygons: ["FootprintApproach"]
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      footprint_topic: "/local_costmap/published_footprint"
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      # The peer footprint is DENSE (one point per 5 cm cell), so two points
+      # inside the projection is already a real body, not a stray return.
+      min_points: 2
+      visualize: true
+      polygon_pub_topic: "polygon_approach"
+      enabled: true
     PolygonStop:
       type: "polygon"
       points: "[[0.50, 0.20], [0.50, -0.20], [-0.10, -0.20], [-0.10, 0.20]]"
@@ -126,17 +139,18 @@ collision_monitor:
       visualize: false
       polygon_pub_topic: "polygon_stop"
       enabled: false
-    FootprintApproach:
-      type: "polygon"
-      action_type: "approach"
-      footprint_topic: "/local_costmap/published_footprint"
-      time_before_collision: 2.0
-      simulation_time_step: 0.05
-      min_points: 1
-      visualize: false
-      enabled: false
-    observation_sources: ["scan"]
-    scan:
-      type: "scan"
-      topic: /scan
-      enabled: false
+    observation_sources: ["fleet_peers"]
+    fleet_peers:
+      type: "pointcloud"
+      topic: /fleet/peer_obstacles
+      min_height: 0.0
+      max_height: 1.5
+      enabled: true
+      # 0.0 DISABLES the staleness stop for this source (nav2_collision_monitor
+      # Source::sourceValid skips the check when the timeout is zero). The
+      # base file's 1.5 s would otherwise halt every autonomous motion the
+      # moment fleet_peer_obstacles.py is down — on a single-robot GPS-only
+      # install that node is the only source, and a stop with nobody to avoid
+      # is the wrong failure. Phantom-peer safety comes from the node itself:
+      # it drops any peer pose older than 3 s and is respawned by the launch.
+      source_timeout: 0.0

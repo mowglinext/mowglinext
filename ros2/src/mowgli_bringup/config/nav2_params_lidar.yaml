@@ -27,7 +27,28 @@ global_costmap:
         enabled: true
         # No persistence: heading drift causes wall duplicates
         observation_persistence: 0.0
-        observation_sources: scan_filtered
+        # fleet_peers (docs/MULTI_ROBOT.md § 3c): the other mowers' footprints,
+        # in the GLOBAL costmap too since 2026-10-10 so Smac routes a transit
+        # AROUND a peer that stopped on the path instead of planning through it
+        # and waiting on the local collision check (the two-robot deadlock).
+        # This was kept out of the global costmap while FTC's zone mask treated
+        # global-lethal cells as non-obstacles; that mask is gone (2026-09-17),
+        # FTC detection reads the LOCAL costmap only. A parked peer will show up
+        # in the obstacle tracker exactly as its physical body already does
+        # through the scan — nothing new there.
+        observation_sources: scan_filtered fleet_peers
+        fleet_peers:
+          topic: /fleet/peer_obstacles
+          data_type: "PointCloud2"
+          marking: true
+          clearing: false
+          observation_persistence: 1.0
+          min_obstacle_height: 0.12
+          max_obstacle_height: 1.5
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+          raytrace_max_range: 0.0
+          raytrace_min_range: 0.0
         scan_filtered:
           topic: /scan_costmap
           # Subscribe to the IMU-tilt-filtered /scan_costmap stream from
@@ -95,13 +116,13 @@ local_costmap:
         # post_undock_blank_sec after charging drops. With that filter
         # owning the dock-mask logic, obstacle_min_range can drop to a
         # near-LiDAR floor and the 0.10–0.65 m mowing blind ring closes.
-        # fleet_peers: the other fleet members' footprints, rings of points
-        # from fleet_peer_obstacles.py (docs/MULTI_ROBOT.md). LOCAL costmap
-        # only: anything lethal in the GLOBAL costmap is treated by FTC's
-        # zone mask as "not an obstacle", which would hide a peer from the
-        # coverage controller. Marking only — the cloud has no sensor origin
-        # to raytrace from; it is republished at 5 Hz (empty when alone) and
-        # its 1 s persistence lets a peer that goes offline fade out.
+        # fleet_peers: the other fleet members' footprints (dense blocks of
+        # points from fleet_peer_obstacles.py, docs/MULTI_ROBOT.md § 3c). FTC
+        # reads THIS costmap for obstacle detection, so a peer on the swath is
+        # skirted or stopped for like any LiDAR return. Marking only — the
+        # cloud has no sensor origin to raytrace from; it is republished at
+        # 5 Hz (empty when alone) and its 1 s persistence lets a peer that
+        # goes offline fade out.
         observation_sources: scan_filtered fleet_peers
         fleet_peers:
           topic: /fleet/peer_obstacles
