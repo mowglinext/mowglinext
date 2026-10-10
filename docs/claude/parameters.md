@@ -287,6 +287,12 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `start_blocked_escape_min_signal_speed` (L551) | 0.03 | Navigation | launch |
 | `start_blocked_escape_signal_max_age_s` (L558) | 90.0 | Navigation | launch |
 
+`motion_footprint` is an internal `behavior_tree_node` double array of chassis
+XY vertices. Both full launch files derive it from `chassis_footprint`, including
+the helper's existing 0.05 m navigation clearance. The ad-hoc node default is
+empty and disables Escape motion authorization. This is not a new operator YAML
+setting. See `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
+
 ### Obstacles (GUI → Settings → Obstacles; injected `navigation.launch.py:811–868`, clamps shown)
 
 | Key (L) | Default | Becomes · clamp | GUI | Life |

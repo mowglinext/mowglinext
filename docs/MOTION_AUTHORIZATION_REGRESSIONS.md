@@ -1,5 +1,8 @@
 # Autonomous motion authorization regression baseline (#924)
 
+> Historical #942 baseline. Current implementation scope and evidence are in
+> [MOTION_AUTHORIZATION_IMPLEMENTATION.md](MOTION_AUTHORIZATION_IMPLEMENTATION.md).
+
 This is a software acceptance baseline for [#924](https://github.com/mowglinext/mowglinext/issues/924),
 before the 1.6 execution-authorization architecture. It adds tests and test registration only.
 It does not repair motion behavior or establish robot/field safety.
