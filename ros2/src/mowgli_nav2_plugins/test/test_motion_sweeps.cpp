@@ -291,4 +291,37 @@ TEST(MotionSweeps, LargeRecordedPolygonPermitsStationaryCompletePivot)
               << " checks=100 mean_us=" << duration / 100 << '\n';
   }
 }
+
+TEST(MotionSweeps, RotatedTranslatedStraightSweepsRejectGapsAndPreserveSharedSeams)
+{
+  for (const double yaw : {0.0, 1e-12, -1e-9, M_PI / 4, -M_PI / 2, 0.37, 2.91})
+    for (const Point offset : {Point{0, 0}, Point{1e5, -1e5}, Point{0.003, -0.007}})
+      for (const double gap : {0.0, 0.001})
+      {
+        Message message;
+        Rectangle(message, -2, -1, -gap / 2, 1);
+        Rectangle(message, gap / 2, -1, 2, 1);
+        const auto transform = [&](double x, double y)
+        {
+          return Point{offset.x + x * std::cos(yaw) - y * std::sin(yaw),
+                       offset.y + x * std::sin(yaw) + y * std::cos(yaw)};
+        };
+        for (auto& marker : message.markers)
+          for (auto& point : marker.points)
+          {
+            const auto transformed = transform(point.x, point.y);
+            point.x = transformed.x;
+            point.y = transformed.y;
+          }
+        const auto geometry = Snapshot::parse(message);
+        ASSERT_TRUE(geometry->valid);
+        const auto start = transform(-1, 0), end = transform(1, 0);
+        ASSERT_TRUE(geometry->mowing.authorized(start));
+        ASSERT_TRUE(geometry->mowing.authorized(end));
+        // Individually valid endpoints must not bridge a real inter-area gap.
+        // Adjacent rings sharing the same edge must still permit progress.
+        EXPECT_EQ(geometry->permits({start.x, start.y, yaw}, kBody, 1, 0, 2, true), gap == 0)
+            << "yaw=" << yaw << " offset=" << offset.x << ',' << offset.y << " gap=" << gap;
+      }
+}
 }  // namespace
