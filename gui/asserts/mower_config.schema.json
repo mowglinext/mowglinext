@@ -93,6 +93,14 @@
           "default": 0.36,
           "description": "Centre-to-centre distance between front casters in metres."
         },
+        "caster_x_offset": {
+          "type": "number",
+          "title": "Caster X Offset",
+          "default": -1.0,
+          "minimum": -1,
+          "maximum": 2,
+          "description": "Caster axle position forward from base_link in metres. -1 keeps the automatic chassis-front placement. Changes apply to the URDF after restarting ROS."
+        },
         "ticks_per_meter": {
           "type": "number",
           "title": "Encoder Ticks per Meter",

@@ -21,6 +21,7 @@
     "boundary_inner_margin_m": "number",
     "caster_radius": "number",
     "caster_track": "number",
+    "caster_x_offset": "number",
     "chassis_center_x": "number",
     "chassis_height": "number",
     "chassis_length": "number",

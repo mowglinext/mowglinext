@@ -1,5 +1,6 @@
+import {MowerPreview} from "../robot/MowerPreview";
 import React, { useState } from "react";
-import { App, Card, Col, Form, Input, InputNumber, Row, Space, Tag, Typography } from "antd";
+import { App, Card, Col, Form, Input, InputNumber, Row, Space, Switch, Tag, Typography } from "antd";
 import { ToolOutlined, DownOutlined, UpOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
@@ -70,6 +71,7 @@ export const HardwareSection: React.FC<Props> = ({
 
     return (
         <div>
+            <MowerPreview values={values}/>
             {/* Identity: the name the fleet view and the GUI show for this mower */}
             <Card size="small" style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
@@ -314,6 +316,24 @@ export const HardwareSection: React.FC<Props> = ({
                                     step={0.01} precision={3} style={{ width: "100%" }}
                                     addonAfter="m"
                                 />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={12} lg={8}>
+                            <Form.Item htmlFor="setting-caster_x_offset" data-setting-key="caster_x_offset"
+                                label={fieldLabel("caster_x_offset", t("settingsHardware.casterXOffset"))}
+                                tooltip={t("settingsHardware.casterXOffsetTooltip")}>
+                                <Space direction="vertical" style={{width:"100%"}}>
+                                    <label style={{display:"flex",gap:8,alignItems:"center"}}>
+                                        <Switch size="small" checked={values.caster_x_offset == null || Number(values.caster_x_offset) === -1}
+                                            onChange={auto=>onChange("caster_x_offset",auto ? -1 : Number(values.chassis_center_x ?? .18)+Number(values.chassis_length ?? .60)/2-Number(values.caster_radius ?? .03))}/>
+                                        {t("settingsHardware.casterAuto")}
+                                    </label>
+                                    {values.caster_x_offset != null && Number(values.caster_x_offset) !== -1 && <InputNumber
+                                        id="setting-caster_x_offset" aria-label={t("settingsHardware.casterXOffset") + ", m"}
+                                        value={Number(values.caster_x_offset)} min={-.99} max={2} step={.01} precision={3}
+                                        onChange={v=>{if(v != null) onChange("caster_x_offset",v);}}
+                                        style={{width:"100%"}} addonAfter="m"/>}
+                                </Space>
                             </Form.Item>
                         </Col>
                     </Row>

@@ -75,6 +75,8 @@
   <xacro:arg name="wheel_x_offset"   default="0.0"/>
   <xacro:arg name="caster_radius"    default="0.03"/>
   <xacro:arg name="caster_track"     default="0.36"/>
+  <!-- -1 preserves the historical chassis-derived caster axle position. -->
+  <xacro:arg name="caster_x_offset"  default="-1.0"/>
   <xacro:arg name="blade_radius"     default="0.09"/>
 
   <!-- ================================================================
@@ -95,7 +97,8 @@
   <xacro:property name="caster_width"     value="0.03"/>
   <xacro:property name="caster_mass"      value="0.2"/>
   <!-- Casters near front edge of chassis -->
-  <xacro:property name="caster_x_offset"  value="${chassis_cx + base_length/2.0 - caster_radius}"/>
+  <xacro:property name="configured_caster_x" value="$(arg caster_x_offset)"/>
+  <xacro:property name="caster_x_offset" value="${chassis_cx + base_length/2.0 - caster_radius if float(configured_caster_x) == -1.0 else float(configured_caster_x)}"/>
   <xacro:property name="caster_track"     value="$(arg caster_track)"/>
 
   <xacro:property name="base_mass"        value="$(arg chassis_mass_kg)"/>

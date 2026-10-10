@@ -1,3 +1,5 @@
+import {StyledDockMarker} from "./map/components/StyledDockMarker";
+import {AssembledMowerMarker} from "./map/components/AssembledMowerMarker";
 import {formatArea} from "../utils/areaLabel.ts";
 import {mowingAreaIndexById} from "../utils/mapAreaIndex.ts";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
@@ -293,13 +295,16 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         ? getMowerHeadingRad(mowerHeadingFeature.geometry.coordinates, (lng, lat) =>
             itranspose(offsetX, offsetY, datum, lat, lng))
         : undefined;
+    const robotGeometry = useRobotDescription();
+    const assembledMowerReady = mowerAppearance.id === "urdf" && !!robotGeometry.fromUrdf && mowerHasValidPose && mowerHeadingRad !== undefined;
     const mowerImageReady = shouldDisplayMowerImage(
         mowerAppearance,
         loadedMowerImageSrc,
         mowerHasValidPose,
         mowerHeadingRad !== undefined,
     );
-    const dockImageReady = shouldDisplayMapImage(
+    const styledDockReady = dockAppearance.id === "styled" && dockHasValidPose && dockHeadingRad !== undefined;
+    const dockImageReady = styledDockReady || shouldDisplayMapImage(
         dockImage,
         loadedDockImageSrc,
         dockHasValidPose,
@@ -309,7 +314,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // Display-only features (mower, dock, heading, paths) rendered as separate layers
     const displayFeatures = useMemo(() => buildMapDisplayFeatures(
         features,
-        mowerImageReady,
+        mowerImageReady || assembledMowerReady,
         dockImageReady,
         (dock) => {
             const coords = dock.getCoordinates();
@@ -318,12 +323,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             return {type: "LineString", coordinates: [coords, endPoint]};
         },
         LAYER_COLORS.dockHeading,
-    ), [features, offsetX, offsetY, datum, LAYER_COLORS, mowerImageReady, dockImageReady]);
+    ), [features, offsetX, offsetY, datum, LAYER_COLORS, mowerImageReady, assembledMowerReady, dockImageReady]);
 
     // The other robots of the fleet (docs/MULTI_ROBOT.md), drawn with this
     // robot's silhouette in their own colour and named.
     const fleetRobots = useFleetPeers();
-    const robotGeometry = useRobotDescription();
     const mapDisplayData = useMemo(() => {
         const peers = peerDisplayFeatures(peerMapPoses(fleetRobots, datum), offsetX, offsetY, datum, robotGeometry);
         return peers.length ? {...displayFeatures, features: [...displayFeatures.features, ...peers]} : displayFeatures;
@@ -394,8 +398,13 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             onLoad={() => setLoadedMowerImageSrc(mowerImage.src)}
             onError={() => setLoadedMowerImageSrc(undefined)}
         />
-        : null;
-    const dockImageMarker = dockImage && dockFeature instanceof DockFeatureBase && dockHasValidPose && dockHeadingRad !== undefined
+        : assembledMowerReady && mowerFeature instanceof MowerFeatureBase
+            ? <AssembledMowerMarker robot={robotGeometry} longitude={mowerFeature.geometry.coordinates[0]}
+                latitude={mowerFeature.geometry.coordinates[1]} headingRad={mowerHeadingRad}/>
+            : null;
+    const dockImageMarker = styledDockReady && dockFeature instanceof DockFeatureBase
+        ? <StyledDockMarker longitude={dockFeature.geometry.coordinates[0]} latitude={dockFeature.geometry.coordinates[1]} headingRad={dockHeadingRad}/>
+        : dockImage && dockFeature instanceof DockFeatureBase && dockHasValidPose && dockHeadingRad !== undefined
         ? <MapImageMarker
             image={dockImage}
             alt={t(dockImage.altKey)}

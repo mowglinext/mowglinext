@@ -79,6 +79,7 @@ It is the radius around a session dig point inside which FollowStrip skips cover
 | `ticks_per_meter` (L43) | 399.0 | `hardware_bridge.ticks_per_meter` `mowgli.launch.py:210` (host odom + re-sent to STM32) | Hardware | launch |
 | `caster_radius` (L190) | 0.03 | xacro `mowgli.launch.py:103` | Hardware | launch |
 | `caster_track` (L191) | 0.36 | xacro `mowgli.launch.py:104` | Hardware | launch |
+| `caster_x_offset` | -1.0 (auto) | xacro `mowgli.launch.py`; caster axle X from base_link, metres | Hardware | launch |
 | `blade_radius` (L194) | 0.09 | xacro `mowgli.launch.py:105` (`blade_link`) | Hardware | launch |
 | `tool_width` (L195) | 0.18 | `map_server.tool_width` `full_system.launch.py:426` (mow-progress stamp radius); `coverage_server.operation_width = tool_width − swath_overlap` `navigation.launch.py:924`. Fallback single-sourced as `DEFAULT_TOOL_WIDTH_M` (`robot_config_util.py:48`) — **Invariant 6** | Hardware | launch |
 

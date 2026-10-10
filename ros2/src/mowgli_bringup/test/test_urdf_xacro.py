@@ -47,3 +47,18 @@ def test_blade_link_is_attached_by_a_fixed_joint() -> None:
     assert child is not None
     assert parent.attrib["link"] == "base_link"
     assert child.attrib["link"] == "blade_link"
+
+
+def test_caster_offset_reaches_both_axles_and_auto_preserves_placement() -> None:
+    for offset, expected in [(-1.0, 0.45), (0.32, 0.32), (0.0, 0.0), (-0.1, -0.1)]:
+        result = subprocess.run(
+            ["xacro", str(_XACRO_FILE), "chassis_length:=0.6",
+             "chassis_center_x:=0.18", "caster_radius:=0.03",
+             f"caster_x_offset:={offset}"],
+            check=True, capture_output=True, text=True,
+        )
+        robot = ET.fromstring(result.stdout)
+        for side in ("left", "right"):
+            origin = robot.find(f"./joint[@name='front_{side}_caster_joint']/origin")
+            assert origin is not None
+            assert abs(float(origin.attrib["xyz"].split()[0]) - expected) < 1e-9

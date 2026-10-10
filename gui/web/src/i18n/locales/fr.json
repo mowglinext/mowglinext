@@ -1615,7 +1615,7 @@
   "mapToolbar": {
     "actionFailed": "Échec de l'action",
     "mowerAppearance": "Image de la tondeuse sur la carte",
-    "mowerAppearanceUrdf": "Silhouette URDF (repli automatique)",
+    "mowerAppearanceUrdf": "URDF · tondeuse assemblée",
     "mowerAppearanceBiltemaRm1000": "Biltema RM1000",
     "mowerAppearanceBiltemaRm1000Alt": "Tondeuse Biltema RM1000",
     "dockAppearance": "Apparence de la base",
@@ -2444,7 +2444,10 @@
     "modelConfirmTitle": "Appliquer le préréglage du modèle ?",
     "modelConfirmBody": "Ceci écrase les dimensions matérielles, les décalages de capteurs et les seuils de batterie — y compris les valeurs calibrées.",
     "modelConfirmOk": "Appliquer le préréglage",
-    "modelConfirmCancel": "Annuler"
+    "modelConfirmCancel": "Annuler",
+    "casterXOffset": "Position avant/arrière des roulettes",
+    "casterXOffsetTooltip": "Position X de l’axe des roulettes depuis base_link (essieu arrière), en mètres ; positive vers l’avant. Le mode automatique place le pneu à l’avant du châssis. Enregistrez et redémarrez ROS pour actualiser le modèle.",
+    "casterAuto": "Automatique selon le châssis"
   },
   "settingsDriveMotor": {
     "savedLiveTitle": "Sauvegardé et appliqué en direct",
@@ -4692,5 +4695,22 @@
       "mavros": "MAVROS"
     },
     "badgeTooltip": "Backend matériel : {{name}} — ouvrir les réglages matériel"
+  },
+  "mowerVisual": {
+    "title": "Votre tondeuse",
+    "bodyStyle": "Style de carrosserie",
+    "rounded": "Arrondi",
+    "sculpted": "Sculpté",
+    "utility": "Utilitaire",
+    "yardforce": "Inspiré Yardforce",
+    "transparent": "Coque transparente",
+    "browserPreference": "Apparence · enregistrée dans ce navigateur",
+    "top": "Dessus · avant ↑",
+    "side": "Profil · avant ←",
+    "waiting": "En attente de la description du robot pour afficher sa géométrie.",
+    "previewNote": "Aperçu des réglages en cours. La carte utilise la description du robot en service ; enregistrez et redémarrez ROS pour appliquer la géométrie.",
+    "mapAlt": "Tondeuse assemblée selon la description du robot en service",
+    "dockStyle": "Base stylisée",
+    "dockNote": "Base illustrative · 67 × 46 cm. Sélectionnez « Base stylisée » dans l’apparence de la carte pour l’afficher."
   }
 }

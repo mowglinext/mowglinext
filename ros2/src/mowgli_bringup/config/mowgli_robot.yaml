@@ -273,6 +273,8 @@ mowgli:
     # Front casters
     caster_radius: 0.03
     caster_track: 0.36
+    # Axle X from base_link (rear axle), metres. -1 = derive from chassis front.
+    caster_x_offset: -1.0
 
     # Mowing blade
     blade_radius: 0.09
