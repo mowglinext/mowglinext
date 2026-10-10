@@ -152,7 +152,9 @@ configure_gps() {
         ;;
       2)
         connection="uart"
-        pick_uart_port "${GNSS_SERIAL_DEVICE:-/dev/ttyAMA4}"
+        local gnss_default="${GNSS_SERIAL_DEVICE:-}"
+        openmower_uart_owner "$gnss_default" >/dev/null && gnss_default=""
+        pick_free_uart_port "${gnss_default:-$(default_gnss_uart_device)}" "GNSS" || return 1
         GNSS_SERIAL_DEVICE="$REPLY"
         ;;
       *)
@@ -162,6 +164,7 @@ configure_gps() {
     esac
   else
     info "GNSS device pre-configured: ${GNSS_SERIAL_DEVICE}"
+    uart_port_is_free "$GNSS_SERIAL_DEVICE" "GNSS" || return 1
   fi
 
   # Explicit --gnss-baud wins, then the value already in mowgli_robot.yaml

@@ -20,7 +20,7 @@ interface HostUpdaterPanelProps {
 export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProtocol}: HostUpdaterPanelProps) {
     const {t} = useTranslation();
     const navigate = useNavigate();
-    const {data, error, refresh} = useHostUpdater();
+    const {data, error, refresh} = useHostUpdater({live: true});
     const [policy, setPolicy] = useState<UpdatePolicy>();
     const [selected, setSelected] = useState<string>();
     const [componentSelected, setComponentSelected] = useState<Record<string,string>>({});

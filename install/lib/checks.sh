@@ -224,11 +224,13 @@ check_generated_gps_yaml_alignment() {
   gnss_source="$(effective_gnss_source 2>/dev/null || default_gnss_source)"
 
   info "GNSS source: $gnss_source"
+
   if [[ "$gnss_source" == "direct" ]]; then
     _describe_gnss_resolution "GNSS receiver family" "$yaml_receiver_family" "${GNSS_RECEIVER_FAMILY:-}" "auto"
-    _describe_gnss_resolution "GNSS serial device" "$yaml_serial_device" "${GNSS_SERIAL_DEVICE:-}" "/dev/ttyAMA4"
+    _describe_gnss_resolution "GNSS serial device" "$yaml_serial_device" "${GNSS_SERIAL_DEVICE:-}" "$(default_gnss_uart_device)"
     _describe_gnss_resolution "GNSS serial baud" "$yaml_serial_baud" "${GNSS_SERIAL_BAUD:-}" "921600"
   fi
+
   _describe_gnss_resolution "GNSS frame_id" "$yaml_frame_id" "${GNSS_FRAME_ID:-}" "gps_link"
   _describe_gnss_resolution "GNSS NTRIP enabled" "$yaml_ntrip_enabled" "${GNSS_NTRIP_ENABLED:-}" "true"
 }

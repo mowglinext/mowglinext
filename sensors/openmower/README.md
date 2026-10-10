@@ -71,7 +71,7 @@ The Rev4 motor adapter (`xesc_yfr4`) is not supported yet.
 
 Device paths default to OpenMower's own for kernels ≥ 6.1.28. The installer
 writes its choice to `docker/.env`; after that they are changed in the GUI
-(**Settings → Hardware Backend**), never by editing a file:
+(**Settings → Hardware** (backend card at the top)), never by editing a file:
 
 | GUI field (`mowgli_robot.yaml` key) | Installer key (`docker/.env`) | Default | Meaning |
 |-------------------------------------|-------------------------------|---------|---------|
@@ -87,9 +87,22 @@ Until a port is saved in the GUI, the GUI shows the installer's value. The
 bridge reads them at start-up: **Restart ROS2** after saving (it restarts the
 `mowgli-openmower` container too). `OPENMOWER_IMAGE` stays an installer key.
 
-The installer enables `uart1…uart5` overlays and disables Bluetooth, which is
-what OpenMowerOS does too. On an older kernel (< 6.1.28) OpenMower used
-`ttyAMA4/2/3` for left/right/mow — set the ports accordingly.
+The installer prepares the Pi the way OpenMowerOS does
+(`stage-openmower/10-pi-serial`, `15-pi-config`), then asks for a reboot:
+
+- `enable_uart=1`, `dtoverlay=disable-bt` and one `dtoverlay=uartN` per port
+  in use — `uart3/4/5` for the xESCs, `uart2` for the GPS;
+- the kernel console is removed from `cmdline.txt` (backup
+  `cmdline.txt.mowgli.bak`) and the `serial-getty` logins on those UARTs are
+  masked — Ubuntu ships `console=serial0`, which otherwise prints the boot log
+  into the LowLevel board on `ttyAMA0`;
+- the GNSS defaults to `/dev/ttyAMA2` (the board's GPS UART; `ttyAMA4`, the
+  usual GNSS port, is the mow xESC here), and a GNSS or LiDAR port an xESC or
+  the LowLevel board already uses is refused. Every Pi UART is wired on this
+  board, so a LiDAR must be a USB one.
+
+On an older kernel (< 6.1.28) OpenMower used `ttyAMA4/2/3` for
+left/right/mow and `ttyAMA1` for the GPS — set the ports accordingly.
 
 ## Settings: shared with every backend, OpenMower defaults
 
@@ -142,7 +155,7 @@ hidden on an OpenMower robot.
 |---------|--------|
 | `/hardware_bridge/status` | LowLevel `ll_status` bits (initialized, rain, UI board) + mow ESC telemetry (rpm, current, temperatures). `is_charging` means **on the dock** and comes from the charge-contact voltage (`power_semantics.hpp`), not from status bit 2 (see *Firmware facts* below). `firmware_compatible` is **true only when the LowLevel stream is live and both drive ESCs are connected** — PreFlightCheck refuses to mow otherwise. `firmware_version` names the ESC type and firmware versions. |
 | `/hardware_bridge/emergency` | LowLevel emergency bitmask (STOP button, lift/tilt, latch) plus the host request; reasons match the STM32 bridge |
-| `/hardware_bridge/power`, `/battery_state` | `v_charge`, `v_system`, `charging_current`, SoC; current is `abs(charge)` while docked, else 0 (docking convention). `charger_enabled` is the board's charge relay; a docked robot whose relay opened (full battery) reads `docked, not charging` / `POWER_SUPPLY_STATUS_NOT_CHARGING` and stays docked. |
+| `/hardware_bridge/power`, `/battery_state` | `v_charge`, `v_system`, `charging_current`, SoC; current is `abs(charge)` while docked, else 0 (docking convention); `Power.charge_current` is also 0 off the dock (the sensor reads ~0.05 A of nothing). `charger_enabled` means ON THE DOCK, as on the STM32 — the behaviour tree reports it as `HighLevelStatus.is_charging`; it is never the charge relay, which v0.13 firmware keeps closed while mowing. The relay shows in `charger_status`: a docked robot whose relay opened (full battery) reads `docked, not charging` / `POWER_SUPPLY_STATUS_NOT_CHARGING` and stays docked. |
 | `/imu/data`, `/imu/mag_raw` | LowLevel `ll_imu`, frame `imu_link`. The at-rest gyro/accel bias is removed by a calibration that is armed on every dock visit and starts once the wheels have been still for 1 s; an attempt aborted by the robot creeping onto the contacts is retried. Off the dock it runs after 15 s at rest if none has completed yet. |
 | `/wheel_odom`, `/wheel_ticks` | xESC tachometers (signed, right side mirrored), 50 ms windows, zeroed while docked. A tick jump no wheel could make (> 2 m/s) is a controller reset, so odometry re-primes instead of publishing it (`IsPlausibleTickDelta`). |
 | `/cmd_vel` | twist_mux output → per-wheel targets → **host-side PI + feed-forward** on the tachometer → xESC duty at 50 Hz. Same slew limits as `hardware_bridge.yaml`. |

@@ -800,15 +800,16 @@ private:
             // ~/start_in_area, which sets current_command itself and never
             // reaches this handler, so this cannot cancel a targeted request.
             //
-            // EXCEPTION: not while parked in StopHoldSequence's IDLE
-            // (isResumableHoldState) — that is the operator's own "Pause" on a
-            // run still in progress, and pressing Resume/Start again must
-            // continue that SAME targeted area, not silently widen to the
-            // whole lawn. The charge-hold/emergency scenario above is
-            // unaffected: it publishes CHARGING/CRITICAL_BATTERY_CHARGING (or,
-            // once EndSession has run, IDLE_DOCKED), never plain IDLE.
+            // EXCEPTIONS (startClearsSingleAreaMode): not while parked in
+            // StopHoldSequence's IDLE — the operator's own "Pause" on a run
+            // still in progress — and not in a battery charge hold, where this
+            // START was just flagged above as a manual "Resume now" of the
+            // SAME run. Either way the operator continues that targeted area;
+            // widening to the whole lawn sent a nearly finished area-2 run
+            // back to area 0 (field report 2026-10-05). IDLE_DOCKED (session
+            // ended) and every other state keep the clear.
             if (cmd == HighLevelControl::Request::COMMAND_START &&
-                !isResumableHoldState(context_->last_high_level_status.state_name))
+                startClearsSingleAreaMode(context_->last_high_level_status.state_name))
             {
               clearSingleAreaMode(*context_);
             }

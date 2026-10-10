@@ -3907,7 +3907,7 @@
     },
     "hardware": {
       "label": "Matériel",
-      "description": "Modèle de robot, roues, châssis et dimensions de la lame"
+      "description": "Backend matériel et son câblage, modèle, roues, châssis et dimensions de la lame"
     },
     "drive_motor": {
       "label": "Moteurs",
@@ -3994,10 +3994,6 @@
       "drivePidUpdateFailedDescription": "Redémarrez ROS2 pour appliquer les nouveaux gains PID des moteurs.",
       "saveFailed": "Échec de l'enregistrement des réglages",
       "savedApplyingLive": "Enregistré. Application des réglages moteurs au robot en cours…"
-    },
-    "hardware_backend": {
-      "label": "Matériel",
-      "description": "Quel pont matériel pilote le robot, et les réglages qui lui sont propres (ports série, contrôleurs moteur)"
     }
   },
   "displayMode": {
@@ -4817,6 +4813,12 @@
       "mavros": "Un contrôleur de vol pilote le robot via le conteneur MAVROS, configuré par l'installateur."
     },
     "choiceNote": "Le pont matériel est choisi à l'installation du robot.",
-    "openmowerRestartNote": "Le pont OpenMower lit ces réglages au démarrage : utilisez « Redémarrer ROS2 » après l'enregistrement, ce qui redémarre aussi le pont."
+    "openmowerRestartNote": "Le pont OpenMower lit ces réglages au démarrage : utilisez « Redémarrer ROS2 » après l'enregistrement, ce qui redémarre aussi le pont.",
+    "shortNames": {
+      "mowgli": "Mowgli",
+      "openmower": "OpenMower v1",
+      "mavros": "MAVROS"
+    },
+    "badgeTooltip": "Backend matériel : {{name}} — ouvrir les réglages matériel"
   }
 }

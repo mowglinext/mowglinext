@@ -82,7 +82,6 @@ describe("hardware backend settings", () => {
         expect(settingsSectionsForBackend(sections, "mavros")).toEqual(sections);
         expect(settingsSectionsForBackend(sections, "openmower")).toEqual(sections);
     });
-});
 
     it("does not send runtime-pending MAVROS routes or Mowgli PID parameters", () => {
         const routes = {

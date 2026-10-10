@@ -11,16 +11,21 @@ export type HardwareParameterRoute = {
 
 export interface HardwareBackendInfo {
     backend: HardwareBackend;
+
     /**
      * Settings whose DEFAULT this backend replaces
-     * (ros2/src/mowgli_bringup/config/backends/<backend>.yaml), e.g. the
-     * OpenMower xESC's ticks_per_meter.
+     * (ros2/src/mowgli_bringup/config/backends/<backend>.yaml).
      */
     defaultOverrides: Record<string, unknown>;
+
     /** Routes for writing live ROS parameters on the selected backend. */
     parameterRoutes: Record<string, HardwareParameterRoute>;
+
     /** Whether the backend's live parameter routing is deployed. */
     runtimeRouting: "available" | "pending_image";
+
+    /** robot_name from the installed config ("" while unknown). */
+    robotName: string;
 }
 
 export const DEFAULT_HARDWARE_BACKEND: HardwareBackend = "mowgli";

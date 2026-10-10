@@ -203,7 +203,9 @@ section "HARDWARE_BACKEND=openmower (LowLevel board + xESC behind the bridge sid
 openmower_repo="$SANDBOX/repo_openmower"
 sandbox_repo "$openmower_repo"
 harness_init "$openmower_repo"
-harness_set_preset backend=openmower gnss=auto gnss_connection=uart lidar=ldlidar-uart
+# Every Pi UART is wired on an OpenMower v1 board (LowLevel ttyAMA0, GPS
+# ttyAMA2, xESC ttyAMA3/4/5), so its LiDAR can only be a USB one.
+harness_set_preset backend=openmower gnss=auto gnss_connection=uart lidar=ldlidar-usb
 if harness_run; then
   pass "openmower backend: harness_run succeeds"
 else
@@ -219,6 +221,7 @@ assert_eq "openmower backend: LowLevel port default"     "/dev/ttyAMA0" "$(env_v
 assert_eq "openmower backend: left xESC port default"    "/dev/ttyAMA5" "$(env_value "$openmower_repo" OPENMOWER_XESC_LEFT_PORT)"
 assert_eq "openmower backend: right xESC port default"   "/dev/ttyAMA3" "$(env_value "$openmower_repo" OPENMOWER_XESC_RIGHT_PORT)"
 assert_eq "openmower backend: mow xESC port default"     "/dev/ttyAMA4" "$(env_value "$openmower_repo" OPENMOWER_XESC_MOW_PORT)"
+assert_eq "openmower backend: GNSS on the board's GPS UART" "/dev/ttyAMA2" "$(env_value "$openmower_repo" GNSS_SERIAL_DEVICE)"
 assert_match "openmower backend: OPENMOWER_IMAGE points at the openmower image" "/openmower:" "$(env_value "$openmower_repo" OPENMOWER_IMAGE)"
 
 openmower_fragments=$(selected_fragments_in_current_run)
@@ -246,5 +249,19 @@ else
   pass "openmower backend: ticks_per_meter is not seeded"
 fi
 assert_match "openmower backend: the sparse config keeps lidar_enabled" "lidar_enabled: true" "$(grep -E '^[[:space:]]+lidar_enabled:' "$openmower_yaml")"
+
+section "HARDWARE_BACKEND=openmower refuses a UART LiDAR on an xESC port"
+
+openmower_clash_repo="$SANDBOX/repo_openmower_clash"
+sandbox_repo "$openmower_clash_repo"
+harness_init "$openmower_clash_repo"
+harness_set_preset backend=openmower gnss=auto gnss_connection=uart lidar=ldlidar-uart
+if harness_run; then
+  fail "openmower + UART LiDAR on ttyAMA5: install refused" "installer accepted the left xESC port for the LiDAR"
+else
+  pass "openmower + UART LiDAR on ttyAMA5: install refused"
+fi
+# harness_run discards the step output; replay the LiDAR step to read it.
+assert_contains "the refusal names the xESC it would collide with" "OpenMower-xESC-left" "$(configure_lidar 2>&1)"
 
 test_summary

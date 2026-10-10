@@ -364,13 +364,19 @@ setup_env() {
 
   sync_gnss_env_contract_values
 
+  # Hardware backends are mutually exclusive.
+  # GNSS_SOURCE remains independent of HARDWARE_BACKEND.
+  local enable_mavros="false"
   local enable_openmower="false"
-  if [[ "$HARDWARE_BACKEND" == "openmower" ]]; then
+
+  if [[ "$HARDWARE_BACKEND" == "mavros" ]]; then
+    enable_mavros="true"
+  elif [[ "$HARDWARE_BACKEND" == "openmower" ]]; then
     enable_openmower="true"
   fi
-  OPENMOWER_ENABLED="$enable_openmower"
 
   MAVROS_ENABLED="$enable_mavros"
+  OPENMOWER_ENABLED="$enable_openmower"
 
   if [[ "$HARDWARE_BACKEND" == "mavros" && "$GNSS_SOURCE" == "mavros" && "$GNSS_MAVROS_SOURCE" == "gps1" ]]; then
     MAVROS_GPS1_CANONICAL="true"

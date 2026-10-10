@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/providers"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"gopkg.in/yaml.v3"
 )
@@ -202,13 +203,12 @@ func applyOpenMowerRuntimeFallbacks(flat map[string]any, runtimeEnv map[string]s
 
 // HardwareBackendResponse is the GET /settings/hardware-backend response.
 type HardwareBackendResponse struct {
-	Backend   string   `json:"backend"`
-	Supported []string `json:"supported"`
-	// DefaultOverrides are settings for which this hardware backend replaces
-	// the template default. Mower-model presets do not own these values.
+	Backend          string                            `json:"backend"`
+	Supported        []string                          `json:"supported"`
 	DefaultOverrides map[string]any                    `json:"default_overrides"`
 	ParameterRoutes  map[string]HardwareParameterRoute `json:"parameter_routes"`
 	RuntimeRouting   string                            `json:"runtime_routing"`
+	RobotName        string                            `json:"robot_name"`
 }
 
 // GetSettingsHardwareBackend reports the installer's selected backend.
@@ -229,6 +229,7 @@ func GetSettingsHardwareBackend(r *gin.RouterGroup, dbProvider types.IDBProvider
 			DefaultOverrides: backendDefaults(backend),
 			ParameterRoutes:  hardwareParameterRoutes[backend],
 			RuntimeRouting:   "available",
+			RobotName:        providers.ReadRobotName(dbProvider),
 		})
 	})
 }

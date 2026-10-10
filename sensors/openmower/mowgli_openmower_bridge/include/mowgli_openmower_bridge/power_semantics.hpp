@@ -54,6 +54,15 @@ constexpr double kDefaultDockedChargeVoltage = 10.0;
   return (status_bitmask & mowgli_hardware::STATUS_BIT_CHARGING) != 0u;
 }
 
+/// Power.charge_current as published. The board's current sensor reads a few
+/// tens of mA with nothing connected (0.05 A on a robot in the field, off the
+/// dock); outside the dock that is noise, and the charge-complete tail check
+/// (charge_current <= threshold) only means something on the dock.
+[[nodiscard]] inline float ReportedChargeCurrent(bool docked, float raw) noexcept
+{
+  return (docked && std::isfinite(raw)) ? raw : 0.0f;
+}
+
 enum class ChargeState
 {
   kUndocked,

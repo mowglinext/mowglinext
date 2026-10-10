@@ -146,7 +146,9 @@ export const SettingsPage = () => {
     }, [sections, searchQuery, matchesSearch, t]);
 
     // Sections merged into "weather" keep their old links working.
-    const LEGACY_SECTIONS: Record<string, string> = { rain: "weather", irrisense: "weather" };
+    const LEGACY_SECTIONS: Record<string, string> = {
+        rain: "weather", irrisense: "weather", hardware_backend: "hardware",
+    };
     const rawSection = searchParams.get('section') ?? 'hardware';
     const requestedSection = LEGACY_SECTIONS[rawSection] ?? rawSection;
     const activeSection = visibleSections.find(section => section.id === requestedSection)?.id
@@ -199,41 +201,38 @@ export const SettingsPage = () => {
                 );
             case "hardware":
                 return (
-                    <HardwareViewSwitcher backend={hardwareBackend.backend} fcu={<FcuFeatureTool/>} chassis={<>
-                        <HardwareBackendCard info={hardwareBackend} />
-                        <HardwareSection
-                            values={values}
-                            onChange={handleChange}
-                            onBulkChange={handleBulkChange}
-                            isOverridden={isOverridden}
-                            hasDefault={hasDefault}
-                            onReset={resetToDefault}
-                            revealAdvanced={!!targetField || !!searchQuery}
-                            backendDefaultOverrides={backendDefaultOverrides}
-                        />
-                    </>}/>
-                );
-            case "hardware_backend":
-                return (
-                    <HardwareBackendSection backend={hardwareBackend.backend}>
-                        {renderFieldCards(OPENMOWER_WIRING_GROUP)}
-                    </HardwareBackendSection>
+                    <HardwareViewSwitcher
+                        backend={hardwareBackend.backend}
+                        fcu={<FcuFeatureTool />}
+                        chassis={
+                            <>
+                                <HardwareBackendCard info={hardwareBackend} />
+
+                                <HardwareBackendSection backend={hardwareBackend.backend}>
+                                    {renderFieldCards(OPENMOWER_WIRING_GROUP)}
+                                </HardwareBackendSection>
+
+                                <HardwareSection
+                                    values={values}
+                                    onChange={handleChange}
+                                    onBulkChange={handleBulkChange}
+                                    isOverridden={isOverridden}
+                                    hasDefault={hasDefault}
+                                    onReset={resetToDefault}
+                                    revealAdvanced={!!targetField || !!searchQuery}
+                                    backendDefaultOverrides={backendDefaultOverrides}
+                                />
+                            </>
+                        }
+                    />
                 );
             case "drive_motor":
                 // Each backend exposes its own drive controls; never show
                 // Mowgli STM32 or OpenMower xESC controls on MAVROS.
-                if (hardwareBackend.backend === "mavros") {
-                    return (
-                        <MavrosDriveSection
-                            values={values}
-                            onChange={handleChange}
-                            acceptPersistedValues={acceptPersistedValues}
-                        />
-                    );
-                }
                 if (hardwareBackend.backend === "openmower") {
                     return <>{renderFieldCards(OPENMOWER_WHEEL_LOOP_GROUP)}</>;
                 }
+
                 return (
                     <>
                         <DriveMotorSection
@@ -242,7 +241,9 @@ export const SettingsPage = () => {
                             acceptPersistedValues={acceptPersistedValues}
                             hardwareBackend={hardwareBackend.backend}
                         />
-                        {hardwareBackend.backend === "mowgli" && renderFieldCards(YAW_LOOP_GROUP)}
+
+                        {hardwareBackend.backend === "mowgli" &&
+                            renderFieldCards(YAW_LOOP_GROUP)}
                     </>
                 );
             case "ntrip":
@@ -314,13 +315,14 @@ export const SettingsPage = () => {
                 );
             case "safety":
                 if (hardwareBackend.backend === "mavros") {
-                    return <MavrosSafetySection values={values} onChange={handleChange} />;
+                    return <SafetySection values={values} onChange={handleChange} />;
                 }
+
                 return (
                     <>
                         <SafetySection values={values} onChange={handleChange} />
                         {renderFieldCards(FIRMWARE_SAFETY_GROUP)}
-                        {hardwareBackend.backend === "mowgli" ? <FirmwareParamsCard /> : null}
+                        {hardwareBackend.backend === "mowgli" && <FirmwareParamsCard />}
                     </>
                 );
             case "obstacles":

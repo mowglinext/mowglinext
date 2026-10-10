@@ -111,7 +111,7 @@ assert_not_contains   "mavros state check does not execute inside mowgli-ros2"  
 repo_openmower="$SANDBOX/repo_openmower"
 sandbox_repo "$repo_openmower"
 harness_init "$repo_openmower"
-harness_set_preset backend=openmower gnss=auto gnss_connection=uart lidar=ldlidar-uart
+harness_set_preset backend=openmower gnss=auto gnss_connection=uart lidar=ldlidar-usb
 harness_run >/dev/null 2>&1
 output_openmower="$(bash "$repo_openmower/install/mowglinext.sh" --check 2>&1)"
 ec=$?

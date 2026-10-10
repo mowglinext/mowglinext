@@ -103,10 +103,11 @@ func postYAML(t *testing.T, db types.IDBProvider, payload map[string]any) {
 }
 
 func TestHardwareBackendRoute(t *testing.T) {
-	db, _ := newBackendTestDB(t, "mowgli:\n  ros__parameters: {}\n", "HARDWARE_BACKEND=openmower\n")
+	db, _ := newBackendTestDB(t, "mowgli:\n  ros__parameters:\n    robot_name: Garden-East\n", "HARDWARE_BACKEND=openmower\n")
 	got := getJSON(t, db, "/api/settings/hardware-backend")
 
 	assert.Equal(t, "openmower", got["backend"])
+	assert.Equal(t, "Garden-East", got["robot_name"], "the header badge names the robot")
 	assert.ElementsMatch(t, []any{"mowgli", "mavros", "openmower"}, got["supported"])
 
 	overrides, ok := got["default_overrides"].(map[string]any)

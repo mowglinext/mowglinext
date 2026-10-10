@@ -56,6 +56,16 @@ TEST(PowerSemantics, ThresholdIsStrictAndNonFiniteIsUndocked)
   EXPECT_FALSE(IsDocked(-30.0f, kThr));
 }
 
+TEST(PowerSemantics, ChargeCurrentIsZeroOffTheDock)
+{
+  // Field report: 0.05 A of sensor offset off the dock, relay on (v0.13).
+  EXPECT_FLOAT_EQ(ReportedChargeCurrent(IsDocked(0.75f, kThr), 0.05f), 0.0f);
+  EXPECT_FLOAT_EQ(ReportedChargeCurrent(IsDocked(29.1f, kThr), 0.85f), 0.85f);
+  // A docked robot keeps its tail current: the charge-complete check needs it.
+  EXPECT_FLOAT_EQ(ReportedChargeCurrent(true, 0.05f), 0.05f);
+  EXPECT_FLOAT_EQ(ReportedChargeCurrent(true, std::nanf("")), 0.0f);
+}
+
 TEST(PowerSemantics, StatusStrings)
 {
   EXPECT_EQ(std::string(ChargerStatusString(ChargeState::kCharging)), "charging");

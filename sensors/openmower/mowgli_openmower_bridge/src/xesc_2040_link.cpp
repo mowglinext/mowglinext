@@ -58,10 +58,15 @@ void Xesc2040Link::Poll(SteadyClock::time_point now)
     {
       break;
     }
+    // Stamp with the time the bytes were read, not the control tick's start:
+    // a bridge stalled in between (a loaded Pi) would otherwise date a whole
+    // stall's ticks to before it, and the odometry sampler — seeing them over
+    // one normal interval — drops them as a counter reset.
+    const SteadyClock::time_point read_at = SteadyClock::now();
     packets_.set_callback(
-        [this, now](const uint8_t* data, std::size_t len)
+        [this, read_at](const uint8_t* data, std::size_t len)
         {
-          OnPacket(data, len, now);
+          OnPacket(data, len, read_at);
         });
     packets_.feed(buf, static_cast<std::size_t>(n));
   }

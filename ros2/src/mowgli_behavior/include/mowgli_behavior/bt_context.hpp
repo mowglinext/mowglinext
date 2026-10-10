@@ -957,14 +957,20 @@ struct BTContext
 ///     lawn. The GUI's "mow this area" button calls ~/start_in_area, which
 ///     sets current_command itself and never goes through that handler, so
 ///     clearing there cannot cancel a targeted request.
-///     EXCEPTION, guarded at the call site with isResumableHoldState(): a
-///     plain COMMAND_START received while parked in StopHoldSequence's IDLE
-///     (the operator paused a run with "Pause" and pressed Resume/Start
-///     again) does NOT call this — Resume must continue the SAME targeted
-///     area, not silently widen to the whole lawn (mowglinext field report,
-///     2026-09-18: a paused single-area run restarted at area 0 instead of
-///     finishing the paused area). The charge-hold/emergency case above still
-///     clears unconditionally; only the plain-pause case is exempted.
+///     EXCEPTIONS, decided at the call site by startClearsSingleAreaMode():
+///       - a plain COMMAND_START received while parked in StopHoldSequence's
+///         IDLE (the operator paused a run with "Pause" and pressed
+///         Resume/Start again) does NOT call this — Resume must continue the
+///         SAME targeted area, not silently widen to the whole lawn (field
+///         report 2026-09-18: a paused single-area run restarted at area 0
+///         instead of finishing the paused area).
+///       - nor does a COMMAND_START received in a battery charge hold
+///         (isChargeHoldState): there it is the operator's "Resume now"
+///         (BTContext::manual_resume_requested), which continues the SAME run.
+///         Clearing the clip there sent a targeted run that was nearly done
+///         back to area 0 and a full-lawn plan (field report 2026-10-05, area
+///         2 interrupted by the battery guard).
+///     A START from IDLE_DOCKED or any other state keeps the historical clear.
 /// Also drops an unconsumed target_area_index: a request that was never
 /// picked up (e.g. start_in_area during an emergency) must not silently
 /// hijack a later plain start.
@@ -1006,6 +1012,16 @@ inline bool isChargeHoldState(const std::string& state_name)
 inline bool isResumableHoldState(const std::string& state_name)
 {
   return state_name == "IDLE";
+}
+
+/// Should a plain COMMAND_START received while the tree publishes `state_name`
+/// drop the single-area clip (clearSingleAreaMode)? No when it continues the
+/// SAME run — a Pause → Play from plain IDLE, or a manual "Resume now" out of
+/// a battery charge hold — and yes everywhere else, where a Start means "mow
+/// the lawn" (IDLE_DOCKED, MOWING, no status yet, ...).
+inline bool startClearsSingleAreaMode(const std::string& state_name)
+{
+  return !isResumableHoldState(state_name) && !isChargeHoldState(state_name);
 }
 
 }  // namespace mowgli_behavior

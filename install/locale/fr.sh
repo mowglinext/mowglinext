@@ -62,6 +62,7 @@ MSG_UART_SELECT="Selectionner le port UART"
 MSG_UART_MANUAL="Entrer manuellement"
 MSG_UART_MANUAL_PROMPT="Chemin du peripherique UART ?"
 MSG_UART_INVALID="Choix invalide"
+MSG_UART_PORT_TAKEN="%s ne peut pas utiliser %s : le controleur %s y est cable. Choisissez un autre port (ou l'USB)."
 MSG_UART_AFTER_REBOOT="disponible apres redemarrage"
 
 # ── GPS (gps.sh) ──
