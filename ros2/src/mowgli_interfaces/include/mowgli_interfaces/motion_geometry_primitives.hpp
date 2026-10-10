@@ -76,6 +76,14 @@ inline std::vector<double> cuts(Point a, Point b, const std::vector<Ring>& rings
   for (const auto& ring : rings)
     for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
     {
+      // Comparisons of the original coordinates prove disjoint closed boxes
+      // without arithmetic error. Parallel distant edges need no determinant
+      // or exact fraction; touching boxes still take the complete predicate.
+      if (std::max(a.x, b.x) < std::min(ring[j].x, ring[i].x) ||
+          std::min(a.x, b.x) > std::max(ring[j].x, ring[i].x) ||
+          std::max(a.y, b.y) < std::min(ring[j].y, ring[i].y) ||
+          std::min(a.y, b.y) > std::max(ring[j].y, ring[i].y))
+        continue;
       const long double ex = static_cast<long double>(ring[i].x) - ring[j].x;
       const long double ey = static_cast<long double>(ring[i].y) - ring[j].y;
       const long double qx = static_cast<long double>(ring[j].x) - a.x;
