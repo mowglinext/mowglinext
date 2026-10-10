@@ -37,6 +37,20 @@
 namespace mowgli_coverage
 {
 
+// Optional exact geometry snapshots for offline replay. No clocks, formatting,
+// quantization or decision logic: an absent trace allocates no snapshot storage.
+// Stages retain cell/ring/point order so a replay can locate the first divergence.
+struct PlanningTrace
+{
+  struct Stage
+  {
+    std::string name;
+    std::vector<std::vector<std::pair<double, double>>> paths;
+    std::vector<double> angles = {};
+  };
+  std::vector<Stage> stages;
+};
+
 // Visibility into what planBoustrophedon dropped and how much of the polygon
 // it ended up planning. Coverage gaps were previously silent (slivers, tiny
 // rings, micro-cells, and whole-area F2C failures all just vanished from the
@@ -268,7 +282,8 @@ BoustrophedonPlan planBoustrophedon(
     double min_turn_radius = 0.20,
     bool perpendicular = false,
     int connector_max_headland_passes = 0,
-    const std::optional<std::pair<double, double>>& start_hint = std::nullopt);
+    const std::optional<std::pair<double, double>>& start_hint = std::nullopt,
+    PlanningTrace* trace = nullptr);
 
 // Where a closed headland ring starts and ends — the ring's "closure". `open_loop`
 // is the ring's corner vertices WITHOUT the repeated closing vertex (>= 3).
@@ -575,7 +590,8 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     ConnectorStats* stats = nullptr,
     const std::vector<std::pair<double, double>>& swath_turn_boundary = {},
     const PivotJoinLimits& pivot_limits = {},
-    bool pin_first_subpath = false);
+    bool pin_first_subpath = false,
+    PlanningTrace* trace = nullptr);
 
 // Reorders a set of FINISHED, hole-free sub-path polylines (as produced by
 // buildContinuousSubPaths above, which calls this internally) to minimize the

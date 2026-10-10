@@ -174,6 +174,26 @@ if(BUILD_TESTING)
     ${PROJECT_NAME}_core
     Fields2Cover::Fields2Cover
   )
+
+  # Passive exact snapshots must not change the planner or connector output.
+  ament_add_gtest(test_planning_trace test/replay/test_trace.cpp)
+  target_link_libraries(test_planning_trace ${PROJECT_NAME}_core Fields2Cover::Fields2Cover)
+
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  include(test/replay/configure_replay.cmake)
+  add_coverage_replay(${PROJECT_NAME}_core)
+  ament_add_test(replay_runner_unit GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/test_runner.py")
+  ament_add_test(replay_provenance_unit GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    ENV "REPLAY_CMAKE=${CMAKE_COMMAND}"
+    COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/test_provenance.py")
+  ament_add_test(replay_matrix GENERATE_RESULT_FOR_RETURN_CODE_ZERO TIMEOUT 600
+    COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/run_replay.py"
+    --binary "$<TARGET_FILE:coverage_replay>" --same-process 2 --processes 2
+    --output "${CMAKE_CURRENT_BINARY_DIR}/replay-results")
 endif()
 
 ament_export_include_directories(include)
