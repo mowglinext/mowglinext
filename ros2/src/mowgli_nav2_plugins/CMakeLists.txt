@@ -52,8 +52,6 @@ add_library(${PROJECT_NAME} SHARED
   src/path_progress_goal_checker.cpp
   src/garden_keepout_layer.cpp
   src/authorized_transit_planner.cpp
-  src/garden_keepout_layer.cpp
-  src/authorized_transit_planner.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -90,8 +88,6 @@ target_link_libraries(${PROJECT_NAME}
 # pluginlib needs the export macro defined.
 pluginlib_export_plugin_description_file(nav2_core ftc_controller_plugin.xml)
 pluginlib_export_plugin_description_file(nav2_core goal_checker_plugin.xml)
-pluginlib_export_plugin_description_file(nav2_costmap_2d costmap_plugins.xml)
-pluginlib_export_plugin_description_file(nav2_core planner_plugin.xml)
 pluginlib_export_plugin_description_file(nav2_costmap_2d costmap_plugins.xml)
 pluginlib_export_plugin_description_file(nav2_core planner_plugin.xml)
 
