@@ -1488,11 +1488,14 @@ BT::NodeStatus FollowStrip::onRunning()
                                   {prior_stuck_point.x, prior_stuck_point.y});
         }
       }
-      // issue #607: the detour budget is spent and its last resume transit
-      // failed. Skip only the blocked stretch, not the rest of the unit — a
-      // unit can carry every headland ring of the lawn (field 2026-10-10: a
-      // 4 m hairpin against a hedge dropped 382 m of a 1016 m plan here).
-      if (!start_pose_blocked && had_detour_in_flight && resumeUnitPastBlockedStretch(ctx))
+      // issue #607: a transit into this unit failed and no detour is left to
+      // try. Skip only the blocked stretch, not the rest of the unit — a unit
+      // can carry every headland ring of the lawn (field 2026-10-10: a 4 m
+      // hairpin against a hedge dropped 382 m of a 1016 m plan here). This
+      // holds for EVERY transit into the unit, not only a detour's: later the
+      // same day a non-obstacle abort's resume transit (0.7 m, refused by RPP
+      // beside the hedge) still dropped the remaining 5296 poses of the rings.
+      if (!start_pose_blocked && resumeUnitPastBlockedStretch(ctx))
       {
         return BT::NodeStatus::RUNNING;
       }
@@ -2295,9 +2298,9 @@ bool FollowStrip::resumeUnitPastBlockedStretch(const std::shared_ptr<BTContext>&
   skipped_tally_.addDetour(resume_idx, gap_m);
   const geometry_msgs::msg::Point blocked_target = poses.front().pose.position;
   RCLCPP_WARN(ctx->node->get_logger(),
-              "FollowStrip: unit %zu/%zu — detours exhausted on this stretch; skipping %zu poses / "
-              "%.2f m past it and resuming the rest of the unit (%zu poses, no-progress resumes: "
-              "%zu)",
+              "FollowStrip: unit %zu/%zu — transit into it failed with no detour left; skipping "
+              "%zu poses / %.2f m past the blocked stretch and resuming the rest of the unit (%zu "
+              "poses, no-progress resumes: %zu)",
               swath_idx_ + 1,
               swaths_.size(),
               resume_idx,
