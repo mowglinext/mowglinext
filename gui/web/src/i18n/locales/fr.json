@@ -1616,6 +1616,8 @@
     "actionFailed": "Échec de l'action",
     "mowerAppearance": "Image de la tondeuse sur la carte",
     "mowerAppearanceUrdf": "Silhouette URDF (repli automatique)",
+    "mowerAppearanceGeneric": "Tondeuse générique (approx.)",
+    "mowerAppearanceGenericAlt": "Tondeuse robot verte sans marque, avec bouton d’arrêt à l’arrière",
     "mowerAppearanceBiltemaRm1000": "Biltema RM1000",
     "mowerAppearanceBiltemaRm1000Alt": "Tondeuse Biltema RM1000",
     "dockAppearance": "Apparence de la base",
