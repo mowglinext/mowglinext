@@ -477,7 +477,10 @@ container with an existing health contract.
 
 Persistent services need more care: additional managed services may write only existing writable mounts at the
 already supported data destinations (`/db`, `/mowgli_config`, `/ros2_ws/maps`,
-`/ros2_ws/config`), which are archived and restored. Other writable mounts reject
+`/ros2_ws/config`), which are archived and restored. The host device tree
+(`/dev:/dev`, or a node under it, which every hardware sidecar binds for its
+serial ports) holds no data and needs no backup, so it is accepted too, also
+when a robot gains the sidecar (`isDeviceMount`). Other writable mounts reject
 the plan. Container writable layers are disposable. Unmanaged containers must not
 write shared managed data. New persistence or application-health contracts require
 an explicit updater implementation and recovery tests; labels are not arbitrary
@@ -580,6 +583,21 @@ sudo mowgli-updater status
 sudo mowgli-updater recover
 sudo journalctl -u mowgli-updater.service -n 100
 ```
+
+### The release's updater runs first
+
+The installed worker is the one that checks a release, so a check it gets
+wrong would block the very release that fixes it (2026-10-10: OpenMower robots
+refused every update over their `/dev` mount until the updater was updated by
+hand). **Review** in Settings → Updates therefore first installs the target
+release's worker when it ships a different build (`POST /v1/agent-update`),
+waits up to 120 s for it to answer, then plans the update with it
+(`gui/web/src/utils/updaterAgent.ts`). It only moves forward: a target
+published before the running worker's own release keeps the running worker,
+because an older worker may not read the newer journal. The launcher keeps the
+previous worker if the new one fails its health probe; the GUI then shows that
+reason and plans nothing. The manual "Update the update service" action stays
+in advanced mode for choosing another worker.
 
 ### Manual update without the host updater
 

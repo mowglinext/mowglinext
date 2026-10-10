@@ -3997,7 +3997,7 @@
     "customComponent": "Custom version",
     "localService": "Locally managed",
     "removedByRelease": "Removed by selected release",
-    "separateUpdate": "Updated separately",
+    "separateUpdate": "Updated automatically with the next release",
     "agentVersion": "Update service version",
     "serviceSelectionUnsupported": "Update the host updater to enable individual container selection.",
     "noCompatibleComponent": "No compatible alternative is published for this component.",
@@ -4083,6 +4083,7 @@
     "pin": "Pin this deployment; continue notifying about newer builds",
     "review": "Review update",
     "updateAgent": "Update the update service",
+    "updatingAgentFirst": "Updating the update service first: the new version is checked by its own updater…",
     "agentHelp": "The updater will restart separately from the containers. Its launcher retains the previous binary if the new version fails to start.",
     "history": "Deployment history",
     "rollback": "Restore previous deployment",
@@ -4572,6 +4573,9 @@
     "stateUnreported": "No report"
   },
   "fleetPage": {
+    "peerFeedLive": "Peers in costmap",
+    "peerFeedDown": "Peers NOT in costmap",
+    "peerFeedDetail": "{{count}} robot(s) fed to this robot's obstacle map at {{rate}} Hz, whether coordination is on or off",
     "betaTag": "Beta",
     "betaTitle": "Multi-robot support is a beta feature",
     "betaBody": "The fleet view and coordinated mowing are in beta and still evolving. Keep an eye on the robots while you use them, and report what you see on GitHub.",
@@ -4618,7 +4622,7 @@
     "startFreshConfirm": "Forget which areas the fleet has finished and clear every mower's resume point?",
     "startFreshDone": "Fleet progress cleared",
     "coordRuleAreas": "Areas are split per area: two mowers never work the same area at once.",
-    "coordRuleYield": "Priority is fixed per robot; the lower-priority mower pauses in place and resumes when the other is gone.",
+    "coordRuleYield": "Both mowers always see each other as obstacles in their navigation maps; on top of that, the lower-priority mower pauses when the other comes close and resumes when it is gone (or after 45 s at most).",
     "coordRuleMap": "Every mower needs the same map and the same GPS datum; use “Push my map” after editing areas.",
     "coordRuleOneArea": "A lawn with a single area cannot be shared yet: the second mower will have nothing to do.",
     "phase": {

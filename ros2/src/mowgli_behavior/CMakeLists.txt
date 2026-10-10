@@ -601,6 +601,17 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
   )
 
+  # ---- test_undock_resume ----
+  # Pure: reverse left of an undock stopped mid-way (Pause / emergency).
+  ament_add_gtest(test_undock_resume
+    test/test_undock_resume.cpp
+  )
+
+  target_include_directories(test_undock_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_dig_skip ----
   # Pure: session dig skip zones (which coverage poses are skipped around a
   # recorded dig point) + the wait for the bridge's bounded reverse.
@@ -1088,6 +1099,25 @@ if(BUILD_TESTING)
   target_compile_definitions(test_dig_obstruction_recovery PRIVATE
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
+
+  # Execute the real mowing startup control flow with deterministic external
+  # actions, and exercise BackUp cancellation before goal-handle collection.
+  ament_add_ros_isolated_gtest(test_startup_pause
+    test/test_startup_pause.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+  )
+  target_include_directories(test_startup_pause PUBLIC include)
+  target_compile_definitions(test_startup_pause PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+  target_link_libraries(test_startup_pause ${behavior_node_dependencies} tinyxml2::tinyxml2)
+
+  ament_add_ros_isolated_gtest(test_backup_pause
+    test/test_backup_pause.cpp
+    src/navigation_nodes.cpp
+  )
+  target_include_directories(test_backup_pause PUBLIC include)
+  target_link_libraries(test_backup_pause ${behavior_node_dependencies})
 
 endif()
 

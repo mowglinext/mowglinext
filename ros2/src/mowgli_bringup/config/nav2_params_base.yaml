@@ -742,11 +742,21 @@ controller_server:
 planner_server:
   ros__parameters:
     use_sim_time: false
-    planner_plugins: ["GridBased"]
+    planner_plugins: ["GridBased", "BoundaryRecovery"]
 
-    GridBased:
+    # Explicit BoundaryGuard recovery only, selected by its dedicated tree.
+    # Ordinary planner failure must never fall back to this unrestricted lane.
+    BoundaryRecovery:
       plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.50
+      allow_unknown: false
+      max_iterations: 1000000
+      max_planning_time: 8.0
+      cost_travel_multiplier: 3.0
+
+    GridBased:
+      plugin: "mowgli_nav2_plugins/AuthorizedTransitPlanner"
+      tolerance: 0.0
       downsample_costmap: false
       downsampling_factor: 2
       allow_unknown: false
@@ -906,32 +916,14 @@ global_costmap:
       # grid.
       resolution: 0.08
       track_unknown_space: false
-      # Rolling window large enough to cover transit across any garden.
-      # Unknown space is treated as free (track_unknown_space: false) so the
-      # planner can plan through unmapped areas — the robot will discover
-      # obstacles via LiDAR as it drives.  This supports arbitrarily large
-      # gardens: the costmap always centres on the robot, and obstacles are
-      # detected in real time by the obstacle_layer.
-      rolling_window: true
-      # 70×70 m rolling window (was 20×20). The 20 m window (±10 m radius) was
-      # sized for STRIP-TO-STRIP transit within an area, but AREA-TO-AREA transit
-      # to a distant zone exceeds it: a goal ~31 m away → SmacPlanner2D rejects it
-      # with "Goal Coordinates ... was outside bounds" → the mission reports
-      # AREA_UNREACHABLE and never moves (hardware-confirmed 2026-06-20 on a
-      # 40×44 m garden). ±35 m now covers cross-garden transits. Safe because the
-      # keepout_filter (below) makes everything outside the authorised zones LETHAL,
-      # so the planner cannot route outside even with the larger window.
-      # TRADE-OFF: at resolution 0.08 m this is 875×875 ≈ 766 k cells (vs ~62 k at
-      # 20 m), lowering the full-costmap publish rate on weaker ARM — the original
-      # reason for shrinking to 20 m. SIZING RULE: the window is centred on the
-      # robot and the planner needs the goal INSIDE it at plan time, so set
-      # width/height ≥ 2× the longest per-axis AREA-TO-AREA transit (on the
-      # 40×44 m test garden the farthest pair, Back↔Front Main, spans 34 m in Y →
-      # ~69 m → 70). To cut cells without losing coverage, coarsen THIS resolution
-      # (0.08→0.10 ≈ −36 % cells; the local costmap stays 0.05 m for fine
-      # avoidance) rather than shrinking the window.
-      width: 70
-      height: 70
+      # Non-rolling garden extent comes from a single keepout-mask snapshot.
+      # Keepout closes the bootstrap and every map edit until geometry and
+      # authorization have been applied in one costmap update.
+      rolling_window: false
+      # Small closed bootstrap; GardenKeepoutLayer replaces the geometry from
+      # the recorded garden mask. Resolution stays 0.08 m, never coarsened.
+      width: 1
+      height: 1
       # keepout_filter makes the area boundary visible to the Smac planner so
       # transit paths never exit the authorised zone. The mask map_server_node
       # publishes is now the INVERSE/hard-boundary one: every cell outside the
@@ -1015,9 +1007,9 @@ global_costmap:
         inflation_radius: 0.68
 
       keepout_filter:
-        plugin: "nav2_costmap_2d::KeepoutFilter"
-        enabled: true
-        filter_info_topic: "/costmap_filter_info"
+        plugin: "mowgli_nav2_plugins::GardenKeepoutLayer"
+        mask_topic: "/keepout_mask"
+        max_cells: 4000000
 
 # ---------------------------------------------------------------------------
 # Local costmap

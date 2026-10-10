@@ -142,30 +142,70 @@ difference, so fleet members must share one datum. Docks stay per robot
 
 ### 3c. Mutual avoidance
 
-- The coordinator publishes peer poses into the local ROS graph through
-  foxglove `clientPublish` as `geometry_msgs/PoseArray` on `/fleet/peers`
-  (map frame, 2 Hz, empty when alone).
-- `fleet_peer_obstacles_node` (Python, `mowgli_bringup/scripts`) turns each
-  peer pose into a ring of points of radius `fleet_peer_radius_m` (0.6 m) at
-  z = 0.3 m and publishes `sensor_msgs/PointCloud2` `/fleet/peer_obstacles` at
-  5 Hz continuously (an empty cloud when there are no peers, so a persisting
-  costmap source never goes stale).
-- Nav2: the LiDAR overlay adds a `fleet_peers` observation source to the LOCAL
-  `obstacle_layer` (marking only, no raytrace clearing). The no-LiDAR overlay
-  adds a dedicated `fleet_layer` (an `ObstacleLayer` under a different name;
-  CI forbids `obstacle_layer` + `static_layer` together) to both costmaps.
-  The global costmap in the LiDAR variant is left alone because FTC treats
-  anything lethal there as "not an obstacle".
-- **Yield rule** (the primary safety mechanism; no BT change): when two
-  members are within `fleet_yield_distance_m` (3.0 m) and both AUTONOMOUS, the
-  greater-`robot_id` member is sent `COMMAND_STOP`; once the distance exceeds
-  5.0 m for 3 s it is sent `COMMAND_START`, which resumes at its saved cursor.
-  A yielded robot reports IDLE, so the other never sees it as a competitor.
+Two layers, and the first one is the primary protection since 2026-10-10:
 
-## Status (2026-09-15)
+**Each robot carries the others in its costmaps, always.** The `FleetProvider`
+runs a *peer feed* (`gui/pkg/providers/fleet_peer_feed.go`) whenever at least
+one peer is registered — independently of the coordination toggle — at 5 Hz:
+it takes every online peer's FUSED pose (`/odometry/filtered_map` mirrored
+over the peer's GUI, so the body centre with its heading, not the antenna
+fix), re-projects it through the peer's datum into our map frame (the peer's
+identity, refreshed every 60 s, carries its datum), drops any sample older
+than 3 s, and publishes `geometry_msgs/PoseArray` on `/fleet/peers` through
+foxglove `clientPublish`. A peer whose fused pose is stale but whose fix is
+fresh is placed from the fix with an all-zero quaternion ("no heading").
+`fleet_peer_obstacles.py` (`mowgli_bringup/scripts`, respawned by the launch)
+turns each pose into a DENSE block of points covering the chassis footprint
+(the same derived triple Nav2 uses for our own footprint, injected by
+`full_system.launch.py`, plus a 0.15 m margin; a disc when the heading is
+unknown) and publishes `sensor_msgs/PointCloud2` `/fleet/peer_obstacles` at
+5 Hz continuously — an empty cloud when alone, so no costmap source ever
+goes stale. Nav2 then treats a peer like any obstacle:
 
-All three phases are implemented on this branch and unit-tested; **none has
-been field-tested with two real mowers yet**.
+- LiDAR overlay: `fleet_peers` source on the LOCAL `obstacle_layer` (FTC's
+  detection source — a peer on the swath is skirted or stopped for) AND on the
+  GLOBAL `obstacle_layer` (Smac routes a transit around a peer stopped on the
+  path instead of planning through it and waiting on the local collision
+  check). The global placement was unsafe while FTC's zone mask treated
+  global-lethal cells as non-obstacles; that mask is gone (root CLAUDE.md
+  Invariant 5). The LiDAR itself also sees the other body, so collision_monitor
+  keeps its scan source only.
+- No-LiDAR overlay: a `fleet_layer` (`ObstacleLayer` under a distinct name) in
+  BOTH costmaps, and — new — the consumers are ON like in the LiDAR variant:
+  FTC `check_obstacles` + `enable_obstacle_deviation`, RPP
+  `use_collision_detection`, and a collision_monitor whose only source is the
+  fleet cloud (`pointcloud` type, an active velocity-projected approach gate,
+  `source_timeout: 0.0` so a dead fleet node never halts a lone robot). On a
+  lawn without peers the layer is empty and nothing changes.
+
+The Fleet page shows the feed state ("Peers in costmap", count, rate, last
+error) so an operator can tell whether the other mower actually reaches this
+robot's obstacle map.
+
+**Yield rule** (the coordinator, only while coordination is ON): when a peer
+WITH PRIORITY (smaller `robot_id`) is autonomous within `yield_distance_m`
+(3.0 m) of us while we are autonomous, we are sent `COMMAND_STOP`; once no
+such peer has been within `resume_distance_m` (5.0 m) for 3 s we are sent
+`COMMAND_START`, which resumes at the saved cursor. Distances use the same
+map-frame positions as the feed (fused pose first, fix as the fallback,
+3 s freshness; no datum → the rule stands down). Two bounds keep it from
+deadlocking against the costmap avoidance above: a hold never lasts longer
+than `yield_max_hold_s` (45 s — the priority robot may itself have stopped in
+front of us on its own collision check, waiting for us to leave), and after
+any resume no new yield is issued for `yield_cooldown_s` (20 s), so the
+resumed robot gets to skirt the peer instead of stopping again at 3 m. The
+coordinator ticks at 1 s.
+
+## Status (2026-10-10)
+
+All three phases are merged into `dev` (PR #615, 2026-09-21) and shown as
+beta in the GUI. The first two-mower field test (2026-10) found the stop rule
+alone unreliable: the peer feed only ran with coordination ON, at 2 s, from
+the antenna fix without heading, and the no-LiDAR variant had no consumer for
+the costmap at all — so the robot that was not told to stop had nothing to
+make it avoid the other. The 3c redesign above (always-on 5 Hz footprint
+feed, consumers enabled in both variants, bounded yield) is the response;
+its own field check is still owed.
 
 | Piece | Where | Verified by |
 |-------|-------|-------------|
@@ -182,19 +222,26 @@ Field checks still owed before calling it done:
    run ends with both docked and MOWING_COMPLETE.
 2. Force a same-area pick (`~/start_in_area` on both): the greater-id robot
    yields mid-pass, saves its cursor and moves on; the other keeps mowing.
-3. Drive the two within 3 m on transit: the lower-priority one holds
-   (`COMMAND_STOP`), the local costmap shows the peer ring, and it resumes
-   after the 5 m / 3 s hysteresis.
-4. `/fleet/peers` actually reaches `fleet_peer_obstacles.py` through
-   foxglove `clientPublish` (JSON encoding of `geometry_msgs/PoseArray`).
+3. Coordination OFF, both mowing near each other: each robot's local costmap
+   shows the other's footprint block (Foxglove: `/fleet/peer_obstacles` and
+   the costmap), FTC skirts or stops for it, a transit routes around it, and
+   the no-LiDAR collision monitor halts before contact.
+4. Coordination ON, drive the two within 3 m on transit: the lower-priority
+   one holds (`COMMAND_STOP`) and resumes after the 5 m / 3 s hysteresis; park
+   the priority robot in front of it and check the 45 s max-hold resume + the
+   20 s cooldown.
+5. The Fleet page's "Peers in costmap" tag is green with the right count on
+   both robots; `fleet_peer_obstacles.py` logs its first `/fleet/peers`
+   message (foxglove `clientPublish`, JSON `geometry_msgs/PoseArray`).
 
 Known limits: partitioning is per AREA (a single-area lawn is not split);
 priority is the lexical order of the generated `robot_id`, not configurable;
 the yield rule needs a GPS fix on both robots; a peer that goes offline keeps
 its last completed areas in the memory until the 12 h TTL or "Start fresh".
 
-Fleet node parameters (`fleet_peer_obstacles.py`: `peer_radius_m` 0.6,
-`ring_points` 24, `publish_rate_hz` 5, `peer_timeout_s` 5, `point_height_m`
+Fleet node parameters (`fleet_peer_obstacles.py`: `peer_margin_m` 0.15,
+`fill_step_m` 0.05, `publish_rate_hz` 5, `peer_timeout_s` 3, `point_height_m`
 0.30) are node defaults only, not template keys — change them in the launch
-file if a site needs to. Coordinator knobs live in the GUI DB
-(`fleet.coordination`) and on the Fleet page.
+file if a site needs to; the chassis extents are injected from the robot
+config. Coordinator knobs live in the GUI DB (`fleet.coordination`) and on
+the Fleet page.

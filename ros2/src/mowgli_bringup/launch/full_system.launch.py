@@ -59,6 +59,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
     chassis_circumscribed_radius,
+    chassis_footprint,
     dig_proposal_radius,
     dig_skip_radius,
     keepout_obstacle_margin,
@@ -809,12 +810,25 @@ def generate_launch_description() -> LaunchDescription:
     # fleet_peers source / fleet_layer in the Nav2 overlays). Always launched:
     # it publishes an EMPTY cloud when the robot is alone, so the costmap
     # source never goes stale. docs/MULTI_ROBOT.md.
+    # The peer's body is marked as OUR chassis footprint (peers run the same
+    # software and, in practice, the same mower): the same derived triple Nav2
+    # uses for its own footprint, never a literal (root CLAUDE.md "do NOT
+    # hardcode the robot's width"). Respawned: in the no-LiDAR variant the
+    # collision monitor reads this node's cloud, so a crash must heal itself.
+    fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint(robot_params)
     fleet_peer_obstacles_node = Node(
         package="mowgli_bringup",
         executable="fleet_peer_obstacles.py",
         name="fleet_peer_obstacles",
         output="screen",
-        parameters=[{"use_sim_time": use_sim_time}],
+        respawn=True,
+        respawn_delay=2.0,
+        parameters=[{
+            "use_sim_time": use_sim_time,
+            "chassis_front_m": float(fleet_front_m),
+            "chassis_rear_m": float(fleet_rear_m),
+            "chassis_half_width_m": float(fleet_half_width_m),
+        }],
     )
 
     # ------------------------------------------------------------------

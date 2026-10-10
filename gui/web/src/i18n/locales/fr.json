@@ -3997,7 +3997,7 @@
     "customComponent": "Version personnalisée",
     "localService": "Géré localement",
     "removedByRelease": "Supprimé par la version choisie",
-    "separateUpdate": "Mis à jour séparément",
+    "separateUpdate": "Mis à jour automatiquement avec la prochaine version",
     "agentVersion": "Version du service de mise à jour",
     "serviceSelectionUnsupported": "Mettez à jour le service de mise à jour pour choisir la version de chaque conteneur.",
     "noCompatibleComponent": "Aucune autre version compatible publiée pour ce composant.",
@@ -4083,6 +4083,7 @@
     "pin": "Épingler ce déploiement et signaler les nouvelles versions",
     "review": "Examiner la mise à jour",
     "updateAgent": "Mettre à jour le service de mise à jour",
+    "updatingAgentFirst": "Mise à jour du service de mise à jour d’abord : la nouvelle version est vérifiée par son propre service…",
     "agentHelp": "Le programme redémarre séparément des conteneurs. Son lanceur conserve le binaire précédent si la nouvelle version ne démarre pas.",
     "history": "Historique des déploiements",
     "rollback": "Restaurer le déploiement précédent",
@@ -4572,6 +4573,9 @@
     "stateUnreported": "Pas de rapport"
   },
   "fleetPage": {
+    "peerFeedLive": "Robots dans la carte d'obstacles",
+    "peerFeedDown": "Robots ABSENTS de la carte d'obstacles",
+    "peerFeedDetail": "{{count}} robot(s) transmis à la carte d'obstacles de ce robot à {{rate}} Hz, coordination activée ou non",
     "betaTag": "Bêta",
     "betaTitle": "Le multi-robot est une fonctionnalité bêta",
     "betaBody": "La vue flotte et la tonte coordonnée sont en bêta et continuent d'évoluer. Gardez un œil sur les robots pendant leur utilisation et signalez ce que vous observez sur GitHub.",
@@ -4618,7 +4622,7 @@
     "startFreshConfirm": "Oublier les zones terminées par la flotte et effacer le point de reprise de chaque tondeuse ?",
     "startFreshDone": "Progression de la flotte effacée",
     "coordRuleAreas": "La répartition se fait par zone : deux tondeuses ne travaillent jamais la même zone en même temps.",
-    "coordRuleYield": "La priorité est fixe par robot ; la tondeuse la moins prioritaire s'arrête sur place et reprend quand l'autre s'est éloignée.",
+    "coordRuleYield": "Les deux tondeuses se voient toujours comme des obstacles dans leurs cartes de navigation ; en plus, la tondeuse la moins prioritaire s'arrête quand l'autre s'approche et reprend quand elle s'est éloignée (ou après 45 s au plus).",
     "coordRuleMap": "Chaque tondeuse doit avoir la même carte et le même datum GPS ; utilisez « Envoyer ma carte » après avoir modifié les zones.",
     "coordRuleOneArea": "Une pelouse à zone unique ne peut pas encore être partagée : la seconde tondeuse n'aura rien à faire.",
     "phase": {

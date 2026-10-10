@@ -14,12 +14,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -87,6 +89,71 @@ protected:
   std::shared_ptr<mowgli_map::MapServerNode> node_;
 };
 
+TEST_F(MapServerTest, TransitGeometryPublishesCompleteSnapshotAndInvalidatesOnEdit)
+{
+  auto observer = std::make_shared<rclcpp::Node>("transit_geometry_observer");
+  visualization_msgs::msg::MarkerArray::ConstSharedPtr latest;
+  auto subscription = observer->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      rclcpp::QoS(1).transient_local(),
+      [&](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+      {
+        latest = message;
+      });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(observer);
+  const auto wait_for = [&](bool empty)
+  {
+    for (int i = 0; i < 200; ++i)
+    {
+      executor.spin_some();
+      if (latest && latest->markers.empty() == empty)
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+  };
+  const auto rectangle = [](float x0, float y0, float x1, float y1)
+  {
+    geometry_msgs::msg::Polygon polygon;
+    for (const auto& xy :
+         std::vector<std::pair<float, float>>{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}})
+    {
+      geometry_msgs::msg::Point32 p;
+      p.x = xy.first;
+      p.y = xy.second;
+      polygon.points.push_back(p);
+    }
+    return polygon;
+  };
+  auto request = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+  request->area.name = "lawn";
+  request->area.area = rectangle(-2, -2, 2, 2);
+  request->area.obstacles.push_back(rectangle(0.4F, 0.4F, 0.6F, 0.6F));
+  auto response = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+  node_->add_area_for_test(request, response);
+  ASSERT_TRUE(response->success);
+  ASSERT_TRUE(wait_for(true));
+  node_->build_keepout_mask_for_test();
+  ASSERT_TRUE(wait_for(false));
+  ASSERT_EQ(latest->markers.size(), 2U);
+  EXPECT_EQ(latest->markers[0].ns, "area");
+  EXPECT_EQ(latest->markers[1].ns, "obstacle");
+  EXPECT_EQ(latest->markers[0].header.frame_id, "map");
+  EXPECT_EQ(latest->markers[0].points.size(), 4U);
+  request->area.name = "navigation";
+  request->area.is_navigation_area = true;
+  request->is_navigation_area = true;
+  request->area.area = rectangle(2, -1, 4, 1);
+  request->area.obstacles.clear();
+  node_->add_area_for_test(request, response);
+  ASSERT_TRUE(response->success);
+  ASSERT_TRUE(wait_for(true));
+  node_->build_keepout_mask_for_test();
+  ASSERT_TRUE(wait_for(false));
+  EXPECT_EQ(latest->markers.size(), 3U);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test 1 — grid_map creation with correct layers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,6 +165,82 @@ TEST_F(MapServerTest, GridMapHasAllRequiredLayers)
 
   EXPECT_TRUE(m.exists(std::string(mowgli_map::layers::OCCUPANCY)));
   EXPECT_TRUE(m.exists(std::string(mowgli_map::layers::CLASSIFICATION)));
+}
+
+TEST_F(MapServerTest, GuiAreaReplacementPreservesCalibratedDockGeometry)
+{
+  node_.reset();
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("resolution", 0.1);
+  options.append_parameter_override("areas_file_path", "");
+  options.append_parameter_override("dock_pose_x", -3.0);
+  options.append_parameter_override("dock_pose_y", -4.0);
+  node_ = std::make_shared<mowgli_map::MapServerNode>(options);
+  auto observer = std::make_shared<rclcpp::Node>("dock_geometry_replace_observer");
+  visualization_msgs::msg::MarkerArray::ConstSharedPtr latest;
+  auto subscription = observer->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      rclcpp::QoS(1).transient_local(),
+      [&](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+      {
+        latest = message;
+      });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(observer);
+  const auto wait_for_snapshot = [&]
+  {
+    for (int i = 0; i < 200; ++i)
+    {
+      executor.spin_some();
+      if (latest && latest->markers.size() == 3)
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+  };
+  auto request = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+  request->area.name = "lawn";
+  for (const auto& xy : std::vector<std::pair<float, float>>{{-2, -2}, {2, -2}, {2, 2}, {-2, 2}})
+  {
+    geometry_msgs::msg::Point32 point;
+    point.x = xy.first;
+    point.y = xy.second;
+    request->area.area.points.push_back(point);
+  }
+  auto added = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+  node_->add_area_for_test(request, added);
+  ASSERT_TRUE(added->success);
+  const auto before = node_->build_keepout_mask_for_test();
+  ASSERT_TRUE(wait_for_snapshot());
+  const auto dock_before = latest->markers;
+  latest.reset();
+
+  auto cleared = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->clear_map_for_test(cleared);
+  ASSERT_TRUE(cleared->success);
+  node_->add_area_for_test(request, added);
+  ASSERT_TRUE(added->success);
+  const auto after = node_->build_keepout_mask_for_test();
+  ASSERT_TRUE(wait_for_snapshot());
+  EXPECT_TRUE(node_->docking_pose_set_for_test());
+  EXPECT_EQ(node_->docking_pose_for_test().position.x, -3.0);
+  EXPECT_EQ(node_->docking_pose_for_test().position.y, -4.0);
+  ASSERT_EQ(latest->markers.size(), dock_before.size());
+  for (std::size_t i = 0; i < dock_before.size(); ++i)
+  {
+    EXPECT_EQ(latest->markers[i].ns, dock_before[i].ns);
+    EXPECT_EQ(latest->markers[i].points, dock_before[i].points);
+  }
+  const auto corridor_cost = [](const nav_msgs::msg::OccupancyGrid& mask)
+  {
+    const auto x =
+        static_cast<unsigned>((-4.2 - mask.info.origin.position.x) / mask.info.resolution);
+    const auto y =
+        static_cast<unsigned>((-4.0 - mask.info.origin.position.y) / mask.info.resolution);
+    return mask.data.at(static_cast<std::size_t>(y) * mask.info.width + x);
+  };
+  EXPECT_EQ(corridor_cost(before), 0);
+  EXPECT_EQ(corridor_cost(after), 0);
 }
 
 TEST_F(MapServerTest, GridMapGeometryIsCorrect)
@@ -310,6 +453,99 @@ static int8_t mask_at(const nav_msgs::msg::OccupancyGrid& m, double x, double y)
   return m.data[static_cast<std::size_t>(row) * m.info.width + col];
 }
 
+TEST_F(AreaTypeTest, SuccessfulMapLoadRepublishesInvalidatedMaskOnNextTimerTick)
+{
+  node_.reset();
+  const std::string dir = std::getenv("TEST_TMPDIR") ? std::getenv("TEST_TMPDIR") : "/tmp";
+  const std::string path = dir + "/mowgli_load_map_timer";
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("resolution", 0.1);
+  options.append_parameter_override("areas_file_path", "");
+  options.append_parameter_override("map_file_path", path);
+  node_ = std::make_shared<mowgli_map::MapServerNode>(options);
+  auto observer = std::make_shared<rclcpp::Node>("load_map_mask_observer");
+  nav_msgs::msg::OccupancyGrid::ConstSharedPtr latest;
+  visualization_msgs::msg::MarkerArray::ConstSharedPtr latest_geometry;
+  auto geometry_subscription = observer->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      rclcpp::QoS(1).transient_local(),
+      [&](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+      {
+        latest_geometry = message;
+      });
+  auto subscription = observer->create_subscription<nav_msgs::msg::OccupancyGrid>(
+      "/keepout_mask",
+      rclcpp::QoS(1).transient_local(),
+      [&](nav_msgs::msg::OccupancyGrid::ConstSharedPtr message)
+      {
+        latest = message;
+      });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(observer);
+  const auto wait_for_mask = [&](bool empty)
+  {
+    for (int i = 0; i < 200; ++i)
+    {
+      executor.spin_some();
+      if (latest && latest->data.empty() == empty)
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+  };
+  const auto wait_for_geometry = [&](bool empty)
+  {
+    for (int i = 0; i < 200; ++i)
+    {
+      executor.spin_some();
+      if (latest_geometry && latest_geometry->markers.empty() == empty)
+        return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+  };
+  ASSERT_TRUE(add_area("lawn", make_rect(-2, -2, 2, 2), false));
+  // Let the real map-edit debounce expire, then use the normal timer path to
+  // publish and clear masks_dirty_. No direct mask-builder call is involved.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1600));
+  node_->publish_mow_progress_for_test();
+  ASSERT_TRUE(wait_for_mask(false));
+  ASSERT_TRUE(wait_for_geometry(false));
+  const auto before = *latest;
+  auto saved = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->save_map_for_test(saved);
+  ASSERT_TRUE(saved->success) << saved->message;
+
+  latest.reset();
+  latest_geometry.reset();
+  auto loaded = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->load_map_for_test(loaded);
+  ASSERT_TRUE(loaded->success) << loaded->message;
+  ASSERT_TRUE(wait_for_mask(true)) << "load must invalidate the previously latched mask";
+  ASSERT_TRUE(wait_for_geometry(true));
+
+  latest.reset();
+  node_->publish_mow_progress_for_test();
+  ASSERT_TRUE(wait_for_mask(false)) << "the next normal timer tick must restore authorization";
+  ASSERT_TRUE(wait_for_geometry(false));
+  EXPECT_EQ(latest->info, before.info);
+  EXPECT_EQ(latest->data, before.data);
+  EXPECT_EQ(mask_at(*latest, 0, 0), 0);
+  std::remove((path + ".dat").c_str());
+  // A data-file failure after grid invalidation must keep both views closed.
+  latest.reset();
+  latest_geometry.reset();
+  node_->load_map_for_test(loaded);
+  ASSERT_FALSE(loaded->success);
+  ASSERT_TRUE(wait_for_mask(true));
+  ASSERT_TRUE(wait_for_geometry(true));
+  node_->publish_mow_progress_for_test();
+  executor.spin_some();
+  EXPECT_TRUE(latest->data.empty());
+  EXPECT_TRUE(latest_geometry->markers.empty());
+  std::remove((path + ".yaml").c_str());
+}
+
 TEST_F(AreaTypeTest, NavigationAreaIsNotStoredAsMowing)
 {
   ASSERT_TRUE(add_area("nav_corridor", make_rect(-2, -2, 2, 2), /*is_navigation=*/true));
@@ -474,6 +710,51 @@ TEST_F(AreaTypeTest, AreaIdSurvivesSaveLoadRoundTrip)
 
   EXPECT_EQ(get_area(0)->area.id, id_before) << "id must not change across a save/load round trip";
   std::remove(tmp_path.c_str());
+}
+
+TEST_F(AreaTypeTest, ReloadWithSameExtentRecentersTheGrid)
+{
+  ASSERT_TRUE(add_area("near", make_rect(-2, -2, 2, 2), false));
+  const auto before_size = node_->map().getSize();
+  const std::string path = "/tmp/mowgli_garden_recenter.dat";
+  {
+    std::ofstream file(path);
+    file << "area_count: 1\narea_0_name: distant\narea_0_id: 1\n"
+            "area_0_polygon: 38,-2;42,-2;42,2;38,2\n";
+  }
+  node_->load_areas_for_test(path);
+  std::remove(path.c_str());
+  EXPECT_TRUE((node_->map().getSize() == before_size).all());
+  EXPECT_DOUBLE_EQ(node_->map().getPosition().x(), 40);
+  EXPECT_DOUBLE_EQ(node_->map().getResolution(), .1);
+  const auto mask = node_->build_keepout_mask_for_test();
+  EXPECT_GT(mask.info.origin.position.x, 30);
+}
+
+TEST_F(AreaTypeTest, DockCorridorIsIncludedInGardenExtent)
+{
+  node_.reset();
+  rclcpp::NodeOptions opts;
+  opts.append_parameter_override("dock_pose_x", -40.0);
+  opts.append_parameter_override("dock_pose_y", -20.0);
+  opts.append_parameter_override("resolution", .1);
+  node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
+  ASSERT_TRUE(add_area("distant_lawn", make_rect(35, 10, 40, 15), false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_LT(mask.info.origin.position.x, -43);
+  EXPECT_LT(mask.info.origin.position.y, -20);
+  EXPECT_GT(mask.info.origin.position.x + mask.info.width * mask.info.resolution, 40);
+}
+
+TEST_F(AreaTypeTest, ResourceErrorIsExplicitAndMaskClosesWithoutCoarsening)
+{
+  const auto before_size = node_->map().getSize();
+  ASSERT_TRUE(add_area("oversized", make_rect(0, 0, 1000, 1000), false));
+  EXPECT_NE(node_->planning_grid_error_for_test().find("max_grid_cells"), std::string::npos);
+  EXPECT_TRUE((node_->map().getSize() == before_size).all());
+  EXPECT_DOUBLE_EQ(node_->map().getResolution(), .1);
+  EXPECT_TRUE(node_->build_keepout_mask_for_test().data.empty());
 }
 
 TEST_F(AreaTypeTest, ReAddingAnAreaWithAnExplicitIdPreservesIt)
@@ -1896,7 +2177,9 @@ protected:
         << "    dock_pose_yaw: " << yaw << "\n";
   }
 
-  std::shared_ptr<mowgli_map::MapServerNode> make_node(double datum_lat, double datum_lon) const
+  std::shared_ptr<mowgli_map::MapServerNode> make_node(double datum_lat,
+                                                       double datum_lon,
+                                                       const std::string& areas_file = "") const
   {
     rclcpp::NodeOptions opts;
     opts.append_parameter_override("resolution", 0.1);
@@ -1905,7 +2188,7 @@ protected:
     opts.append_parameter_override("map_frame", "map");
     opts.append_parameter_override("tool_width", 0.2);
     opts.append_parameter_override("map_file_path", "");
-    opts.append_parameter_override("areas_file_path", "");
+    opts.append_parameter_override("areas_file_path", areas_file);
     opts.append_parameter_override("publish_rate", 1.0);
     opts.append_parameter_override("datum_lat", datum_lat);
     opts.append_parameter_override("datum_lon", datum_lon);
@@ -2062,6 +2345,61 @@ TEST_F(DatumMigrationTest, DatumChangeReprojectsAreasObstaclesAndDock)
   const auto poly2 = area_polygon(*node, 0);
   EXPECT_NEAR(poly2.points[0].x, poly.points[0].x, 1e-4);
   EXPECT_NEAR(poly2.points[0].y, poly.points[0].y, 1e-4);
+}
+
+// The GUI's map-backup restore (#887) writes an older areas.dat into place and
+// calls ~/load_areas at runtime. A backup recorded BEFORE the datum moved is
+// stamped with the old datum, so its polygons must be re-projected — but the
+// dock pose is already in the current frame (it was migrated at boot or set by
+// calibration under the current datum) and must NOT shift by the datum delta.
+TEST_F(DatumMigrationTest, RuntimeReloadOfOldBackupMovesAreasButNotDock)
+{
+  const std::string backup_path = areas_path_ + ".backup";
+  {
+    auto node = make_node(kOldLat, kOldLon);
+    add_area(*node, "lawn", make_rect(-2, -2, 2, 2));
+    node->save_areas_for_test(backup_path);
+  }
+
+  // The stack runs with the NEW datum; dock (1, 2) is in the new frame, both in
+  // memory and in mowgli_robot.yaml. No areas.dat exists yet at boot.
+  std::remove(areas_path_.c_str());
+  auto node = make_node(kNewLat, kNewLon, areas_path_);
+  ASSERT_TRUE(node->docking_pose_set_for_test());
+
+  // Restore: the backup lands as areas.dat, then the runtime reload.
+  {
+    std::ifstream in(backup_path, std::ios::binary);
+    std::ofstream out(areas_path_, std::ios::binary | std::ios::trunc);
+    out << in.rdbuf();
+  }
+  const auto res = node->load_areas_service_for_test();
+  ASSERT_TRUE(res.success) << res.message;
+
+  // Polygons re-projected into the current frame, exactly as at boot…
+  const auto poly = area_polygon(*node, 0);
+  ASSERT_EQ(poly.points.size(), 4U);
+  double ex = -2.0;
+  double ey = -2.0;
+  expected_reproject(kOldLat, kOldLon, kNewLat, kNewLon, ex, ey);
+  EXPECT_NEAR(poly.points[0].x, ex, 1e-3);
+  EXPECT_NEAR(poly.points[0].y, ey, 1e-3);
+  EXPECT_GT(std::abs(poly.points[0].x - (-2.0)), 1.0);
+
+  // …but the dock stays put, in memory and on disk.
+  const auto& dock = node->docking_pose_for_test();
+  EXPECT_NEAR(dock.position.x, 1.0, 1e-9);
+  EXPECT_NEAR(dock.position.y, 2.0, 1e-9);
+  const std::string yaml = read_file(yaml_path_);
+  EXPECT_NEAR(yaml_scalar(yaml, "dock_pose_x"), 1.0, 1e-9);
+  EXPECT_NEAR(yaml_scalar(yaml, "dock_pose_y"), 2.0, 1e-9);
+
+  // areas.dat is re-stamped, so the next boot does not migrate it again.
+  const std::string content = read_file(areas_path_);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lat"), kNewLat, 1e-9);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lon"), kNewLon, 1e-9);
+
+  std::remove(backup_path.c_str());
 }
 
 TEST_F(DatumMigrationTest, AStartPointMovesWithTheMapWhenTheDatumChanges)

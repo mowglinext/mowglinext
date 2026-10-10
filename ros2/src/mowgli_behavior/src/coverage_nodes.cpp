@@ -751,6 +751,18 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     coverage_plan_pub_->publish(goal.path);
   }
 
+  // Once this unit is dispatched, a halt before the controller reports its
+  // first progress update must resume from this unit's start. The previous
+  // unit's cursor can belong to a later sub-path when an earlier transit had
+  // failed; leaving it in place would make an immediate preempt persist stale
+  // progress from that later unit.
+  const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
+  const std::size_t trim_offset = (swath_idx_ < swath_resume_start_indices_.size())
+                                      ? swath_resume_start_indices_[swath_idx_]
+                                      : 0;
+  ctx->area_resume_pose_index[area_idx_] = base + trim_offset;
+  saveCoverageResumeState(*ctx);
+
   follow_handle_.reset();
 
   // Collect the controller's own path-tracking error for this segment. The slot
