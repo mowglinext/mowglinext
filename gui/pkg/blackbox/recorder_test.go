@@ -53,6 +53,17 @@ func waitFor(t *testing.T, condition func() bool) {
 	}
 }
 
+func configureRecorder(t *testing.T, r *Recorder, cfg Config) {
+	t.Helper()
+	if err := r.Configure(cfg); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return r.Status().Phase != "pruning" })
+	if r.Status().LastError != "" {
+		t.Fatal(r.Status().LastError)
+	}
+}
+
 func ingest(t *testing.T, r *Recorder, topic, data string) {
 	t.Helper()
 	if !r.Ingest(topic, []byte(data)) {
@@ -312,9 +323,7 @@ func TestCountAndByteRetention(t *testing.T) {
 	r, clock := testRecorder(t)
 	cfg := r.Status().Config
 	cfg.MaxSnapshots = 2
-	if err := r.Configure(cfg); err != nil {
-		t.Fatal(err)
-	}
+	configureRecorder(t, r, cfg)
 	for i := 0; i < 4; i++ {
 		ingest(t, r, "odom", `{"x":1}`)
 		r.Trigger("manual")
@@ -330,7 +339,7 @@ func TestCountAndByteRetention(t *testing.T) {
 		}
 	}
 	cfg.MaxDiskBytes = 4 << 20
-	if err := r.prune(cfg, 0); err != nil {
+	if err := r.prune(cfg, ""); err != nil {
 		t.Fatal(err)
 	}
 	list, err = r.List()

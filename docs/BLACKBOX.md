@@ -43,6 +43,13 @@ completed names are listed. Restart removes recorder-owned partial files.
 Writes, retention scans and fsync run outside the collector lock. Configuration
 persistence is serialized with capture detection; failed settings saves leave
 the previous configuration and history intact.
+Startup with existing recordings and accepted retention changes apply pruning
+asynchronously through the same single disk worker. Settings edits wait for
+cleanup. Events during cleanup immediately pin one bounded RAM capture, preserving
+the original trigger time and pre/post window; its disk write waits for cleanup
+to finish. Additional events coalesce into that incident. Status changes from
+`pruning` to `capturing` when an incident arrives; telemetry admission continues.
+Pruning errors are visible and saving the same settings retries failed cleanup.
 
 The existing session tracker, logs and other GUI features have their own writes;
 the zero normal-history-write property is scoped to the blackbox, not the entire
@@ -96,7 +103,7 @@ the existing bitcask database. They are independent of robot-operation YAML.
 Basic controls are in Diagnostics; the API accepts the complete configuration.
 Settings changes preserve admissible history and detector edge state. Disabling
 clears volatile history and detaches the blackbox's subscriptions. Changes during
-capture/write return HTTP 409; wait for completion. Saved files remain accessible.
+capture/write/pruning return HTTP 409; wait for completion. Saved files remain accessible.
 
 - `enabled`: true by default.
 - `pre_seconds`: 60, allowed 1–300; `post_seconds`: 15, allowed 1–60.
@@ -135,8 +142,21 @@ a guarantee that every topic delivered continuously for that span.
 Default storage is `/ros2_ws/maps/blackbox` (override with `BLACKBOX_DIR` for
 testing). It uses the same shared persistent volume as manual recordings, in a
 separate namespace. Pruning only touches strictly named regular blackbox files;
-manual rosbag directories are untouched. Incoming space/count is reserved before
-publish, protecting a new capture from a backward wall-clock adjustment.
+manual rosbag directories are untouched. Earlier completed evidence is retained
+until the replacement has been written, synced and atomically published. Pruning
+then protects that new filename, including after a backward wall-clock adjustment.
+`max_disk_bytes`/`max_snapshots` bound completed retention after cleanup. During
+replacement there can be one additional partial or completed capture, individually
+bounded by `max_disk_bytes`; transient managed disk use is at most twice that
+limit when existing retention is satisfied. Startup or a reduced limit can briefly
+exceed the new bound until asynchronous cleanup finishes. Disk reserve requires
+space for the replacement without deleting old evidence; insufficient free space
+rejects it and leaves earlier recordings downloadable.
+If cleanup fails after publication, that complete snapshot is counted and remains
+downloadable with a visible retention error. Once existing files exceed a limit,
+further publication stops until cleanup or manual deletion restores the limit.
+Retrying the same settings retries cleanup; repeated failures cannot accumulate
+an unlimited sequence of additional recordings.
 Disk reserve, serialization limit, write/flush/fsync errors become recorder status
 errors; they never restart ROS or the robot. Only one writer can remain blocked.
 
@@ -160,6 +180,8 @@ operations. The existing GUI authentication/network-access model is unchanged.
 No recorder upload or notification delivery is added. Exports include location
 and diagnostic telemetry; inspect them before sharing. Full robot configuration
 and credentials are deliberately not included.
+Malformed/unavailable blackbox API responses remain local errors in its panel;
+other Diagnostics controls continue working and polling can recover automatically.
 
 `Recorder.Close(ctx)` marks an active snapshot interrupted and attempts to save
 it; context expiry lets the caller stop waiting while the one writer finishes.

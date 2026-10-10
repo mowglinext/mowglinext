@@ -32,7 +32,7 @@
     "cancel": "Cancel",
     "interrupted": "Capture interrupted",
     "dropped": "{{count}} capture observations dropped",
-    "phase": {"ready": "Ready", "disabled": "Disabled", "capturing": "Collecting post-event history", "writing": "Saving snapshot", "stopped": "Stopped"}
+    "phase": {"ready": "Ready", "disabled": "Disabled", "capturing": "Collecting post-event history", "writing": "Saving snapshot", "pruning": "Applying storage limits", "stopped": "Stopped"}
   },
   "bladeDirection": {
     "title": "Requested blade direction",

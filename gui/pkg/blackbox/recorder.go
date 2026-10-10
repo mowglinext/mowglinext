@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,7 @@ type capture struct {
 type writeResult struct {
 	err      error
 	duration time.Duration
+	pruning  bool
 }
 
 // Recorder owns one collector and at most one disk writer. Ingest only copies
@@ -83,6 +85,7 @@ type Recorder struct {
 	buffer                ring
 	active                *capture
 	writing               bool
+	pruning               bool
 	lastTrigger           time.Time
 	lastError             string
 	completed, coalesced  uint64
@@ -104,13 +107,21 @@ type Recorder struct {
 	now                   func() time.Time
 	resources             func() resourceSample
 	write                 func(*capture) error
+	freeDisk              func(string) (int64, bool)
+	maintain              func(Config) error
+	removeCompleted       func(*os.Root, string) error
 }
 
 func New(dir string, cfg Config, identifiers map[string]string) (*Recorder, error) {
+	return newRecorder(dir, cfg, identifiers, nil)
+}
+
+func newRecorder(dir string, cfg Config, identifiers map[string]string, maintain func(Config) error) (*Recorder, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if err := prepareDirectory(dir); err != nil {
+	hasCompleted, err := prepareDirectory(dir)
+	if err != nil {
 		return nil, err
 	}
 	ids := make(map[string]string)
@@ -131,6 +142,15 @@ func New(dir string, cfg Config, identifiers map[string]string) (*Recorder, erro
 	r.allocateBuffer()
 	r.config.Store(&cfg)
 	r.write = r.persist
+	r.freeDisk = diskFree
+	r.removeCompleted = func(root *os.Root, name string) error { return root.Remove(name) }
+	r.maintain = func(cfg Config) error { return r.prune(cfg, "") }
+	if maintain != nil {
+		r.maintain = maintain
+	}
+	if hasCompleted {
+		r.startPrune()
+	}
 	go r.run()
 	return r, nil
 }
@@ -220,7 +240,9 @@ func (r *Recorder) trigger(reason string, now time.Time) (string, bool) {
 		}
 		return r.active.metadata.CaptureID, false
 	}
-	if r.writing || (!strings.HasPrefix(reason, "manual") && !r.lastTrigger.IsZero() && now.Sub(r.lastTrigger) < time.Duration(r.cfg.CooldownSeconds)*time.Second) {
+	// Maintenance must not consume incident edges. Pin one bounded RAM capture
+	// immediately; its disk write waits until the maintenance worker finishes.
+	if (r.writing && !r.pruning) || (!strings.HasPrefix(reason, "manual") && !r.lastTrigger.IsZero() && now.Sub(r.lastTrigger) < time.Duration(r.cfg.CooldownSeconds)*time.Second) {
 		r.coalesced++
 		return "", false
 	}
@@ -300,6 +322,9 @@ func (r *Recorder) ConfigurePersist(cfg Config, persist func() error) error {
 	}
 	// Preserve event edge state across settings edits to avoid capture storms.
 	r.config.Store(&cfg)
+	if cfg.MaxSnapshots != previous.MaxSnapshots || cfg.MaxDiskBytes != previous.MaxDiskBytes || r.lastError != "" {
+		r.startPrune()
+	}
 	return nil
 }
 
@@ -310,11 +335,14 @@ func (r *Recorder) Status() Status {
 	if !r.cfg.Enabled {
 		phase = "disabled"
 	}
-	if r.active != nil {
-		phase = "capturing"
-	}
 	if r.writing {
 		phase = "writing"
+	}
+	if r.pruning {
+		phase = "pruning"
+	}
+	if r.active != nil {
+		phase = "capturing"
 	}
 	if r.closed.Load() {
 		phase = "stopped"
@@ -388,7 +416,7 @@ func (r *Recorder) run() {
 			r.mu.Lock()
 			now := r.now()
 			r.buffer.expire(now.Add(-time.Duration(r.cfg.PreSeconds) * time.Second))
-			if r.active != nil && !now.Before(r.active.deadline) {
+			if r.active != nil && !r.writing && !r.closed.Load() && !now.Before(r.active.deadline) {
 				r.finish(now, false)
 			}
 			resourceTicks++
@@ -399,13 +427,9 @@ func (r *Recorder) run() {
 			r.mu.Unlock()
 		case result := <-r.result:
 			r.mu.Lock()
-			r.writing = false
-			r.lastWriteSeconds = result.duration.Seconds()
-			if result.err != nil {
-				r.lastError = result.err.Error()
-			} else {
-				r.completed++
-				r.lastError = ""
+			r.applyWriteResult(result)
+			if r.active != nil && !r.closed.Load() && !r.now().Before(r.active.deadline) {
+				r.finish(r.now(), false)
 			}
 			r.mu.Unlock()
 		case <-r.stop:
@@ -420,26 +444,53 @@ func (r *Recorder) run() {
 					draining = false
 				}
 			}
-			if r.active != nil {
-				r.finish(r.now(), true)
-			}
-			writing := r.writing
-			r.mu.Unlock()
-			if writing {
+			// A RAM incident may coexist with retention maintenance. Wait for the
+			// current worker before starting its interrupted snapshot write.
+			if r.writing {
+				r.mu.Unlock()
 				result := <-r.result
 				r.mu.Lock()
-				r.writing = false
-				r.lastWriteSeconds = result.duration.Seconds()
-				if result.err != nil {
-					r.lastError = result.err.Error()
-				} else {
-					r.completed++
-				}
-				r.mu.Unlock()
+				r.applyWriteResult(result)
 			}
+			if r.active != nil {
+				r.finish(r.now(), true)
+				r.mu.Unlock()
+				result := <-r.result
+				r.mu.Lock()
+				r.applyWriteResult(result)
+			}
+			r.mu.Unlock()
 			return
 		}
 	}
+}
+
+func (r *Recorder) applyWriteResult(result writeResult) {
+	r.writing, r.pruning = false, false
+	if !result.pruning {
+		r.lastWriteSeconds = result.duration.Seconds()
+	}
+	var published publishedError
+	if !result.pruning && (result.err == nil || errors.As(result.err, &published)) {
+		r.completed++
+	}
+	if result.err != nil {
+		r.lastError = result.err.Error()
+	} else {
+		r.lastError = ""
+	}
+}
+
+// Called with mu held, or before New publishes the recorder. Retention shares
+// the single disk worker with snapshots; settings acceptance does no disk I/O.
+func (r *Recorder) startPrune() {
+	if r.active != nil || r.writing || r.closed.Load() {
+		return
+	}
+	r.writing, r.pruning = true, true
+	cfg := r.cfg
+	maintain := r.maintain
+	go func() { r.result <- writeResult{err: maintain(cfg), pruning: true} }()
 }
 
 func (r *Recorder) finish(now time.Time, interrupted bool) {

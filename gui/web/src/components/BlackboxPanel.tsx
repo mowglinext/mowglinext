@@ -15,7 +15,7 @@ export function BlackboxPanel() {
         try { await action(); } catch (e) { void message.error(e instanceof Error ? e.message : t("blackbox.requestFailed")); }
     };
     const status = box.status;
-    const capturing = status?.phase === "capturing" || status?.phase === "writing";
+    const capturing = status?.phase === "capturing" || status?.phase === "writing" || status?.phase === "pruning";
     const remove = (recording: BlackboxRecording) => modal.confirm({
         title: t("blackbox.deleteTitle"), content: recording.name,
         okText: t("blackbox.delete"), cancelText: t("blackbox.cancel"), okButtonProps: {danger: true},

@@ -32,7 +32,7 @@
     "cancel": "Annuler",
     "interrupted": "Capture interrompue",
     "dropped": "{{count}} observations perdues dans la capture",
-    "phase": {"ready": "Prête", "disabled": "Désactivée", "capturing": "Collecte après l’événement", "writing": "Sauvegarde de la capture", "stopped": "Arrêtée"}
+    "phase": {"ready": "Prête", "disabled": "Désactivée", "capturing": "Collecte après l’événement", "writing": "Sauvegarde de la capture", "pruning": "Application des limites de stockage", "stopped": "Arrêtée"}
   },
   "bladeDirection": {
     "title": "Sens demandé de la lame",
