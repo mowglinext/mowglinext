@@ -17,8 +17,7 @@ function ShellSprite({style, view, x, y, width, height}: {
         <svg data-layer="shell-art" x={x} y={y} width={width} height={height}
         viewBox={[sx,sy,sw,sh].join(" ")} preserveAspectRatio="none" overflow="hidden">
         <rect data-shell-bounds x={sx} y={sy} width={sw} height={sh} fill="none"/>
-        <image onLoad={()=>setLoaded(true)} onError={()=>setLoaded(false)} href={`/assets/robots/layered/${style}.png`} width={shell.size[0]} height={shell.size[1]}
-            transform={view === "top" && shell.topRotation ? `rotate(${shell.topRotation} ${sx+sw/2} ${sy+sh/2})` : undefined}/>
+        <image onLoad={()=>setLoaded(true)} onError={()=>setLoaded(false)} href={`/assets/robots/layered/${style}.png`} width={shell.size[0]} height={shell.size[1]}/>
     </svg></>;
 }
 

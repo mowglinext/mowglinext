@@ -2,6 +2,7 @@ import {expect,test} from "@playwright/test";
 import {mkdirSync} from "node:fs";
 import {installMockBackend} from "./mock/mockBackend";
 import {SCENARIOS} from "./mock/scenarios";
+import {SHELLS} from "../../src/components/robot/shellAssets";
 import {ROBOT_URDF} from "../../src/test/robotUrdf";
 const base=SCENARIOS[0];
 const shots="screenshots.local/layered-mower";
@@ -113,4 +114,45 @@ test("caster fore/aft setting changes preview and automatic restores chassis pla
     await page.getByRole("switch",{name:"Automatic from chassis"}).click();
     await expect(input).toHaveCount(0);
     await expect(page.getByTestId("mower-top").locator('[data-layer="casters"] > g').first()).toHaveAttribute("transform",/ -0.44999999999999996\)| -0.45\)/);
+});
+
+// Inspect source alpha outside the configured crop as well. Testing only the
+// SVG rectangle would pass even if it represented padding or clipped the body.
+test("all shell dimensions describe opaque chassis edges, excluding atlas margins",async({page})=>{
+    await page.goto("/#/settings?section=hardware");
+    await expect(page.getByTestId("mower-top")).toBeVisible();
+    const measured=await page.evaluate(async()=>{
+        const result:Record<string,Record<string,number[]>>={};
+        for(const style of ["rounded","sculpted","utility","yardforce"]){
+            const image=new Image();image.src=`/assets/robots/layered/${style}.png`;await image.decode();
+            const canvas=document.createElement("canvas");canvas.width=image.width;canvas.height=image.height;
+            const ctx=canvas.getContext("2d",{willReadFrequently:true})!;ctx.drawImage(image,0,0);
+            const pixels=ctx.getImageData(0,0,image.width,image.height).data;
+            result[style]={};
+            // The two isolated projections are separated at x=768 in these
+            // source atlases. Scan their whole cells, not just the crop metadata.
+            for(const [view,start,end] of [["top",0,768],["side",768,image.width]] as const){
+                let minX=image.width,minY=image.height,maxX=-1,maxY=-1;
+                for(let y=0;y<image.height;y++)for(let x=start;x<end;x++){
+                    // Ignore the antialias fringe; alpha >220 defines solid shell.
+                    if(pixels[(y*image.width+x)*4+3]<=220)continue;
+                    minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);
+                }
+                result[style][view]=[minX,minY,maxX-minX+1,maxY-minY+1];
+            }
+        }
+        return result;
+    });
+    for(const [style,asset] of Object.entries(SHELLS)){
+        for(const view of ["top","side"] as const){
+            expect(measured[style][view],`${style} ${view}: physical crop must touch all four solid edges`).toEqual(asset[view]);
+        }
+    }
+    // The same measured edge crop occupies the configured metric extent.
+    const top=page.getByTestId("mower-top").locator('[data-layer="shell-art"]');
+    const side=page.getByTestId("mower-side").locator('[data-layer="shell-art"]');
+    await expect(top).toHaveAttribute("width","0.45");
+    await expect(top).toHaveAttribute("height","0.6");
+    await expect(side).toHaveAttribute("width","0.6");
+    await expect(side).toHaveAttribute("height","0.19");
 });

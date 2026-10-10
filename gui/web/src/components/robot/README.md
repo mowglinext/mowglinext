@@ -34,7 +34,11 @@ wheel/caster/blade cylinders with direct base_link joints. Sensors use named
 GPS/LiDAR/IMU box/cylinder visuals and direct joints. Other URDF layouts use the
 existing map fallback rather than claiming guessed geometry is authoritative.
 
-Source atlas bounds exclude transparent padding. Caster artwork has a separate
+Source atlas bounds exclude transparent padding. A browser regression scans the
+actual alpha pixels of all eight shell projections (outside the configured crop
+as well) and requires their solid edges to match the crop exactly. The crop maps
+to chassis width/length in top view and length/height in side view. Viewport
+padding provides display space only; it cannot alter those physical extents. Caster artwork has a separate
 tyre reference rectangle so its fork does not change the diameter or axle anchor.
 Sensor art selects a visible local face and projects mounting roll/pitch/yaw.
 The side of a vertical cylindrical LiDAR is yaw-invariant.
