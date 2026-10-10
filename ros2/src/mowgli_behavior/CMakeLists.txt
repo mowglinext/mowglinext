@@ -716,6 +716,22 @@ if(BUILD_TESTING)
     ${geometry_msgs_TARGETS}
   )
 
+  # ---- test_blocked_stretch ----
+  # Pure: where a unit resumes once an obstacle stretch beat every detour
+  # (issue #607) instead of dropping the rest of the unit.
+  ament_add_gtest(test_blocked_stretch
+    test/test_blocked_stretch.cpp
+  )
+
+  target_include_directories(test_blocked_stretch PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_blocked_stretch
+    ${geometry_msgs_TARGETS}
+  )
+
   # ---- test_unit_resume ----
   ament_add_gtest(test_unit_resume
     test/test_unit_resume.cpp
