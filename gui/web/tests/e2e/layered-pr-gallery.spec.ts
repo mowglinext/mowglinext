@@ -60,3 +60,19 @@ for(const example of ["yardforce500","custom-angular"] as const){
         }
     });
 }
+
+
+test("chassis style gallery",async({page})=>{
+    mkdirSync(output,{recursive:true});
+    await page.setViewportSize({width:1600,height:1150});
+    await page.goto("/tests/e2e/fixtures/chassis-gallery.html");
+    await expect(page.locator("article")).toHaveCount(4);
+    await expect(page.locator("[data-mower-style]")).toHaveCount(8);
+    await page.evaluate(async()=>{
+        await Promise.all([...document.querySelectorAll("image")].map(e=>{
+            const image=new Image();image.src=e.getAttribute("href")!;return image.decode();
+        }));
+        await document.fonts.ready;
+    });
+    await page.locator("main").screenshot({path:`${output}/chassis-gallery.png`});
+});

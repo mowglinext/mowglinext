@@ -33,3 +33,18 @@ configuration drift and Go schema/template/model/generated-type parity passed.
 Earlier checks on this feature: GUI production build; 12 application Playwright
 cases and map projection checks. Full ROS workspace build/test and physical
 geometry acceptance have not been completed.
+
+
+## Chassis collection gallery
+
+`chassis-gallery.png` is a presentation fixture, not an additional application
+screen. It uses the production `LayeredMower` renderer with the same
+600 x 450 x 190 mm geometry for all four styles, 200 mm drive wheels,
+325 mm centre track, 40 mm tyre width and casters at X=390 mm / track=280 mm.
+Sensors are omitted to make the shell shapes easy to compare. Reproduce with:
+
+```sh
+npx playwright test tests/e2e/layered-pr-gallery.spec.ts -g "chassis style gallery" --workers=1
+```
+
+The gallery capture test passed and the final screenshot was visually inspected.
