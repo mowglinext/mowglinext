@@ -18,6 +18,28 @@ export enum ProvidersRemoteAccessPhase {
   RemoteAccessError = "error",
 }
 
+export interface ApiBlackboxStatusResponse {
+  buffered_bytes?: number;
+  buffered_records?: number;
+  buffered_seconds?: number;
+  capture_id?: string;
+  coalesced_triggers?: number;
+  completed_snapshots?: number;
+  config?: BlackboxConfig;
+  dropped_messages?: number;
+  effective_memory_bytes?: number;
+  effective_pre_seconds?: number;
+  history_evictions?: number;
+  last_error?: string;
+  last_write_seconds?: number;
+  memory_pressure?: boolean;
+  phase?: string;
+  recordings?: BlackboxSnapshot[];
+  skipped_trigger_sources?: number;
+  topics?: ApiBlackboxTopicStatus[];
+  warning?: string;
+}
+
 export interface ApiContainer {
   id?: string;
   labels?: Record<string, string>;
@@ -33,12 +55,33 @@ export interface ApiErrorResponse {
   error?: string;
 }
 
+export interface ApiFleetCoordinationResponse {
+  settings?: ProvidersCoordinatorSettings;
+  status?: ProvidersCoordinatorStatus;
+}
+
 export interface ApiGetConfigResponse {
   tileUri?: string;
 }
 
 export interface ApiGetSettingsResponse {
   settings?: Record<string, any>;
+}
+
+export interface ApiHardwareBackendResponse {
+  backend?: string;
+  /**
+   * DefaultOverrides are the settings whose default this backend replaces
+   * (config/backends/<backend>.yaml). A mower-model preset must not write
+   * these: the preset describes the machine, not its electronics.
+   */
+  default_overrides?: Record<string, any>;
+  /**
+   * RobotName is robot_name from the installed config (or its default):
+   * the header badge shows it beside the backend.
+   */
+  robot_name?: string;
+  supported?: string[];
 }
 
 export interface ApiImportDockPose {
@@ -136,6 +179,50 @@ export interface ApiIrriSenseSettingsUpdate {
   zoneIds?: string[];
 }
 
+export interface ApiNotificationSettingsResponse {
+  channel?: string;
+  channels?: string[];
+  enabled?: boolean;
+  eventKinds?: string[];
+  events?: Record<string, boolean>;
+  language?: string;
+  ntfyServer?: string;
+  ntfyTokenMasked?: string;
+  ntfyTokenSet?: boolean;
+  ntfyTopic?: string;
+  pushoverAppTokenMasked?: string;
+  pushoverAppTokenSet?: boolean;
+  pushoverUserKey?: string;
+  telegramBotTokenMasked?: string;
+  telegramBotTokenSet?: boolean;
+  telegramChatId?: string;
+  title?: string;
+  webhookUrl?: string;
+}
+
+export interface ApiNotificationSettingsUpdate {
+  channel?: string;
+  clearNtfyToken?: boolean;
+  clearPushoverAppToken?: boolean;
+  clearTelegramBotToken?: boolean;
+  enabled?: boolean;
+  events?: Record<string, boolean>;
+  language?: string;
+  ntfyServer?: string;
+  ntfyToken?: string;
+  ntfyTopic?: string;
+  pushoverAppToken?: string;
+  pushoverUserKey?: string;
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  title?: string;
+  webhookUrl?: string;
+}
+
+export interface ApiOkResponse {
+  ok?: string;
+}
+
 export interface ApiRemoteAccessSettingsResponse {
   authKeyMasked?: string;
   authKeySet?: boolean;
@@ -154,10 +241,6 @@ export interface ApiRemoteAccessSettingsUpdate {
   hostname?: string;
   image?: string;
   serveHttps?: boolean;
-}
-
-export interface ApiOkResponse {
-  ok?: string;
 }
 
 export interface ApiSchedule {
@@ -225,6 +308,72 @@ export interface ApiVersionsResponse {
   server?: BuildinfoInfo;
 }
 
+export interface ApiAddPeerRequest {
+  address?: string;
+}
+
+export interface ApiBlackboxTopicStatus {
+  last_received_at?: string;
+  topic?: string;
+}
+
+export interface ApiRegisterPeerRequest {
+  api_version?: number;
+  id?: string;
+  name?: string;
+  port?: number;
+}
+
+export interface BlackboxConfig {
+  cooldown_seconds?: number;
+  enabled?: boolean;
+  max_disk_bytes?: number;
+  max_message_bytes?: number;
+  max_snapshots?: number;
+  memory_bytes?: number;
+  min_free_disk_bytes?: number;
+  post_seconds?: number;
+  pre_seconds?: number;
+}
+
+export interface BlackboxSnapshot {
+  actual_post_seconds?: number;
+  actual_pre_seconds?: number;
+  capture_dropped_messages?: number;
+  capture_id?: string;
+  config?: BlackboxConfig;
+  dropped_messages?: number;
+  format_version?: number;
+  identifiers?: Record<string, string>;
+  interrupted?: boolean;
+  kind?: string;
+  name?: string;
+  reasons?: string[];
+  records?: number;
+  size?: number;
+  triggered_at?: string;
+  window_elapsed_seconds?: number;
+}
+
+export interface BlackboxStatus {
+  buffered_bytes?: number;
+  buffered_records?: number;
+  buffered_seconds?: number;
+  capture_id?: string;
+  coalesced_triggers?: number;
+  completed_snapshots?: number;
+  config?: BlackboxConfig;
+  dropped_messages?: number;
+  effective_memory_bytes?: number;
+  effective_pre_seconds?: number;
+  history_evictions?: number;
+  last_error?: string;
+  last_write_seconds?: number;
+  memory_pressure?: boolean;
+  phase?: string;
+  skipped_trigger_sources?: number;
+}
+
 export interface BuildinfoInfo {
   built_at?: string;
   modified?: boolean;
@@ -276,6 +425,8 @@ export interface MowgliMapArea {
   name?: string;
   obstacle_info?: MowgliMapObstacleInfo[];
   obstacles?: GeometryPolygon[];
+  proposed_obstacle_info?: MowgliMapObstacleInfo[];
+  proposed_obstacles?: GeometryPolygon[];
   ring_direction?: number;
   start_x?: number;
   start_y?: number;
@@ -306,6 +457,46 @@ export interface MowgliSetDockingPointReq {
   yaw_source?: number;
 }
 
+export interface ProvidersAddPeerResult {
+  peer?: ProvidersFleetPeer;
+  reciprocal?: boolean;
+  warning?: string;
+}
+
+export interface ProvidersCoordinatorSettings {
+  completed_ttl_h?: number;
+  enabled?: boolean;
+  resume_distance_m?: number;
+  yield_distance_m?: number;
+}
+
+export interface ProvidersCoordinatorStatus {
+  completed_areas?: number[];
+  enabled?: boolean;
+  excluded_areas?: number[];
+  last_error?: string;
+  last_push_at?: string;
+  preferred_start?: number;
+  yielded?: boolean;
+}
+
+export interface ProvidersFleetPeer {
+  /** host:port of the peer's GUI backend */
+  address?: string;
+  api_version?: number;
+  id?: string;
+  name?: string;
+}
+
+export interface ProvidersFleetRobot {
+  address?: string;
+  identity?: ProvidersRobotIdentity;
+  last_seen?: string;
+  online?: boolean;
+  self?: boolean;
+  topics?: Record<string, number[]>;
+}
+
 export interface ProvidersIrriSenseGardenSummary {
   id?: string;
   name?: string;
@@ -316,6 +507,31 @@ export interface ProvidersIrriSenseZoneSummary {
   enabled?: boolean;
   id?: string;
   label?: string;
+}
+
+export interface ProvidersMapPushPeerResult {
+  address?: string;
+  error?: string;
+  id?: string;
+  name?: string;
+  ok?: boolean;
+}
+
+export interface ProvidersMapPushResult {
+  areas?: number;
+  peers?: ProvidersMapPushPeerResult[];
+}
+
+export interface ProvidersNotifyDeliveryStatus {
+  channel?: string;
+  configured?: boolean;
+  enabled?: boolean;
+  failedCount?: number;
+  lastError?: string;
+  lastErrorAt?: string;
+  lastMessage?: string;
+  lastSentAt?: string;
+  sentCount?: number;
 }
 
 export interface ProvidersRemoteAccessStatus {
@@ -340,6 +556,31 @@ export interface ProvidersRemoteAccessStatus {
   phase?: ProvidersRemoteAccessPhase;
   tailscaleIps?: string[];
   version?: string;
+}
+
+export interface ProvidersRobotIdentity {
+  api_version?: number;
+  datum_lat?: number;
+  datum_lon?: number;
+  id?: string;
+  name?: string;
+  revision?: string;
+  version?: string;
+}
+
+export interface TypesFirmwareAvailability {
+  available?: boolean;
+  board?: string;
+  fw_version?: string;
+  own_release?: boolean;
+  panel?: string;
+  protocol_version?: number;
+  /**
+   * Release the manifest came from; OwnRelease is false when this
+   * installation's release carries no firmware and the latest stable one
+   * was used instead.
+   */
+  release?: string;
 }
 
 export interface TypesFirmwareConfig {
@@ -420,6 +661,27 @@ export interface TypesSoilZoneStatus {
   reason?: string;
   selected?: boolean;
   wet?: boolean;
+}
+
+export interface UpdatesChangelog {
+  features?: UpdatesChangelogEntry[];
+  fixes?: UpdatesChangelogEntry[];
+  /** Commits that are neither a feature nor a fix (ci, docs, test, chore, ...). */
+  other?: number;
+  total?: number;
+  /**
+   * The installed revision was not found in the first page of history, so
+   * the lists cover the most recent changes only.
+   */
+  truncated?: boolean;
+  url?: string;
+}
+
+export interface UpdatesChangelogEntry {
+  breaking?: boolean;
+  pr?: number;
+  scope?: string;
+  title?: string;
 }
 
 export type QueryParamsType = Record<string | number, any>;
@@ -799,6 +1061,201 @@ export class Api<
         ...params,
       }),
   };
+  fleet = {
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name CoordinationList
+     * @summary coordinated mowing settings and status
+     * @request GET:/fleet/coordination
+     */
+    coordinationList: (params: RequestParams = {}) =>
+      this.request<ApiFleetCoordinationResponse, any>({
+        path: `/fleet/coordination`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name CoordinationUpdate
+     * @summary update coordinated mowing settings
+     * @request PUT:/fleet/coordination
+     */
+    coordinationUpdate: (
+      body: ProvidersCoordinatorSettings,
+      params: RequestParams = {},
+    ) =>
+      this.request<ApiFleetCoordinationResponse, ApiErrorResponse>({
+        path: `/fleet/coordination`,
+        method: "PUT",
+        body: body,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name CoordinationResetCreate
+     * @summary fleet-wide start fresh
+     * @request POST:/fleet/coordination/reset
+     */
+    coordinationResetCreate: (params: RequestParams = {}) =>
+      this.request<ApiOkResponse, ApiErrorResponse>({
+        path: `/fleet/coordination/reset`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name IdentityList
+     * @summary this robot's fleet identity
+     * @request GET:/fleet/identity
+     */
+    identityList: (params: RequestParams = {}) =>
+      this.request<ProvidersRobotIdentity, ApiErrorResponse>({
+        path: `/fleet/identity`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name MapPushCreate
+     * @summary push this robot's map to the fleet
+     * @request POST:/fleet/map/push
+     */
+    mapPushCreate: (params: RequestParams = {}) =>
+      this.request<ProvidersMapPushResult, ApiErrorResponse>({
+        path: `/fleet/map/push`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name PeersCreate
+     * @summary add a fleet peer
+     * @request POST:/fleet/peers
+     */
+    peersCreate: (body: ApiAddPeerRequest, params: RequestParams = {}) =>
+      this.request<ProvidersAddPeerResult, ApiErrorResponse>({
+        path: `/fleet/peers`,
+        method: "POST",
+        body: body,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name PeersRegisterCreate
+     * @summary reverse-register a peer
+     * @request POST:/fleet/peers/register
+     */
+    peersRegisterCreate: (
+      body: ApiRegisterPeerRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<ProvidersFleetPeer, ApiErrorResponse>({
+        path: `/fleet/peers/register`,
+        method: "POST",
+        body: body,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name PeersUnregisterCreate
+     * @summary a peer asks to be forgotten
+     * @request POST:/fleet/peers/unregister
+     */
+    peersUnregisterCreate: (params: RequestParams = {}) =>
+      this.request<ApiOkResponse, any>({
+        path: `/fleet/peers/unregister`,
+        method: "POST",
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name PeersDelete
+     * @summary remove a fleet peer
+     * @request DELETE:/fleet/peers/{id}
+     */
+    peersDelete: (id: string, params: RequestParams = {}) =>
+      this.request<ApiOkResponse, ApiErrorResponse>({
+        path: `/fleet/peers/${id}`,
+        method: "DELETE",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name RobotsList
+     * @summary fleet snapshot
+     * @request GET:/fleet/robots
+     */
+    robotsList: (params: RequestParams = {}) =>
+      this.request<ProvidersFleetRobot[], ApiErrorResponse>({
+        path: `/fleet/robots`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags fleet
+     * @name RobotsCallCreate
+     * @summary send a command to a fleet robot
+     * @request POST:/fleet/robots/{id}/call/{command}
+     */
+    robotsCallCreate: (
+      id: string,
+      command: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ApiOkResponse, ApiErrorResponse>({
+        path: `/fleet/robots/${id}/call/${command}`,
+        method: "POST",
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+  };
   import = {
     /**
      * @description Parse a user-supplied OpenMower map.json, translate it into MowgliNext's coordinate frame, and return a summary for confirmation. Setting `apply=true` runs the live write path (areas + dock pose). See docs/IMPORT_OPENMOWER_MAP.md.
@@ -887,92 +1344,6 @@ export class Api<
       this.request<TypesSoilStatus, any>({
         path: `/irrisense/status`,
         method: "GET",
-        format: "json",
-        ...params,
-      }),
-  };
-  remoteAccess = {
-    /**
-     * No description
-     *
-     * @tags remote-access
-     * @name SettingsList
-     * @summary Remote access settings
-     * @request GET:/remote-access/settings
-     */
-    settingsList: (params: RequestParams = {}) =>
-      this.request<ApiRemoteAccessSettingsResponse, any>({
-        path: `/remote-access/settings`,
-        method: "GET",
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags remote-access
-     * @name SettingsUpdate
-     * @summary update remote access settings
-     * @request PUT:/remote-access/settings
-     */
-    settingsUpdate: (
-      settings: ApiRemoteAccessSettingsUpdate,
-      params: RequestParams = {},
-    ) =>
-      this.request<ApiRemoteAccessSettingsResponse, ApiErrorResponse>({
-        path: `/remote-access/settings`,
-        method: "PUT",
-        body: settings,
-        type: ContentType.Json,
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * @description container phase, tailscaled login state, login URL while waiting, reachable URLs once connected
-     *
-     * @tags remote-access
-     * @name StatusList
-     * @summary Remote access status
-     * @request GET:/remote-access/status
-     */
-    statusList: (params: RequestParams = {}) =>
-      this.request<ProvidersRemoteAccessStatus, any>({
-        path: `/remote-access/status`,
-        method: "GET",
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * No description
-     *
-     * @tags remote-access
-     * @name ApplyCreate
-     * @summary Retry applying remote access settings
-     * @request POST:/remote-access/apply
-     */
-    applyCreate: (params: RequestParams = {}) =>
-      this.request<ApiOkResponse, any>({
-        path: `/remote-access/apply`,
-        method: "POST",
-        format: "json",
-        ...params,
-      }),
-
-    /**
-     * @description the node key is discarded; the sidecar restarts and logs in again (interactively or with the stored auth key)
-     *
-     * @tags remote-access
-     * @name LogoutCreate
-     * @summary Log the robot out of the tailnet
-     * @request POST:/remote-access/logout
-     */
-    logoutCreate: (params: RequestParams = {}) =>
-      this.request<ApiOkResponse, ApiErrorResponse>({
-        path: `/remote-access/logout`,
-        method: "POST",
         format: "json",
         ...params,
       }),
@@ -1122,6 +1493,162 @@ export class Api<
         ...params,
       }),
   };
+  notifications = {
+    /**
+     * No description
+     *
+     * @tags notifications
+     * @name SettingsList
+     * @summary notification settings
+     * @request GET:/notifications/settings
+     */
+    settingsList: (params: RequestParams = {}) =>
+      this.request<ApiNotificationSettingsResponse, any>({
+        path: `/notifications/settings`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags notifications
+     * @name SettingsUpdate
+     * @summary update notification settings
+     * @request PUT:/notifications/settings
+     */
+    settingsUpdate: (
+      settings: ApiNotificationSettingsUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<ApiNotificationSettingsResponse, ApiErrorResponse>({
+        path: `/notifications/settings`,
+        method: "PUT",
+        body: settings,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags notifications
+     * @name StatusList
+     * @summary notification delivery status
+     * @request GET:/notifications/status
+     */
+    statusList: (params: RequestParams = {}) =>
+      this.request<ProvidersNotifyDeliveryStatus, any>({
+        path: `/notifications/status`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags notifications
+     * @name TestCreate
+     * @summary send a test notification
+     * @request POST:/notifications/test
+     */
+    testCreate: (params: RequestParams = {}) =>
+      this.request<ApiOkResponse, ApiErrorResponse>({
+        path: `/notifications/test`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+  };
+  remoteAccess = {
+    /**
+     * No description
+     *
+     * @tags remote-access
+     * @name ApplyCreate
+     * @summary Retry applying remote access settings
+     * @request POST:/remote-access/apply
+     */
+    applyCreate: (params: RequestParams = {}) =>
+      this.request<ApiOkResponse, any>({
+        path: `/remote-access/apply`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description the node key is discarded; the sidecar restarts and logs in again (interactively or with the stored auth key)
+     *
+     * @tags remote-access
+     * @name LogoutCreate
+     * @summary Log the robot out of the tailnet
+     * @request POST:/remote-access/logout
+     */
+    logoutCreate: (params: RequestParams = {}) =>
+      this.request<ApiOkResponse, ApiErrorResponse>({
+        path: `/remote-access/logout`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags remote-access
+     * @name SettingsList
+     * @summary Remote access settings
+     * @request GET:/remote-access/settings
+     */
+    settingsList: (params: RequestParams = {}) =>
+      this.request<ApiRemoteAccessSettingsResponse, any>({
+        path: `/remote-access/settings`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags remote-access
+     * @name SettingsUpdate
+     * @summary update remote access settings
+     * @request PUT:/remote-access/settings
+     */
+    settingsUpdate: (
+      settings: ApiRemoteAccessSettingsUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<ApiRemoteAccessSettingsResponse, ApiErrorResponse>({
+        path: `/remote-access/settings`,
+        method: "PUT",
+        body: settings,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description container phase, tailscaled login state, login URL while waiting, reachable URLs once connected
+     *
+     * @tags remote-access
+     * @name StatusList
+     * @summary Remote access status
+     * @request GET:/remote-access/status
+     */
+    statusList: (params: RequestParams = {}) =>
+      this.request<ProvidersRemoteAccessStatus, any>({
+        path: `/remote-access/status`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+  };
   schedules = {
     /**
      * @description list all mowing schedules
@@ -1234,6 +1761,22 @@ export class Api<
       }),
 
     /**
+     * @description HARDWARE_BACKEND from the runtime env (default mowgli)
+     *
+     * @tags settings
+     * @name HardwareBackendList
+     * @summary returns the active hardware backend
+     * @request GET:/settings/hardware-backend
+     */
+    hardwareBackendList: (params: RequestParams = {}) =>
+      this.request<ApiHardwareBackendResponse, any>({
+        path: `/settings/hardware-backend`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * @description returns the JSON Schema for mower configuration parameters
      *
      * @tags settings
@@ -1332,6 +1875,22 @@ export class Api<
       }),
   };
   setup = {
+    /**
+     * @description Version and protocol of the prebuilt firmware that /setup/flashBoard would install for the saved board selection, taken from this installation's release (or the latest stable one when it carries none).
+     *
+     * @tags setup
+     * @name FirmwareAvailableList
+     * @summary prebuilt firmware available for the saved board
+     * @request GET:/setup/firmware/available
+     */
+    firmwareAvailableList: (params: RequestParams = {}) =>
+      this.request<TypesFirmwareAvailability, ApiErrorResponse>({
+        path: `/setup/firmware/available`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
     /**
      * @description flash the mower board with the given config
      *
@@ -1473,6 +2032,33 @@ export class Api<
       }),
 
     /**
+     * @description Features and fixes read from the commit subjects between the installed and the candidate revision.
+     *
+     * @tags system
+     * @name UpdatesChangelogList
+     * @summary What changed between two source revisions
+     * @request GET:/system/updates/changelog
+     */
+    updatesChangelogList: (
+      query: {
+        /** owner/name */
+        repository: string;
+        /** Installed 40-hex revision */
+        installed: string;
+        /** Candidate 40-hex revision */
+        available: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<UpdatesChangelog, ApiErrorResponse>({
+        path: `/system/updates/changelog`,
+        method: "GET",
+        query: query,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * No description
      *
      * @tags system
@@ -1485,6 +2071,88 @@ export class Api<
         path: `/system/versions`,
         method: "GET",
         format: "json",
+        ...params,
+      }),
+  };
+  tools = {
+    /**
+     * No description
+     *
+     * @tags diagnostics
+     * @name BlackboxConfigUpdate
+     * @summary Configure passive blackbox (complete configuration)
+     * @request PUT:/tools/blackbox/config
+     */
+    blackboxConfigUpdate: (
+      config: BlackboxConfig,
+      params: RequestParams = {},
+    ) =>
+      this.request<BlackboxStatus, any>({
+        path: `/tools/blackbox/config`,
+        method: "PUT",
+        body: config,
+        type: ContentType.Json,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags diagnostics
+     * @name BlackboxDownloadDetail
+     * @summary Download a completed timestamped blackbox timeline
+     * @request GET:/tools/blackbox/download/{name}
+     */
+    blackboxDownloadDetail: (name: string, params: RequestParams = {}) =>
+      this.request<File, any>({
+        path: `/tools/blackbox/download/${name}`,
+        method: "GET",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags diagnostics
+     * @name BlackboxSaveCreate
+     * @summary Save available pre-event history and collect post-event window
+     * @request POST:/tools/blackbox/save
+     */
+    blackboxSaveCreate: (params: RequestParams = {}) =>
+      this.request<Record<string, any>, any>({
+        path: `/tools/blackbox/save`,
+        method: "POST",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags diagnostics
+     * @name BlackboxStatusList
+     * @summary Passive blackbox status and completed recordings
+     * @request GET:/tools/blackbox/status
+     */
+    blackboxStatusList: (params: RequestParams = {}) =>
+      this.request<ApiBlackboxStatusResponse, any>({
+        path: `/tools/blackbox/status`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags diagnostics
+     * @name BlackboxDelete
+     * @summary Delete a completed blackbox recording
+     * @request DELETE:/tools/blackbox/{name}
+     */
+    blackboxDelete: (name: string, params: RequestParams = {}) =>
+      this.request<ApiOkResponse, any>({
+        path: `/tools/blackbox/${name}`,
+        method: "DELETE",
         ...params,
       }),
   };

@@ -45,9 +45,9 @@ var topicMap = map[string]topicDef{
 	"imu":                 {"/imu/data", "sensor_msgs/msg/Imu"},
 	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
 	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
-	"map":                 {"", ""},                                     // virtual – populated via map_server services
+	"map":                 {"", ""}, // virtual – populated via map_server services
 	"path":                {"/coverage/plan_preview", "mowgli_interfaces/msg/CoveragePlanPreview"},
-	"plan":                {"/plan", "nav_msgs/msg/Path"},               // infrequent event
+	"plan":                {"/plan", "nav_msgs/msg/Path"}, // infrequent event
 	"power":               {"/hardware_bridge/power", "mowgli_interfaces/msg/Power"},
 	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"}, // safety-critical
 	"lidar":               {"/scan", "sensor_msgs/msg/LaserScan"},                            // large message
@@ -74,6 +74,13 @@ var topicMap = map[string]topicDef{
 	// Latched: what the STM32 actually runs for every runtime parameter, its
 	// envelope and whether it is persisted in the board's flash (protocol v7).
 	"firmwareParams": {"/hardware_bridge/firmware_params", "mowgli_interfaces/msg/FirmwareParams"},
+	// Passive blackbox telemetry; these keys never publish or call services.
+	"cmdVel":           {"/cmd_vel", "geometry_msgs/msg/TwistStamped"},
+	"cmdVelApplied":    {"/hardware_bridge/cmd_vel_applied", "geometry_msgs/msg/TwistStamped"},
+	"digEvent":         {"/hardware_bridge/dig_event", "mowgli_interfaces/msg/DigEvent"},
+	"localizationMode": {"/mowgli/localization/mode_id", "std_msgs/msg/Int32"},
+	"collisionMonitor": {"/collision_monitor_state", "nav2_msgs/msg/CollisionMonitorState"},
+	"gpsRaw":           {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
 }
 
 // TopicKeys returns every logical topic key the provider can subscribe to, so
@@ -259,16 +266,19 @@ var foxgloveAdapters = map[string]func([]byte) ([]byte, error){
 // above the 100 ms downstream throttle so no visible frame is lost. Topics not
 // listed here are deserialized at their native rate.
 var upstreamDecimationMs = map[string]int{
-	"imu":        80,
-	"lidar":      80,
-	"pose":       80,
-	"fusionRaw":  80,
-	"wheelOdom":  80,
-	"ticks":      80,
-	"gps":        80,
-	"gnssStatus": 80,
-	"cogHeading": 150,
-	"magYaw":     150,
+	"imu":           80,
+	"lidar":         80,
+	"pose":          80,
+	"fusionRaw":     80,
+	"wheelOdom":     80,
+	"ticks":         80,
+	"gps":           80,
+	"gnssStatus":    80,
+	"cogHeading":    150,
+	"magYaw":        150,
+	"cmdVel":        100,
+	"cmdVelApplied": 100,
+	"gpsRaw":        100,
 }
 
 // NewRosProvider constructs a RosProvider, reads the foxglove URL from the
