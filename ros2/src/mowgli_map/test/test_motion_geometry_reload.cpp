@@ -165,6 +165,56 @@ protected:
   std::vector<Geometry> received_;
 };
 
+TEST_F(MotionGeometryReload, StartupPublishesPersistedPermissionWithoutOccupancyMap)
+{
+  // Exercise the real wall timer, without the test-only mask rebuild or /map.
+  // Persisted loading first revokes permission; require the subsequent valid
+  // publication rather than mistaking that initial empty message for readiness.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while ((received_.empty() || received_.back().markers.empty()) &&
+         std::chrono::steady_clock::now() < deadline)
+  {
+    Pump();
+  }
+  ASSERT_FALSE(received_.empty());
+  const auto snapshot = mowgli_interfaces::motion::Snapshot::parse(received_.back());
+  ASSERT_TRUE(snapshot->valid);
+  const mowgli_interfaces::motion::Ring body{{-0.1, -0.1}, {0.1, -0.1}, {0.1, 0.1}, {-0.1, 0.1}};
+  EXPECT_TRUE(snapshot->permits({0, 0, 0}, body, 0.1, 0, 0.1, false));
+}
+
+TEST_F(MotionGeometryReload, ParameterLawnPublishesWithPausedSimulationClockAndNoOccupancyMap)
+{
+  executor_.remove_node(node_);
+  node_.reset();
+  subscription_.reset();
+  received_.clear();
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("resolution", 0.20);
+  options.append_parameter_override("use_sim_time", true);
+  options.append_parameter_override("areas_file_path", std::string{});
+  options.append_parameter_override("map_file_path", std::string{});
+  options.append_parameter_override("robot_yaml_path", path_ + ".robot.yaml");
+  options.append_parameter_override("area_names", std::vector<std::string>{"main_mow"});
+  options.append_parameter_override("area_polygons",
+                                    std::vector<std::string>{"-4.5,-3;4.5,-3;4.5,3;-4.5,3"});
+  node_ = std::make_shared<mowgli_map::MapServerNode>(options);
+  subscription_ =
+      observer_->create_subscription<Geometry>("/map_server_node/transit_geometry",
+                                               rclcpp::QoS(1).transient_local().reliable(),
+                                               [this](Geometry::ConstSharedPtr geometry)
+                                               {
+                                                 received_.push_back(*geometry);
+                                               });
+  executor_.add_node(node_);
+  ObserveNewPublication(0);
+  const auto snapshot = mowgli_interfaces::motion::Snapshot::parse(received_.back());
+  ASSERT_TRUE(snapshot->valid);
+  const mowgli_interfaces::motion::Ring body{{-0.1, -0.1}, {0.1, -0.1}, {0.1, 0.1}, {-0.1, 0.1}};
+  EXPECT_TRUE(snapshot->permits({0, 0, 0}, body, 0.1, 0, 0.1, false));
+  EXPECT_FALSE(snapshot->permits({5, 0, 0}, body, 0.1, 0, 0.1, false));
+}
+
 TEST_F(MotionGeometryReload, MalformedAreaCountRevokesPreviouslyPublishedGeometry)
 {
   ExpectRevokedAfterFailedReload("area_count: not_an_integer\n");
