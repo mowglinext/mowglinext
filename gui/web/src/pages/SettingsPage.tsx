@@ -20,6 +20,9 @@ import { useContainerRestart } from "../hooks/useContainerRestart.ts";
 import { SettingsNav } from "../components/settings/SettingsNav.tsx";
 import { HardwareSection } from "../components/settings/HardwareSection.tsx";
 import { HardwareBackendSection } from "../components/settings/HardwareBackendSection.tsx";
+import { HardwareBackendCard } from "../components/settings/HardwareBackendCard.tsx";
+import { HardwareViewSwitcher } from "../components/settings/HardwareViewSwitcher.tsx";
+import { FcuFeatureTool } from "../components/settings/FcuFeatureTool.tsx";
 import { DriveMotorSection } from "../components/settings/DriveMotorSection.tsx";
 import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { PositioningSection } from "../components/settings/PositioningSection.tsx";
@@ -171,7 +174,7 @@ export const SettingsPage = () => {
     // Each card shows only what exists on this robot's hardware backend.
     const renderFieldCards = (...groups: SettingsFieldGroup[]) =>
         groups
-            .map((group) => groupForBackend(group, hardwareBackend))
+            .map((group) => groupForBackend(group, hardwareBackend.backend))
             .filter((group): group is SettingsFieldGroup => group !== null)
             .map((group) => (
             <SettingsFieldCard
@@ -198,36 +201,50 @@ export const SettingsPage = () => {
                 );
             case "hardware":
                 return (
-                    <>
-                    <HardwareBackendSection backend={hardwareBackend}>
-                        {renderFieldCards(OPENMOWER_WIRING_GROUP)}
-                    </HardwareBackendSection>
-                    <HardwareSection
-                        values={values}
-                        onChange={handleChange}
-                        onBulkChange={handleBulkChange}
-                        isOverridden={isOverridden}
-                        hasDefault={hasDefault}
-                        onReset={resetToDefault}
-                        revealAdvanced={!!targetField || !!searchQuery}
-                        backendDefaultOverrides={backendDefaultOverrides}
+                    <HardwareViewSwitcher
+                        backend={hardwareBackend.backend}
+                        fcu={<FcuFeatureTool />}
+                        chassis={
+                            <>
+                                <HardwareBackendCard info={hardwareBackend} />
+
+                                <HardwareBackendSection backend={hardwareBackend.backend}>
+                                    {renderFieldCards(OPENMOWER_WIRING_GROUP)}
+                                </HardwareBackendSection>
+
+                                <HardwareSection
+                                    values={values}
+                                    onChange={handleChange}
+                                    onBulkChange={handleBulkChange}
+                                    isOverridden={isOverridden}
+                                    hasDefault={hasDefault}
+                                    onReset={resetToDefault}
+                                    revealAdvanced={!!targetField || !!searchQuery}
+                                    backendDefaultOverrides={backendDefaultOverrides}
+                                />
+                            </>
+                        }
                     />
-                    </>
                 );
             case "drive_motor":
-                // The STM32 drive calibration and PID (PWM counts) exist only on
-                // the Mowgli board; OpenMower's xESC gets a host-side duty loop.
-                return hardwareBackend === "mowgli" ? (
+                // Each backend exposes its own drive controls; never show
+                // Mowgli STM32 or OpenMower xESC controls on MAVROS.
+                if (hardwareBackend.backend === "openmower") {
+                    return <>{renderFieldCards(OPENMOWER_WHEEL_LOOP_GROUP)}</>;
+                }
+
+                return (
                     <>
                         <DriveMotorSection
                             values={values}
                             onChange={handleChange}
                             acceptPersistedValues={acceptPersistedValues}
+                            hardwareBackend={hardwareBackend.backend}
                         />
-                        {renderFieldCards(YAW_LOOP_GROUP)}
+
+                        {hardwareBackend.backend === "mowgli" &&
+                            renderFieldCards(YAW_LOOP_GROUP)}
                     </>
-                ) : (
-                    <>{renderFieldCards(OPENMOWER_WHEEL_LOOP_GROUP)}</>
                 );
             case "ntrip":
                 return <NtripSection values={values} onChange={handleChange} />;
@@ -297,11 +314,15 @@ export const SettingsPage = () => {
                     </>
                 );
             case "safety":
+                if (hardwareBackend.backend === "mavros") {
+                    return <SafetySection values={values} onChange={handleChange} />;
+                }
+
                 return (
                     <>
                         <SafetySection values={values} onChange={handleChange} />
                         {renderFieldCards(FIRMWARE_SAFETY_GROUP)}
-                        {hardwareBackend === "mowgli" ? <FirmwareParamsCard /> : null}
+                        {hardwareBackend.backend === "mowgli" && <FirmwareParamsCard />}
                     </>
                 );
             case "obstacles":
@@ -475,7 +496,7 @@ export const SettingsPage = () => {
                         <SettingsNav
                             sections={visibleSections}
                             activeSection={activeSection}
-                        onSectionChange={selectSection}
+                            onSectionChange={selectSection}
                             isSectionDirty={isSectionDirty}
                         />
                     ) : (

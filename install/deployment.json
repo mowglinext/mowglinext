@@ -28,8 +28,8 @@
       "name": "gps",
       "type": "external",
       "image": "ghcr.io/pepeuch/universal-gnss-ros2-lyrical",
-      "version": "v0.7.1-rc3",
-      "digest": "sha256:4e7960132882f2f83fb2b1e7d1430b4dfd00081d4be15d7d8ab20dacf7f22bc5"
+      "version": "v0.7.2-rc4",
+      "digest": "sha256:488bdeb99083f83a42f2dd75d356f02afdc505e076552fe76718b0ae949d55c1"
     },
     {
       "name": "lidar-ldlidar",

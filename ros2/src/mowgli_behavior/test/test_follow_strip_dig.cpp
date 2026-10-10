@@ -44,6 +44,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -129,13 +130,31 @@ public:
         name,
         [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const typename ActionT::Goal>)
         {
-          std::unique_lock<std::mutex> lock(mutex_);
-          ++requests_;
-          accept_cv_.wait(lock,
-                          [this]()
-                          {
-                            return !hold_accept_;
-                          });
+          std::shared_future<void> gate;
+
+          {
+            std::unique_lock<std::mutex> lock(mutex_);
+
+            // Preserve both request counters used by the test suites.
+            ++goal_requests_;
+            ++requests_;
+
+            // MAVROS: optionally delay the goal response.
+            gate = response_gate_;
+
+            // Dev: optionally hold goal acceptance.
+            accept_cv_.wait(lock,
+                            [this]()
+                            {
+                              return !hold_accept_;
+                            });
+          }
+
+          // Never wait on the future while holding mutex_.
+          if (gate.valid())
+          {
+            gate.wait();
+          }
           return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         },
         [](const std::shared_ptr<Handle>)
@@ -170,6 +189,19 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex_);
     return handles_.size();
+  }
+
+  // A promise owned by the test deterministically withholds the server's goal
+  // response. Its destruction also releases the waiter after a failed ASSERT.
+  void deferGoalResponse(std::shared_future<void> gate)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    response_gate_ = std::move(gate);
+  }
+
+  std::size_t goalRequests() const
+  {
+    return goal_requests_.load();
   }
 
   std::shared_ptr<const typename ActionT::Goal> goal(std::size_t i)
@@ -209,6 +241,8 @@ private:
   bool hold_accept_ = false;
   std::size_t requests_ = 0;
   std::vector<std::shared_ptr<Handle>> handles_;
+  std::shared_future<void> response_gate_;
+  std::atomic<std::size_t> goal_requests_{0};
 };
 
 }  // namespace
@@ -896,6 +930,104 @@ TEST_F(FollowStripDigTest, NearEndAbortPreservesResumeWithoutCompleting)
   EXPECT_LT(ctx->coverage_percent, 100.0f);
   EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
   EXPECT_TRUE(ctx->completed_areas.empty());
+}
+
+TEST_F(FollowStripDigTest, HaltBeforeGoalResponsePersistsSelectedEarlierIncompleteUnit)
+{
+  std::promise<void> response;
+  follow->deferGoalResponse(response.get_future().share());
+  ctx->area_resume_pose_index[0] = 81;
+  setRobot(2.0, 0.0);
+  startFollowStrip({straightUnit(2.0, 4.0), straightUnit(4.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalRequests() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 0u) << "the server response is still withheld";
+  tree->haltTree();
+  response.set_value();
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 0u);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+  EXPECT_TRUE(ctx->completed_areas.empty());
+}
+
+TEST_F(FollowStripDigTest, FleetYieldBeforeGoalResponsePersistsSelectedEarlierIncompleteUnit)
+{
+  std::promise<void> response;
+  follow->deferGoalResponse(response.get_future().share());
+  ctx->area_resume_pose_index[0] = 81;
+  setRobot(2.0, 0.0);
+  startFollowStrip({straightUnit(2.0, 4.0), straightUnit(4.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalRequests() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 0u);
+  ctx->fleet_excluded_areas.insert(0);
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+  response.set_value();
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 0u);
+  EXPECT_EQ(ctx->fleet_yielded_areas.count(0), 1u);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+  EXPECT_TRUE(ctx->completed_areas.empty());
+}
+
+TEST_F(FollowStripDigTest, HaltDuringTransitToEarlierIncompleteUnitPersistsLogicalStart)
+{
+  ctx->area_resume_pose_index[0] = 81;
+  setRobot(6.0, 0.0);
+  startFollowStrip({straightUnit(2.0, 4.0), straightUnit(4.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1 && bladeRequestCount() > 0;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_FALSE(bladeRequest(bladeRequestCount() - 1).mow_enabled);
+  EXPECT_EQ(follow->goalRequests(), 0u);
+  // Being geometrically over the unit while transiting is not mowing it.
+  setRobot(3.0, 0.0);
+  tree->haltTree();
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 0u);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+  EXPECT_TRUE(ctx->completed_areas.empty());
+}
+
+TEST_F(FollowStripDigTest, HaltWithAcceptedHandlePreservesMidUnitResume)
+{
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  for (double x = 0.25; x <= 2.0; x += 0.25)
+  {
+    setRobot(x, 0.0);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  }
+  tree->haltTree();
+  ASSERT_EQ(ctx->area_resume_pose_index.at(0), 40u);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 2;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_DOUBLE_EQ(follow->goal(1)->path.poses.front().pose.position.x, 2.0);
 }
 
 TEST_F(FollowStripDigTest, ResumeDoesNotCompleteEarlierUnitSkippedAfterTransitFailure)

@@ -27,4 +27,8 @@ services:
       MAVROS_TGT_SYSTEM: ${MAVROS_TGT_SYSTEM:-1}
       MAVROS_TGT_COMPONENT: ${MAVROS_TGT_COMPONENT:-1}
       MAVROS_AUTOPILOT: ${MAVROS_AUTOPILOT:-ardupilot}
+      # Opt-in temporary serial GPS1 canonical source; use only with GNSS stack disabled.
+      MAVROS_GPS1_CANONICAL: ${MAVROS_GPS1_CANONICAL:-false}
+      GNSS_SOURCE: ${GNSS_SOURCE:-direct}
+      GNSS_MAVROS_SOURCE: ${GNSS_MAVROS_SOURCE:-gps1}
     restart: unless-stopped

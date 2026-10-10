@@ -1,7 +1,7 @@
 import {GnssStatus, GnssStatusConstants} from "../types/ros.ts";
 import i18n from "../i18n";
 
-export type GpsFixType = "RTK_FIX" | "RTK_FLOAT" | "GPS_FIX" | "NO_FIX";
+export type GpsFixType = "RTK_FIX" | "RTK_FLOAT" | "DGPS" | "3D_FIX" | "2D_FIX" | "NO_FIX" | "UNKNOWN";
 export type OptionalGnssBooleanState = "unsupported" | "unknown" | "false" | "true";
 
 export interface GpsStatus {
@@ -36,15 +36,21 @@ export interface DiagnosticArrayLike {
 function fromFixType(fixType: number | undefined | null): GpsStatus | null {
     switch (fixType) {
         case GnssStatusConstants.FIX_TYPE_RTK_FIXED:
-            return {fixType: "RTK_FIX", label: i18n.t("gpsStatus.rtkFixed"), percent: 100};
+            return {fixType: "RTK_FIX", label: i18n.t("gpsStatus.compactRtkFixed"), percent: 100};
         case GnssStatusConstants.FIX_TYPE_RTK_FLOAT:
-            return {fixType: "RTK_FLOAT", label: i18n.t("gpsStatus.rtkFloat"), percent: 50};
+            return {fixType: "RTK_FLOAT", label: i18n.t("gpsStatus.compactRtkFloat"), percent: 80};
+        case GnssStatusConstants.FIX_TYPE_DGPS:
+            return {fixType: "DGPS", label: i18n.t("gpsStatus.compactDgps"), percent: 60};
+        case GnssStatusConstants.FIX_TYPE_3D_FIX:
+            return {fixType: "3D_FIX", label: i18n.t("gpsStatus.compact3d"), percent: 40};
+        case GnssStatusConstants.FIX_TYPE_2D_FIX:
+            return {fixType: "2D_FIX", label: i18n.t("gpsStatus.compact2d"), percent: 20};
         case GnssStatusConstants.FIX_TYPE_GPS_FIX:
-            return {fixType: "GPS_FIX", label: i18n.t("gpsStatus.gpsFix"), percent: 25};
+            return {fixType: "UNKNOWN", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
         case GnssStatusConstants.FIX_TYPE_DEAD_RECKONING:
-            return {fixType: "NO_FIX", label: i18n.t("gpsStatus.deadReckoning"), percent: 10};
+            return {fixType: "UNKNOWN", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
         case GnssStatusConstants.FIX_TYPE_NO_FIX:
-            return {fixType: "NO_FIX", label: i18n.t("gpsStatus.noGps"), percent: 0};
+            return {fixType: "NO_FIX", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
         default:
             return null;
     }
@@ -53,27 +59,31 @@ function fromFixType(fixType: number | undefined | null): GpsStatus | null {
 // Source of truth: GnssStatus from /gps/status.
 export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsStatus {
     if (gnssStatus?.fix_valid === false) {
-        return {fixType: "NO_FIX", label: i18n.t("gpsStatus.noGps"), percent: 0};
+        return {fixType: "NO_FIX", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
     }
 
-    if (gnssStatus?.rtk_mode === GnssStatusConstants.RTK_MODE_FIXED) {
-        return {fixType: "RTK_FIX", label: i18n.t("gpsStatus.rtkFixed"), percent: 100};
-    }
-
-    if (gnssStatus?.rtk_mode === GnssStatusConstants.RTK_MODE_FLOAT) {
-        return {fixType: "RTK_FLOAT", label: i18n.t("gpsStatus.rtkFloat"), percent: 50};
+    switch (gnssStatus?.rtk_mode) {
+        case GnssStatusConstants.RTK_MODE_FIXED:
+            return {fixType: "RTK_FIX", label: i18n.t("gpsStatus.compactRtkFixed"), percent: 100};
+        case GnssStatusConstants.RTK_MODE_FLOAT:
+            return {fixType: "RTK_FLOAT", label: i18n.t("gpsStatus.compactRtkFloat"), percent: 80};
+        case GnssStatusConstants.RTK_MODE_NONE:
+            if (gnssStatus.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FIXED ||
+                gnssStatus.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FLOAT) {
+                return {fixType: "UNKNOWN", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
+            }
+            break;
+        case GnssStatusConstants.RTK_MODE_UNKNOWN:
+        default:
+            break;
     }
 
     const fromTypedStatus = fromFixType(gnssStatus?.fix_type);
-    if (fromTypedStatus && (fromTypedStatus.fixType !== "NO_FIX" || gnssStatus?.fix_valid !== true)) {
+    if (fromTypedStatus) {
         return fromTypedStatus;
     }
 
-    if (gnssStatus?.fix_valid === true) {
-        return {fixType: "GPS_FIX", label: i18n.t("gpsStatus.gpsFix"), percent: 25};
-    }
-
-    return {fixType: "NO_FIX", label: i18n.t("gpsStatus.noGps"), percent: 0};
+    return {fixType: "UNKNOWN", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
 }
 
 export function gnssRtkModeLabel(gnssStatus: GnssStatus | undefined | null): GnssRtkModeLabel | undefined {

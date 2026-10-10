@@ -14,6 +14,24 @@ def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+def mavros_ticks_per_meter_from_motor_revolutions(
+    left_scaled_revolutions: int,
+    right_scaled_revolutions: int,
+    rtk_distance_m: float,
+    *,
+    transport_scale: float = 1000.0,
+) -> float:
+    """Fit ESC motor revolutions per metre from WheelTick and RTK distance."""
+    distance = _require_finite_float("rtk_distance_m", rtk_distance_m)
+    scale = _require_finite_float("transport_scale", transport_scale)
+    if distance <= 0.0 or scale <= 0.0:
+        raise ValueError("RTK distance and transport scale must be positive")
+    mean_revolutions = 0.5 * (
+        abs(int(left_scaled_revolutions)) + abs(int(right_scaled_revolutions))
+    ) / scale
+    return mean_revolutions / distance
+
+
 def wrap_angle_rad(angle_rad: float) -> float:
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
@@ -101,6 +119,20 @@ WHEEL_PID_KP_RANGE = (2.0, 80.0)
 WHEEL_PID_KI_RANGE = (200.0, 8000.0)
 WHEEL_PID_INTEGRAL_LIMIT_RANGE = (32.0, 120.0)
 WHEEL_PID_KD_MAX = 50.0
+
+
+@dataclass(frozen=True)
+class OdometryParams:
+    """The only active calibration parameter for the MAVROS backend."""
+
+    ticks_per_meter: float
+
+    def to_dict(self) -> dict[str, float]:
+        return {"ticks_per_meter": _require_finite_float("ticks_per_meter", self.ticks_per_meter)}
+
+    @classmethod
+    def from_mapping(cls, mapping: dict[str, Any]) -> "OdometryParams":
+        return cls(_require_finite_float("ticks_per_meter", mapping["ticks_per_meter"]))
 
 
 @dataclass(frozen=True)

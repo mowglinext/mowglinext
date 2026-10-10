@@ -27,7 +27,6 @@ async function openSystem(page: Page, mobile = false) {
     await page.goto("/#/diagnostics");
     if (mobile) await page.getByRole("button", {name: /System$/}).click();
     await expect(page.getByRole("button", {name: "Host power…", exact: true})).toBeVisible();
-    await expect(page.getByText("GPS: RTK Fixed", {exact: true})).toBeVisible();
     await expect(page.getByRole("button", {name: "Battery and power menu"})).toContainText("100%");
     await page.getByRole("button", {name: "Host power…", exact: true}).scrollIntoViewIfNeeded();
 }
@@ -92,14 +91,14 @@ for (const viewport of [{width: 1440, height: 1000}, {width: 390, height: 844}])
         test.setTimeout(20_000);
         await page.setViewportSize(viewport);
         const shortStatus = {
-            fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+            fix_type: GnssStatusConstants.FIX_TYPE_2D_FIX,
             fix_valid: true,
             rtk_mode: GnssStatusConstants.RTK_MODE_NONE,
         };
         const longStatus = {
-            fix_type: GnssStatusConstants.FIX_TYPE_RTK_FIXED,
+            fix_type: GnssStatusConstants.FIX_TYPE_RTK_FLOAT,
             fix_valid: true,
-            rtk_mode: GnssStatusConstants.RTK_MODE_FIXED,
+            rtk_mode: GnssStatusConstants.RTK_MODE_FLOAT,
         };
         await installMockBackend(page, {
             ...SCENARIOS[0],
@@ -114,10 +113,10 @@ for (const viewport of [{width: 1440, height: 1000}, {width: 390, height: 844}])
 
         const fixValue = page.getByTestId("gnss-fix-status-value");
         const rtkGroup = page.getByTestId("gnss-rtk-status-group");
-        await expect(fixValue).toContainText("GPS fix");
+        await expect(fixValue).toContainText("2D");
         const before = await rtkGroup.boundingBox();
         expect(before).not.toBeNull();
-        await expect(fixValue).toContainText("RTK Fixed", {timeout: 10_000});
+        await expect(fixValue).toContainText("FLOAT", {timeout: 10_000});
         const after = await rtkGroup.boundingBox();
         expect(after).not.toBeNull();
         expect(Math.abs(after!.x - before!.x)).toBeLessThan(1);

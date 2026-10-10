@@ -1645,6 +1645,12 @@ const char* FixTypeName(uint8_t fix_type)
       return "RTK_FIXED";
     case GnssStatus::FIX_TYPE_DEAD_RECKONING:
       return "DEAD_RECKONING";
+    case GnssStatus::FIX_TYPE_2D_FIX:
+      return "2D_FIX";
+    case GnssStatus::FIX_TYPE_3D_FIX:
+      return "3D_FIX";
+    case GnssStatus::FIX_TYPE_DGPS:
+      return "DGPS";
     default:
       return "UNKNOWN";
   }

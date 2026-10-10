@@ -6,5 +6,6 @@
 # v0.7.1-rc3 to a September snapshot with no universal_gnss_msgs — every Docker
 # build died on "universal_gnss_msgs: not found"). Re-pinning now means changing
 # the gitlink AND this file in the same commit; CI fails when they disagree.
-ros2/src/external/universal-gnss 56d96d538d90551d9ca42ae02c25b3b960fa620b  # v0.7.1-rc3
+ros2/src/external/universal-gnss 383caba3de94e16167764393d5a4ef046078b015  # v0.7.2-rc4
 ros2/src/opennav_coverage d6e41a298c5e9767cc2a42c9fafa7ca41b9bf089
+ros2/src/external/mowglimavros e7d516cb0adca1872dd9d10fb66412857d38b0c8  # MowgliMAVROS merged main

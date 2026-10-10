@@ -28,6 +28,16 @@ FINAL_COMPOSE_FILE="$DOCKER_DIR/docker-compose.yaml"
 FINAL_ENV_FILE="$DOCKER_DIR/.env"
 UDEV_RULES_FILE="/etc/udev/rules.d/50-mowgli.rules"
 
+# MowgliMAVROS is released independently from MowgliNext.
+_mavros_image_env="${BASH_SOURCE[0]%/*}/../../sensors/mavros/image.env"
+if [[ ! -r "$_mavros_image_env" ]]; then
+  echo "Missing MAVROS sidecar image contract: $_mavros_image_env" >&2
+  return 1
+fi
+# shellcheck source=/dev/null
+source "$_mavros_image_env"
+unset _mavros_image_env
+
 # Derive the GHCR image prefix from REPO_URL so forks automatically point
 # at their own registry namespace. Strips the trailing .git and extracts
 # the owner/repo path from the GitHub URL.
@@ -45,7 +55,7 @@ recompute_image_defaults() {
   LIDAR_LDLIDAR_IMAGE_DEFAULT="${prefix}/lidar-ldlidar:${IMAGE_TAG}"
   LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
-  MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
+  MAVROS_IMAGE_DEFAULT="${MOWGLI_MAVROS_IMAGE_DEFAULT}"
   OPENMOWER_IMAGE_DEFAULT="${prefix}/openmower:${IMAGE_TAG}"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
   # Universal GNSS is a separately released runtime. Never derive it from
@@ -53,7 +63,7 @@ recompute_image_defaults() {
   # Pinned by DIGEST, not only by tag: this container owns the GNSS serial
   # port and runs privileged-adjacent on every robot, and a tag on a third-party
   # registry can be re-pushed. Must match install/deployment.json (test-gated).
-  UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.1-rc3@sha256:4e7960132882f2f83fb2b1e7d1430b4dfd00081d4be15d7d8ab20dacf7f22bc5"
+  UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.2-rc4@sha256:488bdeb99083f83a42f2dd75d356f02afdc505e076552fe76718b0ae949d55c1"
 }
 
 is_release_image_channel() {
@@ -329,6 +339,7 @@ NON_INTERACTIVE_EXPLICIT=false
 # --no-updater: install without the host updater service (manual updates only).
 INSTALL_UPDATER=true
 CLI_PRESET=false
+GNSS_SOURCE_CLI_PRESET=false
 GNSS_RECEIVER_FAMILY_CLI_PRESET=false
 GNSS_CONNECTION_CLI_PRESET=false
 GNSS_SERIAL_DEVICE_CLI_PRESET=false
@@ -453,6 +464,59 @@ default_gnss_status_source() {
 
 default_gnss_stack() {
   printf 'universal\n'
+}
+
+default_gnss_source() {
+  # Preserve the historical direct-receiver behaviour when an existing .env
+  # predates GNSS_SOURCE. Fresh interactive MAVROS installs explicitly ask.
+  printf 'direct\n'
+}
+
+normalize_gnss_source() {
+  local source="${1:-}"
+
+  case "${source,,}" in
+    "")
+      default_gnss_source
+      ;;
+    direct|soc|host|companion)
+      printf 'direct\n'
+      ;;
+    mavros|pixhawk|fcu)
+      printf 'mavros\n'
+      ;;
+    *)
+      printf '%s\n' "${source,,}"
+      ;;
+  esac
+}
+
+list_supported_gnss_sources() {
+  printf 'direct mavros\n'
+}
+
+is_supported_gnss_source() {
+  case "${1:-}" in
+    direct|mavros) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+effective_gnss_source() {
+  local source
+  source="$(normalize_gnss_source "${1:-${GNSS_SOURCE:-}}")"
+
+  if ! is_supported_gnss_source "$source"; then
+    return 1
+  fi
+
+  # A MAVROS-owned receiver only exists when the hardware backend actually
+  # provides MAVROS. Direct GNSS remains valid with either hardware backend.
+  if [[ "$source" == "mavros" && "${HARDWARE_BACKEND:-mowgli}" != "mavros" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$source"
 }
 
 normalize_gnss_stack() {
@@ -632,6 +696,11 @@ default_gnss_uart_device() {
 }
 
 gnss_serial_device_from_state() {
+  if [[ "$(effective_gnss_source 2>/dev/null || default_gnss_source)" == "mavros" ]]; then
+    printf '\n'
+    return 0
+  fi
+
   if [[ -n "${GNSS_SERIAL_DEVICE:-}" ]]; then
     printf '%s\n' "$GNSS_SERIAL_DEVICE"
     return 0
@@ -880,6 +949,21 @@ parse_args() {
             ;;
         esac
         ;;
+      --gnss-source=*)
+        CLI_PRESET=true
+        GNSS_SOURCE_CLI_PRESET=true
+        local gnss_source_spec
+        gnss_source_spec="$(normalize_gnss_source "${1#*=}")"
+        case "$gnss_source_spec" in
+          direct|mavros)
+            GNSS_SOURCE="$gnss_source_spec"
+            ;;
+          *)
+            error "Unknown GNSS source: ${1#*=} (expected direct or mavros)"
+            exit 1
+            ;;
+        esac
+        ;;
       --gnss=*)
         CLI_PRESET=true
         GNSS_RECEIVER_FAMILY_CLI_PRESET=true
@@ -1109,6 +1193,7 @@ Options
   --image-tag=<main|dev|tag> Container image tag (default: follows the branch)
   --lang=<en|fr>             Installer language
   --backend=<mowgli|mavros>  Hardware backend (default: mowgli)
+  --gnss-source=<direct|mavros>  GNSS receiver attached to SoC or Pixhawk/MAVROS
   --gnss-connection=<uart|usb>  GNSS serial link (default: uart)
   --gnss-device=<path>       GNSS serial device (default for uart: /dev/ttyAMA4,
                              /dev/ttyAMA2 with --backend=openmower)
@@ -1208,11 +1293,55 @@ PY
 write_mavros_runtime_config() {
   local source="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local target="$DOCKER_DIR/config/mavros/mowgli_robot.yaml"
+  local odometry_target="$DOCKER_DIR/config/mavros/esc_wheel_odometry.yaml"
+  local bridge_target="$DOCKER_DIR/config/mavros/hardware_bridge.yaml"
+  local robot_template="$REPO_DIR/ros2/src/mowgli_bringup/config/mowgli_robot.yaml"
 
   mkdir -p "$(dirname "$target")"
   cp "$source" "$target"
   # Universal GNSS is the sole NTRIP owner.
   _yaml_patch_key "$target" ntrip_enabled false || return 1
+  [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]] || return 0
+
+  # The sidecar receives only its dedicated plugin parameters.  Resolve the
+  # canonical values here from the complete ROS template plus the operator's
+  # sparse runtime file; never make the sidecar parse mower configuration.
+  _yaml_python "$source" "$robot_template" "$odometry_target" "$bridge_target" <<'PY'
+import math
+import sys
+from pathlib import Path
+
+import yaml
+
+sparse_path, template_path, target_path, bridge_path = map(Path, sys.argv[1:5])
+
+def parameters(path):
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return data.get("mowgli", {}).get("ros__parameters", {})
+
+effective = dict(parameters(template_path))
+effective.update(parameters(sparse_path))
+values = {
+    "ticks_per_meter": effective.get("ticks_per_meter"),
+    "track_width_m": effective.get("wheel_track"),
+}
+for name, value in values.items():
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"effective {name} must be a finite positive number")
+values = {name: float(value) for name, value in values.items()}
+
+payload = {"/**/esc_wheel_odometry": {"ros__parameters": values}}
+target_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+bridge_values = {
+    "manual_control_linear_scale": effective["wheel_pid_pwm_per_mps"],
+    "mowing_enabled": effective["mowing_enabled"],
+}
+if not isinstance(bridge_values["manual_control_linear_scale"], (int, float)) or isinstance(bridge_values["manual_control_linear_scale"], bool) or not math.isfinite(bridge_values["manual_control_linear_scale"]) or bridge_values["manual_control_linear_scale"] <= 0:
+    raise ValueError("effective manual_control_linear_scale must be a finite positive number")
+if not isinstance(bridge_values["mowing_enabled"], bool):
+    raise ValueError("effective mowing_enabled must be boolean")
+bridge_path.write_text(yaml.safe_dump({"hardware_bridge": {"ros__parameters": bridge_values}}, sort_keys=False), encoding="utf-8")
+PY
 }
 
 runtime_gnss_config_value() {
@@ -1314,4 +1443,3 @@ EOF
 run_mower_configuration_step() {
   ensure_default_configs && write_config
 }
-

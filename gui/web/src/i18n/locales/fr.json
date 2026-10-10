@@ -63,6 +63,45 @@
       "unavailable": "Indisponible"
     }
   },
+  "settingsHardwareBackend": {
+    "title": "Pont matériel",
+    "active": "Pont actif",
+    "names": {
+      "mowgli": "STM32 Mowgli",
+      "mavros": "Pixhawk via MAVROS"
+    },
+    "mavrosTitle": "Étalonnage des roues MAVROS",
+    "mavrosPending": "L’étalonnage des roues est appliqué en direct au plugin d’odométrie MAVROS. Les commandes PID et feed-forward STM32 Mowgli ne sont pas disponibles avec ce backend."
+  },
+  "settingsMavrosDrive": {
+    "notice": {
+      "title": "Étalonnage de propulsion MAVROS",
+      "description": "Ce backend propose l’étalonnage de l’odométrie roue et une activation explicite de la traction. Les commandes PID, feed-forward et flash du STM32 Mowgli ne sont pas utilisées."
+    },
+    "calibration": {"title": "Odométrie roue", "ticksPerMeter": "Ticks moteur par mètre", "wheelTrack": "Voie des roues (m)"},
+    "odometry": {"title": "Odométrie MAVROS en direct", "source": "Source", "status": "État", "leftTicks": "Ticks moteur gauche", "rightTicks": "Ticks moteur droit"},
+    "status": {"live": "En direct", "unavailable": "Indisponible ou périmé"}
+  },
+  "settingsMavrosSafety": {
+    "title": "Sécurité MAVROS", "switch": "Safety Switch", "left": "Soulèvement roue gauche", "right": "Soulèvement roue droite",
+    "physicalSafety": "Le Safety Switch physique reste toujours l’autorité de sécurité. Il ne peut pas être contourné ici.",
+    "protection": "Protection contre le soulèvement", "liveProtection": "Protection déclarée par le sidecar", "on": "Activée", "off": "Désactivée",
+    "disableTitle": "Désactiver la protection contre le soulèvement ?",
+    "disableDescription": "Deux roues levées ne déclencheront plus l’arrêt d’urgence de soulèvement. La télémétrie reste visible et le Safety Switch physique reste actif. Enregistrez pour appliquer.",
+    "states": {"unknown": "Inconnu", "engaged": "Engagé", "released": "Relâché", "ground": "Au sol", "lifted": "Levée"}
+  },
+  "settingsMavrosTraction": {
+    "title": "Activer les commandes de traction MAVROS",
+    "description": "Désactivées par défaut. L’activation transmet les commandes de traction uniquement si le FCU est connecté, déjà armé et son Safety Switch relâché. La commande de lame reste désactivée.",
+    "confirmTitle": "Activer les commandes de traction ?",
+    "confirmDescription": "Confirmez que le mapping de traction a été validé et que la zone est sûre. Ce réglage n’arme jamais le FCU et ne contourne aucune sécurité. Enregistrez pour appliquer."
+  },
+  "settingsMavrosCalibration": {
+    "title": "Étalonnage des roues par RTK", "instructions": "Démarrez l’enregistrement avec RTK Fixed et un retour roue frais. Effectuez une passe rectiligne de 2 à 10 m avec les commandes manuelles existantes dans un autre onglet, arrêtez-vous, puis terminez l’enregistrement. Les révolutions moteur observées et la distance RTK indépendante déterminent ticks_per_meter. L’application enregistre uniquement cette valeur ; PID et feed-forward restent inchangés.",
+    "state": "État", "samples": "Observations appariées", "distance": "Distance RTK", "proposal": "Ticks moteur par mètre proposés",
+    "start": "Démarrer l’enregistrement", "finish": "Terminer l’enregistrement", "apply": "Appliquer ticks_per_meter", "unavailable": "Service d’étalonnage indisponible",
+    "states": {"idle": "Au repos", "recording": "Enregistrement", "ready": "Prêt à appliquer", "applied": "Appliqué et enregistré", "failed": "Mesure rejetée"}
+  },
   "updates": {
     "title": "Versions et mises à jour",
     "shortTitle": "Versions",
@@ -82,6 +121,20 @@
     "installedSoftware": "Logiciels installés",
     "noContainers": "Aucun conteneur Mowgli identifié",
     "mainboard": "Firmware de la carte principale",
+    "autopilotFirmware": "Firmware de l’autopilote",
+    "mavrosConnected": "FCU connectée",
+    "mavrosDisconnected": "FCU déconnectée",
+    "mavrosProvider": "Fournisseur du firmware",
+    "mavrosVehicleType": "Type de véhicule",
+    "mavrosBoardIdentity": "Identité de la carte",
+    "mavrosVersionUnavailable": "Version non communiquée par l’autopilote",
+    "mavrosNotReported": "Non communiqué par MAVROS",
+    "mavrosUpdateUnsupported": "Les mises à jour du firmware via MAVROS ne sont pas encore prises en charge.",
+    "mavrosVehicleTypes": {
+      "1": "Avion",
+      "2": "Quadrirotor",
+      "10": "Rover terrestre"
+    },
     "firmwareMeaning": "La compatibilité est vérifiée avec le protocole du logiciel du robot. Elle ne signifie pas que le firmware est le plus récent. Les valeurs déconnectées ou périmées sont les dernières connues.",
     "firmwareAvailable": "Le firmware {{version}} (protocole {{protocol}}) est disponible pour cette installation.",
     "firmwareUpToDate": "La carte exécute le firmware de cette installation ({{version}}).",
@@ -904,6 +957,10 @@
     "firmwareVersion": "v{{version}}",
     "firmwareReflash": "v{{version}} — reflashez le firmware pour tondre",
     "firmwareFlashCta": "Flasher le firmware",
+    "mavrosFcuConnected": "FCU connectée",
+    "mavrosFcuDisconnected": "FCU déconnectée",
+    "mavrosWaitingInfo": "En attente des informations autopilote MAVROS",
+    "mavrosAutopilotBoard": "Carte autopilote",
     "coverageProgress": "Couverture de la zone · {{pct}} %",
     "bladesOff": "arrêt",
     "areaN": "Zone {{number}}",
@@ -1451,6 +1508,12 @@
     "stats": "Stats"
   },
   "gpsStatus": {
+    "compactUnknown": "—",
+    "compact2d": "2D",
+    "compact3d": "3D",
+    "compactDgps": "DGPS",
+    "compactRtkFloat": "FLOAT",
+    "compactRtkFixed": "FIX",
     "rtkFixed": "RTK fixe",
     "rtkFloat": "RTK flottant",
     "gpsFix": "GPS simple",
@@ -2446,7 +2509,81 @@
     "modelConfirmOk": "Appliquer le préréglage",
     "modelConfirmCancel": "Annuler"
   },
+  "settingsFcu": {
+    "viewMode": "Vue du matériel",
+    "chassisTab": "Châssis / carte mère",
+    "fcuTab": "FCU",
+    "scopeTitle": "Configuration des fonctions FCU uniquement",
+    "scopeDescription": "Cet outil contrôle uniquement selected_features. Le véhicule, la carte et la version sont affichés à titre informatif. Il ne compile et ne flashe aucun firmware.",
+    "importTitle": "Importer le YAML du Custom Firmware Builder",
+    "importDescription": "Importez le YAML complet exporté par ArduPilot. Une sauvegarde immuable du document original est enregistrée avant toute modification.",
+    "importButton": "Importer un YAML",
+    "importError": "Le YAML n’a pas pu être importé",
+    "invalidYaml": "Document YAML invalide",
+    "informationTitle": "Configuration importée",
+    "vehicle": "Véhicule",
+    "board": "Carte",
+    "version": "Version",
+    "informationOnly": "Ces informations n’influencent pas le contrôle des fonctions.",
+    "compatibilityTitle": "Compatibilité des fonctions FCU",
+    "addAll": "Ajouter toutes les fonctions MowgliNext manquantes",
+    "minimumSatisfied": "Toutes les fonctions requises par MowgliNext sont présentes.",
+    "minimumMissing_one": "{{count}} fonction requise par MowgliNext est manquante.",
+    "minimumMissing_other": "{{count}} fonctions requises par MowgliNext sont manquantes.",
+    "removalWarningTitle": "Des fonctions de la configuration d’origine ont été supprimées.",
+    "removalWarningDescription": "MowgliNext ne peut pas garantir qu’elles n’étaient pas utilisées par votre matériel ou votre configuration. Une sauvegarde du fichier original a été conservée.",
+    "removeFeature": "Supprimer {{feature}}",
+    "addFeature": "Ajouter {{feature}}",
+    "status": {
+      "requiredPresent": "✓ présente",
+      "requiredMissing": "✕ manquante",
+      "extra": "○ supplémentaire",
+      "removed": "− supprimée par l’utilisateur"
+    },
+    "sessionDiff": "Modifications de la session",
+    "addedDiff": "ajoutée pour satisfaire le minimum MowgliNext",
+    "removedDiff": "supprimée par l’utilisateur",
+    "exportTitle": "Continuer avec ArduPilot",
+    "downloadFinal": "Télécharger le YAML final",
+    "openBuilder": "Ouvrir le constructeur officiel ArduPilot",
+    "builderDescription": "Téléchargez ce YAML, puis importez-le sur le site officiel ArduPilot afin de construire vous-même le firmware.",
+    "backupsTitle": "Sauvegardes FCU",
+    "noBackups": "Aucune sauvegarde FCU enregistrée dans ce navigateur",
+    "originalBackup": "YAML original importé",
+    "downloadBackup": "Télécharger",
+    "restoreBackup": "Restaurer comme configuration de travail"
+  },
   "settingsDriveMotor": {
+    "odometry": {
+      "sectionDescription": "Calibration de l'odométrie des roues",
+      "label": "Calibration odométrie",
+      "start": "Démarrer la calibration odométrie",
+      "modalTitle": "Calibrer l'odométrie",
+      "ticksPerMeter": "Ticks par mètre",
+      "passCoefficient": "Coefficient de la passe : {{value}} ticks/m",
+      "wheelMeasurements": "Comptages transportés des roues : gauche {{left}}, droite {{right}}",
+      "savedLiveDescription": "La sauvegarde conserve ticks_per_meter dans mowgli_robot.yaml et applique sa valeur flottante à l'odométrie des roues MAVROS.",
+      "assistantSummary": "Cet assistant calibre l'odométrie des roues par des passes rectilignes. Utilisez une zone dégagée et plane, avec l'arrêt d'urgence à portée. Vérifiez la distance et le choix d'appliquer le résultat avant de démarrer.",
+      "motionDescription": "Les commandes de vitesse horodatées sur /cmd_vel_tuning passent par twist_mux vers /cmd_vel. Le robot s'arrête entre les segments de mouvement. Toutes les passes utilisent la valeur actuelle de ticks_per_meter comme référence.",
+      "workflowDescription": "Le robot effectue des passes rectilignes via /cmd_vel, mesure les rotations/ticks des roues et compare l'odométrie à la distance RTK/GNSS lorsqu'elle est disponible. L'assistant calcule un nouveau ticks_per_meter et écrit les mesures et recommandations dans un rapport YAML. L'application de la valeur est optionnelle.",
+      "applyTitle": "Une passe réussie sauvegardera le coefficient d'odométrie recommandé",
+      "applyDescription": "Seul ticks_per_meter sera appliqué à l'odométrie des roues MAVROS et sauvegardé dans mowgli_robot.yaml, en conservant sa précision flottante.",
+      "reportOnlyDescription": "L'assistant générera un rapport YAML en utilisant la valeur actuelle de ticks_per_meter comme référence. Aucun paramètre du robot ni aucune configuration permanente ne seront modifiés.",
+      "started": "Calibration odométrie démarrée",
+      "startFailed": "Impossible de démarrer la calibration odométrie",
+      "validation": {
+        "noPasses": "Aucune passe d'odométrie enregistrée pour le moment.",
+        "failed": "La calibration d'odométrie ne s'est pas terminée correctement. Consultez les détails de l'échec dans le rapport.",
+        "noMotion": "Une passe d'odométrie a calé ou n'a produit aucun mouvement des roues. Vérifiez les observations des roues et la mécanique.",
+        "noReference": "Aucune distance d'odométrie valide basée sur une référence RTK/GNSS n'a été acceptée.",
+        "incompleteReference": "Certaines passes d'odométrie n'ont pas de distance RTK/GNSS valide acceptée. Vérifiez la couverture des mesures.",
+        "validated": "Odométrie validée avec une erreur de distance de {{errorPct}} %.",
+        "excessiveError": "L'erreur de distance odométrique de {{errorPct}} % dépasse le seuil accepté de 2,0 %.",
+        "stability": "La calibration d'odométrie présente un avertissement de stabilité du mouvement (erreur de distance {{errorPct}} %). Vérifiez les mesures des roues.",
+        "measurement": "La calibration d'odométrie s'est terminée avec des avertissements de mesure (erreur de distance {{errorPct}} %). Consultez les notes des passes."
+      },
+      "rollbackDescription": "Restaurer uniquement le ticks_per_meter sauvegardé dans l'odométrie des roues MAVROS et mowgli_robot.yaml."
+    },
     "savedLiveTitle": "Sauvegardé et appliqué en direct",
     "savedLiveDescription": "La sauvegarde enregistre ces valeurs dans mowgli_robot.yaml et les transmet immédiatement au contrôleur de déplacement — aucun redémarrage de ROS2 nécessaire. Elles persistent après un redémarrage : à chaque démarrage, le robot renvoie les valeurs sauvegardées au firmware. (Le firmware lui-même n'a aucun stockage, il utilise donc ses valeurs par défaut intégrées uniquement pendant le bref instant avant la reconnexion du contrôleur, puis revalide et borne les valeurs que vous avez sauvegardées.)",
     "wheelVelocityPid": "PID de vitesse des roues",

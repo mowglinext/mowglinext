@@ -40,6 +40,9 @@ export interface DriveTuningStatusResponse {
 }
 
 export interface DriveTuningTrial {
+    ticks_per_meter?: number;
+    left_ticks_seen?: number;
+    right_ticks_seen?: number;
     name: string;
     phase: string;
     target_speed: number;
@@ -80,6 +83,7 @@ export interface DriveTuningDrivetrainDiagnostics {
 }
 
 export interface DriveTuningReport {
+    recommended?: Record<string, number>;
     generated_at: string;
     mode: string;
     profile: string;

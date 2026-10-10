@@ -7,7 +7,7 @@ export function liveStatusTagColor(fixType: GpsFixType) {
     if (fixType === "RTK_FIX") {
         return "success";
     }
-    if (fixType === "NO_FIX") {
+    if (fixType === "NO_FIX" || fixType === "UNKNOWN") {
         return "warning";
     }
     return "processing";

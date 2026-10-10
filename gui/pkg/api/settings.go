@@ -846,6 +846,10 @@ func gnssCompatFromFlat(flat map[string]any, schemaDefaults map[string]any) map[
 
 func gnssRuntimeEnvFallbackFromFlat(flat map[string]any, schemaDefaults map[string]any) map[string]string {
 	compat := gnssCompatFromFlat(flat, schemaDefaults)
+	if stringValue(flat["gnss_stack"], gnssSchemaDefaultString(schemaDefaults, "gnss_stack", "universal")) == "disabled" {
+		compat["GNSS_STACK"] = "disabled"
+		compat["GNSS_STATUS_SOURCE"] = "external"
+	}
 	return map[string]string{
 		"GNSS_STACK":                compat["GNSS_STACK"],
 		"GNSS_STATUS_SOURCE":        compat["GNSS_STATUS_SOURCE"],
@@ -1571,6 +1575,10 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		}
 		if err := writePreservingPerms(string(configFilePath), []byte(header+string(out))); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
+		if err := writeMavrosRuntimeConfig(dbProvider); err != nil {
+			c.JSON(500, ErrorResponse{Error: "settings saved, but MAVROS runtime config failed: " + err.Error()})
 			return
 		}
 

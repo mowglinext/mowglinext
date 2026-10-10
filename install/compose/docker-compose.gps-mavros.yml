@@ -1,0 +1,158 @@
+# Universal GNSS correction runtime for a receiver connected to Pixhawk/MAVROS.
+# Unlike docker-compose.gps.yml, this fragment does not open a host serial
+# receiver. It consumes the UG MAVROS status stream for GGA and publishes RTCM
+# on /rtcm; the MowgliMAVROS UG plugin forwards that stream as GPS_RTCM_DATA.
+x-ros2-env: &ros2-env
+  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+  RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+  ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+  RCUTILS_COLORIZED_OUTPUT: "1"
+  RCUTILS_LOGGING_USE_STDOUT: "1"
+  CYCLONEDDS_URI: file:///cyclonedds.xml
+
+services:
+  gps:
+    container_name: mowgli-gps
+    labels:
+      garden.mowgli.update.image: gps
+    image: ${UNIVERSAL_GNSS_IMAGE:-ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.2-rc4@sha256:488bdeb99083f83a42f2dd75d356f02afdc505e076552fe76718b0ae949d55c1}
+    network_mode: host
+    ipc: host
+    environment:
+      <<: *ros2-env
+      UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION: "1"
+      ROS_LOG_DIR: /run/universal_gnss/log
+      UNIVERSAL_GNSS_EXPORT_DIR: /run/universal_gnss/export
+      GNSS_MAVROS_SOURCE: ${GNSS_MAVROS_SOURCE:-gps1}
+    volumes:
+      - ./docker/config/mowgli:/config:ro
+      - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
+    tmpfs:
+      - /run/universal_gnss:uid=1000,gid=1000,mode=0700,size=64m
+    command:
+      - python3
+      - -c
+      - |
+        import os
+        import sys
+        import yaml
+
+        DEFAULTS = {
+            "ntrip_enabled": False,
+            "ntrip_host": "",
+            "ntrip_port": 2101,
+            "ntrip_user": "",
+            "ntrip_password": "",
+            "ntrip_mountpoint": "",
+            "gnss_ntrip_gga_enabled": True,
+            "gnss_ntrip_gga_interval_s": 10,
+        }
+        CONFIG = os.environ.get("MOWGLI_ROBOT_CONFIG", "/config/mowgli_robot.yaml")
+        RUN_DIR = os.environ.get("UNIVERSAL_GNSS_RUN_DIR", "/run/universal_gnss")
+        MAVROS_SOURCE = os.environ.get("GNSS_MAVROS_SOURCE", "gps1").strip().lower()
+
+
+        def truthy(value):
+            if isinstance(value, bool):
+                return value
+            return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
+        def main():
+            if MAVROS_SOURCE not in ("gps1", "gps2"):
+                print("universal_gnss_launcher event=invalid_mavros_source value=%s" % MAVROS_SOURCE,
+                      file=sys.stderr)
+                raise SystemExit(2)
+
+            with open(CONFIG, "r", encoding="utf-8") as handle:
+                document = yaml.safe_load(handle) or {}
+            config = (document.get("mowgli") or {}).get("ros__parameters") or {}
+            p = dict(DEFAULTS)
+            p.update({k: v for k, v in config.items() if k in DEFAULTS and v is not None})
+
+            host = str(p["ntrip_host"]).strip()
+            mountpoint = str(p["ntrip_mountpoint"]).strip()
+            enabled = truthy(p["ntrip_enabled"]) and bool(host) and bool(mountpoint)
+            flag = os.path.join(RUN_DIR, "ntrip_enabled")
+
+            if not enabled:
+                if truthy(p["ntrip_enabled"]):
+                    print("universal_gnss_launcher event=ntrip_disabled reason=host_or_mountpoint_empty",
+                          file=sys.stderr)
+                if os.path.exists(flag):
+                    os.remove(flag)
+                print("universal_gnss_launcher event=idle source=mavros ntrip=false", file=sys.stderr)
+                os.execvp("sleep", ["sleep", "infinity"])
+
+            params = {
+                "/universal_gnss_ntrip": {"ros__parameters": {
+                    "caster_host": host,
+                    "caster_port": int(p["ntrip_port"]),
+                    "mountpoint": mountpoint,
+                    "username": str(p["ntrip_user"]),
+                    "password": str(p["ntrip_password"]),
+                    "gga_enabled": truthy(p["gnss_ntrip_gga_enabled"]),
+                    "gga_interval_s": int(p["gnss_ntrip_gga_interval_s"]),
+                    "tls_enabled": False,
+                }},
+            }
+            path = os.path.join(RUN_DIR, "parameters.yaml")
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(params, handle, default_flow_style=False)
+            open(flag, "w").close()
+
+            status_topic = "/mavros/universal_gnss/%s/status" % MAVROS_SOURCE
+            print("universal_gnss_launcher event=start source=mavros status_topic=%s ntrip=true" %
+                  status_topic, file=sys.stderr)
+            os.execvp("ros2", [
+                "ros2", "run", "universal_gnss_ros2", "ntrip_node", "--ros-args",
+                "--params-file", path,
+                "-r", "status:=" + status_topic,
+                "-r", "rtcm:=/rtcm",
+            ])
+
+
+        if __name__ == "__main__":
+            main()
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/universal-gnss-entrypoint
+        - python3
+        - -c
+        - |
+          import pathlib
+          import sys
+          import rclpy
+          from std_srvs.srv import Trigger
+
+          flag = pathlib.Path("/run/universal_gnss/ntrip_enabled")
+          if not flag.exists():
+              raise SystemExit(0)
+
+          rclpy.init()
+          node = rclpy.create_node("mowgli_gnss_mavros_healthcheck")
+          client = node.create_client(Trigger, "/universal_gnss_ntrip/get_health")
+          try:
+              if not client.wait_for_service(timeout_sec=2.0):
+                  raise SystemExit(1)
+              future = client.call_async(Trigger.Request())
+              rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
+              ok = (future.done() and future.exception() is None
+                    and future.result() is not None and future.result().success)
+              raise SystemExit(0 if ok else 1)
+          finally:
+              node.destroy_client(client)
+              node.destroy_node()
+              rclpy.shutdown()
+      interval: 30s
+      timeout: 12s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-file: "3"
+        max-size: 5m

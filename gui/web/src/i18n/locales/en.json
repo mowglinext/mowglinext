@@ -63,6 +63,45 @@
       "unavailable": "Unavailable"
     }
   },
+  "settingsHardwareBackend": {
+    "title": "Hardware backend",
+    "active": "Active bridge",
+    "names": {
+      "mowgli": "Mowgli STM32",
+      "mavros": "Pixhawk via MAVROS"
+    },
+    "mavrosTitle": "MAVROS wheel calibration",
+    "mavrosPending": "Wheel calibration is applied live to the MAVROS odometry plugin. Mowgli PID and feed-forward controls are unavailable on this backend."
+  },
+  "settingsMavrosDrive": {
+    "notice": {
+      "title": "MAVROS drive calibration",
+      "description": "Wheel odometry calibration and an explicit traction opt-in are available for this backend. Mowgli STM32 PID, feed-forward and flash controls are not used."
+    },
+    "calibration": {"title": "Wheel odometry", "ticksPerMeter": "Motor ticks per metre", "wheelTrack": "Wheel track (m)"},
+    "odometry": {"title": "Live MAVROS odometry", "source": "Source", "status": "Status", "leftTicks": "Left motor ticks", "rightTicks": "Right motor ticks"},
+    "status": {"live": "Live", "unavailable": "Unavailable or stale"}
+  },
+  "settingsMavrosSafety": {
+    "title": "MAVROS safety", "switch": "Safety Switch", "left": "Wheel lift left", "right": "Wheel lift right",
+    "physicalSafety": "The physical Safety Switch always remains authoritative. It cannot be bypassed here.",
+    "protection": "Wheel lift protection", "liveProtection": "Protection reported by the sidecar", "on": "On", "off": "Off",
+    "disableTitle": "Disable wheel lift protection?",
+    "disableDescription": "Both lifted wheels will no longer assert the wheel lift emergency. Lift telemetry stays visible and the physical Safety Switch remains active. Save to apply.",
+    "states": {"unknown": "Unknown", "engaged": "Engaged", "released": "Released", "ground": "On ground", "lifted": "Lifted"}
+  },
+  "settingsMavrosTraction": {
+    "title": "Enable MAVROS traction commands",
+    "description": "Disabled by default. Enabling forwards traction commands only when the FCU is connected, already armed and its Safety Switch is released. Blade control remains disabled.",
+    "confirmTitle": "Enable traction commands?",
+    "confirmDescription": "Confirm that traction mapping has been validated and the area is safe. This setting never arms the FCU and does not bypass safety. Save to apply."
+  },
+  "settingsMavrosCalibration": {
+    "title": "RTK wheel calibration", "instructions": "Start recording with RTK Fixed and fresh wheel feedback. Drive a straight 2–10 m pass using the existing manual controls in another tab, stop, then finish recording. The measured motor revolutions and independent RTK distance determine ticks_per_meter. Applying saves only this value; PID and feed-forward are untouched.",
+    "state": "State", "samples": "Paired observations", "distance": "RTK distance", "proposal": "Proposed motor ticks per metre",
+    "start": "Start recording", "finish": "Finish recording", "apply": "Apply ticks_per_meter", "unavailable": "Calibration service unavailable",
+    "states": {"idle": "Idle", "recording": "Recording", "ready": "Ready to apply", "applied": "Applied and saved", "failed": "Measurement rejected"}
+  },
   "updates": {
     "title": "Versions & updates",
     "shortTitle": "Versions",
@@ -82,6 +121,20 @@
     "installedSoftware": "Installed software",
     "noContainers": "No Mowgli containers could be identified",
     "mainboard": "Mainboard firmware",
+    "autopilotFirmware": "Autopilot firmware",
+    "mavrosConnected": "FCU connected",
+    "mavrosDisconnected": "FCU disconnected",
+    "mavrosProvider": "Firmware provider",
+    "mavrosVehicleType": "Vehicle type",
+    "mavrosBoardIdentity": "Board identity",
+    "mavrosVersionUnavailable": "Version not reported by the autopilot",
+    "mavrosNotReported": "Not reported by MAVROS",
+    "mavrosUpdateUnsupported": "Firmware updates via MAVROS are not supported yet.",
+    "mavrosVehicleTypes": {
+      "1": "Fixed wing",
+      "2": "Quadrotor",
+      "10": "Ground rover"
+    },
     "firmwareMeaning": "Compatibility is checked against the robot software's protocol. It does not mean the firmware is the latest release. Disconnected or stale values are last known readings.",
     "firmwareAvailable": "Firmware {{version}} (protocol {{protocol}}) is available for this installation.",
     "firmwareUpToDate": "The board runs the firmware of this installation ({{version}}).",
@@ -907,6 +960,10 @@
     "firmwareVersion": "v{{version}}",
     "firmwareReflash": "v{{version}} — reflash firmware to mow",
     "firmwareFlashCta": "Flash firmware",
+    "mavrosFcuConnected": "FCU connected",
+    "mavrosFcuDisconnected": "FCU disconnected",
+    "mavrosWaitingInfo": "Waiting for MAVROS autopilot information",
+    "mavrosAutopilotBoard": "Autopilot board",
     "coverageToday": "Coverage today · {{pct}} %",
     "soilWetTitle": "Careful: the garden is wet (IrriSense)",
     "soilWetBlocking": "scheduled mows are suspended",
@@ -1455,6 +1512,12 @@
     "stats": "Stats"
   },
   "gpsStatus": {
+    "compactUnknown": "—",
+    "compact2d": "2D",
+    "compact3d": "3D",
+    "compactDgps": "DGPS",
+    "compactRtkFloat": "FLOAT",
+    "compactRtkFixed": "FIX",
     "rtkFixed": "RTK Fixed",
     "rtkFloat": "RTK Float",
     "gpsFix": "GPS fix",
@@ -2450,7 +2513,81 @@
     "modelConfirmOk": "Apply preset",
     "modelConfirmCancel": "Cancel"
   },
+  "settingsFcu": {
+    "viewMode": "Hardware view",
+    "chassisTab": "Chassis / main board",
+    "fcuTab": "FCU",
+    "scopeTitle": "FCU feature configuration only",
+    "scopeDescription": "This tool checks only selected_features. Vehicle, board and version details are informational. It does not compile or flash firmware.",
+    "importTitle": "Import Custom Firmware Builder YAML",
+    "importDescription": "Import the complete YAML exported by ArduPilot. An immutable backup of the original document is saved before editing.",
+    "importButton": "Import YAML",
+    "importError": "YAML could not be imported",
+    "invalidYaml": "Invalid YAML document",
+    "informationTitle": "Imported configuration",
+    "vehicle": "Vehicle",
+    "board": "Board",
+    "version": "Version",
+    "informationOnly": "These details do not affect the feature check.",
+    "compatibilityTitle": "FCU feature compatibility",
+    "addAll": "Add all missing MowgliNext features",
+    "minimumSatisfied": "All features required by MowgliNext are present.",
+    "minimumMissing_one": "{{count}} feature required by MowgliNext is missing.",
+    "minimumMissing_other": "{{count}} features required by MowgliNext are missing.",
+    "removalWarningTitle": "Features from the original configuration have been removed.",
+    "removalWarningDescription": "MowgliNext cannot guarantee that they were not used by your hardware or configuration. A backup of the original file has been retained.",
+    "removeFeature": "Remove {{feature}}",
+    "addFeature": "Add {{feature}}",
+    "status": {
+      "requiredPresent": "✓ present",
+      "requiredMissing": "✕ missing",
+      "extra": "○ additional",
+      "removed": "− removed by user"
+    },
+    "sessionDiff": "Session changes",
+    "addedDiff": "added to satisfy the MowgliNext minimum",
+    "removedDiff": "removed by the user",
+    "exportTitle": "Continue with ArduPilot",
+    "downloadFinal": "Download final YAML",
+    "openBuilder": "Open the official ArduPilot builder",
+    "builderDescription": "Download this YAML, then import it on the official ArduPilot website to build the firmware yourself.",
+    "backupsTitle": "FCU backups",
+    "noBackups": "No FCU backup saved in this browser",
+    "originalBackup": "Original imported YAML",
+    "downloadBackup": "Download",
+    "restoreBackup": "Restore as working configuration"
+  },
   "settingsDriveMotor": {
+    "odometry": {
+      "sectionDescription": "Wheel odometry calibration",
+      "label": "Odometry calibration",
+      "start": "Start odometry calibration",
+      "modalTitle": "Calibrate odometry",
+      "ticksPerMeter": "Ticks per metre",
+      "passCoefficient": "Pass coefficient: {{value}} ticks/m",
+      "wheelMeasurements": "Wheel transport counts: left {{left}}, right {{right}}",
+      "savedLiveDescription": "Saving stores ticks_per_meter in mowgli_robot.yaml and applies its floating-point value to MAVROS wheel odometry.",
+      "assistantSummary": "This assistant calibrates wheel odometry through straight test passes. Use a clear, level area and keep emergency stop within reach. Review the distance and whether to apply the result before starting.",
+      "motionDescription": "Stamped velocity commands on /cmd_vel_tuning pass through twist_mux to /cmd_vel. The robot stops between motion segments. All passes use the current ticks_per_meter as their reference.",
+      "workflowDescription": "The robot runs straight passes through /cmd_vel, measures wheel rotations/ticks and compares odometry against RTK/GNSS distance when available. The assistant calculates a new ticks_per_meter and writes measurements and recommendations to a YAML report. Applying the value is optional.",
+      "applyTitle": "A successful run will save the recommended odometry coefficient",
+      "applyDescription": "Only ticks_per_meter will be applied to MAVROS wheel odometry and saved in mowgli_robot.yaml, preserving its floating-point precision.",
+      "reportOnlyDescription": "The assistant will generate a YAML report using the current ticks_per_meter as reference. No robot parameters will be changed and no permanent configuration changes will be applied.",
+      "started": "Odometry calibration started",
+      "startFailed": "Failed to start odometry calibration",
+      "validation": {
+        "noPasses": "No odometry passes recorded yet.",
+        "failed": "Odometry calibration did not complete successfully. Review the report failure details.",
+        "noMotion": "An odometry pass stalled or produced no wheel motion. Check wheel observations and mechanics.",
+        "noReference": "No valid RTK/GNSS-backed odometry distance was accepted.",
+        "incompleteReference": "Some odometry passes lack a valid accepted RTK/GNSS distance. Review the measurement coverage.",
+        "validated": "Validated odometry with distance error {{errorPct}}%.",
+        "excessiveError": "Odometry distance error {{errorPct}}% exceeds the accepted 2.0% threshold.",
+        "stability": "Odometry calibration has a motion stability warning (distance error {{errorPct}}%). Review the wheel measurements.",
+        "measurement": "Odometry calibration completed with measurement warnings (distance error {{errorPct}}%). Review the pass notes."
+      },
+      "rollbackDescription": "Restore only the backed-up ticks_per_meter in MAVROS wheel odometry and mowgli_robot.yaml."
+    },
     "savedLiveTitle": "Saved and applied live",
     "savedLiveDescription": "Saving stores these in mowgli_robot.yaml and pushes them to the drive controller immediately — no ROS2 restart needed. They persist across reboots: on every boot the robot re-sends the saved values to the firmware. (The firmware itself has no storage, so it runs its built-in defaults only for the brief moment before the controller reconnects, then re-validates and clamps the values you saved.)",
     "wheelVelocityPid": "Wheel Velocity PID",
