@@ -775,12 +775,34 @@ func (b DockerBackend) stopManaged(ctx context.Context) ([]byte, error) {
 	return nil, nil
 }
 
+// backedUpMounts are the writable data directories the backup and rollback
+// contract covers (Backup/Restore).
+var backedUpMounts = map[string]bool{"/db": true, "/mowgli_config": true, "/ros2_ws/maps": true, "/ros2_ws/config": true}
+
+// isDeviceMount is the host's device tree (or a node in it) bound into a
+// container, as every hardware sidecar does for its serial ports. It holds
+// device nodes the kernel recreates, not data: there is nothing to back up or
+// roll back, so it never needs a backup contract.
+func isDeviceMount(source, target string) bool {
+	under := func(path string) bool {
+		path = filepath.Clean(path)
+		return path == "/dev" || strings.HasPrefix(path, "/dev/")
+	}
+	return under(source) && under(target)
+}
+
+// writableMountCovered reports whether a writable mount is either backed up
+// or holds no data.
+func writableMountCovered(source, target string) bool {
+	return backedUpMounts[target] || isDeviceMount(source, target)
+}
+
 func validateManagedMounts(service string, ci containerInfo) error {
 	if _, legacy := Services[service]; legacy {
 		return nil
 	}
 	for _, mount := range ci.Mounts {
-		if mount.RW && mount.Destination != "/db" && mount.Destination != "/mowgli_config" && mount.Destination != "/ros2_ws/maps" && mount.Destination != "/ros2_ws/config" {
+		if mount.RW && !writableMountCovered(mount.Source, mount.Destination) {
 			return fmt.Errorf("managed service %s has an unsupported writable mount %s", service, mount.Destination)
 		}
 	}

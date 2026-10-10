@@ -477,7 +477,10 @@ container with an existing health contract.
 
 Persistent services need more care: additional managed services may write only existing writable mounts at the
 already supported data destinations (`/db`, `/mowgli_config`, `/ros2_ws/maps`,
-`/ros2_ws/config`), which are archived and restored. Other writable mounts reject
+`/ros2_ws/config`), which are archived and restored. The host device tree
+(`/dev:/dev`, or a node under it, which every hardware sidecar binds for its
+serial ports) holds no data and needs no backup, so it is accepted too, also
+when a robot gains the sidecar (`isDeviceMount`). Other writable mounts reject
 the plan. Container writable layers are disposable. Unmanaged containers must not
 write shared managed data. New persistence or application-health contracts require
 an explicit updater implementation and recovery tests; labels are not arbitrary
