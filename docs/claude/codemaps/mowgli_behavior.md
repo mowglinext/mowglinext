@@ -32,6 +32,7 @@
 | Start-pose-blocked (#487) recovery + escape motion | `include/mowgli_behavior/transit_failure.hpp` (`classifyTransitFailure`), `include/mowgli_behavior/start_blocked_escape.hpp` (`EscapeDecide`, ceilings), `src/escape_nodes.cpp` (`EscapeStartBlocked`), `src/condition_nodes.cpp` `IsCoverageStartBlocked` :885 |
 | Docking / undocking flow | `src/docking_nodes.cpp` (`DockRobot` → `/dock_robot`), undock = `BackUp` in `src/navigation_nodes.cpp` :800+ (`/backup`), `main_tree.xml` `UndockSequence` :487-538 |
 | Heading calibration on undock / off-dock start | `src/calibration_nodes.cpp` (`RecordUndockStart`, `CalibrateHeadingFromUndock` line-fit → `/fusion_graph_node/set_pose`, `SeedYawFromMotion` drives via `/cmd_vel_teleop`) |
+| Resuming an undock stopped mid-reverse (Pause / emergency / failed BackUp) | `include/mowgli_behavior/undock_resume.hpp` (`remainingUndockDistance`, pure) + `IsUndockInterrupted` / `RemainingUndockDistance` in `src/calibration_nodes.cpp`; tree branch `ResumeInterruptedUndock` — finishes the reverse, never `SeedYawFromMotion` |
 | Dock-contact alignment log / dock_yaw drift check | `include/mowgli_behavior/dock_alignment.hpp` (`ComputeDockContactDelta`, `EvaluateDockYawDrift`) |
 | Battery % derivation, low-battery false trips | `src/battery_filter.cpp` (`BatteryVoltageFilter`, `batteryPercentFromVoltage`), `behavior_tree_node.cpp` :204-229 |
 | Rain handling (mode / debounce / dock-and-wait) | `src/condition_nodes.cpp` `IsNewRain`, `IsRainModeAtLeast`; `main_tree.xml` `RainGuard`. Dock-and-pause resume samples `IsCharging` after departure preparation; off-charger resume stops, publishes `RAIN_DOCK_FAILED`, clears the command and holds until the command guard halts it. `test/test_rain_resume.cpp` executes the production rain branch with deterministic motion/wait stubs. |
@@ -64,7 +65,8 @@
 | `recording_nodes.hpp` | 203 | `RecordArea` (`kMinSampleSpacingM=0.05`, `kDefaultRecordRateHz=10`, preview 2 Hz) |
 | `status_nodes.hpp` | ~195 | `PublishHighLevelStatus` (IDLE debounce 3 ticks), `WasRainingAtStart`, `ClearCommand`, `MarkGuardHalt`(reason — sets `guard_halted_reason`), `EndSession`, `IncrementSkippedSwaths` |
 | `utility_nodes.hpp` | 192 | `SetMowerEnabled`, `WaitForDuration`, `WaitForGpsFix`, `SaveObstacles`, `ResetEmergency` |
-| `calibration_nodes.hpp` | 152 | `RecordUndockStart`, `CalibrateHeadingFromUndock`, `SeedYawFromMotion` |
+| `calibration_nodes.hpp` | 197 | `RecordUndockStart`, `IsUndockInterrupted`, `RemainingUndockDistance`, `CalibrateHeadingFromUndock`, `SeedYawFromMotion` |
+| `undock_resume.hpp` | 55 | Pure: `remainingUndockDistance` — reverse left of an interrupted undock (≤ `undock_distance`, 0 below 0.10 m) |
 | `localization_health.hpp` | 328 | Header-only `LocalizationHealthMonitor` (GNSS accuracy / fix-lost / stale latches + σ_xy divergence backstop) |
 | `start_blocked_escape.hpp` | 329 | Header-only escape policy; compiled ceilings `kEscapeMaxSpeed=0.15`, `kEscapeMaxDistance=0.60`, `kEscapeMaxTimeout=15`, `SanitizeEscapeCfg` |
 | `scan_pause.hpp` | 105 | Header-only blade pause across a SHORT LiDAR dropout (`ScanPauseStep`, `kScanPauseMaxAgeSec=1.0`, `kScanResumeFreshSec=0.5`): blade OFF, coverage goal kept, blade back after a continuous fresh window. Driven by `FollowStrip::stepScanPause`; the Root `IsScanStale` halt (`max_age_sec=20`) is the second stage. Field 2026-09-12 |
@@ -182,7 +184,7 @@ Clients (node → file:line):
 | Navigation — `navigation_nodes.{hpp,cpp}` | `StopMoving`(duration_sec), `ClearCostmap`, `SetNav2Lifecycle`(command PAUSE/RESUME), `NavigateToPose`†(goal "x;y;yaw"), `BackUp`(backup_dist, backup_speed), `SetNavMode`(mode precise/degraded), `NavigateInsideBoundary` |
 | Escape — `escape_nodes.{hpp,cpp}` | `EscapeStartBlocked` |
 | Status — `status_nodes.{hpp,cpp}` | `PublishHighLevelStatus`(state, state_name), `WasRainingAtStart`, `ClearCommand`, `MarkGuardHalt`(reason), `EndSession`, `IncrementSkippedSwaths`† |
-| Calibration — `calibration_nodes.{hpp,cpp}` | `RecordUndockStart`, `CalibrateHeadingFromUndock`(min_displacement_m), `SeedYawFromMotion`(distance_m, speed_ms, timeout_sec, min_displacement_m) |
+| Calibration — `calibration_nodes.{hpp,cpp}` | `RecordUndockStart`, `IsUndockInterrupted`, `RemainingUndockDistance`(undock_distance → remaining), `CalibrateHeadingFromUndock`(min_displacement_m), `SeedYawFromMotion`(distance_m, speed_ms, timeout_sec, min_displacement_m) |
 | Docking — `docking_nodes.{hpp,cpp}` | `DockRobot`(dock_id, dock_type), `UndockRobot`†(dock_type), `RecordResumeUndockFailure` |
 | Coverage — `coverage_nodes.{hpp,cpp}` | `GetNextUnmowedArea`(max_areas → out `area_index`), `FollowStrip`(max_detours_per_segment, detour_footprint_radius_m), `TransitToStrip`(timeout_sec, ≤ 0 = `transitDeadlineSec(gap)`; a non-START_OCCUPIED failure is recorded in `BTContext::transit_to_strip_failed_at` so FollowStrip skips — not repeats — that first transit), `DetourAroundObstacle`†(forward_m, lateral_m), `PlanCoverageArea`(area_index) |
 | Recording — `recording_nodes.{hpp,cpp}` | `RecordArea`(simplification_tolerance, min_vertices, min_area, record_rate_hz, is_exclusion_zone) |
