@@ -185,3 +185,45 @@ height/offset/track, sensors and map; map projection fixture checks physical
 corners under zoom, heading, bearing and pitch. Map tests reject PNG requests,
 images above 384 px, and initial artwork transfers above 150 kB. Regeneration
 and hardware physical measurements remain distinct from this rendering evidence.
+
+## Wheel enclosure audit (2026-10-10)
+
+Rendering baseline: d94ea7f4, YardForce500/B preset, full and compact assets.
+No robot, firmware, receiver or installed config was read for this audit.
+Historical source comparisons:
+
+- 5acb6f78 (initial ROS2, 2026-03-26): approximate 400 mm body width,
+  350 mm centre track and 50 mm tyre width.
+- cb134cb9 (2026-04-07): actual xacro arguments 400 mm body width,
+  325 mm centre track, 40 mm tyre width. Its header says 400 mm track,
+  but that is contradicted by the executable argument; not an old 400 mm track.
+- 78a0a015 (2026-09-05): template/presets changed body width to 450 mm
+  after a maintainer measurement on their Yardforce500. This does not establish
+  dimensions on .118. Wheel track/width stayed 325/40 mm.
+- Current template describes wheel_track as "from OpenMower"; the inspected
+  history does not establish a physical Yardforce track/tyre-width measurement.
+
+Source-alpha inspection at the drive axle (top atlas row 683, x=0 in robot
+coordinates) gives a 551 px shell span within the 629 px body crop. At 450 mm
+body width, that is about 394 mm of body at the axle versus 365 mm outer tyre
+span. Thus the current opaque shell covers the wheel centres and outer edges
+at that row, even with correct crop scaling and track/width arithmetic.
+
+The supplied Yardforce overhead and rear-quarter photos visibly have narrower
+rear bodywork and pronounced wheel recesses. Our generated top shell is too
+full around that region, and its side panel lacks the real wheel opening.
+This is a visual fidelity defect; correct crop bounds do not validate shell
+contours. Correct the shell recesses while retaining the configured outer body
+extent and axle anchors. Do not enlarge drive track merely to expose wheels.
+
+HARDWARE_REQUIRED for selecting different physical track/tyre-width defaults.
+Baseline to record at measurement: intended unit (.118 if applicable), installed
+mower model/config and wheel type; renderer comparison remains d94ea7f4 with
+325 mm track, 40 mm width, 450 mm maximum body width. On a level surface with
+power off and blades removed, measure both tyre widths, their outer-to-outer
+span and body width at the rear axle (also maximum body width). Calculate
+centre track as outer span minus half the sum of the two tyre widths. Agreement
+within 5 mm supports the current values; a larger discrepancy rejects them for
+that unit and calls for a measured override. Perspective photos alone cannot
+settle those absolute measurements. No parameter or artwork was changed by
+this audit.
