@@ -23,9 +23,11 @@ below predates this change.
   The seed stays the first generated swath. The same boundary, hole, minimum-radius,
   pivot-sweep and optional swath-turn-envelope checks still decide each driven join.
 - `coverage_planning.cpp:2323`:
-  `orderSubPathsForMinimalTransit` now receives `preserve_direction_count` (default 1).
+  `orderSubPathsForMinimalTransit` receives `ring_bearing_count` (default 1).
   The builder protects **every** ring-bearing sub-path, including obstacle loops and
-  mixed ring/swath paths, from reversal; all may still move in the execution sequence.
+  mixed ring/swath paths, from reversal and keeps that group ahead of every interior-only
+  path. The outermost-ring path remains the route seed; ring-free plans retain the full
+  seed search.
 - `test/test_coverage_route.cpp`: Isabey route-length/transit bounds, all original
   swaths/rings retained inside the cut, sampled segment containment and obstacle checks,
   exact deterministic replay, wider-turn efficiency, and protected ring winding.
@@ -51,8 +53,9 @@ below predates this change.
   corner, which is what the field report of 2026-07 (ring-to-ring stalls) forbids; with no hint it
   is the midpoint of the longest side, exactly as before. With a hint the largest loop of the
   outermost pass (the perimeter, not a ring round a hole) is moved to `plan.rings[0]`, and
-  `buildContinuousSubPaths(..., pin_first_subpath)` → `orderSubPathsForMinimalTransit(...,
-  pin_first_seed)` stops the seed search moving the first sub-path. Rings off = no ring to start on:
+  `buildContinuousSubPaths` always keeps that outermost-ring sub-path first and keeps every
+  ring-bearing sub-path ahead of interior-only paths; `pin_first_subpath` additionally preserves a
+  selected first path for a ring-free direct caller. Rings off = no ring to start on:
   the hint is ignored and `PreviewCoverage.start_adjustable` is false. The preview answers with the
   real `start_x/y` (the snapped point). Tests `test/test_start_point.cpp`.
 - CMake registers `test_coverage_planning`, `test_pivot_joins`, `test_start_point`, `test_coverage_preview`
@@ -199,8 +202,9 @@ and `kRingSpikeTolM` 0.005 (`:1945-1946`).
    in-bounds, hole-free, pivot sweep inside recorded line + soft band and ≥ sweep radius from
    every drawn obstacle) → else split →
    `roundSharpCorners` (>88°, never at a zero-length twin) → `clampInsideRing` →
-   `enforcePivotCornerContract` → greedy NN sub-path reorder (adopted only if shorter; sub-path 0
-   fixed; reversing a sub-path keeps its twins).
+   `enforcePivotCornerContract` → constrained greedy NN sub-path reorder (adopted only if shorter;
+   outermost-ring path fixed first; every ring-bearing path stays ahead of interior-only paths;
+   ring-free plans may choose any seed; reversing an eligible sub-path keeps its twins).
 5. Pose yaws from `pathHeadings` (a corner's first twin = incoming heading, second = outgoing),
    verification + logs (`coverage_server.cpp`), result fill.
 
