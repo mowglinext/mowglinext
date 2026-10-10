@@ -20,7 +20,7 @@ hardware_bridge:
     # OpenMower wires the right ESC mirrored; mower_comms_v1 negates it too.
     left_motor_inverted: false
     right_motor_inverted: true
-    motor_pole_pairs: 4       # xesc_mini only — eRPM → shaft rpm
+    motor_pole_pairs: 4       # eRPM (mini) / hall ticks (2040) → shaft rpm
     control_rate: 50.0        # Hz — duty commands + odometry
     heartbeat_rate: 25.0      # Hz — LowLevel keep-alive (board times out at 500 ms;
                               # mower_comms_v1 sends at 50 Hz, 5 B per packet)

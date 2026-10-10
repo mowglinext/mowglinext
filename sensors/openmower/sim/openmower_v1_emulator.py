@@ -264,14 +264,18 @@ class DriveMotor:
 class BladeMotor:
     RPM_PER_DUTY = 3600.0
     TAU = 0.4
+    POLE_PAIRS = 4  # the bridge's motor_pole_pairs default
+    # xESC2040 main.cpp adds one to tacho_absolute per hall state change.
+    HALL_STEPS_PER_REV = 6 * POLE_PAIRS
 
     def __init__(self):
         self.duty = 0.0
-        self.rpm = 0.0
-        self.ticks = 0.0
+        self.rpm = 0.0    # signed: negative while the duty is
+        self.ticks = 0.0  # signed hall steps
 
     def step(self, dt: float, effective_duty: float):
-        self.rpm += (abs(effective_duty) * self.RPM_PER_DUTY - self.rpm) * min(1.0, dt / self.TAU)
+        self.rpm += (effective_duty * self.RPM_PER_DUTY - self.rpm) * min(1.0, dt / self.TAU)
+        self.ticks += self.rpm / 60.0 * dt * self.HALL_STEPS_PER_REV
 
 
 class Plant:
@@ -679,7 +683,7 @@ class XescMini(_Esc):
         struct.pack_into('>i', p, 5, int(abs(duty) * 150))              # current_motor
         struct.pack_into('>i', p, 9, int(abs(duty) * 150))              # current_in
         struct.pack_into('>h', p, 21, int(duty * 1000))                 # duty_now
-        erpm = int(speed * 2000) if hasattr(self.motor, 'speed') else int(self.motor.rpm * 4)
+        erpm = int(speed * 2000) if hasattr(self.motor, 'speed') else int(self.motor.rpm * BladeMotor.POLE_PAIRS)
         struct.pack_into('>i', p, 23, erpm)
         struct.pack_into('>h', p, 27, 265)                              # v_in 26.5
         struct.pack_into('>i', p, 45, tacho)                            # tacho (signed)

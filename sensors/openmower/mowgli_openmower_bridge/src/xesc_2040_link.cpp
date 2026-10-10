@@ -18,8 +18,15 @@ constexpr std::size_t kReadChunk = 256u;
 constexpr std::chrono::milliseconds kSettingsResendPeriod{500};
 }  // namespace
 
-Xesc2040Link::Xesc2040Link(std::string port, Xesc2040Settings settings, LogFn warn)
-    : port_(std::move(port)), settings_(settings), warn_(std::move(warn)), serial_(port_, kXescBaud)
+Xesc2040Link::Xesc2040Link(std::string port,
+                           Xesc2040Settings settings,
+                           int motor_pole_pairs,
+                           LogFn warn)
+    : port_(std::move(port)),
+      settings_(settings),
+      warn_(std::move(warn)),
+      serial_(port_, kXescBaud),
+      speed_(motor_pole_pairs)
 {
 }
 
@@ -40,6 +47,7 @@ void Xesc2040Link::Poll(SteadyClock::time_point now)
     packets_.reset_receive_state();
     telemetry_.has_status = false;
     have_previous_status_ = false;
+    speed_.Reset();
     SendSettings(now);
   }
 
@@ -115,7 +123,8 @@ void Xesc2040Link::HandleStatus(const xesc2040::StatusPacket& pkt, SteadyClock::
   telemetry_.temp_motor = pkt.temperature_motor;
   telemetry_.current_in = pkt.current_input;
   telemetry_.duty = pkt.duty_cycle;
-  telemetry_.rpm = 0.0;  // the 2040 does not report shaft speed
+  // The 2040 reports no speed: derive it from the hall counter.
+  telemetry_.rpm = speed_.Update(pkt.tacho_absolute, now);
   telemetry_.fault_code = static_cast<uint32_t>(pkt.fault_code);
   telemetry_.connected = true;
 

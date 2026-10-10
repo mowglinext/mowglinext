@@ -10,6 +10,7 @@
 
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
+#include "mowgli_openmower_bridge/blade_speed.hpp"
 #include "mowgli_openmower_bridge/motor_link.hpp"
 #include "mowgli_openmower_bridge/xesc_2040_protocol.hpp"
 
@@ -38,7 +39,8 @@ class Xesc2040Link final : public MotorLink
 public:
   using LogFn = std::function<void(const std::string&)>;
 
-  Xesc2040Link(std::string port, Xesc2040Settings settings, LogFn warn);
+  /// `motor_pole_pairs` turns hall ticks into shaft rpm (blade speed).
+  Xesc2040Link(std::string port, Xesc2040Settings settings, int motor_pole_pairs, LogFn warn);
 
   void Poll(SteadyClock::time_point now) override;
   bool SendDuty(double duty) override;
@@ -74,6 +76,7 @@ private:
   SteadyClock::time_point last_settings_sent_{};
   bool have_previous_status_{false};
   uint32_t previous_tacho_absolute_{0u};
+  HallSpeedMeter speed_;
 };
 
 }  // namespace mowgli_openmower_bridge
