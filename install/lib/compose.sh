@@ -324,10 +324,17 @@ write_compose_merged() {
   mkdir -p "$DOCKER_DIR"
 
   if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
-    if [[ "${HARDWARE_BACKEND:-mowgli}" != "mowgli" ]]; then
-      error "$MSG_UPDATER_STACK_BACKEND"
-      return 1
-    fi
+    # The worker reads HARDWARE_BACKEND from docker/.env itself (the bundle's
+    # "backend" group), so only the backends a release covers get this far.
+    # Spelled out rather than updater_hardware_supported: docker/stack.sh
+    # sources this file without lib/updater.sh.
+    case "${HARDWARE_BACKEND:-mowgli}" in
+      mowgli|openmower) ;;
+      *)
+        error "$MSG_UPDATER_STACK_BACKEND"
+        return 1
+        ;;
+    esac
     local selected_gnss="none" selected_lidar="none"
     if [[ "$(effective_gnss_stack)" != "disabled" && "$(effective_gnss_backend)" != "disabled" ]]; then
       selected_gnss="universal"

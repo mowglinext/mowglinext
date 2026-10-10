@@ -316,7 +316,7 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
                 {!plan.custom_images && <Typography.Text type="secondary">{plan.target.source.repository} · {plan.target.source.branch}</Typography.Text>}
                 {plan.stack ? <>
                     <Typography.Text type="secondary">{t('hostUpdater.selectionHelp')}</Typography.Text>
-                    <div>{Object.entries(plan.stack.selection.options).map(([key, value]) => <Tag key={key}>{t(`hostUpdater.hardware.${key}`, {defaultValue: key})}: {value === 'none' ? t('hostUpdater.disabled') : value === 'universal' ? t('hostUpdater.enabled') : value}</Tag>)}</div>
+                    <div>{Object.entries(plan.stack.selection.options).map(([key, value]) => <Tag key={key}>{t(`hostUpdater.hardware.${key}`, {defaultValue: key})}: {key === 'backend' ? t(`hostUpdater.backendChoice.${value}`, {defaultValue: value}) : value === 'none' ? t('hostUpdater.disabled') : value === 'universal' ? t('hostUpdater.enabled') : value}</Tag>)}</div>
                     <div data-testid="stack-changes">{plan.stack.changes.map(change => <div key={change.service} style={{display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6}}>
                         <Typography.Text>{component(change.service)}</Typography.Text>
                         <Tag color={change.action === 'add' ? 'green' : change.action === 'remove' ? 'orange' : undefined}>{t(`hostUpdater.stackActions.${change.action}`)}</Tag>

@@ -79,11 +79,24 @@ service or container orchestrator is needed on the mower.
 
 Raspberry Pi OS 64-bit, Ubuntu and Debian retain their existing architecture
 support. Automatic installation requires the standard installer Compose layout,
-host networking and the Mowgli mainboard readiness interface. ARM32, Windows,
+host networking and the mower readiness interface. ARM32, Windows,
 macOS, rootless Docker, Podman and non-systemd installations are not supported by
 this updater. Version reporting and manual image comparison remain available
-when the host service is absent. MAVROS/other hardware backends without Mowgli
-firmware readiness cannot pass the automatic installation gate.
+when the host service is absent. The Mowgli mainboard and the OpenMower v1
+bridge (`HARDWARE_BACKEND=openmower`) are covered; MAVROS cannot pass the
+automatic installation gate.
+
+**OpenMower v1.** The release bundle's `backend` group adds
+`docker-compose.openmower.yml` and the release publishes the `openmower` image
+next to the others. The worker reads `HARDWARE_BACKEND` from `docker/.env` on
+every installer run (never from an earlier selection, so a robot moved back to
+the Mowgli board drops the bridge). The OpenMower bridge talks to the stock
+LowLevel and xESC firmware and reports firmware protocol 0, so the release's
+`firmware_protocol` (the Mowgli STM32 wire protocol) is waived there — decided
+from the host's `docker/.env`, not from the GUI. Everything else in the
+readiness gate still applies: fresh, idle, stationary, blade-off telemetry, and
+`firmware_compatible` (the bridge reaches the LowLevel board and both drive
+ESCs).
 
 ## First installation or adoption
 
@@ -659,7 +672,8 @@ restoring only an older executable is unsafe.
 
 Fresh MAVROS, TF-Luna or VESC configurations use the existing installer path and
 keep their selected containers. They are not silently enrolled into coordinated
-updates: the current release selector covers the Mowgli backend, GNSS and LiDAR.
+updates: the current release selector covers the Mowgli and OpenMower v1
+backends, GNSS and LiDAR.
 An already managed installation rejects these unsupported selections before
 regenerating runtime files. These integrations need explicit release/health/storage
 contracts before they can participate in coordinated updates.

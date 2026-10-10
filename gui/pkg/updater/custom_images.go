@@ -153,7 +153,8 @@ func (b DockerBackend) PlanCustomImages(ctx context.Context, requested map[strin
 		return nil, 0, errors.New("reconcile pending installer selections with a published deployment first")
 	}
 	ready, err := b.readiness(ctx)
-	if err != nil || ready.FirmwareProtocol < 1 {
+	exempt := b.FirmwareProtocolExempt()
+	if err != nil || (ready.FirmwareProtocol < 1 && !exempt) {
 		return nil, 0, errors.New("mainboard firmware protocol is unavailable")
 	}
 	c, _, err := b.model(ctx)
@@ -194,7 +195,7 @@ func (b DockerBackend) PlanCustomImages(ctx context.Context, requested map[strin
 		if e != nil {
 			return nil, 0, fmt.Errorf("%s: %w", name, e)
 		}
-		if image.FirmwareProtocol != ready.FirmwareProtocol {
+		if !exempt && image.FirmwareProtocol != ready.FirmwareProtocol {
 			return nil, 0, fmt.Errorf("%s: release requires a different mainboard firmware protocol", name)
 		}
 		if image.Family != managed[name].Image {
