@@ -1687,9 +1687,7 @@ void FollowStrip::onHalted()
   // Preempt (recharge, e-stop, command change) mid-path: capture how far we got
   // and persist the resume cursor so the next dispatch continues from here
   // rather than re-mowing the whole area from the start.
-  if ((follow_handle_ || follow_accept_) &&
-      total_path_poses_ > 0 &&
-      swath_idx_ < swaths_.size())
+  if ((follow_handle_ || follow_accept_) && total_path_poses_ > 0 && swath_idx_ < swaths_.size())
   {
     // Selection is already valid while a blade-off transit or the asynchronous
     // goal response is pending. Persist that logical cursor even without a
@@ -1705,13 +1703,9 @@ void FollowStrip::onHalted()
   abortActiveGoals(ctx);
 }
 
-BT::NodeStatus FollowStrip::yieldToFleet(
-  const std::shared_ptr<BTContext>& ctx,
-  bool mid_pass)
+BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, bool mid_pass)
 {
-  if (mid_pass &&
-      (follow_handle_ || follow_accept_) &&
-      total_path_poses_ > 0 &&
+  if (mid_pass && (follow_handle_ || follow_accept_) && total_path_poses_ > 0 &&
       swath_idx_ < swaths_.size())
   {
     if (follow_handle_ && !transit_active_ && !transit_pending_)
@@ -1726,12 +1720,11 @@ BT::NodeStatus FollowStrip::yieldToFleet(
 
   ctx->fleet_yielded_areas.insert(area_idx_);
 
-  RCLCPP_INFO(
-    ctx->node->get_logger(),
-    "FollowStrip: area %u is assigned to another fleet member — yielding %s "
-    "(resume cursor saved; this pass is not charged to the no-progress budget)",
-    area_idx_,
-    mid_pass ? "mid-pass" : "before starting");
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "FollowStrip: area %u is assigned to another fleet member — yielding %s "
+              "(resume cursor saved; this pass is not charged to the no-progress budget)",
+              area_idx_,
+              mid_pass ? "mid-pass" : "before starting");
 
   // SUCCESS = "this pass is over", exactly like a pass that mowed what it
   // could; completion is decided by completed_areas, not by this status, so

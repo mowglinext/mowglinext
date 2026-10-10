@@ -28,6 +28,16 @@ FINAL_COMPOSE_FILE="$DOCKER_DIR/docker-compose.yaml"
 FINAL_ENV_FILE="$DOCKER_DIR/.env"
 UDEV_RULES_FILE="/etc/udev/rules.d/50-mowgli.rules"
 
+# MowgliMAVROS is released independently from MowgliNext.
+_mavros_image_env="${BASH_SOURCE[0]%/*}/../../sensors/mavros/image.env"
+if [[ ! -r "$_mavros_image_env" ]]; then
+  echo "Missing MAVROS sidecar image contract: $_mavros_image_env" >&2
+  return 1
+fi
+# shellcheck source=/dev/null
+source "$_mavros_image_env"
+unset _mavros_image_env
+
 # Derive the GHCR image prefix from REPO_URL so forks automatically point
 # at their own registry namespace. Strips the trailing .git and extracts
 # the owner/repo path from the GitHub URL.
@@ -45,7 +55,7 @@ recompute_image_defaults() {
   LIDAR_LDLIDAR_IMAGE_DEFAULT="${prefix}/lidar-ldlidar:${IMAGE_TAG}"
   LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
-  MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
+  MAVROS_IMAGE_DEFAULT="${MOWGLI_MAVROS_IMAGE_DEFAULT}"
   OPENMOWER_IMAGE_DEFAULT="${prefix}/openmower:${IMAGE_TAG}"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
   # Universal GNSS is a separately released runtime. Never derive it from

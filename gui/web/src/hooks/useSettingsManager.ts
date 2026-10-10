@@ -671,10 +671,10 @@ export const useSettingsManager = () => {
                     });
                 }
             }
-        } catch (e: any) {
+        } catch (e: unknown) {
             notification.error({
                 message: t("settingsSections.toasts.saveFailed"),
-                description: e.message,
+                description: e instanceof Error ? e.message : String(e),
             });
         } finally {
             setSaving(false);

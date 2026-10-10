@@ -326,6 +326,10 @@ setup_env() {
   : "${MAVROS_GCS_URL:=udp-b://@255.255.255.255:14550}" # udp-b = broadcast, udp = unicast, empty = disabled
   : "${MAVROS_TGT_SYSTEM:=1}"
   : "${MAVROS_TGT_COMPONENT:=1}"
+  # Prefer the persistent USB identity when available.
+  if [[ "$HARDWARE_BACKEND" == "mavros" && "$MAVROS_BY_ID" == /dev/serial/by-id/* ]]; then
+    MAVROS_PORT="$MAVROS_BY_ID"
+  fi
 
   # OpenMower electronics (LowLevel board + xESC on the Pi UARTs). GNSS is NOT
   # affected: the OpenMower GPS is a plain receiver and keeps the Universal
