@@ -26,6 +26,7 @@ find_package(nav2_util REQUIRED)
 find_package(nav2_ros_common REQUIRED)
 find_package(nav2_smac_planner REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -76,6 +77,7 @@ target_link_libraries(${PROJECT_NAME}
   ${nav2_ros_common_TARGETS}
   ${nav2_smac_planner_TARGETS}
   ${nav_msgs_TARGETS}
+  ${nav2_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${pluginlib_TARGETS}
@@ -190,6 +192,15 @@ if(BUILD_TESTING)
   )
 
   target_include_directories(test_ftc_stall
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  ament_add_gtest(test_ftc_collision_monitor_hold
+    test/test_ftc_collision_monitor_hold.cpp
+  )
+
+  target_include_directories(test_ftc_collision_monitor_hold
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
