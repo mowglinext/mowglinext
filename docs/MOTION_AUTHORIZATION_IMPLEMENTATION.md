@@ -16,9 +16,12 @@ stack-wide autonomous-motion invariant or physical containment.
   supply the geometry required by the production interface.
 - Production checkpoint: `26926295`. Final-source native checks passed:
   navigation 22/22, behavior 46/46 and map 12/12 CTest targets. Later changes
-  record test latency and update documentation; motion production is unchanged.
+  record test latency, exercise automatic map startup and update documentation;
+  motion production is unchanged.
   Packaging checkpoint `0f66cd8c` adds Boost headers and visualization_msgs to
   the five thin sensor build dependency lists after CI exposed missing Boost.
+  Test-only checkpoint `8671b3a4` verifies automatic permission publication;
+  its expanded map suite passed under Fast DDS and CycloneDDS.
 - #905 (`26a2515d`) and #906 (`a04c4219`) were open and unmerged when inspected.
   This imports #905-compatible raw MarkerArray publication and segment logic,
   not its transit planner or another geometry grid. Coordinate the overlapping
@@ -99,7 +102,7 @@ add-area requests reject without altering the live map.
 | FTC swaths, connectors, headlands, deviations | `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav` | 26 command cases, including original 12 negative and 4 positive controls; passed on the final production source |
 | FTC PRE/PIVOT/POST and fallback reverse | Directed full rotation and final Twist sweep; existing costmap collision checks retained | Real-controller wheel-lag turn scenarios and complete footprint tests; passed on the final production source |
 | EscapeStartBlocked | Bound action instance -> `/cmd_vel_nav`; geometry, pose, blade, arming and budgets; rejection/halt zero | 17 production-path DDS/command cases; passed on the final production source |
-| Map permission production | #905-compatible `/map_server_node/transit_geometry`; `area.text=mowing|navigation`; revocation before replacement | 28 reload/add/parameter cases; passed on the final production source |
+| Map permission production | #905-compatible `/map_server_node/transit_geometry`; `area.text=mowing|navigation`; revocation before replacement | 30 startup/reload/add/parameter cases; passed on the final production source |
 | Nav2 RPP/RotationShim transit and HOME | BT `NavigateToPose` -> Nav2 -> `/cmd_vel_nav` | No new execution gate. #905 protects planning, not controller corner cutting. OPEN |
 | Nav2 BackUp, BT boundary recovery and undock | BT `/backup` and recovery action paths -> Nav2 -> `/cmd_vel_nav` | Existing behavior retained; no bounded geometry exception implemented here. OPEN |
 | Dock and dock calibration | `/dock_robot` and independent docking commands -> `/cmd_vel_docking` -> mux | No new execution gate; non-default approach/undock distances and charge/resume mission unverified. OPEN |
@@ -121,9 +124,9 @@ sources in a separate non-root ROS build: 12 FTC negative cases and the one
 Escape negative case failed; four positive FTC controls passed.
 
 Final-source navigation, behavior and map builds passed all **80 CTest targets**
-(22 + 46 + 12), containing **966 GoogleTest cases** (263 + 484 + 219).
+(22 + 46 + 12), containing **968 GoogleTest cases** (263 + 484 + 221).
 The focused suites contain 26 FTC command cases, 18 continuous
-sweep cases, 17 Escape cases and 28 map reload/add/parameter cases. All original
+sweep cases, 17 Escape cases and 30 map startup/reload/add/parameter cases. All original
 13 negative cases now pass and all four original positive FTC controls remain
 green. Additional positive checks include real-FTC edge progress, 1000 legal
 straight sweeps, 1000 curved headland sweeps around a hole, complete pivots,
@@ -140,7 +143,12 @@ it does not measure full mission coverage or final actuator containment.
 
 Fast DDS was used for the complete native suites. The four focused suites
 (FTC, sweeps, Escape and map reload) additionally passed through CycloneDDS:
-4/4 CTest targets containing the same 89 cases.
+4/4 CTest targets originally containing 89 cases. The later expanded 30-case
+map suite also passed under both implementations, with all 12 map-package
+CTest targets rerun successfully. The two new cases exercise actual automatic
+startup publication without `/map`: persisted geometry and the simulation's
+parameter-defined lawn with a paused ROS clock. They neither invoke the
+test-only mask rebuild nor substitute authorization evidence.
 
 Host latency measurements below used production `26926295` and test-only
 instrumentation `37af533e`. The dense-circle straight case previously averaged
@@ -187,9 +195,9 @@ including newly generated interfaces and installed-consumer builds. OpenMower
 amd64 and arm64 image builds and smoke tests also passed. The CI counter that
 greps every XML `tests` attribute counts nested attributes twice; the case
 counts here use GTest's actual executed-case output. The [full ROS workspace
-Build & Test job](https://github.com/mowglinext/mowglinext/actions/runs/38010152519/job/114088099001)
-also passed at `0f66cd8c`: 14 source packages built and tested, with colcon
-reporting 3105 tests, 0 errors, 0 failures and 369 skipped. That colcon total
+Build & Test job](https://github.com/mowglinext/mowglinext/actions/runs/38014488887/job/114101679699)
+also passed at test checkpoint `8671b3a4`: 14 source packages built and tested,
+with colcon reporting 3107 tests, 0 errors, 0 failures and 369 skipped. That colcon total
 includes framework/linter results and is not an additional GoogleTest count.
 Despite the job's historical `ROS2 kilted` name, its actual setup is Lyrical.
 
@@ -216,31 +224,34 @@ The reviewer explicitly retained the full-#924 and hardware acceptance gaps.
 
 ## Simulation and resource limitations
 
-No Webots mission was executed. The repository's existing simulation recipe
-was investigated, including LiDAR and no-LiDAR E2E harnesses. A reasonable
-isolated setup attempt copied Webots R2025a and compatible scratch GLU/sndio
-libraries from the shared Kilted container into the owned Lyrical container.
-Loader probing still found missing `libasound.so.2`; Xvfb and Lyrical
-`webots_ros2`/control packages are absent. Fetching the Dockerfile-pinned driver
-revision failed before checkout. The shared simulator was not modified or
-used for implementation missions.
+No Webots mission was executed. After Docker/WSL recovery and moving large
+scratch artifacts to D:, Webots R2025a and the repository-pinned driver/control
+revision `db4a77c84ee91445d39de9a631e5b57a888814e2` built and ran in a separate
+bridge-networked container as UID 1000, ROS domain 170, with no robot devices,
+host IPC or published ports. Xvfb, missing runtime libraries and Linux-native
+Webots IPC were repaired in task-owned scratch; shared services were restored
+after the user-authorized Docker restart and were not used for missions.
 
-Host C: fell to 141 MB free, causing compiler write I/O failure and Docker
-Desktop failure. The user authorized recovery; Docker was restarted and
-interrupted shared development/Signal Ledger services were restored. Deleting
-only the owned redundant 454 MB Webots transfer cache recovered space for
-serial focused builds. The app remains staged in the owned container. A full
-current simulation image needs multiple GiB of backing storage and could not
-be built safely within the remaining roughly 0.5 GB on C:. A subsequent isolated
-recovery attempt uses a fresh D: scratch directory and separate bridge-networked
-container (UID 1000, ROS domain 170, no robot devices or published ports). Its
-pinned public driver source fetch succeeded; runtime dependencies were extracted
-there. Non-root Xvfb/Qt startup succeeded and Webots printed `R2025a` with a
-normal exit. The pinned driver is compiling against Lyrical. The tested current
-Nav2, behavior and map package installations and unchanged generated interfaces
-were separately staged on D: for overlay verification. Compatible driver and
-current-stack integration are still being checked. App startup does not count
-as a Webots mission or current-stack motion evidence.
+The current simulation launch/config/world/robot description and tested native
+interfaces/navigation/behavior/map installations were overlaid on cached image
+`be2f6e79c62e` (runtime provenance `df018f11`). Untouched components including
+coverage and Nav2 still came from that cached runtime: this is a mixed-baseline
+integration attempt, not a fully rebuilt release image. The configured
+`main_mow` lawn loaded, robot-state publication initialized, and both
+`joint_state_broadcaster` and `diffdrive_controller` reported active.
+
+Earlier full-stack attempts failed readiness: docking exited with an undefined
+`opennav_docking::Controller` symbol and Nav2 remained inactive. A subsequent
+reliable transient-local probe delivered the real configured geometry from
+the current map executable/library; `/map` is not required for this wall-timer
+publication. Native startup tests establish that separately. The docking
+loader failure was traced to case-insensitive Windows bind lookup: Webots'
+`libController.so` shadowed ROS's `libcontroller.so`. Corrected loader order
+resolves docking symbols while preserving Webots dependencies. A strict
+per-node lifecycle retry remains in progress after correcting a non-executable
+temporary mount. The existing E2E harness has not been invoked. Controller
+activation is simulated-hardware startup evidence, not a mowing, docking or
+recovery mission.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
