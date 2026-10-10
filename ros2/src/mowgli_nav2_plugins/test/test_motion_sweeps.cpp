@@ -283,12 +283,20 @@ TEST(MotionSweeps, LargeRecordedPolygonPermitsStationaryCompletePivot)
   for (const double omega : {0.0, 1e-12, 0.2})
   {
     const auto began = std::chrono::steady_clock::now();
+    double max_us = 0;
     for (int i = 0; i < 100; ++i)
+    {
+      const auto tick = std::chrono::steady_clock::now();
       ASSERT_TRUE(geometry->permits({0, 0, 0}, kBody, 0.2, omega, 0.1, true));
+      max_us = std::max(max_us,
+                        std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() -
+                                                                  tick)
+                            .count());
+    }
     const auto duration =
         std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - began).count();
     std::cout << "translation polygon_vertices=32768 omega=" << omega
-              << " checks=100 mean_us=" << duration / 100 << '\n';
+              << " checks=100 mean_us=" << duration / 100 << " max_us=" << max_us << '\n';
   }
 }
 
@@ -347,12 +355,20 @@ TEST(MotionSweeps, DenselySubdividedAxisAlignedPolygonPreservesInteriorAndEdgePr
   for (const Pose pose : {Pose{0, 0, 0}, Pose{0, -10, 0}})
   {
     const auto began = std::chrono::steady_clock::now();
+    double max_us = 0;
     for (int i = 0; i < 100; ++i)
+    {
+      const auto tick = std::chrono::steady_clock::now();
       ASSERT_TRUE(geometry->permits(pose, kBody, 0.2, 0, 0.1, true));
+      max_us = std::max(max_us,
+                        std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() -
+                                                                  tick)
+                            .count());
+    }
     const auto duration =
         std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - began).count();
     std::cout << "axis-aligned translation polygon_vertices=32768 y=" << pose.y
-              << " checks=100 mean_us=" << duration / 100 << '\n';
+              << " checks=100 mean_us=" << duration / 100 << " max_us=" << max_us << '\n';
   }
   EXPECT_FALSE(geometry->permits({9.99, 0, 0}, kBody, 0.2, 0, 0.1, true));
 }
