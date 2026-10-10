@@ -601,6 +601,17 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
   )
 
+  # ---- test_undock_resume ----
+  # Pure: reverse left of an undock stopped mid-way (Pause / emergency).
+  ament_add_gtest(test_undock_resume
+    test/test_undock_resume.cpp
+  )
+
+  target_include_directories(test_undock_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_dig_skip ----
   # Pure: session dig skip zones (which coverage poses are skipped around a
   # recorded dig point) + the wait for the bridge's bounded reverse.

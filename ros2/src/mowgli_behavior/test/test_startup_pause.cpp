@@ -50,7 +50,10 @@ struct Observations
   int held_halts = 0;
   int stop_starts = 0;
   int home_starts = 0;
+  /// Per leaf tag, and per "tag#occurrence" for leaves that appear twice.
   std::map<std::string, int> starts;
+  /// "tag#occurrence" leaves that report FAILURE.
+  std::set<std::string> failing;
 };
 
 // External services, clocks and motion are controlled here. The production
@@ -74,6 +77,7 @@ public:
   BT::NodeStatus onStart() override
   {
     ++observations_->starts[tag_];
+    ++observations_->starts[key()];
     if (held())
       ++observations_->held_starts;
     if (tag_ == "StopMoving" && observations_->context->current_command == 8)
@@ -95,6 +99,11 @@ public:
   }
 
 private:
+  std::string key() const
+  {
+    return tag_ + "#" + std::to_string(occurrence_);
+  }
+
   bool held() const
   {
     return tag_ == observations_->stage.tag && occurrence_ == observations_->stage.occurrence;
@@ -107,6 +116,15 @@ private:
       return Status::RUNNING;
     if (tag_ == "StopMoving" && observations_->context->current_command == 8)
       return Status::RUNNING;
+    if (observations_->failing.count(key()))
+      return Status::FAILURE;
+    // The undock bookkeeping the resume branch keys on, as the real nodes do.
+    if (tag_ == "RecordUndockStart")
+      observations_->context->undock_start_recorded = true;
+    if (tag_ == "CalibrateHeadingFromUndock")
+      observations_->context->undock_start_recorded = false;
+    if (tag_ == "IsUndockInterrupted")
+      return observations_->context->undock_start_recorded ? Status::SUCCESS : Status::FAILURE;
     if (tag_ == "IsCharging")
     {
       // The mowing contact debounce is irrelevant to startup and must not
@@ -319,6 +337,67 @@ TEST_P(StartupPauseTest, ContinuedStartDoesNotReplaySuccessfulStartupSteps)
   EXPECT_EQ(observations->held_ticks, 3);
   EXPECT_EQ(observations->starts, starts);
 }
+
+// Pause during the undock reverse, after the robot has left the contacts, then
+// Play: the robot still faces the dock, so the tree must finish the reverse —
+// never run SeedYawFromMotion's 1 m forward drive back onto the dock.
+class InterruptedUndockTest : public StartupPauseTest
+{
+protected:
+  BT::Tree pauseMidUndockThenPlay()
+  {
+    auto tree = makeTree();
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+    EXPECT_EQ(observations->held_starts, 1);
+    EXPECT_TRUE(observations->context->undock_start_recorded);
+    observations->context->current_command = 8;
+    tree.tickOnce();
+    EXPECT_EQ(observations->held_halts, 1);
+    observations->stage.charging = false;
+    observations->context->current_command = 1;
+    // MainLogic first deselects the stop branch, then re-enters mowing.
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+    tree.tickOnce();
+    return tree;
+  }
+};
+
+TEST_P(InterruptedUndockTest, PlayFinishesTheReverseInsteadOfDrivingForward)
+{
+  auto tree = pauseMidUndockThenPlay();
+  EXPECT_EQ(observations->starts["SeedYawFromMotion"], 0);
+  EXPECT_EQ(observations->starts["BackUp#1"], 1) << "the dock-side reverse is not restarted";
+  EXPECT_EQ(observations->starts["BackUp#2"], 1) << "ResumeInterruptedUndock's reverse";
+  EXPECT_EQ(observations->starts["CalibrateHeadingFromUndock#2"], 1);
+  EXPECT_FALSE(observations->context->undock_start_recorded);
+  EXPECT_EQ(observations->starts["ClearCommand"], 0);
+  EXPECT_EQ(observations->starts["GetNextUnmowedArea"], 1);
+}
+
+TEST_P(InterruptedUndockTest, NothingLeftToReverseStillCalibratesWithoutMoving)
+{
+  observations->failing.insert("RemainingUndockDistance#1");
+  auto tree = pauseMidUndockThenPlay();
+  EXPECT_EQ(observations->starts["SeedYawFromMotion"], 0);
+  EXPECT_EQ(observations->starts["BackUp#2"], 0);
+  EXPECT_EQ(observations->starts["CalibrateHeadingFromUndock#2"], 1);
+  EXPECT_EQ(observations->starts["GetNextUnmowedArea"], 1);
+}
+
+TEST_P(InterruptedUndockTest, AFailedResumeEndsInUndockFailedNotTheForwardSeed)
+{
+  observations->failing.insert("BackUp#2");
+  auto tree = pauseMidUndockThenPlay();
+  EXPECT_EQ(observations->starts["BackUp#2"], 1);
+  EXPECT_EQ(observations->starts["SeedYawFromMotion"], 0);
+  EXPECT_EQ(observations->starts["GetNextUnmowedArea"], 0);
+  EXPECT_GE(observations->starts["ClearCommand"], 1);
+  EXPECT_EQ(observations->context->current_command, 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(UndockReverse,
+                         InterruptedUndockTest,
+                         ::testing::Values(Stage{"BackUp", 1, true, true, true}));
 
 INSTANTIATE_TEST_SUITE_P(ProductionStartupStages,
                          StartupPauseTest,

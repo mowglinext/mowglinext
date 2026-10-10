@@ -645,6 +645,10 @@
                  cycle does not re-trigger the forward drive mid-session. -->
             <Sequence name="NotDockedBranch">
               <Inverter><IsCharging/></Inverter>
+              <!-- Never while an undock reverse is unfinished: the robot
+                   then still faces the dock, and this 1 m FORWARD drive
+                   would push it back onto it (ResumeInterruptedUndock). -->
+              <Inverter><IsUndockInterrupted/></Inverter>
               <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
               <SeedYawFromMotion distance_m="1.0" speed_ms="0.2" timeout_sec="30.0"/>
               <!-- Drop stale obstacle marks projected during the pre-seed
@@ -712,6 +716,27 @@
               <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
               <!-- Clear costmaps again after undock — dock structure must be
                    cleared before navigation starts. -->
+              <ClearCostmap/>
+            </Sequence>
+            <!-- Off the dock with the undock reverse unfinished (Pause,
+                 emergency or a failed BackUp after RecordUndockStart):
+                 finish the reverse — only what is left of undock_distance
+                 from the recorded start — then calibrate as a normal undock.
+                 A failure here takes UndockFailed, never the forward seed. -->
+            <Sequence name="ResumeInterruptedUndock">
+              <Inverter><IsCharging/></Inverter>
+              <IsUndockInterrupted/>
+              <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
+              <Fallback>
+                <Inverter>
+                  <RemainingUndockDistance undock_distance="{undock_distance}"
+                                           remaining="{undock_remaining}"/>
+                </Inverter>
+                <BackUp backup_dist="{undock_remaining}" backup_speed="{undock_speed}"/>
+              </Fallback>
+              <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
+              <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
+              <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
               <ClearCostmap/>
             </Sequence>
             <!-- Undock failed — abort -->
