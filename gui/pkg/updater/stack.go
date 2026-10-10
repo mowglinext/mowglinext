@@ -457,10 +457,10 @@ func validateStackMounts(current, target composeConfig, old, next map[string]man
 		}
 		names[s.ContainerName] = true
 		for _, v := range s.Volumes {
-			if !v.ReadOnly && !known[mountKey(v)] {
+			if !v.ReadOnly && !known[mountKey(v)] && !isDeviceMount(v.Source, v.Target) {
 				return fmt.Errorf("%s adds writable storage at %s; explicit data/layout migration required", name, v.Target)
 			}
-			if _, core := Services[name]; !core && !v.ReadOnly && v.Target != "/db" && v.Target != "/mowgli_config" && v.Target != "/ros2_ws/maps" && v.Target != "/ros2_ws/config" {
+			if _, core := Services[name]; !core && !v.ReadOnly && !writableMountCovered(v.Source, v.Target) {
 				return fmt.Errorf("%s requires a backup contract for writable mount %s", name, v.Target)
 			}
 		}

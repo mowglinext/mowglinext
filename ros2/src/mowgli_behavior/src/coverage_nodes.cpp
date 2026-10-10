@@ -24,6 +24,7 @@
 
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/area_coverage_lines.hpp"
+#include "mowgli_behavior/blocked_stretch.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/coverage_preview.hpp"
@@ -749,6 +750,18 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   {
     coverage_plan_pub_->publish(goal.path);
   }
+
+  // Once this unit is dispatched, a halt before the controller reports its
+  // first progress update must resume from this unit's start. The previous
+  // unit's cursor can belong to a later sub-path when an earlier transit had
+  // failed; leaving it in place would make an immediate preempt persist stale
+  // progress from that later unit.
+  const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
+  const std::size_t trim_offset = (swath_idx_ < swath_resume_start_indices_.size())
+                                      ? swath_resume_start_indices_[swath_idx_]
+                                      : 0;
+  ctx->area_resume_pose_index[area_idx_] = base + trim_offset;
+  saveCoverageResumeState(*ctx);
 
   follow_handle_.reset();
 
@@ -1487,6 +1500,14 @@ BT::NodeStatus FollowStrip::onRunning()
                                   {prior_stuck_point.x, prior_stuck_point.y});
         }
       }
+      // issue #607: the detour budget is spent and its last resume transit
+      // failed. Skip only the blocked stretch, not the rest of the unit — a
+      // unit can carry every headland ring of the lawn (field 2026-10-10: a
+      // 4 m hairpin against a hedge dropped 382 m of a 1016 m plan here).
+      if (!start_pose_blocked && had_detour_in_flight && resumeUnitPastBlockedStretch(ctx))
+      {
+        return BT::NodeStatus::RUNNING;
+      }
       ++swaths_skipped_;
       return advance();
     }
@@ -1598,6 +1619,22 @@ BT::NodeStatus FollowStrip::onRunning()
     // the per-segment budget is not spent — otherwise fall through to the
     // existing skip. tryStartDetour reuses the inter-segment transit machinery,
     // so the blade is provably OFF for the crossing (structural gap guard).
+    // The detour budget bounds ONE obstacle stretch, not a whole unit: a unit
+    // can be hundreds of metres of hedge-side ring (issue #607). Real progress
+    // since the last detour / resume (the unit is trimmed at each, so
+    // path_progress_idx_ counts only what was driven since) refills it.
+    if (detours_used_ > 0 && swath_idx_ < swaths_.size() &&
+        pathLengthBetween(swaths_[swath_idx_].poses, 0, path_progress_idx_) >= kDetourBudgetResetM)
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowStrip: unit %zu/%zu drove >= %.0f m since the last detour — detour "
+                  "budget refilled (%zu used before)",
+                  swath_idx_ + 1,
+                  swaths_.size(),
+                  kDetourBudgetResetM,
+                  detours_used_);
+      detours_used_ = 0;
+    }
     if (tryStartDetour(ctx))
     {
       follow_handle_.reset();
@@ -2231,6 +2268,59 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
   // obstacle. The transit_active_ handler then re-dispatches FollowCoveragePath
   // (blade back on) for the trimmed remainder. If that transit itself fails, the
   // handler skips the unit — the same fail-safe as any inter-segment transit.
+  swath_goal_sent_ = false;
+  transit_pending_ = false;
+  transit_active_ = false;
+  return sendCurrentSwath(ctx);
+}
+
+bool FollowStrip::resumeUnitPastBlockedStretch(const std::shared_ptr<BTContext>& ctx)
+{
+  if (swath_idx_ >= swaths_.size())
+  {
+    return false;
+  }
+  const auto& poses = swaths_[swath_idx_].poses;
+  const std::size_t unit_poses = poses.size();
+  // The unit was trimmed at the failed target, so poses[0] is that target and
+  // the robot reached nothing of it.
+  const std::optional<std::size_t> idx =
+      resumePastBlockedStretch(poses, 0, ctx->session_failed_transit_targets);
+  const std::size_t resume_idx = idx.value_or(unit_poses);
+  const UnitResumeDecision resume =
+      DecideUnitResume(unit_poses, 0, resume_idx, unit_resumes_without_progress_);
+  unit_resumes_without_progress_ = resume.consecutive;
+  if (!resume.resume)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: unit %zu/%zu — no resume past the blocked stretch (%s, %zu resumes "
+                "without progress) — skipping the rest of the unit",
+                swath_idx_ + 1,
+                swaths_.size(),
+                idx.has_value() ? "no-progress budget spent or too little left"
+                                : "nothing clear left",
+                unit_resumes_without_progress_);
+    return false;
+  }
+
+  const double gap_m = pathLengthBetween(poses, 0, resume_idx);
+  skipped_tally_.addDetour(resume_idx, gap_m);
+  const geometry_msgs::msg::Point blocked_target = poses.front().pose.position;
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "FollowStrip: unit %zu/%zu — detours exhausted on this stretch; skipping %zu poses / "
+              "%.2f m past it and resuming the rest of the unit (%zu poses, no-progress resumes: "
+              "%zu)",
+              swath_idx_ + 1,
+              swaths_.size(),
+              resume_idx,
+              gap_m,
+              unit_poses - resume_idx,
+              unit_resumes_without_progress_);
+  trimUnitAt(ctx, resume_idx);
+  // Book this as a detour leg too: if its transit fails, the failure handler
+  // records the target, comes back here and moves further on, bounded by the
+  // no-progress budget above.
+  last_detour_stuck_point_ = blocked_target;
   swath_goal_sent_ = false;
   transit_pending_ = false;
   transit_active_ = false;

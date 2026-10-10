@@ -52,6 +52,23 @@ def _controller_section(params: dict) -> dict:
     return params["controller_server"]["ros__parameters"]
 
 
+@pytest.mark.parametrize("overlay", ["nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"])
+def test_transit_authorization_and_explicit_recovery_are_separate(overlay: str) -> None:
+    params = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml(overlay))
+    planner = params["planner_server"]["ros__parameters"]
+    assert planner["planner_plugins"] == ["GridBased", "BoundaryRecovery"]
+    assert planner["GridBased"]["plugin"] == "mowgli_nav2_plugins/AuthorizedTransitPlanner"
+    assert planner["GridBased"]["downsample_costmap"] is False
+    assert planner["GridBased"]["tolerance"] == 0.0
+    assert planner["BoundaryRecovery"]["plugin"] == "nav2_smac_planner::SmacPlanner2D"
+    trees = os.path.join(os.path.dirname(__file__), "..", "..", "mowgli_behavior", "trees")
+    for filename in ("navigate_to_pose.xml", "navigate_to_pose_transit.xml"):
+        with open(os.path.join(trees, filename), encoding="utf-8") as stream:
+            assert "BoundaryRecovery" not in stream.read()
+    with open(os.path.join(trees, "navigate_inside_boundary.xml"), encoding="utf-8") as stream:
+        assert 'planner_id="BoundaryRecovery"' in stream.read()
+
+
 # The coverage goal-checker was migrated off SimpleGoalChecker/StoppedGoalChecker
 # (commit 4bae0567) to PathProgressGoalChecker. The old "xy_goal_tolerance must
 # be <= mower_width" and "stateful must be true" guards belonged to the
@@ -1475,7 +1492,7 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
     order — flipping it back makes every coverage line next to a drawn obstacle
     un-plannable again."""
     for loader, first in ((_load_params, "obstacle_layer"),
-                          (_load_no_lidar_params, "static_layer")):
+                          (_load_no_lidar_params, "fleet_layer")):
         gc = loader()["global_costmap"]["global_costmap"]["ros__parameters"]
         plugins = gc["plugins"]
         # Source layers first (the no-LiDAR variant also carries the fleet
@@ -1488,6 +1505,22 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
         )
         lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
         assert "keepout_filter" not in lc["plugins"]  # Invariant 5
+
+
+def test_global_grid_is_garden_sized_with_bounded_recent_sources() -> None:
+    for loader, source in ((_load_params, "obstacle_layer"),
+                           (_load_no_lidar_params, "fleet_layer")):
+        gc = loader()["global_costmap"]["global_costmap"]["ros__parameters"]
+        lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
+        assert gc["rolling_window"] is False
+        assert lc["rolling_window"] is True
+        assert gc["resolution"] == GLOBAL_COSTMAP_RESOLUTION_M == 0.08
+        assert gc["keepout_filter"]["plugin"] == "mowgli_nav2_plugins::GardenKeepoutLayer"
+        assert gc["keepout_filter"]["max_cells"] == 4000000
+        assert gc[source]["plugin"] == "mowgli_nav2_plugins::RecentObstacleLayer"
+        for name in gc[source]["observation_sources"].split():
+            assert 0 < gc[source][name]["observation_persistence"] <= 2.0
+        assert "static_layer" not in gc["plugins"]
 
 
 def test_global_costmap_resolution_matches_the_launch_constant() -> None:
@@ -1722,7 +1755,9 @@ def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
         assert len(found) == 1, f"{cm}: expected exactly one fleet source"
         layer, _, src = found[0]
         assert layer == "fleet_layer"
-        assert params[layer]["plugin"] == "nav2_costmap_2d::ObstacleLayer"
+        expected = ("mowgli_nav2_plugins::RecentObstacleLayer" if cm == "global_costmap"
+                    else "nav2_costmap_2d::ObstacleLayer")
+        assert params[layer]["plugin"] == expected
         assert src["marking"] is True and src["clearing"] is False
         plugins = params["plugins"]
         assert plugins.index("fleet_layer") < plugins.index("inflation_layer"), (
@@ -1730,7 +1765,9 @@ def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
         )
     local = merged["local_costmap"]["local_costmap"]["ros__parameters"]["fleet_layer"]
     glob = merged["global_costmap"]["global_costmap"]["ros__parameters"]["fleet_layer"]
-    assert local == glob, "the two fleet_layer copies in nav2_params_no_lidar.yaml drifted apart"
+    assert {k: v for k, v in local.items() if k != "plugin"} == {
+        k: v for k, v in glob.items() if k != "plugin"
+    }, "local/global fleet observation configurations drifted apart"
 
 
 def test_no_lidar_collision_monitor_stops_for_fleet_peers_without_a_stale_stop() -> None:
