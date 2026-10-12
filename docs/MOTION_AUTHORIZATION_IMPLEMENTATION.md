@@ -328,6 +328,24 @@ count is claimed without validating that alignment. Full attempt-14h logs
 and monitor/pose data are retained under task-owned D: scratch. No physical
 robot or shared-service mission was run.
 
+Further verification uses a corrected simulation fixture: the same 54 m2 lawn
+is shifted to `[-4.5,4.5] x [0.8,6.8]`, with a recorded navigation rectangle
+`[-2.2,1.0] x [-1.0,1.8]` connecting origin dock/staging to the lawn. The
+synthetic charging disk and every production charging/blade guard remain
+unchanged. This geometry lives in the existing simulation scenario YAML;
+real-robot map defaults are unaffected. First coverage poses remain on the
+lawn, with blade-off Nav2 ingress rather than FTC coverage at the dock.
+
+The no-LiDAR observer now uses the actual retained full-plan topic and stamped
+post-mux command type. It requires observed undock/plan/mow/dock phases,
+completed target paths without skips, actual docked charging, and the stated
+median tracking threshold. `COVERAGE_INCOMPLETE` remains a failure even when
+path counters later report completion. Timeout and signal termination preserve
+the report's failure status. FTC rejection diagnostics record the actual
+rejected pose/Twist and checked sweep; their geometry fingerprint is evidence
+correlation only, not another permission identity. These changes prepare a new
+mission; they do not establish its completion or whole-system safety.
+
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
