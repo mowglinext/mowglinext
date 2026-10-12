@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/mowglinext/mowglinext/pkg/buildinfo"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"golang.org/x/sys/execabs"
@@ -83,6 +84,9 @@ func (fp *FirmwareProvider) FlashFirmware(writer io.Writer, config types.Firmwar
 		return xerrors.Errorf("invalid firmwareSource %q (want %q or %q)",
 			config.FirmwareSource, FirmwareSourcePrebuilt, FirmwareSourceCustom)
 	}
+	if err := validateFirmwareTargetSelection(config.FirmwareSelectionModel, config.BoardType, config.PanelType, config.FirmwareTarget); err != nil {
+		return err
+	}
 	configJson, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -115,6 +119,8 @@ func (fp *FirmwareProvider) FlashFirmware(writer io.Writer, config types.Firmwar
 }
 
 func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareConfig) error {
+	progress := newFlashProgress(writer, customFlashStages)
+	progress.enter(flashStageClone)
 	_, _ = writer.Write([]byte("------> Cloning repository " + config.Repository + "@" + config.Branch + "...\n"))
 	//Clone git repository, checkout branch, build board.h, build firmware with platformio, flash firmware with platformio
 	referenceName := plumbing.ReferenceName("refs/heads/" + config.Branch)
@@ -145,6 +151,7 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 	}
 	pioProjectDir := os.TempDir() + "/mowgli/" + firmwareDir + "/stm32/ros_usbnode"
 	//Build board.h
+	progress.enter(flashStageConfigure)
 	_, _ = writer.Write([]byte("------> Building board.h...\n"))
 	boardTemplated, err := fp.buildBoardHeader(pioProjectDir+"/include/board.h.template", config)
 	if err != nil {
@@ -158,13 +165,11 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> board.h built\n"))
 	//Build firmware
+	progress.enter(flashStageBuild)
 	_, _ = writer.Write([]byte("------> Building firmware...\n"))
-	pioEnv := "Yardforce500"
-	switch config.BoardType {
-	case "BOARD_YARDFORCE500B":
-		pioEnv = "Yardforce500B"
-	case "BOARD_LUV1000RI":
-		pioEnv = "LUV1000RI"
+	pioEnv, err := firmwareEnvironment(config.BoardType, config.FirmwareTarget)
+	if err != nil {
+		return err
 	}
 	// BUILD ONLY — deliberately not `-t upload`. PlatformIO's uploader forces
 	// `transport select swd`, which excludes ST-Link V2 dongles without recent
@@ -188,6 +193,7 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 		_, _ = writer.Write([]byte("------> Build produced no firmware.elf at " + elfPath + "\n"))
 		return xerrors.Errorf("firmware.elf not found after build: %w", statErr)
 	}
+	progress.enter(flashStageFlash)
 	_, _ = writer.Write([]byte("------> Flashing firmware (openocd program+verify)...\n"))
 	cmd = execabs.Command("/bin/bash", "-c", openocdProgramCmd(config.BoardType, elfPath))
 	cmd.Stdout = writer
@@ -214,6 +220,8 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 		return xerrors.Errorf("invalid firmware file: %q", config.File)
 	}
 
+	progress := newFlashProgress(writer, vermutFlashStages)
+	progress.enter(flashStageDownload)
 	_, _ = writer.Write([]byte("------> Downloading firmware...\n"))
 	cmd := execabs.Command("/bin/bash", "-c", "wget -O "+os.TempDir()+"/firmware.zip "+config.File)
 	cmd.Stdout = writer
@@ -225,6 +233,7 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> Firmware downloaded\n"))
 
+	progress.enter(flashStageUnzip)
 	_, _ = writer.Write([]byte("------> Unzipping firmware...\n"))
 	cmd = execabs.Command("/bin/bash", "-c", "unzip -o "+os.TempDir()+"/firmware.zip -d "+os.TempDir()+"/firmware")
 	cmd.Stdout = writer
@@ -236,6 +245,7 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> Firmware unzipped\n"))
 
+	progress.enter(flashStageFlash)
 	_, _ = writer.Write([]byte("------> Flashing firmware...\n"))
 	// Flash over the ST-Link/V2 USB dongle (interface/stlink.cfg), the same
 	// transport the proven `platformio run -t upload` path uses. Do NOT bit-bang
@@ -288,6 +298,59 @@ func openocdTargetCfg(board string) string {
 	}
 }
 
+// firmwareEnvironment resolves the custom-build environment. The explicit
+// target matters for variants such as RM1000, which share an MCU board profile
+// with YardForce500B but require different compile-time behavior.
+func firmwareEnvironment(board, target string) (string, error) {
+	if target == "" {
+		switch board {
+		case "BOARD_YARDFORCE500B":
+			return "Yardforce500B", nil
+		case "BOARD_LUV1000RI":
+			return "LUV1000RI", nil
+		default:
+			return "Yardforce500", nil
+		}
+	}
+	allowed := map[string]string{
+		"Yardforce500":  "BOARD_YARDFORCE500",
+		"Yardforce500B": "BOARD_YARDFORCE500B",
+		"BiltemaRM1000": "BOARD_YARDFORCE500B",
+		"LUV1000RI":     "BOARD_LUV1000RI",
+	}
+	wantBoard, ok := allowed[target]
+	if !ok {
+		return "", xerrors.Errorf("unsupported firmware target %q", target)
+	}
+	if board != wantBoard {
+		return "", xerrors.Errorf("firmware target %q requires board %q, got %q", target, wantBoard, board)
+	}
+	return target, nil
+}
+
+// requireExplicitRM1000Target prevents targetless RM1000 configs from falling
+// back to the ordinary Yardforce500B environment or its prebuilt binary.
+func validateFirmwareTargetSelection(model, board, panel, target string) error {
+	if model == "BiltemaRM1000" && target != "BiltemaRM1000" {
+		return xerrors.Errorf("Biltema RM1000 requires the explicit and exact BiltemaRM1000 firmware target, got %q", target)
+	}
+	if target == "BiltemaRM1000" {
+		// CUSTOM represents user-defined mower hardware, so an expert can
+		// deliberately select this target for a custom-configured RM1000.
+		// A known, named non-RM1000 model must never route to RM1000 firmware.
+		if model != "" && model != "BiltemaRM1000" && model != "CUSTOM" {
+			return xerrors.Errorf("BiltemaRM1000 firmware is incompatible with mower model %q", model)
+		}
+		if board != "BOARD_YARDFORCE500B" {
+			return xerrors.Errorf("BiltemaRM1000 firmware requires board BOARD_YARDFORCE500B, got %q", board)
+		}
+		if panel != "PANEL_TYPE_YARDFORCE_900_ECO" {
+			return xerrors.Errorf("BiltemaRM1000 firmware requires panel PANEL_TYPE_YARDFORCE_900_ECO, got %q", panel)
+		}
+	}
+	return nil
+}
+
 // flashPrebuilt is the default new-user path: resolve the prebuilt binary for
 // the selected board from the release manifest, download + sha256-verify it,
 // SWD-flash it with openocd (program+verify+reset at the STM32 flash base), then
@@ -299,14 +362,21 @@ func openocdTargetCfg(board string) string {
 //  3. post-flash protocol/version check vs the manifest (the wrong-for-board net,
 //     the strongest available since the firmware carries no board self-ID).
 func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.FirmwareConfig) error {
+	progress := newFlashProgress(writer, prebuiltFlashStages)
+	progress.enter(flashStageManifest)
 	_, _ = writer.Write([]byte("------> Fetching firmware manifest...\n"))
-	manifest, err := fetchFirmwareManifest(DefaultFirmwareManifestURL)
+	manifest, source, err := fetchInstallFirmwareManifest(buildinfo.Current().Version)
 	if err != nil {
 		_, _ = fmt.Fprintf(writer, "------> Error fetching manifest: %v\n", err)
 		return xerrors.Errorf("fetching firmware manifest: %w", err)
 	}
+	if source.OwnRelease {
+		_, _ = fmt.Fprintf(writer, "------> Using the firmware of this installation's release %s\n", source.Release)
+	} else {
+		_, _ = fmt.Fprintf(writer, "------> This installation's release has no firmware attached: using the latest stable release %s\n", source.Release)
+	}
 
-	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType)
+	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType, config.FirmwareTarget)
 	if err != nil {
 		_, _ = fmt.Fprintf(writer, "------> %v — use the Expert build path for this board.\n", err)
 		return xerrors.Errorf("resolving prebuilt firmware: %w", err)
@@ -315,6 +385,7 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 		entry.File, entry.Board, entry.ProtocolVersion, entry.FwVersion)
 
 	binPath := os.TempDir() + "/firmware_prebuilt.bin"
+	progress.enter(flashStageDownload)
 	_, _ = fmt.Fprintf(writer, "------> Downloading + verifying (sha256) %s...\n", entry.URL)
 	if err := downloadAndVerify(entry, binPath); err != nil {
 		_, _ = fmt.Fprintf(writer, "------> %v\n", err)
@@ -322,6 +393,7 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 	}
 	_, _ = writer.Write([]byte("------> Firmware downloaded and checksum verified\n"))
 
+	progress.enter(flashStageFlash)
 	_, _ = writer.Write([]byte("------> Flashing firmware (openocd program+verify)...\n"))
 	// Flash over the ST-Link/V2 USB dongle (interface/stlink.cfg), the same
 	// transport the proven `platformio run -t upload` path uses (platformio.ini:
@@ -341,6 +413,7 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 	}
 	_, _ = writer.Write([]byte("------> Firmware flashed and byte-verified\n"))
 
+	progress.enter(flashStageVerify)
 	fp.postFlashProtocolCheck(writer, entry)
 	return nil
 }
@@ -412,4 +485,40 @@ func (fp *FirmwareProvider) postFlashProtocolCheck(writer io.Writer, entry firmw
 	}
 	_, _ = fmt.Fprintf(writer, "------> OK: firmware verified — protocol %d, version %s, compatible.\n",
 		s.FirmwareProtocolVersion, s.FirmwareVersion)
+}
+
+// AvailableFirmware reports the prebuilt firmware a flash would install for the
+// saved board selection (gui.firmware.config), from the same manifest
+// flashPrebuilt uses, so the Updates page can offer a re-flash without the
+// onboarding wizard. Board is empty when no board was ever configured.
+func (fp *FirmwareProvider) AvailableFirmware() (types.FirmwareAvailability, error) {
+	var config types.FirmwareConfig
+	raw, err := fp.db.Get("gui.firmware.config")
+	if err == nil && len(raw) > 0 {
+		if err := json.Unmarshal(raw, &config); err != nil {
+			return types.FirmwareAvailability{}, xerrors.Errorf("reading saved firmware config: %w", err)
+		}
+	}
+	result := types.FirmwareAvailability{Board: config.BoardType, Panel: config.PanelType}
+	if config.BoardType == "" {
+		return result, nil
+	}
+	if err := validateFirmwareTargetSelection(config.FirmwareSelectionModel, config.BoardType, config.PanelType, config.FirmwareTarget); err != nil {
+		return result, nil
+	}
+	manifest, source, err := fetchInstallFirmwareManifest(buildinfo.Current().Version)
+	if err != nil {
+		return result, err
+	}
+	result.Release = source.Release
+	result.OwnRelease = source.OwnRelease
+	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType, config.FirmwareTarget)
+	if err != nil {
+		// No prebuilt for this board: the operator needs the expert path.
+		return result, nil
+	}
+	result.Available = true
+	result.FwVersion = entry.FwVersion
+	result.ProtocolVersion = entry.ProtocolVersion
+	return result, nil
 }

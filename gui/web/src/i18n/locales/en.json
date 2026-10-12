@@ -83,6 +83,15 @@
     "noContainers": "No Mowgli containers could be identified",
     "mainboard": "Mainboard firmware",
     "firmwareMeaning": "Compatibility is checked against the robot software's protocol. It does not mean the firmware is the latest release. Disconnected or stale values are last known readings.",
+    "firmwareAvailable": "Firmware {{version}} (protocol {{protocol}}) is available for this installation.",
+    "firmwareUpToDate": "The board runs the firmware of this installation ({{version}}).",
+    "firmwareFromLatestStable": "This installation's release carries no firmware: taken from the latest stable release {{release}}.",
+    "firmwareNoBoard": "No board has been selected yet: flash the firmware once from the onboarding to record it.",
+    "firmwareNoPrebuilt": "There is no prebuilt firmware for {{board}}: use the expert (compile from source) path of the onboarding.",
+    "firmwareCheckFailed": "Could not check the available firmware",
+    "firmwareRelease": "Firmware release",
+    "firmwareFlashNeedsDock": "Put the robot on its charger first: flashing reboots the board and stops the motors and the blade.",
+    "firmwareFlashVersion": "Flash firmware {{version}}",
     "protocol": "Protocol",
     "configuredModel": "Configured mower model",
     "boardRevision": "Board revision",
@@ -101,9 +110,35 @@
     "built": "Built at (UTC)",
     "architecture": "Architecture",
     "metadataUnavailable": "Image metadata is unavailable; the reference and state are still shown.",
-    "components": {"robot": "Robot software", "gui": "Web interface", "gps": "GPS", "lidar": "LiDAR", "mqtt": "MQTT", "watchtower": "Watchtower", "mavros": "MAVROS", "ntrip": "NTRIP", "vesc": "VESC", "tfluna-front": "Front TF-Luna", "tfluna-edge": "Edge TF-Luna"},
-    "containerStates": {"running": "Running", "exited": "Stopped", "created": "Created", "restarting": "Restarting", "paused": "Paused", "dead": "Dead", "removing": "Removing"},
-    "firmwareStates": {"waiting": "Waiting for live status", "disconnected": "Disconnected", "stale": "Status is stale", "compatible": "Protocol compatible", "incompatible": "Protocol incompatible"}
+    "components": {
+      "robot": "Robot software",
+      "gui": "Web interface",
+      "gps": "GPS",
+      "lidar": "LiDAR",
+      "mqtt": "MQTT",
+      "watchtower": "Watchtower",
+      "mavros": "MAVROS",
+      "ntrip": "NTRIP",
+      "vesc": "VESC",
+      "tfluna-front": "Front TF-Luna",
+      "tfluna-edge": "Edge TF-Luna"
+    },
+    "containerStates": {
+      "running": "Running",
+      "exited": "Stopped",
+      "created": "Created",
+      "restarting": "Restarting",
+      "paused": "Paused",
+      "dead": "Dead",
+      "removing": "Removing"
+    },
+    "firmwareStates": {
+      "waiting": "Waiting for live status",
+      "disconnected": "Disconnected",
+      "stale": "Status is stale",
+      "compatible": "Protocol compatible",
+      "incompatible": "Protocol incompatible"
+    }
   },
   "systemPower": {
     "title": "Host",
@@ -128,7 +163,8 @@
     "logs": "Logs",
     "onboarding": "Onboarding",
     "more": "More",
-    "close": "Close"
+    "close": "Close",
+    "setupShort": "Setup"
   },
   "pageMeta": {
     "home": {
@@ -275,15 +311,15 @@
     "returnToDock": "Return to dock",
     "cancel": "Cancel",
     "recordZone": "Record a zone",
-    "mowNextZone": "Resume / Mow",
-    "continue": "Resume",
+    "mowNextZone": "Resume mowing",
+    "continue": "Resume mowing",
     "pause": "Pause",
-    "disableEmergency": "Disable emergency stop",
-    "bladeForward": "Blade forward",
-    "bladeBackward": "Blade backward",
-    "bladeOff": "Blade stopped",
-    "start": "Start",
-    "resume": "Resume",
+    "disableEmergency": "Release emergency stop",
+    "bladeForward": "Start blade — forward",
+    "bladeBackward": "Start blade — reverse",
+    "bladeOff": "Stop blade",
+    "start": "Start mowing",
+    "resume": "Resume mowing",
     "resumeNow": "Resume now (skip charge)",
     "startFresh": "Start fresh",
     "emergencyStop": "Emergency stop",
@@ -296,6 +332,7 @@
     "stateAtBase": "At base",
     "stateIdle": "Idle",
     "stateCharging": "Charging",
+    "stateManualCharging": "Manually docked",
     "statePreflight": "Pre-flight",
     "stateLeavingBase": "Leaving base",
     "stateCalibration": "Calibration",
@@ -329,16 +366,48 @@
     "stateCoverageFailed": "Coverage failed"
   },
   "flashBoard": {
+    "boardBiltemaRM1000": "Mowgli - Biltema RM1000",
     "firmwareSourceTitle": "Firmware source",
+    "firmwareTargetTitle": "Firmware target",
+    "firmwareTargetTooltip": "Advanced: choose an exact firmware build target. Automatic keeps the target inferred from the mower model.",
     "firmwareSourcePrebuilt": "Prebuilt image (recommended)",
     "firmwareSourceCustom": "Custom — compile from source (expert)",
     "firmwareSourceTooltip": "'Prebuilt image' flashes the tested, checksum-verified binary for your board. 'Custom' compiles the firmware from the repository/branch below with the parameters in the expert section and flashes that instead.",
     "prebuiltInfoTitle": "We'll flash the prebuilt firmware for your model",
-    "prebuiltInfoDesc": "Pick your board and panel above, keep Firmware source on 'Prebuilt image', then Flash. The matching prebuilt, checksum-verified binary is downloaded and written — no compiling needed. Only choose 'Custom' if you know you need to build from source.",
+    "prebuiltInfoDesc": "Keep Firmware source on 'Prebuilt image', then Flash. The prebuilt, checksum-verified binary for the target above is downloaded and written — no compiling needed. Only choose 'Custom' if you know you need to build from source.",
     "noPrebuiltTitle": "No prebuilt firmware for this model yet",
     "noPrebuiltDesc": "There's no tested prebuilt binary for the selected board. Set Firmware source to 'Custom — compile from source' and fill in the expert section below to compile and flash it instead.",
     "selectionRequiredTitle": "Select a board and panel before flashing",
-    "selectionRequiredDesc": "The mower model may not identify the controller board. Choose the exact board and panel for your hardware; flashing stays disabled until both are selected.",
+    "selectionRequiredDesc": "Your mower model does not identify the controller board on its own. Choose the exact board and panel for your hardware; flashing stays disabled until both are selected.",
+    "targetTitle": "Hardware target",
+    "targetFromModel": "From your mower model ({{model}}). Change it only if your hardware differs.",
+    "targetSetManually": "Set manually — no longer follows the mower model.",
+    "targetFromSaved": "Restored from your last flash.",
+    "targetChange": "Change",
+    "targetOverrideTitle": "Overriding the hardware target",
+    "targetOverrideDesc": "The board and panel below were derived from your mower model. Only change them if you fitted a different controller board or panel; a wrong target flashes firmware that does not match the hardware.",
+    "showLog": "Show detailed log",
+    "stageStarting": "Starting…",
+    "stages": {
+      "manifest": "Locate firmware",
+      "download": "Download",
+      "clone": "Fetch sources",
+      "configure": "Configure",
+      "build": "Compile",
+      "unzip": "Unpack",
+      "flash": "Write to board",
+      "verify": "Verify"
+    },
+    "stageHints": {
+      "manifest": "Looking up the firmware release for this installation.",
+      "download": "Downloading the firmware and checking its checksum.",
+      "clone": "Cloning the firmware repository.",
+      "configure": "Generating board.h from your parameters.",
+      "build": "Compiling the firmware — this takes several minutes.",
+      "unzip": "Unpacking the firmware archive.",
+      "flash": "Writing and verifying the flash over SWD. Do not power off the robot.",
+      "verify": "Waiting about 30 s for the board to reboot and report its firmware version."
+    },
     "expertBuildLabel": "Expert: custom build parameters",
     "expertBuildAlertMessage": "Only used when Firmware source is 'Custom'",
     "expertBuildAlertDescription": "These settings compile firmware from source instead of flashing the tested prebuilt binary. Wrong values here can damage the battery or disable physical safety. They only take effect when Firmware source above is set to 'Custom — compile from source'.",
@@ -478,7 +547,7 @@
     "colStarted": "Started",
     "containers": "Containers",
     "refresh": "Refresh",
-    "temperature": "Temperature",
+    "temperature": "Temperature (°C)",
     "firmwareDebugTitle": "Debug Firmware",
     "firmwareDebugOffTitle": "Firmware diagnostics are disabled.",
     "firmwareDebugOffBody": "Enable the switch to ask the STM32 and hardware_bridge to emit firmware-only diagnostic lines.",
@@ -496,10 +565,10 @@
     "satellitesVisible": "Satellites visible",
     "satellitesTracked": "Satellites tracked",
     "verticalAccuracyM": "Vertical accuracy (m)",
-    "headingDeg": "GNSS heading (deg)",
-    "headingAccuracyDeg": "Heading accuracy (deg)",
-    "baselineAzimuthDeg": "Baseline azimuth (deg)",
-    "baselinePitchDeg": "Baseline pitch (deg)",
+    "headingDeg": "GNSS heading (°)",
+    "headingAccuracyDeg": "Heading accuracy (°)",
+    "baselineAzimuthDeg": "Baseline azimuth (°)",
+    "baselinePitchDeg": "Baseline pitch (°)",
     "baselineLengthM": "Baseline length (m)",
     "baselineSolutionStatus": "Baseline solution status",
     "correctionAgeS": "Correction age (s)",
@@ -509,17 +578,17 @@
     "xM": "X (m)",
     "yM": "Y (m)",
     "zM": "Z (m)",
-    "yawDeg": "Yaw (deg)",
-    "rollDeg": "Roll (deg)",
-    "pitchDeg": "Pitch (deg)",
+    "yawDeg": "Yaw (°)",
+    "rollDeg": "Roll (°)",
+    "pitchDeg": "Pitch (°)",
     "zDrift": "Z Drift",
     "flatCheck": "Flat Check",
     "flatCheckOk": "OK",
     "flatCheckDrift": "DRIFT",
     "fixType": "Fix Type",
     "gpsGnssTitle": "GPS / GNSS",
-    "latitude": "Latitude",
-    "longitude": "Longitude",
+    "latitude": "Latitude (°)",
+    "longitude": "Longitude (°)",
     "altitudeM": "Altitude (m)",
     "horizontalAccuracyM": "Horizontal accuracy (m)",
     "receiver": "Receiver",
@@ -557,7 +626,7 @@
     "lidarAnchorStateMapping": "Mapping",
     "lidarAnchorStateAnchoring": "Anchoring",
     "lidarAnchorShadowSuffix": "(shadow)",
-    "lidarAnchorSigma": "σ {{value}} m",
+    "lidarAnchorSigma": "σ (m) {{value}}",
     "lidarAnchorMapCells": "Map cells",
     "lidarAnchorSeeds": "seeds {{seeds}} · skipped {{skipped}}",
     "lidarAnchorVerdict": "Last verdict",
@@ -565,7 +634,7 @@
     "lidarAnchorVerdictRejectedScore": "Rejected (score)",
     "lidarAnchorVerdictRejectedSpread": "Rejected (spread)",
     "lidarAnchorVerdictRejectedDeadReckoning": "Rejected (dead reckoning)",
-    "lidarAnchorHitRatio": "hit ratio {{pct}}%",
+    "lidarAnchorHitRatio": "hit ratio (%) {{pct}}",
     "lidarAnchorFactors": "Anchor factors",
     "lidarAnchorFactorsHint": "applied to the graph",
     "lidarAnchorAccepted": "Accepted estimates",
@@ -574,18 +643,18 @@
     "lidarAnchorOdomRebases": "Odom rebases",
     "nodesInGraph": "Nodes in graph",
     "poseSigma": "Pose σ",
-    "yawSigma": "yaw ±{{value}}°",
+    "yawSigma": "yaw σ (°): {{value}}",
     "fusionGraphDescPart1": "GTSAM iSAM2 factor graph. Save persists nodes + scans to",
     "fusionGraphDescPart2": "Clear wipes the graph and waits for the next GPS fix or set_pose to re-initialize.",
     "fusionGraphTopicLabel": "Topic:",
-    "lastUpdateAgo": "· last update {{seconds}}s ago",
+    "lastUpdateAgo": "· message received {{seconds}} s ago",
     "headingSources": "Heading sources (fused by fusion_graph)",
     "filter": "Filter",
     "referenceSignal": "Reference signal for deltas below.",
     "cogGps": "COG (GPS)",
-    "deltaFilterCog": "Δ(filter−cog): {{value}}°",
+    "deltaFilterCog": "Δ(filter−cog) (°): {{value}}",
     "magnetometer": "Magnetometer",
-    "deltaFilterMag": "Δ(filter−mag): {{value}}°",
+    "deltaFilterMag": "Δ(filter−mag) (°): {{value}}",
     "colArea": "Area",
     "colCoverage": "Coverage",
     "colTotalCells": "Total Cells",
@@ -595,11 +664,11 @@
     "btState": "BT State",
     "state": "State",
     "subState": "Sub-state",
-    "battery": "Battery",
-    "voltage": "Voltage",
+    "battery": "Battery (%)",
+    "voltage": "Voltage (V)",
     "charging": "Charging",
-    "chargeCurrent": "Charge current",
-    "chargerVoltage": "Charger voltage",
+    "chargeCurrent": "Charge current (A)",
+    "chargerVoltage": "Charger voltage (V)",
     "emergency": "Emergency",
     "emergencyActive": "ACTIVE",
     "latched": "Latched",
@@ -620,18 +689,18 @@
     "subtitleRecoveryStuck": "Nav2 recovery running for {{duration}} — the robot may be stuck",
     "subtitleAlerts": "{{count}} active alert(s) — see details below",
     "verdictStuck": "Robot stuck?",
-    "mowProgressTitle": "Mowing progress",
+    "mowProgressTitle": "Mowing progress (%)",
     "noActiveMowing": "No mowing in progress",
     "currentAreaLabel": "Area",
     "subPathsLabel": "Sub-paths",
     "subPathsSkipped": "{{count}} skipped",
     "handPushTitle": "Stationary pushes",
-    "coverage": "Coverage",
+    "coverage": "Coverage (%)",
     "configurationCrossChecks": "Configuration Cross-checks",
     "noWarnings": "No warnings.",
     "dockPose": "Dock pose",
-    "datumLat": "Datum lat",
-    "datumLon": "Datum lon",
+    "datumLat": "Datum lat (°)",
+    "datumLon": "Datum lon (°)",
     "configPresent": "Config present",
     "calibrationStarted": "Calibration started",
     "calibrationStartedDesc": "Running 3 forward/back cycles plus optional dock pre-phase. This may take up to 2 minutes.",
@@ -654,29 +723,29 @@
     "calibratedAt": "Calibrated at",
     "samples": "Samples",
     "gyroBias": "Gyro bias (rad/s)",
-    "impliedPitchRoll": "Implied pitch/roll",
+    "impliedPitchRoll": "Implied pitch/roll (°)",
     "noImuCalibration": "No imu_calibration.txt yet — hardware_bridge will auto-calibrate on the next dock.",
     "magnetometerCalibration": "Magnetometer calibration",
     "disabled": "Disabled",
     "enableAndRun": "Enable & run",
     "magFusionOffPart1": "Magnetometer fusion is off. Enable ",
     "magFusionOffPart2": " on calibrate_imu_yaw_node to include the rotation phase.",
-    "angVelX": "Ang Vel X",
-    "angVelY": "Ang Vel Y",
-    "angVelZ": "Ang Vel Z",
-    "linAccX": "Lin Acc X",
-    "linAccY": "Lin Acc Y",
-    "linAccZ": "Lin Acc Z",
+    "angVelX": "Ang Vel X (rad/s)",
+    "angVelY": "Ang Vel Y (rad/s)",
+    "angVelZ": "Ang Vel Z (rad/s)",
+    "linAccX": "Lin Acc X (m/s²)",
+    "linAccY": "Lin Acc Y (m/s²)",
+    "linAccZ": "Lin Acc Z (m/s²)",
     "wheelOdometry": "Wheel Odometry",
     "linearVel": "Linear Vel (m/s)",
     "angularVel": "Angular Vel (rad/s)",
     "poseXM": "Pose X (m)",
     "poseYM": "Pose Y (m)",
     "perWheelEncoders": "Per-Wheel Encoders",
-    "frontLeft": "Front Left",
-    "frontRight": "Front Right",
-    "rearLeft": "Rear Left",
-    "rearRight": "Rear Right",
+    "frontLeft": "Front Left (rpm)",
+    "frontRight": "Front Right (rpm)",
+    "rearLeft": "Rear Left (rpm)",
+    "rearRight": "Rear Right (rpm)",
     "ticksWithDirection": "{{ticks}} ticks · {{direction}}",
     "directionForward": "↑ forward",
     "directionReverse": "↓ reverse",
@@ -696,7 +765,7 @@
     "escUnknown": "Unknown ({{code}})",
     "escTemp": "ESC Temp",
     "motorTemp": "Motor Temp",
-    "motorRpm": "Motor RPM",
+    "motorRpm": "Motor RPM (rpm)",
     "rpiPower": "RPi Power",
     "escPower": "ESC Power",
     "uiBoard": "UI Board",
@@ -712,6 +781,7 @@
     "sensors": "Sensors",
     "tabRobot": "Robot",
     "tabCalibration": "Calibration",
+    "tabParameters": "Advanced parameters",
     "calibrationCancel": "Cancel",
     "calibrationStatusErrorTitle": "Failed to load calibration status",
     "calibrationTimedOut": "Calibration timed out",
@@ -754,13 +824,19 @@
     "rosbagDeleteFailed": "Could not delete recording",
     "rosbagDeleteConfirmTitle": "Delete recording?",
     "rosbagDeleteConfirmBody": "This permanently deletes the recording {{name}} from the robot. This cannot be undone.",
-    "gpsWrongfix": "GPS wrong-fix rejects: {{count}}"
+    "gpsWrongfix": "GPS wrong-fix rejects: {{count}}",
+    "sourcePublication": "Producer publication (ROS clock): {{stamp}}. Receipt age is not sensor acquisition age.",
+    "sourceIdentityUnknown": "No producer timestamp. Sensor acquisition age is unknown.",
+    "sourceUnchanged": "Publication unchanged for {{seconds}} s",
+    "lidarNoEstimate": "No estimate yet"
   },
   "mowgliNextPage": {
     "headlineUntilHomePrefix": "Just ",
     "headlineMinutes": "{{value}} min",
     "headlineUntilHomeSuffix": " until home.",
     "headlineChargingPrefix": "Charging · ",
+    "headlineMowingPausedPrefix": "Mowing paused · ",
+    "headlineResumingMowing": "Resuming mowing…",
     "headlinePercent": "{{value}} %",
     "emergencyStop": "Emergency stop",
     "headlineIdlePrefix": "Mowgli is ",
@@ -776,6 +852,9 @@
     "sublineScanPaused": "LiDAR scan is temporarily stale. Blades are off; mowing resumes automatically when fresh scans return.",
     "activeZone": "active zone",
     "sublineCharging": "On the dock, {{current}} A coming in.",
+    "sublineChargeHold": "Resumes automatically when charging is complete.",
+    "sublineResumingMowing": "Leaving the dock to continue the mowing session.",
+    "sublineManualChargeHold": "Mowing is paused because the mower was docked manually. Take it off the dock before resuming.",
     "sublineEmergency": "Secure the area, then restart with the green button.",
     "sublineIdle": "Tap Play to start a mow, or let the schedule take over.",
     "emergencyConfirmBody": "This triggers the hardware emergency stop (blades + movement). Re-arm manually afterwards. Continue?",
@@ -1038,7 +1117,9 @@
     "revert": "Revert",
     "saveWithCount": "Save ({{count}} changes)",
     "saved": "Saved",
-    "unsavedChanges": "unsaved changes"
+    "unsavedChanges": "unsaved changes",
+    "searchResults": "Matching settings",
+    "technicalDetails": "Technical details"
   },
   "schedulePage": {
     "planning": "Planning",
@@ -1082,10 +1163,10 @@
     "cancel": "Cancel",
     "lastRun": "Last: {{value}}",
     "never": "Never",
-    "newRun": "New run",
+    "newRun": "Add disabled schedule",
     "pickAStarter": "Pick a starter",
-    "pickAStarterDescTap": "One tap to create a schedule. Tune the days, time and area afterwards.",
-    "pickAStarterDescClick": "One click to create a schedule. Tune the days, time and area afterwards.",
+    "pickAStarterDescTap": "Create a disabled schedule, review the days and time, then enable it.",
+    "pickAStarterDescClick": "Create a disabled schedule, review the days and time, then enable it.",
     "thisWeek": "This week",
     "activeSchedules": "active schedules",
     "schedules": "Schedules",
@@ -1094,19 +1175,36 @@
     "schedulesConfigured_other": "{{count}} schedules configured.",
     "lastDayTooltip": "At least one day must stay selected",
     "appliesToAllAreas": "Applies to all areas",
+    "areaDialogTitle": "Areas for schedule {{index}}",
+    "areaDialogHint": "Choose which area this schedule mows. A schedule mows one area or all of them.",
+    "allAreasOption": "All areas",
+    "allAreasOptionHint": "A normal start: every area in turn",
+    "areaFallback": "Area {{id}}",
+    "areaRemoved": "{{name}} (removed)",
+    "areaRemovedWarning": "This area no longer exists, so the schedule is skipped until you pick another one.",
+    "noAreasHint": "No mowing areas have been recorded yet.",
+    "chooseAreaAria": "Choose the area for schedule {{index}}",
+    "saveArea": "Save",
+    "blockStartArea": "start · {{area}}",
+    "overlapTitle": "Schedules overlap",
     "blockStartHint": "start · all areas",
     "createdDisabledTitle": "Schedule created (disabled)",
     "createdDisabledBody": "Review the time and days, then enable it.",
     "areaLabel": "Area {{index}}",
     "schedulesConfigured": "{{count}} schedules configured.",
     "rules": "Rules",
-    "rulesDescription": "Built-in safety behaviors — always active.",
+    "rulesDescription": "Saved robot settings. Restart-dependent changes may not yet be active on the robot.",
     "ruleRainAware": "Rain-aware",
     "ruleRainAwareHint": "pause if rain detected",
     "ruleAutoDockLow": "Auto-dock low",
-    "ruleAutoDockLowHint": "return at <20% battery",
+    "ruleAutoDockLowHint": "return below {{percent}}% battery",
     "on": "On",
-    "off": "Off"
+    "off": "Off",
+    "enableSchedule": "Enable schedule {{index}}",
+    "inactive": "Inactive",
+    "autoSaveHint": "Changes are saved automatically. Inactive schedules cannot start mowing.",
+    "startTime": "Scheduled start time",
+    "unknown": "Unknown"
   },
   "liveMapMini": {
     "noAreaYet": "No area recorded yet",
@@ -1125,7 +1223,7 @@
     "colCoverage": "Coverage",
     "colStatus": "Status",
     "rechargeTag": "{{count}}× recharge",
-    "heroTotalDistance": "Total distance",
+    "heroTotalDistance": "Recorded distance",
     "heroSinceInstall": "since install",
     "heroHoursActive": "Hours active",
     "heroSessionsCount_one": "{{count}} session",
@@ -1136,7 +1234,7 @@
     "heroRunsCompleted": "Runs completed",
     "heroAvgCoverage": "avg {{pct}}% coverage",
     "distancePerWeek": "Distance per week",
-    "last12Weeks": "Last 12 weeks (km)",
+    "last12Weeks": "Last 12 weeks (h)",
     "weekTooltip": "Week {{week}}: {{km}} km",
     "zoneCoverage": "Zone coverage",
     "areaLabel": "Area {{index}}",
@@ -1151,7 +1249,16 @@
     "noSessionsRecorded": "No mowing sessions recorded yet.",
     "heroSessionsCount": "{{count}} sessions",
     "heroCompletedCount": "{{count}} completed",
-    "sessionsRecorded": "{{count}} sessions recorded"
+    "sessionsRecorded": "{{count}} sessions recorded",
+    "recordedDistanceHint": "Recorded odometry; older sessions may be incomplete",
+    "noDistanceRecorded": "No distance recorded for these sessions",
+    "durationPerWeek": "Mowing time per week",
+    "weekDurationTooltip": "Week {{week}}: {{hours}} h",
+    "status": {
+      "completed": "Completed",
+      "aborted": "Interrupted",
+      "error": "Error"
+    }
   },
   "dashboardHome": {
     "statusMowing": "Mowing",
@@ -1327,7 +1434,10 @@
     "startMowing": "Start mowing",
     "pause": "Pause",
     "returnToBase": "Return to base",
-    "rearm": "Re-arm"
+    "rearm": "Re-arm",
+    "resumeNow": "Resume now",
+    "cancelMowing": "Cancel mowing",
+    "resumeAvailable": "Available from {{percent}}%"
   },
   "modeSegment": {
     "ecoLabel": "Eco",
@@ -1389,6 +1499,10 @@
       "label": "Charging",
       "friendly": "Charging the battery"
     },
+    "MANUAL_CHARGING": {
+      "label": "Manually docked",
+      "friendly": "Mowing paused on the dock"
+    },
     "PREFLIGHT_CHECK": {
       "label": "Pre-flight",
       "friendly": "Checks before starting"
@@ -1440,6 +1554,10 @@
     "CRITICAL_BATTERY_DOCKING": {
       "label": "Critical battery",
       "friendly": "Critical battery — returning to base"
+    },
+    "CRITICAL_BATTERY_CHARGING": {
+      "label": "Critical-battery charge",
+      "friendly": "Mowing paused while the battery recovers"
     },
     "CRITICAL_BATTERY_NAV_FAILED": {
       "label": "Return failed",
@@ -1500,19 +1618,35 @@
   },
   "mapToolbar": {
     "actionFailed": "Action failed",
+    "mowerAppearance": "Mower map image",
+    "mowerAppearanceUrdf": "URDF silhouette (automatic fallback)",
+    "mowerAppearanceGeneric": "Generic mower (approx.)",
+    "mowerAppearanceGenericAlt": "Unbranded green robotic mower with a rear stop button",
+    "mowerAppearanceBiltemaRm1000": "Biltema RM1000",
+    "mowerAppearanceBiltemaRm1000Alt": "Biltema RM1000 mower",
+    "dockAppearance": "Dock appearance",
+    "dockAppearanceMarker": "Existing dock marker",
+    "dockAppearanceGeneric": "Generic dock image (approx.)",
+    "dockAppearanceGenericAlt": "Generic visual dock approximation based on a cleaned RM1000 station photo",
+    "dockAppearanceBiltemaRm1000": "RM1000 dock (support sticker)",
+    "dockAppearanceBiltemaRm1000Alt": "Biltema RM1000 docking station with support sticker",
     "darkMap": "Dark map",
     "satellite": "Satellite",
+    "showObstacleClearance": "Show obstacle clearance preview",
+    "hideObstacleClearance": "Hide obstacle clearance preview",
+    "showCoveragePreview": "Show mowing lines",
+    "hideCoveragePreview": "Hide mowing lines",
     "flattenMap": "Flatten map",
     "tilt3dView": "Tilt 3D view",
     "areaRecording": "Area Recording",
-    "mowNextArea": "Resume / Mow",
-    "continue": "Resume",
-    "pause": "Pause",
+    "mowNextArea": "Resume mowing",
+    "continue": "Resume mowing",
+    "pause": "Pause mowing",
     "stopManualMowing": "Stop",
     "manualMowing": "Manual Mowing",
-    "bladeForward": "Blade Forward",
-    "bladeBackward": "Blade Backward",
-    "bladeOff": "Blade Off",
+    "bladeForward": "Start blade — forward",
+    "bladeBackward": "Start blade — reverse",
+    "bladeOff": "Stop blade",
     "backupMap": "Backup Map",
     "restoreMap": "Restore Map",
     "importFromOpenMower": "Import from OpenMower",
@@ -1520,14 +1654,19 @@
     "editMap": "Edit Map",
     "finishRecording": "Finish Recording",
     "cancelRecording": "Cancel Recording",
-    "start": "Start",
-    "home": "Home",
-    "emergencyOn": "Emergency On",
-    "emergencyOff": "Emergency Off",
+    "start": "Start mowing",
+    "home": "Return to dock",
+    "emergencyOn": "Emergency stop",
+    "emergencyOff": "Release emergency stop",
     "mowArea": "Mow area",
     "stopManual": "Stop",
     "manualMow": "Manual Mow",
-    "more": "More"
+    "more": "More",
+    "displayGroup": "Map display",
+    "motionGroup": "Robot movement",
+    "bladeGroup": "Blade controls",
+    "filesGroup": "Map files",
+    "emergencyActive": "Emergency stop active"
   },
   "resetMowingProgress": {
     "action": "Reset mowing progress",
@@ -1544,13 +1683,17 @@
     "actionFailed": "Action failed",
     "darkMap": "Dark map",
     "satellite": "Satellite",
+    "showObstacleClearance": "Show obstacle clearance preview",
+    "hideObstacleClearance": "Hide obstacle clearance preview",
+    "showCoveragePreview": "Show mowing lines",
+    "hideCoveragePreview": "Hide mowing lines",
     "areaRecording": "Area Recording",
-    "mowNextArea": "Resume / Mow",
-    "continue": "Resume",
-    "pause": "Pause",
-    "bladeForward": "Blade Forward",
-    "bladeBackward": "Blade Backward",
-    "bladeOff": "Blade Off",
+    "mowNextArea": "Resume mowing",
+    "continue": "Resume mowing",
+    "pause": "Pause mowing",
+    "bladeForward": "Start blade — forward",
+    "bladeBackward": "Start blade — reverse",
+    "bladeOff": "Stop blade",
     "backupMap": "Backup Map",
     "restoreMap": "Restore Map",
     "importFromOpenMower": "Import from OpenMower",
@@ -1560,20 +1703,20 @@
     "combine": "Combine",
     "subtract": "Subtract",
     "splitDrawLine": "Split (draw line)",
-    "emergencyOff": "Emergency Off",
-    "emergencyOn": "Emergency On",
+    "emergencyOff": "Release emergency stop",
+    "emergencyOn": "Emergency stop",
     "stop": "STOP",
     "save": "Save",
     "cancel": "Cancel",
     "undo": "Undo",
     "redo": "Redo",
     "drawPolygon": "Draw polygon",
-    "addShape": "Add shape",
+    "addShape": "Add",
     "delete": "Delete",
     "placeDock": "Place dock",
     "more": "More",
-    "start": "Start",
-    "home": "Home",
+    "start": "Start mowing",
+    "home": "Return to dock",
     "editMap": "Edit Map",
     "mowArea": "Mow area",
     "mow": "Mow",
@@ -1587,14 +1730,15 @@
     "undo": "Undo",
     "redo": "Redo",
     "drawPolygon": "Draw polygon",
-    "addShape": "Add shape",
+    "addShape": "Add",
     "deleteSelected": "Delete selected",
     "combine": "Combine (select 2+)",
     "subtract": "Subtract (select 2)",
     "split": "Split (select 1, draw line)",
     "editProperties": "Edit properties",
     "clickToPlaceDock": "Click on map to place dock",
-    "placeDockPoint": "Place dock point"
+    "placeDockPoint": "Place dock point",
+    "restoreBackup": "Restore a previous map"
   },
   "mapShapePicker": {
     "square": "Square",
@@ -1603,6 +1747,52 @@
     "size": "Size",
     "emoji": "Emoji",
     "add": "Add"
+  },
+  "coveragePreview": {
+    "title": "Mowing lines",
+    "hint": "Shows how the robot will mow the selected area: the perimeter rounds (kopakker) and the lines across it. Arrows show the driving direction.",
+    "area": "Area",
+    "angle": "Mow angle",
+    "angleModeGlobal": "Robot-wide ({{value}})",
+    "angleModeAuto": "Auto",
+    "angleModeFixed": "Fixed angle",
+    "angleAuto": "auto",
+    "angleDeg": "{{deg}}°",
+    "angleAutoNow": "Auto (now {{deg}}°)",
+    "direction": "Perimeter direction",
+    "directionGlobal": "Robot-wide ({{value}})",
+    "directionDefault": "Default",
+    "directionClockwise": "Clockwise",
+    "directionCounterClockwise": "Counter-clockwise",
+    "swaths": "{{count}} lines",
+    "rings": "{{count}} perimeter rounds",
+    "coverage": "{{percent}}% of the area planned",
+    "calculating": "Calculating…",
+    "failed": "The planner could not draw lines for this area.",
+    "noAreas": "Draw a mowing area first.",
+    "ownSettings": "This area has its own lines.",
+    "followsRobotWide": "This area follows the robot-wide settings.",
+    "resumeWarning": "A paused mow was found. After saving the map, choose Start fresh instead of Resume: resuming plans this area again.",
+    "startPoint": "Start point",
+    "startAutomatic": "Automatic: the middle of the longest side.",
+    "startCustom": "You chose where mowing starts.",
+    "startHint": "Drag the green dot to change where mowing starts. It always starts on the outermost round and snaps onto it.",
+    "startReset": "Back to automatic",
+    "startNeedsRings": "A start point needs the perimeter rounds. Without them mowing starts at the first line.",
+    "startMarkerTitle": "Drag to move where mowing starts",
+    "editHint": "Changes here are part of this map edit: Save map keeps them, Cancel drops them.",
+    "viewHint": "Choose Edit map to change the angle, direction or start point."
+  },
+  "mapSidebar": {
+    "collapse": "collapse",
+    "expand": "expand",
+    "obstacles": "Obstacles",
+    "drawnObstacles": "Drawn obstacles ({{count}})",
+    "noObstacles": "No obstacles detected and no proposals waiting.",
+    "mowingLines": "Mowing lines",
+    "mowingLinesOff": "Shows how the robot will mow an area, so you can try an angle or direction before it mows.",
+    "mowingLinesShow": "Show mowing lines",
+    "noAreas": "Draw a mowing area first."
   },
   "mapOffsetPanel": {
     "mapOffset": "Map Offset",
@@ -1620,7 +1810,10 @@
     "areaType": "Area type",
     "areaName": "Area name",
     "areaNamePlaceholder": "e.g. Front lawn",
-    "mowingOrder": "Mowing order"
+    "mowingOrder": "Mowing order",
+    "shrinkFailed": "Could not shrink the recorded outline — not converted to an obstacle",
+    "shrinkRecorded": "Recorded by driving along the object: shrink by half the chassis width",
+    "shrinkRecordedHelp": "A recording follows the robot's own centre, so driving the chassis edge along an object leaves the outline that much too large. Applied once, when the area becomes an obstacle. Untick for outlines you drew by hand."
   },
   "mapNewArea": {
     "title": "New area",
@@ -1675,12 +1868,13 @@
     "typeWorkArea": "Work Area",
     "typeNavigation": "Navigation",
     "typeObstacle": "Obstacle",
-    "areasHeader": "Areas ({{count}})",
+    "areasHeader": "Mowing areas ({{count}})",
     "moveUp": "Move up",
     "moveDown": "Move down",
     "navigationArea": "Navigation {{index}}",
     "obstacleArea": "Obstacle {{index}}",
-    "unnamedArea": "Area {{index}}"
+    "unnamedArea": "Area {{index}}",
+    "otherFeatures": "{{navigation}} navigation · {{obstacles}} obstacles"
   },
   "mapTrackedObstacles": {
     "ignore": "Ignore",
@@ -1710,6 +1904,30 @@
     "pointsShort_other": "{{count}}pt",
     "noContainingArea": "No containing area",
     "promoteTooltip": "Promote to permanent keepout"
+  },
+  "mapLidarCorridors": {
+    "save": "Save",
+    "header": "LiDAR ignore lines ({{count}})",
+    "hint": "A drawn line has two sides. On the side that overlaps a mowing/navigation area, the LiDAR is ignored up to the set distance — so the mower can approach that close to the recorded boundary next to e.g. a hedge. On the far side (e.g. into the hedge itself), the LiDAR is always ignored along the whole line, with no distance limit, since the mower can never physically be there. Everywhere else keeps watching for obstacles normally.",
+    "safetyWarning": "The collision stop is ignored too, on both sides — with a distance limit on the area side, and with NO limit at all on the far side. Draw the line accurately: on the area side, don't set the distance further than the hedge/obstacle actually reaches into the lawn.",
+    "unnamed": "Line {{id}}",
+    "nameLabel": "Name",
+    "namePlaceholder": "e.g. Hedge along the patio",
+    "widthLabel": "Ignore distance in centimetres",
+    "widthRange": "Enter a whole distance between {{min}} and {{max}} cm",
+    "widthTooltip": "How close the mower can get to the line on the area side, 5-120 cm — the far side of the line has no distance limit at all",
+    "delete": "Delete this line",
+    "drawing": "Tap points on the map, then confirm.",
+    "finish": "Finish line",
+    "cancel": "Cancel",
+    "draw": "Draw ignore line",
+    "saveFailed": "Could not save the ignore lines",
+    "lockedHint": "Switch to map edit mode to change these lines.",
+    "smooth": "Make curved",
+    "smoothTooltip": "Round the line through its points (adds points along the curve)",
+    "simplify": "Simplify",
+    "simplifyTooltip": "Remove points that barely change the shape",
+    "editHint": "Select a line on the map, then double-click it to edit: drag a point to move it, drag a midpoint to add a point, select a point and press Delete to remove it."
   },
   "mapObstacleProposals": {
     "header": "Obstacle proposals ({{count}})",
@@ -1757,10 +1975,30 @@
     "deleteAreaConfirmOk": "Delete",
     "deleteAreaConfirmCancel": "Cancel"
   },
+  "mapBackups": {
+    "title": "Restore a previous map",
+    "intro": "A copy of the map is made automatically every time the editor opens. The last {{keep}} are kept; older ones are deleted. Restoring replaces the current map (it is copied first, so you can undo it).",
+    "empty": "No map backups yet — one is made the next time you open the editor.",
+    "restore": "Restore",
+    "cancel": "Cancel",
+    "close": "Close",
+    "confirmTitle": "Restore this map?",
+    "confirmBody": "The map as it was on {{when}} ({{areas}} areas) replaces the current map. Unsaved edits are discarded.",
+    "restored": "Map restored",
+    "restoreFailed": "Could not restore the map",
+    "listFailed": "Could not load the map backups",
+    "backupFailed": "Could not back up the map — the editor stays closed",
+    "areas": "{{count}} areas",
+    "obstacles": "{{count}} obstacles",
+    "ignoreLines": "{{count}} ignore lines",
+    "menuItem": "Restore a previous map"
+  },
   "mapFiles": {
     "areaSaved": "Area saved",
     "failedToSaveArea": "Failed to save area",
     "restoreFailed": "Could not restore this map backup",
+    "restoreOriginalsFailed": "The map was restored, but the recorded obstacle outlines in the backup could not be stored",
+    "restoreCorridorsFailed": "The map was restored, but the LiDAR ignore lines in the backup could not be written",
     "bagImportComingSoonMessage": "OpenMower .bag import — coming soon",
     "bagImportComingSoonDescription": "Convert your map.bag to map.json on the source robot first (OpenMower 1.x auto-converts at boot), then re-import the .json. See docs/IMPORT_OPENMOWER_MAP.md §6.",
     "openMowerImportFailed": "OpenMower import failed",
@@ -2160,6 +2398,10 @@
       "label": "YardForce 500B",
       "description": "500 B variant with different blade motor UART and panel layout."
     },
+    "BiltemaRM1000": {
+      "label": "Biltema RM1000",
+      "description": "Biltema RM1000 robotic mower."
+    },
     "YardForceSA650": {
       "label": "YardForce SA650",
       "description": "Larger model (570x390mm) with higher encoder resolution."
@@ -2539,7 +2781,8 @@
           "validated": "Validated PID step response with max overshoot {{overshootPct}}%."
         }
       }
-    }
+    },
+    "assistantSummary": "These assistants move the robot through straight test passes to tune wheel response. Use a clear, level area and keep emergency stop within reach. Review the test distance and whether to apply the results before starting."
   },
   "settingsBattery": {
     "batteryThresholds": "Battery Thresholds",
@@ -2560,14 +2803,16 @@
     "criticalRecovery": "Critical Recovery",
     "criticalRecoveryTooltip": "Leave the critical-battery state once recharged above this %. Hysteresis upper bound, must be greater than Critical.",
     "manualResume": "Manual Resume",
-    "manualResumeTooltip": "Pressing Play while the robot is charging mid-session resumes mowing only above this %. Must be greater than Low (Dock) or the robot re-docks within minutes."
+    "manualResumeTooltip": "Pressing Play while the robot is charging mid-session resumes mowing only above this %. Must be greater than Low (Dock) or the robot re-docks within minutes.",
+    "chargeTail": "Charge Tail Current",
+    "chargeTailTooltip": "After a mid-session recharge the robot resumes only once the charge current has dropped to this value (A), as well as reaching Full %. Higher resumes earlier with a slightly less full pack. Default 0.08 A matches the firmware's end-of-charge current."
   },
   "settingsSafety": {
     "alertMessage": "Safety settings protect the robot and its surroundings",
-    "alertDescription": "The STM32 firmware is the sole safety authority: it cuts the blade on lift, tilt and emergency stop, and none of that is configurable from this page. There is nothing to edit here.",
+    "alertDescription": "The STM32 firmware is the sole safety authority: it cuts the blade on a lift, a tilt or an emergency stop, whatever the ROS2 stack does. The settings below only tune its timings and thresholds, and the firmware keeps each one inside a compiled safe envelope.",
     "firmwareOwnedTitle": "Handled by the firmware",
-    "firmwareOwnedDescription": "Lift and tilt detection, the emergency-stop latch and the blade cut-out all live in the STM32 firmware, which decides on its own physical thresholds. The GUI cannot relax, delay or bypass any of them, so no control is offered here.",
-    "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited on the Parameters page."
+    "firmwareOwnedDescription": "Lift and tilt detection, the emergency-stop latch and the blade cut-out all live in the STM32 firmware. The interface cannot bypass or disable them: it can only set how long a fault must persist before it trips, and the tilt sensor threshold, each within the limits the firmware enforces.",
+    "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited in Diagnostics → Advanced parameters."
   },
   "settingsObstacles": {
     "digSensitivity": "Wheel-slip (dig) sensitivity",
@@ -2591,6 +2836,8 @@
     "maxDetourDistanceTooltip": "Maximum lateral detour around an obstacle before giving up — drives both coverage skirting and the bypass give-up threshold",
     "drawnObstacleMargin": "Drawn Obstacle Margin",
     "drawnObstacleMarginTooltip": "How far the coverage plan stays from obstacles drawn on the map. Floored at launch at a value derived from the chassis; the transit keepout band is derived separately and follows this value when you raise it. Raise it for root zones invisible to the LiDAR.",
+    "drawnObstacleMarginBesideBody": "≈ {{cm}} cm beside the chassis at this value",
+    "drawnObstacleMarginFlooredWarning": "This chassis needs at least {{floorM}} m to stay plannable — {{floorM}} m (≈ {{floorCm}} cm beside the chassis) will actually be used, not the value above.",
     "clearanceMargin": "Clearance Margin",
     "clearanceMarginTooltip": "Sideways room left beyond the chassis when skirting an obstacle while mowing. Raise this if the robot goes around obstacles but shaves past them. Inflation Radius does NOT do this.",
     "detectionRange": "Detection Range",
@@ -2633,7 +2880,7 @@
     "connectorMaxHeadlandPassesTooltip": "How many of the Headland Passes rings a turn-around may cross, counted from the inner field outward. Unlimited = turns may use the whole headland apron, out to the outermost ring. Set it below Headland Passes (e.g. 2 with 3 passes configured) to keep the outermost ring(s) a no-turn zone, so U-turns stay further from the recorded boundary and clear of nearby objects — at the cost of more straight/blade-off connector fallbacks where the remaining apron is too narrow for a turn-around arc to fit. Only applies with a forced (non-Auto, non-None) Headland Passes count. Wired to coverage_server.connector_max_headland_passes.",
     "connectorMaxHeadlandPassesUnlimited": "Unlimited",
     "mowDirection": "Perimeter Direction",
-    "mowDirectionTooltip": "Travel direction around the perimeter/headland rings. Set it so a side-mounted blade stays on the cut side. Auto keeps the planner's natural winding. Wired to coverage_server.ring_direction.",
+    "mowDirectionTooltip": "Travel direction around the perimeter/headland rings. Set it so a side-mounted blade stays on the cut side. Auto keeps the planner's natural winding. Wired to coverage_server.ring_direction. To see the effect, open the Map page and choose Show mowing lines.",
     "mowDirectionAuto": "Auto (planner default)",
     "mowDirectionCw": "Clockwise",
     "mowDirectionCcw": "Counter-clockwise",
@@ -2644,7 +2891,7 @@
     "crossHatch": "Cross-hatch mowing",
     "crossHatchTooltip": "Alternate each area's stripes by 90° when that area is mowed again, relative to Auto or the fixed angle. Pauses, recharge and restarts keep the current orientation. Boundary passes are unchanged. Restart ROS2 after changing this setting.",
     "mowAngleDeg": "Mow Angle",
-    "mowAngleDegTooltip": "Swath (mowing line) direction. Enable Auto to let the planner pick the swath-count-minimising angle, or set a fixed angle of 0–179°.",
+    "mowAngleDegTooltip": "Swath (mowing line) direction. Enable Auto to let the planner pick the swath-count-minimising angle, or set a fixed angle of 0–179°. The Map page can show the resulting lines (Show mowing lines) and set a different angle or direction for one area.",
     "mowAngleAuto": "Auto",
     "mowAngleFixed": "Fixed",
     "mowAngle": "Mow Angle",
@@ -2759,13 +3006,13 @@
   },
   "settingsLocalization": {
     "lidarMapAnchorTitle": "LiDAR map anchor",
-    "lidarMapAnchorSummary": "Scan-to-map particle filter that holds the position when RTK Fixed drops (XY only).",
-    "lidarMapAnchorDetail": "Under RTK Fixed, selected scans update persistent georeferenced tiles. A local map window supports scan-to-map localization when GPS becomes stale; only validated XY corrections enter the graph. Diagnostics → Fusion Graph shows its state.",
+    "lidarMapAnchorSummary": "Use stored LiDAR landmarks to help maintain position when RTK Fixed is lost.",
+    "lidarMapAnchorDetail": "Under RTK Fixed, scans update georeferenced tiles. Validated position corrections may then enter the graph when GPS becomes stale. See Diagnostics → Localization.",
     "anchorShadowTitle": "Anchor shadow mode",
     "anchorShadowSummary": "Run and measure the anchor under RTK Fixed without applying it.",
     "anchorShadowDetail": "Keeps calibration active under trusted RTK Fixed at the configured filter rate, instead of periodic calibration bursts. Publishes candidates and counters for comparison; applies no factors while Fixed remains trusted.",
     "magYawTitle": "Magnetometer yaw",
-    "magYawSummary": "Fuse tilt-compensated mag yaw as a yaw unary factor.",
+    "magYawSummary": "Use the magnetic compass to help estimate heading. Motor interference can make this unreliable.",
     "magYawDetail": "Off by default — motor-induced bias makes the magnetometer unreliable on most chassis. Enable only after running mag calibration with motors-off and validating a stable |B|.",
     "badgeDisabled": "Disabled in settings",
     "badgeNoDriver": "No driver detected",
@@ -2801,7 +3048,9 @@
     "minHorizontalFieldLabel": "Min horizontal field",
     "minHorizontalFieldTooltip": "Minimum horizontal field magnitude for a valid yaw. Below this the mag yaw is rejected.",
     "magYawVarianceLabel": "Mag yaw variance",
-    "magYawVarianceTooltip": "Sensor-noise variance (rad²) for the magnetometer yaw unary factor. Higher = trusted less."
+    "magYawVarianceTooltip": "Sensor-noise variance (rad²) for the magnetometer yaw unary factor. Higher = trusted less.",
+    "positionSummary": "The robot combines GPS, wheel movement and heading sensors to estimate its position. The optional settings below control which extra sensors can help when GPS is less reliable.",
+    "openDiagnostics": "Open Diagnostics → Localization"
   },
   "settingsGnssAdvanced": {
     "rawValueFallback": "{{label}} Raw Value"
@@ -2983,7 +3232,7 @@
     "savedDock": "Saved dock (heading unchanged by this action)",
     "setDockConfirmFooter": "Make sure the robot is sitting on the dock so the position capture reflects the true charging-contact point. The new position persists across container restarts.",
     "sensorPlacement": "Sensor Placement",
-    "metersFromUrdf": "m (from URDF)",
+    "metersFromUrdf": "m (robot geometry)",
     "dragSensorsHint": "Drag sensors on the top-down robot view to set their X/Y position. Use the rotation handle (small circle) to set sensor yaw. The grid spacing is 5 cm. Robot dimensions are read from the /robot_description topic.",
     "resetToDefaults": "Reset to defaults",
     "xForward": "X (forward)",
@@ -2993,7 +3242,7 @@
     "autoCalibrateImuTooltip": "Auto-calibrate IMU mounting yaw (robot drives itself ~0.6 m forward then back)",
     "dockPose": "Dock Pose",
     "bearingCompass": "Bearing (compass, 0–360°)",
-    "compassBearingHint": "Compass bearing: 0° = N, 90° = E, 180° = S, 270° = W. Hold a phone compass behind the dock pointing the way the robot enters and read the bearing off it. Auto-captured on first charge by dock_yaw_to_set_pose",
+    "compassBearingHint": "Compass bearing: 0° = N, 90° = E, 180° = S, 270° = W. Hold a phone compass behind the dock pointing in the direction the robot enters. Use dock calibration to measure and save the position and heading together.",
     "source": "source",
     "captureFromRobot": "Capture from current robot position",
     "captureIntro1": "Park the robot on the dock facing the approach direction, then click below. Captures",
@@ -3029,15 +3278,18 @@
     "calibFailedHint": "Hint: drive faster or longer so the accelerometer sees a clear forward and backward impulse along the body X axis.",
     "retry": "Retry",
     "discard": "Discard",
-    "apply": "Apply"
+    "apply": "Apply",
+    "dockHeading": "Dock heading, degrees"
   },
   "robotAnatomy": {
     "gpsAntenna": "GPS antenna",
+    "imuYawTitle": "IMU yaw (°)",
     "yawValue": "yaw {{n}}°",
     "noData": "no data",
     "streaming": "streaming",
     "noScan": "no scan",
     "battery": "Battery",
+    "batteryValuesTitle": "Battery (% · V)",
     "blade": "Blade",
     "spinning": "spinning",
     "off": "off",
@@ -3056,7 +3308,7 @@
     "inspecting": "Inspecting",
     "hoverAPart": "Hover a part",
     "legend": "Green = healthy, amber = needs attention.",
-    "motorTemps": "motor {{motor}} °C · ESC {{esc}} °C",
+    "motorTemps": "motor {{motor}} · ESC {{esc}}",
     "unknown": "Unknown"
   },
   "dashboardHeroCard": {
@@ -3114,7 +3366,11 @@
     "dayFri": "Fri",
     "cellTooltip": "{{date}} -- {{km}} km",
     "less": "Less",
-    "more": "More"
+    "more": "More",
+    "sessionCount_one": "{{count}} session",
+    "sessionCount_other": "{{count}} sessions",
+    "activityTooltip_one": "{{date}}: {{count}} session",
+    "activityTooltip_other": "{{date}}: {{count}} sessions"
   },
   "notificationBell": {
     "justNow": "just now",
@@ -3476,6 +3732,8 @@
     "modeStaleDescription": "Amber dot circling a dark ring. Powered and running, but the behavior tree is not reporting.",
     "modeLowBattery": "Low battery",
     "modeLowBatteryDescription": "Whole ring blinking red. Same colour as emergency — the blinking is what tells them apart.",
+    "modeTransit": "Transit",
+    "modeTransitDescription": "Ring alternates lit halves in warm orange, about once a second. Driving to the next strip with the blade off.",
     "modeMowing": "Mowing",
     "modeMowingDescription": "Green arc growing with coverage, with a white pixel at its tip.",
     "modeMowingDegraded": "Mowing without RTK fix",
@@ -3509,14 +3767,21 @@
     "topicsDescription": "Full JSON schema and command codes are documented in docs/MQTT_CONTROL.md."
   },
   "settingsSections": {
-    "updates": {"label": "Updates", "description": "Installed versions, update sources and recovery"},
+    "weather": {
+      "label": "Weather",
+      "description": "Rain sensor behaviour and the IrriSense soil-moisture check: whether the weather lets the robot mow."
+    },
+    "updates": {
+      "label": "Updates",
+      "description": "Installed versions, update sources and recovery"
+    },
     "appearance": {
       "label": "Appearance",
       "description": "Visual richness, energy use and timestamp display on this device"
     },
     "hardware": {
       "label": "Hardware",
-      "description": "Robot model, wheels, chassis, and blade dimensions"
+      "description": "Hardware backend and its wiring, robot model, wheels, chassis, and blade dimensions"
     },
     "drive_motor": {
       "label": "Drive Motor",
@@ -3566,7 +3831,10 @@
       "label": "Rain",
       "description": "Rain detection behavior and delay"
     },
-    "notifications": {"label": "Notifications", "description": "Push messages to your phone: zone start/finish, stuck, emergency, rain, battery"},
+    "notifications": {
+      "label": "Notifications",
+      "description": "Push messages to your phone: zone start/finish, stuck, emergency, rain, battery"
+    },
     "irrisense": {
       "label": "IrriSense",
       "description": "Soil moisture from your IrriSense Cloud garden: skip scheduled mows on wet grass"
@@ -3598,7 +3866,8 @@
       "dockRefreshFailedDescription": "Restart ROS2 (or call /map_server_node/set_docking_point manually) to pick up the new dock pose.",
       "drivePidUpdateFailed": "Settings saved, but live drive-PID update failed",
       "drivePidUpdateFailedDescription": "Restart ROS2 to apply the new drive-motor PID gains.",
-      "saveFailed": "Failed to save settings"
+      "saveFailed": "Failed to save settings",
+      "savedApplyingLive": "Saved. Applying the drive settings to the running robot…"
     }
   },
   "displayMode": {
@@ -3654,7 +3923,8 @@
   },
   "settingsReset": {
     "overridden": "Overridden — differs from default",
-    "resetToDefault": "Reset to default"
+    "resetToDefault": "Reset to default",
+    "resetField": "Reset {{field}} to default"
   },
   "settingsSchema": {
     "loadFailed": "Failed to load settings schema"
@@ -3675,6 +3945,13 @@
     }
   },
   "hostUpdater": {
+    "customShort": "Custom",
+    "standardStackShort": "Matched",
+    "localServiceShort": "Local",
+    "unhealthyShort": "Unhealthy",
+    "component": "Component",
+    "runningBuild": "Running version / date",
+    "status": "Status",
     "changelog": {
       "title": "What's in this update",
       "features": "New features",
@@ -3705,11 +3982,9 @@
     "imageReference": "image reference",
     "reviewCustom": "Review custom images",
     "customInstallAccept": "Install this custom mix. I understand the risks and have recovery access.",
-
     "built": "Built",
     "published": "Published",
     "buildDatesHelp": "Built is the installed image timestamp; Published is when the release was published.",
-
     "componentSourceHelp": "Choose compatible component versions from published releases in the same repository and branch. For another repository, branch image or Docker tag, use Custom images.",
     "summaryUnknown": "Unknown",
     "summaryCustom": "Custom",
@@ -3729,19 +4004,27 @@
     "customComponent": "Custom version",
     "localService": "Locally managed",
     "removedByRelease": "Removed by selected release",
-    "separateUpdate": "Updated separately",
+    "separateUpdate": "Updated automatically with the next release",
     "agentVersion": "Update service version",
     "serviceSelectionUnsupported": "Update the host updater to enable individual container selection.",
     "noCompatibleComponent": "No compatible alternative is published for this component.",
     "componentReview": "{{component}}: custom version {{version}}",
     "diagnostics": "Diagnostics and manual image comparison",
-    "compatibility": {"source": "Different source", "contract": "Incompatible contract", "platform": "Unavailable for this platform"},
-
+    "compatibility": {
+      "source": "Different source",
+      "contract": "Incompatible contract",
+      "platform": "Unavailable for this platform"
+    },
     "selectionPending": "Installer hardware choices have changed. Review installation to apply the container changes.",
     "selectionHelp": "Containers follow your saved installer hardware choices.",
     "hardware": {
+      "backend": "Board",
       "gnss": "GPS",
       "lidar": "LiDAR"
+    },
+    "backendChoice": {
+      "none": "Mowgli",
+      "openmower": "OpenMower v1"
     },
     "disabled": "Off",
     "enabled": "On",
@@ -3763,8 +4046,19 @@
     "returnMatched": "Review matched release",
     "mixedReview": "Custom combination: GUI {{version}}; other components use the base release.",
     "observedAt": "Docker observed: {{time}}",
-    "identities": {"matched": "Matched release", "mixed": "Custom mix", "drifted": "Installation changed", "custom": "Existing/custom installation", "unverified": "Installed version unverified", "unknown": "Installed version unavailable"},
-    "health": {"healthy": "Running / checks passing", "degraded": "Stopped or unhealthy", "unknown": "Unknown"},
+    "identities": {
+      "matched": "Matched release",
+      "mixed": "Custom mix",
+      "drifted": "Installation changed",
+      "custom": "Existing/custom installation",
+      "unverified": "Installed version unverified",
+      "unknown": "Installed version unavailable"
+    },
+    "health": {
+      "healthy": "Running / checks passing",
+      "degraded": "Stopped or unhealthy",
+      "unknown": "Unknown"
+    },
     "resetSource": "Reset changes",
     "agentNotice": "An update to the host updater is available",
     "title": "Updates and recovery",
@@ -3796,6 +4090,7 @@
     "pin": "Pin this deployment; continue notifying about newer builds",
     "review": "Review update",
     "updateAgent": "Update the update service",
+    "updatingAgentFirst": "Updating the update service first: the new version is checked by its own updater…",
     "agentHelp": "The updater will restart separately from the containers. Its launcher retains the previous binary if the new version fails to start.",
     "history": "Deployment history",
     "rollback": "Restore previous deployment",
@@ -3830,6 +4125,9 @@
     "recoveryHelp": "Maintenance remains active and the mower stays inhibited. Correct the restore, container, firmware, or mower safety problem shown above, then retry recovery.",
     "recoveryWarnings": "Some components still need attention",
     "recoveryWarningsHelp": "The previous deployment was restored and maintenance was released. Check the reported components before mowing.",
+    "forcedHealthBaseline": "Forced update baseline",
+    "remainingHealthIssues": "Pre-existing component issues still need attention",
+    "remainingHealthIssuesHelp": "These exact checks were already failing immediately before maintenance and still fail after the update. New failures would have restored the previous deployment.",
     "softwareUpdates": "Software updates",
     "simple": "Simple",
     "advanced": "Advanced",
@@ -3848,9 +4146,25 @@
     "imageDetails": "Container image details",
     "componentsToUpdate": "Components",
     "backupHelp": "Settings and maps are backed up before installation. Mainboard firmware is unchanged.",
-    "unavailableHelp": "Automatic updates need the host updater installed. Advanced contains installed versions and manual image comparisons."
+    "unavailableHelp": "Automatic updates need the host updater installed. Advanced contains installed versions and manual image comparisons.",
+    "firmwareChangeWarning": "This version needs mainboard firmware protocol {{to}}; the board runs protocol {{from}}",
+    "firmwareChangeHelp": "Software updates never flash the mainboard. After this update the robot refuses to mow until you flash the matching firmware from the Firmware section of the new interface (ST-Link, a few minutes). Rolling back the software before flashing is still possible.",
+    "firmwareChangeAccept": "Install anyway. I will flash the mainboard firmware right after the update.",
+    "firmwareChangeAgent": "Update the updater agent first: the installed agent cannot cross a firmware protocol change.",
+    "firmwareInstallWarning": "Mainboard firmware protocol changes from {{from}} to {{to}}",
+    "firmwareInstallHelp": "Mowing stays blocked after installation until the mainboard is flashed. Keep the ST-Link at hand.",
+    "firmwareInstallAccept": "Install and flash the mainboard firmware afterwards. I understand the robot cannot mow until then.",
+    "healthInstallWarning": "Some installed components are already unhealthy",
+    "healthInstallHelp": "You can force this update so the affected containers can be replaced. Only the same component checks that are still failing immediately before maintenance may remain unhealthy; any new failure stops the update and restores the previous deployment.",
+    "healthInstallAccept": "Force this update with the listed pre-existing issues.",
+    "firmwareFlashNeeded": "Flash the mainboard firmware now (protocol {{from}} → {{to}})",
+    "firmwareFlashNeededHelp": "The installed software speaks a newer mainboard protocol than the board. The robot will not mow until the firmware is flashed."
   },
   "settingsFields": {
+    "imu_inclination_threshold": {
+      "label": "Tilt sensor threshold",
+      "tooltip": "Threshold of the onboard tilt sensor (LIS3DH INT1_THS register). Larger allows more inclination before the tilt emergency. The firmware keeps it between 44 (0x2C, stock firmware) and 64 (0x40); 56 (0x38) is the shipped value."
+    },
     "yaw_loop_enabled": {
       "label": "Yaw-Rate Loop",
       "tooltip": "Close the firmware gyro yaw-rate loop. Off = open differential passthrough (the wheels get the raw command, no heading trim). Affects how the robot drives: test after changing. Applied after a ROS2 restart."
@@ -3872,12 +4186,36 @@
       "tooltip": "Sign of the onboard gyro Z axis versus robot +yaw (counter-clockwise): +1 or -1. If the yaw loop diverges (the robot spins harder instead of correcting), flip this - no firmware reflash needed."
     },
     "max_charge_voltage": {
-      "label": "Max Charge Voltage",
-      "tooltip": "Charge voltage ceiling sent to the firmware [V]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+      "label": "Max charge voltage",
+      "tooltip": "Charge voltage ceiling sent to the STM32 [V] and stored in its flash. The firmware keeps it between 25.2 and 29.4 V: 29.4 V is the battery pack limit and can never be exceeded."
     },
     "max_charge_current": {
-      "label": "Max Charge Current",
-      "tooltip": "Charge current ceiling sent to the firmware [A]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+      "label": "Max charge current",
+      "tooltip": "Charge current ceiling sent to the STM32 [A] and stored in its flash. The firmware keeps it between 0.1 and 1.2 A: no higher current has been validated on the board."
+    },
+    "max_mps": {
+      "label": "Max wheel speed",
+      "tooltip": "Wheel-speed cap sent to the STM32 [m/s] and stored in its flash. The firmware keeps it between 0.1 and 0.6 m/s."
+    },
+    "one_wheel_lift_emergency_ms": {
+      "label": "One-wheel lift trip",
+      "tooltip": "How long one wheel must stay lifted before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 5000 ms."
+    },
+    "both_wheels_lift_emergency_ms": {
+      "label": "Both-wheels lift trip",
+      "tooltip": "How long both wheels must stay lifted before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 3000 ms."
+    },
+    "tilt_emergency_ms": {
+      "label": "Tilt trip",
+      "tooltip": "How long a tilt (mechanical switch or accelerometer) must persist before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 1000 ms."
+    },
+    "stop_button_emergency_ms": {
+      "label": "Stop button trip",
+      "tooltip": "How long the stop button must be held before the firmware latches an emergency [ms]. Shorter is stricter. The firmware keeps it between 10 and 250 ms."
+    },
+    "play_button_clear_emergency_ms": {
+      "label": "Hold PLAY to clear emergency",
+      "tooltip": "How long PLAY must be held on the robot to clear a latched emergency [ms]. Longer is stricter. The firmware keeps it between 500 and 10000 ms."
     },
     "imu_cal_samples": {
       "label": "IMU Calibration Samples",
@@ -4054,6 +4392,46 @@
     "start_blocked_escape_signal_max_age_s": {
       "label": "Escape Signal Max Age",
       "tooltip": "How old the last-motion direction may be [s]. Too short is fail-safe (no motion); too long risks acting on a direction that no longer describes how the robot arrived. Hard ceiling 300 in code."
+    },
+    "openmower_xesc_type": {
+      "label": "Motor controller",
+      "tooltip": "xesc_mini (VESC protocol) or xesc_2040. A wrong choice leaves every motor silent: Diagnostics then reports the firmware as incompatible."
+    },
+    "openmower_ll_port": {
+      "label": "LowLevel board port",
+      "tooltip": "Serial device of the OpenMower LowLevel (Pico) board. Stock OpenMower v1: /dev/ttyAMA0."
+    },
+    "openmower_xesc_left_port": {
+      "label": "Left wheel controller port",
+      "tooltip": "Serial device of the left drive xESC. Stock OpenMower v1: /dev/ttyAMA5."
+    },
+    "openmower_xesc_right_port": {
+      "label": "Right wheel controller port",
+      "tooltip": "Serial device of the right drive xESC. Stock OpenMower v1: /dev/ttyAMA3."
+    },
+    "openmower_xesc_mow_port": {
+      "label": "Blade controller port",
+      "tooltip": "Serial device of the blade xESC. Stock OpenMower v1: /dev/ttyAMA4."
+    },
+    "openmower_emergency_input_config": {
+      "label": "Emergency inputs",
+      "tooltip": "What each of the LowLevel board's four hall inputs is (L = lift, S = stop, ! = active low), e.g. !L,!L,S,S. Empty keeps the board's own wiring. A wrong mapping can hide a lift or stop sensor."
+    },
+    "openmower_wheel_loop_enabled": {
+      "label": "Closed-loop wheel speed",
+      "tooltip": "Off = OpenMower's own open-loop mapping (speed × duty per m/s), without tachometer feedback."
+    },
+    "openmower_wheel_duty_per_mps": {
+      "label": "Duty per m/s",
+      "tooltip": "Feed-forward: duty cycle (0–1) per m/s of wheel speed. 1.0 is OpenMower's own mapping."
+    },
+    "openmower_wheel_kp": {
+      "label": "Wheel loop Kp",
+      "tooltip": "Proportional gain [duty per m/s of speed error]. Unlike the STM32 wheel PID this is in duty, not PWM counts."
+    },
+    "openmower_wheel_ki": {
+      "label": "Wheel loop Ki",
+      "tooltip": "Integral gain [duty per (m/s × s) of speed error]."
     }
   },
   "settingsFieldGroups": {
@@ -4063,8 +4441,12 @@
       "description": "Gyro-based differential yaw-rate loop running in the STM32 firmware. The values are pushed to the firmware at startup, which re-validates and clamps them."
     },
     "chargeLimits": {
-      "title": "Charge Limits",
-      "description": "Charge ceilings forwarded to the firmware. The firmware clamps them to its compiled board limits, so they can only be tightened."
+      "title": "Charge limits",
+      "description": "Charge ceilings sent to the STM32 firmware and stored in its flash, so they also apply before the ROS2 stack starts. The firmware keeps each value inside its safe envelope. Takes effect after a ROS2 restart."
+    },
+    "firmwareSafety": {
+      "title": "Firmware safety limits",
+      "description": "Speed cap, emergency timings and tilt threshold sent to the STM32 firmware and stored in its flash, so they also apply before the ROS2 stack starts. A value may be stricter or looser than the default, but the firmware never lets it leave its compiled safe envelope. Takes effect after a ROS2 restart."
     },
     "localizationGuard": {
       "title": "Localization Guard",
@@ -4097,12 +4479,113 @@
     "startEscape": {
       "title": "Start-Pose Escape",
       "description": "Last-resort nudge when the robot stands on a keepout cell and every plan from its own pose is refused."
+    },
+    "openmowerWiring": {
+      "title": "OpenMower Electronics",
+      "description": "How the OpenMower LowLevel board and the three xESC motor controllers are connected. Until you set a value here, the one chosen in the installer applies. Takes effect when ROS2 is restarted."
+    },
+    "openmowerWheelLoop": {
+      "title": "OpenMower Wheel Speed Loop",
+      "description": "The xESC only takes a duty cycle, so the OpenMower bridge closes a per-wheel speed loop on the wheel tachometers. Takes effect when ROS2 is restarted."
     }
   },
+  "firmwareParams": {
+    "params": {
+      "ticks_per_meter": {
+        "label": "Encoder ticks per metre",
+        "description": "Encoder scale used by the wheel PI and the odometry [ticks/m]. Calibrated by the drive tuning (Motors section)."
+      },
+      "wheel_pid_kp": {
+        "label": "Wheel PI proportional gain",
+        "description": "Proportional gain of the per-wheel velocity loop [PWM per m/s of error]. Set in the Motors section."
+      },
+      "wheel_pid_ki": {
+        "label": "Wheel PI integral gain",
+        "description": "Integral gain of the per-wheel velocity loop [PWM per m/s·s]; it is what pushes the wheel through the motor deadband. Set in the Motors section."
+      },
+      "wheel_pid_kd": {
+        "label": "Wheel PI derivative gain",
+        "description": "Derivative gain of the per-wheel velocity loop; 0 on this robot. Set in the Motors section."
+      },
+      "wheel_pid_integral_limit": {
+        "label": "Wheel PI integral limit",
+        "description": "Clamp on the integral term [PWM], anti-windup. Set in the Motors section."
+      },
+      "wheel_pid_pwm_per_mps": {
+        "label": "Wheel feedforward",
+        "description": "Open-loop PWM per m/s added before the PI correction. Calibrated by the drive tuning (Motors section)."
+      },
+      "imu_gyro_bias_z": {
+        "label": "Gyro bias (measured)",
+        "description": "At-rest gyro Z offset measured by the IMU calibration on the dock [rad/s] and subtracted by the firmware yaw loop. Re-measured on every calibration, never stored in flash."
+      },
+      "wheel_track": {
+        "label": "Wheel track",
+        "description": "Distance between the two drive wheels [m], used by the firmware to split a turn between the wheels. Set in the Hardware section."
+      }
+    },
+    "title": "Values applied by the firmware",
+    "description": "What the STM32 actually runs, as it reported it. A value the firmware had to move into its envelope is flagged; a value marked stored is kept in the board's flash and applies at power-on.",
+    "noData": "No report from the firmware yet. The ROS2 stack sends the parameters when it connects to the board.",
+    "incompatible": "The firmware on the board does not speak this protocol version: these values are not applied. Reflash the firmware.",
+    "bootDefaults": "The board started on its compiled defaults (nothing stored yet).",
+    "bootFlash": "The board started on the values stored in its flash.",
+    "bootErased": "The board erased its parameter store at boot because a reset was requested or no valid record existed. It starts on compiled defaults until the host reconnects and reapplies settings.",
+    "commitError": "The parameter-store operation failed or a reset request was rejected. Check each persisted flag; unstored values may revert at the next power cycle.",
+    "commitFull": "The parameter log is full or has an invalid tail. It will not be erased automatically; an explicit reset request and reboot are required. New changes remain in RAM only until power cycle.",
+    "recordsLeft": "{{count}} saves remain before an explicit reset is needed.",
+    "resetAction": "Reset stored parameters…",
+    "rebootAction": "Reboot board to apply reset…",
+    "resetConfirmTitle": "Request parameter-store reset?",
+    "resetConfirmBody": "This sends a one-time request to the firmware. It does not erase flash now. After the board confirms the request, a separate reboot is required; the erase happens on that next boot.",
+    "resetConfirmWarning": "This erases saved tuning, safety and charging settings. Compiled defaults apply until the host reconnects and reapplies settings. The compiled charge ceiling may be higher, and stored emergency thresholds and tuning are unavailable meanwhile.",
+    "resetConfirmOk": "Send reset request",
+    "resetConfirmCancel": "Cancel",
+    "resetWaiting": "Reset request sent; waiting for matching firmware confirmation. The board will not reboot automatically.",
+    "resetRequestId": "Request ID {{id}}",
+    "resetUncertain": "Firmware confirmation was not received; the outcome is uncertain. No retry was sent. Check the current board status before taking another action.",
+    "resetArmed": "Firmware reports reset request {{id}} is armed or still unresolved. Another board reboot is required to finish recovery.",
+    "resetArmedWarning": "The next boot will try to complete the reset. If firmware erases the store, compiled defaults apply until the host reconnects and reapplies settings. The compiled charge ceiling may be higher; stored charging limits, emergency thresholds and tuning are lost if the reset completes.",
+    "rebootConfirmTitle": "Reboot the board to apply the reset?",
+    "rebootConfirmBody": "This is a separate, explicit reboot. On the next boot, firmware will try to finish the requested reset; the stored values may already have been erased.",
+    "rebootConfirmOk": "Reboot board",
+    "rebootSent": "Reboot request sent. The board reboot and reset completion are not confirmed yet.",
+    "resetCompleted": "The firmware reports that it erased the parameter store at boot. Compiled defaults remain active until the host reconnects and reapplies settings.",
+    "resetRecoverPending": "Use the board's confirmed pending request",
+    "resetClearUncertain": "Clear local warning only (does not change the board)",
+    "resetBlocked": {
+      "status_unknown": "Waiting for board status.",
+      "status_stale": "Board status is stale; wait for fresh telemetry.",
+      "firmware_incompatible": "A compatible protocol v8 firmware is required.",
+      "board_uninitialized": "Waiting for the board to finish initializing.",
+      "high_level_unknown": "Waiting for the mower state.",
+      "high_level_stale": "Mower state is stale; wait for fresh telemetry.",
+      "not_idle": "The mower must be in IDLE.",
+      "odometry_unknown": "Waiting for wheel odometry.",
+      "odometry_stale": "Wheel odometry is stale; wait for fresh telemetry.",
+      "wheels_moving": "The wheels must be stopped.",
+      "blade_state_unknown": "Waiting for blade status.",
+      "blade_state_stale": "Blade status is stale; wait for fresh telemetry.",
+      "blade_active": "The blade must be off and stopped."
+    },
+    "colParameter": "Parameter",
+    "colApplied": "Applied",
+    "colRequested": "Requested",
+    "colRange": "Allowed range",
+    "colState": "State",
+    "stateStored": "Stored",
+    "stateNotStored": "Not stored yet",
+    "stateVolatile": "Not stored (measured)",
+    "stateClamped": "Moved into range",
+    "stateUnreported": "No report"
+  },
   "fleetPage": {
+    "peerFeedLive": "Peers in costmap",
+    "peerFeedDown": "Peers NOT in costmap",
+    "peerFeedDetail": "{{count}} robot(s) fed to this robot's obstacle map at {{rate}} Hz, whether coordination is on or off",
     "betaTag": "Beta",
     "betaTitle": "Multi-robot support is a beta feature",
-    "betaBody": "The fleet view and coordinated mowing have not been validated on real mowers yet. Keep an eye on the robots while you try it, and report what you see on GitHub.",
+    "betaBody": "The fleet view and coordinated mowing are in beta and still evolving. Keep an eye on the robots while you use them, and report what you see on GitHub.",
     "thisRobot": "this robot",
     "openGui": "Open this robot's GUI",
     "removeConfirm": "Remove {{robot}} from the fleet? It will forget this robot too.",
@@ -4114,9 +4597,9 @@
     "gps": "GPS",
     "mowingArea": "Mowing area {{area}} · {{pct}} %",
     "lastSeen": "Last seen {{when}}",
-    "play": "Play",
-    "pause": "Pause",
-    "home": "Home",
+    "play": "Start mowing",
+    "pause": "Pause mowing",
+    "home": "Return to dock",
     "homeConfirm": "Send {{robot}} back to its dock?",
     "sent": "{{action}} sent to {{robot}}",
     "positions": "Positions",
@@ -4146,7 +4629,7 @@
     "startFreshConfirm": "Forget which areas the fleet has finished and clear every mower's resume point?",
     "startFreshDone": "Fleet progress cleared",
     "coordRuleAreas": "Areas are split per area: two mowers never work the same area at once.",
-    "coordRuleYield": "Priority is fixed per robot; the lower-priority mower pauses in place and resumes when the other is gone.",
+    "coordRuleYield": "Both mowers always see each other as obstacles in their navigation maps; on top of that, the lower-priority mower pauses when the other comes close and resumes when it is gone (or after 45 s at most).",
     "coordRuleMap": "Every mower needs the same map and the same GPS datum; use “Push my map” after editing areas.",
     "coordRuleOneArea": "A lawn with a single area cannot be shared yet: the second mower will have nothing to do.",
     "phase": {
@@ -4159,5 +4642,62 @@
       "manual": "Manual",
       "emergency": "Emergency"
     }
+  },
+  "dockCalibration": {
+    "title": "Dock calibration",
+    "intro": "Place the robot on its charging dock with RTK Fixed. Calibration captures the GPS antenna position, then measures the heading while reversing. Position and heading are saved together.",
+    "motionWarning": "The robot will reverse off the dock and drive back. Clear the path before starting. The blade stays off.",
+    "details": "How calibration is applied",
+    "detail": "The return uses the old dock pose until ROS2 restarts, so it may stop short of the charger. The new calibration is saved even if the confirmation return does not reach the charger.",
+    "start": "Start dock calibration",
+    "running": "Calibrating…",
+    "startError": "Could not start dock calibration",
+    "success": "Dock calibrated",
+    "notDocked": "Dock calibrated — but the robot is NOT on the dock",
+    "failed": "Dock calibration failed",
+    "measurements": "Course spread {{spread}}° · moved {{distance}} m · {{charge}}",
+    "charging": "charging",
+    "notCharging": "not charging",
+    "phases": {
+      "0": "Waiting for RTK Fixed",
+      "1": "Reversing off the dock",
+      "2": "Checking heading consistency",
+      "3": "Returning to dock",
+      "4": "Verifying charge",
+      "5": "Saving dock pose",
+      "6": "Idle",
+      "7": "Done",
+      "8": "Capturing position on the dock"
+    },
+    "retries": {
+      "1": "Wait for a stable RTK Fixed position, then retry.",
+      "2": "GPS heading is inconsistent. Wait for reliable positioning, then retry.",
+      "3": "The reverse distance was too short to measure heading.",
+      "4": "The return used the old dock pose and did not reach the charger. Restart ROS2 before returning to dock, or place the robot on the dock manually.",
+      "5": "Emergency stop is active. Resolve its cause before releasing it and retrying.",
+      "6": "The robot must be charging on its dock with mowing stopped.",
+      "7": "The dock pose was not fully saved. Review the reported error before retrying."
+    }
+  },
+  "settingsHardwareBackend": {
+    "active": "Active backend",
+    "names": {
+      "mowgli": "Mowgli board (STM32)",
+      "openmower": "OpenMower v1 (LowLevel board + xESC)",
+      "mavros": "Pixhawk (MAVROS)"
+    },
+    "descriptions": {
+      "mowgli": "The Mowgli STM32 firmware drives the motors and owns blade and emergency safety. It needs no wiring settings here.",
+      "openmower": "The stock OpenMower electronics keep their own firmware; a bridge container drives them. Settings MowgliNext already has (charge limits, lift delays, ticks per metre…) stay in their usual sections and are applied to the OpenMower hardware.",
+      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer."
+    },
+    "choiceNote": "The backend is chosen when installing the robot.",
+    "openmowerRestartNote": "The OpenMower bridge reads these settings when it starts: use \"Restart ROS2\" after saving, which restarts the bridge too.",
+    "shortNames": {
+      "mowgli": "Mowgli",
+      "openmower": "OpenMower v1",
+      "mavros": "MAVROS"
+    },
+    "badgeTooltip": "Hardware backend: {{name}} — open the hardware settings"
   }
 }

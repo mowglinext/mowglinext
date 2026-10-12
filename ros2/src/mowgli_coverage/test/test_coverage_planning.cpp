@@ -26,6 +26,7 @@ using mowgli_coverage::buildContinuousPath;
 using mowgli_coverage::buildContinuousSubPaths;
 using mowgli_coverage::dedupClosedRing;
 using mowgli_coverage::distanceToRing;
+using mowgli_coverage::orderSubPathsForMinimalTransit;
 using mowgli_coverage::planBoustrophedon;
 using mowgli_coverage::pointInRing;
 
@@ -329,6 +330,83 @@ TEST(CoveragePlanning, FixedAngleIsHonouredAndDeterministic)
   }
 }
 
+// BruteForce steps lanes by a fixed op_width from one edge, so an extent that is
+// not a whole number of lanes left a strip (up to op_width/2 + the stepping
+// granularity) on the far side that no lane covered — field-reported 2026-10-02
+// as a skipped strip under the headland. The lanes are now spread evenly over
+// the extent. 1.0 m across / 0.16 m lanes = 6.25: fixed stepping puts the last
+// lane centre 0.12 m from the far edge (strip 0.04 m beyond its reach), even
+// spreading puts BOTH outer lanes within op_width/2 of their edge.
+TEST(CoveragePlanning, SwathsAreSpreadEvenlyAcrossTheCell)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeight = 1.0;
+  const auto plan = planBoustrophedon(makeRectCentered(3.0, kHeight),
+                                      kOpWidth,
+                                      0.18,
+                                      /*passes=*/-1,
+                                      /*chassis_safety_inset=*/kOpWidth / 2.0,
+                                      /*mow_angle_rad=*/0.0,
+                                      0.15);
+  ASSERT_TRUE(plan.rings.empty());
+  ASSERT_GE(plan.swaths.size(), 6u);
+
+  std::vector<double> lanes;
+  for (const auto& s : plan.swaths)
+  {
+    lanes.push_back(0.5 * (s.first.second + s.second.second));
+  }
+  std::sort(lanes.begin(), lanes.end());
+
+  constexpr double kSlack = 0.01;  // densification / GEOS buffer noise
+  EXPECT_LE(lanes.front() - (-kHeight / 2.0), kOpWidth / 2.0 + kSlack)
+      << "near-edge strip left unplanned";
+  EXPECT_LE(kHeight / 2.0 - lanes.back(), kOpWidth / 2.0 + kSlack)
+      << "far-edge strip left unplanned — lanes were stepped, not spread evenly";
+  for (std::size_t i = 1; i < lanes.size(); ++i)
+  {
+    EXPECT_LE(lanes[i] - lanes[i - 1], kOpWidth + 1e-6)
+        << "gap between lanes " << i - 1 << "→" << i;
+  }
+}
+
+// F2C places floor(extent / op_width) lanes, so a remainder of MORE than half a lane is the
+// common case, not an edge case: a field plan measured extent/op = 10.97 and got 10 lanes,
+// leaving a 0.136 m strip (almost a whole lane) unplanned beside the headland. 1.08 m across /
+// 0.16 m lanes = 6.75: fixed stepping gives 6 lanes whose last centre is 0.20 m from the far
+// edge; spreading them gives 7, both outer lanes within op_width/2 of their edge.
+TEST(CoveragePlanning, SwathsAreSpreadEvenlyWhenTheRemainderIsOverHalfALane)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeight = 1.08;
+  const auto plan = planBoustrophedon(makeRectCentered(3.0, kHeight),
+                                      kOpWidth,
+                                      0.18,
+                                      /*passes=*/-1,
+                                      /*chassis_safety_inset=*/kOpWidth / 2.0,
+                                      /*mow_angle_rad=*/0.0,
+                                      0.15);
+  ASSERT_TRUE(plan.rings.empty());
+
+  std::vector<double> lanes;
+  for (const auto& s : plan.swaths)
+  {
+    lanes.push_back(0.5 * (s.first.second + s.second.second));
+  }
+  std::sort(lanes.begin(), lanes.end());
+  ASSERT_GE(lanes.size(), 7u) << "the lanes were stepped, not spread: a strip is left unplanned";
+
+  constexpr double kSlack = 0.01;
+  EXPECT_LE(lanes.front() - (-kHeight / 2.0), kOpWidth / 2.0 + kSlack);
+  EXPECT_LE(kHeight / 2.0 - lanes.back(), kOpWidth / 2.0 + kSlack)
+      << "far-edge strip left unplanned";
+  for (std::size_t i = 1; i < lanes.size(); ++i)
+  {
+    EXPECT_LE(lanes[i] - lanes[i - 1], kOpWidth + 1e-6)
+        << "gap between lanes " << i - 1 << "→" << i;
+  }
+}
+
 // 5x5 m square with a 1.5x1.5 m central hole: no swath may cross the hole —
 // each sweep line is clipped into per-side swaths (F2C v3 makes every disjoint
 // clip its own swath; that property replaces decomposition).
@@ -402,12 +480,12 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
 
   // The DRIVER follows the split sub-paths; each must be internally hole-free.
   // The gap between consecutive sub-paths is bridged by a blade-off Nav2 transit
-  // (routes around the hole), so it is intentionally NOT continuous here.
+  // (routes around the hole); safe continuous routes are also allowed.
   const auto subs =
       buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
-  ASSERT_GE(subs.size(), 2u)
-      << "a central hole must split the path into >=2 sub-paths (else a connector "
-         "cut through the hole)";
+  ASSERT_FALSE(subs.empty());
+  // A connector-aware sweep can route around the hole without splitting.
+  // Verify the geometry below instead of requiring the old greedy split count.
   // At most one break can be introduced per join. This catches accidental
   // fragmentation inside a segment while allowing untrackable swath-end
   // fallbacks to become explicit blade-off transitions.
@@ -454,7 +532,10 @@ TEST_P(CrossHatchContinuousPath, HoleFreeFieldSplitsDiscontinuousFallbacks)
   ASSERT_TRUE(plan.safe_holes.empty()) << "test field must be hole-free";
   mowgli_coverage::ConnectorStats stats;
   const auto subs = buildContinuousSubPaths(plan, plan.safe_boundary, 0.18, 0.15, 0.05, &stats);
-  EXPECT_GT(stats.split, 0u);
+  // Wider row choices may now avoid every fallback. An actual untrackable
+  // two-row join is checked separately by the pivot-join fixtures.
+  EXPECT_GT(stats.attempted, 0u);
+  EXPECT_EQ(stats.arc + stats.split, stats.attempted);
   EXPECT_EQ(stats.straight_kept, 0u);
   EXPECT_EQ(subs.size(), stats.split + 1u);
 }
@@ -479,7 +560,11 @@ TEST(CoverageContinuousPath, SingleCentralHoleSplitsOnlyAtJoins)
   // inset 0.0 leaves safe_boundary empty → fall back to the raw field ring.
   const auto boundary = plan.safe_boundary.empty() ? squareRing(kSide) : plan.safe_boundary;
   const auto subs = buildContinuousSubPaths(plan, boundary, 0.18, 0.15, 0.05);
-  EXPECT_GE(subs.size(), 2u) << "the central hole must still split the path (safety)";
+  ASSERT_FALSE(subs.empty());
+  for (const auto& path : subs)
+    for (const auto& point : path)
+      for (const auto& safe_hole : plan.safe_holes)
+        EXPECT_FALSE(pointInRing(point.first, point.second, safe_hole));
   EXPECT_LE(subs.size(), plan.rings.size() + plan.swaths.size());
 }
 
@@ -504,7 +589,7 @@ TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
   // 10 m square with two separated holes. Sub-paths split ONLY where a blade-on
   // connector cannot clear a hole (obstacle-driven, issue #333) — a lobe change
   // that passes to the SIDE of a hole stays blade-on, so this field yields a
-  // small number of hole-free lobes (>= 2), enough to exercise the NN reorder.
+  // small number of hole-free lobes (possibly one with connector-aware ordering).
   // The reorder's SAFETY contract (every sub-path stays hole-free; the order is
   // deterministic for BT resume-by-index) is what this test guards, not a
   // specific lobe count.
@@ -526,7 +611,7 @@ TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
   ASSERT_GE(plan.safe_holes.size(), 2u) << "both holes must reach the plan as safe_holes";
   const auto subs =
       buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
-  ASSERT_GE(subs.size(), 2u) << "holes must split the plan into >=2 hole-free lobes to reorder";
+  ASSERT_FALSE(subs.empty());  // Avoiding a hole no longer requires a split.
 
   // (1) Hole-free preserved after reorder/reversal.
   std::size_t in_hole = 0, total = 0;
@@ -575,6 +660,118 @@ TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
   EXPECT_LT(transit, field_diag * static_cast<double>(subs.size()))
       << "relocation transit " << transit << " m implausibly long for " << subs.size()
       << " sub-paths — the NN order is not sequencing lobes locally";
+}
+
+// mowglinext#818: field-measured 9.78 m transit gap between the only two
+// sub-paths of an otherwise-adjacent area — traced to the single-seed NN
+// search only ever entering sub-path B from A's END (A pinned as seed 0,
+// always driven forward), never trying the reverse: starting from B and
+// letting A be entered from whichever of ITS ends is closer. Here A's FRONT
+// sits right next to B's END while A's BACK (the only point the single-seed
+// search ever measured from) is far from both ends of B — a case the old
+// algorithm could not find no matter which way it reversed B.
+TEST(CoveragePlanning, SubPathOrderTriesEverySeedNotJustTheFirst)
+{
+  // A: front=(0,1.05) very close to B's back; back=(5,5) far from B either way.
+  const std::vector<std::pair<double, double>> a{{0.0, 1.05}, {5.0, 5.0}};
+  // B: front=(20,20) far from A either way; back=(0,1) 0.05 m from A's front.
+  const std::vector<std::pair<double, double>> b{{20.0, 20.0}, {0.0, 1.0}};
+
+  const auto ordered = orderSubPathsForMinimalTransit({a, b});
+  ASSERT_EQ(ordered.size(), 2u);
+
+  const double realized_transit = std::hypot(ordered[1].front().first - ordered[0].back().first,
+                                             ordered[1].front().second - ordered[0].back().second);
+
+  // The single-seed algorithm this replaces could only reach 6.4 m here (seed
+  // forced to A, B reversed: A.back=(5,5) to B.back=(0,1)). Trying B as the
+  // seed instead finds B.back=(0,1) -> A.front=(0,1.05), 0.05 m.
+  EXPECT_NEAR(realized_transit, 0.05, 1e-6)
+      << "expected the seed=B order (0.05 m link) instead of the old single-seed "
+         "optimum (6.4 m, seed pinned to A)";
+
+  // Whichever sub-path ends up second, ITS points must be unchanged as a set
+  // (only reordered/reversed, never altered) — same safety contract as the
+  // full-plan reorder test above.
+  auto asSet = [](const std::vector<std::pair<double, double>>& poly)
+  {
+    std::vector<std::pair<double, double>> sorted(poly.begin(), poly.end());
+    std::sort(sorted.begin(), sorted.end());
+    return sorted;
+  };
+  std::vector<std::pair<double, double>> all_ordered;
+  for (const auto& sp : ordered)
+  {
+    all_ordered.insert(all_ordered.end(), sp.begin(), sp.end());
+  }
+  std::vector<std::pair<double, double>> all_input = a;
+  all_input.insert(all_input.end(), b.begin(), b.end());
+  EXPECT_EQ(asSet(all_ordered), asSet(all_input)) << "reorder must not add/drop/move points";
+}
+
+// A field where the raw input order is already optimal must come back
+// byte-for-byte unchanged (never spuriously reversed/reordered by float noise
+// in the O(n^3) seed search).
+TEST(CoveragePlanning, SubPathOrderLeavesAnAlreadyOptimalChainAlone)
+{
+  const std::vector<std::pair<double, double>> a{{0.0, 0.0}, {0.0, 1.0}};
+  const std::vector<std::pair<double, double>> b{{0.0, 1.01}, {0.0, 2.0}};
+  const auto ordered = orderSubPathsForMinimalTransit({a, b});
+  ASSERT_EQ(ordered.size(), 2u);
+  EXPECT_EQ(ordered[0], a);
+  EXPECT_EQ(ordered[1], b);
+}
+
+// Above kMaxSeedSearchSize sub-paths, the search falls back to the
+// single-seed=0 behavior rather than paying the full O(n^3) cost — still
+// expected to return a valid permutation of every input point.
+TEST(CoveragePlanning, SubPathOrderHandlesManySubPathsWithoutCrashing)
+{
+  std::vector<std::vector<std::pair<double, double>>> many;
+  for (int i = 0; i < 50; ++i)
+  {
+    const double x = static_cast<double>(i) * 3.0;
+    many.push_back({{x, 0.0}, {x, 1.0}});
+  }
+  // Shuffle-ish input order (reverse) so there is real reordering to do.
+  std::reverse(many.begin(), many.end());
+  const auto ordered = orderSubPathsForMinimalTransit(many);
+  ASSERT_EQ(ordered.size(), many.size());
+  std::size_t total_points = 0;
+  for (const auto& sp : ordered)
+  {
+    total_points += sp.size();
+  }
+  EXPECT_EQ(total_points, many.size() * 2);
+}
+
+// mowglinext#819 review (liltaket): trying every sub-path as seed must never
+// reverse sub-path 0's ORIGINAL winding, even when a DIFFERENT sub-path wins
+// as seed and pulls sub-path 0 in as an ordinary candidate. sub-path 0 is the
+// one most likely to carry headland-ring material (buildContinuousSubPaths
+// appends rings before swaths), and reversing a ring's point order reverses
+// its driven winding — silently inverting the operator's ring_direction
+// (#335) for a shorter transit link.
+//
+// Constructed so seed=2 ("Z") is the clear global optimum IF sub-path 0
+// ("R") may be reversed (Z->R-reversed->Y totals 0.002 m), strictly beating
+// every other seed (seed=0 totals 10.001 m, seed=1 totals ~64 m) — so an
+// unprotected search would pick it and reverse R. With R protected, seed=2's
+// own total rises to 20.0 m (R must be entered forward, at 9.999 m instead
+// of 0.001 m), making seed=0 (10.001 m, R AS the seed — always forward
+// regardless) the new global optimum: R survives untouched either way, but
+// only the protection guarantees it.
+TEST(CoveragePlanning, SubPathOrderNeverReversesSubPathZero)
+{
+  const std::vector<std::pair<double, double>> r{{0.0, 10.0}, {0.0, 0.0}};
+  const std::vector<std::pair<double, double>> y{{0.0, 10.001}, {50.0, 50.0}};
+  const std::vector<std::pair<double, double>> z{{0.0, -0.001}, {0.0, 0.001}};
+
+  const auto ordered = orderSubPathsForMinimalTransit({r, y, z});
+  ASSERT_EQ(ordered.size(), 3u);
+
+  const auto it = std::find(ordered.begin(), ordered.end(), r);
+  ASSERT_NE(it, ordered.end()) << "sub-path 0 (R) must survive as an exact, unreversed match";
 }
 
 // #335: ring_direction controls the perimeter/headland travel winding (blade
@@ -692,7 +889,10 @@ TEST_P(CrossHatchContinuousPath, NotchFieldLobeChainedNoMidFieldJoins)
     double run = 0.0;
     for (std::size_t i = 0; i < path.size(); ++i)
     {
-      if (!pointInRing(path[i].first, path[i].second, plan.safe_boundary))
+      // Match the planner's 1 mm on-edge predicate (ring/swath endpoints may
+      // sit on either side of the strict ray-casting classification).
+      if (!pointInRing(path[i].first, path[i].second, plan.safe_boundary) &&
+          distanceToRing(path[i].first, path[i].second, plan.safe_boundary) > 0.001)
       {
         ++oob;
       }
@@ -754,6 +954,136 @@ TEST_P(CrossHatchContinuousPath, NotchFieldLobeChainedNoMidFieldJoins)
   EXPECT_LT(worst_conn_run, 3.5)
       << "a " << worst_conn_run << " m blade-on connector run crosses the field — a "
       << "relocation is being mowed instead of split into a Nav2 transit";
+}
+
+// Field report: "a weird little loop between headland rings" — the ring-to-
+// ring entry vertex used to be picked by nearest-Euclidean-distance among
+// heading-aligned candidates, which for closely-spaced concentric rings (ring
+// spacing == op_width, well under twice the turn radius here) sits almost
+// directly inward from the previous ring's end with near-zero forward
+// advance. That is exactly the "spacing < 2*radius forces an omega (RLR/LRL)
+// loop" geometry already documented for swath-end turn-arounds (see
+// ConnectorStats's "WHAT IT MEASURED" comment above) — a forward-only Dubins
+// connector cannot just slide sideways between two closely-spaced, near-
+// parallel poses. The fix biases the entry-point search toward a point far
+// enough ALONG the next ring for a clean two-arc diagonal merge instead.
+//
+// Assert directly on the driven path: no ring-to-ring connector run may turn
+// through anywhere near a full loop. A clean two-arc merge turns through at
+// most ~180 degrees total; an omega/loop maneuver turns through close to or
+// beyond 360 by construction, so 300 degrees cleanly separates the two
+// without being sensitive to exact path-length tuning.
+TEST(CoverageContinuousPath, RingToRingJoinsDoNotLoop)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr int kNumRings = 5;  // production default (mowgli_robot.yaml)
+  constexpr double kTurnRadius = 0.18;  // deployed connector_turn_radius default
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kStep = 0.03;
+
+  // 10 x 10 m square: large enough for 5 rings (0.8 m total inset) plus a
+  // real mainland with swaths, so ring-to-ring joins sit alongside ordinary
+  // swath-to-swath and ring-to-swath joins in the same driven path.
+  const auto cell = makeSquare(10.0);
+
+  const auto plan = planBoustrophedon(cell,
+                                      kOpWidth,
+                                      /*headland_width=*/0.18,
+                                      kNumRings,
+                                      0.0,
+                                      -1.0,
+                                      kMinSwath,
+                                      /*ring_direction=*/0,
+                                      kMinTurnRadius);
+  ASSERT_GE(plan.rings.size(), 5u) << "expected all 5 forced headland rings to plan";
+  ASSERT_FALSE(plan.connector_clearance_boundary.empty());
+
+  const auto subs = buildContinuousSubPaths(
+      plan, plan.connector_clearance_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_FALSE(subs.empty());
+
+  // Ring-only primitives, so a connector run's endpoints can be classified as
+  // "adjacent to a ring" independent of the swaths that follow in the same
+  // driven sub-path.
+  std::vector<std::array<double, 4>> ring_prim;
+  for (const auto& loop : plan.rings)
+  {
+    for (std::size_t i = 0; i + 1 < loop.size(); ++i)
+    {
+      ring_prim.push_back({loop[i].first, loop[i].second, loop[i + 1].first, loop[i + 1].second});
+    }
+  }
+  auto distToRingPrims = [&ring_prim](double x, double y)
+  {
+    double best = std::numeric_limits<double>::max();
+    for (const auto& s : ring_prim)
+    {
+      const double dx = s[2] - s[0], dy = s[3] - s[1];
+      const double l2 = dx * dx + dy * dy;
+      double t = l2 > 1e-12 ? ((x - s[0]) * dx + (y - s[1]) * dy) / l2 : 0.0;
+      t = std::max(0.0, std::min(1.0, t));
+      best = std::min(best, std::hypot(x - (s[0] + t * dx), y - (s[1] + t * dy)));
+    }
+    return best;
+  };
+  auto heading = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
+  {
+    return std::atan2(b.second - a.second, b.first - a.first);
+  };
+  auto turnDeg = [](double h_in, double h_out)
+  {
+    double d = h_out - h_in;
+    while (d > M_PI)
+      d -= 2.0 * M_PI;
+    while (d < -M_PI)
+      d += 2.0 * M_PI;
+    return std::fabs(d) * 180.0 / M_PI;
+  };
+
+  constexpr double kOnRingTolM = 0.05;  // rings are densified far finer than this
+  constexpr double kMaxLoopishTurnDeg = 300.0;
+
+  std::size_t ring_to_ring_joins_checked = 0;
+  for (const auto& path : subs)
+  {
+    ASSERT_GE(path.size(), 2u);
+    bool in_connector = false;
+    bool run_started_on_ring = false;
+    double cum_turn = 0.0;
+    for (std::size_t i = 1; i + 1 < path.size(); ++i)
+    {
+      const bool on_ring = distToRingPrims(path[i].first, path[i].second) <= kOnRingTolM;
+      if (!on_ring && !in_connector)
+      {
+        in_connector = true;
+        cum_turn = 0.0;
+        run_started_on_ring = distToRingPrims(path[i - 1].first, path[i - 1].second) <= kOnRingTolM;
+      }
+      // Accumulate the turn AT this point before checking whether the run
+      // just closed, so the closing turn (off-ring segment -> the re-entry
+      // segment onto the next ring) is included in cum_turn.
+      if (in_connector)
+      {
+        cum_turn += turnDeg(heading(path[i - 1], path[i]), heading(path[i], path[i + 1]));
+      }
+      if (on_ring && in_connector)
+      {
+        if (run_started_on_ring)
+        {
+          ++ring_to_ring_joins_checked;
+          EXPECT_LT(cum_turn, kMaxLoopishTurnDeg)
+              << "ring-to-ring connector turns " << cum_turn
+              << " degrees cumulative — looks like an omega/loop maneuver, not a "
+                 "diagonal merge";
+        }
+        in_connector = false;
+      }
+    }
+  }
+  EXPECT_GE(ring_to_ring_joins_checked, 3u)
+      << "expected several ring-to-ring joins in a 5-ring plan; found "
+      << ring_to_ring_joins_checked << " — test may not be exercising the intended geometry";
 }
 
 // Concave L-shape: covered without decomposition — swaths exist in BOTH lobes
@@ -1518,20 +1848,26 @@ TEST(CoverageContinuousPath, ShippedGeometryTightSwathLimitFragmentsUTurns)
   constexpr int kLimit = 3;  // apron (3 - 0.5) * 0.16 = 0.40 m < ~0.49 m needed
   const auto cell = makeSquare(kSize);
 
-  const auto plan = planBoustrophedon(cell,
-                                      kOpWidth,
-                                      0.9,
-                                      kRings,
-                                      /*chassis_safety_inset=*/0.0,
-                                      -1.0,
-                                      kMinSwath,
-                                      0,
-                                      kMinTurnRadius,
-                                      false,
-                                      kLimit);
+  auto plan = planBoustrophedon(cell,
+                                kOpWidth,
+                                0.9,
+                                kRings,
+                                /*chassis_safety_inset=*/0.0,
+                                -1.0,
+                                kMinSwath,
+                                0,
+                                kMinTurnRadius,
+                                false,
+                                kLimit);
   ASSERT_FALSE(plan.rings.empty());
   ASSERT_FALSE(plan.swaths.empty());
   ASSERT_GE(plan.swath_turn_envelope.size(), 3u) << "limit=3 of 5 should populate an envelope";
+
+  // Isolate an adjacent-row join. With a full field the ordering optimiser
+  // can skip a row for a wider arc, so fragmentation is no longer inevitable.
+  ASSERT_GE(plan.swaths.size(), 2u);
+  plan.swaths.resize(2);
+  plan.rings.clear();
 
   mowgli_coverage::ConnectorStats baseline_stats;
   (void)buildContinuousSubPaths(
@@ -1994,6 +2330,8 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   double total_len = 0.0, worst_turn = 0.0;
   std::size_t oob = 0, tight_run = 0;
   double min_clearance = std::numeric_limits<double>::max();
+  double max_past_ring = 0.0;
+  constexpr double kOnEdgeTol = 1e-3;  // == the planner's kOnEdgeTolM
   for (const auto& path : subs)
   {
     ASSERT_GE(path.size(), 2u);
@@ -2012,9 +2350,18 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
     // that much inside the raw boundary.
     for (const auto& p : path)
     {
+      // A connector/pivot pose can sit EXACTLY on the clearance ring (a swath end
+      // or an arc clipped to it), where the strict ray-cast pointInRing is
+      // ambiguous. The planner itself accepts that (allInside's kOnEdgeTolM, 1 mm),
+      // so judge "outside" by the same yardstick: further than 1 mm past the ring.
       if (!pointInRing(p.first, p.second, connector_boundary))
       {
-        ++oob;
+        const double past = distanceToRing(p.first, p.second, connector_boundary);
+        max_past_ring = std::max(max_past_ring, past);
+        if (past > kOnEdgeTol)
+        {
+          ++oob;
+        }
       }
       min_clearance = std::min(min_clearance, distanceToRing(p.first, p.second, boundary));
     }
@@ -2038,7 +2385,8 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   EXPECT_LT(worst_turn, 120.0) << "a sub-path has a " << worst_turn
                                << "° turn — a near-reversal cusp is not trackable";
   EXPECT_EQ(oob, 0u) << oob << "/" << total_poses
-                     << " continuous-path points are outside the safety-inset ring";
+                     << " continuous-path points are outside the safety-inset ring (furthest "
+                     << max_past_ring << " m past it)";
   // Effective planning inset = chassis_safety_inset − op_width/2 (the outermost
   // ring centerline sits `kInset` inside the raw line; the field it is planned
   // in is shrunk by that much less). Connectors/fillets ride the planning
@@ -2055,6 +2403,51 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   EXPECT_LT(total_poses, 200000u) << "path is implausibly large";
   EXPECT_NEAR(subs.front().front().first, plan.rings.front().front().first, 1e-9);
   EXPECT_NEAR(subs.front().front().second, plan.rings.front().front().second, 1e-9);
+}
+
+// Evidence pin for the sub-paths FollowStrip actually receives, not a
+// production rejection rule. On the shipped five-pass, 0.16 m operation-width,
+// 0.18 m headland and 0.20 m connector/min-radius geometry, every split is a
+// blade-off transit and must remain bounded on the recorded operator area.
+TEST(CoverageContinuousPath, RecordedArea1ShippedGeometryBoundsBladeOffExecutorTransits)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr int kHeadlandPasses = 5;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kTurnRadius = 0.20;
+  constexpr double kStep = 0.03;
+
+  const auto plan = planBoustrophedon(
+      makeRecordedArea1(), kOpWidth, kHeadland, kHeadlandPasses, 0.0, -1.0, kMinSwath);
+  ASSERT_EQ(plan.rings.size(), static_cast<std::size_t>(kHeadlandPasses));
+  ASSERT_FALSE(plan.swaths.empty());
+  ASSERT_GE(plan.connector_clearance_boundary.size(), 3u);
+
+  // Mirror the launch-injected pivot limits from the shipped 0.60 x 0.45 m
+  // chassis at base_link x=0.18 with the 0.05 m footprint margin. The soft
+  // boundary band is floored at this circumscribed radius in
+  // robot_config_util.boundary_soft_margin().
+  mowgli_coverage::PivotJoinLimits pivot_limits;
+  pivot_limits.sweep_radius = std::hypot(0.18 + 0.60 / 2.0 + 0.05, 0.45 / 2.0 + 0.05);
+  pivot_limits.boundary_margin = pivot_limits.sweep_radius;
+  pivot_limits.recorded_boundary = recordedArea1Pts();
+
+  mowgli_coverage::ConnectorStats stats;
+  const auto subpaths = buildContinuousSubPaths(plan,
+                                                plan.connector_clearance_boundary,
+                                                kTurnRadius,
+                                                kTurnRadius,
+                                                kStep,
+                                                &stats,
+                                                plan.swath_turn_envelope,
+                                                pivot_limits);
+
+  ASSERT_GT(stats.attempted, 10u) << "fixture no longer exercises a non-trivial coverage plan";
+  EXPECT_LE(stats.split, 4u);
+  EXPECT_LE(static_cast<double>(stats.split) / static_cast<double>(stats.attempted), 0.20);
+  EXPECT_EQ(subpaths.size(), stats.split + 1u);
+  EXPECT_LE(subpaths.size(), 5u);
 }
 
 // ===========================================================================
@@ -2441,9 +2834,15 @@ constexpr int kShippedHeadlandPasses = 5;  // mowgli_robot.yaml num_headland_pas
 
 // Plan a 6 m square with `rings` perimeter passes, then join it exactly the way
 // coverage_server does — bounded by connector_clearance_boundary, not the looser
-// safe_boundary — and return how every join resolved.
-mowgli_coverage::ConnectorStats connectorOutcomes(
-    int rings, double op_width, double headland, double turn_radius, double min_turn_radius)
+// safe_boundary — and return how every join resolved. adjacent_pairs_only
+// isolates each consecutive row pair to test the connector's apron constraint
+// independently of the route optimiser's ability to select wider turns.
+mowgli_coverage::ConnectorStats connectorOutcomes(int rings,
+                                                  double op_width,
+                                                  double headland,
+                                                  double turn_radius,
+                                                  double min_turn_radius,
+                                                  bool adjacent_pairs_only = false)
 {
   const f2c::types::Cell cell = makeSquare(6.0);
   const auto plan =
@@ -2453,8 +2852,21 @@ mowgli_coverage::ConnectorStats connectorOutcomes(
                                        ? plan.connector_clearance_boundary
                                        : plan.safe_boundary;
   mowgli_coverage::ConnectorStats stats;
-  (void)buildContinuousSubPaths(
-      plan, connector_boundary, turn_radius, min_turn_radius, kStatsStep, &stats);
+  if (adjacent_pairs_only)
+  {
+    for (std::size_t i = 1; i < plan.swaths.size(); ++i)
+    {
+      BoustrophedonPlan pair;
+      pair.swaths = {plan.swaths[i - 1], plan.swaths[i]};
+      (void)buildContinuousSubPaths(
+          pair, connector_boundary, turn_radius, min_turn_radius, kStatsStep, &stats);
+    }
+  }
+  else
+  {
+    (void)buildContinuousSubPaths(
+        plan, connector_boundary, turn_radius, min_turn_radius, kStatsStep, &stats);
+  }
   return stats;
 }
 }  // namespace
@@ -2566,6 +2978,24 @@ TEST(CoverageConnectorStats, OutcomesPartitionAttemptedJoins)
   EXPECT_EQ(stats.pivot, 0u) << "pivot joins are opt-in: no limits, no pivot join";
 }
 
+TEST(CoverageConnectorStats, SplitWarningThresholdIncludesExactBoundary)
+{
+  mowgli_coverage::ConnectorStats stats;
+  EXPECT_FALSE(mowgli_coverage::connectorSplitRateWarns(stats));
+
+  stats = {.attempted = 4, .split = 0};
+  EXPECT_FALSE(mowgli_coverage::connectorSplitRateWarns(stats));
+
+  stats = {.attempted = 4, .split = 1};
+  EXPECT_TRUE(mowgli_coverage::connectorSplitRateWarns(stats));
+
+  stats = {.attempted = 100, .split = 24};
+  EXPECT_FALSE(mowgli_coverage::connectorSplitRateWarns(stats));
+
+  stats = {.attempted = 100, .split = 25};
+  EXPECT_TRUE(mowgli_coverage::connectorSplitRateWarns(stats));
+}
+
 // Counter sanity on a case whose outcome is hand-checkable, so a stuck
 // classifier cannot masquerade as a planner result. With the swath spacing at
 // or above twice the turn radius (0.50 >= 2 * 0.18) the turn-around is a plain
@@ -2600,10 +3030,18 @@ TEST(CoverageConnectorStats, EveryJoinIsAnArcWhenSpacingExceedsTwiceTheTurnRadiu
 TEST(CoverageConnectorStats, SwathEndArcsAreDecidedByTheHeadlandApronNotTheRadius)
 {
   constexpr int kInsufficientPasses = 2;
-  const auto insufficient = connectorOutcomes(
-      kInsufficientPasses, kStatsOpWidth, kStatsHeadland, kStatsTurnRadius, kStatsMinTurnRadius);
-  const auto production = connectorOutcomes(
-      kShippedHeadlandPasses, kStatsOpWidth, kStatsHeadland, kStatsTurnRadius, kStatsMinTurnRadius);
+  const auto insufficient = connectorOutcomes(kInsufficientPasses,
+                                              kStatsOpWidth,
+                                              kStatsHeadland,
+                                              kStatsTurnRadius,
+                                              kStatsMinTurnRadius,
+                                              true);
+  const auto production = connectorOutcomes(kShippedHeadlandPasses,
+                                            kStatsOpWidth,
+                                            kStatsHeadland,
+                                            kStatsTurnRadius,
+                                            kStatsMinTurnRadius,
+                                            true);
 
   ASSERT_GT(insufficient.attempted, 10u);
   ASSERT_GT(production.attempted, 10u);

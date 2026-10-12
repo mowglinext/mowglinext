@@ -896,6 +896,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/api.ErrorResponse"
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
                     }
                 }
             }
@@ -946,6 +952,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/api.ErrorResponse"
                         }
@@ -2023,8 +2035,12 @@ const docTemplate = `{
         "api.Schedule": {
             "type": "object",
             "properties": {
-                "area": {
+                "areaId": {
+                    "description": "AreaID is the STABLE map area id (MapArea.id) this schedule mows; 0 means\nevery area (a plain Start). The scheduler resolves it to the current\npositional index when the schedule fires. AreaName is a display snapshot\nso the GUI and MQTT consumers can label it, even if the area was removed.",
                     "type": "integer"
+                },
+                "areaName": {
+                    "type": "string"
                 },
                 "createdAt": {
                     "type": "string"
@@ -2264,8 +2280,23 @@ const docTemplate = `{
                 "area": {
                     "$ref": "#/definitions/geometry.Polygon"
                 },
+                "has_mow_angle": {
+                    "type": "boolean"
+                },
+                "has_ring_direction": {
+                    "type": "boolean"
+                },
+                "has_start_point": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "integer"
+                },
                 "is_navigation_area": {
                     "type": "boolean"
+                },
+                "mow_angle_deg": {
+                    "type": "number"
                 },
                 "name": {
                     "type": "string"
@@ -2281,6 +2312,15 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/geometry.Polygon"
                     }
+                },
+                "ring_direction": {
+                    "type": "integer"
+                },
+                "start_x": {
+                    "type": "number"
+                },
+                "start_y": {
+                    "type": "number"
                 }
             }
         },
@@ -2499,6 +2539,13 @@ const docTemplate = `{
                 },
                 "firmwareSource": {
                     "description": "FirmwareSource is the GUI dropdown selector: \"custom\" compiles from\nsource (the expert path), \"prebuilt\" (or empty, for older payloads)\nflashes the tested prebuilt binary.",
+                    "type": "string"
+                },
+                "firmwareTarget": {
+                    "description": "FirmwareTarget is an exact PlatformIO/release-manifest environment for\nboards with multiple firmware variants. Empty preserves legacy routing.",
+                    "type": "string"
+                },
+                "firmwareTargetOrigin": {
                     "type": "string"
                 },
                 "imuOnboardInclinationThreshold": {

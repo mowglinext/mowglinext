@@ -47,8 +47,8 @@ export const NavigationSection: React.FC<Props> = ({
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={fieldLabel("xy_goal_tolerance", t("settingsNavigation.transitXyTolerance"))} tooltip={t("settingsNavigation.transitXyToleranceTooltip")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-xy_goal_tolerance" data-setting-key="xy_goal_tolerance" label={fieldLabel("xy_goal_tolerance", t("settingsNavigation.transitXyTolerance"))} tooltip={t("settingsNavigation.transitXyToleranceTooltip")}>
+                                    <InputNumber aria-label={t("settingsNavigation.transitXyTolerance") + ", m"} aria-description={t("settingsNavigation.transitXyToleranceTooltip")}  id="setting-xy_goal_tolerance"
                                         value={values.xy_goal_tolerance}
                                         onChange={(v) => onChange("xy_goal_tolerance", v)}
                                         min={0.1} max={2.0} step={0.1} precision={2}
@@ -57,8 +57,8 @@ export const NavigationSection: React.FC<Props> = ({
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={fieldLabel("yaw_goal_tolerance", t("settingsNavigation.yawTolerance"))} tooltip={t("settingsNavigation.yawToleranceTooltip")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-yaw_goal_tolerance" data-setting-key="yaw_goal_tolerance" label={fieldLabel("yaw_goal_tolerance", t("settingsNavigation.yawTolerance"))} tooltip={t("settingsNavigation.yawToleranceTooltip")}>
+                                    <InputNumber aria-label={t("settingsNavigation.yawTolerance") + ", rad"} aria-description={t("settingsNavigation.yawToleranceTooltip")}  id="setting-yaw_goal_tolerance"
                                         value={values.yaw_goal_tolerance}
                                         onChange={(v) => onChange("yaw_goal_tolerance", v)}
                                         min={0.1} max={3.14} step={0.1} precision={2}
@@ -67,8 +67,8 @@ export const NavigationSection: React.FC<Props> = ({
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={fieldLabel("coverage_xy_tolerance", t("settingsNavigation.coverageXyTolerance"))} tooltip={t("settingsNavigation.coverageXyToleranceTooltip")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-coverage_xy_tolerance" data-setting-key="coverage_xy_tolerance" label={fieldLabel("coverage_xy_tolerance", t("settingsNavigation.coverageXyTolerance"))} tooltip={t("settingsNavigation.coverageXyToleranceTooltip")}>
+                                    <InputNumber aria-label={t("settingsNavigation.coverageXyTolerance") + ", m"} aria-description={t("settingsNavigation.coverageXyToleranceTooltip")}  id="setting-coverage_xy_tolerance"
                                         value={values.coverage_xy_tolerance}
                                         onChange={(v) => onChange("coverage_xy_tolerance", v)}
                                         min={0.05} max={1.0} step={0.05} precision={2}
@@ -85,8 +85,8 @@ export const NavigationSection: React.FC<Props> = ({
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
                         <Col xs={12} sm={8}>
-                            <Form.Item label={fieldLabel("progress_timeout_sec", t("settingsNavigation.progressTimeout"))} tooltip={t("settingsNavigation.progressTimeoutTooltip")}>
-                                <InputNumber
+                            <Form.Item htmlFor="setting-progress_timeout_sec" data-setting-key="progress_timeout_sec" label={fieldLabel("progress_timeout_sec", t("settingsNavigation.progressTimeout"))} tooltip={t("settingsNavigation.progressTimeoutTooltip")}>
+                                <InputNumber aria-label={t("settingsNavigation.progressTimeout") + ", s"} aria-description={t("settingsNavigation.progressTimeoutTooltip")}  id="setting-progress_timeout_sec"
                                     value={values.progress_timeout_sec}
                                     onChange={(v) => onChange("progress_timeout_sec", v)}
                                     min={10} max={300} step={10} precision={0}
@@ -105,8 +105,8 @@ export const NavigationSection: React.FC<Props> = ({
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
                         <Col xs={12} sm={8}>
-                            <Form.Item label={fieldLabel("boundary_inner_margin_m", t("settingsNavigation.boundaryInnerMargin"))} tooltip={t("settingsNavigation.boundaryInnerMarginTooltip")}>
-                                <InputNumber
+                            <Form.Item htmlFor="setting-boundary_inner_margin_m" data-setting-key="boundary_inner_margin_m" label={fieldLabel("boundary_inner_margin_m", t("settingsNavigation.boundaryInnerMargin"))} tooltip={t("settingsNavigation.boundaryInnerMarginTooltip")}>
+                                <InputNumber aria-label={t("settingsNavigation.boundaryInnerMargin") + ", m"} aria-description={t("settingsNavigation.boundaryInnerMarginTooltip")}  id="setting-boundary_inner_margin_m"
                                     value={values.boundary_inner_margin_m}
                                     onChange={(v) => onChange("boundary_inner_margin_m", v)}
                                     min={0} max={1.0} step={0.05} precision={2}
@@ -115,8 +115,8 @@ export const NavigationSection: React.FC<Props> = ({
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8}>
-                            <Form.Item label={fieldLabel("dock_inner_margin_exempt_radius_m", t("settingsNavigation.dockExemptRadius"))} tooltip={t("settingsNavigation.dockExemptRadiusTooltip")}>
-                                <InputNumber
+                            <Form.Item htmlFor="setting-dock_inner_margin_exempt_radius_m" data-setting-key="dock_inner_margin_exempt_radius_m" label={fieldLabel("dock_inner_margin_exempt_radius_m", t("settingsNavigation.dockExemptRadius"))} tooltip={t("settingsNavigation.dockExemptRadiusTooltip")}>
+                                <InputNumber aria-label={t("settingsNavigation.dockExemptRadius") + ", m"} aria-description={t("settingsNavigation.dockExemptRadiusTooltip")}  id="setting-dock_inner_margin_exempt_radius_m"
                                     value={values.dock_inner_margin_exempt_radius_m}
                                     onChange={(v) => onChange("dock_inner_margin_exempt_radius_m", v)}
                                     min={0} max={10.0} step={0.5} precision={2}

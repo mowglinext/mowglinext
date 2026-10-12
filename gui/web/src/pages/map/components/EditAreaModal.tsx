@@ -1,4 +1,4 @@
-import {Form, Input, InputNumber, Modal, Select} from "antd";
+import {Checkbox, Form, Input, InputNumber, Modal, Select} from "antd";
 import {useTranslation} from "react-i18next";
 import {MowingAreaEdit} from "../utils/types.ts";
 
@@ -36,6 +36,16 @@ export const EditAreaModal = ({open, area, onChange, onSave, onCancel}: EditArea
                         options={AREA_TYPE_OPTIONS.map((o) => ({value: o.value, label: t(o.labelKey)}))}
                     />
                 </Form.Item>
+                {area.feature_type === 'obstacle' && area.orig_feature_type !== 'obstacle' && (
+                    <Form.Item extra={t('mapEditArea.shrinkRecordedHelp')}>
+                        <Checkbox
+                            checked={area.shrink_recorded}
+                            onChange={(e) => onChange({...area, shrink_recorded: e.target.checked})}
+                        >
+                            {t('mapEditArea.shrinkRecorded')}
+                        </Checkbox>
+                    </Form.Item>
+                )}
                 {area.feature_type === 'workarea' && (
                     <Form.Item label={t('mapEditArea.areaName')}>
                         <Input

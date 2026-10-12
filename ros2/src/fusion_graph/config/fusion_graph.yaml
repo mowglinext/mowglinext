@@ -217,8 +217,23 @@ fusion_graph_node:
     # fixes, so multi-cm wrong-fix jumps slipped in and rebased map→odom by
     # 3-11 cm — field 2026-06. wheel_dist is now part of the budget instead.)
     # rtk_wrongfix_max_jump_m is the slack on top of travel — size it to a
-    # few × the raw GNSS jitter σ (~1.4 cm RTK on this rig).
-    rtk_wrongfix_max_jump_m: 0.05
+    # few × the raw GNSS jitter σ (~1.1-1.6 cm RTK, field-measured 2026-09-22).
+    # mowglinext#738: a 6.1-min straight-line session at the 0.05 default
+    # logged 52 gps_rejects_wrongfix — cross-referenced against
+    # universal_gnss_status, EVERY one was RTK-Fixed, sub-16mm accuracy,
+    # 22-30 sats — i.e. genuinely valid fixes the gate dropped anyway. Their
+    # excess over budget ("jump - wheel_dist", the quantity this slack alone
+    # must cover) ranged 6-56 mm; raised to 0.08 to absorb most of that
+    # range while staying well short of the ~10 cm+ excess the gate's own
+    # carrier-phase-reset rationale above describes for a GENUINE wrong-fix
+    # (deliberately NOT raised to cover the full 56 mm outlier — doing so
+    # would erode the margin against a real wrong-fix; see #738's discussion
+    # of that trade-off). Revisit with more multi-site data, and consider
+    # candidate direction #2 from #738 (verify ticks_per_meter against a
+    # measured distance — a structurally under-reported wheel_dist would
+    # shrink the WHOLE budget, not just this slack term, and masquerade as
+    # "the slack is too tight" here).
+    rtk_wrongfix_max_jump_m: 0.08
     # DEPRECATED — no longer used by the motion-consistent gate above.
     # Removed 2026-07. Clear any per-site overlay that still carries this key.
 
@@ -367,6 +382,9 @@ fusion_graph_node:
     lidar_map_tile_size_m: 10.0          # persistent tiles in datum coordinates
     lidar_map_radius_tiles: 2           # bounded 5 x 5 tiles, 50 x 50 m at defaults
     lidar_map_insert_period_s: 0.5        # insert a scan into the grid at most every 0.5 s
+    lidar_map_insert_min_travel_m: 0.10   # ...and only after the robot moved this far: a still robot
+                                          # (docked without charger voltage, paused) would re-write the
+                                          # same scene at a drifting pose and grow false walls
     lidar_map_rebuild_period_s: 5.0       # publish local grid; PF rebuild deferred until computation
     lidar_anchor_max_rate_hz: 5.0
     lidar_anchor_calibration_period_s: 60.0

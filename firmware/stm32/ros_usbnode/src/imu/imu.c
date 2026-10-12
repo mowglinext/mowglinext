@@ -15,6 +15,7 @@
 #include <math.h>
 
 #include "imu/imu.h"
+#include "imu/imu_mount_transform.h"
 #include "imu/lsm6.h"
 #include "imu/mpu6050.h"
 #include "imu/wt901.h"
@@ -56,7 +57,9 @@ int IMU_TryReadAccelerometer(float *x, float *y, float *z)
   *y = 0.0f;
   *z = 0.0f;
   if (imuReadAccelerometerRaw == NULL) return 0;
-  return imuReadAccelerometerRaw(x, y, z);
+  if (!imuReadAccelerometerRaw(x, y, z)) return 0;
+  IMU_ApplyConfiguredMountRotation(x, y, z);
+  return 1;
 }
 
 void IMU_ReadAccelerometer(float *x, float *y, float *z)
@@ -77,7 +80,9 @@ int IMU_TryReadGyro(float *x, float *y, float *z)
   *y = 0.0f;
   *z = 0.0f;
   if (imuReadGyroRaw == NULL) return 0;
-  return imuReadGyroRaw(x, y, z);
+  if (!imuReadGyroRaw(x, y, z)) return 0;
+  IMU_ApplyConfiguredMountRotation(x, y, z);
+  return 1;
 }
 
 void IMU_ReadGyro(float *x, float *y, float *z)
@@ -97,7 +102,9 @@ int IMU_TryReadMag(float *x, float *y, float *z)
   *y = 0.0f;
   *z = 0.0f;
   if (imuReadMagRaw == NULL) return 1;
-  return imuReadMagRaw(x, y, z);
+  if (!imuReadMagRaw(x, y, z)) return 0;
+  IMU_ApplyConfiguredMountRotation(x, y, z);
+  return 1;
 }
 
 void IMU_ReadMag(float *x, float *y, float *z)

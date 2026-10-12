@@ -47,8 +47,8 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={24} sm={12}>
-                                <Form.Item label={fieldLabel("undock_distance", t('dockingSection.undockDistance'))} tooltip={t('dockingSection.undockDistanceTooltip')}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-undock_distance" data-setting-key="undock_distance" label={fieldLabel("undock_distance", t('dockingSection.undockDistance'))} tooltip={t('dockingSection.undockDistanceTooltip')}>
+                                    <InputNumber id="setting-undock_distance"
                                         value={values.undock_distance}
                                         onChange={(v) => onChange("undock_distance", v)}
                                         min={0.5} max={3.0} step={0.1} precision={2}
@@ -57,8 +57,8 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item label={fieldLabel("undock_speed", t('dockingSection.undockSpeed'))} tooltip={t('dockingSection.undockSpeedTooltip')}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-undock_speed" data-setting-key="undock_speed" label={fieldLabel("undock_speed", t('dockingSection.undockSpeed'))} tooltip={t('dockingSection.undockSpeedTooltip')}>
+                                    <InputNumber id="setting-undock_speed"
                                         value={values.undock_speed}
                                         onChange={(v) => onChange("undock_speed", v)}
                                         min={0.05} max={0.3} step={0.05} precision={2}
@@ -67,8 +67,8 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item label={fieldLabel("dock_approach_distance", t('dockingSection.approachDistance'))} tooltip={t('dockingSection.approachDistanceTooltip')}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-dock_approach_distance" data-setting-key="dock_approach_distance" label={fieldLabel("dock_approach_distance", t('dockingSection.approachDistance'))} tooltip={t('dockingSection.approachDistanceTooltip')}>
+                                    <InputNumber id="setting-dock_approach_distance"
                                         value={values.dock_approach_distance}
                                         onChange={(v) => onChange("dock_approach_distance", v)}
                                         min={0.5} max={3.0} step={0.1} precision={2}
@@ -77,8 +77,8 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item label={fieldLabel("dock_use_charger_detection", t('dockingSection.chargerDetection'))} tooltip={t('dockingSection.chargerDetectionTooltip')}>
-                                    <Switch
+                                <Form.Item htmlFor="setting-dock_use_charger_detection" data-setting-key="dock_use_charger_detection" label={fieldLabel("dock_use_charger_detection", t('dockingSection.chargerDetection'))} tooltip={t('dockingSection.chargerDetectionTooltip')}>
+                                    <Switch id="setting-dock_use_charger_detection"
                                         checked={values.dock_use_charger_detection ?? true}
                                         onChange={(v) => onChange("dock_use_charger_detection", v)}
                                     />
@@ -101,8 +101,8 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                                     <Form layout="vertical" size="small">
                                         <Row gutter={[16, 0]}>
                                             <Col xs={24} sm={12}>
-                                                <Form.Item label={fieldLabel("dock_max_retries", t('dockingSection.maxRetries'))} tooltip={t('dockingSection.maxRetriesTooltip')}>
-                                                    <InputNumber
+                                                <Form.Item htmlFor="setting-dock_max_retries" data-setting-key="dock_max_retries" label={fieldLabel("dock_max_retries", t('dockingSection.maxRetries'))} tooltip={t('dockingSection.maxRetriesTooltip')}>
+                                                    <InputNumber id="setting-dock_max_retries"
                                                         value={values.dock_max_retries}
                                                         onChange={(v) => onChange("dock_max_retries", v)}
                                                         min={1} max={10} step={1} precision={0}
@@ -111,8 +111,8 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                                                 </Form.Item>
                                             </Col>
                                             <Col xs={24} sm={12}>
-                                                <Form.Item label={fieldLabel("dock_charging_threshold", t('dockingSection.chargingThreshold'))} tooltip={t('dockingSection.chargingThresholdTooltip')}>
-                                                    <InputNumber
+                                                <Form.Item htmlFor="setting-dock_charging_threshold" data-setting-key="dock_charging_threshold" label={fieldLabel("dock_charging_threshold", t('dockingSection.chargingThreshold'))} tooltip={t('dockingSection.chargingThresholdTooltip')}>
+                                                    <InputNumber id="setting-dock_charging_threshold"
                                                         value={values.dock_charging_threshold}
                                                         onChange={(v) => onChange("dock_charging_threshold", v)}
                                                         min={0.05} max={1.0} step={0.05} precision={2}
@@ -121,8 +121,8 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                                                 </Form.Item>
                                             </Col>
                                             <Col xs={24} sm={12}>
-                                                <Form.Item label={fieldLabel("dock_approach_overshoot", t('dockingSection.approachOvershoot'))} tooltip={t('dockingSection.approachOvershootTooltip')}>
-                                                    <InputNumber
+                                                <Form.Item htmlFor="setting-dock_approach_overshoot" data-setting-key="dock_approach_overshoot" label={fieldLabel("dock_approach_overshoot", t('dockingSection.approachOvershoot'))} tooltip={t('dockingSection.approachOvershootTooltip')}>
+                                                    <InputNumber id="setting-dock_approach_overshoot"
                                                         value={values.dock_approach_overshoot}
                                                         onChange={(v) => onChange("dock_approach_overshoot", v)}
                                                         min={0} max={0.3} step={0.01} precision={2}
@@ -131,8 +131,8 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                                                 </Form.Item>
                                             </Col>
                                             <Col xs={24} sm={12}>
-                                                <Form.Item label={fieldLabel("dock_pose_yaw_sigma_rad", t('dockingSection.baseHeadingUncertainty'))} tooltip={t('dockingSection.baseHeadingUncertaintyTooltip')}>
-                                                    <InputNumber
+                                                <Form.Item htmlFor="setting-dock_pose_yaw_sigma_rad" data-setting-key="dock_pose_yaw_sigma_rad" label={fieldLabel("dock_pose_yaw_sigma_rad", t('dockingSection.baseHeadingUncertainty'))} tooltip={t('dockingSection.baseHeadingUncertaintyTooltip')}>
+                                                    <InputNumber id="setting-dock_pose_yaw_sigma_rad"
                                                         value={values.dock_pose_yaw_sigma_rad}
                                                         onChange={(v) => onChange("dock_pose_yaw_sigma_rad", v)}
                                                         min={0.005} max={0.5} step={0.005} precision={3}

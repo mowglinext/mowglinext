@@ -22,7 +22,7 @@
  * ManualChargeGuard stops the mow when the operator physically puts the mower
  * back on the dock mid-run. It is the first reader of IsCharging for which a
  * TRANSIENT charger bit is a state transition rather than a no-op: it turns the
- * blade off, stops the robot, publishes CHARGING, waits, then publishes MOWING.
+ * blade off, stops the robot, publishes MANUAL_CHARGING, waits, then publishes MOWING.
  * The firmware bit is not clean enough for that — it stays high ~100 ms into a
  * BackUp undock (CLAUDE.md invariant 11) and can bounce when the mower brushes
  * the dock contacts on a swath that runs close to the station.
@@ -464,6 +464,15 @@ TEST(ManualChargeGuardTest, TreeExitConditionIsNotDebounced)
   EXPECT_NE(wait_loop.find("<Inverter><IsCharging/></Inverter>"), std::string::npos)
       << "The wait loop's exit condition is no longer a raw <IsCharging/>. A debounced instance "
          "there starts its own window at zero and releases the guard on its first tick.";
+}
+
+TEST(ManualChargeGuardTest, TreePublishesExplicitManualChargingProvenance)
+{
+  const std::string block = ExtractManualChargeGuard(ReadMainTree());
+  ASSERT_FALSE(block.empty());
+  EXPECT_NE(block.find("state_name=\"MANUAL_CHARGING\""), std::string::npos);
+  EXPECT_EQ(block.find("state_name=\"CHARGING\""), std::string::npos)
+      << "ManualChargeGuard must not impersonate the battery auto-resume hold.";
 }
 
 // The 24 h fall-through is a deliberate design decision, so pin BOTH factors.

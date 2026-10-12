@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.22.1)
 project(mowgli_interfaces)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -31,6 +31,13 @@ set(msg_files
   "msg/DockCalibrationStatus.msg"
   "msg/DigEvent.msg"
   "msg/CoverageSession.msg"
+  "msg/FirmwareParam.msg"
+  "msg/FirmwareParams.msg"
+  "msg/LidarIgnoreCorridor.msg"
+  "msg/LidarIgnoreCorridorArray.msg"
+  "msg/RecordedAreaPolygon.msg"
+  "msg/RecordedAreaPolygonArray.msg"
+  "msg/CoveragePlanPreview.msg"
 )
 
 # Declare service files
@@ -52,6 +59,13 @@ set(srv_files
   "srv/CoverageOrientation.srv"
   "srv/SetFleetAssignment.srv"
   "srv/PromoteObstacle.srv"
+  "srv/PreviewObstacleClearance.srv"
+  "srv/PreviewCoverage.srv"
+  "srv/SetAreaCoverageLines.srv"
+  "srv/CorrectRecordedObstacle.srv"
+  "srv/AddLidarIgnoreCorridor.srv"
+  "srv/GetLidarIgnoreCorridors.srv"
+  "srv/ClearLidarIgnoreCorridors.srv"
 )
 
 # Declare action files

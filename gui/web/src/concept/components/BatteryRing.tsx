@@ -1,3 +1,4 @@
+import {useTranslation} from "react-i18next";
 import {motion, useMotionValue, useTransform, animate} from "framer-motion";
 import {useEffect} from "react";
 
@@ -31,6 +32,7 @@ export function BatteryRing({
   charging = false,
   children,
 }: BatteryRingProps) {
+  const {t} = useTranslation();
   const r = (size - thickness) / 2;
   const circ = 2 * Math.PI * r;
   const offset = useMotionValue(circ);
@@ -124,7 +126,7 @@ export function BatteryRing({
             <svg width="9" height="11" viewBox="0 0 9 11" fill="currentColor">
               <path d="M5 0L0 6h3l-1 5 5-6H4l1-5z"/>
             </svg>
-            charging
+            {t("fleetPage.phase.charging")}
           </div>
         </motion.div>
       )}

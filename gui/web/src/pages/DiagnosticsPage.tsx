@@ -29,6 +29,7 @@ import {
     PlayCircleOutlined,
     ReloadOutlined,
     SettingOutlined,
+    SlidersOutlined,
     SoundOutlined,
     StopOutlined,
     ThunderboltOutlined,
@@ -60,7 +61,8 @@ import {
     displayHorizontalAccuracyM,
     deriveGpsStatus,
 } from "../utils/gpsStatus.ts";
-import {useEffect, useMemo, useState} from "react";
+import {lazy, Suspense, useEffect, useMemo, useState} from "react";
+import {useSearchParams} from "react-router-dom";
 import {App} from "antd";
 import {useTranslation} from "react-i18next";
 import {useSettings} from "../hooks/useSettings.ts";
@@ -86,6 +88,7 @@ import {groupAlertsByComponent} from "../utils/diagnosticsAlerts.ts";
 import {deriveLidarAnchor} from "../utils/lidarAnchor.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
 import {SystemPowerCard} from "../components/SystemPowerCard.tsx";
+import "./DiagnosticsPage.css";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -138,8 +141,22 @@ const ESC_STATUS: Record<number, {labelKey: string; color: string}> = {
 
 // ── sub-components ───────────────────────────────────────────────────────────
 
-function HealthBadge({label, color}: {label: string; color: string}) {
-    return <Tag color={color} style={{fontSize: 12, padding: "2px 8px"}}>{label}</Tag>;
+const HEALTH_BADGE_VALUE_MARKER = "\uFFF0";
+
+function HealthBadge({label, color, numericValue, valueWidth = 3}: {
+    label: string;
+    color: string;
+    numericValue?: string;
+    valueWidth?: number;
+}) {
+    const parts = label.split(HEALTH_BADGE_VALUE_MARKER);
+    return (
+        <Tag color={color} style={{fontSize: 12, padding: "2px 8px"}}>
+            {parts.length > 1 && numericValue !== undefined ? (
+                <>{parts[0]}<span className="diagnostics-health-badge-number" style={{inlineSize: `${valueWidth}ch`}}>{numericValue}</span>{parts.slice(1).join(HEALTH_BADGE_VALUE_MARKER)}</>
+            ) : label}
+        </Tag>
+    );
 }
 
 // A Tag whose color is not the sole signal: the label text never changes
@@ -154,6 +171,15 @@ function BoolStatusTag({label, ok}: {label: string; ok: boolean}) {
 }
 
 // ── main page ────────────────────────────────────────────────────────────────
+
+// The raw ROS parameter editor is for advanced users: it lives under
+// Diagnostics instead of the main menu, and loads only when opened.
+const ParametersPage = lazy(() => import("./ParametersPage.tsx"));
+const sectionParameters = (
+    <Suspense fallback={null}>
+        <ParametersPage/>
+    </Suspense>
+);
 
 export const DiagnosticsPage = () => {
     const {colors} = useThemeMode();
@@ -187,8 +213,12 @@ export const DiagnosticsPage = () => {
     const {diagnostics} = useDiagnostics();
     // Mobile uses collapsible panels; desktop shows sensors in the Robot tab.
     // Subscribe to the high-rate IMU stream only in the visible sensor view.
-    const [openPanels, setOpenPanels] = useState<string[]>([]);
-    const [activeTab, setActiveTab] = useState("system");
+    // ?tab=parameters opens the advanced ROS parameters editor (formerly its
+    // own page in the main menu; /parameters redirects here).
+    const [searchParams] = useSearchParams();
+    const requestedTab = searchParams.get("tab");
+    const [openPanels, setOpenPanels] = useState<string[]>(requestedTab ? [requestedTab] : []);
+    const [activeTab, setActiveTab] = useState(requestedTab ?? "system");
     const sensorsPanelOpen = isMobile ? openPanels.includes("sensors") : activeTab === "robot";
     const imu = useImu(sensorsPanelOpen);
     const {settings} = useSettings();
@@ -334,8 +364,9 @@ export const DiagnosticsPage = () => {
                     color={gpsOk ? "success" : gpsWarn ? "warning" : "error"}
                 />
                 <HealthBadge
-                    label={t('diagnosticsPage.batteryBadge', {value: batteryPercent.toFixed(0)})}
+                    label={t('diagnosticsPage.batteryBadge', {value: HEALTH_BADGE_VALUE_MARKER})}
                     color={batteryLevel === "ok" ? "success" : batteryLevel === "warn" ? "warning" : "error"}
+                    numericValue={batteryPercent.toFixed(0)}
                 />
                 <HealthBadge
                     label={emergencyActive ? t('diagnosticsPage.emergencyUpper') : t('diagnosticsPage.noEmergency')}
@@ -346,8 +377,10 @@ export const DiagnosticsPage = () => {
                     color={cpuTemp > 70 ? "error" : cpuTemp > 55 ? "warning" : "success"}
                 />
                 <HealthBadge
-                    label={cpuUsage != null ? t('diagnosticsPage.cpuUsageBadge', {value: cpuUsage.toFixed(0)}) : t('diagnosticsPage.cpuUsageUnknown')}
+                    label={cpuUsage != null ? t('diagnosticsPage.cpuUsageBadge', {value: HEALTH_BADGE_VALUE_MARKER}) : t('diagnosticsPage.cpuUsageUnknown')}
                     color="default"
+                    numericValue={cpuUsage != null ? cpuUsage.toFixed(0) : undefined}
+                    valueWidth={4}
                 />
             </Flex>
         </Card>
@@ -520,10 +553,10 @@ export const DiagnosticsPage = () => {
             <Col xs={24} lg={8}>
                 <Card title={<Space><DashboardOutlined/> CPU</Space>} size="small" style={{height: "100%"}}>
                     <Statistic
-                        title={t('diagnosticsPage.cpuUsage')}
+                        className="diagnostics-three-digit-statistic"
+                        title={`${t('diagnosticsPage.cpuUsage')} (%)`}
                         value={cpuUsage ?? "—"}
                         precision={1}
-                        suffix={cpuUsage != null ? "%" : undefined}
                     />
                     <Typography.Paragraph type="secondary" style={{fontSize: 12, marginTop: 4}}>
                         {t('diagnosticsPage.cpuUsageHint')}
@@ -532,7 +565,6 @@ export const DiagnosticsPage = () => {
                         title={t('diagnosticsPage.temperature')}
                         value={cpuTemp > 0 ? cpuTemp : undefined}
                         precision={1}
-                        suffix="°C"
                         valueStyle={{
                             color: cpuTemp > 70 ? colors.danger : cpuTemp > 55 ? colors.warning : undefined,
                         }}
@@ -651,13 +683,12 @@ export const DiagnosticsPage = () => {
                             title={t('diagnosticsPage.zM')}
                             value={pose.pose?.pose?.position ? poseZ : null}
                             precision={3}
-                            suffix="m"
                             tone={poseZ > 2 ? "danger" : poseZ > 0.5 ? "warn" : "default"}
                         />
-                        <TelemetryStat span={8} title={t('diagnosticsPage.yawDeg')} value={yaw} precision={1} suffix="°"/>
-                        <TelemetryStat span={8} title={t('diagnosticsPage.rollDeg')} value={roll} precision={1} suffix="°"/>
-                        <TelemetryStat span={8} title={t('diagnosticsPage.pitchDeg')} value={pitch} precision={1} suffix="°"/>
-                        <Col span={12}>
+                        <TelemetryStat span={8} title={t('diagnosticsPage.yawDeg')} value={yaw} precision={1}/>
+                        <TelemetryStat span={8} title={t('diagnosticsPage.rollDeg')} value={roll} precision={1}/>
+                        <TelemetryStat span={8} title={t('diagnosticsPage.pitchDeg')} value={pitch} precision={1}/>
+                        <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.flatCheck')}
                                 value={flatCheck ? t('diagnosticsPage.flatCheckOk') : t('diagnosticsPage.flatCheckDrift')}
@@ -911,8 +942,14 @@ export const DiagnosticsPage = () => {
         });
     };
 
-    const fusionAgeS = fusionStats ? Math.floor((nowMs - fusionStats.receivedAt) / 1000) : null;
-    const fusionStale = fusionAgeS === null || fusionAgeS > 5;
+    // Sample after the callback that supplied stats, in the same monotonic clock.
+    // The one-second wall-clock render ticker can precede a newer callback.
+    const fusionNow = performance.now();
+    const fusionAgeS = fusionStats?.receivedMonotonic === undefined ? null
+        : Math.floor((fusionNow - fusionStats.receivedMonotonic) / 1000);
+    const sourceAgeS = fusionStats?.sourceIdentity && fusionStats.distinctMonotonic !== undefined
+        ? Math.floor((fusionNow - fusionStats.distinctMonotonic) / 1000) : null;
+    const fusionStale = fusionAgeS === null || fusionAgeS > 5 || (sourceAgeS !== null && sourceAgeS > 5);
     const fv = fusionStats?.values ?? {};
     const num = (k: string) => {
         const raw = fv[k];
@@ -1008,9 +1045,8 @@ export const DiagnosticsPage = () => {
                         />
                         <TelemetryStat
                             xs={12} md={6} large
-                            title={t('diagnosticsPage.poseSigma')}
+                            title={`${t('diagnosticsPage.poseSigma')} (cm)`}
                             value={sigmaXY}
-                            suffix="cm"
                             precision={1}
                             tone={sigmaXY === null ? "danger" : sigmaXY < 5 ? "ok" : sigmaXY < 20 ? "warn" : "danger"}
                             hint={sigmaYawDeg !== null ? t('diagnosticsPage.yawSigma', {value: sigmaYawDeg.toFixed(2)}) : ""}
@@ -1047,8 +1083,8 @@ export const DiagnosticsPage = () => {
                                 <TelemetryStat
                                     xs={12} md={6} large
                                     title={t('diagnosticsPage.lidarAnchorVerdict')}
-                                    value={lidarAnchor.verdictKey !== null ? t(LIDAR_ANCHOR_VERDICT_LABEL[lidarAnchor.verdictKey]) : null}
-                                    tone={lidarAnchor.verdictKey === null ? "default" : lidarAnchor.verdictKey === "accepted" ? "ok" : "warn"}
+                                    value={lidarAnchor.verdictKey !== null ? t(LIDAR_ANCHOR_VERDICT_LABEL[lidarAnchor.verdictKey]) : t("diagnosticsPage.lidarNoEstimate")}
+                                    tone={lidarAnchor.verdictKey === null ? "default" : fusionStale ? "warn" : lidarAnchor.verdictKey === "accepted" ? "ok" : "warn"}
                                     hint={lidarAnchor.hitRatioPct !== null ? t('diagnosticsPage.lidarAnchorHitRatio', {pct: lidarAnchor.hitRatioPct}) : ""}
                                 />
                                 <TelemetryStat
@@ -1092,6 +1128,11 @@ export const DiagnosticsPage = () => {
                         {t('diagnosticsPage.fusionGraphDescPart2')}
                         {t('diagnosticsPage.fusionGraphTopicLabel')} <Typography.Text code>/fusion_graph/diagnostics</Typography.Text>{" "}
                         {fusionAgeS !== null && <span>{t('diagnosticsPage.lastUpdateAgo', {seconds: fusionAgeS})}</span>}
+                        <br />
+                        {fusionStats?.sourceStamp
+                            ? t('diagnosticsPage.sourcePublication', {stamp: fusionStats.sourceStamp})
+                            : t('diagnosticsPage.sourceIdentityUnknown')}
+                        {sourceAgeS !== null && sourceAgeS > 5 && <span> · {t('diagnosticsPage.sourceUnchanged', {seconds: sourceAgeS})}</span>}
                     </Typography.Paragraph>
                 </Card>
             </Col>
@@ -1106,10 +1147,10 @@ export const DiagnosticsPage = () => {
                         <Col xs={24} md={8}>
                             <Space direction="vertical" style={{width: "100%"}}>
                                 <Space>
-                                    <Typography.Text strong>{t('diagnosticsPage.filter')}</Typography.Text>
+                                    <Typography.Text strong className="diagnostics-live-label-nowrap">{t('diagnosticsPage.filter')}</Typography.Text>
                                     <Tag color="success">/odometry/filtered_map</Tag>
                                 </Space>
-                                <Statistic title={t('diagnosticsPage.yawDeg')} value={yaw} precision={1} suffix="°"/>
+                                <Statistic title={t('diagnosticsPage.yawDeg')} value={yaw} precision={1}/>
                                 <Typography.Text type="secondary" style={{fontSize: 11}}>
                                     {t('diagnosticsPage.referenceSignal')}
                                 </Typography.Text>
@@ -1127,10 +1168,9 @@ export const DiagnosticsPage = () => {
                                     title={t('diagnosticsPage.yawDeg')}
                                     value={cogYawDeg !== null ? cogYawDeg : "-"}
                                     precision={cogYawDeg !== null ? 1 : undefined}
-                                    suffix={cogYawDeg !== null ? "°" : undefined}
                                 />
                                 <Typography.Text type="secondary" style={{fontSize: 12}}>
-                                    σ: {cogSigmaDeg !== null ? `${cogSigmaDeg.toFixed(2)}°` : "—"}
+                                    σ (°): {cogSigmaDeg !== null ? cogSigmaDeg.toFixed(2) : "—"}
                                 </Typography.Text>
                                 {deltaFilterCog !== null && (
                                     <Typography.Text type="secondary" style={{fontSize: 12}}>
@@ -1151,10 +1191,9 @@ export const DiagnosticsPage = () => {
                                     title={t('diagnosticsPage.yawDeg')}
                                     value={magYawDeg !== null ? magYawDeg : "-"}
                                     precision={magYawDeg !== null ? 1 : undefined}
-                                    suffix={magYawDeg !== null ? "°" : undefined}
                                 />
                                 <Typography.Text type="secondary" style={{fontSize: 12}}>
-                                    σ: {magSigmaDeg !== null ? `${magSigmaDeg.toFixed(2)}°` : "—"}
+                                    σ (°): {magSigmaDeg !== null ? magSigmaDeg.toFixed(2) : "—"}
                                 </Typography.Text>
                                 {deltaFilterMag !== null && (
                                     <Typography.Text type="secondary" style={{fontSize: 12}}>
@@ -1216,7 +1255,6 @@ export const DiagnosticsPage = () => {
                                 title={t('diagnosticsPage.battery')}
                                 value={batteryPercent}
                                 precision={0}
-                                suffix="%"
                                 valueStyle={{
                                     color: batteryPercent < 20 ? colors.danger : batteryPercent < 50 ? colors.warning : undefined,
                                 }}
@@ -1227,7 +1265,6 @@ export const DiagnosticsPage = () => {
                                 title={t('diagnosticsPage.voltage')}
                                 value={power.v_battery}
                                 precision={2}
-                                suffix="V"
 
                             />
                         </Col>
@@ -1245,7 +1282,6 @@ export const DiagnosticsPage = () => {
                                 title={t('diagnosticsPage.chargeCurrent')}
                                 value={clampTinyToZero(power.charge_current) ?? undefined}
                                 precision={2}
-                                suffix="A"
                                 valueStyle={{
                                     color: highLevelStatus.is_charging && (power.charge_current ?? 0) > 0
                                         ? colors.primary
@@ -1258,7 +1294,6 @@ export const DiagnosticsPage = () => {
                                 title={t('diagnosticsPage.chargerVoltage')}
                                 value={clampTinyToZero(power.v_charge) ?? undefined}
                                 precision={2}
-                                suffix="V"
                             />
                         </Col>
                     </Row>
@@ -1321,6 +1356,7 @@ export const DiagnosticsPage = () => {
                             <Progress
                                 percent={Math.round(highLevelStatus.coverage_percent ?? 0)}
                                 status={mowingActive ? "active" : "normal"}
+                                showInfo={false}
                             />
                             <Row gutter={[12, 12]} style={{marginTop: 12}}>
                                 <TelemetryStat
@@ -1340,10 +1376,9 @@ export const DiagnosticsPage = () => {
                                 />
                                 <TelemetryStat
                                     span={8}
-                                    title={t('diagnosticsPage.colCoverage')}
+                                    title={`${t('diagnosticsPage.colCoverage')} (%)`}
                                     value={highLevelStatus.coverage_percent}
                                     precision={1}
-                                    suffix="%"
                                 />
                             </Row>
                         </>
@@ -1415,12 +1450,14 @@ export const DiagnosticsPage = () => {
                             <Col span={8}>
                                 <Statistic
                                     title={t('diagnosticsPage.yawDeg')}
-                                    value={(crossChecks.dock_pose.configured_yaw * 180 / Math.PI).toFixed(1)}
-                                    suffix="°"
+                                    value={Number.isFinite(crossChecks.dock_pose.configured_yaw)
+                                        ? (crossChecks.dock_pose.configured_yaw * 180 / Math.PI).toFixed(1)
+                                        : "—"}
                                 />
                             </Col>
                             <Col span={12}>
                                 <Statistic
+                                    className="diagnostics-coordinate-value"
                                     title={t('diagnosticsPage.datumLat')}
                                     value={crossChecks.dock_pose.datum_lat}
                                     precision={9}
@@ -1428,6 +1465,7 @@ export const DiagnosticsPage = () => {
                             </Col>
                             <Col span={12}>
                                 <Statistic
+                                    className="diagnostics-coordinate-value"
                                     title={t('diagnosticsPage.datumLon')}
                                     value={crossChecks.dock_pose.datum_lon}
                                     precision={9}
@@ -1570,11 +1608,11 @@ export const DiagnosticsPage = () => {
                 >
                     {dockCal?.present && !dockCal?.error ? (
                         <Descriptions size="small" column={1}>
-                            <Descriptions.Item label={t('diagnosticsPage.position')}>
-                                ({dockCal.dock_pose_x?.toFixed(3)}, {dockCal.dock_pose_y?.toFixed(3)}) m
+                            <Descriptions.Item label={`${t('diagnosticsPage.position')} (m)`}>
+                                ({dockCal.dock_pose_x?.toFixed(3)}, {dockCal.dock_pose_y?.toFixed(3)})
                             </Descriptions.Item>
-                            <Descriptions.Item label={t('diagnosticsPage.yaw')}>
-                                {dockCal.dock_pose_yaw_deg?.toFixed(2)}°
+                            <Descriptions.Item label={`${t('diagnosticsPage.yaw')} (°)`}>
+                                {dockCal.dock_pose_yaw_deg?.toFixed(2)}
                             </Descriptions.Item>
                         </Descriptions>
                     ) : dockCal?.error ? (
@@ -1622,7 +1660,7 @@ export const DiagnosticsPage = () => {
                                 {imuCal.gyro_bias_z?.toFixed(5) ?? "—"}]
                             </Descriptions.Item>
                             <Descriptions.Item label={t('diagnosticsPage.impliedPitchRoll')}>
-                                {imuCal.implied_pitch_deg?.toFixed(2)}° / {imuCal.implied_roll_deg?.toFixed(2)}°
+                                {imuCal.implied_pitch_deg?.toFixed(2)} / {imuCal.implied_roll_deg?.toFixed(2)}
                             </Descriptions.Item>
                         </Descriptions>
                     ) : imuCal?.error ? (
@@ -1691,22 +1729,22 @@ export const DiagnosticsPage = () => {
                 <Card title="IMU" size="small">
                     <Row gutter={[12, 8]}>
                         <Col span={8}>
-                            <Statistic title={t('diagnosticsPage.angVelX')} value={imu.angular_velocity?.x} precision={4}/>
+                            <Statistic className="diagnostics-sign-statistic" title={t('diagnosticsPage.angVelX')} value={imu.angular_velocity?.x} precision={4}/>
                         </Col>
                         <Col span={8}>
-                            <Statistic title={t('diagnosticsPage.angVelY')} value={imu.angular_velocity?.y} precision={4}/>
+                            <Statistic className="diagnostics-sign-statistic" title={t('diagnosticsPage.angVelY')} value={imu.angular_velocity?.y} precision={4}/>
                         </Col>
                         <Col span={8}>
-                            <Statistic title={t('diagnosticsPage.angVelZ')} value={imu.angular_velocity?.z} precision={4}/>
+                            <Statistic className="diagnostics-sign-statistic" title={t('diagnosticsPage.angVelZ')} value={imu.angular_velocity?.z} precision={4}/>
                         </Col>
                         <Col span={8}>
-                            <Statistic title={t('diagnosticsPage.linAccX')} value={imu.linear_acceleration?.x} precision={4}/>
+                            <Statistic className="diagnostics-sign-statistic" title={t('diagnosticsPage.linAccX')} value={imu.linear_acceleration?.x} precision={4}/>
                         </Col>
                         <Col span={8}>
-                            <Statistic title={t('diagnosticsPage.linAccY')} value={imu.linear_acceleration?.y} precision={4}/>
+                            <Statistic className="diagnostics-sign-statistic" title={t('diagnosticsPage.linAccY')} value={imu.linear_acceleration?.y} precision={4}/>
                         </Col>
                         <Col span={8}>
-                            <Statistic title={t('diagnosticsPage.linAccZ')} value={imu.linear_acceleration?.z} precision={4}/>
+                            <Statistic className="diagnostics-sign-statistic" title={t('diagnosticsPage.linAccZ')} value={imu.linear_acceleration?.z} precision={4}/>
                         </Col>
                     </Row>
                 </Card>
@@ -1716,6 +1754,7 @@ export const DiagnosticsPage = () => {
                     <Row gutter={[12, 8]}>
                         <Col span={12}>
                             <Statistic
+                                className="diagnostics-sign-statistic"
                                 title={t('diagnosticsPage.linearVel')}
                                 value={wheelOdom.twist?.twist?.linear?.x}
                                 precision={3}
@@ -1723,6 +1762,7 @@ export const DiagnosticsPage = () => {
                         </Col>
                         <Col span={12}>
                             <Statistic
+                                className="diagnostics-sign-statistic"
                                 title={t('diagnosticsPage.angularVel')}
                                 value={wheelOdom.twist?.twist?.angular?.z}
                                 precision={3}
@@ -1730,6 +1770,7 @@ export const DiagnosticsPage = () => {
                         </Col>
                         <Col span={12}>
                             <Statistic
+                                className="diagnostics-sign-statistic"
                                 title={t('diagnosticsPage.poseXM')}
                                 value={wheelOdom.pose?.pose?.position?.x}
                                 precision={3}
@@ -1737,6 +1778,7 @@ export const DiagnosticsPage = () => {
                         </Col>
                         <Col span={12}>
                             <Statistic
+                                className="diagnostics-sign-statistic"
                                 title={t('diagnosticsPage.poseYM')}
                                 value={wheelOdom.pose?.pose?.position?.y}
                                 precision={3}
@@ -1765,16 +1807,16 @@ export const DiagnosticsPage = () => {
                             return (
                                 <Col key={w.label} xs={12} md={6}>
                                     <Statistic
+                                        className="diagnostics-sign-statistic"
                                         title={w.label}
                                         value={valid ? w.rpm : undefined}
                                         precision={0}
-                                        suffix="rpm"
                                         valueStyle={{
                                             color: !valid ? colors.muted :
                                                    Math.abs(w.rpm) > 5 ? colors.success : undefined,
                                         }}
                                     />
-                                    <Typography.Text type="secondary" style={{fontSize: 11}}>
+                                    <Typography.Text className="diagnostics-live-value" type="secondary" style={{fontSize: 11}}>
                                         {valid ? (
                                             <>
                                                 {t('diagnosticsPage.ticksWithDirection', {ticks: (w.ticks ?? 0).toLocaleString(), direction: w.dir === 1 ? t('diagnosticsPage.directionForward') : t('diagnosticsPage.directionReverse')})}
@@ -1833,10 +1875,10 @@ export const DiagnosticsPage = () => {
                             />
                         </Col>
                         <Col xs={12} lg={4}>
-                            <Statistic title={t('diagnosticsPage.escTemp')} value={status.mower_esc_temperature} precision={1} suffix="°C"/>
+                            <Statistic title={`${t('diagnosticsPage.escTemp')} (°C)`} value={status.mower_esc_temperature} precision={1}/>
                         </Col>
                         <Col xs={12} lg={4}>
-                            <Statistic title={t('diagnosticsPage.motorTemp')} value={status.mower_motor_temperature} precision={1} suffix="°C"/>
+                            <Statistic title={`${t('diagnosticsPage.motorTemp')} (°C)`} value={status.mower_motor_temperature} precision={1}/>
                         </Col>
                         <Col xs={12} lg={4}>
                             <Statistic title={t('diagnosticsPage.motorRpm')} value={status.mower_motor_rpm} precision={0}/>
@@ -1943,7 +1985,7 @@ export const DiagnosticsPage = () => {
 
     if (isMobile) {
         return (
-            <div style={{display: "flex", flexDirection: "column", gap: 12, paddingBottom: 8}}>
+            <div className="diagnostics-page" style={{display: "flex", flexDirection: "column", gap: 12, paddingBottom: 8}}>
                 {healthHero}
                 {healthBar}
                 {sectionAlerts}
@@ -2002,6 +2044,11 @@ export const DiagnosticsPage = () => {
                             label: t('diagnosticsPage.rosDiagnostics'),
                             children: sectionRosDiagnostics,
                         },
+                        {
+                            key: "parameters",
+                            label: <Space><SlidersOutlined/> {t('diagnosticsPage.tabParameters')}</Space>,
+                            children: openPanels.includes("parameters") ? sectionParameters : null,
+                        },
                     ]}
                 />
             </div>
@@ -2046,10 +2093,15 @@ export const DiagnosticsPage = () => {
                 {sectionCalibrationStatus}
             </Space>,
         },
+        {
+            key: "parameters",
+            label: <Space><SlidersOutlined/> {t('diagnosticsPage.tabParameters')}</Space>,
+            children: activeTab === "parameters" ? sectionParameters : null,
+        },
     ];
 
     return (
-        <Space direction="vertical" size="middle" style={{width: "100%"}}>
+        <Space className="diagnostics-page" direction="vertical" size="middle" style={{width: "100%"}}>
             {healthHero}
             {healthBar}
             {sectionAlerts}

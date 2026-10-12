@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
@@ -161,7 +162,7 @@ type componentBackend struct {
 	images map[string]string
 }
 
-func (b *componentBackend) PlanImages(_ context.Context, d Deployment) (map[string]string, error) {
+func (b *componentBackend) PlanImages(_ context.Context, d Deployment, _ PlanOptions) (map[string]string, error) {
 	return map[string]string{"gui": d.ID + "-gui", "mowgli": d.ID + "-ros"}, nil
 }
 func (b *componentBackend) Inventory(context.Context) (string, map[string]string, error) {
@@ -175,7 +176,9 @@ func (b *componentBackend) Apply(_ context.Context, images map[string]string) er
 	b.images = images
 	return nil
 }
-func (b *componentBackend) Verify(context.Context, map[string]string, *Deployment) error { return nil }
+func (b *componentBackend) Verify(context.Context, map[string]string, *Deployment, *FirmwareProtocolChange) error {
+	return nil
+}
 
 func TestGUIOverridePersistsAndRollbackRestoresCombination(t *testing.T) {
 	m, fake, _ := setup(t, "")
@@ -321,26 +324,26 @@ func TestWorkerDowngradeCannotDiscardComponentProvenance(t *testing.T) {
 		`{"version":"candidate","api":1,"state_schema":1}`,
 		`{"version":"candidate","api":1,"state_schema":3}`,
 		`{"version":"candidate","api":1,"state_schema":4}`,
-		`{"version":"wrong","api":1,"state_schema":5}`,
-		`{"version":"candidate","api":2,"state_schema":5}`,
+		fmt.Sprintf(`{"version":"wrong","api":1,"state_schema":%d}`, StateSchema),
+		fmt.Sprintf(`{"version":"candidate","api":2,"state_schema":%d}`, StateSchema),
 	} {
 		if validateWorkerProbe([]byte(probe), "candidate") == nil {
 			t.Fatal("accepted incompatible worker", probe)
 		}
 	}
-	if err := validateWorkerProbe([]byte(`{"version":"candidate","api":1,"state_schema":5}`), "candidate"); err != nil {
+	if err := validateWorkerProbe([]byte(fmt.Sprintf(`{"version":"candidate","api":1,"state_schema":%d}`, StateSchema)), "candidate"); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func (b *componentBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, error) {
+func (b *componentBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment, opts PlanOptions) (map[string]string, error) {
 	services := map[string]managedService{"gui": {Image: "mowglinext-gui"}, "mowgli": {Image: "mowgli-ros2"}}
 	if err := validateOverrides(d, overrides, services); err != nil {
 		return nil, err
 	}
-	images, _ := b.PlanImages(ctx, d)
+	images, _ := b.PlanImages(ctx, d, opts)
 	for service, selected := range overrides {
-		values, _ := b.PlanImages(ctx, selected)
+		values, _ := b.PlanImages(ctx, selected, opts)
 		images[service] = values[service]
 	}
 	return images, nil

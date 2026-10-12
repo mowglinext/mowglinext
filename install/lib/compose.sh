@@ -60,9 +60,18 @@ build_compose_stack() {
   local gnss_stack
   local gnss_service
 
+  if ! is_supported_hardware_backend "${HARDWARE_BACKEND:-mowgli}"; then
+    error "Unknown HARDWARE_BACKEND: ${HARDWARE_BACKEND:-unset} (expected mowgli, mavros or openmower)"
+    return 1
+  fi
+
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.base.yml")
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.gui.yml")
-  COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.mqtt.yml")
+  # The mosquitto broker only matters to operators integrating Home Assistant
+  # or another MQTT client (docs/MQTT_CONTROL.md); it is opt-in (--mqtt=on).
+  if [[ "${ENABLE_MQTT:-false}" == "true" ]]; then
+    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.mqtt.yml")
+  fi
 
   # In Mowgli mode, select one direct GNSS stack.
   # In MAVROS mode, GPS is handled via Pixhawk/MAVROS + NTRIP sidecar,
@@ -111,9 +120,9 @@ build_compose_stack() {
     fi
   fi
 
-  if [[ ! -f "$DOCKER_DIR/.updater-managed" ]]; then
-    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.watchtower.yml")
-  fi
+  # Watchtower is gone: the host updater does managed releases and
+  # `mowglinext.sh update` does everything else. install_host_updater still
+  # removes a Watchtower container left by an older install.
 
   if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
     COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.updater.yml")
@@ -139,20 +148,13 @@ build_compose_stack() {
     esac
   fi
 
-  if effective_tfluna_front_enabled; then
-    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.tfluna-front.yml")
-  fi
-
-  if effective_tfluna_edge_enabled; then
-    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.tfluna-edge.yml")
-  fi
-
   [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]] && \
     COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.mavros.yml")
 
-  if effective_vesc_enabled; then
-    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.vesc.yml")
-  fi
+  # OpenMower v1 electronics: the bridge sidecar replaces mowgli-ros2's
+  # hardware_bridge_node (gated in mowgli.launch.py); GNSS stays universal.
+  [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]] && \
+    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.openmower.yml")
 
   info "Selected compose fragments:"
   for f in "${COMPOSE_FILES[@]}"; do
@@ -254,15 +256,50 @@ record_compose_baseline() {
   fi
 }
 
-# Exit status 3 from `installer-stack` means: the installed Compose file has no
-# recorded baseline and differs from the current definition, so the updater
-# cannot tell a hand edit from fragments that evolved. Ask the operator; on
-# consent the updater keeps the old file as docker-compose.yaml.legacy-<UTC>.
-# A non-interactive run consents with MOWGLI_ADOPT_LEGACY_COMPOSE=true.
+# Exit status 3 from `installer-stack` means the updater cannot vouch for the
+# installed Compose file: either it has no recorded baseline and differs from
+# the current definition (a hand edit and evolved fragments look the same), or
+# its checksum no longer matches the baseline (a hand edit). Ask the operator;
+# on consent the updater keeps the exact old file next to the new one
+# (docker-compose.yaml.legacy-<UTC> / .edited-<UTC>) and regenerates it.
+# A non-interactive run consents with MOWGLI_ADOPT_LEGACY_COMPOSE=true (or
+# implicitly, since confirm() answers yes without a terminal — the old file
+# is kept either way).
 run_updater_installer_stack() {
   local selected_gnss="$1" selected_lidar="$2" status=0
   local binary="${MOWGLI_UPDATER_STACK_BINARY:-/usr/local/bin/mowgli-updater}"
   local stack_args=(installer-stack "$DOCKER_DIR" "${COMPOSE_PROJECT_NAME:-install}" "$COMPOSE_SRC_DIR" "$selected_gnss" "$selected_lidar")
+
+  # A deleted compose file is recreated from the installed definition; there
+  # is nothing to keep, but the operator is told before it happens.
+  if [[ ! -f "$FINAL_COMPOSE_FILE" ]]; then
+    warn "$MSG_COMPOSE_MISSING"
+    if ! confirm "$MSG_COMPOSE_MISSING_CONFIRM"; then
+      error "$MSG_COMPOSE_MISSING_DECLINED"
+      return 1
+    fi
+  fi
+
+  # The updater daemon renders with the directory recorded at its install
+  # (/etc/mowgli-updater.json). If this shell resolves the checkout to another
+  # spelling (symlinked home, moved checkout, MOWGLI_HOME), every bind mount
+  # source differs and the next reviewed update is refused as "adds writable
+  # storage". Say so now, with both paths, instead of later.
+  local updater_config="${MOWGLI_UPDATER_CONFIG:-/etc/mowgli-updater.json}" daemon_dir=""
+  if [[ -r "$updater_config" ]]; then
+    daemon_dir="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("directory",""))' "$updater_config" 2>/dev/null || true)"
+    if [[ -n "$daemon_dir" && "$daemon_dir" != "$DOCKER_DIR" ]]; then
+      error "$MSG_UPDATER_DIRECTORY_MISMATCH"
+      error "  updater: $daemon_dir"
+      error "  this run: $DOCKER_DIR"
+      return 1
+    fi
+  fi
+
+  # The broker is a local (non-release) service: installer-stack must know
+  # whether to add or drop it when it regenerates the file.
+  export MOWGLI_ENABLE_MQTT="${ENABLE_MQTT:-false}"
+  export MOWGLI_REGENERATE_STACK="${MOWGLI_REGENERATE_STACK:-false}"
 
   if [[ "${MOWGLI_ADOPT_LEGACY_COMPOSE:-}" == "true" ]]; then
     MOWGLI_ADOPT_LEGACY_COMPOSE=true "$binary" "${stack_args[@]}"
@@ -287,17 +324,32 @@ write_compose_merged() {
   mkdir -p "$DOCKER_DIR"
 
   if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
-    if [[ "${HARDWARE_BACKEND:-mowgli}" != "mowgli" ]]; then
-      error "$MSG_UPDATER_STACK_BACKEND"
-      return 1
-    fi
+    # The worker reads HARDWARE_BACKEND from docker/.env itself (the bundle's
+    # "backend" group), so only the backends a release covers get this far.
+    # Spelled out rather than updater_hardware_supported: docker/stack.sh
+    # sources this file without lib/updater.sh.
+    case "${HARDWARE_BACKEND:-mowgli}" in
+      mowgli|openmower) ;;
+      *)
+        error "$MSG_UPDATER_STACK_BACKEND"
+        return 1
+        ;;
+    esac
     local selected_gnss="none" selected_lidar="none"
     if [[ "$(effective_gnss_stack)" != "disabled" && "$(effective_gnss_backend)" != "disabled" ]]; then
       selected_gnss="universal"
     fi
     if [[ "${LIDAR_ENABLED:-true}" == "true" ]]; then selected_lidar="${LIDAR_TYPE:-none}"; fi
     run_updater_installer_stack "$selected_gnss" "$selected_lidar" || return 1
-    if [[ -s "$DOCKER_DIR/stack-release.json" ]] && [[ "$(cat "$DOCKER_DIR/stack-release.json")" != "null" ]]; then
+    if [[ "${MOWGLI_REGENERATE_STACK:-false}" == "true" ]]; then
+      # The updater's digest pins would put the old images back under the
+      # new definition; images now follow the .env tags. The pins are kept
+      # as a dated copy, and the next reviewed update writes fresh ones.
+      if [[ -f "$DOCKER_DIR/update-images.json" ]]; then
+        backup_path_if_exists "$DOCKER_DIR/update-images.json"
+        info "$MSG_UPDATE_MANUAL_PINS"
+      fi
+    elif [[ -s "$DOCKER_DIR/stack-release.json" ]] && [[ "$(cat "$DOCKER_DIR/stack-release.json")" != "null" ]]; then
       info "$MSG_UPDATER_STACK_REVIEW"
     fi
     prune_backup_if_unchanged "$FINAL_COMPOSE_FILE" "${MIGRATED_COMPOSE_BACKUP:-}"
@@ -318,7 +370,7 @@ write_compose_merged() {
   # `config --no-interpolate` keeps `${MOWGLI_ROS2_IMAGE}` and friends as
   # literal references in the generated compose file instead of baking
   # the values from .env at install time. Without it, editing .env later
-  # (image-tag bumps, switching `:main` ↔ `:dev`, watchtower picking up
+  # (image-tag bumps, switching `:main` ↔ `:dev`, the updater picking up
   # a new pin) was silently ignored — the compose file shipped with the
   # values resolved at first install.
   if ! (

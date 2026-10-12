@@ -6,6 +6,7 @@ import { dirtyKeysRequireGpsRestart, restartGps } from "../utils/containers.ts";
 import { useContainerRestart } from "./useContainerRestart.ts";
 import { getQuaternionFromHeading } from "../utils/map.tsx";
 import { ContentType } from "../api/Api.ts";
+import {matchesSettingSearch, settingSearchText} from "../utils/settingsSearch.ts";
 import { valuesMatch } from "../utils/settingsValues.ts";
 import {
     AREA_RECORDING_GROUP,
@@ -13,13 +14,17 @@ import {
     CHARGE_LIMITS_GROUP,
     DOCK_CALIBRATION_GROUP,
     DOCK_DETECTION_GROUP,
+    FIRMWARE_SAFETY_GROUP,
     LOCALIZATION_GUARD_GROUP,
+    OPENMOWER_WHEEL_LOOP_GROUP,
+    OPENMOWER_WIRING_GROUP,
     REVERSE_ESCAPE_GROUP,
     START_ESCAPE_GROUP,
     TURN_SPEED_GROUP,
     YAW_LOOP_GROUP,
     groupKeys,
 } from "../components/settings/settingsFieldGroups.ts";
+import { useHardwareBackend } from "./useHardwareBackend.ts";
 
 /** A section that saves outside mowgli_robot.yaml but wants the page's Save button. */
 export interface ExternalSaver {
@@ -46,10 +51,9 @@ export type SettingsSection =
     | "safety"
     | "obstacles"
     | "navigation"
-    | "rain"
+    | "weather"
     | "leds"
     | "mqtt"
-    | "irrisense"
     | "remote_access"
     | "notifications"
     | "advanced";
@@ -87,6 +91,9 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "wheel_x_offset", "chassis_center_x", "chassis_length", "chassis_width",
             "chassis_height", "chassis_mass_kg", "caster_radius", "caster_track",
             "ticks_per_meter", "tool_width", "blade_radius",
+            // The hardware backend's own wiring (ports, controller type), in
+            // the same section: one place for "what this robot is made of".
+            ...groupKeys(OPENMOWER_WIRING_GROUP),
         ],
     },
     {
@@ -98,6 +105,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
             "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
             ...groupKeys(YAW_LOOP_GROUP),
+            ...groupKeys(OPENMOWER_WHEEL_LOOP_GROUP),
         ],
     },
     {
@@ -200,6 +208,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "battery_full_voltage", "battery_empty_voltage", "battery_critical_voltage",
             "battery_full_percent", "battery_low_percent", "battery_critical_percent",
             "battery_critical_recovery_percent", "battery_manual_resume_percent",
+            "battery_charge_tail_current_a",
             ...groupKeys(CHARGE_LIMITS_GROUP),
         ],
     },
@@ -221,6 +230,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // that mode is on. Listing them here is what keeps them out of
             // AdvancedSection's free-form editor, exactly as before.
             "lift_blade_resume_delay_sec", "lift_recovery_mode",
+            ...groupKeys(FIRMWARE_SAFETY_GROUP),
         ],
     },
     {
@@ -252,10 +262,12 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         ],
     },
     {
-        id: "rain",
-        label: "settingsSections.rain.label",
+        // Rain sensor behaviour + the IrriSense soil-moisture skip: both
+        // decide whether the weather lets the robot mow.
+        id: "weather",
+        label: "settingsSections.weather.label",
         icon: "cloud",
-        description: "settingsSections.rain.description",
+        description: "settingsSections.weather.description",
         keys: ["rain_mode", "rain_delay_minutes", "rain_debounce_sec"],
     },
     {
@@ -289,15 +301,6 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "mqtt_password", "mqtt_topic_prefix", "mqtt_use_ssl",
             "mqtt_home_assistant_discovery_enabled",
         ],
-    },
-    {
-        id: "irrisense",
-        label: "settingsSections.irrisense.label",
-        icon: "cloud-sync",
-        description: "settingsSections.irrisense.description",
-        // No yaml keys: the IrriSense settings (token included) live in the
-        // GUI's key-value DB and the section loads/saves them itself.
-        keys: [],
     },
     {
         id: "remote_access",
@@ -338,7 +341,18 @@ export const useSettingsManager = () => {
     const [defaults, setDefaults] = useState<Record<string, any>>({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [restartRequired, setRestartRequired] = useState(false);
+    const [restartRequired, setRestartRequired] = useState(() => {
+        try { return sessionStorage.getItem('mowgli.pendingRosRestart') === 'true'; }
+        catch { return false; }
+    });
+    useEffect(() => {
+        try { sessionStorage.setItem('mowgli.pendingRosRestart', String(restartRequired)); }
+        catch { /* Storage can be disabled in embedded browsers. */ }
+    }, [restartRequired]);
+    const acknowledgeRestart = useCallback(() => {
+        try { sessionStorage.removeItem('mowgli.pendingRosRestart'); } catch { /* optional storage */ }
+        setRestartRequired(false);
+    }, []);
     // GPS restart skips the rosbridge readiness probe (ROS2 is unaffected).
     const gpsRestart = useContainerRestart({
         pendingLabel: t("settingsManager.gpsRestartPending"),
@@ -348,6 +362,7 @@ export const useSettingsManager = () => {
     });
     const [searchQuery, setSearchQuery] = useState("");
     const initialLoadDone = useRef(false);
+    const hardware = useHardwareBackend();
 
     // Load values on mount
     useEffect(() => {
@@ -509,8 +524,12 @@ export const useSettingsManager = () => {
                 "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
                 "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
             ];
-            const liveHardwareKeys = ["ticks_per_meter", ...driveKeys];
+            // Live push to the Mowgli STM32 bridge only: on another backend
+            // these parameters do not exist on the node named hardware_bridge
+            // (the OpenMower bridge reads them at start-up).
+            const liveHardwareKeys = hardware.backend === "mowgli" ? ["ticks_per_meter", ...driveKeys] : [];
             const liveHardwareDirty = liveHardwareKeys.some((k) => dirtyKeys.has(k));
+            const requiresRosRestart = [...dirtyKeys].some(key => !liveHardwareKeys.includes(key));
             const hasDirtyChanges = dirtyKeys.size > 0;
             const externalSavers = Object.values(externalSaversRef.current).filter((x) => x.dirtyCount > 0);
             if (!hasDirtyChanges && !shouldRestartGps && externalSavers.length === 0) {
@@ -544,12 +563,12 @@ export const useSettingsManager = () => {
                 }
                 setSavedValues(pruned);
                 setLocalValues(pruned);
-                setRestartRequired(true);
+                if (requiresRosRestart) setRestartRequired(true);
                 notification.success({
                     message: t("settingsSections.toasts.saved"),
                     description: shouldRestartGps
                         ? t("settingsSections.toasts.savedGpsRestartDescription")
-                        : t("settingsSections.toasts.savedDescription"),
+                        : t(requiresRosRestart ? "settingsSections.toasts.savedDescription" : "settingsSections.toasts.savedApplyingLive"),
                 });
             } else if (shouldRestartGps) {
                 notification.info({
@@ -623,6 +642,7 @@ export const useSettingsManager = () => {
                             body: { parameters },
                         });
                     } catch (e: any) {
+                        setRestartRequired(true);
                         notification.warning({
                             message: t("settingsSections.toasts.drivePidUpdateFailed"),
                             description: e?.message ??
@@ -639,7 +659,7 @@ export const useSettingsManager = () => {
         } finally {
             setSaving(false);
         }
-    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, t]);
+    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, t, hardware.backend]);
 
     const savePartialValues = useCallback(async (
         partialValues: Record<string, any>,
@@ -764,17 +784,15 @@ export const useSettingsManager = () => {
     const matchesSearch = useCallback(
         (key: string, label?: string): boolean => {
             if (!searchQuery) return true;
-            const q = searchQuery.toLowerCase();
-            return (
-                key.toLowerCase().includes(q) ||
-                (label?.toLowerCase().includes(q) ?? false)
-            );
+            return matchesSettingSearch(searchQuery, key, label ?? '', ...settingSearchText(key, t));
         },
-        [searchQuery]
+        [searchQuery, t]
     );
 
     return {
         sections: SECTION_DEFINITIONS,
+        hardwareBackend: hardware.backend,
+        backendDefaultOverrides: hardware.defaultOverrides,
         values: localValues,
         savedValues,
         defaults,
@@ -787,6 +805,7 @@ export const useSettingsManager = () => {
         registerExternalSaver,
         unregisterExternalSaver,
         restartRequired,
+        acknowledgeRestart,
         searchQuery,
         advancedKeys,
         setSearchQuery,

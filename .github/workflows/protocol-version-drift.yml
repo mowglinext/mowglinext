@@ -10,7 +10,7 @@ on:
       - 'firmware/scripts/protocol_baseline.json'
       - '.github/workflows/protocol-version-drift.yml'
   pull_request:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - 'firmware/stm32/ros_usbnode/include/mowgli_protocol.h'
       - 'ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp'

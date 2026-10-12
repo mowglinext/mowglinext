@@ -72,7 +72,7 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, 
             });
             return;
         }
-        const areaLabel = areaNames[areaIdx] ?? t('mapTrackedObstacles.areaFallback', {index: areaIdx});
+        const areaLabel = areaNames[areaIdx] ?? t('mapAreasList.unnamedArea', {index: areaIdx + 1});
 
         modal.confirm({
             title: t('mapTrackedObstacles.confirmTitleWithId', {id}),
@@ -126,7 +126,7 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, 
                 {obstacles.map((obs) => {
                     const id = obs.id ?? 0;
                     const areaIdx = obstacleAreaIndex[id];
-                    const areaLabel = areaIdx == null ? t('mapTrackedObstacles.noArea') : (areaNames[areaIdx] ?? t('mapTrackedObstacles.areaFallback', {index: areaIdx}));
+                    const areaLabel = areaIdx == null ? t('mapTrackedObstacles.noArea') : (areaNames[areaIdx] ?? t('mapAreasList.unnamedArea', {index: areaIdx + 1}));
                     const isSelected = selectedObstacleId === id;
                     return (
                         <div key={id}

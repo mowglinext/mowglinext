@@ -38,6 +38,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -51,6 +53,13 @@ namespace mowgli_interfaces::path_tracking
 /// one goal the FeasiblePathHandler only ever walks that index FORWARD; the
 /// slack absorbs the one-or-two-pose retreat a mid-goal path update can cause.
 inline constexpr std::uint32_t kGoalRestartIndexDrop = 5;
+
+/// Number of most recent samples kept for the windowed percentile. The controller
+/// server publishes at its control rate (~10 Hz on this robot), so 300 samples is
+/// roughly the last 30 s of driving: long enough that one obstacle-avoidance
+/// excursion is a small fraction of the window, short enough that a lasting
+/// problem still shows within half a minute.
+inline constexpr std::size_t kRecentWindowSamples = 300;
 
 /// One tracking sample, already extracted from nav2_msgs/TrackingFeedback so
 /// that this header stays free of ROS types (and therefore unit-testable
@@ -84,6 +93,8 @@ public:
     last_position_error_m_ = 0.0;
     last_path_index_ = 0;
     has_index_ = false;
+    recent_count_ = 0;
+    recent_next_ = 0;
   }
 
   /// Accumulate one sample, starting a new episode first when the path index
@@ -122,6 +133,13 @@ public:
     last_position_error_m_ = sample.position_error_m;
     last_path_index_ = sample.path_index;
     has_index_ = true;
+
+    recent_abs_position_m_[recent_next_] = abs_position;
+    recent_next_ = (recent_next_ + 1) % kRecentWindowSamples;
+    if (recent_count_ < kRecentWindowSamples)
+    {
+      ++recent_count_;
+    }
   }
 
   bool HasSamples() const
@@ -150,6 +168,37 @@ public:
   double RmsPositionErrorM() const
   {
     return count_ > 0 ? std::sqrt(sum_squared_position_m2_ / static_cast<double>(count_)) : 0.0;
+  }
+
+  /// Number of samples currently held in the recent window (<= kRecentWindowSamples).
+  std::size_t RecentCount() const
+  {
+    return recent_count_;
+  }
+
+  /// Percentile (q in [0, 1], nearest-rank) of |lateral error| over the most recent
+  /// kRecentWindowSamples samples. The goal-wide MAX is the wrong quantity to alarm
+  /// on: one deliberate obstacle-avoidance excursion sets it for the rest of the
+  /// goal, however well the robot tracked afterwards. A high percentile of a recent
+  /// window still catches sustained poor tracking and recovers once it is over.
+  /// Returns 0 when the window is empty.
+  double RecentPercentileAbsPositionErrorM(const double q) const
+  {
+    if (recent_count_ == 0)
+    {
+      return 0.0;
+    }
+    std::array<double, kRecentWindowSamples> sorted = recent_abs_position_m_;
+    const auto last = sorted.begin() + static_cast<std::ptrdiff_t>(recent_count_);
+    // Until the ring has wrapped, only [0, recent_count_) is filled; once it has,
+    // recent_count_ == kRecentWindowSamples and the whole array is live.
+    const double clamped = std::min(1.0, std::max(0.0, q));
+    const auto rank =
+        static_cast<std::size_t>(std::ceil(clamped * static_cast<double>(recent_count_)));
+    const std::size_t index = rank == 0 ? 0 : rank - 1;
+    const auto nth = sorted.begin() + static_cast<std::ptrdiff_t>(index);
+    std::nth_element(sorted.begin(), nth, last);
+    return *nth;
   }
 
   double MaxAbsHeadingErrorRad() const
@@ -187,6 +236,11 @@ private:
   double last_position_error_m_{0.0};
   std::uint32_t last_path_index_{0};
   bool has_index_{false};
+
+  // Ring buffer of the most recent |lateral error| samples (see RecentPercentile...).
+  std::array<double, kRecentWindowSamples> recent_abs_position_m_{};
+  std::size_t recent_count_{0};
+  std::size_t recent_next_{0};
 };
 
 }  // namespace mowgli_interfaces::path_tracking

@@ -162,6 +162,8 @@ protected:
       <root BTCPP_format="4">
         <BehaviorTree ID="MainTree">
           <ReactiveFallback name="BoundaryGuard">
+            <IsCommand command="0"/>
+            <IsCommand command="8"/>
             <IsCommand command="2"/>
             <Sequence name="DockTransitExempt">
               <IsCommand command="1"/>
@@ -219,6 +221,26 @@ TEST_F(BoundaryGuardExemptTest, HomeCommandStillWhitelisted)
   ctx->docking_active = false;
   ctx->boundary_violation = true;
   EXPECT_EQ(tick(), BT::NodeStatus::SUCCESS);  // handler skipped
+}
+
+TEST_F(BoundaryGuardExemptTest, IdleOutsideBoundaryDoesNotStartRecovery)
+{
+  ctx->current_command = 0;
+  ctx->boundary_violation = true;
+  EXPECT_EQ(tick(), BT::NodeStatus::SUCCESS);
+}
+
+TEST_F(BoundaryGuardExemptTest, StopCancelsRecoveryAndLaterStartRestoresBoundaryProtection)
+{
+  ctx->current_command = 1;
+  ctx->boundary_violation = true;
+  EXPECT_EQ(tick(), BT::NodeStatus::FAILURE);
+
+  ctx->current_command = 8;
+  EXPECT_EQ(tick(), BT::NodeStatus::SUCCESS);
+
+  ctx->current_command = 1;
+  EXPECT_EQ(tick(), BT::NodeStatus::FAILURE);
 }
 
 // docking_active must NOT leak the exemption to an unrelated command that is

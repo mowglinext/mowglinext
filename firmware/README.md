@@ -40,7 +40,7 @@ and the 500B (STM32F401VC), and provides:
 - Battery voltage, the CC/CV charge envelope and charging state
 - Rain sensor, stop buttons, wheel-lift and tilt emergency sensors
 - USB-CDC link to ROS2's `hardware_bridge_node` — COBS-framed and CRC-16 checked
-  (`include/mowgli_protocol.h`, protocol version 6)
+  (`include/mowgli_protocol.h`, protocol version 7)
 
 ### Building
 

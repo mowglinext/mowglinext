@@ -44,6 +44,10 @@ extern "C"
 #define VALID_BOARD_DEFINED 1
 #define PANEL_TYPE PANEL_TYPE_YARDFORCE_500_CLASSIC
 #define BLADEMOTOR_LENGTH_RECEIVED_MSG 16
+#define BLADEMOTOR_STOP_COMMAND_VALUE 0x00u
+#define BLADEMOTOR_FORWARD_COMMAND_VALUE 0x80u
+#define BLADEMOTOR_REVERSE_COMMAND_VALUE 0xC0u
+#define BLADEMOTOR_POLL_INTERVAL_MS 100u
 #define DEBUG_TYPE DEBUG_TYPE_UART
 
 #define MAX_MPS 0.5		  // Allow maximum speed of 1.0 m/s
@@ -63,12 +67,25 @@ extern "C"
 #define BLADEMOTOR_USART_INSTANCE USART6
 
 #define VALID_BOARD_DEFINED 1
+#if defined(BOARD_BILTEMA_RM1000)
+#define PANEL_TYPE PANEL_TYPE_YARDFORCE_900_ECO
+#define BLADEMOTOR_STOP_COMMAND_VALUE 0x02u
+#define BLADEMOTOR_FORWARD_COMMAND_VALUE 0x81u
+#define BLADEMOTOR_REVERSE_COMMAND_VALUE 0xC1u
+#define BLADEMOTOR_POLL_INTERVAL_MS 20u
+#define BLADEMOTOR_SEQUENCED_POWER 1
+#else
 #define PANEL_TYPE PANEL_TYPE_YARDFORCE_500B_CLASSIC
+#define BLADEMOTOR_STOP_COMMAND_VALUE 0x00u
+#define BLADEMOTOR_FORWARD_COMMAND_VALUE 0x80u
+#define BLADEMOTOR_REVERSE_COMMAND_VALUE 0xC0u
+#define BLADEMOTOR_POLL_INTERVAL_MS 100u
+#endif
 #define BLADEMOTOR_LENGTH_RECEIVED_MSG 16
 #define DEBUG_TYPE DEBUG_TYPE_SWO
 
 #define MAX_MPS 0.5		  // Allow maximum speed of 1.0 m/s
-#define PWM_PER_MPS 275.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
+#define PWM_PER_MPS 300.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
 #define TICKS_PER_M 277.0 // Power-on fallback encoder ticks per meter; ROS runtime tuning overrides this after host connection
 #define WHEEL_BASE  0.325		// The distance between the center of the wheels in meters
 
@@ -79,6 +96,10 @@ extern "C"
 #elif defined(BOARD_LUV1000RI) // TODO: This currently can't be selected via platformio
 #define PANEL_TYPE PANEL_TYPE_YARDFORCE_LUV1000RI
 #define BLADEMOTOR_LENGTH_RECEIVED_MSG 14
+#define BLADEMOTOR_STOP_COMMAND_VALUE 0x00u
+#define BLADEMOTOR_FORWARD_COMMAND_VALUE 0x80u
+#define BLADEMOTOR_REVERSE_COMMAND_VALUE 0xC0u
+#define BLADEMOTOR_POLL_INTERVAL_MS 100u
 
 #define DEBUG_TYPE 0
 
@@ -147,6 +168,12 @@ extern "C"
 #define PAC5223RESET_PIN GPIO_PIN_14
 #define PAC5223RESET_GPIO_PORT GPIOE
 #define PAC5223RESET_GPIO_CLK_ENABLE() __HAL_RCC_GPIOE_CLK_ENABLE()
+
+#if defined(BLADEMOTOR_SEQUENCED_POWER)
+#define BLADEMOTOR_POWER_PIN GPIO_PIN_11
+#define BLADEMOTOR_POWER_GPIO_PORT GPIOD
+#define BLADEMOTOR_POWER_GPIO_CLK_ENABLE() __HAL_RCC_GPIOD_CLK_ENABLE()
+#endif
 
 /* Drive Motors - HC366 OE Pins (LOW to enable) */
 #define PAC5210RESET_PIN GPIO_PIN_15

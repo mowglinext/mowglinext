@@ -1,4 +1,5 @@
 import {useState} from "react";
+import type {ReactNode} from "react";
 import {useTranslation} from "react-i18next";
 import type {TFunction} from "i18next";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
@@ -34,7 +35,7 @@ type PartTone = 'ok' | 'warn' | 'unknown';
 
 interface PartInfo {
   label: string;
-  value: string;
+  value: ReactNode;
   tone: PartTone;
 }
 
@@ -47,7 +48,7 @@ function partInfo(part: Part, inputs: AnatomyInputs, t: TFunction): PartInfo {
     case 'gps':
       return {label: t('robotAnatomy.gpsAntenna'), value: inputs.gpsLabel, tone: boolTone(inputs.gpsOk)};
     case 'imu':
-      return {label: 'IMU', value: inputs.imuOk ? t('robotAnatomy.yawValue', {n: inputs.imuYawDeg.toFixed(0)}) : t('robotAnatomy.noData'), tone: boolTone(inputs.imuOk)};
+      return {label: t('robotAnatomy.imuYawTitle'), value: inputs.imuOk ? inputs.imuYawDeg.toFixed(0) : t('robotAnatomy.noData'), tone: boolTone(inputs.imuOk)};
     case 'lidar':
       // Without a live scan-freshness signal we refuse to fake "streaming".
       return inputs.lidarOk === undefined
@@ -56,18 +57,18 @@ function partInfo(part: Part, inputs: AnatomyInputs, t: TFunction): PartInfo {
     case 'battery':
       return {
         label: t('robotAnatomy.battery'),
-        value: `${inputs.batteryPct.toFixed(0)}% · ${inputs.vBattery.toFixed(1)} V`,
+        value: <><span className="diagnostics-battery-percent">{inputs.batteryPct.toFixed(0)}</span>% · <span className="diagnostics-battery-voltage">{inputs.vBattery.toFixed(1)}</span> V</>,
         tone: boolTone(inputs.batteryPct > 20),
       };
     case 'blade':
       return {label: t('robotAnatomy.blade'), value: inputs.bladeOn ? t('robotAnatomy.spinning') : t('robotAnatomy.off'), tone: boolTone(!inputs.bladeOn)};
     case 'wheelL':
-      return {label: t('robotAnatomy.leftWheel'), value: t('robotAnatomy.rpmValue', {n: inputs.wheelLeftRpm.toFixed(0)}), tone: 'ok'};
+      return {label: `${t('robotAnatomy.leftWheel')} (rpm)`, value: inputs.wheelLeftRpm.toFixed(0), tone: 'ok'};
     case 'wheelR':
-      return {label: t('robotAnatomy.rightWheel'), value: t('robotAnatomy.rpmValue', {n: inputs.wheelRightRpm.toFixed(0)}), tone: 'ok'};
+      return {label: `${t('robotAnatomy.rightWheel')} (rpm)`, value: inputs.wheelRightRpm.toFixed(0), tone: 'ok'};
     case 'motor':
       return {
-        label: t('robotAnatomy.motors'),
+        label: `${t('robotAnatomy.motors')} (°C)`,
         value: t('robotAnatomy.motorTemps', {motor: inputs.motorTempC.toFixed(0), esc: inputs.escTempC.toFixed(0)}),
         tone: boolTone(inputs.motorTempC < 55),
       };
@@ -164,9 +165,10 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
           <g onMouseEnter={handleEnter('battery')} onMouseLeave={handleLeave} style={{cursor: 'pointer'}}>
             <rect x={120} y={150} width={80} height={26} rx={4}
                   fill={fill('battery')} stroke={stroke('battery')} strokeWidth={sw('battery')}/>
-            <text x={160} y={166} textAnchor="middle" fontSize={9} fontWeight={600} fill={colors.text}>
-              {inputs.batteryPct.toFixed(0)}%
+            <text x={166} y={166} textAnchor="end" fontSize={9} fontWeight={600} fill={colors.text}>
+              {inputs.batteryPct.toFixed(0)}
             </text>
+            <text x={168} y={166} textAnchor="start" fontSize={9} fontWeight={600} fill={colors.text}>%</text>
           </g>
 
           {/* Blade (center, below IMU) */}

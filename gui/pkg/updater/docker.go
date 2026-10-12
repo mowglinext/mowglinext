@@ -222,10 +222,10 @@ func (b DockerBackend) Inventory(ctx context.Context) (string, map[string]string
 	}
 	return updates.Hash(data), images, nil
 }
-func (b DockerBackend) PlanImages(ctx context.Context, d Deployment) (map[string]string, error) {
-	return b.PlanSelectedImages(ctx, d, nil)
+func (b DockerBackend) PlanImages(ctx context.Context, d Deployment, opts PlanOptions) (map[string]string, error) {
+	return b.PlanSelectedImages(ctx, d, nil, opts)
 }
-func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, error) {
+func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment, opts PlanOptions) (map[string]string, error) {
 	if err := d.Validate(b.Config.Trusted); err != nil {
 		return nil, err
 	}
@@ -233,8 +233,8 @@ func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, ove
 	if err != nil {
 		return nil, err
 	}
-	if ready.FirmwareProtocol != d.FirmwareProtocol {
-		return nil, errors.New("target requires a different mainboard firmware protocol")
+	if _, err := b.checkFirmwareProtocol(ready.FirmwareProtocol, d, opts); err != nil {
+		return nil, err
 	}
 	c, _, err := b.model(ctx)
 	if err != nil {
@@ -351,6 +351,7 @@ func (b DockerBackend) ValidateImageStorage(ctx context.Context, p Plan) error {
 }
 
 type Readiness struct {
+	MaintenanceReady bool   `json:"maintenance_ready"`
 	Ready            bool   `json:"ready"`
 	Maintenance      bool   `json:"maintenance"`
 	FirmwareProtocol int    `json:"firmware_protocol"`
@@ -370,6 +371,13 @@ func (b DockerBackend) readiness(ctx context.Context) (Readiness, error) {
 	}
 	return r, e
 }
+
+// RunningFirmwareProtocol lets the manager record an allowed protocol change
+// on the plan it hands back for review.
+func (b DockerBackend) RunningFirmwareProtocol(ctx context.Context) (int, error) {
+	r, err := b.readiness(ctx)
+	return r.FirmwareProtocol, err
+}
 func (b DockerBackend) MaintenanceSet() (bool, error) {
 	_, err := os.Stat(filepath.Join(b.Config.StateDir, "maintenance"))
 	if os.IsNotExist(err) {
@@ -385,11 +393,45 @@ func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
 		}
 		return nil
 	}
+	return b.enterMaintenance(ctx, 0, nil)
+}
+
+// Only a reviewed install that matches the live firmware may enter maintenance
+// despite an old bridge's protocol mismatch (protocol-first transition), or one
+// whose operator explicitly allowed the mismatch (update-first transition, the
+// plan's FirmwareProtocolChange). Rollback and final verification still require
+// full compatibility except under that same acknowledged change. Older GUI
+// endpoints fail closed.
+func (b DockerBackend) PrepareUpdate(ctx context.Context, p Plan) error {
+	if b.FirmwareProtocolExempt() {
+		return b.enterMaintenance(ctx, 0, nil)
+	}
+	return b.enterMaintenance(ctx, p.Target.FirmwareProtocol, p.FirmwareProtocolChange)
+}
+
+func maintenanceReady(r Readiness, protocol int, change *FirmwareProtocolChange) bool {
+	if change != nil {
+		return expectedFirmwareMismatch(r, change)
+	}
+	if protocol == 0 {
+		return r.Ready
+	}
+	return r.FirmwareProtocol == protocol && (r.Ready || r.MaintenanceReady)
+}
+
+func (b DockerBackend) enterMaintenance(ctx context.Context, protocol int, change *FirmwareProtocolChange) error {
+	marker := filepath.Join(b.Config.StateDir, "maintenance")
 	r, err := b.readiness(ctx)
 	if err != nil {
 		return err
 	}
-	if !r.Ready {
+	switch {
+	case change != nil && r.FirmwareProtocol != change.From && r.FirmwareProtocol != change.To:
+		return fmt.Errorf("firmware protocol changed since review: running %d, the reviewed change expects %d or %d", r.FirmwareProtocol, change.From, change.To)
+	case change == nil && protocol != 0 && r.FirmwareProtocol != protocol:
+		return fmt.Errorf("firmware protocol changed since review: running %d, update requires %d", r.FirmwareProtocol, protocol)
+	}
+	if !maintenanceReady(r, protocol, change) {
 		return fmt.Errorf("mower not ready: %s", r.Reason)
 	}
 	// Never let a second updater recreate a container during our transaction.
@@ -406,7 +448,7 @@ func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
 	// Require the GUI to acknowledge the persisted gate before stopping writers.
 	for i := 0; i < 20; i++ {
 		r, e := b.readiness(ctx)
-		if e == nil && r.Maintenance && r.Ready {
+		if e == nil && r.Maintenance && maintenanceReady(r, protocol, change) {
 			return nil
 		}
 		select {
@@ -733,12 +775,34 @@ func (b DockerBackend) stopManaged(ctx context.Context) ([]byte, error) {
 	return nil, nil
 }
 
+// backedUpMounts are the writable data directories the backup and rollback
+// contract covers (Backup/Restore).
+var backedUpMounts = map[string]bool{"/db": true, "/mowgli_config": true, "/ros2_ws/maps": true, "/ros2_ws/config": true}
+
+// isDeviceMount is the host's device tree (or a node in it) bound into a
+// container, as every hardware sidecar does for its serial ports. It holds
+// device nodes the kernel recreates, not data: there is nothing to back up or
+// roll back, so it never needs a backup contract.
+func isDeviceMount(source, target string) bool {
+	under := func(path string) bool {
+		path = filepath.Clean(path)
+		return path == "/dev" || strings.HasPrefix(path, "/dev/")
+	}
+	return under(source) && under(target)
+}
+
+// writableMountCovered reports whether a writable mount is either backed up
+// or holds no data.
+func writableMountCovered(source, target string) bool {
+	return backedUpMounts[target] || isDeviceMount(source, target)
+}
+
 func validateManagedMounts(service string, ci containerInfo) error {
 	if _, legacy := Services[service]; legacy {
 		return nil
 	}
 	for _, mount := range ci.Mounts {
-		if mount.RW && mount.Destination != "/db" && mount.Destination != "/mowgli_config" && mount.Destination != "/ros2_ws/maps" && mount.Destination != "/ros2_ws/config" {
+		if mount.RW && !writableMountCovered(mount.Source, mount.Destination) {
 			return fmt.Errorf("managed service %s has an unsupported writable mount %s", service, mount.Destination)
 		}
 	}

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.22.1)
 project(mowgli_bringup)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -64,6 +64,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gnss_launch_config test/test_gnss_launch_config.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_foxglove_launch_config test/test_foxglove_launch_config.py
+    TIMEOUT 30
+  )
   # The GNSS sidecar's embedded launcher (install/compose/docker-compose.gps.yml)
   # keeps its defaults equal to the template and needs no host-side config.
   ament_add_pytest_test(test_gnss_sidecar_launcher test/test_gnss_sidecar_launcher.py
@@ -99,6 +102,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_launch_injection test/test_launch_injection.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_battery_launch_config test/test_battery_launch_config.py
+    TIMEOUT 30
+  )
 
   # Lockstep guard for the firmware wheel-PI defaults: template ==
   # mowgli.launch.py fallback == hardware_bridge_node.cpp declared default, and
@@ -113,6 +119,12 @@ if(BUILD_TESTING)
   # file's own pure helper out of its AST, no ROS2 runtime.
   ament_add_pytest_test(test_fusion_graph_launch_types
     test/test_fusion_graph_launch_types.py
+    TIMEOUT 30
+  )
+
+  # HARDWARE_BACKEND gating: only the mowgli backend launches the in-tree
+  # hardware_bridge_node; mavros/openmower sidecars own the bridge. AST-based.
+  ament_add_pytest_test(test_hardware_backend_launch test/test_hardware_backend_launch.py
     TIMEOUT 30
   )
 

@@ -23,15 +23,16 @@ import {
     MinusSquareOutlined,
     PlayCircleOutlined,
     HomeOutlined,
-    WarningOutlined,
     PlusOutlined,
     BorderOutlined,
     AimOutlined,
-    ForwardOutlined,
     CaretRightOutlined,
     PauseOutlined,
     ThunderboltOutlined,
     ImportOutlined,
+    CheckOutlined,
+    BarsOutlined,
+    ExpandOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
 import AsyncButton from "../../../components/AsyncButton.tsx";
@@ -39,6 +40,9 @@ import type {Feature} from "geojson";
 import type {MenuItemType} from "antd/es/menu/interface";
 import {ShapePickerDropdown} from "./ShapePickerDropdown.tsx";
 import type {ShapeType} from "../hooks/useMapEditing.ts";
+import {getAvailableDockAppearances, MOWER_APPEARANCES, type DockAppearanceId, type MowerAppearanceId} from "../../../constants/mowerAppearances.ts";
+import {parseMowerAppearanceMenuKey} from "../../../constants/mowerAppearanceMenuKey.ts";
+import {parseDockAppearanceMenuKey} from "../../../constants/dockAppearanceMenuKey.ts";
 
 interface MowingAreaItem extends MenuItemType {
     feat: Feature;
@@ -54,9 +58,14 @@ interface MapToolbarMobileProps {
     mowingAreas: MowingAreaItem[];
     onEditMap: () => void;
     onSaveMap: () => Promise<void>;
+    onRestoreBackup?: () => void;
     onUndo: () => void;
     onRedo: () => void;
     onToggleSatellite: () => void;
+    showObstacleClearance?: boolean;
+    onToggleObstacleClearance?: () => void;
+    showCoveragePreview?: boolean;
+    onToggleCoveragePreview?: () => void;
     onManualMode: () => Promise<void>;
     onStopManualMode: () => Promise<void>;
     onBackupMap: () => void;
@@ -76,16 +85,29 @@ interface MapToolbarMobileProps {
     onSubtract?: () => void;
     onSplit?: () => void;
     onPlaceDock?: () => void;
+    /// LiDAR-ignore line drawing (draw_line_string on the map, click-to-place).
+    onDrawLidarCorridor?: () => void;
+    lidarCorridorDrawing?: boolean;
+    onFinishLidarCorridor?: () => void;
+    onCancelLidarCorridor?: () => void;
+    /// True when the current map selection is specifically an ignore LINE
+    /// (not an area/obstacle) — shows a dedicated pencil button that opens
+    /// its edit popup (name + distance) directly, instead of only being
+    /// reachable through the "editProps" entry buried in the ⋯ More menu.
+    lidarCorridorSelected?: boolean;
     dockPlacementMode?: boolean;
     stateName?: string;
     highLevelState?: number;
     emergency?: boolean;
+    mowerAppearanceId?: MowerAppearanceId;
+    onMowerAppearanceChange?: (id: MowerAppearanceId) => void;
+    dockAppearanceId?: DockAppearanceId;
+    onDockAppearanceChange?: (id: DockAppearanceId) => void;
     onStart?: () => Promise<void>;
     onHome?: () => Promise<void>;
     onEmergencyOn?: () => Promise<void>;
     onEmergencyOff?: () => Promise<void>;
     onAreaRecording?: () => Promise<void>;
-    onMowNextArea?: () => Promise<void>;
     onContinueOrPause?: () => Promise<void>;
     onBladeForward?: () => Promise<void>;
     onBladeBackward?: () => Promise<void>;
@@ -97,15 +119,21 @@ interface MapToolbarMobileProps {
 export const MapToolbarMobile = ({
     editMap, hasUnsavedChanges, manualMode, useSatellite,
     historyIndex, editHistoryLength, mowingAreas,
-    onEditMap, onSaveMap, onUndo, onRedo, onToggleSatellite,
+    onEditMap, onSaveMap, onRestoreBackup, onUndo, onRedo, onToggleSatellite,
+    showObstacleClearance = false, onToggleObstacleClearance,
+    showCoveragePreview = false, onToggleCoveragePreview,
     onManualMode, onStopManualMode,
     onBackupMap, onRestoreMap, onDownloadGeoJSON, onUploadGeoJSON, onImportOpenMower, onResetMowingProgress,
     onMowArea, selectedFeatureCount = 0, onEditSelectedFeature,
     onDrawPolygon, onDrawShape, onDrawEmoji, onTrash, onCombine, onSubtract, onSplit,
     onPlaceDock, dockPlacementMode,
+    onDrawLidarCorridor, lidarCorridorDrawing = false, onFinishLidarCorridor, onCancelLidarCorridor,
+    lidarCorridorSelected = false,
     stateName, highLevelState, emergency,
+    mowerAppearanceId = "urdf", onMowerAppearanceChange = () => {},
+    dockAppearanceId = "marker", onDockAppearanceChange = () => {},
     onStart, onHome, onEmergencyOn, onEmergencyOff,
-    onAreaRecording, onMowNextArea, onContinueOrPause,
+    onAreaRecording, onContinueOrPause,
     onBladeForward, onBladeBackward, onBladeOff,
 }: MapToolbarMobileProps) => {
     const {colors, displayMode} = useThemeMode();
@@ -164,9 +192,9 @@ export const MapToolbarMobile = ({
         height: 60,
         borderRadius: 18,
         fontWeight: 700,
-        background: emergency ? colors.bgElevated : colors.danger,
+        background: colors.danger,
         borderColor: colors.danger,
-        color: emergency ? colors.danger : colors.text,
+        color: colors.bgBase,
         boxShadow: colors.glassShadow,
     };
 
@@ -188,38 +216,91 @@ export const MapToolbarMobile = ({
     };
 
     const dataMenuItems: MenuProps["items"] = [
-        {key: "satellite", icon: <GlobalOutlined />, label: useSatellite ? t("mapToolbarMobile.darkMap") : t("mapToolbarMobile.satellite")},
-        {type: "divider"},
-        {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbarMobile.areaRecording")},
-        {key: "mowNext", icon: <ForwardOutlined />, label: t("mapToolbarMobile.mowNextArea")},
-        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? t("mapToolbarMobile.continue") : t("mapToolbarMobile.pause")},
-        {type: "divider"},
-        {key: "bladeForward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeForward")},
-        {key: "bladeBackward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeBackward")},
-        {key: "bladeOff", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeOff"), danger: true},
-        {type: "divider"},
-        {key: "backup", icon: <DatabaseOutlined />, label: t("mapToolbarMobile.backupMap")},
-        {key: "restore", icon: <DatabaseOutlined />, label: t("mapToolbarMobile.restoreMap")},
-        {key: "importOpenMower", icon: <ImportOutlined />, label: t("mapToolbarMobile.importFromOpenMower")},
-        {
-            key: "resetMowingProgress",
-            icon: <DeleteOutlined />,
-            label: t("resetMowingProgress.action"),
-            danger: true,
-            disabled: resetDisabled,
-        },
-        {type: "divider"},
-        {key: "download", icon: <DownloadOutlined />, label: t("mapToolbarMobile.downloadGeojson")},
-        ...(editMap
-            ? [{key: "upload", icon: <UploadOutlined />, label: t("mapToolbarMobile.uploadGeojson")} satisfies NonNullable<MenuProps["items"]>[number]]
-            : []),
+        ...(emergency ? [{key: "emergencyOff", label: t("mapToolbarMobile.emergencyOff")}]: []),
+        {type: "group", label: t("mapToolbar.displayGroup"), children: [
+            {key: "satellite", icon: <GlobalOutlined />, label: useSatellite ? t("mapToolbarMobile.darkMap") : t("mapToolbarMobile.satellite")},
+            ...(onToggleObstacleClearance
+                ? [{
+                    key: "obstacleClearance",
+                    icon: <ExpandOutlined />,
+                    label: showObstacleClearance ? t("mapToolbarMobile.hideObstacleClearance") : t("mapToolbarMobile.showObstacleClearance"),
+                } satisfies NonNullable<MenuProps["items"]>[number]]
+                : []),
+            ...(onToggleCoveragePreview
+                ? [{
+                    key: "coveragePreview",
+                    icon: <BarsOutlined />,
+                    label: showCoveragePreview ? t("mapToolbarMobile.hideCoveragePreview") : t("mapToolbarMobile.showCoveragePreview"),
+                } satisfies NonNullable<MenuProps["items"]>[number]]
+                : []),
+            {
+                key: "mowerAppearance",
+                label: t("mapToolbar.mowerAppearance"),
+                children: Object.values(MOWER_APPEARANCES).map((appearance) => ({
+                    key: `mowerAppearance:${appearance.id}`,
+                    icon: appearance.id === mowerAppearanceId ? <CheckOutlined /> : undefined,
+                    label: t(appearance.labelKey),
+                })),
+            },
+            {
+                key: "dockAppearance",
+                label: t("mapToolbar.dockAppearance"),
+                children: getAvailableDockAppearances(mowerAppearanceId).map((appearance) => ({
+                        key: `dockAppearance:${appearance.id}`,
+                        icon: appearance.id === dockAppearanceId ? <CheckOutlined /> : undefined,
+                        label: t(appearance.labelKey),
+                    })),
+            },
+        ]},
+        {type: "group", label: t("mapToolbar.motionGroup"), children: [
+            {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbarMobile.areaRecording")},
+            {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? t("mapToolbarMobile.continue") : t("mapToolbarMobile.pause")},
+        ]},
+        {type: "group", label: t("mapToolbar.bladeGroup"), children: [
+            {key: "bladeForward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeForward")},
+            {key: "bladeBackward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeBackward")},
+            {key: "bladeOff", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeOff"), danger: true},
+        ]},
+        {type: "group", label: t("mapToolbar.filesGroup"), children: [
+            {key: "backup", icon: <DatabaseOutlined />, label: t("mapToolbarMobile.backupMap")},
+            {key: "restore", icon: <DatabaseOutlined />, label: t("mapToolbarMobile.restoreMap")},
+            {key: "importOpenMower", icon: <ImportOutlined />, label: t("mapToolbarMobile.importFromOpenMower")},
+            {
+                key: "resetMowingProgress",
+                icon: <DeleteOutlined />,
+                label: t("resetMowingProgress.action"),
+                danger: true,
+                disabled: resetDisabled,
+            },
+            {type: "divider"},
+            {key: "download", icon: <DownloadOutlined />, label: t("mapToolbarMobile.downloadGeojson")},
+            ...(editMap && onRestoreBackup
+                ? [{key: "restoreBackup", icon: <DatabaseOutlined />, label: t("mapBackups.menuItem")} satisfies NonNullable<MenuProps["items"]>[number]]
+                : []),
+            ...(editMap
+                ? [{key: "upload", icon: <UploadOutlined />, label: t("mapToolbarMobile.uploadGeojson")} satisfies NonNullable<MenuProps["items"]>[number]]
+                : []),
+        ]},
     ];
 
     const handleMoreClick: MenuProps["onClick"] = ({key}: MenuInfo) => {
+        const appearanceId = parseMowerAppearanceMenuKey(key);
+        if (appearanceId) {
+            onMowerAppearanceChange(appearanceId);
+            return;
+        }
+        const dockAppearanceId = parseDockAppearanceMenuKey(key);
+        if (dockAppearanceId) {
+            onDockAppearanceChange(dockAppearanceId);
+            return;
+        }
+
         switch (key) {
+            case "emergencyOff": safeCall(onEmergencyOff); break;
             case "satellite": onToggleSatellite(); break;
+            case "obstacleClearance": onToggleObstacleClearance?.(); break;
+            case "coveragePreview": onToggleCoveragePreview?.(); break;
             case "areaRecording": safeCall(onAreaRecording); break;
-            case "mowNext": safeCall(onMowNextArea); break;
             case "continueOrPause": safeCall(onContinueOrPause); break;
             case "bladeForward": safeCall(onBladeForward); break;
             case "bladeBackward": safeCall(onBladeBackward); break;
@@ -230,6 +311,7 @@ export const MapToolbarMobile = ({
             case "resetMowingProgress": onResetMowingProgress(); break;
             case "download": onDownloadGeoJSON(); break;
             case "upload": onUploadGeoJSON(); break;
+            case "restoreBackup": onRestoreBackup?.(); break;
         }
     };
 
@@ -258,20 +340,60 @@ export const MapToolbarMobile = ({
     };
 
     // Always-present, dominant, separated emergency control. Rendered outside
-    // the scrolling cluster in its own fixed corner. Keeps the exact emergency
-    // on/off commands — only the styling/label/placement changed.
+    // the scrolling cluster in its own fixed corner. Always issues the stop command; release is a separate named menu item.
     const stopButton = (
         <AsyncButton
             danger
-            type={emergency ? "default" : "primary"}
-            icon={<WarningOutlined />}
-            onAsyncClick={(emergency ? onEmergencyOff : onEmergencyOn)!}
-            aria-label={emergency ? t("mapToolbarMobile.emergencyOff") : t("mapToolbarMobile.emergencyOn")}
-            style={stopButtonStyle}
+            type="primary"
+            className="emergency-stop"
+            onAsyncClick={onEmergencyOn!}
+            aria-label={t("mapToolbarMobile.emergencyOn")}
+            style={{...stopButtonStyle, padding: 0}}
         >
             {t("mapToolbarMobile.stop")}
         </AsyncButton>
     );
+
+    // While placing points for a LiDAR-ignore line, the toolbar becomes just
+    // Cancel (✗) / Finish (✓) / hint — nothing else in the normal row is
+    // usable mid-draw anyway (undo/redo, other draw tools, dock placement),
+    // and burying Finish/Cancel at the tail of a long horizontally-scrolling
+    // row meant they were easy to miss entirely on a phone, right when the
+    // operator is mid-tap on the map and least likely to go hunting for a
+    // button off-screen. This mirrors how the RECORDING state already hands
+    // Finish/Cancel/Home to JoystickOverlay instead of sharing the row. Both
+    // action buttons sit together at the FRONT (field-requested 2026-09-29)
+    // so they're the first thing the eye finds; the hint text trails after,
+    // and is deliberately short (points are placed via gl-draw's own
+    // draw_line_string mode now, not a JS-side counter — see MapPage.tsx —
+    // so there is no live count to show any more).
+    if (editMap && lidarCorridorDrawing) {
+        return (
+            <>
+                <div style={toolbarStyle}>
+                    <Button
+                        size="large"
+                        icon={<CloseOutlined />}
+                        onClick={onCancelLidarCorridor}
+                        aria-label={t("mapLidarCorridors.cancel")}
+                        style={touchTarget}
+                    />
+                    <Button
+                        type="primary"
+                        size="large"
+                        icon={<CheckOutlined />}
+                        onClick={onFinishLidarCorridor}
+                        aria-label={t("mapLidarCorridors.finish")}
+                        style={touchTarget}
+                    />
+                    <div style={{fontSize: 13, color: colors.text, whiteSpace: "nowrap"}}>
+                        {t("mapLidarCorridors.drawing")}
+                    </div>
+                </div>
+                {stopButton}
+            </>
+        );
+    }
 
     if (editMap) {
         return (
@@ -329,6 +451,7 @@ export const MapToolbarMobile = ({
                         <ShapePickerDropdown
                             onDrawShape={onDrawShape}
                             onDrawEmoji={onDrawEmoji}
+                            onDrawLidarCorridor={onDrawLidarCorridor}
                             placement="top"
                         >
                             <Button size="large" icon={<PlusOutlined />} aria-label={t("mapToolbarMobile.addShape")} style={touchTarget} />
@@ -351,6 +474,21 @@ export const MapToolbarMobile = ({
                         aria-label={t("mapToolbarMobile.placeDock")}
                         style={touchTarget}
                     />
+
+                    {/* Only for a selected LiDAR-ignore LINE, not areas/obstacles (those
+                        already reach "Edit properties" via the ⋯ More menu below) — the
+                        line's edit popup (name + ignore distance) has no other entry
+                        point on mobile at all, since there is no side panel here to hold
+                        an inline field the way the desktop LidarCorridorsPanel does. */}
+                    {lidarCorridorSelected && (
+                        <Button
+                            size="large"
+                            icon={<EditOutlined />}
+                            onClick={onEditSelectedFeature}
+                            aria-label={t("mapToolbarMobile.editProperties")}
+                            style={touchTarget}
+                        />
+                    )}
 
                     {/* Combine/Subtract/Split now live inside this More menu
                         (editMenuItems) to keep the top row uncluttered. */}
@@ -432,7 +570,7 @@ export const MapToolbarMobile = ({
                 />
 
                 <Dropdown
-                    menu={{items: dataMenuItems, onClick: handleMoreClick}}
+                    menu={{items: dataMenuItems, onClick: handleMoreClick, style: {maxHeight: "70dvh", overflowY: "auto"}}}
                     trigger={["click"]}
                     placement="topRight"
                 >

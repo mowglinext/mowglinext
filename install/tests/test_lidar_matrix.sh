@@ -41,7 +41,7 @@ check_lidar_preset() {
   local repo="$SANDBOX/repo_lidar_${label}"
   sandbox_repo "$repo"
   harness_init "$repo"
-  harness_set_preset gnss=auto gnss_connection=uart "lidar=$preset" tfluna=none
+  harness_set_preset gnss=auto gnss_connection=uart "lidar=$preset"
   if harness_run >/dev/null 2>&1; then
     pass "$label: harness_run"
   else
@@ -136,7 +136,7 @@ section "STL27L explicit overrides remain effective"
 repo_override="$SANDBOX/repo_lidar_override"
 sandbox_repo "$repo_override"
 harness_init "$repo_override"
-harness_set_preset gnss=auto gnss_connection=uart lidar=stl27l-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=stl27l-uart
 LIDAR_MODEL="custom-stl27l-driver"
 LIDAR_BAUD="123456"
 if harness_run >/dev/null 2>&1; then

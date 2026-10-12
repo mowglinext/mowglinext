@@ -20,6 +20,11 @@ geometry_msgs/Polygon outer_boundary
 geometry_msgs/Polygon[] obstacles      # interior holes (>= 3 points each)
 float64 mow_angle_deg                  # swath heading in the map frame; < 0 = auto (minimise swath count)
 bool perpendicular                    # rotate resolved AUTO/fixed swaths 90 degrees; boundary rings unchanged
+bool override_ring_direction          # false = use coverage_server's live ring_direction parameter (a goal built before this field existed)
+int32 ring_direction                  # perimeter winding: 0 planner default, 1 clockwise, 2 counter-clockwise; read only when override_ring_direction
+bool has_start_point                  # false = the planner picks where the route starts (the midpoint of the longest side of the outermost ring)
+float64 start_x                       # map-frame metres; the route starts on the OUTERMOST headland ring at the point nearest this one; read only when has_start_point
+float64 start_y
 ---
 # Result
 uint8 SEGMENT_RING=0    # densified closed headland loop

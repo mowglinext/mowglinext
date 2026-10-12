@@ -54,7 +54,7 @@
 | `DockCalibrationStatus.msg` | 28 | `PHASE_*` (0-7 incl. `IDLE`/`DONE`), `progress`, `cog_std_deg`, `displacement_m`, `charging`, `running`, `success`, `retry_reason`, `message` |
 | `Emergency.msg` | 6 | `active_emergency`, `latched_emergency`, `lift_warning`, `lift_duration_sec`, `reason` |
 | `ESCStatus.msg` | 12 | `ESC_STATUS_*` codes, `current`, `tacho`, `rpm`, temps — no ROS producer |
-| `GnssStatus.msg` | 120 | `FIX_TYPE_*`, `RTK_MODE_*`, `BASELINE_STATUS_*`, `CORRECTION_STREAM_STATUS_*`, 25 `CAP_*` bits; `capability_flags` vs `value_flags`; dual-antenna baseline; MSM summary |
+| `GnssStatus.msg` | 172 | `FIX_TYPE_*`, `RTK_MODE_*`, `BASELINE_STATUS_*`, `CORRECTION_STREAM_STATUS_*`, 28 `CAP_*` bits; `capability_flags` vs `value_flags`; dual-antenna baseline; MSM summary; `position_observation_sequence` (freshness provenance, commit `b8c5a290`, 2026-09-05; used by `localization_monitor_node`, see CLAUDE.md Invariant 1); and three enum groups added by commit `212ee599` (2026-09-05, correction transport/flow/semantic diagnostics) not yet consumed anywhere in `ros2/src`: `CORRECTION_TRANSPORT_STATUS_*` (7 values), `CORRECTION_FLOW_STATUS_*` (6), `CORRECTION_SEMANTIC_STATUS_*` (6), plus fields `correction_transport_status`, `correction_response_accepted`, `correction_flow_status`, `correction_semantic_status`, `correction_source`, `correction_forwarding_source`, `msm_summary_source` |
 | `HighLevelStatus.msg` | 22 | `HIGH_LEVEL_STATE_*` (0-4), `state_name`, `sub_state_name`, area/path/swath counters, `coverage_percent`, `gps_quality_percent`, `battery_percent`, `is_charging`, `emergency` |
 | `ImuRaw.msg` | 10 | `dt`, ax..gz, mx..mz — no ROS producer |
 | `MapArea.msg` | 10 | `name`, `area` polygon, `obstacles[]`, `is_navigation_area`, `obstacle_info[]` |
@@ -75,6 +75,8 @@
 | `GetRecoveryPoint.srv` | 6 | empty → `recovery_pose`, `distance_outside` |
 | `HighLevelControl.srv` | 18 | `COMMAND_*` (1-8, 254, 255) → `success` |
 | `MowerControl.srv` | 4 | `mow_enabled`, `mow_direction` → `success` |
+| `PreviewCoverage.srv` | 35 | `outer_boundary`, `obstacles[]`, `mow_angle_deg` (<0 auto), `perpendicular`, `ring_direction` (0/1/2, <0 live) → `rings[]`, `swaths[]` (drive order), resolved `mow_angle_deg`, `headland_passes`, `ring_direction`, `planned_fraction`, `field_area_m2`, `dropped_pieces`; served by `coverage_server` for the GUI line preview |
+| `SetAreaCoverageLines.srv` | 29 | stable `id`, `has_mow_angle` + `mow_angle_deg` (< 0 = auto), `has_ring_direction` + `ring_direction` (0/1/2) → `success`, `message`; + `has_start_point` / `start_x` / `start_y` (the route's start, snapped onto the outermost ring); set or clear ONE area's own overrides; served by `map_server_node` |
 | `PromoteObstacle.srv` | 59 | `area_index`, `obstacle_id` \| `polygon` \| `pending_id`, `name` → `success`, `message` |
 | `SetDockingPoint.srv` | 76 | `docking_pose`, `yaw_source` (`PRESERVE/REQUEST/MOTION`), `yaw_rad`, and at most ONE position flag: `use_gps_position` (live on-dock raw-antenna capture), `use_pending_antenna` (antenna from `~/capture_dock_antenna` + MOTION yaw — the calibration's normal write), `preserve_position` (yaw-only MOTION fallback); the last two are the only requests exempt from the charging gate → `success`, `message`, `stored_pose` |
 | `StartInArea.srv` | 13 | `area` (uint8 index) → `success` |
@@ -82,7 +84,7 @@
 | **`action/`** | | |
 | `CalibrateDock.action` | 70 | Goal `include_imu_yaw`, `include_mag`; Result `RETRY_*` (0-7), dock pose, `cog_std_deg`, IMU block; Feedback `PHASE_*` (0-5) |
 | `CoverageTask.action` | 11 | `area_index` → `coverage_percent` — no server or client |
-| `PlanCoverage.action` | 53 | Goal `outer_boundary`, `obstacles[]`, `mow_angle_deg`; Result `SEGMENT_RING/SWATH`, `segments[]`, `segment_types[]`, `full_path`, `drivable_subpaths[]`, counts; Feedback `phase` |
+| `PlanCoverage.action` | 55 | Goal `outer_boundary`, `obstacles[]`, `mow_angle_deg`, `perpendicular`, `override_ring_direction` + `ring_direction` (false = coverage_server's live parameter); Result `SEGMENT_RING/SWATH`, `segments[]`, `segment_types[]`, `full_path`, `drivable_subpaths[]`, counts; Feedback `phase` |
 
 No launch, config, or test files live in this package. Tests that pin its contracts live in the consumer packages (see *Build, test, run*).
 

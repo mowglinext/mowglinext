@@ -39,7 +39,9 @@ export const GnssDiagnosticBarRow: React.FC<Props> = ({
                     <Text strong>{label}</Text>
                     {status}
                 </Space>
-                <Text style={{ fontVariantNumeric: "tabular-nums" }}>{value}</Text>
+                <Text className="diagnostics-live-value diagnostics-live-value-wide">
+                    {value}
+                </Text>
             </div>
             {barPercent && (
                 <div

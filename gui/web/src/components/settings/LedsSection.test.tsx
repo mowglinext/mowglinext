@@ -218,6 +218,7 @@ describe("LedsSection", () => {
             "Charging",
             "No status",
             "Low battery",
+            "Transit",
             "Mowing",
             "Mowing without RTK fix",
             "Recording a boundary",
@@ -242,7 +243,7 @@ describe("LedsSection", () => {
             onReset,
         });
 
-        const resetButtons = screen.getAllByRole("button", { name: /reset to default/i });
+        const resetButtons = screen.getAllByRole("button", { name: /reset .* to default/i });
         expect(resetButtons).toHaveLength(1);
 
         await userEvent.click(resetButtons[0]);
@@ -251,6 +252,6 @@ describe("LedsSection", () => {
 
     it("renders plainly when the settings manager knows no defaults", () => {
         renderSection(enabledValues);
-        expect(screen.queryByRole("button", { name: /reset to default/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /reset .* to default/i })).not.toBeInTheDocument();
     });
 });

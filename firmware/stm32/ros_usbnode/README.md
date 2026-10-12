@@ -13,7 +13,7 @@ For the file map, wire-packet table and pitfalls see
 ## Platform.IO - compile and upload
 
 - Start VS Code and open `firmware/stm32/ros_usbnode` in platform.io (or run `pio` from that directory).
-- Make sure you Build and Upload the env that matches your mainboard: `Yardforce500` (STM32F103VC, the `default_envs`) or `Yardforce500B` (STM32F401VC). The `Yardforce500_STLINK_V3` / `Yardforce500B_STLINK_V3` variants upload through OpenOCD instead of PlatformIO's built-in ST-Link protocol. From a shell that is e.g. `pio run -e Yardforce500 -t upload`.
+- Make sure you Build and Upload the env that matches your mainboard: `Yardforce500` (STM32F103VC, the `default_envs`) or `Yardforce500B` (STM32F401VC). `BiltemaRM1000` uses the F401 profile with the RM-MB V6.1 panel protocol, blade command bytes and polling interval, plus sequenced PAC5223 reset and inverter power. `BiltemaRM1000_MPU6050_Yaw180` additionally rotates external IMU vectors 180 degrees around Z for the tested MPU-6050 mounting; generic Yardforce500B and RM1000 builds retain the identity transform. The `Yardforce500_STLINK_V3` / `Yardforce500B_STLINK_V3` variants upload through OpenOCD instead of PlatformIO's built-in ST-Link protocol. From a shell that is e.g. `pio run -e Yardforce500 -t upload`.
 - The "Yardforce 500 (STM32F103 VCT6)" and generic `genericSTM32F103C8` (bluepill) envs belong to the old bring-up firmware in [`../test_code`](../test_code), not to this project.
 - Having your ST-Link hooked up to the J9 connector on the mainboard (the 4-pin GND / SWCL / SWDA / 3V3 header) the firmware should now be flashed
 - The LED (D3) near the STM32 cpu should flash and you should hear a "double" chirp on bootup
@@ -80,6 +80,29 @@ itself: a multi-second gap in the incoming stream on a nominally open port makes
 close and reopen the device (`serial_rx_timeout_s`), so a flash or a board reboot
 self-heals. If you are talking to the port with your own tool instead, unplug and
 replug the USB cable to settle things.
+
+## F401 USB self-recovery diagnostics
+
+The F401 builds count successful automatic USB recoveries in
+`CDC_GetUsbRecoveryCount()` (`s_usbRecoveryCount` for a debugger). The count is
+volatile, resets on MCU boot and advances only when the host configures CDC
+after a firmware-initiated detach/restart. Ordinary host resets/configurations
+and failed stop/start attempts do not increment it.
+
+Existing SWO debug output emits a main-loop summary after the first recovery,
+then at most once per 30 seconds, aggregating later recoveries:
+
+```text
+[FW_DIAG] USB recoveries=3 busy_stuck=5 missing_completion=5 tick=30900
+```
+
+The latter two counters count detected TX stalls, not successful recoveries;
+`tick` is the report's uptime in milliseconds. Repeated stop/start failures do
+not print. Capture SWO through a trace-capable probe connected to the SWO pin
+(see **Serial Debugging** below); output is best-effort and may be dropped on
+backpressure. The counter remains readable even without trace capture. These
+are firmware debug diagnostics, not ROS logs or new wire packets. Host USB
+disconnect logs alone cannot distinguish self-recovery from a reboot/unplug.
 
 ## Drive the bot
 

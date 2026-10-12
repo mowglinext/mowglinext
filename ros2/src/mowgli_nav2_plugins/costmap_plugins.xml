@@ -1,0 +1,8 @@
+<library path="mowgli_nav2_plugins">
+  <class name="mowgli_nav2_plugins::GardenKeepoutLayer" type="mowgli_nav2_plugins::GardenKeepoutLayer" base_class_type="nav2_costmap_2d::Layer">
+    <description>Non-rolling garden geometry and final fail-closed keepout mask.</description>
+  </class>
+  <class name="mowgli_nav2_plugins::RecentObstacleLayer" type="mowgli_nav2_plugins::RecentObstacleLayer" base_class_type="nav2_costmap_2d::Layer">
+    <description>Sensor obstacle marks rebuilt from recent observation buffers.</description>
+  </class>
+</library>

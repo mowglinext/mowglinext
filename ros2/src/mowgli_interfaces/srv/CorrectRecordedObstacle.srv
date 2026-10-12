@@ -1,0 +1,25 @@
+# Shrinks a just-recorded obstacle polygon inward by the chassis half-width.
+#
+# RecordArea (mowgli_behavior) records base_footprint's own trajectory while
+# the operator drives around the obstacle. Tracing an obstacle by driving the
+# chassis EDGE along it — the natural way to do it — means the recorded
+# vertex sits chassis_width/2 further from the true physical surface than the
+# operator intended, on whichever side was away from the object at that
+# point. Left uncorrected, EVERY obstacle recorded this way is drawn larger
+# than reality by roughly that margin all the way round, on top of whatever
+# obstacle_margin later adds for planning.
+#
+# This is a PHYSICAL correction only: it uses the raw chassis half-width
+# (robot_width/2), never obstacle_margin or the +0.05 m planning footprint
+# margin used elsewhere (root CLAUDE.md's "count the body exactly once"
+# table) — those are planning clearances, not a measurement of where the
+# body's edge actually is.
+#
+# Erosion can collapse a small/thin polygon entirely; that is reported as
+# success=false with a message, never as a silently-uncorrected polygon —
+# the whole point is that the software must not leave extra room in.
+geometry_msgs/Polygon polygon
+---
+geometry_msgs/Polygon corrected
+bool success
+string message

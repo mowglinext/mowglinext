@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/providers"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,6 +27,22 @@ func setupMowgliNextRouter(provider types.IRosProvider) *gin.Engine {
 	group := r.Group("/api")
 	MowgliNextRoutes(group, provider)
 	return r
+}
+
+func TestCompactCoveragePreviewPreservesFloat32MessagePackCoordinates(t *testing.T) {
+	message := map[string]interface{}{"xy": []interface{}{float64(1.25), float64(-2.5)}, "subpath_offsets": []interface{}{float64(0), float64(1)}}
+	compactCoveragePreview(message)
+	coords, ok := message["xy"].([]float32)
+	require.True(t, ok)
+	require.Equal(t, []float32{1.25, -2.5}, coords)
+	payload, err := msgpack.Marshal(message)
+	require.NoError(t, err)
+	var decoded map[string]interface{}
+	require.NoError(t, msgpack.Unmarshal(payload, &decoded))
+	got, ok := decoded["xy"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, got, 2)
+	assert.InDelta(t, 1.25, got[0], 0.00001)
 }
 
 func TestServiceRoute_HighLevelControl(t *testing.T) {
@@ -162,6 +179,24 @@ func TestServiceRoute_FusionGraphTriggers(t *testing.T) {
 			assert.Equal(t, tc.service, mock.ServiceCalls[0].Service)
 		})
 	}
+}
+
+func TestServiceRoute_ResetFirmwareParamStore(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		_ = json.Unmarshal([]byte(`{"success":true,"message":"request_id=305419896; reset request sent"}`), res)
+	}
+	router := setupMowgliNextRouter(mock)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/mowglinext/call/reset_firmware_param_store", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "request_id=305419896")
+	require.Len(t, mock.ServiceCalls, 1)
+	assert.Equal(t, "/hardware_bridge/reset_firmware_param_store", mock.ServiceCalls[0].Service)
 }
 
 func TestServiceRoute_FusionGraphClearLidarMap_ServiceError(t *testing.T) {
@@ -494,6 +529,7 @@ func TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics(t *testing.T) {
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",
 		"coverageResumeAvailable", "fusionDiag", "dockCalibrationStatus",
+		"firmwareParams",
 	}
 	for _, topic := range knownTopics {
 		interval, known := topicSubscribeInterval(topic)
@@ -503,6 +539,17 @@ func TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics(t *testing.T) {
 
 	_, known := topicSubscribeInterval("not_a_real_topic")
 	assert.False(t, known)
+}
+
+// TestTopicSubscribeInterval_CoversEveryProviderTopic: a topic added to the
+// provider's topicMap but not to topicSubscribeInterval is silently dropped by
+// MultiplexRoute ("ignoring unknown topic"), so the frontend never receives it
+// — the firmwareParams card stayed empty on the robot for exactly that reason.
+func TestTopicSubscribeInterval_CoversEveryProviderTopic(t *testing.T) {
+	for _, topic := range providers.TopicKeys() {
+		_, known := topicSubscribeInterval(topic)
+		assert.Truef(t, known, "topicMap key %q is not routable by topicSubscribeInterval", topic)
+	}
 }
 
 // dialSubscribe opens the test server's dedicated /subscribe/:topic
@@ -576,4 +623,169 @@ func TestServiceRoute_CoverageOrientation(t *testing.T) {
 		assert.Equal(t, 200, w.Code)
 		assert.Contains(t, w.Body.String(), `"next_perpendicular":true`)
 	}
+}
+
+func TestServiceRoute_PreviewCoverage(t *testing.T) {
+	square := map[string]any{"points": []map[string]any{{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 10, "y": 10}, {"x": 0, "y": 10}}}
+
+	call := func(mock *types.MockRosProvider, body map[string]any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/api/mowglinext/call/preview_coverage", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		setupMowgliNextRouter(mock).ServeHTTP(w, req)
+		return w
+	}
+
+	t.Run("omitted angle and direction mean auto and live, not zero", func(t *testing.T) {
+		mock := types.NewMockRosProvider()
+		var got mowgli.PreviewCoverageReq
+		mock.ServiceResponder = func(service string, req any, res any) {
+			assert.Equal(t, "/coverage_server/preview_coverage", service)
+			got = *req.(*mowgli.PreviewCoverageReq)
+			*res.(*mowgli.PreviewCoverageRes) = mowgli.PreviewCoverageRes{Success: true, MowAngleDeg: 42}
+		}
+		w := call(mock, map[string]any{"outer_boundary": square})
+		assert.Equal(t, 200, w.Code)
+		assert.Equal(t, -1.0, got.MowAngleDeg)
+		assert.Equal(t, int32(-1), got.RingDirection)
+		assert.Len(t, got.OuterBoundary.Points, 4)
+		// Empty lists are sent as lists, never null.
+		assert.Contains(t, w.Body.String(), `"rings":[]`)
+		assert.Contains(t, w.Body.String(), `"swaths":[]`)
+	})
+
+	t.Run("an explicit zero is passed through", func(t *testing.T) {
+		mock := types.NewMockRosProvider()
+		var got mowgli.PreviewCoverageReq
+		mock.ServiceResponder = func(service string, req any, res any) {
+			got = *req.(*mowgli.PreviewCoverageReq)
+			*res.(*mowgli.PreviewCoverageRes) = mowgli.PreviewCoverageRes{Success: true}
+		}
+		w := call(mock, map[string]any{"outer_boundary": square, "mow_angle_deg": 0, "ring_direction": 0, "perpendicular": true})
+		assert.Equal(t, 200, w.Code)
+		assert.Equal(t, 0.0, got.MowAngleDeg)
+		assert.Equal(t, int32(0), got.RingDirection)
+		assert.True(t, got.Perpendicular)
+	})
+
+	t.Run("a planner refusal is relayed as a normal answer", func(t *testing.T) {
+		mock := types.NewMockRosProvider()
+		mock.ServiceResponder = func(service string, req any, res any) {
+			*res.(*mowgli.PreviewCoverageRes) = mowgli.PreviewCoverageRes{Success: false, Message: "field too small after insets"}
+		}
+		w := call(mock, map[string]any{"outer_boundary": square})
+		assert.Equal(t, 200, w.Code)
+		assert.Contains(t, w.Body.String(), `"success":false`)
+		assert.Contains(t, w.Body.String(), "field too small")
+	})
+
+	t.Run("a start point is passed to the planner, and its absence means no start point", func(t *testing.T) {
+		mock := types.NewMockRosProvider()
+		var got mowgli.PreviewCoverageReq
+		mock.ServiceResponder = func(service string, req any, res any) {
+			got = *req.(*mowgli.PreviewCoverageReq)
+			*res.(*mowgli.PreviewCoverageRes) = mowgli.PreviewCoverageRes{Success: true, StartAdjustable: true, StartX: 3.5, StartY: -1}
+		}
+		w := call(mock, map[string]any{"outer_boundary": square, "has_start_point": true, "start_x": 0, "start_y": 4.25})
+		assert.Equal(t, 200, w.Code)
+		assert.True(t, got.HasStartPoint)
+		assert.Equal(t, 0.0, got.StartX, "0 is a real coordinate")
+		assert.Equal(t, 4.25, got.StartY)
+		// The planner's answer (where it really starts) is relayed to the page.
+		assert.Contains(t, w.Body.String(), `"start_adjustable":true`)
+		assert.Contains(t, w.Body.String(), `"start_x":3.5`)
+
+		call(mock, map[string]any{"outer_boundary": square})
+		assert.False(t, got.HasStartPoint)
+	})
+
+	t.Run("a boundary with fewer than three points is rejected before ROS", func(t *testing.T) {
+		mock := types.NewMockRosProvider()
+		mock.ServiceResponder = func(service string, req any, res any) {
+			t.Fatal("must not reach the service")
+		}
+		w := call(mock, map[string]any{"outer_boundary": map[string]any{"points": []map[string]any{{"x": 0, "y": 0}, {"x": 1, "y": 0}}}})
+		assert.Equal(t, 400, w.Code)
+	})
+}
+
+func TestServiceRoute_SetAreaCoverageLines(t *testing.T) {
+	call := func(mock *types.MockRosProvider, body map[string]any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/api/mowglinext/call/set_area_coverage_lines", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		setupMowgliNextRouter(mock).ServeHTTP(w, req)
+		return w
+	}
+
+	t.Run("passes the id and both overrides to map_server", func(t *testing.T) {
+		mock := types.NewMockRosProvider()
+		var got mowgli.SetAreaCoverageLinesReq
+		mock.ServiceResponder = func(service string, req any, res any) {
+			assert.Equal(t, "/map_server_node/set_area_coverage_lines", service)
+			got = *req.(*mowgli.SetAreaCoverageLinesReq)
+			*res.(*mowgli.SetAreaCoverageLinesRes) = mowgli.SetAreaCoverageLinesRes{Success: true}
+		}
+		w := call(mock, map[string]any{"id": 7, "has_mow_angle": true, "mow_angle_deg": 35.5, "has_ring_direction": true, "ring_direction": 2})
+		assert.Equal(t, 200, w.Code)
+		assert.Equal(t, uint32(7), got.Id)
+		assert.True(t, got.HasMowAngle)
+		assert.Equal(t, 35.5, got.MowAngleDeg)
+		assert.True(t, got.HasRingDirection)
+		assert.Equal(t, uint8(2), got.RingDirection)
+	})
+
+	t.Run("omitted flags clear the overrides rather than setting zero", func(t *testing.T) {
+		mock := types.NewMockRosProvider()
+		var got mowgli.SetAreaCoverageLinesReq
+		mock.ServiceResponder = func(service string, req any, res any) {
+			got = *req.(*mowgli.SetAreaCoverageLinesReq)
+			*res.(*mowgli.SetAreaCoverageLinesRes) = mowgli.SetAreaCoverageLinesRes{Success: true}
+		}
+		w := call(mock, map[string]any{"id": 7})
+		assert.Equal(t, 200, w.Code)
+		assert.False(t, got.HasMowAngle)
+		assert.False(t, got.HasRingDirection)
+	})
+
+	t.Run("a zero id is rejected before ROS", func(t *testing.T) {
+		mock := types.NewMockRosProvider()
+		mock.ServiceResponder = func(service string, req any, res any) {
+			t.Fatal("must not reach the service")
+		}
+		assert.Equal(t, 400, call(mock, map[string]any{"has_mow_angle": true, "mow_angle_deg": 10}).Code)
+		assert.Equal(t, 400, call(mock, map[string]any{"id": 0}).Code)
+	})
+
+	t.Run("a map_server refusal is surfaced with its reason", func(t *testing.T) {
+		mock := types.NewMockRosProvider()
+		mock.ServiceResponder = func(service string, req any, res any) {
+			*res.(*mowgli.SetAreaCoverageLinesRes) = mowgli.SetAreaCoverageLinesRes{Success: false, Message: "no area with id 9"}
+		}
+		w := call(mock, map[string]any{"id": 9})
+		assert.NotEqual(t, 200, w.Code)
+		assert.Contains(t, w.Body.String(), "no area with id 9")
+	})
+}
+
+func TestServiceRoute_SetAreaCoverageLinesStartPoint(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	var got mowgli.SetAreaCoverageLinesReq
+	mock.ServiceResponder = func(service string, req any, res any) {
+		got = *req.(*mowgli.SetAreaCoverageLinesReq)
+		*res.(*mowgli.SetAreaCoverageLinesRes) = mowgli.SetAreaCoverageLinesRes{Success: true}
+	}
+	raw, _ := json.Marshal(map[string]any{"id": 4, "has_start_point": true, "start_x": 12.5, "start_y": -3})
+	req := httptest.NewRequest("POST", "/api/mowglinext/call/set_area_coverage_lines", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	setupMowgliNextRouter(mock).ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code)
+	assert.True(t, got.HasStartPoint)
+	assert.Equal(t, 12.5, got.StartX)
+	assert.Equal(t, -3.0, got.StartY)
+	assert.False(t, got.HasMowAngle, "an omitted flag clears that override, it does not set zero")
 }

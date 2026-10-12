@@ -6,7 +6,18 @@
 
 > Lyrical API: full plans enter `newPathReceived`; local processed plans do not replace FTC progress. The goal checker transforms the costmap-frame query into the full-plan frame and exposes both XY and XY+yaw checks. Regression tests: `test/test_lyrical_goal_checker.cpp`; end-approach rule (short sub-paths FTC parks short of): `test/test_path_progress_end_approach.cpp`.
 
+Global fixed-grid geometry and mandatory authorization are owned by `GardenKeepoutLayer` in
+`garden_keepout_layer.hpp/.cpp`. `RecentObstacleLayer` rebuilds global marks from
+current observation buffers. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md)
+for geometry synchronization, recovery toggles, budgets and hardware acceptance.
+
 ## Where to look
+
+Normal transit planning is now `include/mowgli_nav2_plugins/authorized_transit_planner.hpp`
+and `src/authorized_transit_planner.cpp`: pinned Smac 2D with a private obstacle
+view and continuous polygon-union checks. `transit_geometry.hpp` owns the pure
+geometry rules; `test_authorized_transit.cpp` runs the real planner regressions.
+See `docs/TRANSIT_AUTHORIZATION.md` for terminal exceptions and recovery.
 
 | Task | Start here |
 |------|------------|
@@ -37,9 +48,9 @@
 | Expose a param to operators / GUI | template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` → `ros2/src/mowgli_bringup/launch/navigation.launch.py` `_inject_dock_pose_and_speeds` (L646, `fcp[...]` L755–847) → `gui/web/src/components/settings/paramCatalog.ts` → `ros2/src/mowgli_bringup/test/test_nav2_params.py` |
 | Tune shipped defaults | `nav2_params_base.yaml` L338–546 (`FollowCoveragePath`), L170–189 (`coverage_goal_checker`); no-LiDAR diff `ros2/src/mowgli_bringup/config/nav2_params_no_lidar.yaml` L19–21 |
 | Live speed change from the BT (SetNavMode) | `ros2/src/mowgli_behavior/src/navigation_nodes.cpp:962` sets `FollowCoveragePath.speed_fast` → `onParameterChange` |
-| Speed limit from collision_monitor | `ftc_controller.cpp` `setSpeedLimit()` (L771) — restores `base_max_cmd_vel_speed_` on negative |
+| External Nav2 SpeedLimit | `ftc_controller.cpp` `setSpeedLimit()` / `maxLinearSpeed()` — percentages [0,100] of configured `max_cmd_vel_speed`, zero clears (legacy negative clears retained); final signed linear cap covers PID floors and reverse branches. `test/test_ftc_speed_limit.cpp` exercises the real controller. Default collision_monitor modifies outgoing velocity separately. |
 | Register a new plugin class | `ros2/src/mowgli_nav2_plugins/ftc_controller_plugin.xml` / `goal_checker_plugin.xml`, `CMakeLists.txt` `pluginlib_export_plugin_description_file`, `package.xml` `<export>` |
-| Add a unit test | `CMakeLists.txt` `if(BUILD_TESTING)` block — every test is ROS-free (pure headers or synthetic `Costmap2D`) |
+| Add a unit test | `CMakeLists.txt` `if(BUILD_TESTING)` block — pure helpers use `ament_add_gtest`; real-controller/node tests use `ament_add_ros_isolated_gtest` for DDS isolation |
 | Diagnose "strip aborted" (ControllerException) | throw sites: `ftc_controller.cpp:835` (crashed latch), `:957` (deviation TF), `:965` (legacy collision), `:973` (crash latched during PID), `:1357` (carrot TF), `:1717` (wait timeout) |
 
 ## Files
@@ -83,6 +94,7 @@
 | `lattice_replay.cpp` | ~470 | Not a test: offline replay tool (see "Where to look") |
 | `test_ftc_turn_fallback.cpp` | ~560 | 14 cases: heading sweep / window; blocked U-turn beside a hedge → planned, every leg re-checked with the bare shapes, clearances ≥ the planning margin; post on a straight → `kNotATurn`; nothing on the line → `kNoBlockage`; return swath blocked / search bound → `kNoRejoin`; pivot needs a reverse, reverse bounded by `max_reverse_m` and the rear strip, boxed in → none; refused followability; near-180° pivot needs the full turn; new obstacle on a planned leg seen by the per-tick checks; zone band refuses off-plan motion; bad input; the recorded 2026-09-22 08:08:25 kink (local lethal cells, zone runs, plan slice) → pivot −64°, 0.98 m, pivot −45°, rejoin idx 455, 1.40 m skipped |
 | `test_ftc_turn_fallback_controller.cpp` | ~590 | 5 closed-loop cases on the real `FTCController` (configured `Costmap2DROS`, painted grid, kinematic robot, controlled ROS clock): U-turn into a hedge improvised and finished, never in lethal, remainder republished; same with the fallback off → WEDGED/reverse/abort as before; wall across a straight → old path; obstacle appearing in the first pivot's sweep → hold + abort; no-LiDAR flags → unreachable |
+| `test_ftc_speed_limit.cpp` | ~430 | Real FTCController + configured Costmap2DROS + controlled clock: percentage units, zero/legacy clear, small caps after floors, configured maximum, dynamic parameters, non-finite input, healthy capped motion, reverse escape and turn-fallback reverse |
 | `test_ftc_pivot.cpp` | ~215 | 10 cases: the planner's corners found exactly; turn-around arcs (r 0.10–0.30), straights and twin-less sharp corners NEVER trigger a pivot; duplicate without a turn / sub-threshold kink / corner at the plan end ignored; leg bounds; obstacle window stops at the corner; plan opening on a corner; arrival/alignment; shortest-rotation sweep probes |
 | `test_obstacle_deviation.cpp` | 823 | ~50 cases on a 400×400 @0.05 m synthetic costmap: detection, side choice (left bias), grow, boundary guard, zone mask (#517), footprint model, clip/expand, `hasClearExit`, lookahead clamp |
 | `test_oscillation_detector.cpp` | 195 | 11 cases: capacity, half-full gate, alternating ω detected, steady motion not |

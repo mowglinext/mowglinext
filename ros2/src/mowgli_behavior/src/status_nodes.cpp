@@ -245,6 +245,13 @@ BT::NodeStatus EndSession::tick()
     std::lock_guard<std::mutex> lock(ctx->context_mutex);
     ctx->session_dig_points.clear();
   }
+  // Failed-transit-target avoidance (issue #732) is SESSION state, same
+  // rationale as the dig skip zones above: a target blocked today (a person
+  // standing there, a parked vehicle) deserves another try next session.
+  // Written only from FollowStrip's own BT action-node callbacks, so — unlike
+  // session_dig_points — no context_mutex lock is needed here (see the
+  // context_mutex doc comment in bt_context.hpp).
+  ctx->session_failed_transit_targets.clear();
   // Swath-completion model (replaces the cell coverage grid): clear the
   // per-area completed-swath sets, swath counts, and the completed-area set so
   // the next COMMAND_START re-plans and re-mows every area from swath 0.

@@ -10,6 +10,11 @@ on:
       - 'tools/motor/**'
       - 'install/config/mowgli/**'
       - 'firmware/stm32/ros_usbnode/include/heartbeat_emergency_policy.hpp'
+      # Pure firmware headers compiled by mowgli_hardware's tests (protocol v7
+      # runtime parameters): a firmware-only change must still re-run them.
+      - 'firmware/stm32/ros_usbnode/include/fw_param_log.h'
+      - 'firmware/stm32/ros_usbnode/include/fw_param_catalog.h'
+      - 'firmware/stm32/ros_usbnode/include/board_defaults.h'
       - '.github/workflows/ros2-ci.yml'
   # NOTE: deliberately NO `paths:` filter here, and `dev` is included alongside
   # `main`. Two bugs used to hide in this block:
@@ -83,6 +88,9 @@ jobs:
           CHANGED=$(git diff --name-only "$BASE" HEAD -- \
             'ros2/**' '.devcontainer/**' 'tools/motor/**' 'install/config/mowgli/**' \
             'firmware/stm32/ros_usbnode/include/heartbeat_emergency_policy.hpp' \
+            'firmware/stm32/ros_usbnode/include/fw_param_log.h' \
+            'firmware/stm32/ros_usbnode/include/fw_param_catalog.h' \
+            'firmware/stm32/ros_usbnode/include/board_defaults.h' \
             '.github/workflows/ros2-ci.yml')
           if [ -n "$CHANGED" ]; then
             echo "ROS2-relevant changes:"; echo "$CHANGED"
@@ -140,6 +148,11 @@ jobs:
     runs-on: ubuntu-26.04
     needs: changes
     if: needs.changes.outputs.ros2 == 'true'
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
 
     defaults:
       run:
@@ -319,13 +332,35 @@ jobs:
           sudo ldconfig
           echo "CMAKE_PREFIX_PATH=/opt/fields2cover-300:$CMAKE_PREFIX_PATH" >> $GITHUB_ENV
 
-      - name: Build pinned Lyrical source dependencies
+      # Install on cache hits too: the prefix contains our source-built overlay,
+      # not its apt-provided build/runtime dependencies. Fingerprint all installed
+      # package versions to include transitive dependencies and the ROS underlay.
+      - name: Install pinned Lyrical vendor dependencies + ccache
+        id: vendor-deps
         working-directory: .
         run: |
           sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ccache
           xargs sudo apt-get install -y --no-install-recommends < ros2/lyrical-vendor-packages.txt
           sudo mkdir -p /opt/lyrical_vendor
           sudo chown "$(id -u):$(id -g)" /opt/lyrical_vendor
+          PACKAGES_HASH=$(dpkg-query -W -f='${binary:Package}=${Version}\n' \
+            | LC_ALL=C sort | sha256sum | cut -d ' ' -f 1)
+          echo "packages=$PACKAGES_HASH" >> "$GITHUB_OUTPUT"
+
+      # Exact matches only: never restore an overlay built with different pins,
+      # patches, build flags, apt dependencies, compiler, or runner platform.
+      - name: Cache pinned Lyrical source dependencies
+        id: cache-lyrical-vendor
+        uses: actions/cache@v4
+        with:
+          path: /opt/lyrical_vendor
+          key: lyrical-vendor-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu26.04-${{ env.ROS_DISTRO }}-${{ hashFiles('ros2/scripts/build_lyrical_vendor.sh', 'ros2/lyrical-vendor-packages.txt') }}-${{ steps.vendor-deps.outputs.packages }}
+
+      - name: Build pinned Lyrical source dependencies
+        working-directory: .
+        if: steps.cache-lyrical-vendor.outputs.cache-hit != 'true'
+        run: |
           bash ros2/scripts/build_lyrical_vendor.sh
 
       - name: Cache rosdep
@@ -386,17 +421,46 @@ jobs:
           restore-keys: |
             colcon-v2-${{ env.ROS_DISTRO }}-
 
+      # Actions caches are immutable. A key per run/attempt saves new compiler
+      # entries even after a prefix restore; ccache validates compiler contents,
+      # flags and headers itself. Keep the existing colcon cache alongside it.
+      - name: Cache ROS2 compiler objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-ros2-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu26.04-${{ env.ROS_DISTRO }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-ros2-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu26.04-${{ env.ROS_DISTRO }}-
+
+      - name: Initialize ccache statistics
+        run: |
+          ccache --version
+          ccache --zero-stats
+
       - name: Build workspace
         run: |
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
           source /opt/lyrical_vendor/local_setup.bash
           colcon build \
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_STANDARD=20 \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DMOWGLI_REQUIRE_MOSQUITTO=ON \
             --parallel-workers $(nproc) \
             --event-handlers console_cohesion+
+
+      - name: Report ccache statistics
+        if: always()
+        continue-on-error: true
+        run: |
+          ccache --show-stats --verbose | tee /tmp/ros2-ccache-stats.txt
+          {
+            echo '### ROS2 ccache statistics (this run)'
+            echo '```text'
+            cat /tmp/ros2-ccache-stats.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Test workspace package scripts
         run: |
@@ -429,8 +493,6 @@ jobs:
           set -eo pipefail
           pwd
           ls -la
-          find / -name setup.bash 2>/dev/null | grep install || true
-          find / -type d -name install 2>/dev/null | head -50 || true
           set +u
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
           source /opt/lyrical_vendor/local_setup.bash

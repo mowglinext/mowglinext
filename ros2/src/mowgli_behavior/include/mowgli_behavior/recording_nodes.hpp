@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,7 @@
 #include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_interfaces/srv/add_mowing_area.hpp"
+#include "mowgli_interfaces/srv/correct_recorded_obstacle.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -172,6 +174,18 @@ private:
   /// Save the simplified polygon as a mowing area.
   bool save_area(const std::vector<geometry_msgs::msg::Point32>& points, bool is_exclusion_zone);
 
+  /// For an exclusion zone (obstacle) only: ask coverage_server to shrink the
+  /// recorded polygon back to the true physical surface the operator traced
+  /// (correct_recorded_obstacle, erodeRingInward by the raw chassis
+  /// half-width — see recording_nodes.cpp for why the recorded trajectory is
+  /// otherwise systematically too generous). Returns the corrected points on
+  /// success; on failure (service unavailable, or the obstacle collapsed
+  /// once corrected) returns std::nullopt and logs why — the caller must NOT
+  /// fall back to the uncorrected polygon, since that would silently keep
+  /// the extra room this exists to remove.
+  std::optional<std::vector<geometry_msgs::msg::Point32>> correct_obstacle_points(
+      const std::vector<geometry_msgs::msg::Point32>& points);
+
   /// Recorded trajectory points in map frame.
   std::vector<geometry_msgs::msg::Point32> trajectory_;
 
@@ -195,6 +209,10 @@ private:
 
   /// Service client for adding the area.
   rclcpp::Client<mowgli_interfaces::srv::AddMowingArea>::SharedPtr add_area_client_;
+
+  /// Service client for the recorded-obstacle chassis-width correction.
+  rclcpp::Client<mowgli_interfaces::srv::CorrectRecordedObstacle>::SharedPtr
+      correct_obstacle_client_;
 
   /// Area counter for auto-naming.
   static int area_counter_;

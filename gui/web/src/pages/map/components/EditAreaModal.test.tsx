@@ -63,6 +63,33 @@ describe('EditAreaModal', () => {
         expect(screen.queryByText(en.mapEditArea.mowingOrder)).not.toBeInTheDocument();
     });
 
+    it('offers the recorded-outline shrink only when converting INTO an obstacle', () => {
+        const converting = new MowingAreaEdit();
+        converting.feature_type = 'obstacle';
+        converting.orig_feature_type = 'workarea';
+        const {unmount} = render(<EditAreaModal {...defaultProps} area={converting} />);
+        expect(screen.getByText(en.mapEditArea.shrinkRecorded)).toBeInTheDocument();
+        unmount();
+
+        // An obstacle that already is one must never be shrunk a second time.
+        const existing = new MowingAreaEdit();
+        existing.feature_type = 'obstacle';
+        existing.orig_feature_type = 'obstacle';
+        render(<EditAreaModal {...defaultProps} area={existing} />);
+        expect(screen.queryByText(en.mapEditArea.shrinkRecorded)).not.toBeInTheDocument();
+    });
+
+    it('reports the shrink choice through onChange', async () => {
+        const onChange = vi.fn();
+        const user = userEvent.setup();
+        const converting = new MowingAreaEdit();
+        converting.feature_type = 'obstacle';
+        converting.orig_feature_type = 'workarea';
+        render(<EditAreaModal {...defaultProps} area={converting} onChange={onChange} />);
+        await user.click(screen.getByText(en.mapEditArea.shrinkRecorded));
+        expect(onChange).toHaveBeenCalledWith(expect.objectContaining({shrink_recorded: false}));
+    });
+
     it('does not render when closed', () => {
         render(<EditAreaModal {...defaultProps} open={false} />);
         expect(screen.queryByText(i18n.t('mapEditArea.titleEditNamed', {name: 'Garden'}))).not.toBeInTheDocument();

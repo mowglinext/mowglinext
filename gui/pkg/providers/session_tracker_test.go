@@ -113,6 +113,13 @@ func TestSessionTracker_ResumablePausesStayInSession(t *testing.T) {
 			resumeState:   "RESUMING_AFTER_RAIN",
 			wantRecharges: 0,
 		},
+		{
+			name:          "manual dock",
+			approachState: "MOWING",
+			pauseState:    "MANUAL_CHARGING",
+			resumeState:   "MOWING",
+			wantRecharges: 0,
+		},
 	}
 
 	for _, tt := range tests {

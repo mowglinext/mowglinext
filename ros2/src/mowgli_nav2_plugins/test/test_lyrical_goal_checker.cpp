@@ -51,7 +51,7 @@ protected:
     {
       auto pose = goal_;
       pose.position.x = 0.1 * i;
-      checker_.isGoalReached(pose, goal_, {}, {});
+      checker_.isGoalReached(pose, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{});
     }
   }
 
@@ -66,6 +66,11 @@ protected:
     return checker_.xy_goal_tolerance_;
   }
 
+  std::size_t maxReachedIndex() const
+  {
+    return checker_.max_reached_index_;
+  }
+
   std::shared_ptr<nav2::LifecycleNode> node_;
   PathProgressGoalChecker checker_;
   geometry_msgs::msg::Pose goal_;
@@ -76,8 +81,8 @@ TEST_F(PathProgressGoalCheckerTest, GoalProximityDoesNotSkipFullPath)
   // A pruned one-pose local plan must not erase the complete-path progress gate.
   nav_msgs::msg::Path local;
   local.poses.resize(1);
-  EXPECT_FALSE(checker_.isGoalReached(goal_, goal_, {}, local));
-  EXPECT_FALSE(checker_.isGoalXYReached(goal_, goal_, {}, local));
+  EXPECT_FALSE(checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, local));
+  EXPECT_FALSE(checker_.isGoalXYReached(goal_, goal_, geometry_msgs::msg::Twist{}, local));
 }
 
 TEST_F(PathProgressGoalCheckerTest, NearEndReplayNeedsProgressBeforeProximityCompletes)
@@ -99,15 +104,32 @@ TEST_F(PathProgressGoalCheckerTest, NearEndReplayNeedsProgressBeforeProximityCom
   replay_goal.position.x = 1.1;
   for (int tick = 0; tick < 20; ++tick)
   {
-    EXPECT_FALSE(checker_.isGoalReached(replay_goal, replay_goal, {}, {})) << "tick " << tick;
+    EXPECT_FALSE(checker_.isGoalReached(
+        replay_goal, replay_goal, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}))
+        << "tick " << tick;
   }
   for (int tick = 0; tick < 20; ++tick)
   {
     auto jittered_goal = replay_goal;
     jittered_goal.position.x += (tick % 2 == 0) ? 0.006 : -0.006;
-    EXPECT_FALSE(checker_.isGoalReached(jittered_goal, replay_goal, {}, {}))
+    EXPECT_FALSE(checker_.isGoalReached(
+        jittered_goal, replay_goal, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}))
         << "endpoint correction " << tick;
   }
+
+  // This bounded sequence has positive motion from the first query but less
+  // than the required accumulated forward displacement. Per-tick thresholds
+  // would incorrectly release the search boundary on the final sample.
+  checker_.reset();
+  setPath(replay);
+  for (const double x : {1.1, 1.088, 1.112, 1.125})
+  {
+    auto query = replay_goal;
+    query.position.x = x;
+    EXPECT_FALSE(checker_.isGoalReached(
+        query, replay_goal, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  }
+  EXPECT_EQ(maxReachedIndex(), 0u);
 
   // On a fresh replay, actual forward motion is still required before normal
   // progress-gated completion can occur — right up to the deliberate
@@ -125,15 +147,19 @@ TEST_F(PathProgressGoalCheckerTest, NearEndReplayNeedsProgressBeforeProximityCom
   {
     auto replay_pose = replay_goal;
     replay_pose.position.x = kReplayStepM * static_cast<double>(i);
-    EXPECT_FALSE(checker_.isGoalReached(replay_pose, replay_goal, {}, {})) << "pose " << i;
+    EXPECT_FALSE(checker_.isGoalReached(
+        replay_pose, replay_goal, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}))
+        << "pose " << i;
   }
-  EXPECT_TRUE(checker_.isGoalReached(replay_goal, replay_goal, {}, {}));
+  EXPECT_TRUE(checker_.isGoalReached(
+      replay_goal, replay_goal, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
 }
 
 TEST_F(PathProgressGoalCheckerTest, ProgressUsesMapToOdomTransform)
 {
   advance();
-  EXPECT_TRUE(checker_.isGoalReached(goal_, goal_, {}, {}));
+  EXPECT_TRUE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
 }
 
 TEST_F(PathProgressGoalCheckerTest, XYCheckIgnoresOnlyYaw)
@@ -142,8 +168,10 @@ TEST_F(PathProgressGoalCheckerTest, XYCheckIgnoresOnlyYaw)
   auto rotated = goal_;
   rotated.orientation.w = 0.0;
   rotated.orientation.z = 1.0;
-  EXPECT_FALSE(checker_.isGoalReached(rotated, goal_, {}, {}));
-  EXPECT_TRUE(checker_.isGoalXYReached(rotated, goal_, {}, {}));
+  EXPECT_FALSE(
+      checker_.isGoalReached(rotated, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  EXPECT_TRUE(
+      checker_.isGoalXYReached(rotated, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
 }
 
 }  // namespace mowgli_nav2_plugins

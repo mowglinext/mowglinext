@@ -113,6 +113,27 @@ PublicGnssStatus project(
   return status;
 }
 
+// Sets the station_id of one semantic observation; nullptr removes the key altogether.
+void setStationId(Array & array, const char * entry_name, const char * station_id)
+{
+  for (auto & entry : array.status) {
+    if (entry.name != entry_name) {
+      continue;
+    }
+    entry.values.erase(
+      std::remove_if(
+        entry.values.begin(), entry.values.end(),
+        [](const diagnostic_msgs::msg::KeyValue & item) {return item.key == "station_id";}),
+      entry.values.end());
+    if (station_id != nullptr) {
+      diagnostic_msgs::msg::KeyValue item;
+      item.key = "station_id";
+      item.value = station_id;
+      entry.values.push_back(item);
+    }
+  }
+}
+
 }  // namespace
 
 TEST(CorrectionDiagnosticTrackerTest, HealthyDynamicFlowDoesNotRequireGlonass1230)
@@ -132,6 +153,51 @@ TEST(CorrectionDiagnosticTrackerTest, HealthyDynamicFlowDoesNotRequireGlonass123
   EXPECT_TRUE(status.msm_summary_valid);
   EXPECT_EQ(status.msm_summary_cell_count, 24U);
   EXPECT_EQ(status.correction_source, "caster:2101/MOUNT");
+}
+
+// RTCM reference-station id 0 is a valid station (the caster in the field serves it): base
+// and MSM both reporting 0 is the same station and must be HEALTHY, not INVALID.
+TEST(CorrectionDiagnosticTrackerTest, StationIdZeroIsAValidMatchingStation)
+{
+  CorrectionDiagnosticTracker tracker(std::chrono::seconds(2));
+  const auto now = CorrectionDiagnosticTracker::TimePoint{} + std::chrono::seconds(100);
+  auto diagnostics = healthyNtrip();
+  setStationId(diagnostics, "universal_gnss_ntrip/rtcm_semantic/base_station_arp", "0");
+  setStationId(diagnostics, "universal_gnss_ntrip/rtcm_semantic/msm_summary", "0");
+  tracker.update(diagnostics, now);
+
+  const auto status = project(tracker, now);
+  EXPECT_EQ(status.correction_semantic_status,
+    PublicGnssStatus::CORRECTION_SEMANTIC_STATUS_HEALTHY);
+  EXPECT_EQ(status.msm_summary_station_id, 0U);
+}
+
+// The id still has to be PRESENT and equal: a missing id, or 0 against 42, is not a match.
+TEST(CorrectionDiagnosticTrackerTest, MissingOrDifferentStationIdIsNeverAMatch)
+{
+  const auto now = CorrectionDiagnosticTracker::TimePoint{} + std::chrono::seconds(100);
+
+  CorrectionDiagnosticTracker neither(std::chrono::seconds(2));
+  auto no_ids = healthyNtrip();
+  setStationId(no_ids, "universal_gnss_ntrip/rtcm_semantic/base_station_arp", nullptr);
+  setStationId(no_ids, "universal_gnss_ntrip/rtcm_semantic/msm_summary", nullptr);
+  neither.update(no_ids, now);
+  EXPECT_EQ(project(neither, now).correction_semantic_status,
+    PublicGnssStatus::CORRECTION_SEMANTIC_STATUS_INVALID);
+
+  CorrectionDiagnosticTracker one_missing(std::chrono::seconds(2));
+  auto base_only = healthyNtrip();
+  setStationId(base_only, "universal_gnss_ntrip/rtcm_semantic/base_station_arp", nullptr);
+  one_missing.update(base_only, now);
+  EXPECT_EQ(project(one_missing, now).correction_semantic_status,
+    PublicGnssStatus::CORRECTION_SEMANTIC_STATUS_INVALID);
+
+  CorrectionDiagnosticTracker zero_vs_42(std::chrono::seconds(2));
+  auto mismatch = healthyNtrip();
+  setStationId(mismatch, "universal_gnss_ntrip/rtcm_semantic/msm_summary", "0");
+  zero_vs_42.update(mismatch, now);
+  EXPECT_EQ(project(zero_vs_42, now).correction_semantic_status,
+    PublicGnssStatus::CORRECTION_SEMANTIC_STATUS_INVALID);
 }
 
 TEST(CorrectionDiagnosticTrackerTest, ConnectionResponseAndForwardingDoNotImplySemanticHealth)

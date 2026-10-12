@@ -31,7 +31,7 @@ describe("MowingSection — automatic blade direction", () => {
             isOverridden={(key) => key === "blade_auto_reverse"}
             hasDefault={(key) => key === "blade_auto_reverse"} onReset={onReset}
         /></ThemeProvider>);
-        fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+        fireEvent.click(screen.getByRole("button", { name: /Reset .* to default/ }));
         expect(onReset).toHaveBeenCalledWith("blade_auto_reverse");
     });
 });

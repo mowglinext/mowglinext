@@ -103,9 +103,14 @@ GNSS_FLAG=""
 GNSS_RECEIVER_FAMILY_FLAG=""
 GNSS_CONNECTION_FLAG=""
 LIDAR_FLAG=""
-TFLUNA_FLAG=""
+LIDAR_UART_FLAG=""
+GNSS_DEVICE_FLAG=""
+GNSS_BAUD_FLAG=""
 BACKEND_FLAG=""
 IMAGE_TAG_FLAG=""
+NON_INTERACTIVE_FLAG=false
+MQTT_FLAG=""
+NO_UPDATER_FLAG=false
 
 REPO_URL="https://github.com/mowglinext/mowglinext.git"
 REPO_BRANCH="main"
@@ -152,24 +157,37 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --lidar=*)   LIDAR_FLAG="${1#--lidar=}"; shift ;;
-    --tfluna=*)  TFLUNA_FLAG="${1#--tfluna=}"; shift ;;  # deprecated, kept for backward compat
+    --lidar-uart=*) LIDAR_UART_FLAG="${1#--lidar-uart=}"; shift ;;
+    --gnss-device=*) GNSS_DEVICE_FLAG="${1#--gnss-device=}"; shift ;;
+    --gnss-baud=*)   GNSS_BAUD_FLAG="${1#--gnss-baud=}"; shift ;;
+    --non-interactive|--yes|-y) NON_INTERACTIVE_FLAG=true; shift ;;
+    --mqtt=*) MQTT_FLAG="${1#--mqtt=}"; shift ;;
+    --no-updater) NO_UPDATER_FLAG=true; shift ;;
+    --tfluna=*)  warn "TF-Luna rangefinders are no longer configured by the installer; ignoring $1"; shift ;;
     --branch=*)  REPO_BRANCH="${1#--branch=}"; shift ;;
     --image-tag=*) IMAGE_TAG_FLAG="${1#--image-tag=}"; shift ;;
     --help|-h)
       echo "Usage: curl -sSL https://mowgli.garden/install.sh | bash -s -- [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --backend=TYPE      Hardware backend: mowgli (default), mavros (advanced Pixhawk path)"
+      echo "  --backend=TYPE      Hardware backend: mowgli (default), openmower (stock OpenMower v1 electronics; v2 unsupported), mavros (advanced Pixhawk path)"
       echo "  --gnss-receiver-family"
       echo "                     Universal GNSS receiver family first-boot default: auto, ublox, unicore, nmea"
       echo "  --gnss-connection  Universal GNSS serial link first-boot default: usb or uart"
       echo "                     (the installer still asks for the actual device path and baud; active runtime GNSS config later lives in YAML/GUI)"
       echo "  --lidar=PRESET     LiDAR config: none, ldlidar-usb, ldlidar-uart,"
       echo "                     rplidar-usb, rplidar-uart, stl27l-usb, stl27l-uart"
+      echo "  --gnss-device=PATH GNSS serial device (default: /dev/ttyAMA4 for uart, first USB by-id otherwise)"
+      echo "  --gnss-baud=N      GNSS serial baud first-boot default (default: 921600)"
+      echo "  --lidar-uart=PATH  LiDAR UART device (default: /dev/ttyAMA5)"
       echo "  --branch=BRANCH    Git branch (default: main)"
       echo "  --image-tag=TAG    Container image tag/channel for the installer"
+      echo "  --non-interactive  Never prompt: every unset choice takes its default"
+      echo "  --no-updater       Skip the host updater service (manual updates only)"
+      echo "  --mqtt=on|off      Run the mosquitto MQTT broker (Home Assistant integrations; default: off)"
       echo ""
-      echo "Without flags, the full interactive installer runs."
+      echo "Without flags, the full interactive installer runs. Datum, NTRIP and the"
+      echo "GNSS receiver profile are configured in the GUI after the first start."
       exit 0
       ;;
     *)
@@ -241,13 +259,13 @@ HAS_INSTALLER_PRESET_ARGS=false
 
 if [[ -n "$BACKEND_FLAG" ]]; then
   case "$BACKEND_FLAG" in
-    mowgli|mavros)
+    mowgli|mavros|openmower)
       INSTALLER_ARGS+=("--backend=$BACKEND_FLAG")
       HAS_INSTALLER_PRESET_ARGS=true
       info "Hardware backend: $BACKEND_FLAG"
       ;;
     *)
-      warn "Unknown hardware backend: $BACKEND_FLAG (expected mowgli|mavros) — installer will ask interactively"
+      warn "Unknown hardware backend: $BACKEND_FLAG (expected mowgli|openmower|mavros) — installer will ask interactively"
       ;;
   esac
 fi
@@ -316,17 +334,25 @@ if [[ -n "$LIDAR_FLAG" ]]; then
   esac
 fi
 
-if [[ -n "$TFLUNA_FLAG" ]]; then
-  case "$TFLUNA_FLAG" in
-    none|front|edge|both)
-      INSTALLER_ARGS+=("--tfluna=$TFLUNA_FLAG")
-      HAS_INSTALLER_PRESET_ARGS=true
-      info "Rangefinders: $TFLUNA_FLAG"
-      ;;
-    *)
-      warn "Unknown TF-Luna preset: $TFLUNA_FLAG — installer will ask interactively"
-      ;;
-  esac
+if [[ -n "$LIDAR_UART_FLAG" ]]; then
+  INSTALLER_ARGS+=("--lidar-uart=$LIDAR_UART_FLAG")
+fi
+if [[ -n "$GNSS_DEVICE_FLAG" ]]; then
+  INSTALLER_ARGS+=("--gnss-device=$GNSS_DEVICE_FLAG")
+  HAS_INSTALLER_PRESET_ARGS=true
+fi
+if [[ -n "$GNSS_BAUD_FLAG" ]]; then
+  INSTALLER_ARGS+=("--gnss-baud=$GNSS_BAUD_FLAG")
+fi
+if [[ -n "$MQTT_FLAG" ]]; then
+  INSTALLER_ARGS+=("--mqtt=$MQTT_FLAG")
+fi
+if $NO_UPDATER_FLAG; then
+  INSTALLER_ARGS+=("--no-updater")
+fi
+if $NON_INTERACTIVE_FLAG; then
+  INSTALLER_ARGS+=("--non-interactive")
+  info "Non-interactive: every unset choice takes its default."
 fi
 
 echo ""

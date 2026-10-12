@@ -48,6 +48,51 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// IsUndockInterrupted / RemainingUndockDistance — finish a stopped undock
+// ---------------------------------------------------------------------------
+
+/// SUCCESS while an undock reverse started by RecordUndockStart has not been
+/// completed by CalibrateHeadingFromUndock (Pause, emergency or a failed BackUp
+/// in between). Off the dock this means the robot still faces the dock, so the
+/// tree must finish the reverse and NEVER run SeedYawFromMotion's forward
+/// drive (see undock_resume.hpp).
+class IsUndockInterrupted : public BT::ConditionNode
+{
+public:
+  IsUndockInterrupted(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+  BT::NodeStatus tick() override;
+};
+
+/// Writes how far the interrupted undock still has to reverse to `remaining`
+/// and returns SUCCESS, or FAILURE when nothing worth reversing is left
+/// (remainingUndockDistance in undock_resume.hpp).
+class RemainingUndockDistance : public BT::SyncActionNode
+{
+public:
+  RemainingUndockDistance(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {
+        BT::InputPort<double>("undock_distance", 1.0, "Full undock reverse distance [m]"),
+        BT::OutputPort<double>("remaining", "Reverse still to drive [m]"),
+    };
+  }
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // CalibrateHeadingFromUndock — derive yaw from the BackUp displacement
 // ---------------------------------------------------------------------------
 

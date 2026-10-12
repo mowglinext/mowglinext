@@ -26,7 +26,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 
 if harness_run; then
   pass "Installer flow completes for default preset"

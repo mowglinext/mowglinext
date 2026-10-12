@@ -1,6 +1,5 @@
 import {useMemo} from "react";
 import {useTranslation} from "react-i18next";
-import i18n from "../i18n";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
@@ -9,7 +8,7 @@ import {zonedDayAnchorMs} from "../utils/logTime.ts";
 /**
  * GitHub-style contribution-graph rendered against mowing sessions.
  *
- * Each cell is one day; the cell intensity is the total mowing distance
+ * Each cell is one day; the cell intensity is the number of recorded sessions
  * for that day. We render the last 52 weeks ending today, padded so the
  * leftmost column is a Sunday.
  *
@@ -24,7 +23,7 @@ import {zonedDayAnchorMs} from "../utils/logTime.ts";
 export interface SessionLike {
   start_time: string;
   duration_sec: number;
-  distance_meters: number;
+  distance_meters?: number | null;
   coverage_percent: number;
   status: string;
 }
@@ -40,10 +39,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // browser zones.
 const DAY_LABEL_ZONE = 'UTC';
 
-function intensity(km: number, max: number): number {
-  if (km <= 0 || max <= 0) return 0;
+function intensity(count: number, max: number): number {
+  if (count <= 0 || max <= 0) return 0;
   // 4 buckets so the colour ramp has clear stops, like GH's contribution graph.
-  const ratio = km / max;
+  const ratio = count / max;
   if (ratio < 0.1) return 1;
   if (ratio < 0.4) return 2;
   if (ratio < 0.75) return 3;
@@ -52,7 +51,7 @@ function intensity(km: number, max: number): number {
 
 export function YearOfLawn({sessions}: YearOfLawnProps) {
   const {colors} = useThemeMode();
-  const {t} = useTranslation();
+  const {t, i18n} = useTranslation();
   const isMobile = useIsMobile();
   const {timeZoneMode} = useTimeFormat();
   // The full year SVG (~810px) always horizontal-scroll-clips on phones; on
@@ -60,51 +59,51 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
   // full 52-week window.
   const weeksToShow = isMobile ? 20 : 52;
 
-  const {grid, weeks, totalKm, activeDays, streak, monthLabels} = useMemo(() => {
+  const {grid, weeks, totalSessions, activeDays, streak, monthLabels} = useMemo(() => {
     const today = zonedDayAnchorMs(Date.now(), timeZoneMode);
-    // 52 weeks ending today, leftmost column starts on a Sunday.
+    // 51 complete weeks plus the current week, all beginning on Sunday.
     const endDay = new Date(today).getUTCDay(); // 0..6
-    const startOffsetDays = 52 * 7 - 1 - endDay;
+    const startOffsetDays = 51 * 7 + endDay;
     const start = today - startOffsetDays * DAY_MS;
 
-    // Bucket distance per day.
+    // Bucket sessions per day.
     const perDay = new Map<number, number>();
     sessions.forEach(s => {
       const startedAtMs = Date.parse(s.start_time);
       if (!Number.isFinite(startedAtMs)) return;
       const d = zonedDayAnchorMs(startedAtMs, timeZoneMode);
       if (d < start || d > today) return;
-      const km = s.distance_meters / 1000;
-      perDay.set(d, (perDay.get(d) ?? 0) + km);
+      const count = 1; // One recorded session counts as activity, including aborted runs.
+      perDay.set(d, (perDay.get(d) ?? 0) + count);
     });
 
     const days = 52 * 7;
-    const cells: { km: number; date: Date }[] = [];
-    let totalKm = 0;
+    const cells: { count: number; date: Date }[] = [];
+    let totalSessions = 0;
     let activeDays = 0;
     for (let i = 0; i < days; i++) {
       const dayMs = start + i * DAY_MS;
-      const km = perDay.get(dayMs) ?? 0;
-      cells.push({km, date: new Date(dayMs)});
-      totalKm += km;
-      if (km > 0) activeDays += 1;
+      const count = perDay.get(dayMs) ?? 0;
+      cells.push({count, date: new Date(dayMs)});
+      totalSessions += count;
+      if (count > 0) activeDays += 1;
     }
 
     // Streak (consecutive active days). Today has no mow recorded until the
     // robot runs, so counting strictly to the last cell reads 0 all morning.
     // If today is still empty, let the streak end at yesterday instead.
-    let streakStart = cells.length - 1;
-    if (streakStart >= 0 && cells[streakStart].km <= 0) streakStart -= 1;
+    let streakStart = Math.min(cells.length - 1, Math.floor((today - start) / DAY_MS));
+    if (streakStart >= 0 && cells[streakStart].count <= 0) streakStart -= 1;
     let streak = 0;
     for (let i = streakStart; i >= 0; i--) {
-      if (cells[i].km > 0) streak += 1;
+      if (cells[i].count > 0) streak += 1;
       else break;
     }
 
     // 52 columns of 7 days each
-    const weeks: { km: number; date: Date }[][] = [];
+    const weeks: { count: number; date: Date }[][] = [];
     for (let c = 0; c < 52; c++) {
-      const col: { km: number; date: Date }[] = [];
+      const col: { count: number; date: Date }[] = [];
       for (let r = 0; r < 7; r++) col.push(cells[c * 7 + r]);
       weeks.push(col);
     }
@@ -124,10 +123,10 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
       }
     });
 
-    return {grid: cells, weeks, totalKm, activeDays, streak, monthLabels};
-  }, [sessions, timeZoneMode]);
+    return {grid: cells, weeks, totalSessions, activeDays, streak, monthLabels};
+  }, [sessions, timeZoneMode, i18n.language]);
 
-  const maxKm = grid.reduce((m, c) => Math.max(m, c.km), 0.001);
+  const maxSessions = grid.reduce((m, c) => Math.max(m, c.count), 0.001);
 
   // On mobile, render only the trailing `weeksToShow` columns. Re-index the
   // month labels into the sliced window.
@@ -159,7 +158,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
             {t('yearOfLawn.yearOfLawn')}
           </div>
           <div style={{fontSize: 22, fontWeight: 700, color: colors.text, marginTop: 2, letterSpacing: '-0.02em'}}>
-            {totalKm.toFixed(1)} km <span style={{fontSize: 13, color: colors.textDim, fontWeight: 500}}>{t('yearOfLawn.last52Weeks')}</span>
+            {t('yearOfLawn.sessionCount', {count: totalSessions})} <span style={{fontSize: 13, color: colors.textDim, fontWeight: 500}}>{t('yearOfLawn.last52Weeks')}</span>
           </div>
         </div>
         <div>
@@ -207,7 +206,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
           {/* cells */}
           {displayWeeks.map((col, ci) =>
             col.map((cell, ri) => {
-              const lvl = intensity(cell.km, maxKm);
+              const lvl = intensity(cell.count, maxSessions);
               return (
                 <rect
                   key={`${ci}-${ri}`}
@@ -219,9 +218,9 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
                   fill={intensityColors[lvl]}
                   stroke={lvl === 0 ? colors.borderSubtle : 'none'}
                 >
-                  <title>{t('yearOfLawn.cellTooltip', {
+                  <title>{t('yearOfLawn.activityTooltip', {
                     date: cell.date.toLocaleDateString(i18n.language, {timeZone: DAY_LABEL_ZONE}),
-                    km: cell.km.toFixed(2),
+                    count: cell.count,
                   })}</title>
                 </rect>
               );

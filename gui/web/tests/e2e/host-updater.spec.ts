@@ -17,7 +17,7 @@ function release(id:string, track='dev', tag='') {
         layout:1,data_schema:1,updater_api:1,maintenance_api:1,firmware_protocol:6,component_compatibility:contracts,
         service_choices:[{service:'mowgli',image:'mowgli-ros2'},{service:'gui',image:'mowglinext-gui'},{service:'gps',image:'gps',when:{gnss:'universal'}},{service:'lidar',image:'lidar-ldlidar',when:{lidar:'ldlidar'}}],
         images:Object.fromEntries(Object.values(familyMap).map(f=>[f,{repository:`ghcr.io/${source.repository}/${f}`,platforms:{'linux/arm64':{manifest:'sha256:'+'1'.repeat(64)}}}])),
-        updater:{'linux/arm64':{version:'updater-current'}}};
+        updater:{'linux/arm64':{version:'updater-current',build_id:'worker-build-a'}}};
 }
 function fixture(track='dev', mixed=false, expanded=false) {
     const base=release('release-base',track,'v1.2.0');const next=release('release-new',track,'v1.3.0');const alternative=release('release-alternative',track,'v1.2.1');
@@ -26,7 +26,7 @@ function fixture(track='dev', mixed=false, expanded=false) {
     const components=Object.fromEntries(names.map(name=>[name,{name:`mowgli-${name}`,family:familyMap[name as keyof typeof familyMap],reference:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,version:track==='stable'?(mixed&&['mowgli','gui'].includes(name)?'v1.2.1':'v1.2.0'):'dev',revision:devPrevious,image:`sha256:installed-${name}`,healthy:true,healthcheck:false}]));
     return {api:1,capabilities:['component-overrides','declared-services','release-compose','service-version-overrides','custom-images'],
         runtime:{identity:mixed?'mixed':'matched',health:'healthy',checked_at:'2026-09-07T09:30:00Z',selection:{gnss:'universal',lidar:expanded?'ldlidar':'none'},components},
-        agent:{version:'updater-current',revision:devPrevious,platform:'linux/arm64'},trusted_repositories:[source.repository],
+        agent:{version:'updater-current',revision:devPrevious,platform:'linux/arm64',build_id:'worker-build-a'},trusted_repositories:[source.repository],
         state:{policy:{source:base.source,interval_hours:24,pinned:false},installed_policy:{source:base.source,interval_hours:24,pinned:true},active:base,
             overrides:mixed?{gui:alternative,mowgli:alternative}:{},last_check:'2026-09-07T09:30:00Z',next_check:'2026-09-08T09:35:00Z',last_success:'2026-09-07T09:30:00Z',releases:[next,base,alternative],notices:[],history:[]}};
 }
@@ -34,10 +34,10 @@ const inventory={docker_available:true,server:{version:'dev'},components:[
     ...['mowgli','gui','gps','lidar','camera'].map(name=>({name:`mowgli-${name}`,component:name==='mowgli'?'robot':name,version:'dev',revision:devPrevious,state:'running',image:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,image_id:`sha256:installed-${name}`})),
     {name:'mowgli-mqtt',component:'mqtt',version:'2.0.22',state:'running',image:'eclipse-mosquitto:2.0.22'},
 ]};
-async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false) {
+async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false, topics:Record<string,unknown>={}) {
     await page.setViewportSize(mobile?{width:390,height:844}:{width:1440,height:1800});
     const names=new Set(Object.values(data.runtime.components).map(c=>c.name));
-    await installMockBackend(page,{...SCENARIOS[0],rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version,revision:Object.values(data.runtime.components).find(r=>r.name===c.name)?.revision,built_at:data.state.active?.published_at ? new Date(Date.parse(data.state.active.published_at)-60000).toISOString() : undefined}))}}});
+    await installMockBackend(page,{...SCENARIOS[0],topics:{...SCENARIOS[0].topics,...topics},rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version,revision:Object.values(data.runtime.components).find(r=>r.name===c.name)?.revision,built_at:data.state.active?.published_at ? new Date(Date.parse(data.state.active.published_at)-60000).toISOString() : undefined}))}}});
     const posts:{path:string;body:Record<string,unknown>}[]=[];const errors:string[]=[];
     page.on('pageerror',e=>errors.push(e.message));
     page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/system/updater/'))posts.push({path:new URL(r.url()).pathname,body:r.postDataJSON()});});
@@ -166,7 +166,7 @@ for(const mobile of [false,true])test(`simple mode accepts another published bra
 });
 
 test('host updater selection has its own reviewed action',async({page})=>{
-    const data=fixture('stable');data.state.releases[2].updater['linux/arm64'].version='updater-alternative';const {panel,posts}=await open(page,data);await advanced(page);
+    const data=fixture('stable');data.state.releases[2].updater['linux/arm64'].version='updater-alternative';data.state.releases[2].updater['linux/arm64'].build_id='worker-build-b';const {panel,posts}=await open(page,data);await advanced(page);
     await choose(page,'Update service version','v1.2.1');expect(posts).toEqual([]);
     await panel.getByRole('button',{name:'Update the update service'}).click();await expect(page.getByRole('dialog')).toBeVisible();expect(posts).toEqual([]);
 });
@@ -391,11 +391,146 @@ test('custom drafts cannot leak into Simple installation',async({page})=>{
 for(const mobile of [false,true])test(`standard branch versus custom image identity ${mobile?'mobile':'desktop'}`,async({page})=>{
     const data=fixture();for(const r of [data.state.active,...data.state.releases])r.source={...source,track:'custom',branch:customBranch};
     const {panel}=await open(page,data,mobile);
-    await expect(panel).toContainText('Standard deployment');await expect(panel).toContainText(customBranch);
+    await expect(panel).toContainText('Matched');await expect(panel).toContainText(customBranch);
     await shot(page,'host-updater-standard-branch',mobile);
     const mixed={...data,runtime:{...data.runtime,identity:'mixed'},state:{...data.state,custom_images:{gui:{requested:'ghcr.io/mowglinext/mowglinext/mowglinext-gui:dev',reference:'ghcr.io/mowglinext/mowglinext/mowglinext-gui@sha256:'+'1'.repeat(64),image_id:'sha256:'+'2'.repeat(64)}}}};
     await page.route('**/api/system/updater/state',r=>r.fulfill({json:mixed}));await page.reload();await expect(panel).toContainText('Custom mix');
-    await expect(panel.getByText('Standard deployment',{exact:true})).toHaveCount(0);
+    await expect(panel.getByText('Matched',{exact:true})).toHaveCount(0);
     await expect(page.getByTestId('stack-gui')).toContainText(mixed.state.custom_images.gui.requested);
     await shot(page,'host-updater-custom-mix',mobile);
+});
+
+for (const mobile of [false,true]) test(`compact installed dates and completed update ${mobile?'mobile':'desktop'}`, async ({page}) => {
+    const data=fixture();
+    data.state.releases[0].updater['linux/arm64'].version='new-deployment-same-worker';
+    const repairedPlan={...plan(data.state.active),preexisting_health_issues:[{service:'lidar',check:'application.lidar',message:'lidar: No fresh LiDAR scans'}]};
+    Object.assign(data.state,{job:{id:'job-completed',kind:'containers',phase:'succeeded',started_at:'2026-09-07T09:30:00Z',plan:repairedPlan}});
+    const {panel,errors,posts}=await open(page,data,mobile);
+    await expect(panel.getByRole('table',{name:'Installed stack'})).toBeVisible();
+    await expect(panel.getByRole('table',{name:'Available to install'})).toContainText(devHead.slice(0,8));
+    for(const badge of await panel.locator('.ant-tag').all()) {
+        const box=await badge.boundingBox();
+        expect(box?.height).toBeLessThan(32);
+    }
+    await expect(page.getByTestId('stack-mowgli')).toContainText('Built:');
+    await expect(page.getByTestId('stack-mowgli')).not.toContainText('Built: Unknown');
+    await expect(panel.getByTestId('update-job')).toContainText('Update completed');
+    await expect(panel.getByTestId('update-job').locator('.ant-alert-description')).toHaveCount(0);
+    await expect(panel.getByRole('button',{name:'Update the update service'})).toHaveCount(0);
+    if(mobile)await page.setViewportSize({width:390,height:1100});
+    await shot(page,'updater-compact-completed',mobile);
+    if(mobile) {
+        await panel.getByRole('table',{name:'Installed stack'}).evaluate(el=>el.scrollIntoView({block:'start'}));
+        const agent=await panel.getByTestId('stack-agent').boundingBox();
+        expect(agent && agent.y+agent.height).toBeLessThan(1016);
+    }
+    await page.getByRole('table',{name:'Installed stack'}).screenshot({path:`tests/e2e/.artifacts/updater-stack-${mobile?'mobile':'desktop'}.png`});
+    expect(errors).toEqual([]);expect(posts).toEqual([]);
+});
+
+test('completed forced update reports only a pre-existing issue which remains',async({page})=>{
+    const data=fixture();const issue={service:'lidar',check:'application.lidar',message:'lidar: No fresh LiDAR scans'};
+    const forcedPlan={...plan(data.state.active),preexisting_health_issues:[issue]};
+    data.state.job={id:'forced-health-job',kind:'containers',phase:'succeeded',started_at:'2026-09-07T09:40:00Z',plan:forcedPlan,remaining_health_issues:[issue]} as never;
+    const {panel}=await open(page,data);
+    await expect(panel.getByTestId('remaining-health-issues')).toContainText('lidar: No fresh LiDAR scans');
+    await expect(panel.getByTestId('remaining-health-issues')).toContainText('New failures would have restored the previous deployment.');
+});
+
+test('installed build date never comes from a different cached image',async({page})=>{
+    const data=fixture();data.runtime.components.mowgli.image='sha256:another-image';
+    await open(page,data);
+    await expect(page.getByTestId('stack-mowgli')).toContainText('Built: Unknown');
+});
+
+test('French mobile tables keep compact badges',async({page})=>{
+    const {panel}=await open(page,fixture(),true);
+    await page.getByText('FR',{exact:true}).first().click();
+    await expect(panel.getByText('Cohérent',{exact:true})).toBeVisible();
+    for(const badge of await panel.locator('.ant-tag').all()) {
+        const box=await badge.boundingBox();expect(box?.height).toBeLessThan(32);
+    }
+    await shot(page,'updater-compact-french',true);
+});
+
+test('worker changes offer update, missing legacy identities remain conservative', async ({page}) => {
+    const data=fixture();data.state.releases[0].updater['linux/arm64'].build_id='worker-build-b';
+    const {panel}=await open(page,data);
+    await expect(panel.getByRole('button',{name:'Update the update service'})).toBeVisible();
+    data.agent.build_id='';data.state.releases[0].updater['linux/arm64'].version='legacy-new-worker';
+    await page.route('**/api/system/updater/state',r=>r.fulfill({json:data}));
+    await expect(panel.getByRole('button',{name:'Update the update service'})).toBeVisible();
+});
+
+// The board reports its protocol in the firmware handshake; the mock status
+// topic carries it. A release built for another protocol is refused unless the
+// operator allows it, confirms again at install, and is then told to flash.
+const boardStatus=(protocol:number)=>({status:{...(SCENARIOS[0].topics?.status as Record<string,unknown>),firmware_protocol_version:protocol,firmware_compatible:true}});
+for(const mobile of [false,true])test(`firmware protocol change needs allowance, confirmation and a flash ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture();data.capabilities.push('firmware-protocol-change');data.state.releases[0].firmware_protocol=7;
+    const {panel,posts,errors}=await open(page,data,mobile,boardStatus(6));
+    const warning=page.getByTestId('firmware-change');
+    await expect(warning).toContainText('needs mainboard firmware protocol 7');await expect(warning).toContainText('runs protocol 6');
+    await expect(panel.getByRole('button',{name:'Review update'})).toBeDisabled();
+    await shot(page,'host-updater-firmware-change',mobile,'firmware-change');
+    await warning.getByRole('checkbox',{name:/Install anyway/}).check();
+    await expect(panel.getByRole('button',{name:'Review update'})).toBeEnabled();
+    const prepared={...plan(data.state.releases[0]),firmware_protocol_change:{from:6,to:7}};
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:prepared}));
+    await page.route('**/api/system/updater/apply',r=>r.fulfill({json:{job:'forced-job'}}));
+    await panel.getByRole('button',{name:'Review update'}).click();
+    const dialog=page.getByRole('dialog');
+    await expect(dialog.getByTestId('firmware-change-review')).toContainText('changes from 6 to 7');
+    await expect(dialog.getByRole('button',{name:'Install reviewed deployment'})).toBeDisabled();
+    await shot(page,'host-updater-firmware-change-review',mobile);
+    await dialog.getByRole('checkbox',{name:/flash the mainboard firmware afterwards/}).check();
+    await dialog.getByRole('button',{name:'Install reviewed deployment'}).click();
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true,allow_firmware_protocol_change:true}},{path:'/api/system/updater/apply',body:{plan:'review-plan',firmware_protocol_acknowledged:true}}]);
+    expect(errors).toEqual([]);
+});
+test('firmware protocol change without an updated agent cannot be reviewed',async({page})=>{
+    const data=fixture();data.state.releases[0].firmware_protocol=7;
+    const {panel,posts}=await open(page,data,false,boardStatus(6));
+    const warning=page.getByTestId('firmware-change');
+    await expect(warning).toContainText('Update the updater agent first');
+    await expect(warning.getByRole('checkbox')).toHaveCount(0);
+    await expect(panel.getByRole('button',{name:'Review update'})).toBeDisabled();
+    expect(posts).toEqual([]);
+});
+// The updater treats an absent flag as allowed (legacy GUIs), so this GUI must
+// always send an explicit refusal when the operator has not ticked anything.
+test('matching firmware protocol shows no allowance and sends an explicit refusal',async({page})=>{
+    const data=fixture();data.capabilities.push('firmware-protocol-change');
+    const {panel,posts}=await open(page,data,false,boardStatus(6));
+    await expect(page.getByTestId('firmware-change')).toHaveCount(0);
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.releases[0])}));
+    await panel.getByRole('button',{name:'Review update'}).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true,allow_firmware_protocol_change:false}}]);
+});
+for(const mobile of [false,true])test(`pre-existing optional health failure needs explicit force ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture();data.capabilities.push('preexisting-health');
+    const {panel,posts,errors}=await open(page,data,mobile);
+    const issue={service:'lidar',check:'application.lidar',message:'lidar: No fresh LiDAR scans'};
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:{...plan(data.state.releases[0]),preexisting_health_issues:[issue]}}));
+    await page.route('**/api/system/updater/apply',r=>r.fulfill({json:{job:'forced-health-job'}}));
+    await panel.getByRole('button',{name:'Review update'}).click();
+    const dialog=page.getByRole('dialog');const warning=dialog.getByTestId('preexisting-health-review');
+    await expect(warning).toContainText('Some installed components are already unhealthy');
+    await expect(warning).toContainText('lidar: No fresh LiDAR scans');
+    await expect(dialog.getByRole('button',{name:'Install reviewed deployment'})).toBeDisabled();
+    await shot(page,'host-updater-preexisting-health-review',mobile);
+    await warning.getByRole('checkbox',{name:'Force this update with the listed pre-existing issues.'}).check();
+    await dialog.getByRole('button',{name:'Install reviewed deployment'}).click();
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true}},{path:'/api/system/updater/apply',body:{plan:'review-plan',preexisting_health_acknowledged:true}}]);
+    expect(errors).toEqual([]);
+});
+for(const protocol of [6,7])test(`after a forced install the flash reminder ${protocol===6?'stays until the board is flashed':'clears once the board runs the new protocol'}`,async({page})=>{
+    const data=fixture();data.capabilities.push('firmware-protocol-change');
+    const forced={...plan(data.state.releases[0]),firmware_protocol_change:{from:6,to:7}};
+    data.state.job={id:'forced-job',kind:'containers',phase:'succeeded',started_at:'2026-09-07T09:40:00Z',plan:forced} as never;
+    await open(page,data,false,boardStatus(protocol));
+    const reminder=page.getByTestId('firmware-flash-needed');
+    if(protocol===6){await expect(reminder).toContainText('Flash the mainboard firmware now (protocol 6 → 7)');await expect(reminder.getByRole('button',{name:'Flash firmware'})).toBeVisible();}
+    else await expect(reminder).toHaveCount(0);
 });

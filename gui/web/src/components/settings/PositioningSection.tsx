@@ -108,8 +108,8 @@ export const PositioningSection: React.FC<Props> = ({
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={t("settingsPositioning.latitude")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-datum_lat" data-setting-key="datum_lat" label={t("settingsPositioning.latitude")}>
+                                    <InputNumber aria-label={t("settingsPositioning.latitude")} id="setting-datum_lat"
                                         value={values.datum_lat}
                                         onChange={(value) => onChange("datum_lat", value)}
                                         step={0.000000001}
@@ -119,8 +119,8 @@ export const PositioningSection: React.FC<Props> = ({
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={t("settingsPositioning.longitude")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-datum_lon" data-setting-key="datum_lon" label={t("settingsPositioning.longitude")}>
+                                    <InputNumber aria-label={t("settingsPositioning.longitude")} id="setting-datum_lon"
                                         value={values.datum_lon}
                                         onChange={(value) => onChange("datum_lon", value)}
                                         step={0.000000001}
@@ -159,7 +159,7 @@ export const PositioningSection: React.FC<Props> = ({
                 extra={(
                     <Space size="small">
                         <Text type="secondary" style={{ fontSize: 12 }}>{t("settingsPositioning.expertMode")}</Text>
-                        <Switch size="small" checked={expertMode} onChange={setExpertMode} />
+                        <Switch aria-label={t("onboardingPage.expertMode")} size="small" checked={expertMode} onChange={setExpertMode} />
                     </Space>
                 )}
                 style={{ marginBottom: 16 }}
@@ -195,11 +195,11 @@ export const PositioningSection: React.FC<Props> = ({
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={10}>
-                            <Form.Item
+                            <Form.Item htmlFor="setting-gnss_config_baud" data-setting-key="gnss_config_baud"
                                 label={t("settingsPositioning.baudLabel")}
                                 tooltip={t("settingsPositioning.baudTooltip")}
                             >
-                                <Select
+                                <Select id="setting-gnss_config_baud"
                                     value={values.gnss_config_baud ?? 921600}
                                     onChange={handleBaudChange}
                                     options={GNSS_BAUD_OPTIONS.map((option) => ({
@@ -254,8 +254,8 @@ export const PositioningSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={12}>
-                                    <Form.Item label={t("settingsPositioning.positionRateLabel")}>
-                                        <Select
+                                    <Form.Item htmlFor="setting-gnss_profile_rate_hz" data-setting-key="gnss_profile_rate_hz" label={t("settingsPositioning.positionRateLabel")}>
+                                        <Select id="setting-gnss_profile_rate_hz"
                                             value={values.gnss_profile_rate_hz ?? 5}
                                             onChange={(value) => onChange("gnss_profile_rate_hz", value)}
                                             options={GNSS_PROFILE_RATE_OPTIONS.map((option) => ({
@@ -268,8 +268,8 @@ export const PositioningSection: React.FC<Props> = ({
                             </Row>
                             <Row gutter={[16, 0]}>
                                 <Col xs={24} sm={10}>
-                                    <Form.Item label={t("settingsPositioning.receiverFamilyLabel")}>
-                                        <Select
+                                    <Form.Item htmlFor="setting-gnss_receiver_family" data-setting-key="gnss_receiver_family" label={t("settingsPositioning.receiverFamilyLabel")}>
+                                        <Select id="setting-gnss_receiver_family"
                                             value={values.gnss_receiver_family ?? "auto"}
                                             onChange={(value) => onChange("gnss_receiver_family", value)}
                                             options={GNSS_RECEIVER_FAMILY_OPTIONS.map((option) => ({
@@ -291,8 +291,8 @@ export const PositioningSection: React.FC<Props> = ({
                             </Row>
                             <Row gutter={[16, 0]}>
                                 <Col xs={12} sm={6}>
-                                    <Form.Item label={t("settingsPositioning.rtkWaitAfterUndockLabel")}>
-                                        <InputNumber
+                                    <Form.Item htmlFor="setting-gps_wait_after_undock_sec" data-setting-key="gps_wait_after_undock_sec" label={t("settingsPositioning.rtkWaitAfterUndockLabel")}>
+                                        <InputNumber aria-label={t("settingsPositioning.rtkWaitAfterUndockLabel") + ", s"} id="setting-gps_wait_after_undock_sec"
                                             value={values.gps_wait_after_undock_sec}
                                             onChange={(value) => onChange("gps_wait_after_undock_sec", value)}
                                             min={0}
@@ -303,8 +303,8 @@ export const PositioningSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={6}>
-                                    <Form.Item label={t("settingsPositioning.gpsTimeoutLabel")}>
-                                        <InputNumber
+                                    <Form.Item htmlFor="setting-gps_timeout_sec" data-setting-key="gps_timeout_sec" label={t("settingsPositioning.gpsTimeoutLabel")}>
+                                        <InputNumber aria-label={t("settingsPositioning.gpsTimeoutLabel") + ", s"} id="setting-gps_timeout_sec"
                                             value={values.gps_timeout_sec}
                                             onChange={(value) => onChange("gps_timeout_sec", value)}
                                             min={1}

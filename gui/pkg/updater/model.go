@@ -23,6 +23,10 @@ const DefaultCheckIntervalHours = 24
 
 var Version = "development"
 var Revision = ""
+
+// BuildID hashes the worker built without release labels or VCS metadata. It
+// changes with executable inputs, not with unrelated monorepo commits.
+var BuildID = ""
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 var revisionPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 
@@ -55,6 +59,7 @@ func (s Source) Validate(trusted []string) error {
 }
 
 type Binary struct {
+	BuildID string `json:"build_id,omitempty"`
 	Asset   string `json:"asset"`
 	SHA256  string `json:"sha256"`
 	Version string `json:"version"`
@@ -154,6 +159,9 @@ func (d Deployment) Validate(trusted []string) error {
 		}
 	}
 	for platform, b := range d.Updater {
+		if b.BuildID != "" && !updates.DigestPattern.MatchString("sha256:"+b.BuildID) {
+			return errors.New("invalid updater build identity")
+		}
 		if platform != "linux/arm64" && platform != "linux/amd64" || !idPattern.MatchString(b.Asset) || !updates.DigestPattern.MatchString("sha256:"+b.SHA256) || !idPattern.MatchString(b.Version) {
 			return errors.New("invalid updater asset")
 		}
@@ -174,35 +182,55 @@ type Notice struct {
 	Read       bool      `json:"read"`
 	Dismissed  bool      `json:"dismissed"`
 }
+
+// HealthIssue is a forceable, optional-component health failure. Check is a
+// stable machine identity; Message is only presentation text and may change
+// between container versions without broadening the accepted exception.
+type HealthIssue struct {
+	Service string `json:"service"`
+	Check   string `json:"check"`
+	Message string `json:"message"`
+}
+
 type Plan struct {
 	CustomImages map[string]CustomImage `json:"custom_images,omitempty"`
 	Stack        *StackPlan             `json:"stack,omitempty"`
-	ID           string                 `json:"id"`
-	Target       Deployment             `json:"target"`
-	Policy       Policy                 `json:"policy"`
-	Fingerprint  string                 `json:"fingerprint"`
-	ExpiresAt    time.Time              `json:"expires_at"`
-	Images       map[string]string      `json:"images"`
-	Previous     map[string]string      `json:"previous"`
-	Overrides    map[string]Deployment  `json:"overrides,omitempty"`
+	// FirmwareProtocolChange is set only when the operator explicitly allowed
+	// installing images that cannot talk to the running mainboard firmware.
+	FirmwareProtocolChange *FirmwareProtocolChange `json:"firmware_protocol_change,omitempty"`
+	// PreexistingHealthIssues are the optional-component failures observed
+	// during review. Immediately before maintenance the job narrows this list
+	// to failures which still exist; post-update verification accepts only the
+	// same service/check pairs. Mandatory and newly introduced failures remain
+	// blocking.
+	PreexistingHealthIssues []HealthIssue         `json:"preexisting_health_issues,omitempty"`
+	ID                      string                `json:"id"`
+	Target                  Deployment            `json:"target"`
+	Policy                  Policy                `json:"policy"`
+	Fingerprint             string                `json:"fingerprint"`
+	ExpiresAt               time.Time             `json:"expires_at"`
+	Images                  map[string]string     `json:"images"`
+	Previous                map[string]string     `json:"previous"`
+	Overrides               map[string]Deployment `json:"overrides,omitempty"`
 }
 type Job struct {
-	PreviousCustomImages map[string]CustomImage `json:"previous_custom_images,omitempty"`
-	ID                   string                 `json:"id"`
-	Kind                 string                 `json:"kind"`
-	Phase                string                 `json:"phase"`
-	Committed            string                 `json:"committed,omitempty"`
-	Error                string                 `json:"error,omitempty"`
-	RecoveryError        string                 `json:"recovery_error,omitempty"`
-	RecoveryWarnings     []string               `json:"recovery_warnings,omitempty"`
-	StartedAt            time.Time              `json:"started_at"`
-	Plan                 Plan                   `json:"plan"`
-	Backup               string                 `json:"backup,omitempty"`
-	PreviousPolicy       Policy                 `json:"previous_policy"`
-	PreviousActive       *Deployment            `json:"previous_active,omitempty"`
-	PreviousOverrides    map[string]Deployment  `json:"previous_overrides,omitempty"`
-	PreviousImages       map[string]string      `json:"previous_images,omitempty"`
-	PreviousJobID        string                 `json:"previous_job_id,omitempty"`
+	PreviousCustomImages  map[string]CustomImage `json:"previous_custom_images,omitempty"`
+	RemainingHealthIssues []HealthIssue          `json:"remaining_health_issues,omitempty"`
+	ID                    string                 `json:"id"`
+	Kind                  string                 `json:"kind"`
+	Phase                 string                 `json:"phase"`
+	Committed             string                 `json:"committed,omitempty"`
+	Error                 string                 `json:"error,omitempty"`
+	RecoveryError         string                 `json:"recovery_error,omitempty"`
+	RecoveryWarnings      []string               `json:"recovery_warnings,omitempty"`
+	StartedAt             time.Time              `json:"started_at"`
+	Plan                  Plan                   `json:"plan"`
+	Backup                string                 `json:"backup,omitempty"`
+	PreviousPolicy        Policy                 `json:"previous_policy"`
+	PreviousActive        *Deployment            `json:"previous_active,omitempty"`
+	PreviousOverrides     map[string]Deployment  `json:"previous_overrides,omitempty"`
+	PreviousImages        map[string]string      `json:"previous_images,omitempty"`
+	PreviousJobID         string                 `json:"previous_job_id,omitempty"`
 }
 
 func (j *Job) Pending() bool {

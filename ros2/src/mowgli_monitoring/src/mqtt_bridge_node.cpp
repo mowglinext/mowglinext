@@ -34,6 +34,12 @@
 #include <string>
 #include <utility>
 
+#include "mowgli_monitoring/battery_percentage.hpp"
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #ifdef MOWGLI_HAS_MOSQUITTO
 #include <chrono>
 #include <functional>
@@ -484,6 +490,7 @@ MqttBridgeNode::MqttBridgeNode(const rclcpp::NodeOptions& options)
     : Node("mqtt_bridge_node", options)
 {
   declare_parameters();
+  host_ip_ = detect_local_ip();
   create_mqtt_client();
   create_subscriptions();
   create_service_client();
@@ -495,10 +502,49 @@ MqttBridgeNode::MqttBridgeNode(std::unique_ptr<IMqttClient> client,
     : Node("mqtt_bridge_node", options), mqtt_client_(std::move(client))
 {
   declare_parameters();
+  host_ip_ = detect_local_ip();
   // Client is already provided — skip create_mqtt_client().
   create_subscriptions();
   create_service_client();
   create_timer();
+}
+
+std::string MqttBridgeNode::detect_local_ip()
+{
+  const int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0)
+  {
+    return "";
+  }
+
+  sockaddr_in remote{};
+  remote.sin_family = AF_INET;
+  remote.sin_port = htons(53);
+  // Any public address works: UDP connect() only consults the routing table to
+  // pick a local source address/interface, it sends nothing on the wire.
+  inet_pton(AF_INET, "8.8.8.8", &remote.sin_addr);
+
+  if (connect(sock, reinterpret_cast<sockaddr*>(&remote), sizeof(remote)) != 0)
+  {
+    close(sock);
+    return "";  // no default route at all — e.g. a fully static, isolated LAN
+  }
+
+  sockaddr_in local{};
+  socklen_t local_len = sizeof(local);
+  if (getsockname(sock, reinterpret_cast<sockaddr*>(&local), &local_len) != 0)
+  {
+    close(sock);
+    return "";
+  }
+  close(sock);
+
+  char buf[INET_ADDRSTRLEN];
+  if (!inet_ntop(AF_INET, &local.sin_addr, buf, sizeof(buf)))
+  {
+    return "";
+  }
+  return std::string{buf};
 }
 
 // ---------------------------------------------------------------------------
@@ -514,6 +560,8 @@ void MqttBridgeNode::declare_parameters()
   mqtt_client_id_ = declare_parameter<std::string>("mqtt_client_id", "mowgli_ros2");
   topic_prefix_ = declare_parameter<std::string>("mqtt_topic_prefix", "mowgli");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
+  battery_empty_voltage_ = declare_parameter<double>("battery_empty_voltage", 24.0);
+  battery_full_voltage_ = declare_parameter<double>("battery_full_voltage", 28.0);
   use_ssl_ = declare_parameter<bool>("use_ssl", false);
   home_assistant_discovery_enabled_ =
       declare_parameter<bool>("home_assistant_discovery_enabled", false);
@@ -640,6 +688,18 @@ void MqttBridgeNode::create_subscriptions()
   // Fused map-frame pose from the localizer: position and heading that do not jitter
   // like the raw GPS fix. SensorDataQoS is compatible with the localizer's reliable
   // publisher and with a best-effort one, should it ever become one.
+  // The planned coverage path (headland rings + serpentine swaths), latched by
+  // behavior_tree_node right after a plan_coverage call succeeds. transient_local on
+  // BOTH ends is required to receive that latched message immediately on (re)connect,
+  // rather than only plans created after this subscription came up.
+  sub_coverage_path_ =
+      create_subscription<nav_msgs::msg::Path>("/coverage/full_plan",
+                                               rclcpp::QoS(1).transient_local(),
+                                               [this](nav_msgs::msg::Path::ConstSharedPtr msg)
+                                               {
+                                                 on_coverage_path(msg);
+                                               });
+
   sub_pose_ =
       create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered_map",
                                                    sensor_qos,
@@ -775,6 +835,21 @@ void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
 void MqttBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
 {
   pending_gnss_status_ = *msg;
+}
+
+std::string MqttBridgeNode::serialise_host(const std::string& ip)
+{
+  return "{\"ip\":\"" + json_escape(ip) + "\"}";
+}
+
+void MqttBridgeNode::on_coverage_path(nav_msgs::msg::Path::ConstSharedPtr msg)
+{
+  // Latched, rare (once per plan), and small enough for the GUI to hold in a browser —
+  // no rate limiting needed. Only republish (retained) when the plan actually changed,
+  // matching <prefix>/area_boundary's own poll-but-only-republish-on-change pattern.
+  const std::string json = serialise_coverage_path(*msg);
+  pending_coverage_path_json_ = json;
+  publish_pending_retained("coverage_path", pending_coverage_path_json_, last_coverage_path_json_);
 }
 
 void MqttBridgeNode::on_pose(nav_msgs::msg::Odometry::ConstSharedPtr msg)
@@ -970,10 +1045,13 @@ void MqttBridgeNode::poll_areas()
     return;
   }
   areas_poll_in_flight_ = true;
-  poll_areas_step(0, std::make_shared<std::vector<AreaSummary>>());
+  ++areas_poll_.generation;
+  areas_poll_.deadline = map_poll_now_() + kMapPollTimeout;
+  poll_areas_step(0, areas_poll_.generation, std::make_shared<std::vector<AreaSummary>>());
 }
 
 void MqttBridgeNode::poll_areas_step(uint32_t index,
+                                     uint64_t generation,
                                      std::shared_ptr<std::vector<AreaSummary>> collected)
 {
   if (index >= kMaxAreasPoll)
@@ -986,47 +1064,54 @@ void MqttBridgeNode::poll_areas_step(uint32_t index,
   auto request = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
   request->index = index;
 
-  srv_get_area_->async_send_request(
+  const auto pending = srv_get_area_->async_send_request(
       request,
-      [this, index, collected](
+      [this, index, generation, collected](
           rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedFuture future)
       {
-        const auto response = future.get();
-        if (!response->success)
-        {
-          // index >= areas_.size() on the server side — end of the list.
-          areas_poll_in_flight_ = false;
-          publish_areas_if_changed(*collected);
-          return;
-        }
-
-        // Navigation-only areas (keepout/boundary zones, never mowed) are
-        // deliberately excluded — same split the GUI applies
-        // (splitMapAreas) before offering "mow this area" to an operator. A
-        // start_area command targeting one would just be skipped by the
-        // BT's own mow-selection loop regardless, but excluding it here
-        // keeps the published list meaning "things you can actually ask
-        // this topic to mow".
-        if (!response->area.is_navigation_area)
-        {
-          collected->push_back(AreaSummary{index, response->area.name});
-        }
-
-        poll_areas_step(index + 1, collected);
+        on_areas_response(index, generation, collected, future);
       });
+  areas_poll_.request_id = pending.request_id;
+}
+
+void MqttBridgeNode::on_areas_response(uint32_t index,
+                                       uint64_t generation,
+                                       std::shared_ptr<std::vector<AreaSummary>> collected,
+                                       AreaClient::SharedFuture future)
+{
+  // A queued or late callback must not consume or finish a replacement poll.
+  if (!areas_poll_in_flight_ || generation != areas_poll_.generation ||
+      expire_map_poll(areas_poll_in_flight_, areas_poll_, srv_get_area_, "areas"))
+  {
+    return;
+  }
+  areas_poll_.request_id.reset();
+  const auto response = future.get();
+  if (!response->success)
+  {
+    areas_poll_in_flight_ = false;
+    publish_areas_if_changed(*collected);
+    return;
+  }
+  // Navigation-only areas are not offered as mowing targets.
+  if (!response->area.is_navigation_area)
+  {
+    collected->push_back(AreaSummary{index, response->area.name, response->area.id});
+  }
+  poll_areas_step(index + 1, generation, collected);
 }
 
 void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& areas)
 {
   const std::string json = serialise_areas(areas);
-  if (json == last_areas_json_)
-  {
-    return;
-  }
-  last_areas_json_ = json;
+  // Discovery describes the latest desired map, independently of whether
+  // the retained /areas submission succeeded. A -> failed B -> A must also
+  // restore discovery's buttons to A after discovery B was accepted.
+  const bool changed = json != serialise_areas(last_areas_);
   last_areas_ = areas;
-  mqtt_client_->publish(full_topic("areas"), json, /*retain=*/true);
-  if (home_assistant_discovery_enabled_)
+  pending_areas_json_ = json;
+  publish_pending_retained("areas", pending_areas_json_, last_areas_json_);
+  if (home_assistant_discovery_enabled_ && changed)
   {
     // Area buttons are part of the same device-discovery document. Refresh it
     // when the map's mowable area list changes so Home Assistant adds, renames
@@ -1039,9 +1124,48 @@ void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& ar
 // Timers: rate-limited publishes (on_timer) + network loop (net_timer_)
 // ---------------------------------------------------------------------------
 
+void MqttBridgeNode::publish_pending_retained(const char* suffix,
+                                              std::optional<std::string>& pending,
+                                              std::string& last_accepted)
+{
+  if (!pending.has_value())
+  {
+    return;
+  }
+  if (*pending == last_accepted ||
+      mqtt_client_->publish(full_topic(suffix), *pending, /*retain=*/true))
+  {
+    last_accepted = *pending;
+    pending.reset();
+  }
+}
+
+bool MqttBridgeNode::expire_map_poll(bool& active,
+                                     MapPollState& poll,
+                                     const AreaClient::SharedPtr& client,
+                                     const char* description)
+{
+  if (!active || map_poll_now_() < poll.deadline)
+  {
+    return false;
+  }
+  // Invalidate callback ownership before releasing the pending ROS request.
+  ++poll.generation;
+  active = false;
+  if (poll.request_id.has_value())
+  {
+    client->remove_pending_request(*poll.request_id);
+    poll.request_id.reset();
+  }
+  RCLCPP_WARN(get_logger(), "MQTT %s poll timed out; retaining previous complete map", description);
+  return true;
+}
+
 void MqttBridgeNode::on_timer()
 {
   // The MQTT network loop runs on net_timer_, not here.
+  expire_map_poll(areas_poll_in_flight_, areas_poll_, srv_get_area_, "areas");
+  expire_map_poll(area_poll_in_progress_, boundary_poll_, srv_get_mowing_area_, "area boundary");
 
   // Attempt reconnect if disconnected.
   if (!mqtt_client_->is_connected())
@@ -1070,6 +1194,12 @@ void MqttBridgeNode::on_timer()
     }
   }
 
+  // Map snapshots can arrive only once (notably the latched coverage plan).
+  // Retry failed submissions without needing another ROS message or map poll.
+  publish_pending_retained("coverage_path", pending_coverage_path_json_, last_coverage_path_json_);
+  publish_pending_retained("areas", pending_areas_json_, last_areas_json_);
+  publish_pending_retained("area_boundary", pending_area_boundary_json_, last_area_boundary_json_);
+
   // A Home Assistant birth message is received while spin_once() is driving
   // the MQTT client. Publish only after spin_once() has returned completely,
   // then let the next timer tick flush the queued QoS message. The same path
@@ -1085,6 +1215,18 @@ void MqttBridgeNode::on_timer()
       // delay delivery until a later timer callback.
       mqtt_client_->spin_once();
     }
+  }
+
+  if (!host_ip_published_ && !host_ip_.empty())
+  {
+    // Rarely changes and is cheap, so just publish once per node lifetime rather
+    // than tracking a "did it change" flag like <prefix>/area_boundary does. Kept
+    // out of the "just (re)connected" block above: this only needs to happen
+    // once, not on every reconnect, and after any discovery publish so a test (or
+    // a consumer) asserting "connecting publishes exactly the discovery config"
+    // is not also seeing this in the same batch.
+    host_ip_published_ = true;
+    mqtt_client_->publish(full_topic("host"), serialise_host(host_ip_), /*retain=*/true);
   }
 
   // Rate-limited publishes: each topic sends only its latest pending message, at most
@@ -1109,7 +1251,15 @@ void MqttBridgeNode::on_timer()
   flush(pending_odom_, last_odom_publish_, "position", serialise_position, /*retain=*/false);
   flush(pending_gps_, last_gps_publish_, "gps", serialise_gps, /*retain=*/false);
   flush(pending_status_, last_status_publish_, "status", serialise_status, /*retain=*/true);
-  flush(pending_power_, last_power_publish_, "power", serialise_power, /*retain=*/true);
+  flush(
+      pending_power_,
+      last_power_publish_,
+      "power",
+      [this](const mowgli_interfaces::msg::Power& power)
+      {
+        return serialise_power(power, battery_empty_voltage_, battery_full_voltage_);
+      },
+      /*retain=*/true);
   flush(pending_pose_, last_pose_publish_, "pose", serialise_pose, /*retain=*/false);
   flush(pending_gnss_status_,
         last_gnss_status_publish_,
@@ -1176,14 +1326,17 @@ void MqttBridgeNode::maybe_poll_area_boundaries()
   }
 
   area_poll_in_progress_ = true;
+  ++boundary_poll_.generation;
+  boundary_poll_.deadline = map_poll_now_() + kMapPollTimeout;
   last_area_poll_ = t;
   auto accumulated =
       std::make_shared<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>();
-  poll_area_boundary_step(0, accumulated);
+  poll_area_boundary_step(0, boundary_poll_.generation, accumulated);
 }
 
 void MqttBridgeNode::poll_area_boundary_step(
     uint32_t index,
+    uint64_t generation,
     std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>> accumulated)
 {
   if (index >= kMaxAreaPollCount)
@@ -1199,27 +1352,40 @@ void MqttBridgeNode::poll_area_boundary_step(
   // executor's queue, not synchronously inline — each step's lambda returns
   // immediately after scheduling the next request, so there is no growing
   // call stack even for many areas.
-  srv_get_mowing_area_->async_send_request(
+  const auto pending = srv_get_mowing_area_->async_send_request(
       request,
-      [this, index, accumulated](
+      [this, index, generation, accumulated](
           rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedFuture future)
       {
-        const auto response = future.get();
-        if (!response->success)
-        {
-          // Index out of range = end of the (possibly non-contiguous, see
-          // docs/MQTT_CONTROL.md) area list.
-          finish_area_boundary_poll(accumulated);
-          return;
-        }
-        if (!response->area.is_navigation_area)
-        {
-          // Navigation-only areas (keepout/boundary zones, never mowed) are
-          // excluded — matches <prefix>/areas' own filter (PR #638).
-          accumulated->emplace_back(index, response->area);
-        }
-        poll_area_boundary_step(index + 1, accumulated);
+        on_area_boundary_response(index, generation, accumulated, future);
       });
+  boundary_poll_.request_id = pending.request_id;
+}
+
+void MqttBridgeNode::on_area_boundary_response(
+    uint32_t index,
+    uint64_t generation,
+    std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>> accumulated,
+    AreaClient::SharedFuture future)
+{
+  if (!area_poll_in_progress_ || generation != boundary_poll_.generation ||
+      expire_map_poll(
+          area_poll_in_progress_, boundary_poll_, srv_get_mowing_area_, "area boundary"))
+  {
+    return;
+  }
+  boundary_poll_.request_id.reset();
+  const auto response = future.get();
+  if (!response->success)
+  {
+    finish_area_boundary_poll(accumulated);
+    return;
+  }
+  if (!response->area.is_navigation_area)
+  {
+    accumulated->emplace_back(index, response->area);
+  }
+  poll_area_boundary_step(index + 1, generation, accumulated);
 }
 
 void MqttBridgeNode::finish_area_boundary_poll(
@@ -1231,14 +1397,8 @@ void MqttBridgeNode::finish_area_boundary_poll(
                                 datum_lat_,
                                 datum_lon_,
                                 make_dock_pose(dock_pose_x_, dock_pose_y_, dock_pose_yaw_));
-  if (json == last_area_boundary_json_)
-  {
-    // Retained topic: republish only when the geometry actually changed,
-    // not every ~10s poll tick.
-    return;
-  }
-  last_area_boundary_json_ = json;
-  mqtt_client_->publish(full_topic("area_boundary"), json, /*retain=*/true);
+  pending_area_boundary_json_ = json;
+  publish_pending_retained("area_boundary", pending_area_boundary_json_, last_area_boundary_json_);
 }
 
 // ---------------------------------------------------------------------------
@@ -1283,14 +1443,12 @@ std::string MqttBridgeNode::serialise_status(const mowgli_interfaces::msg::Statu
   return std::string{buf};
 }
 
-std::string MqttBridgeNode::serialise_power(const mowgli_interfaces::msg::Power& msg)
+std::string MqttBridgeNode::serialise_power(const mowgli_interfaces::msg::Power& msg,
+                                            double empty_voltage,
+                                            double full_voltage)
 {
-  // Derive battery percentage same as diagnostics (4S LiPo 12.0–16.8V range).
-  constexpr double kVFull = 16.8;
-  constexpr double kVEmpty = 12.0;
   const double voltage = static_cast<double>(msg.v_battery);
-  double pct = 100.0 * (voltage - kVEmpty) / (kVFull - kVEmpty);
-  pct = std::max(0.0, std::min(100.0, pct));
+  const double pct = battery_percentage(voltage, empty_voltage, full_voltage);
 
   char buf[256];
   std::snprintf(buf,
@@ -1563,9 +1721,32 @@ std::string MqttBridgeNode::serialise_areas(const std::vector<AreaSummary>& area
     json += std::to_string(area.index);
     json += ",\"name\":\"";
     json += json_escape(area.name);
-    json += "\"}";
+    json += "\",\"id\":";
+    json += std::to_string(area.id);
+    json += '}';
   }
   json += ']';
+  return json;
+}
+
+std::string MqttBridgeNode::serialise_coverage_path(const nav_msgs::msg::Path& path)
+{
+  // Unbounded-length payload (point count varies with plan size), same precedent as
+  // <prefix>/area_boundary and <prefix>/areas.
+  std::string json = "{\"points\":[";
+  bool first = true;
+  for (const auto& pose : path.poses)
+  {
+    if (!first)
+    {
+      json += ',';
+    }
+    first = false;
+    char point[48];
+    std::snprintf(point, sizeof(point), "[%.3f,%.3f]", pose.pose.position.x, pose.pose.position.y);
+    json += point;
+  }
+  json += "]}";
   return json;
 }
 

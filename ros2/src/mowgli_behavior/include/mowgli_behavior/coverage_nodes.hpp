@@ -33,9 +33,11 @@
 #include "mowgli_behavior/detour_resume.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/scan_pause.hpp"
+#include "mowgli_behavior/strip_progress.hpp"
 #include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
+#include "mowgli_interfaces/msg/coverage_plan_preview.hpp"
 #include "mowgli_interfaces/path_tracking_stats.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
@@ -98,6 +100,17 @@ inline bool sameTransitTarget(double ax, double ay, double bx, double by)
 /// TransitToStrip's time bound when the robot's position is unknown: the
 /// deadline of a 30 m transit (transitDeadlineSec) — bounded, and generous.
 constexpr double kTransitToStripUnknownGapM = 30.0;
+
+/// A FollowCoveragePath goal between async_send_goal and its acceptance. The BT
+/// only reads the goal handle on its next tick, so a halt in that window would
+/// otherwise neither persist the cursor nor cancel the goal — which the server
+/// then accepts and drives with nobody watching. The goal-response callback and
+/// the halt meet here under the mutex: whichever comes second cancels.
+struct FollowAcceptSlot
+{
+  std::mutex mutex;
+  bool abandoned = false;
+};
 
 /// Latest NavigateToPose result, filled by the result_callback registered at
 /// dispatch (FollowStrip's sub-path transits, TransitToStrip). Held behind a
@@ -288,6 +301,11 @@ private:
   // RUNNING); false when it should fall back to the abort-to-next path (no
   // costmap, abort not obstacle-related, no clear resume, or budget exhausted).
   bool tryStartDetour(const std::shared_ptr<BTContext>& ctx);
+  // A detour's resume transit failed and no further detour is possible: resume
+  // the SAME unit past the blocked stretch (blocked_stretch.hpp) instead of
+  // dropping the rest of it. False when nothing drivable is left or the
+  // no-progress resume budget is spent — the caller then skips the unit.
+  bool resumeUnitPastBlockedStretch(const std::shared_ptr<BTContext>& ctx);
   /// Trim the current unit to [idx, end) and persist the moved resume cursor.
   void trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx);
 
@@ -351,7 +369,8 @@ private:
   // does not abandon the area).
   void persistResumeCursor(const std::shared_ptr<BTContext>& ctx);
   // Smooth live coverage percent (0..100) from the current pose cursor
-  // (swath_base_[swath_idx_] + resume_start_idx_ + path_progress_idx_) over
+  // (swath_base_[swath_idx_] + swath_resume_start_indices_[swath_idx_] +
+  // path_progress_idx_) over
   // total_path_poses_. Monotonic within an area; recomputed every following tick
   // so the GUI %-readout climbs smoothly rather than jumping per sub-path.
   float livePercent() const;
@@ -385,12 +404,22 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr coverage_plan_pub_;
   std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
   FollowGoalHandle::SharedPtr follow_handle_;
+  /// Set while a sent follow goal has no handle yet (see FollowAcceptSlot).
+  std::shared_ptr<FollowAcceptSlot> follow_accept_;
 
   /// Terminal verdicts from the result callbacks. Polling a goal handle is not
   /// enough: a goal the server finishes in the same instant it accepts it can
   /// lose its status message and leave the poll stuck (action_outcome.hpp).
   std::shared_ptr<ActionOutcomeSlot> transit_outcome_ = std::make_shared<ActionOutcomeSlot>();
   std::shared_ptr<ActionOutcomeSlot> follow_outcome_ = std::make_shared<ActionOutcomeSlot>();
+  // FollowCoveragePath's own error_msg (issue #743) — TransitResultSlot's
+  // shape is generic enough to reuse here: mowgli_interfaces::ftc_abort_
+  // reason::HasObstacleAbortMarker(error_msg) tells tryStartDetour whether
+  // FTCController itself reported this abort as obstacle-caused, independent
+  // of tryStartDetour's own global-costmap re-derivation (the two can
+  // disagree — see ftc_abort_reason.hpp). Renewed per goal like tracking_
+  // slot_, for the same reason.
+  std::shared_ptr<TransitResultSlot> follow_result_;
   // Path-tracking error of the segment currently being driven, reduced from the
   // FollowPath action feedback that ROS 2 Lyrical's controller_server fills in
   // for whichever controller runs (FTC here). Logged once per segment so a field
@@ -445,6 +474,10 @@ private:
   // Sub-paths recorded MOWED during THIS pass. Distinct from
   // ctx->area_completed_swaths[area].size(), which is cumulative across passes.
   std::size_t swaths_mowed_this_pass_ = 0;
+  // Planned path this pass left un-mowed on purpose (obstacle detours, controller turn-fallback
+  // rejoins). The unit counters above cannot show it: a unit that was mostly detoured around
+  // is still booked mowed, so the end-of-pass message reports this tally too.
+  SkippedPathTally skipped_tally_;
   bool swath_goal_sent_ = false;
   // Absolute start index of each swaths_ unit within the CONCATENATION of all
   // units (== full_path). swath_base_[k] = sum of the ORIGINAL (untrimmed) pose
@@ -453,13 +486,12 @@ private:
   // stays comparable to area_path_pose_count. For a single unit this is {0} and
   // the bookkeeping reduces to the original single-path behaviour.
   std::vector<std::size_t> swath_base_;
-  // Resume-cursor bookkeeping. resume_start_idx_ = trim offset WITHIN the
-  // currently-driven unit (swaths_[swath_idx_]) where this run begins (non-zero
-  // only for the one unit a mid-unit resume trimmed); path_progress_idx_ =
-  // furthest pose reached within the currently-driven (trimmed) unit;
-  // total_path_poses_ = concatenation length (percent denominator). Both reset
-  // to 0 on advance() to the next unit.
-  std::size_t resume_start_idx_ = 0;
+  // Resume-cursor bookkeeping. Each entry is the trim offset WITHIN that unit
+  // where this run begins (non-zero for a unit resumed mid-path); keeping these
+  // offsets per unit matters when an earlier incomplete unit is retried first.
+  // path_progress_idx_ is the furthest pose reached within the currently-driven
+  // (trimmed) unit; total_path_poses_ is the original concatenation length.
+  std::vector<std::size_t> swath_resume_start_indices_;
   std::size_t path_progress_idx_ = 0;
   std::size_t total_path_poses_ = 0;
   // Area being mowed (from ctx->current_area) — keys the swath-completion
@@ -495,6 +527,20 @@ private:
   // Blade-off detours taken on the CURRENT segment (unit). Reset to 0 per unit
   // (onStart and on advance() to the next unit). Bounded by max_detours_per_segment_.
   std::size_t detours_used_ = 0;
+  // The FTC-stuck pose (poses[stuck] in tryStartDetour) of the detour currently
+  // in flight, if any — set right before the blade-off transit is dispatched,
+  // consumed (recorded into session_failed_transit_targets) if that transit
+  // later fails, and reset once consumed or on any unit reset. This exists
+  // because the detour's TRANSIT TARGET (the resume pose past the obstacle) is
+  // re-derived from the live costmap on every attempt and can drift by more
+  // than session_failed_transit_targets' merge radius between dispatch
+  // attempts of the same area — so recording only that point let a real,
+  // static obstacle (e.g. a hedge) re-trigger the full
+  // confirm+search+transit+Nav2-recovery cycle on every fresh dispatch. The
+  // STUCK pose is fixed plan geometry: the same obstacle blocks FTC at
+  // essentially the same point every time, so recording (and checking) THIS
+  // point reliably catches the repeat.
+  std::optional<geometry_msgs::msg::Point> last_detour_stuck_point_;
   /// Consecutive same-unit resumes that made no real progress (unit_resume.hpp).
   std::size_t unit_resumes_without_progress_ = 0;
 
@@ -510,6 +556,12 @@ private:
   /// just FAILED (same destination). Booked as skipped by the next onRunning
   /// tick instead of sending the identical transit a second time.
   bool unit_transit_already_failed_{false};
+  /// The dispatch about to run would repeat a transit that failed on an
+  /// EARLIER dispatch of this area, THIS session (issue #732,
+  /// session_failed_transit_targets). Distinct from
+  /// unit_transit_already_failed_ (that one is TransitToStrip-specific and
+  /// single-shot) so onRunning can log an accurate reason for each.
+  bool unit_transit_known_failed_{false};
   /// dig_event_count value already handled.
   std::uint64_t dig_events_seen_{0};
   bool dig_recovery_active_{false};
@@ -732,7 +784,11 @@ private:
   BT::NodeStatus processResponse();
 
   /// Advance current_area_idx_ past completed/attempted areas and fire the
-  /// next existence probe. Returns RUNNING (probe in flight) or FAILURE.
+  /// next existence probe. Returns RUNNING (probe in flight) or FAILURE. The
+  /// completed/attempted skip is only taken when isSkipVerified() confirms
+  /// the index was reconciled at the CURRENT area-list generation
+  /// (mowglinext#637 phase 2, coverage_nodes.cpp) — otherwise it falls
+  /// through to a real probe, which reconciles it in processResponse.
   BT::NodeStatus advanceAndProbe();
 
   // Existence probe: GetMowingArea(index).success is false once index passes
@@ -830,6 +886,7 @@ private:
   // single segment. Latched (transient_local) so a late GUI subscriber still
   // gets the whole plan for the current area.
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr full_plan_pub_;
+  rclcpp::Publisher<mowgli_interfaces::msg::CoveragePlanPreview>::SharedPtr plan_preview_pub_;
   Phase phase_{Phase::QueryRemaining};
   std::chrono::steady_clock::time_point phase_start_;
 };

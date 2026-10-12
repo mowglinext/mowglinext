@@ -24,6 +24,9 @@
 #include "usbd_cdc_if.h"
 #include "main.h"
 #include "mowgli_protocol.h"
+#include "mowgli_comms.h"
+#include "usbd_core.h"
+#include "usb_device.h"
 #include <stdatomic.h>
 #include <signal.h>
 
@@ -72,11 +75,13 @@
 #define APP_RX_DATA_SIZE 2
 #endif
 
-/* Only after this bounded timeout may the wrapper forcibly clear hcdc->TxState.
- * Shorter anomalies are treated as transient and left to the normal TX-complete
- * callback path. */
+/* Shorter anomalies are left to the normal TX-complete callback. On F401 a
+ * persistent busy transfer requests main-loop USB re-enumeration. */
 #define CDC_TX_BUSY_TIMEOUT_MS 500u
 #define CDC_TELEMETRY_PROBE_MS 1000u
+#define CDC_USB_DETACH_MS 250u
+#define CDC_USB_RECOVERY_COOLDOWN_MS 5000u
+#define CDC_USB_RECOVERY_LOG_MS 30000u
 /* USER CODE END PRIVATE_DEFINES */
 
 /**
@@ -129,11 +134,27 @@ static uint32_t s_txCompleteMissingCount = 0;
 static uint32_t s_hostClosedSkipCount = 0;
 static uint32_t s_usbResetSeenCount = 0;
 static uint32_t s_usbSuspendSeenCount = 0;
+static volatile uint32_t s_usbRecoveryCount = 0;
 static uint32_t s_telemetryProbeUntil = 0;
 static uint8_t s_usbSuspended = 0;
 static uint8_t s_txPacketArmed = 0;
 static uint8_t s_txPacketFailPendingRecovery = 0;
 static uint8_t s_txRecoveryHold = 0;
+#if BOARD_YARDFORCE500_VARIANT_B
+/* Only the main loop stops/restarts USB. Never recycle a live IN transfer
+ * from CDC_Transmit (which also runs in USB RX IRQ context). */
+enum { CDC_USB_RUNNING, CDC_USB_RECOVERY_REQUESTED,
+       CDC_USB_DETACHED, CDC_USB_ENUMERATING };
+static volatile uint8_t s_usbRecoveryState = CDC_USB_RUNNING;
+static uint32_t s_lastReceiveTick = 0;
+static uint32_t s_usbDetachTick = 0;
+static uint32_t s_lastUsbRecoveryTick = 0;
+static uint8_t s_hasReceived = 0;
+static uint8_t s_hasUsbRecovered = 0;
+static uint32_t s_usbRecoveryLoggedCount = 0;
+static uint32_t s_usbRecoveryLogTick = 0;
+static uint8_t s_hasUsbRecoveryLog = 0;
+#endif
 
 #ifdef USE_USB_FS
     static uint8_t ReceiveBuffer[CDC_DATA_FS_MAX_PACKET_SIZE];
@@ -241,6 +262,11 @@ static void CDC_ArmTelemetryProbe(void)
 
 static void CDC_ClearRecoveryHold(void)
 {
+#if BOARD_YARDFORCE500_VARIANT_B
+    if (s_usbRecoveryState != CDC_USB_RUNNING) {
+        return;
+    }
+#endif
     atomic_signal_fence(memory_order_acquire);
     s_txRecoveryHold = 0u;
     atomic_signal_fence(memory_order_release);
@@ -272,6 +298,20 @@ static int8_t CDC_Init(void)
     /* Set Application Buffers */
     USBD_CDC_SetTxBuffer(&hUsbDevice, UserTxBufferFS, 0);
     USBD_CDC_SetRxBuffer(&hUsbDevice, ReceiveBuffer);
+#if BOARD_YARDFORCE500_VARIANT_B
+    /* A fresh host configuration is the only completion boundary for recovery.
+     * The old endpoints have been closed; discard partial pre-reset frames. */
+    if (s_usbRecoveryState == CDC_USB_ENUMERATING) {
+        ++s_usbRecoveryCount;
+    }
+    s_usbRecoveryState = CDC_USB_RUNNING;
+    s_txtail = s_txhead;
+    s_rxtail = s_rxhead;
+    mowgli_comms_reset_rx();
+    s_hasReceived = 0u;
+    s_lastTransmitStart = 0u;
+    s_lastTransmitComplete = 0u;
+#endif
     s_usbSuspended = 0u;
     s_txPacketArmed = 0u;
     s_txPacketFailPendingRecovery = 0u;
@@ -399,6 +439,13 @@ static int8_t CDC_Receive(uint8_t *Buf, uint32_t *Len)
 {
     /* USER CODE BEGIN 6 */
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_ENTER);
+#if BOARD_YARDFORCE500_VARIANT_B
+    if (s_usbRecoveryState != CDC_USB_RUNNING) {
+        return USBD_OK;
+    }
+    s_lastReceiveTick = HAL_GetTick();
+    s_hasReceived = 1u;
+#endif
     CDC_ArmTelemetryProbe();
     CDC_ClearRecoveryHold();
     s_txPacketFailPendingRecovery = 0u;
@@ -525,6 +572,11 @@ static int8_t CDC_TransmitCplt(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
     /* USER CODE BEGIN 13 */
     UNUSED(Buf);
     UNUSED(epnum);
+#if BOARD_YARDFORCE500_VARIANT_B
+    if (s_usbRecoveryState != CDC_USB_RUNNING) {
+        return result;
+    }
+#endif
 
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_COMPLETE);
 
@@ -571,12 +623,21 @@ void CDC_ResumeTransmit(void)
             WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_BUSY_STUCK);
             s_txBusyStuckCount++;
             s_txCompleteMissingCount++;
-            /* The class TxState stayed busy beyond the documented timeout while
-             * the device was configured/open enough for normal traffic. Drop
-             * queued telemetry and release the vendor busy flag so a later USB
-             * event or host RX can restart cleanly. */
+#if BOARD_YARDFORCE500_VARIANT_B
+            /* Keep the class busy and the in-flight buffer owned by hardware.
+             * Clearing TxState here lets a late old completion consume bytes
+             * belonging to a new transfer. Quiesce USB before discarding it. */
+            s_txRecoveryHold = 1u;
+            const uint32_t now = HAL_GetTick();
+            if (s_hasReceived != 0u && now - s_lastReceiveTick < CDC_TELEMETRY_PROBE_MS &&
+                (s_hasUsbRecovered == 0u ||
+                 now - s_lastUsbRecoveryTick >= CDC_USB_RECOVERY_COOLDOWN_MS)) {
+                s_usbRecoveryState = CDC_USB_RECOVERY_REQUESTED;
+            }
+#else
             hcdc->TxState = 0u;
             CDC_EnterRecoveryHold();
+#endif
         }
         WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
         return;
@@ -603,6 +664,86 @@ void CDC_ResumeTransmit(void)
         }
     }
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
+}
+
+/* Call once per main-loop iteration, with interrupts enabled. The 250 ms
+ * disconnect is asynchronous: motor, heartbeat, sensor and watchdog servicing
+ * continue. No MCU reset, emergency release or actuator intent is performed. */
+void CDC_ServiceRecovery(void)
+{
+#if BOARD_YARDFORCE500_VARIANT_B
+    if (__get_IPSR() != 0u || __get_PRIMASK() != 0u) {
+        return;
+    }
+    if (s_usbRecoveryState == CDC_USB_RUNNING) {
+        /* Detect the stall even if telemetry gating has stopped the producers.
+         * Queue servicing shares their short critical section; Stop/Start below
+         * deliberately run after global interrupts have been restored. */
+        CDC_ENTER_CRITICAL_SECTION();
+        CDC_ResumeTransmit();
+        CDC_EXIT_CRITICAL_SECTION();
+    }
+    if (s_usbRecoveryState == CDC_USB_RECOVERY_REQUESTED) {
+        HAL_NVIC_DisableIRQ(OTG_FS_IRQn);
+        /* A host reset may have cancelled the request before IRQ masking. */
+        if (s_usbRecoveryState != CDC_USB_RECOVERY_REQUESTED) {
+            HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
+            return;
+        }
+        /* USBD_Stop hides LL_Stop errors and still frees the class. Check the
+         * low-level stop before allowing that ownership boundary. Its second
+         * LL_Stop is deliberate: F4 HAL_PCD_Stop repeats disable/disconnect/
+         * FIFO flush, then unlocks. With USB IRQ masked and TX held, nothing
+         * can rearm between calls; even a second-call error cannot undo the
+         * first successful quiesce. Retain vendor class cleanup afterwards. */
+        if (USBD_LL_Stop(&hUsbDevice) != USBD_OK) {
+            HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
+            return;
+        }
+        s_usbRecoveryState = CDC_USB_DETACHED;
+        (void)USBD_Stop(&hUsbDevice);
+        USB_DEVICE_Detach();
+        hUsbDevice.dev_state = USBD_STATE_DEFAULT;
+        CDC_EnterRecoveryHold();
+        s_rxtail = s_rxhead;
+        mowgli_comms_reset_rx();
+        s_lastTransmitStart = 0u;
+        s_lastTransmitComplete = 0u;
+        s_hasReceived = 0u;
+        s_usbDetachTick = HAL_GetTick();
+        s_lastUsbRecoveryTick = s_usbDetachTick;
+        s_hasUsbRecovered = 1u;
+    } else if (s_usbRecoveryState == CDC_USB_DETACHED &&
+               HAL_GetTick() - s_usbDetachTick >= CDC_USB_DETACH_MS) {
+        s_usbRecoveryState = CDC_USB_ENUMERATING;
+        HAL_NVIC_ClearPendingIRQ(OTG_FS_IRQn);
+        USB_DEVICE_Attach();
+        if (USBD_Start(&hUsbDevice) != USBD_OK) {
+            /* Remain held and retry asynchronously; do not accept RX or TX on
+             * a device whose low-level driver did not restart. */
+            USB_DEVICE_Detach();
+            s_usbRecoveryState = CDC_USB_DETACHED;
+            s_usbDetachTick = HAL_GetTick();
+            return;
+        }
+        HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
+        /* Do not clear the hold until CDC_Init during host enumeration. */
+    }
+    /* Never log from CDC_Init (USB IRQ), or while stop/start is retrying.
+     * Aggregate repeated successful recoveries, independent of fault-loop
+     * frequency. Existing SWO/UART debug output is strictly best-effort. */
+    const uint32_t count = s_usbRecoveryCount;
+    const uint32_t now = HAL_GetTick();
+    if (s_usbRecoveryState == CDC_USB_RUNNING && count != s_usbRecoveryLoggedCount &&
+        (s_hasUsbRecoveryLog == 0u || now - s_usbRecoveryLogTick >= CDC_USB_RECOVERY_LOG_MS)) {
+        s_usbRecoveryLoggedCount = count;
+        s_usbRecoveryLogTick = now;
+        s_hasUsbRecoveryLog = 1u;
+        debug_printf("[FW_DIAG] USB recoveries=%lu busy_stuck=%lu missing_completion=%lu tick=%lu\r\n",
+                     (unsigned long)count, (unsigned long)s_txBusyStuckCount,
+                     (unsigned long)s_txCompleteMissingCount, (unsigned long)now);
+    }
+#endif
 }
 
 /**
@@ -1044,6 +1185,11 @@ uint32_t CDC_GetUsbResetSeenCount(void)
 uint32_t CDC_GetUsbSuspendSeenCount(void)
 {
     return s_usbSuspendSeenCount;
+}
+
+uint32_t CDC_GetUsbRecoveryCount(void)
+{
+    return s_usbRecoveryCount;
 }
 
 /**

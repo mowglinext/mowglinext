@@ -41,29 +41,34 @@ one:
 |---|---|---|---|
 | **A — world + body** | `worlds_webots/mowgli_garden.wbt` | The world, and the physical robot instance. `EXTERNPROTO "../protos/MowgliMower.proto"` (`:11`), the `MowgliMower { … }` instance (`:71`–`:82`), `WorldInfo.basicTimeStep 20` (`:16`, matching controller_manager 50 Hz), sensor nodes in `extensionSlot` (`:82`+) | ROS topic names |
 | **B — device wiring** | `urdf_webots/mowgli_webots.urdf` | Which Webots device maps to which ROS topic, and which plugins load. `<webots>` block `:161`–`:204`, `<ros2_control>` joints `:206`–`:220` | Any geometry, mass, or joint physics |
-| **C — body motion** | `mowgli_simulation/kinematic_drive.py` | `/cmd_vel` → firmware motor model → Supervisor teleport of the chassis, plus the chassis ODE velocity for sensor sampling | Wheel motor commands (owned by `diff_drive_controller`) |
+| **C — body motion** | `mowgli_simulation/kinematic_drive.py` | `/cmd_vel_wheels` (the POST-firmware-model achievable twist) → Supervisor teleport of the chassis, plus the chassis ODE velocity for sensor sampling | Wheel motor commands (owned by `diff_drive_controller`); the firmware motor model itself |
 
 **Geometry lives in A only.** The URDF is *device + plugin wiring* — it does
 not spawn a body (see § 7).
 
 ### Signal chain (current topic names)
 
-Note the **split**: `kinematic_drive` reads raw `/cmd_vel`, while the wheels
-are driven from `/cmd_vel_wheels` via `sim_actuation_node`. The body pose and
-the wheel encoders are therefore fed by two different points in the chain.
+**`sim_actuation_node` is the SOLE firmware-model authority** (PR #507,
+merged 2026-09-05, "centralize Webots actuation and startup"). Before that,
+`kinematic_drive` ran its own independent copy of the firmware model on raw
+`/cmd_vel`, which could diverge from `sim_actuation_node`'s copy — ground
+truth could move while `/wheel_odom` read zero, breaking the RTK
+motion-consistency gate. Now BOTH the chassis teleport and
+`diffdrive_controller` are fed the SAME post-firmware-model twist, so they
+cannot diverge by scheduler phase:
 
 ```
-/cmd_vel ─┬─> kinematic_drive plugin  ──> Supervisor teleport of the chassis
-          │      (urdf:202 <cmdVelTopic>/cmd_vel</cmdVelTopic>)
-          │
-          └─> sim_actuation_node ──> /cmd_vel_wheels ──> diffdrive_controller
-                 (sim_actuation_node.cpp:80-83)   (webots_minimal.launch.py:111)
-                                                          │
-                                    /wheel_odom_raw <─────┘ (launch:112)
-                                          │
-                        sim_wheel_slip (sim_full_system.launch.py:396-415)
-                                          │
-                                     /wheel_odom
+/cmd_vel ──> sim_actuation_node ──> /cmd_vel_wheels ─┬─> kinematic_drive plugin ──> Supervisor teleport of the chassis
+     (sim_actuation_node.cpp:80-83)                  │      (urdf:205 <cmdVelTopic>/cmd_vel_wheels</cmdVelTopic>,
+                                                      │       urdf:206 <applyFirmwareModel>false</applyFirmwareModel>)
+                                                      │
+                                                      └─> diffdrive_controller (webots_minimal.launch.py:111)
+                                                                 │
+                                           /wheel_odom_raw <─────┘ (launch:112)
+                                                 │
+                               sim_wheel_slip (sim_full_system.launch.py:396-415)
+                                                 │
+                                            /wheel_odom
 ```
 
 Sensors:

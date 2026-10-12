@@ -45,6 +45,8 @@ export type ContainerRestartOptions = {
     errorMessage?: string;
     /** How long to wait for ROS2 to come back before giving up. */
     timeoutMs?: number;
+    /** Called only after the restart and readiness check have succeeded. */
+    onSuccess?: () => void;
     /** If true, skip the readiness probe and resolve as soon as the container API call returns. */
     skipReadinessProbe?: boolean;
 };
@@ -64,6 +66,7 @@ export const useContainerRestart = (options: ContainerRestartOptions = {}) => {
         successMessage,
         errorMessage,
         timeoutMs = 60_000,
+        onSuccess,
         skipReadinessProbe = false,
     } = options;
     // Callers may override the copy; otherwise fall back to the translated defaults.
@@ -92,6 +95,7 @@ export const useContainerRestart = (options: ContainerRestartOptions = {}) => {
                         return;
                     }
                 }
+                onSuccess?.();
                 notification.success({ message: successText });
             } catch (e: any) {
                 notification.error({ message: errorText, description: e.message });
@@ -100,7 +104,7 @@ export const useContainerRestart = (options: ContainerRestartOptions = {}) => {
                 setPending(false);
             }
         },
-        [notification, successText, errorText, timeoutMs, skipReadinessProbe, t],
+        [notification, successText, errorText, timeoutMs, skipReadinessProbe, t, onSuccess],
     );
 
     return { pending, pendingLabel: pendingText, run };

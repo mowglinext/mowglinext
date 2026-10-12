@@ -2,6 +2,12 @@ import {describe, expect, it} from "vitest";
 import {deriveLidarAnchor} from "./lidarAnchor.ts";
 
 describe("deriveLidarAnchor", () => {
+    it("does not turn the producer's initial accepted enum into evidence", () => {
+        for (const updates of [undefined, "0"]) {
+            expect(deriveLidarAnchor({lidar_anchor_state: "2", lidar_anchor_verdict: "accepted", ...(updates === undefined ? {} : {lidar_anchor_updates: updates})})?.verdictKey).toBeNull();
+        }
+        expect(deriveLidarAnchor({lidar_anchor_state: "3", lidar_anchor_verdict: "accepted", lidar_anchor_updates: "1"})?.verdictKey).toBe("accepted");
+    });
     it("returns null when the node does not publish lidar_anchor_state", () => {
         expect(deriveLidarAnchor({total_nodes: "42"})).toBeNull();
     });
@@ -11,6 +17,7 @@ describe("deriveLidarAnchor", () => {
             lidar_anchor_state: "3",
             lidar_anchor_shadow: "1",
             lidar_anchor_verdict: "rejected_dead_reckoning",
+            lidar_anchor_updates: "1",
         });
         expect(summary).not.toBeNull();
         expect(summary?.stateKey).toBe("anchoring");

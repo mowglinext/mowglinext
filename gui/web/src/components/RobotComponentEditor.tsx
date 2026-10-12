@@ -823,7 +823,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                 }
                                 extra={
                                     <Tooltip title={t("robotComponentEditor.resetToDefaults")}>
-                                        <Button type="text" size="small" icon={<UndoOutlined />}
+                                        <Button type="text" size="small" aria-label={t("settingsReset.resetField", {field: meta.label})} icon={<UndoOutlined />}
                                             onClick={() => resetSensor(meta)} />
                                     </Tooltip>
                                 }
@@ -833,6 +833,8 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.xForward")}</Text>
                                         <InputNumber
+                                            data-setting-key={meta.xKey}
+                                            aria-label={`${meta.label} — ${t("robotComponentEditor.xForward")}, m`}
                                             value={val.x} onChange={(v) => onChange(meta.xKey, v ?? 0)}
                                             step={0.005} precision={3} size="small"
                                             style={{ width: "100%" }} addonAfter="m"
@@ -841,6 +843,8 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.yLeft")}</Text>
                                         <InputNumber
+                                            data-setting-key={meta.yKey}
+                                            aria-label={`${meta.label} — ${t("robotComponentEditor.yLeft")}, m`}
                                             value={val.y} onChange={(v) => onChange(meta.yKey, v ?? 0)}
                                             step={0.005} precision={3} size="small"
                                             style={{ width: "100%" }} addonAfter="m"
@@ -849,6 +853,8 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.zHeight")}</Text>
                                         <InputNumber
+                                            data-setting-key={meta.zKey}
+                                            aria-label={`${meta.label} — ${t("robotComponentEditor.zHeight")}, m`}
                                             value={val.z} onChange={(v) => onChange(meta.zKey, v ?? 0)}
                                             step={0.005} precision={3} size="small"
                                             style={{ width: "100%" }} addonAfter="m"
@@ -860,6 +866,8 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                             {meta.id === "imu" ? (
                                                 <Space.Compact style={{ width: "100%" }}>
                                                     <InputNumber
+                                                        data-setting-key={meta.yawKey}
+                                            aria-label={`${meta.label} — ${t("robotComponentEditor.yaw")}, °`}
                                                         value={roundTo(radToDeg(val.yaw), 1)}
                                                         onChange={(v) => onChange(meta.yawKey, roundTo(degToRad(v ?? 0), 4))}
                                                         step={1} precision={1} size="small"
@@ -869,13 +877,16 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                                         <Button
                                                             size="small"
                                                             icon={<CompassOutlined />}
+                                                            aria-label={t("robotComponentEditor.autoCalibrateImuTooltip")}
                                                             onClick={openCalibration}
                                                         />
                                                     </Tooltip>
                                                 </Space.Compact>
                                             ) : (
                                                 <InputNumber
-                                                    value={roundTo(radToDeg(val.yaw), 1)}
+                                                    data-setting-key={meta.yawKey}
+                                            aria-label={`${meta.label} — ${t("robotComponentEditor.yaw")}, °`}
+                                                        value={roundTo(radToDeg(val.yaw), 1)}
                                                     onChange={(v) => onChange(meta.yawKey, roundTo(degToRad(v ?? 0), 4))}
                                                     step={1} precision={1} size="small"
                                                     style={{ width: "100%" }} addonAfter="°"
@@ -905,6 +916,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                             <Col span={12}>
                                 <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.bearingCompass")}</Text>
                                 <InputNumber
+                                    aria-label={t("robotComponentEditor.dockHeading")}
                                     value={roundTo(yawRadToCompassBearing(dockYawRad), 1)}
                                     onChange={(v) => {
                                         const bearing = ((Number(v ?? 0) % 360) + 360) % 360;

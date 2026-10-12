@@ -13,6 +13,7 @@
 - [Architecture](Architecture)
 - [Configuration](Configuration)
 - [Behavior Trees](Behavior-Trees)
+- [LiDAR Ignore Lines](LiDAR-Ignore-Lines)
 
 **Components**
 - [Sensors](Sensors)

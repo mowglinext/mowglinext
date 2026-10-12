@@ -1,9 +1,0 @@
-services:
-  tfluna_front:
-    container_name: mowgli-tfluna-front
-    image: ${RANGE_IMAGE:-ghcr.io/...}
-    network_mode: host
-    privileged: true
-    volumes:
-      - /dev:/dev
-    restart: unless-stopped

@@ -232,9 +232,9 @@ func TestPostSettingsYAML_LeavesStringsAndBoolsAlone(t *testing.T) {
 }
 
 // TestPostSettingsYAML_TemplateRepairsDemotedFloat is the repair case the
-// on-disk fallback cannot handle: max_mps is absent from the JSON schema, the
-// file ALREADY holds the demoted "1", and only the ROS2 template knows it is a
-// double (template value 0.5). A consumer that does not cast such a key aborts
+// on-disk fallback cannot handle: the file ALREADY holds the demoted "1" for
+// keys whose template value is a double (max_mps 0.5, dock_pose_* 0.0 — the
+// dock pose is absent from the JSON schema, so only the template knows). A consumer that does not cast such a key aborts
 // on the type mismatch.
 func TestPostSettingsYAML_TemplateRepairsDemotedFloat(t *testing.T) {
 	chdirToGuiRoot(t)
@@ -360,7 +360,7 @@ func TestPostSettingsYAML_NoChangeSaveKeepsKnownKeyTypes(t *testing.T) {
     max_mps: 1
     dock_pose_x: 15
     battery_full_percent: 90
-    one_wheel_lift_emergency_ms: 2000
+    one_wheel_lift_emergency_ms: 1500
     gnss_config_baud: 460800
     datum_lat: 48.123456789
 `
@@ -373,8 +373,8 @@ func TestPostSettingsYAML_NoChangeSaveKeepsKnownKeyTypes(t *testing.T) {
 	assert.IsType(t, float64(0), params["max_mps"])
 	// Schema says number.
 	assert.Contains(t, content, "battery_full_percent: 90.0")
-	// Template int and schema integer.
-	assert.Contains(t, content, "one_wheel_lift_emergency_ms: 2000\n")
+	// Schema integers (1500: a value equal to the 2000 default is pruned).
+	assert.Contains(t, content, "one_wheel_lift_emergency_ms: 1500\n")
 	assert.Contains(t, content, "gnss_config_baud: 460800\n")
 	assert.IsType(t, 0, params["one_wheel_lift_emergency_ms"])
 	assert.IsType(t, 0, params["gnss_config_baud"])

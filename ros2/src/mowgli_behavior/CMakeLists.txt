@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.22.1)
 project(mowgli_behavior)
 
 # ---------------------------------------------------------------------------
@@ -43,16 +43,16 @@ find_package(rcl_interfaces REQUIRED)
 add_executable(behavior_tree_node
   src/behavior_tree_node.cpp
   src/battery_filter.cpp
-  src/condition_nodes.cpp
+  $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   src/navigation_nodes.cpp
   src/docking_nodes.cpp
   src/escape_nodes.cpp
   src/calibration_nodes.cpp
-  src/status_nodes.cpp
-  src/status_snapshot.cpp
+  $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+  $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   src/utility_nodes.cpp
-  src/coverage_nodes.cpp
-  src/coverage_persistence.cpp
+  $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+  $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
   src/recording_nodes.cpp
   src/register_nodes.cpp
 )
@@ -80,6 +80,20 @@ target_link_libraries(behavior_tree_node
   ${mowgli_interfaces_TARGETS}
   ${rcl_interfaces_TARGETS}
 )
+
+# Compile the repeatedly used production sources once, with the node's usage
+# requirements. Each consumer still receives only its original objects and
+# retains its own link dependencies (no new archive/shared-library semantics).
+# Test-specific tree-path definitions are used only by the test translation
+# units; none of these production sources or their headers depends on them.
+get_target_property(behavior_node_includes behavior_tree_node INCLUDE_DIRECTORIES)
+get_target_property(behavior_node_dependencies behavior_tree_node LINK_LIBRARIES)
+foreach(behavior_source IN ITEMS
+    condition_nodes coverage_nodes coverage_persistence status_nodes status_snapshot)
+  add_library(mowgli_behavior_${behavior_source} OBJECT src/${behavior_source}.cpp)
+  target_include_directories(mowgli_behavior_${behavior_source} PRIVATE ${behavior_node_includes})
+  target_link_libraries(mowgli_behavior_${behavior_source} PRIVATE ${behavior_node_dependencies})
+endforeach()
 
 # ---------------------------------------------------------------------------
 # Install
@@ -112,6 +126,7 @@ if(BUILD_TESTING)
   # colcon tests packages in parallel, and on one shared DDS domain the test
   # processes discover each other's nodes (docs/claude/testing-ci.md).
   find_package(ament_cmake_ros REQUIRED)
+  find_package(tinyxml2 REQUIRED)
   # Exclude uncrustify — we use clang-format (see .clang-format)
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
@@ -146,10 +161,10 @@ if(BUILD_TESTING)
   ament_add_ros_isolated_gtest(test_blade_direction
     test/test_blade_direction.cpp
     src/utility_nodes.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
   target_include_directories(test_blade_direction PUBLIC include)
   target_link_libraries(test_blade_direction
@@ -196,7 +211,7 @@ if(BUILD_TESTING)
   # simulate the subscriber callback in behavior_tree_node.cpp.
   ament_add_ros_isolated_gtest(test_obstacle_recovery
     test/test_obstacle_recovery.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_obstacle_recovery PUBLIC
@@ -256,7 +271,7 @@ if(BUILD_TESTING)
   # boundary protection during blade-on mowing.
   ament_add_ros_isolated_gtest(test_docking_boundary_exempt
     test/test_docking_boundary_exempt.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_docking_boundary_exempt PUBLIC
@@ -350,10 +365,10 @@ if(BUILD_TESTING)
   # linked in for the real EndSession node (the session boundary that clears it).
   ament_add_ros_isolated_gtest(test_get_next_unmowed_area
     test/test_get_next_unmowed_area.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
 
   target_include_directories(test_get_next_unmowed_area PUBLIC
@@ -386,7 +401,7 @@ if(BUILD_TESTING)
   # branch (clear costmaps + retry) and still commands no escape motion.
   ament_add_ros_isolated_gtest(test_start_occupied_retry
     test/test_start_occupied_retry.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_start_occupied_retry PUBLIC
@@ -421,7 +436,7 @@ if(BUILD_TESTING)
   # in-RAM BT halt).
   ament_add_gtest(test_coverage_persistence
     test/test_coverage_persistence.cpp
-    src/coverage_persistence.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
   )
 
   target_include_directories(test_coverage_persistence PUBLIC
@@ -509,9 +524,9 @@ if(BUILD_TESTING)
   # arrive at one place then re-transit elsewhere. Pins the mapping + guards.
   ament_add_gtest(test_coverage_resume_location
     test/test_coverage_resume_location.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
 
   target_include_directories(test_coverage_resume_location PUBLIC
@@ -543,9 +558,9 @@ if(BUILD_TESTING)
   # Drives refreshSwathProgress through a simulated pass on a plain BTContext.
   ament_add_gtest(test_swath_progress
     test/test_swath_progress.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
 
   target_include_directories(test_swath_progress PUBLIC
@@ -570,6 +585,33 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
+  # ---- test_area_coverage_lines ----
+  # Pure: which swath angle / perimeter winding an area is planned with (its own
+  # override, else the robot-wide setting).
+  ament_add_gtest(test_area_coverage_lines
+    test/test_area_coverage_lines.cpp
+  )
+
+  target_include_directories(test_area_coverage_lines PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_area_coverage_lines
+    ${mowgli_interfaces_TARGETS}
+  )
+
+  # ---- test_undock_resume ----
+  # Pure: reverse left of an undock stopped mid-way (Pause / emergency).
+  ament_add_gtest(test_undock_resume
+    test/test_undock_resume.cpp
+  )
+
+  target_include_directories(test_undock_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_dig_skip ----
   # Pure: session dig skip zones (which coverage poses are skipped around a
   # recorded dig point) + the wait for the bridge's bounded reverse.
@@ -586,16 +628,29 @@ if(BUILD_TESTING)
     ${geometry_msgs_TARGETS}
   )
 
+  # ---- test_transit_avoidance ----
+  # Pure: session failed-transit-target avoidance (issue #732) — which
+  # blade-off inter-unit transits are short-circuited because they already
+  # failed earlier this session. No ROS message dependency (plain doubles).
+  ament_add_gtest(test_transit_avoidance
+    test/test_transit_avoidance.cpp
+  )
+
+  target_include_directories(test_transit_avoidance PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_follow_strip_dig ----
   # Tick-level: FollowStrip against fake /follow_path + /navigate_to_pose
   # servers. Covers dig recovery and short scan dropouts: the latter cut and
   # restore the blade without canceling/replacing the active coverage goal.
   ament_add_ros_isolated_gtest(test_follow_strip_dig
     test/test_follow_strip_dig.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
     TIMEOUT 180
   )
 
@@ -627,10 +682,10 @@ if(BUILD_TESTING)
   # the mow moves on to the next unit (field 2026-09-21).
   ament_add_ros_isolated_gtest(test_transit_non_blocking
     test/test_transit_non_blocking.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
     TIMEOUT 180
   )
 
@@ -669,6 +724,22 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_strip_progress
+    ${geometry_msgs_TARGETS}
+  )
+
+  # ---- test_blocked_stretch ----
+  # Pure: where a unit resumes once an obstacle stretch beat every detour
+  # (issue #607) instead of dropping the rest of the unit.
+  ament_add_gtest(test_blocked_stretch
+    test/test_blocked_stretch.cpp
+  )
+
+  target_include_directories(test_blocked_stretch PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_blocked_stretch
     ${geometry_msgs_TARGETS}
   )
 
@@ -764,15 +835,19 @@ if(BUILD_TESTING)
   # current_command + resume cursor) and only EndSession on a dead charger.
   ament_add_ros_isolated_gtest(test_battery_critical_resume
     test/test_battery_critical_resume.cpp
-    src/condition_nodes.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
-    src/coverage_persistence.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
   )
 
   target_include_directories(test_battery_critical_resume PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
+  )
+
+  target_compile_definitions(test_battery_critical_resume PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
 
   target_link_libraries(test_battery_critical_resume
@@ -789,6 +864,35 @@ if(BUILD_TESTING)
     ${tf2_geometry_msgs_TARGETS}
   )
 
+  # Execute the production rain guard with deterministic external actions.
+  ament_add_ros_isolated_gtest(test_rain_resume
+    test/test_rain_resume.cpp
+    src/docking_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+  )
+  target_include_directories(test_rain_resume PUBLIC include)
+  target_compile_definitions(test_rain_resume PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+  target_link_libraries(test_rain_resume
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    tinyxml2::tinyxml2
+  )
+
   # ---- test_manual_resume ----
   # Operator-forced resume out of a mid-session charge hold: Play
   # (COMMAND_START) while CHARGING / CRITICAL_BATTERY_CHARGING sets
@@ -799,7 +903,7 @@ if(BUILD_TESTING)
   # the node, poll at <= 5 s, and still bound at 8 h.
   ament_add_ros_isolated_gtest(test_manual_resume
     test/test_manual_resume.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_manual_resume PUBLIC
@@ -837,7 +941,7 @@ if(BUILD_TESTING)
   # newly added guard cannot reintroduce it.
   ament_add_ros_isolated_gtest(test_guard_fallthrough
     test/test_guard_fallthrough.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_guard_fallthrough PUBLIC
@@ -867,7 +971,7 @@ if(BUILD_TESTING)
   # ---- test_manual_charge_guard ----
   # ManualChargeGuard stops the mow when the operator puts the mower back on
   # the dock mid-run. It is the first reader of IsCharging for which a
-  # TRANSIENT charger bit is a state transition (blade off, stop, CHARGING,
+  # TRANSIENT charger bit is a state transition (blade off, stop, MANUAL_CHARGING,
   # wait, MOWING) rather than a no-op, so IsCharging gained an optional
   # stable_for_sec debounce port. Pins that the port defaults to the raw bit
   # (the other ten <IsCharging/> sites must not change), that the debounce
@@ -877,7 +981,7 @@ if(BUILD_TESTING)
   # keeps the debounced entry, the raw exit and the documented 24 h bound.
   ament_add_ros_isolated_gtest(test_manual_charge_guard
     test/test_manual_charge_guard.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_manual_charge_guard PUBLIC
@@ -912,7 +1016,7 @@ if(BUILD_TESTING)
   # FollowStrip). Pins the tree-owned vs live-field split.
   ament_add_gtest(test_high_level_status_snapshot
     test/test_high_level_status_snapshot.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
 
   target_include_directories(test_high_level_status_snapshot PUBLIC
@@ -963,6 +1067,13 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  ament_add_gtest(test_coverage_preview test/test_coverage_preview.cpp)
+  target_include_directories(test_coverage_preview PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  target_link_libraries(test_coverage_preview ${mowgli_interfaces_TARGETS} ${nav_msgs_TARGETS})
+
   # ---- test_dock_motion_gate ----
   # Structural guard over the real main_tree.xml: a DockRobot must never be
   # entered while the last published high-level state is IDLE. The firmware
@@ -988,6 +1099,25 @@ if(BUILD_TESTING)
   target_compile_definitions(test_dig_obstruction_recovery PRIVATE
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
+
+  # Execute the real mowing startup control flow with deterministic external
+  # actions, and exercise BackUp cancellation before goal-handle collection.
+  ament_add_ros_isolated_gtest(test_startup_pause
+    test/test_startup_pause.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+  )
+  target_include_directories(test_startup_pause PUBLIC include)
+  target_compile_definitions(test_startup_pause PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+  target_link_libraries(test_startup_pause ${behavior_node_dependencies} tinyxml2::tinyxml2)
+
+  ament_add_ros_isolated_gtest(test_backup_pause
+    test/test_backup_pause.cpp
+    src/navigation_nodes.cpp
+  )
+  target_include_directories(test_backup_pause PUBLIC include)
+  target_link_libraries(test_backup_pause ${behavior_node_dependencies})
 
 endif()
 

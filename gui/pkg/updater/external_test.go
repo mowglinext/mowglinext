@@ -37,7 +37,7 @@ func TestExternalTopologyTransactionAndFailureRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			saved := reopened.Snapshot()
-			if saved.Schema != 5 || saved.Job.Plan.Target.Images["helper"].Type != "external" || saved.Job.Plan.Target.Images["helper"].Digest != d.Images["helper"].Digest {
+			if saved.Schema != StateSchema || saved.Job.Plan.Target.Images["helper"].Type != "external" || saved.Job.Plan.Target.Images["helper"].Digest != d.Images["helper"].Digest {
 				t.Fatal("lost external recovery identity")
 			}
 			if failure != "" && !strings.Contains(strings.Join(b.events, ","), "restore,apply-old,verify-old,ungate") {

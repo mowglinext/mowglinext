@@ -1,0 +1,11 @@
+{
+  "_comment": "GENERATED from ros2/src/mowgli_bringup/config/backends/*.yaml — do not edit by hand. Regenerate with: cd gui \u0026\u0026 go run ./cmd/gen-backend-defaults",
+  "backends": {
+    "openmower": {
+      "both_wheels_lift_emergency_ms": 100,
+      "max_charge_voltage": 29,
+      "one_wheel_lift_emergency_ms": 2500,
+      "ticks_per_meter": 1600
+    }
+  }
+}

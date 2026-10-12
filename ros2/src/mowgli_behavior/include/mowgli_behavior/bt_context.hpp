@@ -33,6 +33,7 @@
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
+#include "mowgli_behavior/transit_avoidance.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
@@ -99,10 +100,14 @@ struct BTContext
   /// attempted_areas, incomplete_retired_areas, area_attempt_count, area_last_coverage,
   /// area_completed_swaths,
   /// area_swath_count, area_resume_pose_index, area_path_pose_count,
-  /// area_plan_fingerprint, completed_areas, coverage_all_complete). Those
+  /// area_plan_fingerprint, completed_areas, session_failed_transit_targets,
+  /// coverage_all_complete, area_ids, current_area_list_generation,
+  /// area_verified_generation). Those
   /// are mutated ONLY from this node's own BT action-node callbacks
-  /// (FollowStrip, GetNextUnmowedArea, EndSession) and the deferred
-  /// ~/clear_coverage_resume handling in tickTree() — every callback of
+  /// (FollowStrip, GetNextUnmowedArea, EndSession), the deferred
+  /// ~/clear_coverage_resume handling in tickTree(), and (for
+  /// current_area_list_generation only) the ~/area_list_generation topic
+  /// subscription — every callback of
   /// behavior_tree_node shares its default MutuallyExclusive callback group,
   /// so the tick thread and every service/timer callback are already
   /// serialized against each other even under the MultiThreadedExecutor (see
@@ -181,6 +186,27 @@ struct BTContext
   std::chrono::steady_clock::time_point manual_resume_requested_time{};
   static constexpr double kManualResumeMaxAgeSec = 30.0;
 
+  /// Latched after COMMAND_STOP is observed in CriticalBatteryDock's
+  /// post-dock charge hold. The critical-battery branch otherwise re-enters
+  /// on every root tick and would send another DockRobot goal before reaching
+  /// StopHoldSequence. Explicit new commands clear this latch. Protected by
+  /// context_mutex.
+  bool critical_charge_stop_latched{false};
+
+  /// Outcome of the most recent DockRobot attempt. Reset when an action starts
+  /// and set only after its action result reports success. Used by the
+  /// critical-battery tree to avoid treating a failed navigation attempt as
+  /// arrival at the charger.
+  bool last_dock_succeeded{false};
+
+  /// Latches a failed critical-battery dock attempt. The mower stays stopped
+  /// until an operator sends a new command, rather than retrying at BT rate.
+  bool critical_dock_failure_latched{false};
+
+  /// Set by LatchCriticalDockFailure and consumed by the node after the current
+  /// tree tick, so persistence remains serialized with coverage-map access.
+  bool critical_dock_failure_persistence_requested{false};
+
   /// Set by the ~/start_in_area service to REQUEST mowing a single, specific
   /// area instead of iterating all areas. This is the one-shot *request*:
   /// GetNextUnmowedArea consumes it on the next onStart() and latches the
@@ -206,6 +232,18 @@ struct BTContext
   /// COMMAND_START (see clearSingleAreaMode) so the next full-lawn run
   /// iterates normally.
   std::optional<uint32_t> single_area_target;
+
+  /// Stable id (mowglinext#637) of the area single_area_target's index
+  /// pointed at when it was locked in — captured from the FIRST probe
+  /// response after the request was consumed (NOT from the ~/start_in_area
+  /// request itself, which only ever carries an index). Every later probe
+  /// of single_area_target's index is checked against this in
+  /// GetNextUnmowedArea::processResponse(); a mismatch means the area list
+  /// was edited/reordered since selection and single_area_target's index
+  /// now names a DIFFERENT area than the one requested — the targeted run
+  /// ends rather than silently mowing whatever is there now. Reset
+  /// alongside single_area_target (both cleared together, always).
+  std::optional<uint32_t> single_area_target_id;
 
   /// Areas already dispatched to PlanCoverageArea+FollowStrip in the
   /// current session. GetNextUnmowedArea skips any index in this set
@@ -439,6 +477,62 @@ struct BTContext
   /// Areas whose every swath is completed-or-skipped this session. Skipped by
   /// GetNextUnmowedArea. Cleared by EndSession.
   std::set<uint32_t> completed_areas;
+  /// Blade-off inter-unit transit targets that have already failed this
+  /// session (issue #732 — transit_avoidance.hpp). sendCurrentSwath checks
+  /// every transit dispatch against this, regardless of which unit or
+  /// dispatch attempt, so a permanently blocked transit (a LiDAR-observed,
+  /// undrawn obstacle) is skipped immediately instead of being retried
+  /// identically on every subsequent dispatch of the area — each attempt
+  /// used to burn the full transitDeadlineSec bound plus nav2's own retry
+  /// cycle before the area was finally given up on. Recorded by the
+  /// transit_active_ abort handler when a transit fails for a reason OTHER
+  /// than the robot's own pose being blocked (isStartPoseBlocked) — a
+  /// START_OCCUPIED refusal is about where the robot stands, not the target,
+  /// so it is not a fact about this target and must not be recorded here.
+  /// Cleared by EndSession.
+  std::vector<FailedTransitTarget> session_failed_transit_targets;
+
+  // -----------------------------------------------------------------------
+  // Area re-index safety (mowglinext#637 phase 2)
+  // -----------------------------------------------------------------------
+  /// Stable area id (MapArea.id, mowglinext#637) last OBSERVED for each area
+  /// INDEX. Every map above is keyed by INDEX, not id — but the GUI's area
+  /// edit/delete flow rebuilds the WHOLE area list (map_server's
+  /// on_add_area, `area_manager.cpp`: clear_map + one add_area per surviving
+  /// area) which can shift what area a given index refers to, LIVE and
+  /// mid-session, not only across a process restart. GetNextUnmowedArea
+  /// compares the freshly-probed id against this map on EVERY probe (never
+  /// "verify once and trust forever") and discards the per-index state
+  /// above for that slot on a mismatch, so a re-indexed area is never
+  /// mistaken for the old one that used to sit at that index — it cannot
+  /// silently inherit a stale "completed" flag (and so get skipped forever
+  /// while genuinely unmowed) nor another area's swath/cross-hatch history.
+  /// Loaded from disk (the id column of the "area" row,
+  /// coverage_persistence.cpp) so the check also covers a restart; updated
+  /// in place by every probe thereafter. Never cleared by EndSession — an id
+  /// is a fact about the CURRENT area list, not per-session state.
+  std::map<uint32_t, uint32_t> area_ids;
+  /// Live area-list generation, updated by a subscription to map_server's
+  /// ~/area_list_generation (transient_local — the topic, not a probe
+  /// response, so it is current by the time any BT tick runs regardless of
+  /// whether GetNextUnmowedArea has been ticking). map_server bumps it on
+  /// every successful ~/add_area — i.e. on every edit/delete/save, since the
+  /// GUI's rebuild flow re-adds every surviving area too.
+  uint64_t current_area_list_generation{0};
+  /// Per-index: current_area_list_generation as of the last time THIS index
+  /// was actually reconciled by a live probe (set alongside area_ids in
+  /// GetNextUnmowedArea::processResponse). GetNextUnmowedArea's synchronous
+  /// fast-skip path (onStart/advanceAndProbe skipping already-completed/
+  /// attempted indices without firing a probe) may only trust an index's
+  /// cached completed_areas/attempted_areas flag when this equals
+  /// current_area_list_generation — i.e. nothing has changed since this
+  /// index was last actually verified. An index with no entry here (never
+  /// probed this process) or a stale entry (probed, but the area list has
+  /// since been edited) always falls through to a real probe instead, which
+  /// re-populates both this and area_ids and runs the full id-reconciliation
+  /// in processResponse. Not persisted — a fresh boot starts empty, which is
+  /// safe: nothing is trusted as verified until actually probed again.
+  std::map<uint32_t, uint64_t> area_verified_generation;
 
   /// Set when FollowStrip's swath-completion bookkeeping reported an area
   /// fully mowed, but the mow_progress cross-check found the actually-
@@ -673,6 +767,8 @@ struct BTContext
   /// (stopped_goal_checker, which opennav_docking still needs). Set once by
   /// behavior_tree_node from the main tree's directory.
   std::string transit_tree_xml;
+  /// Dedicated planner selection for explicit BoundaryGuard recovery only.
+  std::string boundary_recovery_tree_xml;
 
   /// Goal-checker instance the coverage controller is dispatched with.
   ///
@@ -863,17 +959,32 @@ struct BTContext
 ///     lawn. The GUI's "mow this area" button calls ~/start_in_area, which
 ///     sets current_command itself and never goes through that handler, so
 ///     clearing there cannot cancel a targeted request.
+///     EXCEPTIONS, decided at the call site by startClearsSingleAreaMode():
+///       - a plain COMMAND_START received while parked in StopHoldSequence's
+///         IDLE (the operator paused a run with "Pause" and pressed
+///         Resume/Start again) does NOT call this — Resume must continue the
+///         SAME targeted area, not silently widen to the whole lawn (field
+///         report 2026-09-18: a paused single-area run restarted at area 0
+///         instead of finishing the paused area).
+///       - nor does a COMMAND_START received in a battery charge hold
+///         (isChargeHoldState): there it is the operator's "Resume now"
+///         (BTContext::manual_resume_requested), which continues the SAME run.
+///         Clearing the clip there sent a targeted run that was nearly done
+///         back to area 0 and a full-lawn plan (field report 2026-10-05, area
+///         2 interrupted by the battery guard).
+///     A START from IDLE_DOCKED or any other state keeps the historical clear.
 /// Also drops an unconsumed target_area_index: a request that was never
 /// picked up (e.g. start_in_area during an emergency) must not silently
 /// hijack a later plain start.
 inline void clearSingleAreaMode(BTContext& ctx)
 {
   ctx.single_area_target.reset();
+  ctx.single_area_target_id.reset();
   ctx.target_area_index.reset();
 }
 
 /// True for the HighLevelStatus state_name values published while the tree
-/// is parked in a battery charge hold: BatteryDockAndResume's "CHARGING" and
+/// is parked in a battery charge hold: BatteryGuardHandler's "CHARGING" and
 /// CriticalBatteryDock's "CRITICAL_BATTERY_CHARGING" (main_tree.xml). A
 /// COMMAND_START received in one of these states is an operator asking to
 /// resume the mow before the pack reaches battery_full_pct — see
@@ -881,6 +992,38 @@ inline void clearSingleAreaMode(BTContext& ctx)
 inline bool isChargeHoldState(const std::string& state_name)
 {
   return state_name == "CHARGING" || state_name == "CRITICAL_BATTERY_CHARGING";
+}
+
+/// True only for "IDLE" — StopHoldSequence's stop-in-place (COMMAND_STOP=8,
+/// "Pause": mower off, halt where it stands, Nav2 left up so the mission can
+/// resume promptly; main_tree.xml). A plain COMMAND_START received here is
+/// the operator continuing the SAME run they just paused, targeted single
+/// area included, not asking for the whole lawn — see the exception this
+/// carves out of clearSingleAreaMode's unconditional-clear-on-Start rule at
+/// the call site in behavior_tree_node.cpp.
+///
+/// Deliberately narrower than "not a charge hold": IDLE_DOCKED (a finished /
+/// never-started session — EndSession already cleared the target, so this is
+/// moot) and the charge-hold states (isChargeHoldState — a low-battery dock
+/// or emergency that kept the session alive without EndSession, where the
+/// operator pressing Start explicitly does expect the whole lawn per
+/// clearSingleAreaMode's doc comment) must both keep the historical clear.
+/// StopHoldSequence is the only branch that publishes IDLE without also
+/// being reachable from a charge hold or a session end, so the state_name
+/// alone disambiguates without needing extra context fields.
+inline bool isResumableHoldState(const std::string& state_name)
+{
+  return state_name == "IDLE";
+}
+
+/// Should a plain COMMAND_START received while the tree publishes `state_name`
+/// drop the single-area clip (clearSingleAreaMode)? No when it continues the
+/// SAME run — a Pause → Play from plain IDLE, or a manual "Resume now" out of
+/// a battery charge hold — and yes everywhere else, where a Start means "mow
+/// the lawn" (IDLE_DOCKED, MOWING, no status yet, ...).
+inline bool startClearsSingleAreaMode(const std::string& state_name)
+{
+  return !isResumableHoldState(state_name) && !isChargeHoldState(state_name);
 }
 
 }  // namespace mowgli_behavior

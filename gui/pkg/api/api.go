@@ -58,6 +58,7 @@ func NewAPI(dbProvider types.IDBProvider, dockerProvider types.IDockerProvider, 
 	RemoteAccessRoutes(apiGroup, remoteAccessProvider)
 	NotificationRoutes(apiGroup, notificationProvider)
 	ImportRoutes(apiGroup, rosProvider, dbProvider)
+	MapBackupRoutes(apiGroup, rosProvider)
 	FleetRoutes(apiGroup, fleetProvider, fleetCoordinator)
 	tileServer, err := dbProvider.Get("system.map.enabled")
 	if err != nil {

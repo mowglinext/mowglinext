@@ -19,7 +19,9 @@
   <depend>nav2_costmap_2d</depend>
   <depend>nav2_util</depend>
   <depend>nav2_ros_common</depend>
+  <depend>nav2_smac_planner</depend>
   <depend>nav_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>geometry_msgs</depend>
   <depend>pluginlib</depend>
   <depend>tf2</depend>
@@ -33,11 +35,13 @@
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>nav2_smac_planner</test_depend>
   <test_depend>ament_cmake_ros</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
     <nav2_core plugin="${prefix}/ftc_controller_plugin.xml"/>
     <nav2_core plugin="${prefix}/goal_checker_plugin.xml"/>
+    <nav2_core plugin="${prefix}/planner_plugin.xml"/>
   </export>
 </package>

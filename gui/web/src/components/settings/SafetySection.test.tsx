@@ -54,9 +54,9 @@ describe("SafetySection", () => {
         expect(screen.getByText(/emergency-stop latch/i)).toBeInTheDocument();
     });
 
-    it("points at the Parameters page for the diagnostics temperature thresholds", () => {
+    it("points at Diagnostics → Advanced parameters for the temperature thresholds", () => {
         renderSection();
         expect(screen.getByText(/motor_temp_warn_c/)).toBeInTheDocument();
-        expect(screen.getByText(/Parameters page/i)).toBeInTheDocument();
+        expect(screen.getByText(/Diagnostics → Advanced parameters/)).toBeInTheDocument();
     });
 });

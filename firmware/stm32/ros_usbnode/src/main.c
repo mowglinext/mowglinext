@@ -21,6 +21,7 @@
 #include <string.h>
 #include "stm32f_board_hal.h"
 #include "main.h"
+#include "actuator_authorization.h"
 // stm32 custom
 #include "board.h"
 #include "panel.h"
@@ -45,6 +46,8 @@
 // ros
 #include "cpp_main.h"
 #include "ringbuffer.h"
+#include "fw_params.h"
+#include "fw_param_reset.h"
 
 static void WATCHDOG_vInit(void);
 static void WATCHDOG_Refresh(void);
@@ -75,6 +78,26 @@ uint8_t do_chirp_duration_counter;
 uint8_t do_chirp = 0;
 
 openmower_status_e main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
+static volatile uint8_t motor_link_output_inhibited = 1u;
+
+void MOTORLINK_ForceInhibit(void) {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (motor_link_output_inhibited == 0u) {
+    ActuatorAuthorization_Invalidate();
+    motor_link_output_inhibited = 1u;
+  }
+  __set_PRIMASK(primask);
+}
+void MOTORLINK_ClearInhibit(void) {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  motor_link_output_inhibited = 0u;
+  __set_PRIMASK(primask);
+}
+uint8_t MOTORLINK_OutputInhibited(void) {
+  return motor_link_output_inhibited;
+}
 
 #if BOARD_YARDFORCE500_VARIANT_ORIG
 UART_HandleTypeDef MASTER_USART_Handler; // UART  Handle
@@ -493,6 +516,12 @@ int main(void)
   LED_Init();
   BOOT_BlinkResetCause(g_boot_reset_csr);
   DB_TRACE(" * LED initialized\r\n");
+  // Runtime parameters: establish backup-register access before checking an
+  // explicit reset marker, then load defaults or the persisted set. The only
+  // flash erase runs here, before WATCHDOG_vInit(), because it can block far
+  // longer than the window watchdog allows.
+  fw_param_reset_backup_init();
+  fw_params_init();
   TIM2_Init();
   ADC_Charging_Init();
   WATCHDOG_LoadBootBreadcrumb();
@@ -551,7 +580,7 @@ int main(void)
 #if (DEBUG_TYPE != DEBUG_TYPE_UART) && (OPTION_ULTRASONIC == 1)
   NBT_init(&main_ultrasonicsensor_nbt, 50);
 #endif
-  NBT_init(&main_blademotor_nbt, 100);
+  NBT_init(&main_blademotor_nbt, BLADEMOTOR_POLL_INTERVAL_MS);
   NBT_init(&main_drivemotor_nbt, 20);
   NBT_init(&main_wdg_nbt, 10);
   NBT_init(&main_buzzer_nbt, 200);
@@ -628,6 +657,8 @@ int main(void)
       WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_WATCHDOG_REFRESH);
       WATCHDOG_Refresh();
     }
+
+    CDC_ServiceRecovery();
 
     if (NBT_handler(&main_drivemotor_nbt))
     {
@@ -1257,9 +1288,25 @@ void vprint(const char *fmt, va_list argp)
   if (0 < vsnprintf(string, sizeof(string), fmt, argp)) // build string
   {
 #if DEBUG_TYPE == DEBUG_TYPE_SWO
-    for (int i = 0; i < strlen(string); i++)
+    /* CMSIS ITM_SendChar() waits indefinitely while an enabled stimulus port
+     * is not ready.  OpenOCD target examination enables ITM port 0 even when
+     * trace I/O itself is disabled, leaving no path that can drain the port.
+     * Require an explicitly enabled trace pin and keep output best-effort:
+     * emit only while port 0 is immediately writable and drop the rest on
+     * backpressure. */
+    if (((DBGMCU->CR & DBGMCU_CR_TRACE_IOEN) != 0UL) &&
+        ((ITM->TCR & ITM_TCR_ITMENA_Msk) != 0UL) &&
+        ((ITM->TER & 1UL) != 0UL))
     {
-      ITM_SendChar(string[i]);
+      const size_t length = strlen(string);
+      for (size_t i = 0; i < length; i++)
+      {
+        if (ITM->PORT[0U].u32 == 0UL)
+        {
+          break;
+        }
+        ITM->PORT[0U].u8 = (uint8_t)string[i];
+      }
     }
 #elif DEBUG_TYPE == DEBUG_TYPE_UART
 #if BOARD_YARDFORCE500_VARIANT_ORIG

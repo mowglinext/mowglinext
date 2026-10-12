@@ -13,7 +13,7 @@
 # Usage:
 #   source install/tests/lib/harness.sh
 #   harness_init "$SANDBOX_REPO"   # absolute path to a sandboxed checkout
-#   harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+#   harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 #   harness_run                    # generate .env + docker-compose.yaml +
 #                                  # mowgli_robot.yaml; no docker pull
 # =============================================================================
@@ -41,22 +41,21 @@ harness_init() {
         GNSS_SERIAL_DEVICE_CLI_PRESET GNSS_SERIAL_BAUD_CLI_PRESET \
         GNSS_FRAME_ID_CLI_PRESET GNSS_NTRIP_GGA_ENABLED_CLI_PRESET \
         GNSS_NTRIP_GGA_INTERVAL_S_CLI_PRESET \
-        IMAGE_TAG \
+        IMAGE_TAG ENABLE_MQTT \
         LIDAR_ENABLED LIDAR_TYPE LIDAR_MODEL LIDAR_CONNECTION \
         LIDAR_PORT LIDAR_UART_DEVICE LIDAR_BAUD LIDAR_IMAGE \
         MOWGLI_ROS2_IMAGE GPS_IMAGE UNIVERSAL_GNSS_IMAGE \
-        UNIVERSAL_GNSS_LOG_DIR UNIVERSAL_GNSS_EXPORT_DIR MAVROS_IMAGE GUI_IMAGE \
-        TFLUNA_FRONT_ENABLED TFLUNA_FRONT_PORT TFLUNA_FRONT_UART_DEVICE \
-        TFLUNA_FRONT_BAUD TFLUNA_EDGE_ENABLED TFLUNA_EDGE_PORT \
-        TFLUNA_EDGE_UART_DEVICE TFLUNA_EDGE_BAUD \
+        UNIVERSAL_GNSS_LOG_DIR UNIVERSAL_GNSS_EXPORT_DIR MAVROS_IMAGE \
+        OPENMOWER_IMAGE GUI_IMAGE \
         HARDWARE_BACKEND MAVROS_BY_ID MAVROS_PORT MAVROS_BAUD \
         MAVROS_GCS_URL MAVROS_TGT_SYSTEM MAVROS_TGT_COMPONENT \
         MAVROS_AUTOPILOT MAVROS_ENABLED \
+        OPENMOWER_ENABLED OPENMOWER_LL_PORT OPENMOWER_XESC_TYPE \
+        OPENMOWER_XESC_LEFT_PORT OPENMOWER_XESC_RIGHT_PORT OPENMOWER_XESC_MOW_PORT \
         CONFIG_NTRIP_ENABLED_EXPLICIT CONFIG_NTRIP_HOST_EXPLICIT \
         CONFIG_NTRIP_PORT_EXPLICIT CONFIG_NTRIP_USER_EXPLICIT \
         CONFIG_NTRIP_PASSWORD_EXPLICIT CONFIG_NTRIP_MOUNTPOINT_EXPLICIT \
         GPS_UART_RULE GPS_DEBUG_UART_RULE LIDAR_UART_RULE \
-        TFLUNA_FRONT_UART_RULE TFLUNA_EDGE_UART_RULE \
         PRESET_LOADED CLI_PRESET STATE_ACTIVE_PRESET_FILE \
         STATE_ACTIVE_PRESET_COUNT 2>/dev/null || true
 
@@ -94,17 +93,9 @@ harness_init() {
   # shellcheck source=/dev/null
   source "$lib_dir/env.sh"
   # shellcheck source=/dev/null
-  source "$lib_dir/serial_probe.sh"
-  # shellcheck source=/dev/null
-  source "$lib_dir/unicore_config.sh"
-  # shellcheck source=/dev/null
-  source "$lib_dir/ublox_config.sh"
-  # shellcheck source=/dev/null
   source "$lib_dir/gps.sh"
   # shellcheck source=/dev/null
   source "$lib_dir/lidar.sh"
-  # shellcheck source=/dev/null
-  source "$lib_dir/range.sh"
   # shellcheck source=/dev/null
   source "$lib_dir/uart.sh"
   # shellcheck source=/dev/null
@@ -127,6 +118,8 @@ harness_init() {
   fi
 
   # Keep prompts from being triggered if a function path slips through.
+  # (The real prompt()/confirm() take the same defaults under NON_INTERACTIVE.)
+  NON_INTERACTIVE=true
   prompt() { REPLY="${2:-}"; }
   confirm() { return 1; }   # default: answer "no"
   pick_uart_port() { REPLY="${1:-/dev/ttyAMA4}"; }
@@ -134,22 +127,8 @@ harness_init() {
   step() { :; }
   export -f prompt confirm pick_uart_port pick_serial_by_id step
 
-  # Defaults that interactive_config would otherwise prompt for.
-  CONFIG_DATUM_LAT="0.0"
-  CONFIG_DATUM_LON="0.0"
-  CONFIG_NTRIP_ENABLED="true"
-  CONFIG_NTRIP_HOST="crtk.net"
-  CONFIG_NTRIP_PORT="2101"
-  CONFIG_NTRIP_USER="centipede"
-  CONFIG_NTRIP_PASSWORD="centipede"
-  CONFIG_NTRIP_MOUNTPOINT="NEAR"
-  CONFIG_LIDAR_X="0.20"
-  CONFIG_LIDAR_Y="0.0"
-  CONFIG_LIDAR_Z="0.22"
-  CONFIG_LIDAR_YAW="0.0"
-  CONFIG_DOCK_X="0.0"
-  CONFIG_DOCK_Y="0.0"
-  CONFIG_DOCK_YAW="0.0"
+  # Datum, NTRIP, LiDAR pose and dock pose are GUI-owned: the installer has
+  # no defaults for them any more (a preset may still pass ntrip=... below).
   SKIP_WRITE_CONFIG=false
 
   # Defaults for backend selection — overridden by harness_set_preset().
@@ -168,14 +147,12 @@ harness_init() {
   LIDAR_CONNECTION="${LIDAR_CONNECTION:-uart}"
   LIDAR_UART_DEVICE="${LIDAR_UART_DEVICE:-/dev/ttyAMA5}"
   LIDAR_BAUD="${LIDAR_BAUD:-230400}"
-  TFLUNA_FRONT_ENABLED="${TFLUNA_FRONT_ENABLED:-false}"
-  TFLUNA_EDGE_ENABLED="${TFLUNA_EDGE_ENABLED:-false}"
 
   PRESET_LOADED=true
 }
 
 # Apply a key=value list of presets, mimicking what install/lib/config.sh
-# parse_args does for --gnss / --gnss-connection / --lidar / --tfluna flags.
+# parse_args does for --gnss / --gnss-connection / --lidar flags.
 harness_set_preset() {
   local kv
   for kv in "$@"; do
@@ -188,6 +165,9 @@ harness_set_preset() {
           export MAVROS_BY_ID="${MAVROS_BY_ID:-/dev/serial/by-id/usb-Pixhawk-stub}"
           export MAVROS_PORT="${MAVROS_PORT:-/dev/mavros}"
           export MAVROS_BAUD="${MAVROS_BAUD:-921600}"
+        fi
+        if [ "$val" = "openmower" ]; then
+          export OPENMOWER_XESC_TYPE="${OPENMOWER_XESC_TYPE:-xesc_mini}"
         fi
         ;;
       gnss)
@@ -227,12 +207,13 @@ harness_set_preset() {
             GNSS_CONNECTION_HINT="uart"
             case "${GNSS_SERIAL_DEVICE:-}" in
               /dev/ttyAMA*|/dev/ttyS*|/dev/ttyTHS*|/dev/ttyHS*) ;;
-              *) GNSS_SERIAL_DEVICE="/dev/ttyAMA4" ;;
+              *) GNSS_SERIAL_DEVICE="$(default_gnss_uart_device)" ;;
             esac
             ;;
         esac
         ;;
       gnss_device) GNSS_SERIAL_DEVICE_CLI_PRESET=true; GNSS_SERIAL_DEVICE="$val" ;;
+      mqtt) ENABLE_MQTT="$val" ;;
       gnss_baud) GNSS_SERIAL_BAUD_CLI_PRESET=true; GNSS_SERIAL_BAUD="$val" ;;
       lidar)
         case "$val" in
@@ -266,14 +247,6 @@ harness_set_preset() {
             ;;
         esac
         ;;
-      tfluna)
-        case "$val" in
-          none)  TFLUNA_FRONT_ENABLED=false; TFLUNA_EDGE_ENABLED=false ;;
-          front) TFLUNA_FRONT_ENABLED=true;  TFLUNA_EDGE_ENABLED=false ;;
-          edge)  TFLUNA_FRONT_ENABLED=false; TFLUNA_EDGE_ENABLED=true  ;;
-          both)  TFLUNA_FRONT_ENABLED=true;  TFLUNA_EDGE_ENABLED=true  ;;
-        esac
-        ;;
       datum_lat) CONFIG_DATUM_LAT="$val" ;;
       datum_lon) CONFIG_DATUM_LON="$val" ;;
       ntrip)     CONFIG_NTRIP_ENABLED_EXPLICIT=true; CONFIG_NTRIP_ENABLED="$val" ;;
@@ -292,7 +265,6 @@ harness_set_preset() {
 harness_run() {
   configure_gps   >/dev/null 2>&1 || return 1
   configure_lidar >/dev/null 2>&1 || return 1
-  configure_rangefinders >/dev/null 2>&1 || return 1
 
   migrate_runtime_paths >/dev/null 2>&1 || true
   setup_env >/dev/null 2>&1 || return 1
@@ -303,6 +275,6 @@ harness_run() {
   build_compose_stack    >/dev/null 2>&1 || return 1
   write_compose_merged   >/dev/null 2>&1 || return 1
 
-  # Always write the robot YAML (interactive_config is skipped).
+  # Always write the robot YAML (hardware keys only).
   write_config >/dev/null 2>&1 || return 1
 }

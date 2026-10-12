@@ -86,6 +86,9 @@ void setBladeMotor(uint8_t on_off);
 uint8_t crcCalc(const uint8_t *msg, uint8_t msg_len);
 void msgPrint(uint8_t *msg, uint8_t msg_len);
 void chirp(uint8_t count);
+void MOTORLINK_ForceInhibit(void);
+void MOTORLINK_ClearInhibit(void);
+uint8_t MOTORLINK_OutputInhibited(void);
 
 
 extern uint16_t  chargecontrol_pwm_val;

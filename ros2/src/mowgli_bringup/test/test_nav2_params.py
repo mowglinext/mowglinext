@@ -52,6 +52,23 @@ def _controller_section(params: dict) -> dict:
     return params["controller_server"]["ros__parameters"]
 
 
+@pytest.mark.parametrize("overlay", ["nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"])
+def test_transit_authorization_and_explicit_recovery_are_separate(overlay: str) -> None:
+    params = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml(overlay))
+    planner = params["planner_server"]["ros__parameters"]
+    assert planner["planner_plugins"] == ["GridBased", "BoundaryRecovery"]
+    assert planner["GridBased"]["plugin"] == "mowgli_nav2_plugins/AuthorizedTransitPlanner"
+    assert planner["GridBased"]["downsample_costmap"] is False
+    assert planner["GridBased"]["tolerance"] == 0.0
+    assert planner["BoundaryRecovery"]["plugin"] == "nav2_smac_planner::SmacPlanner2D"
+    trees = os.path.join(os.path.dirname(__file__), "..", "..", "mowgli_behavior", "trees")
+    for filename in ("navigate_to_pose.xml", "navigate_to_pose_transit.xml"):
+        with open(os.path.join(trees, filename), encoding="utf-8") as stream:
+            assert "BoundaryRecovery" not in stream.read()
+    with open(os.path.join(trees, "navigate_inside_boundary.xml"), encoding="utf-8") as stream:
+        assert 'planner_id="BoundaryRecovery"' in stream.read()
+
+
 # The coverage goal-checker was migrated off SimpleGoalChecker/StoppedGoalChecker
 # (commit 4bae0567) to PathProgressGoalChecker. The old "xy_goal_tolerance must
 # be <= mower_width" and "stateful must be true" guards belonged to the
@@ -563,37 +580,37 @@ def _load_no_lidar_params() -> dict:
                        _load_yaml("nav2_params_no_lidar.yaml"))
 
 
-def test_no_lidar_followcoveragepath_uses_ftc_without_obstacle_checks() -> None:
+def test_no_lidar_followcoveragepath_uses_ftc_with_obstacle_checks() -> None:
     """The GPS-only variant runs the SAME FTC controller as the LiDAR variant,
-    but with obstacle checking/deviation OFF — there is no local obstacle_layer
-    to read without LiDAR, so FTC would query an empty/static costmap. Pin both.
+    obstacle checking and lateral deviation included (2026-10-10): its local
+    costmap carries the fleet peers layer, the only obstacle a GPS-only robot
+    can ever see, and a peer standing on the swath must be skirted or stopped
+    for exactly like a LiDAR return (docs/MULTI_ROBOT.md § 3c). On a lawn
+    without peers the layer is empty and the flags are a no-op.
     """
     fcp = _controller_section(_load_no_lidar_params())["FollowCoveragePath"]
     assert fcp["plugin"] == "mowgli_nav2_plugins/FTCController"
-    assert fcp["check_obstacles"] is False, (
-        "no-LiDAR variant must NOT check obstacles (no obstacle_layer)"
+    assert fcp["check_obstacles"] is True, (
+        "no-LiDAR variant must check obstacles — the fleet peers layer feeds it"
     )
-    assert fcp["enable_obstacle_deviation"] is False
+    assert fcp["enable_obstacle_deviation"] is True
 
 
 def test_coverage_controller_aligned_across_variants() -> None:
-    """FollowCoveragePath's tracking config (plugin + PID + speeds) MUST be
-    identical between the LiDAR and no-LiDAR configs — only the obstacle flags
-    (check_obstacles, enable_obstacle_deviation) legitimately differ, because the
-    no-LiDAR variant has no obstacle_layer. Guards every PID/speed tuning change
-    touching one file from forgetting the other (the bug class that once left
-    no_lidar on a different controller).
+    """FollowCoveragePath's config (plugin + PID + speeds + obstacle flags) MUST
+    be identical between the LiDAR and no-LiDAR configs. Guards every PID/speed
+    tuning change touching one file from forgetting the other (the bug class
+    that once left no_lidar on a different controller). Since 2026-10-10 the
+    obstacle flags are part of the lockstep too: the no-LiDAR local costmap
+    carries the fleet peers layer, so FTC's obstacle behaviour must be the
+    same on both.
     """
     lidar = dict(_controller_section(_load_params())["FollowCoveragePath"])
     no_lidar = dict(_controller_section(_load_no_lidar_params())["FollowCoveragePath"])
-    obstacle_flags = ("check_obstacles", "enable_obstacle_deviation")
-    for k in obstacle_flags:
-        lidar.pop(k, None)
-        no_lidar.pop(k, None)
     assert lidar == no_lidar, (
-        "FollowCoveragePath tracking config differs between the merged LiDAR and "
-        "no-LiDAR configs beyond the obstacle flags — the PID/speed params must "
-        "come entirely from nav2_params_base.yaml so the two stay in lockstep."
+        "FollowCoveragePath config differs between the merged LiDAR and no-LiDAR "
+        "configs — the PID/speed/obstacle params must come entirely from "
+        "nav2_params_base.yaml (or be set identically) so the two stay in lockstep."
     )
 
 
@@ -865,15 +882,17 @@ def test_ftc_turn_fallback_is_configured_and_bounded() -> None:
         assert 10.0 <= fcp["turn_fallback_timeout_s"] <= 120.0
 
 
-def test_turn_fallback_is_unreachable_without_lidar() -> None:
-    """The fallback runs only where FTC's obstacle deviation runs. The no-LiDAR
-    overlay must keep both obstacle flags off, so a GPS-only robot behaves
-    exactly as before (it has no local obstacle layer to plan the manoeuvre on).
+def test_turn_fallback_reaches_both_variants() -> None:
+    """The fallback runs where FTC's obstacle deviation runs — since 2026-10-10
+    in BOTH overlays: the no-LiDAR local costmap carries the fleet peers layer,
+    so a GPS-only robot plans the same manoeuvre around another mower that a
+    LiDAR robot plans around a hedge (docs/MULTI_ROBOT.md § 3c).
     """
-    fcp = _controller_section(_load_no_lidar_params())["FollowCoveragePath"]
-    assert fcp["enable_obstacle_deviation"] is False
-    assert fcp["check_obstacles"] is False
-    assert _controller_section(_load_params())["FollowCoveragePath"]["use_offset_lattice"] is True
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        assert fcp["enable_obstacle_deviation"] is True
+        assert fcp["check_obstacles"] is True
+        assert fcp["use_offset_lattice"] is True
 
 
 def test_coverage_is_ftc_transit_is_not() -> None:
@@ -1003,7 +1022,10 @@ def test_transit_lookahead_damps_pursuit_weave() -> None:
 
 
 def test_lyrical_transit_parameters_reach_primary_controller() -> None:
-    for overlay, collision in (("lidar", True), ("no_lidar", False)):
+    # RPP's collision detection reads the local costmap in BOTH variants since
+    # 2026-10-10: without a LiDAR that costmap holds the fleet peers layer, the
+    # only obstacle a GPS-only robot can see (docs/MULTI_ROBOT.md § 3c).
+    for overlay, collision in (("lidar", True), ("no_lidar", True)):
         cfg = _deep_merge(_load_yaml("nav2_params_base.yaml"),
                           _load_yaml(f"nav2_params_{overlay}.yaml"))
         controller = _controller_section(cfg)
@@ -1470,7 +1492,7 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
     order — flipping it back makes every coverage line next to a drawn obstacle
     un-plannable again."""
     for loader, first in ((_load_params, "obstacle_layer"),
-                          (_load_no_lidar_params, "static_layer")):
+                          (_load_no_lidar_params, "fleet_layer")):
         gc = loader()["global_costmap"]["global_costmap"]["ros__parameters"]
         plugins = gc["plugins"]
         # Source layers first (the no-LiDAR variant also carries the fleet
@@ -1483,6 +1505,22 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
         )
         lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
         assert "keepout_filter" not in lc["plugins"]  # Invariant 5
+
+
+def test_global_grid_is_garden_sized_with_bounded_recent_sources() -> None:
+    for loader, source in ((_load_params, "obstacle_layer"),
+                           (_load_no_lidar_params, "fleet_layer")):
+        gc = loader()["global_costmap"]["global_costmap"]["ros__parameters"]
+        lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
+        assert gc["rolling_window"] is False
+        assert lc["rolling_window"] is True
+        assert gc["resolution"] == GLOBAL_COSTMAP_RESOLUTION_M == 0.08
+        assert gc["keepout_filter"]["plugin"] == "mowgli_nav2_plugins::GardenKeepoutLayer"
+        assert gc["keepout_filter"]["max_cells"] == 4000000
+        assert gc[source]["plugin"] == "mowgli_nav2_plugins::RecentObstacleLayer"
+        for name in gc[source]["observation_sources"].split():
+            assert 0 < gc[source][name]["observation_persistence"] <= 2.0
+        assert "static_layer" not in gc["plugins"]
 
 
 def test_global_costmap_resolution_matches_the_launch_constant() -> None:
@@ -1682,17 +1720,21 @@ def _fleet_sources(params: dict) -> list:
     return found
 
 
-def test_lidar_variant_marks_fleet_peers_in_the_local_costmap_only() -> None:
-    """With a LiDAR the peer cloud goes on the LOCAL obstacle_layer and NOT the
-    global one: FTC treats a cell that is lethal in the global costmap as
-    'not an obstacle' (zone mask), which would hide a peer from the coverage
-    controller. Marking only — the cloud has no sensor origin to raytrace from.
+def test_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
+    """With a LiDAR the peer cloud goes on the LOCAL obstacle_layer (FTC's
+    detection source) AND the global one (so Smac routes a transit around a
+    peer stopped on the path instead of planning through it). The global
+    placement was unsafe while FTC's zone mask treated global-lethal cells as
+    non-obstacles; that mask was removed 2026-09-17 (root CLAUDE.md Inv. 5).
+    Marking only — the cloud has no sensor origin to raytrace from.
     """
     merged = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml("nav2_params_lidar.yaml"))
     local = _fleet_sources(merged["local_costmap"]["local_costmap"]["ros__parameters"])
     glob = _fleet_sources(merged["global_costmap"]["global_costmap"]["ros__parameters"])
     assert len(local) == 1, "lidar local costmap must carry exactly one fleet source"
-    assert glob == [], "lidar global costmap must NOT carry the fleet source (FTC zone mask)"
+    assert len(glob) == 1, "lidar global costmap must carry the fleet source (transit routes around a peer)"
+    assert glob[0][0] == "obstacle_layer"
+    assert glob[0][2]["marking"] is True and glob[0][2]["clearing"] is False
     layer, _, src = local[0]
     assert layer == "obstacle_layer"
     assert src["data_type"] == "PointCloud2"
@@ -1713,7 +1755,9 @@ def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
         assert len(found) == 1, f"{cm}: expected exactly one fleet source"
         layer, _, src = found[0]
         assert layer == "fleet_layer"
-        assert params[layer]["plugin"] == "nav2_costmap_2d::ObstacleLayer"
+        expected = ("mowgli_nav2_plugins::RecentObstacleLayer" if cm == "global_costmap"
+                    else "nav2_costmap_2d::ObstacleLayer")
+        assert params[layer]["plugin"] == expected
         assert src["marking"] is True and src["clearing"] is False
         plugins = params["plugins"]
         assert plugins.index("fleet_layer") < plugins.index("inflation_layer"), (
@@ -1721,4 +1765,45 @@ def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
         )
     local = merged["local_costmap"]["local_costmap"]["ros__parameters"]["fleet_layer"]
     glob = merged["global_costmap"]["global_costmap"]["ros__parameters"]["fleet_layer"]
-    assert local == glob, "the two fleet_layer copies in nav2_params_no_lidar.yaml drifted apart"
+    assert {k: v for k, v in local.items() if k != "plugin"} == {
+        k: v for k, v in glob.items() if k != "plugin"
+    }, "local/global fleet observation configurations drifted apart"
+
+
+def test_no_lidar_collision_monitor_stops_for_fleet_peers_without_a_stale_stop() -> None:
+    """Without a LiDAR the collision monitor's only source is the fleet peer
+    cloud: an ACTIVE velocity-projected approach gate (never a static stop —
+    issue #393) reading a `pointcloud` source on /fleet/peer_obstacles. That
+    source's staleness stop MUST be disabled (0.0): the base 1.5 s would halt
+    every autonomous motion of a single GPS-only robot the moment
+    fleet_peer_obstacles.py is down, with nobody around to avoid. Phantom-peer
+    safety is the node's own 3 s pose timeout + the launch respawn."""
+    cmon = _load_no_lidar_params()["collision_monitor"]["ros__parameters"]
+    active = cmon["polygons"]
+    approach = [n for n in active if cmon[n].get("action_type") == "approach" and cmon[n].get("enabled") is True]
+    assert approach, "no-LiDAR collision_monitor needs an ACTIVE approach gate for fleet peers"
+    assert cmon[approach[0]].get("footprint_topic"), "the approach gate must project the real footprint"
+    assert not [n for n in active if cmon[n].get("action_type") == "stop"], (
+        "no static stop polygon may be active (it freezes a reverse escape, #393)"
+    )
+    assert cmon["observation_sources"] == ["fleet_peers"]
+    src = cmon["fleet_peers"]
+    assert src["type"] == "pointcloud" and src["topic"] == _FLEET_TOPIC and src["enabled"] is True
+    assert src["min_height"] < 0.30 < src["max_height"], "the 0.30 m peer points must pass the height band"
+    assert src["source_timeout"] == 0.0, (
+        "fleet_peers.source_timeout must be 0.0 (disabled): a dead fleet node must "
+        "not stop a lone GPS-only robot"
+    )
+
+
+def test_fleet_peer_node_is_respawned_and_gets_the_chassis_footprint() -> None:
+    """The no-LiDAR collision monitor reads the fleet node's cloud, so the node
+    must heal itself after a crash, and the peer footprint it marks must be
+    the DERIVED chassis triple, never a literal."""
+    src = _read_text("launch/full_system.launch.py")
+    block = src[src.index("fleet_peer_obstacles_node = Node("):]
+    block = block[:block.index(")\n\n")]
+    assert "respawn=True" in block
+    assert re.search(r"fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint\(robot_params\)", src)
+    for key in ("chassis_front_m", "chassis_rear_m", "chassis_half_width_m"):
+        assert key in block, f"{key} must be injected into fleet_peer_obstacles"

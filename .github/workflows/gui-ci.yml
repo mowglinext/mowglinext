@@ -25,6 +25,7 @@ on:
       # template-only change must run them (that is the divergence class they
       # exist to catch).
       - 'ros2/src/mowgli_bringup/config/mowgli_robot.yaml'
+      - 'ros2/src/mowgli_bringup/config/backends/**'
       - '.github/workflows/gui-ci.yml'
   pull_request:
     branches: [main, dev]
@@ -41,6 +42,7 @@ on:
       # template-only change must run them (that is the divergence class they
       # exist to catch).
       - 'ros2/src/mowgli_bringup/config/mowgli_robot.yaml'
+      - 'ros2/src/mowgli_bringup/config/backends/**'
       - '.github/workflows/gui-ci.yml'
   workflow_dispatch:
 

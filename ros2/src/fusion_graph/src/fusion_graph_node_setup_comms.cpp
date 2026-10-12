@@ -17,6 +17,7 @@
 #include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include "fusion_graph/checkpoint_file.hpp"
 #include "fusion_graph/clear_graph_gate.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
@@ -229,18 +230,34 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
   //   ros2 service call /fusion_graph_node/save_graph std_srvs/Trigger
   srv_save_ = create_service<std_srvs::srv::Trigger>(
       "~/save_graph",
-      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
-             std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
+      [this](std::shared_ptr<rclcpp::Service<std_srvs::srv::Trigger>> service,
+             std::shared_ptr<rmw_request_id_t> header,
+             const std::shared_ptr<std_srvs::srv::Trigger::Request>)
       {
         // Dispatch on the async save worker, never inline: a direct Save()
         // blocks this executor for the full file write (~500 ms on the robot's
         // eMMC — the exact stall DispatchAsyncSave was built to avoid,
         // 2026-05-14 incident), starving the timers that feed the TF fallback
         // path and risking Nav2 ExtrapolationExceptions on every manual save.
-        DispatchAsyncSave("manual-service");
-        resp->success = true;
-        resp->message = "save dispatched to " + graph_save_prefix_ + ".* (async)";
-        RCLCPP_INFO(get_logger(), "fusion_graph: %s", resp->message.c_str());
+        // Defer only the response, not the executor. A dispatch acknowledgement
+        // cannot truthfully report whether the checkpoint reached disk.
+        const auto respond = [service, header](bool ok, const std::string& message)
+        {
+          auto response = std::make_shared<std_srvs::srv::Trigger::Response>();
+          response->success = ok;
+          response->message = message;
+          service->send_response(*header, *response);
+        };
+        const bool accepted =
+            DispatchAsyncSave("manual-service",
+                              [respond](bool ok)
+                              {
+                                respond(ok,
+                                        ok ? "checkpoint saved"
+                                           : "checkpoint save failed; check logs/storage");
+                              });
+        if (!accepted)
+          respond(false, "save not started: maintenance in progress or worker unavailable; retry");
       });
 
   // ── Clear-graph service ─────────────────────────────────────────
@@ -303,14 +320,18 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         // the next accepted GPS position can restore map->odom immediately;
         // subsequent COG/mag factors still refine this bootstrap yaw.
         const auto pre_clear_snapshot = graph_->LatestSnapshot();
-        graph_->Reset();
         // The clear operation must survive a container restart. Previously it
         // reset RAM only, so the next boot silently loaded the old graph and
         // restored the localization state the operator had just discarded.
         // The LiDAR tile store is intentionally separate and remains intact.
-        std::remove((graph_save_prefix_ + ".graph").c_str());
-        std::remove((graph_save_prefix_ + ".meta").c_str());
-        std::remove((graph_save_prefix_ + ".scans").c_str());  // legacy format
+        if (!checkpoint::Clear(graph_save_prefix_))
+        {
+          resp->success = false;
+          resp->message = "clear_graph failed to remove/sync checkpoints; RAM graph retained";
+          RCLCPP_ERROR(get_logger(), "fusion_graph: %s", resp->message.c_str());
+          return;
+        }
+        graph_->Reset();
         // Drop the latched position seed so a pre-clear GPS fix cannot put the
         // new graph back at the position the operator was trying to escape.
         // Heading is safe to retain: a stationary robot cannot produce a new

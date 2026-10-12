@@ -1,0 +1,4 @@
+LidarIgnoreCorridor corridor
+---
+bool success
+uint32 id

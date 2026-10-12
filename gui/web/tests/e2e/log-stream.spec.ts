@@ -64,6 +64,7 @@ test.describe("docker-stamped log lines", () => {
       containerLogs: [
         "2026-05-12T22:02:33.123456789Z INFO docker stamped line",
         "2026-05-12T22:02:34.000000000Z [INFO] [1747087353.123456789] [map_server_node]: planning",
+        "2026-05-12T22:02:35.000000000Z INFO durée 179.373µs — météo",
       ],
     });
 
@@ -76,6 +77,8 @@ test.describe("docker-stamped log lines", () => {
     await expect(
       page.getByText("[INFO] [map_server_node]: planning", { exact: true }),
     ).toBeVisible();
+
+    await expect(page.getByText("INFO durée 179.373µs — météo", {exact: true})).toBeVisible();
 
     // Column: the daemon's instant, not Date.now().
     await expect(page.getByText("2026-05-12T22:02:33").first()).toBeVisible();

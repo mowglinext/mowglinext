@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.22.1)
 project(mowgli_tools)
 
 find_package(ament_cmake REQUIRED)
@@ -23,6 +23,11 @@ if(BUILD_TESTING)
 
   ament_add_pytest_test(test_drive_pid_math
     test/test_drive_pid_math.py
+    TIMEOUT 30
+  )
+
+  ament_add_pytest_test(test_drive_pid_tuner
+    test/test_drive_pid_tuner.py
     TIMEOUT 30
   )
 endif()

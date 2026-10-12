@@ -509,12 +509,16 @@ TEST_F(MapReplaceTest, MaskIsRebuiltOnceAfterABurstOfEditsNotBetweenThem)
   make_node(0.1, /*persist=*/false, /*publish_rate=*/20.0);
   auto listener = std::make_shared<rclcpp::Node>("keepout_listener");
   std::vector<nav_msgs::msg::OccupancyGrid> received;
+  size_t invalidations = 0;
   auto sub = listener->create_subscription<nav_msgs::msg::OccupancyGrid>(
       "/keepout_mask",
       rclcpp::QoS(1).transient_local(),
-      [&received](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
+      [&received, &invalidations](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
       {
-        received.push_back(*msg);
+        if (msg->data.empty())
+          ++invalidations;
+        else
+          received.push_back(*msg);
       });
   rclcpp::executors::SingleThreadedExecutor exec;
   exec.add_node(node_);
@@ -541,6 +545,7 @@ TEST_F(MapReplaceTest, MaskIsRebuiltOnceAfterABurstOfEditsNotBetweenThem)
 
   // Assert
   EXPECT_EQ(during_burst, 0u) << "a half-built map reached the keepout filter";
+  EXPECT_GT(invalidations, 0u) << "planning must close throughout the edit burst";
   ASSERT_EQ(received.size(), 1u) << "exactly one rebuild after the burst";
   expect_mask_matches_definition(received.front(), areas);
 }

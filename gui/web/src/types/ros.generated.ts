@@ -159,6 +159,12 @@ export type CoveragePath = {
   path?: Path;
 };
 
+export type CoveragePlanPreview = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  xy?: number[];
+  subpath_offsets?: number[];
+};
+
 export type CoverageSession = {
   session_active?: boolean;
   current_area?: number;
@@ -223,6 +229,53 @@ export type Emergency = {
   lift_warning?: boolean;
   lift_duration_sec?: number;
   reason?: string;
+};
+
+export const enum FirmwareParamConstants {
+  STATUS_OK = 0,
+  STATUS_CLAMPED = 1,
+  STATUS_UNKNOWN_ID = 2,
+  STATUS_REJECTED = 3,
+};
+
+export type FirmwareParam = {
+  id?: number;
+  name?: string;
+  requested_valid?: boolean;
+  requested?: number;
+  reported?: boolean;
+  applied?: number;
+  default_value?: number;
+  min_value?: number;
+  max_value?: number;
+  status?: number;
+  persisted?: boolean;
+  is_volatile?: boolean;
+};
+
+export const enum FirmwareParamsConstants {
+  BOOT_UNKNOWN = 255,
+  BOOT_DEFAULTS = 0,
+  BOOT_FLASH = 1,
+  BOOT_FLASH_ERASED = 2,
+  COMMIT_NONE = 0,
+  COMMIT_WRITTEN = 1,
+  COMMIT_UNCHANGED = 2,
+  COMMIT_PENDING = 3,
+  COMMIT_LOG_FULL = 4,
+  COMMIT_ERROR = 5,
+  COMMIT_RESET_PENDING = 6,
+};
+
+export type FirmwareParams = {
+  stamp?: { sec: number; nanosec: number };
+  firmware_incompatible?: boolean;
+  boot_source?: number;
+  last_commit?: number;
+  records_left?: number;
+  reset_request_id?: number;
+  store_status_sequence?: number;
+  params?: FirmwareParam[];
 };
 
 export const enum GnssStatusConstants {
@@ -392,6 +445,18 @@ export type ImuRaw = {
   mz?: number;
 };
 
+export type LidarIgnoreCorridor = {
+  name?: string;
+  polyline?: Polygon;
+  width_m?: number;
+  id?: number;
+};
+
+export type LidarIgnoreCorridorArray = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  corridors?: LidarIgnoreCorridor[];
+};
+
 export type MapArea = {
   name?: string;
   area?: Polygon;
@@ -401,6 +466,13 @@ export type MapArea = {
   proposed_obstacles?: Polygon[];
   proposed_obstacle_info?: MapObstacleInfo[];
   id?: number;
+  has_mow_angle?: boolean;
+  mow_angle_deg?: number;
+  has_ring_direction?: boolean;
+  ring_direction?: number;
+  has_start_point?: boolean;
+  start_x?: number;
+  start_y?: number;
 };
 
 export const enum MapObstacleInfoConstants {
@@ -428,6 +500,15 @@ export type Power = {
   charge_current?: number;
   charger_enabled?: boolean;
   charger_status?: string;
+};
+
+export type RecordedAreaPolygon = {
+  area?: Polygon;
+};
+
+export type RecordedAreaPolygonArray = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  areas?: RecordedAreaPolygon[];
 };
 
 export const enum StatusConstants {

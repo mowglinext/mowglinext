@@ -54,6 +54,10 @@
  *                                           on their own timers/clients; consolidating them into
  *                                           one poll loop is a natural follow-up, not done here.
  *   (connection state)                   → <prefix>/available  ("online"/"offline", retained, LWT)
+ *   (detected once at startup)            → <prefix>/host       (JSON: {ip}) — retained;
+ *                                           published once per node lifetime, on the first
+ *                                           successful connect; not published at all when the
+ *                                           host has no default route
  *   (periodic poll, ~10s)                → <prefix>/areas      (JSON array of {index,name}) —
  *                                           retained; walks map_server_node's GetMowingArea
  *                                           index-by-index (same pattern the GUI backend's
@@ -129,6 +133,7 @@
 #ifndef MOWGLI_MONITORING__MQTT_BRIDGE_NODE_HPP_
 #define MOWGLI_MONITORING__MQTT_BRIDGE_NODE_HPP_
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -150,6 +155,7 @@
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/start_in_area.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 
@@ -339,9 +345,23 @@ public:
   // DiagnosticsNode's check_*() methods (diagnostics_node.hpp).
 
   static std::string serialise_status(const mowgli_interfaces::msg::Status& msg);
-  static std::string serialise_power(const mowgli_interfaces::msg::Power& msg);
+  static std::string serialise_power(const mowgli_interfaces::msg::Power& msg,
+                                     double empty_voltage = 24.0,
+                                     double full_voltage = 28.0);
   static std::string serialise_emergency(const mowgli_interfaces::msg::Emergency& msg);
   static std::string serialise_position(const nav_msgs::msg::Odometry& msg);
+
+  /// Build the <prefix>/host payload: {"ip": "..."}. `ip` is the empty string when
+  /// none was found (no default route to consult, e.g. an isolated LAN with a
+  /// purely static address) -- a consumer should treat that as "not published".
+  static std::string serialise_host(const std::string& ip);
+
+  /// Local LAN IP the mower is reachable on, for a consumer to build a link to its
+  /// own GUI (host networking, so this is the Pi's real interface, not a container
+  /// address). A UDP "connect" to a public address needs no actual connectivity --
+  /// it only makes the kernel pick a route/interface, exactly what's wanted here --
+  /// so this works offline too. Returns "" if there is no default route at all.
+  static std::string detect_local_ip();
   /// Map-frame pose {x, y, yaw} from the fused localizer (/odometry/filtered_map).
   static std::string serialise_pose(const nav_msgs::msg::Odometry& msg);
   static std::string serialise_diagnostics(const diagnostic_msgs::msg::DiagnosticArray& msg);
@@ -369,6 +389,9 @@ public:
   {
     uint32_t index{0};
     std::string name{};
+    /// Stable MapArea.id (mowglinext#637). Unlike `index` it survives edits to other
+    /// areas; schedules reference an area by it. 0 = not assigned.
+    uint32_t id{0};
   };
 
   static std::string serialise_home_assistant_discovery(const std::string& topic_prefix,
@@ -409,6 +432,17 @@ public:
       double datum_lat,
       double datum_lon,
       const std::optional<DockPose>& dock = std::nullopt);
+
+  /**
+   * @brief Build the <prefix>/coverage_path payload from the planned coverage path.
+   * @param path /coverage/full_plan: headland rings then serpentine swaths, concatenated
+   *        — the SAME map frame (metres, no datum needed) as area_boundary/pose/dock, and
+   *        the same source the GUI's own map view draws (mowglinext#726's sibling data).
+   *        Consecutive poses can be far apart where the plan jumps between segments that
+   *        are not driven directly across (see docs/MQTT_CONTROL.md); a consumer should
+   *        split the polyline at a gap threshold before drawing it, as the GUI does.
+   */
+  static std::string serialise_coverage_path(const nav_msgs::msg::Path& path);
 
   /// Escape a raw string so it is safe inside a JSON string literal.
   static std::string json_escape(const std::string& raw);
@@ -467,6 +501,21 @@ public:
 private:
   // ---- Initialisation -------------------------------------------------------
 
+  friend class MqttMapPollTest;
+  friend class RetainedMapPublicationTest;
+  using AreaClient = rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>;
+  struct MapPollState
+  {
+    uint64_t generation{0};
+    std::optional<int64_t> request_id;
+    std::chrono::steady_clock::time_point deadline;
+  };
+  /// Abandon a whole enumeration without publishing its incomplete prefix.
+  bool expire_map_poll(bool& active,
+                       MapPollState& poll,
+                       const AreaClient::SharedPtr& client,
+                       const char* description);
+
   void declare_parameters();
   void create_mqtt_client();
   void create_subscriptions();
@@ -484,8 +533,15 @@ private:
   /// Request GetMowingArea for `index`, then chain to `index + 1` on success.
   void poll_area_boundary_step(
       uint32_t index,
+      uint64_t generation,
       std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>
           accumulated);
+  void on_area_boundary_response(
+      uint32_t index,
+      uint64_t generation,
+      std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>
+          accumulated,
+      AreaClient::SharedFuture future);
   /// Serialise + publish (retained) `accumulated`, but only if it differs
   /// from the last payload actually sent — <prefix>/area_boundary is meant
   /// to be a quiet, retained topic, not a ~10s heartbeat.
@@ -504,6 +560,7 @@ private:
   void on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
   void on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg);
   void on_pose(nav_msgs::msg::Odometry::ConstSharedPtr msg);
+  void on_coverage_path(nav_msgs::msg::Path::ConstSharedPtr msg);
 
   // ---- MQTT command callback ------------------------------------------------
 
@@ -517,12 +574,23 @@ private:
   // ---- Area list: periodic poll of GetMowingArea + publish ------------------
 
   void poll_areas();
-  void poll_areas_step(uint32_t index, std::shared_ptr<std::vector<AreaSummary>> collected);
+  void poll_areas_step(uint32_t index,
+                       uint64_t generation,
+                       std::shared_ptr<std::vector<AreaSummary>> collected);
+  void on_areas_response(uint32_t index,
+                         uint64_t generation,
+                         std::shared_ptr<std::vector<AreaSummary>> collected,
+                         AreaClient::SharedFuture future);
   void publish_areas_if_changed(const std::vector<AreaSummary>& areas);
 
   // ---- Timers: rate-limited publishes (on_timer) + network loop (net_timer_) -----
 
   void on_timer();
+
+  /// Keep a failed retained publication pending until the client accepts it.
+  void publish_pending_retained(const char* suffix,
+                                std::optional<std::string>& pending,
+                                std::string& last_accepted);
 
   // ---- Helpers --------------------------------------------------------------
 
@@ -544,6 +612,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps_fix_;
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr sub_gnss_status_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_pose_;
+  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_coverage_path_;
 
   rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedPtr srv_high_level_;
   rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr srv_get_area_;
@@ -574,9 +643,13 @@ private:
   double dock_pose_x_{0.0};
   double dock_pose_y_{0.0};
   double dock_pose_yaw_{0.0};
+  double battery_empty_voltage_{24.0};
+  double battery_full_voltage_{28.0};
 
   // Tracks MQTT connection edges so discovery is refreshed after reconnect.
   bool mqtt_was_connected_{false};
+  std::string host_ip_{};
+  bool host_ip_published_{false};
   // Set by MQTT callbacks and consumed by on_timer() after spin_once() has
   // fully returned. This avoids publishing from within the MQTT receive path.
   bool home_assistant_discovery_publish_pending_{false};
@@ -616,7 +689,9 @@ private:
 
   rclcpp::Time last_areas_poll_{0, 0, RCL_ROS_TIME};
   bool areas_poll_in_flight_{false};
+  MapPollState areas_poll_;
   std::string last_areas_json_{};
+  std::optional<std::string> pending_areas_json_;
   std::vector<AreaSummary> last_areas_{};
 
   // ---- Area boundary polling state -------------------------------------------
@@ -626,7 +701,19 @@ private:
 
   rclcpp::Time last_area_poll_{0, 0, RCL_ROS_TIME};
   bool area_poll_in_progress_{false};
+  MapPollState boundary_poll_;
+  // One monotonic deadline covers the entire enumeration, including all indices.
+  // A callback arriving at or after the deadline cannot publish a partial map.
+  static constexpr auto kMapPollTimeout = std::chrono::seconds(5);
+  std::function<std::chrono::steady_clock::time_point()> map_poll_now_{
+      std::chrono::steady_clock::now};
   std::string last_area_boundary_json_{};
+  std::optional<std::string> pending_area_boundary_json_;
+
+  // ---- Coverage path state --------------------------------------------------
+
+  std::string last_coverage_path_json_{};
+  std::optional<std::string> pending_coverage_path_json_;
 };
 
 }  // namespace mowgli_monitoring

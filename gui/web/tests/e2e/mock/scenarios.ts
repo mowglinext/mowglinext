@@ -14,6 +14,8 @@ export interface Scenario {
     rest?: Record<string, unknown>;
     /** Per-topic multiplex payloads (the decoded ROS message object). */
     topics?: Record<string, unknown>;
+    /** Optional live payload sequences used to exercise changing telemetry. */
+    topicSequences?: Record<string, unknown[]>;
     /** When true, the multiplex socket accepts the connection but never sends
      *  a frame — exercises the "offline / stale data" UI. */
     silentSocket?: boolean;

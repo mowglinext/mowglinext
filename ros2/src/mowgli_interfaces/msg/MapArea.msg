@@ -36,3 +36,32 @@ MapObstacleInfo[] proposed_obstacle_info
 # never invent one client-side - so unrelated areas keep their identity
 # across an edit to a different one. See area_manager.cpp's on_add_area().
 uint32 id
+
+# Per-area coverage lines: optional overrides of the robot-wide mow_angle_deg
+# and mow_direction settings (the Map page's "mowing lines" preview edits them).
+# Opt-in by design: a flag per value, so the zero value of every field means
+# "use the robot-wide setting". That keeps a request or a persisted map built
+# before these fields existed meaning exactly what it meant before, and keeps
+# "0 degrees" and "planner default winding" expressible as real choices.
+#
+# has_mow_angle: false = use the robot-wide mow_angle_deg. true = mow_angle_deg
+# applies to this area: degrees in [0, 180) (a swath has no sense of direction),
+# or any NEGATIVE value for AUTO (the convention of mow_angle_deg everywhere) -
+# which pins this area to auto even when the robot-wide angle is fixed.
+bool has_mow_angle
+float64 mow_angle_deg
+# has_ring_direction: false = use the robot-wide ring_direction. true =
+# ring_direction applies to this area: 0 planner default, 1 clockwise,
+# 2 counter-clockwise (same values as coverage_server.ring_direction).
+bool has_ring_direction
+uint8 ring_direction
+
+# Where the route starts, as a point (map-frame metres) near the OUTERMOST headland
+# ring: the planner snaps it onto that ring, on a straight side, and the route
+# always begins there, so the outermost ring is driven first. Opt-in like the two
+# above: has_start_point false = the planner's own start (the midpoint of the
+# longest side of the outermost ring). Meaningless with the headland rings off.
+# Re-projected with the polygon when the datum changes.
+bool has_start_point
+float64 start_x
+float64 start_y

@@ -23,10 +23,13 @@
 #include "main.h"
 
 #include "blademotor.h"
+#include "actuator_authorization.h"
 #include "charger.h"
 #include "drivemotor.h"
 #include "emergency.h"
+#include "blade_emergency_policy.hpp"
 #include "heartbeat_emergency_policy.hpp"
+#include "motor_output_safety.hpp"
 #include "nbt.h"
 #include "panel.h"
 #include "pid.hpp"
@@ -40,10 +43,15 @@
 // COBS protocol (replaces rosserial)
 #include "mowgli_comms.h"
 #include "mowgli_protocol.h"
+#include "drive_tuning_defaults.h"
+#include "fw_params.h"
+#include "fw_param_reset.h"
+#include "i2c.h"
 #include "cmd_vel_safety.hpp"
 
 // Math
 #include <cmath>
+#include <cstring>
 
 // IMU
 #include "imu/imu.h"
@@ -110,12 +118,8 @@ static int16_t right_pwm_signed = 0;
  * Set USE_WHEEL_PI to 0 to fall back to open-loop forwarding for
  * debugging / hardware bring-up. */
 #define USE_WHEEL_PI 1
-#define WHEEL_PI_KP_PWM_PER_MPS 30.0f /* proportional gain */
-#define WHEEL_PI_KI_PWM_PER_MPS_S                                              \
-  5000.0f /* integral gain (50 PWM in ~0.2 s when err=0.05 m/s) */
-#define WHEEL_PI_INT_MAX_PWM                                                   \
-  100.0f /* anti-windup clamp on the integral term                             \
-          */
+/* Power-on gains: drive_tuning_defaults.h. The live gains come from fw_params
+ * (flash, then the host) — see apply_drive_params(). */
 #define WHEEL_PI_DT_S (MOTORS_NBT_TIME_MS / 1000.0f)
 /* Per-wheel velocity PI — battle-tested PX4 PID core (pid.hpp). Gains/limits
  * set once in init_ROS(). The integrator (kept inside the PID object) is what
@@ -165,16 +169,13 @@ static float r_dig_exp_ticks = 0.0f;
 static bool l_dig_latched = false;
 static bool r_dig_latched = false;
 
-/* Open-loop feedforward velocity->PWM scale. Runtime-tunable copy of the
- * board.h PWM_PER_MPS default so the ROS 2 host can retune the drive loop via
- * PKT_ID_SET_DRIVE_PID without a reflash. Seeded with the compile-time default,
- * which therefore remains the power-on fallback (this board has no config
- * persistence; the bridge re-sends the gains on every reconnect). */
+/* Open-loop feedforward velocity->PWM scale. Runtime copy of the board.h
+ * PWM_PER_MPS default, set from fw_params (FW_PARAM_PWM_PER_MPS). */
 static volatile float g_pwm_per_mps = (float)PWM_PER_MPS;
 
 /* Runtime wheel base (centre-to-centre track) used by the differential-drive
- * inverse kinematics. Seeded with the board.h/template WHEEL_BASE, which remains
- * the power-on fallback; retunable via PKT_ID_SET_KINEMATICS without a reflash.
+ * inverse kinematics. Seeded with the board.h/template WHEEL_BASE, then set from
+ * fw_params (FW_PARAM_WHEEL_BASE).
  * The runtime max-speed cap lives in drivemotor.c (g_max_mps / DRIVEMOTOR_*MaxMps)
  * because it is also consumed there for the anti-dig frame ceiling. */
 static volatile float g_wheel_base = (float)WHEEL_BASE;
@@ -200,9 +201,7 @@ static volatile float g_wheel_base = (float)WHEEL_BASE;
  * bounded differential the per-wheel loops still cap at ±MAX_MPS — a bounded
  * veer, never an unbounded spin. Gains/sign/enable are runtime-tunable via
  * PKT_ID_SET_YAW_PID. */
-#define YAW_PI_KP_DEFAULT 0.30f          /* m/s trim per rad/s yaw error */
-#define YAW_PI_KI_DEFAULT 0.40f          /* m/s trim per (rad/s·s) */
-#define YAW_TRIM_LIMIT_MPS_DEFAULT 0.15f /* clamp on |differential trim| [m/s] */
+/* Power-on gains/limit: drive_tuning_defaults.h (YAW_PI_*_DEFAULT). */
 /* Integral term is clamped TIGHTER than the total trim (leaves headroom for the
  * P term and limits integral-driven overshoot/hunting). */
 #define YAW_INT_LIMIT_FRAC 0.60f
@@ -247,13 +246,21 @@ static volatile float g_yaw_gyro_sign = 1.0f;     /* gyro Z sign vs robot +yaw *
 static volatile float g_yaw_trim_limit_mps = YAW_TRIM_LIMIT_MPS_DEFAULT;
 /* Host-measured mean at-rest gyro-Z bias [rad/s], raw sensor frame. Subtracted
  * before the sign multiply so open-loop moves (BackUp) hold a true straight line
- * instead of tracing the bias as an arc. 0 until the host sends SET_YAW_PID. */
+ * instead of tracing the bias as an arc. 0 until the host sends it
+ * (FW_PARAM_YAW_GYRO_BIAS_RADPS, never persisted: re-measured on every dock). */
 static volatile float g_yaw_gyro_bias = 0.0f;
 
 /* ---------------------------------------------------------------------------
  * Blade motor control state
  * ---------------------------------------------------------------------------*/
 static volatile uint8_t target_blade_on_off = 0;
+static volatile uint32_t target_blade_authorization_epoch = 0;
+static volatile uint32_t cmd_vel_authorization_epoch = 0;
+static volatile uint32_t host_zero_phase_sequence = 0u;
+static volatile uint8_t host_zero_motion_intent = 0u;
+static volatile uint8_t host_yaw_inhibit = 1u;
+static mowgli_motor_safety::LinkRearmState motor_link_rearm_state{};
+static volatile uint8_t motor_link_rearm_required = 1u;
 static uint8_t blade_on_off = 0;
 static uint8_t blade_direction = 0;
 
@@ -261,6 +268,7 @@ static uint8_t blade_direction = 0;
  * cmd_vel timeout tracking (replaces ros::Time)
  * ---------------------------------------------------------------------------*/
 static volatile uint32_t last_cmd_vel_tick = 0;
+static volatile uint8_t valid_cmd_vel_seen = 0u;
 
 /* ---------------------------------------------------------------------------
  * High-level state received from host
@@ -272,6 +280,8 @@ static uint8_t hl_gps_quality = 0;
  * Heartbeat watchdog
  * ---------------------------------------------------------------------------*/
 static volatile uint32_t last_heartbeat_tick = 0;
+static volatile uint8_t heartbeat_seen = 0u;
+#define CMD_VEL_TIMEOUT_MS 200u
 #define HEARTBEAT_TIMEOUT_MS 2000u
 
 /* True when the CURRENTLY latched emergency was raised SOLELY by the heartbeat
@@ -363,6 +373,7 @@ static void on_heartbeat(const uint8_t *data, size_t len) {
   const pkt_heartbeat_t *pkt = reinterpret_cast<const pkt_heartbeat_t *>(data);
 
   last_heartbeat_tick = HAL_GetTick();
+  heartbeat_seen = 1u;
 
   const bool emergency_requested = pkt->emergency_requested != 0u;
   const bool emergency_release_requested =
@@ -420,19 +431,69 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
    * malformed packet deterministically stops the next motor cycle. */
   mowgli_cmd_vel::SafetyState safety_state{
       cmd_wz, left_target_mps, right_target_mps, last_cmd_vel_tick};
-  if (!mowgli_cmd_vel::apply_safety(vx, wz, HAL_GetTick(), safety_state)) {
+  if (!mowgli_cmd_vel::apply_safety_for_mode(
+          vx, wz, HAL_GetTick(),
+          main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, safety_state)) {
     cmd_wz = safety_state.cmd_wz;
     left_target_mps = safety_state.left_target_mps;
     right_target_mps = safety_state.right_target_mps;
+    host_zero_motion_intent = safety_state.zero_motion_intent ? 1u : 0u;
+    host_yaw_inhibit = 1u;
+    valid_cmd_vel_seen = 0u;
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
     return;
   }
 
-  /* Only a validated command is a new cmd_vel heartbeat. */
+  const bool zero_motion = safety_state.zero_motion_intent;
+  const bool idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
+  uint32_t accepted_authorization_epoch = 0u;
+  const uint32_t authorization_primask = __get_PRIMASK();
+  __disable_irq();
+  const bool safety_boundary_active =
+      mowgli_cmd_vel::authorization_boundary_active(
+          idle, zero_motion, Emergency_State() != 0u);
+  const bool drive_command_accepted =
+      ActuatorAuthorization_AcceptDriveCommand(
+          zero_motion, safety_boundary_active,
+          &accepted_authorization_epoch);
+  __set_PRIMASK(authorization_primask);
+  if (!drive_command_accepted) {
+    cmd_wz = 0.0f;
+    left_target_mps = 0.0f;
+    right_target_mps = 0.0f;
+    host_zero_motion_intent = 1u;
+    host_yaw_inhibit = 1u;
+    valid_cmd_vel_seen = 0u;
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    return;
+  }
+
+  if (idle) {
+    /* A zero observed in IDLE satisfies only the fresh-zero re-arm phase.
+     * The IDLE/emergency gates still hold the physical output at zero, and
+     * this path must not make blade commands look fresh or extend motion TTL. */
+    cmd_vel_authorization_epoch = accepted_authorization_epoch;
+    cmd_wz = 0.0f;
+    left_target_mps = 0.0f;
+    right_target_mps = 0.0f;
+    host_zero_motion_intent = 1u;
+    host_yaw_inhibit = 1u;
+    valid_cmd_vel_seen = 0u;
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    if (target_blade_on_off == 0u) {
+      ++host_zero_phase_sequence;
+    }
+    return;
+  }
+
+  /* Only a validated, currently authorized command is a new cmd_vel
+   * heartbeat. The epoch is captured atomically with the zero re-arm. */
+  cmd_vel_authorization_epoch = accepted_authorization_epoch;
   last_cmd_vel_tick = safety_state.last_valid_tick;
-
-  if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
-    return;
-  }
+  valid_cmd_vel_seen = 1u;
+  host_zero_motion_intent = zero_motion ? 1u : 0u;
+  host_yaw_inhibit = safety_state.yaw_inhibited ? 1u : 0u;
+  DRIVEMOTOR_SetHostZeroMotionIntent(zero_motion ? 1u : 0u);
 
   /* Commanded yaw rate for the firmware yaw-rate loop (Option C), read in the
    * motor timebase by motors_handler. Stored raw (pre-IK) so the loop tracks
@@ -463,155 +524,163 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
    * deadband on sub-deadband commands. */
   left_target_mps = left_mps;
   right_target_mps = right_mps;
+  if (zero_motion && target_blade_on_off == 0u) {
+    ++host_zero_phase_sequence;
+  }
 }
 
-static void on_set_drive_pid(const uint8_t *data, size_t len) {
-  if (len < sizeof(pkt_set_drive_pid_t) - 2u) {
+/* ---------------------------------------------------------------------------
+ * Runtime parameters (protocol v8). Handlers run in USB RX interrupt context:
+ * they only store the coerced value (fw_params_set). The subsystems are updated
+ * from the main loop by apply_param_groups(), one group at a time, so no loop
+ * ever sees a half-applied set.
+ * ---------------------------------------------------------------------------*/
+static void on_set_param(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_set_param_t) - 2u) {
+    return;
+  }
+  pkt_set_param_t pkt;
+  memcpy(&pkt, data, sizeof(pkt) - 2u);
+  (void)fw_params_set(pkt.param_id, pkt.value);
+}
+
+static void on_get_param(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_get_param_t) - 2u) {
+    return;
+  }
+  pkt_get_param_t pkt;
+  memcpy(&pkt, data, sizeof(pkt) - 2u);
+  fw_params_request_report(pkt.param_id);
+}
+
+static void on_param_commit(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_param_commit_t) - 2u) {
+    return;
+  }
+  if (data[1] == PKT_PARAM_COMMIT_MAGIC) {
+    fw_params_request_commit();
+  }
+}
+
+/* An explicit reset is accepted only with fresh feedback and every firmware
+ * stop predicate satisfied. The callback only queues the request; RTC marker
+ * writes are done by fw_params_service() from the main loop. The flash erase
+ * itself runs at the following boot, before the window watchdog is armed. */
+static void on_param_store_reset(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_param_store_reset_t) - 2u) {
+    return;
+  }
+  pkt_param_store_reset_t pkt;
+  memcpy(&pkt, data, sizeof(pkt) - 2u);
+  if (pkt.magic != PKT_PARAM_STORE_RESET_MAGIC || pkt.request_id == 0u) {
+    fw_params_report_reset_rejected();
     return;
   }
 
-  const pkt_set_drive_pid_t *pkt =
-      reinterpret_cast<const pkt_set_drive_pid_t *>(data);
-
-  /* Drive behaviour is safety-relevant: reject the whole packet if any field
-   * is non-finite, then clamp each field to a safe range before applying so a
-   * bad host value can never make the wheel loop diverge. Both wheels share
-   * the gains; the output limit stays fixed at 255 PWM (motor controller max).
-   * pid_constrain() comes from pid.hpp. */
-  if (!std::isfinite(pkt->ticks_per_meter) || !std::isfinite(pkt->kp) ||
-      !std::isfinite(pkt->ki) || !std::isfinite(pkt->kd) ||
-      !std::isfinite(pkt->integral_limit) || !std::isfinite(pkt->pwm_per_mps)) {
-    debug_printf("set_drive_pid rejected: non-finite field\r\n");
-    return;
-  }
-
-  const float ticks_per_meter =
-      pid_constrain(pkt->ticks_per_meter, 50.0f, 5000.0f);
-  const float kp = pid_constrain(pkt->kp, 0.0f, 200.0f);
-  const float ki = pid_constrain(pkt->ki, 0.0f, 20000.0f);
-  const float kd = pid_constrain(pkt->kd, 0.0f, 500.0f);
-  const float ilim = pid_constrain(pkt->integral_limit, 0.0f, 255.0f);
-  const float ff = pid_constrain(pkt->pwm_per_mps, 50.0f, 600.0f);
-
-  /* Apply atomically w.r.t. motors_handler(), which reads these objects in the
-   * main loop at 50 Hz: this handler runs in USB RX interrupt context, and a
-   * half-applied update (e.g. new gains but the old integral limit) could let
-   * the ki integrator wind up unbounded for one cycle. Same __disable_irq
-   * guard motors_handler uses for its setpoint snapshot. setOutputLimit is
-   * re-asserted here so the ±255 clamp never silently depends on init_ROS
-   * having run first (the PX4 PID default-inits _limit_output to 0). */
+  fw_param_reset_safety_t safety = {};
+  const uint32_t primask = __get_PRIMASK();
   __disable_irq();
+  safety.firmware_idle =
+      main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ? 1u : 0u;
+  safety.drive_feedback_healthy = DRIVEMOTOR_FeedbackHealthy() ? 1u : 0u;
+  safety.blade_feedback_healthy = BLADEMOTOR_FeedbackHealthy() ? 1u : 0u;
+  safety.left_target_mps = left_target_mps;
+  safety.right_target_mps = right_target_mps;
+  safety.left_measured_speed = left_wheel_speed_val;
+  safety.right_measured_speed = right_wheel_speed_val;
+  safety.blade_target_on = target_blade_on_off;
+  safety.blade_active = BLADEMOTOR_bActivated ? 1u : 0u;
+  safety.blade_reported_rpm = BLADEMOTOR_u16RPM;
+  __set_PRIMASK(primask);
+
+  if (!fw_param_reset_is_safe(&safety) ||
+      !fw_params_request_reset(pkt.request_id)) {
+    fw_params_report_reset_rejected();
+  }
+}
+
+/* Per-wheel velocity PI + encoder scale + feedforward. Both wheels share the
+ * gains; the output limit stays 255 PWM (motor controller max) and is
+ * re-asserted so it never depends on init order (the PX4 PID default-inits
+ * _limit_output to 0). */
+static void apply_drive_params() {
+  const float kp = fw_params_get(FW_PARAM_WHEEL_KP);
+  const float ki = fw_params_get(FW_PARAM_WHEEL_KI);
+  const float kd = fw_params_get(FW_PARAM_WHEEL_KD);
+  const float ilim = fw_params_get(FW_PARAM_WHEEL_INTEGRAL_LIMIT);
   left_wheel_pid.setGains(kp, ki, kd);
   left_wheel_pid.setIntegralLimit(ilim);
   left_wheel_pid.setOutputLimit(255.0f);
   right_wheel_pid.setGains(kp, ki, kd);
   right_wheel_pid.setIntegralLimit(ilim);
   right_wheel_pid.setOutputLimit(255.0f);
-  DRIVEMOTOR_SetTicksPerMeter(ticks_per_meter);
-  g_pwm_per_mps = ff;
-  __enable_irq();
-
-  /* Do not log successful drive-PID updates here: this handler runs in the USB
-   * RX path and hardware_bridge intentionally re-sends the packet in bursts
-   * after reconnect. Printing each success over the debug UART can stall long
-   * enough to starve the main loop and re-trigger the watchdog reboot loop. */
+  DRIVEMOTOR_SetTicksPerMeter(fw_params_get(FW_PARAM_TICKS_PER_METER));
+  g_pwm_per_mps = fw_params_get(FW_PARAM_PWM_PER_MPS);
 }
 
-static void on_set_yaw_pid(const uint8_t *data, size_t len) {
-  if (len < sizeof(pkt_set_yaw_pid_t) - 2u) {
-    return;
-  }
-
-  const pkt_set_yaw_pid_t *pkt =
-      reinterpret_cast<const pkt_set_yaw_pid_t *>(data);
-
-  /* Yaw regulation is safety-relevant (it steers the chassis): reject the whole
-   * packet if any gain/limit is non-finite, then clamp before applying so a bad
-   * host value can never make the yaw loop diverge. */
-  if (!std::isfinite(pkt->yaw_kp) || !std::isfinite(pkt->yaw_ki) ||
-      !std::isfinite(pkt->trim_limit_mps) ||
-      !std::isfinite(pkt->gyro_bias_radps)) {
-    debug_printf("set_yaw_pid rejected: non-finite field\r\n");
-    return;
-  }
-
-  const float kp = pid_constrain(pkt->yaw_kp, 0.0f, 5.0f);
-  const float ki = pid_constrain(pkt->yaw_ki, 0.0f, 20.0f);
-  const float tl =
-      pid_constrain(pkt->trim_limit_mps, 0.0f, DRIVEMOTOR_GetMaxMps());
-  const uint8_t en = (pkt->enabled != 0) ? 1u : 0u;
-  const float sign = (pkt->gyro_sign < 0) ? -1.0f : 1.0f;
-  /* A physical at-rest gyro bias is small (WT901: a few deg/s). Clamp hard so a
-   * bad host value can only nudge, not steer — and the differential trim clamp
-   * below bounds the yaw correction regardless. */
-  const float bias = pid_constrain(pkt->gyro_bias_radps, -0.5f, 0.5f);
-
-  /* Apply atomically w.r.t. motors_handler() (reads these at 50 Hz); this
-   * handler runs in USB RX interrupt context. The integral limit is pinned to
-   * the trim limit so the integrator alone can never exceed the differential
-   * clamp. Same __disable_irq guard as on_set_drive_pid. */
-  __disable_irq();
-  yaw_pid.setGains(kp, ki, 0.0f);
+/* Gyro yaw-rate loop. The trim limit is also capped to the live speed cap,
+ * and the integral limit is pinned below it so the integrator alone can never
+ * exceed the differential clamp. */
+static void apply_yaw_params() {
+  const float tl = pid_constrain(fw_params_get(FW_PARAM_YAW_TRIM_LIMIT_MPS), 0.0f,
+                                 DRIVEMOTOR_GetMaxMps());
+  yaw_pid.setGains(fw_params_get(FW_PARAM_YAW_KP), fw_params_get(FW_PARAM_YAW_KI), 0.0f);
   yaw_pid.setIntegralLimit(tl * YAW_INT_LIMIT_FRAC);
   yaw_pid.setOutputLimit(tl);
   g_yaw_trim_limit_mps = tl;
-  g_yaw_gyro_sign = sign;
-  g_yaw_gyro_bias = bias;
-  g_yaw_loop_enabled = en;
-  __enable_irq();
+  g_yaw_gyro_sign = fw_params_get(FW_PARAM_YAW_GYRO_SIGN) < 0.0f ? -1.0f : 1.0f;
+  g_yaw_gyro_bias = fw_params_get(FW_PARAM_YAW_GYRO_BIAS_RADPS);
+  g_yaw_loop_enabled = fw_params_get(FW_PARAM_YAW_LOOP_ENABLED) != 0.0f ? 1u : 0u;
 }
 
-static void on_set_kinematics(const uint8_t *data, size_t len) {
-  if (len < sizeof(pkt_set_kinematics_t) - 2u) {
-    return;
-  }
-
-  const pkt_set_kinematics_t *pkt =
-      reinterpret_cast<const pkt_set_kinematics_t *>(data);
-
-  /* Motion caps are safety-relevant: reject the whole packet if any field is
-   * non-finite, then clamp before applying. max_mps is clamped by
-   * DRIVEMOTOR_SetMaxMps to (0, compile-time MAX_MPS] — the wire can only LOWER
-   * the cap, never raise it above the compiled ceiling. wheel_base is clamped to
-   * a sane physical range. Applied atomically w.r.t. motors_handler() (50 Hz);
-   * this handler runs in USB RX interrupt context. */
-  if (!std::isfinite(pkt->max_mps) || !std::isfinite(pkt->wheel_base)) {
-    debug_printf("set_kinematics rejected: non-finite field\r\n");
-    return;
-  }
-
-  const float wb = pid_constrain(pkt->wheel_base, 0.15f, 0.60f);
-
+static void apply_kinematics_params() {
+  /* on_cmd_vel (USB interrupt) reads both: update them together. */
   __disable_irq();
-  DRIVEMOTOR_SetMaxMps(pkt->max_mps); /* clamps to (0, MAX_MPS] internally */
-  g_wheel_base = wb;
+  DRIVEMOTOR_SetMaxMps(fw_params_get(FW_PARAM_MAX_MPS));
+  g_wheel_base = fw_params_get(FW_PARAM_WHEEL_BASE);
   __enable_irq();
 }
 
-static void on_set_safety_limits(const uint8_t *data, size_t len) {
-  if (len < sizeof(pkt_set_safety_limits_t) - 2u) {
-    return;
+static void apply_charge_params() {
+  charger_set_charge_limits(fw_params_get(FW_PARAM_MAX_CHARGE_VOLTAGE),
+                            fw_params_get(FW_PARAM_MAX_CHARGE_CURRENT));
+}
+
+static void apply_emergency_params() {
+  emergency_set_timeouts((uint32_t)fw_params_get(FW_PARAM_ONE_WHEEL_LIFT_MS),
+                         (uint32_t)fw_params_get(FW_PARAM_BOTH_WHEELS_LIFT_MS),
+                         (uint32_t)fw_params_get(FW_PARAM_TILT_MS),
+                         (uint32_t)fw_params_get(FW_PARAM_STOP_BUTTON_MS),
+                         (uint32_t)fw_params_get(FW_PARAM_PLAY_CLEAR_MS));
+}
+
+static void apply_imu_params() {
+  /* Queued: I2C_Onboard_Service rewrites the LIS3DH register from its own
+   * state machine, never mid-transaction. */
+  I2C_Onboard_SetInclinationThreshold(
+      (uint8_t)fw_params_get(FW_PARAM_IMU_INCLINATION_THRESHOLD));
+}
+
+static void apply_param_groups(uint32_t groups) {
+  if (groups & (1u << FW_PARAM_GROUP_DRIVE)) {
+    apply_drive_params();
   }
-
-  const pkt_set_safety_limits_t *pkt =
-      reinterpret_cast<const pkt_set_safety_limits_t *>(data);
-
-  /* Charge/e-stop limits are safety-critical: reject the whole packet if a charge
-   * field is non-finite. charger.c / emergency.c then clamp EVERY field so the
-   * wire can only make protection STRONGER (lower charge ceiling, faster trips,
-   * harder emergency-clear), never weaker; the compile-time board_defaults values
-   * remain the power-on fallback (an unconnected host = full vetted safety).
-   * emergency_set_timeouts self-guards its group apply; the two charge stores are
-   * individually atomic (single 32-bit writes on Cortex-M3). */
-  if (!std::isfinite(pkt->max_charge_voltage) ||
-      !std::isfinite(pkt->max_charge_current)) {
-    debug_printf("set_safety_limits rejected: non-finite charge field\r\n");
-    return;
+  if (groups & (1u << FW_PARAM_GROUP_KINEMATICS)) {
+    apply_kinematics_params();
   }
-
-  charger_set_charge_limits(pkt->max_charge_voltage, pkt->max_charge_current);
-  emergency_set_timeouts(pkt->one_wheel_lift_ms, pkt->both_wheels_lift_ms,
-                         pkt->tilt_ms, pkt->stop_button_ms, pkt->play_clear_ms);
+  /* The yaw trim is capped by max_mps: re-apply it when the cap moves. */
+  if (groups & ((1u << FW_PARAM_GROUP_YAW) | (1u << FW_PARAM_GROUP_KINEMATICS))) {
+    apply_yaw_params();
+  }
+  if (groups & (1u << FW_PARAM_GROUP_CHARGE)) {
+    apply_charge_params();
+  }
+  if (groups & (1u << FW_PARAM_GROUP_EMERGENCY)) {
+    apply_emergency_params();
+  }
+  if (groups & (1u << FW_PARAM_GROUP_IMU)) {
+    apply_imu_params();
+  }
 }
 
 static void on_hl_state(const uint8_t *data, size_t len) {
@@ -620,6 +689,7 @@ static void on_hl_state(const uint8_t *data, size_t len) {
   }
 
   const pkt_hl_state_t *pkt = reinterpret_cast<const pkt_hl_state_t *>(data);
+  const bool was_idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
 
   hl_current_mode = pkt->current_mode;
   hl_gps_quality = pkt->gps_quality;
@@ -658,10 +728,21 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     PANEL_Set_LED(PANEL_LED_4H, PANEL_LED_OFF);
     PANEL_Set_LED(PANEL_LED_6H, PANEL_LED_OFF);
     PANEL_Set_LED(PANEL_LED_8H, PANEL_LED_OFF);
+    if (!was_idle) {
+      ActuatorAuthorization_Invalidate();
+    }
     main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
     left_target_mps = right_target_mps = 0.0f;
+    /* IDLE invalidates the controller's already prepared UART speeds too. A
+     * rapid later mode change still needs a fresh post-IDLE cmd_vel. */
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    DRIVEMOTOR_SetSpeedSigned(0, 0, ActuatorAuthorization_Epoch());
     cmd_wz = 0.0f;
     blade_on_off = target_blade_on_off = 0;
+    target_blade_authorization_epoch = ActuatorAuthorization_Epoch();
+    valid_cmd_vel_seen = 0u;
+    host_zero_motion_intent = 1u;
+    host_yaw_inhibit = 1u;
     break;
   }
 
@@ -674,17 +755,35 @@ static void on_cmd_blade(const uint8_t *data, size_t len) {
   }
 
   const pkt_cmd_blade_t *pkt = reinterpret_cast<const pkt_cmd_blade_t *>(data);
-  /* Defense-in-depth: never arm the blade target while IDLE/docked. The
-   * authoritative gate is in motors_handler (which zeroes blade_on_off in
-   * IDLE every tick), but refusing to latch the target here keeps state
-   * consistent and avoids an instantaneous spin-up on the IDLE→MOWING edge.
-   * blade_dir is still accepted so direction is correct once mowing starts. */
-  if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
-    target_blade_on_off = 0;
-  } else {
-    target_blade_on_off = pkt->blade_on;
-  }
+  /* Bind each explicit request to the emergency generation it followed.
+   * Commands received during an emergency are rejected by the shared policy. */
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  const uint32_t emergency_generation = ActuatorAuthorization_Epoch();
+  const bool emergency_active = Emergency_State() != 0u;
+  const bool blade_command_fresh = blade_on_command_is_fresh(
+      HAL_GetTick(), last_cmd_vel_tick, valid_cmd_vel_seen != 0u,
+      CMD_VEL_TIMEOUT_MS, last_heartbeat_tick, heartbeat_seen != 0u,
+      HEARTBEAT_TIMEOUT_MS) &&
+      ActuatorAuthorization_DriveRequestIsCurrent(
+          cmd_vel_authorization_epoch);
+  const std::uint8_t accepted_blade_request =
+      pkt->blade_on != 0u && !blade_command_fresh ? 0u : pkt->blade_on;
+  const BladeIntentDecision decision = decide_blade_intent(
+      target_blade_on_off, target_blade_authorization_epoch, true,
+      accepted_blade_request, emergency_generation,
+      main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, emergency_active,
+      motor_link_rearm_required != 0u,
+      emergency_generation);
+  target_blade_on_off = decision.retained_request;
+  target_blade_authorization_epoch = decision.request_generation;
   blade_direction = pkt->blade_dir;
+  if (pkt->blade_on == 0u && host_zero_motion_intent != 0u &&
+      left_target_mps == 0.0f && right_target_mps == 0.0f &&
+      main_eOpenmowerStatus != OPENMOWER_STATUS_IDLE) {
+    ++host_zero_phase_sequence;
+  }
+  __set_PRIMASK(primask);
 }
 
 /* Host -> Firmware reboot request. Sets reboot_flag so chatter_handler issues
@@ -840,21 +939,113 @@ extern "C" void motors_handler() {
     float snap_right_target = right_target_mps;
     float snap_cmd_wz = cmd_wz;
     uint8_t snap_target_blade = target_blade_on_off;
-    uint32_t snap_heartbeat = last_heartbeat_tick;
+    uint32_t snap_blade_generation = target_blade_authorization_epoch;
     uint32_t snap_cmd_vel = last_cmd_vel_tick;
+    uint32_t snap_cmd_vel_authorization_epoch = cmd_vel_authorization_epoch;
+    uint32_t snap_zero_phase = host_zero_phase_sequence;
+    bool snap_zero_intent = host_zero_motion_intent != 0u;
+    bool snap_yaw_inhibit = host_yaw_inhibit != 0u;
     float snap_ticks_per_meter = DRIVEMOTOR_GetTicksPerMeter();
+    uint32_t snap_emergency_generation = ActuatorAuthorization_Epoch();
+    bool emergency_active = Emergency_State() != 0u;
+    bool idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
+    bool links_healthy = DRIVEMOTOR_FeedbackHealthy() &&
+                         BLADEMOTOR_FeedbackHealthy();
+    uint32_t drive_fault_sequence = DRIVEMOTOR_FaultSequence();
+    uint32_t blade_fault_sequence = BLADEMOTOR_FaultSequence();
+    bool link_inhibited = MOTORLINK_OutputInhibited() != 0u;
     __enable_irq();
 
-    blade_on_off = snap_target_blade;
+    const bool cmd_vel_authorization_current =
+        ActuatorAuthorization_DriveRequestIsCurrent(
+            snap_cmd_vel_authorization_epoch);
 
-    /* --- decide effective target ---
-     * Emergency or cmd_vel watchdog timeout overrides to a hard stop.
-     * Otherwise the snapshot value drives the PI loop below. */
+    motor_link_rearm_required = mowgli_motor_safety::update_link_rearm(
+        motor_link_rearm_state, links_healthy, snap_zero_phase,
+        snap_zero_intent, snap_target_blade == 0u, drive_fault_sequence,
+        blade_fault_sequence, link_inhibited);
+    if (motor_link_rearm_required != 0u) {
+      MOTORLINK_ForceInhibit();
+    } else if (motor_link_rearm_state.rearm_completed) {
+      /* Revalidate only the zero/off -> armed transition. Requiring zero/off
+       * again during ordinary motion would inhibit every nonzero drive/blade
+       * request. Live link health and final output checks still run each cycle.
+       * Close the race with a UART fault or a host update between the snapshot
+       * and inhibit clear. The source links must still be healthy and no newer
+       * zero/off intent may have arrived. */
+      const uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      const bool still_healthy = DRIVEMOTOR_FeedbackHealthy() &&
+                                 BLADEMOTOR_FeedbackHealthy() &&
+          DRIVEMOTOR_FaultSequence() == drive_fault_sequence &&
+          BLADEMOTOR_FaultSequence() == blade_fault_sequence &&
+          host_zero_phase_sequence == snap_zero_phase &&
+          host_zero_motion_intent != 0u && target_blade_on_off == 0u &&
+          left_target_mps == 0.0f && right_target_mps == 0.0f &&
+          Emergency_State() == 0u &&
+          ActuatorAuthorization_DriveRequestIsCurrent(
+              cmd_vel_authorization_epoch);
+      if (still_healthy) {
+        MOTORLINK_ClearInhibit();
+      } else {
+        motor_link_rearm_required = 1u;
+        motor_link_rearm_state.required = true;
+        motor_link_rearm_state.zero_phase_baseline = host_zero_phase_sequence;
+        MOTORLINK_ForceInhibit();
+      }
+      __set_PRIMASK(primask);
+    }
+
+    /* Emergency and IDLE gates discard retained blade intent as well as
+     * forcing the output OFF, so clearing a gate cannot revive an older
+     * enable request. */
+    const BladeIntentDecision blade_decision = decide_blade_intent(
+        snap_target_blade, snap_blade_generation, false, 0u,
+        snap_emergency_generation, idle, emergency_active,
+        motor_link_rearm_required != 0u, snap_emergency_generation);
+    blade_on_off = blade_decision.effective_output;
+    if (blade_decision.retained_request != snap_target_blade ||
+        blade_decision.request_generation != snap_blade_generation) {
+      const uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      const uint32_t current_generation = ActuatorAuthorization_Epoch();
+      const bool emergency_active_now = Emergency_State() != 0u;
+      const bool idle_now = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
+      if (target_blade_on_off != 0u &&
+          (emergency_active_now || idle_now ||
+           motor_link_rearm_required != 0u ||
+           target_blade_authorization_epoch != current_generation)) {
+        target_blade_on_off = 0;
+        target_blade_authorization_epoch = current_generation;
+      }
+      __set_PRIMASK(primask);
+    }
+
+    /* --- decide effective drive target ---
+     * Emergency or cmd_vel watchdog timeout overrides the drive output. */
     bool hard_stop = false;
-    if (Emergency_State()) {
+    if (!cmd_vel_authorization_current) {
+      hard_stop = true;
+      const uint32_t auth_primask = __get_PRIMASK();
+      __disable_irq();
+      if (cmd_vel_authorization_epoch ==
+          snap_cmd_vel_authorization_epoch) {
+        left_target_mps = 0.0f;
+        right_target_mps = 0.0f;
+        cmd_wz = 0.0f;
+        valid_cmd_vel_seen = 0u;
+        host_zero_motion_intent = 1u;
+        host_yaw_inhibit = 1u;
+        DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+      }
+      __set_PRIMASK(auth_primask);
+    }
+    if (motor_link_rearm_required != 0u) {
       hard_stop = true;
       blade_on_off = 0;
-    } else if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
+    } else if (emergency_active) {
+      hard_stop = true;
+    } else if (idle) {
       /* Re-assert the IDLE gate HERE — in the one place that actually
        * drives the wheels AND the blade — so the "never move / never
        * spin the blade while idle/docked" guarantee holds regardless of
@@ -867,13 +1058,32 @@ extern "C" void motors_handler() {
       blade_on_off = 0;
     } else {
       const uint32_t cmd_vel_age_ms = HAL_GetTick() - snap_cmd_vel;
-      if (cmd_vel_age_ms > 200u) {
+      if (cmd_vel_age_ms > CMD_VEL_TIMEOUT_MS) {
         /* Command-vel watchdog: zero motors if the host hasn't
          * sent a twist in 200 ms (Pi hang, USB glitch, etc). */
         hard_stop = true;
+        const uint32_t watchdog_primask = __get_PRIMASK();
+        __disable_irq();
+        if ((uint32_t)(HAL_GetTick() - last_cmd_vel_tick) >
+            CMD_VEL_TIMEOUT_MS) {
+          DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+        }
+        __set_PRIMASK(watchdog_primask);
       }
       if (cmd_vel_age_ms > 25000u) {
-        blade_on_off = 0;
+        /* This timeout is a blade authorization boundary. Recheck freshness
+         * under the same lock used by packet handlers so a concurrent fresh
+         * command is not erased, and never retain an old ON for later replay. */
+        const uint32_t timeout_primask = __get_PRIMASK();
+        __disable_irq();
+        if ((uint32_t)(HAL_GetTick() - last_cmd_vel_tick) > 25000u) {
+          const BladeIntentDecision stopped =
+              stop_blade_intent(ActuatorAuthorization_Epoch());
+          target_blade_on_off = stopped.retained_request;
+          target_blade_authorization_epoch = stopped.request_generation;
+          blade_on_off = stopped.effective_output;
+        }
+        __set_PRIMASK(timeout_primask);
       }
     }
 
@@ -884,7 +1094,11 @@ extern "C" void motors_handler() {
      * setpoint. See the block comment at the yaw-loop globals for rationale and
      * the bounded-failure argument. */
     float yaw_trim_mps = 0.0f;
-    const bool yaw_loop_active = (g_yaw_loop_enabled != 0u) && !hard_stop;
+    const bool zero_host_motion = snap_yaw_inhibit &&
+                                  snap_left_target == 0.0f &&
+                                  snap_right_target == 0.0f;
+    const bool yaw_loop_active = mowgli_motor_safety::yaw_loop_active(
+        g_yaw_loop_enabled != 0u, hard_stop, zero_host_motion);
     /* Reset the yaw integrator on stop / yaw-direction reversal (mirrors the
      * per-wheel resets) AND at turn-exit — a sharp drop in |commanded wz| from
      * turning to straight (task #37). Dumping the wind-up here is what kills the
@@ -989,12 +1203,12 @@ extern "C" void motors_handler() {
     /* Apply the symmetric differential trim to the per-wheel setpoints
      * (+right / −left increases yaw rate, matching the IK in on_cmd_vel), then
      * re-clamp to the physical wheel-speed limit. hard_stop forces 0. */
-    float l_target = snap_left_target - yaw_trim_mps;
-    float r_target = snap_right_target + yaw_trim_mps;
-    if (hard_stop) {
-      l_target = 0.0f;
-      r_target = 0.0f;
-    }
+    const mowgli_motor_safety::WheelTargets adjusted_targets =
+        mowgli_motor_safety::apply_yaw_trim(
+            snap_left_target, snap_right_target, yaw_trim_mps,
+            zero_host_motion, hard_stop);
+    float l_target = adjusted_targets.left_mps;
+    float r_target = adjusted_targets.right_mps;
     const float max_mps = DRIVEMOTOR_GetMaxMps();
     if (l_target > max_mps)
       l_target = max_mps;
@@ -1091,12 +1305,10 @@ extern "C" void motors_handler() {
     /* When the target is exactly zero AND we're not braking from a
      * larger speed, force PWM to zero outright — avoids the residual
      * "hum" from a non-zero integral applied to a stopped wheel. */
-    left_pwm_signed = (l_target == 0.0f && fabsf(l_actual_mps) < 0.02f)
-                          ? 0
-                          : (int16_t)l_pwm_f;
-    right_pwm_signed = (r_target == 0.0f && fabsf(r_actual_mps) < 0.02f)
-                           ? 0
-                           : (int16_t)r_pwm_f;
+    left_pwm_signed = mowgli_motor_safety::suppress_stationary_zero_output(
+        l_target, l_actual_mps, (int16_t)l_pwm_f);
+    right_pwm_signed = mowgli_motor_safety::suppress_stationary_zero_output(
+        r_target, r_actual_mps, (int16_t)r_pwm_f);
 
     /* Anti-dig cutout (always active, all modes). The step compares actual
      * travel to the travel the commanded speed implies, using the live
@@ -1122,28 +1334,72 @@ extern "C" void motors_handler() {
     right_pwm_signed = (int16_t)(r_target * g_pwm_per_mps);
 #endif
 
-    if (hard_stop) {
-      DRIVEMOTOR_SetSpeedSigned(0, 0);
-    } else {
-      DRIVEMOTOR_SetSpeedSigned(left_pwm_signed, right_pwm_signed);
-    }
-
     // Heartbeat watchdog: if no heartbeat for HEARTBEAT_TIMEOUT_MS, emergency
     // stop. Tag a PURE comms-loss latch (no physical sensor asserted) so it can
     // be auto-cleared when heartbeats resume (on_heartbeat), instead of
     // stranding the robot. If a physical sensor is asserted, leave the flag
     // cleared so the latch needs an explicit operator release.
-    if (snap_heartbeat != 0 &&
-        (HAL_GetTick() - snap_heartbeat) > HEARTBEAT_TIMEOUT_MS) {
+    const uint32_t heartbeat_primask = __get_PRIMASK();
+    __disable_irq();
+    const uint32_t current_heartbeat = last_heartbeat_tick;
+    if (heartbeat_timed_out(HAL_GetTick(), current_heartbeat,
+                             HEARTBEAT_TIMEOUT_MS)) {
       if (any_physical_emergency()) {
         heartbeat_only_latch = false;
       } else if (!Emergency_State()) {
         heartbeat_only_latch = true;
       }
       Emergency_SetState(1);
+      target_blade_on_off = 0;
+      target_blade_authorization_epoch = ActuatorAuthorization_Epoch();
+      blade_on_off = 0;
     }
+    __set_PRIMASK(heartbeat_primask);
 
-    BLADEMOTOR_Set(blade_on_off, blade_direction);
+    /* Close the interrupt window between the earlier snapshot and the motor
+     * request. A new emergency generation, emergency state, IDLE transition,
+     * or explicit OFF command must still force this cycle's output OFF. */
+    const uint32_t output_primask = __get_PRIMASK();
+    __disable_irq();
+    const uint32_t output_generation = ActuatorAuthorization_Epoch();
+    const bool output_links_healthy =
+        DRIVEMOTOR_FeedbackHealthy() && BLADEMOTOR_FeedbackHealthy() &&
+        DRIVEMOTOR_FaultSequence() == drive_fault_sequence &&
+        BLADEMOTOR_FaultSequence() == blade_fault_sequence &&
+        MOTORLINK_OutputInhibited() == 0u;
+    if (!output_links_healthy) {
+      MOTORLINK_ForceInhibit();
+      motor_link_rearm_required = 1u;
+      motor_link_rearm_state.required = true;
+      motor_link_rearm_state.zero_phase_baseline = host_zero_phase_sequence;
+      target_blade_on_off = 0u;
+      target_blade_authorization_epoch = output_generation;
+      blade_on_off = 0u;
+      hard_stop = true;
+    }
+    if (Emergency_State() != 0u ||
+        main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
+        motor_link_rearm_required != 0u ||
+        target_blade_on_off == 0u ||
+        target_blade_authorization_epoch != output_generation) {
+      blade_on_off = 0;
+    }
+    const bool final_drive_stop = hard_stop ||
+                                  !cmd_vel_authorization_current ||
+                                  !output_links_healthy ||
+                                  Emergency_State() != 0u ||
+                                  main_eOpenmowerStatus ==
+                                      OPENMOWER_STATUS_IDLE;
+    if (final_drive_stop) {
+      DRIVEMOTOR_SetSpeedSigned(0, 0,
+                                snap_cmd_vel_authorization_epoch);
+    } else {
+      DRIVEMOTOR_SetSpeedSigned(left_pwm_signed, right_pwm_signed,
+                                snap_cmd_vel_authorization_epoch);
+    }
+    BLADEMOTOR_Set(blade_on_off, blade_direction,
+                   snap_blade_generation);
+    __set_PRIMASK(output_primask);
   }
 }
 
@@ -1450,8 +1706,10 @@ extern "C" void broadcast_handler() {
  * spinOnce — no-op (rosserial spin removed)
  * ---------------------------------------------------------------------------*/
 extern "C" void spinOnce() {
-  // Nothing to do — COBS RX is handled in CDC_DataReceivedHandler().
-  // This function is kept so main.c doesn't need modification.
+  // COBS RX is handled in CDC_DataReceivedHandler(). The main loop applies the
+  // parameter groups the host changed and services the flash commit / reports.
+  apply_param_groups(fw_params_take_dirty_groups());
+  fw_params_service(HAL_GetTick());
 }
 
 /* ---------------------------------------------------------------------------
@@ -1467,10 +1725,11 @@ extern "C" void init_ROS() {
   mowgli_comms_register_handler(PKT_ID_HL_STATE, on_hl_state);
   mowgli_comms_register_handler(PKT_ID_CMD_BLADE, on_cmd_blade);
   mowgli_comms_register_handler(PKT_ID_REBOOT, on_reboot);
-  mowgli_comms_register_handler(PKT_ID_SET_DRIVE_PID, on_set_drive_pid);
-  mowgli_comms_register_handler(PKT_ID_SET_YAW_PID, on_set_yaw_pid);
-  mowgli_comms_register_handler(PKT_ID_SET_KINEMATICS, on_set_kinematics);
-  mowgli_comms_register_handler(PKT_ID_SET_SAFETY_LIMITS, on_set_safety_limits);
+  mowgli_comms_register_handler(PKT_ID_SET_PARAM, on_set_param);
+  mowgli_comms_register_handler(PKT_ID_GET_PARAM, on_get_param);
+  mowgli_comms_register_handler(PKT_ID_PARAM_COMMIT, on_param_commit);
+  mowgli_comms_register_handler(PKT_ID_PARAM_STORE_RESET,
+                                on_param_store_reset);
   mowgli_comms_register_handler(PKT_ID_CONFIG_REQ, on_config_req);
 
   // Initialise timers
@@ -1481,31 +1740,22 @@ extern "C" void init_ROS() {
   NBT_init(&motors_nbt, MOTORS_NBT_TIME_MS);
   NBT_init(&blade_nbt, BLADE_NBT_TIME_MS);
 
-#if USE_WHEEL_PI
-  // Per-wheel velocity PI gains/limits (vendored PX4 PID, pid.hpp). D=0 — no
-  // derivative on a velocity loop. Gains/limits are in PWM units, matching the
-  // hand-rolled loop they replace (Kp·err + integrator, integral clamp ±100,
-  // output clamp ±255). The PID adds derivative-on-measurement (unused at D=0)
-  // and conditional-integration anti-windup.
-  left_wheel_pid.setGains(WHEEL_PI_KP_PWM_PER_MPS, WHEEL_PI_KI_PWM_PER_MPS_S,
-                          0.0f);
-  left_wheel_pid.setIntegralLimit(WHEEL_PI_INT_MAX_PWM);
-  left_wheel_pid.setOutputLimit(255.0f);
-  right_wheel_pid.setGains(WHEEL_PI_KP_PWM_PER_MPS, WHEEL_PI_KI_PWM_PER_MPS_S,
-                           0.0f);
-  right_wheel_pid.setIntegralLimit(WHEEL_PI_INT_MAX_PWM);
-  right_wheel_pid.setOutputLimit(255.0f);
-
-  /* Gyro yaw-rate loop (Option C). Output/integral both clamped to the trim
-   * limit so the differential correction is bounded regardless of gains. */
-  yaw_pid.setGains(YAW_PI_KP_DEFAULT, YAW_PI_KI_DEFAULT, 0.0f);
-  yaw_pid.setIntegralLimit(YAW_TRIM_LIMIT_MPS_DEFAULT * YAW_INT_LIMIT_FRAC);
-  yaw_pid.setOutputLimit(YAW_TRIM_LIMIT_MPS_DEFAULT);
-#endif
+  // Apply every runtime parameter group: the values fw_params_init() loaded
+  // from flash (or the compiled defaults when none are stored), so a board the
+  // host never talks to still runs the persisted configuration. The wheel PIs
+  // are the vendored PX4 PID (pid.hpp) in PWM units; the yaw loop's output and
+  // integral are both clamped to the trim limit.
+  fw_params_mark_all_dirty();
+  apply_param_groups(fw_params_take_dirty_groups());
 
   last_odom_tick = HAL_GetTick();
-  last_heartbeat_tick = 0;
+  /* Start the heartbeat watchdog at initialization, not at the first packet:
+   * a host that sends actuator commands but omits HEARTBEAT must time out. */
+  last_heartbeat_tick = HAL_GetTick();
   last_cmd_vel_tick = 0;
+  valid_cmd_vel_seen = 0u;
+  heartbeat_seen = 0u;
+  DRIVEMOTOR_SetHostZeroMotionIntent(1u);
 }
 
 float clamp(float d, float min, float max) {

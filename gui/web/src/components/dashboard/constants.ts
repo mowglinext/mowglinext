@@ -20,6 +20,7 @@ export const MOWER_STATES: Record<string, { label: string; tone: 'info' | 'prima
   IDLE_DOCKED:                { label: 'mowerStates.IDLE_DOCKED.label',                 tone: 'info',    friendly: 'mowerStates.IDLE_DOCKED.friendly' },
   IDLE:                       { label: 'mowerStates.IDLE.label',                        tone: 'info',    friendly: 'mowerStates.IDLE.friendly' },
   CHARGING:                   { label: 'mowerStates.CHARGING.label',                    tone: 'success', friendly: 'mowerStates.CHARGING.friendly' },
+  MANUAL_CHARGING:            { label: 'mowerStates.MANUAL_CHARGING.label',             tone: 'info',    friendly: 'mowerStates.MANUAL_CHARGING.friendly' },
 
   // Autonomous mowing cycle
   PREFLIGHT_CHECK:            { label: 'mowerStates.PREFLIGHT_CHECK.label',             tone: 'info',    friendly: 'mowerStates.PREFLIGHT_CHECK.friendly' },
@@ -41,6 +42,7 @@ export const MOWER_STATES: Record<string, { label: string; tone: 'info' | 'prima
   // Battery
   LOW_BATTERY_DOCKING:        { label: 'mowerStates.LOW_BATTERY_DOCKING.label',         tone: 'warning', friendly: 'mowerStates.LOW_BATTERY_DOCKING.friendly' },
   CRITICAL_BATTERY_DOCKING:   { label: 'mowerStates.CRITICAL_BATTERY_DOCKING.label',    tone: 'warning', friendly: 'mowerStates.CRITICAL_BATTERY_DOCKING.friendly' },
+  CRITICAL_BATTERY_CHARGING:  { label: 'mowerStates.CRITICAL_BATTERY_CHARGING.label',   tone: 'warning', friendly: 'mowerStates.CRITICAL_BATTERY_CHARGING.friendly' },
   CRITICAL_BATTERY_NAV_FAILED:{ label: 'mowerStates.CRITICAL_BATTERY_NAV_FAILED.label', tone: 'danger',  friendly: 'mowerStates.CRITICAL_BATTERY_NAV_FAILED.friendly' },
 
   // Rain
@@ -307,6 +309,17 @@ export const KEYFRAMES_CSS = `
   color: var(--rose) !important;
 }
 
+/* Emergency stop must remain opaque over satellite imagery in every state. */
+.ant-btn.emergency-stop,
+.ant-btn.emergency-stop:hover,
+.ant-btn.emergency-stop:focus,
+.ant-btn.emergency-stop:active {
+  background: var(--rose) !important;
+  border-color: var(--rose) !important;
+  color: var(--bg-deep) !important;
+  font-weight: 700 !important;
+}
+
 /* AntD Steps -- pull the stepper into the concept palette. */
 .ant-steps-item-process .ant-steps-item-icon {
   background: linear-gradient(135deg, var(--lime), var(--emerald)) !important;
@@ -330,6 +343,21 @@ export const KEYFRAMES_CSS = `
 .ant-steps-item-tail::after { background: rgba(236, 255, 244, 0.10) !important; }
 .ant-steps-item-finish > .ant-steps-item-container > .ant-steps-item-tail::after {
   background: linear-gradient(90deg, var(--lime), var(--mint)) !important;
+}
+
+/* Stable form surfaces, regardless of the decorative display mode. */
+:root .settings-page .ant-card,
+:root .onboarding-page .ant-card {
+  background: var(--bg-card-solid) !important;
+}
+
+/* The concept button reset otherwise erases the unchecked switch track. */
+.ant-switch:not(.ant-switch-checked) {
+  background: var(--switch-track) !important;
+  box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+.ant-switch:not(.ant-switch-checked):hover {
+  background: var(--switch-track-hover) !important;
 }
 
 /* AntD Switch -- lime when on. */

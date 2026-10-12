@@ -55,6 +55,9 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 {
   // ── Declare and read parameters ──────────────────────────────────────────
   resolution_ = declare_parameter<double>("resolution", 0.05);
+  max_grid_cells_ = declare_parameter<int64_t>("max_grid_cells", 4000000);
+  if (!std::isfinite(resolution_) || resolution_ <= 0.0 || max_grid_cells_ <= 0)
+    throw std::runtime_error("Invalid map resolution or max_grid_cells resource budget");
   map_size_x_ = declare_parameter<double>("map_size_x", 20.0);
   map_size_y_ = declare_parameter<double>("map_size_y", 20.0);
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
@@ -257,6 +260,17 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 
   keepout_mask_pub_ =
       create_publisher<nav_msgs::msg::OccupancyGrid>("/keepout_mask", transient_qos);
+  planning_grid_error_pub_ =
+      create_publisher<std_msgs::msg::String>("~/planning_grid_error", transient_qos);
+
+  lidar_ignore_corridors_pub_ = create_publisher<mowgli_interfaces::msg::LidarIgnoreCorridorArray>(
+      "/mowgli/lidar_ignore_corridors", transient_qos);
+
+  recorded_area_polygons_pub_ = create_publisher<mowgli_interfaces::msg::RecordedAreaPolygonArray>(
+      "/mowgli/recorded_area_polygons", transient_qos);
+  transit_geometry_pub_ =
+      create_publisher<visualization_msgs::msg::MarkerArray>("~/transit_geometry", transient_qos);
+  invalidate_keepout_mask();
 
   // ── Subscribers ──────────────────────────────────────────────────────────
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
@@ -394,6 +408,14 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         on_add_area(req, res);
       });
 
+  set_area_coverage_lines_srv_ = create_service<mowgli_interfaces::srv::SetAreaCoverageLines>(
+      "~/set_area_coverage_lines",
+      [this](const mowgli_interfaces::srv::SetAreaCoverageLines::Request::SharedPtr req,
+             mowgli_interfaces::srv::SetAreaCoverageLines::Response::SharedPtr res)
+      {
+        on_set_area_coverage_lines(req, res);
+      });
+
   get_mowing_area_srv_ = create_service<mowgli_interfaces::srv::GetMowingArea>(
       "~/get_mowing_area",
       [this](const mowgli_interfaces::srv::GetMowingArea::Request::SharedPtr req,
@@ -401,6 +423,31 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       {
         on_get_mowing_area(req, res);
       });
+
+  add_lidar_ignore_corridor_srv_ = create_service<mowgli_interfaces::srv::AddLidarIgnoreCorridor>(
+      "~/add_lidar_ignore_corridor",
+      [this](const mowgli_interfaces::srv::AddLidarIgnoreCorridor::Request::SharedPtr req,
+             mowgli_interfaces::srv::AddLidarIgnoreCorridor::Response::SharedPtr res)
+      {
+        on_add_lidar_ignore_corridor(req, res);
+      });
+
+  get_lidar_ignore_corridors_srv_ = create_service<mowgli_interfaces::srv::GetLidarIgnoreCorridors>(
+      "~/get_lidar_ignore_corridors",
+      [this](const mowgli_interfaces::srv::GetLidarIgnoreCorridors::Request::SharedPtr req,
+             mowgli_interfaces::srv::GetLidarIgnoreCorridors::Response::SharedPtr res)
+      {
+        on_get_lidar_ignore_corridors(req, res);
+      });
+
+  clear_lidar_ignore_corridors_srv_ =
+      create_service<mowgli_interfaces::srv::ClearLidarIgnoreCorridors>(
+          "~/clear_lidar_ignore_corridors",
+          [this](const mowgli_interfaces::srv::ClearLidarIgnoreCorridors::Request::SharedPtr req,
+                 mowgli_interfaces::srv::ClearLidarIgnoreCorridors::Response::SharedPtr res)
+          {
+            on_clear_lidar_ignore_corridors(req, res);
+          });
 
   capture_dock_antenna_srv_ = create_service<std_srvs::srv::Trigger>(
       "~/capture_dock_antenna",
@@ -452,6 +499,10 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   docking_pose_pub_ =
       create_publisher<geometry_msgs::msg::PoseStamped>("~/docking_pose",
                                                         rclcpp::QoS(1).transient_local());
+
+  area_list_generation_pub_ =
+      create_publisher<std_msgs::msg::UInt64>("~/area_list_generation",
+                                              rclcpp::QoS(1).transient_local());
 
   // ── Obstacle-tracker snapshot (monitoring only) ───────────────────────
   // The tracker output is no longer auto-mirrored into the classification
@@ -548,8 +599,18 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
     }
   }
 
-  // Resize map to fit loaded areas (if any).
+  // Build dock geometry before sizing: its approach may be far from the areas.
+  if (docking_pose_set_)
+    rebuild_dock_polygons();
   resize_map_to_areas();
+
+  // No baseline area_list_generation_ publish here: it is not persisted and
+  // always starts at 0 on a fresh boot, which is exactly what
+  // BTContext::current_area_list_generation already defaults to — a
+  // subscriber that connects before the first edit needs no message to
+  // agree with map_server on that. transient_local covers the case that
+  // actually matters: a subscriber connecting AFTER at least one edit has
+  // already bumped it (bump_area_list_generation(), called from on_add_area).
 
   // Publish docking pose if available (transient_local ensures late subscribers get it).
   if (docking_pose_set_)

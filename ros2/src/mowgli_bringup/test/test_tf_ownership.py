@@ -20,7 +20,7 @@ import yaml
 
 
 def _ros2_src_root() -> str:
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = os.path.dirname(os.path.realpath(__file__))
     return os.path.abspath(os.path.join(here, "..", ".."))
 
 

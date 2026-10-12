@@ -25,7 +25,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 
 if ! harness_run; then
   fail "harness_run" "non-zero exit"
@@ -43,9 +43,9 @@ assert_file_exists "yaml exists" "$YAML"
 CONTENT="$(cat "$YAML")"
 
 assert_match "datum_lat is zero placeholder" \
-  '^[[:space:]]+datum_lat:[[:space:]]+0(\.0)?[[:space:]]*$' "$CONTENT"
+  '^[[:space:]]+datum_lat:[[:space:]]+0(\.0+)?[[:space:]]*$' "$CONTENT"
 assert_match "datum_lon is zero placeholder" \
-  '^[[:space:]]+datum_lon:[[:space:]]+0(\.0)?[[:space:]]*$' "$CONTENT"
+  '^[[:space:]]+datum_lon:[[:space:]]+0(\.0+)?[[:space:]]*$' "$CONTENT"
 assert_match "gnss_receiver_family=auto" \
   '^[[:space:]]+gnss_receiver_family:[[:space:]]+"?auto"?[[:space:]]*$' "$CONTENT"
 assert_match "gnss_serial_device=/dev/ttyAMA4" \
@@ -58,12 +58,9 @@ assert_match "gnss_transport=serial" \
   '^[[:space:]]+gnss_transport:[[:space:]]+"?serial"?[[:space:]]*$' "$CONTENT"
 assert_match "gnss_frame_id=gps_link" \
   '^[[:space:]]+gnss_frame_id:[[:space:]]+"?gps_link"?[[:space:]]*$' "$CONTENT"
-assert_match "ntrip_enabled=true" \
-  '^[[:space:]]+ntrip_enabled:[[:space:]]+true[[:space:]]*$' "$CONTENT"
-assert_match "gnss_ntrip_gga_enabled=true" \
-  '^[[:space:]]+gnss_ntrip_gga_enabled:[[:space:]]+true[[:space:]]*$' "$CONTENT"
-assert_match "gnss_ntrip_gga_interval_s=10" \
-  '^[[:space:]]+gnss_ntrip_gga_interval_s:[[:space:]]+10[[:space:]]*$' "$CONTENT"
+# NTRIP is GUI-owned: the installer leaves the seed default (false) alone.
+assert_match "ntrip_enabled keeps the seed default (GUI-owned)" \
+  '^[[:space:]]+ntrip_enabled:[[:space:]]+false[[:space:]]*$' "$CONTENT"
 
 legacy_yaml_keys=(
   "gps_""protocol:"
@@ -114,28 +111,24 @@ else
   pass "yaml syntax (skipped; PyYAML missing)"
 fi
 
-section "retired localization overrides are removed on upgrade"
+section "an existing mowgli_robot.yaml is left untouched on upgrade (GUI-owned)"
 
-cat >> "$YAML" <<'YAML_RETIRED'
+# Whatever the operator's file holds — including keys the GUI would scrub on
+# its next save — the installer neither strips nor patches it on a rerun.
+cat >> "$YAML" <<'YAML_OPERATOR'
     use_scan_matching: true
-    use_loop_closure: true
-    icp_max_iter: 30
-    lc_max_dist_m: 5.0
-    lidar_map_half_extent_m: 80.0
     use_lidar_map_anchor: false
-YAML_RETIRED
+YAML_OPERATOR
+before="$(cat "$YAML")"
+LIDAR_ENABLED=false; LIDAR_TYPE=none
 if ! harness_run; then
   fail "upgrade harness_run" "non-zero exit"
 else
-  for retired in use_scan_matching use_loop_closure icp_max_iter lc_max_dist_m lidar_map_half_extent_m; do
-    if grep -qE "^[[:space:]]+${retired}:" "$YAML"; then
-      fail "retired localization key absent: $retired" "found in $YAML"
-    else
-      pass "retired localization key absent: $retired"
-    fi
-  done
+  assert_eq "upgrade leaves mowgli_robot.yaml byte-identical" "$before" "$(cat "$YAML")"
   assert_match "operator scan-to-map preference survives upgrade" \
     '^[[:space:]]+use_lidar_map_anchor:[[:space:]]+false[[:space:]]*$' "$(cat "$YAML")"
+  assert_match "installer does not flip lidar_enabled on an existing file" \
+    '^[[:space:]]+lidar_enabled:[[:space:]]+true[[:space:]]*$' "$(cat "$YAML")"
 fi
 
 test_summary

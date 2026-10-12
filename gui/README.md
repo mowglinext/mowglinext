@@ -89,7 +89,7 @@ Available topics (published retained):
 - /gui/ticks — `/wheel_ticks`
 - /gui/wheelOdom — `/wheel_odom`
 - /gui/map — areas, obstacles and dock pose (assembled from the map_server services)
-- /gui/path — full coverage plan (`/coverage/full_plan`)
+- /gui/path — compact coverage preview (`/coverage/plan_preview`, `CoveragePlanPreview`)
 - /gui/plan — current Nav2 plan (`/plan`)
 
 Available commands — publish the service request as JSON, see

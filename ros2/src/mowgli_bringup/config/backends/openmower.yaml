@@ -1,0 +1,24 @@
+# Backend defaults for HARDWARE_BACKEND=openmower (stock OpenMower v1
+# electronics: LowLevel Pico board + xESC motor controllers).
+#
+# Layered between the template and the installed config (Invariant 15):
+#     template  <-  THIS FILE  <-  installed mowgli_robot.yaml
+# by robot_config_util.load_robot_config (mowgli-ros2), by the OpenMower bridge
+# sidecar's launch file, and by the GUI's "default" / reset-to-default
+# (gui/asserts/backend_defaults.json, generated from this file). So on an
+# OpenMower robot, "default" means OpenMower's value, and switching backend
+# never requires rewriting the robot's file.
+#
+# Only keys whose MowgliNext DEFAULT is wrong for this hardware belong here —
+# the keys themselves are shared with every backend.
+mowgli:
+  ros__parameters:
+    # xESC hall ticks (OpenMower OM_WHEEL_TICKS_PER_M), not STM32 encoder ticks.
+    ticks_per_meter: 1600.0
+    # The LowLevel board's own factory safety values (OpenMower v1-fw
+    # applyConfig defaults). The STM32 template values are looser on the
+    # Pico: both_wheels_lift_emergency_ms 1000 would make its lift e-stop ten
+    # times slower than the 100 ms it ships with.
+    both_wheels_lift_emergency_ms: 100   # LowLevel lift_period (>= 2 wheels)
+    one_wheel_lift_emergency_ms: 2500    # LowLevel tilt_period (1 wheel)
+    max_charge_voltage: 29.0             # LowLevel v_battery_cutoff

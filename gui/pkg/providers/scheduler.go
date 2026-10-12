@@ -3,6 +3,8 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -15,8 +17,13 @@ import (
 // schedule mirrors api.Schedule exactly. It is redefined here to avoid an
 // import cycle (providers ← api). Keep fields in sync with api.Schedule.
 type schedule struct {
-	ID         string     `json:"id"`
-	Area       int        `json:"area"`
+	ID string `json:"id"`
+	// AreaID is the STABLE map area id (MapArea.id, mowglinext#637) this schedule
+	// mows; 0 means every area (a plain COMMAND_START). It is resolved to the
+	// current positional index only at fire time, because the index shifts
+	// whenever the area list is edited. AreaName is a display snapshot.
+	AreaID     uint32     `json:"areaId"`
+	AreaName   string     `json:"areaName,omitempty"`
 	Time       string     `json:"time"`
 	DaysOfWeek []int      `json:"daysOfWeek"`
 	Enabled    bool       `json:"enabled"`
@@ -29,6 +36,9 @@ type schedule struct {
 }
 
 const schedulerKeyPrefix = "schedule:"
+
+// maxAreaEnumeration bounds the get_mowing_area walk, matching the GUI's map poll.
+const maxAreaEnumeration = 100
 
 // SchedulerProvider polls the database every minute and triggers autonomous
 // mowing via the high_level_control ROS2 service when a schedule fires.
@@ -176,8 +186,17 @@ func (s *SchedulerProvider) wakeStartupRetry() {
 	}
 }
 
+// describeScheduleClock names the clock schedules are matched against. A schedule's
+// HH:mm is compared with this process's local time, so a container left on UTC
+// fires an 08:15 schedule at 10:15 CEST; logging it once at startup makes that
+// visible without having to run `date` inside the container.
+func describeScheduleClock(now time.Time) string {
+	return fmt.Sprintf("evaluating schedules in time zone %s (now %s)", now.Location(), now.Format("15:04 MST"))
+}
+
 func (s *SchedulerProvider) run() {
 	startedAt := time.Now()
+	logrus.Infof("Scheduler: %s", describeScheduleClock(startedAt))
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
@@ -259,27 +278,37 @@ func (s *SchedulerProvider) checkSchedulesAtLocked(now time.Time) {
 			continue
 		}
 
-		logrus.Infof("Scheduler: triggering autonomous mowing for schedule %s (area %d)", sched.ID, sched.Area)
+		// "All areas" (AreaID 0) is a plain COMMAND_START; a schedule bound to
+		// one area goes through start_in_area instead, which mows that single
+		// area and then docks.
+		areaIndex := uint32(0)
+		if sched.AreaID != 0 {
+			index, reason := s.resolveAreaIndex(sched.AreaID)
+			if reason != "" {
+				logrus.Warnf("Scheduler: skipping schedule %s — %s", sched.ID, reason)
+				s.persistSkip(sched, reason, now)
+				continue
+			}
+			areaIndex = index
+		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		var res mowgli.HighLevelControlRes
-		err = s.rosProvider.CallService(
-			ctx,
-			"/behavior_tree_node/high_level_control",
-			&mowgli.HighLevelControlReq{Command: 1}, // 1 = COMMAND_START
-			&res,
-		)
-		cancel()
+		if sched.AreaID == 0 {
+			logrus.Infof("Scheduler: triggering autonomous mowing for schedule %s (all areas)", sched.ID)
+		} else {
+			logrus.Infof("Scheduler: triggering autonomous mowing for schedule %s (area id %d, index %d)",
+				sched.ID, sched.AreaID, areaIndex)
+		}
 
+		accepted, err := s.startMowing(sched.AreaID != 0, areaIndex)
 		if err != nil {
-			logrus.Errorf("Scheduler: failed to call high_level_control for schedule %s: %v", sched.ID, err)
+			logrus.Errorf("Scheduler: failed to start mowing for schedule %s: %v", sched.ID, err)
 			continue
 		}
 		// A delivered call is not an accepted one: behavior_tree_node answers
 		// success=false while it refuses START (update maintenance). Nothing
 		// ran, so LastRun stays untouched and the next tick may retry (#702).
-		if !res.Success {
-			logrus.Warnf("Scheduler: high_level_control rejected START for schedule %s", sched.ID)
+		if !accepted {
+			logrus.Warnf("Scheduler: behavior tree rejected START for schedule %s", sched.ID)
 			continue
 		}
 
@@ -289,6 +318,72 @@ func (s *SchedulerProvider) checkSchedulesAtLocked(now time.Time) {
 			current.LastRun = &now
 		})
 	}
+}
+
+// startMowing sends the start command: start_in_area for one area, plain
+// COMMAND_START (high_level_control) for all of them. It reports whether the
+// behavior tree ACCEPTED the command.
+func (s *SchedulerProvider) startMowing(singleArea bool, areaIndex uint32) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if singleArea {
+		var res mowgli.StartInAreaRes
+		err := s.rosProvider.CallService(
+			ctx,
+			"/behavior_tree_node/start_in_area",
+			&mowgli.StartInAreaReq{Area: uint8(areaIndex)},
+			&res,
+			"mowgli_interfaces/srv/StartInArea",
+		)
+		return res.Success, err
+	}
+
+	var res mowgli.HighLevelControlRes
+	err := s.rosProvider.CallService(
+		ctx,
+		"/behavior_tree_node/high_level_control",
+		&mowgli.HighLevelControlReq{Command: 1}, // 1 = COMMAND_START
+		&res,
+	)
+	return res.Success, err
+}
+
+// resolveAreaIndex maps a stable area id to map_server's CURRENT positional
+// index, asking the map server itself (not a cached snapshot) because the
+// index shifts whenever the area list is edited. A non-empty reason means
+// the run must be skipped, and says why.
+func (s *SchedulerProvider) resolveAreaIndex(areaID uint32) (uint32, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for i := uint32(0); i < maxAreaEnumeration; i++ {
+		var res mowgli.GetMowingAreaRes
+		err := s.rosProvider.CallService(
+			ctx,
+			"/map_server_node/get_mowing_area",
+			&mowgli.GetMowingAreaReq{Index: i},
+			&res,
+			"mowgli_interfaces/srv/GetMowingArea",
+		)
+		if err != nil {
+			return 0, fmt.Sprintf("could not look up the area (%v)", err)
+		}
+		if !res.Success {
+			break // end of the area list
+		}
+		if res.Area.Id != areaID {
+			continue
+		}
+		if res.Area.IsNavigationArea {
+			return 0, "the scheduled area is a navigation area and cannot be mowed"
+		}
+		if i > math.MaxUint8 {
+			return 0, "the scheduled area index is out of range for start_in_area"
+		}
+		return i, ""
+	}
+	return 0, "the scheduled area no longer exists"
 }
 
 // updateRunMetadata applies mutate to the schedule AS STORED NOW, never to

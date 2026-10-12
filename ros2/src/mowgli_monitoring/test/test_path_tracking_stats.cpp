@@ -151,6 +151,68 @@ TEST(PathTrackingStats, DropsNonFiniteSamplesInsteadOfPoisoningTheSummary)
   EXPECT_NEAR(summary.MaxAbsPositionErrorM(), 0.02, kEps);
 }
 
+TEST(PathTrackingStats, RecentPercentileIgnoresASingleExcursionThatTheMaxKeeps)
+{
+  // Arrange — 99 well-tracked samples and ONE 0.6 m avoidance excursion.
+  Summary summary;
+  for (std::uint32_t i = 0; i < 99; ++i)
+  {
+    summary.Add({0.03, 0.0, i});
+  }
+  summary.Add({0.6, 0.0, 99});
+
+  // Act / Assert — the max holds the excursion, the p95 does not.
+  EXPECT_NEAR(summary.MaxAbsPositionErrorM(), 0.6, kEps);
+  EXPECT_NEAR(summary.RecentPercentileAbsPositionErrorM(0.95), 0.03, kEps);
+  EXPECT_NEAR(summary.RecentPercentileAbsPositionErrorM(1.0), 0.6, kEps);
+}
+
+TEST(PathTrackingStats, RecentPercentileSeesSustainedPoorTracking)
+{
+  Summary summary;
+  for (std::uint32_t i = 0; i < 100; ++i)
+  {
+    summary.Add({i % 2 == 0 ? 0.30 : -0.30, 0.0, i});
+  }
+
+  EXPECT_NEAR(summary.RecentPercentileAbsPositionErrorM(0.95), 0.30, kEps);
+}
+
+TEST(PathTrackingStats, RecentWindowForgetsSamplesOlderThanTheWindow)
+{
+  // Arrange — a bad stretch, then more than a full window of clean tracking.
+  Summary summary;
+  std::uint32_t index = 0;
+  for (int i = 0; i < 50; ++i)
+  {
+    summary.Add({0.5, 0.0, index++});
+  }
+  for (std::size_t i = 0; i < mowgli_interfaces::path_tracking::kRecentWindowSamples; ++i)
+  {
+    summary.Add({0.02, 0.0, index++});
+  }
+
+  // Assert — the goal-wide max still remembers, the window does not.
+  EXPECT_EQ(summary.RecentCount(), mowgli_interfaces::path_tracking::kRecentWindowSamples);
+  EXPECT_NEAR(summary.MaxAbsPositionErrorM(), 0.5, kEps);
+  EXPECT_NEAR(summary.RecentPercentileAbsPositionErrorM(0.95), 0.02, kEps);
+}
+
+TEST(PathTrackingStats, RecentPercentileIsZeroWithoutSamplesAndClearedByReset)
+{
+  Summary summary;
+  EXPECT_EQ(summary.RecentCount(), 0u);
+  EXPECT_NEAR(summary.RecentPercentileAbsPositionErrorM(0.95), 0.0, kEps);
+
+  summary.Add({0.2, 0.0, 0});
+  EXPECT_EQ(summary.RecentCount(), 1u);
+  EXPECT_NEAR(summary.RecentPercentileAbsPositionErrorM(0.95), 0.2, kEps);
+
+  summary.Reset();
+  EXPECT_EQ(summary.RecentCount(), 0u);
+  EXPECT_NEAR(summary.RecentPercentileAbsPositionErrorM(0.95), 0.0, kEps);
+}
+
 TEST(PathTrackingStats, ResetClearsEverything)
 {
   // Arrange

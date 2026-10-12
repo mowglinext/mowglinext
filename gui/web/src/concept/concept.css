@@ -69,3 +69,15 @@
   0%   { transform: translateX(-160%) skewX(-12deg); }
   100% { transform: translateX(280%)  skewX(-12deg); }
 }
+
+/* The focused setting stays identifiable after following a search result. */
+[data-setting-key][data-search-target="true"] {
+  outline: 2px solid var(--lime);
+  outline-offset: 5px;
+  border-radius: 6px;
+}
+[data-concept] button:focus-visible,
+[data-concept] [role="radio"]:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 3px;
+}

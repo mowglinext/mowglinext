@@ -63,10 +63,12 @@
 //                     worth seeing from across the lawn -- warm colour plus
 //                     motion, both changed, so it cannot be mistaken for the
 //                     healthy arc in bright sun where hue alone is unreliable.
-//      TRANSIT        (autonomous, blade off, driving a blade-off transit
-//                     between coverage sub-paths) the two ring HALVES
-//                     alternate lit/dark in light orange, ~1 s each -- not a
-//                     comet (nothing rotates around the ring) and not a
+//      TRANSIT        (autonomous, blade off, driving without mowing --
+//                     between coverage sub-paths within an area, between
+//                     areas, undocking, or returning to the dock) the two
+//                     ring HALVES alternate lit/dark in light orange, ~1 s
+//                     each -- not a comet (nothing rotates around the ring)
+//                     and not a
 //                     whole-ring blink (LOW BATTERY), so it cannot be
 //                     confused with either: exactly half the ring is ever
 //                     lit, and which half flips. Ranked ahead of MOWING/
@@ -144,11 +146,17 @@ struct LedInputs
   bool emergency = false;
   /// GNSS currently reports an RTK-Fixed solution.
   bool rtk_fixed = false;
-  /// FollowStrip is currently driving a blade-off transit between coverage
-  /// sub-paths (HighLevelStatus.sub_state_name == "TRANSIT" while state is
-  /// AUTONOMOUS). Only meaningful in that state; the node does not need to
-  /// clear it elsewhere since SelectMode only reads it inside the
-  /// kAutonomous branch.
+  /// The robot is currently driving without mowing: HighLevelStatus's
+  /// sub_state_name == "TRANSIT" (FollowStrip's own blade-off bridge between
+  /// coverage sub-paths, live-overridden mid-invocation -- see
+  /// withLiveStatusFields in mowgli_behavior/status_snapshot.cpp) OR its
+  /// tree-owned state_name is "TRANSIT" (transit to a new/re-planned area's
+  /// coverage start, including between two areas), "UNDOCKING", or
+  /// "RETURNING_HOME". All four are blade-off driving under the same
+  /// HIGH_LEVEL_STATE_AUTONOMOUS numeric state, which alone cannot tell them
+  /// apart from MOWING -- see led_ring_node.cpp's collectInputs(). Only
+  /// meaningful in that state; the node does not need to clear it elsewhere
+  /// since SelectMode only reads it inside the kAutonomous branch.
   bool transiting = false;
   /// Seconds the ring has continuously shown the steady "charge complete"
   /// frame (is_charging && battery_valid && battery_percent >=

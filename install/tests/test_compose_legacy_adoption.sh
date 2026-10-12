@@ -35,7 +35,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=none tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=none
 
 file_digest() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -92,7 +92,7 @@ else
 fi
 assert_eq "declined: updater asked once, without consent" \
   "installer-stack adopt=false" "$(cat "$STUB_LOG")"
-assert_contains "declined: the operator is told why" "no checksum of it was recorded" "$(cat "$SANDBOX/managed.out")"
+assert_contains "declined: the operator is told why" "cannot be vouched for" "$(cat "$SANDBOX/managed.out")"
 assert_contains "declined: the operator is told where edits belong" "stack-overrides.yaml" "$(cat "$SANDBOX/managed.out")"
 assert_eq "declined: installed file untouched" "$compose_before" "$(cat "$FINAL_COMPOSE_FILE")"
 

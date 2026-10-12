@@ -14,7 +14,7 @@ describe('AreasListPanel', () => {
 
     it('shows area count in header', () => {
         render(<AreasListPanel areas={areas} />);
-        expect(screen.getByText(i18n.t('mapAreasList.areasHeader', {count: 3}))).toBeInTheDocument();
+        expect(screen.getByText(i18n.t('mapAreasList.areasHeader', {count: 1}))).toBeInTheDocument();
     });
 
     it('renders all areas immediately (no expand needed)', () => {
@@ -22,6 +22,20 @@ describe('AreasListPanel', () => {
         expect(screen.getByText('Front Yard')).toBeInTheDocument();
         expect(screen.getByText('Nav Zone')).toBeInTheDocument();
         expect(screen.getByText('Tree')).toBeInTheDocument();
+    });
+
+    it('renders only the rows when the header is hidden (the sidebar section names the list)', () => {
+        render(<AreasListPanel areas={areas} hideHeader />);
+        expect(screen.queryByText(i18n.t('mapAreasList.areasHeader', {count: 1}))).not.toBeInTheDocument();
+        expect(screen.getByText('Front Yard')).toBeInTheDocument();
+        expect(screen.getByText('Tree')).toBeInTheDocument();
+    });
+
+    it('can list one type only, e.g. just the drawn obstacles', () => {
+        render(<AreasListPanel areas={areas.filter(a => a.ftype === 'obstacle')} hideHeader />);
+        expect(screen.getByText('Tree')).toBeInTheDocument();
+        expect(screen.queryByText('Front Yard')).not.toBeInTheDocument();
+        expect(screen.queryByText('Nav Zone')).not.toBeInTheDocument();
     });
 
     it('shows area sizes', () => {

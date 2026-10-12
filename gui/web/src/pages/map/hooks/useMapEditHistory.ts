@@ -15,9 +15,27 @@ interface UseMapEditHistoryOptions {
     setFeatures: (features: Record<string, MowingFeature>) => void;
     editMap: boolean;
     setEditMap: (v: boolean) => void;
+    // Called whenever an edit session is genuinely ABANDONED (either branch
+    // of exitEditMode — no unsaved area/obstacle changes to begin with, or
+    // the operator confirmed "discard"). NOT called on a successful Save
+    // Map, which sets editMap false directly without going through here.
+    // MapPage uses this to revert LiDAR-ignore corridors, which (unlike
+    // areas/obstacles) are written to map_server immediately on every edit
+    // rather than staying buffered in `features` until Save — see
+    // useLidarCorridors's own doc comment.
+    onDiscard?: () => void;
+    // Additional "there are unsaved changes" signal from outside this hook
+    // (area/obstacle edits are tracked internally via the `features` watcher
+    // below; this covers a corridor-only edit, which never touches
+    // `features` and so would otherwise silently skip the confirm dialog).
+    extraUnsavedChanges?: boolean;
+    // Runs before edit mode opens; the editor opens only when it resolves true
+    // (MapPage uses it to take a server-side copy of the map first). Absent =
+    // open at once, as before.
+    beforeEdit?: () => Promise<boolean>;
 }
 
-export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: UseMapEditHistoryOptions) {
+export function useMapEditHistory({features, setFeatures, editMap, setEditMap, onDiscard, extraUnsavedChanges, beforeEdit}: UseMapEditHistoryOptions) {
     const {modal} = App.useApp();
     const {t} = useTranslation();
     // History entries are PLAIN serialized snapshots, never the class
@@ -34,6 +52,10 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
     // undo/redo). The watcher effect skips it so entering edit mode leaves
     // history at length 1 with no dirty flag, and undo/redo don't re-push.
     const lastRecordedRef = useRef<Record<string, MowingFeature> | null>(null);
+    // The map may update while beforeEdit runs: open the editor on the LATEST features.
+    const featuresRef = useRef(features);
+    featuresRef.current = features;
+    const openingRef = useRef(false);
 
     function exitEditMode() {
         setEditHistory([]);
@@ -41,15 +63,29 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
         setHasUnsavedChanges(false);
         lastRecordedRef.current = null;
         setEditMap(false);
+        onDiscard?.();
+    }
+
+    function enterEditMode() {
+        const current = featuresRef.current;
+        setEditHistory([serializeFeatures(current)]);
+        setHistoryIndex(0);
+        lastRecordedRef.current = current;
+        setEditMap(true);
     }
 
     function handleEditMap() {
         if (!editMap) {
-            setEditHistory([serializeFeatures(features)]);
-            setHistoryIndex(0);
-            lastRecordedRef.current = features;
-            setEditMap(true);
-        } else if (hasUnsavedChanges) {
+            if (!beforeEdit) {
+                enterEditMode();
+                return;
+            }
+            if (openingRef.current) return; // a second click while the copy is being made
+            openingRef.current = true;
+            void beforeEdit()
+                .then((ok) => { if (ok) enterEditMode(); })
+                .finally(() => { openingRef.current = false; });
+        } else if (hasUnsavedChanges || extraUnsavedChanges) {
             modal.confirm({
                 title: t('mapEditHistory.discardTitle'),
                 content: t('mapEditHistory.discardContent'),

@@ -7,6 +7,13 @@
 #ifndef HEARTBEAT_EMERGENCY_POLICY_HPP
 #define HEARTBEAT_EMERGENCY_POLICY_HPP
 
+#include <stdint.h>
+
+constexpr bool heartbeat_timed_out(uint32_t now, uint32_t last,
+                                   uint32_t timeout) {
+  return (now - last) > timeout;
+}
+
 enum class HeartbeatEmergencyAction {
   Unchanged,
   Assert,

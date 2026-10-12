@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
@@ -19,15 +18,13 @@ import (
 // it reads the fleet snapshot, decides which areas this robot must leave to
 // the others, pushes that to the local BT, publishes the peers' poses into
 // the local ROS graph for the costmap, and applies the proximity yield rule.
-// docs/MULTI_ROBOT.md § 3b/3c. Inert while fleet.coordination.enabled is off.
+// docs/MULTI_ROBOT.md § 3b/3c. While disabled, only reconciles an empty assignment.
 
 const (
 	coordinationSettingsKey   = "fleet.coordination"
 	coordinationMemoryKey     = "fleet.session.completed"
-	coordinatorTick           = 2 * time.Second
+	coordinatorTick           = 1 * time.Second
 	assignmentRefresh         = 30 * time.Second
-	fleetPeersTopic           = "/fleet/peers"
-	fleetPeersMsgType         = "geometry_msgs/msg/PoseArray"
 	setFleetAssignmentService = "/behavior_tree_node/set_fleet_assignment"
 	setFleetAssignmentType    = "mowgli_interfaces/srv/SetFleetAssignment"
 	highLevelControlService   = "/behavior_tree_node/high_level_control"
@@ -55,6 +52,7 @@ type FleetCoordinator struct {
 	identity func() (RobotIdentity, error)
 	now      func() time.Time
 
+	tickMu     sync.Mutex // serialize ticker and immediate settings/reset ticks
 	mu         sync.Mutex
 	memory     map[uint32]time.Time
 	lastPushed *FleetAssignment
@@ -62,6 +60,10 @@ type FleetCoordinator struct {
 	yield      yieldState
 	wasEnabled bool
 	lastError  string
+	// Disabled startup or transition is not finished until the BT accepts the
+	// empty assignment. Failed calls may have applied, so retain explicit intent.
+	clearPending     bool
+	nextClearAttempt time.Time
 
 	stop chan struct{}
 	done chan struct{}
@@ -84,6 +86,10 @@ func newFleetCoordinator(db types.IDBProvider, ros types.IRosProvider, snapshot 
 		memory:   map[uint32]time.Time{},
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
+		// The BT can outlive the GUI process with an earlier assignment. On
+		// disabled startup, reconcile it until acknowledged; enabled startup
+		// supersedes this intent before computing its current assignment.
+		clearPending: true,
 	}
 	c.memory = c.loadMemory()
 	return c
@@ -181,32 +187,61 @@ func (c *FleetCoordinator) Reset() error {
 
 // tick is one coordinator step; exposed unexported for tests.
 func (c *FleetCoordinator) tick(now time.Time) {
+	c.tickMu.Lock()
+	defer c.tickMu.Unlock()
+
 	settings := c.Settings()
 	if !settings.Enabled {
 		c.mu.Lock()
-		wasEnabled := c.wasEnabled
+		if c.wasEnabled {
+			c.clearPending = true
+			c.nextClearAttempt = now
+		}
 		c.wasEnabled = false
 		c.yield = yieldState{}
+		mustClear := c.clearPending && !now.Before(c.nextClearAttempt)
+		if mustClear {
+			c.nextClearAttempt = now.Add(coordinatorTick)
+		}
 		c.mu.Unlock()
-		if wasEnabled {
-			// Hand the whole lawn back to the local BT exactly once.
-			c.pushAssignment(FleetAssignment{Excluded: []uint32{}, PreferredStart: -1}, "coordination disabled", now)
+		if mustClear {
+			// Hand the whole lawn back, retrying at the bounded tick cadence
+			// until acknowledged. This never sends a motion command.
+			if c.pushAssignment(FleetAssignment{Excluded: []uint32{}, PreferredStart: -1}, "coordination disabled", now) {
+				c.mu.Lock()
+				c.clearPending = false
+				c.mu.Unlock()
+			}
 		}
 		return
 	}
+	c.mu.Lock()
+	if c.clearPending {
+		// Supersede the old clear intent. Its outcome was unknown, so force
+		// the current enabled assignment even if it matches the old cache.
+		c.clearPending = false
+		c.lastPushed = nil
+	}
+	c.wasEnabled = true
+	c.mu.Unlock()
 	rows, err := c.snapshot()
 	if err != nil {
 		c.setError("fleet snapshot: " + err.Error())
 		return
 	}
+	// Positions are placed in OUR map frame; without a datum there is no
+	// frame, so the yield rule stands down (members keep a nil position).
+	var selfDatum LatLon
+	if id, err := c.identity(); err == nil {
+		selfDatum = LatLon{Lat: id.DatumLat, Lon: id.DatumLon}
+	}
 	members := make([]fleetMember, 0, len(rows))
 	for _, r := range rows {
-		members = append(members, memberFromRobot(r))
+		members = append(members, memberFromRobotAt(r, selfDatum, peerPoseMaxAge))
 	}
 	self, peers := splitMembers(members)
 
 	c.mu.Lock()
-	c.wasEnabled = true
 	memory := updateCompletedMemory(c.memory, members, now, time.Duration(settings.CompletedTTLHours*float64(time.Hour)))
 	memoryChanged := !reflect.DeepEqual(memory, c.memory)
 	c.memory = memory
@@ -224,7 +259,6 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	if mustPush {
 		c.pushAssignment(assignment, "fleet coordinator", now)
 	}
-	c.publishPeers(peers)
 
 	next, action := decideYield(self, peers, yieldBefore, settings, now)
 	c.mu.Lock()
@@ -240,7 +274,7 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	}
 }
 
-func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now time.Time) {
+func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now time.Time) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), coordinatorCallTimeout)
 	defer cancel()
 	req := mowgli.SetFleetAssignmentReq{
@@ -251,11 +285,11 @@ func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now 
 	var res mowgli.SetFleetAssignmentRes
 	if err := c.ros.CallService(ctx, setFleetAssignmentService, &req, &res, setFleetAssignmentType); err != nil {
 		c.setError("set_fleet_assignment: " + err.Error())
-		return
+		return false
 	}
 	if !res.Success {
 		c.setError("set_fleet_assignment refused: " + res.Message)
-		return
+		return false
 	}
 	c.mu.Lock()
 	copyA := a
@@ -263,46 +297,7 @@ func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now 
 	c.lastPushAt = now
 	c.lastError = ""
 	c.mu.Unlock()
-}
-
-// publishPeers republishes every online peer with a fix as a pose in OUR map
-// frame; an empty array when alone, so fleet_peer_obstacles.py keeps a fresh,
-// empty cloud flowing to the costmap.
-func (c *FleetCoordinator) publishPeers(peers []fleetMember) {
-	id, err := c.identity()
-	if err != nil {
-		return
-	}
-	if id.DatumLat == 0 && id.DatumLon == 0 {
-		return // no map frame yet; nothing to project into
-	}
-	datum := LatLon{Lat: id.DatumLat, Lon: id.DatumLon}
-	stamp := c.now()
-	msg := poseArrayMsg{
-		Header: geometry.Header{
-			Stamp:   geometry.Stamp{Sec: uint32(stamp.Unix()), Nanosec: uint32(stamp.Nanosecond())},
-			FrameId: "map",
-		},
-		Poses: []geometry.Pose{},
-	}
-	for _, p := range peers {
-		if p.Pos == nil {
-			continue
-		}
-		x, y := enuFromDatum(datum, *p.Pos)
-		msg.Poses = append(msg.Poses, geometry.Pose{
-			Position:    geometry.Point{X: x, Y: y, Z: 0},
-			Orientation: geometry.Quaternion{W: 1},
-		})
-	}
-	if err := c.ros.Publish(fleetPeersTopic, fleetPeersMsgType, &msg); err != nil {
-		c.setError("publish /fleet/peers: " + err.Error())
-	}
-}
-
-type poseArrayMsg struct {
-	Header geometry.Header `json:"header"`
-	Poses  []geometry.Pose `json:"poses"`
+	return true
 }
 
 func (c *FleetCoordinator) sendHighLevel(command uint8) {

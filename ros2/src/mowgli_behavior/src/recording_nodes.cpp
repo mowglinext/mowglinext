@@ -429,11 +429,90 @@ double RecordArea::polygon_area(const std::vector<geometry_msgs::msg::Point32>& 
   return std::abs(area) / 2.0;
 }
 
+std::optional<std::vector<geometry_msgs::msg::Point32>> RecordArea::correct_obstacle_points(
+    const std::vector<geometry_msgs::msg::Point32>& points)
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  auto helper = ctx->helper_node;
+
+  if (!correct_obstacle_client_)
+  {
+    correct_obstacle_client_ =
+        helper->create_client<mowgli_interfaces::srv::CorrectRecordedObstacle>(
+            "/coverage_server/correct_recorded_obstacle");
+  }
+
+  if (!correct_obstacle_client_->wait_for_service(std::chrono::seconds(5)))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "RecordArea: correct_recorded_obstacle service not available — refusing to save "
+                 "an uncorrected obstacle (it would be recorded larger than the real object)");
+    return std::nullopt;
+  }
+
+  auto request = std::make_shared<mowgli_interfaces::srv::CorrectRecordedObstacle::Request>();
+  request->polygon.points = points;
+
+  auto future = correct_obstacle_client_->async_send_request(request);
+  // Poll future without spinning (avoids executor deadlock) — same pattern
+  // as the add_area call below.
+  {
+    auto timeout = std::chrono::seconds(10);
+    auto start = std::chrono::steady_clock::now();
+    bool completed = false;
+    while (rclcpp::ok())
+    {
+      if (future.wait_for(std::chrono::milliseconds(10)) == std::future_status::ready)
+      {
+        completed = true;
+        break;
+      }
+      if (std::chrono::steady_clock::now() - start > timeout)
+      {
+        break;
+      }
+    }
+    if (!completed)
+    {
+      RCLCPP_ERROR(ctx->node->get_logger(), "RecordArea: correct_recorded_obstacle call timed out");
+      return std::nullopt;
+    }
+  }
+
+  auto response = future.get();
+  if (!response->success)
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "RecordArea: correct_recorded_obstacle failed: %s",
+                 response->message.c_str());
+    return std::nullopt;
+  }
+
+  return response->corrected.points;
+}
+
 bool RecordArea::save_area(const std::vector<geometry_msgs::msg::Point32>& points,
                            bool is_exclusion_zone)
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   auto helper = ctx->helper_node;
+
+  // An obstacle traced by driving the chassis edge along it is recorded
+  // chassis_width/2 too generous all the way round (base_footprint's own
+  // trajectory, not the true physical surface) — correct that BEFORE saving,
+  // never after: the software must not persist the extra room at all, not
+  // even transiently. Area/boundary recordings are NOT corrected: root
+  // Invariant 5 wants the boundary to ride exactly on the driven line.
+  std::vector<geometry_msgs::msg::Point32> points_to_save = points;
+  if (is_exclusion_zone)
+  {
+    auto corrected = correct_obstacle_points(points);
+    if (!corrected)
+    {
+      return false;
+    }
+    points_to_save = *corrected;
+  }
 
   if (!add_area_client_)
   {
@@ -451,7 +530,7 @@ bool RecordArea::save_area(const std::vector<geometry_msgs::msg::Point32>& point
 
   // Build polygon
   geometry_msgs::msg::Polygon polygon;
-  polygon.points = points;
+  polygon.points = points_to_save;
   request->area.area = polygon;
 
   // Auto-generate area name
@@ -470,7 +549,7 @@ bool RecordArea::save_area(const std::vector<geometry_msgs::msg::Point32>& point
   RCLCPP_INFO(ctx->node->get_logger(),
               "RecordArea: saving area '%s' with %zu vertices (exclusion=%s)",
               request->area.name.c_str(),
-              points.size(),
+              points_to_save.size(),
               is_exclusion_zone ? "true" : "false");
 
   auto future = add_area_client_->async_send_request(request);

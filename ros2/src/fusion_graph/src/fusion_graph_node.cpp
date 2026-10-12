@@ -92,7 +92,9 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
       declare_parameter<double>("adaptive_noise_residual_floor_rad", 0.005);
 
   // RTK wrong-fix detection (handled in OnGnss, not in graph_manager).
-  rtk_wrongfix_max_jump_m_ = declare_parameter<double>("rtk_wrongfix_max_jump_m", 0.05);
+  // Default 0.08 — see fusion_graph_node.hpp's rtk_wrongfix_max_jump_m_ doc
+  // comment / mowglinext#738 for the field-data justification.
+  rtk_wrongfix_max_jump_m_ = declare_parameter<double>("rtk_wrongfix_max_jump_m", 0.08);
   // Stuck-receiver payload-value gate (mowglinext#694, gps_stuck_gate.hpp).
   // Wheel travel accumulated since /gps/fix's reported lat/lon last actually
   // changed, above which the sample is withheld as stuck rather than fused.

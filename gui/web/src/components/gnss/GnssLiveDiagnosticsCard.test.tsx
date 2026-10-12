@@ -35,8 +35,10 @@ describe("GnssLiveDiagnosticsCard", () => {
         expect(screen.getByText("Unicore UM982")).toBeInTheDocument();
         expect(screen.getByText("18 / 24")).toBeInTheDocument();
         expect(screen.getByText("21 / 24")).toBeInTheDocument();
-        expect(screen.getByText("41.5 dB-Hz")).toBeInTheDocument();
-        expect(screen.getByText("50.0 dB-Hz")).toBeInTheDocument();
+        expect(screen.getByText("Mean C/N0 (dB-Hz)")).toBeInTheDocument();
+        expect(screen.getByText("Max C/N0 (dB-Hz)")).toBeInTheDocument();
+        expect(screen.getByText("41.5")).toBeInTheDocument();
+        expect(screen.getByText("50.0")).toBeInTheDocument();
         expect(screen.getByText(en.settingsGnssLiveStatus.msmStateValid)).toBeInTheDocument();
         expect(screen.getByText("GPS+GLO+GAL")).toBeInTheDocument();
         expect(screen.getByText("4095")).toBeInTheDocument();

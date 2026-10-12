@@ -107,33 +107,41 @@ Foxglove Studio then connects to `ws://localhost:8765`; the noVNC view of the si
 
 ## Quick Start on Hardware (Automated)
 
-The easiest way to deploy on real hardware is the install composer at [mowgli.garden](https://mowgli.garden/#getting-started). Pick your hardware (GPS, LiDAR, rangefinders) and copy the generated command. Or run the installer directly:
+The easiest way to deploy on real hardware is the install composer at [mowgli.garden](https://mowgli.garden/#getting-started). Pick your hardware (backend, GNSS link, LiDAR) and copy the generated command — it runs **non-interactively**: every choice it does not list takes its documented default. Or run the installer directly and answer the prompts:
 
 ```bash
 curl -sSL https://mowgli.garden/install.sh | bash
 ```
 
-The installer handles:
+The installer only wires the **host**:
 - Docker installation (if needed)
-- udev rules for serial devices (`/dev/mowgli`, `/dev/gps`, `/dev/lidar`)
-- Sensor configuration (pre-filled if you used the web composer, interactive otherwise)
-- Mower configuration (GPS datum, dock position, NTRIP credentials)
-- Pulling and launching all containers
-- Post-install diagnostics
+- udev rules for serial devices (`/dev/mowgli`, `/dev/gps`, `/dev/lidar`), UART overlays, DDS sysctl
+- `docker/.env`, the merged compose file and the sparse `mowgli_robot.yaml` seed (hardware keys only)
+- the `mowgli-*` helper commands, the host updater service, then pulls and starts the containers
 
-Run diagnostics on an existing installation:
+Datum, NTRIP, the GNSS receiver profile and LiDAR mounting are **not** asked: the GUI onboarding wizard configures them after the first start.
 
-```bash
-cd ~/mowglinext/install && ./mowglinext.sh --check
-```
-
-Add or re-run a single step on an already-installed robot, instead of repeating the whole flow — e.g. install the host auto-updater afterwards, without re-answering every hardware prompt:
+The same script has four modes, all run from the checkout:
 
 ```bash
-cd ~/mowglinext/install && ./mowglinext.sh --only=updater
+cd ~/mowglinext/install
+./mowglinext.sh check                 # diagnostics only
+./mowglinext.sh update                # manual update: sync the checkout, regenerate .env/compose, pull, restart
+./mowglinext.sh update --branch=dev   # ...onto another branch/image channel
+./mowglinext.sh repair                # re-apply udev/UART/sysctl/.env/compose/helpers from the saved choices, no prompts
+./mowglinext.sh install --non-interactive --backend=mowgli --gnss-connection=uart --lidar=ldlidar-uart
+./mowglinext.sh uninstall             # remove everything; keeps the maps volume and mowgli_robot.yaml for a later reinstall
 ```
 
-Valid step names: `system`, `docker`, `uart`, `backend`, `gps`, `lidar`, `rangefinders`, `directory`, `migrate`, `env`, `udev`, `mower`, `tools`, `motd`, `updater`, `startup` (run with any other/unrecognised name to have the installer print this same list). `--only=` skips the branch/language prompts and reuses your existing configuration — it does not re-ask anything the full install flow would.
+`update` is deliberately independent of the host updater (Settings > Updates): no readiness gate, no firmware-protocol check, no backup/rollback transaction — it is the escape hatch when the updater cannot or must not run. It regenerates the runtime files with the same writers as `install`, so an installed updater can adopt the result afterwards.
+
+Add or re-run a single step on an already-installed robot, instead of repeating the whole flow — e.g. install the host auto-updater afterwards:
+
+```bash
+./mowglinext.sh --only=updater
+```
+
+Valid step names: `docker`, `backend`, `gps`, `lidar`, `uart`, `directory`, `migrate`, `env`, `udev`, `mower`, `helpers`, `updater`, `startup`, `system` (run with any other name to have the installer print this list). `--only=` skips the branch/language prompts and reuses your existing configuration.
 
 ## Manual Install
 

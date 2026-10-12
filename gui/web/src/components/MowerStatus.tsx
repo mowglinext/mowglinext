@@ -160,7 +160,7 @@ export const MowerStatus = () => {
                                 fontSize: 13,
                             }}/>
                             <Typography.Text style={{fontSize: 12, color: colors.text}}>
-                                {batteryPercent}%
+                                <span style={{display: 'inline-block', width: '3ch', textAlign: 'end', fontVariantNumeric: 'tabular-nums'}}>{batteryPercent}</span>%
                             </Typography.Text>
                         </Space>
                     </Button>

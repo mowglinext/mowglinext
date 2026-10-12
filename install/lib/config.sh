@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-#interactive_config
 
 # ── Global configuration ────────────────────────────────────────────────────
 
@@ -47,6 +46,7 @@ recompute_image_defaults() {
   LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
   MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
+  OPENMOWER_IMAGE_DEFAULT="${prefix}/openmower:${IMAGE_TAG}"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
   # Universal GNSS is a separately released runtime. Never derive it from
   # MowgliNext IMAGE_TAG; the integration targets ROS 2 Lyrical.
@@ -164,6 +164,12 @@ select_repo_branch() {
   current_ref="$(repo_current_ref "$REPO_DIR" 2>/dev/null || true)"
   previous="${REPO_BRANCH:-${current_branch:-main}}"
 
+  if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then
+    REPO_BRANCH="${current_branch:-$previous}"
+    info "Repository branch: ${REPO_BRANCH} (current checkout)"
+    return 0
+  fi
+
   echo ""
   echo -e "${CYAN:-}${BOLD:-}Repository branch${NC:-}"
   if [[ -n "$current_branch" ]]; then
@@ -244,6 +250,13 @@ select_image_channel() {
     previous="$current_branch_tag"
   fi
 
+  if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then
+    IMAGE_TAG="$previous"
+    info "Image tag: ${IMAGE_TAG}"
+    recompute_image_defaults
+    return 0
+  fi
+
   echo ""
   echo -e "${CYAN:-}${BOLD:-}Image tag${NC:-}"
   echo "  1) main — stable published images"
@@ -302,6 +315,19 @@ CHECK_ONLY=false
 # default. See run_only_step()/list_only_steps() in mowglinext.sh for the
 # valid step names.
 ONLY_STEP=""
+# Mode: install (default) | update | repair | check | only (--only=<step>).
+INSTALL_MODE="install"
+# Set when the mode came from the command line; a bare run on an installed
+# robot with a terminal asks instead of silently reinstalling.
+MODE_EXPLICIT=false
+# --non-interactive: every prompt takes its default. Also switched on
+# automatically when no controlling terminal is available (parse_args).
+NON_INTERACTIVE=false
+# Distinguishes an explicit --yes from a missing tty: only the former may
+# confirm a destructive mode (uninstall).
+NON_INTERACTIVE_EXPLICIT=false
+# --no-updater: install without the host updater service (manual updates only).
+INSTALL_UPDATER=true
 CLI_PRESET=false
 GNSS_RECEIVER_FAMILY_CLI_PRESET=false
 GNSS_CONNECTION_CLI_PRESET=false
@@ -332,13 +358,10 @@ compose_restart_services_for_backend() {
   local gnss_stack
   local gnss_service
 
-  case "$backend" in
-    mowgli|mavros) ;;
-    *)
-      error "Unknown hardware backend: $backend (expected mowgli or mavros)"
-      return 1
-      ;;
-  esac
+  if ! is_supported_hardware_backend "$backend"; then
+    error "Unknown hardware backend: $backend (expected ${SUPPORTED_HARDWARE_BACKENDS// /, })"
+    return 1
+  fi
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
   gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
@@ -349,6 +372,10 @@ compose_restart_services_for_backend() {
 
   if [[ "$backend" == "mavros" ]]; then
     services+=(mavros)
+  fi
+  # The OpenMower bridge reads mowgli_robot.yaml too, so it restarts with it.
+  if [[ "$backend" == "openmower" ]]; then
+    services+=(openmower)
   fi
   services+=(mowgli)
 
@@ -367,105 +394,6 @@ print_restart_command_for_backend() {
     printf ' %q' "$service"
   done
   printf '\n'
-}
-
-range_services_available() {
-  local fragment
-
-  for fragment in \
-    "$COMPOSE_SRC_DIR/docker-compose.tfluna-front.yml" \
-    "$COMPOSE_SRC_DIR/docker-compose.tfluna-edge.yml"
-  do
-    if [ ! -f "$fragment" ]; then
-      return 1
-    fi
-
-    if grep -q 'ghcr.io/\.\.\.' "$fragment" 2>/dev/null; then
-      return 1
-    fi
-  done
-
-  return 0
-}
-
-vesc_service_available() {
-  # Keep VESC disabled during the installer hardening phase until the
-  # runtime/image contract is finalized and tested end-to-end.
-  return 1
-}
-
-feature_is_available() {
-  local feature="${1:-}"
-
-  case "$feature" in
-    range|rangefinders|tfluna|tfluna_front|tfluna_edge)
-      range_services_available
-      ;;
-    vesc)
-      vesc_service_available
-      ;;
-    *)
-      return 0
-      ;;
-  esac
-}
-
-warn_unavailable_feature_once() {
-  local feature="${1:?warn_unavailable_feature_once: missing feature}"
-  local message="${2:?warn_unavailable_feature_once: missing message}"
-  local flag_name="FEATURE_WARNING_${feature//[^A-Za-z0-9_]/_}"
-
-  if [ "${!flag_name:-false}" = "true" ]; then
-    return 0
-  fi
-
-  warn "$message"
-  printf -v "$flag_name" '%s' "true"
-}
-
-effective_tfluna_front_enabled() {
-  if [[ "${TFLUNA_FRONT_ENABLED:-false}" != "true" ]]; then
-    return 1
-  fi
-
-  if feature_is_available tfluna_front; then
-    return 0
-  fi
-
-  warn_unavailable_feature_once \
-    tfluna \
-    "TF-Luna rangefinder services are not available on this branch yet; requested TF-Luna options will be skipped."
-  return 1
-}
-
-effective_tfluna_edge_enabled() {
-  if [[ "${TFLUNA_EDGE_ENABLED:-false}" != "true" ]]; then
-    return 1
-  fi
-
-  if feature_is_available tfluna_edge; then
-    return 0
-  fi
-
-  warn_unavailable_feature_once \
-    tfluna \
-    "TF-Luna rangefinder services are not available on this branch yet; requested TF-Luna options will be skipped."
-  return 1
-}
-
-effective_vesc_enabled() {
-  if [[ "${ENABLE_VESC:-false}" != "true" ]]; then
-    return 1
-  fi
-
-  if feature_is_available vesc; then
-    return 0
-  fi
-
-  warn_unavailable_feature_once \
-    vesc \
-    "VESC support is not available on this branch yet; the VESC compose fragment will be skipped."
-  return 1
 }
 
 warn_legacy_nmea_backend_once() {
@@ -590,6 +518,26 @@ gnss_connection_from_serial_device() {
   printf 'uart\n'
 }
 
+# Every hardware backend the installer can select. Lives HERE, next to the
+# other shared predicates, and NOT in backend_choice.sh (which owns only the
+# interactive selection flow): docker/stack.sh sources common/config/docker/
+# deploy/compose and then calls build_compose_stack, so a guard that compose.sh
+# needs must be defined in a lib stack.sh actually sources. When this lived in
+# backend_choice.sh, `stack.sh regen` died with "command not found" and — since
+# `! <missing command>` is TRUE — reported "Unknown HARDWARE_BACKEND" for every
+# backend including the default one.
+# Keep in lockstep with SUPPORTED_HARDWARE_BACKENDS in
+# ros2/src/mowgli_bringup/launch/mowgli.launch.py (pinned by
+# test_hardware_backend_launch.py) and the composer in docs/index.html.
+SUPPORTED_HARDWARE_BACKENDS="mowgli mavros openmower"
+
+is_supported_hardware_backend() {
+  case "${1:-}" in
+    mowgli|mavros|openmower) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 list_supported_gnss_backends() {
   printf 'universal disabled\n'
 }
@@ -673,6 +621,16 @@ gnss_transport_from_state() {
   printf '%s\n' "${transport,,}"
 }
 
+# On OpenMower v1 the GPS sits on ttyAMA2 (open_mower_ros, kernel >= 6.1.28);
+# ttyAMA4 — the usual GNSS port — is the mow xESC there.
+default_gnss_uart_device() {
+  if [[ "${HARDWARE_BACKEND:-}" == "openmower" ]]; then
+    printf '/dev/ttyAMA2\n'
+  else
+    printf '/dev/ttyAMA4\n'
+  fi
+}
+
 gnss_serial_device_from_state() {
   if [[ -n "${GNSS_SERIAL_DEVICE:-}" ]]; then
     printf '%s\n' "$GNSS_SERIAL_DEVICE"
@@ -681,7 +639,7 @@ gnss_serial_device_from_state() {
 
   case "$(gnss_connection_from_serial_device)" in
     usb)  printf '/dev/serial/by-id/usb-stub\n' ;;
-    *)    printf '/dev/ttyAMA4\n' ;;
+    *)    default_gnss_uart_device ;;
   esac
 }
 
@@ -843,11 +801,36 @@ compose_gnss_container_name() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      install|update|repair|check|uninstall)
+        INSTALL_MODE="$1"
+        MODE_EXPLICIT=true
+        ;;
       --check)
-        CHECK_ONLY=true
+        INSTALL_MODE="check"
+        MODE_EXPLICIT=true
         ;;
       --only=*)
         ONLY_STEP="${1#*=}"
+        INSTALL_MODE="only"
+        MODE_EXPLICIT=true
+        ;;
+      --non-interactive|--yes|-y)
+        NON_INTERACTIVE=true
+        NON_INTERACTIVE_EXPLICIT=true
+        ;;
+      --no-updater)
+        INSTALL_UPDATER=false
+        ;;
+      --mqtt=*)
+        case "${1#*=}" in
+          on|true|yes)  ENABLE_MQTT="true" ;;
+          off|false|no) ENABLE_MQTT="false" ;;
+          *) error "Unknown --mqtt value: ${1#*=} (expected on or off)"; exit 1 ;;
+        esac
+        ;;
+      --help|-h)
+        print_usage
+        exit 0
         ;;
       --lang=*)
         MOWGLI_LANG="${1#*=}"
@@ -887,8 +870,12 @@ parse_args() {
           mavros)
             HARDWARE_BACKEND="mavros"
             ;;
+          openmower)
+            HARDWARE_BACKEND="openmower"
+            MAVROS_BY_ID=""
+            ;;
           *)
-            error "Unknown hardware backend: $backend_spec (expected mowgli or mavros)"
+            error "Unknown hardware backend: $backend_spec (expected mowgli, mavros or openmower)"
             exit 1
             ;;
         esac
@@ -1040,33 +1027,8 @@ parse_args() {
       --lidar-uart=*)
         LIDAR_UART_DEVICE="${1#*=}"
         ;;
-      --tfluna=*)
-        CLI_PRESET=true
-        local tf_spec="${1#*=}"
-        case "$tf_spec" in
-          none)
-            TFLUNA_FRONT_ENABLED="false"; TFLUNA_EDGE_ENABLED="false"
-            ;;
-          front)
-            TFLUNA_FRONT_ENABLED="true"; TFLUNA_EDGE_ENABLED="false"
-            ;;
-          edge)
-            TFLUNA_FRONT_ENABLED="false"; TFLUNA_EDGE_ENABLED="true"
-            ;;
-          both)
-            TFLUNA_FRONT_ENABLED="true"; TFLUNA_EDGE_ENABLED="true"
-            ;;
-          *)
-            error "Unknown tfluna spec: $tf_spec (expected none, front, edge, both)"
-            exit 1
-            ;;
-        esac
-        ;;
-      --tfluna-front-uart=*)
-        TFLUNA_FRONT_UART_DEVICE="${1#*=}"
-        ;;
-      --tfluna-edge-uart=*)
-        TFLUNA_EDGE_UART_DEVICE="${1#*=}"
+      --tfluna=*|--tfluna-front-uart=*|--tfluna-edge-uart=*)
+        warn "TF-Luna rangefinders are no longer configured by the installer; ignoring $1"
         ;;
       *)
         warn "Unknown argument: $1"
@@ -1079,6 +1041,89 @@ parse_args() {
   if [[ "$CLI_PRESET" == "true" ]]; then
     PRESET_LOADED=true
   fi
+
+  # No terminal to ask on (curl | bash without /dev/tty, CI, cron): behave as
+  # --non-interactive rather than letting `read` fail or return garbage.
+  if [[ "$NON_INTERACTIVE" != "true" ]] && ! { : </dev/tty; } 2>/dev/null; then
+    NON_INTERACTIVE=true
+  fi
+}
+
+# A bare `mowglinext.sh` on a robot that is already installed: ask what the
+# operator wants instead of walking them through a full reinstall. Only with
+# a terminal — a composer command or a cron job keeps the documented default.
+select_mode() {
+  [[ "$MODE_EXPLICIT" != "true" ]] || return 0
+  [ -f "$FINAL_ENV_FILE" ] || return 0
+
+  # No terminal to ask on: a bare run on an installed robot means "update",
+  # exactly what the menu would default to. Hardware flags (a composer
+  # command) still mean a reconfiguring install.
+  if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then
+    if [[ "${CLI_PRESET:-false}" != "true" ]]; then
+      INSTALL_MODE="update"
+      info "$MSG_MODE_SELECTED update ($MSG_MODE_NO_TTY)"
+    fi
+    return 0
+  fi
+
+  echo ""
+  echo -e "${CYAN:-}${BOLD:-}$MSG_MODE_TITLE${NC:-}"
+  echo "  1) $MSG_MODE_UPDATE"
+  echo "  2) $MSG_MODE_REPAIR"
+  echo "  3) $MSG_MODE_REINSTALL"
+  echo "  4) $MSG_MODE_CHECK"
+  echo "  5) $MSG_MODE_UNINSTALL"
+  echo ""
+  prompt "$MSG_CHOICE" "1"
+  case "$REPLY" in
+    1|update)  INSTALL_MODE="update" ;;
+    2|repair)  INSTALL_MODE="repair" ;;
+    3|install|reinstall) INSTALL_MODE="install" ;;
+    4|check)   INSTALL_MODE="check" ;;
+    5|uninstall) INSTALL_MODE="uninstall" ;;
+    *) warn "$MSG_MODE_INVALID"; INSTALL_MODE="update" ;;
+  esac
+  info "$MSG_MODE_SELECTED $INSTALL_MODE"
+}
+
+print_usage() {
+  cat <<'EOF'
+Usage: mowglinext.sh [install|update|repair|check|uninstall] [options]
+
+Modes
+  install (default)  Full installation. Interactive when a terminal is attached.
+  update             Manual update: sync the checkout to --branch (or the current
+                     branch), regenerate docker/.env + compose, pull images, restart.
+                     No host updater involved, no readiness or firmware-protocol gate.
+  repair             Re-apply udev rules, UART overlays, sysctl, .env, compose and the
+                     helper commands from the saved choices. Never asks anything.
+  check              Diagnostics only (alias: --check).
+  uninstall          Remove containers, images, the host updater, host files and the checkout.
+                     Keeps the maps volume and docker/config/mowgli/mowgli_robot.yaml in place.
+                     Asks for confirmation; without a terminal only an explicit --yes counts.
+
+Options
+  --non-interactive, --yes   Every unset choice takes its default (automatic without a tty)
+  --branch=<main|dev|name>   Repository branch to check out (default: keep current)
+  --image-tag=<main|dev|tag> Container image tag (default: follows the branch)
+  --lang=<en|fr>             Installer language
+  --backend=<mowgli|mavros>  Hardware backend (default: mowgli)
+  --gnss-connection=<uart|usb>  GNSS serial link (default: uart)
+  --gnss-device=<path>       GNSS serial device (default for uart: /dev/ttyAMA4,
+                             /dev/ttyAMA2 with --backend=openmower)
+  --gnss-baud=<n|auto>       GNSS serial baud (default: keep YAML value or 921600)
+  --gnss-receiver-family=<auto|ublox|unicore|nmea>  First-boot receiver family
+  --lidar=<none|ldlidar-uart|ldlidar-usb|rplidar-uart|rplidar-usb|stl27l-uart|stl27l-usb>
+                             LiDAR (default: ldlidar-uart interactive, none otherwise)
+  --lidar-uart=<path>        LiDAR UART device (default: /dev/ttyAMA5)
+  --no-updater               Do not install the host updater service
+  --mqtt=<on|off>            Run the mosquitto MQTT broker (Home Assistant integrations; default: off)
+  --only=<step>              Run one step; see the list printed on an unknown name
+
+Datum, NTRIP, the GNSS receiver profile and LiDAR mounting are configured in
+the GUI onboarding wizard after the first start, not here.
+EOF
 }
 
 # Track issues for the final summary
@@ -1095,8 +1140,6 @@ load_existing_config() {
     return
   fi
 
-  PREV_DATUM_LAT="$(existing_yaml_value datum_lat "$yaml_file")"
-  PREV_DATUM_LON="$(existing_yaml_value datum_lon "$yaml_file")"
   PREV_GNSS_RECEIVER_FAMILY="$(existing_yaml_value gnss_receiver_family "$yaml_file")"
   PREV_GNSS_TRANSPORT="$(existing_yaml_value gnss_transport "$yaml_file")"
   PREV_GNSS_SERIAL_DEVICE="$(existing_yaml_value gnss_serial_device "$yaml_file")"
@@ -1105,195 +1148,28 @@ load_existing_config() {
   PREV_GNSS_FRAME_ID="$(existing_yaml_value gnss_frame_id "$yaml_file")"
   PREV_GNSS_NTRIP_GGA_ENABLED="$(existing_yaml_value gnss_ntrip_gga_enabled "$yaml_file")"
   PREV_GNSS_NTRIP_GGA_INTERVAL_S="$(existing_yaml_value gnss_ntrip_gga_interval_s "$yaml_file")"
-  PREV_NTRIP_ENABLED="$(existing_yaml_value ntrip_enabled "$yaml_file")"
-  PREV_NTRIP_HOST="$(existing_yaml_value ntrip_host "$yaml_file")"
-  PREV_NTRIP_PORT="$(existing_yaml_value ntrip_port "$yaml_file")"
-  PREV_NTRIP_USER="$(existing_yaml_value ntrip_user "$yaml_file")"
-  PREV_NTRIP_PASSWORD="$(existing_yaml_value ntrip_password "$yaml_file")"
-  PREV_NTRIP_MOUNTPOINT="$(existing_yaml_value ntrip_mountpoint "$yaml_file")"
-}
-
-interactive_config() {
-  step "5/6  Mower configuration"
-
-  local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
-  # Defaults live in install/config/ (versioned templates). The runtime
-  # copies under docker/config/ are git-ignored so user edits survive
-  # `git pull` and the installer's `git reset --hard`.
-  local defaults="$INSTALL_DIR/config"
-  mkdir -p "$DOCKER_DIR/config/mowgli"
-  mkdir -p "$DOCKER_DIR/config/om"
-  mkdir -p "$DOCKER_DIR/config/mqtt"
-  mkdir -p "$DOCKER_DIR/config/db"
-
-  # CycloneDDS
-  if [ ! -f "$DOCKER_DIR/config/cyclonedds.xml" ]; then
-    cp "$defaults/cyclonedds.xml" "$DOCKER_DIR/config/cyclonedds.xml"
-    info "Created cyclonedds.xml"
-  fi
-
-  # Mosquitto
-  if [ ! -f "$DOCKER_DIR/config/mqtt/mosquitto.conf" ]; then
-    cp "$defaults/mqtt/mosquitto.conf" "$DOCKER_DIR/config/mqtt/mosquitto.conf"
-    info "Created mosquitto.conf"
-  fi
-
-  # Load previous values for defaults
-  load_existing_config
-
-  # If config already exists, ask whether to reconfigure
-  SKIP_WRITE_CONFIG=false
-  if [ -f "$yaml_file" ]; then
-    info "mowgli_robot.yaml already exists"
-    if ! confirm "Do you want to reconfigure it?"; then
-      SKIP_WRITE_CONFIG=true
-      return
-    fi
-  fi
-
-  echo ""
-  echo -e "${BOLD}Let's configure your mower. You can change these later in:${NC}"
-  echo -e "  ${DIM}$yaml_file${NC}"
-  echo ""
-
-  # GPS datum
-  local datum_lat="${PREV_DATUM_LAT:-0.0}" datum_lon="${PREV_DATUM_LON:-0.0}"
-
-  if [[ "$datum_lat" != "0.0" && "$datum_lat" != "0" && -n "$datum_lat" ]]; then
-    echo -e "${CYAN}GPS Datum${NC} — currently set to $datum_lat, $datum_lon"
-    echo ""
-    echo -e "  ${BOLD}1)${NC} Keep current datum ($datum_lat, $datum_lon)"
-    echo -e "  ${BOLD}2)${NC} Enter new coordinates manually"
-    echo -e "  ${BOLD}3)${NC} Auto-detect from GPS after startup"
-    echo ""
-    prompt "  Choose" "1"
-    local datum_choice="$REPLY"
-
-    case "$datum_choice" in
-      2)
-        echo -e "  ${DIM}Find coordinates on Google Maps: right-click dock > copy coordinates${NC}"
-        prompt "  Latitude?" "$datum_lat"
-        datum_lat="$REPLY"
-        prompt "  Longitude?" "$datum_lon"
-        datum_lon="$REPLY"
-        ;;
-      3)
-        datum_lat="0.0"
-        datum_lon="0.0"
-        info "Datum will be auto-detected from GPS after startup"
-        ;;
-      *)
-        info "Keeping current datum: $datum_lat, $datum_lon"
-        ;;
-    esac
-  else
-    echo -e "${CYAN}GPS Datum${NC} — map origin coordinates (should be near your dock)"
-    echo ""
-    echo -e "  ${BOLD}1)${NC} Auto-detect from GPS after startup (mower must be on the dock)"
-    echo -e "  ${BOLD}2)${NC} Enter coordinates manually"
-    echo -e "  ${BOLD}3)${NC} Skip (configure later)"
-    echo ""
-    prompt "  Choose" "1"
-    local datum_choice="$REPLY"
-
-    case "$datum_choice" in
-      2)
-        echo -e "  ${DIM}Find coordinates on Google Maps: right-click dock > copy coordinates${NC}"
-        prompt "  Latitude?" "0.0"
-        datum_lat="$REPLY"
-        prompt "  Longitude?" "0.0"
-        datum_lon="$REPLY"
-        if [[ "$datum_lat" == "0.0" || "$datum_lon" == "0.0" ]]; then
-          warn "Datum is 0.0 — GPS localisation won't work"
-          add_issue "Set datum_lat and datum_lon in config/mowgli/mowgli_robot.yaml"
-        fi
-        ;;
-      1)
-        datum_lat="0.0"
-        datum_lon="0.0"
-        info "Datum will be auto-detected from GPS after startup"
-        ;;
-      *)
-        warn "Datum skipped — you must set it before mowing"
-        add_issue "Set datum_lat and datum_lon in config/mowgli/mowgli_robot.yaml"
-        ;;
-    esac
-  fi
-
-  # NTRIP — use previous values as defaults
-  echo ""
-  echo -e "${CYAN}NTRIP RTK${NC} — correction stream for centimetre-level GPS accuracy"
-  echo -e "${DIM}Free in France: crtk.net (user: centipede / pass: centipede)${NC}"
-  echo -e "${DIM}Default mountpoint NEAR picks the closest base via NMEA GGA.${NC}"
-  echo -e "${DIM}Find your nearest base station at https://centipede.fr${NC}"
-
-  local prev_ntrip="${PREV_NTRIP_ENABLED:-false}"
-  local ntrip_enabled="false"
-  local ntrip_host="${PREV_NTRIP_HOST:-crtk.net}"
-  local ntrip_port="${PREV_NTRIP_PORT:-2101}"
-  local ntrip_user="${PREV_NTRIP_USER:-centipede}"
-  local ntrip_password="${PREV_NTRIP_PASSWORD:-centipede}"
-  local ntrip_mountpoint="${PREV_NTRIP_MOUNTPOINT:-NEAR}"
-
-  if [[ "$prev_ntrip" == "true" && -n "$ntrip_mountpoint" ]]; then
-    echo -e "  ${DIM}Currently: ${ntrip_host}:${ntrip_port}/${ntrip_mountpoint}${NC}"
-  fi
-
-  if confirm "  Enable NTRIP corrections?"; then
-    ntrip_enabled="true"
-    echo ""
-    echo -e "  ${DIM}Enter NTRIP parameters (press Enter to keep current value):${NC}"
-    prompt "    Host?" "$ntrip_host"
-    ntrip_host="$REPLY"
-    prompt "    Port?" "$ntrip_port"
-    ntrip_port="$REPLY"
-    prompt "    User?" "$ntrip_user"
-    ntrip_user="$REPLY"
-    prompt "    Password?" "$ntrip_password"
-    ntrip_password="$REPLY"
-    prompt "    Mountpoint (nearest base station)?" "$ntrip_mountpoint"
-    ntrip_mountpoint="$REPLY"
-
-    if [[ -z "$ntrip_mountpoint" ]]; then
-      warn "No mountpoint set — NTRIP won't connect without one"
-      add_issue "Set ntrip_mountpoint in $yaml_file to your nearest base station"
-    fi
-  fi
-
-  # Store config vars for write_config and auto_detect
-  CONFIG_DATUM_LAT="$datum_lat"
-  CONFIG_DATUM_LON="$datum_lon"
-  CONFIG_NTRIP_ENABLED="$ntrip_enabled"
-  CONFIG_NTRIP_HOST="$ntrip_host"
-  CONFIG_NTRIP_PORT="$ntrip_port"
-  CONFIG_NTRIP_USER="$ntrip_user"
-  CONFIG_NTRIP_PASSWORD="$ntrip_password"
-  CONFIG_NTRIP_MOUNTPOINT="$ntrip_mountpoint"
-  CONFIG_NTRIP_ENABLED_EXPLICIT=true
-  CONFIG_NTRIP_HOST_EXPLICIT=true
-  CONFIG_NTRIP_PORT_EXPLICIT=true
-  CONFIG_NTRIP_USER_EXPLICIT=true
-  CONFIG_NTRIP_PASSWORD_EXPLICIT=true
-  CONFIG_NTRIP_MOUNTPOINT_EXPLICIT=true
-  CONFIG_LIDAR_X="0.20"
-  CONFIG_LIDAR_Y="0.0"
-  CONFIG_LIDAR_Z="0.22"
-  CONFIG_LIDAR_YAW="0.0"
-  CONFIG_DOCK_X="0.0"
-  CONFIG_DOCK_Y="0.0"
-  CONFIG_DOCK_YAW="0.0"
 }
 
 # Patch a single mowgli/ros__parameters key in-place. Preserves
 # indentation, comments, and every other key. If the key is missing
 # (only happens when the seeded template is older than the installer)
 # we append it under the ros__parameters block.
+# Run an in-place python edit of a yaml the installer OWNS (the seed it just
+# created, the derived MAVROS copy). Never let a failed edit pass as success.
+_yaml_python() {
+  local file="${1:?_yaml_python: missing file}"
+  if ! python3 - "$@"; then
+    error "Could not update $file"
+    return 1
+  fi
+}
+
 _yaml_patch_key() {
   local file="$1" key="$2" value="$3"
   if grep -qE "^[[:space:]]+${key}:" "$file"; then
     # Replace value, preserving leading whitespace and any trailing
     # comment on the same line.
-    python3 - "$file" "$key" "$value" <<'PY'
+    _yaml_python "$file" "$key" "$value" <<'PY'
 import re, sys
 path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
 pat = re.compile(r'^(\s+' + re.escape(key) + r':\s*)([^#\n]*)(\s*#.*)?$')
@@ -1310,7 +1186,7 @@ with open(path, 'w') as f:
 PY
   else
     # Append under the first ros__parameters: line in the mowgli block.
-    python3 - "$file" "$key" "$value" <<'PY'
+    _yaml_python "$file" "$key" "$value" <<'PY'
 import sys
 path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path) as f:
@@ -1336,7 +1212,7 @@ write_mavros_runtime_config() {
   mkdir -p "$(dirname "$target")"
   cp "$source" "$target"
   # Universal GNSS is the sole NTRIP owner.
-  _yaml_patch_key "$target" ntrip_enabled false
+  _yaml_patch_key "$target" ntrip_enabled false || return 1
 }
 
 runtime_gnss_config_value() {
@@ -1364,264 +1240,78 @@ write_config() {
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local template="$INSTALL_DIR/config/mowgli/mowgli_robot.yaml"
   local resolved_receiver_family resolved_transport resolved_serial_device
-  local resolved_serial_baud resolved_config_baud resolved_frame_id resolved_profile_rate_hz resolved_ntrip_enabled
-  local resolved_ntrip_host resolved_ntrip_port resolved_ntrip_user
-  local resolved_ntrip_password resolved_ntrip_mountpoint
-  local resolved_ntrip_gga_enabled resolved_ntrip_gga_interval_s
+  local resolved_serial_baud resolved_frame_id
+
+  # mowgli_robot.yaml is the OPERATOR's file: the GUI edits every key in it
+  # (GNSS link and profile, LiDAR, datum, NTRIP, ...) and the ROS containers
+  # write calibration results into it as root (Invariant 6). The installer
+  # therefore writes it exactly once — when it does not exist yet — seeding
+  # the sparse template with the hardware wiring just chosen. An existing
+  # file is never patched: update/repair leave it alone, and a reinstall that
+  # changes the wiring says so instead of overriding the GUI.
+  if [ -f "$yaml_file" ]; then
+    info "$yaml_file exists — left untouched (GNSS link, LiDAR presence and everything else are edited in the GUI)"
+    write_mavros_runtime_config || return 1
+    return 0
+  fi
 
   : "${GNSS_RECEIVER_FAMILY:=auto}"
   : "${GNSS_TRANSPORT:=serial}"
-  : "${GNSS_SERIAL_DEVICE:=/dev/ttyAMA4}"
+  : "${GNSS_SERIAL_DEVICE:=$(default_gnss_uart_device)}"
   : "${GNSS_SERIAL_BAUD:=921600}"
   : "${GNSS_FRAME_ID:=gps_link}"
-  : "${GNSS_NTRIP_GGA_ENABLED:=true}"
-  : "${GNSS_NTRIP_GGA_INTERVAL_S:=10}"
 
-  load_existing_config
-
-  # Seed from the comprehensive template if the runtime yaml doesn't
-  # exist yet. We never overwrite an existing file — that would wipe
-  # GUI-managed values like chassis dims, IMU calibration, fusion
-  # graph flags, etc.
-  if [ ! -f "$yaml_file" ]; then
-    if [ -f "$template" ]; then
-      cp "$template" "$yaml_file"
-      info "Seeded $yaml_file from install template"
-    else
-      warn "Install template missing at $template — writing minimal yaml"
-      cat > "$yaml_file" <<EOF
+  if [ -f "$template" ]; then
+    cp "$template" "$yaml_file"
+    info "Seeded $yaml_file from install template"
+  else
+    warn "Install template missing at $template — writing minimal yaml"
+    cat > "$yaml_file" <<EOF
 mowgli:
   ros__parameters:
     ntrip_enabled: false
 EOF
-    fi
-  else
-    info "Patching existing $yaml_file in place"
   fi
 
-  resolved_receiver_family="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_RECEIVER_FAMILY; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_RECEIVER_FAMILY}" "${PREV_GNSS_RECEIVER_FAMILY:-}" "auto")"
-  resolved_transport="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_TRANSPORT; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_TRANSPORT}" "${PREV_GNSS_TRANSPORT:-}" "serial")"
-  resolved_serial_device="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_SERIAL_DEVICE; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_SERIAL_DEVICE}" "${PREV_GNSS_SERIAL_DEVICE:-}" "/dev/ttyAMA4")"
-  resolved_serial_baud="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_SERIAL_BAUD; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_SERIAL_BAUD}" "${PREV_GNSS_SERIAL_BAUD:-}" "921600")"
-  resolved_config_baud="${PREV_GNSS_CONFIG_BAUD:-$resolved_serial_baud}"
-  resolved_frame_id="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_FRAME_ID; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_FRAME_ID}" "${PREV_GNSS_FRAME_ID:-}" "gps_link")"
-  resolved_profile_rate_hz="$(runtime_gnss_config_value \
-    "$yaml_file" gnss_profile_rate_hz 5.0)"
-  resolved_ntrip_enabled="$(preserved_gnss_value \
-    "${CONFIG_NTRIP_ENABLED_EXPLICIT:-false}" "${CONFIG_NTRIP_ENABLED:-}" "${PREV_NTRIP_ENABLED:-}" "true")"
-  resolved_ntrip_host="$(preserved_gnss_value \
-    "${CONFIG_NTRIP_HOST_EXPLICIT:-false}" "${CONFIG_NTRIP_HOST:-}" "${PREV_NTRIP_HOST:-}" "crtk.net")"
-  resolved_ntrip_port="$(preserved_gnss_value \
-    "${CONFIG_NTRIP_PORT_EXPLICIT:-false}" "${CONFIG_NTRIP_PORT:-}" "${PREV_NTRIP_PORT:-}" "2101")"
-  resolved_ntrip_user="$(preserved_gnss_value \
-    "${CONFIG_NTRIP_USER_EXPLICIT:-false}" "${CONFIG_NTRIP_USER:-}" "${PREV_NTRIP_USER:-}" "centipede")"
-  resolved_ntrip_password="$(preserved_gnss_value \
-    "${CONFIG_NTRIP_PASSWORD_EXPLICIT:-false}" "${CONFIG_NTRIP_PASSWORD:-}" "${PREV_NTRIP_PASSWORD:-}" "centipede")"
-  resolved_ntrip_mountpoint="$(preserved_gnss_value \
-    "${CONFIG_NTRIP_MOUNTPOINT_EXPLICIT:-false}" "${CONFIG_NTRIP_MOUNTPOINT:-}" "${PREV_NTRIP_MOUNTPOINT:-}" "NEAR")"
-  resolved_ntrip_gga_enabled="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_NTRIP_GGA_ENABLED; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_NTRIP_GGA_ENABLED}" "${PREV_GNSS_NTRIP_GGA_ENABLED:-}" "true")"
-  resolved_ntrip_gga_interval_s="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_NTRIP_GGA_INTERVAL_S; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_NTRIP_GGA_INTERVAL_S}" "${PREV_GNSS_NTRIP_GGA_INTERVAL_S:-}" "10")"
+  resolved_receiver_family="$(normalize_gnss_receiver_family "${GNSS_RECEIVER_FAMILY}")"
+  resolved_transport="${GNSS_TRANSPORT}"
+  resolved_serial_device="${GNSS_SERIAL_DEVICE}"
+  resolved_serial_baud="${GNSS_SERIAL_BAUD}"
+  resolved_frame_id="${GNSS_FRAME_ID}"
 
-  # Patch in only the keys the installer is responsible for.
-  _yaml_patch_key "$yaml_file" datum_lat       "$CONFIG_DATUM_LAT"
-  _yaml_patch_key "$yaml_file" datum_lon       "$CONFIG_DATUM_LON"
-  _yaml_patch_key "$yaml_file" gnss_receiver_family "\"$resolved_receiver_family\""
-  _yaml_patch_key "$yaml_file" gnss_transport "\"$resolved_transport\""
-  _yaml_patch_key "$yaml_file" gnss_serial_device "\"$resolved_serial_device\""
-  _yaml_patch_key "$yaml_file" gnss_serial_baud "$resolved_serial_baud"
-  _yaml_patch_key "$yaml_file" gnss_config_baud "$resolved_config_baud"
-  _yaml_patch_key "$yaml_file" gnss_frame_id "\"$resolved_frame_id\""
+  # Only the hardware wiring the installer just asked for. Datum, NTRIP,
+  # the receiver profile, LiDAR pose and dock pose stay at the template
+  # placeholders for the GUI onboarding wizard.
+  _yaml_patch_key "$yaml_file" gnss_receiver_family "\"$resolved_receiver_family\"" || return 1
+  _yaml_patch_key "$yaml_file" gnss_transport "\"$resolved_transport\"" || return 1
+  _yaml_patch_key "$yaml_file" gnss_serial_device "\"$resolved_serial_device\"" || return 1
+  _yaml_patch_key "$yaml_file" gnss_serial_baud "$resolved_serial_baud" || return 1
+  _yaml_patch_key "$yaml_file" gnss_config_baud "$resolved_serial_baud" || return 1
+  _yaml_patch_key "$yaml_file" gnss_frame_id "\"$resolved_frame_id\"" || return 1
   # The ROS2 launch reads the stack from the robot config only (no env
   # fallback), so the install-time choice has to land in the yaml.
-  _yaml_patch_key "$yaml_file" gnss_stack "\"${GNSS_STACK:-universal}\""
-  _yaml_patch_key "$yaml_file" ntrip_enabled   "$resolved_ntrip_enabled"
-  _yaml_patch_key "$yaml_file" ntrip_host      "\"$resolved_ntrip_host\""
-  _yaml_patch_key "$yaml_file" ntrip_port      "$resolved_ntrip_port"
-  _yaml_patch_key "$yaml_file" ntrip_user      "\"$resolved_ntrip_user\""
-  _yaml_patch_key "$yaml_file" ntrip_password  "\"$resolved_ntrip_password\""
-  _yaml_patch_key "$yaml_file" ntrip_mountpoint "\"$resolved_ntrip_mountpoint\""
-  _yaml_patch_key "$yaml_file" gnss_ntrip_gga_enabled "$resolved_ntrip_gga_enabled"
-  _yaml_patch_key "$yaml_file" gnss_ntrip_gga_interval_s "$resolved_ntrip_gga_interval_s"
-
-  # The Universal GNSS sidecar reads mowgli_robot.yaml itself (see
-  # install/compose/docker-compose.gps.yml): no derived parameter file.
-  write_mavros_runtime_config
+  _yaml_patch_key "$yaml_file" gnss_stack "\"${GNSS_STACK:-universal}\"" || return 1
 
   # LiDAR hardware availability gates obstacle detection and scan-to-map localization.
   local lidar_on="false"
-  if [[ "${LIDAR_ENABLED:-false}" == "true" ]]; then
-    lidar_on="true"
-  fi
-  _yaml_patch_key "$yaml_file" lidar_enabled     "$lidar_on"
+  [[ "${LIDAR_ENABLED:-false}" == "true" ]] && lidar_on="true"
+  _yaml_patch_key "$yaml_file" lidar_enabled "$lidar_on" || return 1
 
-  # Remove retired localization overrides from upgraded installations.
-  python3 - "$yaml_file" <<'PY_RETIRED'
-import re
-import sys
-from pathlib import Path
-path = Path(sys.argv[1])
-retired = {
-    'use_scan_matching',
-    'use_loop_closure',
-    'icp_max_iter',
-    'icp_max_corresp_dist',
-    'icp_source_subsample',
-    'scan_min_inliers',
-    'icp_sigma_xy_base',
-    'icp_sigma_theta_base',
-    'icp_max_rmse_m',
-    'icp_max_delta_xy_m',
-    'icp_max_delta_theta_rad',
-    'icp_max_divergence_xy_m',
-    'icp_max_divergence_theta_rad',
-    'scan_yield_to_rtk',
-    'scan_yield_timeout_s',
-    'scan_yield_sigma_xy',
-    'scan_yield_sigma_theta',
-    'scan_yaw_sigma_floor_rad',
-    'lc_max_dist_m',
-    'lc_min_age_s',
-    'lc_max_candidates',
-    'lc_min_delta_m',
-    'lc_min_delta_theta',
-    'lc_max_rmse',
-    'lc_sigma_xy',
-    'lc_sigma_theta',
-    'lc_skip_when_rtk_fixed',
-    'lc_min_travel_m',
-    'lc_min_interval_s',
-    'lc_gps_sigma_ratio',
-    'scan_retention_nodes',
-    'lidar_map_half_extent_m',
-}
-lines = path.read_text().splitlines(keepends=True)
-def keep(line):
-    match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*):", line)
-    return not match or match.group(1) not in retired
-path.write_text("".join(line for line in lines if keep(line)))
-PY_RETIRED
+  # No per-backend seeding: OpenMower's different defaults (xESC hall ticks,
+  # the LowLevel board's own lift/tilt/charge values) live in
+  # ros2/src/mowgli_bringup/config/backends/openmower.yaml, which every
+  # consumer layers between the template and this sparse file. Writing them
+  # here would pin them and break the GUI's reset-to-default — which is also
+  # why the seed carries no ticks_per_meter.
 
-  # Lidar mounting only patched when explicitly set (auto-detect step
-  # leaves them alone so the GUI / template defaults survive).
-  if [[ -n "${CONFIG_LIDAR_X:-}" ]]; then
-    _yaml_patch_key "$yaml_file" lidar_x   "$CONFIG_LIDAR_X"
-    _yaml_patch_key "$yaml_file" lidar_y   "$CONFIG_LIDAR_Y"
-    _yaml_patch_key "$yaml_file" lidar_z   "$CONFIG_LIDAR_Z"
-    _yaml_patch_key "$yaml_file" lidar_yaw "$CONFIG_LIDAR_YAW"
-  fi
-
-  _yaml_patch_key "$yaml_file" dock_pose_x   "$CONFIG_DOCK_X"
-  _yaml_patch_key "$yaml_file" dock_pose_y   "$CONFIG_DOCK_Y"
-  _yaml_patch_key "$yaml_file" dock_pose_yaw "$CONFIG_DOCK_YAW"
+  # The Universal GNSS sidecar reads mowgli_robot.yaml itself (see
+  # install/compose/docker-compose.gps.yml): no derived parameter file.
+  write_mavros_runtime_config || return 1
 
   info "Wrote $yaml_file"
 }
 
-auto_detect_position() {
-  step "Auto-detect: GPS datum & dock position"
-
-  if [[ "$CONFIG_DATUM_LAT" != "0.0" && "$CONFIG_DATUM_LAT" != "0" ]]; then
-    info "Datum already set ($CONFIG_DATUM_LAT, $CONFIG_DATUM_LON) — skipping auto-detect"
-    return
-  fi
-
-  local gnss_backend
-  local gnss_stack
-  local restart_services=()
-
-  gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
-  gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
-
-  if [[ "$gnss_backend" == "disabled" || "$gnss_stack" == "disabled" ]]; then
-    warn "GNSS is disabled — GPS datum auto-detect is unavailable"
-    add_issue "Enable GNSS_STACK=universal or set datum_lat and datum_lon manually in docker/config/mowgli/mowgli_robot.yaml"
-    return
-  fi
-
-  if ! docker_cmd inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
-    warn "mowgli-ros2 container not running — cannot auto-detect"
-    add_issue "Set datum_lat and datum_lon manually in config/mowgli/mowgli_robot.yaml"
-    return
-  fi
-
-  echo -e "${DIM}Waiting for GPS fix (up to 60s)...${NC}"
-
-  local fix_data="" lat="" lon=""
-  local attempt=0
-  while [[ $attempt -lt 12 ]]; do
-    fix_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /gps/fix --once 2>/dev/null" 2>/dev/null || true)
-    lat=$(awk '/latitude:/ {print $2; exit}' <<< "$fix_data")
-    lon=$(awk '/longitude:/ {print $2; exit}' <<< "$fix_data")
-
-    if [[ -n "$lat" && "$lat" != "0.0" ]]; then
-      break
-    fi
-
-    attempt=$((attempt + 1))
-    sleep 5
-  done
-
-  if [[ -z "$lat" || "$lat" == "0.0" ]]; then
-    warn "Could not get a GPS fix — set datum manually"
-    add_issue "Set datum_lat and datum_lon in config/mowgli/mowgli_robot.yaml"
-    return
-  fi
-
-  info "GPS position: $lat, $lon"
-
-  local is_charging="false"
-  if docker_cmd inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
-    local status_data
-    status_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /hardware_bridge/status --once 2>/dev/null" 2>/dev/null || true)
-    is_charging=$(awk '/is_charging:/ {print $2; exit}' <<< "$status_data")
-  fi
-
-  CONFIG_DATUM_LAT="$lat"
-  CONFIG_DATUM_LON="$lon"
-  info "Datum auto-set to GPS position: $lat, $lon"
-
-  if [[ "$is_charging" == "true" ]]; then
-    CONFIG_DOCK_X="0.0"
-    CONFIG_DOCK_Y="0.0"
-    CONFIG_DOCK_YAW="0.0"
-    info "Mower is charging — dock position set to map origin (0, 0)"
-    echo -e "       ${DIM}The datum IS your dock, so dock_pose = (0, 0, 0)${NC}"
-  else
-    warn "Mower is not charging — dock position left at (0, 0)"
-    echo -e "       ${DIM}To set dock position later: drive to dock, then read /gps/pose${NC}"
-    add_issue "Set dock_pose_x/y/yaw in config/mowgli/mowgli_robot.yaml (drive mower to dock, read the pose)"
-  fi
-
-  write_config
-  info "Config updated with auto-detected position"
-
-  echo -e "${DIM}Restarting containers with new config...${NC}"
-  mapfile -t restart_services < <(compose_restart_services_for_backend)
-  docker_compose_cmd \
-    -f "$FINAL_COMPOSE_FILE" \
-    --env-file "$FINAL_ENV_FILE" \
-    restart "${restart_services[@]}" 2>&1 | tail -3
-  sleep 10
-}
-
 run_mower_configuration_step() {
-  SKIP_WRITE_CONFIG=false
-  interactive_config
-  if ! $SKIP_WRITE_CONFIG; then
-    write_config
-  fi
+  ensure_default_configs && write_config
 }
+

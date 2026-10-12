@@ -266,8 +266,8 @@ hardware_bridge:
   FIRMWARE (task #33), which closes it on the same gyro without the host's
   USB round-trip latency — collapsing the 3-loop cascade to 2 without the
   Option B feed-forward-refit tradeoffs. Tunable via the firmware's
-  `yaw_kp`/`yaw_ki` (sent over `SET_DRIVE_PID`); GUI catalog entries for
-  those will land once the firmware param interface is finalized.
+  `yaw_kp`/`yaw_ki` (sent with the protocol v7 `SET_PARAM` packet and
+  stored in the board's flash); editable in Settings (firmware yaw loop).
 
 #### Dig detection (`dig_*`)
 

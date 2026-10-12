@@ -57,8 +57,8 @@ func (c *Client) GetParameters(ctx context.Context, names []string) ([]Parameter
 }
 
 // SetParameters updates parameters on their owning nodes and returns the values
-// the bridge echoes back. Some bridges do not echo; a timeout is then treated as
-// best-effort success and the requested values are returned.
+// the bridge echoes back. Without a reply, application is unconfirmed: the
+// request may have been applied, so callers must read back before retrying.
 func (c *Client) SetParameters(ctx context.Context, params []Parameter) ([]Parameter, error) {
 	if !c.Connected() {
 		return nil, fmt.Errorf("foxglove: SetParameters: not connected")
@@ -80,7 +80,7 @@ func (c *Client) SetParameters(ctx context.Context, params []Parameter) ([]Param
 	case echoed := <-ch:
 		return echoed, nil
 	case <-tctx.Done():
-		return params, nil
+		return nil, fmt.Errorf("foxglove: SetParameters: update unconfirmed; read back parameters before retrying: %w", tctx.Err())
 	}
 }
 

@@ -83,21 +83,35 @@
                all and reports "collision ahead" at its control rate. Backing up
                0.30 m is the only action here that changes that. Clearing the
                costmaps only hides a REAL obstacle until the next scan re-marks
-               it, spinning keeps the footprint exactly where it is (and is itself
-               refused for the same reason), and waiting does nothing.
+               it, and waiting does nothing.
                Field 2026-09-18: a 2.13 m transit at the start of the first ring
                spent its whole 36 s budget on 164 "collision ahead" reports and one
                useless spin, and FollowStrip's watchdog cancelled it before the
                RoundRobin ever reached the BackUp that would have freed it.
                The blade is provably OFF for every coverage transit (structural gap
-               guard in FollowStrip), and the move stays bounded at 0.30 m. -->
+               guard in FollowStrip), and the move stays bounded at 0.30 m.
+
+               Spin is DELIBERATELY NOT in this RoundRobin (removed 2026-09-25,
+               field bag near a hedge). The reasoning above assumed spinning
+               "keeps the footprint exactly where it is (and is itself refused for
+               the same reason)" as FollowPath — the field bag disproved that:
+               `Running spin` / `spin completed successfully` fired repeatedly
+               right next to a hedge that RPP was simultaneously, correctly
+               refusing to approach (`detected collision ahead!`, tens of times
+               per cycle). A hedge is soft, sparse-return vegetation, and Spin's
+               own collision check runs against whatever the local costmap holds
+               at that instant — right after this SAME RoundRobin's
+               ClearingActions branch wiped it, with no guarantee LiDAR has
+               re-marked the hedge from every angle before Spin's sweep. Spin also
+               cannot reposition the footprint off a lethal cell the way BackUp
+               does, so it bought nothing here even when it "worked" — only risk,
+               never recovery, next to a hedge specifically. -->
           <RoundRobin name="RecoveryActions" wrap_around="true">
             <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
             <Sequence name="ClearingActions">
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
             </Sequence>
-            <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
             <Wait wait_duration="5.0"/>
           </RoundRobin>
         </ReactiveFallback>

@@ -35,7 +35,7 @@ export const ObstacleProposalsPanel = ({proposals, selectedProposalId, onHoverPr
     if (proposals.length === 0) return null;
 
     const areaLabel = (proposal: ObstacleProposal) =>
-        proposal.areaName || t('mapObstacleProposals.areaFallback', {index: proposal.areaIndex});
+        proposal.areaName || t('mapAreasList.unnamedArea', {index: proposal.areaIndex + 1});
 
     const handleAccept = (proposal: ObstacleProposal) => {
         modal.confirm({

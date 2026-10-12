@@ -212,6 +212,19 @@ export default function FleetPage() {
                 <Space direction="vertical" size={10} style={{width: "100%"}}>
                     <Text type="secondary">{t("fleetPage.coordinationHelp")}</Text>
                     {rows.length < 2 && <Text type="secondary" style={{fontSize: 12}}>{t("fleetPage.coordinationNeedsPeer")}</Text>}
+                    {rows.length >= 2 && (
+                        <Space wrap size={[6, 6]} data-testid="fleet-peer-feed">
+                            <Tag color={coordination.peer_feed.active ? "green" : "red"}>
+                                {coordination.peer_feed.active ? t("fleetPage.peerFeedLive") : t("fleetPage.peerFeedDown")}
+                            </Tag>
+                            <Text type="secondary" style={{fontSize: 12}}>
+                                {t("fleetPage.peerFeedDetail", {count: coordination.peer_feed.peers_published, rate: coordination.peer_feed.rate_hz})}
+                            </Text>
+                            {coordination.peer_feed.last_error && (
+                                <Text type="danger" style={{fontSize: 12}}>{coordination.peer_feed.last_error}</Text>
+                            )}
+                        </Space>
+                    )}
                     {coordination.status.last_error && (
                         <Alert type="warning" showIcon message={coordination.status.last_error}/>
                     )}

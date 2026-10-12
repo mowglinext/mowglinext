@@ -12,8 +12,6 @@ import {
     NumberPicker,
     Select,
 } from "@formily/antd-v5";
-import {StyledTerminal} from "./StyledTerminal.tsx";
-import Terminal, {ColorMode, TerminalOutput} from "react-terminal-ui";
 import {useTranslation} from "react-i18next";
 import {createForm, onFieldValueChange} from "@formily/core";
 import {useApi} from "../hooks/useApi.ts";
@@ -25,6 +23,10 @@ import {
     type FirmwareFieldOrigin,
     type FirmwareSelection,
 } from "./firmwareModelDefaults.ts";
+import {PANEL_OPTIONS, VERMUT_BOARD, boardOptionsForModel, hasPrebuiltFirmware} from "./firmwareTargets.ts";
+import {FlashProgressView} from "./FlashProgressView.tsx";
+import {parseFlashStage, type FlashStage} from "./flashStage.ts";
+import {FlashTargetSummary} from "./FlashTargetSummary.tsx";
 
 const SchemaField = createSchemaField({
     components: {
@@ -43,6 +45,7 @@ type Config = {
     version: string,
     boardType: string,
     panelType: string,
+    firmwareTarget: string,
     // "prebuilt" (default) flashes the tested binary; "custom" enables the
     // expert compile-from-source path. This is the single control that decides.
     firmwareSource: string,
@@ -66,21 +69,25 @@ type Config = {
     perimeterWire: boolean
     boardTypeOrigin?: FirmwareFieldOrigin
     panelTypeOrigin?: FirmwareFieldOrigin
+    firmwareTargetOrigin?: FirmwareFieldOrigin
     firmwareSelectionModel?: string
 }
 
-// Boards that flash WITHOUT compiling: Vermut has its own release-zip path, and
-// the Mowgli STM32 boards have prebuilt binaries in the release manifest (mirrors
-// firmware/scripts/package_release.py's PERMUTATIONS). A board absent here (e.g.
-// LUV1000RI) has no prebuilt yet and must use the Expert compile path — the UI
-// steers the user there instead of letting the flash fail at runtime.
-const PREBUILT_BOARDS = new Set<string>([
-    "BOARD_VERMUT_YARDFORCE500",
-    "BOARD_YARDFORCE500",
-    "BOARD_YARDFORCE500B",
-]);
+/**
+ * `page` (default): the onboarding wizard step — the action bar is pinned to
+ * the bottom of the screen and the form scrolls in a fixed-height pane.
+ * `modal`: embedded in a dialog (Settings → Updates) — a fixed bar would
+ * escape the dialog and float at the bottom of the viewport, so the actions
+ * stay in the normal flow under a content pane that sizes to its content.
+ */
+export type FlashBoardVariant = "page" | "modal";
 
-export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: string }) => {
+export const FlashBoardComponent = (props: {
+    onNext: () => void;
+    mowerModel?: string;
+    variant?: FlashBoardVariant;
+}) => {
+    const inModal = props.variant === "modal";
     const isMobile = useIsMobile();
     const {colors} = useThemeMode();
     const {t} = useTranslation();
@@ -93,7 +100,13 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
     // React state so the button + guidance can react without a Formily observer.
     const [selectedBoard, setSelectedBoard] = useState("");
     const [selectedPanel, setSelectedPanel] = useState("");
+    const [isManualTarget, setIsManualTarget] = useState(false);
     const [isExpert, setIsExpert] = useState(false);
+    // The board/panel pickers are an override, not the default UI: the target
+    // is derived from the mower model and shown as a summary. They open when
+    // the operator asks ("Change") or when the model cannot identify the target.
+    const [isTargetPickerOpen, setIsTargetPickerOpen] = useState(false);
+    const [stage, setStage] = useState<FlashStage | null>(null);
     const form = useMemo(() => createForm({
         validateFirst: true,
         effects: (form) => {
@@ -102,12 +115,13 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 if (initializedModelRef.current && !applyingModelDefaultsRef.current) {
                     manualOverridesRef.current.boardType = true;
                     form.setValues({boardTypeOrigin: 'manual'});
+                    setIsManualTarget(true);
                 }
                 form.setFieldState('*(tickPerM,wheelBase,directory,branch,repository,disableEmergency,maxMps,maxChargeCurrent,limitVoltage150MA,maxChargeVoltage,batChargeCutoffVoltage,oneWheelLiftEmergencyMillis,bothWheelsLiftEmergencyMillis,tiltEmergencyMillis,stopButtonEmergencyMillis,playButtonClearEmergencyMillis,imuOnboardInclinationThreshold,externalImuAcceleration,externalImuAngular,perimeterWire)', (state) => {
-                    state.display = field.value !== "BOARD_VERMUT_YARDFORCE500" ? "visible" : "hidden";
+                    state.display = field.value !== VERMUT_BOARD ? "visible" : "hidden";
                 })
                 form.setFieldState('*(version,file)', (state) => {
-                    state.display = field.value === "BOARD_VERMUT_YARDFORCE500" ? "visible" : "hidden";
+                    state.display = field.value === VERMUT_BOARD ? "visible" : "hidden";
                 })
             })
             onFieldValueChange('panelType', (field) => {
@@ -115,6 +129,13 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 if (initializedModelRef.current && !applyingModelDefaultsRef.current) {
                     manualOverridesRef.current.panelType = true;
                     form.setValues({panelTypeOrigin: 'manual'});
+                    setIsManualTarget(true);
+                }
+            })
+            onFieldValueChange('firmwareTarget', () => {
+                if (initializedModelRef.current && !applyingModelDefaultsRef.current) {
+                    manualOverridesRef.current.firmwareTarget = true;
+                    form.setValues({firmwareTargetOrigin: 'manual'});
                 }
             })
             onFieldValueChange('firmwareSource', (field) => {
@@ -132,7 +153,6 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
     const [isFlashing, setIsFlashing] = useState(false);
     const [flashDone, setFlashDone] = useState(false);
     const [flashError, setFlashError] = useState<string | null>(null);
-    const terminalRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         mowerModelRef.current = props.mowerModel;
@@ -170,7 +190,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     // request is submitted (including failed flash attempts).
                     // Unknown/legacy configs are deliberately conservative:
                     // preserve both saved fields instead of guessing a board.
-                    manualOverridesRef.current = manualOverridesFromProvenance(saved);
+                    manualOverridesRef.current = manualOverridesFromProvenance(saved, model);
                     // If the model/settings lookup is unavailable, restoring
                     // the saved config must still work. In particular, do not
                     // turn a previously known automatic value into an empty
@@ -183,8 +203,11 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                         (saved.boardTypeOrigin ?? "legacy") : "auto";
                     seeded.panelTypeOrigin = manualOverridesRef.current.panelType ?
                         (saved.panelTypeOrigin ?? "legacy") : "auto";
+                    seeded.firmwareTargetOrigin = manualOverridesRef.current.firmwareTarget ?
+                        (saved.firmwareTargetOrigin ?? "legacy") : "auto";
                     setSelectedBoard(String(seeded.boardType ?? ""));
                     setSelectedPanel(String(seeded.panelType ?? ""));
+                    setIsManualTarget(!!manualOverridesRef.current.boardType || !!manualOverridesRef.current.panelType);
                     setIsExpert(seeded.firmwareSource === "custom");
                     applyingModelDefaultsRef.current = true;
                     form.setInitialValues(seeded);
@@ -195,8 +218,10 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     seeded.firmwareSelectionModel = model;
                     seeded.boardTypeOrigin = "auto";
                     seeded.panelTypeOrigin = "auto";
+                    seeded.firmwareTargetOrigin = "auto";
                     setSelectedBoard(String(seeded.boardType ?? ""));
                     setSelectedPanel(String(seeded.panelType ?? ""));
+                    setIsManualTarget(false);
                     applyingModelDefaultsRef.current = true;
                     form.setInitialValues(seeded);
                     form.setValues(seeded);
@@ -235,18 +260,25 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
             (form.values as FirmwareSelection).boardTypeOrigin ?? "manual" : "auto";
         seeded.panelTypeOrigin = manualOverridesRef.current.panelType ?
             (form.values as FirmwareSelection).panelTypeOrigin ?? "manual" : "auto";
+        seeded.firmwareTargetOrigin = manualOverridesRef.current.firmwareTarget ?
+            (form.values as FirmwareSelection).firmwareTargetOrigin ?? "manual" : "auto";
         applyingModelDefaultsRef.current = true;
         form.setValues(seeded);
         applyingModelDefaultsRef.current = false;
         setConfiguredMowerModel(props.mowerModel);
     }, [props.mowerModel, configuredMowerModel, form]);
 
-    // Auto-scroll terminal to bottom
+    // The pickers are Formily fields that must stay registered (their values
+    // are what gets submitted), so they are hidden through field state rather
+    // than unmounted. An incomplete target always shows them: there is nothing
+    // to summarise, and the operator has to choose.
+    const isTargetComplete = !!selectedBoard && !!selectedPanel;
+    const showTargetPicker = isTargetPickerOpen || !isTargetComplete;
     useEffect(() => {
-        if (terminalRef.current) {
-            terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-        }
-    }, [data]);
+        form.setFieldState('*(boardType,panelType)', (state) => {
+            state.display = showTargetPicker ? "visible" : "hidden";
+        });
+    }, [form, showTargetPicker]);
 
     const doFlashFirmware = async (values: Config) => {
         if (isFlashing) return;
@@ -258,6 +290,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
         setIsFlashing(true);
         setFlashDone(false);
         setFlashError(null);
+        setStage(null);
         setData([]);
         try {
             await fetchEventSource(`/api/setup/flashBoard`, {
@@ -296,6 +329,13 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     } else if (event.event == "error") {
                         setIsFlashing(false);
                         setFlashError(event.data);
+                        return;
+                    } else if (event.event == "stage") {
+                        // A malformed stage payload is ignored rather than
+                        // trusted: the bar simply stays where it was and the
+                        // log keeps streaming.
+                        const parsed = parseFlashStage(event.data);
+                        if (parsed) setStage(parsed);
                         return;
                     } else {
                         setData((data) => [...(data ?? []), event.data]);
@@ -347,6 +387,8 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 (manualOverridesRef.current.boardType ? "manual" : "auto"),
             panelTypeOrigin: values.panelTypeOrigin ??
                 (manualOverridesRef.current.panelType ? "manual" : "auto"),
+            firmwareTargetOrigin: values.firmwareTargetOrigin ??
+                (manualOverridesRef.current.firmwareTarget ? "manual" : "auto"),
             firmwareSelectionModel: values.firmwareSelectionModel ??
                 mowerModelRef.current ?? configuredMowerModel,
         };
@@ -387,100 +429,65 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
     // Show flashing progress view
     if (data !== undefined && data.length > 0 || isFlashing || flashDone || flashError) {
         return (
-            <Row gutter={[0, 16]}>
-                <Col span={24}>
-                    <Typography.Title level={5} style={{margin: 0}}>
-                        {isFlashing ? t('flashBoard.flashingFirmware') : flashError ? t('flashBoard.flashFailed') : t('flashBoard.flashComplete')}
-                    </Typography.Title>
-                </Col>
-                <Col span={24}>
-                    <div ref={terminalRef} style={{height: isMobile ? "30vh" : "35vh", overflowY: "auto"}}>
-                        <StyledTerminal>
-                            <Terminal colorMode={ColorMode.Dark}>
-                                {(data ?? []).map((line, index) => (
-                                    <TerminalOutput key={index}>{line}</TerminalOutput>
-                                ))}
-                                {flashDone && (
-                                    <TerminalOutput>
-                                        {`\n✅ ${t('flashBoard.flashedSuccessfully')}`}
-                                    </TerminalOutput>
-                                )}
-                                {flashError && (
-                                    <TerminalOutput>
-                                        {`\n❌ ${t('flashBoard.errorPrefix')}: ${flashError}`}
-                                    </TerminalOutput>
-                                )}
-                            </Terminal>
-                        </StyledTerminal>
-                    </div>
-                </Col>
-                <Col span={24} style={{
-                    position: "fixed",
-                    bottom: isMobile ? 'calc(56px + env(safe-area-inset-bottom, 0px))' : 20,
-                    left: isMobile ? 0 : undefined,
-                    right: isMobile ? 0 : undefined,
-                    padding: isMobile ? '8px 12px' : undefined,
-                    background: isMobile ? colors.bgCard : undefined,
-                    borderTop: isMobile ? `1px solid ${colors.border}` : undefined,
-                    zIndex: 50,
-                }}>
-                    <FormButtonGroup>
-                        {flashError && (
-                            <Button onClick={() => {
-                                setData(undefined);
-                                setFlashError(null);
-                            }}>{t('flashBoard.backToConfig')}</Button>
-                        )}
-                        <Button
-                            type="primary"
-                            disabled={isFlashing}
-                            onClick={props.onNext}
-                        >
-                            {isFlashing ? t('flashBoard.flashingShort') : t('flashBoard.next')}
-                        </Button>
-                    </FormButtonGroup>
-                </Col>
-            </Row>
+            <FlashProgressView
+                stage={stage}
+                log={data ?? []}
+                isFlashing={isFlashing}
+                flashDone={flashDone}
+                flashError={flashError}
+                onBackToConfig={() => {
+                    setData(undefined);
+                    setFlashError(null);
+                    setStage(null);
+                }}
+                onNext={props.onNext}
+            />
         );
     }
 
     // Show config form
     return <Form form={form}>
         <Row>
-            <Col span={24} style={{height: isMobile ? "auto" : "55vh", overflowY: isMobile ? undefined : "auto", paddingBottom: isMobile ? 80 : undefined}}>
+            <Col span={24} style={inModal
+                ? {maxHeight: "60vh", overflowY: "auto"}
+                : {height: isMobile ? "auto" : "55vh", overflowY: isMobile ? undefined : "auto", paddingBottom: isMobile ? 80 : undefined}}>
                 <FormLayout layout="vertical">
+                    {!showTargetPicker && (
+                        <FlashTargetSummary
+                            mowerModel={configuredMowerModel}
+                            boardType={selectedBoard}
+                            panelType={selectedPanel}
+                            isManual={isManualTarget}
+                            onChange={() => setIsTargetPickerOpen(true)}
+                        />
+                    )}
+                    {showTargetPicker && isTargetComplete && (
+                        <Alert
+                            type="info"
+                            showIcon
+                            style={{marginBottom: 12}}
+                            message={t('flashBoard.targetOverrideTitle')}
+                            description={t('flashBoard.targetOverrideDesc')}
+                        />
+                    )}
+                    {/* The two pickers stay registered in the form while hidden
+                        (field display, not unmount) so the derived target is
+                        what gets submitted. */}
                     <SchemaField><SchemaField.String
                         name={"boardType"}
                         title={t('flashBoard.boardSelectionTitle')}
-                        // No board is safe as a generic fallback: YardForce
-                        // 500 identifies a chassis, not Vermut vs Mowgli.
+                        // No board is safe as a generic fallback for a model
+                        // the firmware does not know.
                         default={""}
-                        enum={[{
-                            label: "Vermut - YardForce 500 Classic",
-                            value: "BOARD_VERMUT_YARDFORCE500"
-                        }, {
-                            label: "Mowgli - YardForce 500 Classic",
-                            value: "BOARD_YARDFORCE500"
-                        }, {
-                            label: "Mowgli - YardForce 500 B Variant",
-                            value: "BOARD_YARDFORCE500B"
-                        },
-                            {
-                                label: "Mowgli - LUV1000RI",
-                                value: "BOARD_LUV1000RI"
-                            }
-                        ]} x-component="Select"
+                        enum={boardOptionsForModel(props.mowerModel ?? configuredMowerModel, t)}
+                        x-component="Select"
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"panelType"}
                         title={t('flashBoard.panelSelectionTitle')}
                         default={""}
-                        enum={[
-                            {label: "YardForce 500 Classic", value: "PANEL_TYPE_YARDFORCE_500_CLASSIC"},
-                            {label: "YardForce LUV1000RI", value: "PANEL_TYPE_YARDFORCE_LUV1000RI"},
-                            {label: "YardForce 500B Classic", value: "PANEL_TYPE_YARDFORCE_500B_CLASSIC"},
-                            {label: "YardForce 900 ECO", value: "PANEL_TYPE_YARDFORCE_900_ECO"},
-                        ]} x-component="Select"
+                        enum={[...PANEL_OPTIONS]}
+                        x-component="Select"
                         x-decorator="FormItem"/></SchemaField>
 
                     {/* Firmware source is the ONE control that chooses between
@@ -537,6 +544,25 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                                         message={t('flashBoard.expertBuildAlertMessage')}
                                         description={t('flashBoard.expertBuildAlertDescription')}
                                     />
+                                    <SchemaField><SchemaField.String
+                                        name={"firmwareTarget"}
+                                        title={t('flashBoard.firmwareTargetTitle')}
+                                        default={""}
+                                        x-decorator-props={{tooltip: t('flashBoard.firmwareTargetTooltip')}}
+                                        enum={[{
+                                            label: "Yardforce500",
+                                            value: "Yardforce500"
+                                        }, {
+                                            label: "Yardforce500B",
+                                            value: "Yardforce500B"
+                                        }, {
+                                            label: "BiltemaRM1000",
+                                            value: "BiltemaRM1000"
+                                        }, {
+                                            label: "LUV1000RI",
+                                            value: "LUV1000RI"
+                                        }]} x-component="Select"
+                                        x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"version"}
                         title={t('flashBoard.versionTitle')}
@@ -728,7 +754,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     />
                 </FormLayout>
             </Col>
-            <Col span={24} style={{
+            <Col span={24} data-testid="flash-actions" style={inModal ? {marginTop: 16} : {
                 position: "fixed",
                 bottom: isMobile ? 'calc(56px + env(safe-area-inset-bottom, 0px))' : 20,
                 left: isMobile ? 0 : undefined,
@@ -739,7 +765,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 zIndex: 50,
             }}>
                 <div style={{width: "100%"}}>
-                    {(!selectedBoard || !selectedPanel) && (
+                    {!isTargetComplete && (
                         <Alert
                             type="warning"
                             showIcon
@@ -748,7 +774,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                             description={t('flashBoard.selectionRequiredDesc')}
                         />
                     )}
-                    {selectedBoard && !isExpert && !PREBUILT_BOARDS.has(selectedBoard) && (
+                    {selectedBoard && !isExpert && !hasPrebuiltFirmware(selectedBoard) && (
                         <Alert
                             type="warning"
                             showIcon
@@ -760,7 +786,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     <FormButtonGroup>
                         <Button
                             type="primary"
-                            disabled={!selectedBoard || !selectedPanel || (!isExpert && !PREBUILT_BOARDS.has(selectedBoard))}
+                            disabled={!isTargetComplete || (!isExpert && !hasPrebuiltFirmware(selectedBoard))}
                             onClick={() => {
                                 form.submit(flashFirmware).catch((err: unknown) => {
                                     if (err instanceof Error) {

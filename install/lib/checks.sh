@@ -10,10 +10,8 @@ container_name_for_service() {
     gui)          printf 'mowgli-gui\n' ;;
     mosquitto)    printf 'mowgli-mqtt\n' ;;
     mavros)       printf 'mowgli-mavros\n' ;;
+    openmower)    printf 'mowgli-openmower\n' ;;
     ntrip)        printf 'mowgli-ntrip\n' ;;
-    vesc)         printf 'mowgli-vesc\n' ;;
-    tfluna_front) printf 'mowgli-tfluna-front\n' ;;
-    tfluna_edge)  printf 'mowgli-tfluna-edge\n' ;;
     *)            return 1 ;;
   esac
 }
@@ -30,7 +28,8 @@ expected_runtime_services() {
   : "${LIDAR_TYPE:=unknown}"
   : "${GNSS_BACKEND:=universal}"
 
-  local services=(mowgli gui mosquitto)
+  local services=(mowgli gui)
+  [[ "${ENABLE_MQTT:-false}" == "true" ]] && services+=(mosquitto)
   local gnss_backend
   local gnss_stack
   local gnss_service
@@ -51,21 +50,18 @@ expected_runtime_services() {
     services+=(mavros)
   fi
 
+  # OpenMower electronics: the bridge sidecar replaces mowgli-ros2's
+  # hardware_bridge_node. GNSS is unaffected — it stays with the sidecar above.
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    services+=(openmower)
+  fi
+
   if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
     services+=(lidar)
   fi
 
-  if effective_tfluna_front_enabled; then
-    services+=(tfluna_front)
-  fi
 
-  if effective_tfluna_edge_enabled; then
-    services+=(tfluna_edge)
-  fi
 
-  if effective_vesc_enabled; then
-    services+=(vesc)
-  fi
 
   printf '%s\n' "${services[@]}"
 }
@@ -88,6 +84,12 @@ check_devices() {
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     devices+=("${MAVROS_PORT:-/dev/mavros}:Pixhawk MAVROS serial")
+  elif [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    devices+=("${OPENMOWER_LL_PORT:-/dev/ttyAMA0}:OpenMower LowLevel board")
+    devices+=("${OPENMOWER_XESC_LEFT_PORT:-/dev/ttyAMA5}:OpenMower left xESC")
+    devices+=("${OPENMOWER_XESC_RIGHT_PORT:-/dev/ttyAMA3}:OpenMower right xESC")
+    devices+=("${OPENMOWER_XESC_MOW_PORT:-/dev/ttyAMA4}:OpenMower mow xESC")
+    devices+=("${gnss_device}:GPS receiver")
   else
     devices+=("/dev/mowgli:Mowgli STM32 board")
   fi
@@ -218,7 +220,7 @@ check_generated_gps_yaml_alignment() {
   yaml_ntrip_enabled="$(yaml_gps_value "$yaml_file" ntrip_enabled)"
 
   _describe_gnss_resolution "GNSS receiver family" "$yaml_receiver_family" "${GNSS_RECEIVER_FAMILY:-}" "auto"
-  _describe_gnss_resolution "GNSS serial device" "$yaml_serial_device" "${GNSS_SERIAL_DEVICE:-}" "/dev/ttyAMA4"
+  _describe_gnss_resolution "GNSS serial device" "$yaml_serial_device" "${GNSS_SERIAL_DEVICE:-}" "$(default_gnss_uart_device)"
   _describe_gnss_resolution "GNSS serial baud" "$yaml_serial_baud" "${GNSS_SERIAL_BAUD:-}" "921600"
   _describe_gnss_resolution "GNSS frame_id" "$yaml_frame_id" "${GNSS_FRAME_ID:-}" "gps_link"
   _describe_gnss_resolution "GNSS NTRIP enabled" "$yaml_ntrip_enabled" "${GNSS_NTRIP_ENABLED:-}" "true"
@@ -277,6 +279,11 @@ check_containers() {
 
 check_firmware() {
   step "Check: Mowgli firmware"
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    info "OpenMower backend: the LowLevel board keeps its own firmware; check the bridge with: $(print_logs_command_for_container mowgli-openmower 50)"
+    return 0
+  fi
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     info "MAVROS backend: skipping direct Mowgli firmware check"
@@ -506,37 +513,6 @@ check_lidar() {
 # fusion_graph GTSAM localizer (sole and default; it owns both map->odom and
 # odom->base_footprint). The old robot_localization dual EKF was also removed.
 # See CLAUDE.md "Architecture Invariants" for details.
-
-check_rangefinders() {
-  step "Check: Rangefinders"
-
-  if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" || "${TFLUNA_EDGE_ENABLED:-false}" == "true" ]]; then
-    if ! feature_is_available tfluna; then
-      warn_unavailable_feature_once \
-        tfluna \
-        "TF-Luna rangefinder services are not available on this branch yet; skipping TF-Luna device checks."
-      return
-    fi
-  fi
-
-  if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" ]]; then
-    if [ -e "${TFLUNA_FRONT_PORT:-/dev/tfluna_front}" ]; then
-      info "TF-Luna front detected (${TFLUNA_FRONT_PORT})"
-    else
-      fail "TF-Luna front not detected (${TFLUNA_FRONT_PORT})"
-      add_issue "TF-Luna front not detected. Check selected UART and TFLUNA_FRONT_PORT in docker/.env."
-    fi
-  fi
-
-  if [[ "${TFLUNA_EDGE_ENABLED:-false}" == "true" ]]; then
-    if [ -e "${TFLUNA_EDGE_PORT:-/dev/tfluna_edge}" ]; then
-      info "TF-Luna edge detected (${TFLUNA_EDGE_PORT})"
-    else
-      fail "TF-Luna edge not detected (${TFLUNA_EDGE_PORT})"
-      add_issue "TF-Luna edge not detected. Check selected UART and TFLUNA_EDGE_PORT in docker/.env."
-    fi
-  fi
-}
 
 check_gui() {
   step "Check: GUI & connectivity"

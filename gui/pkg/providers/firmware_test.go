@@ -8,6 +8,7 @@ import (
 
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestFlashFirmwareRouting exercises the build-mode selector at the FlashFirmware
@@ -131,6 +132,39 @@ func TestOpenocdProgramCmdPicksTheBoardTarget(t *testing.T) {
 	if got := openocdProgramCmd("BOARD_YARDFORCE500", "/tmp/f.elf"); !strings.Contains(got, "target/stm32f1x.cfg") {
 		t.Errorf("500 is an STM32F103 and needs stm32f1x.cfg: %s", got)
 	}
+}
+
+func TestFirmwareEnvironmentSelectsNativeRM1000Target(t *testing.T) {
+	got, err := firmwareEnvironment("BOARD_YARDFORCE500B", "BiltemaRM1000")
+	require.NoError(t, err)
+	assert.Equal(t, "BiltemaRM1000", got)
+
+	got, err = firmwareEnvironment("BOARD_YARDFORCE500B", "")
+	require.NoError(t, err)
+	assert.Equal(t, "Yardforce500B", got)
+	got, err = firmwareEnvironment("BOARD_YARDFORCE500", "")
+	require.NoError(t, err)
+	assert.Equal(t, "Yardforce500", got)
+
+	_, err = firmwareEnvironment("BOARD_YARDFORCE500", "BiltemaRM1000")
+	assert.ErrorContains(t, err, `requires board "BOARD_YARDFORCE500B"`)
+	_, err = firmwareEnvironment("BOARD_YARDFORCE500B", "not-a-target")
+	assert.ErrorContains(t, err, "unsupported firmware target")
+}
+
+func TestRM1000RequiresExplicitTarget(t *testing.T) {
+	assert.ErrorContains(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", ""), "exact BiltemaRM1000")
+	assert.ErrorContains(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "Yardforce500B"), "exact BiltemaRM1000")
+	assert.NoError(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "BiltemaRM1000"))
+	assert.ErrorContains(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", "BiltemaRM1000"), "requires panel PANEL_TYPE_YARDFORCE_900_ECO")
+	assert.ErrorContains(t, validateFirmwareTargetSelection("YardForce500B", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "BiltemaRM1000"), "incompatible with mower model")
+	assert.NoError(t, validateFirmwareTargetSelection("CUSTOM", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "BiltemaRM1000"))
+	assert.NoError(t, validateFirmwareTargetSelection("YardForce500B", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", ""))
+}
+
+func TestRM1000OpenOCDUsesSTM32F4Target(t *testing.T) {
+	got := openocdProgramCmd("BOARD_YARDFORCE500B", "/tmp/rm1000.elf")
+	assert.Contains(t, got, "target/stm32f4x.cfg")
 }
 
 // The prebuilt path flashes a raw .bin, which carries no addresses, so its

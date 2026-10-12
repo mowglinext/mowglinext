@@ -194,6 +194,48 @@ class PythonCorrectionTrackerParityTest(unittest.TestCase):
         )
         self.assertEqual(status.msm_summary_cell_count, 24)
 
+    def test_station_id_zero_is_a_valid_matching_station(self) -> None:
+        # RTCM reference-station id 0 is real: base and MSM both reporting 0 are the same station.
+        zero = _healthy_ntrip()
+        for entry in zero.status:
+            if entry.name in (
+                'universal_gnss_ntrip/rtcm_semantic/base_station_arp',
+                'universal_gnss_ntrip/rtcm_semantic/msm_summary',
+            ):
+                for item in entry.values:
+                    if item.key == 'station_id':
+                        item.value = '0'
+        tracker = CorrectionDiagnosticTracker(2.0)
+        tracker.update(zero, 100.0)
+        status = _project(tracker, 100.0)
+        self.assertEqual(
+            status.correction_semantic_status,
+            PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_HEALTHY,
+        )
+        self.assertEqual(status.msm_summary_station_id, 0)
+
+    def test_missing_or_different_station_id_is_never_a_match(self) -> None:
+        for drop in ('both', 'base', 'zero_vs_42'):
+            array = _healthy_ntrip()
+            for entry in array.status:
+                is_base = entry.name == 'universal_gnss_ntrip/rtcm_semantic/base_station_arp'
+                is_msm = entry.name == 'universal_gnss_ntrip/rtcm_semantic/msm_summary'
+                if drop == 'both' and (is_base or is_msm):
+                    entry.values = [i for i in entry.values if i.key != 'station_id']
+                elif drop == 'base' and is_base:
+                    entry.values = [i for i in entry.values if i.key != 'station_id']
+                elif drop == 'zero_vs_42' and is_msm:
+                    for item in entry.values:
+                        if item.key == 'station_id':
+                            item.value = '0'
+            tracker = CorrectionDiagnosticTracker(2.0)
+            tracker.update(array, 100.0)
+            self.assertEqual(
+                _project(tracker, 100.0).correction_semantic_status,
+                PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_INVALID,
+                drop,
+            )
+
     def test_transport_response_forwarding_and_invalid_semantics_are_distinct(self) -> None:
         connected = CorrectionDiagnosticTracker(2.0)
         array = DiagnosticArray()

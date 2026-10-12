@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/mowglinext/mowglinext/pkg/types"
@@ -11,8 +14,13 @@ import (
 )
 
 type Schedule struct {
-	ID         string     `json:"id"`
-	Area       int        `json:"area"`
+	ID string `json:"id"`
+	// AreaID is the STABLE map area id (MapArea.id) this schedule mows; 0 means
+	// every area (a plain Start). The scheduler resolves it to the current
+	// positional index when the schedule fires. AreaName is a display snapshot
+	// so the GUI and MQTT consumers can label it, even if the area was removed.
+	AreaID     uint32     `json:"areaId"`
+	AreaName   string     `json:"areaName,omitempty"`
 	Time       string     `json:"time"`       // HH:mm format
 	DaysOfWeek []int      `json:"daysOfWeek"` // 0=Sunday .. 6=Saturday
 	Enabled    bool       `json:"enabled"`
@@ -29,6 +37,29 @@ type ScheduleListResponse struct {
 }
 
 const scheduleKeyPrefix = "schedule:"
+
+// minScheduleSpacingMinutes is how far apart two enabled schedules must start
+// on a shared weekday. A mow has no fixed duration, so this matches the one-hour
+// block the weekly overview draws for every schedule.
+const minScheduleSpacingMinutes = 60
+
+const minutesPerWeek = 7 * 24 * 60
+
+const maxAreaNameLength = 200
+
+// scheduleWriteMu serialises check-then-write so two concurrent saves (HTTP
+// and MQTT) cannot both pass the overlap check against the same stored state.
+var scheduleWriteMu sync.Mutex
+
+// ScheduleConflictError reports that saving would make two enabled schedules overlap.
+type ScheduleConflictError struct {
+	With Schedule
+}
+
+func (e *ScheduleConflictError) Error() string {
+	return fmt.Sprintf("overlaps the enabled schedule starting at %s: schedules sharing a weekday must start at least %d minutes apart",
+		e.With.Time, minScheduleSpacingMinutes)
+}
 
 func ScheduleRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider) {
 	group := r.Group("/schedules")
@@ -67,6 +98,7 @@ func listSchedules(dbProvider types.IDBProvider) gin.HandlerFunc {
 // @Param schedule body Schedule true "schedule"
 // @Success 200 {object} Schedule
 // @Failure 400 {object} ErrorResponse
+// @Failure 409 {object} ErrorResponse
 // @Router /schedules [post]
 func createSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -84,10 +116,11 @@ func createSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 		sched.ID = fmt.Sprintf("%d", time.Now().UnixNano())
 		sched.CreatedAt = time.Now()
 
-		if err := saveSchedule(dbProvider, &sched); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+		if err := saveScheduleChecked(dbProvider, &sched); err != nil {
+			writeScheduleSaveError(c, err)
 			return
 		}
+		notifyScheduleChanged()
 
 		c.JSON(http.StatusOK, sched)
 	}
@@ -105,6 +138,7 @@ func createSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 // @Success 200 {object} Schedule
 // @Failure 400 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
+// @Failure 409 {object} ErrorResponse
 // @Router /schedules/{id} [put]
 func updateSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -134,10 +168,11 @@ func updateSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 		sched.LastSkipReason = existing.LastSkipReason
 		sched.LastSkippedAt = existing.LastSkippedAt
 
-		if err := saveSchedule(dbProvider, &sched); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+		if err := saveScheduleChecked(dbProvider, &sched); err != nil {
+			writeScheduleSaveError(c, err)
 			return
 		}
+		notifyScheduleChanged()
 
 		c.JSON(http.StatusOK, sched)
 	}
@@ -160,6 +195,7 @@ func deleteSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 			return
 		}
+		notifyScheduleChanged()
 		c.JSON(http.StatusOK, OkResponse{})
 	}
 }
@@ -180,7 +216,99 @@ func validateSchedule(s *Schedule) error {
 			return fmt.Errorf("day of week must be 0-6 (Sunday-Saturday)")
 		}
 	}
+	s.AreaName = strings.TrimSpace(s.AreaName)
+	if len(s.AreaName) > maxAreaNameLength {
+		return fmt.Errorf("areaName is too long (max %d characters)", maxAreaNameLength)
+	}
+	if s.AreaID == 0 {
+		// "All areas" carries no name; a stale one would label it wrongly.
+		s.AreaName = ""
+	}
 	return nil
+}
+
+// writeScheduleSaveError maps a save failure to an HTTP response: an overlap is
+// the caller's conflict (409), anything else is a storage failure.
+func writeScheduleSaveError(c *gin.Context, err error) {
+	var conflict *ScheduleConflictError
+	if errors.As(err, &conflict) {
+		c.JSON(http.StatusConflict, ErrorResponse{Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+}
+
+// minuteOfWeek is the Sunday 00:00-based minute of a weekday + HH:mm start.
+func minuteOfWeek(day int, hhmm string) (int, bool) {
+	t, err := time.Parse("15:04", hhmm)
+	if err != nil {
+		return 0, false
+	}
+	return day*24*60 + t.Hour()*60 + t.Minute(), true
+}
+
+// schedulesOverlap reports whether any start of a is closer than
+// minScheduleSpacingMinutes to any start of b. Distance wraps around the week,
+// so Sunday 23:30 and Monday 00:15 are 45 minutes apart, not six days.
+func schedulesOverlap(a, b *Schedule) bool {
+	for _, da := range a.DaysOfWeek {
+		ma, okA := minuteOfWeek(da, a.Time)
+		if !okA {
+			continue
+		}
+		for _, db := range b.DaysOfWeek {
+			mb, okB := minuteOfWeek(db, b.Time)
+			if !okB {
+				continue
+			}
+			diff := ma - mb
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > minutesPerWeek/2 {
+				diff = minutesPerWeek - diff
+			}
+			if diff < minScheduleSpacingMinutes {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// findOverlappingSchedule returns the first OTHER enabled schedule that overlaps
+// the candidate. A disabled candidate never conflicts (it cannot fire), so
+// disabling is always allowed; the check runs when a schedule is enabled or
+// its time or days change while enabled.
+func findOverlappingSchedule(candidate *Schedule, existing []Schedule) *Schedule {
+	if !candidate.Enabled {
+		return nil
+	}
+	for i := range existing {
+		other := &existing[i]
+		if other.ID == candidate.ID || !other.Enabled {
+			continue
+		}
+		if schedulesOverlap(candidate, other) {
+			return other
+		}
+	}
+	return nil
+}
+
+// saveScheduleChecked stores s unless it would overlap another enabled
+// schedule. HTTP and MQTT both save through it, so the rule holds everywhere.
+func saveScheduleChecked(dbProvider types.IDBProvider, s *Schedule) error {
+	scheduleWriteMu.Lock()
+	defer scheduleWriteMu.Unlock()
+	existing, err := getAllSchedules(dbProvider)
+	if err != nil {
+		return err
+	}
+	if other := findOverlappingSchedule(s, existing); other != nil {
+		return &ScheduleConflictError{With: *other}
+	}
+	return saveSchedule(dbProvider, s)
 }
 
 func saveSchedule(dbProvider types.IDBProvider, s *Schedule) error {

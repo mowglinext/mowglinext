@@ -1,5 +1,6 @@
 import reactUseWebSocketModule from "react-use-websocket";
 import {useEffect, useRef, useState} from "react";
+import {createUtf8StreamDecoder} from "../utils/utf8Stream.ts";
 import {wsBase} from "../utils/apiHost";
 import {
     getMultiplexedSocket,
@@ -60,12 +61,14 @@ export const useWS = <T>(
     const pubUriRef = useRef<string | null>(null);
     const pubFirstRef = useRef(true);
     const pubDecodeWarnedRef = useRef(false);
+    const textDecoderRef = useRef(createUtf8StreamDecoder());
     const ws = useWebSocket(pubUri, {
         share: true,
         shouldReconnect: () => true,
         reconnectAttempts: Infinity,
         reconnectInterval: (attempt: number) => Math.min(1000 * Math.pow(2, attempt), 30000),
         onOpen: () => {
+            textDecoderRef.current = createUtf8StreamDecoder();
             onInfoRef.current("Stream connected");
         },
         onError: () => {
@@ -77,7 +80,7 @@ export const useWS = <T>(
         onMessage: (e: MessageEvent) => {
             let decoded: string;
             try {
-                decoded = atob(e.data);
+                decoded = textDecoderRef.current(e.data);
             } catch (err) {
                 if (!pubDecodeWarnedRef.current) {
                     pubDecodeWarnedRef.current = true;
@@ -85,6 +88,7 @@ export const useWS = <T>(
                 }
                 return;
             }
+            if (!decoded) return; // A partial UTF-8 character is still buffered.
             const isFirst = pubFirstRef.current;
             if (isFirst) pubFirstRef.current = false;
             onDataRef.current(decoded as T, isFirst);
@@ -92,13 +96,15 @@ export const useWS = <T>(
     });
 
     const teardown = () => {
-        if (muxUnsubscribeRef.current) {
-            muxUnsubscribeRef.current();
-            muxUnsubscribeRef.current = null;
-        }
+        // Removing the final topic closes the shared socket synchronously.
+        // Intentional teardown must not report that close as a stream error.
         if (muxStatusUnsubRef.current) {
             muxStatusUnsubRef.current();
             muxStatusUnsubRef.current = null;
+        }
+        if (muxUnsubscribeRef.current) {
+            muxUnsubscribeRef.current();
+            muxUnsubscribeRef.current = null;
         }
         if (pubUriRef.current !== null) {
             pubUriRef.current = null;
@@ -139,6 +145,7 @@ export const useWS = <T>(
         }
 
         // Publish path: open a dedicated socket as before.
+        textDecoderRef.current = createUtf8StreamDecoder();
         pubFirstRef.current = true;
         pubDecodeWarnedRef.current = false;
         pubUriRef.current = `${wsBase()}${uri}`;

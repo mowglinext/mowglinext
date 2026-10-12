@@ -138,6 +138,20 @@ private:
   // element 0 = 0). Rebuilt with path_poses_ in onPath().
   std::vector<double> path_arc_m_;
   size_t max_reached_index_{0};
+  // An artificial search boundary that remains nearest may be reached after a
+  // localization correction or before the first meaningful query. Keep the
+  // first local path coordinate there so small subsequent forward samples can
+  // accumulate enough evidence to release the bounded window.
+  std::optional<size_t> pending_progress_boundary_;
+  std::optional<double> pending_progress_boundary_origin_offset_m_;
+  std::optional<double> pending_progress_boundary_high_water_offset_m_;
+  // Accumulate signed displacement only when the query follows an eligible
+  // local path tangent, so rejected lateral motion cannot become evidence.
+  double pending_progress_boundary_origin_tangent_x_{0.0};
+  double pending_progress_boundary_origin_tangent_y_{0.0};
+  double pending_progress_boundary_forward_motion_m_{0.0};
+  double pending_progress_boundary_radius_m_{0.0};
+  double pending_progress_boundary_minimum_motion_m_{0.0};
   // A controller may ask isGoalReached repeatedly without moving. Do not let
   // those callback ticks consume the bounded forward-search window as fake
   // path progress.

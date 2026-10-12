@@ -1,0 +1,110 @@
+.diagnostics-page {
+    --diagnostics-value-width: 7ch;
+
+    /* Cover every live number, including nested diagnostics components. */
+    font-variant-numeric: tabular-nums;
+}
+
+/* Dynamic labels keep their own layout slot; text changes cannot move peers. */
+.diagnostics-page .diagnostics-status-slot {
+    display: inline-flex;
+    flex: 0 0 auto;
+    inline-size: var(--diagnostics-status-width);
+    max-inline-size: 100%;
+    min-block-size: 22px;
+    align-items: center;
+    overflow: hidden;
+}
+
+.diagnostics-page .diagnostics-status-slot .ant-tag {
+    max-inline-size: 100%;
+    margin-inline-end: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.diagnostics-page .diagnostics-status-slot-fix { --diagnostics-status-width: 12ch; }
+.diagnostics-page .diagnostics-status-slot-rtk { --diagnostics-status-width: 12ch; }
+.diagnostics-page .diagnostics-status-slot-correction { --diagnostics-status-width: 27ch; }
+.diagnostics-page .diagnostics-status-slot-description { --diagnostics-status-width: 22ch; }
+
+.diagnostics-page .diagnostics-text-slot {
+    display: inline-block;
+    inline-size: min(100%, 24ch);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
+}
+
+.diagnostics-page .ant-statistic-content {
+    display: inline-flex;
+    justify-content: flex-end;
+    inline-size: min(100%, var(--diagnostics-value-width));
+}
+
+/* Keep SI symbols case-sensitive inside field headings (rad/s, m/s², etc.). */
+.diagnostics-page .ant-statistic-title {
+    text-transform: none;
+}
+
+.diagnostics-page .diagnostics-live-value {
+    display: inline-block;
+    min-inline-size: min(100%, var(--diagnostics-value-width));
+}
+
+.diagnostics-page .diagnostics-coordinate-value {
+    --diagnostics-value-width: 14ch;
+}
+
+.diagnostics-page .diagnostics-live-value-wide {
+    --diagnostics-value-width: 10ch;
+}
+
+.diagnostics-page .diagnostics-live-number {
+    text-align: end;
+}
+
+.diagnostics-page .diagnostics-live-value-nowrap {
+    white-space: nowrap;
+}
+
+.diagnostics-page .diagnostics-live-label {
+    display: block;
+    margin-block-end: 4px;
+    font-size: 12px;
+}
+
+.diagnostics-page .diagnostics-live-label-nowrap {
+    white-space: nowrap;
+    word-break: keep-all;
+    overflow-wrap: normal;
+    hyphens: none;
+}
+
+.diagnostics-page .diagnostics-gnss-constellations {
+    white-space: nowrap;
+}
+
+.diagnostics-page .diagnostics-health-badge-number {
+    display: inline-block;
+    text-align: end;
+    font-variant-numeric: tabular-nums;
+}
+
+.diagnostics-page .diagnostics-battery-percent {
+    display: inline-block;
+    inline-size: 3ch;
+    text-align: end;
+}
+
+.diagnostics-page .diagnostics-battery-voltage {
+    display: inline-block;
+    inline-size: 4ch;
+    text-align: end;
+}
+
+.diagnostics-page .ant-progress-text {
+    min-inline-size: 4ch;
+}

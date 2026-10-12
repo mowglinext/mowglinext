@@ -88,9 +88,12 @@ export function deriveLidarAnchor(values: Record<string, string>): LidarAnchorSu
         seeds: numberOrNull(values, "lidar_anchor_seeds"),
         skipped: numberOrNull(values, "lidar_anchor_skipped"),
         factors: numberOrNull(values, "lidar_anchor_factors"),
-        hitRatioPct: hitRatio === null ? null : Math.round(Math.min(1, Math.max(0, hitRatio)) * 100),
-        sigmaM: numberOrNull(values, "lidar_anchor_sigma_m"),
-        verdictKey: verdictRaw === undefined ? null : (VERDICT_KEYS[verdictRaw] ?? null),
+        hitRatioPct: !updates || hitRatio === null ? null : Math.round(Math.min(1, Math.max(0, hitRatio)) * 100),
+        sigmaM: updates ? numberOrNull(values, "lidar_anchor_sigma_m") : null,
+        // The producer initializes verdict to accepted before evaluating a candidate.
+        // A default enum alone is not evidence of an accepted localization.
+        verdictKey: updates === null || updates === 0 || verdictRaw === undefined
+            ? null : (VERDICT_KEYS[verdictRaw] ?? null),
         rejScore,
         rejSpread,
         rejDr,

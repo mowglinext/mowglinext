@@ -30,23 +30,31 @@ Paths in this table are repo-root relative. Everywhere else below, bare `lib/…
 bash install/test_mowglinext.sh
 for t in install/tests/test_*.sh; do bash "$t" || echo "FAILED: $t"; done
 
-# Syntax gate — test_mowglinext.sh only checks mowglinext.sh + 10 libs; cover the rest by hand
+# Syntax gate — test_mowglinext.sh only checks mowglinext.sh + 7 libs; cover the rest by hand
 for f in install/mowglinext.sh install/lib/*.sh install/locale/*.sh; do bash -n "$f" || echo "SYNTAX: $f"; done
 
-# Interactive install / upgrade / diagnose (on the robot)
-bash install/mowglinext.sh
-bash install/mowglinext.sh --check          # diagnostics only
-bash install/mowglinext.sh --branch=dev --image-tag=dev --backend=mowgli \
-     --gnss=auto --gnss-connection=uart --gnss-baud=auto --lidar=ldlidar-uart --tfluna=none
-# also: --lang= --gnss-device= --gnss-receiver-family= --lidar-uart= --tfluna-{front,edge}-uart=
-#       --gps= / --gps-uart= / --channel=  (deprecated aliases, still parsed)
+# Modes (on the robot). `install` is the default; interactive when a tty is
+# attached, `--non-interactive` (or no tty) makes every unset choice its default.
+bash install/mowglinext.sh                  # install, interactive
+bash install/mowglinext.sh install --non-interactive --branch=dev --image-tag=dev \
+     --backend=mowgli --gnss-connection=uart --gnss-device=/dev/ttyAMA4 --lidar=ldlidar-uart
+bash install/mowglinext.sh update           # MANUAL update: sync checkout, regen .env+compose, pull, up.
+                                            # No host updater, no readiness/firmware gate (docs/UPDATES.md)
+bash install/mowglinext.sh update --branch=dev
+bash install/mowglinext.sh repair           # re-apply udev/UART/sysctl/.env/compose/helpers from saved choices, never prompts
+bash install/mowglinext.sh check            # diagnostics only (alias --check)
+bash install/mowglinext.sh uninstall        # remove everything (stack+images, updater, host files, checkout);
+                                            # KEEPS the maps volume + docker/config/mowgli/mowgli_robot.yaml in place;
+                                            # confirms on a tty, needs an explicit --yes without one (lib/uninstall.sh)
+# also: --lang= --gnss-baud= --gnss-receiver-family= --lidar-uart= --no-updater
+#       --gps= / --gps-uart= / --channel= / --tfluna* (deprecated, parsed and ignored)
+# The installer asks ONLY host wiring. Datum, NTRIP, the GNSS receiver profile
+# (family/baud/config apply) and LiDAR mounting are GUI-owned (onboarding wizard).
 
-# --only=<step> (issue #632): run exactly one step instead of the full 15-step
-# flow — for adding one thing (e.g. the host updater) to an already-working
-# install without re-running everything else. Skips select_repo_branch()/
-# select_language() (deliberately non-interactive-friendly), still loads the
-# existing docker/.env first. See list_only_steps()/run_only_step() in
-# mowglinext.sh for the full, current list of step names.
+# --only=<step> (issue #632): run exactly one step of run_install() — for
+# adding one thing (e.g. the host updater) to an already-working install.
+# Skips the branch/language prompts, still loads the existing docker/.env.
+# See list_only_steps()/run_only_step() in mowglinext.sh for the step names.
 bash install/mowglinext.sh --only=updater
 bash install/mowglinext.sh --only=bogus     # rejected, lists valid step names
 
@@ -78,24 +86,28 @@ python3 install/scripts/migrate_openmower.py --source ~/mowgli-docker \
 
 ## Component-specific gotchas
 
-- **A compose fragment must work on a robot that never ran this installer version.** Updater-managed robots receive new fragments through the release bundle with their OLD `.env` and no installer run, so every `${VAR}` needs a `:-default` and a fragment may not depend on a file only the installer generates. It may not ADD writable storage either: the host updater refuses such a release (`validateStackMounts`: "adds writable storage …; explicit data/layout migration required", no backup contract) — keep runtime scratch in a bounded `tmpfs`. The GNSS sidecar (`compose/docker-compose.gps.yml`) is the reference: it mounts `mowgli_robot.yaml` — the ONE GNSS configuration, edited in the GUI — and its embedded launcher derives the receiver's ROS parameters in a tmpfs at container start. There is deliberately no `docker/config/universal_gnss/parameters.yaml` and no `GNSS_DEVICE` / `UNIVERSAL_GNSS_*_DIR` variable any more (pinned by `tests/test_gnss_external_sidecar_contract.sh` and `mowgli_bringup/test/test_gnss_sidecar_launcher.py`, which also keeps the launcher's defaults equal to the template).
+- **A compose fragment must work on a robot that never ran this installer version.** Updater-managed robots receive new fragments through the release bundle with their OLD `.env` and no installer run, so every `${VAR}` needs a `:-default` and a fragment may not depend on a file only the installer generates. It may not ADD writable storage either: the host updater refuses such a release (`validateStackMounts`: "adds writable storage …; explicit data/layout migration required", no backup contract) — keep runtime scratch in a bounded `tmpfs`. The one exception is the host device tree (`/dev:/dev`, `isDeviceMount`); `gui/pkg/updater/sidecar_mounts_test.go` runs every release sidecar through both mount gates. The GNSS sidecar (`compose/docker-compose.gps.yml`) is the reference: it mounts `mowgli_robot.yaml` — the ONE GNSS configuration, edited in the GUI — and its embedded launcher derives the receiver's ROS parameters in a tmpfs at container start. There is deliberately no `docker/config/universal_gnss/parameters.yaml` and no `GNSS_DEVICE` / `UNIVERSAL_GNSS_*_DIR` variable any more (pinned by `tests/test_gnss_external_sidecar_contract.sh` and `mowgli_bringup/test/test_gnss_sidecar_launcher.py`, which also keeps the launcher's defaults equal to the template).
 
 - **"Local changes" means modified TRACKED files** (`repo_local_changes`, `lib/deploy.sh` and its twin in `docs/install.sh`): untracked files and submodule state never count. Anything the installer, the GUI or the host updater writes into the checkout must be in `.gitignore`, and the installer must never `submodule update --init` — a robot builds nothing from `ros2/src`, and an initialised submodule makes the operator's next `git pull` die in the on-demand submodule fetch as soon as its URL or pin moves (`tests/test_repo_self_update.sh`).
 - The plain installer records `docker/stack-definition.sha256` for every Compose file it generates (`record_compose_baseline`); that is what lets the host updater adopt an older-but-untouched file later. A new writer of `docker-compose.yaml` must record it too.
 - A new `docker/.env` key must be added to `lib/state.sh` `is_allowed_installer_key` (L11–33) or presets and `.env` reload **silently drop it**; also extend the `REQUIRED_KEYS` list in `tests/test_env_output.sh` L41.
-- `write_config` (`lib/config.sh` L1327–1443) NEVER overwrites an existing installed `mowgli_robot.yaml` — it line-splices ~25 keys. Changing the seed alone does nothing on an already-installed robot.
+- A new `HARDWARE_BACKEND` value must land in FOUR places at once: `lib/config.sh` (`SUPPORTED_HARDWARE_BACKENDS` + `is_supported_hardware_backend`, which live there and NOT in `lib/backend_choice.sh` because `docker/stack.sh` never sources that file) plus `parse_args --backend=`, the menu in `lib/backend_choice.sh`, `docs/install.sh` + the composer in `docs/index.html`, and `SUPPORTED_HARDWARE_BACKENDS` in `ros2/src/mowgli_bringup/launch/mowgli.launch.py` (pinned by `test_hardware_backend_launch.py`). Only `mowgli` launches the in-tree bridge; `mavros`/`openmower` own it in a sidecar.
+- `write_config` (`lib/config.sh`) writes `mowgli_robot.yaml` ONLY when it does not exist yet (seed + the GNSS link / `lidar_enabled` just chosen). An existing file is never touched — not by `update`, `repair`, nor a reinstall: the GUI owns every key (Invariant 15) and the containers write calibration into it as root (Invariant 6), so a reinstall that changes the wiring tells the operator to flip it in the GUI. Changing the seed alone does nothing on an already-installed robot; retired keys are scrubbed by the GUI settings backend on save, not here.
 - `LIDAR_ENABLED` in `.env` decides only whether the *container* is composed; the ROS-side LiDAR mode is `mowgli_robot.yaml:lidar_enabled` (comment in `compose/docker-compose.base.yml` L13–17).
-- Empty `GNSS_*` values in `compose/docker-compose.gps.yml` L45–57 mean "not set" on purpose — `sensors/gps/start_gps.sh` resolves YAML → env → default, so a compose default silently masks the operator's YAML.
+- **The GNSS sidecar is an external image, not a local build** (2026-09-19, commit `bfd44f1a`, "#625"): `compose/docker-compose.gps.yml`'s `gps` service no longer builds `sensors/gps/Dockerfile`/`start_gps.sh` with `GNSS_*` env passthrough — it runs `${UNIVERSAL_GNSS_IMAGE}` and reads `mowgli_robot.yaml` directly via an inline Python `command:` block (`GPS_IMAGE` was removed from `.env`). `mowgli_gnss_bridge` is now compiled straight into the `mowgli-ros2` image instead of a `sensors/gps` sidecar image.
 - `config/mowgli/{hardware_bridge,twist_mux,foxglove_bridge}.yaml` are **dead seeds** — the installer never copies them into `docker/config/mowgli/`, and launch loads `hardware_bridge.yaml` / `twist_mux.yaml` from the package share. Only `mowgli_robot.yaml` is read from `/ros2_ws/config`.
 - `config/cyclonedds.xml` is only a seed — the stack mounts the *tracked* `docker/config/cyclonedds.xml`, so the seed-if-absent guard never fires on a repo clone. Edit both.
-- `compose/docker-compose.foxglove.yml` is dead and would break the stack (`enable_coverage:=`, an arg no launch file declares); `compose/docker-compose.mavros.yml` L39–40 launches a `mowgli_ntrip_client` package that does not exist in `ros2/src`.
-- TF-Luna and VESC prompts exist but are hard-gated off (`lib/config.sh` `range_services_available` L354, `vesc_service_available` L373 returns 1 unconditionally); `tests/test_optional_features.sh` pins that they never leak into the generated compose.
+- The standalone `mowgli-ntrip` service was removed from `compose/docker-compose.mavros.yml` entirely (2026-09-19, commit `bfd44f1a`, same PR as the GNSS sidecar change above) — it used to launch a `mowgli_ntrip_client` package that never existed in `ros2/src`; there is now no separate NTRIP container on this backend.
+- **Watchtower is gone** (2026-09-29): the host updater handles managed releases and `mowglinext.sh update` everything else; `install_host_updater` still removes a leftover `mowgli-watchtower` container. **The mosquitto broker is opt-in** (`--mqtt=on`, `.env` `ENABLE_MQTT`, default off): it is a local (non-release) service, so `installer-stack` reads `MOWGLI_ENABLE_MQTT` to add or drop it when it regenerates the file, and `--check` only expects it when enabled.
+- TF-Luna and VESC are RETIRED (2026-09-29, with the optional tools, the datum/NTRIP prompts and the host-side GNSS baud probing/upgrade): their fragments, libs and `.env` keys are gone; `setup_env` scrubs the keys from an older `.env` and `tests/test_optional_features.sh` pins that they never come back. `lib/tools.sh` now only installs the `mowgli-*` helpers (always, no prompt).
+- `prompt`/`confirm` (`lib/common.sh`) return their default under `NON_INTERACTIVE=true`, which `parse_args` also sets when `/dev/tty` is unreadable — every prompt MUST therefore carry a sensible default as `$2`; a new prompt without one silently answers "" in a composer run. `confirm` answers yes; keep destructive confirmations out of non-interactive paths (or gate them on an explicit flag, as `MOWGLI_ADOPT_LEGACY_COMPOSE` does).
+- `update`/`repair` require an existing `docker/.env` (`require_installed_runtime`) and never invent hardware choices; `repair` forces `NON_INTERACTIVE`. `update` leaves an installed host updater running on purpose (operator decision 2026-09-29): it uses the same writers as `install`, so the baseline is re-recorded and the updater can adopt the result; the GUI reports "drifted" until the next managed release.
 - `write_compose_merged` runs `docker compose config --no-interpolate`; the pure-Bash fallback (`lib/compose.sh` L169–206) is a naive section concatenator. Re-run `tests/test_compose_validity.sh` after touching any fragment.
 - `config.sh` recomputes `REPO_DIR` from `MOWGLI_HOME` at source time, so `docker/stack.sh` L76–83 re-asserts the paths afterwards — any new lib that caches a path at source time needs the same treatment.
 - `migrate_runtime_paths` still backs up `.env` + `docker-compose.yaml` to `.old.<ts>` unconditionally up front on every run (`lib/deploy.sh`), but `prune_backup_if_unchanged` removes that backup afterward if the regenerated file turns out byte-identical — a re-run that changes nothing no longer accumulates one. Remaining backup-policy ideas (rotation, a dedicated backup dir, `--no-backup`) are still open in `TODO-runtime-backups.md`.
 - `lib/udev.sh` L58–63 falls back to a bare `KERNEL=="<kernel name>"` rule when `udevadm` cannot resolve USB attributes — unstable across re-enumeration, which is exactly the bug the VID/PID form fixes.
 - `COMPOSE_PROJECT_NAME` must stay stable (default `install`): renaming it orphans the `install_mowgli_maps` volume holding `areas.dat` and the saved fusion graph.
-- `parse_args` (`lib/config.sh` L842–1078) only `warn`s on an unknown argument, so a typo'd flag silently no-ops. A new flag also needs the `docs/install.sh` bootstrap allowlist and the web composer under `docs/`.
+- `parse_args` (`lib/config.sh`) only `warn`s on an unknown argument, so a typo'd flag silently no-ops. A new flag also needs the `docs/install.sh` bootstrap allowlist and the web composer under `docs/` (which always appends `--non-interactive`; `docs/test_web_composer.sh` pins it).
 
 ## Safety
 

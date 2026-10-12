@@ -62,6 +62,9 @@ struct Observation
   bool valid{false};
   std::uint32_t message_type{0};
   std::uint32_t station_id{0};
+  // True when the diagnostic carried a station_id at all. RTCM station 0 is a valid
+  // reference-station id (many casters use it), so 0 must not be read as "unknown".
+  bool station_id_present{false};
   std::uint32_t satellite_count{0};
   std::uint32_t signal_count{0};
   std::uint32_t cell_count{0};
@@ -330,7 +333,8 @@ Observation parseObservation(const DiagnosticEntry * entry)
   observation.has_value |= parseBool(lookup(*entry, "decoded"), observation.decoded);
   observation.has_value |= parseBool(lookup(*entry, "valid"), observation.valid);
   observation.has_value |= parseUint(lookup(*entry, "message_type"), observation.message_type);
-  observation.has_value |= parseUint(lookup(*entry, "station_id"), observation.station_id);
+  observation.station_id_present = parseUint(lookup(*entry, "station_id"), observation.station_id);
+  observation.has_value |= observation.station_id_present;
   observation.has_value |=
     parseUint(lookup(*entry, "satellite_count"), observation.satellite_count);
   observation.has_value |= parseUint(lookup(*entry, "signal_count"), observation.signal_count);
@@ -406,8 +410,10 @@ std::uint8_t semanticStatus(const Snapshot & ntrip, std::uint8_t transport)
   const bool msm_fresh = msm.age_s >= 0.0F && msm.age_s <= kSemanticFreshnessSeconds;
   const bool msm_usable = msm.present && msm.seen && msm.decoded && msm.valid &&
     msm.cell_count > 0U && msm_fresh && msm.malformed_count == 0U;
-  const bool station_matches =
-    base.station_id != 0U && msm.station_id != 0U && base.station_id == msm.station_id;
+  // Both observations must carry a station id and agree. Id 0 is a real station, so it is
+  // the PRESENCE of the id that counts, not a non-zero value.
+  const bool station_matches = base.station_id_present && msm.station_id_present &&
+    base.station_id == msm.station_id;
 
   if (has_correction_available && correction_available && has_parser_health && parser_healthy &&
     base_usable && msm_usable && station_matches)

@@ -8,6 +8,7 @@ require (
 	github.com/distribution/reference v0.5.0
 	github.com/docker/distribution v2.8.3+incompatible
 	github.com/docker/docker v20.10.24+incompatible
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gin-contrib/cors v1.4.0
 	github.com/gin-contrib/static v1.1.6
 	github.com/gin-gonic/gin v1.12.0

@@ -19,7 +19,7 @@
 | Wheel σ random-walk model (#491), pivot release, adaptive inflation | `graph_manager_node.cpp:258-325`; `test_wheel_sigma_scaling.cpp`, `test_adaptive_noise.cpp` |
 | Stationary yaw snap, hand-push gate, gyro-bias EMA | `graph_manager_node.cpp:125-190`; `graph_manager.cpp` `AddGyroDelta` (:109); `test_stationary_yaw.cpp`, `test_gyro_bias.cpp` |
 | COG yaw gating, σ floor, 180° flip recovery | `fusion_graph_node_callbacks_b.cpp` `OnCogHeading` (:44); pure rules `include/fusion_graph/yaw_gates.hpp`, `include/fusion_graph/cog_flip_recovery.hpp` |
-| Graph persistence (`.graph/.meta`), datum cross-garden guard, autoload, empty-graph refusal | `src/graph_manager_persistence.cpp` `Save` / `Load`; `test_persistence.cpp` |
+| Graph persistence, crash recovery, legacy `.graph/.meta` loading, datum guard | `PERSISTENCE.md`; `src/graph_manager_persistence.cpp` `Save` / `Load`; `src/checkpoint_file.cpp`; persistence tests |
 | Save / clear services, auto-checkpoints | `fusion_graph_node_setup_comms.cpp:205-270`; `DispatchAsyncSave` `callbacks_b.cpp:363`; `OnHighLevelStatus` :276; `OnPeriodicSaveTimer` `misc.cpp:126` |
 | map→odom anchor, slew limiter (unwired), odom re-base, TF thread | `src/fusion_graph_node_publish.cpp` (`PublishOutputs` :153, `SlewPublishedAnchor` :278, `TfBroadcastLoop` :320); re-base `fusion_graph_node_timer.cpp:483-500`; pure `include/fusion_graph/anchor_slew.hpp` |
 | Published covariance frame (body→map) | `fusion_graph_node_publish.cpp:183` + `include/fusion_graph/covariance_frame.hpp`; `test_covariance_frame.cpp` |
@@ -68,9 +68,13 @@
 | `.../graph_manager.cpp` | | Accumulators, queues, initialization, statistics and pose snapshots |
 | `.../graph_manager_node.cpp` | 574 | `Tick` / `CreateNodeLocked`: all per-node gates + factor construction + iSAM2 update + throttled marginal |
 | `.../graph_manager_rebase.cpp` | | Windowed iSAM2 rebase, robust update/reset, rigid whole-graph transforms |
-| `.../graph_manager_persistence.cpp` | | Graph reset and `.graph`/`.meta` persistence with datum guard |
+| `.../graph_manager_persistence.cpp` | | Graph reset, snapshot/restore, semantic validation and datum guard |
+| `.../checkpoint_file.cpp` + `include/fusion_graph/checkpoint_file.hpp` | | Combined checkpoint publication, recovery copy, checksums and checked I/O |
+| `PERSISTENCE.md` | | Persistence protocol, recovery/compatibility contracts and validation limits |
 | `.../factors.cpp` | 162 | Factor `evaluateError` + analytic Jacobians + `clone` |
 | **`ros2/src/fusion_graph/test/`** | | |
+| `.../test_checkpoint_file.cpp`, `.../test_persistence_faults.cpp` | | Deterministic I/O faults, process interruption, recovery and legacy migration |
+| `.../test_save_service.py`, `.../checkpoint_test_delay.cpp` | | Real-node save result, busy failure and executor progress during held file I/O |
 | `.../test_factors.cpp` | | Graph factor residual and Jacobian tests |
 | `.../test_gnss_timestamp.cpp` | 142 | Delayed GNSS constrains the node at `header.stamp`, bounded by the window |
 | `.../test_rtk_wrongfix_gate.cpp` | 167 | Wrong-fix budget math; reject-forever regression if reset only on accept |
@@ -183,7 +187,7 @@ All read ONCE at construction (`declare_parameter`, no dynamic reconfigure). Pre
 
 - **`beluga_ros::Amcl`'s first update applies the WHOLE odom pose, not a delta** — its motion model reads a 2-pose odometry window with no first-update special case, so the first estimate after construction lands metres away (3.2 m in the 2026-09-07 replay). `RebuildLidarAnchorMap` does one discarded warm-up update right after construction; do not remove it. Re-seeds are unaffected (window already full).
 - **Never feed a LiDAR-anchor estimate to the graph unvalidated.** The 2026-09-06 outage put the fused pose 10 m off with the filter's own covariance saying 5 cm. Every candidate goes through `ValidateLidarAnchor` (scan consistency AT THE ESTIMATE, particle spread, plausibility vs dead reckoning); dead reckoning is the better witness beyond its drift budget, and the cloud is re-seeded from it after `lidar_anchor_reseed_after_s` of rejects.
-- The anchor map only grows while MAPPING (fresh RTK-Fixed): it is frozen during ANCHORING by design, so a robot that drives out of the mapped area during an outage is on dead reckoning until it comes back — the score gate makes that explicit (`lidar_anchor_rej_score` climbs, no factors).
+- The anchor map only grows while MAPPING (fresh RTK-Fixed) AND moving: a scan is written at most every `lidar_map_insert_period_s` and only after `lidar_map_insert_min_travel_m` (0.10 m) of odometry travel since the last written scan, so a still robot (docked without charger voltage, paused, waiting for RTK) does not re-write the same scene at a drifting pose (`lidar_map_anchor_gate.hpp`). The dock gate (`is_charging`, or unknown at boot) is separate and still applies. The map is frozen during ANCHORING by design, so a robot that drives out of the mapped area during an outage is on dead reckoning until it comes back — the score gate makes that explicit (`lidar_anchor_rej_score` climbs, no factors).
 - Three layers of defaults disagree: `GraphParams` struct (`graph_params.hpp`, e.g. `max_graph_nodes` 3000, `stationary_sigma_theta` 1e-3) vs declare defaults vs `fusion_graph.yaml` (6000, 0.01) vs launch (`node_period_s` 0.1 → yaml 0.02 → deployed 0.04). Unit tests construct `GraphParams` directly, so they run on struct defaults, not production values.
 - The LiDAR map anchor factor is `PoseTranslationPrior<Pose2>` (XY only, `graph_manager_node.cpp` `lidar_map_xy` consumer). No LiDAR-derived yaw ever enters the graph as an absolute factor: a LiDAR yaw prior once flipped map→odom ~180° (2026-07-22, the since-removed scan-to-keyframe anchor). Do not add one back.
 - `primary_mode=false` comments in `setup_params.cpp:134-137` and the arg description in `fusion_graph.launch.py:102-105` describe an `ekf_map_node` fallback that no longer exists; `navigation.launch.py:1088` always passes `"true"`.

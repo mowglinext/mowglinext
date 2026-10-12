@@ -42,6 +42,7 @@ OdometryPublisher::OdometryPublisher(rclcpp::Node& node) : node_(node)
 
 void OdometryPublisher::reset()
 {
+  odom_clock_fit_.Reset();
   odom_initialized_ = false;
   prev_left_ticks_ = 0;
   prev_right_ticks_ = 0;

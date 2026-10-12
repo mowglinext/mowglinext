@@ -563,6 +563,26 @@ private:
     return false;
   }
 
+  // Entering RECORDING from IDLE invalidates the firmware's previous drive
+  // authorization. Its motor-link inhibit also needs a fresh, accepted zero
+  // command before a nonzero command can move the wheels. Keep zero flowing
+  // through the mux and USB bridge while that handshake completes.
+  bool arm_drive_after_recording(const std::function<bool()>& should_abort)
+  {
+    const double deadline = monotonic() + 1.0;
+    while (rclcpp::ok() && monotonic() < deadline)
+    {
+      if (should_abort())
+      {
+        publish_vx(0.0);
+        return false;
+      }
+      publish_vx(0.0);
+      sleep_for(1.0 / CMD_RATE_HZ);
+    }
+    return rclcpp::ok() && !should_abort();
+  }
+
   // ── Dock yaw drive ──────────────────────────────────────────────────
   struct DockYawResult
   {
@@ -1642,6 +1662,17 @@ private:
       need_exit_recording = true;
     }
 
+    if (!arm_drive_after_recording(should_abort))
+    {
+      return finish(false,
+                    emergency_active_ ? CalibrateDock::Result::RETRY_EMERGENCY
+                                      : CalibrateDock::Result::RETRY_WRONG_STATE,
+                    "Aborted while arming the drive for reverse; nothing was changed.",
+                    is_canceled(),
+                    nullptr,
+                    nullptr);
+    }
+
     // ── (3) Straight reverse, collecting COG (+ IMU/odom accel if folding) ──
     const double x0 = latest_gps_x_.load();
     const double y0 = latest_gps_y_.load();
@@ -1730,12 +1761,11 @@ private:
                                dc_min_baseline_disp_m_);
     if (!gate.coherent)
     {
-      return finish(false,
-                    cog_reason_to_retry(gate.reason),
-                    "COG incoherent (RTK not truly fixed / GPS noisy) — retry.",
-                    false,
-                    &gate,
-                    nullptr);
+      const char* message =
+          gate.reason == DockCogReason::INSUFFICIENT_DISPLACEMENT
+              ? "Reverse leg too short for a heading fit — check that the wheels move and retry."
+              : "COG incoherent (RTK not truly fixed / GPS noisy) — retry.";
+      return finish(false, cog_reason_to_retry(gate.reason), message, false, &gate, nullptr);
     }
 
     // Optional IMU-yaw fold from the same straight leg. Pitch/roll need a
@@ -1939,6 +1969,16 @@ private:
                         &gate,
                         nullptr);
         }
+        if (!arm_drive_after_recording(should_abort))
+        {
+          return finish(false,
+                        emergency_active_ ? CalibrateDock::Result::RETRY_EMERGENCY
+                                          : CalibrateDock::Result::RETRY_WRONG_STATE,
+                        "Aborted while arming the drive for backoff." + yaw_saved_note,
+                        is_canceled(),
+                        &gate,
+                        nullptr);
+        }
         const double bx = latest_gps_x_.load();
         const double by = latest_gps_y_.load();
         double bseg_x = bx;
@@ -2055,6 +2095,19 @@ private:
         return;
       }
       need_exit_recording = true;
+    }
+
+    if (!arm_drive_after_recording(
+            [this]()
+            {
+              return emergency_active_.load();
+            }))
+    {
+      if (need_exit_recording)
+        call_hlc(HL_CMD_RECORD_CANCEL, "cancel after failed drive arm");
+      response->success = false;
+      response->message = "Emergency while arming the calibration drive.";
+      return;
     }
 
     activate_sensor_subs();

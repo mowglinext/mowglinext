@@ -57,7 +57,8 @@ void FusionGraphNode::ResetLidarTiming()
     lidar_anchor_gate_.emplace(true,
                                lidar_anchor_engage_age_s_,
                                lidar_map_insert_period_s_,
-                               lidar_anchor_disengage_dwell_s_);
+                               lidar_anchor_disengage_dwell_s_,
+                               lidar_map_insert_min_travel_m_);
 }
 
 void FusionGraphNode::PollLidarSubmaps(double x, double y)
@@ -286,7 +287,8 @@ void FusionGraphNode::OnLidarMapImport(nav_msgs::msg::OccupancyGrid::ConstShared
     lidar_anchor_gate_.emplace(true,
                                lidar_anchor_engage_age_s_,
                                lidar_map_insert_period_s_,
-                               lidar_anchor_disengage_dwell_s_);
+                               lidar_anchor_disengage_dwell_s_,
+                               lidar_map_insert_min_travel_m_);
   lidar_map_import_pending_ = true;
   RCLCPP_INFO(get_logger(),
               "LiDAR map import dispatched (%u x %u)",
@@ -312,7 +314,8 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   }
   const Sophus::SE2d dr_now = lidar_scan_dr_;
   const bool map_has_structure = lidar_map_occupied_cells_ > 0;
-  const auto d = lidar_anchor_gate_->Step(rtk_age_s, map_has_structure, now_s);
+  const auto d = lidar_anchor_gate_->Step(
+      rtk_age_s, map_has_structure, now_s, dr_now.translation().x(), dr_now.translation().y());
 
   // Publish the grid once at startup, whatever the state: it is latched, and
   // the GUI map page draws the map instead of the raw scan points only once a
@@ -331,6 +334,7 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   if (!snapshot || !node_pose)
     return;
   const auto pose_at_scan = node_pose->compose(scan_time.offset);
+  const auto node_to_scan_map = LidarNodeToScanMapOffset(*node_pose, scan_time.offset);
 
   // On the charger the fused pose is gauge-pinned to the dock while the
   // BackUp undock actually moves the robot 1.5 m (field 2026-09-07, t+9..38 s:
@@ -581,7 +585,7 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
                             *cov_applied,
                             true,
                             scan_time.index,
-                            scan_time.offset.translation(),
+                            node_to_scan_map,
                             lidar_scan_stamp_s_ + lidar_scan_max_age_s_);
     ++lidar_anchor_updates_;
   };

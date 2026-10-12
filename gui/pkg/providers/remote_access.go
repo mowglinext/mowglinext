@@ -263,18 +263,17 @@ func (p *RemoteAccessProvider) reconcile(ctx context.Context, cfg RemoteAccessCo
 		p.setPhase(RemoteAccessRunning, "")
 		return nil
 	}
-	if found {
-		p.setPhase(RemoteAccessStarting, "")
-		if err := p.docker.ContainerRemove(ctx, existing.ID, true); err != nil {
-			return fmt.Errorf("replace %s: %w", RemoteAccessContainerName, err)
-		}
-		logrus.Infof("remote access: settings changed, recreating %s", RemoteAccessContainerName)
-	}
 	p.setPhase(RemoteAccessPulling, "")
 	if err := p.docker.ImagePull(ctx, spec.Image); err != nil {
 		return err
 	}
 	p.setPhase(RemoteAccessStarting, "")
+	if found {
+		if err := p.docker.ContainerRemove(ctx, existing.ID, true); err != nil {
+			return fmt.Errorf("replace %s: %w", RemoteAccessContainerName, err)
+		}
+		logrus.Infof("remote access: settings changed, recreating %s", RemoteAccessContainerName)
+	}
 	id, err := p.docker.ContainerCreateService(ctx, spec)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", RemoteAccessContainerName, err)

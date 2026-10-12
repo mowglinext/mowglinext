@@ -99,7 +99,7 @@ describe("SettingsFieldCard", () => {
             </ThemeProvider>,
         );
 
-        fireEvent.click(screen.getByRole("button", { name: /reset to default/i }));
+        fireEvent.click(screen.getByRole("button", { name: /reset .* to default/i }));
 
         expect(onReset).toHaveBeenCalledWith("turn_speed_ratio");
     });

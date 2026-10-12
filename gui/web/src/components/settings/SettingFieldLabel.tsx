@@ -16,6 +16,13 @@ type Props = {
     onReset?: (key: string) => void;
 };
 
+function labelText(label: React.ReactNode): string {
+    if (typeof label === 'string' || typeof label === 'number') return String(label);
+    if (Array.isArray(label)) return label.map(labelText).join(' ');
+    if (React.isValidElement<{children?: React.ReactNode}>(label)) return labelText(label.props.children);
+    return '';
+}
+
 /**
  * SettingFieldLabel wraps a Form.Item label with two default-awareness
  * affordances used by the sparse-config settings UI:
@@ -56,13 +63,13 @@ export const SettingFieldLabel: React.FC<Props> = ({
                     <Button
                         type="text"
                         size="small"
-                        aria-label={t("settingsReset.resetToDefault", "Reset to default")}
+                        aria-label={t("settingsReset.resetField", {field: labelText(label) || settingKey})}
                         icon={<UndoOutlined style={{ fontSize: 11 }} />}
                         onClick={(e) => {
                             e.preventDefault();
                             onReset?.(settingKey);
                         }}
-                        style={{ height: 18, width: 18, minWidth: 18, padding: 0, opacity: 0.65 }}
+                        style={{ height: 24, width: 24, minWidth: 24, padding: 0 }}
                     />
                 </Tooltip>
             ) : null}

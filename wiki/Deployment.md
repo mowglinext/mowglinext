@@ -6,7 +6,7 @@ MowgliNext is deployed through an installer-generated compose stack written to `
 
 The installer selects fragments from `install/compose/` based on hardware choices:
 
-- `docker-compose.base.yml`, `docker-compose.gui.yml`, `docker-compose.mqtt.yml` and `docker-compose.watchtower.yml` — always included
+- `docker-compose.base.yml` and `docker-compose.gui.yml` — always included. `docker-compose.mqtt.yml` is opt-in (`ENABLE_MQTT`, default off). **`docker-compose.watchtower.yml` no longer exists** — Watchtower was dropped entirely on 2026-09-29; the host updater now handles managed releases
 - `docker-compose.gps.yml` — the Universal GNSS sidecar, included whenever `GNSS_STACK=universal` (the default on the Mowgli/STM32 backend). It is the only GNSS fragment the installer can select; `GNSS_STACK=disabled` selects none.
 - optional LiDAR / MAVROS / TF-Luna fragments
 
@@ -21,8 +21,8 @@ The installer selects fragments from `install/compose/` based on hardware choice
 | `mowgli-lidar` | LiDAR runtime when enabled |
 | `mowgli-gui` | Web UI |
 | `mowgli-mqtt` | MQTT broker |
-| `mowgli-watchtower` | Image updates |
-| `mowgli-mavros` + `mowgli-ntrip` | Pixhawk backend only (`HARDWARE_BACKEND=mavros`), which forces `GNSS_STACK=disabled` and replaces `mowgli-gps` |
+| `mowgli-mavros` | Pixhawk backend only (`HARDWARE_BACKEND=mavros`), which forces `GNSS_STACK=disabled` and replaces `mowgli-gps`. There is no standalone `mowgli-ntrip` container any more (removed 2026-09-19) |
+| `mowgli-openmower` | OpenMower v1 electronics backend only (`HARDWARE_BACKEND=openmower`): bridges the stock LowLevel board + xESC controllers (firmware untouched) and replaces `mowgli-ros2`'s `hardware_bridge_node`; `mowgli-gps` stays. See `sensors/openmower/README.md`. |
 
 ## GNSS Deployment Shape
 
@@ -37,7 +37,7 @@ GNSS_STACK=universal              (default when HARDWARE_BACKEND=mowgli)
 
 GNSS_STACK=disabled               (forced when HARDWARE_BACKEND=mavros)
   -> no direct-GNSS fragment
-  -> GNSS arrives from the Pixhawk through mowgli-mavros + mowgli-ntrip
+  -> GNSS arrives from the Pixhawk through mowgli-mavros (MAVLink; no separate NTRIP container)
 ```
 
 `GNSS_STACK` accepts only `universal` or `disabled`; the installer errors on anything else, and the older `legacy` / `fallback` spellings are normalized to `universal` on load.
@@ -97,7 +97,7 @@ Removed, and no longer present anywhere in the tree:
 | `ublox_gnss.launch.py` / `ublox_gnss.yaml` | Superseded by Universal GNSS. |
 | `mowgli_bringup/universal_gnss.launch.py` | Universal GNSS runs in the `mowgli-gps` sidecar, not inside `mowgli-ros2`; `test_gnss_launch_config.py` asserts `full_system.launch.py` includes no such file. |
 
-`install/tests/test_compose_validity.sh` pins the outcome: a generated universal compose must contain `mowgli-ros2`, `mowgli-gps`, `mowgli-gui`, `mowgli-lidar`, `mowgli-mqtt` and `mowgli-watchtower`, and must not contain `gnss_unicore`, `UNICORE_IMAGE` or the legacy `GPS_*` service env keys.
+`install/tests/test_compose_validity.sh` pins the outcome: a generated universal compose must contain `mowgli-ros2`, `mowgli-gps`, `mowgli-gui`, `mowgli-lidar`, must contain `mowgli-mqtt` only when `ENABLE_MQTT=true`, must NOT contain `mowgli-watchtower` (Watchtower was dropped 2026-09-29) or a standalone `mowgli-ntrip` (removed 2026-09-19), and must not contain `gnss_unicore`, `UNICORE_IMAGE` or the legacy `GPS_*` service env keys.
 
 ## Troubleshooting
 
@@ -105,5 +105,5 @@ Removed, and no longer present anywhere in the tree:
 - Wrong receiver path: inspect `/dev/serial/by-id` first and wire `GNSS_SERIAL_DEVICE` to that stable symlink. If by-id is unavailable, use `/sys/class/tty/*/../manufacturer` and `/sys/class/tty/*/../product` only as a diagnostic fallback before touching raw `ttyACM*` or `ttyUSB*`.
 - Stale `/dev/tty*` entries in a container can survive old hardware layouts. When `/dev` and `/sys/class/tty` disagree, trust the live sysfs mapping rather than the stale node list.
 - No RTK corrections: confirm NTRIP settings in `docker/.env` and `docker/config/mowgli/mowgli_robot.yaml`, then check `/rtcm` and `/diagnostics`.
-- No `mowgli-gps` container in compose: expected only when `GNSS_STACK=disabled`, i.e. `HARDWARE_BACKEND=mavros`, where the Pixhawk supplies GNSS through `mowgli-mavros` + `mowgli-ntrip`. On the Mowgli/STM32 backend `GNSS_STACK=universal` must compose `mowgli-gps` — if it does not, regenerate with the installer.
+- No `mowgli-gps` container in compose: expected only when `GNSS_STACK=disabled`, i.e. `HARDWARE_BACKEND=mavros`, where the Pixhawk supplies GNSS through `mowgli-mavros` alone (no separate NTRIP container). On the Mowgli/STM32 backend `GNSS_STACK=universal` must compose `mowgli-gps` — if it does not, regenerate with the installer.
 - Wrong compose shape: regenerate with the installer and inspect `docker/docker-compose.yaml` plus `docker/.env`.

@@ -371,6 +371,28 @@ TEST_F(DiagnosticsTest, PathTrackingIsOkAndIdleBeforeAnyFollowPathGoal)
   EXPECT_NE(status.message.find("Idle"), std::string::npos);
 }
 
+TEST_F(DiagnosticsTest, PathTrackingIsJudgedOnTheRecentPercentileNotTheGoalMax)
+{
+  using mowgli_monitoring::classify_path_tracking;
+
+  // A healthy window stays OK whatever the goal-wide max did.
+  EXPECT_EQ(classify_path_tracking(300, 20, 0.05, 0.20, 0.35), DiagLevel::OK);
+  EXPECT_EQ(classify_path_tracking(300, 20, 0.14, 0.20, 0.35), DiagLevel::OK);
+  // Sustained poor tracking is graded by the thresholds, boundary inclusive.
+  EXPECT_EQ(classify_path_tracking(300, 20, 0.20, 0.20, 0.35), DiagLevel::WARN);
+  EXPECT_EQ(classify_path_tracking(300, 20, 0.30, 0.20, 0.35), DiagLevel::WARN);
+  EXPECT_EQ(classify_path_tracking(300, 20, 0.35, 0.20, 0.35), DiagLevel::ERROR);
+}
+
+TEST_F(DiagnosticsTest, PathTrackingDoesNotAlarmBeforeTheWindowHasEnoughSamples)
+{
+  using mowgli_monitoring::classify_path_tracking;
+
+  EXPECT_EQ(classify_path_tracking(5, 20, 0.90, 0.20, 0.35), DiagLevel::OK);
+  EXPECT_EQ(classify_path_tracking(19, 20, 0.90, 0.20, 0.35), DiagLevel::OK);
+  EXPECT_EQ(classify_path_tracking(20, 20, 0.90, 0.20, 0.35), DiagLevel::ERROR);
+}
+
 TEST_F(DiagnosticsTest, PathTrackingReportsNoSamplesBeforeTheFirstGoal)
 {
   auto node = make_node("_tracking_empty");

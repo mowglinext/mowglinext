@@ -92,7 +92,7 @@ FINAL_COMPOSE_FILE="$DOCKER_DIR/docker-compose.yaml"
 FINAL_ENV_FILE="$DOCKER_DIR/.env"
 
 # Drop optional fragments the operator hasn't opted into. build_compose_stack
-# always appends mqtt + watchtower; gate them on .env toggles here so docker/.env
+# gates mqtt on ENABLE_MQTT; the same toggle applies here so docker/.env
 # stays the single source of truth without modifying shared installer code.
 filter_optional_fragments() {
   local kept=() f base
@@ -101,9 +101,6 @@ filter_optional_fragments() {
     case "$base" in
       docker-compose.mqtt.yml)
         [[ "${ENABLE_MQTT:-false}" == "true" ]] || continue
-        ;;
-      docker-compose.watchtower.yml)
-        [[ "${ENABLE_WATCHTOWER:-false}" == "true" ]] || continue
         ;;
     esac
     kept+=("$f")

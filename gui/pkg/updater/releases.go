@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -33,9 +34,6 @@ func (g GitHubSource) List(ctx context.Context, source Source) ([]Deployment, er
 		Name       string `json:"name"`
 		Draft      bool   `json:"draft"`
 		Prerelease bool   `json:"prerelease"`
-		Assets     []struct {
-			Name string `json:"name"`
-		} `json:"assets"`
 	}
 	result := []Deployment{}
 	headers := []releaseHeader{}
@@ -58,15 +56,6 @@ func (g GitHubSource) List(ctx context.Context, source Source) ([]Deployment, er
 			if source.Track == "stable" && !stableVersion.MatchString(r.Tag) {
 				continue
 			}
-			found := false
-			for _, a := range r.Assets {
-				if a.Name == "mowgli-deployment.json" {
-					found = true
-				}
-			}
-			if !found {
-				continue
-			}
 			headers = append(headers, r)
 		}
 		if len(releases) < 100 || (source.Track != "stable" && len(headers) >= 30) {
@@ -84,6 +73,17 @@ func (g GitHubSource) List(ctx context.Context, source Source) ([]Deployment, er
 	for _, r := range headers {
 		body, err := updates.Read(ctx, g.Client, assetURL(source.Repository, r.Tag, "mowgli-deployment.json"), "")
 		if err != nil {
+			// GitHub's bulk releases list can report a release before its
+			// uploaded assets are visible there, even though the asset already
+			// downloads fine directly (observed: deployment-d9012e8e2558-...,
+			// published with all 5 assets per the dedicated assets endpoint,
+			// listed with an empty assets array for 3+ hours). A missing
+			// descriptor is "not ready yet", not a reason to fail every other
+			// release already found in this scan.
+			var remoteErr updates.RemoteError
+			if errors.As(err, &remoteErr) && remoteErr.Status == http.StatusNotFound {
+				continue
+			}
 			return nil, err
 		}
 		var d Deployment

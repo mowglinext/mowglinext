@@ -21,7 +21,9 @@
 
 #include "mowgli_monitoring/diagnostics_node.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -29,6 +31,7 @@
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "diagnostic_msgs/msg/key_value.hpp"
+#include "mowgli_monitoring/battery_percentage.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/qos.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -83,6 +86,27 @@ uint8_t classify_temperature(double temp_c, double warn_c, double error_c)
   return DiagLevel::OK;
 }
 
+uint8_t classify_path_tracking(std::size_t recent_samples,
+                               std::size_t min_samples,
+                               double percentile_m,
+                               double warn_m,
+                               double error_m)
+{
+  if (recent_samples < min_samples)
+  {
+    return DiagLevel::OK;
+  }
+  if (percentile_m >= error_m)
+  {
+    return DiagLevel::ERROR;
+  }
+  if (percentile_m >= warn_m)
+  {
+    return DiagLevel::WARN;
+  }
+  return DiagLevel::OK;
+}
+
 std::string level_name(uint8_t level)
 {
   switch (level)
@@ -129,13 +153,17 @@ void DiagnosticsNode::declare_parameters()
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
   freshness_warn_sec_ = declare_parameter<double>("freshness_warn_sec", 5.0);
   freshness_error_sec_ = declare_parameter<double>("freshness_error_sec", 10.0);
+  battery_empty_voltage_ = declare_parameter<double>("battery_empty_voltage", 24.0);
+  battery_full_voltage_ = declare_parameter<double>("battery_full_voltage", 28.0);
   battery_warn_pct_ = declare_parameter<double>("battery_warn_pct", 20.0);
   battery_error_pct_ = declare_parameter<double>("battery_error_pct", 10.0);
   motor_temp_warn_c_ = declare_parameter<double>("motor_temp_warn_c", 60.0);
   motor_temp_error_c_ = declare_parameter<double>("motor_temp_error_c", 80.0);
   lidar_enabled_ = declare_parameter<bool>("lidar_enabled", false);
-  path_tracking_warn_m_ = declare_parameter<double>("path_tracking_warn_m", 0.10);
-  path_tracking_error_m_ = declare_parameter<double>("path_tracking_error_m", 0.25);
+  path_tracking_warn_m_ = declare_parameter<double>("path_tracking_warn_m", 0.20);
+  path_tracking_error_m_ = declare_parameter<double>("path_tracking_error_m", 0.35);
+  path_tracking_min_samples_ = static_cast<std::size_t>(
+      std::max<int64_t>(1, declare_parameter<int64_t>("path_tracking_min_samples", 20)));
   path_tracking_idle_sec_ = declare_parameter<double>("path_tracking_idle_sec", 2.0);
 
   // Clamp publish_rate to [0.1, 100.0] Hz to prevent zero-division.
@@ -436,14 +464,10 @@ diagnostic_msgs::msg::DiagnosticStatus DiagnosticsNode::check_battery() const
 
   const auto& p = *state_.last_power;
 
-  // The hardware does not expose a percentage directly; derive it from the
-  // known LiPo 4S cell voltage range (full: 16.8V, empty: 12.0V).
-  constexpr double kVFull = 16.8;
-  constexpr double kVEmpty = 12.0;
+  // This is a voltage estimate, using the same pack endpoints as the BT.
   const double voltage = static_cast<double>(p.v_battery);
-
-  double percentage = 100.0 * (voltage - kVEmpty) / (kVFull - kVEmpty);
-  percentage = std::max(0.0, std::min(100.0, percentage));
+  const double percentage =
+      battery_percentage(voltage, battery_empty_voltage_, battery_full_voltage_);
 
   status.level = classify_battery(percentage, battery_warn_pct_, battery_error_pct_);
   status.message = fmt_float(percentage, 0) + "% (" + fmt_float(voltage, 2) + " V)";
@@ -728,11 +752,17 @@ diagnostic_msgs::msg::DiagnosticStatus DiagnosticsNode::check_path_tracking(
   // to: right after a mow, "how well did it track?" is exactly the question, and
   // the answer would otherwise vanish the moment the action completed.
   const double max_abs_m = state_.path_tracking.MaxAbsPositionErrorM();
+  const double p95_m = state_.path_tracking.RecentPercentileAbsPositionErrorM(0.95);
+  const std::size_t recent_samples = state_.path_tracking.RecentCount();
   const double mean_abs_m = state_.path_tracking.MeanAbsPositionErrorM();
   const double rms_m = state_.path_tracking.RmsPositionErrorM();
   const double last_signed_m = state_.path_tracking.LastPositionErrorM();
   const double max_heading_deg = state_.path_tracking.MaxAbsHeadingErrorRad() * 180.0 / M_PI;
 
+  // The level is judged on the recent-window p95, not on the goal-wide max: a single
+  // obstacle-avoidance excursion would otherwise hold ERROR for the rest of the goal.
+  status.values.push_back(kv("recent_p95_lateral_error_m", fmt_float(p95_m, 3)));
+  status.values.push_back(kv("recent_samples", std::to_string(recent_samples)));
   status.values.push_back(kv("max_lateral_error_m", fmt_float(max_abs_m, 3)));
   status.values.push_back(kv("mean_lateral_error_m", fmt_float(mean_abs_m, 3)));
   status.values.push_back(kv("rms_lateral_error_m", fmt_float(rms_m, 3)));
@@ -752,21 +782,15 @@ diagnostic_msgs::msg::DiagnosticStatus DiagnosticsNode::check_path_tracking(
     return status;
   }
 
-  if (max_abs_m >= path_tracking_error_m_)
-  {
-    status.level = DiagLevel::ERROR;
-  }
-  else if (max_abs_m >= path_tracking_warn_m_)
-  {
-    status.level = DiagLevel::WARN;
-  }
-  else
-  {
-    status.level = DiagLevel::OK;
-  }
+  status.level = classify_path_tracking(recent_samples,
+                                        path_tracking_min_samples_,
+                                        p95_m,
+                                        path_tracking_warn_m_,
+                                        path_tracking_error_m_);
 
-  status.message =
-      "Lateral max " + fmt_float(max_abs_m, 3) + "m, mean " + fmt_float(mean_abs_m, 3) + "m";
+  status.message = "Lateral p95 " + fmt_float(p95_m, 3) + "m (last " +
+                   std::to_string(recent_samples) + " samples), max " + fmt_float(max_abs_m, 3) +
+                   "m, mean " + fmt_float(mean_abs_m, 3) + "m";
   return status;
 }
 

@@ -11,6 +11,7 @@
           "enum": [
             "YardForce500",
             "YardForce500B",
+            "BiltemaRM1000",
             "YardForceSA650",
             "YardForce900ECO",
             "LUV1000RI",
@@ -926,17 +927,23 @@
           "default": 30.0,
           "description": "Floor for an operator-forced resume from the charger: pressing Play while the robot is charging mid-session resumes mowing only above this percentage. Must be greater than Low Percent or the robot re-docks within minutes."
         },
+        "battery_charge_tail_current_a": {
+          "type": "number",
+          "title": "Charge Tail Current",
+          "default": 0.08,
+          "description": "After a mid-session recharge the robot only resumes once the charge current has dropped to this value [A], on top of reaching Full Percent. Pack voltage under charge reads well above the true state of charge, so percent alone would send it out too early. A higher value resumes earlier with a slightly less full pack; the default matches the firmware's own end-of-charge current."
+        },
         "max_charge_voltage": {
           "type": "number",
           "title": "Max Charge Voltage",
           "default": 29.4,
-          "description": "Charge voltage ceiling sent to the firmware [V]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+          "description": "Charge voltage ceiling sent to the STM32 [V] and stored in its flash. The firmware keeps it inside [25.2, 29.4] V: 29.4 V is the pack limit and can never be exceeded."
         },
         "max_charge_current": {
           "type": "number",
           "title": "Max Charge Current",
           "default": 1.2,
-          "description": "Charge current ceiling sent to the firmware [A]. The firmware clamps it to its compiled board limit, so this can only make charging MORE conservative."
+          "description": "Charge current ceiling sent to the STM32 [A] and stored in its flash. The firmware keeps it inside [0.1, 1.2] A: no current above 1.2 A has been validated on the board."
         }
       }
     },
@@ -955,6 +962,48 @@
           "title": "Lift Recovery Mode",
           "default": false,
           "description": "Allow autonomous resume after a lift event (default: stay stopped until operator ack)."
+        },
+        "max_mps": {
+          "type": "number",
+          "title": "Max Wheel Speed",
+          "default": 0.5,
+          "description": "Wheel-speed cap sent to the STM32 [m/s] and stored in its flash. The firmware keeps it inside [0.1, 0.6] m/s."
+        },
+        "one_wheel_lift_emergency_ms": {
+          "type": "integer",
+          "title": "One-Wheel Lift Trip",
+          "default": 2000,
+          "description": "How long one wheel must stay lifted before the firmware latches an emergency [ms]. Stored in the board's flash; the firmware keeps it inside [10, 5000] ms."
+        },
+        "both_wheels_lift_emergency_ms": {
+          "type": "integer",
+          "title": "Both-Wheels Lift Trip",
+          "default": 1000,
+          "description": "How long both wheels must stay lifted before the firmware latches an emergency [ms]. Stored in the board's flash; the firmware keeps it inside [10, 3000] ms."
+        },
+        "tilt_emergency_ms": {
+          "type": "integer",
+          "title": "Tilt Trip",
+          "default": 500,
+          "description": "How long a tilt (mechanical switch or accelerometer) must persist before the firmware latches an emergency [ms]. Stored in the board's flash; the firmware keeps it inside [10, 1000] ms."
+        },
+        "stop_button_emergency_ms": {
+          "type": "integer",
+          "title": "Stop Button Trip",
+          "default": 100,
+          "description": "How long the stop button must be held before the firmware latches an emergency [ms]. Stored in the board's flash; the firmware keeps it inside [10, 250] ms."
+        },
+        "play_button_clear_emergency_ms": {
+          "type": "integer",
+          "title": "Play Hold To Clear Emergency",
+          "default": 2000,
+          "description": "How long PLAY must be held on the robot to clear a latched emergency [ms]. Stored in the board's flash; the firmware keeps it inside [500, 10000] ms."
+        },
+        "imu_inclination_threshold": {
+          "type": "integer",
+          "title": "Tilt Sensor Threshold",
+          "default": 56,
+          "description": "Onboard LIS3DH tilt-interrupt threshold (register INT1_THS). Larger allows more inclination before the tilt emergency. Stored in the board's flash; the firmware keeps it inside [44, 64] (0x2C-0x40). 56 (0x38) is stricter than the stock firmware's 44."
         }
       }
     },
@@ -1396,6 +1445,77 @@
           "title": "Escape Signal Max Age",
           "default": 90.0,
           "description": "How old the last-motion direction may be [s]. Too short is fail-safe (no motion); too long risks acting on a direction that no longer describes how the robot arrived. Hard ceiling 300 in code."
+        }
+      }
+    },
+    "openmower_settings": {
+      "title": "OpenMower Hardware",
+      "type": "object",
+      "properties": {
+        "openmower_ll_port": {
+          "type": "string",
+          "title": "LowLevel Board Port",
+          "description": "Serial device of the OpenMower LowLevel (Pico) board (HARDWARE_BACKEND=openmower). Stock OpenMower v1 on a Raspberry Pi 4 with kernel >= 6.1.28: /dev/ttyAMA0. Applied when the OpenMower bridge restarts. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_type": {
+          "type": "string",
+          "title": "Motor Controller Type",
+          "enum": [
+            "xesc_mini",
+            "xesc_2040"
+          ],
+          "description": "Which xESC drives the wheels and blade: xesc_mini (VESC protocol) or xesc_2040 (COBS protocol). A wrong choice leaves every motor silent (the bridge reports firmware_compatible = false). No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_left_port": {
+          "type": "string",
+          "title": "Left Wheel Controller Port",
+          "description": "Serial device of the left drive xESC. Stock OpenMower v1: /dev/ttyAMA5. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_right_port": {
+          "type": "string",
+          "title": "Right Wheel Controller Port",
+          "description": "Serial device of the right drive xESC. Stock OpenMower v1: /dev/ttyAMA3. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_mow_port": {
+          "type": "string",
+          "title": "Blade Controller Port",
+          "description": "Serial device of the blade xESC. Stock OpenMower v1: /dev/ttyAMA4. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_emergency_input_config": {
+          "type": "string",
+          "title": "Emergency Inputs",
+          "default": "",
+          "description": "OpenMower OM_EMERGENCY_INPUT_CONFIG: what each of the board's four hall inputs is (L = lift, S = stop, ! = active low), e.g. \"!L,!L,S,S\". Empty keeps the board's own wiring (YardForce). Safety-relevant: a wrong mapping can hide a lift or stop sensor."
+        },
+        "openmower_wheel_loop_enabled": {
+          "type": "boolean",
+          "title": "Closed-Loop Wheel Speed",
+          "default": true,
+          "description": "The xESC only takes a duty cycle, so the bridge closes a per-wheel speed loop on the tachometer. Off = OpenMower's own open-loop mapping (speed x duty-per-m/s)."
+        },
+        "openmower_wheel_duty_per_mps": {
+          "type": "number",
+          "title": "Duty per m/s",
+          "default": 1.0,
+          "minimum": 0.1,
+          "maximum": 5.0,
+          "description": "Feed-forward: duty cycle (0..1) per m/s of wheel speed. 1.0 is OpenMower's own mapping."
+        },
+        "openmower_wheel_kp": {
+          "type": "number",
+          "title": "Wheel Loop Kp",
+          "default": 0.5,
+          "minimum": 0.0,
+          "maximum": 10.0,
+          "description": "Proportional gain of the host-side wheel loop [duty per m/s of error]. Unlike the STM32's wheel_pid_kp this is in duty, not PWM counts."
+        },
+        "openmower_wheel_ki": {
+          "type": "number",
+          "title": "Wheel Loop Ki",
+          "default": 2.0,
+          "minimum": 0.0,
+          "maximum": 50.0,
+          "description": "Integral gain of the host-side wheel loop [duty per (m/s x s)]."
         }
       }
     }

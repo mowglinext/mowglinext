@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# A.9 Optional feature guardrails — unsupported TF-Luna / VESC must not leak
-# into the generated runtime compose, even when old docker/.env files still
-# carry those flags.
+# Retired optional hardware (TF-Luna rangefinders, VESC) can never come back
+# through a stale docker/.env: the keys are dropped on reload AND scrubbed on
+# write, and no compose fragment exists for them any more.
 # =============================================================================
-
-set -uo pipefail
-
+set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # shellcheck source=lib/framework.sh
 source "$SCRIPT_DIR/lib/framework.sh"
 # shellcheck source=lib/mocks.sh
@@ -19,79 +16,43 @@ source "$SCRIPT_DIR/lib/harness.sh"
 setup_sandbox
 install_all_mocks
 
-section "Standard install keeps unsupported optional services out of compose"
+section "Retired fragments are gone from the installer sources"
+for fragment in tfluna-front tfluna-edge vesc foxglove; do
+  assert_file_not_exists "no docker-compose.${fragment}.yml fragment" "$REPO_ROOT/install/compose/docker-compose.${fragment}.yml"
+done
 
-repo_standard="$SANDBOX/repo_standard"
-sandbox_repo "$repo_standard"
-harness_init "$repo_standard"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
-
-if harness_run; then
-  pass "standard harness_run"
-else
-  fail "standard harness_run" "non-zero exit"
-  test_summary
-  exit 1
-fi
-
-compose_standard="$(cat "$repo_standard/docker/docker-compose.yaml")"
-assert_not_contains "standard compose omits TF-Luna placeholder image" "ghcr.io/..." "$compose_standard"
-assert_not_contains "standard compose omits mowgli-tfluna-front" "mowgli-tfluna-front" "$compose_standard"
-assert_not_contains "standard compose omits mowgli-tfluna-edge" "mowgli-tfluna-edge" "$compose_standard"
-assert_not_contains "standard compose omits mowgli-vesc" "mowgli-vesc" "$compose_standard"
-
-section "Legacy docker/.env with TF-Luna enabled is neutralized safely"
-
-repo_tfluna="$SANDBOX/repo_tfluna"
-sandbox_repo "$repo_tfluna"
-harness_init "$repo_tfluna"
-mkdir -p "$repo_tfluna/docker"
-cat > "$repo_tfluna/docker/.env" <<'EOF'
+section "Legacy docker/.env with TF-Luna and VESC enabled is neutralized"
+repo_legacy="$SANDBOX/repo_legacy"
+sandbox_repo "$repo_legacy"
+harness_init "$repo_legacy"
+mkdir -p "$repo_legacy/docker"
+cat > "$repo_legacy/docker/.env" <<'EOF'
 TFLUNA_FRONT_ENABLED=true
-TFLUNA_FRONT_PORT=/dev/tfluna_front
 TFLUNA_FRONT_UART_DEVICE=/dev/ttyAMA3
-TFLUNA_FRONT_BAUD=115200
-TFLUNA_EDGE_ENABLED=false
-EOF
-
-load_env_defaults_file "$repo_tfluna/docker/.env"
-if harness_run; then
-  pass "legacy TF-Luna env rerun"
-else
-  fail "legacy TF-Luna env rerun" "non-zero exit"
-  test_summary
-  exit 1
-fi
-
-env_tfluna="$(cat "$repo_tfluna/docker/.env")"
-compose_tfluna="$(cat "$repo_tfluna/docker/docker-compose.yaml")"
-assert_contains "legacy TF-Luna env rewritten with front disabled" "TFLUNA_FRONT_ENABLED=false" "$env_tfluna"
-assert_not_contains "legacy TF-Luna compose omits front service" "mowgli-tfluna-front" "$compose_tfluna"
-assert_not_contains "legacy TF-Luna compose omits placeholder image" "ghcr.io/..." "$compose_tfluna"
-
-section "Legacy docker/.env with VESC enabled is skipped safely"
-
-repo_vesc="$SANDBOX/repo_vesc"
-sandbox_repo "$repo_vesc"
-harness_init "$repo_vesc"
-mkdir -p "$repo_vesc/docker"
-cat > "$repo_vesc/docker/.env" <<'EOF'
+TFLUNA_EDGE_ENABLED=true
 ENABLE_VESC=true
-VESC_IMAGE=ghcr.io/example/vesc:test
 VESC_CAN_INTERFACE=can0
+RANGE_IMAGE=ghcr.io/...
 EOF
-
-load_env_defaults_file "$repo_vesc/docker/.env"
+reload_out="$(load_env_defaults_file "$repo_legacy/docker/.env" 2>&1)"
+load_env_defaults_file "$repo_legacy/docker/.env" >/dev/null 2>&1
+assert_not_contains "retired keys are dropped silently, not warned about" "Ignoring unknown installer key 'TFLUNA" "$reload_out"
+assert_eq "TFLUNA_FRONT_ENABLED dropped on reload" "" "${TFLUNA_FRONT_ENABLED:-}"
+assert_eq "ENABLE_VESC dropped on reload" "" "${ENABLE_VESC:-}"
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 if harness_run; then
-  pass "legacy VESC env rerun"
+  pass "legacy harness_run"
 else
-  fail "legacy VESC env rerun" "non-zero exit"
-  test_summary
-  exit 1
+  fail "legacy harness_run" "non-zero exit"
 fi
-
-compose_vesc="$(cat "$repo_vesc/docker/docker-compose.yaml")"
-assert_not_contains "legacy VESC compose omits mowgli-vesc" "mowgli-vesc" "$compose_vesc"
-assert_not_contains "legacy VESC compose omits TF-Luna placeholder image" "ghcr.io/..." "$compose_vesc"
+env_legacy="$(cat "$repo_legacy/docker/.env")"
+compose_legacy="$(cat "$repo_legacy/docker/docker-compose.yaml")"
+assert_not_contains "legacy TF-Luna keys scrubbed from .env" "TFLUNA_" "$env_legacy"
+assert_not_contains "legacy VESC keys scrubbed from .env" "VESC" "$env_legacy"
+assert_not_contains "legacy RANGE_IMAGE scrubbed from .env" "RANGE_IMAGE" "$env_legacy"
+assert_not_contains "compose omits mowgli-tfluna-front" "mowgli-tfluna-front" "$compose_legacy"
+assert_not_contains "compose omits mowgli-tfluna-edge" "mowgli-tfluna-edge" "$compose_legacy"
+assert_not_contains "compose omits mowgli-vesc" "mowgli-vesc" "$compose_legacy"
+assert_not_contains "compose omits the placeholder image" "ghcr.io/..." "$compose_legacy"
 
 test_summary

@@ -1,10 +1,9 @@
 import React from "react";
+import {useTranslation} from "react-i18next";
 import { Alert, Button, Card, Progress, Space, Typography } from "antd";
 import { AimOutlined } from "@ant-design/icons";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 import {
-    PHASE_LABELS,
-    RETRY_LABELS,
     useDockCalibration,
 } from "../../hooks/useDockCalibration.ts";
 
@@ -18,6 +17,8 @@ const { Text, Paragraph } = Typography;
  * then persist the dock pose. Blade stays OFF throughout.
  */
 export const DockCalibrationCard: React.FC = () => {
+    const {t, i18n} = useTranslation();
+    const number = (n: number) => n.toLocaleString(i18n.language, {maximumFractionDigits: 2});
     const { colors } = useThemeMode();
     const { status, start, starting, startError, running, done } = useDockCalibration();
 
@@ -33,18 +34,16 @@ export const DockCalibrationCard: React.FC = () => {
                 <div>
                     <Text strong className="mn-display" style={{ fontSize: 14, color: colors.text }}>
                         <AimOutlined style={{ marginRight: 6, color: colors.primary }} />
-                        Dock calibration (one-click)
+                        {t('dockCalibration.title')}
                     </Text>
-                    <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                        Robot on the dock (charging) with RTK-Fixed. It first captures the
-                        dock position right there from the raw GPS antenna, then reverses in a
-                        straight line, measures the heading from the GPS course and saves
-                        position + heading together. The re-dock that follows is only a
-                        confirmation: it still steers by the OLD dock pose (the navigation
-                        stack loads the new one at its next restart), so if the old pose was
-                        wrong it may stop short of the charger — the calibration is saved
-                        either way. The blade stays off the whole time.
+                    <Paragraph type="secondary" style={{ margin: "4px 0 12px" }}>
+                        {t('dockCalibration.intro')}
                     </Paragraph>
+                    <Alert type="warning" showIcon message={t('dockCalibration.motionWarning')} />
+                    <details style={{marginTop: 12}}>
+                        <summary>{t('dockCalibration.details')}</summary>
+                        <Paragraph type="secondary">{t('dockCalibration.detail')}</Paragraph>
+                    </details>
                 </div>
 
                 <Button
@@ -54,21 +53,21 @@ export const DockCalibrationCard: React.FC = () => {
                     disabled={running}
                     onClick={start}
                 >
-                    {running ? "Calibrating…" : "Start dock calibration"}
+                    {t(running ? 'dockCalibration.running' : 'dockCalibration.start')}
                 </Button>
 
                 {startError && !running && (
                     <Alert
                         type="error"
                         showIcon
-                        message="Could not start dock calibration"
+                        message={t('dockCalibration.startError')}
                         description={startError}
                     />
                 )}
 
                 {(running || (status && status.phase !== 6)) && !showResult && (
                     <div>
-                        <Text style={{ color: colors.text }}>{PHASE_LABELS[phase] ?? "…"}</Text>
+                        <Text style={{ color: colors.text }}>{t(`dockCalibration.phases.${phase}`)}</Text>
                         <Progress percent={progressPct} status={running ? "active" : "normal"} />
                         {status?.message && (
                             <div>
@@ -79,9 +78,7 @@ export const DockCalibrationCard: React.FC = () => {
                         )}
                         {status && (
                             <Text type="secondary" style={{ fontSize: 12 }}>
-                                COG σ {status.cog_std_deg.toFixed(2)}° · moved{" "}
-                                {status.displacement_m.toFixed(2)} m ·{" "}
-                                {status.charging ? "charging" : "not charging"}
+                                {t('dockCalibration.measurements', {spread: number(status.cog_std_deg), distance: number(status.displacement_m), charge: t(status.charging ? 'dockCalibration.charging' : 'dockCalibration.notCharging')})}
                             </Text>
                         )}
                     </div>
@@ -91,7 +88,7 @@ export const DockCalibrationCard: React.FC = () => {
                     <Alert
                         type="success"
                         showIcon
-                        message="Dock calibrated"
+                        message={t('dockCalibration.success')}
                         description={status?.message}
                     />
                 )}
@@ -99,7 +96,7 @@ export const DockCalibrationCard: React.FC = () => {
                     <Alert
                         type="warning"
                         showIcon
-                        message="Dock calibrated — but the robot is NOT on the dock"
+                        message={t('dockCalibration.notDocked')}
                         description={status?.message}
                     />
                 )}
@@ -107,11 +104,11 @@ export const DockCalibrationCard: React.FC = () => {
                     <Alert
                         type="error"
                         showIcon
-                        message="Dock calibration failed"
+                        message={t('dockCalibration.failed')}
                         description={
                             <>
                                 <div>{status?.message}</div>
-                                {RETRY_LABELS[retry] && <div>{RETRY_LABELS[retry]}</div>}
+                                {retry > 0 && retry <= 7 && <div>{t(`dockCalibration.retries.${retry}`)}</div>}
                             </>
                         }
                     />

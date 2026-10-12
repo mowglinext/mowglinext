@@ -153,7 +153,8 @@ func (b DockerBackend) PlanCustomImages(ctx context.Context, requested map[strin
 		return nil, 0, errors.New("reconcile pending installer selections with a published deployment first")
 	}
 	ready, err := b.readiness(ctx)
-	if err != nil || ready.FirmwareProtocol < 1 {
+	exempt := b.FirmwareProtocolExempt()
+	if err != nil || (ready.FirmwareProtocol < 1 && !exempt) {
 		return nil, 0, errors.New("mainboard firmware protocol is unavailable")
 	}
 	c, _, err := b.model(ctx)
@@ -194,7 +195,7 @@ func (b DockerBackend) PlanCustomImages(ctx context.Context, requested map[strin
 		if e != nil {
 			return nil, 0, fmt.Errorf("%s: %w", name, e)
 		}
-		if image.FirmwareProtocol != ready.FirmwareProtocol {
+		if !exempt && image.FirmwareProtocol != ready.FirmwareProtocol {
 			return nil, 0, fmt.Errorf("%s: release requires a different mainboard firmware protocol", name)
 		}
 		if image.Family != managed[name].Image {
@@ -270,10 +271,14 @@ func (m *Manager) MakeCustomPlan(ctx context.Context, requested map[string]strin
 		}
 		images[name] = image.Reference
 	}
+	healthIssues, err := m.preexistingHealthIssues(ctx, retainedHealthScope(previous, images))
+	if err != nil {
+		return Plan{}, err
+	}
 	m.mu.Lock()
 	locked = true
 	target := Deployment{ID: fmt.Sprintf("custom-%d", m.now().UnixNano()), FirmwareProtocol: protocol}
-	p := Plan{ID: fmt.Sprintf("plan-%d", m.now().UnixNano()), Target: target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous, CustomImages: custom}
+	p := Plan{ID: fmt.Sprintf("plan-%d", m.now().UnixNano()), Target: target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous, CustomImages: custom, PreexistingHealthIssues: healthIssues}
 	m.state.Plans = []Plan{p}
 	return p, m.save()
 }

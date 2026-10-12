@@ -40,12 +40,12 @@ const conditionTag = (
     unknownLabel: string,
 ) => {
     if (value === "true") {
-        return <Tag color="error">{trueLabel}</Tag>;
+        return <span className="diagnostics-status-slot diagnostics-status-slot-description"><Tag color="error">{trueLabel}</Tag></span>;
     }
     if (value === "false") {
-        return <Tag color="success">{falseLabel}</Tag>;
+        return <span className="diagnostics-status-slot diagnostics-status-slot-description"><Tag color="success">{falseLabel}</Tag></span>;
     }
-    return <Tag>{unknownLabel}</Tag>;
+    return <span className="diagnostics-status-slot diagnostics-status-slot-description"><Tag>{unknownLabel}</Tag></span>;
 };
 
 export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
@@ -181,18 +181,24 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
             title={<Space><WifiOutlined /> {t("diagnosticsPage.gpsGnssTitle")}</Space>}
         >
             <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                <Space wrap size={[12, 8]}>
-                    <Space size={4}>
+                <Space wrap size={[12, 8]} className="diagnostics-gnss-status-row">
+                    <Space size={4} data-testid="gnss-fix-status-group">
                         <Text type="secondary">{t("diagnosticsPage.fixType")}</Text>
-                        <Tag color={liveStatusTagColor(liveStatus.fixType)}>{liveStatus.label}</Tag>
+                        <span className="diagnostics-status-slot diagnostics-status-slot-fix" data-testid="gnss-fix-status-value">
+                            <Tag color={liveStatusTagColor(liveStatus.fixType)}>{liveStatus.label}</Tag>
+                        </span>
                     </Space>
-                    <Space size={4}>
+                    <Space size={4} data-testid="gnss-rtk-status-group">
                         <Text type="secondary">{t("diagnosticsPage.rtkMode")}</Text>
-                        <Tag color={rtkModeTagColor(gnssStatus?.rtk_mode)}>{rtkModeLabel}</Tag>
+                        <span className="diagnostics-status-slot diagnostics-status-slot-rtk">
+                            <Tag color={rtkModeTagColor(gnssStatus?.rtk_mode)}>{rtkModeLabel}</Tag>
+                        </span>
                     </Space>
-                    <Space size={4}>
+                    <Space size={4} data-testid="gnss-correction-status-group">
                         <Text type="secondary">{t("diagnosticsPage.correctionStreamStatus")}</Text>
-                        <Tag color={correctionStreamTagColor(gnssStatus?.correction_stream_status)}>{correctionStreamLabel}</Tag>
+                        <span className="diagnostics-status-slot diagnostics-status-slot-correction">
+                            <Tag color={correctionStreamTagColor(gnssStatus?.correction_stream_status)}>{correctionStreamLabel}</Tag>
+                        </span>
                     </Space>
                 </Space>
 
@@ -201,6 +207,7 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                     <Row gutter={[12, 12]}>
                         <Col span={12}>
                             <Statistic
+                                className="diagnostics-coordinate-value"
                                 title={t("diagnosticsPage.latitude")}
                                 value={latitude ?? "-"}
                                 precision={latitude !== undefined ? 9 : undefined}
@@ -208,6 +215,7 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                         </Col>
                         <Col span={12}>
                             <Statistic
+                                className="diagnostics-coordinate-value"
                                 title={t("diagnosticsPage.longitude")}
                                 value={longitude ?? "-"}
                                 precision={longitude !== undefined ? 9 : undefined}
@@ -234,10 +242,10 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                     <Text strong>{t("diagnosticsPage.receiver")}</Text>
                     <Descriptions size="small" column={{ xs: 1, sm: 2 }}>
                         <Descriptions.Item label={t("diagnosticsPage.receiver")}>
-                            {receiverLabel}
+                            <span className="diagnostics-text-slot">{receiverLabel}</span>
                         </Descriptions.Item>
                         <Descriptions.Item label={t("diagnosticsPage.backend")}>
-                            {backendLabel}
+                            <span className="diagnostics-text-slot">{backendLabel}</span>
                         </Descriptions.Item>
                     </Descriptions>
                 </Space>
@@ -274,19 +282,19 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                         {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_MEAN_CN0) && (
                             <GnssDiagnosticBarRow
                                 barColor="#52c41a"
-                                label={t("settingsGnssLiveStatus.meanCn0DbHz")}
+                                label={`${t("settingsGnssLiveStatus.meanCn0DbHz")} (dB-Hz)`}
                                 ratio={gpsMeanCn0 !== undefined ? gpsMeanCn0 / GNSS_CN0_FULL_SCALE_DB_HZ : undefined}
                                 testId="gnss-cn0-mean"
-                                value={formatNumber(gpsMeanCn0, 1, " dB-Hz")}
+                                value={formatNumber(gpsMeanCn0, 1)}
                             />
                         )}
                         {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_MAX_CN0) && (
                             <GnssDiagnosticBarRow
                                 barColor="#faad14"
-                                label={t("settingsGnssLiveStatus.maxCn0DbHz")}
+                                label={`${t("settingsGnssLiveStatus.maxCn0DbHz")} (dB-Hz)`}
                                 ratio={gpsMaxCn0 !== undefined ? gpsMaxCn0 / GNSS_CN0_FULL_SCALE_DB_HZ : undefined}
                                 testId="gnss-cn0-max"
-                                value={formatNumber(gpsMaxCn0, 1, " dB-Hz")}
+                                value={formatNumber(gpsMaxCn0, 1)}
                             />
                         )}
                         <Descriptions size="small" column={{ xs: 1, sm: 2 }}>
@@ -320,14 +328,18 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                         <Descriptions size="small" column={{ xs: 1, sm: 2 }}>
                             {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_CORRECTION_STREAM) && (
                                 <Descriptions.Item label={t("diagnosticsPage.correctionStreamStatus")}>
-                                    <Tag color={correctionStreamTagColor(gnssStatus?.correction_stream_status)}>
-                                        {correctionStreamLabel}
-                                    </Tag>
+                                    <span className="diagnostics-status-slot diagnostics-status-slot-description">
+                                        <Tag color={correctionStreamTagColor(gnssStatus?.correction_stream_status)}>
+                                            {correctionStreamLabel}
+                                        </Tag>
+                                    </span>
                                 </Descriptions.Item>
                             )}
                             {hasMsmSummary && (
                                 <Descriptions.Item label={t("settingsGnssLiveStatus.msmState")}>
-                                    <Tag color={msmState.color}>{msmState.label}</Tag>
+                                    <span className="diagnostics-status-slot diagnostics-status-slot-description">
+                                        <Tag color={msmState.color}>{msmState.label}</Tag>
+                                    </span>
                                 </Descriptions.Item>
                             )}
                             {hasMsmSummary && (
@@ -341,10 +353,12 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                                 </Descriptions.Item>
                             )}
                             {hasMsmSummary && (
-                                <Descriptions.Item label={t("settingsGnssLiveStatus.msmConstellationsSeen")}>
-                                    {normalizeGnssString(
-                                        hasMsmSummaryValue ? gnssStatus?.msm_summary_constellations_seen : undefined,
-                                    ) || unknownLabel}
+                                <Descriptions.Item label={t("settingsGnssLiveStatus.msmConstellationsSeen")} span={2}>
+                                    <span className="diagnostics-gnss-constellations diagnostics-text-slot">
+                                        {normalizeGnssString(
+                                            hasMsmSummaryValue ? gnssStatus?.msm_summary_constellations_seen : undefined,
+                                        ) || unknownLabel}
+                                    </span>
                                 </Descriptions.Item>
                             )}
                             {hasMsmSummary && (
@@ -374,39 +388,66 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                 {showBaselineSection && (
                     <Space direction="vertical" size={8} style={{ width: "100%" }}>
                         <Text strong>{t("settingsGnssLiveStatus.baselineSectionTitle")}</Text>
-                        <Descriptions size="small" column={{ xs: 1, sm: 2 }}>
+                        <Row gutter={[16, 12]}>
                             {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_BASELINE) && (
-                                <Descriptions.Item label={t("diagnosticsPage.dualAntennaBaseline")}>
-                                    <Tag color={dualAntennaBaseline ? "success" : dualAntennaBaseline === false ? "warning" : undefined}>
-                                        {dualAntennaBaseline === undefined
-                                            ? unknownLabel
-                                            : dualAntennaBaseline
-                                                ? t("settingsGnssLiveStatus.available")
-                                                : t("settingsGnssLiveStatus.unavailable")}
-                                    </Tag>
-                                </Descriptions.Item>
+                                <Col xs={24} sm={12}>
+                                    <Text type="secondary" className="diagnostics-live-label">
+                                        {t("diagnosticsPage.dualAntennaBaseline")}
+                                    </Text>
+                                    <span className="diagnostics-live-value diagnostics-live-value-wide diagnostics-live-value-nowrap">
+                                        <span className="diagnostics-status-slot diagnostics-status-slot-description">
+                                            <Tag color={dualAntennaBaseline ? "success" : dualAntennaBaseline === false ? "warning" : undefined}>
+                                                {dualAntennaBaseline === undefined
+                                                    ? unknownLabel
+                                                    : dualAntennaBaseline
+                                                        ? t("settingsGnssLiveStatus.available")
+                                                        : t("settingsGnssLiveStatus.unavailable")}
+                                            </Tag>
+                                        </span>
+                                    </span>
+                                </Col>
                             )}
                             {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_SOLUTION_STATUS) && (
-                                <Descriptions.Item label={t("diagnosticsPage.baselineSolutionStatus")}>
-                                    {baselineSolutionStatus ?? unknownLabel}
-                                </Descriptions.Item>
+                                <Col xs={24} sm={12}>
+                                    <Text type="secondary" className="diagnostics-live-label">
+                                        {t("diagnosticsPage.baselineSolutionStatus")}
+                                    </Text>
+                                    <span className="diagnostics-live-value diagnostics-live-value-wide diagnostics-live-value-nowrap">
+                                        <span className="diagnostics-text-slot">{baselineSolutionStatus ?? unknownLabel}</span>
+                                    </span>
+                                </Col>
                             )}
                             {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_AZIMUTH) && (
-                                <Descriptions.Item label={t("diagnosticsPage.baselineAzimuthDeg")}>
-                                    {formatNumber(baselineAzimuth, 2)}
-                                </Descriptions.Item>
+                                <Col xs={24} sm={12}>
+                                    <Text type="secondary" className="diagnostics-live-label">
+                                        {t("diagnosticsPage.baselineAzimuthDeg")}
+                                    </Text>
+                                    <span className="diagnostics-live-value diagnostics-live-value-wide diagnostics-live-value-nowrap diagnostics-live-number">
+                                        {formatNumber(baselineAzimuth, 2)}
+                                    </span>
+                                </Col>
                             )}
                             {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_PITCH) && (
-                                <Descriptions.Item label={t("diagnosticsPage.baselinePitchDeg")}>
-                                    {formatNumber(baselinePitch, 2)}
-                                </Descriptions.Item>
+                                <Col xs={24} sm={12}>
+                                    <Text type="secondary" className="diagnostics-live-label">
+                                        {t("diagnosticsPage.baselinePitchDeg")}
+                                    </Text>
+                                    <span className="diagnostics-live-value diagnostics-live-value-wide diagnostics-live-value-nowrap diagnostics-live-number">
+                                        {formatNumber(baselinePitch, 2)}
+                                    </span>
+                                </Col>
                             )}
                             {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_LENGTH) && (
-                                <Descriptions.Item label={t("diagnosticsPage.baselineLengthM")}>
-                                    {formatNumber(baselineLength, 3)}
-                                </Descriptions.Item>
+                                <Col xs={24} sm={12}>
+                                    <Text type="secondary" className="diagnostics-live-label">
+                                        {t("diagnosticsPage.baselineLengthM")}
+                                    </Text>
+                                    <span className="diagnostics-live-value diagnostics-live-value-wide diagnostics-live-value-nowrap diagnostics-live-number">
+                                        {formatNumber(baselineLength, 3)}
+                                    </span>
+                                </Col>
                             )}
-                        </Descriptions>
+                        </Row>
                     </Space>
                 )}
 

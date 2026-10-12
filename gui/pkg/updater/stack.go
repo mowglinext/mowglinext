@@ -165,6 +165,11 @@ func retainLocalServices(before, target []byte, managed map[string]managedServic
 	return json.Marshal(next)
 }
 
+// ErrComposeEdited: the generated Compose file no longer matches the baseline
+// recorded when it was written. The updater refuses to plan over it; the
+// installer offers to keep a copy and regenerate it (InstallStack).
+var ErrComposeEdited = errors.New("generated Compose was edited manually; move intentional changes into stack-overrides.yaml and regenerate before updating")
+
 func (b DockerBackend) checkStackBaseline() error {
 	data, err := os.ReadFile(filepath.Join(b.Config.Directory, "docker-compose.yaml"))
 	if err != nil {
@@ -175,12 +180,12 @@ func (b DockerBackend) checkStackBaseline() error {
 		return errors.New("run the current installer once to register hardware selections and the Compose baseline")
 	}
 	if strings.TrimSpace(string(expected)) != updates.Hash(data) {
-		return errors.New("generated Compose was edited manually; move intentional changes into stack-overrides.yaml and regenerate before updating")
+		return ErrComposeEdited
 	}
 	return nil
 }
 
-func (b DockerBackend) PlanStack(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, *StackPlan, error) {
+func (b DockerBackend) PlanStack(ctx context.Context, d Deployment, overrides map[string]Deployment, opts PlanOptions) (map[string]string, *StackPlan, error) {
 	if err := d.Validate(b.Config.Trusted); err != nil {
 		return nil, nil, err
 	}
@@ -206,10 +211,10 @@ func (b DockerBackend) PlanStack(ctx context.Context, d Deployment, overrides ma
 	if err != nil {
 		return nil, nil, err
 	}
-	return b.planBundle(ctx, d, overrides, bundle, selection)
+	return b.planBundle(ctx, d, overrides, bundle, selection, opts)
 }
 
-func (b DockerBackend) planBundle(ctx context.Context, d Deployment, overrides map[string]Deployment, bundle ComposeBundle, selection StackSelection) (map[string]string, *StackPlan, error) {
+func (b DockerBackend) planBundle(ctx context.Context, d Deployment, overrides map[string]Deployment, bundle ComposeBundle, selection StackSelection, opts PlanOptions) (map[string]string, *StackPlan, error) {
 	if d.ServiceChoices != nil {
 		choices, err := bundle.ServiceChoices()
 		if err != nil {
@@ -223,8 +228,8 @@ func (b DockerBackend) planBundle(ctx context.Context, d Deployment, overrides m
 	if err != nil {
 		return nil, nil, err
 	}
-	if ready.FirmwareProtocol != d.FirmwareProtocol {
-		return nil, nil, errors.New("target requires a different mainboard firmware protocol")
+	if _, err := b.checkFirmwareProtocol(ready.FirmwareProtocol, d, opts); err != nil {
+		return nil, nil, err
 	}
 	current, _, err := b.model(ctx)
 	if err != nil {
@@ -420,13 +425,28 @@ func sameServiceDefinition(a, b serviceConfig) bool {
 	return reflect.DeepEqual(old, next)
 }
 
+// mountKey identifies a mount by type, source and target. Bind sources are
+// canonicalised so the same host directory reached through a symlinked home
+// or a differently spelled path (installer run vs. updater daemon) is one
+// mount, not "new writable storage".
+func mountKey(v composeVolume) string {
+	source := v.Source
+	if v.Type == "bind" && filepath.IsAbs(source) {
+		source = filepath.Clean(source)
+		if resolved, err := filepath.EvalSymlinks(source); err == nil {
+			source = resolved
+		}
+	}
+	return v.Type + ":" + source + ":" + v.Target
+}
+
 // Layout 1 can reuse its existing persistent mounts, but cannot introduce new
 // writable storage without a reviewed backup/data migration contract.
 func validateStackMounts(current, target composeConfig, old, next map[string]managedService) error {
 	known := map[string]bool{}
 	for name := range old {
 		for _, v := range current.Services[name].Volumes {
-			known[v.Type+":"+v.Source+":"+v.Target] = true
+			known[mountKey(v)] = true
 		}
 	}
 	names := map[string]bool{}
@@ -437,10 +457,10 @@ func validateStackMounts(current, target composeConfig, old, next map[string]man
 		}
 		names[s.ContainerName] = true
 		for _, v := range s.Volumes {
-			if !v.ReadOnly && !known[v.Type+":"+v.Source+":"+v.Target] {
+			if !v.ReadOnly && !known[mountKey(v)] && !isDeviceMount(v.Source, v.Target) {
 				return fmt.Errorf("%s adds writable storage at %s; explicit data/layout migration required", name, v.Target)
 			}
-			if _, core := Services[name]; !core && !v.ReadOnly && v.Target != "/db" && v.Target != "/mowgli_config" && v.Target != "/ros2_ws/maps" && v.Target != "/ros2_ws/config" {
+			if _, core := Services[name]; !core && !v.ReadOnly && !writableMountCovered(v.Source, v.Target) {
 				return fmt.Errorf("%s requires a backup contract for writable mount %s", name, v.Target)
 			}
 		}

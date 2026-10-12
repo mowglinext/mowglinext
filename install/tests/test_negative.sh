@@ -73,13 +73,18 @@ else
   fail "--lidar=mythical-laser fails" "exit=0 unexpectedly"
 fi
 
-# Bad TF-Luna preset
+# Retired TF-Luna flag: accepted with a warning so old composer commands
+# and scripts keep working, but it configures nothing.
 out=$( ( parse_args --tfluna=midnight ) 2>&1 )
 ec=$?
-if [ "$ec" -ne 0 ]; then
-  pass "--tfluna=midnight fails (exit=$ec)"
+if [ "$ec" -eq 0 ]; then
+  pass "--tfluna=midnight is ignored (exit=$ec)"
+  case "$out" in
+    *"no longer configured"*) pass "--tfluna warns that rangefinders are retired" ;;
+    *)                        fail "--tfluna warns that rangefinders are retired" "got: $out" ;;
+  esac
 else
-  fail "--tfluna=midnight fails" "exit=0 unexpectedly"
+  fail "--tfluna=midnight is ignored" "exit=$ec unexpectedly"
 fi
 
 # GNSS receiver-family nmea is now accepted on the Universal path

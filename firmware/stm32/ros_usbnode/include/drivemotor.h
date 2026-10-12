@@ -13,6 +13,9 @@
 #ifndef __DRIVEMOTOR_H
 #define __DRIVEMOTOR_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -72,17 +75,22 @@ void DRIVEMOTOR_ReceiveIT(void);
  * internally (see PWM_DEADBAND in drivemotor.c).
  */
 void DRIVEMOTOR_SetSpeedSigned(int16_t left_pwm_signed,
-                               int16_t right_pwm_signed);
+                               int16_t right_pwm_signed,
+                               uint32_t authorization_epoch);
 void DRIVEMOTOR_SetTicksPerMeter(float ticks_per_meter);
+void DRIVEMOTOR_SetHostZeroMotionIntent(uint8_t zero_intent);
 float DRIVEMOTOR_GetTicksPerMeter(void);
 /* Runtime max wheel-speed cap. The setter clamps to (0, compile-time MAX_MPS];
  * the wire (PKT_ID_SET_KINEMATICS) can only LOWER the cap, never raise it. */
 void DRIVEMOTOR_SetMaxMps(float max_mps);
 float DRIVEMOTOR_GetMaxMps(void);
+bool DRIVEMOTOR_FeedbackHealthy(void);
+uint32_t DRIVEMOTOR_FaultSequence(void);
 
 /** Legacy 4-arg API kept as a shim over DRIVEMOTOR_SetSpeedSigned. */
 void DRIVEMOTOR_SetSpeed(uint8_t left_speed, uint8_t right_speed,
-                         uint8_t left_dir, uint8_t right_dir);
+                         uint8_t left_dir, uint8_t right_dir,
+                         uint32_t authorization_epoch);
 
 #ifdef __cplusplus
 }

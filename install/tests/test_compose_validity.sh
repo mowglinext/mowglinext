@@ -30,7 +30,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 
 if ! harness_run; then
   fail "harness_run" "non-zero exit"
@@ -64,7 +64,7 @@ section "Required services present (default mowgli + ldlidar preset)"
 
 CONTAINERS=$(grep -E '^\s+container_name:' "$COMPOSE_FILE" | awk '{print $2}' | sort)
 
-for required in mowgli-ros2 mowgli-gps mowgli-gui mowgli-lidar mowgli-mqtt mowgli-watchtower; do
+for required in mowgli-ros2 mowgli-gps mowgli-gui mowgli-lidar; do
   if printf '%s\n' "$CONTAINERS" | grep -qx "$required"; then
     pass "service: $required"
   else
@@ -74,7 +74,7 @@ done
 
 # Negative: with HARDWARE_BACKEND=mowgli + GNSS_STACK=universal, mavros and
 # the MAVROS-only NTRIP sidecar must NOT be present.
-for forbidden in mowgli-mavros mowgli-ntrip; do
+for forbidden in mowgli-mavros mowgli-ntrip mowgli-openmower; do
   if printf '%s\n' "$CONTAINERS" | grep -qx "$forbidden"; then
     fail "service NOT present: $forbidden" "should not be in mowgli backend compose"
   else
@@ -140,7 +140,7 @@ section "MAVROS and Universal GNSS are independent sidecars"
 MAVROS_REPO="$SANDBOX/repo_mavros"
 sandbox_repo "$MAVROS_REPO"
 harness_init "$MAVROS_REPO"
-harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=none tfluna=none
+harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=none
 
 if ! harness_run; then
   fail "MAVROS harness_run" "non-zero exit"
@@ -232,7 +232,7 @@ fi
 # managed-updater checks below; managed release updates intentionally support
 # the Mowgli hardware backend only.
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 if ! harness_run; then
   fail "restore default Mowgli harness" "non-zero exit"
 fi

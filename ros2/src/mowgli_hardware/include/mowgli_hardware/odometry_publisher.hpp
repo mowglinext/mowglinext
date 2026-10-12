@@ -47,8 +47,8 @@ public:
   /// Creates its own ~/wheel_odom and ~/wheel_ticks publishers on @p node.
   explicit OdometryPublisher(rclcpp::Node& node);
 
-  /// Drop in-flight tick/aggregation state. Call on serial (re)connect —
-  /// mirrors hardware_bridge_node's reset_serial_dependent_state().
+  /// Drop clock-fit history and in-flight tick/aggregation state on serial (re)connect.
+  /// Mirrors hardware_bridge_node's reset_serial_dependent_state().
   void reset();
 
   /**

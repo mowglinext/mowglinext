@@ -2,17 +2,18 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
-
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -45,17 +46,23 @@ func (f fixedPrecisionFloat) MarshalYAML() (any, error) {
 	}, nil
 }
 
-// writePreservingPerms writes content to path, preserving the existing
-// file's mode and uid/gid when the file already exists. When the file
-// is being created for the first time, it is written owner- and
-// group-writable (0664) so other processes (ROS containers) sharing the
-// file's group can still update it. NOTE: 0664 is NOT world-writable, so
-// the ROS-side line-splice writers (calibration service, set_docking_point,
-// drive-tuning rollback) only persist if their container shares the file's
-// gid; if the containers run with a different uid AND gid, those write-backs
-// fail with EACCES. The previous behavior would silently rewrite the file as
-// owned by the GUI process with mode 0644, which locked out those writers.
+// writePreservingPerms atomically replaces path while preserving the existing
+// file's mode and uid/gid when available. New files are owner- and
+// group-writable (0664) so other processes (ROS containers) sharing the file's
+// group can still update it. NOTE: 0664 is NOT world-writable, so the ROS-side
+// line-splice writers (calibration service, set_docking_point, drive-tuning
+// rollback) only persist if their container shares the file's gid; if the
+// containers run with a different uid AND gid, those write-backs fail with
+// EACCES. Replacing the file in its own directory keeps the rename on the same
+// filesystem; the installed config directory is shared as a directory mount
+// between the GUI and ROS containers.
 func writePreservingPerms(path string, content []byte) error {
+	return writePreservingPermsWithWriter(path, content, (*os.File).Write)
+}
+
+// writePreservingPermsWithWriter accepts the write operation so tests can
+// inject a failure after writing part of the temporary file.
+func writePreservingPermsWithWriter(path string, content []byte, write func(*os.File, []byte) (int, error)) error {
 	mode := os.FileMode(0664)
 	var uid, gid int = -1, -1
 	if info, err := os.Stat(path); err == nil {
@@ -64,21 +71,66 @@ func writePreservingPerms(path string, content []byte) error {
 			uid = int(stat.Uid)
 			gid = int(stat.Gid)
 		}
-	}
-	if err := os.WriteFile(path, content, mode); err != nil {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	// os.WriteFile only applies the mode on creation; force it after
-	// every write so an externally-changed mode does not stick.
-	if err := os.Chmod(path, mode); err != nil {
+
+	temp, err := os.CreateTemp(filepath.Dir(path), ".mowgli-settings-*.tmp")
+	if err != nil {
 		return err
 	}
+	tempPath := temp.Name()
+	closed := false
+	replaced := false
+	defer func() {
+		if !closed {
+			_ = temp.Close()
+		}
+		if !replaced {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	written, err := write(temp, content)
+	if err != nil {
+		return err
+	}
+	if written != len(content) {
+		return io.ErrShortWrite
+	}
+
 	if uid >= 0 && gid >= 0 {
-		// Best-effort: chown can fail when the GUI process is not root
-		// (e.g. running directly on the host). In that case the file
-		// was opened in-place so ownership is already preserved.
-		_ = os.Chown(path, uid, gid)
+		info, err := temp.Stat()
+		if err != nil {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("cannot inspect temporary settings file ownership")
+		}
+		if int(stat.Uid) != uid || int(stat.Gid) != gid {
+			// If ownership cannot be copied, keep the old file rather than
+			// installing a replacement that could lock out ROS-side writers.
+			if err := temp.Chown(uid, gid); err != nil {
+				return err
+			}
+		}
 	}
+	if err := temp.Chmod(mode); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		closed = true
+		return err
+	}
+	closed = true
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	replaced = true
 	return nil
 }
 
@@ -88,6 +140,7 @@ func SettingsRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider) {
 	GetSettingsSchema(r, dbProvider)
 	GetSettingsYAML(r, dbProvider)
 	GetSettingsYAMLDefaults(r, dbProvider)
+	GetSettingsHardwareBackend(r, dbProvider)
 	PostSettingsYAML(r, dbProvider)
 	GetSettingsStatus(r, dbProvider)
 	PostSettingsStatus(r, dbProvider)
@@ -1339,6 +1392,9 @@ func GetSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRout
 
 		responseFlat := cloneFlatMap(doc.Flat)
 		applyUniversalGnssCompatibility(responseFlat, loadSchemaDefaults(dbProvider))
+		if activeHardwareBackend(doc.RuntimeEnv) == "openmower" {
+			applyOpenMowerRuntimeFallbacks(responseFlat, doc.RuntimeEnv)
+		}
 
 		c.JSON(200, responseFlat)
 	})
@@ -1384,6 +1440,9 @@ func GetSettingsYAMLDefaults(r *gin.RouterGroup, dbProvider types.IDBProvider) g
 		}
 		defaults := map[string]any{}
 		extractDefaults(schema, defaults)
+		// On a robot whose backend changes some defaults, "default" means the
+		// backend's value (config/backends/<backend>.yaml, Invariant 15).
+		applyBackendDefaults(defaults, activeHardwareBackend(loadRuntimeEnv(dbProvider)))
 		c.JSON(200, defaults)
 	})
 }
@@ -1419,7 +1478,13 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		existingYAML := map[string]any{}
 		file, err := os.ReadFile(string(configFilePath))
 		if err == nil {
-			_ = yaml.Unmarshal(file, &existingYAML)
+			if err := yaml.Unmarshal(file, &existingYAML); err != nil {
+				c.JSON(500, ErrorResponse{Error: "failed to parse existing YAML; repair the configuration before saving: " + err.Error()})
+				return
+			}
+		} else if !os.IsNotExist(err) {
+			c.JSON(500, ErrorResponse{Error: "failed to read existing YAML: " + err.Error()})
+			return
 		}
 
 		// Number-type hints must be captured from the document as it was READ,
@@ -1436,6 +1501,10 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		defaults := map[string]any{}
 		if err == nil {
 			extractDefaults(schema, defaults)
+			// Backend-aware, exactly like GET /settings/yaml/defaults: a value
+			// equal to the BACKEND's default is pruned, so the robot falls back
+			// to that same value.
+			applyBackendDefaults(defaults, activeHardwareBackend(loadRuntimeEnv(dbProvider)))
 			for key, value := range defaults {
 				if _, exists := existing[key]; !exists {
 					existing[key] = value
@@ -1450,9 +1519,11 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		// "reset to default" for a key that has no schema default) — drop the
 		// key so it is removed from the YAML rather than written back as
 		// "key: null".
+		explicitlyDeletedKeys := map[string]bool{}
 		for key, value := range payload {
 			if value == nil {
 				delete(existing, key)
+				explicitlyDeletedKeys[key] = true
 			} else {
 				existing[key] = value
 			}
@@ -1470,6 +1541,11 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		// them — scrub them explicitly (issue #195).
 		for key := range retiredParamKeys {
 			delete(existing, key)
+			prunedKeys[key] = true
+		}
+		// nestToROS2YAML clones the on-disk YAML, so explicit deletes must also
+		// reach the nested prune step or the clone would restore their old values.
+		for key := range explicitlyDeletedKeys {
 			prunedKeys[key] = true
 		}
 

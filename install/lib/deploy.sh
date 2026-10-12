@@ -357,10 +357,6 @@ setup_directory() {
 run_startup_step_live() {
   build_compose_stack
   run_compose_stack
-
-  if ! $SKIP_WRITE_CONFIG; then
-    auto_detect_position
-  fi
 }
 
 backup_path_if_exists() {

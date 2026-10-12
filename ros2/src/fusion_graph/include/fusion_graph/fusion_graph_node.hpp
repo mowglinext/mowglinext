@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -133,7 +134,7 @@ private:
   void PublishLocalOdom();
   // Launch GraphManager::Save on a detached worker. No-op if a
   // previous async save is still running. `reason` is logged.
-  void DispatchAsyncSave(const char* reason);
+  bool DispatchAsyncSave(const char* reason, std::function<void(bool)> completion = {});
 
   // ── Members ────────────────────────────────────────────────────────
   // shared_ptr (not unique_ptr) so background save / rebase threads
@@ -406,6 +407,7 @@ private:
   double lidar_map_tile_size_m_ = 10.0;
   int lidar_map_radius_tiles_ = 2;
   double lidar_map_insert_period_s_ = 0.5;
+  double lidar_map_insert_min_travel_m_ = 0.10;
   double lidar_map_rebuild_period_s_ = 5.0;
   double lidar_anchor_engage_age_s_ = 1.0;
   double lidar_anchor_apply_age_s_ = 20.0;
@@ -681,10 +683,16 @@ private:
   double wheel_dist_since_last_gps_m_ = 0.0;
   // GPS jump (m) above which the sample is rejected as a wrong-fix (motion-
   // consistent gate: compare jump against actual wheel travel since last fix).
-  // 50 mm sits above the σ~1 cm noise floor (2026-05-17: 8-12 mm σ on raw
-  // /gps/fix stationary) and below vx_max≈0.30 m/s × 0.1 s = 30 mm of
-  // legitimate motion. See rtk_wrongfix_gate.hpp for the decision function.
-  double rtk_wrongfix_max_jump_m_ = 0.05;
+  // Raised from 0.05 to 0.08 (mowglinext#738): a 6.1-min straight-line field
+  // session at 0.05 logged 52 gps_rejects_wrongfix that cross-referenced
+  // against universal_gnss_status as ALL genuinely RTK-Fixed, sub-16mm
+  // accuracy — their excess over budget ranged 6-56mm. 0.08 absorbs most of
+  // that without covering the full 56mm outlier, which would start eating
+  // into the ~10cm+ excess a GENUINE carrier-phase-reset wrong-fix produces
+  // (see the state comment above) — deliberately conservative pending more
+  // multi-site data. See rtk_wrongfix_gate.hpp for the decision function,
+  // fusion_graph.yaml for the fuller field-data writeup.
+  double rtk_wrongfix_max_jump_m_ = 0.08;
   // Stuck-receiver payload-value gate state (mowglinext#694,
   // gps_stuck_gate.hpp). NaN-initialized last_gps_lat_/lon_ so the very
   // first fix always counts as a change (NaN != NaN).

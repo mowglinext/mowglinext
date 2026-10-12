@@ -41,10 +41,11 @@ DIRTY_FLAG = 0x80
 
 # The default permutation catalog. Each entry is a PlatformIO env plus the
 # board/panel identity that ends up in the artifact name and the manifest key.
-# Extend this list (and firmware-ci.yml's matrix) when a new prebuilt permutation
-# is published — NOT by hand-editing rendered binaries. Panel/board strings are
-# lowercased, stripped tokens taken from board.h.template's PANEL_TYPE_* /
-# BOARD_* names so the selection map (Phase 2) can resolve them deterministically.
+# Extend this list and both release workflows' build steps when publishing a
+# new prebuilt permutation — NOT by hand-editing rendered binaries. Panel/board
+# strings are lowercased, stripped tokens taken from board.h.template's
+# PANEL_TYPE_* / BOARD_* names so the selection map (Phase 2) can resolve them
+# deterministically.
 PERMUTATIONS = [
     {
         "key": "yardforce500",
@@ -57,6 +58,12 @@ PERMUTATIONS = [
         "env": "Yardforce500B",
         "board": "BOARD_YARDFORCE500B",
         "panel": "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+    },
+    {
+        "key": "biltema-rm1000",
+        "env": "BiltemaRM1000",
+        "board": "BOARD_YARDFORCE500B",
+        "panel": "PANEL_TYPE_YARDFORCE_900_ECO",
     },
 ]
 

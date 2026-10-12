@@ -95,11 +95,11 @@ export const MqttSection: React.FC<Props> = ({
                         <Form layout="vertical" size="small">
                             <Row gutter={[16, 0]}>
                                 <Col xs={24} sm={14}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-mqtt_host" data-setting-key="mqtt_host"
                                         label={label("mqtt_host", t("settingsMqtt.host"))}
                                         tooltip={t("settingsMqtt.hostTooltip")}
                                     >
-                                        <Input
+                                        <Input id="setting-mqtt_host"
                                             value={values.mqtt_host}
                                             onChange={(e) => onChange("mqtt_host", e.target.value)}
                                             placeholder="localhost"
@@ -107,10 +107,10 @@ export const MqttSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={4}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-mqtt_port" data-setting-key="mqtt_port"
                                         label={label("mqtt_port", t("settingsMqtt.port"))}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsMqtt.port")} id="setting-mqtt_port"
                                             value={values.mqtt_port}
                                             onChange={(v) => onChange("mqtt_port", v)}
                                             min={1} max={65535} step={1} precision={0}
@@ -119,22 +119,22 @@ export const MqttSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={6}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-mqtt_use_ssl" data-setting-key="mqtt_use_ssl"
                                         label={label("mqtt_use_ssl", t("settingsMqtt.useSsl"))}
                                         tooltip={t("settingsMqtt.useSslTooltip")}
                                     >
-                                        <Switch
+                                        <Switch id="setting-mqtt_use_ssl"
                                             checked={values.mqtt_use_ssl ?? false}
                                             onChange={(checked) => onChange("mqtt_use_ssl", checked)}
                                         />
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={12}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-mqtt_username" data-setting-key="mqtt_username"
                                         label={label("mqtt_username", t("settingsMqtt.username"))}
                                         tooltip={t("settingsMqtt.usernameTooltip")}
                                     >
-                                        <Input
+                                        <Input id="setting-mqtt_username"
                                             value={values.mqtt_username}
                                             onChange={(e) => onChange("mqtt_username", e.target.value)}
                                         />
@@ -151,11 +151,11 @@ export const MqttSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={12}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-mqtt_topic_prefix" data-setting-key="mqtt_topic_prefix"
                                         label={label("mqtt_topic_prefix", t("settingsMqtt.topicPrefix"))}
                                         tooltip={t("settingsMqtt.topicPrefixTooltip")}
                                     >
-                                        <Input
+                                        <Input id="setting-mqtt_topic_prefix"
                                             value={values.mqtt_topic_prefix}
                                             onChange={(e) => onChange("mqtt_topic_prefix", e.target.value)}
                                             placeholder="mowgli"

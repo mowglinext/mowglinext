@@ -106,6 +106,21 @@ struct DetourResumeCfg
   // (chassis half-width + a small margin) so it fires only on a genuine wedge,
   // never on a localization/goal-checker abort in open space. <= 0 disables.
   double wedge_radius_m = 0.35;
+  // Issue #743: FTCController detects with the real oriented footprint against
+  // the LOCAL costmap — the model that actually produced the abort — while
+  // this search runs against a DIFFERENT, GLOBAL costmap snapshot with a disc
+  // approximation (the local costmap is a rolling window too unstable to plan
+  // a resume search in). The two can disagree: a LiDAR-observed, undrawn
+  // obstacle lethal locally but not yet in the global snapshot, or one whose
+  // geometry only blocks the oriented body. When the caller's OWN abort
+  // classification (FollowCoveragePath's error_msg carrying
+  // mowgli_interfaces::ftc_abort_reason::kObstacleAbortMarker — see that
+  // header) already says this abort was obstacle-caused, seed blocked_seen
+  // the same way wedge_radius_m's physical check does, so the forward search
+  // may adopt the first pose the GLOBAL grid considers clear as the resume
+  // point even though nothing in that grid was ever found lethal. Defaults
+  // false: every existing caller/test is unaffected.
+  bool ftc_confirmed_obstacle = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -194,7 +209,7 @@ inline DetourDecision decideDetour(const DetourCostmap& cm,
   // the coverage loop endlessly re-aborting in place.
   const bool wedged = cfg.wedge_radius_m > 0.0 &&
                       !footprintClear(cm, s.x, s.y, cfg.wedge_radius_m, cfg.lethal_cost);
-  bool blocked_seen = wedged;
+  bool blocked_seen = wedged || cfg.ftc_confirmed_obstacle;
   double arc = 0.0;
   for (std::size_t i = stuck_idx; i < poses.size(); ++i)
   {

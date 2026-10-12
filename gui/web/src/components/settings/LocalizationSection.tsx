@@ -108,7 +108,10 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 style={{marginBottom: 16}}
                 message={t("settingsLocalization.mapFrameLocalizerTitle")}
                 description={
-                    <span>
+                    <div>
+                        <Paragraph>{t("settingsLocalization.positionSummary")}</Paragraph>
+                        <details>
+                        <summary>{t("settingsPage.technicalDetails")}</summary>
                         {t("settingsLocalization.mapFrameLocalizerIntro")} (<Text code>fusion_graph_node</Text>){t("settingsLocalization.mapFrameLocalizerMid")}{" "}
                         <Text code>odom→base_footprint</Text>{" "}
                         {t("settingsLocalization.mapFrameLocalizerTfPrefix")} <Text code>ekf_odom_node</Text> {t("settingsLocalization.mapFrameLocalizerTfSuffix")}{" "}
@@ -118,7 +121,8 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                         >
                             {t("settingsLocalization.readArchitectureNotes")}
                         </Link>
-                    </span>
+                        </details>
+                    </div>
                 }
             />
 
@@ -139,7 +143,7 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                     <Text code>/scan</Text> {t("settingsLocalization.lidarObstacleOutro")}
                 </Paragraph>
                 <Paragraph type="secondary" style={{marginTop: 0, marginBottom: 0, fontSize: 11}}>
-                    {t("settingsLocalization.lidarTogglePrefix")} <Text strong>Sensors → lidar_enabled</Text>.
+                    {t("settingsLocalization.lidarTogglePrefix")} <Link href="#/settings?section=sensors">{t("settingsSections.sensors.label")} → {t("settingsSensors.lidarSensor")}</Link>.
                     {lidarDiag?.message ? (
                         <>
                             {" "}
@@ -185,12 +189,14 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                                     <Paragraph style={{margin: "4px 0 0", fontSize: 12}}>
                                         {t(toggle.summary)}
                                     </Paragraph>
-                                    <Paragraph type="secondary" style={{margin: "4px 0 0", fontSize: 11}}>
-                                        {t(toggle.detail)}
-                                    </Paragraph>
+                                    <details style={{marginTop: 8, fontSize: 12}}>
+                                        <summary>{t("settingsPage.technicalDetails")}</summary>
+                                        <Paragraph type="secondary">{t(toggle.detail)}</Paragraph>
+                                    </details>
                                 </Col>
                                 <Col flex="none">
                                     <Switch
+                                        aria-label={t(toggle.title)}
                                         checked={enabled}
                                         disabled={isLocked}
                                         onChange={(v) => onChange(toggle.key, v)}
@@ -202,6 +208,7 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 })}
             </Card>
 
+            <Paragraph><Link href="#/diagnostics?tab=localization">{t("settingsLocalization.openDiagnostics")}</Link></Paragraph>
             {/* ── Group C: Other yaw sources ──────────────────────────────── */}
             <Card
                 size="small"
@@ -232,6 +239,7 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                         </Col>
                         <Col flex="none">
                             <Switch
+                                aria-label={t(MAGNETOMETER_TOGGLE.title)}
                                 checked={asBool(values[MAGNETOMETER_TOGGLE.key])}
                                 onChange={(v) => onChange(MAGNETOMETER_TOGGLE.key, v)}
                             />
@@ -264,6 +272,7 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                         </Col>
                         <Col flex="none">
                             <Switch
+                                aria-label={t("settingsLocalization.collectCalibrationSamples")}
                                 checked={asBool(values.enable_mag_cal)}
                                 onChange={(v) => onChange("enable_mag_cal", v)}
                             />
@@ -273,8 +282,8 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
                         <Col xs={24} sm={8}>
-                            <Form.Item label={t("settingsLocalization.magneticDeclinationLabel")} tooltip={t("settingsLocalization.magneticDeclinationTooltip")}>
-                                <InputNumber
+                            <Form.Item htmlFor="setting-declination_deg" data-setting-key="declination_deg" label={t("settingsLocalization.magneticDeclinationLabel")} tooltip={t("settingsLocalization.magneticDeclinationTooltip")}>
+                                <InputNumber aria-label={t("settingsLocalization.magneticDeclinationLabel") + ", °"} aria-description={t("settingsLocalization.magneticDeclinationTooltip")}  id="setting-declination_deg"
                                     value={values.declination_deg}
                                     onChange={(v) => onChange("declination_deg", v)}
                                     min={-30} max={30} step={0.1} precision={2}
@@ -283,8 +292,8 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={8}>
-                            <Form.Item label={t("settingsLocalization.minHorizontalFieldLabel")} tooltip={t("settingsLocalization.minHorizontalFieldTooltip")}>
-                                <InputNumber
+                            <Form.Item htmlFor="setting-min_horizontal_u" data-setting-key="min_horizontal_u" label={t("settingsLocalization.minHorizontalFieldLabel")} tooltip={t("settingsLocalization.minHorizontalFieldTooltip")}>
+                                <InputNumber aria-label={t("settingsLocalization.minHorizontalFieldLabel") + ", µT"} aria-description={t("settingsLocalization.minHorizontalFieldTooltip")}  id="setting-min_horizontal_u"
                                     value={values.min_horizontal_uT}
                                     onChange={(v) => onChange("min_horizontal_uT", v)}
                                     min={0} max={100} step={1} precision={1}
@@ -293,8 +302,8 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={8}>
-                            <Form.Item label={t("settingsLocalization.magYawVarianceLabel")} tooltip={t("settingsLocalization.magYawVarianceTooltip")}>
-                                <InputNumber
+                            <Form.Item htmlFor="setting-mag_yaw_variance" data-setting-key="mag_yaw_variance" label={t("settingsLocalization.magYawVarianceLabel")} tooltip={t("settingsLocalization.magYawVarianceTooltip")}>
+                                <InputNumber aria-label={t("settingsLocalization.magYawVarianceLabel") + ", rad²"} aria-description={t("settingsLocalization.magYawVarianceTooltip")}  id="setting-mag_yaw_variance"
                                     value={values.mag_yaw_variance}
                                     onChange={(v) => onChange("mag_yaw_variance", v)}
                                     min={0.0001} max={1} step={0.0001} precision={4}

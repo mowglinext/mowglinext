@@ -34,6 +34,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_behavior/detour_resume.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
+#include "mowgli_interfaces/ftc_abort_reason.hpp"
 #include <gtest/gtest.h>
 
 using geometry_msgs::msg::PoseStamped;
@@ -275,6 +276,64 @@ TEST(DetourResume, WedgeDoesNotFireInOpenSpace)
 
   EXPECT_FALSE(d.obstacle_confirmed);
   EXPECT_FALSE(d.resume_idx.has_value());
+}
+
+// ---------------------------------------------------------------------------
+// ftc_confirmed_obstacle (issue #743): FTCController's own abort
+// classification, independent of this search's own costmap-based confirmation.
+// ---------------------------------------------------------------------------
+
+// With no lethal cell anywhere in the (global) costmap, the plain search would
+// find no obstacle (NoObstacleMeansNoDetour). ftc_confirmed_obstacle seeds the
+// same blocked_seen the wedge check does, so the forward search still adopts
+// the first clear-in-this-grid pose past min_skip as the resume point — this
+// is exactly the disagreement case: FTC aborted on the LOCAL costmap/oriented
+// footprint, this (global, disc) grid never saw anything lethal.
+TEST(DetourResume, FtcConfirmedObstacleRescuesAnAllClearGlobalCostmap)
+{
+  DetourCostmap cm = makeGrid();  // all free — the global snapshot disagrees
+  const auto poses = straightPath(40);
+
+  DetourResumeCfg c = cfg();
+  c.ftc_confirmed_obstacle = true;
+
+  const DetourDecision d = decideDetour(cm, poses, /*stuck=*/0, c);
+
+  EXPECT_TRUE(d.obstacle_confirmed);
+  ASSERT_TRUE(d.resume_idx.has_value());
+  EXPECT_GE(poses[*d.resume_idx].pose.position.x, 0.8);
+}
+
+// Defaults to false: every existing caller/test (including every test above
+// this one) is unaffected unless it opts in.
+TEST(DetourResume, FtcConfirmedObstacleDefaultsFalse)
+{
+  EXPECT_FALSE(DetourResumeCfg{}.ftc_confirmed_obstacle);
+}
+
+// ftc_abort_reason::HasObstacleAbortMarker — the structured signal
+// FollowStrip reads to fill ftc_confirmed_obstacle. Mirrors exactly how
+// FTCController stamps it (a fixed prefix) and how FollowStrip captures the
+// FollowCoveragePath result's error_msg verbatim.
+TEST(FtcAbortReason, MarkerAtStartIsDetected)
+{
+  using mowgli_interfaces::ftc_abort_reason::HasObstacleAbortMarker;
+  using mowgli_interfaces::ftc_abort_reason::kObstacleAbortMarker;
+  EXPECT_TRUE(HasObstacleAbortMarker(std::string(kObstacleAbortMarker) +
+                                     "FTCController: collision detected along lookahead path."));
+  EXPECT_TRUE(HasObstacleAbortMarker(std::string(kObstacleAbortMarker) +
+                                     "FTCController: WEDGED, aborting strip after 5s wait."));
+}
+
+TEST(FtcAbortReason, UnmarkedOrEmptyMessageIsNotDetected)
+{
+  using mowgli_interfaces::ftc_abort_reason::HasObstacleAbortMarker;
+  EXPECT_FALSE(HasObstacleAbortMarker("FTCController: TF lookup failed."));
+  EXPECT_FALSE(HasObstacleAbortMarker(""));
+  // The marker only counts at the START — appearing later in an unrelated
+  // message must not false-positive.
+  EXPECT_FALSE(HasObstacleAbortMarker(std::string("some other text ") +
+                                      mowgli_interfaces::ftc_abort_reason::kObstacleAbortMarker));
 }
 
 // ---------------------------------------------------------------------------

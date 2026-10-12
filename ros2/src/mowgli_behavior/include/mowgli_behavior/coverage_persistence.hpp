@@ -35,7 +35,11 @@ struct BTContext;
 /// cursor is discarded; a pose-count-only key was insufficient because the AUTO
 /// mow-angle tie-break or sub-path split can change geometry at equal count),
 /// the completed-swath sets (`area_completed_swaths`), the completed-area set
-/// (`completed_areas`), and the current area index.
+/// (`completed_areas`), the current area index, and — mowglinext#637 phase 2
+/// — the stable area id last observed for each index (`area_ids`), so a
+/// resume can detect that the GUI's area list changed since this file was
+/// written and discard per-index state that would otherwise be misattributed
+/// to whatever area now sits at that index.
 ///
 /// The file is written atomically (temp + rename) and every reader tolerates a
 /// missing / empty / corrupt file by returning false and leaving the context

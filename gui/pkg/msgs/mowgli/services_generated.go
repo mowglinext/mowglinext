@@ -5,6 +5,17 @@ import (
 	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 )
 
+// AddLidarIgnoreCorridorReq for mowgli_interfaces/srv/AddLidarIgnoreCorridor request.
+type AddLidarIgnoreCorridorReq struct {
+	Corridor                  LidarIgnoreCorridor            `json:"corridor"`
+}
+
+// AddLidarIgnoreCorridorRes for mowgli_interfaces/srv/AddLidarIgnoreCorridor response.
+type AddLidarIgnoreCorridorRes struct {
+	Success                   bool                           `json:"success"`
+	Id                        uint32                         `json:"id"`
+}
+
 // AddMowingAreaReq for mowgli_interfaces/srv/AddMowingArea request.
 type AddMowingAreaReq struct {
 	Area                      MapArea                        `json:"area"`
@@ -72,6 +83,14 @@ type CalibrateImuYawRes struct {
 	DockUndockDisplacementM   float64                        `json:"dock_undock_displacement_m"`
 }
 
+// ClearLidarIgnoreCorridorsReq for mowgli_interfaces/srv/ClearLidarIgnoreCorridors request (empty).
+type ClearLidarIgnoreCorridorsReq struct{}
+
+// ClearLidarIgnoreCorridorsRes for mowgli_interfaces/srv/ClearLidarIgnoreCorridors response.
+type ClearLidarIgnoreCorridorsRes struct {
+	Success                   bool                           `json:"success"`
+}
+
 // ClearMapReq for mowgli_interfaces/srv/ClearMap request (empty).
 type ClearMapReq struct{}
 
@@ -87,6 +106,18 @@ type ClearObstacleReq struct {
 
 // ClearObstacleRes for mowgli_interfaces/srv/ClearObstacle response.
 type ClearObstacleRes struct {
+	Success                   bool                           `json:"success"`
+	Message                   string                         `json:"message"`
+}
+
+// CorrectRecordedObstacleReq for mowgli_interfaces/srv/CorrectRecordedObstacle request.
+type CorrectRecordedObstacleReq struct {
+	Polygon                   geometry.Polygon               `json:"polygon"`
+}
+
+// CorrectRecordedObstacleRes for mowgli_interfaces/srv/CorrectRecordedObstacle response.
+type CorrectRecordedObstacleRes struct {
+	Corrected                 geometry.Polygon               `json:"corrected"`
 	Success                   bool                           `json:"success"`
 	Message                   string                         `json:"message"`
 }
@@ -116,6 +147,15 @@ type EmergencyStopReq struct {
 
 // EmergencyStopRes for mowgli_interfaces/srv/EmergencyStop response.
 type EmergencyStopRes struct {
+	Success                   bool                           `json:"success"`
+}
+
+// GetLidarIgnoreCorridorsReq for mowgli_interfaces/srv/GetLidarIgnoreCorridors request (empty).
+type GetLidarIgnoreCorridorsReq struct{}
+
+// GetLidarIgnoreCorridorsRes for mowgli_interfaces/srv/GetLidarIgnoreCorridors response.
+type GetLidarIgnoreCorridorsRes struct {
+	Corridors                 []LidarIgnoreCorridor          `json:"corridors"`
 	Success                   bool                           `json:"success"`
 }
 
@@ -162,6 +202,46 @@ type MowerControlRes struct {
 	Success                   bool                           `json:"success"`
 }
 
+// PreviewCoverageReq for mowgli_interfaces/srv/PreviewCoverage request.
+type PreviewCoverageReq struct {
+	OuterBoundary             geometry.Polygon               `json:"outer_boundary"`
+	Obstacles                 []geometry.Polygon             `json:"obstacles"`
+	MowAngleDeg               float64                        `json:"mow_angle_deg"`
+	Perpendicular             bool                           `json:"perpendicular"`
+	RingDirection             int32                          `json:"ring_direction"`
+	HasStartPoint             bool                           `json:"has_start_point"`
+	StartX                    float64                        `json:"start_x"`
+	StartY                    float64                        `json:"start_y"`
+}
+
+// PreviewCoverageRes for mowgli_interfaces/srv/PreviewCoverage response.
+type PreviewCoverageRes struct {
+	Success                   bool                           `json:"success"`
+	Message                   string                         `json:"message"`
+	Rings                     []geometry.Polygon             `json:"rings"`
+	Swaths                    []geometry.Polygon             `json:"swaths"`
+	MowAngleDeg               float64                        `json:"mow_angle_deg"`
+	HeadlandPasses            int32                          `json:"headland_passes"`
+	RingDirection             int32                          `json:"ring_direction"`
+	PlannedFraction           float64                        `json:"planned_fraction"`
+	FieldAreaM2               float64                        `json:"field_area_m2"`
+	DroppedPieces             uint32                         `json:"dropped_pieces"`
+	StartAdjustable           bool                           `json:"start_adjustable"`
+	StartX                    float64                        `json:"start_x"`
+	StartY                    float64                        `json:"start_y"`
+}
+
+// PreviewObstacleClearanceReq for mowgli_interfaces/srv/PreviewObstacleClearance request.
+type PreviewObstacleClearanceReq struct {
+	Obstacles                 []geometry.Polygon             `json:"obstacles"`
+}
+
+// PreviewObstacleClearanceRes for mowgli_interfaces/srv/PreviewObstacleClearance response.
+type PreviewObstacleClearanceRes struct {
+	Buffered                  []geometry.Polygon             `json:"buffered"`
+	ObstacleMarginM           float64                        `json:"obstacle_margin_m"`
+}
+
 // PromoteObstacleReq for mowgli_interfaces/srv/PromoteObstacle request.
 type PromoteObstacleReq struct {
 	AreaIndex                 uint32                         `json:"area_index"`
@@ -173,6 +253,24 @@ type PromoteObstacleReq struct {
 
 // PromoteObstacleRes for mowgli_interfaces/srv/PromoteObstacle response.
 type PromoteObstacleRes struct {
+	Success                   bool                           `json:"success"`
+	Message                   string                         `json:"message"`
+}
+
+// SetAreaCoverageLinesReq for mowgli_interfaces/srv/SetAreaCoverageLines request.
+type SetAreaCoverageLinesReq struct {
+	Id                        uint32                         `json:"id"`
+	HasMowAngle               bool                           `json:"has_mow_angle"`
+	MowAngleDeg               float64                        `json:"mow_angle_deg"`
+	HasRingDirection          bool                           `json:"has_ring_direction"`
+	RingDirection             uint8                          `json:"ring_direction"`
+	HasStartPoint             bool                           `json:"has_start_point"`
+	StartX                    float64                        `json:"start_x"`
+	StartY                    float64                        `json:"start_y"`
+}
+
+// SetAreaCoverageLinesRes for mowgli_interfaces/srv/SetAreaCoverageLines response.
+type SetAreaCoverageLinesRes struct {
 	Success                   bool                           `json:"success"`
 	Message                   string                         `json:"message"`
 }

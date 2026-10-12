@@ -21,7 +21,7 @@ interface MowingSession {
   coverage_percent: number;
   strips_completed: number;
   strips_skipped: number;
-  distance_meters: number;
+  distance_meters?: number | null;
   status: "completed" | "aborted" | "error";
   recharge_pauses?: number;
   errors: string[];
@@ -35,7 +35,7 @@ interface SessionsResponse {
 interface SessionStats {
   total_sessions: number;
   total_duration_sec: number;
-  total_distance_m: number;
+  total_distance_m?: number | null;
   total_strips: number;
   completed: number;
   aborted: number;
@@ -56,12 +56,6 @@ function formatTotalHours(seconds: number): string {
   return Math.round(seconds / 3600).toString();
 }
 
-function formatDistance(meters: number): string {
-  if (!meters || meters <= 0) return "0";
-  if (meters >= 1000) return (meters / 1000).toFixed(1);
-  return Math.round(meters).toString();
-}
-
 function formatDistanceUnit(meters: number): string {
   return meters >= 1000 ? "km" : "m";
 }
@@ -79,7 +73,8 @@ function formatDate(timestamp: string, timeZoneMode: TimeZoneMode): string {
 }
 
 export const StatisticsPage = () => {
-  const {t} = useTranslation();
+  const {t, i18n} = useTranslation();
+  const number = (value: number, digits = 1) => value.toLocaleString(i18n.language, {maximumFractionDigits: digits});
   const {timeZoneMode} = useTimeFormat();
   const guiApi = useApi();
   const {snapshot} = useDiagnosticsSnapshot();
@@ -124,8 +119,14 @@ export const StatisticsPage = () => {
     ? Math.round((stats.completed / stats.total_sessions) * 100) : 0;
 
   const coverage = snapshot?.coverage ?? [];
+  // Old sessions have no odometer provenance. Do not present an absent metric
+  // (or an all-zero legacy history with recorded runtime) as measured travel.
+  const distance = stats?.total_distance_m;
+  const hasDistance = typeof distance === 'number' && Number.isFinite(distance)
+    && (distance > 0 || stats?.total_duration_sec === 0);
 
-  // Weekly distance bars. The buckets are ROLLING 7-day windows measured back
+
+  // Weekly runtime bars. Runtime exists for legacy sessions whose distance was not recorded. The buckets are ROLLING 7-day windows measured back
   // from "now" on absolute instants, NOT calendar weeks, so they are unaffected
   // by the time-zone toggle and carry no date labels to disagree with. Keep it
   // that way: switching to calendar weeks would need `zonedDayAnchorMs` here
@@ -142,7 +143,7 @@ export const StatisticsPage = () => {
       const diffWeeks = Math.floor((nowMs - startedAtMs) / (7 * 24 * 60 * 60 * 1000));
       return diffWeeks === weekAgo;
     });
-    return weekSessions.reduce((acc, s) => acc + (s.distance_meters / 1000), 0);
+    return weekSessions.reduce((acc, s) => acc + (Number.isFinite(s.duration_sec) ? s.duration_sec / 3600 : 0), 0);
   });
   const maxBar = Math.max(...weeklyBars, 0.01);
 
@@ -160,7 +161,7 @@ export const StatisticsPage = () => {
     }] : []),
     {
       title: t('statisticsPage.colArea'), dataIndex: "area_index", key: "area_index",
-      render: (v: number) => <span style={{fontSize: 13}}>{v != null && v >= 0 ? `#${v}` : "--"}</span>,
+      render: (v: number) => <span style={{fontSize: 13}}>{v != null && v >= 0 ? t('mapAreasList.unnamedArea', {index: v + 1}) : '—'}</span>,
     },
     {
       title: t('statisticsPage.colCoverage'), dataIndex: "coverage_percent", key: "coverage",
@@ -179,7 +180,7 @@ export const StatisticsPage = () => {
         const c = v === "completed" ? "success" : v === "aborted" ? "warning" : "error";
         return (
           <span style={{display: 'inline-flex', gap: 6, alignItems: 'center'}}>
-            <Tag color={c}>{v ?? "--"}</Tag>
+            <Tag color={c}>{['completed', 'aborted', 'error'].includes(v) ? t(`statisticsPage.status.${v}`) : v || '—'}</Tag>
             {record.recharge_pauses ? (
               <Tag color="processing">⏸ {t('statisticsPage.rechargeTag', {count: record.recharge_pauses})}</Tag>
             ) : null}
@@ -212,10 +213,10 @@ export const StatisticsPage = () => {
       {/* Hero stats -- accent watermark per metric, no border to feel lighter */}
       <div style={{display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12}}>
         {[
-          {label: t('statisticsPage.heroTotalDistance'), value: formatDistance(stats?.total_distance_m ?? 0), unit: formatDistanceUnit(stats?.total_distance_m ?? 0), hint: t('statisticsPage.heroSinceInstall'), color: colors.accent},
+          {label: t('statisticsPage.heroTotalDistance'), value: hasDistance ? number(distance >= 1000 ? distance / 1000 : distance) : '—', unit: hasDistance ? formatDistanceUnit(distance) : '', hint: t(hasDistance ? 'statisticsPage.recordedDistanceHint' : 'statisticsPage.noDistanceRecorded'), color: colors.accent},
           {label: t('statisticsPage.heroHoursActive'), value: formatTotalHours(stats?.total_duration_sec ?? 0), unit: 'h', hint: t('statisticsPage.heroSessionsCount', {count: stats?.total_sessions ?? 0}), color: colors.sky},
           {label: t('statisticsPage.heroCompletionRate'), value: `${completionRate}`, unit: '%', hint: t('statisticsPage.heroCompletedCount', {count: stats?.completed ?? 0}), color: colors.amber},
-          {label: t('statisticsPage.heroRunsCompleted'), value: `${stats?.total_sessions ?? 0}`, unit: '', hint: t('statisticsPage.heroAvgCoverage', {pct: Math.round(stats?.avg_coverage_pct ?? 0)}), color: colors.accent},
+          {label: t('statisticsPage.heroRunsCompleted'), value: `${stats?.completed ?? 0}`, unit: '', hint: t('statisticsPage.heroAvgCoverage', {pct: Math.round(stats?.avg_coverage_pct ?? 0)}), color: colors.accent},
         ].map(s => (
           <DashCard key={s.label} padding={isMobile ? 16 : 20}
                     style={{position: 'relative', overflow: 'hidden'}}>
@@ -275,7 +276,7 @@ export const StatisticsPage = () => {
       <DashCard>
         <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16}}>
           <div>
-            <div style={{fontSize: 14, fontWeight: 600}}>{t('statisticsPage.distancePerWeek')}</div>
+            <div style={{fontSize: 14, fontWeight: 600}}>{t('statisticsPage.durationPerWeek')}</div>
             <div style={{fontSize: 11, color: colors.textMuted}}>{t('statisticsPage.last12Weeks')}</div>
           </div>
         </div>
@@ -290,7 +291,7 @@ export const StatisticsPage = () => {
               position: 'absolute', left: 0, top: -4, fontSize: 9, fontWeight: 600,
               color: colors.textMuted, fontFamily: "'Space Grotesk', monospace",
             }}>
-              {maxBar.toFixed(1)} km
+              {number(maxBar)} h
             </div>
           )}
           {weeklyBars.map((v, i) => {
@@ -304,7 +305,7 @@ export const StatisticsPage = () => {
                 onMouseEnter={() => setHoveredBar(i)}
                 onMouseLeave={() => setHoveredBar(null)}
                 onClick={() => setHoveredBar(hoveredBar === i ? null : i)}
-                title={t('statisticsPage.weekTooltip', {week: i + 1, km: v.toFixed(2)})}
+                title={t('statisticsPage.weekDurationTooltip', {week: i + 1, hours: number(v, 2)})}
                 style={{flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', cursor: 'pointer'}}
               >
                 <div style={{
@@ -319,7 +320,7 @@ export const StatisticsPage = () => {
                 <div style={{fontSize: 9, color: colors.textMuted, position: 'absolute', bottom: 0}}>W{i + 1}</div>
                 {showValue && (
                   <div style={{position: 'absolute', top: -22, fontSize: 10, fontWeight: 700, color: colors.accent, whiteSpace: 'nowrap'}}>
-                    {v.toFixed(1)} km
+                    {number(v)} h
                   </div>
                 )}
               </div>
@@ -336,7 +337,7 @@ export const StatisticsPage = () => {
             {coverage.map(area => (
               <div key={area.area_index} style={{marginBottom: 10}}>
                 <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4}}>
-                  <span style={{color: colors.text, fontWeight: 500}}>{t('statisticsPage.areaLabel', {index: area.area_index})}</span>
+                  <span style={{color: colors.text, fontWeight: 500}}>{t('mapAreasList.unnamedArea', {index: area.area_index + 1})}</span>
                   <span style={{color: colors.textDim}}>
                     {t('statisticsPage.cellsLabel', {mowed: area.mowed_cells, total: area.total_cells})}
                   </span>

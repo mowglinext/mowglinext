@@ -79,16 +79,35 @@ TEST(TransitTree, RecoveryBacksUpBeforeAnythingElse)
 
   const auto backup = xml.find("<BackUp", round_robin);
   const auto clearing = xml.find("ClearingActions", round_robin);
-  const auto spin = xml.find("<Spin", round_robin);
   const auto wait = xml.find("<Wait", round_robin);
   ASSERT_NE(backup, std::string::npos);
   ASSERT_NE(clearing, std::string::npos);
-  ASSERT_NE(spin, std::string::npos);
   ASSERT_NE(wait, std::string::npos);
 
   EXPECT_LT(backup, clearing) << "BackUp must come before clearing the costmaps";
-  EXPECT_LT(backup, spin) << "BackUp must come before Spin";
   EXPECT_LT(backup, wait) << "BackUp must come before Wait";
+}
+
+// Spin was removed from the recovery RoundRobin in both trees (field bag
+// 2026-09-25, near a hedge): `Running spin` / `spin completed successfully`
+// fired repeatedly right next to a hedge that RPP was simultaneously,
+// correctly refusing to approach — Spin's own collision check did not
+// reliably catch the same soft, sparse-return obstacle RPP did, right after
+// ClearingActions had just wiped the costmap it would have checked against.
+// Spin also cannot reposition the footprint off a lethal cell the way BackUp
+// does, so it bought nothing even when its own check happened to pass.
+TEST(TransitTree, RecoveryHasNoSpin)
+{
+  for (const char* path : {MOWGLI_NAV_TREE_PATH, MOWGLI_TRANSIT_TREE_PATH})
+  {
+    const std::string xml = stripHeaderComment(readFile(path));
+    const auto round_robin = xml.find("RecoveryActions");
+    ASSERT_NE(round_robin, std::string::npos) << path << ": no recovery RoundRobin";
+    EXPECT_EQ(xml.find("<Spin", round_robin), std::string::npos)
+        << path
+        << ": Spin must not be in the recovery RoundRobin (bought no recovery, next to a "
+           "hedge only risk — see the RoundRobin's own doc comment)";
+  }
 }
 
 // Both trees must validate the path as a POINT, the model SmacPlanner2D plans

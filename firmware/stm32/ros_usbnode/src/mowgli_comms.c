@@ -187,6 +187,13 @@ void mowgli_comms_init(void)
     s_crc_error_count   = 0u;
 }
 
+void mowgli_comms_reset_rx(void)
+{
+    /* The caller excludes the USB RX interrupt. Keep handlers and diagnostics;
+     * only bytes belonging to the previous USB session must be discarded. */
+    s_rx_write = 0u;
+}
+
 void mowgli_comms_process_rx(const uint8_t *data, size_t len)
 {
     for (size_t i = 0u; i < len; ++i) {

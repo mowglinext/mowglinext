@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.22.1)
 project(mowgli_coverage)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -145,6 +145,34 @@ if(BUILD_TESTING)
   )
   set_target_properties(test_pivot_joins PROPERTIES
     INSTALL_RPATH "/opt/fields2cover-300/lib"
+  )
+
+  # Operator-chosen start point: where a ring closes, the outermost ring first, the
+  # pinned first sub-path. Real F2C v3, no ROS.
+  ament_add_gtest(test_start_point test/test_start_point.cpp)
+  target_link_libraries(test_start_point
+    ${PROJECT_NAME}_core
+    Fields2Cover::Fields2Cover
+  )
+  set_target_properties(test_start_point PROPERTIES
+    INSTALL_RPATH "/opt/fields2cover-300/lib"
+  )
+
+  # GUI line preview: ring simplification, heading folding, real-planner checks.
+  ament_add_gtest(test_coverage_preview test/test_coverage_preview.cpp)
+  target_link_libraries(test_coverage_preview
+    ${PROJECT_NAME}_core
+    Fields2Cover::Fields2Cover
+  )
+  set_target_properties(test_coverage_preview PROPERTIES
+    INSTALL_RPATH "/opt/fields2cover-300/lib"
+  )
+
+  # Route efficiency, full exported-map geometry and ring-winding preservation.
+  ament_add_gtest(test_coverage_route test/test_coverage_route.cpp)
+  target_link_libraries(test_coverage_route
+    ${PROJECT_NAME}_core
+    Fields2Cover::Fields2Cover
   )
 endif()
 

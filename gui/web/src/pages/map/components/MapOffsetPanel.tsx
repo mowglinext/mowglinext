@@ -6,27 +6,14 @@ import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 interface MapOffsetPanelProps {
     offsetX: number;
     offsetY: number;
-    bearing: number;
     onChangeX: (v: number) => void;
     onChangeY: (v: number) => void;
-    onChangeBearing: (v: number) => void;
 }
 
-export const MapOffsetPanel = ({offsetX, offsetY, bearing, onChangeX, onChangeY, onChangeBearing}: MapOffsetPanelProps) => {
+/// X / Y shift of the map. The title ("Map offset") is the sidebar section header.
+export const MapOffsetPanel = ({offsetX, offsetY, onChangeX, onChangeY}: MapOffsetPanelProps) => {
     const {colors} = useThemeMode();
-    const {t} = useTranslation();
     return (
-    <div>
-        <div style={{
-            fontSize: 12,
-            fontWeight: 600,
-            color: colors.muted,
-            textTransform: 'uppercase' as const,
-            letterSpacing: '0.05em',
-            marginBottom: 6,
-        }}>
-            {t('mapOffsetPanel.mapOffset')}
-        </div>
         <div style={{display: 'flex', gap: 8}}>
             <div style={{flex: 1}}>
                 <label style={{fontSize: 11, color: colors.textSecondary, display: 'block', marginBottom: 2}}>X</label>
@@ -37,18 +24,18 @@ export const MapOffsetPanel = ({offsetX, offsetY, bearing, onChangeX, onChangeY,
                 <InputNumber size="small" value={offsetY} onChange={(v) => onChangeY(v ?? 0)} min={-30} max={30} step={0.01} style={{width: '100%'}}/>
             </div>
         </div>
+    );
+};
 
-        <div style={{
-            fontSize: 12,
-            fontWeight: 600,
-            color: colors.muted,
-            textTransform: 'uppercase' as const,
-            letterSpacing: '0.05em',
-            marginTop: 10,
-            marginBottom: 6,
-        }}>
-            {t('mapOffsetPanel.mapRotation')}
-        </div>
+interface MapRotationPanelProps {
+    bearing: number;
+    onChangeBearing: (v: number) => void;
+}
+
+/// Map rotation (bearing). The title ("Map rotation") is the sidebar section header.
+export const MapRotationPanel = ({bearing, onChangeBearing}: MapRotationPanelProps) => {
+    const {t} = useTranslation();
+    return (
         <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
             <div style={{flex: 1}}>
                 <Slider
@@ -76,6 +63,5 @@ export const MapOffsetPanel = ({offsetX, offsetY, bearing, onChangeX, onChangeY,
                 title={t('mapOffsetPanel.resetToNorthUp')}
             />
         </div>
-    </div>
     );
 };

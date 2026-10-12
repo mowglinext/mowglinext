@@ -143,6 +143,23 @@ uint8_t classify_battery(double percentage, double warn_pct, double error_pct);
 uint8_t classify_temperature(double temp_c, double warn_c, double error_c);
 
 /**
+ * @brief Classifies path-tracking quality from the recent-window lateral-error percentile.
+ *
+ * @param recent_samples  Samples currently in the recent window.
+ * @param min_samples     Samples needed before the percentile is trusted; with fewer the
+ *                        result is OK (a fresh goal must not alarm on its first ticks).
+ * @param percentile_m    Recent-window percentile of |lateral error| in metres.
+ * @param warn_m          Percentile at or above which status becomes WARN.
+ * @param error_m         Percentile at or above which status becomes ERROR.
+ * @return One of DiagLevel::{OK, WARN, ERROR}.
+ */
+uint8_t classify_path_tracking(std::size_t recent_samples,
+                               std::size_t min_samples,
+                               double percentile_m,
+                               double warn_m,
+                               double error_m);
+
+/**
  * @brief Converts a numeric diagnostic level to its human-readable name.
  */
 std::string level_name(uint8_t level);
@@ -164,8 +181,10 @@ std::string level_name(uint8_t level);
  * motor_temp_error_c   double  80.0   °C — ESC/motor ERROR temperature
  * lidar_enabled        bool    false     — gate the LiDAR /scan health check; when
  *                                          false, report OK "LiDAR disabled"
- * path_tracking_warn_m  double 0.10   m  — max |lateral error| above which tracking WARNs
- * path_tracking_error_m double 0.25   m  — max |lateral error| above which tracking ERRORs
+ * path_tracking_warn_m  double 0.20   m  — recent p95 |lateral error| at/above which tracking WARNs
+ * path_tracking_error_m double 0.35   m  — recent p95 |lateral error| at/above which tracking
+ *                                          ERRORs
+ * path_tracking_min_samples int 20       — window samples needed before it is judged
  * path_tracking_idle_sec double 2.0   s  — silence above which no FollowPath goal is
  *                                          assumed to be running (reports OK "idle")
  */
@@ -248,11 +267,14 @@ private:
   double freshness_error_sec_{10.0};
   double battery_warn_pct_{20.0};
   double battery_error_pct_{10.0};
+  double battery_empty_voltage_{24.0};
+  double battery_full_voltage_{28.0};
   double motor_temp_warn_c_{60.0};
   double motor_temp_error_c_{80.0};
   bool lidar_enabled_{false};
-  double path_tracking_warn_m_{0.10};
-  double path_tracking_error_m_{0.25};
+  double path_tracking_warn_m_{0.20};
+  double path_tracking_error_m_{0.35};
+  std::size_t path_tracking_min_samples_{20};
   double path_tracking_idle_sec_{2.0};
 
   // ---- State snapshot -------------------------------------------------------

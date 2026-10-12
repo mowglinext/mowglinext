@@ -20,7 +20,10 @@ test("reset mowing progress confirms, clears only resume data, and reports succe
 
   const mowerCommands: string[] = [];
   await page.route(/\/api\/mowglinext\/call\//, async (route) => {
-    mowerCommands.push(new URL(route.request().url()).pathname);
+    const path = new URL(route.request().url()).pathname;
+    // The map also polls this read-only service. Keep every other service in
+    // the assertion so unexpected start/blade/mutation commands still fail.
+    if (!path.endsWith('/get_lidar_ignore_corridors')) mowerCommands.push(path);
     await route.fulfill({
       status: 200,
       contentType: "application/json",

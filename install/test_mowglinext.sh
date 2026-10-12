@@ -76,7 +76,7 @@ section "end-to-end harness run writes clean Universal GNSS outputs"
 repo_flow="$SANDBOX/repo_flow"
 sandbox_repo "$repo_flow"
 harness_init "$repo_flow"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 
 if harness_run; then
   pass "harness_run succeeds"
@@ -95,7 +95,7 @@ legacy_ublox_key="UBLOX_""DEVICE_SERIAL_STRING="
 
 assert_contains "runtime env keeps GNSS_BACKEND=universal" "GNSS_BACKEND=universal" "$env_content"
 assert_contains "runtime env keeps GNSS_SERIAL_DEVICE=/dev/ttyAMA4" "GNSS_SERIAL_DEVICE=/dev/ttyAMA4" "$env_content"
-assert_contains "runtime env keeps GNSS_NTRIP_ENABLED=true" "GNSS_NTRIP_ENABLED=true" "$env_content"
+assert_contains "runtime env mirrors the seed NTRIP default (GUI-owned)" "GNSS_NTRIP_ENABLED=false" "$env_content"
 assert_contains "runtime env keeps GNSS_RTCM_FORWARDING=true" "GNSS_RTCM_FORWARDING=true" "$env_content"
 assert_not_contains "runtime env omits legacy protocol key" "$legacy_protocol_key" "$env_content"
 assert_not_contains "runtime env omits legacy port key" "$legacy_port_key" "$env_content"
@@ -112,11 +112,7 @@ section "Script syntax validation"
 for script in \
   "$SCRIPT_DIR/mowglinext.sh" \
   "$SCRIPT_DIR/lib/gps.sh" \
-  "$SCRIPT_DIR/lib/serial_probe.sh" \
-  "$SCRIPT_DIR/lib/unicore_config.sh" \
-  "$SCRIPT_DIR/lib/ublox_config.sh" \
   "$SCRIPT_DIR/lib/lidar.sh" \
-  "$SCRIPT_DIR/lib/range.sh" \
   "$SCRIPT_DIR/lib/common.sh" \
   "$SCRIPT_DIR/lib/config.sh" \
   "$SCRIPT_DIR/lib/env.sh" \

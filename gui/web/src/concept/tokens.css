@@ -38,7 +38,9 @@
   /* ink */
   --ink:           #ECFFF4;
   --ink-2:         rgba(236, 255, 244, 0.66);
-  --ink-3:         rgba(236, 255, 244, 0.42);
+  --ink-3:         rgba(236, 255, 244, 0.65);
+  --switch-track: #65786D;
+  --switch-track-hover: #82998C;
   --ink-4:         rgba(236, 255, 244, 0.24);
 
   /* gradients (derive from the colour vars) */

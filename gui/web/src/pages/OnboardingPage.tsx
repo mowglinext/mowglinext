@@ -1,3 +1,4 @@
+import {useSectionFocus} from "../hooks/useSectionFocus.ts";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -31,6 +32,8 @@ import {
 import { RobotComponentEditor } from "../components/RobotComponentEditor.tsx";
 import { FlashBoardComponent } from "../components/FlashBoardComponent.tsx";
 import { MOWER_MODELS } from "../constants/mowerModels.ts";
+import { presetValuesForBackend } from "../constants/hardwareBackends.ts";
+import { useHardwareBackend } from "../hooks/useHardwareBackend.ts";
 import {
     restartGps,
     GPS_RESTART_KEYS,
@@ -143,6 +146,9 @@ type RobotModelStepProps = {
 
 const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
     const { t } = useTranslation();
+    // A model preset describes the machine; keys the hardware backend
+    // overrides (an OpenMower xESC's ticks per metre) take its default.
+    const { defaultOverrides, loading: backendLoading } = useHardwareBackend();
     const { colors } = useThemeMode();
     const selectedModel = values.mower_model || "YardForce500";
 
@@ -150,7 +156,7 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
         onChange("mower_model", model);
         const preset = MOWER_MODELS.find((m) => m.value === model);
         if (preset?.defaults) {
-            for (const [k, v] of Object.entries(preset.defaults)) {
+            for (const [k, v] of Object.entries(presetValuesForBackend(preset.defaults, defaultOverrides))) {
                 onChange(k, v);
             }
         }
@@ -160,10 +166,12 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
     // user who never taps a card leaves with mower_model unset (no preset
     // applied) even though the YardForce 500 card looks selected. We persist the
     // default so the highlighted card and the saved value always agree.
+    // Waits for the backend: applied earlier, the preset would write the
+    // STM32 ticks_per_meter on an OpenMower robot.
     useEffect(() => {
-        if (!values.mower_model) handleModelSelect("YardForce500");
+        if (!backendLoading && !values.mower_model) handleModelSelect("YardForce500");
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [backendLoading]);
 
     return (
         <div style={{ maxWidth: 760, margin: "0 auto" }}>
@@ -175,12 +183,12 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
             </Paragraph>
 
             <Form layout="vertical" style={{ marginBottom: 16 }}>
-                <Form.Item
+                <Form.Item htmlFor="setting-robot_name" data-setting-key="robot_name"
                     label={t("onboardingPage.robotNameLabel")}
                     tooltip={t("onboardingPage.robotNameTooltip")}
                     style={{ marginBottom: 0 }}
                 >
-                    <Input
+                    <Input id="setting-robot_name"
                         value={values.robot_name ?? ""}
                         onChange={(e) => onChange("robot_name", e.target.value)}
                         maxLength={32}
@@ -194,7 +202,7 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                 {MOWER_MODELS.map((model) => {
                     const isSelected = selectedModel === model.value;
                     return (
-                        <Col xs={12} sm={8} md={6} key={model.value}>
+                        <Col xs={24} sm={12} lg={8} key={model.value}>
                             <Card
                                 hoverable
                                 size="small"
@@ -222,11 +230,9 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                                     <Space>
                                         {/* Checkmark is a non-color-only selected affordance. */}
                                         {isSelected && <CheckOutlined style={{ color: colors.primary }} aria-hidden />}
-                                        <Text strong>{t(model.label)}</Text>
-                                        {(model as any).tag && (
-                                            <Tag color="green">{t((model as any).tag)}</Tag>
-                                        )}
+                                        <Text strong style={{wordBreak: "normal", overflowWrap: "normal"}}>{t(model.label)}</Text>
                                     </Space>
+                                    {model.tag && <Tag color="green">{t(model.tag)}</Tag>}
                                     <Text type="secondary" style={{ fontSize: 12 }}>
                                         {t(model.description)}
                                     </Text>
@@ -250,8 +256,8 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                     <Form layout="vertical">
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={t("onboardingPage.wheelRadiusLabel")} tooltip={t("onboardingPage.wheelRadiusTooltip")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-wheel_radius" data-setting-key="wheel_radius" label={t("onboardingPage.wheelRadiusLabel")} tooltip={t("onboardingPage.wheelRadiusTooltip")}>
+                                    <InputNumber id="setting-wheel_radius"
                                         value={values.wheel_radius ?? 0.04475}
                                         onChange={(v) => onChange("wheel_radius", v)}
                                         step={0.001} precision={5} style={{ width: "100%" }}
@@ -260,8 +266,8 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={t("onboardingPage.wheelTrackLabel")} tooltip={t("onboardingPage.wheelTrackTooltip")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-wheel_track" data-setting-key="wheel_track" label={t("onboardingPage.wheelTrackLabel")} tooltip={t("onboardingPage.wheelTrackTooltip")}>
+                                    <InputNumber id="setting-wheel_track"
                                         value={values.wheel_track ?? 0.325}
                                         onChange={(v) => onChange("wheel_track", v)}
                                         step={0.001} precision={3} style={{ width: "100%" }}
@@ -270,8 +276,8 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={t("onboardingPage.bladeRadiusLabel")} tooltip={t("onboardingPage.bladeRadiusTooltip")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-blade_radius" data-setting-key="blade_radius" label={t("onboardingPage.bladeRadiusLabel")} tooltip={t("onboardingPage.bladeRadiusTooltip")}>
+                                    <InputNumber id="setting-blade_radius"
                                         value={values.blade_radius ?? 0.09}
                                         onChange={(v) => onChange("blade_radius", v)}
                                         step={0.01} precision={3} style={{ width: "100%" }}
@@ -432,11 +438,11 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={10}>
-                            <Form.Item
+                            <Form.Item htmlFor="setting-gnss_serial_baud" data-setting-key="gnss_serial_baud"
                                 label={t("onboardingPage.baudLabel")}
                                 tooltip={t("onboardingPage.baudTooltip")}
                             >
-                                <Select
+                                <Select id="setting-gnss_serial_baud"
                                     value={values.gnss_serial_baud ?? 921600}
                                     onChange={handleBaudChange}
                                     options={GNSS_BAUD_OPTIONS.map((option) => ({
@@ -487,8 +493,8 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={12}>
-                                    <Form.Item label={t("onboardingPage.positionRateLabel")}>
-                                        <Select
+                                    <Form.Item htmlFor="setting-gnss_profile_rate_hz" data-setting-key="gnss_profile_rate_hz" label={t("onboardingPage.positionRateLabel")}>
+                                        <Select id="setting-gnss_profile_rate_hz"
                                             value={values.gnss_profile_rate_hz ?? 5}
                                             onChange={(v) => onChange("gnss_profile_rate_hz", v)}
                                             options={GNSS_PROFILE_RATE_OPTIONS.map((option) => ({
@@ -501,8 +507,8 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                             </Row>
                             <Row gutter={16}>
                                 <Col xs={24} sm={10}>
-                                    <Form.Item label={t("onboardingPage.receiverFamilyLabel")}>
-                                        <Select
+                                    <Form.Item htmlFor="setting-gnss_receiver_family" data-setting-key="gnss_receiver_family" label={t("onboardingPage.receiverFamilyLabel")}>
+                                        <Select id="setting-gnss_receiver_family"
                                             value={values.gnss_receiver_family ?? "auto"}
                                             onChange={(v) => onChange("gnss_receiver_family", v)}
                                             options={GNSS_RECEIVER_FAMILY_OPTIONS.map((option) => ({
@@ -645,12 +651,12 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting, 
                 <Form layout="vertical">
                     <Row gutter={16}>
                         <Col xs={12}>
-                            <Form.Item
+                            <Form.Item htmlFor="setting-datum_lat" data-setting-key="datum_lat"
                                 label={t("onboardingPage.latitudeLabel")}
                                 validateStatus={requiredError ? "error" : undefined}
                                 help={requiredError ? t("onboardingPage.datumRequiredHelp") : undefined}
                             >
-                                <InputNumber
+                                <InputNumber id="setting-datum_lat"
                                     value={values.datum_lat ?? 0}
                                     onChange={(v) => onChange("datum_lat", v)}
                                     step={0.000000001} precision={9} style={{ width: "100%" }}
@@ -659,11 +665,11 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting, 
                             </Form.Item>
                         </Col>
                         <Col xs={12}>
-                            <Form.Item
+                            <Form.Item htmlFor="setting-datum_lon" data-setting-key="datum_lon"
                                 label={t("onboardingPage.longitudeLabel")}
                                 validateStatus={requiredError ? "error" : undefined}
                             >
-                                <InputNumber
+                                <InputNumber id="setting-datum_lon"
                                     value={values.datum_lon ?? 0}
                                     onChange={(v) => onChange("datum_lon", v)}
                                     step={0.000000001} precision={9} style={{ width: "100%" }}
@@ -1045,6 +1051,8 @@ const OnboardingWizard: React.FC = () => {
     const deepLinkFirmware = searchParams.get("step") === "firmware";
     const autoFlash = deepLinkFirmware && searchParams.get("flash") === "1";
     const [currentStep, setCurrentStep] = useState(deepLinkFirmware ? STEP_FIRMWARE : 0);
+    const stepRef = useRef<HTMLDivElement>(null);
+    useSectionFocus(stepRef, currentStep);
     const [localValues, setLocalValues] = useState<Record<string, any>>({});
     const [saving, setSaving] = useState(false);
     const gpsRestart = useContainerRestart({
@@ -1149,7 +1157,7 @@ const OnboardingWizard: React.FC = () => {
     const stepItems = STEP_TITLES.map((title, i) => ({ title: t(title), icon: STEP_ICONS[i] }));
 
     const stepContent = (
-        <>
+        <div ref={stepRef} tabIndex={-1} role="region" aria-label={t(STEP_TITLES[currentStep])}>
             {currentStep === 0 && <WelcomeStep onNext={handleNext} />}
             {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
             {currentStep === 2 && <FirmwareStep onNext={handleNext} autoFlash={autoFlash} mowerModel={localValues.mower_model} />}
@@ -1170,7 +1178,7 @@ const OnboardingWizard: React.FC = () => {
             {currentStep === 6 && <SensorStep values={localValues} onChange={handleChange} />}
             {currentStep === 7 && <ImuYawStep values={localValues} onChange={handleChange} />}
             {currentStep === 8 && <ReadinessStep values={localValues} onJumpToStep={jumpToStep} />}
-        </>
+        </div>
     );
 
     // Navigation bar (hidden on welcome, complete, and firmware steps).
@@ -1212,7 +1220,7 @@ const OnboardingWizard: React.FC = () => {
     if (isMobile) {
         const pct = Math.round(((currentStep + 1) / STEP_TITLES.length) * 100);
         return (
-            <Row gutter={[0, 12]}>
+            <Row className="onboarding-page" gutter={[0, 12]}>
                 <Col span={24}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 4 }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1248,7 +1256,7 @@ const OnboardingWizard: React.FC = () => {
     // each of the 8 steps its own labelled row instead of a cramped horizontal
     // strip, which reads far better with this many steps.
     return (
-        <Row gutter={[28, 0]} style={{ minHeight: "calc(100vh - 150px)" }}>
+        <Row className="onboarding-page" gutter={[28, 0]} style={{ minHeight: "calc(100vh - 150px)" }}>
             <Col flex="0 0 220px">
                 <Steps
                     direction="vertical"
@@ -1259,6 +1267,7 @@ const OnboardingWizard: React.FC = () => {
             </Col>
             <Col
                 flex="1 1 0"
+                data-step-scroll
                 style={{
                     minWidth: 0,
                     height: "calc(100vh - 150px)",

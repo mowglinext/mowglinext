@@ -38,6 +38,7 @@
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "geometry_msgs/msg/polygon.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
@@ -46,9 +47,12 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_monitoring/mqtt_bridge_node.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "sensor_msgs/msg/nav_sat_status.hpp"
+#include <arpa/inet.h>
 #include <gtest/gtest.h>
+#include <netinet/in.h>
 
 using mowgli_monitoring::IMqttClient;
 using mowgli_monitoring::MqttBridgeNode;
@@ -207,8 +211,8 @@ TEST(HomeAssistantDiscovery, EmptyPrefixFallsBackToMowgliDataTopics)
 TEST(HomeAssistantDiscovery, AddsExplicitMowButtonForEachCurrentArea)
 {
   const std::vector<MqttBridgeNode::AreaSummary> areas{
-      {2, "Back \"Garden\""},
-      {7, "Side lawn"},
+      {2, "Back \"Garden\"", 3},
+      {7, "Side lawn", 5},
   };
   const std::string json = MqttBridgeNode::serialise_home_assistant_discovery("garden", areas);
 
@@ -243,11 +247,20 @@ TEST_F(HomeAssistantDiscoveryNodeTest, RepublishesDiscoveryWhenHomeAssistantCome
   executor.spin_some();
   executor.remove_node(node);
 
-  ASSERT_EQ(recording->publications.size(), 1U);
+  // <prefix>/host is also published on this same first connect (after discovery,
+  // see on_timer()), but only when the test sandbox happens to have a default
+  // route -- DetectLocalIp's own test covers that environment-dependent contract,
+  // so this only asserts discovery's own shape and that host is never emitted first.
+  ASSERT_FALSE(recording->publications.empty());
   EXPECT_EQ(recording->publications[0].topic, "homeassistant/device/mowglinext_back_garden/config");
   EXPECT_TRUE(recording->publications[0].retained);
   EXPECT_NE(recording->publications[0].payload.find(R"("platform":"lawn_mower")"),
             std::string::npos);
+  ASSERT_LE(recording->publications.size(), 2U);
+  if (recording->publications.size() == 2U)
+  {
+    EXPECT_EQ(recording->publications[1].topic, "back_garden/host");
+  }
 }
 
 // ===========================================================================
@@ -290,8 +303,8 @@ TEST(SerialiseStatus, ProducesExpectedJson)
 TEST(SerialisePower, ProducesExpectedJsonAndDerivesBatteryPercent)
 {
   mowgli_interfaces::msg::Power msg{};
-  msg.v_charge = 16.5f;
-  msg.v_battery = 14.4f;  // midpoint of the 12.0-16.8V 4S LiPo range -> 50.0%
+  msg.v_charge = 28.0f;
+  msg.v_battery = 26.0f;  // midpoint of the configured-default 24-28V range -> 50.0%
   msg.charge_current = 0.75f;
   msg.charger_enabled = true;
   msg.charger_status = "bulk";
@@ -299,18 +312,18 @@ TEST(SerialisePower, ProducesExpectedJsonAndDerivesBatteryPercent)
   const std::string json = MqttBridgeNode::serialise_power(msg);
 
   EXPECT_EQ(json,
-            "{\"v_charge\":16.500,\"v_battery\":14.400,\"charge_current\":0.750,"
+            "{\"v_charge\":28.000,\"v_battery\":26.000,\"charge_current\":0.750,"
             "\"charger_enabled\":true,\"charger_status\":\"bulk\",\"battery_pct\":50.0}");
 }
 
 TEST(SerialisePower, ClampsBatteryPercentToZeroAndHundred)
 {
   mowgli_interfaces::msg::Power below{};
-  below.v_battery = 5.0f;  // below kVEmpty (12.0)
+  below.v_battery = 20.0f;  // below the default empty voltage (24.0)
   EXPECT_NE(MqttBridgeNode::serialise_power(below).find("\"battery_pct\":0.0"), std::string::npos);
 
   mowgli_interfaces::msg::Power above{};
-  above.v_battery = 20.0f;  // above kVFull (16.8)
+  above.v_battery = 30.0f;  // above the default full voltage (28.0)
   EXPECT_NE(MqttBridgeNode::serialise_power(above).find("\"battery_pct\":100.0"),
             std::string::npos);
 }
@@ -546,18 +559,21 @@ TEST(SerialiseAreas, ProducesExpectedJsonWithRawIndices)
   // 0..N-1 position — a navigation-only area between two mowing areas would
   // leave a gap here, matching what GetMowingArea/StartInArea expect.
   std::vector<MqttBridgeNode::AreaSummary> areas{
-      {0, "Front Lawn"},
-      {2, "Back Garden"},
+      {0, "Front Lawn", 11},
+      {2, "Back Garden", 7},
   };
 
+  // "id" is the stable MapArea.id: it does not move when other areas are edited.
   EXPECT_EQ(MqttBridgeNode::serialise_areas(areas),
-            "[{\"index\":0,\"name\":\"Front Lawn\"},{\"index\":2,\"name\":\"Back Garden\"}]");
+            "[{\"index\":0,\"name\":\"Front Lawn\",\"id\":11},"
+            "{\"index\":2,\"name\":\"Back Garden\",\"id\":7}]");
 }
 
 TEST(SerialiseAreas, EscapesAreaName)
 {
-  std::vector<MqttBridgeNode::AreaSummary> areas{{1, R"(Side "yard")"}};
-  EXPECT_EQ(MqttBridgeNode::serialise_areas(areas), R"([{"index":1,"name":"Side \"yard\""}])");
+  std::vector<MqttBridgeNode::AreaSummary> areas{{1, R"(Side "yard")", 4}};
+  EXPECT_EQ(MqttBridgeNode::serialise_areas(areas),
+            R"([{"index":1,"name":"Side \"yard\"","id":4}])");
 }
 
 // ===========================================================================
@@ -843,4 +859,64 @@ TEST(SerialiseAreaBoundaries, NoDockKeyWhenUnset)
   const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> none{};
   EXPECT_EQ(MqttBridgeNode::serialise_area_boundaries(none, 0.0, 0.0, std::nullopt),
             "{\"datum_lat\":0.00000000,\"datum_lon\":0.00000000,\"areas\":[]}");
+}
+
+// ===========================================================================
+// <prefix>/host (the bridge's own LAN IP, for a consumer to link to the GUI)
+// ===========================================================================
+
+TEST(SerialiseHost, ProducesExpectedJson)
+{
+  EXPECT_EQ(MqttBridgeNode::serialise_host("192.168.12.10"), "{\"ip\":\"192.168.12.10\"}");
+}
+
+TEST(SerialiseHost, EmptyIpIsAnEmptyString)
+{
+  EXPECT_EQ(MqttBridgeNode::serialise_host(""), "{\"ip\":\"\"}");
+}
+
+TEST(DetectLocalIp, ReturnsEmptyOrAValidIPv4Address)
+{
+  // No network access is guaranteed in a test/CI sandbox, so this only checks
+  // the CONTRACT (empty, or a real dotted-quad) rather than a specific value.
+  const std::string ip = MqttBridgeNode::detect_local_ip();
+  if (ip.empty())
+  {
+    SUCCEED();
+    return;
+  }
+  in_addr addr{};
+  EXPECT_EQ(inet_pton(AF_INET, ip.c_str(), &addr), 1) << "not a valid IPv4 address: " << ip;
+}
+
+// ===========================================================================
+// <prefix>/coverage_path (the planned coverage path, /coverage/full_plan)
+// ===========================================================================
+
+namespace
+{
+nav_msgs::msg::Path path_with_points(const std::vector<std::pair<double, double>>& points)
+{
+  nav_msgs::msg::Path path{};
+  for (const auto& [x, y] : points)
+  {
+    geometry_msgs::msg::PoseStamped pose{};
+    pose.pose.position.x = x;
+    pose.pose.position.y = y;
+    path.poses.push_back(pose);
+  }
+  return path;
+}
+}  // namespace
+
+TEST(SerialiseCoveragePath, EmptyPathIsEmptyPointsArray)
+{
+  EXPECT_EQ(MqttBridgeNode::serialise_coverage_path(nav_msgs::msg::Path{}), "{\"points\":[]}");
+}
+
+TEST(SerialiseCoveragePath, ProducesExpectedJson)
+{
+  const auto path = path_with_points({{1.0, 2.0}, {3.5, -4.25}, {0.0, 0.0}});
+  EXPECT_EQ(MqttBridgeNode::serialise_coverage_path(path),
+            "{\"points\":[[1.000,2.000],[3.500,-4.250],[0.000,0.000]]}");
 }

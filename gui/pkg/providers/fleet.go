@@ -52,6 +52,9 @@ type FleetRobot struct {
 	Online   bool                       `json:"online"`
 	LastSeen *time.Time                 `json:"last_seen,omitempty"`
 	Topics   map[string]json.RawMessage `json:"topics"`
+	// Age of each cached topic in seconds — consumers that place a robot on
+	// the lawn (peer feed, yield rule) must ignore stale samples.
+	TopicAgeS map[string]float64 `json:"topic_age_s"`
 }
 
 // FleetProvider owns the peer registry and the per-peer mirrors.
@@ -65,6 +68,7 @@ type FleetProvider struct {
 	peers   map[string]FleetPeer
 	clients map[string]*peerClient
 	self    *peerCache
+	feed    *peerFeed
 }
 
 // NewFleetProvider loads the registry, starts a mirror per peer and starts
@@ -78,6 +82,7 @@ func NewFleetProvider(db types.IDBProvider, ros types.IRosProvider) *FleetProvid
 		peers:   map[string]FleetPeer{},
 		clients: map[string]*peerClient{},
 		self:    newPeerCache(),
+		feed:    newPeerFeed(),
 	}
 	if _, err := EnsureRobotID(db); err != nil {
 		logrus.Errorf("fleet: cannot persist robot id: %v", err)
@@ -87,6 +92,7 @@ func NewFleetProvider(db types.IDBProvider, ros types.IRosProvider) *FleetProvid
 		f.startClient(p)
 	}
 	f.subscribeSelf()
+	f.startPeerFeed()
 	return f
 }
 
@@ -103,8 +109,9 @@ func (f *FleetProvider) subscribeSelf() {
 	}
 }
 
-// Close stops every peer mirror. The registry stays persisted.
+// Close stops the peer feed and every peer mirror. The registry stays persisted.
 func (f *FleetProvider) Close() {
+	f.stopPeerFeed()
 	f.mu.Lock()
 	clients := f.clients
 	f.clients = map[string]*peerClient{}
@@ -342,13 +349,14 @@ func (f *FleetProvider) Robots() ([]FleetRobot, error) {
 		return nil, err
 	}
 	now := f.now()
-	topics, seen, _ := f.self.snapshot(now)
+	topics, ages, seen, _ := f.self.snapshot(now)
 	rows := []FleetRobot{{
-		Identity: self,
-		Self:     true,
-		Online:   true,
-		LastSeen: timePtr(seen),
-		Topics:   topics,
+		Identity:  self,
+		Self:      true,
+		Online:    true,
+		LastSeen:  timePtr(seen),
+		Topics:    topics,
+		TopicAgeS: ages,
 	}}
 	f.mu.Lock()
 	peers := f.sortedPeersLocked()
@@ -359,21 +367,27 @@ func (f *FleetProvider) Robots() ([]FleetRobot, error) {
 	f.mu.Unlock()
 	for _, p := range peers {
 		row := FleetRobot{
-			Identity: RobotIdentity{ID: p.ID, Name: p.Name, APIVersion: p.APIVersion},
-			Address:  p.Address,
-			Topics:   map[string]json.RawMessage{},
+			Identity:  RobotIdentity{ID: p.ID, Name: p.Name, APIVersion: p.APIVersion},
+			Address:   p.Address,
+			Topics:    map[string]json.RawMessage{},
+			TopicAgeS: map[string]float64{},
 		}
 		if c := clients[p.ID]; c != nil {
-			row.Topics, row.LastSeen, row.Online = snapshotRow(c.cache, now)
+			// The live identity carries the peer's datum (and a renamed robot's
+			// new name); the registry only knows what it learnt at add time.
+			if id, ok := c.cache.identitySnapshot(); ok && id.ID == p.ID {
+				row.Identity = id
+			}
+			row.Topics, row.TopicAgeS, row.LastSeen, row.Online = snapshotRow(c.cache, now)
 		}
 		rows = append(rows, row)
 	}
 	return rows, nil
 }
 
-func snapshotRow(c *peerCache, now time.Time) (map[string]json.RawMessage, *time.Time, bool) {
-	topics, seen, online := c.snapshot(now)
-	return topics, timePtr(seen), online
+func snapshotRow(c *peerCache, now time.Time) (map[string]json.RawMessage, map[string]float64, *time.Time, bool) {
+	topics, ages, seen, online := c.snapshot(now)
+	return topics, ages, timePtr(seen), online
 }
 
 func timePtr(t time.Time) *time.Time {

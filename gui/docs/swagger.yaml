@@ -348,8 +348,15 @@ definitions:
     type: object
   api.Schedule:
     properties:
-      area:
+      areaId:
+        description: |-
+          AreaID is the STABLE map area id (MapArea.id) this schedule mows; 0 means
+          every area (a plain Start). The scheduler resolves it to the current
+          positional index when the schedule fires. AreaName is a display snapshot
+          so the GUI and MQTT consumers can label it, even if the area was removed.
         type: integer
+      areaName:
+        type: string
       createdAt:
         type: string
       daysOfWeek:
@@ -507,8 +514,18 @@ definitions:
     properties:
       area:
         $ref: '#/definitions/geometry.Polygon'
+      has_mow_angle:
+        type: boolean
+      has_ring_direction:
+        type: boolean
+      has_start_point:
+        type: boolean
+      id:
+        type: integer
       is_navigation_area:
         type: boolean
+      mow_angle_deg:
+        type: number
       name:
         type: string
       obstacle_info:
@@ -519,6 +536,12 @@ definitions:
         items:
           $ref: '#/definitions/geometry.Polygon'
         type: array
+      ring_direction:
+        type: integer
+      start_x:
+        type: number
+      start_y:
+        type: number
     type: object
   mowgli.MapObstacleInfo:
     properties:
@@ -678,6 +701,13 @@ definitions:
           FirmwareSource is the GUI dropdown selector: "custom" compiles from
           source (the expert path), "prebuilt" (or empty, for older payloads)
           flashes the tested prebuilt binary.
+        type: string
+      firmwareTarget:
+        description: |-
+          FirmwareTarget is an exact PlatformIO/release-manifest environment for
+          boards with multiple firmware variants. Empty preserves legacy routing.
+        type: string
+      firmwareTargetOrigin:
         type: string
       imuOnboardInclinationThreshold:
         type: integer
@@ -1351,6 +1381,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
       summary: create a schedule
       tags:
       - schedules
@@ -1406,6 +1440,10 @@ paths:
             $ref: '#/definitions/api.ErrorResponse'
         "404":
           description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
           schema:
             $ref: '#/definitions/api.ErrorResponse'
       summary: update a schedule

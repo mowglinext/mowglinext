@@ -23,7 +23,7 @@ jobs:
   # firmware (what CI builds / what prebuilt binaries ship) and the GUI-rendered
   # firmware can never silently drift apart on a safety value.
   defaults-parity:
-    name: Board defaults, blade reversal and sensor recovery
+    name: Board defaults, blade reversal, sensor recovery and runtime parameters
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -41,6 +41,18 @@ jobs:
           python3 firmware/scripts/test_soft_i2c_recovery.py
           python3 firmware/scripts/test_onboard_i2c_recovery.py
 
+      - name: Test runtime parameters and their flash persistence
+        run: python3 firmware/scripts/test_fw_params.py
+
+      - name: Test F401 USB recovery and stale command isolation
+        run: python3 firmware/scripts/test_usb_recovery.py
+
+      - name: Test charger state machine
+        run: python3 firmware/scripts/test_charger.py
+
+      - name: Validate published firmware permutations and release builds
+        run: python3 firmware/scripts/test_package_release.py
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -48,6 +60,8 @@ jobs:
         environment:
           - Yardforce500
           - Yardforce500B
+          - BiltemaRM1000
+          - BiltemaRM1000_MPU6050_Yaw180
           - Yardforce500_COASTDOWN_VALIDATION
     steps:
       - uses: actions/checkout@v6
@@ -84,7 +98,7 @@ jobs:
         run: pip install platformio
 
       - name: Run native firmware unit tests
-        run: pio test -e native
+        run: pio test -e native -e native_rm1000_yaw180
         working-directory: firmware/stm32/ros_usbnode
 
   # ─── Publish prebuilt binaries on a version tag ────────────────────────────
@@ -131,6 +145,7 @@ jobs:
         run: |
           pio run -e Yardforce500
           pio run -e Yardforce500B
+          pio run -e BiltemaRM1000
 
       - name: Package binaries + manifest
         env:

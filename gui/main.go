@@ -39,6 +39,12 @@ func main() {
 	irriSenseProvider := providers.NewIrriSenseProvider(dbProvider)
 	remoteAccessProvider := providers.NewRemoteAccessProvider(dbProvider, dockerProvider)
 	providers.NewSchedulerProvider(rosProvider, dbProvider, irriSenseProvider)
+	// Mirrors the schedules onto the same external broker mqtt_bridge_node uses
+	// (docs/MQTT_CONTROL.md), gated by the same mqtt_enabled switch; inert when
+	// MQTT is off. Deliberately independent of the "system.mqtt.enabled"/
+	// NewMqttProvider above -- that is the GUI's own embedded broker for an
+	// unrelated purpose, not the robot's documented external MQTT contract.
+	api.NewScheduleMqttBridge(dbProvider)
 	notificationProvider := providers.NewNotificationProvider(dbProvider)
 	if ros, ok := rosProvider.(*providers.RosProvider); ok {
 		ros.AttachNotifier(notificationProvider)

@@ -23,8 +23,15 @@ step()  { echo -e "\n${CYAN}${BOLD}── $* ──${NC}"; }
 ask()   { echo -en "${BOLD}$1${NC} "; }
 
 # Prompt with default value. Sets REPLY global.
+# Every prompt carries its default as $2. In non-interactive mode (explicit
+# --non-interactive, or no controlling terminal) that default IS the answer,
+# so a flow never blocks on read and every unset choice is the documented one.
 prompt() {
   local answer
+  if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then
+    REPLY="${2:-}"
+    return 0
+  fi
   echo -en "${BOLD}$1 [${2:-}]:${NC} " >/dev/tty
   read -r answer </dev/tty
   echo >/dev/tty
@@ -34,6 +41,9 @@ prompt() {
 # Yes/no prompt. Usage: if confirm "Continue?"; then ...
 confirm() {
   local answer
+  if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then
+    return 0
+  fi
   echo -en "${BOLD}$1 [Y/n]:${NC} " >/dev/tty
   read -r answer </dev/tty
   echo >/dev/tty

@@ -9,6 +9,62 @@
 > uses no TF. Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
+## Route-ordering update (2026-10-05)
+
+Regenerated from the current planner and test registration; the older line-number map
+below predates this change.
+
+- `coverage_planning.cpp:1791`: `buildContinuousSubPaths` keeps
+  outer perimeter loops in their original order, groups the remaining obstacle loops
+  by proximity, then chooses swaths by the feasible connector's length. Pivot heading
+  changes are charged as equivalent arc length at the configured radius; blade-off
+  relocations receive a full-circle penalty. These are ordering heuristics, not Nav2
+  route lengths or execution-time estimates. Every original mowing primitive remains.
+  The seed stays the first generated swath. The same boundary, hole, minimum-radius,
+  pivot-sweep and optional swath-turn-envelope checks still decide each driven join.
+- `coverage_planning.cpp:2323`:
+  `orderSubPathsForMinimalTransit` now receives `preserve_direction_count` (default 1).
+  The builder protects **every** ring-bearing sub-path, including obstacle loops and
+  mixed ring/swath paths, from reversal; all may still move in the execution sequence.
+- `test/test_coverage_route.cpp`: Isabey route-length/transit bounds, all original
+  swaths/rings retained inside the cut, sampled segment containment and obstacle checks,
+  exact deterministic replay, wider-turn efficiency, and protected ring winding.
+- `test/fixtures/isabey.hpp`: float32 map-frame geometry from the supplied 2026-10-05
+  export; raw outer ring plus ten active obstacles, no pending proposals or dock data.
+- **Line preview (GUI map editor "Mowing lines").** `~/preview_coverage`
+  (`mowgli_interfaces/srv/PreviewCoverage.srv`, `CoverageServer::previewCoverage`) is a
+  read-only dry run of the SAME `buildCellFromGoal` + `planBoustrophedon` calls a real
+  plan makes, taking the swath angle, cross-hatch flag and perimeter winding from the
+  request (`ring_direction < 0` = the live parameter) instead of the saved settings. The
+  geometry knobs come from the one `readLivePlanParams()` that `planCoverage` also uses,
+  so the preview cannot drift from a real plan; a `plan_mutex_` keeps the two from
+  running Fields2Cover side by side. It returns rings and swaths in DRIVE ORDER
+  (`summarisePlanForPreview` simplifies the 0.10 m-dense rings with Douglas-Peucker at
+  2 cm and folds the heading into [0, 180)); turn-around connectors are deliberately not
+  part of it. Nothing is queued and the robot does not move. GUI route `preview_coverage`,
+  overlay `useCoveragePreview` + `CoveragePreviewPanel`. Test `test/test_coverage_preview.cpp`.
+- **Operator-chosen start point.** `planBoustrophedon(..., start_hint)` (optional, default none =
+  bit-for-bit the historical plan) and `PlanCoverage` goal `has_start_point` / `start_x` / `start_y`.
+  The route always starts on the OUTERMOST headland ring: `pickRingClosure` (public, pure) closes
+  every ring on the straight side nearest the hint, at the nearest point kept `max(0.5 m, 2.5 ×
+  min_turn_radius)` clear of both corners (a short side closes at its midpoint) — never on a
+  corner, which is what the field report of 2026-07 (ring-to-ring stalls) forbids; with no hint it
+  is the midpoint of the longest side, exactly as before. With a hint the largest loop of the
+  outermost pass (the perimeter, not a ring round a hole) is moved to `plan.rings[0]`, and
+  `buildContinuousSubPaths(..., pin_first_subpath)` → `orderSubPathsForMinimalTransit(...,
+  pin_first_seed)` stops the seed search moving the first sub-path. Rings off = no ring to start on:
+  the hint is ignored and `PreviewCoverage.start_adjustable` is false. The preview answers with the
+  real `start_x/y` (the snapped point). Tests `test/test_start_point.cpp`.
+- CMake registers `test_coverage_planning`, `test_pivot_joins`, `test_start_point`, `test_coverage_preview`
+  and `test_coverage_route`. Run with `colcon test --packages-select mowgli_coverage
+  --return-code-on-test-failure`. Local standalone replay against real F2C 3.0.0 passes
+  93 tests; it does not exercise the ROS action server or the physical robot.
+
+Narrow-apron tests isolate adjacent row pairs: a full route can now avoid a tight
+omega turn by selecting a wider row. A hole likewise need not force a split if a
+safe continuous connector exists; containment, rather than a minimum split count,
+is the safety acceptance condition. Existing footprint/pivot gates remain tested.
+
 ## Where to look
 
 | Task | Start here |
@@ -28,7 +84,7 @@
 | Which boundary the connectors are bounded by | `coverage_server.cpp` (`connector_clearance_boundary` → `safe_boundary` → raw; always ring 0, never moved by `connector_max_headland_passes`), definitions `coverage_planning.hpp` `BoustrophedonPlan` field docs, computed `coverage_planning.cpp` `ringCenterlineBoundary` lambda |
 | Limiting how many headland passes a turn may cross (`connector_max_headland_passes`, issue #497) | `coverage_planning.cpp` `ringCenterlineBoundary`/`swath_turn_envelope` block populates a SEPARATE envelope (ring `(n_rings − limit)`'s centerline) used ONLY for mainland swath-to-swath joins in `buildContinuousSubPaths`'s `swath_turn_boundary` param — `connector_clearance_boundary` itself never moves (the #388 clamp, the verify, and every ring-involving join stay on it — a maintainer review on PR #598 caught an earlier revision that moved `connector_clearance_boundary` directly and silently clamped ring 0's own poses onto a different ring); declared/read live `coverage_server.cpp` next to `connector_turn_radius`; tests `test_coverage_planning.cpp` `ConnectorMaxHeadlandPassesLimitsSwathTurnEnvelopeDepth`, `SwathTurnEnvelopeNeverRelocatesRingZero`, `ShippedGeometryTightSwathLimitFragmentsUTurns`, `ShippedGeometryP4OfFiveKeepsTurnAroundArcs` |
 | Out-of-bounds poses at convex ring corners (#388) | `coverage_planning.cpp:1275-1335` (`kClearanceClampMarginM` 2 cm, `clampInsideRing`), applied `:1701-1707` |
-| Connector outcome stats / "fallback rate" + "split rate" WARN (#499) | `coverage_planning.hpp` (`ConnectorStats`: arc / straight_kept / pivot / split partition `attempted`), `coverage_server.cpp` (`kConnectorSplitWarnPct` 25 % — severity follows the SPLIT share since pivot joins, `MOWGLI_CONNECTOR_STATS_FMT`) |
+| Connector outcome stats / "fallback rate" + "split rate" WARN (#499) | `coverage_planning.hpp` (`ConnectorStats`: arc / straight_kept / pivot / split partition `attempted`; pure `connectorSplitRateWarns` holds the 25 % split-share WARN contract, false for zero attempts), `coverage_server.cpp` (`MOWGLI_CONNECTOR_STATS_FMT`; severity follows the SPLIT share since pivot joins), `test_coverage_planning.cpp` (`RecordedArea1ShippedGeometryBoundsBladeOffExecutorTransits`: shipped 5-pass / 0.16 m op-width / 0.18 m headland / 0.20 m connector-min-radius plan has <=4 splits, <=20 % split ratio, and <=5 returned sub-paths) |
 | **Pivot joins** (a row-end join that fits no arc stays blade-on as a short straight with in-place pivot corners instead of splitting — field 2026-09-21, 128 sub-paths on AUTO rings) | `coverage_planning.cpp` `planPivotJoin` (length ≤ `kSegmentTransitGapM`, `allInside` + `clearOfHoles`, `pivotSweepFits` at each corner), `appendPivotJoin` (emits the corner twins), `enforcePivotCornerContract` (after `clampInsideRing`: only planner twins survive as zero-length steps); limits `PivotJoinLimits` in `coverage_planning.hpp`; server builds them from the RAW goal polygons + params `pivot_sweep_radius` / `boundary_soft_margin`; tests `test/test_pivot_joins.cpp` |
 | **Pivot corner contract** (planner ↔ FTC) | `ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp` (`kPivotCornerMaxStepM` 1e-4, `kPivotCornerMinTurnRad` 15°); pose yaws via `pathHeadings` (`coverage_planning.cpp`, used by `coverage_server.cpp` for every result pose); consumer `mowgli_nav2_plugins/ftc_pivot.hpp` |
 | Rings off + drawn obstacles whose `obstacle_margin` growth overlaps each other / the recorded line (invalid cell → GEOS TopologyException → SIGSEGV in F2C's swath clip) | `coverage_planning.cpp` `cellsAreValid` / `shellMinusHoles` (only on the rings-off, zero-offset branch, only when invalid; NOT `buffer(0)`, which keeps the overlap of two holes as an island) |
@@ -52,6 +108,7 @@
 | `ros2/src/mowgli_coverage/src/coverage_planning.cpp` | ~2.1k | F2C pipeline (`planBoustrophedon`), Dubins connectors, fillets, sub-path builder, ring sanitization/buffering |
 | `ros2/src/mowgli_coverage/src/main.cpp` | 15 | `rclcpp::spin` of `CoverageServer` |
 | `ros2/src/mowgli_coverage/test/test_coverage_planning.cpp` | ~2.3k | 45 gtests against the REAL F2C v3 library (no ROS) — see Build, test, run |
+| `ros2/src/mowgli_coverage/test/test_coverage_preview.cpp` | ~270 | 12 gtests: `summarisePlanForPreview` (ring simplification stays within tolerance and keeps the winding, heading folded into [0, 180), swath order, counts) plus real-planner checks (requested heading, auto, perpendicular, CW/CCW, alternating swaths) |
 | `ros2/src/mowgli_coverage/test/test_pivot_joins.cpp` | ~480 | 17 gtests: pivot joins (synthetic two-swath joins, whole-field rectangles at -1/AUTO/1 rings, drawn obstacle), corner contract, `pivotSweepFits`, `pathHeadings`, rings-off invalid-cell repair |
 
 No README, launch file, or config YAML lives in this package. Node defaults live in

@@ -9,7 +9,7 @@
     freshness_warn_sec: 5.0    # seconds
     freshness_error_sec: 10.0  # seconds
 
-    # Battery thresholds (derived from 4S LiPo voltage range 12.0–16.8 V).
+    # Battery thresholds (estimate uses configured battery_empty/full_voltage).
     battery_warn_pct: 20.0   # %  — below this → WARN
     battery_error_pct: 10.0  # %  — below this → ERROR
 
@@ -17,14 +17,17 @@
     motor_temp_warn_c: 60.0   # °C — above this → WARN
     motor_temp_error_c: 80.0  # °C — above this → ERROR
 
-    # Path-tracking error thresholds, applied to the MAXIMUM |lateral error|
-    # seen during the FollowPath goal that is currently running.
-    # Reference points: FTC tracks coverage paths to 8-16 mm, and adjacent F2C
-    # swaths deliberately overlap by `swath_overlap` (0.02 m) — so a sustained
-    # lateral error above ~0.10 m is already leaving an uncut band, while 0.25 m
-    # is half a swath off and means the controller is not tracking at all.
-    path_tracking_warn_m: 0.10   # m — above this → WARN
-    path_tracking_error_m: 0.25  # m — above this → ERROR
+    # Path-tracking error thresholds, applied to the 95th percentile of the
+    # |lateral error| over the most recent ~300 samples (~30 s) of the running
+    # FollowPath goal — NOT the goal-wide maximum, which one deliberate
+    # obstacle-avoidance excursion sets for the rest of the goal. The max, mean
+    # and RMS are still published as values. Measured on two field logs: p95 of
+    # a healthy mow is ~0.14 m (p50 0.04), so 0.20 m means a lasting detour or
+    # real mistracking, and 0.35 m is a large part of a swath off.
+    path_tracking_warn_m: 0.20   # m — p95 at or above this → WARN
+    path_tracking_error_m: 0.35  # m — p95 at or above this → ERROR
+    # Samples in the window before it is judged (a new goal starts empty).
+    path_tracking_min_samples: 20
     # Silence longer than this means no FollowPath goal is running (parked,
     # docked, planning). Reported as OK with the previous goal's summary — a
     # docked robot is not a fault.

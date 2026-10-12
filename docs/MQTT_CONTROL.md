@@ -11,6 +11,14 @@ internal REST/WebSocket API on `:4006` (unauthenticated, unversioned, an impleme
 the bundled frontend) and not the GUI's own separate embedded MQTT broker
 (`gui/pkg/providers/mqtt.go`, a different prefix/payload shape used by the web UI).
 
+**One exception to "mqtt_bridge_node publishes everything":** the `<prefix>/schedules*` topics
+(below) are published by the **GUI backend itself** (`gui/pkg/api/schedule_mqtt.go`), not
+`mqtt_bridge_node` — mowing schedules live only in the GUI's own database, with no ROS2
+representation at all, so there is nothing for a ROS2 node to relay. The GUI backend connects to
+the *same* broker, using the *same* `mqtt_enabled`/`mqtt_host`/`mqtt_port`/`mqtt_username`/
+`mqtt_password`/`mqtt_topic_prefix` settings, so from an external tool's point of view it is one
+contract on one broker — which process publishes a given topic is an implementation detail.
+
 ## Enabling it
 
 1. Set the broker connection in the GUI: **Settings → MQTT / Home Assistant**. Toggling it on
@@ -79,11 +87,16 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/pose` | out | no | `/odometry/filtered_map` (fused localizer pose, **map frame**) | latest value, at most `publish_rate` Hz |
 | `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | latest value, at most `publish_rate` Hz |
 | `<prefix>/area_boundary` | out | yes | `/map_server_node/get_mowing_area` (polled) | on change, polled every 10 s |
+| `<prefix>/coverage_path` | out | yes | `/coverage/full_plan` (latched) | on change |
 | `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
 | `<prefix>/available` | out | yes | connection state (LWT) | on connect/disconnect |
+| `<prefix>/host` | out | yes | the bridge's own LAN IP | once, on the first successful connect |
 | `<prefix>/areas` | out | yes | `/map_server_node/get_mowing_area` (polled) | ~every 10s |
 | `<prefix>/command` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/high_level_control` | — |
 | `<prefix>/start_area` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/start_in_area` | — |
+| `<prefix>/schedules` | out | yes | the GUI's schedule database (not ROS2 — see above) | on any create/update/delete |
+| `<prefix>/schedules/set` | **in** | no (retained deliveries rejected) | → GUI schedule database | — |
+| `<prefix>/schedules/delete` | **in** | no (retained deliveries rejected) | → GUI schedule database | — |
 
 ### `<prefix>/high_level_status` — the primary "is it mowing?" topic
 
@@ -163,18 +176,20 @@ state and every `sub_state_name`.
 
 ```json
 {
-  "v_charge": 16.500,
-  "v_battery": 15.800,
+  "v_charge": 28.000,
+  "v_battery": 26.000,
   "charge_current": 0.000,
   "charger_enabled": false,
   "charger_status": "idle",
-  "battery_pct": 90.9
+  "battery_pct": 50.0
 }
 ```
 
-`battery_pct` is derived from `v_battery` over the 12.0–16.8 V 4S LiPo range and clamped to
-[0, 100] — the same formula `diagnostics_node` uses. `<prefix>/high_level_status.battery_percent`
-is the BT's own estimate and is the one the GUI dashboard shows; the two normally agree closely.
+`battery_pct` is derived from `v_battery` using the configured `battery_empty_voltage` and
+`battery_full_voltage` endpoints, then clamped to [0, 100]. The default 24–28 V range gives
+50% at 26 V, as shown above. `diagnostics_node` uses the same endpoints and formula.
+`<prefix>/high_level_status.battery_percent` is the BT's filtered voltage estimate and is
+the one the GUI dashboard shows; transient values can differ because of that filtering.
 
 ### `<prefix>/emergency`
 
@@ -278,6 +293,42 @@ at the dock) and it carries a heading, which `<prefix>/gps` does not. It needs n
 placed on the `area_boundary` geometry. Not retained; a localizer that has not converged yet (non-
 finite values) publishes nothing.
 
+### `<prefix>/host`
+
+```json
+{"ip": "192.168.12.10"}
+```
+
+The mower's own LAN IP address, so an external tool can link to its GUI (`http://<ip>:4006`)
+without the operator having to enter it by hand. Detected once at startup (the same address a UDP
+socket would use to reach the internet, via a routing-table lookup that sends nothing and needs no
+actual connectivity — works offline) and published once, retained, on the first successful connect
+(a bridge reconnect does not republish it — the broker already retains the value). **Omitted
+entirely** when the robot has no default route at all (a fully static, isolated LAN) — treat a
+missing/absent topic, not an empty `ip`, as "not published"; an empty string is not sent either
+way, since the bridge skips publishing rather than sending one.
+
+### `<prefix>/coverage_path`
+
+```json
+{"points": [[1.234, -0.567], [2.5, -0.567], [2.5, 3.0], "..."]}
+```
+
+The current **planned** coverage path — headland rings, then serpentine swaths, concatenated — in
+the same map frame (metres, no datum needed) as `<prefix>/area_boundary`'s polygons, `<prefix>/pose`
+and `<prefix>/gps`'s projected position, so it overlays directly on them. Relay of
+`/coverage/full_plan` (`nav_msgs/Path`, latched by `behavior_tree_node` right after a
+`plan_coverage` call succeeds) — the same source the robot's own GUI map view draws, retained on
+this topic too so a client that connects mid-mow still gets the current plan immediately, and only
+republished when the plan actually changes (a new area, or a resumed/replanned run).
+
+**Gap caveat**: this is a raw concatenation of segments, not the joined `drivable_subpaths` the
+robot actually drives — consecutive points can be far apart where the plan jumps between segments
+that are not driven directly across (e.g. between a ring and the first swath, or across a
+hole/obstacle). Split the polyline wherever the distance between consecutive points exceeds a
+threshold (the GUI itself uses 0.75 m, `gui/web/src/pages/MapPage.tsx`'s `SUBPATH_GAP_M`) before
+drawing it, rather than connecting every point in order.
+
 ### `<prefix>/diagnostics`
 
 ```json
@@ -335,8 +386,8 @@ MQTT to do either.
 
 ```json
 [
-  {"index": 0, "name": "Front Lawn"},
-  {"index": 2, "name": "Back Garden"}
+  {"index": 0, "name": "Front Lawn", "id": 11},
+  {"index": 2, "name": "Back Garden", "id": 7}
 ]
 ```
 
@@ -345,15 +396,17 @@ until the service reports `success=false` — the same pattern the GUI backend's
 uses) and republished, retained, only when the resulting list actually changed. Navigation-only
 areas (keepout/boundary zones that are never mowed) are excluded.
 
-**⚠️ Interim, index-based contract — expect this to change.** `index` is the *raw*, purely
-*positional* index `map_server_node` uses internally — recorded areas have **no stable ID** yet
-([mowglinext#637](https://github.com/mowglinext/mowglinext/issues/637) tracks adding one). The
+`id` is the area's stable `MapArea.id` ([mowglinext#637](https://github.com/mowglinext/mowglinext/issues/637)):
+it survives edits, reorders and deletes of *other* areas, so it is what `<prefix>/schedules`
+references (`areaId`). `0` means the id has not been assigned yet.
+
+**⚠️ `<prefix>/start_area` is still index-based.** `index` is the *raw*, purely
+*positional* index `map_server_node` uses internally. The
 GUI's own area editor rebuilds its entire area list on any single-area add/edit/delete, which can
 reassign *every* area's index in the process — so **do not cache an index across a session**.
 Re-fetch `<prefix>/areas` and re-resolve the target by `name` before sending `<prefix>/start_area`
-each time. Once #637 lands, this topic is expected to grow a stable `id` field and
-`<prefix>/start_area` an id-based counterpart; this index-only shape is a stepping stone, not the
-final contract — don't build a permanent integration against it without accounting for that.
+each time. `<prefix>/start_area` is expected to grow an id-based counterpart; until then, don't
+build a permanent integration against the index without accounting for that.
 
 ### `<prefix>/start_area` (inbound — start mowing a specific area)
 
@@ -367,6 +420,80 @@ unrecognised/out-of-range payload is logged and dropped, and the command is drop
 `/behavior_tree_node/start_in_area` isn't available. Poll `<prefix>/high_level_status` afterwards
 to confirm it took effect. Subject to the same index-staleness caveat as `<prefix>/areas` above —
 targeting a stale index can start the wrong area.
+
+### `<prefix>/schedules` (mowing schedules)
+
+Published by the **GUI backend**, not `mqtt_bridge_node` — see the note at the top of this document.
+Retained, republished on every create/update/delete (from MQTT *or* the GUI's own Schedules page —
+both go through the exact same validation and storage, so this is never stale relative to the GUI).
+
+```json
+{
+  "schedules": [
+    {
+      "id": "1758901234567890000",
+      "areaId": 7,
+      "areaName": "Back Garden",
+      "time": "06:00",
+      "daysOfWeek": [1, 2, 3, 4, 5],
+      "enabled": true,
+      "createdAt": "2026-09-20T08:00:00Z",
+      "lastRun": "2026-09-26T06:00:03Z",
+      "lastSkipReason": "soil wet",
+      "lastSkippedAt": "2026-09-25T06:00:00Z"
+    }
+  ]
+}
+```
+
+`id` is an opaque string (a nanosecond timestamp today — treat it as opaque, not as a sortable
+time). `areaId` is the stable area `id` from `<prefix>/areas` that this schedule mows; `0` (or
+absent) means **all areas**, which is a plain Start. `areaName` is a display snapshot taken when the
+schedule was saved, kept so the label survives an area being removed. The scheduler resolves
+`areaId` to the area's *current* index each time the schedule fires (it asks the map server, so
+an edit to the area list cannot retarget it); if the area no longer exists the run is skipped and
+`lastSkipReason` says so. One schedule mows one area or all of them. `daysOfWeek` is
+`0`=Sunday…`6`=Saturday. `lastRun` and
+`lastSkipReason`/`lastSkippedAt` are written by the scheduler itself (the latter when IrriSense
+reports wet soil at a due run) — a client may read them but writing them via `schedules/set` (below)
+has no effect; they are always carried over from the existing schedule.
+
+A due, enabled schedule triggers autonomous mowing the same way pressing "Start" in the GUI does
+(after the same emergency/already-mowing/soil checks) — an open, reachable broker can therefore
+create a schedule that starts the mower unattended, exactly as consequential as `<prefix>/command`'s
+`COMMAND_START` (see the security note near the top of this document).
+
+### `<prefix>/schedules/set` (inbound — create or update a schedule)
+
+```json
+{"areaId": 7, "areaName": "Back Garden", "time": "06:00", "daysOfWeek": [1, 2, 3, 4, 5], "enabled": true}
+```
+
+Omit `id` (or send an `id` that does not exist yet) to **create** a schedule — the server assigns
+the `id`. Send an existing `id` to **update** that schedule; `createdAt`/`lastRun`/
+`lastSkipReason`/`lastSkippedAt` are preserved from the existing record regardless of what the
+payload contains. `time` must be `HH:mm` and `daysOfWeek` must have at least one entry in `0`–`6`.
+
+On an update, an **omitted `areaId` means "unchanged"** (so an integration written before per-area
+schedules, which only flips `enabled`, does not reset a per-area schedule to all areas); an explicit
+`areaId` always wins, and `0` is an explicit "all areas". An omitted `areaName` is kept only while
+`areaId` is the same area. On a create, omitting `areaId` means all areas. Prefer echoing the full
+record you read from `<prefix>/schedules` when updating. `time` and `daysOfWeek` are still required
+on every update (the same validation `POST/PUT /schedules` applies).
+
+**Enabled schedules may not overlap:** two
+enabled schedules sharing a weekday must start at least 60 minutes apart (the distance wraps
+across midnight and the end of the week); a disabled schedule is never checked, so disabling is
+always accepted. `POST/PUT /schedules` answers an overlap with `409`; here, as for any invalid
+payload, it is logged and dropped with no
+error published back to MQTT (there is no ack/result topic here either — subscribe to
+`<prefix>/schedules` to see whether it took effect).
+
+### `<prefix>/schedules/delete` (inbound — delete a schedule)
+
+Payload is the schedule's `id`, either as plain text (`1758901234567890000`) or as
+`{"id": "1758901234567890000"}`. A payload with no id (including `{}`) is ignored rather than
+deleting everything.
 
 ## Parameters
 

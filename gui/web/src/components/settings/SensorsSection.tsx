@@ -32,6 +32,7 @@ export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
                         </Paragraph>
                     </div>
                     <Switch
+                        aria-label={t("settingsSensors.lidarSensor")}
                         checked={values.lidar_enabled ?? false}
                         onChange={handleLidarToggle}
                     />
@@ -54,8 +55,8 @@ export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
                         <Col xs={24} sm={8}>
-                            <Form.Item label={t("settingsSensors.calibrationSamples")} tooltip={t("settingsSensors.calibrationSamplesTooltip")}>
-                                <InputNumber
+                            <Form.Item htmlFor="setting-imu_cal_samples" data-setting-key="imu_cal_samples" label={t("settingsSensors.calibrationSamples")} tooltip={t("settingsSensors.calibrationSamplesTooltip")}>
+                                <InputNumber aria-label={t("settingsSensors.calibrationSamples")} aria-description={t("settingsSensors.calibrationSamplesTooltip")}  id="setting-imu_cal_samples"
                                     value={values.imu_cal_samples}
                                     onChange={(v) => onChange("imu_cal_samples", v)}
                                     min={50} max={2000} step={50} precision={0}
@@ -64,8 +65,8 @@ export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={8}>
-                            <Form.Item label={t("settingsSensors.restWindowBeforeCal")} tooltip={t("settingsSensors.restWindowBeforeCalTooltip")}>
-                                <InputNumber
+                            <Form.Item htmlFor="setting-imu_cal_auto_rest_sec" data-setting-key="imu_cal_auto_rest_sec" label={t("settingsSensors.restWindowBeforeCal")} tooltip={t("settingsSensors.restWindowBeforeCalTooltip")}>
+                                <InputNumber aria-label={t("settingsSensors.restWindowBeforeCal") + ", s"} aria-description={t("settingsSensors.restWindowBeforeCalTooltip")}  id="setting-imu_cal_auto_rest_sec"
                                     value={values.imu_cal_auto_rest_sec}
                                     onChange={(v) => onChange("imu_cal_auto_rest_sec", v)}
                                     min={1} max={120} step={1} precision={0}
@@ -74,8 +75,8 @@ export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={8}>
-                            <Form.Item label={t("settingsSensors.periodicRecalInterval")} tooltip={t("settingsSensors.periodicRecalIntervalTooltip")}>
-                                <InputNumber
+                            <Form.Item htmlFor="setting-imu_cal_periodic_recal_sec" data-setting-key="imu_cal_periodic_recal_sec" label={t("settingsSensors.periodicRecalInterval")} tooltip={t("settingsSensors.periodicRecalIntervalTooltip")}>
+                                <InputNumber aria-label={t("settingsSensors.periodicRecalInterval") + ", s"} aria-description={t("settingsSensors.periodicRecalIntervalTooltip")}  id="setting-imu_cal_periodic_recal_sec"
                                     value={values.imu_cal_periodic_recal_sec}
                                     onChange={(v) => onChange("imu_cal_periodic_recal_sec", v)}
                                     min={0} max={3600} step={30} precision={0}

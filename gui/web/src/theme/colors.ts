@@ -31,6 +31,8 @@ export const PALETTE = {
   amber:        '#F3A85C',
   rose:         '#FF6B7A',
   ink:          '#ECFFF4',
+  switchTrack:  '#65786D',
+  switchTrackHover: '#82998C',
 } as const;
 
 /** RGB triple of the warm paper-green ink — the basis for every ink opacity stop. */
@@ -177,9 +179,8 @@ const DARK: ColorTokens = {
   success: PALETTE.lime,
   text: PALETTE.ink,                // papier-vert chaud
   textSecondary: inkAlpha(0.66),
-  // 0.42 only hit ~4.0:1 on card backgrounds (WCAG AA needs 4.5:1 for text,
-  // and this token is used for real caption text, not just icons).
-  muted: inkAlpha(0.50),
+  // Captions need contrast headroom over the decorative gradient surfaces.
+  muted: inkAlpha(0.65),
   border: inkAlpha(0.07),
   borderSubtle: inkAlpha(0.04),
   glassBackground: 'rgba(11, 24, 20, 0.78)',
@@ -195,9 +196,8 @@ const DARK: ColorTokens = {
   amberSoft: 'rgba(243, 168, 92, 0.14)',
   pink: PALETTE.rose,
   textDim: inkAlpha(0.62),
-  // 0.40 only hit ~3.7:1 on card backgrounds (WCAG AA needs 4.5:1); bumped
-  // to 0.48 (~4.8:1), still visibly lighter than textDim (0.62).
-  textMuted: inkAlpha(0.48),
+  // Keep helper copy readable even on elevated form surfaces.
+  textMuted: inkAlpha(0.65),
 
   mint: PALETTE.mint,
   emeraldDeep: PALETTE.emeraldDeep,
@@ -242,7 +242,9 @@ export function cssVars(): Record<string, string> {
     '--rose': PALETTE.rose,
     '--ink': PALETTE.ink,
     '--ink-2': inkAlpha(0.66),
-    '--ink-3': inkAlpha(0.42),
+    '--ink-3': inkAlpha(0.65),
+    '--switch-track': PALETTE.switchTrack,
+    '--switch-track-hover': PALETTE.switchTrackHover,
     '--ink-4': inkAlpha(0.24),
   };
 }

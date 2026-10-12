@@ -4,6 +4,7 @@ import { useWS } from "../../../hooks/useWS.ts";
 import { useHighLevelStatus } from "../../../hooks/useHighLevelStatus.ts";
 import {
     AbsolutePose,
+    CoveragePlanPreview,
     LaserScan,
     Map as MapType,
     ObstacleArray,
@@ -61,7 +62,7 @@ export function useMapStreams({
     robotPoseRef,
 }: UseMapStreamsOptions) {
     const [map, setMap] = useState<MapType | undefined>(undefined);
-    const [path, setPath] = useState<Path | undefined>(undefined);
+    const [path, setPath] = useState<CoveragePlanPreview | undefined>(undefined);
     const [plan, setPlan] = useState<Path | undefined>(undefined);
     const [lidarCollection, setLidarCollection] = useState<GeoJSON.FeatureCollection>({
         type: "FeatureCollection",
@@ -155,7 +156,7 @@ export function useMapStreams({
         () => {
         },
         (e) => {
-            const parse = (e as any) as Path;
+            const parse = (e as any) as CoveragePlanPreview;
             setPath(parse);
         }
     );
@@ -334,7 +335,21 @@ export function useMapStreams({
         } catch { /* layer may not exist yet */ }
     }, [lidarCollection]);
 
-    // Start/stop streams when editMap changes
+    // Start/stop the view-mode streams. Triggered by EITHER editMap leaving
+    // edit mode OR the datum becoming available — deliberately ONE effect,
+    // not two: this used to be split into this editMap-keyed effect plus a
+    // second, separately-declared datum-keyed effect below that ALSO called
+    // start() on the exact same 8 streams. Both fired around the same time
+    // on a normal page load (editMap starts false, datum usually arrives a
+    // moment later), so every stream got torn down and re-subscribed twice
+    // in quick succession — exactly the "re-subscribe storm" the datum-only
+    // dependency comment below was already written to avoid once, just
+    // reopened via a second effect duplicating the same start() calls.
+    // Field-reported 2026-09-28: the "map" topic (large — full areas +
+    // corridors + dock) pushing two ~1.35 MB updates within half a second,
+    // slowing the browser down. Keyed on the datum VALUES only (not the
+    // whole `settings` object, which gets a new identity on every poll) —
+    // see the removed effect's own comment for why that distinction matters.
     useEffect(() => {
         if (editMap) {
             mapStream.stop();
@@ -350,24 +365,25 @@ export function useMapStreams({
             setPath(undefined);
             setPlan(undefined);
             setLidarCollection({ type: "FeatureCollection", features: [] });
-        } else {
-            if (
-                settings["datum_lon"] == undefined ||
-                settings["datum_lat"] == undefined
-            ) {
-                return;
-            }
-            highLevelStatus.start("/api/mowglinext/subscribe/highLevelStatus");
-            poseStream.start("/api/mowglinext/subscribe/pose");
-            mapStream.start("/api/mowglinext/subscribe/map");
-            pathStream.start("/api/mowglinext/subscribe/path");
-            planStream.start("/api/mowglinext/subscribe/plan");
-            lidarStream.start("/api/mowglinext/subscribe/lidar");
-            obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
-            mowProgress.stream.start("/api/mowglinext/subscribe/mowProgress");
-            lidarMap.stream.start("/api/mowglinext/subscribe/lidarMap");
+            return;
         }
-    }, [editMap]);
+        if (
+            settings["datum_lon"] == undefined ||
+            settings["datum_lat"] == undefined
+        ) {
+            return;
+        }
+        highLevelStatus.start("/api/mowglinext/subscribe/highLevelStatus");
+        poseStream.start("/api/mowglinext/subscribe/pose");
+        mapStream.start("/api/mowglinext/subscribe/map");
+        pathStream.start("/api/mowglinext/subscribe/path");
+        planStream.start("/api/mowglinext/subscribe/plan");
+        lidarStream.start("/api/mowglinext/subscribe/lidar");
+        obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
+        mowProgress.stream.start("/api/mowglinext/subscribe/mowProgress");
+        lidarMap.stream.start("/api/mowglinext/subscribe/lidarMap");
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [editMap, settings["datum_lon"], settings["datum_lat"]]);
 
     // Start joy + recording trajectory streams on RECORDING state
     useEffect(() => {
@@ -409,31 +425,6 @@ export function useMapStreams({
     useEffect(() => {
         return () => clearTimeout(joyStopTimerRef.current);
     }, []);
-
-    // Start streams once the datum is available. Keyed on the datum values
-    // ONLY — not the whole `settings` object. The previous `[settings]`
-    // dependency re-ran on every settings-object identity change (each poll /
-    // partial merge creates a new object), tearing down and re-subscribing all
-    // eight streams each time. That re-subscribe storm churned the backend
-    // RosSubscribers and left components briefly without data ("stale").
-    useEffect(() => {
-        if (
-            settings["datum_lon"] == undefined ||
-            settings["datum_lat"] == undefined
-        ) {
-            return;
-        }
-        highLevelStatus.start("/api/mowglinext/subscribe/highLevelStatus");
-        poseStream.start("/api/mowglinext/subscribe/pose");
-        mapStream.start("/api/mowglinext/subscribe/map");
-        pathStream.start("/api/mowglinext/subscribe/path");
-        planStream.start("/api/mowglinext/subscribe/plan");
-        lidarStream.start("/api/mowglinext/subscribe/lidar");
-        obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
-        mowProgress.stream.start("/api/mowglinext/subscribe/mowProgress");
-            lidarMap.stream.start("/api/mowglinext/subscribe/lidarMap");
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [settings["datum_lon"], settings["datum_lat"]]);
 
     // Cleanup all streams on unmount
     useEffect(() => {

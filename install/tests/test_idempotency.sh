@@ -34,7 +34,7 @@ sandbox_repo "$SANDBOX_REPO"
 section "First installer run"
 
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 if harness_run; then
   pass "first run: harness_run"
 else
@@ -54,7 +54,7 @@ section "Second installer run, same preset"
 sleep 1
 
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 if harness_run; then
   pass "second run: harness_run"
 else

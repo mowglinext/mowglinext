@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// absentMeansTrue reads a tri-state request flag whose omission comes from a
+// client that predates it. See the firmware flags on /v1/plan and /v1/apply.
+func absentMeansTrue(flag *bool) bool {
+	return flag == nil || *flag
+}
 func Client(socket string) *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
@@ -44,7 +49,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		if data, err := os.ReadFile(filepath.Join(config.StateDir, "agent-active.json")); err == nil {
 			_ = json.Unmarshal(data, &selection)
 		}
-		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": PublicState(m.Snapshot()), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services", "release-compose", "service-version-overrides", "custom-images", "external-images"}, "trusted_repositories": config.Trusted}, nil)
+		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "build_id": BuildID, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": PublicState(m.Snapshot()), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services", "release-compose", "service-version-overrides", "custom-images", "external-images", "firmware-protocol-change", "preexisting-health"}, "trusted_repositories": config.Trusted}, nil)
 	})
 	mux.HandleFunc("POST /v1/policy", func(w http.ResponseWriter, r *http.Request) {
 		var p Policy
@@ -61,11 +66,16 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		w.WriteHeader(202)
 	})
 	mux.HandleFunc("POST /v1/plan", func(w http.ResponseWriter, r *http.Request) {
+		// Both firmware flags are tri-state: a GUI that knows about them sends
+		// an explicit value and does its own gating; a GUI that predates them
+		// sends nothing and MUST NOT be locked out — it is exactly the GUI that
+		// can only get the matching firmware from the image it is installing.
 		var req struct {
-			Deployment string            `json:"deployment"`
-			Pinned     bool              `json:"pinned"`
-			GUI        string            `json:"gui_deployment"`
-			Components map[string]string `json:"component_deployments"`
+			Deployment                  string            `json:"deployment"`
+			Pinned                      bool              `json:"pinned"`
+			GUI                         string            `json:"gui_deployment"`
+			Components                  map[string]string `json:"component_deployments"`
+			AllowFirmwareProtocolChange *bool             `json:"allow_firmware_protocol_change"`
 		}
 		if decode(w, r, &req) {
 			if req.Components == nil {
@@ -78,7 +88,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 				}
 				req.Components["gui"] = req.GUI
 			}
-			p, e := m.MakeServicePlan(r.Context(), req.Deployment, req.Pinned, req.Components)
+			p, e := m.MakeServicePlan(r.Context(), req.Deployment, req.Pinned, req.Components, PlanOptions{AllowFirmwareProtocolChange: absentMeansTrue(req.AllowFirmwareProtocolChange)})
 			respond(w, PublicPlan(p), e)
 		}
 	})
@@ -94,11 +104,13 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 	})
 	mux.HandleFunc("POST /v1/apply", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Plan               string `json:"plan"`
-			CustomAcknowledged bool   `json:"custom_acknowledged"`
+			Plan                          string `json:"plan"`
+			CustomAcknowledged            bool   `json:"custom_acknowledged"`
+			FirmwareProtocolAcknowledged  *bool  `json:"firmware_protocol_acknowledged"`
+			PreexistingHealthAcknowledged bool   `json:"preexisting_health_acknowledged"`
 		}
 		if decode(w, r, &req) {
-			id, e := m.StartAcknowledged(req.Plan, req.CustomAcknowledged)
+			id, e := m.StartWithAcknowledgements(req.Plan, req.CustomAcknowledged, absentMeansTrue(req.FirmwareProtocolAcknowledged), req.PreexistingHealthAcknowledged)
 			respond(w, map[string]string{"job": id}, e)
 		}
 	})
@@ -183,6 +195,8 @@ func Serve(config HostConfig) error {
 		}
 	}
 	m.Recover()
+	// No-op while the recovery above runs; that job prunes when it finishes.
+	m.Prune()
 	go func() {
 		tick := time.NewTicker(15 * time.Second)
 		defer tick.Stop()

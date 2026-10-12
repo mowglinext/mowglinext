@@ -8,6 +8,8 @@ export interface CoordinatorSettings {
     yield_distance_m: number;
     resume_distance_m: number;
     completed_ttl_h: number;
+    yield_max_hold_s: number;
+    yield_cooldown_s: number;
 }
 
 export interface CoordinatorStatus {
@@ -20,9 +22,20 @@ export interface CoordinatorStatus {
     last_error?: string;
 }
 
+export interface PeerFeedStatus {
+    active: boolean;
+    peers_published: number;
+    rate_hz: number;
+    publishes: number;
+    last_publish_at?: string;
+    last_error?: string;
+}
+
 export interface FleetCoordination {
     settings: CoordinatorSettings;
     status: CoordinatorStatus;
+    /** The /fleet/peers → costmap feed; live whenever a peer is registered. */
+    peer_feed: PeerFeedStatus;
 }
 
 export interface MapPushPeerResult {
@@ -39,8 +52,9 @@ export interface MapPushResult {
 }
 
 const EMPTY_COORDINATION: FleetCoordination = {
-    settings: {enabled: false, yield_distance_m: 3, resume_distance_m: 5, completed_ttl_h: 12},
+    settings: {enabled: false, yield_distance_m: 3, resume_distance_m: 5, completed_ttl_h: 12, yield_max_hold_s: 45, yield_cooldown_s: 20},
     status: {enabled: false, excluded_areas: [], preferred_start: -1, yielded: false, completed_areas: []},
+    peer_feed: {active: false, peers_published: 0, rate_hz: 5, publishes: 0},
 };
 
 /** The e2e mock answers `{}` for unknown routes: fall back to the defaults. */
@@ -50,6 +64,7 @@ export function parseCoordination(payload: unknown): FleetCoordination {
     return {
         settings: {...EMPTY_COORDINATION.settings, ...p.settings},
         status: {...EMPTY_COORDINATION.status, ...p.status},
+        peer_feed: {...EMPTY_COORDINATION.peer_feed, ...(p.peer_feed ?? {})},
     };
 }
 

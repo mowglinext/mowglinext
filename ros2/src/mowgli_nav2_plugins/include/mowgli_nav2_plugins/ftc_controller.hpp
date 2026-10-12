@@ -96,6 +96,8 @@ public:
   void setSpeedLimit(const double& speed_limit, const bool& percentage) override;
 
 private:
+  friend struct FTCSpeedLimitTestAccess;
+
   // ── State machine ─────────────────────────────────────────────────────────
 
   enum class PlannerState
@@ -814,13 +816,16 @@ private:
     return config_.obstacle_body_half_width + std::max(0.0, config_.obstacle_clearance_margin);
   }
 
-  /// Speed limit applied via setSpeedLimit(). -1.0 means "no external limit".
-  double speed_limit_{-1.0};
+  /// Configured maximum bounded by Nav2's external linear speed limit.
+  double maxLinearSpeed() const;
+
+  /// Protect the external limit and its configured percentage reference.
+  mutable std::mutex speed_limit_mutex_;
+  /// Nav2 uses percentages in [0, 100] and zero for "no external limit".
+  double speed_limit_{0.0};
   bool speed_limit_is_percentage_{false};
   // Configured max linear speed, captured at configure() and on every
-  // max_cmd_vel_speed parameter change. setSpeedLimit() restores
-  // config_.max_cmd_vel_speed to this value when the limit is cleared
-  // (speed_limit < 0); without it a once-applied limit stuck forever.
+  // max_cmd_vel_speed parameter change. External limits never overwrite it.
   double base_max_cmd_vel_speed_{2.0};
 };
 

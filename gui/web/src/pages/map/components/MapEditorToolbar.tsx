@@ -13,6 +13,7 @@ import {
     FormOutlined,
     PlusOutlined,
     AimOutlined,
+    HistoryOutlined,
 } from "@ant-design/icons";
 import AsyncButton from "../../../components/AsyncButton.tsx";
 import {ShapePickerDropdown} from "./ShapePickerDropdown.tsx";
@@ -31,6 +32,7 @@ interface MapEditorToolbarProps {
     onDrawPolygon?: () => void;
     onDrawShape?: (shape: ShapeType, sizeMeters: number) => void;
     onDrawEmoji?: (emoji: string, sizeMeters: number) => void;
+    onDrawLidarCorridor?: () => void;
     onTrash?: () => void;
     onCombine?: () => void;
     onSubtract?: () => void;
@@ -38,6 +40,7 @@ interface MapEditorToolbarProps {
     onEditSelectedFeature?: () => void;
     onPlaceDock?: () => void;
     dockPlacementMode?: boolean;
+    onRestoreBackup?: () => void;
 }
 
 interface ToolButtonProps {
@@ -89,8 +92,8 @@ const ToolButton = ({icon, tooltip, onClick, disabled, danger, primary, glow}: T
 export const MapEditorToolbar = ({
     hasUnsavedChanges, historyIndex, editHistoryLength,
     selectedFeatureCount, onSaveMap, onCancel, onUndo, onRedo,
-    onDrawPolygon, onDrawShape, onDrawEmoji, onTrash, onCombine, onSubtract, onSplit, onEditSelectedFeature,
-    onPlaceDock, dockPlacementMode,
+    onDrawPolygon, onDrawShape, onDrawEmoji, onDrawLidarCorridor, onTrash, onCombine, onSubtract, onSplit, onEditSelectedFeature,
+    onPlaceDock, dockPlacementMode, onRestoreBackup,
 }: MapEditorToolbarProps) => {
     const {colors, displayMode} = useThemeMode();
     const {t} = useTranslation();
@@ -144,6 +147,9 @@ export const MapEditorToolbar = ({
             </div>
         </Tooltip>
         <ToolButton icon={<CloseOutlined/>} tooltip={t('mapEditorToolbar.cancelEditing')} onClick={onCancel}/>
+        {onRestoreBackup && (
+            <ToolButton icon={<HistoryOutlined/>} tooltip={t('mapEditorToolbar.restoreBackup')} onClick={onRestoreBackup}/>
+        )}
 
         <div style={{height: 1, background: colors.borderSubtle, margin: '2px 4px'}}/>
 
@@ -155,7 +161,7 @@ export const MapEditorToolbar = ({
 
         {/* Drawing tools */}
         <ToolButton icon={<BorderOutlined/>} tooltip={t('mapEditorToolbar.drawPolygon')} onClick={onDrawPolygon}/>
-        <ShapePickerDropdown onDrawShape={onDrawShape} onDrawEmoji={onDrawEmoji} placement="bottomLeft">
+        <ShapePickerDropdown onDrawShape={onDrawShape} onDrawEmoji={onDrawEmoji} onDrawLidarCorridor={onDrawLidarCorridor} placement="bottomLeft">
             <Tooltip title={t('mapEditorToolbar.addShape')} placement="right">
                 <button
                     aria-label={t('mapEditorToolbar.addShape')}

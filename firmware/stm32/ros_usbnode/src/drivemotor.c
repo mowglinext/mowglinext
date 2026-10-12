@@ -21,11 +21,14 @@
 
 #include "adc.h"
 #include "board.h"
+#include "actuator_authorization.h"
 #include "emergency.h"
 #include "main.h"
+#include "pac5210_drive_request.h"
 #include "ros/ros_custom/cpp_main.h"
 
 #include "drivemotor.h"
+#include "fw_param_catalog.h"
 
 /******************************************************************************
  * Module Preprocessor Constants
@@ -33,19 +36,18 @@
 #define DRIVEMOTOR_LENGTH_INIT_MSG 38
 #define DRIVEMOTOR_LENGTH_RQST_MSG 12
 #define DRIVEMOTOR_LENGTH_RECEIVED_MSG 20
+#define DRIVEMOTOR_FEEDBACK_TIMEOUT_MS 75u
 
-/* Kinematic ceiling on per-frame encoder motion. cmd_vel is capped to MAX_MPS,
+/* Kinematic ceiling on per-frame encoder motion. cmd_vel is capped to the runtime max_mps,
  * so in one ~20 ms controller frame a wheel advances at most
- *   MAX_MPS * ticks_per_meter * 0.02 s  ticks.
+ *   max_mps * ticks_per_meter * 0.02 s  ticks.
  * The x3 factor is slack for frame-time jitter; a "reset" whose remainder
  * exceeds this is not real motion (a glitch) and is dropped, not accumulated.
  */
 #define DRIVEMOTOR_MIN_TICKS_PER_M 50.0f
 #define DRIVEMOTOR_MAX_TICKS_PER_M 5000.0f
-/* Floor for the runtime max-speed cap. The CEILING is the compile-time MAX_MPS
- * (board.h / template) — the runtime value (PKT_ID_SET_KINEMATICS) can only
- * LOWER the motion cap, never raise it above the compiled safety limit. */
-#define DRIVEMOTOR_MIN_MAX_MPS 0.1f
+/* The runtime max-speed cap (fw_params, protocol v7) is clamped to the absolute
+ * envelope of fw_param_catalog.h; the compile-time MAX_MPS is its default. */
 /******************************************************************************
  * Module Preprocessor Macros
  *******************************************************************************/
@@ -98,6 +100,12 @@ DMA_HandleTypeDef hdma_usart2_tx;
 
 static DRIVEMOTOR_STATE_e drivemotor_eState = DRIVEMOTOR_INIT_1;
 static rx_status_e drivemotors_eRxFlag = RX_WAIT;
+static volatile uint32_t drivemotor_last_valid_tick = 0u;
+static volatile uint32_t drivemotor_fault_sequence = 0u;
+static volatile uint8_t drivemotor_seen_valid = 0u;
+static volatile uint8_t drivemotor_last_error = 0u;
+static volatile uint8_t drivemotor_host_zero_intent = 1u;
+static volatile uint32_t drivemotor_authorization_epoch = 0u;
 
 static DRIVEMOTORS_data_t drivemotor_psReceivedData = {0};
 static uint8_t drivemotor_pu8RqstMessage[DRIVEMOTOR_LENGTH_RQST_MSG] = {
@@ -135,9 +143,8 @@ uint8_t left_power = 0;
 
 uint32_t DRIVEMOTOR_u32ErrorCnt = 0;
 volatile float g_ticks_per_meter = (float)TICKS_PER_M;
-/* Runtime max wheel-speed cap. Seeded with the compile-time MAX_MPS, which
- * therefore remains the power-on fallback AND the hard ceiling the wire cannot
- * exceed (see drivemotor_clamp_max_mps). Retunable via PKT_ID_SET_KINEMATICS. */
+/* Runtime max wheel-speed cap. Seeded with the compile-time MAX_MPS; init_ROS()
+ * then applies the persisted value (fw_params). See drivemotor_clamp_max_mps. */
 volatile float g_max_mps = (float)MAX_MPS;
 
 static float drivemotor_clamp_ticks_per_meter(float ticks_per_meter) {
@@ -153,18 +160,17 @@ static float drivemotor_clamp_ticks_per_meter(float ticks_per_meter) {
   return ticks_per_meter;
 }
 
-/* Clamp the runtime max-speed cap to (0, compile-time MAX_MPS]. An invalid or
- * unset value falls back to the compiled MAX_MPS; a value above it is capped to
- * it, so the wire can never raise the motion cap past the compiled ceiling. */
+/* Clamp the runtime max-speed cap to the absolute envelope. An invalid value
+ * falls back to the compiled MAX_MPS. */
 static float drivemotor_clamp_max_mps(float max_mps) {
   if (!isfinite(max_mps) || max_mps <= 0.0f) {
     return (float)MAX_MPS;
   }
-  if (max_mps < DRIVEMOTOR_MIN_MAX_MPS) {
-    return DRIVEMOTOR_MIN_MAX_MPS;
+  if (max_mps < FW_ENVELOPE_MAX_MPS_MIN) {
+    return FW_ENVELOPE_MAX_MPS_MIN;
   }
-  if (max_mps > (float)MAX_MPS) {
-    return (float)MAX_MPS;
+  if (max_mps > FW_ENVELOPE_MAX_MPS_MAX) {
+    return FW_ENVELOPE_MAX_MPS_MAX;
   }
   return max_mps;
 }
@@ -341,13 +347,21 @@ void DRIVEMOTOR_App_10ms(void) {
 
   case DRIVEMOTOR_RUN:
 
+    if (!DRIVEMOTOR_FeedbackHealthy()) {
+      MOTORLINK_ForceInhibit();
+    }
+
     /* prepare to receive the message before to launch the command */
     HAL_UART_Receive_DMA(&DRIVEMOTORS_USART_Handler,
                          (uint8_t *)&drivemotor_psReceivedData,
                          sizeof(DRIVEMOTORS_data_t));
 
-    drivemotor_prepareMsg(left_speed_req, right_speed_req, left_dir_req,
-                          right_dir_req);
+    if (MOTORLINK_OutputInhibited() || !DRIVEMOTOR_FeedbackHealthy()) {
+      drivemotor_prepareMsg(0, 0, 0, 0);
+    } else {
+      drivemotor_prepareMsg(left_speed_req, right_speed_req, left_dir_req,
+                            right_dir_req);
+    }
     /* error State*/
     if (drivemotor_psReceivedData.u8_error != 0) {
       drivemotor_prepareMsg(0, 0, 0, 0);
@@ -383,9 +397,25 @@ void DRIVEMOTOR_App_10ms(void) {
       }
     }
 
-    HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
-                          (uint8_t *)drivemotor_pu8RqstMessage,
-                          DRIVEMOTOR_LENGTH_RQST_MSG);
+    /* Recheck the actuator gates atomically at the UART DMA handoff. A USB,
+     * emergency or feedback ISR may have changed them after the earlier
+     * request calculation. */
+    {
+      const uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      if (Emergency_State() != 0u ||
+          main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
+          MOTORLINK_OutputInhibited() || !DRIVEMOTOR_FeedbackHealthy() ||
+          drivemotor_host_zero_intent != 0u ||
+          !ActuatorAuthorization_DriveRequestIsCurrent(
+              drivemotor_authorization_epoch)) {
+        drivemotor_prepareMsg(0, 0, 0, 0);
+      }
+      HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
+                            (uint8_t *)drivemotor_pu8RqstMessage,
+                            DRIVEMOTOR_LENGTH_RQST_MSG);
+      __set_PRIMASK(primask);
+    }
 
     break;
 
@@ -401,7 +431,9 @@ void DRIVEMOTOR_App_10ms(void) {
      * fires mid-reverse, hard-stop the wheels this frame and abandon the
      * maneuver back to RUN (where cmd_vel drive is itself gated to 0 by the
      * hard_stop path in cpp_main). */
-    if (Emergency_State() != 0) {
+    if (Emergency_State() != 0 || MOTORLINK_OutputInhibited() ||
+        !DRIVEMOTOR_FeedbackHealthy()) {
+      MOTORLINK_ForceInhibit();
       drivemotor_prepareMsg(0, 0, 0, 0);
       drivemotor_eState = DRIVEMOTOR_RUN;
     } else {
@@ -411,9 +443,23 @@ void DRIVEMOTOR_App_10ms(void) {
         l_u32Timestamp = HAL_GetTick();
       }
     }
-    HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
-                          (uint8_t *)drivemotor_pu8RqstMessage,
-                          DRIVEMOTOR_LENGTH_RQST_MSG);
+    {
+      const uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      if (Emergency_State() != 0u ||
+          main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
+          MOTORLINK_OutputInhibited() || !DRIVEMOTOR_FeedbackHealthy() ||
+          drivemotor_host_zero_intent != 0u ||
+          !ActuatorAuthorization_DriveRequestIsCurrent(
+              drivemotor_authorization_epoch)) {
+        drivemotor_prepareMsg(0, 0, 0, 0);
+        drivemotor_eState = DRIVEMOTOR_RUN;
+      }
+      HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
+                            (uint8_t *)drivemotor_pu8RqstMessage,
+                            DRIVEMOTOR_LENGTH_RQST_MSG);
+      __set_PRIMASK(primask);
+    }
 
     break;
 
@@ -618,6 +664,10 @@ void DRIVEMOTOR_App_Rx(void) {
   }
 }
 
+void DRIVEMOTOR_SetHostZeroMotionIntent(uint8_t zero_intent) {
+  drivemotor_host_zero_intent = zero_intent != 0u;
+}
+
 void DRIVEMOTOR_SetTicksPerMeter(float ticks_per_meter) {
   g_ticks_per_meter = drivemotor_clamp_ticks_per_meter(ticks_per_meter);
 }
@@ -646,27 +696,18 @@ float DRIVEMOTOR_GetMaxMps(void) { return drivemotor_clamp_max_mps(g_max_mps); }
  * @param  right_pwm_signed  signed PWM command for the right wheel
  */
 void DRIVEMOTOR_SetSpeedSigned(int16_t left_pwm_signed,
-                               int16_t right_pwm_signed) {
-  /* Saturate to the 8-bit motor-controller magnitude. */
-  if (left_pwm_signed > 255)
-    left_pwm_signed = 255;
-  if (left_pwm_signed < -255)
-    left_pwm_signed = -255;
-  if (right_pwm_signed > 255)
-    right_pwm_signed = 255;
-  if (right_pwm_signed < -255)
-    right_pwm_signed = -255;
-
-  left_speed_req =
-      (uint8_t)(left_pwm_signed < 0 ? -left_pwm_signed : left_pwm_signed);
-  right_speed_req =
-      (uint8_t)(right_pwm_signed < 0 ? -right_pwm_signed : right_pwm_signed);
-
-  /* Motor-controller convention: dir=1 → forward at |speed|, dir=0 →
-   * reverse at |speed| (or stop when |speed|=0). Only forward maps to
-   * a non-zero dir byte. */
-  left_dir_req = (left_pwm_signed > 0) ? 1 : 0;
-  right_dir_req = (right_pwm_signed > 0) ? 1 : 0;
+                               int16_t right_pwm_signed,
+                               uint32_t authorization_epoch) {
+  const Pac5210DriveRequest request =
+      pac5210_request_from_signed_pwm(left_pwm_signed, right_pwm_signed);
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  left_speed_req = request.left_speed;
+  right_speed_req = request.right_speed;
+  left_dir_req = (request.direction & 0xc0u) == 0xc0u ? 1u : 0u;
+  right_dir_req = (request.direction & 0x30u) == 0x30u ? 1u : 0u;
+  drivemotor_authorization_epoch = authorization_epoch;
+  __set_PRIMASK(primask);
 }
 
 /**
@@ -675,7 +716,8 @@ void DRIVEMOTOR_SetSpeedSigned(int16_t left_pwm_signed,
  *         working. New code should call DRIVEMOTOR_SetSpeedSigned directly.
  */
 void DRIVEMOTOR_SetSpeed(uint8_t left_speed, uint8_t right_speed,
-                         uint8_t left_dir, uint8_t right_dir) {
+                         uint8_t left_dir, uint8_t right_dir,
+                         uint32_t authorization_epoch) {
   const int16_t l_signed =
       left_dir ? (int16_t)left_speed : -(int16_t)left_speed;
   const int16_t r_signed =
@@ -683,12 +725,14 @@ void DRIVEMOTOR_SetSpeed(uint8_t left_speed, uint8_t right_speed,
   /* If both speeds are 0, the deadband path passes 0 through unchanged,
    * matching the old "0,0,0,0 == stop" contract. */
   DRIVEMOTOR_SetSpeedSigned((left_speed == 0) ? 0 : l_signed,
-                            (right_speed == 0) ? 0 : r_signed);
+                            (right_speed == 0) ? 0 : r_signed,
+                            authorization_epoch);
 }
 
 /// @brief drive motor receive interrupt handler
 /// @param
 void DRIVEMOTOR_ReceiveIT(void) {
+  const uint32_t now = HAL_GetTick();
   /* decode the frame */
   if (memcmp(drivemotor_pcu8Preamble, (uint8_t *)&drivemotor_psReceivedData,
              5) == 0) {
@@ -696,13 +740,38 @@ void DRIVEMOTOR_ReceiveIT(void) {
                               DRIVEMOTOR_LENGTH_RECEIVED_MSG - 1);
     if (drivemotor_psReceivedData.u8_CRC == l_u8crc) {
       drivemotors_eRxFlag = RX_VALID;
+      if (drivemotor_seen_valid != 0u &&
+          (uint32_t)(now - drivemotor_last_valid_tick) >
+              DRIVEMOTOR_FEEDBACK_TIMEOUT_MS) {
+        ++drivemotor_fault_sequence;
+        MOTORLINK_ForceInhibit();
+      }
+      drivemotor_seen_valid = 1u;
+      drivemotor_last_valid_tick = now;
+      drivemotor_last_error = drivemotor_psReceivedData.u8_error != 0u;
+      if (drivemotor_last_error != 0u) {
+        ++drivemotor_fault_sequence;
+        MOTORLINK_ForceInhibit();
+      }
     } else {
       drivemotors_eRxFlag = RX_CRC_ERROR;
+      ++drivemotor_fault_sequence;
+      MOTORLINK_ForceInhibit();
     }
   } else {
     drivemotors_eRxFlag = RX_INVALID_ERROR;
+    ++drivemotor_fault_sequence;
+    MOTORLINK_ForceInhibit();
   }
 }
+
+bool DRIVEMOTOR_FeedbackHealthy(void) {
+  return drivemotor_seen_valid != 0u && drivemotor_last_error == 0u &&
+         (uint32_t)(HAL_GetTick() - drivemotor_last_valid_tick) <=
+             DRIVEMOTOR_FEEDBACK_TIMEOUT_MS;
+}
+
+uint32_t DRIVEMOTOR_FaultSequence(void) { return drivemotor_fault_sequence; }
 
 /******************************************************************************
  *  Private Functions
@@ -713,31 +782,18 @@ __STATIC_INLINE void drivemotor_prepareMsg(uint8_t left_speed,
                                            uint8_t left_dir,
                                            uint8_t right_dir) {
 
-  uint8_t direction = 0x0;
-
-  // calc direction bits
-  if (right_dir == 1) {
-    direction |= (0x20 + 0x10);
-  } else {
-    direction |= 0x20;
-  }
-  if (left_dir == 1) {
-    direction |= (0x40 + 0x80);
-  } else {
-    direction |= 0x80;
-  }
-
-  drivemotor_pu8RqstMessage[0] = 0x55;
-  drivemotor_pu8RqstMessage[1] = 0xaa;
-  drivemotor_pu8RqstMessage[2] = 0x08;
-  drivemotor_pu8RqstMessage[3] = 0x10;
-  drivemotor_pu8RqstMessage[4] = 0x80;
-  drivemotor_pu8RqstMessage[5] = direction;
-  drivemotor_pu8RqstMessage[6] = left_speed;
-  drivemotor_pu8RqstMessage[7] = right_speed;
-  drivemotor_pu8RqstMessage[9] = 0;
-  drivemotor_pu8RqstMessage[8] = 0;
-  drivemotor_pu8RqstMessage[10] = 0;
-  drivemotor_pu8RqstMessage[11] =
-      crcCalc(drivemotor_pu8RqstMessage, DRIVEMOTOR_LENGTH_RQST_MSG - 1);
+  Pac5210DriveRequest request = {
+      (uint8_t)((right_dir ? 0x30u : 0x20u) |
+                (left_dir ? 0xc0u : 0x80u)),
+      left_speed,
+      right_speed};
+  const bool stop = pac5210_should_stop_output(
+      Emergency_State() != 0u,
+      main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE,
+      MOTORLINK_OutputInhibited() != 0u, DRIVEMOTOR_FeedbackHealthy(),
+      drivemotor_host_zero_intent != 0u,
+      ActuatorAuthorization_DriveRequestIsCurrent(
+          drivemotor_authorization_epoch));
+  request = pac5210_apply_final_output_gate(request, stop);
+  pac5210_encode_drive_packet(drivemotor_pu8RqstMessage, request);
 }

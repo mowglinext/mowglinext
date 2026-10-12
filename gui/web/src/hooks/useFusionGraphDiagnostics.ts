@@ -1,9 +1,15 @@
-import {useEffect, useRef, useState} from "react";
+import {useEffect, useState} from "react";
 import {useWS} from "./useWS.ts";
 
 export interface FusionGraphStats {
-    /** Wall-clock time when this snapshot was published (rclcpp::now()). */
+    /** Browser receipt wall time, retained for existing readiness consumers. Not acquisition time. */
     receivedAt: number;
+    /** Monotonic browser delivery time; never compare with a ROS stamp. */
+    receivedMonotonic?: number;
+    /** First receipt of this producer + publication stamp (cached repeats do not renew it). */
+    distinctMonotonic?: number;
+    sourceIdentity?: string;
+    sourceStamp?: string;
     level: number;
     message: string;
     /**
@@ -15,7 +21,9 @@ export interface FusionGraphStats {
 }
 
 interface DiagnosticArray {
+    header?: {stamp?: {sec: number; nanosec: number}};
     status?: Array<{
+        hardware_id?: string;
         level: number;
         name: string;
         message: string;
@@ -31,7 +39,7 @@ interface DiagnosticArray {
  */
 export const useFusionGraphDiagnostics = () => {
     const [stats, setStats] = useState<FusionGraphStats | null>(null);
-    const lastReceiveRef = useRef<number>(0);
+
 
     const stream = useWS<string>(
         () => { /* closed */ },
@@ -45,13 +53,23 @@ export const useFusionGraphDiagnostics = () => {
                 for (const v of entry.values ?? []) {
                     values[v.key] = v.value;
                 }
-                lastReceiveRef.current = Date.now();
-                setStats({
-                    receivedAt: lastReceiveRef.current,
+                const receivedMonotonic = performance.now();
+                const stamp = msg.header?.stamp;
+                const sourceStamp = stamp && Number.isFinite(stamp.sec) && Number.isFinite(stamp.nanosec)
+                    && (stamp.sec > 0 || stamp.nanosec > 0)
+                    ? `${stamp.sec}.${String(stamp.nanosec).padStart(9, '0')}` : undefined;
+                const sourceIdentity = sourceStamp ? `${entry.name}|${entry.hardware_id ?? ''}|${sourceStamp}` : undefined;
+                setStats(previous => ({
+                    receivedAt: Date.now(),
+                    receivedMonotonic,
+                    distinctMonotonic: sourceIdentity && sourceIdentity === previous?.sourceIdentity
+                        ? previous.distinctMonotonic : receivedMonotonic,
+                    sourceIdentity,
+                    sourceStamp,
                     level: entry.level,
                     message: entry.message,
                     values,
-                });
+                }));
             } catch {
                 /* ignore malformed messages */
             }

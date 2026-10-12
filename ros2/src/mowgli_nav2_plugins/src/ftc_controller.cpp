@@ -24,11 +24,13 @@
 
 #include <nav2_core/controller_exceptions.hpp>
 #include <nav2_costmap_2d/costmap_2d.hpp>
+#include <nav2_costmap_2d/costmap_filters/filter_values.hpp>
 #include <nav2_ros_common/node_utils.hpp>
 #include <tf2/utils.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_interfaces/ftc_abort_reason.hpp"
 #include "mowgli_nav2_plugins/ftc_carrot_lead.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_obstacle_wait.hpp"
@@ -245,7 +247,11 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
 
   // Robot limits
   config_.max_cmd_vel_speed = declare_double("max_cmd_vel_speed", 2.0);
-  base_max_cmd_vel_speed_ = config_.max_cmd_vel_speed;
+  {
+    std::lock_guard<std::mutex> lock(speed_limit_mutex_);
+    base_max_cmd_vel_speed_ = config_.max_cmd_vel_speed;
+    speed_limit_ = nav2_costmap_2d::NO_SPEED_LIMIT;
+  }
   config_.max_cmd_vel_ang = declare_double("max_cmd_vel_ang", 2.0);
   config_.max_goal_distance_error = declare_double("max_goal_distance_error", 1.0);
   config_.max_goal_angle_error = declare_double("max_goal_angle_error", 10.0);
@@ -542,6 +548,7 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 0.01, 10.0))
         break;
       config_.max_cmd_vel_speed = p.as_double();
+      std::lock_guard<std::mutex> lock(speed_limit_mutex_);
       base_max_cmd_vel_speed_ = config_.max_cmd_vel_speed;
     }
     else if (key == "max_cmd_vel_ang")
@@ -1024,33 +1031,36 @@ double FTCController::applyBladeLoad(double target_speed)
 
 void FTCController::setSpeedLimit(const double& speed_limit, const bool& percentage)
 {
-  speed_limit_ = speed_limit;
-  speed_limit_is_percentage_ = percentage;
-
-  if (speed_limit_ < 0.0)
+  if (!std::isfinite(speed_limit))
   {
-    // Negative means "no limit" — restore the configured max speed. Without
-    // this, a once-applied limit (e.g. from collision_monitor's speed gate)
-    // stayed latched on config_.max_cmd_vel_speed forever, permanently
-    // capping the robot below its configured speed after the limit cleared.
-    config_.max_cmd_vel_speed = base_max_cmd_vel_speed_;
+    RCLCPP_WARN(logger_, "FTCController: ignoring non-finite speed limit.");
     return;
   }
-
-  if (speed_limit_is_percentage_)
   {
-    // Treat limit as a fraction [0, 1] of the configured max speed.
-    config_.max_cmd_vel_speed = config_.speed_fast * std::clamp(speed_limit_, 0.0, 1.0);
-  }
-  else
-  {
-    config_.max_cmd_vel_speed = speed_limit_;
+    std::lock_guard<std::mutex> lock(speed_limit_mutex_);
+    // Zero is Nav2's no-limit sentinel. Preserve legacy negative clears too.
+    speed_limit_ = std::max(nav2_costmap_2d::NO_SPEED_LIMIT, speed_limit);
+    speed_limit_is_percentage_ = percentage;
   }
 
   RCLCPP_INFO(logger_,
               "FTCController: speed limit set to %.3f (percentage=%s).",
-              speed_limit_,
+              speed_limit,
               percentage ? "true" : "false");
+}
+
+double FTCController::maxLinearSpeed() const
+{
+  std::lock_guard<std::mutex> lock(speed_limit_mutex_);
+  if (speed_limit_ == nav2_costmap_2d::NO_SPEED_LIMIT)
+  {
+    return base_max_cmd_vel_speed_;
+  }
+  const double external_cap =
+      speed_limit_is_percentage_
+          ? base_max_cmd_vel_speed_ * std::clamp(speed_limit_, 0.0, 100.0) / 100.0
+          : speed_limit_;
+  return std::min(base_max_cmd_vel_speed_, external_cap);
 }
 
 // ── computeVelocityCommands ───────────────────────────────────────────────────
@@ -1067,6 +1077,15 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   geometry_msgs::msg::TwistStamped cmd_vel;
   cmd_vel.header.frame_id = "base_link";
   cmd_vel.header.stamp = clock_->now();
+
+  // Apply the hard linear cap at every output boundary, after movement floors
+  // and including reverse escape / turn-fallback commands that bypass the PID.
+  const auto bounded_command = [this, &cmd_vel]()
+  {
+    const double max_speed = maxLinearSpeed();
+    cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
+    return cmd_vel;
+  };
 
   const rclcpp::Time now = clock_->now();
   const double dt = (now - last_time_).seconds();
@@ -1096,7 +1115,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   if (current_state_ == PlannerState::FINISHED)
   {
     // Zero velocity — goal reached.
-    return cmd_vel;
+    return bounded_command();
   }
 
   // NOTE: do NOT reset the goal checker here. controller_server already
@@ -1166,7 +1185,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   // next tick from the outgoing pose enterPivot() retargeted to.
   if (entering_pivot)
   {
-    return cmd_vel;  // zero velocity
+    return bounded_command();  // zero velocity
   }
 
   // 3. Collision check + lateral-deviation update.
@@ -1191,7 +1210,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     if (!reverse_escape_active_ && !turnFallbackReversing() && currentBodyInLethal())
     {
       waitOrThrowForObstacle("chassis footprint overlaps a lethal obstacle cell");
-      return cmd_vel;  // zero-velocity hold (waitOrThrow throws after timeout)
+      return bounded_command();  // zero-velocity hold (waitOrThrow throws after timeout)
     }
     // Turn fallback, straight reverse before its first pivot: a pure straight
     // reverse (like the reverse-escape), rear footprint probed every tick,
@@ -1199,7 +1218,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     if (turnFallbackReversing())
     {
       turnFallbackReverseTick(safe_dt, cmd_vel);
-      return cmd_vel;
+      return bounded_command();
     }
     if (current_state_ == PlannerState::PIVOT)
     {
@@ -1213,10 +1232,10 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       // obstacles.
       if (!pivotSweepGate(safe_dt))
       {
-        return cmd_vel;  // zero-velocity hold (waitOrThrow throws after timeout)
+        return bounded_command();  // zero-velocity hold (waitOrThrow throws after timeout)
       }
       calculate_velocity_commands(safe_dt, cmd_vel);
-      return cmd_vel;
+      return bounded_command();
     }
     updateLateralDeviation(safe_dt);
     // The lattice found no profile and a turn fallback engaged instead of the
@@ -1225,7 +1244,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     if (turn_fallback_engaged_now_)
     {
       turn_fallback_engaged_now_ = false;
-      return cmd_vel;  // zero velocity
+      return bounded_command();  // zero velocity
     }
     // updateLateralDeviation engaged the bounded reverse-escape sub-state
     // (both sides of an obstacle blocked / skirt over cap, rear footprint
@@ -1237,7 +1256,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     {
       cmd_vel.twist.linear.x = -config_.obstacle_reverse_speed_mps;
       cmd_vel.twist.angular.z = 0.0;
-      return cmd_vel;
+      return bounded_command();
     }
     // updateLateralDeviation flipped on the wait-before-abort gate (the
     // costmap is blocked beyond max_lateral_deviation and we're holding
@@ -1245,7 +1264,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     // costmap clears or the helper throws on timeout.
     if (obstacle_waiting_)
     {
-      return cmd_vel;
+      return bounded_command();
     }
     applyLateralDeviationToCarrot();
     // Re-derive the base_link PID errors from the NOW-deviated carrot.
@@ -1279,7 +1298,12 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   else if (checkCollision(config_.obstacle_lookahead))
   {
     is_crashed_ = true;
-    throw nav2_core::ControllerException("FTCController: collision detected along lookahead path.");
+    // Issue #743: marked as obstacle-caused (mowgli_interfaces/ftc_abort_
+    // reason.hpp) so FollowStrip's detour confirmation does not have to
+    // re-derive "was this an obstacle" from a different costmap/body model.
+    throw nav2_core::ControllerException(
+        std::string(mowgli_interfaces::ftc_abort_reason::kObstacleAbortMarker) +
+        "FTCController: collision detected along lookahead path.");
   }
 
   // 4. PID velocity computation.
@@ -1291,7 +1315,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
         "FTCController: collision detected during velocity computation.");
   }
 
-  return cmd_vel;
+  return bounded_command();
 }
 
 // ── State machine ─────────────────────────────────────────────────────────────
@@ -1603,6 +1627,11 @@ void FTCController::update_control_point(double dt)
       const double straight_dist = distanceLookahead();
       double target_speed =
           (straight_dist >= config_.speed_fast_threshold) ? config_.speed_fast : config_.speed_slow;
+      // A mower obeying a low external cap is not slipping. Keep the carrot
+      // and stall detector's expected speed within the same hard limit.
+      const double max_speed = maxLinearSpeed();
+      target_speed = std::min(target_speed, max_speed);
+      current_movement_speed_ = std::min(current_movement_speed_, max_speed);
 
       // Anti-wheelspin traction control. If the carrot is already commanding a
       // meaningful forward speed but the robot's ACTUAL forward speed (odom
@@ -1633,7 +1662,7 @@ void FTCController::update_control_point(double dt)
       // blade motor's RPM sag so a bogged blade gets fed slower. Sets
       // is_blade_limited_ for calculate_velocity_commands. Pure decision +
       // unit tests in ftc_blade_load.hpp / test_ftc_blade_load.cpp.
-      target_speed = applyBladeLoad(target_speed);
+      target_speed = std::min(applyBladeLoad(target_speed), max_speed);
 
       // Smooth speed ramp (acceleration / deceleration).
       if (target_speed > current_movement_speed_)
@@ -1870,7 +1899,8 @@ void FTCController::calculate_velocity_commands(double dt,
     }
     else
     {
-      lin_speed = std::clamp(lin_speed, -config_.max_cmd_vel_speed, config_.max_cmd_vel_speed);
+      const double max_speed = maxLinearSpeed();
+      lin_speed = std::clamp(lin_speed, -max_speed, max_speed);
     }
 
     if (is_stalled_)
@@ -2290,9 +2320,13 @@ bool FTCController::waitOrThrowForObstacle(const std::string& reason)
   if (elapsed > config_.obstacle_wait_timeout_s)
   {
     is_crashed_ = true;
-    throw nav2_core::ControllerException(std::string("FTCController: ") + reason +
-                                         ", aborting strip after " +
-                                         std::to_string(static_cast<int>(elapsed)) + "s wait.");
+    // Issue #743: this whole function exists to wait for, then abort on, an
+    // obstacle — mark it (mowgli_interfaces/ftc_abort_reason.hpp) so
+    // FollowStrip's detour confirmation does not have to re-derive "was this
+    // an obstacle" from a different costmap/body model.
+    throw nav2_core::ControllerException(
+        std::string(mowgli_interfaces::ftc_abort_reason::kObstacleAbortMarker) + "FTCController: " +
+        reason + ", aborting strip after " + std::to_string(static_cast<int>(elapsed)) + "s wait.");
   }
   obstacle_waiting_ = true;
   return true;

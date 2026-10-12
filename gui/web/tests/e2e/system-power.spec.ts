@@ -71,6 +71,61 @@ test("desktop shortcut uses the existing confirmation and reboot reconnect flow"
     expect(requests).toBe(1);
 });
 
+test("diagnostics reserves stable space and uses tabular numerals page-wide", async ({page}) => {
+    await page.setViewportSize({width: 1440, height: 1000});
+    await openSystem(page);
+
+    const diagnostics = page.locator(".diagnostics-page");
+    await expect(diagnostics).toHaveCount(1);
+    await expect(diagnostics).toHaveCSS("font-variant-numeric", /tabular-nums/);
+
+    const statistic = diagnostics.locator(".ant-statistic").filter({hasText: "CPU usage (%)"});
+    await expect(statistic).toBeVisible();
+    const content = statistic.locator(".ant-statistic-content");
+    expect(await content.evaluate(element => getComputedStyle(element).inlineSize)).not.toBe("0px");
+    await expect(statistic.locator(".ant-statistic-title")).toContainText("CPU usage (%)");
+    await expect(content.locator(".ant-statistic-content-suffix")).toHaveCount(0);
+});
+
+for (const viewport of [{width: 1440, height: 1000}, {width: 390, height: 844}]) {
+    test(`live GNSS status changes without shifting its neighbors at ${viewport.width}px`, async ({page}) => {
+        test.setTimeout(20_000);
+        await page.setViewportSize(viewport);
+        const shortStatus = {
+            fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+            fix_valid: true,
+            rtk_mode: GnssStatusConstants.RTK_MODE_NONE,
+        };
+        const longStatus = {
+            fix_type: GnssStatusConstants.FIX_TYPE_RTK_FIXED,
+            fix_valid: true,
+            rtk_mode: GnssStatusConstants.RTK_MODE_FIXED,
+        };
+        await installMockBackend(page, {
+            ...SCENARIOS[0],
+            topicSequences: {gnssStatus: [shortStatus, longStatus]},
+        }, {liveStatusIntervalMs: 7000});
+        await page.goto("/#/diagnostics");
+        if (viewport.width < 600) {
+            await page.getByRole("button", {name: /Localisation$/}).click();
+        } else {
+            await page.getByRole("tab", {name: /Localisation/}).click();
+        }
+
+        const fixValue = page.getByTestId("gnss-fix-status-value");
+        const rtkGroup = page.getByTestId("gnss-rtk-status-group");
+        await expect(fixValue).toContainText("GPS fix");
+        const before = await rtkGroup.boundingBox();
+        expect(before).not.toBeNull();
+        await expect(fixValue).toContainText("RTK Fixed", {timeout: 10_000});
+        const after = await rtkGroup.boundingBox();
+        expect(after).not.toBeNull();
+        expect(Math.abs(after!.x - before!.x)).toBeLessThan(1);
+        expect(Math.abs(after!.y - before!.y)).toBeLessThan(1);
+        expect(Math.abs(after!.width - before!.width)).toBeLessThan(1);
+    });
+}
+
 test("mobile shortcut uses the existing shutdown confirmation", async ({page}) => {
     await page.setViewportSize({width: 390, height: 844});
     await openSystem(page, true);

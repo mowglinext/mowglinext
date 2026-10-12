@@ -76,8 +76,8 @@ export const RainSection: React.FC<Props> = ({ values, onChange }) => {
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={12}>
-                                <Form.Item label={t("settingsRain.resumeDelay")} tooltip={t("settingsRain.resumeDelayTooltip")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-rain_delay_minutes" data-setting-key="rain_delay_minutes" label={t("settingsRain.resumeDelay")} tooltip={t("settingsRain.resumeDelayTooltip")}>
+                                    <InputNumber aria-label={t("settingsRain.resumeDelay") + ", min"} aria-description={t("settingsRain.resumeDelayTooltip")}  id="setting-rain_delay_minutes"
                                         value={values.rain_delay_minutes}
                                         onChange={(v) => onChange("rain_delay_minutes", v)}
                                         min={0} max={240} step={5} precision={0}
@@ -86,8 +86,8 @@ export const RainSection: React.FC<Props> = ({ values, onChange }) => {
                                 </Form.Item>
                             </Col>
                             <Col xs={12}>
-                                <Form.Item label={t("settingsRain.debounce")} tooltip={t("settingsRain.debounceTooltip")}>
-                                    <InputNumber
+                                <Form.Item htmlFor="setting-rain_debounce_sec" data-setting-key="rain_debounce_sec" label={t("settingsRain.debounce")} tooltip={t("settingsRain.debounceTooltip")}>
+                                    <InputNumber aria-label={t("settingsRain.debounce") + ", s"} aria-description={t("settingsRain.debounceTooltip")}  id="setting-rain_debounce_sec"
                                         value={values.rain_debounce_sec}
                                         onChange={(v) => onChange("rain_debounce_sec", v)}
                                         min={1} max={60} step={5} precision={0}

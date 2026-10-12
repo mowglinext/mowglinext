@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"math"
@@ -45,7 +46,7 @@ var topicMap = map[string]topicDef{
 	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
 	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
 	"map":                 {"", ""},                                     // virtual – populated via map_server services
-	"path":                {"/coverage/full_plan", "nav_msgs/msg/Path"}, // full F2C coverage plan (headland + all swaths; execution is swath-by-swath)
+	"path":                {"/coverage/plan_preview", "mowgli_interfaces/msg/CoveragePlanPreview"},
 	"plan":                {"/plan", "nav_msgs/msg/Path"},               // infrequent event
 	"power":               {"/hardware_bridge/power", "mowgli_interfaces/msg/Power"},
 	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"}, // safety-critical
@@ -70,6 +71,19 @@ var topicMap = map[string]topicDef{
 	// 1 Hz per-session coverage sets (completed / attempted / excluded areas)
 	// for the fleet coordinator on every member's GUI (docs/MULTI_ROBOT.md).
 	"coverageSession": {"/behavior_tree_node/coverage_session", "mowgli_interfaces/msg/CoverageSession"},
+	// Latched: what the STM32 actually runs for every runtime parameter, its
+	// envelope and whether it is persisted in the board's flash (protocol v7).
+	"firmwareParams": {"/hardware_bridge/firmware_params", "mowgli_interfaces/msg/FirmwareParams"},
+}
+
+// TopicKeys returns every logical topic key the provider can subscribe to, so
+// the API layer can check that each one is also routable.
+func TopicKeys() []string {
+	keys := make([]string, 0, len(topicMap))
+	for key := range topicMap {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +179,22 @@ func (r *RosSubscriber) run() {
 // RosProvider – IRosProvider implementation backed by foxglove WebSocket
 // ---------------------------------------------------------------------------
 
+type rosClient interface {
+	Connect(context.Context) error
+	Subscribe(string, string, string, func(json.RawMessage), ...int) error
+	Unsubscribe(string, string)
+	CallService(context.Context, string, interface{}, ...string) (json.RawMessage, error)
+	Publish(string, interface{}, ...string) error
+	GetParameters(context.Context, []string) ([]foxglove.Parameter, error)
+	SetParameters(context.Context, []foxglove.Parameter) ([]foxglove.Parameter, error)
+}
+
+type foxgloveSubscription struct {
+	// Serializes reconciliation for one key, never while holding RosProvider.mtx.
+	mtx        sync.Mutex
+	subscribed bool
+}
+
 // RosProvider implements types2.IRosProvider using a foxglove WebSocket
 // client. All topic access uses logical keys defined in topicMap; the actual
 // ROS2 topic names are an internal concern.
@@ -177,13 +207,13 @@ func (r *RosSubscriber) run() {
 // and /wheel_odom no longer chew CPU when the browser is closed and the
 // optional MQTT/HomeKit providers are disabled.
 type RosProvider struct {
-	client      *foxglove.Client
+	client      rosClient
 	cmdVelRelay *cmdVelRelayClient
 
-	mtx                sync.Mutex
-	subscribers        map[string]map[string]*RosSubscriber // logicalKey -> id -> subscriber
-	lastMessage        map[string][]byte                    // logicalKey -> last JSON bytes
-	foxgloveSubscribed map[string]bool                      // logicalKey -> upstream-subscribed?
+	mtx                   sync.Mutex
+	subscribers           map[string]map[string]*RosSubscriber // logicalKey -> id -> subscriber
+	lastMessage           map[string][]byte                    // logicalKey -> last JSON bytes
+	foxgloveSubscriptions map[string]*foxgloveSubscription     // logicalKey -> reconciliation state
 
 	// Cached docking pose from map_server_node (guarded by mtx)
 	dockPoseSet bool
@@ -255,13 +285,13 @@ func NewRosProvider(dbProvider types2.IDBProvider) types2.IRosProvider {
 	cmdVelRelayURL := "ws://localhost:8766"
 
 	r := &RosProvider{
-		client:             foxglove.NewClient(foxgloveURL),
-		cmdVelRelay:        newCmdVelRelayClient(cmdVelRelayURL),
-		subscribers:        make(map[string]map[string]*RosSubscriber),
-		lastMessage:        make(map[string][]byte),
-		foxgloveSubscribed: make(map[string]bool),
-		dbProvider:         dbProvider,
-		sessionTracker:     NewSessionTracker(dbProvider),
+		client:                foxglove.NewClient(foxgloveURL),
+		cmdVelRelay:           newCmdVelRelayClient(cmdVelRelayURL),
+		subscribers:           make(map[string]map[string]*RosSubscriber),
+		lastMessage:           make(map[string][]byte),
+		foxgloveSubscriptions: make(map[string]*foxgloveSubscription),
+		dbProvider:            dbProvider,
+		sessionTracker:        NewSessionTracker(dbProvider),
 	}
 
 	go func() {
@@ -275,18 +305,47 @@ func NewRosProvider(dbProvider types2.IDBProvider) types2.IRosProvider {
 	return r
 }
 
-// ensureFoxgloveSubscribed subscribes the foxglove client to the ROS2 topic
-// backing logicalKey if it isn't already. No-op for virtual keys (empty
-// MsgType) or unknown keys. Caller must hold r.mtx.
-func (r *RosProvider) ensureFoxgloveSubscribed(logicalKey string) {
-	if r.foxgloveSubscribed[logicalKey] {
-		return
-	}
+// reconcileFoxgloveSubscription applies the latest downstream listener state.
+// Bridge I/O must never hold the provider lock: the read pump also needs it to
+// fan out messages. Recheck after each operation so an unsubscribe racing a
+// subscribe cannot leave a live listener detached (or an unused topic active).
+func (r *RosProvider) reconcileFoxgloveSubscription(logicalKey string) {
 	def, ok := topicMap[logicalKey]
 	if !ok || def.MsgType == "" {
 		return
 	}
+	r.mtx.Lock()
+	if r.foxgloveSubscriptions == nil {
+		r.foxgloveSubscriptions = make(map[string]*foxgloveSubscription)
+	}
+	state := r.foxgloveSubscriptions[logicalKey]
+	if state == nil {
+		state = &foxgloveSubscription{}
+		r.foxgloveSubscriptions[logicalKey] = state
+	}
+	r.mtx.Unlock()
+	state.mtx.Lock()
+	defer state.mtx.Unlock()
+	for {
+		r.mtx.Lock()
+		wanted := len(r.subscribers[logicalKey]) > 0
+		r.mtx.Unlock()
+		if wanted == state.subscribed {
+			return
+		}
+		if wanted {
+			if err := r.subscribeFoxglove(logicalKey, def); err != nil {
+				logrus.Errorf("RosProvider: subscribe %s (%s): %v", def.ROS2Topic, logicalKey, err)
+				return
+			}
+		} else {
+			r.client.Unsubscribe(def.ROS2Topic, "gui-"+logicalKey)
+		}
+		state.subscribed = wanted
+	}
+}
 
+func (r *RosProvider) subscribeFoxglove(logicalKey string, def topicDef) error {
 	key := logicalKey // capture for closure
 	var cb func(json.RawMessage)
 	if adapt, ok := foxgloveAdapters[key]; ok {
@@ -309,32 +368,7 @@ func (r *RosProvider) ensureFoxgloveSubscribed(logicalKey string) {
 	if dec, ok := upstreamDecimationMs[key]; ok {
 		subOpts = append(subOpts, dec)
 	}
-	if err := r.client.Subscribe(def.ROS2Topic, def.MsgType, "gui-"+key, cb, subOpts...); err != nil {
-		logrus.Errorf("RosProvider: subscribe %s (%s): %v", def.ROS2Topic, key, err)
-		return
-	}
-	r.foxgloveSubscribed[key] = true
-	logrus.Infof("RosProvider: subscribed to %s as '%s'", def.ROS2Topic, key)
-}
-
-// maybeUnsubscribeFoxglove drops the upstream foxglove subscription for
-// logicalKey if no downstream listeners remain. Caller must hold r.mtx.
-func (r *RosProvider) maybeUnsubscribeFoxglove(logicalKey string) {
-	if !r.foxgloveSubscribed[logicalKey] {
-		return
-	}
-	if subs := r.subscribers[logicalKey]; len(subs) > 0 {
-		return
-	}
-	def, ok := topicMap[logicalKey]
-	if !ok || def.MsgType == "" {
-		return
-	}
-	r.client.Unsubscribe(def.ROS2Topic, "gui-"+logicalKey)
-	delete(r.foxgloveSubscribed, logicalKey)
-	// Drop the cached last-message — stale once we stop receiving updates.
-	delete(r.lastMessage, logicalKey)
-	logrus.Infof("RosProvider: unsubscribed from %s (no listeners)", def.ROS2Topic)
+	return r.client.Subscribe(def.ROS2Topic, def.MsgType, "gui-"+key, cb, subOpts...)
 }
 
 // fanOut stores msg as the latest value for logicalKey and delivers it to all
@@ -417,6 +451,21 @@ func (r *RosProvider) initDockPoseSubscription() {
 
 // initMapPolling periodically fetches mowing areas from the map_server_node
 // and publishes the result to the virtual "map" topic for the GUI.
+//
+// pollMap() makes one sequential CallService round-trip per area
+// (get_mowing_area), and each of those competes with the rest of the ROS2
+// stack for foxglove_bridge/DDS bandwidth. Field-reported 2026-09-28: while
+// actively mowing, each call was taking ~4s, so a poll with several areas
+// ran well past the 5s tick interval. This loop is already single-threaded
+// (pollMap always runs to completion before the next `range` iteration reads
+// the channel, so pollMap can never actually run twice AT ONCE) — the
+// symptom is different: time.Ticker's channel buffers at most one pending
+// tick, and while a slow pollMap() is still running, that one tick fires
+// and sits waiting. The MOMENT pollMap() returns, the loop reads that
+// already-fired tick immediately — giving a second, near-back-to-back poll
+// with almost no gap — before the normal 5s cadence resumes. Drain that one
+// stale tick (if any) right after pollMap() returns, so a slow poll costs
+// one lost tick instead of a rapid-fire double one.
 func (r *RosProvider) initMapPolling() {
 	go func() {
 		// Wait for foxglove_bridge to be ready
@@ -426,12 +475,36 @@ func (r *RosProvider) initMapPolling() {
 		defer ticker.Stop()
 
 		for range ticker.C {
+			start := time.Now()
 			r.pollMap()
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				logrus.WithField("elapsed", elapsed).Warn(
+					"pollMap: took longer than the 5s poll interval (ROS2 service " +
+						"calls contended, likely while actively mowing)")
+			}
+			// Unconditional, non-blocking: drain a tick that already fired while
+			// pollMap() was running (there is at most one — see the comment
+			// above), so an overrun costs one lost tick instead of an
+			// immediate back-to-back poll. A no-op (does nothing, costs
+			// nothing) on every normal, on-time cycle.
+			select {
+			case <-ticker.C:
+			default:
+			}
 		}
 	}()
 }
 
-// Preserve ROS area IDs when the UI separates mowing and navigation areas.
+// Preserve each working area's ROS ARRAY INDEX (its position in `areas`, what
+// map_server's index-based services — get_mowing_area, start_in_area,
+// coverage_orientation — expect) when the UI separates mowing and navigation
+// areas. This is NOT the stable MapArea.Id (mowglinext#637): the index is
+// wire-protocol-required and unavoidably shifts whenever the area list is
+// edited/saved (map_server rebuilds it wholesale), but Id survives that edit
+// (map_server's on_add_area preserves a caller-supplied one) and is carried
+// through verbatim on every returned MapArea — the frontend resolves the
+// CURRENT index from Id at the moment it acts (mowingAreaIndexById), rather
+// than trusting a position captured earlier.
 func splitMapAreas(areas []mowgli.MapArea) (working, navigation []mowgli.MapArea, indices []uint32) {
 	for index, area := range areas {
 		if area.IsNavigationArea {
@@ -449,6 +522,7 @@ func (r *RosProvider) pollMap() {
 	defer cancel()
 
 	var allAreas []mowgli.MapArea
+	complete := false
 
 	// Fetch all areas (index 0..N until success=false)
 	for i := uint32(0); i < 100; i++ {
@@ -456,17 +530,22 @@ func (r *RosProvider) pollMap() {
 		var res mowgli.GetMowingAreaRes
 		err := r.CallService(ctx, "/map_server_node/get_mowing_area", &req, &res, "mowgli_interfaces/srv/GetMowingArea")
 		if err != nil {
-			if i == 0 {
-				logrus.WithError(err).WithField("index", i).Warn("pollMap: get_mowing_area failed — map_server_node may not be ready")
-			} else {
-				logrus.WithError(err).WithField("index", i).Warn("pollMap: get_mowing_area failed mid-iteration")
-			}
-			break
+			logrus.WithError(err).WithField("index", i).Warn(
+				"pollMap: refresh failed; retaining last complete map (stale)")
+			return
 		}
 		if !res.Success {
+			complete = true
 			break
 		}
 		allAreas = append(allAreas, res.Area)
+	}
+	// Only the service's end-of-list response establishes completeness. A
+	// transport failure or reaching the enumeration guard is not an empty or
+	// shortened map, and must not replace the last complete cached snapshot.
+	if !complete {
+		logrus.Warn("pollMap: refresh failed: area enumeration limit reached; retaining last complete map (stale)")
+		return
 	}
 
 	workingAreas, navAreas, workingIndices := splitMapAreas(allAreas)
@@ -490,6 +569,25 @@ func (r *RosProvider) pollMap() {
 
 	data, err := json.Marshal(mapData)
 	if err != nil {
+		return
+	}
+
+	// pollMap runs on a fixed 5s ticker regardless of whether anything
+	// actually changed, and the payload is the WHOLE map (every area,
+	// obstacle and corridor point) — easily >1 MB with a real garden's
+	// worth of areas/ignore lines. fanOut() itself has no dedup (by design:
+	// other logicalKeys legitimately want every tick delivered even when
+	// byte-identical, e.g. high-frequency sensor topics), so skip the
+	// broadcast here specifically when nothing changed since the last poll,
+	// rather than pushing an unchanged multi-MB payload to every connected
+	// browser tab every 5s. Field-reported 2026-09-28: this was the other
+	// half of a "map updates twice, always huge" slowdown — see the paired
+	// frontend fix (useMapStreams.ts) for the actual duplicate-subscribe
+	// half of that report.
+	r.mtx.Lock()
+	unchanged := bytes.Equal(r.lastMessage["map"], data)
+	r.mtx.Unlock()
+	if unchanged {
 		return
 	}
 
@@ -523,7 +621,6 @@ func (r *RosProvider) CallService(ctx context.Context, service string, req any, 
 // topic also triggers the upstream foxglove_bridge subscription.
 func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func(msg []byte)) error {
 	r.mtx.Lock()
-	defer r.mtx.Unlock()
 
 	if r.subscribers[topic] == nil {
 		r.subscribers[topic] = make(map[string]*RosSubscriber)
@@ -533,14 +630,12 @@ func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func
 		r.subscribers[topic][id] = NewRosSubscriber(topic, id, interval, cb)
 	}
 
-	// Subscribe upstream on first listener for this logical key. Safe to call
-	// repeatedly — ensureFoxgloveSubscribed short-circuits on the second hit.
-	r.ensureFoxgloveSubscribed(topic)
-
 	// Replay the most recent message so the subscriber is immediately usable.
 	if last, ok := r.lastMessage[topic]; ok {
 		r.subscribers[topic][id].Publish(last)
 	}
+	r.mtx.Unlock()
+	r.reconcileFoxgloveSubscription(topic)
 	return nil
 }
 
@@ -549,22 +644,29 @@ func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func
 // foxglove_bridge subscription is dropped too.
 func (r *RosProvider) UnSubscribe(topic string, id string) {
 	r.mtx.Lock()
-	defer r.mtx.Unlock()
 
 	subs, ok := r.subscribers[topic]
 	if !ok {
+		r.mtx.Unlock()
 		return
 	}
 	sub, exists := subs[id]
 	if !exists {
+		r.mtx.Unlock()
 		return
 	}
 	sub.Close()
 	delete(subs, id)
 	if len(subs) == 0 {
 		delete(r.subscribers, topic)
-		r.maybeUnsubscribeFoxglove(topic)
+		if def, ok := topicMap[topic]; ok && def.MsgType != "" {
+			// Live telemetry is stale once the last listener leaves. Virtual
+			// topics keep their existing internal polling/cache semantics.
+			delete(r.lastMessage, topic)
+		}
 	}
+	r.mtx.Unlock()
+	r.reconcileFoxgloveSubscription(topic)
 }
 
 // Publish sends msg to the named ROS2 topic. For /cmd_vel_teleop the relay

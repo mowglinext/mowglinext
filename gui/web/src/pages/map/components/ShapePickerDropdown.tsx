@@ -1,7 +1,7 @@
 import {useState} from 'react';
 import {Dropdown, InputNumber} from 'antd';
 import {useTranslation} from 'react-i18next';
-import {BorderOutlined, RadiusSettingOutlined, PlusOutlined} from '@ant-design/icons';
+import {BorderOutlined, RadiusSettingOutlined, PlusOutlined, RadarChartOutlined} from '@ant-design/icons';
 import type {ShapeType} from '../hooks/useMapEditing';
 import {useThemeMode} from '../../../theme/ThemeContext.tsx';
 
@@ -10,6 +10,11 @@ const POPULAR_EMOJI = ['⭐', '❤️', '🌙', '🔔', '💎', '🍀', '🦋', 
 interface ShapePickerDropdownProps {
     onDrawShape?: (shape: ShapeType, sizeMeters: number) => void;
     onDrawEmoji?: (emoji: string, sizeMeters: number) => void;
+    /// Starts a LiDAR-ignore line (click-to-place polyline, no fixed size) —
+    /// listed alongside the geometry shapes below so it's reachable from the
+    /// same "+ Add" entry point on both desktop and mobile, instead of its
+    /// own standalone button.
+    onDrawLidarCorridor?: () => void;
     children?: React.ReactNode;
     placement?: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight' | 'top' | 'bottom';
 }
@@ -23,10 +28,20 @@ const shapes: {key: ShapeType; labelKey: string; icon: React.ReactNode}[] = [
 export const ShapePickerDropdown = ({
     onDrawShape,
     onDrawEmoji,
+    onDrawLidarCorridor,
     children,
     placement = 'topLeft',
 }: ShapePickerDropdownProps) => {
     const [size, setSize] = useState(5);
+    // Controlled open state so every selection explicitly closes the popup.
+    // dropdownRender content (unlike antd's `menu` prop) never auto-closes on
+    // its own — field-reported 2026-09-28: picking "Draw ignore line" on
+    // mobile appeared to do nothing. Most likely cause: the popup stayed
+    // open over the map, and the operator's next tap (meant to place the
+    // first line point) landed on the still-open popup instead of the map
+    // canvas beneath it. Closing immediately on every choice removes that
+    // trap for shapes/emoji too, not just the ignore line.
+    const [open, setOpen] = useState(false);
     const {colors} = useThemeMode();
     const {t} = useTranslation();
 
@@ -61,6 +76,14 @@ export const ShapePickerDropdown = ({
                 border: `1px solid ${colors.border}`,
                 padding: 8,
                 minWidth: 200,
+                // Bounded + scrollable: on a short phone viewport with
+                // placement="top" this content (size control + 3 shapes +
+                // ignore line + emoji grid) can be taller than the space
+                // above the toolbar, which would otherwise push the bottom
+                // rows (including "Draw ignore line") off-screen and
+                // unreachable instead of just scrolling into view.
+                maxHeight: '70vh',
+                overflowY: 'auto',
                 boxShadow: colors.glassShadow,
             }}
         >
@@ -85,7 +108,7 @@ export const ShapePickerDropdown = ({
             {shapes.map((s) => (
                 <button
                     key={s.key}
-                    onClick={() => onDrawShape?.(s.key, size)}
+                    onClick={() => { setOpen(false); onDrawShape?.(s.key, size); }}
                     style={menuItemStyle}
                     onMouseOver={hoverOn}
                     onMouseOut={hoverOff}
@@ -94,6 +117,23 @@ export const ShapePickerDropdown = ({
                     {t(s.labelKey)}
                 </button>
             ))}
+
+            {/* LiDAR-ignore line — a click-to-place polyline, not a fixed-size
+                stamp, so it ignores the size control above; still listed here
+                (not a separate toolbar button) so it's one tap away on mobile too.
+                Closing the popup BEFORE starting the draw matters more here than
+                for a shape: the very next tap has to land on the map. */}
+            {onDrawLidarCorridor && (
+                <button
+                    onClick={() => { setOpen(false); onDrawLidarCorridor(); }}
+                    style={menuItemStyle}
+                    onMouseOver={hoverOn}
+                    onMouseOut={hoverOff}
+                >
+                    <RadarChartOutlined />
+                    {t('mapLidarCorridors.draw')}
+                </button>
+            )}
 
             <div style={{height: 1, background: colors.borderSubtle, margin: '4px'}} />
 
@@ -110,7 +150,7 @@ export const ShapePickerDropdown = ({
                 {POPULAR_EMOJI.map((emoji) => (
                     <button
                         key={emoji}
-                        onClick={() => onDrawEmoji?.(emoji, size)}
+                        onClick={() => { setOpen(false); onDrawEmoji?.(emoji, size); }}
                         style={{
                             background: 'transparent',
                             border: 'none',
@@ -137,6 +177,8 @@ export const ShapePickerDropdown = ({
             trigger={['click']}
             placement={placement}
             dropdownRender={() => dropdownContent}
+            open={open}
+            onOpenChange={setOpen}
         >
             {children ? (
                 <span style={{display: 'inline-flex'}}>{children}</span>

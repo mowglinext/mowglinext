@@ -25,7 +25,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 
 if ! harness_run; then
   fail "harness_run for default preset" "non-zero exit"
@@ -43,6 +43,7 @@ REQUIRED_KEYS=(
   MOWER_IP
   DISABLE_BLUETOOTH
   ENABLE_FOXGLOVE
+  ENABLE_MQTT
   IMAGE_TAG
   GNSS_BACKEND
   GNSS_STATUS_SOURCE
@@ -68,19 +69,12 @@ REQUIRED_KEYS=(
   LIDAR_PORT
   LIDAR_UART_DEVICE
   LIDAR_BAUD
-  TFLUNA_FRONT_ENABLED
-  TFLUNA_FRONT_PORT
-  TFLUNA_FRONT_UART_DEVICE
-  TFLUNA_FRONT_BAUD
-  TFLUNA_EDGE_ENABLED
-  TFLUNA_EDGE_PORT
-  TFLUNA_EDGE_UART_DEVICE
-  TFLUNA_EDGE_BAUD
   MOWGLI_ROS2_IMAGE
   UNIVERSAL_GNSS_IMAGE
   GNSS_DEVICE_GID
   LIDAR_IMAGE
   MAVROS_IMAGE
+  OPENMOWER_IMAGE
   GUI_IMAGE
   HARDWARE_BACKEND
   MAVROS_ENABLED
@@ -88,6 +82,12 @@ REQUIRED_KEYS=(
   MAVROS_TGT_SYSTEM
   MAVROS_TGT_COMPONENT
   MAVROS_AUTOPILOT
+  OPENMOWER_ENABLED
+  OPENMOWER_LL_PORT
+  OPENMOWER_XESC_TYPE
+  OPENMOWER_XESC_LEFT_PORT
+  OPENMOWER_XESC_RIGHT_PORT
+  OPENMOWER_XESC_MOW_PORT
 )
 
 for key in "${REQUIRED_KEYS[@]}"; do
@@ -108,7 +108,7 @@ assert_contains "GNSS_TRANSPORT=serial (default)" "GNSS_TRANSPORT=serial" "$ENV_
 assert_contains "GNSS_SERIAL_DEVICE=/dev/ttyAMA4 (derived)" "GNSS_SERIAL_DEVICE=/dev/ttyAMA4" "$ENV_CONTENT"
 assert_contains "GNSS_SERIAL_BAUD=921600 (derived)" "GNSS_SERIAL_BAUD=921600" "$ENV_CONTENT"
 assert_contains "GNSS_FRAME_ID=gps_link (default)" "GNSS_FRAME_ID=gps_link" "$ENV_CONTENT"
-assert_contains "GNSS_NTRIP_ENABLED=true (rover default)" "GNSS_NTRIP_ENABLED=true" "$ENV_CONTENT"
+assert_contains "GNSS_NTRIP_ENABLED mirrors the seed default (GUI-owned)" "GNSS_NTRIP_ENABLED=false" "$ENV_CONTENT"
 assert_contains "GNSS_NTRIP_HOST=crtk.net (default)" "GNSS_NTRIP_HOST=crtk.net" "$ENV_CONTENT"
 assert_contains "GNSS_RTCM_FORWARDING=true (rover default)" "GNSS_RTCM_FORWARDING=true" "$ENV_CONTENT"
 assert_contains "GNSS_NTRIP_GGA_ENABLED=true (NEAR mountpoint)" "GNSS_NTRIP_GGA_ENABLED=true" "$ENV_CONTENT"
@@ -117,8 +117,7 @@ assert_contains "LIDAR_BAUD=230400 (preset)" "LIDAR_BAUD=230400" "$ENV_CONTENT"
 assert_contains "HARDWARE_BACKEND=mowgli (default)" "HARDWARE_BACKEND=mowgli" "$ENV_CONTENT"
 assert_contains "GNSS_BACKEND=universal (public runtime)" "GNSS_BACKEND=universal" "$ENV_CONTENT"
 assert_contains "GNSS_STATUS_SOURCE=universal (default)" "GNSS_STATUS_SOURCE=universal" "$ENV_CONTENT"
-assert_contains "TFLUNA_FRONT_ENABLED=false (default)" "TFLUNA_FRONT_ENABLED=false" "$ENV_CONTENT"
-assert_contains "TFLUNA_EDGE_ENABLED=false (default)" "TFLUNA_EDGE_ENABLED=false" "$ENV_CONTENT"
+assert_not_contains "retired TF-Luna keys are not written" "TFLUNA_" "$ENV_CONTENT"
 assert_contains "GNSS fallback comment explains .env role" "# GNSS_* values below are fallback-only first-boot defaults." "$ENV_CONTENT"
 assert_contains "GNSS fallback comment points to YAML/GUI" "# Active operator GNSS settings live in docker/config/mowgli/mowgli_robot.yaml and the GUI." "$ENV_CONTENT"
 legacy_protocol_key="GPS_""PROTOCOL="
@@ -139,7 +138,7 @@ section "Universal USB presets keep GNSS_SERIAL_DEVICE on a by-id path"
 repo_usb="$SANDBOX/repo_usb"
 sandbox_repo "$repo_usb"
 harness_init "$repo_usb"
-harness_set_preset gnss=ublox gnss_connection=usb lidar=none tfluna=none
+harness_set_preset gnss=ublox gnss_connection=usb lidar=none
 
 if ! harness_run; then
   fail "harness_run for USB GNSS preset" "non-zero exit"
@@ -161,8 +160,6 @@ GNSS_SERIAL_DEVICE=/dev/ttyAMA4
 GNSS_SERIAL_BAUD=921600
 LIDAR_ENABLED=false
 LIDAR_TYPE=none
-TFLUNA_FRONT_ENABLED=false
-TFLUNA_EDGE_ENABLED=false
 EOF
 
 load_preset_file "$repo_unicore/install/.preset"
@@ -182,7 +179,7 @@ repo_feature="$SANDBOX/repo_feature"
 sandbox_repo "$repo_feature"
 harness_init "$repo_feature"
 IMAGE_TAG="feat-universal-gnss-integration"
-harness_set_preset gnss=auto gnss_connection=uart lidar=none tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=none
 
 if ! harness_run; then
   fail "harness_run for custom feature image tag" "non-zero exit"
@@ -200,7 +197,7 @@ section "NTRIP env is written without leaking secrets to logs"
 repo_ntrip="$SANDBOX/repo_ntrip"
 sandbox_repo "$repo_ntrip"
 harness_init "$repo_ntrip"
-harness_set_preset gnss=ublox gnss_connection=usb lidar=none tfluna=none \
+harness_set_preset gnss=ublox gnss_connection=usb lidar=none \
   ntrip=true ntrip_host=rtk.local ntrip_port=2102 \
   ntrip_user=operator ntrip_password=super-secret ntrip_mountpoint=FIELD1
 

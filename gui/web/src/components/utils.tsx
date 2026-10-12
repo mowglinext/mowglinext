@@ -20,6 +20,7 @@ const STATE_LABEL_KEYS: Record<string, string> = {
     IDLE_DOCKED: "stateAtBase",
     IDLE: "stateIdle",
     CHARGING: "stateCharging",
+    MANUAL_CHARGING: "stateManualCharging",
     PREFLIGHT_CHECK: "statePreflight",
     UNDOCKING: "stateLeavingBase",
     CALIBRATING_HEADING: "stateCalibration",

@@ -26,6 +26,7 @@ const LED_MODES: { key: string; color: string }[] = [
     { key: "modeCharging", color: "#00ff00" },
     { key: "modeStale", color: "#ff6e00" },
     { key: "modeLowBattery", color: "#ff0000" },
+    { key: "modeTransit", color: "#ffaa28" },
     { key: "modeMowing", color: "#00ff00" },
     { key: "modeMowingDegraded", color: "#ff6e00" },
     { key: "modeRecording", color: "#00c8ff" },
@@ -107,11 +108,11 @@ export const LedsSection: React.FC<Props> = ({
                         <Form layout="vertical" size="small">
                             <Row gutter={[16, 0]}>
                                 <Col xs={24} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_count" data-setting-key="led_count"
                                         label={label("led_count", t("settingsLeds.ledCount"))}
                                         tooltip={t("settingsLeds.ledCountTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.ledCount")} aria-description={t("settingsLeds.ledCountTooltip")}  id="setting-led_count"
                                             value={values.led_count}
                                             onChange={(v) => onChange("led_count", v)}
                                             min={0} max={512} step={1} precision={0}
@@ -120,11 +121,11 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={10}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_spi_device" data-setting-key="led_spi_device"
                                         label={label("led_spi_device", t("settingsLeds.spiDevice"))}
                                         tooltip={t("settingsLeds.spiDeviceTooltip")}
                                     >
-                                        <Input
+                                        <Input id="setting-led_spi_device"
                                             value={values.led_spi_device}
                                             onChange={(e) => onChange("led_spi_device", e.target.value)}
                                             placeholder="/dev/spidev4.1"
@@ -132,11 +133,11 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={6}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_spi_speed_hz" data-setting-key="led_spi_speed_hz"
                                         label={label("led_spi_speed_hz", t("settingsLeds.spiClock"))}
                                         tooltip={t("settingsLeds.spiClockTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.spiClock") + ", Hz"} aria-description={t("settingsLeds.spiClockTooltip")}  id="setting-led_spi_speed_hz"
                                             value={values.led_spi_speed_hz}
                                             onChange={(v) => onChange("led_spi_speed_hz", v)}
                                             min={1} step={100000} precision={0}
@@ -153,11 +154,11 @@ export const LedsSection: React.FC<Props> = ({
                         <Form layout="vertical" size="small">
                             <Row gutter={[16, 0]}>
                                 <Col xs={24} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_brightness" data-setting-key="led_brightness"
                                         label={label("led_brightness", t("settingsLeds.brightness"))}
                                         tooltip={t("settingsLeds.brightnessTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.brightness")} aria-description={t("settingsLeds.brightnessTooltip")}  id="setting-led_brightness"
                                             value={values.led_brightness}
                                             onChange={(v) => onChange("led_brightness", v)}
                                             min={0} max={1} step={0.05}
@@ -166,11 +167,11 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_idle_scale" data-setting-key="led_idle_scale"
                                         label={label("led_idle_scale", t("settingsLeds.idleBrightness"))}
                                         tooltip={t("settingsLeds.idleBrightnessTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.idleBrightness")} aria-description={t("settingsLeds.idleBrightnessTooltip")}  id="setting-led_idle_scale"
                                             value={values.led_idle_scale}
                                             onChange={(v) => onChange("led_idle_scale", v)}
                                             min={0} max={1} step={0.05}
@@ -179,11 +180,11 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_refresh_hz" data-setting-key="led_refresh_hz"
                                         label={label("led_refresh_hz", t("settingsLeds.refreshRate"))}
                                         tooltip={t("settingsLeds.refreshRateTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.refreshRate") + ", Hz"} aria-description={t("settingsLeds.refreshRateTooltip")}  id="setting-led_refresh_hz"
                                             value={values.led_refresh_hz}
                                             onChange={(v) => onChange("led_refresh_hz", v)}
                                             min={1} max={60} step={1}
@@ -200,11 +201,11 @@ export const LedsSection: React.FC<Props> = ({
                         <Form layout="vertical" size="small">
                             <Row gutter={[16, 0]}>
                                 <Col xs={12} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_low_battery_percent" data-setting-key="led_low_battery_percent"
                                         label={label("led_low_battery_percent", t("settingsLeds.lowBattery"))}
                                         tooltip={t("settingsLeds.lowBatteryTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.lowBattery") + ", %"} aria-description={t("settingsLeds.lowBatteryTooltip")}  id="setting-led_low_battery_percent"
                                             value={values.led_low_battery_percent}
                                             onChange={(v) => onChange("led_low_battery_percent", v)}
                                             min={0} max={100} step={1}
@@ -213,11 +214,11 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_charge_full_percent" data-setting-key="led_charge_full_percent"
                                         label={label("led_charge_full_percent", t("settingsLeds.chargeFull"))}
                                         tooltip={t("settingsLeds.chargeFullTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.chargeFull") + ", %"} aria-description={t("settingsLeds.chargeFullTooltip")}  id="setting-led_charge_full_percent"
                                             value={values.led_charge_full_percent}
                                             onChange={(v) => onChange("led_charge_full_percent", v)}
                                             min={0} max={100} step={1}
@@ -226,11 +227,11 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_status_timeout_s" data-setting-key="led_status_timeout_s"
                                         label={label("led_status_timeout_s", t("settingsLeds.statusTimeout"))}
                                         tooltip={t("settingsLeds.statusTimeoutTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.statusTimeout") + ", s"} aria-description={t("settingsLeds.statusTimeoutTooltip")}  id="setting-led_status_timeout_s"
                                             value={values.led_status_timeout_s}
                                             onChange={(v) => onChange("led_status_timeout_s", v)}
                                             min={0.5} step={0.5}
@@ -239,11 +240,11 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_keepalive_s" data-setting-key="led_keepalive_s"
                                         label={label("led_keepalive_s", t("settingsLeds.keepalive"))}
                                         tooltip={t("settingsLeds.keepaliveTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.keepalive") + ", s"} aria-description={t("settingsLeds.keepaliveTooltip")}  id="setting-led_keepalive_s"
                                             value={values.led_keepalive_s}
                                             onChange={(v) => onChange("led_keepalive_s", v)}
                                             min={0.2} step={0.5}
@@ -252,11 +253,11 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_device_retry_s" data-setting-key="led_device_retry_s"
                                         label={label("led_device_retry_s", t("settingsLeds.deviceRetry"))}
                                         tooltip={t("settingsLeds.deviceRetryTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.deviceRetry") + ", s"} aria-description={t("settingsLeds.deviceRetryTooltip")}  id="setting-led_device_retry_s"
                                             value={values.led_device_retry_s}
                                             onChange={(v) => onChange("led_device_retry_s", v)}
                                             min={1} step={5}
@@ -265,14 +266,14 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_charge_complete_timeout_s" data-setting-key="led_charge_complete_timeout_s"
                                         label={label(
                                             "led_charge_complete_timeout_s",
                                             t("settingsLeds.chargeCompleteTimeout"),
                                         )}
                                         tooltip={t("settingsLeds.chargeCompleteTimeoutTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.chargeCompleteTimeout") + ", s"} aria-description={t("settingsLeds.chargeCompleteTimeoutTooltip")}  id="setting-led_charge_complete_timeout_s"
                                             value={values.led_charge_complete_timeout_s}
                                             onChange={(v) => onChange("led_charge_complete_timeout_s", v)}
                                             min={0} step={60}
@@ -281,14 +282,14 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_charge_complete_dim_scale" data-setting-key="led_charge_complete_dim_scale"
                                         label={label(
                                             "led_charge_complete_dim_scale",
                                             t("settingsLeds.chargeCompleteDim"),
                                         )}
                                         tooltip={t("settingsLeds.chargeCompleteDimTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.chargeCompleteDim")} aria-description={t("settingsLeds.chargeCompleteDimTooltip")}  id="setting-led_charge_complete_dim_scale"
                                             value={values.led_charge_complete_dim_scale}
                                             onChange={(v) => onChange("led_charge_complete_dim_scale", v)}
                                             min={0} max={1} step={0.05}
@@ -297,14 +298,14 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_charge_complete_indicator_count" data-setting-key="led_charge_complete_indicator_count"
                                         label={label(
                                             "led_charge_complete_indicator_count",
                                             t("settingsLeds.chargeCompleteIndicatorCount"),
                                         )}
                                         tooltip={t("settingsLeds.chargeCompleteIndicatorCountTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.chargeCompleteIndicatorCount")} aria-description={t("settingsLeds.chargeCompleteIndicatorCountTooltip")}  id="setting-led_charge_complete_indicator_count"
                                             value={values.led_charge_complete_indicator_count}
                                             onChange={(v) => onChange("led_charge_complete_indicator_count", v)}
                                             min={0} max={values.led_count ?? 512} step={1} precision={0}
@@ -313,14 +314,14 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={8}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_charge_complete_indicator_scale" data-setting-key="led_charge_complete_indicator_scale"
                                         label={label(
                                             "led_charge_complete_indicator_scale",
                                             t("settingsLeds.chargeCompleteIndicatorScale"),
                                         )}
                                         tooltip={t("settingsLeds.chargeCompleteIndicatorScaleTooltip")}
                                     >
-                                        <InputNumber
+                                        <InputNumber aria-label={t("settingsLeds.chargeCompleteIndicatorScale")} aria-description={t("settingsLeds.chargeCompleteIndicatorScaleTooltip")}  id="setting-led_charge_complete_indicator_scale"
                                             value={values.led_charge_complete_indicator_scale}
                                             onChange={(v) => onChange("led_charge_complete_indicator_scale", v)}
                                             min={0} max={1} step={0.05}
@@ -329,14 +330,14 @@ export const LedsSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={16}>
-                                    <Form.Item
+                                    <Form.Item htmlFor="setting-led_charge_complete_indicator_ids" data-setting-key="led_charge_complete_indicator_ids"
                                         label={label(
                                             "led_charge_complete_indicator_ids",
                                             t("settingsLeds.chargeCompleteIndicatorIds"),
                                         )}
                                         tooltip={t("settingsLeds.chargeCompleteIndicatorIdsTooltip")}
                                     >
-                                        <Input
+                                        <Input id="setting-led_charge_complete_indicator_ids"
                                             value={values.led_charge_complete_indicator_ids}
                                             onChange={(e) => onChange("led_charge_complete_indicator_ids", e.target.value)}
                                             placeholder="0,4,8,12"

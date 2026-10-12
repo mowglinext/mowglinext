@@ -1,0 +1,11 @@
+# Buffers each input polygon outward by the live obstacle_margin coverage_server
+# is actually planning with (bufferRingOutward, coverage_planning.cpp) — the
+# same growth every real coverage plan applies to a drawn obstacle hole. Read-
+# only, stateless: for the GUI's toggleable "obstacle clearance preview" map
+# overlay (docs/claude/codemaps/mowgli_coverage.md), never consumed by planning
+# itself. buffered[i] corresponds to obstacles[i]; a degenerate input ring is
+# echoed back unbuffered rather than dropped (mirrors bufferRingOutward).
+geometry_msgs/Polygon[] obstacles
+---
+geometry_msgs/Polygon[] buffered
+float64 obstacle_margin_m

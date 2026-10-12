@@ -119,16 +119,6 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
             }]
         },
         {
-            key: "mower_s2",
-            label: t('mowerActions.mowNextZone'),
-            actions: [{
-                command: "high_level_control",
-                args: {
-                    Command: 4,
-                }
-            }]
-        },
-        {
             // Match MapToolbar: resting state is IDLE_DOCKED (BT never emits
             // plain IDLE except as the manual-mow fallthrough).
             key: (highLevelStatus.state_name == "IDLE_DOCKED" || highLevelStatus.state_name == "IDLE") ? "continue" : "pause",

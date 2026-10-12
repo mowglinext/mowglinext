@@ -87,10 +87,18 @@ env_yaml_value() {
   printf '%s\n' "$value"
 }
 
+# The GNSS_NTRIP_* keys in docker/.env are fallback-only first-boot defaults
+# (the sidecar resolves mowgli_robot.yaml first). They mirror the runtime
+# yaml when it exists and the SPARSE SEED before the first write, so a
+# re-run never changes them: NTRIP is GUI-owned and the installer no longer
+# has an opinion of its own.
 load_gnss_ntrip_runtime_defaults() {
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local yaml_enabled yaml_host yaml_port yaml_user yaml_password yaml_mountpoint
 
+  if [[ ! -f "$yaml_file" ]]; then
+    yaml_file="$INSTALL_DIR/config/mowgli/mowgli_robot.yaml"
+  fi
   if [[ ! -f "$yaml_file" ]]; then
     return 0
   fi
@@ -225,6 +233,17 @@ setup_env() {
   : "${MOWER_IP:=10.0.0.161}"
   : "${DISABLE_BLUETOOTH:=true}"
   : "${ENABLE_FOXGLOVE:=true}"
+  # mosquitto broker (Home Assistant / MQTT integrations): opt-in on a fresh
+  # install, but an existing install keeps the broker it already runs — the
+  # toggle did not exist before 2026-09-29, so an absent key must not switch
+  # off a Home Assistant integration on the next update.
+  if [[ -z "${ENABLE_MQTT:-}" ]]; then
+    if grep -qs 'mowgli-mqtt' "$FINAL_COMPOSE_FILE" 2>/dev/null; then
+      ENABLE_MQTT="true"
+    else
+      ENABLE_MQTT="false"
+    fi
+  fi
 
   # Main GNSS receiver.
   # docker/.env now carries fallback-only GNSS defaults for first boot and
@@ -263,17 +282,6 @@ setup_env() {
     : "${LIDAR_BAUD:=230400}"
   fi
 
-  # TF-Luna
-  : "${TFLUNA_FRONT_ENABLED:=false}"
-  : "${TFLUNA_FRONT_PORT:=/dev/tfluna_front}"
-  : "${TFLUNA_FRONT_UART_DEVICE:=/dev/ttyAMA3}"
-  : "${TFLUNA_FRONT_BAUD:=115200}"
-
-  : "${TFLUNA_EDGE_ENABLED:=false}"
-  : "${TFLUNA_EDGE_PORT:=/dev/tfluna_edge}"
-  : "${TFLUNA_EDGE_UART_DEVICE:=/dev/ttyAMA2}"
-  : "${TFLUNA_EDGE_BAUD:=115200}"
-
   # Image tag — re-validate IMAGE_TAG (might have been loaded from .env
   # by load_env_defaults_file or set by --image-tag=/preset) and rebuild the
   # *_IMAGE_DEFAULT vars to match. mowglinext.sh unsets all *_IMAGE values
@@ -290,6 +298,7 @@ setup_env() {
   : "${UNIVERSAL_GNSS_IMAGE:=${UNIVERSAL_GNSS_IMAGE_DEFAULT}}"
   : "${GUI_IMAGE:=${GUI_IMAGE_DEFAULT}}"
   : "${MAVROS_IMAGE:=${MAVROS_IMAGE_DEFAULT}}"
+  : "${OPENMOWER_IMAGE:=${OPENMOWER_IMAGE_DEFAULT}}"
   if [[ -z "${LIDAR_IMAGE:-}" ]]; then
     case "${LIDAR_TYPE:-ldlidar}" in
       rplidar) LIDAR_IMAGE="${LIDAR_RPLIDAR_IMAGE_DEFAULT}" ;;
@@ -308,6 +317,22 @@ setup_env() {
   : "${MAVROS_TGT_SYSTEM:=1}"
   : "${MAVROS_TGT_COMPONENT:=1}"
 
+  # OpenMower electronics (LowLevel board + xESC on the Pi UARTs). GNSS is NOT
+  # affected: the OpenMower GPS is a plain receiver and keeps the Universal
+  # GNSS sidecar, which since #625 is independent of HARDWARE_BACKEND anyway.
+  : "${OPENMOWER_LL_PORT:=/dev/ttyAMA0}"
+  : "${OPENMOWER_XESC_TYPE:=xesc_mini}"
+  : "${OPENMOWER_XESC_LEFT_PORT:=/dev/ttyAMA5}"
+  : "${OPENMOWER_XESC_RIGHT_PORT:=/dev/ttyAMA3}"
+  : "${OPENMOWER_XESC_MOW_PORT:=/dev/ttyAMA4}"
+  case "$OPENMOWER_XESC_TYPE" in
+    xesc_mini|xesc_2040) ;;
+    *)
+      warn "Unknown OPENMOWER_XESC_TYPE=${OPENMOWER_XESC_TYPE} — defaulting to xesc_mini"
+      OPENMOWER_XESC_TYPE="xesc_mini"
+      ;;
+  esac
+
   if [[ "${GNSS_BACKEND:-universal}" == "nmea" ]]; then
     warn_legacy_nmea_backend_once
     GNSS_BACKEND="universal"
@@ -324,6 +349,11 @@ setup_env() {
     enable_mavros="true"
   fi
   MAVROS_ENABLED="$enable_mavros"
+  local enable_openmower="false"
+  if [[ "$HARDWARE_BACKEND" == "openmower" ]]; then
+    enable_openmower="true"
+  fi
+  OPENMOWER_ENABLED="$enable_openmower"
 
   touch "$env_file"
 
@@ -331,6 +361,8 @@ setup_env() {
   upsert_env_key "$env_file" "MOWER_IP" "$MOWER_IP"
   upsert_env_key "$env_file" "DISABLE_BLUETOOTH" "$DISABLE_BLUETOOTH"
   upsert_env_key "$env_file" "ENABLE_FOXGLOVE" "$ENABLE_FOXGLOVE"
+  upsert_env_key "$env_file" "ENABLE_MQTT" "$ENABLE_MQTT"
+  remove_env_key "$env_file" "ENABLE_WATCHTOWER"
   upsert_env_key "$env_file" "IMAGE_TAG" "$IMAGE_TAG"
 
   upsert_env_key "$env_file" "GNSS_BACKEND" "$(effective_gnss_backend 2>/dev/null || printf 'universal\n')"
@@ -345,20 +377,19 @@ setup_env() {
   upsert_env_key "$env_file" "LIDAR_UART_DEVICE" "$LIDAR_UART_DEVICE"
   upsert_env_key "$env_file" "LIDAR_BAUD" "$LIDAR_BAUD"
 
-  upsert_env_key "$env_file" "TFLUNA_FRONT_ENABLED" "$TFLUNA_FRONT_ENABLED"
-  upsert_env_key "$env_file" "TFLUNA_FRONT_PORT" "$TFLUNA_FRONT_PORT"
-  upsert_env_key "$env_file" "TFLUNA_FRONT_UART_DEVICE" "$TFLUNA_FRONT_UART_DEVICE"
-  upsert_env_key "$env_file" "TFLUNA_FRONT_BAUD" "$TFLUNA_FRONT_BAUD"
-
-  upsert_env_key "$env_file" "TFLUNA_EDGE_ENABLED" "$TFLUNA_EDGE_ENABLED"
-  upsert_env_key "$env_file" "TFLUNA_EDGE_PORT" "$TFLUNA_EDGE_PORT"
-  upsert_env_key "$env_file" "TFLUNA_EDGE_UART_DEVICE" "$TFLUNA_EDGE_UART_DEVICE"
-  upsert_env_key "$env_file" "TFLUNA_EDGE_BAUD" "$TFLUNA_EDGE_BAUD"
+  # Retired hardware options (TF-Luna, VESC) are scrubbed from older .env
+  # files so a stale key can never re-select a fragment that no longer exists.
+  remove_env_keys_with_prefix "$env_file" "TFLUNA_"
+  remove_env_key "$env_file" "ENABLE_VESC"
+  remove_env_key "$env_file" "VESC_IMAGE"
+  remove_env_key "$env_file" "VESC_CAN_INTERFACE"
+  remove_env_key "$env_file" "RANGE_IMAGE"
 
   upsert_env_key "$env_file" "MOWGLI_ROS2_IMAGE" "$MOWGLI_ROS2_IMAGE"
   upsert_env_key "$env_file" "UNIVERSAL_GNSS_IMAGE" "$UNIVERSAL_GNSS_IMAGE"
   upsert_env_key "$env_file" "LIDAR_IMAGE" "$LIDAR_IMAGE"
   upsert_env_key "$env_file" "MAVROS_IMAGE" "$MAVROS_IMAGE"
+  upsert_env_key "$env_file" "OPENMOWER_IMAGE" "$OPENMOWER_IMAGE"
   upsert_env_key "$env_file" "GUI_IMAGE" "$GUI_IMAGE"
 
   upsert_env_key "$env_file" "HARDWARE_BACKEND" "$HARDWARE_BACKEND"
@@ -370,6 +401,12 @@ setup_env() {
   upsert_env_key "$env_file" "MAVROS_TGT_SYSTEM" "$MAVROS_TGT_SYSTEM"
   upsert_env_key "$env_file" "MAVROS_TGT_COMPONENT" "$MAVROS_TGT_COMPONENT"
   upsert_env_key "$env_file" "MAVROS_AUTOPILOT" "$MAVROS_AUTOPILOT"
+  upsert_env_key "$env_file" "OPENMOWER_ENABLED" "$OPENMOWER_ENABLED"
+  upsert_env_key "$env_file" "OPENMOWER_LL_PORT" "$OPENMOWER_LL_PORT"
+  upsert_env_key "$env_file" "OPENMOWER_XESC_TYPE" "$OPENMOWER_XESC_TYPE"
+  upsert_env_key "$env_file" "OPENMOWER_XESC_LEFT_PORT" "$OPENMOWER_XESC_LEFT_PORT"
+  upsert_env_key "$env_file" "OPENMOWER_XESC_RIGHT_PORT" "$OPENMOWER_XESC_RIGHT_PORT"
+  upsert_env_key "$env_file" "OPENMOWER_XESC_MOW_PORT" "$OPENMOWER_XESC_MOW_PORT"
 
   remove_legacy_gnss_env_keys "$env_file"
   remove_env_key "$env_file" "GPS_IMAGE"

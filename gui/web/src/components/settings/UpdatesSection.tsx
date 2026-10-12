@@ -1,8 +1,7 @@
 import {useState} from 'react';
-import {Alert, Button, Card, Empty, Segmented, Space, Spin, Tag, Typography} from 'antd';
+import {Alert, Button, Card, Empty, Segmented, Spin, Tag, Typography} from 'antd';
 import {ReloadOutlined} from '@ant-design/icons';
 import {useTranslation} from 'react-i18next';
-import {useNavigate} from 'react-router-dom';
 import {browserBuild, useInstalledVersions, useServedWebBuild} from '../../hooks/useInstalledVersions';
 import {useFirmwareInventory} from '../../hooks/useFirmwareInventory';
 import {browserBuildDiffers, imageVersion} from '../../utils/versions';
@@ -10,13 +9,17 @@ import type {ApiInstalledComponent} from '../../api/Api';
 import './UpdatesSection.css';
 import {UpdateChecks} from './UpdateChecks';
 import {HostUpdaterPanel} from './HostUpdaterPanel';
+import {FirmwareUpdateCard} from './FirmwareUpdateCard';
+import {useHardwareBackend} from '../../hooks/useHardwareBackend';
 
 const {Text} = Typography;
-const order = ['robot', 'gui', 'gps', 'lidar', 'tfluna-front', 'tfluna-edge', 'mavros', 'ntrip', 'mqtt', 'watchtower', 'vesc'];
+const order = ['robot', 'openmower', 'gui', 'gps', 'lidar', 'tfluna-front', 'tfluna-edge', 'mavros', 'ntrip', 'mqtt', 'watchtower', 'vesc'];
 
 export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
     const {t} = useTranslation();
-    const navigate = useNavigate();
+    // Only the Mowgli STM32 is flashed from here; other backends keep their
+    // own firmware (OpenMower: untouched LowLevel + xESC).
+    const {backend} = useHardwareBackend();
     const [advanced, setAdvanced] = useState(false);
     const {data, loading, error, refresh} = useInstalledVersions();
     const firmware = useFirmwareInventory();
@@ -49,7 +52,7 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
             {error && <Alert type="warning" showIcon message={t('updates.fetchFailed')} description={data ? t('updates.showingPrevious') : undefined}/>}
             {data && !data.docker_available && <Alert type="warning" showIcon message={t('updates.dockerUnavailable')}/>}
             {browserBuildDiffers(browserBuild, servedBuild ?? {}) && <Alert type="warning" showIcon message={t('updates.browserStale')} action={<Button onClick={() => window.location.reload()}>{t('updates.reloadBrowser')}</Button>}/>}
-            <HostUpdaterPanel advanced={advanced} inventory={components}/>
+            <HostUpdaterPanel advanced={advanced} inventory={components} firmwareProtocol={firmware.data.firmware_protocol_version}/>
             {advanced && <details className="update-diagnostics"><summary>{t('hostUpdater.diagnostics')}</summary><UpdateChecks/>
             {advanced && <div className="installed-version-toolbar"><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => void refresh()}>{t('updates.refresh')}</Button>{data && <Typography.Paragraph style={{margin: 0}} copyable={{text: versionDetails, tooltips: [t('updates.copy'), t('updates.copied')]}}>{t('updates.copy')}</Typography.Paragraph>}</div>}
             {advanced && <Card title={t('updates.installedSoftware')} size="small">
@@ -62,14 +65,8 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
             </dl><Text type="secondary">{t('updates.browserMeaning')}</Text></Card>}
             {advanced && data?.observed_at && <Text type="secondary">{t('updates.observed', {time: new Date(data.observed_at).toLocaleString()})}</Text>}
             </details>}
-            <Card title={t('updates.mainboard')} size="small">
-                <Space direction="vertical" style={{width: '100%'}}>
-                    <div className="installed-version-heading"><Text code>{firmware.data.firmware_version || unknown}</Text><Tag color={firmware.state === 'compatible' ? 'success' : firmware.state === 'incompatible' ? 'error' : 'default'}>{t(`updates.firmwareStates.${firmware.state}`)}</Tag></div>
-                    <Text type="secondary">{t('updates.firmwareMeaning')}</Text>
-                    {advanced && <dl><dt>{t('updates.protocol')}</dt><dd>{firmware.data.firmware_protocol_version || unknown}</dd><dt>{t('updates.configuredModel')}</dt><dd>{configuredModel || unknown}</dd><dt>{t('updates.boardRevision')}</dt><dd>{t('updates.notReported')}</dd></dl>}
-                    {firmware.state === 'incompatible' && <Button danger onClick={() => void navigate('/onboarding?step=firmware&flash=1')}>{t('mowgliNextPage.firmwareFlashCta')}</Button>}
-                </Space>
-            </Card>
+            {backend === 'mowgli' && <FirmwareUpdateCard firmwareVersion={firmware.data.firmware_version} protocolVersion={firmware.data.firmware_protocol_version}
+                state={firmware.state} configuredModel={configuredModel} advanced={advanced}/>}
 
         </div>
     );

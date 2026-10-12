@@ -64,3 +64,7 @@ Published with **numeric state 1 (IDLE)** and `state_name="DIG_OBSTRUCTION"` whi
 - Reaching the charger also clears the latch. Manual / recording modes (3/5/6/7) are never blocked by the guard.
 
 The GUI shows the state as "Dig obstruction" with the recovery hint, and the map toolbar offers Continue (Play) rather than Pause while it is held.
+
+### MANUAL_CHARGING (`ManualChargeGuard`, mid-mow charge detection)
+
+Distinct from the end-of-mow `CHARGING` / `CRITICAL_BATTERY_CHARGING` states above: this fires while a `FollowCoveragePath`/`FollowPath` goal is actively running, if the robot is detected charging (e.g. it drifted onto or near the dock mid-coverage). `ManualChargeGuard` (inside `StripGuards`, `main_tree.xml:972-1000`) debounces the charger bit 3.0 s to survive dock-contact bounce, then publishes **numeric state 1 (IDLE)** with `state_name="MANUAL_CHARGING"` and pauses — no auto-undock. It waits up to 24 h (17280 × 5 s) for the operator to physically undock the robot; on timeout the run is treated as finished. Exposed on the GUI dashboard as a charge hold (commits `c8da653c`/`fb2b18cb`/`3762f1f4`, 2026-09-04 to 09-24).

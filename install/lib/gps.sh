@@ -39,6 +39,9 @@ pick_serial_by_id() {
     done
   fi
 
+  if [[ "${NON_INTERACTIVE:-false}" == "true" && -z "$default_idx" && "${#candidates[@]}" -gt 1 ]]; then
+    warn "Several USB serial devices found; taking the first — pass --gnss-device= to choose"
+  fi
   prompt "$MSG_CHOICE" "${default_idx:-1}"
   choice="$REPLY"
 
@@ -63,8 +66,13 @@ preset_key_loaded() {
   return 1
 }
 
+# The installer only wires the GNSS serial LINK: transport (uart/usb) and the
+# device path, which drive the udev symlink and the UART overlay. Receiver
+# family, baud upgrade, profile and NTRIP belong to the sidecar
+# (gnss_config_apply at container start) and the GUI; the values recorded here
+# are first-boot defaults only. There is deliberately no baud probing.
 configure_gps() {
-  step "Universal GNSS configuration"
+  step "GNSS serial link"
 
   if declare -F apply_existing_yaml_gnss_state >/dev/null 2>&1; then
     apply_existing_yaml_gnss_state
@@ -80,13 +88,7 @@ configure_gps() {
   : "${GNSS_CONNECTION_HINT:=}"
 
   local serial_preconfigured=false
-  local baud_preconfigured=false
-  local probe_mode="ask"
-  local receiver_family
-  local probe_backend
   local connection
-  local probe_port=""
-  local default_baud="921600"
 
   if [[ "$(effective_gnss_backend "${GNSS_BACKEND:-universal}")" == "disabled" ]]; then
     info "Direct GNSS configuration disabled for HARDWARE_BACKEND=${HARDWARE_BACKEND:-mowgli}"
@@ -95,19 +97,9 @@ configure_gps() {
 
   if [[ "${PRESET_LOADED:-false}" == "true" ]]; then
     if [ "${STATE_ACTIVE_PRESET_COUNT:-0}" -gt 0 ]; then
-      if preset_key_loaded GNSS_SERIAL_DEVICE; then
-        serial_preconfigured=true
-      fi
-      if preset_key_loaded GNSS_SERIAL_BAUD; then
-        baud_preconfigured=true
-      fi
-    else
-      if [[ -n "${GNSS_SERIAL_DEVICE:-}" ]]; then
-        serial_preconfigured=true
-      fi
-      if [[ -n "${GNSS_SERIAL_BAUD:-}" ]]; then
-        baud_preconfigured=true
-      fi
+      preset_key_loaded GNSS_SERIAL_DEVICE && serial_preconfigured=true
+    elif [[ -n "${GNSS_SERIAL_DEVICE:-}" ]]; then
+      serial_preconfigured=true
     fi
   fi
 
@@ -115,10 +107,11 @@ configure_gps() {
   GNSS_STACK="universal"
   GNSS_STATUS_SOURCE="universal"
   GNSS_TRANSPORT="serial"
-  receiver_family="$(normalize_gnss_receiver_family "${GNSS_RECEIVER_FAMILY:-auto}")"
-  GNSS_RECEIVER_FAMILY="$receiver_family"
+  GNSS_RECEIVER_FAMILY="$(normalize_gnss_receiver_family "${GNSS_RECEIVER_FAMILY:-auto}")"
 
   connection="$(gnss_connection_from_serial_device "${GNSS_SERIAL_DEVICE:-}")"
+  [[ -n "$connection" ]] || connection="${GNSS_CONNECTION_HINT:-uart}"
+
   if [[ "$serial_preconfigured" != "true" || -z "${GNSS_SERIAL_DEVICE:-}" ]]; then
     local connection_default="2"
     [[ "$connection" == "usb" ]] && connection_default="1"
@@ -136,7 +129,9 @@ configure_gps() {
         ;;
       2)
         connection="uart"
-        pick_uart_port "${GNSS_SERIAL_DEVICE:-/dev/ttyAMA4}"
+        local gnss_default="${GNSS_SERIAL_DEVICE:-}"
+        openmower_uart_owner "$gnss_default" >/dev/null && gnss_default=""
+        pick_free_uart_port "${gnss_default:-$(default_gnss_uart_device)}" "GNSS" || return 1
         GNSS_SERIAL_DEVICE="$REPLY"
         ;;
       *)
@@ -145,29 +140,16 @@ configure_gps() {
         ;;
     esac
   else
-    info "Universal GNSS device pre-configured: ${GNSS_SERIAL_DEVICE}"
-    probe_mode="auto"
+    info "GNSS device pre-configured: ${GNSS_SERIAL_DEVICE}"
+    uart_port_is_free "$GNSS_SERIAL_DEVICE" "GNSS" || return 1
   fi
 
-  default_baud="${GNSS_SERIAL_BAUD:-921600}"
-  probe_port="${GNSS_SERIAL_DEVICE:-}"
-  case "$receiver_family" in
-    ublox|auto) probe_backend="ublox" ;;
-    unicore) probe_backend="unicore" ;;
-    *)          probe_backend="nmea" ;;
-  esac
-
-  if [[ "$baud_preconfigured" != "true" && -n "$probe_port" ]]; then
-    prompt_or_probe_baud "$probe_port" "$probe_backend" "$default_baud" "$probe_mode"
-    GNSS_SERIAL_BAUD="$REPLY"
-    maybe_upgrade_unicore_baud "$probe_port" "$GNSS_SERIAL_BAUD" "$probe_mode"
-    maybe_upgrade_ublox_baud "$probe_port" "$GNSS_SERIAL_BAUD" "$probe_mode"
-  elif [[ -z "${GNSS_SERIAL_BAUD:-}" ]]; then
-    GNSS_SERIAL_BAUD="$default_baud"
-  fi
+  # Explicit --gnss-baud wins, then the value already in mowgli_robot.yaml
+  # (apply_existing_yaml_gnss_state), then the sidecar's canonical default.
+  : "${GNSS_SERIAL_BAUD:=921600}"
 
   echo ""
-  info "Universal GNSS : receiver_family=$GNSS_RECEIVER_FAMILY transport=$GNSS_TRANSPORT device=$GNSS_SERIAL_DEVICE baud=$GNSS_SERIAL_BAUD"
+  info "GNSS link : receiver_family=$GNSS_RECEIVER_FAMILY transport=$GNSS_TRANSPORT device=$GNSS_SERIAL_DEVICE baud=$GNSS_SERIAL_BAUD"
   return 0
 }
 

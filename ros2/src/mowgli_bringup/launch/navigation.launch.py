@@ -288,6 +288,12 @@ def generate_launch_description() -> LaunchDescription:
     # frame; it is 0 on this stack but kept general.
     lidar_height_m = 0.30
     lidar_mount_yaw = 0.0
+    # LIDAR position offset from base_link (same lidar_x/lidar_y the URDF
+    # uses, mowgli.launch.py:111-112) — needed by the corridor-ignore filter
+    # to project a beam's map-frame endpoint, which the ground filter never
+    # needed (angle-only gravity projection).
+    lidar_x_m = 0.0
+    lidar_y_m = 0.0
     # Bound unconditionally: the `if rp:` below is not guaranteed to run, and
     # these are read later from inside _inject_dock_pose_and_speeds. Leaving them
     # to the branch is the UnboundLocalError that crash-looped the stack once
@@ -296,6 +302,8 @@ def generate_launch_description() -> LaunchDescription:
     if rp:
         lidar_height_m = float(rp.get("lidar_z", lidar_height_m))
         lidar_mount_yaw = float(rp.get("lidar_yaw", 0.0)) - float(rp.get("imu_yaw", 0.0))
+        lidar_x_m = float(rp.get("lidar_x", 0.0))
+        lidar_y_m = float(rp.get("lidar_y", 0.0))
         # Footprint geometry comes from robot_config_util so that this and the
         # inflation floor below cannot drift apart — see chassis_footprint().
         fp_f, fp_r, fp_hw = chassis_footprint(rp)
@@ -1427,6 +1435,16 @@ def generate_launch_description() -> LaunchDescription:
              # forward ground returns survive as phantom obstacles.
              "lidar_height_m": lidar_height_m,
              "lidar_mount_yaw": lidar_mount_yaw,
+             # LIDAR-ignore corridor filter (costmap_scan_filter_node's third
+             # stage): map-frame projection geometry (position offset — the
+             # ground filter above only ever needed the yaw) plus the pose
+             # freshness gate. A stale pose must never suppress LiDAR near an
+             # operator-drawn corridor while the robot doesn't actually know
+             # it is there — same "stale -> pass-through" rule the ground
+             # filter already applies to a stale IMU sample.
+             "lidar_x_m": lidar_x_m,
+             "lidar_y_m": lidar_y_m,
+             "corridor_pose_max_age_s": 1.0,
              # Ground-filter floor raised 0.08 → 0.15 m (2026-06-12). At
              # 0.08 a phantom ground strike only needs ~1.5° of IMU tilt
              # error at 3 m range to pass as an "obstacle" — on a bumpy

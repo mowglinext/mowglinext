@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.22.1)
 project(mowgli_map)
 
 # ---------------------------------------------------------------------------
@@ -46,6 +46,7 @@ add_library(mowgli_map_lib STATIC
   src/area_manager.cpp
   src/costmap_filters.cpp
   src/progress_tracker.cpp
+  src/lidar_corridor_manager.cpp
 )
 
 target_include_directories(mowgli_map_lib PUBLIC
@@ -55,6 +56,7 @@ target_include_directories(mowgli_map_lib PUBLIC
 )
 
 target_link_libraries(mowgli_map_lib
+  ${visualization_msgs_TARGETS}
   ${rclcpp_TARGETS}
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
@@ -281,6 +283,14 @@ if(BUILD_TESTING)
   target_include_directories(test_boundary_classifier PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${Boost_INCLUDE_DIRS}
+  )
+
+  # Pure logic, no ROS deps — per-area mow angle / perimeter winding overrides.
+  ament_add_gtest(test_area_coverage_lines
+    test/test_area_coverage_lines.cpp
+  )
+  target_include_directories(test_area_coverage_lines PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
   # Pure logic, no ROS deps — which gates a SetDockingPoint request must pass.

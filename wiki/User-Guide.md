@@ -372,7 +372,7 @@ The Wiki [FAQ](https://github.com/mowglinext/mowglinext/wiki/FAQ) is the long ve
 
 **Symptoms:** robot runs over the edge of a polygon, or mows outside a recorded area.
 
-**Diagnose:** map view → check that the area's polygon actually covers what you intended. Coverage plans **inside** the recorded boundary: the outermost swath centreline sits `chassis_safety_inset` (0.20 m by default, Settings → Mowing) in from it, so a strip of that width along the edge is normally left uncut on purpose.
+**Diagnose:** map view → check that the area's polygon actually covers what you intended. By default (`chassis_safety_inset` = 0, Settings → Mowing) the outermost pass rides **on** the recorded boundary so the blade mows right to the edge — the chassis straddling the line there is expected, not a violation. To keep the whole body inside instead, raise `chassis_safety_inset` to about half your chassis width (this leaves a strip of roughly that width minus half the cut width unmown along the edge). v1.4.0 and earlier defaulted to 0.20 m, which left a strip of about 0.1 m uncut.
 
 **Fix:** **Edit Map** → click the polygon → drag vertices. If the polygon is correct but the robot still wanders, the *yaw* is wrong (see "Robot drifts in odom" above) — straight-line FTCController error becomes yaw-driven.
 

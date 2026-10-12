@@ -11,7 +11,7 @@
 | Run headless Webots sim / E2E | `ros2/Makefile` `sim` (L81), `e2e-test` (L91), `e2e-test-no-lidar` (L111); harnesses `ros2/src/e2e_test.py`, `ros2/src/e2e_test_no_lidar.py` |
 | Sim will not start ("Failed to find a free participant", Webots IPC socket) | `ros2/scripts/sim-stop.sh` — SIGINT `ros2 launch`, kills Webots + node stragglers, wipes `/dev/shm/cyclone*`, `/tmp/webots/*` (L60-64) |
 | Change the production image | `ros2/Dockerfile` stage table below; `.github/workflows/ros2-docker.yml` builds target `runtime` for amd64+arm64 |
-| Bump GTSAM / Fields2Cover / ublox_dgnss pins | `ros2/Dockerfile` L13-129 (GTSAM 4.3a1, F2C v2.0.0 + v3 @ `884d895`) and L142-168 (`UBLOX_DGNSS_REF/SHA`) **and** the mirrored recipes in `.github/workflows/ros2-ci.yml` (GTSAM + F2C cache keys) |
+| Bump GTSAM / Fields2Cover / ublox_dgnss pins | `ros2/Dockerfile` L13-129 (GTSAM 4.3a1, F2C **v3 only** @ `884d895` — the v2.0.0 stage was removed entirely by the Lyrical migration, commit `7035a236`) and L142-168 (`UBLOX_DGNSS_REF/SHA`) **and** the mirrored recipes in `.github/workflows/ros2-ci.yml` (GTSAM + F2C cache keys) |
 | Add a new ROS package to the image | `ros2/Dockerfile` deps-stage `COPY … package.xml/CMakeLists.txt` list (L297-340); the sync script picks up `mowgli_*` automatically, non-`mowgli_*` names need an explicit link (see `fusion_graph`, L175-177) |
 | Format C++ | `make format` / `ros2/scripts/format.sh [--check]` (clang-format 18, style `ros2/.clang-format`, skips `opennav_coverage`); CI = `git-clang-format-18` on changed lines vs `origin/main` |
 | Lint C++ | `make lint` (cppcheck `--enable=all` + cpplint with `ros2/CPPLINT.cfg`); CI cppcheck is report-only on changed files |
@@ -96,7 +96,7 @@
 | `test` / `clean` | `./scripts/test.sh` / `rm -rf build/ install/ log/` |
 | `sim-stop` | `scripts/sim-stop.sh` |
 | `sim` | `sim-stop` then `ros2 launch mowgli_bringup sim_full_system.launch.py headless:=true use_rviz:=false` with `DISPLAY=:99` |
-| `e2e-test` | `sim-stop build` → launch sim in background → `sleep 90` → `python3 src/e2e_test.py` → kill + `sim-stop`, exits with the test's code |
+| `e2e-test` | `sim-stop build` → launch sim in background → poll `ros2/scripts/wait_for_nav2_active.sh` for Nav2 lifecycle-active (kills sim, exits 1 on timeout — commit `09cbad2b`, replacing a fixed `sleep 90`) → `python3 src/e2e_test.py` → kill + `sim-stop`, exits with the test's code |
 | `e2e-test-no-lidar` | same with `use_lidar:=false simulate_gps_degradation:=false` and `src/e2e_test_no_lidar.py` |
 | `docker` / `docker-sim` | `docker build --target runtime\|simulation -t mowgli-ros2[-sim]:latest .` (context `ros2/` — **wrong context**, see Pitfalls) |
 | `lint` / `format` / `format-check` | cppcheck + cpplint / `clang-format -i` / `--dry-run --Werror` over `src/` (**includes** `opennav_coverage`, unlike `format.sh`) |
@@ -107,10 +107,9 @@
 | Stage | Line | From | Contents |
 |-------|------|------|----------|
 | `gtsam-builder` | 13 | `ros:lyrical-ros-base` | GTSAM 4.3a1 from source → `/opt/gtsam` |
-| `fields2cover-builder` | 50 | ros base | F2C v2.0.0 → `/opt/fields2cover-200` (kept on disk as revert fallback, NOT ldconfig'd) |
-| `fields2cover-v3-builder` | 91 | ros base | F2C v3 @ `884d895b…` + `<iomanip>` patch → `/opt/fields2cover-300` |
+| `fields2cover-v3-builder` | 72 | ros base | F2C v3 @ `884d895b…` + `<iomanip>` patch → `/opt/fields2cover-300`. The F2C v2.0.0 stage (`fields2cover-builder` → `/opt/fields2cover-200`) was removed entirely by the Lyrical migration (commit `7035a236`) — there is no v2 tree on disk any more |
 | `ublox-msgs-builder` | 142 | ros base | `ublox_ubx_msgs` + `ublox_ubx_interfaces` from `cedbossneo/ublox_dgnss` (`UBLOX_DGNSS_SHA=5e1d0cf…`) → `/opt/ublox_msgs` (schema resolution for foxglove_bridge only) |
-| `base` | 171 | ros base | apt runtime deps (Nav2, twist_mux, BT.CPP, grid_map, foxglove-bridge, rtcm-msgs, opennav-docking, Cyclone DDS, ortools, python3-websockets), GTSAM + both F2C trees copied, ldconfig **only** `/opt/fields2cover-300/lib` (L275); L175-178 forces apt IPv4 (marked LOCAL-ONLY) |
+| `base` | 171 | ros base | apt runtime deps (Nav2, twist_mux, BT.CPP, grid_map, foxglove-bridge, rtcm-msgs, opennav-docking, Cyclone DDS, ortools, python3-websockets), GTSAM + the single F2C v3 tree copied, ldconfig'd (L298-299); L175-178 forces apt IPv4 (marked LOCAL-ONLY) |
 | `deps` | 282 | base | colcon/rosdep; COPY of every package's `package.xml`+`CMakeLists.txt` (incl. `opennav_coverage_msgs`, `external/universal-gnss/gnss_ros2`, `tools/motor` → `src/mowgli_tools`); `rosdep install … \|\| true` |
 | `build-interfaces` | 357 | deps | `mowgli_interfaces` only (cache layer) |
 | `build` | 374 | build-interfaces | COPY `ros2/src/` + `tools/motor/`; `touch` COLCON_IGNORE in the 5 upstream `opennav_coverage` subpackages (L387-392); `colcon build -DBUILD_TESTING=OFF --parallel-workers 2` (L404-410); `colcon test -L gtest … \|\| true` (non-blocking, L416-419) |
@@ -159,7 +158,7 @@ make build-full                           # or: make build-pkg PKG=mowgli_behavi
 make test                                 # or: PACKAGES="mowgli_behavior" ./scripts/test.sh
 make format-check && make lint            # ./scripts/format.sh --check is the CI-equivalent (skips opennav_coverage)
 make sim                                  # headless Webots; Foxglove ws://localhost:8765 (needs an X server on :99)
-make e2e-test                             # self-contained: sim-stop + build + sim + 90 s wait + src/e2e_test.py + sim-stop
+make e2e-test                             # self-contained: sim-stop + build + sim + Nav2-readiness poll + src/e2e_test.py + sim-stop
 make e2e-test-no-lidar                    # GPS-only variant, src/e2e_test_no_lidar.py (exit 1 on FAIL)
 python3 -m pytest -q ros2/scripts/test_check_config_drift.py && python3 ros2/scripts/check_config_drift.py   # from repo root, PyYAML only
 python3 ros2/scripts/compute_nav2_params.py --compare --overlay lidar --robot-yaml ros2/src/mowgli_bringup/config/mowgli_robot.yaml
@@ -187,7 +186,7 @@ docker compose -f docker/docker-compose.simulation.yaml up dev-sim   # then: exe
 - `ros2/Dockerfile.dev` no longer exists (removed in the Lyrical migration, #602); anything that still references it should point at `.devcontainer/Dockerfile`.
 - `ros2/Dockerfile` L178 (`Acquire::ForceIPv4`) is labelled "LOCAL-ONLY (do not commit)" (L175) yet is committed and reaches every CI/ghcr image.
 - `make sim` / `make e2e-test` export `DISPLAY=:99` but do not start Xvfb (compose does: `Xvfb :99 … &`); run Xvfb yourself in the devcontainer or Webots fails to open a display.
-- `make e2e-test` is **self-contained** (kills any running sim first, rebuilds, waits a fixed 90 s). `src/e2e_test.py` still drives Gazebo (`gz service /world/garden/…`, L561/577; "garden.sdf" L1447) although the sim is Webots (`sim_full_system.launch.py:20`, `worlds_webots/mowgli_garden.wbt`), and subscribes topics nothing publishes (`/coverage_planner_node/coverage_path` L179, `/gps_degradation_sim/status` L195, `/cmd_vel_smoothed` L203); `e2e_test_no_lidar.py` subscribes `/mowgli/coverage/path` (L102) and its docstring/comments (L12, L458) still say robot_localization dual EKF (see CLAUDE.md Invariant 1). Expect path-deviation and map criteria to report no data until these are re-pointed.
+- `make e2e-test` is **self-contained** (kills any running sim first, rebuilds, and — since commit `09cbad2b` — polls `wait_for_nav2_active.sh` for a Nav2 lifecycle-active event rather than waiting a fixed sleep). `src/e2e_test.py` still drives Gazebo (`gz service /world/garden/…`, L561/577; "garden.sdf" L1447) although the sim is Webots (`sim_full_system.launch.py:20`, `worlds_webots/mowgli_garden.wbt`), and subscribes topics nothing publishes (`/coverage_planner_node/coverage_path` L179, `/gps_degradation_sim/status` L195, `/cmd_vel_smoothed` L203); `e2e_test_no_lidar.py` subscribes `/mowgli/coverage/path` (L102) and its docstring/comments (L12, L458) still say robot_localization dual EKF (see CLAUDE.md Invariant 1). Expect path-deviation and map criteria to report no data until these are re-pointed.
 - `src/precision_monitor.py` subscribes `/gps/pose_sim` (L109) — no publisher in the tree; the `/precision/*` topics stay at their defaults. Neither `precision_monitor.py` copy is in any image.
 - `ros2/scripts/e2e_test.py` and `ros2/scripts/precision_monitor.py` are stale duplicates of the `ros2/src/` versions (the scripts copy still references `/pose`, SLAM map growth, `/ros2_ws/src/scripts/e2e_test.py`); edit the `ros2/src/` files.
 - `systemd/mowgli.service` sets `ROS_DISTRO=jazzy` (L36) and its comment (L19) says jazzy, while `ros2_entrypoint.sh` hardcodes `/opt/ros/lyrical/setup.bash` (L15); `make deploy` rsyncs only `install/` to `/opt/mowgli_ros2/install/` but the unit's `ExecStart` needs `/opt/mowgli_ros2/scripts/ros2_entrypoint.sh` (never synced). The unit `Documentation=` URL points at `cedricziel/mowgli-ros2`. The supported deployment is the Docker installer (`install/mowglinext.sh`); treat the unit as unmaintained.

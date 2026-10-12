@@ -945,3 +945,70 @@ def test_hardware_bridge_launch_injects_the_dig_sensitivity_preset():
     # Injected AFTER the static params file, so the preset wins over it.
     assert source.index("hardware_bridge_params,") < source.index(
         "dig_detector_params(robot_params)")
+
+
+# ---------------------------------------------------------------------------
+# Hardware-backend default overlays (config/backends/<backend>.yaml)
+# ---------------------------------------------------------------------------
+
+_BACKENDS_DIR = _PKG_DIR / "config" / "backends"
+
+
+def _backend_overlay(name: str) -> dict:
+    with open(_BACKENDS_DIR / f"{name}.yaml", "r") as handle:
+        doc = yaml.safe_load(handle) or {}
+    return doc.get("mowgli", {}).get("ros__parameters", {})
+
+
+def test_backend_overlays_only_replace_existing_template_keys():
+    # An overlay changes a DEFAULT; a key the template does not have would be a
+    # backend-only setting hiding outside the template (Invariant 15).
+    template = _template_params()
+    overlays = sorted(_BACKENDS_DIR.glob("*.yaml"))
+    assert overlays, "no backend overlay found"
+    for path in overlays:
+        extra = set(_backend_overlay(path.stem)) - set(template)
+        assert not extra, f"{path.name} adds keys the template lacks: {sorted(extra)}"
+
+
+def test_openmower_defaults_replace_the_template_for_that_backend_only():
+    path = _write_sparse({"datum_lat": 1.0})
+    try:
+        om = load_robot_params(str(_PKG_DIR), runtime_path=path, hardware_backend="openmower")
+        mowgli = load_robot_params(str(_PKG_DIR), runtime_path=path, hardware_backend="mowgli")
+    finally:
+        os.unlink(path)
+    template = _template_params()
+    assert om["ticks_per_meter"] == 1600.0
+    assert om["both_wheels_lift_emergency_ms"] == 100
+    assert om["one_wheel_lift_emergency_ms"] == 2500
+    assert om["max_charge_voltage"] == 29.0
+    for key in _backend_overlay("openmower"):
+        assert mowgli[key] == template[key], key
+
+
+def test_installed_config_still_wins_over_backend_defaults():
+    path = _write_sparse({"both_wheels_lift_emergency_ms": 300})
+    try:
+        om = load_robot_params(str(_PKG_DIR), runtime_path=path, hardware_backend="openmower")
+    finally:
+        os.unlink(path)
+    assert om["both_wheels_lift_emergency_ms"] == 300
+    assert om["one_wheel_lift_emergency_ms"] == 2500
+
+
+def test_hardware_backend_comes_from_the_environment():
+    resolve = _util.resolve_hardware_backend
+    assert resolve({}) == "mowgli"
+    assert resolve({"HARDWARE_BACKEND": " OpenMower "}) == "openmower"
+    # never a path component
+    assert resolve({"HARDWARE_BACKEND": "../../etc/passwd"}) == "mowgli"
+
+
+def test_unknown_backend_has_no_overlay():
+    path = _write_sparse({})
+    try:
+        merged = load_robot_params(str(_PKG_DIR), runtime_path=path, hardware_backend="mavros")
+    finally:
+        os.unlink(path)
+    assert merged["ticks_per_meter"] == _template_params()["ticks_per_meter"]

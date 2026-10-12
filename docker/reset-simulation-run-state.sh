@@ -12,6 +12,8 @@ docker compose -f "${compose_file}" run --rm --no-deps \
   --entrypoint /bin/rm "${service}" -f \
   /ros2_ws/maps/fusion_graph.graph \
   /ros2_ws/maps/fusion_graph.meta \
+  /ros2_ws/maps/fusion_graph.checkpoint \
+  /ros2_ws/maps/fusion_graph.checkpoint.previous \
   /ros2_ws/maps/fusion_graph.scans \
   /ros2_ws/maps/fusion_graph.lidarmap \
   /ros2_ws/maps/coverage_resume.txt
