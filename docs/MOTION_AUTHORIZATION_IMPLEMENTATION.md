@@ -101,6 +101,7 @@ add-area requests reject without altering the live map.
 |---|---|---|
 | FTC swaths, connectors, headlands, deviations | `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav` | 26 command cases, including original 12 negative and 4 positive controls; passed on the final production source |
 | FTC PRE/PIVOT/POST and fallback reverse | Directed full rotation and final Twist sweep; existing costmap collision checks retained | Real-controller wheel-lag turn scenarios and complete footprint tests; passed on the final production source |
+| Webots no-LiDAR full mission | Current coverage/interface/map/nav/behavior overlays plus cached remaining runtime; real launch and unchanged E2E harness | Attempt 14h: four resumable FTC denials, progress to cursor 8157/9947, then simulator proximity-charging hold and 3000 s timeout. Full mowing/HOME/docking completion FAILED; exact rejected commands unresolved |
 | EscapeStartBlocked | Bound action instance -> `/cmd_vel_nav`; geometry, pose, blade, arming and budgets; rejection/halt zero | 17 production-path DDS/command cases; passed on the final production source |
 | Map permission production | #905-compatible `/map_server_node/transit_geometry`; `area.text=mowing|navigation`; revocation before replacement | 30 startup/reload/add/parameter cases; passed on the final production source |
 | Nav2 RPP/RotationShim transit and HOME | BT `NavigateToPose` -> Nav2 -> `/cmd_vel_nav` | No new execution gate. #905 protects planning, not controller corner cutting. OPEN |
@@ -267,19 +268,72 @@ trajectory was followed, and no mowing/HOME/docking completion is claimed.
 This mixed-baseline failure does not establish a regression in current
 production coverage source; its cause remains unconfirmed.
 
-The owned container was stopped after C: fell to approximately 97 MiB free,
-below the 200 MB build/run floor. Later live verification found approximately
-489 MiB available again. The next bounded recovery step is a current coverage
-build/install against compatible dependencies on D:, followed by the same
-strict-readiness mission harness. The validation worker is pursuing that step;
-no production change or physical deployment is authorized by simulation results.
+The owned attempt-13 container was stopped below the 200 MB disk floor. Once
+headroom recovered, current-source coverage was built on D: as UID 1000 against
+the current interface overlay. All 8 focused CTest targets passed (128 GTests).
+The build handoff identifies source `750eb4a1`; the runtime provenance file
+does not independently record its Git SHA. The installed coverage executable
+SHA-256 was `e0c4cc8409e2fd200d8029f30b9f73b08f92eecc4e2170a4f2ea48fb351fcc6b`.
+Mapped-library evidence confirms the current coverage/interface/map overlays;
+the schema-affected cached MQTT bridge was not launched. Other cached packages
+still make this a mixed-baseline integration run.
+
+Attempt 14h passed explicit readiness for all eight Nav2 lifecycle nodes,
+coverage and both drive controllers, and received the real mowing polygon.
+The unchanged no-LiDAR E2E harness ran its full default **3000-second budget**
+in ROS domain 181. The mandatory session monitor started before START. The
+read-only-rootfs task container disabled Docker duplicate logging and stored
+the runner, session and pose logs on D:; it is stopped and removed.
+
+Undocking and planning succeeded. Coverage produced 82 segments, 9947 poses
+and a 383.8 m route. Four early FTC sweep denials aborted follow goals and
+saved resume cursors 57, 118, 212 and 271; subsequent goals resumed and made
+progress. The later saved cursor was 8157/9947 (82% of path poses, **not lawn
+coverage**). At about 1920 seconds, charging became true during the follow
+goal. ManualChargeGuard entered `MANUAL_CHARGING`, canceled motion and held
+zero output while awaiting operator undocking. No override was injected.
+
+The mission **did not complete**. At the full-budget timeout, the unchanged
+harness additionally raised `AttributeError` from `RcutilsLogger.warn`, exiting
+1. Its `Coverage path: 0 poses` metric was unusable despite the actual planned
+and followed path; it also reported incompatible `/cmd_vel` QoS. The monitor
+recorded 30421 samples over 3043.47 seconds, 319.66 m integrated wheel travel,
+and final state `MANUAL_CHARGING`; the E2E harness reported about 313.7 m.
+These distinct distance metrics have not been reconciled. Independent source
+and receipt-time CSV assessment traced charging to the fake bridge's existing
+axle-distance-to-origin rule: it asserts charging inside 0.3 m regardless of
+heading or physical contact. At the rising edge, ground truth was approximately
+`(-0.240,-0.150)` (0.283 m from origin), while fused pose was `(-0.548,-0.150)`.
+Final truth remained about `(0.225,-0.156)` (0.274 m), preserving the charging
+assertion and hold. The cached fake-bridge source has this same rule; battery
+output was fixed at 28 V/full charge. This establishes a proximity-triggered
+simulation hold, not a depleted battery or a new authorization failure. The
+four FTC denials lack exact rejected-command evidence; full mowing is unverified.
+
+All four last logged FTC states were FOLLOWING. Nearest receipt-time fused
+poses lay 0.00075-0.00458 m inside the rectangular outer boundary, at different
+edges. Their headings and preceding published commands are consistent with
+perimeter overshoot, but those commands were previously accepted commands,
+not the rejected Twist. The exact rejection pose, command and branch were not
+logged. This cannot establish a verifier false positive or reconstruct its
+precise sweep. No later authorization denial appeared. The smallest next
+software investigation is one instrumented denial and deterministic replay,
+not another blind full-mission run. Keep the execution invariant and existing
+charging guard intact while investigating.
+
+Ground-truth and fused-pose CSVs use different header time bases. Inspected
+nearest receipt-time pairs differ by approximately 0.263-0.381 m, so raw truth,
+fused map pose and wheel odometry must not be conflated. No boundary-violation
+count is claimed without validating that alignment. Full attempt-14h logs
+and monitor/pose data are retained under task-owned D: scratch. No physical
+robot or shared-service mission was run.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
 area, dock/undock/HOME/charging-resume missions or post-mux hardware-output tests.
-Mission completion, coverage percentage, final-command boundary violations and
-whole-stack CPU/memory overhead therefore remain unmeasured.
+Full mission completion is unverified; lawn coverage percentage, final-command
+boundary violations and whole-stack CPU/memory overhead remain unmeasured.
 
 The existing [OpenMower software hardware simulation](https://github.com/mowglinext/mowglinext/actions/runs/38010148929)
 did execute on `0f66cd8c`: **178/179 checks passed** on its first attempt.
