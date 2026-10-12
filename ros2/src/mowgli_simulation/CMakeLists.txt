@@ -117,6 +117,11 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
 
+  ament_add_pytest_test(test_fake_hardware_blade_status
+    test/test_fake_hardware_blade_status.py
+    ENV ROS_DOMAIN_ID=186
+    TIMEOUT 30
+  )
   ament_add_pytest_test(test_sim_navsat_rtk_fix
     test/test_sim_navsat_rtk_fix.py
   )
