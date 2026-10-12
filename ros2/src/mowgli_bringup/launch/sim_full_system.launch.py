@@ -88,6 +88,7 @@ def generate_launch_description() -> LaunchDescription:
     datum_lon = float(gps_reference["longitude"])
     lever_arm_x = float(antenna_lever_arm["x"])
     lever_arm_y = float(antenna_lever_arm["y"])
+    areas = scenario["areas"]
 
     # ------------------------------------------------------------------
     # Declared arguments
@@ -239,14 +240,17 @@ def generate_launch_description() -> LaunchDescription:
             # ships with empty area_* arrays so a fresh real-robot install
             # never tries to mow a phantom polygon at the GPS datum (see
             # commit history for BLOCKER #1). The sim needs a polygon to
-            # exercise coverage, so override here. 9×6 m rectangle, no
-            # pre-defined obstacles — runtime obstacle tracker handles
-            # whatever appears in the world file.
+            # exercise coverage. Scenario geometry separates the 9×6 m lawn
+            # from the synthetic charger and records its blade-off transit.
+            # Runtime obstacle tracking handles the objects in the world.
             {
-                "area_names": ["main_mow"],
-                "area_polygons": ["-4.5,-3.0;4.5,-3.0;4.5,3.0;-4.5,3.0"],
-                "area_is_navigation": [False],
-                "area_obstacles": [""],
+                "area_names": [area["name"] for area in areas],
+                "area_polygons": [
+                    ";".join(f"{float(x)},{float(y)}" for x, y in area["polygon"])
+                    for area in areas
+                ],
+                "area_is_navigation": [area["is_navigation"] for area in areas],
+                "area_obstacles": [""] * len(areas),
             },
             # Same datum the sim navsat converter projects with (below) —
             # keeps the areas.dat datum stamp / datum-change migration

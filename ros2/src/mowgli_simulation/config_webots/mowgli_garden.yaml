@@ -6,3 +6,12 @@ gps_reference:
 antenna_lever_arm:
   x: 0.30
   y: 0.0
+# The synthetic charger occupies the origin. Keep coverage outside its 0.3 m
+# charging disk, while recording the blade-off dock/staging route explicitly.
+areas:
+  - name: main_mow
+    polygon: [[-4.5, 0.8], [4.5, 0.8], [4.5, 6.8], [-4.5, 6.8]]
+    is_navigation: false
+  - name: dock_transit
+    polygon: [[-2.2, -1.0], [1.0, -1.0], [1.0, 1.8], [-2.2, 1.8]]
+    is_navigation: true
