@@ -58,6 +58,32 @@ TEST(MotionSweeps, EdgeOverhangAndFullRotationRemainPermitted)
   EXPECT_FALSE(geometry->permits({0, 0, 0}, kBody, -0.1, 0, 1, true));
 }
 
+TEST(MotionSweeps, RecordedWebotsEdgeRequestsRejectTranslationButPermitRotation)
+{
+  Message message;
+  // Actual purpose-tagged MarkerArray coordinates and padded local footprint
+  // from attempt 15. These are rejected outgoing requests, not prior commands.
+  Rectangle(message, -4.5, 0.800000011920929, 4.5, 6.800000190734863);
+  Rectangle(message, -2.200000047683716, -1, 1, 1.7999999523162842, "area", "navigation");
+  const auto geometry = Snapshot::parse(message);
+  struct Request
+  {
+    Pose pose;
+    double omega;
+  };
+  const Request requests[] = {
+      {{4.4997399088844361, 6.3355318210314948, -1.5373789320620819}, -0.039188308258679048},
+      {{4.2059910154778049, 0.80012458638621742, -2.997445687174157}, -0.16862997211308312},
+      {{-4.499182166392937, 1.1165191792346709, 1.6857187151013817}, -0.1334378275453616},
+      {{-4.1643221403607216, 6.7986513894022282, 0.10530944771126731}, -0.12320616635863514},
+  };
+  for (const auto& request : requests)
+  {
+    EXPECT_FALSE(geometry->permits(request.pose, kBody, 0.15, request.omega, 0.1, true));
+    EXPECT_TRUE(geometry->permits(request.pose, kBody, 0, request.omega, 0.1, true));
+  }
+}
+
 TEST(MotionSweeps, FullChassisCatchesSubmillimetreHoleBetweenEndpointBodies)
 {
   auto message = Lawn();
