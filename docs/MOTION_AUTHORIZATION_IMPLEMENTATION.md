@@ -101,7 +101,7 @@ add-area requests reject without altering the live map.
 |---|---|---|
 | FTC swaths, connectors, headlands, deviations | `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav` | 26 command cases, including original 12 negative and 4 positive controls; passed on the final production source |
 | FTC PRE/PIVOT/POST and fallback reverse | Directed full rotation and final Twist sweep; existing costmap collision checks retained | Real-controller wheel-lag turn scenarios and complete footprint tests; passed on the final production source |
-| Webots no-LiDAR full mission | Current coverage/interface/map/nav/behavior overlays plus cached remaining runtime; real launch and unchanged E2E harness | Attempt 14h: four resumable FTC denials, progress to cursor 8157/9947, then simulator proximity-charging hold and 3000 s timeout. Full mowing/HOME/docking completion FAILED; exact rejected commands unresolved |
+| Webots no-LiDAR full mission | Current coverage/interface/map/nav/behavior overlays plus cached remaining runtime; real launch and strict E2E harness | Attempt 15: route endpoint reached, but 0% stamped coverage and missing external dock detection caused FAIL. Simulator defects corrected and targeted checks pass; complete mowing/HOME/docking mission still unverified |
 | EscapeStartBlocked | Bound action instance -> `/cmd_vel_nav`; geometry, pose, blade, arming and budgets; rejection/halt zero | 17 production-path DDS/command cases; passed on the final production source |
 | Map permission production | #905-compatible `/map_server_node/transit_geometry`; `area.text=mowing|navigation`; revocation before replacement | 30 startup/reload/add/parameter cases; passed on the final production source |
 | Nav2 RPP/RotationShim transit and HOME | BT `NavigateToPose` -> Nav2 -> `/cmd_vel_nav` | No new execution gate. #905 protects planning, not controller corner cutting. OPEN |
@@ -343,8 +343,46 @@ median tracking threshold. `COVERAGE_INCOMPLETE` remains a failure even when
 path counters later report completion. Timeout and signal termination preserve
 the report's failure status. FTC rejection diagnostics record the actual
 rejected pose/Twist and checked sweep; their geometry fingerprint is evidence
-correlation only, not another permission identity. These changes prepare a new
-mission; they do not establish its completion or whole-system safety.
+correlation only, not another permission identity.
+
+Attempt 15 at `8fcb0176` executed the corrected no-LiDAR mission. Undock and
+planning passed; the 9899-pose route progressed for 368.4 m, with median
+tracking deviation 5.6 mm and p95 58.5 mm. Four early FTC denials were resumed.
+The route reached its endpoint, but the real map reported 0% stamped coverage
+and FollowStrip latched `COVERAGE_INCOMPLETE`. The harness correctly failed
+mowing. Navigation to dock staging succeeded; docking then failed because no
+external dock detection arrived. After over 60 s idle with zero command and no
+charging, signal termination retained FAIL (exit 1). No guard was bypassed.
+This is incomplete mission evidence, not preserved full-system functionality.
+Logs show the simulator requested blade ON but reported an inactive blade
+controller; production stamping correctly rejected it. GNSS projection also
+reported an invalid-identity/provenance warning. Peak observed resource range was roughly
+530-645% CPU and 1.3-1.45 GiB RSS; it is not isolated verifier overhead.
+
+Targeted diagnosis confirmed two simulator producer defects. The fake bridge
+always sent `mower_esc_status=0`, including during ON with 3000 RPM; it now
+reports active only while ON. A real installed-process service/topic regression
+fails against the old binary and passes OFF/ON/OFF against the correction, using
+private test endpoints. Map-server verification remains unchanged.
+The synthetic GNSS relay omitted `position_observation_sequence`; the current
+production association explicitly rejects zero. The relay now pairs the exact
+raw fix header with a nonzero sequence for each increasing raw acquisition plus
+a new ground-truth generation. Duplicates, unset/future raw stamps, replay and
+cached truth cannot refresh it. Both callbacks reset cached observations on ROS
+clock rewind while retaining monotonic sequences.
+
+All 60 simulator Python tests pass; 19 sweep tests include the four actual
+attempt-15 rejected requests and original edge-overhang controls. The captured
+requests are rejected by the real verifier; rotation-only counterparts remain
+permitted. No authorization rule was relaxed. A stationary 60 s Webots probe
+observed 262 fixes/261 zero-identity statuses with zero absolute poses or dock
+detections before the relay correction. After correction it observed 260 fixes,
+260 absolute poses and 599 real dock detections. This establishes the production
+projection/detection connection, not successful physical docking or a completed
+mission. Independent review found and resolved a clock-rewind regression.
+Ground-truth headers currently use wall time while raw fixes use simulation
+time; generation deduplication does not establish ground-truth acquisition-time
+freshness. Receipt alignment and mixed cached packages remain limitations.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
