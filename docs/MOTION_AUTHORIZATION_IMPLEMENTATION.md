@@ -101,12 +101,12 @@ add-area requests reject without altering the live map.
 |---|---|---|
 | FTC swaths, connectors, headlands, deviations | `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav` | 26 command cases, including original 12 negative and 4 positive controls; passed on the final production source |
 | FTC PRE/PIVOT/POST and fallback reverse | Directed full rotation and final Twist sweep; existing costmap collision checks retained | Real-controller wheel-lag turn scenarios and complete footprint tests; passed on the final production source |
-| Webots no-LiDAR full mission | Current coverage/interface/map/nav/behavior overlays plus cached remaining runtime; real launch and strict E2E harness | Attempt 15: route endpoint reached, but 0% stamped coverage and missing external dock detection caused FAIL. Simulator defects corrected and targeted checks pass; complete mowing/HOME/docking mission still unverified |
+| Webots no-LiDAR mission cycle | Current coverage/interface/map/nav/behavior overlays plus cached remaining runtime; real launch and strict E2E harness | Attempt 17 PASS: undock, plan, mow, return-to-dock and charging; 2539 s. Three recovery cursor advances omit partial spans. Exact area coverage, explicit HOME command and charging-resume remain unverified |
 | EscapeStartBlocked | Bound action instance -> `/cmd_vel_nav`; geometry, pose, blade, arming and budgets; rejection/halt zero | 17 production-path DDS/command cases; passed on the final production source |
 | Map permission production | #905-compatible `/map_server_node/transit_geometry`; `area.text=mowing|navigation`; revocation before replacement | 30 startup/reload/add/parameter cases; passed on the final production source |
-| Nav2 RPP/RotationShim transit and HOME | BT `NavigateToPose` -> Nav2 -> `/cmd_vel_nav` | No new execution gate. #905 protects planning, not controller corner cutting. OPEN |
+| Nav2 RPP/RotationShim transit and HOME | BT `NavigateToPose` -> Nav2 -> `/cmd_vel_nav` | Default staging transit completed in attempt 17. No new execution gate; #905 protects planning, not controller corner cutting. Explicit HOME interruption untested. OPEN |
 | Nav2 BackUp, BT boundary recovery and undock | BT `/backup` and recovery action paths -> Nav2 -> `/cmd_vel_nav` | Existing behavior retained; no bounded geometry exception implemented here. OPEN |
-| Dock and dock calibration | `/dock_robot` and independent docking commands -> `/cmd_vel_docking` -> mux | No new execution gate; non-default approach/undock distances and charge/resume mission unverified. OPEN |
+| Dock and dock calibration | `/dock_robot` and independent docking commands -> `/cmd_vel_docking` -> mux | One default simulated dock/charging cycle passed. No new execution gate; non-default distances, calibration and charge/resume remain unverified. OPEN |
 | Motion heading seed / yaw / IMU / magnetometer calibration | Independent publishers, including `SeedYawFromMotion` -> `/cmd_vel_teleop` | Sharing the teleop lane does not make an autonomous calibration manual. OPEN |
 | Dig recovery | `hardware_bridge_node::dig_monitor_tick` -> `send_cmd_vel_packet`, bypassing ROS mux | Existing limits retained; no geometry execution gate. OPEN |
 | Selection, shaping, final motor packets | Collision monitor -> twist_mux -> bridge slew/deadband shaping -> firmware; bridge also has direct sources | FTC/Escape validate their intended source commands. No owner/action/revision lease after shaping or final-output integration evidence. OPEN |
@@ -400,12 +400,40 @@ Further runs must verify the live map/tool TF and installed URDF before START,
 then record actual map-server stamped cells during mowing. Full mission
 completion remains pending.
 
+Attempt 17 at `929e8378` passed the actual no-LiDAR mission cycle in 2539 s
+(42.3 min), exit 0: undock 11.9 s, plan 46.4 s, mow 2412.5 s, dock 46.8 s,
+ending `IDLE_DOCKED` and charging. The strict harness reported 1/1 complete
+paths and zero wholly skipped paths, with no `COVERAGE_INCOMPLETE`. Final global
+stamped raster was 21,712 cells / 54.28 m2; this is not an area-specific coverage
+percentage. The existing area plausibility guard checks only 50% interior
+stamping when a usable grid exists. Three authorization aborts caused approximately 0.8 m recovery cursor
+advances with blade-off transit; those partial omissions do not increment the
+whole-path skip counter. The goal checker also accepted the endpoint with
+0.499 m remaining. Neighboring passes may overlap these spans; actual uncovered
+area has not been established. This demonstrates a progressing mission cycle,
+not every planned span executed blade-on or near-total physical lawn coverage.
+
+The harness measured 366.6 m travel and median fused-pose nearest-path error
+5.3 mm (p95 57.9 mm, 55,297 samples); these are not ground-truth tracking errors
+or checks against the intended segment. Three short GNSS guard pauses recovered
+automatically. The pre-START monitor recorded 23,417 samples. Live spot samples
+were about 1.45-1.47 GiB and 500-600% CPU, not isolated authorization overhead.
+The real dock action completed and final truth was within the simulator's
+0.3 m charging circle. This does not validate physical dock contact. Logs also
+show dock-prior/RTK discrepancies of 0.52-0.57 m, a final 0.59 m gauge reset,
+eight failed periodic graph saves and a failed dock-arrival save. These runtime
+diagnostics require follow-up; a healthy covariance verdict does not resolve
+position disagreement. Independent evidence review confirmed the harness PASS
+and these limits. LiDAR, explicit HOME interruption, charge/resume, revocation
+and additional geometries still lack full-mission evidence.
+
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
 area, dock/undock/HOME/charging-resume missions or post-mux hardware-output tests.
-Full mission completion is unverified; lawn coverage percentage, final-command
-boundary violations and whole-stack CPU/memory overhead remain unmeasured.
+One no-LiDAR mission cycle now passes; exact lawn coverage percentage,
+final-command boundary violations and isolated authorization overhead remain
+unmeasured.
 
 The existing [OpenMower software hardware simulation](https://github.com/mowglinext/mowglinext/actions/runs/38010148929)
 did execute on `0f66cd8c`: **178/179 checks passed** on its first attempt.
@@ -445,8 +473,9 @@ for the FTC/Escape final-output invariant. No assertion was weakened.
   its polygon. This preexisting deferred gap prevents claiming protection of
   every successfully promoted forbidden region.
 - Transit, docking, undocking, HOME, ingress, calibration and dig still require
-  coherent bounded exceptions and final command authorization. Their normal
-  missions have not been demonstrated on this implementation.
+  coherent bounded exceptions and final command authorization. One default
+  no-LiDAR cycle demonstrates normal undock, ingress and return-to-dock;
+  other variants, explicit HOME and charging-resume remain unverified.
 - Worst-case union construction, many intersecting rings and target ARM
   controller deadlines remain unmeasured. Host microbenchmarks cannot certify
   real-time hardware behavior.
