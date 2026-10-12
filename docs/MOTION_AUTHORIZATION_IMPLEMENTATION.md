@@ -427,6 +427,20 @@ position disagreement. Independent evidence review confirmed the harness PASS
 and these limits. LiDAR, explicit HOME interruption, charge/resume, revocation
 and additional geometries still lack full-mission evidence.
 
+LiDAR attempt 18 at `9fdcf8c3` stopped before START with a failed readiness
+verdict. All base nodes/controllers/tool TF were ready, and raw/costmap/collision
+scan streams had increasing nonzero acquisition stamps. The collision-monitor
+bulk parameter response contained no values, so its effective guard configuration
+was not verified. A startup LiDAR-OFF warning describes the absent installed
+configuration's default; source review confirms explicit CLI overrides take
+precedence, so that warning does not establish the active mode. The empty
+response needs isolated parameter queries, including separating unused legacy
+polygons from required active guards. No mission, LiDAR obstacle response or
+coverage result is claimed. A fresh task-owned graph directory was writable as
+UID 1000 and live graph save/autosave settings were correct; save success was
+not exercised. The next isolated attempt uses an explicit sparse LiDAR config
+and verifies actual guard parameters before authorizing START.
+
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
