@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <string>
 #include <utility>
@@ -1155,6 +1156,9 @@ void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command)
   // This is not a downstream command lease or a stopping-distance guarantee.
   bool permitted =
       authorization_->permits(pose, footprint, command.linear.x, command.angular.z, 0.1, true);
+  const char* checked_sweep = "command";
+  double checked_horizon = 0.1;
+  double checked_omega = command.angular.z;
   if (permitted && command.linear.x == 0 && command.angular.z != 0 &&
       (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT ||
        current_state_ == PlannerState::POST_ROTATE))
@@ -1169,9 +1173,35 @@ void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command)
     // angular rate so a legitimate slow rotation cannot hit its time budget.
     permitted = authorization_->permits(
         pose, footprint, 0, std::copysign(1.0, command.angular.z), turn, true);
+    checked_sweep = "remaining_rotation";
+    checked_horizon = turn;
+    checked_omega = std::copysign(1.0, command.angular.z);
   }
   if (!permitted)
+  {
+    // Capture the rejected request itself, rather than a previously published
+    // command. The fingerprint correlates with a retained geometry snapshot;
+    // it is diagnostic only and never grants or substitutes for permission.
+    RCLCPP_ERROR(logger_,
+                 "FTC authorization denied: sweep=%s state=%d index=%zu "
+                 "x=%.17g y=%.17g yaw=%.17g v=%.17g w=%.17g "
+                 "checked_w=%.17g horizon=%.17g pose_age=%.17g "
+                 "footprint_vertices=%zu geometry_fingerprint=%zu",
+                 checked_sweep,
+                 static_cast<int>(current_state_),
+                 static_cast<std::size_t>(current_index_),
+                 pose.x,
+                 pose.y,
+                 pose.yaw,
+                 command.linear.x,
+                 command.angular.z,
+                 checked_omega,
+                 checked_horizon,
+                 age,
+                 footprint.size(),
+                 std::hash<std::string>{}(authorization_->identity));
     throw nav2_core::ControllerException("FTCController: intended chassis sweep is unauthorized");
+  }
 }
 
 // ── computeVelocityCommands ───────────────────────────────────────────────────
