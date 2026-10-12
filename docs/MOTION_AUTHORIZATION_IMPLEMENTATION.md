@@ -384,6 +384,22 @@ Ground-truth headers currently use wall time while raw fixes use simulation
 time; generation deduplication does not establish ground-truth acquisition-time
 freshness. Receipt alignment and mixed cached packages remain limitations.
 
+Attempt 16 at `7b894c84` passed undock/planning and entered MOWING with verified
+blade activity. It advanced 21.7 m, but 19 warnings showed a missing
+`map -> blade_link` transform. It was stopped early with FAIL (exit 1), rather
+than waiting for a predictable unrecorded-coverage result. Stamped area was not
+measured; HOME/docking were not exercised. Two FTC denials resumed movement.
+The Webots URDF now includes the fixed cutting-tool frame using the simulator's
+existing 0.18 m chassis centre and 0.093 m wheel radius, matching production
+xacro construction and placing the tool 0.05 m above ground. Map stamping and
+blade guards are unchanged. All 62 simulator Python tests pass, including real
+robot-state-publisher TF and configured xacro geometry checks; the final two
+tool-frame tests also pass with `ROS_DOMAIN_ID` unset. Independent review
+confirmed publisher ownership/geometry and resolved a test-domain mismatch.
+Further runs must verify the live map/tool TF and installed URDF before START,
+then record actual map-server stamped cells during mowing. Full mission
+completion remains pending.
+
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
