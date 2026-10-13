@@ -14,18 +14,19 @@ stack-wide autonomous-motion invariant or physical containment.
   Its branch and Draft PR were not modified. The original assertions and
   scenarios were retained; additional tests and real map-publication fixtures
   supply the geometry required by the production interface.
-- Production checkpoint: `26926295`. Final-source native checks passed:
+- Initial authorization production checkpoint: `26926295`. Native checks passed:
   navigation 22/22, behavior 46/46 and map 12/12 CTest targets. Later changes
-  record test latency, exercise automatic map startup and update documentation;
-  motion production is unchanged.
+  record test latency, exercise automatic map startup and update documentation.
+  Later production increments and their separate baselines are described below.
   Packaging checkpoint `0f66cd8c` adds Boost headers and visualization_msgs to
   the five thin sensor build dependency lists after CI exposed missing Boost.
   Test-only checkpoint `8671b3a4` verifies automatic permission publication;
   its expanded map suite passed under Fast DDS and CycloneDDS.
-- #905 (`26a2515d`) and #906 (`a04c4219`) were open and unmerged when inspected.
-  This imports #905-compatible raw MarkerArray publication and segment logic,
-  not its transit planner or another geometry grid. Coordinate the overlapping
-  publisher changes before either branch merges.
+- #905 merged on 2026-10-13 and #906 on 2026-10-10. This branch retains its
+  named original dev baseline and #905-compatible raw MarkerArray publication
+  and segment logic. Integration with current dev is still required: a
+  nonmutating merge preview identified six conflicts in coverage planning,
+  map publication and FTC. Neither a merge nor latest-dev validation is claimed.
 
 ## Authorization policy
 
@@ -99,7 +100,7 @@ add-area requests reject without altering the live map.
 
 | Producer / path | Command path and authorization in this slice | Evidence / remaining acceptance |
 |---|---|---|
-| FTC swaths, connectors, headlands, deviations | `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav` | 26 command cases, including original 12 negative and 4 positive controls; passed on the final production source |
+| FTC swaths, connectors, headlands, deviations | Raw mowing lattice critic plus `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav`; forward lattice output also checks closed lethal-cell response sweep | 26 command cases, including original 12 negative and 4 positive controls; 21 critic and 18 real-controller cases. Strong modeled obstacles safely abort; full LiDAR mission progress remains OPEN |
 | FTC PRE/PIVOT/POST and fallback reverse | Directed full rotation and final Twist sweep; existing costmap collision checks retained | Real-controller wheel-lag turn scenarios and complete footprint tests; passed on the final production source |
 | Webots no-LiDAR mission cycle | Current coverage/interface/map/nav/behavior overlays plus cached remaining runtime; real launch and strict E2E harness | Attempt 17 PASS: undock, plan, mow, return-to-dock and charging; 2539 s. Three recovery cursor advances omit partial spans. Exact area coverage, explicit HOME command and charging-resume remain unverified |
 | EscapeStartBlocked | Bound action instance -> `/cmd_vel_nav`; geometry, pose, blade, arming and budgets; rejection/halt zero | 17 production-path DDS/command cases; passed on the final production source |
@@ -717,7 +718,7 @@ RPP transit reports success near a point inside the navigation corridor but
 outside the mowing polygon. This exposes an operation-handoff limitation;
 it does not establish retained FTC output after abort. Lattice candidates
 currently use the soft costmap boundary rather than raw mowing permission;
-geometry-aware candidate selection is the next focused investigation.
+geometry-aware candidate selection was investigated in the increment below.
 
 An additional observer retains 41,226 final simulated wheel commands, 7,762
 footprints and one genuine cached raw geometry message. It starts after both
@@ -728,6 +729,80 @@ commands remain retained. The 108 resource samples peak at 764% host CPU and
 1.716 GiB; these are whole-stack observations, not isolated verifier overhead
 or ARM limits. The earlier startup failures remain recorded. No corrected
 complete LiDAR cycle or hardware acceptance is claimed.
+
+## Geometry-aware avoidance and forward obstacle sweep
+
+FTC now applies raw mowing authorization during lattice selection as well as
+at final command output. Every station, offset node and connecting chord must
+keep the axle inside the mowing union; the complete chassis sweep must avoid
+raw forbidden holes. These hard checks remain active during reaction grace
+and horizon degradation. The critic uses the actual padded chassis and the
+exact inverse of the transform that placed the plan in the local costmap.
+Missing geometry or invalid transforms fail closed. Legal outer-body overhang,
+existing recovery limits and the final raw command gate remain unchanged.
+
+Selecting an inward skirt exposed a separate execution defect: the intended
+path was legal, but actual modeled wheel/yaw response could sweep the body
+through a lethal obstacle. Positive forward FOLLOWING lattice output therefore
+also checks a complete reachable chassis envelope against closed lethal-254
+cell squares. Rejection uses the existing obstacle hold/abort behavior. Soft
+boundary-253 cells retain their existing policy; STOP remains unconditional.
+Reverse, pure rotation, no-lattice and no-LiDAR obstacle paths retain their
+existing guards rather than receiving this new forward-obstacle gate.
+
+`FollowCoveragePath.obstacle_coast_time_bound_s` defaults to 0.5 seconds, with
+finite startup and live bounds [0.01, 2.0]. Startup rejects an invalid value
+explicitly. The envelope assumes no speed/yaw overshoot beyond proposed and
+measured extrema during the 0.1-second command interval, then bounds remaining
+absolute-speed path length and cumulative heading excursion by the configured
+coast bound times those extrema at every subsequent time. First-order STOP
+decay with tau at most that bound satisfies this model. This is an assumed
+response contract, not physical stopping, localization uncertainty, transport
+timing or downstream command-retention evidence. A smaller value requires a
+validated response assumption; a larger value rejects more conservatively.
+
+Immutable raw-edge indexing accelerates the same reference-point and chord
+predicates; it does not simplify allowed geometry. Exact-Y parity preparation
+is private to each decision, with an 8 MiB accounted cache budget and exact
+predicate fallback on exhaustion. Geometry replacement/revocation installs
+the new Snapshot before index preparation; delayed preparation cannot install
+over a newer Snapshot. Content identity does not become a producer epoch or
+action lease.
+
+The original unsafe modeled obstacle result (27 lethal samples versus zero
+before the candidate change) and the slow geometry cases are retained as
+failures. After the repair, eight full-duration strong synthetic/captured-plan
+prefix cases at response tau 0.15/0.5 seconds safely abort with zero lethal or
+outside-reference samples, including 80 STOP-coast steps. They do not establish
+obstacle traversal. An empty edge-overhang control completes in 228 ticks and
+a small default obstacle skirt in 230 ticks; the five existing recovery scenes
+also pass. Captured plan coordinates are real, while obstacles and response
+are modeled; this is not exact first-denial costmap replay.
+
+After the final startup guard, a fresh Release build passes 23/23 Nav2 CTest
+targets (20 GTest executables containing 298 cases, plus three lint checks):
+21 critic cases, 18 real-controller cases and all 26 FTC authorization cases.
+The controller cases reject seven invalid startup values and accept both range
+endpoints and the default, for both LiDAR configurations. Rebuilt Escape and
+docking-dispatch targets against the same installed shared header pass 17/17
+and 14/14 respectively. Both-overlay configuration checks pass 72/72; the drift
+check reports structural fields in sync and three existing uncategorized GNSS
+keys. Clang-format 18 whole-file and changed-line checks pass. These counts
+overlap earlier evidence and must not be summed as independent suites.
+
+Measured full index preparation plus a 51-station decision on this host fell
+from approximately 1.7 seconds for a 32,768-point circle and 2.19 seconds for a
+32,768-point comb to 14.40 ms and 31–39 ms respectively. Dense geometry with
+30 holes takes 6.12 ms; nonidentity TF comb controls take 20–24 ms. Actual
+less-than-100-ms assertions pass. Measurements exclude MarkerArray parsing and
+are not ARM or generic hard-deadline evidence. Adversarial cache-budget
+exhaustion passes predicate equivalence, but does not prove its decision latency.
+
+No fresh full Webots mission has yet accepted this increment. The last complete
+LiDAR mission remains attempt 25-03 FAIL. Navigation-to-mowing handoff, full
+mission progress, worst-case deadlines, ownership/leases and the other OPEN
+paths in the acceptance matrix remain owed. Hardware acceptance remains
+`HARDWARE_REQUIRED` under the exact-baseline procedure below.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
