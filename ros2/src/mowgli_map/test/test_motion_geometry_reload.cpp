@@ -207,7 +207,15 @@ TEST_F(MotionGeometryReload, ParameterLawnPublishesWithPausedSimulationClockAndN
                                                  received_.push_back(*geometry);
                                                });
   executor_.add_node(node_);
-  ObserveNewPublication(0);
+  // Current dev publishes an initial unavailable snapshot. Require the wall
+  // timer's nonempty publication without advancing the paused ROS clock.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while ((received_.empty() || received_.back().markers.empty()) &&
+         std::chrono::steady_clock::now() < deadline)
+  {
+    Pump();
+  }
+  ASSERT_FALSE(received_.empty());
   const auto snapshot = mowgli_interfaces::motion::Snapshot::parse(received_.back());
   ASSERT_TRUE(snapshot->valid);
   const mowgli_interfaces::motion::Ring body{{-0.1, -0.1}, {0.1, -0.1}, {0.1, 0.1}, {-0.1, 0.1}};

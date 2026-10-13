@@ -96,6 +96,41 @@ TEST(RingCornerSmoothing, ExistingPivotTwinsAndHeadingsArePreserved)
                 near, {{-1, -1}, {5, -1}, {5, 5}, {-1, 5}}, {}, 30 * M_PI / 180, .4, .2, .03),
             near);
 }
+TEST(RingCornerSmoothing, LegalPivotsAtActualBevelVerticesRemainSharp)
+{
+  const auto sparse = capturedSparseOuterRing();
+  std::vector<std::pair<double, double>> evaluated;
+  const auto keep = [&](const auto& corner, double turn)
+  {
+    evaluated.push_back(corner);
+    EXPECT_GT(turn, 30 * M_PI / 180);
+    EXPECT_NE(std::find(sparse.begin(), sparse.end(), corner), sparse.end());
+    return true;
+  };
+  EXPECT_EQ(
+      mc::detail::roundBeveledCorners(sparse, kBoundary, {}, 30 * M_PI / 180, .4, .2, .03, keep),
+      sparse);
+  EXPECT_FALSE(evaluated.empty());
+}
+TEST(RingCornerSmoothing, RejectedPivotPreservesSupportedBevelFillet)
+{
+  const auto sparse = capturedSparseOuterRing();
+  const auto without_pivots =
+      mc::detail::roundBeveledCorners(sparse, kBoundary, {}, 30 * M_PI / 180, .4, .2, .03);
+  const auto rejected = mc::detail::roundBeveledCorners(sparse,
+                                                        kBoundary,
+                                                        {},
+                                                        30 * M_PI / 180,
+                                                        .4,
+                                                        .2,
+                                                        .03,
+                                                        [](const auto&, double)
+                                                        {
+                                                          return false;
+                                                        });
+  EXPECT_EQ(rejected, without_pivots);
+  EXPECT_EQ(unsupported(densify(rejected, .1)), 0u);
+}
 TEST(RingCornerSmoothing, RejectedNarrowBevelRollsBack)
 {
   const Pts pts{{0, 0}, {.04, 0}, {.043, .003}, {.043, .04}};

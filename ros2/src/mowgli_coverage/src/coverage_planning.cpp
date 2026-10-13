@@ -1063,8 +1063,8 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
   if (!std::isfinite(step) || step <= 0.0)
     return pts;
   if (pts.size() < 4)
-    return roundSharpCorners(pts, boundary, holes, max_turn_rad, fillet_r, min_radius, step,
-                             keep_sharp);
+    return roundSharpCorners(
+        pts, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
   std::vector<std::pair<double, double>> out{pts.front()};
   for (std::size_t i = 1; i + 1 < pts.size(); ++i)
   {
@@ -1152,8 +1152,8 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
       out.push_back(pts[i]);
   }
   out.push_back(pts.back());
-  return roundSharpCorners(out, boundary, holes, max_turn_rad, fillet_r, min_radius, step,
-                           keep_sharp);
+  return roundSharpCorners(
+      out, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
 }
 
 // True iff every cell is a valid OGR/GEOS polygon (holes inside the shell, not
@@ -1883,14 +1883,15 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                        pivotSweepFits(corner.first, corner.second, ring_pivot_limits);
               };
             }
-            auto rounded = detail::roundBeveledCorners(sparse,
-                                             fillet_boundary,
-                                             plan.safe_holes,
-                                             kRingCornerThreshold,
-                                             std::max(2.0 * min_turn_radius, min_turn_radius),
-                                             std::max(0.02, min_turn_radius),
-                                             0.03,
-                                             keep_sharp);
+            auto rounded =
+                detail::roundBeveledCorners(sparse,
+                                            fillet_boundary,
+                                            plan.safe_holes,
+                                            kRingCornerThreshold,
+                                            std::max(2.0 * min_turn_radius, min_turn_radius),
+                                            std::max(0.02, min_turn_radius),
+                                            0.03,
+                                            keep_sharp);
             loop = densifyPolyline(rounded, kDensifyStep);
           }
         }
