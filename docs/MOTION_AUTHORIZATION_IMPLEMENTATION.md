@@ -601,7 +601,7 @@ The mixed-runtime and clock/provenance limitations remain. A complete LiDAR
 mowing cycle, a measured final-command containment result, and physical
 acceptance remain outstanding.
 
-A focused comparison now reproduces the headland functionality problem through
+A focused comparison reproduces a headland functionality problem through
 the real FTC library, with identical geometry, TF, parameters and modeled wheel
 response. Its representative legal rounded rectangle is not the unrecorded
 attempt-22 full plan. Original `9f39497f` dev finishes after 726 model steps but
@@ -612,17 +612,30 @@ outside samples and a final X of approximately 4.5001 m. Neither outcome passes
 the combined progress-and-containment requirement. These are modeled controller
 results, not a physical stopping-distance measurement.
 
-An isolated brake/heading-alignment experiment completes the unbiased fixture
+An isolated brake/heading-alignment experiment completes the basic unbiased fixture
 without a recorded crossing and preserves all 26 FTC authorization assertions.
 It is **not included in production**: its early forecast assumes the fixture's
-0.15 s response, future-pose probes expose numerical-edge behavior, and signed
-3 mm pose bias can leave the estimate inside while modeled truth crosses.
+0.15 s response, a 0.04 s future-TF probe fails progress under its finite retry
+budget, and signed 3 mm pose bias can leave the estimate inside while modeled
+truth crosses. Earlier unbounded probes also exposed numerical-edge behavior.
 Behavioral checks are not a robustness or full-mission PASS. The real Nav2
 velocity argument has no acquisition timestamp; it supplies no freshness or
 physical stopping guarantee. Exact full-plan recording has separately passed
-a real ROS 9,899-pose transport and startup CLI check, but no subsequent mission
-with that recorder has completed yet. A controller progress repair still needs
-a coherent software intention contract and validation against the actual path.
+a real ROS 9,899-pose transport and startup CLI check.
+
+Strict LiDAR attempt 23, using the same reviewed runtime and the full-plan
+recorder, **failed after 293.2 s**. Undocking (11.6 s), planning (40.3 s), and
+fallback docking/charging (53.9 s) passed; mowing failed after 173.3 s, with
+0/1 paths completed and 29.7 m total travel. The watchdog did not trigger.
+Four complete plans were retained. All 9,899 initial reference points lie
+inside the configured outer rectangle; this is not a complete trajectory or
+footprint certificate. The actual first corners have roughly 45-degree heading
+changes on either end of 3.586 mm and 3.606 mm chamfers, without coincident
+planner pivot twins. They differ materially from the representative 0.2 m
+radius fixture. Two FOLLOWING denials again rejected an outside-start pose and
+an outward intended arc. A progress repair must now address the actual planner
+and controller corner contract, preserve the existing body/hole gates, and be
+validated against the captured path. No corrected full-mission PASS is claimed.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
