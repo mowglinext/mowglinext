@@ -637,6 +637,53 @@ an outward intended arc. A progress repair must now address the actual planner
 and controller corner contract, preserve the existing body/hole gates, and be
 validated against the captured path. No corrected full-mission PASS is claimed.
 
+The production coverage planner now treats a microscopic headland bevel as
+one corner only when a supported tangent fillet fits across its two supporting
+edges. The four-point window admits ordinary edges from 0.1 mm to 10 mm,
+requires consistent turn direction and forward tangent ordering, and bounds
+the virtual intersection within 10 mm of both bevel vertices. That intersection
+is never emitted alone. Existing minimum-radius and sampled geometry checks
+remain; GEOS additionally checks every emitted chord and tangent connector
+against the complete boundary and holes. A rejected proposal keeps the original
+vertices. This changes sparse headland-ring smoothing only; the final
+normalization, explicit pivot twins, FTC execution gate and chassis-overhang
+policy retain their existing behavior.
+
+A real Fields2Cover production-pipeline regression uses the configured ordinary
+rectangle and the observed operation/headland widths, five passes and 0.20 m
+minimum radius. The preceding source fails with a 45.0579-degree maximum
+heading kink; the corrected outer ring has a 5.0555-degree maximum. Summaries
+of the four inner rings are unchanged. The native original plan has 9,896
+poses versus the captured mission's 9,899, so this is a reproduced planning
+defect, not exact regeneration of that mission. All **138 coverage GoogleTest
+cases pass**, including nine new seam controls and the new real-pipeline
+regression. A complete non-root ROS coverage-package build and install passes
+**9/9 CTest targets**, including those six GoogleTest targets and three linters;
+the overlapping counts are not additional cases. Unchanged real-controller
+FTC **26/26** and Escape **17/17** assertions also pass.
+
+Independent strong review found no supported new production blocker in this
+narrow increment. It identified an incomplete rectangle predicate in the
+separate modeled-controller evidence. The corrected common oracle checks all
+four bounds for truth, estimates and zero-command coast, with the original
+numerical tolerances. Three direct oracle controls pass, including left/top
+coast rejection. Both nine-case modeled prefix batches pass again: captured
+vertices passed through the corrected ring seam (175 poses), and separately
+regenerated production output (174 poses), each ending after the second corner.
+All 18 cases finish with zero outside samples under that complete rectangle
+oracle, including 40 additional coast steps. Cases cover no-LiDAR and an empty
+real LiDAR costmap, TF leads through 0.08 s, response constants 0.10/0.15/0.30 s
+and signed 3 mm XY biases. This is selected wheel-response model evidence,
+not actual mission LiDAR, physical stopping distance or whole-route acceptance.
+The raw-path and naive-pivot progress failures remain RED. The reviewer reran all
+nine seam tests and the pipeline regression, and exercised 20,000 randomized
+bevel inputs. No full corrected Webots mission has run yet. A separately
+constructed beveled-field probe still has unsupported later 33.75-degree and
+90-degree corners before and after this change; general corner feasibility is
+not established. The inherited radius-retry routine also needs configuration
+validation for nonfinite or extremely large radii; shipped finite radii were
+used in the reported checks.
+
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
