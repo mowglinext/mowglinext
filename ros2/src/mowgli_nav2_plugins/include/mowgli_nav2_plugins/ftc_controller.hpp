@@ -58,6 +58,7 @@ struct Snapshot;
 
 namespace mowgli_nav2_plugins
 {
+class MotionRegionIndex;
 
 /**
  * @class FTCController
@@ -106,8 +107,13 @@ private:
 
   /// Final FTC output gate, after all speed floors and recovery commands.
   void authorizeCommand(const geometry_msgs::msg::Twist& command);
+  bool forwardCommandSweepBlocked(const geometry_msgs::msg::Twist& command,
+                                  const geometry_msgs::msg::Twist& measured);
+  LatticeGeometryBlocked motionLatticeCritic(
+      const geometry_msgs::msg::TransformStamped* costmap_from_plan = nullptr);
   std::mutex authorization_mutex_;
   std::shared_ptr<const mowgli_interfaces::motion::Snapshot> authorization_;
+  std::shared_ptr<const MotionRegionIndex> authorization_index_;
   rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr authorization_sub_;
 
   // ── State machine ─────────────────────────────────────────────────────────
@@ -288,7 +294,8 @@ private:
   /// Plan poses [first, last) expressed in the local costmap frame.
   bool planWindowInCostmapFrame(std::size_t first,
                                 std::size_t last,
-                                std::vector<geometry_msgs::msg::PoseStamped>& out);
+                                std::vector<geometry_msgs::msg::PoseStamped>& out,
+                                geometry_msgs::msg::TransformStamped* transform_used = nullptr);
 
   /// The lattice solver parameters planOffsetLattice uses, from config_.
   LatticeSolverCfg latticeSolverCfg() const;
@@ -575,6 +582,8 @@ private:
     /// applies until the resumed path has remained stable for
     /// obstacle_clear_hold_s. 0 disables the limiter.
     double obstacle_restart_angular_acceleration{1.0};
+    // ASSUMED no-overshoot actuator tail integral bound, not a hardware measurement.
+    double obstacle_coast_time_bound_s{0.5};
     double min_speed_mps{0.15};
 
     // Anti-wheelspin / traction control. When the carrot commands a forward

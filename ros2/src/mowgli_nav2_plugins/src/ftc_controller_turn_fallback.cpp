@@ -125,6 +125,7 @@ TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
     return out;
   };
   const LatticeSolverCfg solver_cfg = latticeSolverCfg();
+  const auto geometry_blocked = motionLatticeCritic(&plan_to_costmap);
   problem.followable = [&, first = first](std::size_t w)
   {
     const std::size_t j = first + w;
@@ -139,7 +140,8 @@ TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
                                NextPivotCorner(pivot_corners_, j),
                                to_costmap,
                                solver_cfg,
-                               config_.avoidance_horizon_m);
+                               config_.avoidance_horizon_m,
+                               geometry_blocked);
   };
   const TurnFallbackPlan plan = PlanTurnFallback(problem, cfg);
   if (problem_out != nullptr)

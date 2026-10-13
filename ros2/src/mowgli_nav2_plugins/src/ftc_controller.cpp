@@ -34,7 +34,10 @@
 #include "mowgli_interfaces/ftc_abort_reason.hpp"
 #include "mowgli_interfaces/motion_authorization.hpp"
 #include "mowgli_nav2_plugins/ftc_carrot_lead.hpp"
+#include "mowgli_nav2_plugins/ftc_forward_sweep.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
+#include "mowgli_nav2_plugins/ftc_motion_critic.hpp"
+#include "mowgli_nav2_plugins/ftc_motion_geometry_index.hpp"
 #include "mowgli_nav2_plugins/ftc_obstacle_wait.hpp"
 #include "mowgli_nav2_plugins/ftc_offset_lattice.hpp"
 #include "mowgli_nav2_plugins/ftc_pivot.hpp"
@@ -75,8 +78,20 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
       [this](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
       {
         auto next = mowgli_interfaces::motion::Snapshot::parse(*message);
+        {
+          std::lock_guard<std::mutex> lock(authorization_mutex_);
+          // Revoke/replace immediately, before any newly introduced index work.
+          // Identical complete raw content may retain its immutable preparation.
+          if (!authorization_index_ || !authorization_index_->matches(next.get()))
+            authorization_index_.reset();
+          authorization_ = next;
+          if (!next->valid || authorization_index_)
+            return;
+        }
+        auto prepared = std::make_shared<MotionRegionIndex>(next);
         std::lock_guard<std::mutex> lock(authorization_mutex_);
-        authorization_ = std::move(next);
+        if (authorization_ == next)
+          authorization_index_ = std::move(prepared);
       },
       rclcpp::QoS(1).transient_local());
 
@@ -173,6 +188,7 @@ void FTCController::cleanup()
   {
     std::lock_guard<std::mutex> lock(authorization_mutex_);
     authorization_.reset();
+    authorization_index_.reset();
   }
   {
     std::lock_guard<std::mutex> lock(boundary_mutex_);
@@ -235,6 +251,13 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.acceleration = declare_double("acceleration", 1.0);
   config_.obstacle_restart_angular_acceleration =
       declare_double("obstacle_restart_angular_acceleration", 1.0);
+  config_.obstacle_coast_time_bound_s = declare_double("obstacle_coast_time_bound_s", .5);
+  if (!std::isfinite(config_.obstacle_coast_time_bound_s) ||
+      config_.obstacle_coast_time_bound_s < .01 || config_.obstacle_coast_time_bound_s > 2.)
+  {
+    throw nav2_core::ControllerException(
+        plugin_name_ + ".obstacle_coast_time_bound_s must be finite and in [0.01, 2.0]");
+  }
   config_.min_speed_mps = declare_double("min_speed_mps", 0.15);
   config_.stall_speed_ratio = declare_double("stall_speed_ratio", 0.35);
   config_.stall_grace_s = declare_double("stall_grace_s", 0.6);
@@ -751,6 +774,12 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
         break;
       config_.avoidance_min_horizon_m = p.as_double();
     }
+    else if (key == "obstacle_coast_time_bound_s")
+    {
+      if (reject_invalid(key, p.as_double(), .01, 2.0))
+        break;
+      config_.obstacle_coast_time_bound_s = p.as_double();
+    }
     else if (key == "avoidance_reaction_m")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
@@ -1192,10 +1221,18 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
 
   // Apply the hard linear cap at every output boundary, after movement floors
   // and including reverse escape / turn-fallback commands that bypass the PID.
-  const auto bounded_command = [this, &cmd_vel]()
+  const auto bounded_command = [this, &cmd_vel, &velocity]()
   {
     const double max_speed = maxLinearSpeed();
     cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
+    if (config_.enable_obstacle_deviation && config_.use_offset_lattice &&
+        current_state_ == PlannerState::FOLLOWING && cmd_vel.twist.linear.x > 0 &&
+        !reverse_escape_active_ && !turnFallbackReversing() &&
+        forwardCommandSweepBlocked(cmd_vel.twist, velocity))
+    {
+      waitOrThrowForObstacle("proposed forward chassis/response sweep intersects lethal cells");
+      cmd_vel.twist = geometry_msgs::msg::Twist{};
+    }
     authorizeCommand(cmd_vel.twist);
     return cmd_vel;
   };
@@ -3116,7 +3153,8 @@ LatticeSolverCfg FTCController::latticeSolverCfg() const
 
 bool FTCController::planWindowInCostmapFrame(std::size_t first,
                                              std::size_t last,
-                                             std::vector<geometry_msgs::msg::PoseStamped>& out)
+                                             std::vector<geometry_msgs::msg::PoseStamped>& out,
+                                             geometry_msgs::msg::TransformStamped* transform_used)
 {
   out.clear();
   last = std::min(last, global_plan_.size());
@@ -3137,6 +3175,8 @@ bool FTCController::planWindowInCostmapFrame(std::size_t first,
   {
     const auto plan_to_costmap =
         tf_buffer_->lookupTransform(costmap_frame, plan_frame, tf2::TimePointZero);
+    if (transform_used)
+      *transform_used = plan_to_costmap;
     for (std::size_t i = first; i < last; ++i)
     {
       geometry_msgs::msg::PoseStamped p;
@@ -3158,6 +3198,94 @@ bool FTCController::planWindowInCostmapFrame(std::size_t first,
     return false;
   }
   return true;
+}
+
+bool FTCController::forwardCommandSweepBlocked(const geometry_msgs::msg::Twist& command,
+                                               const geometry_msgs::msg::Twist& measured)
+{
+  if (command.linear.x == 0 && command.angular.z == 0)
+    return false;
+  if (!costmap_map_ || !costmap_ros_)
+    return true;
+  geometry_msgs::msg::PoseStamped robot;
+  if (!costmap_ros_->getRobotPose(robot))
+    return true;
+  const auto& q = robot.pose.orientation;
+  const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+  if (!std::isfinite(norm) || std::abs(norm - 1) > 1e-6)
+    return true;
+  mowgli_interfaces::motion::Ring body;
+  for (const auto& p : costmap_ros_->getRobotFootprint())
+    body.push_back({p.x, p.y});
+  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap_map_->getMutex());
+  return ForwardSweepBlocked(*costmap_map_,
+                             body,
+                             {robot.pose.position.x, robot.pose.position.y, tf2::getYaw(q)},
+                             command,
+                             measured,
+                             .1,
+                             config_.obstacle_coast_time_bound_s);
+}
+
+LatticeGeometryBlocked FTCController::motionLatticeCritic(
+    const geometry_msgs::msg::TransformStamped* costmap_from_plan)
+{
+  std::shared_ptr<const mowgli_interfaces::motion::Snapshot> geometry;
+  std::shared_ptr<const MotionRegionIndex> prepared;
+  {
+    std::lock_guard<std::mutex> lock(authorization_mutex_);
+    geometry = authorization_;
+    prepared = authorization_index_;
+  }
+  if (!geometry || !geometry->valid || geometry->mowing.allowed.empty())
+    throw nav2_core::ControllerException(
+        "FTCController: missing/invalid avoidance motion geometry");
+  mowgli_interfaces::motion::Pose costmap_in_map{0, 0, 0};
+  const auto validate_transform = [](const geometry_msgs::msg::TransformStamped& transform)
+  {
+    const auto& q = transform.transform.rotation;
+    const auto& t = transform.transform.translation;
+    const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    if (!std::isfinite(t.x) || !std::isfinite(t.y) || !std::isfinite(t.z) || !std::isfinite(norm) ||
+        std::abs(norm - 1) > 1e-6)
+      throw nav2_core::ControllerException("FTCController: invalid avoidance geometry TF");
+  };
+  const auto frame = costmap_ros_->getGlobalFrameID();
+  if (frame != "map" && costmap_from_plan && costmap_from_plan->child_frame_id == "map")
+  {
+    // Reuse the exact transform that placed the plan in the costmap, rather
+    // than sample a potentially newer map->odom correction for the critic.
+    validate_transform(*costmap_from_plan);
+    tf2::Transform transform;
+    tf2::fromMsg(costmap_from_plan->transform, transform);
+    const auto inverse = transform.inverse();
+    costmap_in_map = {inverse.getOrigin().x(),
+                      inverse.getOrigin().y(),
+                      tf2::getYaw(inverse.getRotation())};
+  }
+  else if (frame != "map")
+  {
+    try
+    {
+      const auto transform = tf_buffer_->lookupTransform("map", frame, tf2::TimePointZero);
+      validate_transform(transform);
+      costmap_in_map = {transform.transform.translation.x,
+                        transform.transform.translation.y,
+                        tf2::getYaw(transform.transform.rotation)};
+    }
+    catch (const tf2::TransformException& ex)
+    {
+      throw nav2_core::ControllerException(std::string("FTCController: avoidance geometry TF: ") +
+                                           ex.what());
+    }
+  }
+  mowgli_interfaces::motion::Ring footprint;
+  for (const auto& p : costmap_ros_->getRobotFootprint())
+    footprint.push_back({p.x, p.y});
+  return MakeMotionLatticeCritic(std::move(geometry),
+                                 std::move(footprint),
+                                 costmap_in_map,
+                                 std::move(prepared));
 }
 
 bool FTCController::planOffsetLattice(std::size_t carrot_idx,
@@ -3198,11 +3326,13 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
   }
 
   std::vector<geometry_msgs::msg::PoseStamped> poses;
+  geometry_msgs::msg::TransformStamped plan_to_costmap;
   {
     std::vector<geometry_msgs::msg::PoseStamped> span;
-    if (!planWindowInCostmapFrame(window.pose_idx.front(), window.pose_idx.back() + 1, span))
+    if (!planWindowInCostmapFrame(
+            window.pose_idx.front(), window.pose_idx.back() + 1, span, &plan_to_costmap))
     {
-      return true;  // no TF this tick: keep the current target, do not escape
+      throw nav2_core::ControllerException("FTCController: avoidance plan TF unavailable");
     }
     poses.reserve(window.pose_idx.size());
     for (const std::size_t i : window.pose_idx)
@@ -3210,6 +3340,7 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
       poses.push_back(span[i - window.pose_idx.front()]);
     }
   }
+  const auto geometry_blocked = motionLatticeCritic(&plan_to_costmap);
 
   // Which (pose, offset) nodes the body cannot occupy, and the degrading solve
   // (reaction slack -> none -> ignore the stations under the body, each over a
@@ -3221,7 +3352,8 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
                        std::move(poses),
                        window.carrot_pos,
                        corner_is_last_station,
-                       solver_cfg);
+                       solver_cfg,
+                       geometry_blocked);
   const std::vector<double>& stations = solver.Stations();
   const auto stations_in = [&solver](double metres)
   {
