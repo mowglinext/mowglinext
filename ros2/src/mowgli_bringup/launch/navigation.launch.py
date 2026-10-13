@@ -86,6 +86,7 @@ from robot_config_util import (
     TRUE_TOKENS,
     check_turn_geometry,
     deep_merge,
+    collision_monitor_velocity_polygons,
     ftc_obstacle_clearance_margin,
     global_inflation_radius,
     derive_blade_load_params,
@@ -1004,9 +1005,15 @@ def generate_launch_description() -> LaunchDescription:
                     f"[{rear:.3f}, {-half:.3f}], [{rear:.3f}, {half:.3f}]]")
 
         if "PolygonStopNarrow" in cm_params:
-            # Band from just behind the front edge to 0.12 m ahead of it.
-            cm_params["PolygonStopNarrow"]["points"] = _poly(
-                fp_f + 0.12, fp_f - 0.02, fp_hw)
+            # A static approach band still returns TTC=0 for a front return
+            # during reverse. Select the original forward band by signed
+            # command, and the full padded body (+ rear band) for reverse.
+            # Nav2 adds footprint_padding AFTER receiving footprint_str.
+            local_params = doc["local_costmap"]["local_costmap"]["ros__parameters"]
+            narrow = cm_params["PolygonStopNarrow"]
+            narrow.pop("points", None)
+            narrow.update(collision_monitor_velocity_polygons(
+                fp_f, fp_r, fp_hw, float(local_params["footprint_padding"])))
         if "PolygonStop" in cm_params:
             # Whole body plus 0.05 m fore and aft.
             cm_params["PolygonStop"]["points"] = _poly(

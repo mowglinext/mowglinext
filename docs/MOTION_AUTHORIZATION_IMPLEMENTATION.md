@@ -106,6 +106,7 @@ add-area requests reject without altering the live map.
 | Map permission production | #905-compatible `/map_server_node/transit_geometry`; `area.text=mowing|navigation`; revocation before replacement | 30 startup/reload/add/parameter cases; passed on the final production source |
 | Nav2 RPP/RotationShim transit and HOME | BT `NavigateToPose` -> Nav2 -> `/cmd_vel_nav` | Default staging transit completed in attempt 17. No new execution gate; #905 protects planning, not controller corner cutting. Explicit HOME interruption untested. OPEN |
 | Nav2 BackUp, BT boundary recovery and undock | BT `/backup` and recovery action paths -> Nav2 -> `/cmd_vel_nav` | Existing behavior retained; no bounded geometry exception implemented here. OPEN |
+| LiDAR collision catchers | Nav2 `/cmd_vel_nav` -> Collision Monitor -> `/cmd_vel_monitored`; signed forward/reverse/rotation regions with unchanged live-footprint guard | Rear-clear reverse trap reproduced and repaired; 27 isolated real-node cases and 10 registered integration tests pass. Continuous geometry authorization and complete LiDAR mission acceptance remain OPEN |
 | Dock and dock calibration | `/dock_robot` and independent docking commands -> `/cmd_vel_docking` -> mux | One default simulated dock/charging cycle passed. No new execution gate; non-default distances, calibration and charge/resume remain unverified. OPEN |
 | Motion heading seed / yaw / IMU / magnetometer calibration | Independent publishers, including `SeedYawFromMotion` -> `/cmd_vel_teleop` | Sharing the teleop lane does not make an autonomous calibration manual. OPEN |
 | Dig recovery | `hardware_bridge_node::dig_monitor_tick` -> `send_cmd_vel_packet`, bypassing ROS mux | Existing limits retained; no geometry execution gate. OPEN |
@@ -510,8 +511,65 @@ An independent source review found no additional confirmed defect within this
 per-node repair. Cross-node action ownership, a rejected cancellation's one-shot
 send and indefinite transport retention for a never-answered acceptance remain
 limitations. This is not a geometry exception or a final-output cancellation
-lease. A new full LiDAR cycle with this installed binary is pending; neither
-that cycle nor stack-wide #924 acceptance follows from these unit results.
+lease. LiDAR attempt 21 at `1b0f50a1` used this verified installed binary and
+failed the strict cycle after about 1590 seconds. Undocking passed in 11.7 s
+and the independent blade-active growth check passed (0 to 352 cells in
+30.0166 s). It traveled 214.8 m and stamped 12,809 global cells (32.0225 m²),
+but completed 0/1 paths. Following two localization-guard pauses, FTC reverse
+and Nav2 BackUp/transit failed to make progress; three controller progress
+failures and four AREA_UNREACHABLE transitions exhausted the five-attempt
+budget. COVERAGE_FAILED_DOCKING began at 1583.6 s. The run was stopped after
+at least 135 s without distance growth; fallback docking had only just begun,
+so this run neither validates nor disproves completion of the docking repair.
+Six FTC denials and three boundary warnings are retained. Path-error median
+15.8 mm and p95 64.0 mm measure fused nearest-path tracking, not containment.
+
+Investigation identified two separate defects. First, the sparse task config
+omitted the scenario datum: fusion/COG self-seeded from the antenna's initial
+fix while map/navsat used the world reference, producing about 0.30 m of
+world-X displacement. All earlier mixed-runtime mission claims remain
+bounded by that frame inconsistency; a passing cycle does not validate
+physical map alignment. The next isolated fixture must provide and verify
+the same explicit datum for every consumer.
+
+Second, the installed Nav2 Collision Monitor 1.5.2 reproduced a rear-clear
+reverse being stopped by two returns in the extra front catcher outside the
+body. `approach` checks current polygon occupancy before projecting motion,
+so the static front band can also freeze reverse. The production correction
+uses supported `velocity_polygon` selection: exactly-zero linear commands
+select the full padded body, negative commands select that body united with
+a rear catcher, and positive commands select the unchanged original forward
+band. Inclusive first-match ranges cover every finite signed velocity without
+an epsilon gap. Launch derives all points from the same operator chassis,
+three-decimal footprint and explicit existing 0.01 m local-costmap padding.
+Two-point sensitivity, projection horizon/step, source/TF rejection and the
+live three-point FootprintApproach guard remain enabled.
+
+An initial 25-case proposal used raw overlay geometry. The subsequent actual
+production-helper run passed **27/27 real installed-node cases**, including
+positive reverse/turn progress, forward/rear and padded-body stops, curved and
+corner sweeps, custom rounding/padding, zero padding, tiny signed commands,
+stale scans and missing TF. Separate real Costmap2DROS probes confirmed default,
+custom and zero padding. The checked-in registered node integration test passed
+**10/10 tests** (nine motion tests plus shutdown) in 30.589 seconds; its outputs
+must match current input stamps. Two parameter-generation cases execute the
+production launch builder using action adapters and inspect its generated YAML
+and footprint-rewrite argument; they do not launch the full ROS stack.
+Independent review found no confirmed blocker in this focused correction.
+The complete bringup Python/configuration batch passed **274/274 cases**.
+Its first complete collection required explicit non-launch file selection;
+five package-index setup failures then passed after loading the workspace and
+fresh bringup install. Both new CMake-registered targets passed (2/2).
+
+The two-point subpolygons, like the preceding static catcher, are regenerated
+at bringup; they do not follow live footprint/padding changes. FootprintApproach
+still follows the live body at its existing three-point threshold. This adds
+no geometry exception or action lease, and docking's mux lane still bypasses
+Collision Monitor. Helper work occurs at launch; selector/body-sweep overhead
+and target-ARM deadlines are not measured. A new datum-aligned full mission
+remains pending. Retained attempt-21 scans omit beam endpoints and cannot prove
+the precise triggering returns. No full LiDAR mission PASS or stack-wide #924
+acceptance is established.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts

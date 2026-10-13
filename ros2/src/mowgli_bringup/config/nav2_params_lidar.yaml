@@ -185,9 +185,9 @@ local_costmap:
 collision_monitor:
   ros__parameters:
     # FootprintApproach + PolygonStopNarrow are the pre-contact stop layers
-    # (both velocity-projected `approach`), PolygonSlow the soft slowdown. Every
-    # active gate is direction-aware: none is a static `stop` box, because a
-    # static stop freezes a REVERSE-escape command (issue #393). Order: the
+    # (both `approach`), PolygonSlow the soft slowdown. The extra catcher uses
+    # signed-velocity geometry; approach alone does not exclude current front
+    # occupancy when reversing. No active static `stop` box (issue #393). Order: the
     # approach halts are evaluated first, then the slowdown. See the base-file
     # collision_monitor comment for the full history of why the static
     # PolygonStop was replaced.
@@ -246,14 +246,10 @@ collision_monitor:
     # (behavior/controller → cmd_vel_nav → collision_monitor → cmd_vel_monitored),
     # so this one static box defeated every reverse-out path.
     #
-    # As `approach` the box is swept along the CURRENT command instead: driving
-    # FORWARD it still catches a thin post and eases the robot to a stop just short
-    # of contact (the A-C1 intent); commanding REVERSE projects the box BACKWARD,
-    # so a front obstacle is off the sweep and can no longer freeze the escape.
-    # This is the SAME lesson that retired the static full-chassis PolygonStop
-    # (disabled below): static stop boxes freeze cmd_vel; velocity-projected
-    # approach polygons don't. FootprintApproach's own backward projection still
-    # halts a reverse before a REAR obstacle, so the escape stays rear-safe.
+    # Merely changing this to `approach` did not close that window: Nav2 first
+    # checks occupancy at time zero, before sweeping along the command. Select
+    # a direction-specific region instead, preserving current BODY occupancy
+    # and rear/turn sweeps while allowing escape from an extra FRONT band.
     #
     # min_points 2 keeps the thin-obstacle sensitivity A-C1 wanted (at 0.6 m a
     # 2 cm cane subtends ~2 bins); the narrow box just past the footprint front
@@ -262,8 +258,35 @@ collision_monitor:
     # bypasses collision_monitor (twist_mux /cmd_vel_docking lane) — only nav
     # motion is gated.
     PolygonStopNarrow:
-      type: "polygon"
-      points: "[[0.62, 0.20], [0.62, -0.20], [0.48, -0.20], [0.48, 0.20]]"
+      # approach checks current occupancy BEFORE projection. The extra front
+      # band must therefore be selected only for forward commands. Reverse
+      # retains the padded body and a rear catcher; pure rotation retains the
+      # padded body. FootprintApproach above remains the live-footprint guard.
+      # These standalone defaults match the base costmap rectangle + 0.01 m
+      # padding. navigation.launch.py derives every point from operator geometry.
+      type: "velocity_polygon"
+      holonomic: false
+      # Nav2 uses inclusive ranges and the FIRST matching subpolygon. Exact
+      # zero must precede reverse/forward; tiny signed commands have no gap.
+      velocity_polygons: ["rotation", "reverse", "forward"]
+      rotation:
+        points: "[[0.51, 0.21], [0.51, -0.21], [-0.11, -0.21], [-0.11, 0.21]]"
+        linear_min: 0.0
+        linear_max: 0.0
+        theta_min: -1.7976931348623157e+308
+        theta_max: 1.7976931348623157e+308
+      reverse:
+        points: "[[0.51, 0.21], [-0.11, 0.21], [-0.11, 0.20], [-0.22, 0.20], [-0.22, -0.20], [-0.11, -0.20], [-0.11, -0.21], [0.51, -0.21]]"
+        linear_min: -1.7976931348623157e+308
+        linear_max: 0.0
+        theta_min: -1.7976931348623157e+308
+        theta_max: 1.7976931348623157e+308
+      forward:
+        points: "[[0.62, 0.20], [0.62, -0.20], [0.48, -0.20], [0.48, 0.20]]"
+        linear_min: 0.0
+        linear_max: 1.7976931348623157e+308
+        theta_min: -1.7976931348623157e+308
+        theta_max: 1.7976931348623157e+308
       action_type: "approach"
       # Match FootprintApproach's projection horizon (1.2 s) so the two front
       # catchers agree on when to start easing off; 0.1 s step is fine for a

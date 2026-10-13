@@ -1687,13 +1687,15 @@ def test_collision_monitor_polygons_follow_the_chassis() -> None:
     before touching. FootprintApproach is exempt: it reads
     /local_costmap/published_footprint and already follows the real geometry."""
     src = _read_text("launch/navigation.launch.py")
-    for polygon in ("PolygonStopNarrow", "PolygonStop"):
+    for polygon in ("PolygonStop",):
         assert re.search(
             rf'cm_params\["{polygon}"\]\["points"\]\s*=\s*_poly\(', src), (
             f"{polygon}.points must be DERIVED from the chassis footprint at "
             "launch, not left as a literal in the overlay yaml."
         )
-    assert re.search(r"_poly\(\s*fp_f \+ 0\.12,\s*fp_f - 0\.02,\s*fp_hw\)", src)
+    assert re.search(
+        r"narrow\.update\(collision_monitor_velocity_polygons\(\s*"
+        r'fp_f, fp_r, fp_hw, float\(local_params\["footprint_padding"\]\)\)\)', src)
     assert re.search(r"_poly\(\s*fp_f \+ 0\.05,\s*fp_r - 0\.05,\s*fp_hw\)", src)
     # The footprint triple must be bound unconditionally — reading it from the
     # injection closure when only an `if rp:` branch assigned it is the
