@@ -365,6 +365,7 @@ All sensor positions drive both the URDF (TF frames) and the Nav2 footprint poly
 | `dock_pose_yaw` | `0.0` | Dock heading in map frame, ENU rad — **set per site** via the GUI "Set Docking Point" or the undock/dock yaw calibration |
 | `undock_distance` | `1.5` | Distance to reverse when undocking (must be > 0.5 m for `CalibrateHeadingFromUndock`) |
 | `undock_speed` | `0.16` | Reverse speed during undocking (m/s) |
+| `undock_forward` | `false` | Undock by driving forward (`/drive_on_heading`) instead of reversing (`/backup`) — robots that dock in reverse; set by the backend (`config/backends/airseekers.yaml`) |
 | `dock_approach_distance` | `1.5` | Straight-in runway behind the dock → `simple_charging_dock.staging_x_offset` |
 | `dock_approach_overshoot` | `0.05` | Forward overshoot past the calibrated dock pose so the contacts seat |
 | `dock_max_retries` | `3` | Maximum docking attempts (injected at launch into nav2 `docking_server.max_retries`) |
@@ -824,7 +825,7 @@ back-end; `fusion_graph_node` persists its own factor graph through `~/save_grap
 |------|-------------|
 | `SetMowerEnabled(enabled)` | Calls `/hardware_bridge/mower_control` service |
 | `StopMoving` | Publishes a zero `TwistStamped` on `/cmd_vel_emergency` (twist_mux priority 100) |
-| `BackUp(backup_dist, backup_speed)` | Nav2 `/backup` action — also the undock manoeuvre (Invariant 10: `UndockRobot` is not used) |
+| `BackUp(backup_dist, backup_speed, forward)` | Nav2 `/backup` action — also the undock manoeuvre (Invariant 10: `UndockRobot` is not used); `forward="{undock_forward}"` on the undock legs drives forward via `/drive_on_heading` instead |
 | `NavigateToPose(goal)` | Nav2 `/navigate_to_pose` action; goal as `"x;y;yaw"` string |
 | `GetNextUnmowedArea(max_areas)` | Finds next area with remaining coverage; returns FAILURE when all areas complete |
 | `PlanCoverageArea(area_index)` | Calls `map_server_node/get_mowing_area`, forwards to `mowgli_coverage`'s `plan_coverage` action (F2C v3); returns hole-free `drivable_subpaths` + bookkeeping segments |

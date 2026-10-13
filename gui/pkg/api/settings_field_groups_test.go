@@ -35,9 +35,9 @@ func TestSettingsFieldGroupKeysHaveSchemaDefaults(t *testing.T) {
 	extractDefaults(mustSchema(t), defaults)
 
 	for _, match := range matches {
-		if _, envBacked := openMowerRuntimeEnvKeys[match[1]]; envBacked {
+		if _, envBacked := sidecarRuntimeEnvKeys[match[1]]; envBacked {
 			// Deliberately default-less: until set, GET /settings/yaml shows
-			// the installer's docker/.env value (applyOpenMowerRuntimeFallbacks),
+			// the installer's docker/.env value (applySidecarRuntimeFallbacks),
 			// and a schema default would let the writer prune an explicit choice.
 			continue
 		}

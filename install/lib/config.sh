@@ -47,6 +47,7 @@ recompute_image_defaults() {
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
   MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
   OPENMOWER_IMAGE_DEFAULT="${prefix}/openmower:${IMAGE_TAG}"
+  AIRSEEKERS_IMAGE_DEFAULT="${prefix}/airseekers:${IMAGE_TAG}"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
   # Universal GNSS is a separately released runtime. Never derive it from
   # MowgliNext IMAGE_TAG; the integration targets ROS 2 Lyrical.
@@ -377,6 +378,9 @@ compose_restart_services_for_backend() {
   if [[ "$backend" == "openmower" ]]; then
     services+=(openmower)
   fi
+  if [[ "$backend" == "airseekers" ]]; then
+    services+=(airseekers)
+  fi
   services+=(mowgli)
 
   printf '%s\n' "${services[@]}"
@@ -529,11 +533,11 @@ gnss_connection_from_serial_device() {
 # Keep in lockstep with SUPPORTED_HARDWARE_BACKENDS in
 # ros2/src/mowgli_bringup/launch/mowgli.launch.py (pinned by
 # test_hardware_backend_launch.py) and the composer in docs/index.html.
-SUPPORTED_HARDWARE_BACKENDS="mowgli mavros openmower"
+SUPPORTED_HARDWARE_BACKENDS="mowgli mavros openmower airseekers"
 
 is_supported_hardware_backend() {
   case "${1:-}" in
-    mowgli|mavros|openmower) return 0 ;;
+    mowgli|mavros|openmower|airseekers) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -874,8 +878,16 @@ parse_args() {
             HARDWARE_BACKEND="openmower"
             MAVROS_BY_ID=""
             ;;
+          airseekers)
+            # The Airseekers sidecar owns the UM960 and publishes /gps/*
+            # itself (backends/airseekers.yaml gnss_stack: disabled).
+            HARDWARE_BACKEND="airseekers"
+            MAVROS_BY_ID=""
+            GNSS_BACKEND="disabled"
+            GNSS_STACK="disabled"
+            ;;
           *)
-            error "Unknown hardware backend: $backend_spec (expected mowgli, mavros or openmower)"
+            error "Unknown hardware backend: $backend_spec (expected mowgli, mavros, openmower or airseekers)"
             exit 1
             ;;
         esac

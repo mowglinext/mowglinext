@@ -186,6 +186,33 @@ else
 fi
 assert_match "openmower backend: the sparse config keeps lidar_enabled" "lidar_enabled: true" "$(grep -E '^[[:space:]]+lidar_enabled:' "$openmower_yaml")"
 
+# ── Airseekers Tron backend ──────────────────────────────────────────────
+section "HARDWARE_BACKEND=airseekers (vendor MCU behind the bridge sidecar, which owns the GNSS)"
+
+airseekers_repo="$SANDBOX/repo_airseekers"
+sandbox_repo "$airseekers_repo"
+harness_init "$airseekers_repo"
+harness_set_preset backend=airseekers gnss=disabled lidar=none
+if harness_run; then
+  pass "airseekers backend: harness_run succeeds"
+else
+  fail "airseekers backend: harness_run succeeds"
+fi
+assert_eq "airseekers backend: HARDWARE_BACKEND=airseekers" "airseekers" "$(env_value "$airseekers_repo" HARDWARE_BACKEND)"
+assert_eq "airseekers backend: GNSS_STACK=disabled (the sidecar publishes /gps/*)" "disabled" "$(env_value "$airseekers_repo" GNSS_STACK)"
+assert_match "airseekers backend: AIRSEEKERS_IMAGE points at the airseekers image" "/airseekers:" "$(env_value "$airseekers_repo" AIRSEEKERS_IMAGE)"
+airseekers_fragments=$(selected_fragments_in_current_run)
+case "$airseekers_fragments" in
+  *docker-compose.airseekers.yml*) pass "airseekers backend: bridge fragment present" ;;
+  *) fail "airseekers backend: bridge fragment present" "$airseekers_fragments" ;;
+esac
+for unwanted in docker-compose.gps.yml docker-compose.openmower.yml docker-compose.mavros.yml; do
+  case "$airseekers_fragments" in
+    *"$unwanted"*) fail "airseekers backend: no $unwanted" ;;
+    *) pass "airseekers backend: no $unwanted" ;;
+  esac
+done
+
 section "HARDWARE_BACKEND=openmower refuses a UART LiDAR on an xESC port"
 
 openmower_clash_repo="$SANDBOX/repo_openmower_clash"

@@ -4051,7 +4051,8 @@
     },
     "backendChoice": {
       "none": "Mowgli",
-      "openmower": "OpenMower v1"
+      "openmower": "OpenMower v1",
+      "airseekers": "Airseekers Tron"
     },
     "disabled": "Désactivé",
     "enabled": "Activé",
@@ -4459,6 +4460,58 @@
     "openmower_wheel_ki": {
       "label": "Ki de la boucle roue",
       "tooltip": "Gain intégral [rapport cyclique par (m/s × s) d'erreur]."
+    },
+    "airseekers_mcu_port": {
+      "label": "Port du MCU",
+      "tooltip": "Port série du MCU châssis/coupe constructeur (115200 bauds). Tron d’origine : /dev/serial_mower."
+    },
+    "airseekers_imu_port": {
+      "label": "Port de l'IMU",
+      "tooltip": "Port série de l'IMU WIT JY61P. Tron d’origine : /dev/serial_imu. Le MCU a besoin de cette IMU : sans elle il signale la tondeuse soulevée."
+    },
+    "airseekers_keys_device": {
+      "label": "Périphérique des touches",
+      "tooltip": "Périphérique evdev des touches du capot. Vide = recherche du périphérique « key input » (/dev/keyboard)."
+    },
+    "airseekers_cutter_height_mm": {
+      "label": "Hauteur de coupe",
+      "tooltip": "Hauteur du plateau pendant la tonte [mm], de 30 à 90 (90 = la plus haute)."
+    },
+    "airseekers_imu_roll_offset_deg": {
+      "label": "Décalage de roulis de l'IMU",
+      "tooltip": "Correction de montage du roulis de l'IMU [°]. 0 sur un Tron d’origine. Sécurité : alimente la détection de soulèvement du MCU et le moniteur d'inclinaison."
+    },
+    "airseekers_imu_pitch_offset_deg": {
+      "label": "Décalage de tangage de l'IMU",
+      "tooltip": "Correction de montage du tangage de l'IMU [°]. 0 sur un Tron d’origine."
+    },
+    "airseekers_max_angular_radps": {
+      "label": "Vitesse de rotation max",
+      "tooltip": "Limite de vitesse de lacet appliquée avant le MCU [rad/s] ; le MCU limite lui-même à 0,3."
+    },
+    "airseekers_angular_trim_radps": {
+      "label": "Correction de ligne droite",
+      "tooltip": "Vitesse de lacet ajoutée en roulant pour compenser une dérive d'un côté [rad/s], signée selon le sens de marche. 0 = désactivé."
+    },
+    "airseekers_angular_deadband_radps": {
+      "label": "Zone morte de rotation",
+      "tooltip": "Les consignes de lacet inférieures sont mises à zéro en roulant [rad/s]. 0 = désactivé."
+    },
+    "airseekers_heading_hold": {
+      "label": "Maintien de cap",
+      "tooltip": "Maintient le cap de l'IMU quand une ligne droite est demandée."
+    },
+    "airseekers_heading_hold_kp": {
+      "label": "Maintien de cap Kp",
+      "tooltip": "rad/s par rad d'erreur de cap."
+    },
+    "airseekers_heading_hold_kd": {
+      "label": "Maintien de cap Kd",
+      "tooltip": "rad/s par rad/s de vitesse de lacet du gyro (amortissement)."
+    },
+    "airseekers_heading_hold_max_radps": {
+      "label": "Limite du maintien de cap",
+      "tooltip": "Limite de la correction de maintien de cap [rad/s]."
     }
   },
   "settingsFieldGroups": {
@@ -4514,6 +4567,14 @@
     "openmowerWheelLoop": {
       "title": "Boucle de vitesse des roues OpenMower",
       "description": "Le xESC ne reçoit qu'un rapport cyclique : le pont OpenMower ferme une boucle de vitesse par roue sur les tachymètres. Pris en compte au redémarrage de ROS2."
+    },
+    "airseekersWiring": {
+      "title": "Électronique Airseekers Tron",
+      "description": "Ports série du MCU constructeur, de l'IMU et des touches, hauteur de coupe et montage de l'IMU. Tant qu'aucun port n'est réglé ici, celui choisi dans l'installateur s'applique. Pris en compte au redémarrage de ROS2."
+    },
+    "airseekersDrive": {
+      "title": "Conduite Airseekers",
+      "description": "Le MCU du Tron n'a pas de boucle de lacet. Limite de vitesse de rotation et compensation de la ligne droite côté hôte. Valeurs neutres par défaut : à régler sur la pelouse. Pris en compte au redémarrage de ROS2."
     }
   },
   "firmwareParams": {
@@ -4711,18 +4772,22 @@
     "names": {
       "mowgli": "Carte Mowgli (STM32)",
       "openmower": "OpenMower v1 (carte LowLevel + xESC)",
+      "airseekers": "Airseekers Tron (MCU constructeur + IMU WIT + UM960)",
       "mavros": "Pixhawk (MAVROS)"
     },
     "descriptions": {
       "mowgli": "Le firmware STM32 Mowgli pilote les moteurs et garde la sécurité de la lame et des arrêts d'urgence. Aucun réglage de câblage n'est nécessaire ici.",
       "openmower": "L'électronique OpenMower d'origine garde son propre firmware ; un conteneur pont la pilote. Les réglages que MowgliNext possède déjà (limites de charge, délais de soulèvement, impulsions par mètre…) restent dans leurs sections habituelles et sont appliqués au matériel OpenMower.",
+      "airseekers": "Le Tron garde son firmware constructeur ; un conteneur pont pilote son MCU, son IMU, ses touches et son récepteur GNSS. Les réglages que MowgliNext possède déjà (voie, vitesse max, NTRIP, port GNSS…) restent dans leurs sections habituelles et sont appliqués au matériel du Tron.",
       "mavros": "Un contrôleur de vol pilote le robot via le conteneur MAVROS, configuré par l'installateur."
     },
     "choiceNote": "Le pont matériel est choisi à l'installation du robot.",
     "openmowerRestartNote": "Le pont OpenMower lit ces réglages au démarrage : utilisez « Redémarrer ROS2 » après l'enregistrement, ce qui redémarre aussi le pont.",
+    "airseekersRestartNote": "Le pont Airseekers lit ces réglages au démarrage : utilisez « Redémarrer ROS2 » après l'enregistrement, ce qui redémarre aussi le pont.",
     "shortNames": {
       "mowgli": "Mowgli",
       "openmower": "OpenMower v1",
+      "airseekers": "Airseekers Tron",
       "mavros": "MAVROS"
     },
     "badgeTooltip": "Backend matériel : {{name}} — ouvrir les réglages matériel"

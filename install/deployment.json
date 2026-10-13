@@ -6,7 +6,8 @@
     "lidar-ldlidar": "scan-contract-1",
     "lidar-rplidar": "scan-contract-1",
     "lidar-stl27l": "scan-contract-1",
-    "openmower": "hardware-bridge-1"
+    "openmower": "hardware-bridge-1",
+    "airseekers": "hardware-bridge-1"
   },
   "gui_compatibility": "ros-gui-1",
   "components": [
@@ -57,6 +58,13 @@
       "type": "built",
       "context": ".",
       "file": "sensors/openmower/Dockerfile",
+      "target": ""
+    },
+    {
+      "name": "airseekers",
+      "type": "built",
+      "context": ".",
+      "file": "sensors/airseekers/Dockerfile",
       "target": ""
     }
   ]

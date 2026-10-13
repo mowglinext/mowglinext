@@ -57,6 +57,8 @@ import {
     TURN_SPEED_GROUP,
     YAW_LOOP_GROUP,
     OPENMOWER_WHEEL_LOOP_GROUP,
+    AIRSEEKERS_DRIVE_GROUP,
+    AIRSEEKERS_WIRING_GROUP,
     OPENMOWER_WIRING_GROUP,
     groupForBackend,
     type SettingsFieldGroup,
@@ -201,7 +203,7 @@ export const SettingsPage = () => {
                 return (
                     <>
                     <HardwareBackendSection backend={hardwareBackend}>
-                        {renderFieldCards(OPENMOWER_WIRING_GROUP)}
+                        {renderFieldCards(OPENMOWER_WIRING_GROUP, AIRSEEKERS_WIRING_GROUP)}
                     </HardwareBackendSection>
                     <HardwareSection
                         values={values}
@@ -228,7 +230,7 @@ export const SettingsPage = () => {
                         {renderFieldCards(YAW_LOOP_GROUP)}
                     </>
                 ) : (
-                    <>{renderFieldCards(OPENMOWER_WHEEL_LOOP_GROUP)}</>
+                    <>{renderFieldCards(OPENMOWER_WHEEL_LOOP_GROUP, AIRSEEKERS_DRIVE_GROUP)}</>
                 );
             case "ntrip":
                 return <NtripSection values={values} onChange={handleChange} />;

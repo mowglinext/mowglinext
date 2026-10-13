@@ -747,116 +747,51 @@ BT::NodeStatus BackUp::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
 
-  if (!action_client_)
-  {
-    action_client_ = rclcpp_action::create_client<BackUpAction>(ctx->node, "/backup");
-  }
-
-  if (!action_client_->wait_for_action_server(std::chrono::seconds(5)))
-  {
-    RCLCPP_ERROR(ctx->node->get_logger(), "BackUp: /backup action server not available");
-    return BT::NodeStatus::FAILURE;
-  }
-
   double dist = 0.5;
   double speed = 0.15;
+  bool forward = false;
   getInput("backup_dist", dist);
   getInput("backup_speed", speed);
+  getInput("forward", forward);
+  dist = std::fabs(dist);
+  speed = std::fabs(speed);
+  driving_forward_ = forward;
 
-  auto goal_msg = BackUpAction::Goal{};
-  // BackUp target is negative X (reverse) in base_link frame
-  goal_msg.target.x = -dist;
-  goal_msg.target.y = 0.0;
-  goal_msg.speed = speed;
   // Generous timeout: slow motors need extra time. 3x nominal duration.
-  goal_msg.time_allowance = rclcpp::Duration::from_seconds(dist / speed * 3.0);
+  const double time_allowance_s = dist / speed * 3.0;
 
-  RCLCPP_INFO(ctx->node->get_logger(), "BackUp: reversing %.2fm at %.2f m/s", dist, speed);
-
-  goal_dispatch_ = std::make_shared<GoalDispatch>();
-  rclcpp_action::Client<BackUpAction>::SendGoalOptions options;
-  options.goal_response_callback =
-      [dispatch = goal_dispatch_,
-       client = std::weak_ptr<rclcpp_action::Client<BackUpAction>>(action_client_),
-       logger = ctx->node->get_logger()](GoalHandle::SharedPtr handle)
+  if (forward)
   {
-    bool halted;
-    {
-      std::lock_guard<std::mutex> lock(dispatch->mutex);
-      dispatch->handle = handle;
-      halted = dispatch->halted;
-    }
-    if (halted)
-    {
-      cancelGoalQuietly(client.lock(), handle, logger, "BackUp");
-    }
-  };
-  goal_handle_future_ = action_client_->async_send_goal(goal_msg, options);
-  goal_handle_ = nullptr;
-  result_requested_ = false;
-  return BT::NodeStatus::RUNNING;
+    // DriveOnHeading: target and speed both positive = straight ahead.
+    RCLCPP_INFO(ctx->node->get_logger(), "BackUp: driving forward %.2fm at %.2f m/s", dist, speed);
+    return forward_.start(ctx->node, "/drive_on_heading", dist, speed, time_allowance_s);
+  }
+  // BackUp target is negative X (reverse) in base_link frame
+  RCLCPP_INFO(ctx->node->get_logger(), "BackUp: reversing %.2fm at %.2f m/s", dist, speed);
+  return reverse_.start(ctx->node, "/backup", -dist, speed, time_allowance_s);
 }
 
 BT::NodeStatus BackUp::onRunning()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-
-  // Wait for goal acceptance
-  if (!goal_handle_)
-  {
-    if (goal_handle_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
-    {
-      return BT::NodeStatus::RUNNING;
-    }
-    goal_handle_ = goal_handle_future_.get();
-    if (!goal_handle_)
-    {
-      RCLCPP_ERROR(ctx->node->get_logger(), "BackUp: goal rejected");
-      return BT::NodeStatus::FAILURE;
-    }
-  }
-
-  // Request result future only once
-  if (!result_requested_)
-  {
-    result_future_ = action_client_->async_get_result(goal_handle_);
-    result_requested_ = true;
-  }
-
-  if (result_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
-  {
-    return BT::NodeStatus::RUNNING;
-  }
-
-  auto wrapped = result_future_.get();
-  if (wrapped.code == rclcpp_action::ResultCode::SUCCEEDED)
-  {
-    RCLCPP_INFO(ctx->node->get_logger(), "BackUp: complete");
-    return BT::NodeStatus::SUCCESS;
-  }
-
-  RCLCPP_WARN(ctx->node->get_logger(),
-              "BackUp: action ended with code %d",
-              static_cast<int>(wrapped.code));
-  return BT::NodeStatus::FAILURE;
+  const auto logger = ctx->node->get_logger();
+  return driving_forward_ ? forward_.poll(logger) : reverse_.poll(logger);
 }
 
 void BackUp::onHalted()
 {
-  GoalHandle::SharedPtr handle;
-  if (goal_dispatch_)
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  const auto logger = ctx->node->get_logger();
+  // Only the attempt in flight: an earlier attempt in the other direction was
+  // already marked halted (its late acceptance cancels itself) or finished.
+  if (driving_forward_)
   {
-    std::lock_guard<std::mutex> lock(goal_dispatch_->mutex);
-    goal_dispatch_->halted = true;
-    handle = goal_dispatch_->handle;
+    forward_.halt(logger);
   }
-  if (handle)
+  else
   {
-    auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-    cancelGoalQuietly(action_client_, handle, ctx->node->get_logger(), "BackUp");
-    RCLCPP_INFO(ctx->node->get_logger(), "BackUp: halted, goal cancelled");
+    reverse_.halt(logger);
   }
-  goal_handle_ = nullptr;
 }
 
 // ---------------------------------------------------------------------------

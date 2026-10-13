@@ -34,7 +34,7 @@ Operator-facing rule of thumb: **the GUI only ever writes `mowgli_robot.yaml`.**
 
 ## mowgli_robot.yaml keys
 
-All 202 template keys. `L###` = line in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`. **GUI** = present in `mower_config.schema.json` (section name), or `no` — a `no` key still shows up in Settings → *Advanced* once it exists in the installed file (`gui/web/src/hooks/useSettingsManager.ts:679` `advancedKeys`). **Life** = `launch` (injected at launch, restart to apply), `dynamic` (also honoured live via `ros2 param set`), `INERT` (never injected — node compiled default wins), `sidecar` (consumed outside ROS2).
+All 226 template keys. `L###` = line in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`. **GUI** = present in `mower_config.schema.json` (section name), or `no` — a `no` key still shows up in Settings → *Advanced* once it exists in the installed file (`gui/web/src/hooks/useSettingsManager.ts:679` `advancedKeys`). **Life** = `launch` (injected at launch, restart to apply), `dynamic` (also honoured live via `ros2 param set`), `INERT` (never injected — node compiled default wins), `sidecar` (consumed outside ROS2).
 
 ### Dock illustration (GUI only)
 
@@ -143,6 +143,7 @@ The five `wheel_pid_*` defaults are pinned in lockstep across template ↔ `mowg
 | `local_inflation_inscribed_radius` | -1.0 (derive from footprint) | `local_costmap.inflation_layer.custom_inscribed_radius` `navigation.launch.py`; when >= 0 it also replaces the chassis-derived `inflation_radius` floor | Obstacles | launch |
 | `undock_distance` (L432) | 1.5 | BT BackUp `full_system.launch.py:232`; dock-calib `:492` | Docking | launch |
 | `undock_speed` (L433) | 0.16 | BT BackUp `full_system.launch.py:231`; dock-calib `:493` | Docking | launch |
+| `undock_forward` | `false` | BT `full_system.launch.py` → blackboard `{undock_forward}` (`forward=` on the undock `BackUp`s in `main_tree.xml`: `/drive_on_heading` instead of `/backup`) + `BTContext::undock_forward` (`CalibrateHeadingFromUndock` heading sign). Recovery BackUps and the dock-calib reverse leg ignore it. Backend default (`airseekers.yaml` true) | Docking (schema; no form control, edited under Advanced) | launch |
 | `mow_angle_deg` (L338) | -1.0 (auto) | BT `full_system.launch.py:250` → `PlanCoverage` goal; an area can override it (`MapArea.has_mow_angle`, Map page "mowing lines", `area_coverage_lines.hpp`) | Mowing | launch |
 | `mow_cross_hatch` | false | BT → per-area persisted phase → `PlanCoverage.perpendicular` | Mowing | launch; next-area overrides use `coverage_orientation` service |
 
@@ -362,6 +363,8 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `battery_full_voltage` / `battery_empty_voltage` | 28.0 / 24.0 | — | LowLevel battery gauge |
 
 The bridge refuses any LowLevel value outside the STM32 firmware envelope (`lowlevel_config.hpp`). OpenMower-only keys (template defaults = `openmower_bridge.yaml`, pinned by `sensors/openmower/mowgli_openmower_bridge/test/test_launch_config.py`; GUI **Settings → Hardware** (backend card at the top) and **Drive Motor**): `openmower_ll_port`, `openmower_xesc_type`, `openmower_xesc_{left,right,mow}_port` (no GUI schema default on purpose: until set, `docker/.env` `OPENMOWER_*` applies and is what the GUI shows), `openmower_emergency_input_config`, `openmower_wheel_loop_enabled`, `openmower_wheel_duty_per_mps`, `openmower_wheel_kp`, `openmower_wheel_ki`. No mowgli-ros2 node reads them.
+
+`airseekers.yaml` (Airseekers Tron, `sensors/airseekers/`): `wheel_track` **0.48**, `max_mps` **0.3** (the MCU clamp), `gnss_stack` **`disabled`** (the sidecar publishes `/gps/*` itself, so mowgli-ros2 starts no GNSS bridge), `gnss_serial_device` **`/dev/serial_rtk`**, `gnss_serial_baud` **115200**, `battery_{full,empty,critical}_voltage` **24.6 / 20.0 / 19.5** (estimates, see the sidecar README), `tilt_emergency_ms` **300** (debounce of the bridge's tilt trip), `undock_forward` **true** (the Tron docks in reverse, so it undocks driving forward; the bridge refuses reverse on the dock). Airseekers-only keys (template defaults = `airseekers_bridge.yaml`, pinned by `sensors/airseekers/mowgli_airseekers_bridge/test/test_launch_config.py`): `airseekers_mcu_port`, `airseekers_imu_port` (no GUI schema default, `docker/.env` `AIRSEEKERS_*` applies until set), `airseekers_keys_device`, `airseekers_max_angular_radps`, `airseekers_cutter_height_mm`, `airseekers_angular_trim_radps`, `airseekers_angular_deadband_radps`, `airseekers_heading_hold{,_kp,_kd,_max_radps}`, `airseekers_imu_{roll,pitch}_offset_deg`. No mowgli-ros2 node reads them.
 
 ### Read by a launch file but absent from the template
 

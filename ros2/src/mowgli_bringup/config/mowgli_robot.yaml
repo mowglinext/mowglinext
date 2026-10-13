@@ -702,6 +702,15 @@ mowgli:
     # be lowered (the clamp no longer blocks it), but that is a supervised
     # physical-behaviour change, not a config tidy-up.
     undock_speed: 0.16             # reverse speed (m/s)
+    # Undock direction. false (default): reverse off the dock via Nav2
+    # /backup — the robot docks nose-first onto front charge contacts. true:
+    # the robot docks in REVERSE (rear contacts, e.g. the Airseekers Tron) and
+    # drives FORWARD off the dock via /drive_on_heading for undock_distance at
+    # undock_speed; CalibrateHeadingFromUndock then reads the heading along
+    # the motion. Only the undock legs of main_tree.xml follow it; recovery
+    # BackUps always reverse. A backend default (config/backends/), not a
+    # per-site knob. Docking itself is unchanged (opennav_docking, forward).
+    undock_forward: false
     # Distance (m) to the staging pose behind the dock — the final
     # straight-in approach runway. Injected as opennav_docking
     # simple_charging_dock.staging_x_offset = -dock_approach_distance
@@ -1206,3 +1215,38 @@ mowgli:
     # The board's hall inputs (OpenMower OM_EMERGENCY_INPUT_CONFIG, e.g.
     # "!L,!L,S,S"). Empty keeps the board's own (YardForce wiring).
     openmower_emergency_input_config: ""
+
+    # ── Airseekers backend (HARDWARE_BACKEND=airseekers only) ───────────────
+    # Only what has NO MowgliNext equivalent. Read ONLY by the Airseekers
+    # bridge sidecar (sensors/airseekers), which deep-merges the installed
+    # config over THIS template + config/backends/airseekers.yaml like
+    # mowgli-ros2 does, and also maps the shared keys (wheel_track, max_mps,
+    # mowing_enabled, gnss_serial_*, ntrip_*, tilt_emergency_ms, ...).
+    # Values equal the bridge's package defaults -- pinned by
+    # sensors/airseekers/mowgli_airseekers_bridge/test/test_launch_config.py.
+    #
+    # Wiring. The installer may write AIRSEEKERS_MCU_PORT / _IMU_PORT to
+    # docker/.env, which wins over these defaults; a value saved in the GUI
+    # wins over both.
+    airseekers_mcu_port: "/dev/serial_mower"   # vendor MCU (cutter + chassis boards)
+    airseekers_imu_port: "/dev/serial_imu"     # WIT JY61P
+    airseekers_keys_device: ""                 # top-panel keys; "" = find "key input"
+    # Yaw-rate cap the bridge applies before the MCU (vendor clamp 0.3 rad/s).
+    airseekers_max_angular_radps: 0.3
+    # Deck height while mowing [mm], 30..90 (absolute; 90 = highest, the
+    # vendor's resting height). Also live: ros2 param set /hardware_bridge
+    # cutter_height_mm <mm>.
+    airseekers_cutter_height_mm: 90
+    # Straight-driving compensation (the vendor MCU has no yaw loop). Neutral
+    # defaults: no behaviour change until tuned on the lawn.
+    airseekers_angular_trim_radps: 0.0
+    airseekers_angular_deadband_radps: 0.0
+    airseekers_heading_hold: false
+    airseekers_heading_hold_kp: 1.0
+    airseekers_heading_hold_kd: 0.1
+    airseekers_heading_hold_max_radps: 0.15
+    # Mounting correction of the IMU attitude forwarded to the MCU (which
+    # trips "lift" outside ~[-37, +40] deg pitch / 38 deg roll) and fed to
+    # the host tilt monitor. 0 / 0 on a stock Tron.
+    airseekers_imu_roll_offset_deg: 0.0
+    airseekers_imu_pitch_offset_deg: 0.0

@@ -11,6 +11,7 @@ container_name_for_service() {
     mosquitto)    printf 'mowgli-mqtt\n' ;;
     mavros)       printf 'mowgli-mavros\n' ;;
     openmower)    printf 'mowgli-openmower\n' ;;
+    airseekers)   printf 'mowgli-airseekers\n' ;;
     ntrip)        printf 'mowgli-ntrip\n' ;;
     *)            return 1 ;;
   esac
@@ -55,6 +56,9 @@ expected_runtime_services() {
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
     services+=(openmower)
   fi
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "airseekers" ]]; then
+    services+=(airseekers)
+  fi
 
   if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
     services+=(lidar)
@@ -90,6 +94,10 @@ check_devices() {
     devices+=("${OPENMOWER_XESC_RIGHT_PORT:-/dev/ttyAMA3}:OpenMower right xESC")
     devices+=("${OPENMOWER_XESC_MOW_PORT:-/dev/ttyAMA4}:OpenMower mow xESC")
     devices+=("${gnss_device}:GPS receiver")
+  elif [[ "${HARDWARE_BACKEND:-mowgli}" == "airseekers" ]]; then
+    devices+=("${AIRSEEKERS_MCU_PORT:-/dev/serial_mower}:Airseekers MCU")
+    devices+=("${AIRSEEKERS_IMU_PORT:-/dev/serial_imu}:Airseekers IMU")
+    devices+=("/dev/serial_rtk:Airseekers UM960 GNSS")
   else
     devices+=("/dev/mowgli:Mowgli STM32 board")
   fi

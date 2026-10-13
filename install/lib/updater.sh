@@ -7,7 +7,7 @@
 # containers are not part of the release bundle).
 updater_hardware_supported() {
   case "${HARDWARE_BACKEND:-mowgli}" in
-    mowgli|openmower) return 0 ;;
+    mowgli|openmower|airseekers) return 0 ;;
     *) return 1 ;;
   esac
 }

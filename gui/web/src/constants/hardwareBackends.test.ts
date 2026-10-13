@@ -17,6 +17,7 @@ describe("normalizeHardwareBackend", () => {
     it("keeps known backends and falls back to mowgli", () => {
         expect(normalizeHardwareBackend("openmower")).toBe("openmower");
         expect(normalizeHardwareBackend("mavros")).toBe("mavros");
+        expect(normalizeHardwareBackend("airseekers")).toBe("airseekers");
         expect(normalizeHardwareBackend("bogus")).toBe("mowgli");
         expect(normalizeHardwareBackend(undefined)).toBe("mowgli");
     });

@@ -76,6 +76,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `compose/docker-compose.lidar-stl27l.yml` | 38 | `lidar` with `ldlidar_stl_ros2_node` + `LIDAR_MODEL`/`LIDAR_PORT`/`LIDAR_BAUD` |
 | `compose/docker-compose.mavros.yml` | 30 | `mavros` (mowgli-mavros) only — the standalone `ntrip` (mowgli-ntrip) service was deleted entirely (commit `bfd44f1a`, 2026-09-19, same PR as the GNSS sidecar rewrite) |
 | `compose/docker-compose.openmower.yml` | 52 | `openmower` (mowgli-openmower) — OpenMower LowLevel + xESC bridge sidecar, mounts `docker/config/mowgli` read-only at `/config` |
+| `compose/docker-compose.airseekers.yml` | ~50 | `airseekers` (mowgli-airseekers) — Airseekers Tron bridge + UM960 GNSS sidecar, mounts `docker/config/mowgli` read-only at `/config`; selected with `HARDWARE_BACKEND=airseekers` (installer sets `GNSS_STACK=disabled`) |
 | **`install/config/`** (seeds copied to `docker/config/`) | | |
 | `config/mowgli/mowgli_robot.yaml` | 79 | The SPARSE installed robot config seed (Invariant 15) |
 | `config/cyclonedds.xml` | ~45 | Loopback-only DDS: `AllowMulticast=false`, iface `lo`, `MaxAutoParticipantIndex=500`, unicast peer `localhost` with `PruneDelay="inf"` (Cyclone 11 otherwise stops re-announcing to a peer port after 30 s — a dropped boot-burst SPDP then leaves two participants blind to each other) |

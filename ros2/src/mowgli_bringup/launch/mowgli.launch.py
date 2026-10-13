@@ -23,8 +23,8 @@ Brings up:
   1. robot_state_publisher  – processes URDF/xacro and publishes /robot_description
                               plus static TF from URDF fixed joints.
   2. hardware_bridge        – serial bridge to the Mowgli firmware board, only
-                              when HARDWARE_BACKEND=mowgli. The mavros and
-                              openmower backends run their own bridge in a
+                              when HARDWARE_BACKEND=mowgli. The mavros,
+                              openmower and airseekers backends run their own bridge in a
                               sidecar container that publishes the same
                               /hardware_bridge contract, so launching this one
                               too would put two command consumers on the wire.
@@ -59,7 +59,7 @@ from robot_config_util import dig_detector_params, load_robot_params  # noqa: E4
 # Every hardware backend the installer can select (HARDWARE_BACKEND in
 # docker/.env, forwarded into the container environment). Only "mowgli" runs
 # the in-tree STM32 bridge; the others own their bridge in a sidecar.
-SUPPORTED_HARDWARE_BACKENDS = ("mowgli", "mavros", "openmower")
+SUPPORTED_HARDWARE_BACKENDS = ("mowgli", "mavros", "openmower", "airseekers")
 NATIVE_BRIDGE_BACKEND = "mowgli"
 
 
@@ -97,8 +97,8 @@ def generate_launch_description() -> LaunchDescription:
     hardware_backend_arg = DeclareLaunchArgument(
         "hardware_backend",
         default_value=EnvironmentVariable("HARDWARE_BACKEND", default_value="mowgli"),
-        description="Hardware backend: mowgli (in-tree STM32 bridge), mavros or "
-        "openmower (bridge runs in its own sidecar container).",
+        description="Hardware backend: mowgli (in-tree STM32 bridge), mavros, "
+        "openmower or airseekers (bridge runs in its own sidecar container).",
     )
 
     # ------------------------------------------------------------------

@@ -1,6 +1,18 @@
 {
   "_comment": "GENERATED from ros2/src/mowgli_bringup/config/backends/*.yaml — do not edit by hand. Regenerate with: cd gui \u0026\u0026 go run ./cmd/gen-backend-defaults",
   "backends": {
+    "airseekers": {
+      "battery_critical_voltage": 19.5,
+      "battery_empty_voltage": 20,
+      "battery_full_voltage": 24.6,
+      "gnss_serial_baud": 115200,
+      "gnss_serial_device": "/dev/serial_rtk",
+      "gnss_stack": "disabled",
+      "max_mps": 0.3,
+      "tilt_emergency_ms": 300,
+      "undock_forward": true,
+      "wheel_track": 0.48
+    },
     "openmower": {
       "both_wheels_lift_emergency_ms": 100,
       "max_charge_voltage": 29,

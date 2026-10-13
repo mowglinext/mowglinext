@@ -52,4 +52,14 @@ inline double remainingUndockDistance(
   return remaining < kMinResumeUndockM ? 0.0 : remaining;
 }
 
+/// Chassis heading [rad, in [-pi, pi]] from the direction the undock MOVED the
+/// robot (`motion_yaw`, start -> end). The default undock reverses off the dock
+/// (/backup), so the chassis faces opposite its motion; a robot that docks in
+/// reverse undocks driving forward (`undock_forward`) and faces along it.
+inline double undockHeadingFromMotion(double motion_yaw, bool forward)
+{
+  const double yaw = forward ? motion_yaw : motion_yaw + M_PI;
+  return std::atan2(std::sin(yaw), std::cos(yaw));
+}
+
 }  // namespace mowgli_behavior

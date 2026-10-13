@@ -19,6 +19,8 @@ import {
     FIRMWARE_SAFETY_GROUP,
     LOCALIZATION_GUARD_GROUP,
     OPENMOWER_WHEEL_LOOP_GROUP,
+    AIRSEEKERS_DRIVE_GROUP,
+    AIRSEEKERS_WIRING_GROUP,
     OPENMOWER_WIRING_GROUP,
     REVERSE_ESCAPE_GROUP,
     START_ESCAPE_GROUP,
@@ -98,6 +100,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // The hardware backend's own wiring (ports, controller type), in
             // the same section: one place for "what this robot is made of".
             ...groupKeys(OPENMOWER_WIRING_GROUP),
+            ...groupKeys(AIRSEEKERS_WIRING_GROUP),
         ],
     },
     {
@@ -110,6 +113,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
             ...groupKeys(YAW_LOOP_GROUP),
             ...groupKeys(OPENMOWER_WHEEL_LOOP_GROUP),
+            ...groupKeys(AIRSEEKERS_DRIVE_GROUP),
         ],
     },
     {

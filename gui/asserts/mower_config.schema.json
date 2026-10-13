@@ -705,6 +705,12 @@
           "default": 0.16,
           "description": "Reverse speed when undocking (m/s)."
         },
+        "undock_forward": {
+          "type": "boolean",
+          "title": "Undock Forward",
+          "default": false,
+          "description": "Drive forward off the dock instead of reversing (robots that dock in reverse). Normally set by the hardware backend."
+        },
         "dock_approach_distance": {
           "type": "number",
           "title": "Dock Approach Distance",
@@ -1592,6 +1598,100 @@
           "minimum": 0.0,
           "maximum": 50.0,
           "description": "Integral gain of the host-side wheel loop [duty per (m/s x s)]."
+        },
+        "airseekers_mcu_port": {
+          "type": "string",
+          "title": "MCU Port",
+          "description": "Serial device of the Airseekers Tron's vendor chassis/cutter MCU (HARDWARE_BACKEND=airseekers), 115200 baud. Stock Tron: /dev/serial_mower. Applied when the Airseekers bridge restarts. No schema default on purpose: the installer's docker/.env choice applies while this key is unset."
+        },
+        "airseekers_imu_port": {
+          "type": "string",
+          "title": "IMU Port",
+          "description": "Serial device of the Tron's WIT JY61P IMU. Stock Tron: /dev/serial_imu. Applied when the Airseekers bridge restarts. No schema default on purpose (see the MCU port)."
+        },
+        "airseekers_keys_device": {
+          "type": "string",
+          "title": "Panel Keys Device",
+          "default": "",
+          "description": "evdev device of the Tron's top-panel keys. Empty finds the \"key input\" device (normally /dev/keyboard)."
+        },
+        "airseekers_max_angular_radps": {
+          "type": "number",
+          "title": "Max Turn Rate",
+          "default": 0.3,
+          "minimum": 0.05,
+          "maximum": 0.3,
+          "description": "Yaw-rate cap [rad/s] the Airseekers bridge applies before the MCU, which clamps at 0.3 rad/s itself."
+        },
+        "airseekers_cutter_height_mm": {
+          "type": "integer",
+          "title": "Cutting Height",
+          "default": 90,
+          "minimum": 30,
+          "maximum": 90,
+          "description": "Deck height while mowing [mm], absolute, 30..90 (90 = highest). Sent to the Tron's height motor with every blade command."
+        },
+        "airseekers_angular_trim_radps": {
+          "type": "number",
+          "title": "Straight-Line Trim",
+          "default": 0.0,
+          "minimum": -0.2,
+          "maximum": 0.2,
+          "description": "Yaw rate [rad/s] added while driving to cancel a pull to one side (signed with the driving direction). The Tron's MCU has no yaw loop. 0 = off."
+        },
+        "airseekers_angular_deadband_radps": {
+          "type": "number",
+          "title": "Turn Deadband",
+          "default": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.2,
+          "description": "Commanded yaw rates below this [rad/s] are zeroed while driving. 0 = off."
+        },
+        "airseekers_heading_hold": {
+          "type": "boolean",
+          "title": "Heading Hold",
+          "default": false,
+          "description": "Hold the IMU heading while a straight line is commanded (host-side yaw correction for the Tron)."
+        },
+        "airseekers_heading_hold_kp": {
+          "type": "number",
+          "title": "Heading Hold Kp",
+          "default": 1.0,
+          "minimum": 0.0,
+          "maximum": 5.0,
+          "description": "rad/s per rad of heading error."
+        },
+        "airseekers_heading_hold_kd": {
+          "type": "number",
+          "title": "Heading Hold Kd",
+          "default": 0.1,
+          "minimum": 0.0,
+          "maximum": 2.0,
+          "description": "rad/s per rad/s of gyro yaw rate (damping)."
+        },
+        "airseekers_heading_hold_max_radps": {
+          "type": "number",
+          "title": "Heading Hold Limit",
+          "default": 0.15,
+          "minimum": 0.0,
+          "maximum": 0.3,
+          "description": "Clamp on the heading-hold correction [rad/s]."
+        },
+        "airseekers_imu_roll_offset_deg": {
+          "type": "number",
+          "title": "IMU Roll Offset",
+          "default": 0.0,
+          "minimum": -180.0,
+          "maximum": 180.0,
+          "description": "Mounting correction added to the IMU roll forwarded to the Tron MCU (its lift trip) and used by the tilt monitor. 0 on a stock Tron."
+        },
+        "airseekers_imu_pitch_offset_deg": {
+          "type": "number",
+          "title": "IMU Pitch Offset",
+          "default": 0.0,
+          "minimum": -180.0,
+          "maximum": 180.0,
+          "description": "Mounting correction added to the IMU pitch. 0 on a stock Tron."
         }
       }
     }

@@ -191,6 +191,7 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
   //     with ~30 samples reaches σ ≈ 0.05–0.1°, well under the 0.23°
   //     endpoint-only ceiling. Requires ≥ 4 samples spanning ≥ 0.5 m.
   //   * endpoint (fallback): atan2(-dy, -dx) on start vs. current
+  //     (atan2(dy, dx) for a forward undock, undock_forward).
   //     position. σ ≈ atan(2·σ_GPS / dist).
   // Whichever produces the result, the value is the chassis heading at
   // the END of the BackUp — by construction the chassis didn't rotate
@@ -206,20 +207,18 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
   if (have_line_fit_samples)
   {
     const auto [motion_yaw, motion_sigma] = FitMotionYaw(samples);
-    // Robot heading points opposite the motion (BackUp reverses).
-    yaw = motion_yaw + M_PI;
-    while (yaw > M_PI)
-      yaw -= 2.0 * M_PI;
-    while (yaw < -M_PI)
-      yaw += 2.0 * M_PI;
+    // Robot heading points opposite the motion (BackUp reverses), or along
+    // it when the undock drove forward (undock_forward).
+    yaw = undockHeadingFromMotion(motion_yaw, ctx->undock_forward);
     sigma_yaw = std::max(motion_sigma, 0.001);  // floor at ~0.06°
     method = "line_fit";
   }
   else
   {
     // Endpoint fallback. Motion vector (dx, dy) points OPPOSITE the
-    // robot's heading so heading = atan2(-dy, -dx).
-    yaw = std::atan2(-dy, -dx);
+    // robot's heading so heading = atan2(-dy, -dx) — or along it,
+    // atan2(dy, dx), for a forward undock.
+    yaw = undockHeadingFromMotion(std::atan2(dy, dx), ctx->undock_forward);
     sigma_yaw = std::atan2(2.0 * 0.007, std::max(dist, 0.05));
   }
   const double yaw_var = std::max(sigma_yaw * sigma_yaw, 5e-4);  // floor σ≈1.3°

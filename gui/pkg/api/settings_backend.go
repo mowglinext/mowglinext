@@ -41,18 +41,20 @@ const (
 )
 
 // supportedHardwareBackends mirrors mowgli.launch.py SUPPORTED_HARDWARE_BACKENDS.
-var supportedHardwareBackends = []string{"mowgli", "mavros", "openmower"}
+var supportedHardwareBackends = []string{"mowgli", "mavros", "openmower", "airseekers"}
 
-// openMowerRuntimeEnvKeys maps the OpenMower wiring keys to the docker/.env
-// entries the installer writes. The bridge layers .env between the defaults
+// sidecarRuntimeEnvKeys maps the hardware-bridge sidecars' wiring keys
+// (OpenMower, Airseekers) to the docker/.env entries the installer writes. The bridge layers .env between the defaults
 // and the installed config, so an ABSENT key runs with the .env value — the
 // GUI must show that one, not the template's.
-var openMowerRuntimeEnvKeys = map[string]string{
+var sidecarRuntimeEnvKeys = map[string]string{
 	"openmower_ll_port":         "OPENMOWER_LL_PORT",
 	"openmower_xesc_type":       "OPENMOWER_XESC_TYPE",
 	"openmower_xesc_left_port":  "OPENMOWER_XESC_LEFT_PORT",
 	"openmower_xesc_right_port": "OPENMOWER_XESC_RIGHT_PORT",
 	"openmower_xesc_mow_port":   "OPENMOWER_XESC_MOW_PORT",
+	"airseekers_mcu_port":       "AIRSEEKERS_MCU_PORT",
+	"airseekers_imu_port":       "AIRSEEKERS_IMU_PORT",
 }
 
 type backendDefaultsFile struct {
@@ -171,11 +173,11 @@ func applyBackendDefaults(defaults map[string]any, backend string) {
 	}
 }
 
-// applyOpenMowerRuntimeFallbacks shows the installer's wiring (docker/.env)
-// for every OpenMower wiring key the installed config does not set — that is
+// applySidecarRuntimeFallbacks shows the installer's wiring (docker/.env)
+// for every sidecar wiring key the installed config does not set — that is
 // the value the bridge runs with.
-func applyOpenMowerRuntimeFallbacks(flat map[string]any, runtimeEnv map[string]string) {
-	for key, envKey := range openMowerRuntimeEnvKeys {
+func applySidecarRuntimeFallbacks(flat map[string]any, runtimeEnv map[string]string) {
+	for key, envKey := range sidecarRuntimeEnvKeys {
 		if hasExplicitFlatValue(flat[key]) {
 			continue
 		}

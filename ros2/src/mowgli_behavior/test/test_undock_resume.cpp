@@ -15,13 +15,16 @@
 
 // SPDX-License-Identifier: GPL-3.0
 
+#include <cmath>
 #include <limits>
+#include <utility>
 
 #include "mowgli_behavior/undock_resume.hpp"
 #include <gtest/gtest.h>
 
 using mowgli_behavior::kMinResumeUndockM;
 using mowgli_behavior::remainingUndockDistance;
+using mowgli_behavior::undockHeadingFromMotion;
 
 TEST(UndockResume, ReversesOnlyWhatIsLeftOfTheUndock)
 {
@@ -54,4 +57,25 @@ TEST(UndockResume, InvalidInputsNeverAskForAReverse)
   EXPECT_EQ(remainingUndockDistance(0.0, 0.0, 0.0, 0.0, nan), 0.0);
   EXPECT_EQ(remainingUndockDistance(0.0, 0.0, 0.0, 0.0, 0.0), 0.0);
   EXPECT_EQ(remainingUndockDistance(0.0, 0.0, 0.0, 0.0, -1.0), 0.0);
+}
+
+TEST(UndockHeading, AReverseUndockFacesAwayFromItsMotion)
+{
+  // Reversed due east -> the chassis faces west.
+  EXPECT_NEAR(std::fabs(undockHeadingFromMotion(0.0, false)), M_PI, 1e-12);
+  // Reversed due north -> faces south.
+  EXPECT_NEAR(undockHeadingFromMotion(M_PI / 2.0, false), -M_PI / 2.0, 1e-12);
+  // Matches the endpoint formula atan2(-dy, -dx) the node used before.
+  for (const auto& [dx, dy] : {std::pair{1.0, 2.0}, std::pair{-3.0, 0.5}, std::pair{-0.2, -1.1}})
+    EXPECT_NEAR(undockHeadingFromMotion(std::atan2(dy, dx), false), std::atan2(-dy, -dx), 1e-12);
+}
+
+TEST(UndockHeading, AForwardUndockFacesAlongItsMotion)
+{
+  // undock_forward: a reverse-entry dock is left driving forward.
+  EXPECT_NEAR(undockHeadingFromMotion(0.0, true), 0.0, 1e-12);
+  EXPECT_NEAR(undockHeadingFromMotion(M_PI / 2.0, true), M_PI / 2.0, 1e-12);
+  EXPECT_NEAR(undockHeadingFromMotion(-2.5, true), -2.5, 1e-12);
+  // Always wrapped into [-pi, pi].
+  EXPECT_NEAR(undockHeadingFromMotion(3.0 * M_PI / 2.0, true), -M_PI / 2.0, 1e-12);
 }

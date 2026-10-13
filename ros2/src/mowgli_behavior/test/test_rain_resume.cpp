@@ -107,7 +107,9 @@ public:
   }
   static BT::PortsList providedPorts()
   {
-    return {BT::InputPort<double>("backup_dist"), BT::InputPort<double>("backup_speed")};
+    return {BT::InputPort<double>("backup_dist"),
+            BT::InputPort<double>("backup_speed"),
+            BT::InputPort<bool>("forward")};
   }
   BT::NodeStatus onStart() override
   {

@@ -61,7 +61,7 @@ build_compose_stack() {
   local gnss_service
 
   if ! is_supported_hardware_backend "${HARDWARE_BACKEND:-mowgli}"; then
-    error "Unknown HARDWARE_BACKEND: ${HARDWARE_BACKEND:-unset} (expected mowgli, mavros or openmower)"
+    error "Unknown HARDWARE_BACKEND: ${HARDWARE_BACKEND:-unset} (expected mowgli, mavros, openmower or airseekers)"
     return 1
   fi
 
@@ -155,6 +155,11 @@ build_compose_stack() {
   # hardware_bridge_node (gated in mowgli.launch.py); GNSS stays universal.
   [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]] && \
     COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.openmower.yml")
+
+  # Airseekers Tron: the sidecar replaces hardware_bridge_node AND owns the
+  # UM960 (GNSS_STACK=disabled, no gps container).
+  [[ "${HARDWARE_BACKEND:-mowgli}" == "airseekers" ]] && \
+    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.airseekers.yml")
 
   info "Selected compose fragments:"
   for f in "${COMPOSE_FILES[@]}"; do
@@ -329,7 +334,7 @@ write_compose_merged() {
     # Spelled out rather than updater_hardware_supported: docker/stack.sh
     # sources this file without lib/updater.sh.
     case "${HARDWARE_BACKEND:-mowgli}" in
-      mowgli|openmower) ;;
+      mowgli|openmower|airseekers) ;;
       *)
         error "$MSG_UPDATER_STACK_BACKEND"
         return 1

@@ -2,7 +2,7 @@
 // Settings page sees them. The active one comes from GET
 // /settings/hardware-backend (gui/pkg/api/settings_backend.go).
 
-export type HardwareBackend = "mowgli" | "mavros" | "openmower";
+export type HardwareBackend = "mowgli" | "mavros" | "openmower" | "airseekers";
 
 export const DEFAULT_HARDWARE_BACKEND: HardwareBackend = "mowgli";
 
@@ -19,7 +19,9 @@ export interface HardwareBackendInfo {
 }
 
 export const normalizeHardwareBackend = (value: unknown): HardwareBackend =>
-    value === "openmower" || value === "mavros" ? value : DEFAULT_HARDWARE_BACKEND;
+    value === "openmower" || value === "mavros" || value === "airseekers"
+        ? value
+        : DEFAULT_HARDWARE_BACKEND;
 
 /** True when an item limited to `backends` applies to `active` (no limit = all). */
 export const appliesToBackend = (

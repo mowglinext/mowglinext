@@ -39,13 +39,21 @@ struct BackUpTestAccess
 {
   static bool GoalResponseReady(const BackUp& node)
   {
-    return node.goal_handle_future_.valid() &&
-           node.goal_handle_future_.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    return node.reverse_.goal_handle_future.valid() &&
+           node.reverse_.goal_handle_future.wait_for(std::chrono::seconds(0)) ==
+               std::future_status::ready;
   }
 
   static bool HasHarvestedHandle(const BackUp& node)
   {
-    return static_cast<bool>(node.goal_handle_);
+    return static_cast<bool>(node.reverse_.goal_handle);
+  }
+
+  static bool ForwardGoalResponseReady(const BackUp& node)
+  {
+    return node.forward_.goal_handle_future.valid() &&
+           node.forward_.goal_handle_future.wait_for(std::chrono::seconds(0)) ==
+               std::future_status::ready;
   }
 };
 
@@ -293,6 +301,82 @@ TEST_F(BackupPauseTest, AbortedGoalStillReturnsFailure)
         return status != BT::NodeStatus::RUNNING;
       }));
   EXPECT_EQ(status, BT::NodeStatus::FAILURE);
+}
+
+// forward="true" (undock off a reverse-entry dock, mowgli_robot.yaml
+// undock_forward) goes to /drive_on_heading with a POSITIVE target and speed —
+// never to /backup, whose server forces reverse — and keeps the same
+// success / halt-cancel behaviour.
+TEST_F(BackupPauseTest, ForwardDrivesOnHeadingAndNeverReverses)
+{
+  using DriveAction = nav2_msgs::action::DriveOnHeading;
+  using DriveHandle = rclcpp_action::ServerGoalHandle<DriveAction>;
+  std::vector<std::shared_ptr<DriveHandle>> drive_goals;
+  auto drive_server = rclcpp_action::create_server<DriveAction>(
+      server_node,
+      "/drive_on_heading",
+      [](const rclcpp_action::GoalUUID&, std::shared_ptr<const DriveAction::Goal>)
+      {
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+      },
+      [](const std::shared_ptr<DriveHandle>&)
+      {
+        return rclcpp_action::CancelResponse::ACCEPT;
+      },
+      [&drive_goals](const std::shared_ptr<DriveHandle>& handle)
+      {
+        drive_goals.push_back(handle);
+      });
+
+  blackboard->set("forward", true);
+  auto forward_tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Forward\">"
+      "<BackUp backup_dist=\"{distance}\" backup_speed=\"0.16\" forward=\"{forward}\"/>"
+      "</BehaviorTree></root>",
+      blackboard));
+  auto& node = dynamic_cast<mowgli_behavior::BackUp&>(*forward_tree->rootNode());
+
+  ASSERT_EQ(forward_tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(spinUntil(
+      [&]
+      {
+        return drive_goals.size() == 1 &&
+               mowgli_behavior::BackUpTestAccess::ForwardGoalResponseReady(node);
+      }));
+  EXPECT_TRUE(goals.empty()) << "a forward undock must never reach /backup";
+  EXPECT_NEAR(drive_goals.front()->get_goal()->target.x, 1.0, 1e-9);
+  EXPECT_NEAR(drive_goals.front()->get_goal()->speed, 0.16, 1e-6);  // float32 field
+
+  // Halt cancels the forward goal like a reverse one.
+  ASSERT_EQ(forward_tree->tickOnce(), BT::NodeStatus::RUNNING);
+  forward_tree->haltTree();
+  ASSERT_TRUE(spinUntil(
+      [&]
+      {
+        return drive_goals.front()->is_canceling();
+      }));
+
+  // A fresh attempt that succeeds returns SUCCESS.
+  ASSERT_EQ(forward_tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(spinUntil(
+      [&]
+      {
+        return drive_goals.size() == 2 &&
+               mowgli_behavior::BackUpTestAccess::ForwardGoalResponseReady(node);
+      }));
+  ASSERT_EQ(forward_tree->tickOnce(), BT::NodeStatus::RUNNING);
+  drive_goals.back()->succeed(std::make_shared<DriveAction::Result>());
+  BT::NodeStatus status = BT::NodeStatus::RUNNING;
+  ASSERT_TRUE(spinUntil(
+      [&]
+      {
+        status = forward_tree->tickOnce();
+        return status != BT::NodeStatus::RUNNING;
+      }));
+  EXPECT_EQ(status, BT::NodeStatus::SUCCESS);
+  EXPECT_TRUE(goals.empty());
+  forward_tree.reset();
+  drive_server.reset();
 }
 
 }  // namespace
