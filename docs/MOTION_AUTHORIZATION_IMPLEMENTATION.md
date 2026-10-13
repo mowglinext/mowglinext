@@ -484,9 +484,34 @@ late-accepted goal to survive the halt. On restart, its terminal callback wrote
 into the outcome slot reused by the replacement goal. Logs show staging
 preemption, an old-goal abort, a second server docking attempt, overlapping Nav2
 navigation and NAV_TO_DOCK_FAILED. Source inspection confirms both lifecycle
-windows. A focused dispatch-identity/cancellation repair and adversarial action
-tests are in progress; no full LiDAR cycle or stack-wide #924 acceptance is
-claimed from this failed run.
+windows. A focused DockRobot/UndockRobot repair now gives every dispatch its
+own acceptance/result state, cancels late acceptance after halt or destruction,
+and waits for its previous action's terminal result before replacement. A
+five-second steady-clock drain timeout refuses replacement and retains the old
+identity; it does not establish that cancellation succeeded. Boundary exemption
+is not enabled while draining. Callbacks no longer capture the destroyed BT
+node, and goal-handle operations occur outside the dispatch mutex.
+
+Four real-ROS cancellation regressions failed against the preceding production
+code; all **14 new transport cases pass**, including normal instant success,
+rejection, destruction, restart, rejected cancellation and concurrent result/halt.
+The focused run passed **7/7 targets**. After correcting only CRLF in the scratch
+XML copy, one complete behavior run passed **47/47 CTest targets**, including
+42 GoogleTest targets with 498 cases and zero failures/errors. Its first
+full run was 44/47; two XML structure failures then passed, while the unchanged
+manual-charge debounce test failed twice in its complete target and passed alone
+before passing in the final full batch. These earlier timing failures remain
+repeatability limitations; no assertion or test source was weakened.
+
+All 96 behavior build inputs match the checkout after CRLF normalization only.
+The installed behavior binary SHA-256 is
+`0025fbeccb5629805cd77000130077a5e7c42905c351c06b7e5adc1d3ee41d26`.
+An independent source review found no additional confirmed defect within this
+per-node repair. Cross-node action ownership, a rejected cancellation's one-shot
+send and indefinite transport retention for a never-answered acceptance remain
+limitations. This is not a geometry exception or a final-output cancellation
+lease. A new full LiDAR cycle with this installed binary is pending; neither
+that cycle nor stack-wide #924 acceptance follows from these unit results.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts

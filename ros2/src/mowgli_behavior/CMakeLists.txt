@@ -281,6 +281,12 @@ if(BUILD_TESTING)
   target_include_directories(test_escape_authorization PRIVATE include)
   target_link_libraries(test_escape_authorization ${behavior_node_dependencies})
 
+  # ---- test_docking_dispatch ----
+  ament_add_ros_isolated_gtest(test_docking_dispatch
+    test/test_docking_dispatch.cpp src/docking_nodes.cpp TIMEOUT 120)
+  target_include_directories(test_docking_dispatch PRIVATE include)
+  target_link_libraries(test_docking_dispatch ${behavior_node_dependencies})
+
   # ---- test_docking_boundary_exempt ----
   # Regression for "Mowing Complete → robot stops short of the dock": exercises
   # the IsDocking condition and the BoundaryGuard whitelist logic that exempts
