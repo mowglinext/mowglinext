@@ -684,6 +684,23 @@ not established. The inherited radius-retry routine also needs configuration
 validation for nonfinite or extremely large radii; shipped finite radii were
 used in the reported checks.
 
+Webots attempt 24 stopped before E2E START: the unchanged Nav2 readiness gate
+failed because `is_path_valid` was unavailable after its existing 10-second
+wait. Copied coverage binary hashes and package-prefix checks passed, but live
+mapping and the later datum/selector gates were not reached. No mission verdict
+exists for that attempt. Its 24 startup resource samples are not mission or
+isolated authorization-overhead measurements.
+
+The first two attempt-25 launches also stopped before E2E START, from test-runner
+encoding and helper-order defects. A partial service probe did not establish
+the Nav2 failure's cause. Lead checks found and repaired an additional syntax
+defect before the next launch; shell/Python/PowerShell syntax, encoding, helper
+ordering and actual checksum accept/reject checks passed. The corrected third
+launch passes Nav2/LiDAR readiness and verifies the exact live coverage executable
+and mapped core library. The original readiness, geometry, datum and canonical
+mission assertions remain in force. The earlier service failure's cause is
+undetermined; passing readiness is not a full corrected mowing-cycle PASS.
+
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
