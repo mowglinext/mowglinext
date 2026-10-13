@@ -3213,3 +3213,25 @@ TEST(CoveragePlanning, PerpendicularEqualsSelectingTheRotatedFixedAngle)
         buildContinuousSubPaths(manual, manual.connector_clearance_boundary, 0.18, 0.15, 0.03));
   }
 }
+
+// Ordinary configured rectangle through the real ConstHL/GEOS ring pipeline.
+// Its outward/inward buffer round-trip creates microscopic bevels; smoothing
+// must fit across their supporting edges, rather than leave both ends sharp.
+TEST(CoverageRingCorners, BufferedRectangleOuterRingHasSupportedFillets)
+{
+  f2c::types::LinearRing ring;
+  for (const auto& p : std::vector<std::pair<double, double>>{
+           {-4.5, .8}, {4.5, .8}, {4.5, 6.8}, {-4.5, 6.8}, {-4.5, .8}})
+    ring.addPoint(f2c::types::Point(p.first, p.second));
+  auto generate = [&]()
+  {
+    return planBoustrophedon(f2c::types::Cell(ring), .16, .18, 5, 0.0, -1.0, .15, 0, .20, false, 0);
+  };
+  const auto plan = generate();
+  ASSERT_EQ(plan.rings.size(), 5u);
+  const auto& outer = plan.rings.front();
+  EXPECT_LT(maxTurnDeg(outer), 15.0);
+  EXPECT_EQ(maxTightArcRun(outer, .03, .20), 0u);
+  EXPECT_EQ(outer.front(), outer.back());
+  EXPECT_EQ(plan.rings, generate().rings);
+}

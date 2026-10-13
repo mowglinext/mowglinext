@@ -16,6 +16,7 @@
 #include <string>
 
 #include "mowgli_interfaces/coverage_geometry.hpp"
+#include "ring_corner_rounding.hpp"
 
 // GDAL/OGR (F2C's geometry backend) — bufferRingOutward grows drawn-obstacle
 // rings with OGRPolygon::Buffer. Explicit include: the transitive path via
@@ -1044,6 +1045,117 @@ std::vector<std::pair<double, double>> densifyPolyline(
 
 }  // namespace
 
+// GEOS can bevel a polygon vertex by a few millimetres. Filleting each end
+// independently cannot fit the minimum radius into that short edge. Recover
+// the intersection of the two supporting edges only when a real tangent
+// fillet fits; never emit the intersection as a replacement sharp corner.
+std::vector<std::pair<double, double>> detail::roundBeveledCorners(
+    const std::vector<std::pair<double, double>>& pts,
+    const std::vector<std::pair<double, double>>& boundary,
+    const std::vector<std::vector<std::pair<double, double>>>& holes,
+    double max_turn_rad,
+    double fillet_r,
+    double min_radius,
+    double step,
+    const std::function<bool(const std::pair<double, double>&, double)>& keep_sharp)
+{
+  constexpr double kMaxBevelM = 0.01;
+  if (!std::isfinite(step) || step <= 0.0)
+    return pts;
+  if (pts.size() < 4)
+    return roundSharpCorners(pts, boundary, holes, max_turn_rad, fillet_r, min_radius, step,
+                             keep_sharp);
+  std::vector<std::pair<double, double>> out{pts.front()};
+  for (std::size_t i = 1; i + 1 < pts.size(); ++i)
+  {
+    bool accepted = false;
+    if (i + 2 < pts.size())
+    {
+      const auto a = out.back(), b = pts[i], c = pts[i + 1], d = pts[i + 2];
+      const double ix = b.first - a.first, iy = b.second - a.second;
+      const double ox = d.first - c.first, oy = d.second - c.second;
+      const double bx = c.first - b.first, by = c.second - b.second;
+      const double in_len = std::hypot(ix, iy), out_len = std::hypot(ox, oy);
+      const double bevel = std::hypot(bx, by);
+      const double cross = ix * oy - iy * ox;
+      const double first_turn = ix * by - iy * bx;
+      const double second_turn = bx * oy - by * ox;
+      // All three edges must be ordinary motion, never an explicit pivot twin.
+      // Same-sign turns exclude a zigzag or hairpin masquerading as a bevel.
+      if (std::isfinite(in_len) && std::isfinite(out_len) && std::isfinite(bevel) &&
+          in_len >= cg::kPivotCornerMaxStepM && out_len >= cg::kPivotCornerMaxStepM &&
+          bevel >= cg::kPivotCornerMaxStepM && bevel <= kMaxBevelM &&
+          std::abs(cross) > 1e-9 * in_len * out_len && cross * first_turn > 0.0 &&
+          cross * second_turn > 0.0)
+      {
+        // Preserve pivots at the actual bevel vertices. The reconstructed
+        // supporting-edge intersection is never an emitted pivot candidate.
+        const double turn_b =
+            std::acos(std::clamp((ix * bx + iy * by) / (in_len * bevel), -1.0, 1.0));
+        const double turn_c =
+            std::acos(std::clamp((bx * ox + by * oy) / (bevel * out_len), -1.0, 1.0));
+        if (keep_sharp && (keep_sharp(b, turn_b) || keep_sharp(c, turn_c)))
+        {
+          out.push_back(b);
+          continue;
+        }
+        const double t = ((c.first - a.first) * oy - (c.second - a.second) * ox) / cross;
+        const std::pair<double, double> corner{a.first + t * ix, a.second + t * iy};
+        const double turn =
+            std::acos(std::clamp((ix * ox + iy * oy) / (in_len * out_len), -1.0, 1.0));
+        const double outgoing_projection =
+            (corner.first - c.first) * ox + (corner.second - c.second) * oy;
+        if (std::isfinite(corner.first) && std::isfinite(corner.second) && t >= 1.0 &&
+            outgoing_projection <= 0.0 && turn > max_turn_rad && turn < M_PI - 1e-6 &&
+            std::hypot(corner.first - b.first, corner.second - b.second) <= kMaxBevelM &&
+            std::hypot(corner.first - c.first, corner.second - c.second) <= kMaxBevelM)
+        {
+          auto local = roundSharpCorners(
+              {a, corner, d}, boundary, holes, max_turn_rad, fillet_r, min_radius, step);
+          // A rejected fillet is exactly the original three-point sharp path.
+          if (local.size() > 3 && allInside(local, boundary) && clearOfHoles(local, holes))
+          {
+            // Validate the entire emitted polyline, including both straight
+            // tangent connectors. Sample-only checks can miss a tiny hole.
+            OGRLineString line;
+            for (const auto& p : local)
+              line.addPoint(p.first, p.second);
+            OGRLinearRing shell;
+            for (const auto& p : boundary)
+              shell.addPoint(p.first, p.second);
+            shell.closeRings();
+            OGRPolygon polygon;
+            polygon.addRing(&shell);
+            std::unique_ptr<OGRGeometry> outside(line.Difference(&polygon));
+            bool fits = outside && outside->IsEmpty();
+            for (const auto& hole : holes)
+            {
+              OGRLinearRing ring;
+              for (const auto& p : hole)
+                ring.addPoint(p.first, p.second);
+              ring.closeRings();
+              OGRPolygon obstacle;
+              obstacle.addRing(&ring);
+              fits = fits && !line.Intersects(&obstacle);
+            }
+            if (fits)
+            {
+              out.insert(out.end(), local.begin() + 1, local.end() - 1);
+              ++i;  // both bevel vertices have been replaced by the accepted arc
+              accepted = true;
+            }
+          }
+        }
+      }
+    }
+    if (!accepted)
+      out.push_back(pts[i]);
+  }
+  out.push_back(pts.back());
+  return roundSharpCorners(out, boundary, holes, max_turn_rad, fillet_r, min_radius, step,
+                           keep_sharp);
+}
+
 // True iff every cell is a valid OGR/GEOS polygon (holes inside the shell, not
 // overlapping each other). F2C's clip operations assume validity.
 static bool cellsAreValid(const f2c::types::Cells& cells)
@@ -1771,7 +1883,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                        pivotSweepFits(corner.first, corner.second, ring_pivot_limits);
               };
             }
-            auto rounded = roundSharpCorners(sparse,
+            auto rounded = detail::roundBeveledCorners(sparse,
                                              fillet_boundary,
                                              plan.safe_holes,
                                              kRingCornerThreshold,
