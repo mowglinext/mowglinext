@@ -458,10 +458,35 @@ advancing direct blade telemetry. It compares blade stamps against ROS clock,
 uses monotonic liveness/deadlines, observes phase changes in callbacks, excludes
 intentional OFF pauses and caps credit at previous evidence expiry. The same
 30 active-second progress requirement and independent 60/3000 s limits remain.
-Eighteen deterministic policy/real-ROS-adapter checks pass. Cleanup now stops
+Nineteen deterministic policy/real-ROS-adapter checks pass. Cleanup now stops
 simulation execution before stopping evidence recorders. Production guards and
 canonical harness assertions were not changed; LiDAR mission acceptance remains
 pending.
+
+LiDAR attempt 20 at `5cc78033` passed those readiness checks and completed the
+undock, plan and mowing phases: 11.7, 38.1 and 2345.4 seconds respectively.
+The strict whole-cycle verdict was **FAIL**, exit 1 at the unchanged 3000-second
+limit. It observed 1/1 completed paths, no wholly skipped paths, 374.4 m travel
+and 20,103 global stamped cells (50.2575 m²); these are not a physical coverage
+percentage. Short blade-off resume-cursor advances remain a coverage limitation.
+The corrected task watchdog passed with fresh blade-active grid growth and did
+not interrupt the mission. Live collision-monitor logs show slowdown and
+approach responses. Seven LiDAR TF future-extrapolation errors and transient
+GNSS/pose freshness rejections occurred; guards stopped or paused motion.
+Eight periodic graph saves succeeded with a private writable map directory.
+An auxiliary collision-state recorder expected a nonexistent message header;
+its failure limits recording and does not invalidate the separate readiness
+probe or establish continuous collision-state evidence.
+
+After MOWING_COMPLETE, a localization guard halted the pending dock dispatch.
+The docking client canceled only an already-polled goal handle, allowing the
+late-accepted goal to survive the halt. On restart, its terminal callback wrote
+into the outcome slot reused by the replacement goal. Logs show staging
+preemption, an old-goal abort, a second server docking attempt, overlapping Nav2
+navigation and NAV_TO_DOCK_FAILED. Source inspection confirms both lifecycle
+windows. A focused dispatch-identity/cancellation repair and adversarial action
+tests are in progress; no full LiDAR cycle or stack-wide #924 acceptance is
+claimed from this failed run.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
