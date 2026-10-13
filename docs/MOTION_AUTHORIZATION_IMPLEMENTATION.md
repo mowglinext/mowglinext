@@ -441,6 +441,28 @@ UID 1000 and live graph save/autosave settings were correct; save success was
 not exercised. The next isolated attempt uses an explicit sparse LiDAR config
 and verifies actual guard parameters before authorizing START.
 
+Attempt 19 at `8573be31` passed the live LiDAR/guard readiness checks, including
+all required active polygons and independently queried parameters. Three setup
+parameter tests passed; unused legacy polygon and PointCloud-only height keys
+no longer mask required LaserScan guard settings. The subsequent mission was
+stopped by a task-observer false positive: its 30 s timer armed on the umbrella
+MOWING status before planning and blade-off transit. At termination transit was
+still progressing, with no recorded mowing. Genuine blade ON and verified
+stamping began later during serial cleanup after observers stopped. This is not
+evidence of a mower refusal or successful LiDAR mission. Harness exit was 1;
+runner/container exit was 31. Sensor streams were advancing, and 355 paired
+nav/monitored commands matched, but no collision response was observed.
+
+The next task-only observer arms from current mowing/path context plus fresh
+advancing direct blade telemetry. It compares blade stamps against ROS clock,
+uses monotonic liveness/deadlines, observes phase changes in callbacks, excludes
+intentional OFF pauses and caps credit at previous evidence expiry. The same
+30 active-second progress requirement and independent 60/3000 s limits remain.
+Eighteen deterministic policy/real-ROS-adapter checks pass. Cleanup now stops
+simulation execution before stopping evidence recorders. Production guards and
+canonical harness assertions were not changed; LiDAR mission acceptance remains
+pending.
+
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
