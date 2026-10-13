@@ -601,6 +601,29 @@ The mixed-runtime and clock/provenance limitations remain. A complete LiDAR
 mowing cycle, a measured final-command containment result, and physical
 acceptance remain outstanding.
 
+A focused comparison now reproduces the headland functionality problem through
+the real FTC library, with identical geometry, TF, parameters and modeled wheel
+response. Its representative legal rounded rectangle is not the unrecorded
+attempt-22 full plan. Original `9f39497f` dev finishes after 726 model steps but
+records 417 reference samples outside the rectangle (maximum X 4.50486 m,
+minimum Y 0.79522 m). This branch aborts after 266 steps with no outside sample
+before the abort; extending the model with zero-command coast records 39
+outside samples and a final X of approximately 4.5001 m. Neither outcome passes
+the combined progress-and-containment requirement. These are modeled controller
+results, not a physical stopping-distance measurement.
+
+An isolated brake/heading-alignment experiment completes the unbiased fixture
+without a recorded crossing and preserves all 26 FTC authorization assertions.
+It is **not included in production**: its early forecast assumes the fixture's
+0.15 s response, future-pose probes expose numerical-edge behavior, and signed
+3 mm pose bias can leave the estimate inside while modeled truth crosses.
+Behavioral checks are not a robustness or full-mission PASS. The real Nav2
+velocity argument has no acquisition timestamp; it supplies no freshness or
+physical stopping guarantee. Exact full-plan recording has separately passed
+a real ROS 9,899-pose transport and startup CLI check, but no subsequent mission
+with that recorder has completed yet. A controller progress repair still needs
+a coherent software intention contract and validation against the actual path.
+
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
