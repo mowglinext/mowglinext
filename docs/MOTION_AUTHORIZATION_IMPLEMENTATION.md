@@ -701,6 +701,34 @@ and mapped core library. The original readiness, geometry, datum and canonical
 mission assertions remain in force. The earlier service failure's cause is
 undetermined; passing readiness is not a full corrected mowing-cycle PASS.
 
+That corrected LiDAR attempt 25-03 is now terminal **FAIL after 1,078 s**:
+undocking 11.5 s and planning 39.8 s pass; mowing fails after 946.4 s with
+0/1 paths completed and 124.6 m traveled. Repeated transit/recovery failures
+exhaust the area attempts. The watchdog ends the run after
+`COVERAGE_FAILED_DOCKING` persists for 60.64 s; fallback docking is not completed
+before termination. Canonical harness exit is 1 and wrapper/watchdog exit is 31.
+Nearest-path tracking passes with 19.2 mm median and 78.2 mm p95 over 22,319
+samples, which does not establish command or physical containment.
+
+The two FTC denials occur on the bottom straight after obstacle deviation,
+and at a subsequent outside-mowing restart. The first intended 0.1 s arc
+crosses the mowing boundary and must remain rejected. Between them, blade-off
+RPP transit reports success near a point inside the navigation corridor but
+outside the mowing polygon. This exposes an operation-handoff limitation;
+it does not establish retained FTC output after abort. Lattice candidates
+currently use the soft costmap boundary rather than raw mowing permission;
+geometry-aware candidate selection is the next focused investigation.
+
+An additional observer retains 41,226 final simulated wheel commands, 7,762
+footprints and one genuine cached raw geometry message. It starts after both
+denials and therefore cannot verify their final-output window. The geometry
+has float32 mowing/navigation vertices and stamp zero; no first-denial revision,
+owner or acquisition freshness is established. All raw plans, scans, poses and
+commands remain retained. The 108 resource samples peak at 764% host CPU and
+1.716 GiB; these are whole-stack observations, not isolated verifier overhead
+or ARM limits. The earlier startup failures remain recorded. No corrected
+complete LiDAR cycle or hardware acceptance is claimed.
+
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
 and fixture collision checks. They do not constitute full mowing, connected
