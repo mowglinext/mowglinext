@@ -566,10 +566,40 @@ at bringup; they do not follow live footprint/padding changes. FootprintApproach
 still follows the live body at its existing three-point threshold. This adds
 no geometry exception or action lease, and docking's mux lane still bypasses
 Collision Monitor. Helper work occurs at launch; selector/body-sweep overhead
-and target-ARM deadlines are not measured. A new datum-aligned full mission
-remains pending. Retained attempt-21 scans omit beam endpoints and cannot prove
+and target-ARM deadlines are not measured. Retained attempt-21 scans omit beam
+endpoints and cannot prove
 the precise triggering returns. No full LiDAR mission PASS or stack-wide #924
 acceptance is established.
+
+Datum-aligned LiDAR attempt 22 at `c8c64e13` passed all live selector and
+five-consumer datum checks before START (81 stationary receipt-aligned pairs,
+maximum XY difference 38.5 mm, wrapped yaw difference zero). The strict mission
+**failed after 385.8 seconds**: undock 12.0 s and planning 39.1 s passed;
+mowing failed after 267.8 s with 0/1 paths complete and about 1% cursor progress.
+Five attempts were exhausted. It traveled 29.5 m and stamped at most 759 global
+cells (1.8975 m²), not a physical coverage percentage. The watchdog did not fire.
+Fallback docking **and simulated charging passed in 50.7 s**, reaching
+IDLE_DOCKED. This is useful docking functionality evidence, not a mowing-cycle
+PASS or physical charger-contact test.
+
+All 181 recorded reverse requests had same-stamp monitored outputs at their
+requested -0.15 m/s. Successful mowing recovery was not established. Two FTC
+denials occurred during FOLLOWING through rounded outer headland corners.
+One reference pose started 1.198 mm outside the recorded max-X boundary; the
+other started 0.629 mm inside min-Y but its proposed 0.1 s arc crossed it.
+Those requests must remain rejected. Earlier translation/steering response and
+residual wheel velocity require a short closed-loop reproduction before a
+controller repair can be accepted. Receipt-aligned ground truth was still
+inside at both denials; fused pose/projection differences cannot be treated as
+proof of physical boundary crossing or permission to ignore an estimated pose.
+Later RPP collision-ahead/controller-patience and repeated transit retries also
+failed. Independent transit commands remain outside this slice's execution gate.
+
+Raw collision-beam records were retained in attempt 22; the monitor still
+records only path summaries, so exact full-plan replay is unavailable.
+The mixed-runtime and clock/provenance limitations remain. A complete LiDAR
+mowing cycle, a measured final-command containment result, and physical
+acceptance remain outstanding.
 
 Available controller fixtures execute the real FTC with modeled wheel response
 and simulated endpoints. They can establish command progress, expected aborts
