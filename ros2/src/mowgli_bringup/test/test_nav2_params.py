@@ -916,6 +916,13 @@ def test_coverage_is_ftc_transit_is_not() -> None:
         )
 
 
+def test_ftc_forward_coast_bound_is_preserved_in_both_overlays() -> None:
+    """Both merged configurations retain the declared forward STOP assumption."""
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        assert fcp["obstacle_coast_time_bound_s"] == 0.5
+
+
 def test_lidar_collision_monitor_has_active_hard_stop() -> None:
     """The LiDAR variant MUST carry an ACTIVE pre-contact hard-stop layer.
 

@@ -86,7 +86,15 @@ enum class LatticeBlock : signed char
   kObstacle = 1,
   /// Off the planned line, the body axis crosses the zone (global cells >= 99).
   kZone = 2,
+  /// Raw mowing geometry denies the reference chord or full-body hole sweep.
+  kGeometry = 3,
 };
+
+/// Optional for costmap-only replay; mandatory in the live FTC controller.
+/// Poses include their lateral offsets, in the local costmap frame. Returning
+/// true rejects the entire connecting chord and its interpolated body sweep.
+using LatticeGeometryBlocked = std::function<bool(const geometry_msgs::msg::PoseStamped&,
+                                                  const geometry_msgs::msg::PoseStamped&)>;
 
 struct LatticeSolution
 {
@@ -116,7 +124,8 @@ public:
                 std::vector<geometry_msgs::msg::PoseStamped> poses,
                 std::size_t carrot_pos,
                 bool corner_is_last_station,
-                const LatticeSolverCfg& cfg);
+                const LatticeSolverCfg& cfg,
+                LatticeGeometryBlocked geometry_blocked = {});
 
   /// Cumulative arc length of each station; station 0 is the carrot.
   const std::vector<double>& Stations() const
@@ -155,6 +164,9 @@ public:
   }
 
 private:
+  bool GeometryPoseBlocked(std::size_t pose, double offset);
+  bool GeometryEdgeBlocked(std::size_t pose, double from_offset, double to_offset);
+  geometry_msgs::msg::PoseStamped OffsetPose(std::size_t pose, double offset) const;
   const nav2_costmap_2d::Costmap2D& costmap_;
   BoundaryGuard guard_;
   ObstacleDeviation::Footprint body_;
@@ -166,6 +178,9 @@ private:
   int half_{0};
   std::size_t width_{1};
   std::vector<signed char> memo_;
+  LatticeGeometryBlocked geometry_blocked_;
+  std::vector<signed char> geometry_memo_;
+  std::vector<signed char> edge_memo_;
   double axis_rear_{0.0};
   double axis_front_{0.0};
 };
@@ -188,6 +203,7 @@ bool LatticeFeasibleFrom(
     const std::function<geometry_msgs::msg::PoseStamped(const geometry_msgs::msg::PoseStamped&)>&
         to_costmap,
     const LatticeSolverCfg& cfg,
-    double horizon_m);
+    double horizon_m,
+    LatticeGeometryBlocked geometry_blocked = {});
 
 }  // namespace mowgli_nav2_plugins
