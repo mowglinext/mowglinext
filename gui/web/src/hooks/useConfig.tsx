@@ -1,4 +1,5 @@
-import {errorMessage} from "../utils/errors";
+import {decodeStringRecord} from "../utils/json";
+import {apiErrorMessage, errorMessage, requestErrorMessage} from "../utils/errors";
 import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
@@ -9,22 +10,22 @@ export const useConfig = (keys: string[]) => {
     const guiApi = useApi()
     const {notification} = App.useApp();
     const {t} = useTranslation();
-    const [config, setConfig] = useState<Record<string, any>>({})
-    const handleSetConfig = async (newConfig: Record<string, any>) => {
+    const [config, setConfig] = useState<Record<string, string>>({})
+    const handleSetConfig = async (newConfig: Record<string, string>) => {
         try {
-            const offsetConfig = await guiApi.config.keysSetCreate(newConfig)
+            const offsetConfig = await guiApi.config.keysSetCreate(decodeStringRecord(newConfig))
             if (offsetConfig.error) {
-                throw new Error(offsetConfig.error.error ?? "")
+                throw new Error(apiErrorMessage(offsetConfig.error) ?? "")
             }
+            const savedConfig = decodeStringRecord(offsetConfig.data);
             setConfig(oldConfig => ({
                 ...oldConfig,
-                ...offsetConfig.data
+                ...savedConfig
             }))
-        } catch (e: any) {
-            notification.error({
-                message: t('hookNotifications.failedToSaveConfig'),
-                description: e.message,
-            })
+        } catch (e: unknown) {
+            // Awaiting callers own the operation-specific failure toast. Never
+            // resolve a failed write: useSettings would otherwise announce success.
+            throw e instanceof Error ? e : new Error(requestErrorMessage(e) ?? errorMessage(e));
         }
     }
     const reportLoadError = useEffectEvent((error: unknown) => {
@@ -39,10 +40,10 @@ export const useConfig = (keys: string[]) => {
             try {
                 const offsetConfig = await guiApi.config.keysGetCreate(requestedKeys)
                 if (offsetConfig.error) {
-                    throw new Error(offsetConfig.error.error ?? "")
+                    throw new Error(apiErrorMessage(offsetConfig.error) ?? "")
                 }
-                setConfig(offsetConfig.data)
-            } catch (e: any) {
+                setConfig(decodeStringRecord(offsetConfig.data))
+            } catch (e: unknown) {
                 reportLoadError(e)
             }
         })())

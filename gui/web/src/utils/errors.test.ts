@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {apiErrorMessage, errorMessage, isAbortError} from "./errors.ts";
+import {apiErrorMessage, errorMessage, isAbortError, requestErrorMessage} from "./errors.ts";
 
 describe("errorMessage", () => {
     it("reads an Error", () => {
@@ -38,5 +38,24 @@ describe("isAbortError", () => {
         expect(isAbortError(new Error("boom"))).toBe(false);
         expect(isAbortError(undefined)).toBe(false);
         expect(isAbortError("AbortError")).toBe(false);
+    });
+});
+
+
+describe('request error boundaries', () => {
+    it.each([null, undefined, 42, 'failure', [], {error: 42}, {error: {error: false}}, {message: {text: 'failure'}}])('does not treat malformed text as a backend reason: %j', payload => {
+        expect(requestErrorMessage(payload)).toBeUndefined();
+        expect(apiErrorMessage(payload)).toBeUndefined();
+    });
+
+    it.each([
+        [new Error('ordinary'), 'ordinary'],
+        [{error: 'direct'}, 'direct'],
+        [{error: {error: 'server'}, message: 'generic'}, 'server'],
+        [{message: 'message'}, 'message'],
+        [{error: {unexpected: true}, message: 'fallback'}, 'fallback'],
+        [{error: ''}, ''],
+    ])('reads only the supported error-envelope text', (payload, expected) => {
+        expect(requestErrorMessage(payload)).toBe(expected);
     });
 });

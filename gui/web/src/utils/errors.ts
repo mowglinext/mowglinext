@@ -9,15 +9,31 @@ export const errorMessage = (thrown: unknown): string => {
         return thrown.message;
     }
     if (typeof thrown === "object" && thrown !== null && "message" in thrown) {
-        return String((thrown as { message: unknown }).message);
+        return String(thrown.message);
     }
     return String(thrown);
 };
 
 /** The `error` text the GUI backend puts in an API error body (`{ error: "..." }`). */
 export const apiErrorMessage = (apiError: unknown): string | undefined =>
-    (apiError as { error?: string } | null | undefined)?.error;
+    typeof apiError === "object" && apiError !== null && "error" in apiError && typeof apiError.error === "string"
+        ? apiError.error : undefined;
 
 /** True for the rejection of an aborted fetch / AbortController (`name === "AbortError"`). */
 export const isAbortError = (thrown: unknown): boolean =>
-    typeof thrown === "object" && thrown !== null && (thrown as { name?: unknown }).name === "AbortError";
+    typeof thrown === "object" && thrown !== null && "name" in thrown && thrown.name === "AbortError";
+
+
+/** Generated HttpResponse rejection, direct API error body, or an ordinary Error.
+ * Read only textual error fields; malformed payloads cannot masquerade as a reason.
+ */
+export function requestErrorMessage(thrown: unknown): string | undefined {
+    if (thrown instanceof Error) return thrown.message;
+    if (typeof thrown !== 'object' || thrown === null) return undefined;
+    const nested = 'error' in thrown ? apiErrorMessage(thrown.error) : undefined;
+    const direct = apiErrorMessage(thrown);
+    if (nested !== undefined) return nested;
+    if (direct !== undefined) return direct;
+    if ('message' in thrown && typeof thrown.message === 'string') return thrown.message;
+    return undefined;
+}
