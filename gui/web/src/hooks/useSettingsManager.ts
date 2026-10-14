@@ -26,11 +26,20 @@ import {
     YAW_LOOP_GROUP,
     groupKeys,
 } from "../components/settings/settingsFieldGroups.ts";
-import { liveHardwareParameters, settingsSectionsForBackend } from "../constants/hardwareBackends.ts";
+import { planHardwareParameters, settingsSectionsForBackend } from "../constants/hardwareBackends.ts";
 import { useHardwareBackend } from "./useHardwareBackend.ts";
+import {isJsonObject} from '../utils/json';
 import {apiErrorMessage, errorMessage} from "../utils/errors";
 import type {SettingsValues} from "../types/settings.generated";
 
+
+// The canonical YAML write precedes sidecar/env synchronization. A failed
+// response may explicitly confirm persistence; never infer it from error text.
+const persistedFailure = (response: unknown): string | undefined => {
+    if (typeof response !== 'object' || response === null || !('error' in response)) return undefined;
+    const body: unknown = response.error;
+    return isJsonObject(body) && body.persisted === true && typeof body.error === 'string' ? body.error : undefined;
+};
 
 /** A section that saves outside mowgli_robot.yaml but wants the page's Save button. */
 export interface ExternalSaver {
@@ -577,6 +586,7 @@ export const useSettingsManager = () => {
 
 
     const persistSettings = useCallback(async (options?: { forceGpsRestart?: boolean }) => {
+        let yamlPersisted = false;
         try {
             setSaving(true);
             const forceGpsRestart = options?.forceGpsRestart ?? false;
@@ -591,16 +601,9 @@ export const useSettingsManager = () => {
                 dirtyKeys.has("dock_pose_yaw");
             // Only runtime-confirmed routes may be pushed live. OpenMower and
             // pending MAVROS routes must be persisted and applied on restart.
-            const liveParameters = liveHardwareParameters(
-                dirtyKeys,
-                localValues,
-                hardware.parameterRoutes,
-            );
-            const liveHardwareKeys = new Set(
-                [...dirtyKeys].filter((key) =>
-                    hardware.parameterRoutes[key]?.runtime === "available" && key in localValues,
-                ),
-            );
+            const plan = planHardwareParameters(dirtyKeys, localValues, hardware);
+            const liveParameters = plan.parameters;
+            const liveHardwareKeys = plan.liveKeys;
             const liveHardwareDirty = liveHardwareKeys.size > 0;
             // Appearance-only changes are persisted without restarting ROS;
             // geometry and unavailable runtime routes still require a restart.
@@ -624,12 +627,22 @@ export const useSettingsManager = () => {
             const dirtyPayload: SettingsValues = {};
             for (const key of dirtyKeys) {
                 if (key in localValues) {
-                    dirtyPayload[key] = localValues[key];
+                    const value = localValues[key];
+                    if (typeof value === 'number' && !Number.isFinite(value)) throw new Error(t('settingsSections.toasts.invalidNumericValue'));
+                    dirtyPayload[key] = value;
                 }
             }
             if (hasDirtyChanges) {
-                const res = await guiApi.settings.yamlCreate(dirtyPayload);
-                if (res.error) throw new Error(apiErrorMessage(res.error));
+                let synchronizationFailure: string | undefined;
+                try {
+                    const res = await guiApi.settings.yamlCreate(dirtyPayload);
+                    synchronizationFailure = persistedFailure(res);
+                    if (res.error && synchronizationFailure === undefined) throw new Error(apiErrorMessage(res.error));
+                } catch (e) {
+                    synchronizationFailure = persistedFailure(e);
+                    if (synchronizationFailure === undefined) throw e;
+                }
+                yamlPersisted = true;
                 // AdvancedSection deletes surface as null-valued keys. The
                 // backend drops null keys from the YAML on save, so prune them
                 // from local state too — otherwise the deleted rows reappear.
@@ -640,18 +653,61 @@ export const useSettingsManager = () => {
                     }
                 }
                 setSavedValues(pruned);
-                setLocalValues(pruned);
-                if (requiresRosRestart) setRestartRequired(true);
-                notification.success({
-                    message: t("settingsSections.toasts.saved"),
-                    description: shouldRestartGps
-                        ? t("settingsSections.toasts.savedGpsRestartDescription")
-                        : t(requiresRosRestart ? "settingsSections.toasts.savedDescription" : liveHardwareDirty ? "settingsSections.toasts.savedApplyingLive" : "settingsSections.toasts.savedDisplaySettings"),
+                setLocalValues(previous => {
+                    const next = {...previous};
+                    for (const [key, value] of Object.entries(localValues)) {
+                        if (value === null && previous[key] === null) delete next[key];
+                    }
+                    return next;
                 });
+                if (requiresRosRestart || synchronizationFailure !== undefined) setRestartRequired(true);
+                if (synchronizationFailure !== undefined) {
+                    notification.warning({message: t('settingsSections.toasts.savedRuntimeFailed'), description: synchronizationFailure});
+                    return;
+                }
+                if (plan.deferredState !== undefined) {
+                    notification.warning({message: t('settingsSections.toasts.saved'),
+                        description: t(`settingsSections.toasts.routing.${plan.deferredState}`)});
+                } else {
+                    notification.success({
+                        message: t("settingsSections.toasts.saved"),
+                        description: shouldRestartGps
+                            ? t("settingsSections.toasts.savedGpsRestartDescription")
+                            : t(requiresRosRestart ? "settingsSections.toasts.savedDescription" : liveHardwareDirty ? "settingsSections.toasts.savedApplyingLive" : "settingsSections.toasts.savedDisplaySettings"),
+                    });
+                }
             } else if (shouldRestartGps) {
                 notification.info({
                     message: t("settingsSections.toasts.restartingGps"),
                 });
+            }
+            // Persisting YAML does not guarantee the runtime accepted a live
+            // parameter update. Only send routes the active backend reports as available.
+            if (hasDirtyChanges && liveParameters.length > 0) {
+                try {
+                    const liveResponse = await guiApi.request({
+                        path: "/params",
+                        method: "POST",
+                        type: ContentType.Json,
+                        format: "json",
+                        body: { parameters: liveParameters },
+                    });
+
+                    if (liveResponse.error) throw new Error(apiErrorMessage(liveResponse.error));
+                    const raw: unknown = liveResponse.data;
+                    if (!isJsonObject(raw) || !Array.isArray(raw.parameters)) throw new Error(t('settingsSections.toasts.runtimeUnconfirmed'));
+                    const echoed: unknown[] = raw.parameters;
+                    if (!liveParameters.every(want => echoed.some(item => isJsonObject(item)
+                        && item.name === want.name && item.value === want.value))) throw new Error(t('settingsSections.toasts.runtimeUnconfirmed'));
+                    notification.success({message: t('settingsSections.toasts.liveApplied')});
+                } catch (e) {
+                    setRestartRequired(true);
+                    notification.warning({
+                        message: t("settingsSections.toasts.drivePidUpdateFailed"),
+                        description: errorMessage(e) ??
+                            t("settingsSections.toasts.drivePidUpdateFailedDescription"),
+                    });
+                }
             }
             // Sections that persist outside the yaml (IrriSense) save through
             // their own endpoint; each reports its own toast on failure.
@@ -700,35 +756,14 @@ export const useSettingsManager = () => {
                     });
                 }
             }
-            // Persisting YAML does not guarantee the runtime accepted a live
-            // parameter update. Only send routes the active backend reports as available.
-            if (hasDirtyChanges && liveParameters.length > 0) {
-                try {
-                    const liveResponse = await guiApi.request({
-                        path: "/params",
-                        method: "POST",
-                        type: ContentType.Json,
-                        format: "json",
-                        body: { parameters: liveParameters },
-                    });
 
-                    if (liveResponse.error) {
-                        throw new Error(apiErrorMessage(liveResponse.error));
-                    }
-                } catch (e) {
-                    setRestartRequired(true);
-                    notification.warning({
-                        message: t("settingsSections.toasts.drivePidUpdateFailed"),
-                        description: errorMessage(e) ??
-                            t("settingsSections.toasts.drivePidUpdateFailedDescription"),
-                    });
-                }
-            }
         } catch (e) {
-            notification.error({
-                message: t("settingsSections.toasts.saveFailed"),
-                description: errorMessage(e),
-            });
+            if (yamlPersisted) {
+                setRestartRequired(true);
+                notification.warning({message: t('settingsSections.toasts.savedRuntimeFailed'), description: errorMessage(e)});
+            } else {
+                notification.error({message: t("settingsSections.toasts.saveFailed"), description: errorMessage(e)});
+            }
         } finally {
             setSaving(false);
         }
@@ -739,7 +774,7 @@ export const useSettingsManager = () => {
         notification,
         gpsRestart,
         t,
-        hardware.parameterRoutes,
+        hardware,
     ]);
 
 
@@ -768,9 +803,14 @@ export const useSettingsManager = () => {
 
 
             setSaving(true);
-            const res = await guiApi.settings.yamlCreate(changedPayload);
-            if (res.error) {
-                throw new Error(apiErrorMessage(res.error));
+            let synchronizationFailure: string | undefined;
+            try {
+                const res = await guiApi.settings.yamlCreate(changedPayload);
+                synchronizationFailure = persistedFailure(res);
+                if (res.error && synchronizationFailure === undefined) throw new Error(apiErrorMessage(res.error));
+            } catch (e) {
+                synchronizationFailure = persistedFailure(e);
+                if (synchronizationFailure === undefined) throw e;
             }
 
 
@@ -778,11 +818,15 @@ export const useSettingsManager = () => {
             setLocalValues((prev) => ({ ...prev, ...changedPayload }));
 
 
-            if (options?.markRestartRequired ?? true) {
+            if (synchronizationFailure !== undefined || (options?.markRestartRequired ?? true)) {
                 setRestartRequired(true);
             }
 
 
+            if (synchronizationFailure !== undefined) {
+                notification.warning({message: t('settingsSections.toasts.savedRuntimeFailed'), description: synchronizationFailure});
+                return false;
+            }
             if (!options?.silentSuccess) {
                 notification.success({
                     message: options?.successMessage ?? t("settingsSections.toasts.saved"),

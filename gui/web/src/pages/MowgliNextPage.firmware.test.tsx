@@ -26,7 +26,7 @@ describe("dashboard firmware inventory by hardware backend", () => {
                 <HealthCard
                     data={data}
                     hardware={{
-                        backend: "mowgli",
+                        presetsAvailable: true, authority: "confirmed", backend: "mowgli",
                         defaultOverrides: {},
                         parameterRoutes: {},
                         runtimeRouting: "available",
@@ -61,7 +61,7 @@ describe("dashboard firmware inventory by hardware backend", () => {
                 <HealthCard
                     data={data}
                     hardware={{
-                        backend: "mavros",
+                        presetsAvailable: true, authority: "confirmed", backend: "mavros",
                         defaultOverrides: {},
                         parameterRoutes: {},
                         runtimeRouting: "pending_image",

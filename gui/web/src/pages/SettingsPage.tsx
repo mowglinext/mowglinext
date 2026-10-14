@@ -224,12 +224,14 @@ export const SettingsPage = () => {
                                     onReset={resetToDefault}
                                     revealAdvanced={!!targetField || !!searchQuery}
                                     backendDefaultOverrides={backendDefaultOverrides}
+                                    backendConfirmed={hardwareBackend.authority === "confirmed" && hardwareBackend.presetsAvailable}
                                 />
                             </>
                         }
                     />
                 );
             case "drive_motor":
+                if (hardwareBackend.authority !== "confirmed") return <HardwareBackendCard info={hardwareBackend}/>;
                 // Each backend exposes its own drive controls; never show
                 // Mowgli STM32 or OpenMower xESC controls on MAVROS.
                 if (hardwareBackend.backend === "openmower") {

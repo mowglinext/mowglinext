@@ -32,6 +32,7 @@ import {
 import { RobotComponentEditor } from "../components/RobotComponentEditor.tsx";
 import { FlashBoardComponent } from "../components/FlashBoardComponent.tsx";
 import { MOWER_MODELS } from "../constants/mowerModels.ts";
+import {HardwareBackendCard} from "../components/settings/HardwareBackendCard";
 import { presetValuesForBackend } from "../constants/hardwareBackends.ts";
 import { useHardwareBackend } from "../hooks/useHardwareBackend.ts";
 import {
@@ -151,11 +152,13 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
     const { t } = useTranslation();
     // A model preset describes the machine; keys the hardware backend
     // overrides (an OpenMower xESC's ticks per metre) take its default.
-    const { defaultOverrides, loading: backendLoading } = useHardwareBackend();
+    const hardwareInfo = useHardwareBackend();
+    const { defaultOverrides, loading: backendLoading, authority, presetsAvailable } = hardwareInfo;
     const { colors } = useThemeMode();
     const selectedModel = values.mower_model || "YardForce500";
 
     const handleModelSelect = (model: string) => {
+        if (authority !== "confirmed" || !presetsAvailable) return;
         onChange("mower_model", model);
         const preset = MOWER_MODELS.find((m) => m.value === model);
         if (preset?.defaults) {
@@ -172,9 +175,9 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
     // Waits for the backend: applied earlier, the preset would write the
     // STM32 ticks_per_meter on an OpenMower robot.
     useEffect(() => {
-        if (!backendLoading && !values.mower_model) handleModelSelect("YardForce500");
+        if (!backendLoading && authority === "confirmed" && presetsAvailable && !values.mower_model) handleModelSelect("YardForce500");
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [backendLoading]);
+    }, [backendLoading, authority, presetsAvailable]);
 
     return (
         <div style={{ maxWidth: 760, margin: "0 auto" }}>
@@ -201,6 +204,7 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                 </Form.Item>
             </Form>
 
+            {(authority !== 'confirmed' || !presetsAvailable) && <HardwareBackendCard info={hardwareInfo} />}
             <Row gutter={[12, 12]} role="radiogroup" aria-label={t("onboardingPage.robotModelTitle")}>
                 {MOWER_MODELS.map((model) => {
                     const isSelected = selectedModel === model.value;

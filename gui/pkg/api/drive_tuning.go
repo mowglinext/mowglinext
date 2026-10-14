@@ -353,9 +353,9 @@ func DriveTuningRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider, dockerP
 	}
 	group := r.Group("/tools/drive")
 	backendGuard := requireMowgliHardwareBackend(dbProvider)
-	group.POST("/ff-calibration/start", manager.postFeedForwardStart())
+	group.POST("/ff-calibration/start", requireDriveHardwareBackend(dbProvider), manager.postFeedForwardStart())
 	group.POST("/pid-tuning/start", backendGuard, manager.postPIDStart())
-	group.POST("/tuning/rollback", manager.postRollback())
+	group.POST("/tuning/rollback", requireDriveHardwareBackend(dbProvider), manager.postRollback())
 	group.GET("/tuning/status", manager.getStatus())
 	group.GET("/tuning/report/latest", manager.getLatestReport())
 }

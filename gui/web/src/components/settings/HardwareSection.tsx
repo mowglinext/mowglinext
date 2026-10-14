@@ -21,6 +21,7 @@ type Props = {
     onChange: (key: string, value: any) => void;
     onBulkChange: (changes: Record<string, any>) => void;
     /** Settings whose default the robot's hardware backend replaces. */
+    backendConfirmed?: boolean;
     backendDefaultOverrides?: Record<string, unknown>;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
@@ -33,6 +34,7 @@ export const HardwareSection: React.FC<Props> = ({
     onChange,
     onBulkChange,
     backendDefaultOverrides = {},
+    backendConfirmed = false,
     isOverridden,
     hasDefault,
     onReset,
@@ -55,6 +57,7 @@ export const HardwareSection: React.FC<Props> = ({
     );
 
     const applyModelPreset = (model: string) => {
+        if (!backendConfirmed) return;
         onChange("mower_model", model);
         const preset = MOWER_MODELS.find((m) => m.value === model);
         onChange("mower_visual_style", (preset?.appearance ?? DEFAULT_MOWER_VISUAL).style);
@@ -64,6 +67,7 @@ export const HardwareSection: React.FC<Props> = ({
     };
 
     const handleModelSelect = (model: string) => {
+        if (!backendConfirmed) return;
         if (model === selectedModel) {
             return;
         }
@@ -119,6 +123,7 @@ export const HardwareSection: React.FC<Props> = ({
                                         size="small"
                                         role="radio"
                                         tabIndex={0}
+                                        aria-disabled={!backendConfirmed}
                                         aria-checked={isSelected}
                                         aria-label={t(model.label)}
                                         onKeyDown={(event) => {

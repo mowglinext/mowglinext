@@ -108,21 +108,32 @@
     "names": {
       "mowgli": "Mowgli board (STM32)",
       "openmower": "OpenMower v1 (LowLevel board + xESC)",
-      "mavros": "Pixhawk (MAVROS)"
+      "mavros": "Pixhawk (MAVROS)",
+      "unknown": "Unconfirmed hardware backend"
     },
     "descriptions": {
       "mowgli": "The Mowgli STM32 firmware drives the motors and owns blade and emergency safety. It needs no wiring settings here.",
       "openmower": "The stock OpenMower electronics keep their own firmware; a bridge container drives them. Settings MowgliNext already has (charge limits, lift delays, ticks per metre…) stay in their usual sections and are applied to the OpenMower hardware.",
-      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer."
+      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer.",
+      "unknown": "Unconfirmed hardware backend"
     },
     "choiceNote": "The backend is chosen when installing the robot.",
     "openmowerRestartNote": "The OpenMower bridge reads these settings when it starts: use \"Restart ROS2\" after saving, which restarts the bridge too.",
     "shortNames": {
       "mowgli": "Mowgli",
       "openmower": "OpenMower v1",
-      "mavros": "MAVROS"
+      "mavros": "MAVROS",
+      "unknown": "Unconfirmed hardware backend"
     },
-    "badgeTooltip": "Hardware backend: {{name}} — open the hardware settings"
+    "badgeTooltip": "Hardware backend: {{name}} — open the hardware settings",
+    "presetsUnavailable": "Backend defaults unavailable; hardware model presets disabled.",
+    "authority": {
+      "loading": "Hardware identity is loading",
+      "legacy_absent": "Legacy metadata endpoint absent; live hardware writes disabled",
+      "unavailable": "Hardware metadata unavailable; live hardware writes disabled",
+      "malformed": "Malformed hardware metadata; live hardware writes disabled",
+      "unsupported": "Unsupported hardware backend; live hardware writes disabled"
+    }
   },
   "settingsMavrosDrive": {
     "notice": {
@@ -4119,8 +4130,18 @@
       "drivePidUpdateFailed": "Settings saved, but live drive-PID update failed",
       "drivePidUpdateFailedDescription": "Restart ROS2 to apply the new drive-motor PID gains.",
       "saveFailed": "Failed to save settings",
-      "savedApplyingLive": "Saved. Applying the drive settings to the running robot…",
-      "savedDisplaySettings": "Saved. Dock appearance updated; no robot restart is needed."
+      "savedApplyingLive": "YAML saved; runtime application is still pending.",
+      "savedDisplaySettings": "Saved. Dock appearance updated; no robot restart is needed.",
+      "runtimeUnconfirmed": "Runtime update was not confirmed; YAML remains saved.",
+      "liveApplied": "Runtime parameters confirmed",
+      "invalidNumericValue": "Invalid numeric setting; nothing was saved.",
+      "savedRuntimeFailed": "YAML saved, but a subsequent operation failed",
+      "routing": {
+        "unconfirmed": "Backend identity is unconfirmed. YAML saved; no live hardware update was sent.",
+        "pending_image": "YAML saved. Live routing needs a compatible runtime image; restart required.",
+        "restart_required": "YAML saved. These hardware changes require a restart.",
+        "unavailable": "YAML saved. Live hardware routing is unavailable; restart required."
+      }
     }
   },
   "displayMode": {

@@ -108,21 +108,32 @@
     "names": {
       "mowgli": "Carte Mowgli (STM32)",
       "openmower": "OpenMower v1 (carte LowLevel + xESC)",
-      "mavros": "Pixhawk (MAVROS)"
+      "mavros": "Pixhawk (MAVROS)",
+      "unknown": "Matériel non confirmé"
     },
     "descriptions": {
       "mowgli": "Le firmware STM32 Mowgli pilote les moteurs et garde la sécurité de la lame et des arrêts d'urgence. Aucun réglage de câblage n'est nécessaire ici.",
       "openmower": "L'électronique OpenMower d'origine garde son propre firmware ; un conteneur pont la pilote. Les réglages que MowgliNext possède déjà (limites de charge, délais de soulèvement, impulsions par mètre…) restent dans leurs sections habituelles et sont appliqués au matériel OpenMower.",
-      "mavros": "Un contrôleur de vol pilote le robot via le conteneur MAVROS, configuré par l'installateur."
+      "mavros": "Un contrôleur de vol pilote le robot via le conteneur MAVROS, configuré par l'installateur.",
+      "unknown": "Matériel non confirmé"
     },
     "choiceNote": "Le pont matériel est choisi à l'installation du robot.",
     "openmowerRestartNote": "Le pont OpenMower lit ces réglages au démarrage : utilisez « Redémarrer ROS2 » après l'enregistrement, ce qui redémarre aussi le pont.",
     "shortNames": {
       "mowgli": "Mowgli",
       "openmower": "OpenMower v1",
-      "mavros": "MAVROS"
+      "mavros": "MAVROS",
+      "unknown": "Matériel non confirmé"
     },
-    "badgeTooltip": "Backend matériel : {{name}} — ouvrir les réglages matériel"
+    "badgeTooltip": "Backend matériel : {{name}} — ouvrir les réglages matériel",
+    "presetsUnavailable": "Valeurs matérielles par défaut indisponibles ; préréglages désactivés.",
+    "authority": {
+      "loading": "Identification du matériel en cours",
+      "legacy_absent": "Métadonnées anciennes absentes ; écritures matérielles désactivées",
+      "unavailable": "Métadonnées indisponibles ; écritures matérielles désactivées",
+      "malformed": "Métadonnées invalides ; écritures matérielles désactivées",
+      "unsupported": "Matériel non pris en charge ; écritures matérielles désactivées"
+    }
   },
   "settingsMavrosDrive": {
     "notice": {
@@ -4115,8 +4126,18 @@
       "drivePidUpdateFailed": "Réglages enregistrés, mais la mise à jour à chaud du PID des moteurs a échoué",
       "drivePidUpdateFailedDescription": "Redémarrez ROS2 pour appliquer les nouveaux gains PID des moteurs.",
       "saveFailed": "Échec de l'enregistrement des réglages",
-      "savedApplyingLive": "Enregistré. Application des réglages moteurs au robot en cours…",
-      "savedDisplaySettings": "Enregistré. Apparence de la station mise à jour ; aucun redémarrage du robot nécessaire."
+      "savedApplyingLive": "YAML enregistré ; application active encore en attente.",
+      "savedDisplaySettings": "Enregistré. Apparence de la station mise à jour ; aucun redémarrage du robot nécessaire.",
+      "runtimeUnconfirmed": "Mise à jour active non confirmée ; le YAML reste enregistré.",
+      "liveApplied": "Paramètres actifs confirmés",
+      "invalidNumericValue": "Valeur numérique invalide ; rien n’a été enregistré.",
+      "savedRuntimeFailed": "YAML enregistré, mais une opération suivante a échoué",
+      "routing": {
+        "unconfirmed": "Backend non confirmé. YAML enregistré ; aucune mise à jour matérielle à chaud envoyée.",
+        "pending_image": "YAML enregistré. Le routage à chaud nécessite une image compatible ; redémarrage requis.",
+        "restart_required": "YAML enregistré. Ces modifications matérielles nécessitent un redémarrage.",
+        "unavailable": "YAML enregistré. Routage matériel à chaud indisponible ; redémarrage requis."
+      }
     }
   },
   "displayMode": {

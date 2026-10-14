@@ -17,6 +17,10 @@ import (
 )
 
 func setupSettingsRouter(dbProvider types.IDBProvider) *gin.Engine {
+	// These legacy settings fixtures have no installer env file unless explicitly supplied.
+	if _, err := dbProvider.Get("system.mower.runtimeEnvFile"); err != nil {
+		_ = dbProvider.Set("system.mower.runtimeEnvFile", []byte(""))
+	}
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	group := r.Group("/api")
