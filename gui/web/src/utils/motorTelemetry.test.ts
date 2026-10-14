@@ -11,9 +11,9 @@ const ticks = (sec: number, count: number, factor = 1000): WheelTick => ({stamp:
     wheel_direction_rl: 1, wheel_direction_rr: 0});
 
 describe('existing motor telemetry contract', () => {
-    it('projects native Status unchanged in RPM, A and degrees Celsius', () => {
+    it('projects native blade measurements and keeps its unpopulated ESC temperature unknown', () => {
         expect(bladeTelemetry(status, 1000, 1001, 'mowgli')).toEqual({fresh: true, rpm: 3200,
-            current: 1.25, escTemp: 42, motorTemp: 36});
+            current: 1.25, escTemp: NaN, motorTemp: 36});
     });
     it('uses the same blade values for MAVROS and keeps unavailable winding temperature unknown', () => {
         const result = bladeTelemetry(status, 1000, 1001, 'mavros');

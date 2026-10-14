@@ -102,6 +102,7 @@ export function deriveFleetRow(row: FleetRobotWire, settings: Record<string, unk
     const fix = topic<AbsolutePose>(row, "gps")?.pose?.pose?.position;
     const gps = deriveGpsStatus(gnss);
     const position = readPosition(fix?.x, fix?.y);
+    const batteryPercent = computeBatteryPercent(hl?.battery_percent, power?.v_battery, settings);
     return {
         id: row.identity.id,
         name: row.identity.name || row.identity.id,
@@ -113,8 +114,8 @@ export function deriveFleetRow(row: FleetRobotWire, settings: Record<string, unk
         subStateName: hl?.sub_state_name ?? "",
         currentArea: hl?.current_area ?? -1,
         coveragePercent: hl?.coverage_percent ?? 0,
-        batteryPercent: computeBatteryPercent(hl?.battery_percent, power?.v_battery, settings),
-        batteryKnown: hasBatteryReading(power?.v_battery),
+        batteryPercent,
+        batteryKnown: hasBatteryReading(power?.v_battery) && Number.isFinite(batteryPercent),
         isCharging: hl?.is_charging ?? status?.is_charging ?? false,
         emergency: hl?.emergency ?? false,
         gpsLabel: gps.label,

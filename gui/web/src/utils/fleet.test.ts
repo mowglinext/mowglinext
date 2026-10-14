@@ -69,6 +69,12 @@ describe("deriveFleetRow", () => {
         expect(row.batteryKnown).toBe(true);
     });
 
+    it('keeps invalid battery interpolation unknown instead of marking a measured percentage', () => {
+        const row = deriveFleetRow(wire({}, {power: {v_battery: 26}}), {battery_full_voltage: '28 V'});
+        expect(row.batteryKnown).toBe(false);
+        expect(row.batteryPercent).toBeNaN();
+    });
+
     it("keeps a measured 0 % distinct from a missing voltage", () => {
         const row = deriveFleetRow(wire({}, {power: {v_battery: 23.0}}));
         expect(row.batteryPercent).toBe(0);

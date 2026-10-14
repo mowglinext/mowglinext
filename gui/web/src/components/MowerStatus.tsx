@@ -167,7 +167,7 @@ export const MowerStatus = () => {
                                 fontSize: 13,
                             }}/>
                             <Typography.Text style={{fontSize: 12, color: colors.text}}>
-                                {hasBatteryReading(power.v_battery) ? (
+                                {(hasBatteryReading(power.v_battery) && Number.isFinite(batteryPercent)) ? (
                                     <>
                                         <span
                                             style={{

@@ -1,4 +1,6 @@
 import {useEffect, useRef, useState} from "react";
+import {isDiagnosticStatus, diagnosticPublicationIdentity} from '../utils/diagnosticTelemetry';
+import {isJsonObject} from '../utils/json';
 import {useWS} from "./useWS.ts";
 
 export interface DiagnosticStatus {
@@ -12,6 +14,8 @@ export interface DiagnosticStatus {
 /** A diagnostic entry stamped with the wall-clock time it was last received. */
 export interface TimestampedDiagnosticStatus extends DiagnosticStatus {
     receivedAt: number;
+    /** Opaque publication identity; cached replay does not renew receivedAt. */
+    publicationStamp?: string;
 }
 
 export interface DiagnosticArray {
@@ -35,17 +39,30 @@ export const isDiagnosticStale = (
  */
 export const useDiagnostics = () => {
     const [diagnostics, setDiagnostics] = useState<DiagnosticArray>({})
+    const receiptsRef = useRef(new Map<string, {identity: string; at: number}>());
     const accumulatorRef = useRef<Map<string, TimestampedDiagnosticStatus>>(new Map());
     const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const diagnosticsStream = useWS<string>(() => {}, () => {},
+    const diagnosticsStream = useWS<unknown>(() => {}, () => {},
         (e) => {
-            const msg: { status?: DiagnosticStatus[] } = (e as any);
+            if (!isJsonObject(e) || !Array.isArray(e.status)) return;
+            const entries: unknown[] = e.status;
             // Merge incoming entries by name (latest value wins)
-            if (msg.status) {
+            if (entries.length > 0) {
                 const receivedAt = Date.now();
-                for (const entry of msg.status) {
-                    accumulatorRef.current.set(entry.name, {...entry, receivedAt});
+                const identity = diagnosticPublicationIdentity(e);
+                for (const entry of entries) {
+                    if (isDiagnosticStatus(entry)) {
+                        const previous = receiptsRef.current.get(entry.name);
+                        const at = identity !== null && previous?.identity === identity ? previous.at : receivedAt;
+                        if (identity !== null) receiptsRef.current.set(entry.name, {identity, at});
+                        accumulatorRef.current.set(entry.name, {
+                            ...entry, receivedAt: at, ...(identity !== null ? {publicationStamp: identity} : {}),
+                        });
+                    } else if (isJsonObject(entry) && typeof entry.name === 'string') {
+                        // A named malformed update cannot renew an older valid entry.
+                        accumulatorRef.current.delete(entry.name);
+                    }
                 }
             }
             // Throttle state updates to max 1 per second

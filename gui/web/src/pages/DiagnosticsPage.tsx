@@ -1,3 +1,4 @@
+import {powerDisplayValue} from '../utils/physicalTelemetry';
 import {hasEmergency, emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
 import {useBladeTelemetry} from '../hooks/useBladeTelemetry';
 import {useHardwareBackend} from '../hooks/useHardwareBackend';
@@ -225,8 +226,6 @@ export const DiagnosticsPage = () => {
     const {diagnostics} = useDiagnostics();
     const wheelControllers = {left_wheel: wheelControllerFromDiagnostics(diagnostics, 'left_wheel', nowMs),
         right_wheel: wheelControllerFromDiagnostics(diagnostics, 'right_wheel', nowMs)};
-    const finitePower = (value: number | undefined) =>
-        typeof value === "number" && Number.isFinite(value) ? value : undefined;
     // Mobile uses collapsible panels; desktop shows sensors in the Robot tab.
     // Subscribe to the high-rate IMU stream only in the visible sensor view.
     // ?tab=parameters opens the advanced ROS parameters editor (formerly its
@@ -250,7 +249,7 @@ export const DiagnosticsPage = () => {
         [highLevelStatus.battery_percent, power.v_battery, settings],
     );
 
-    const batteryKnown = hasBatteryReading(power.v_battery);
+    const batteryKnown = (hasBatteryReading(power.v_battery) && Number.isFinite(batteryPercent));
 
     const gpsFix = useMemo(() => deriveGpsStatus(gnssStatus), [gnssStatus]);
     const gpsFixType = gpsFix.label;
@@ -1302,7 +1301,7 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.voltage')}
-                                value={finitePower(power.v_battery)}
+                                value={powerDisplayValue(power.v_battery)}
                                 precision={2}
 
                             />
@@ -1319,7 +1318,7 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.chargeCurrent')}
-                                value={finitePower(clampTinyToZero(power.charge_current) ?? undefined)}
+                                value={powerDisplayValue(clampTinyToZero(power.charge_current) ?? undefined)}
                                 precision={2}
                                 valueStyle={{
                                     color: highLevelStatus.is_charging && (power.charge_current ?? 0) > 0
@@ -1331,7 +1330,7 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.chargerVoltage')}
-                                value={finitePower(clampTinyToZero(power.v_charge) ?? undefined)}
+                                value={powerDisplayValue(clampTinyToZero(power.v_charge) ?? undefined)}
                                 precision={2}
                             />
                         </Col>
@@ -1857,9 +1856,9 @@ export const DiagnosticsPage = () => {
                                         }}
                                     />
                                     <Typography.Text className="diagnostics-live-value" type="secondary" style={{fontSize: 11}}>
-                                        {valid ? (
+                                        {valid && w.ticks !== undefined && (w.dir === 0 || w.dir === 1) ? (
                                             <>
-                                                {t('diagnosticsPage.ticksWithDirection', {ticks: (w.ticks ?? 0).toLocaleString(), direction: w.dir === 1 ? t('diagnosticsPage.directionForward') : t('diagnosticsPage.directionReverse')})}
+                                                {t('diagnosticsPage.ticksWithDirection', {ticks: w.ticks?.toLocaleString() ?? '—', direction: w.dir === 1 ? t('diagnosticsPage.directionForward') : t('diagnosticsPage.directionReverse')})}
                                             </>
                                         ) : (
                                             t('diagnosticsPage.noEncoderReading')

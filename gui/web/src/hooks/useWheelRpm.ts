@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
+import {decodeWheelTicks} from '../utils/physicalTelemetry';
 import type {WheelTick} from '../types/ros';
 import {useTopic} from './useTopic';
 import {MOTOR_DISPLAY_STALE_MS, unknownWheelRpm, wheelRpmBetween} from '../utils/motorTelemetry';
@@ -15,7 +16,9 @@ export function useWheelRpm({wheelRadiusM = DEFAULT_WHEEL_RADIUS_M}: UseWheelRpm
     const {data, lastMessageAt} = useTopic<Sample>('ticks', {
         ticks: {}, radius: wheelRadiusM, rpm: unknownWheelRpm(), advancedAt: null,
     }, {withTimestamp: true, select: raw => {
-        const ticks = (raw !== null && typeof raw === "object" ? raw : {}) as WheelTick;
+        const ticks = decodeWheelTicks(raw);
+        // Keep the last valid identity: rejected frames must not make a replay new.
+        if (ticks === undefined) return {ticks: {}, radius: wheelRadiusM, rpm: unknownWheelRpm(), advancedAt: null};
         const old = previous.current;
         const sample: Sample = {ticks, radius: wheelRadiusM, rpm: unknownWheelRpm(), advancedAt: Date.now()};
         if (!((ticks.wheel_tick_factor ?? 0) > 0) || !((ticks.valid_wheels ?? 0) > 0)) sample.advancedAt = null;

@@ -103,7 +103,7 @@ function useMowerData(backend?: string) {
     emergencyKnown: emergencyIsKnown(emergency, highLevelStatus),
     clearanceUnverified: emergencyClearanceUnverified(emergency, highLevelStatus),
     battery: batteryPercent,
-    batteryKnown: hasBatteryReading(power.v_battery),
+    batteryKnown: (hasBatteryReading(power.v_battery) && Number.isFinite(batteryPercent)),
     charging: isCharging,
     // The charging/contact bit is also true on a full docked mower. The BT's
     // IDLE_DOCKED name can follow a failed return, so it is not dock evidence.
@@ -114,7 +114,7 @@ function useMowerData(backend?: string) {
     commandState: highLevelStatus.state_name ?? (commandEmergency ? "EMERGENCY" : isCharging ? "CHARGING" : "IDLE_DOCKED"),
     gps: gpsStatus.percent,
     gpsLabel: gpsStatus.label,
-    vBattery: power.v_battery ?? 0,
+    vBattery: power.v_battery ?? NaN,
     // Battery charge current (shown while docked/charging) vs. blade motor
     // current (shown on the Blades tile) are DIFFERENT signals — keep them
     // separate so the Blades tile doesn't read the charger.
