@@ -664,6 +664,17 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  # ---- test_follow_strip_detour_costmap ----
+  ament_add_ros_isolated_gtest(test_follow_strip_detour_costmap
+    test/test_follow_strip_detour_costmap.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
+    TIMEOUT 120
+  )
+  target_include_directories(test_follow_strip_detour_costmap PUBLIC include)
+  target_link_libraries(test_follow_strip_detour_costmap ${behavior_node_dependencies})
+
   # ---- test_follow_strip_dig ----
   # Tick-level: FollowStrip against fake /follow_path + /navigate_to_pose
   # servers. Covers dig recovery and short scan dropouts: the latter cut and
