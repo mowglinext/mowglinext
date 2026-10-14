@@ -278,10 +278,81 @@ not controller deadlines. Whole-container samples show 1.707-1.710 GiB and
 557-613% multi-core CPU for Webots, ROS and observers together; no isolated
 authorization overhead or identical-host baseline is measured.
 
-GPS-only attempt29-03 has started at the same source `042329de`/documentation snapshot
-`d674f6e5` with the strict direct fleet/FTC/collision/no-LiDAR live gate and both
-typed costmap proofs. Its terminal result is **pending**. Earlier GPS28-05 PASS
-retains its separate source `daa6b402` baseline.
+### Current-source GPS-only mission (attempt29-03, 2026-10-14)
+
+The strict direct no-LiDAR/fleet/FTC/collision runtime gate and both typed
+costmap proofs pass before START on source `042329de` and documentation snapshot
+`d674f6e5fc719cc2886663a64a92bea4e51ed398`. LiDAR consumers and map anchoring
+are disabled; fleet, local-static, controller and collision protections remain
+active. This mode does not establish blind-obstacle detection.
+
+The canonical cycle **PASS and authoritative outer exit 0** are confirmed,
+with no watchdog or outer timeout. The BT reaches `IDLE_DOCKED` and charging
+at 2,362.8 s: undock 12.0 s, plan 37.8 s, mowing 2,259.8 s, docking 43.0 s.
+Travel is 371.9 m. Tracking has 55,899 samples: mean 11.8 mm, median 4.4 mm,
+P95 50.1 mm, maximum 79.9 mm. Three `WAITING_FOR_RTK` episodes return through
+preflight, heading calibration, planning/transit and mowing. These are
+simulated recovery results, not GNSS receiver or field validation.
+
+Final status reports 1/1 completed paths, zero wholly skipped, no emergency
+and 21,985 stamped cells. The 100% cursor and 54.9625 square metres of raster
+cells do not establish the geometric residual on the 54-square-metre lawn.
+The harness has no separate final geometric tail gate. Six observed plans
+contain 9,757, 8,432, 6,666, 5,607, 1,194 and 138 poses; the stream carries no
+action-owner identity and is not an independently certified execution cursor.
+Complete blade coverage and continuous commanded containment remain unmeasured.
+
+Typed costmap CDR integrity passes for 155 global and 155 local replies:
+one pre-START proof and 154 final-ten-percent samples per service. Recording
+uses 17,770,325 bytes below 128 MiB. Global/local observed reply medians are
+1.290/1.172 ms; P95 3.046/3.722 ms. These independent replies do not establish
+pair atomicity, producer generation, physical freshness or action alignment.
+The main final-output capture is sealed at 245,089,864 bytes below 256 MiB;
+its cap and timeout flags are false. A network-disabled UID1000 analyzer
+decodes 313,172 receipts with matching terminal counts, including 119,044
+wheel commands: 113,813 nonzero, 1,952 reverse and 355 rotation-only receipts.
+The modeled post-firmware wheel extrema are 0.470578 m/s and 2.213331 rad/s;
+these are not FTC source-command extrema or validated hardware limits.
+Sampled ground-truth distance is 392.667 m, separate from the harness's
+371.9 m and potentially including jumps. SHA-256
+`15a90cc7e54f3a857fa24797e271b78a62043d7114fe11c4efd6dcf18e12858b`
+matches before and after decoding. This establishes software receipts,
+not continuous containment, action ownership, physical freshness or lossless
+delivery. Earlier attempt28-05 retains source `daa6b402` as a separate baseline.
+
+### CI integration checks and remaining planner gate
+
+The [ROS CI run on documentation snapshot `00fa373f`](https://github.com/mowglinext/mowglinext/actions/runs/38539099057)
+passes formatting, configuration drift and static analysis but fails the broad
+test job: two new launch cases expected the old no-LiDAR collision-monitor
+pass-through, and the simulator package reports three Python indent/import
+lint errors. Commit `f434acd4` repairs those tests to require current dev's
+active fleet approach polygon and peer source, and fixes formatting. All 19
+affected Python regressions pass in the real ROS container as UID1000; the
+unchanged simulation `ament_flake8` check passes all 16 files. The relay's AST
+matches mission source `042329de`; its only runtime-source change is whitespace.
+No production configuration, original #942 assertion or motion guard changes.
+These local repairs are not a claim that the subsequent CI run is green.
+
+The [planner replay run](https://github.com/mowglinext/mowglinext/actions/runs/38539099114)
+fails Release, Debug and RelWithDebInfo and has a separate unresolved
+strict-output gate. The retained RelWithDebInfo
+artifact compares its actual synthetic merge `25f13a28` against base parent
+`d125e924`: only **5/26 exact baseline outputs match**, while all **26/26**
+cases are deterministic, use identical fixtures and preserve trace passivity.
+Each case has 15 baseline, 15 untraced candidate and 100 traced repetitions.
+An independent rerun of the unchanged comparison returns exit 1. All boundary
+and kept-swath stages match in the retained snapshots, as do swath/ring/subpath
+counts, join statistics, blade-off transits and endpoint-transit lengths.
+Microscopic-bevel smoothing changes execution geometry, quaternions, pose
+counts and path lengths. No coverage-package change separates `50b1c361` from
+this newer CI base. This explains the exact-identity mismatch without proving
+all changed trajectories safe or desirable. The gate remains a merge blocker;
+no expected outputs, cases or `--require-identical` requirement are weakened.
+
+This CI x86_64/GCC15.2/F2C3.0.0 comparison measures median per-case planner
+time +0.580%, connector time +0.501%, process time 0% and RSS +0.105%.
+Those measurements do not establish controller-loop or target ARM deadlines.
 
 ### Deferred recovery target and accounting gaps
 
@@ -385,7 +456,7 @@ add-area requests reject without altering the live map.
 |---|---|---|
 | FTC swaths, connectors, headlands, deviations | Raw mowing lattice critic plus `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav`; forward lattice output also checks closed lethal-cell response sweep | 26 command cases, including original 12 negative and 4 positive controls; 21 critic and 18 real-controller cases. Strong modeled obstacles safely abort; rebased LiDAR cycle passes with known unmowed spans; continuous containment remains OPEN |
 | FTC PRE/PIVOT/POST and fallback reverse | Directed full rotation and final Twist sweep; existing costmap collision checks retained | Real-controller wheel-lag turn scenarios and complete footprint tests; passed on the final production source |
-| Webots mission cycles | Actual rebased stack, audited twelve-prefix runtime, strict live mode checks and canonical E2E | Source `042329de`: LiDAR29-02 canonical/outer PASS, with cutting gaps and final-pass counters; GPS29-03 running. Source `daa6b402`: GPS28-05 PASS and LiDAR28-06 FAIL remain separate baselines. Full blade coverage, explicit HOME and charging-resume remain unverified |
+| Webots mission cycles | Actual rebased stack, audited twelve-prefix runtime, strict live mode checks and canonical E2E | Source `042329de`: LiDAR29-02 and GPS29-03 canonical/outer PASS; LiDAR has cutting gaps and final-pass counters, GPS has three handled RTK waits. Source `daa6b402`: GPS28-05 PASS and LiDAR28-06 FAIL remain separate baselines. Full blade coverage, continuous commanded containment, explicit HOME and charging-resume remain unverified |
 | EscapeStartBlocked | Bound action instance -> `/cmd_vel_nav`; geometry, pose, blade, arming and budgets; rejection/halt zero | 17 production-path DDS/command cases; passed on the final production source |
 | Map permission production | #905-compatible `/map_server_node/transit_geometry`; `area.text=mowing|navigation`; revocation before replacement | 30 startup/reload/add/parameter cases; passed on the final production source |
 | Nav2 RPP/RotationShim transit and HOME | BT `NavigateToPose` -> Nav2 -> `/cmd_vel_nav` | Default staging transit completed in attempt 17. No new execution gate; #905 protects planning, not controller corner cutting. Explicit HOME interruption untested. OPEN |
