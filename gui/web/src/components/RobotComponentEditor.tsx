@@ -927,7 +927,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange, onDock
                 maskClosable={!calibRunning}
                 closable={!calibRunning}
                 footer={null}
-                destroyOnClose
+                destroyOnHidden
             >
                 <Typography.Paragraph>
                     {t("robotComponentEditor.imuCalibIntro1")}{" "}
