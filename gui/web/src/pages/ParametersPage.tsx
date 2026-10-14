@@ -1,3 +1,4 @@
+import {TextWithAddon} from '../components/inputs/TextWithAddon';
 import {NumberWithAddon} from '../components/inputs/NumberWithAddon';
 import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useMemo, useState} from "react";
@@ -138,9 +139,9 @@ function ParamRow({
         </Tooltip>
       );
     }
-    return <Input value={stringifyValue(value)} disabled={saving || disabled}
+    return <TextWithAddon value={stringifyValue(value)} disabled={saving || disabled}
                   style={{width: controlWidth ?? 220}}
-                  addonAfter={meta.unit}
+                  after={meta.unit}
                   onChange={(e) => setValue(e.target.value)}
                   onBlur={() => value !== param.value && guardedCommit(value)}
                   onPressEnter={() => value !== param.value && guardedCommit(value)}/>;
