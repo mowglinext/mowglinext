@@ -187,7 +187,7 @@ normally sends deltas after initial/geometry-change publication. Its cached grid
 can therefore miss added or cleared obstacles. The observed stale-clear detour
 is consistent with this defect, but exact causality for the last suffix is not
 proved because raw costmaps were not recorded. The request-scoped GetCostmap
-repair is implemented at `042329de`; no repaired mission result is claimed.
+repair is implemented at `042329de`; its separate LiDAR mission is recorded below.
 The failed repeat's 326,763 decoded CDR receipts have consistent terminal counts;
 ownership, acquisition freshness, lossless delivery and continuous containment
 remain unestablished.
@@ -226,8 +226,82 @@ The prior runtime prefixes for other packages are unchanged.
 This repair establishes request ownership and validated response data. The
 upstream service response is not an atomic costmap-generation certificate, an
 execution permission, or a physical observation-freshness guarantee. Planner,
-FTC, collision and firmware guards remain necessary. A new mission on this
-source is pending; the completed missions above retain baseline `daa6b402`.
+FTC, collision and firmware guards remain necessary. The completed missions
+above retain baseline `daa6b402`; the new-source result follows separately.
+
+### Current-source LiDAR mission (attempt29-02, 2026-10-14)
+
+Source `042329de3cd78d1b233eb3d8448f4eed4b66ecef`, START documentation snapshot
+`d674f6e5`, uses a fresh behavior install and eleven byte-identical prior package
+prefixes. The complete twelve-prefix audit covers 1,700 files. The unchanged
+canonical harness starts only after actual LiDAR/collision, datum, pose/tool,
+actuation and recorder readiness. Attempt29-01 first stopped before START with
+captured exit 38: the private observer used a reserved rclpy Node property.
+Corrected actual node construction and two typed mock service checks pass;
+that idle attempt has no mowing result. Failed artifacts remain preserved.
+
+Fresh attempt29-02 records canonical **PASS and authoritative outer exit 0**,
+without watchdog or timeout. It reaches IDLE_DOCKED and charging at 2554.8 s:
+undock 12.0 s, planning 38.2 s, mowing 2446.5 s and dock 44.6 s. It drives 386.0 m;
+60,970 nearest-path samples have median 6.2 mm, P95 62.7 mm and maximum 87.4 mm.
+These demonstrate observed progress through the cycle, not full blade coverage.
+
+Adverse functionality evidence remains: **15 detours, six transit timeouts and
+13 failed-transit log messages**. A reproducible ledger sums 434 logged gap
+poses and 17.39 m of rounded per-dispatch left-unmowed arc estimates; this is not
+unique spatial unmowed area. Separate non-obstacle cursor advances and blocked
+start skips also occur. Three actual FTC authorization denials are retained.
+Near the end, the log reports skipping the rest/all one swath, then starts a
+new pass at cursor 9741/9757 with 16 poses. The unchanged goal checker accepts
+that short tail at 6.7% progress, 0.408 m remaining and 0.486 m endpoint error.
+The final-pass summary therefore reports 1/1 completed and 0 skipped. Independent
+strong review confirms expected per-pass retry semantics; earlier blade-off
+gaps were not proved reclaimed. FollowStrip resets its local gap tally per
+pass, and the published skipped counter is separate. Final 100% cursor progress
+and unit completion must not be read as complete cutting coverage.
+
+The sealed main CDR has 343,093 receipts and 267,646,613 bytes, 788,843 bytes below
+the 256 MiB cap, with ready/terminal counts reconciled and no cap/timeout.
+It includes 130,002 wheel-command receipts, demonstrating observation after
+selection/shaping. It does not establish owner/action identity, lossless
+delivery, acquisition freshness or continuous containment.
+
+A separate bounded observer records actual typed GetCostmap request/response
+CDRs: 254 global and 254 local replies, zero failed exchanges, integrity PASS,
+29,117,384 bytes under 128 MiB. Both services answer before START; 253 later pairs
+cover live cursor progress 90.017% through 99.836%. All 508 response payloads
+also decode successfully. These independent requests are not correlated with
+the grids consumed by individual FollowStrip decisions, and are not atomic
+producer-generation or physical freshness certificates. Global/local observer
+RPC medians are 1.143/0.976 ms (P95 2.454/1.942 ms). They are software reply timings,
+not controller deadlines. Whole-container samples show 1.707-1.710 GiB and
+557-613% multi-core CPU for Webots, ROS and observers together; no isolated
+authorization overhead or identical-host baseline is measured.
+
+GPS-only attempt29-03 has started at the same source `042329de`/documentation snapshot
+`d674f6e5` with the strict direct fleet/FTC/collision/no-LiDAR live gate and both
+typed costmap proofs. Its terminal result is **pending**. Earlier GPS28-05 PASS
+retains its separate source `daa6b402` baseline.
+
+### Deferred recovery target and accounting gaps
+
+Independent investigation reproduces another existing functionality mismatch:
+a fresh raw 253/raw 255 target center can pass FollowStrip's preserved lethal-only
+disc test, while AuthorizedTransitPlanner rejects center costs >=253. A private
+central-cell candidate preserves body-only inflations and initially passes 21
+fixture cases. Strong review finds an adjacent-cell precision defect: service
+resolution is float32, planner resolution double. With origin (-1, -2), goal (0.8, 0)
+and true resolution 0.1, actual Costmap2D::worldToMap selects (18, 20), wire metadata
+selects (17, 19). Two real-API boundary comparisons fail the candidate, showing
+both false clearance and rejection of a legitimately clear target.
+
+The candidate is **not integrated**. Rejecting all ambiguous boundary cells
+can regress legitimate recovery; a producer precision/eligibility contract and
+positive boundary controls remain needed. The current planner retains its own
+authoritative rejection; this is not a demonstrated motion bypass or proof of
+exclusive mission causality. All failed probes are retained. Cumulative gap
+accounting across retries is also open; neither the canonical pass nor these
+probes establish complete coverage. Original #942 assertions remain unchanged.
 
 No paired unmodified-dev run, repeated reliability, connected multi-area
 coverage, hole/revocation mission, non-default docking, explicit HOME,
@@ -311,7 +385,7 @@ add-area requests reject without altering the live map.
 |---|---|---|
 | FTC swaths, connectors, headlands, deviations | Raw mowing lattice critic plus `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav`; forward lattice output also checks closed lethal-cell response sweep | 26 command cases, including original 12 negative and 4 positive controls; 21 critic and 18 real-controller cases. Strong modeled obstacles safely abort; rebased LiDAR cycle passes with known unmowed spans; continuous containment remains OPEN |
 | FTC PRE/PIVOT/POST and fallback reverse | Directed full rotation and final Twist sweep; existing costmap collision checks retained | Real-controller wheel-lag turn scenarios and complete footprint tests; passed on the final production source |
-| Webots no-LiDAR mission cycle | Current coverage/interface/map/nav/behavior overlays plus cached remaining runtime; real launch and strict E2E harness | Attempt 17 PASS: undock, plan, mow, return-to-dock and charging; 2539 s. Three recovery cursor advances omit partial spans. Exact area coverage, explicit HOME command and charging-resume remain unverified |
+| Webots mission cycles | Actual rebased stack, audited twelve-prefix runtime, strict live mode checks and canonical E2E | Source `042329de`: LiDAR29-02 canonical/outer PASS, with cutting gaps and final-pass counters; GPS29-03 running. Source `daa6b402`: GPS28-05 PASS and LiDAR28-06 FAIL remain separate baselines. Full blade coverage, explicit HOME and charging-resume remain unverified |
 | EscapeStartBlocked | Bound action instance -> `/cmd_vel_nav`; geometry, pose, blade, arming and budgets; rejection/halt zero | 17 production-path DDS/command cases; passed on the final production source |
 | Map permission production | #905-compatible `/map_server_node/transit_geometry`; `area.text=mowing|navigation`; revocation before replacement | 30 startup/reload/add/parameter cases; passed on the final production source |
 | Nav2 RPP/RotationShim transit and HOME | BT `NavigateToPose` -> Nav2 -> `/cmd_vel_nav` | Default staging transit completed in attempt 17. No new execution gate; #905 protects planning, not controller corner cutting. Explicit HOME interruption untested. OPEN |
