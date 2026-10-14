@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { GnssStatus, GnssStatusConstants } from "../../types/ros.ts";
 import {
     deriveGpsStatus,
+    currentRtkMode,
+    currentCorrectionStreamStatus,
     gnssCorrectionStreamStatusLabel,
     gnssReceiverLabel,
     hasGnssCapability,
@@ -38,7 +40,7 @@ export const GnssLiveStatusSummaryCard: React.FC<Props> = ({
         if (!hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_RTK_MODE)) {
             return unknownLabel;
         }
-        switch (gnssStatus?.rtk_mode) {
+        switch (currentRtkMode(gnssStatus)) {
             case GnssStatusConstants.RTK_MODE_NONE:
                 return t("settingsGnssLiveStatus.rtkModeNone");
             case GnssStatusConstants.RTK_MODE_FLOAT:
@@ -61,11 +63,11 @@ export const GnssLiveStatusSummaryCard: React.FC<Props> = ({
                     </Space>
                     <Space size={4}>
                         <Text type="secondary">{t("settingsGnssLiveStatus.rtkMode")}</Text>
-                        <Tag color={rtkModeTagColor(gnssStatus?.rtk_mode)}>{rtkModeLabel}</Tag>
+                        <Tag color={rtkModeTagColor(currentRtkMode(gnssStatus))}>{rtkModeLabel}</Tag>
                     </Space>
                     <Space size={4}>
                         <Text type="secondary">{t("settingsGnssLiveStatus.correctionStream")}</Text>
-                        <Tag color={correctionStreamTagColor(gnssStatus?.correction_stream_status)}>{correctionStreamLabel}</Tag>
+                        <Tag color={correctionStreamTagColor(currentCorrectionStreamStatus(gnssStatus))}>{correctionStreamLabel}</Tag>
                     </Space>
                 </Space>
 

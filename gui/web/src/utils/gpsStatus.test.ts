@@ -302,13 +302,11 @@ describe('deriveGpsStatus', () => {
         expect(sample.msm_summary_cell_count).toBe(0);
     });
 
-    it('merges diagnostics-derived correction stream fields into a typed GNSS sample when the bridge is older', () => {
+    it('enriches a legacy mask-less typed sample with correction diagnostics', () => {
         const merged = mergeGnssStatusDiagnosticProjection(
             {
                 backend: 'universal',
                 fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
-                capability_flags: GnssStatusConstants.CAP_HORIZONTAL_ACCURACY,
-                value_flags: GnssStatusConstants.CAP_HORIZONTAL_ACCURACY,
             },
             deriveGnssStatusFromDiagnostics({
                 status: [

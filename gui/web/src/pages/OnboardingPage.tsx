@@ -23,7 +23,7 @@ import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
 import { useFirmwareStatus } from "../hooks/useFirmwareStatus.ts";
 import { GnssStatusConstants } from "../types/ros.ts";
 import { CompassOutlined } from "@ant-design/icons";
-import { deriveGpsStatus, gnssReceiverLabel } from "../utils/gpsStatus.ts";
+import { deriveGpsStatus, currentCorrectionStreamStatus, gnssReceiverLabel } from "../utils/gpsStatus.ts";
 import { ReadinessStep } from "../components/onboarding/ReadinessStep.tsx";
 import {
     STEP_FIRMWARE, STEP_NTRIP, STEP_GPS, STEP_DATUM,
@@ -330,7 +330,7 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
     // A typo'd NTRIP credential otherwise reads as "GPS FIX" forever with no
     // explanation — surface whether RTCM corrections are actually flowing.
     const correctionsActive =
-        gnssStatus?.correction_stream_status === GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE;
+        currentCorrectionStreamStatus(gnssStatus) === GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE;
     const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
     const selectedExecutionBaud = (() => {
         const value = normalizeGnssString(values.gnss_execution_baud).toLowerCase();

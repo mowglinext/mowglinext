@@ -1,43 +1,25 @@
-import {useEffect, useMemo, useRef, useState} from "react";
-import {GnssStatus} from "../types/ros.ts";
-import {useWS} from "./useWS.ts";
-import {useDiagnostics} from "./useDiagnostics.ts";
-import {
-    deriveGnssStatusFromDiagnostics,
-    hasTypedGnssStatusSample,
-    mergeGnssStatusDiagnosticProjection,
-} from "../utils/gpsStatus.ts";
+import {useMemo} from 'react';
+import type {GnssStatus} from '../types/ros';
+import {useDiagnostics} from './useDiagnostics';
+import {useValidatedTelemetry} from './useValidatedTelemetry';
+import {diagnosticPublicationIdentity} from '../utils/diagnosticTelemetry';
+import {decodeGnssStatus} from '../utils/gnssTelemetry';
+import {deriveGnssStatusFromDiagnostics, mergeGnssStatusDiagnosticProjection} from '../utils/gpsStatus';
 
-export const useGnssStatus = () => {
-    const [gnssStatus, setGnssStatus] = useState<GnssStatus>({});
-    const parseWarningLoggedRef = useRef(false);
+const replaceStatus = (_previous: GnssStatus, next: GnssStatus): GnssStatus => next;
+
+/** Receipt/identity metadata describes delivery, not physical GNSS acquisition. */
+export const useGnssStatusState = () => {
+    const {telemetry} = useValidatedTelemetry<GnssStatus>('gnssStatus', {}, decodeGnssStatus, replaceStatus, undefined, diagnosticPublicationIdentity);
     const {diagnostics} = useDiagnostics();
-    const ignoreStreamEvent = () => {};
-    const gnssStatusStream = useWS<string>(ignoreStreamEvent, ignoreStreamEvent, (payload) => {
-        try {
-            setGnssStatus(payload as unknown as GnssStatus);
-            parseWarningLoggedRef.current = false;
-        } catch (error) {
-            if (!parseWarningLoggedRef.current) {
-                console.warn("Ignoring malformed /gps/status frame", error);
-                parseWarningLoggedRef.current = true;
-            }
-        }
-    });
-    const {start, stop} = gnssStatusStream;
-    useEffect(() => {
-        start("/api/mowglinext/subscribe/gnssStatus");
-        return () => {
-            stop();
-        };
-    }, [start, stop]);
-
-    const diagnosticFallback = useMemo(
-        () => deriveGnssStatusFromDiagnostics(diagnostics),
-        [diagnostics],
-    );
-
-    return hasTypedGnssStatusSample(gnssStatus)
-        ? mergeGnssStatusDiagnosticProjection(gnssStatus, diagnosticFallback)
-        : (diagnosticFallback ?? gnssStatus);
+    const projection = useMemo(() => deriveGnssStatusFromDiagnostics(diagnostics), [diagnostics]);
+    const status = useMemo(() => {
+        if (!telemetry.hasReceivedFrame) return projection ?? {};
+        // Invalid frames or transport loss must not resurrect a diagnostic fix.
+        if (telemetry.condition !== 'valid') return {};
+        return mergeGnssStatusDiagnosticProjection(telemetry.data, projection);
+    }, [telemetry.condition, telemetry.hasReceivedFrame, telemetry.data, projection]);
+    return {status, telemetry};
 };
+
+export const useGnssStatus = (): GnssStatus => useGnssStatusState().status;

@@ -4,6 +4,8 @@ import {telemetryStampIdentity, type TelemetryDecode} from '../utils/statusTelem
 
 export interface ValidatedTelemetry<T> {
     data: T;
+    /** Delivery history only: even a rejected frame establishes that this stream sent data. */
+    hasReceivedFrame: boolean;
     /** Last reported assertions; not acknowledged cleared without producer ordering. */
     assertions: T;
     condition: 'missing' | 'valid' | 'invalid' | 'unsupported' | 'disconnected';
@@ -21,9 +23,10 @@ export function useValidatedTelemetry<T>(
     decode: (raw: unknown) => TelemetryDecode<T>,
     retainWarnings: (previous: T, next: T) => T,
     accumulateAssertions?: (previous: T, next: T) => T,
+    readIdentity: (raw: unknown) => string | null = telemetryStampIdentity,
 ) {
     const [telemetry, setTelemetry] = useState<ValidatedTelemetry<T>>({
-        data: initial, assertions: initial, condition: 'missing', lastValidReceiptAt: null,
+        data: initial, hasReceivedFrame: false, assertions: initial, condition: 'missing', lastValidReceiptAt: null,
         stampIdentity: null, stampChangedAt: null,
     });
     const stream = useWS<unknown>(
@@ -35,14 +38,14 @@ export function useValidatedTelemetry<T>(
             const decoded = decode(raw);
             if (decoded.kind !== 'valid') {
                 setTelemetry(previous => previous.condition === decoded.kind ? previous : {
-                    ...previous, data: retainWarnings(previous.data, initial), condition: decoded.kind,
+                    ...previous, hasReceivedFrame: true, data: retainWarnings(previous.data, initial), condition: decoded.kind,
                 });
                 return;
             }
             const at = performance.now();
-            const identity = telemetryStampIdentity(raw);
+            const identity = readIdentity(raw);
             setTelemetry(previous => ({
-                data: retainWarnings(previous.data, decoded.data), condition: 'valid',
+                data: retainWarnings(previous.data, decoded.data), hasReceivedFrame: true, condition: 'valid',
                 assertions: accumulateAssertions ? accumulateAssertions(previous.assertions, decoded.data) : initial,
                 lastValidReceiptAt: at, stampIdentity: identity,
                 stampChangedAt: identity === null ? null

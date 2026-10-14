@@ -56,20 +56,51 @@ function fromFixType(fixType: number | undefined | null): GpsStatus | null {
     }
 }
 
+function unknownGpsStatus(): GpsStatus {
+    return {fixType: "UNKNOWN", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
+}
+
+function optionalValueAvailable(status: GnssStatus | undefined | null, flag: number): boolean {
+    return status != null && (status.capability_flags === undefined || hasGnssCapability(status, flag))
+        && (status.value_flags === undefined || hasGnssValue(status, flag));
+}
+
+export function currentCorrectionStreamStatus(status: GnssStatus | undefined | null): number | undefined {
+    return optionalValueAvailable(status, GnssStatusConstants.CAP_CORRECTION_STREAM)
+        ? status?.correction_stream_status : undefined;
+}
+
+export function currentRtkMode(status: GnssStatus | undefined | null): number | undefined {
+    if (!status) return undefined;
+    if ((status.capability_flags !== undefined && !hasGnssCapability(status, GnssStatusConstants.CAP_RTK_MODE)) ||
+        (status.value_flags !== undefined && !hasGnssValue(status, GnssStatusConstants.CAP_RTK_MODE))) return undefined;
+    return status.rtk_mode;
+}
+
 // Source of truth: GnssStatus from /gps/status.
 export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsStatus {
     if (gnssStatus?.fix_valid === false) {
         return {fixType: "NO_FIX", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
     }
 
-    switch (gnssStatus?.rtk_mode) {
+    if (gnssStatus?.dead_reckoning === true) return unknownGpsStatus();
+    if (gnssStatus?.fix_type !== undefined && fromFixType(gnssStatus.fix_type) === null) return unknownGpsStatus();
+    if (gnssStatus?.fix_type === GnssStatusConstants.FIX_TYPE_NO_FIX) {
+        return {fixType: "NO_FIX", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
+    }
+    if (gnssStatus?.fix_type === GnssStatusConstants.FIX_TYPE_DEAD_RECKONING) return unknownGpsStatus();
+    if (gnssStatus?.fix_type === undefined && gnssStatus?.fix_valid !== true) return unknownGpsStatus();
+    if (gnssStatus?.rtk_mode !== undefined && (!Number.isInteger(gnssStatus.rtk_mode)
+        || gnssStatus.rtk_mode < 0 || gnssStatus.rtk_mode > Number(GnssStatusConstants.RTK_MODE_FIXED))) return unknownGpsStatus();
+    const rtkMode = currentRtkMode(gnssStatus);
+    switch (rtkMode) {
         case GnssStatusConstants.RTK_MODE_FIXED:
             return {fixType: "RTK_FIX", label: i18n.t("gpsStatus.compactRtkFixed"), percent: 100};
         case GnssStatusConstants.RTK_MODE_FLOAT:
             return {fixType: "RTK_FLOAT", label: i18n.t("gpsStatus.compactRtkFloat"), percent: 80};
         case GnssStatusConstants.RTK_MODE_NONE:
-            if (gnssStatus.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FIXED ||
-                gnssStatus.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FLOAT) {
+            if (gnssStatus?.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FIXED ||
+                gnssStatus?.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FLOAT) {
                 return {fixType: "UNKNOWN", label: i18n.t("gpsStatus.compactUnknown"), percent: 0};
             }
             break;
@@ -87,7 +118,7 @@ export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsS
 }
 
 export function gnssRtkModeLabel(gnssStatus: GnssStatus | undefined | null): GnssRtkModeLabel | undefined {
-    switch (gnssStatus?.rtk_mode) {
+    switch (currentRtkMode(gnssStatus)) {
         case GnssStatusConstants.RTK_MODE_NONE:
             return "None";
         case GnssStatusConstants.RTK_MODE_FLOAT:
@@ -102,6 +133,7 @@ export function gnssRtkModeLabel(gnssStatus: GnssStatus | undefined | null): Gns
 }
 
 export function gnssBaselineSolutionStatusLabel(gnssStatus: GnssStatus | undefined | null): string | undefined {
+    if (!optionalValueAvailable(gnssStatus, GnssStatusConstants.CAP_BASELINE_SOLUTION_STATUS)) return undefined;
     switch (gnssStatus?.baseline_solution_status) {
         case GnssStatusConstants.BASELINE_STATUS_UNKNOWN:
             return i18n.t("gpsStatus.baselineUnknown");
@@ -125,7 +157,7 @@ export function gnssBaselineSolutionStatusLabel(gnssStatus: GnssStatus | undefin
 }
 
 export function gnssCorrectionStreamStatusLabel(gnssStatus: GnssStatus | undefined | null): string | undefined {
-    switch (gnssStatus?.correction_stream_status) {
+    switch (currentCorrectionStreamStatus(gnssStatus)) {
         case GnssStatusConstants.CORRECTION_STREAM_STATUS_UNKNOWN:
             return i18n.t("gpsStatus.correctionStreamUnknown");
         case GnssStatusConstants.CORRECTION_STREAM_STATUS_IDLE:
@@ -144,11 +176,7 @@ export function gnssCorrectionStreamStatusLabel(gnssStatus: GnssStatus | undefin
 }
 
 export function hasTypedGnssStatusSample(gnssStatus: GnssStatus | undefined | null): boolean {
-    return gnssStatus?.fix_type !== undefined ||
-        gnssStatus?.fix_valid !== undefined ||
-        (gnssStatus?.backend?.trim().length ?? 0) > 0 ||
-        (gnssStatus?.receiver_vendor?.trim().length ?? 0) > 0 ||
-        (gnssStatus?.receiver_model?.trim().length ?? 0) > 0;
+    return gnssStatus != null && Object.keys(gnssStatus).some(key => key !== 'header');
 }
 
 export function diagnosticsValueMap(entry: DiagnosticStatusLike | undefined): Record<string, string> {
@@ -181,16 +209,23 @@ function parseDiagnosticInt(value: string | undefined): number | undefined {
     if (!value) {
         return undefined;
     }
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : undefined;
+    if (!/^-?\d+$/.test(value.trim())) return undefined;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function parseDiagnosticUint16(value: string | undefined): number | undefined {
+    const parsed = parseDiagnosticInt(value);
+    return parsed !== undefined && parsed >= 0 && parsed <= 65535 ? parsed : undefined;
 }
 
 function parseDiagnosticFloat(value: string | undefined): number | undefined {
     if (!value) {
         return undefined;
     }
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim())) return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function correctionStreamStatusFromMessage(message: string | undefined): number | undefined {
@@ -204,13 +239,13 @@ function correctionStreamStatusFromMessage(message: string | undefined): number 
     if (normalized.includes("unavailable")) {
         return GnssStatusConstants.CORRECTION_STREAM_STATUS_UNAVAILABLE;
     }
-    if (normalized.includes("waiting")) {
+    if (/^rtcm forwarding waiting(?: for .*)?$/.test(normalized)) {
         return GnssStatusConstants.CORRECTION_STREAM_STATUS_WAITING;
     }
-    if (normalized.includes("active")) {
+    if (/^rtcm forwarding active$/.test(normalized)) {
         return GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE;
     }
-    if (normalized.includes("idle")) {
+    if (/^rtcm forwarding (?:idle|stale)$/.test(normalized)) {
         return GnssStatusConstants.CORRECTION_STREAM_STATUS_IDLE;
     }
     return undefined;
@@ -231,6 +266,8 @@ export function isGnssFixType(
 
 function navSatFixStatusToGnssFixType(fixStatus: number | undefined): number | undefined {
     switch (fixStatus) {
+        case -1:
+            return GnssStatusConstants.FIX_TYPE_NO_FIX;
         case 2:
         case 1:
         case 0:
@@ -278,38 +315,30 @@ export function deriveGnssStatusFromDiagnostics(
     const msmSummarySeen = parseDiagnosticBool(msmSummaryValues.seen);
     const msmSummaryDecoded = parseDiagnosticBool(msmSummaryValues.decoded);
     const msmSummaryValid = parseDiagnosticBool(msmSummaryValues.valid);
-    const msmSummaryMessageType = parseDiagnosticInt(msmSummaryValues.message_type);
-    const msmSummaryStationId = parseDiagnosticInt(msmSummaryValues.station_id);
-    const msmSummarySatelliteCount = parseDiagnosticInt(msmSummaryValues.satellite_count);
-    const msmSummarySignalCount = parseDiagnosticInt(msmSummaryValues.signal_count);
-    const msmSummaryCellCount = parseDiagnosticInt(msmSummaryValues.cell_count);
+    const msmSummaryMessageType = parseDiagnosticUint16(msmSummaryValues.message_type);
+    const msmSummaryStationId = parseDiagnosticUint16(msmSummaryValues.station_id);
+    const msmSummarySatelliteCount = parseDiagnosticUint16(msmSummaryValues.satellite_count);
+    const msmSummarySignalCount = parseDiagnosticUint16(msmSummaryValues.signal_count);
+    const msmSummaryCellCount = parseDiagnosticUint16(msmSummaryValues.cell_count);
     const msmSummaryAgeS = parseDiagnosticFloat(msmSummaryValues.age_s);
     const msmSummaryConstellationsSeen = msmSummaryValues.constellations_seen;
     const fixType = navSatFixStatusToGnssFixType(parseDiagnosticInt(gpsValues.fix_status));
-    const fixValid = parseDiagnosticBool(summaryValues.fix_valid) ??
-        (fixType !== undefined ? !isGnssFixType(fixType, GnssStatusConstants.FIX_TYPE_NO_FIX) : undefined);
+    const summaryFixValid = parseDiagnosticBool(summaryValues.fix_valid);
+    const fixValid = summaryFixValid === false || fixType === GnssStatusConstants.FIX_TYPE_NO_FIX
+        ? false : summaryFixValid ?? (fixType !== undefined ? true : undefined);
     const capabilityFlags =
         (correctionStream ? GnssStatusConstants.CAP_CORRECTION_STREAM : 0) |
         (msmSummary ? GnssStatusConstants.CAP_MSM_SUMMARY : 0);
     const valueFlags =
         (correctionStreamStatus !== undefined ? GnssStatusConstants.CAP_CORRECTION_STREAM : 0) |
-        ((msmSummarySeen !== undefined ||
-            msmSummaryDecoded !== undefined ||
-            msmSummaryValid !== undefined ||
-            msmSummaryMessageType !== undefined ||
-            msmSummaryStationId !== undefined ||
-            msmSummaryConstellationsSeen !== undefined ||
-            msmSummarySatelliteCount !== undefined ||
-            msmSummarySignalCount !== undefined ||
-            msmSummaryCellCount !== undefined ||
-            msmSummaryAgeS !== undefined)
+        ((msmSummarySeen !== undefined && msmSummaryDecoded !== undefined && msmSummaryValid !== undefined)
             ? GnssStatusConstants.CAP_MSM_SUMMARY
             : 0);
 
     const projected: GnssStatus = {
         backend: summary ? "universal" : undefined,
-        fix_type: fixType ?? GnssStatusConstants.FIX_TYPE_NO_FIX,
-        fix_valid: fixValid ?? false,
+        ...(fixType !== undefined ? {fix_type: fixType} : {}),
+        ...(fixValid !== undefined ? {fix_valid: fixValid} : {}),
     };
     if (capabilityFlags) {
         projected.capability_flags = capabilityFlags;
@@ -322,16 +351,16 @@ export function deriveGnssStatusFromDiagnostics(
             correctionStreamStatus ?? GnssStatusConstants.CORRECTION_STREAM_STATUS_UNKNOWN;
     }
     if (msmSummary) {
-        projected.msm_summary_seen = msmSummarySeen ?? false;
-        projected.msm_summary_decoded = msmSummaryDecoded ?? false;
-        projected.msm_summary_valid = msmSummaryValid ?? false;
-        projected.msm_summary_message_type = msmSummaryMessageType ?? 0;
-        projected.msm_summary_station_id = msmSummaryStationId ?? 0;
+        if (msmSummarySeen !== undefined) projected.msm_summary_seen = msmSummarySeen;
+        if (msmSummaryDecoded !== undefined) projected.msm_summary_decoded = msmSummaryDecoded;
+        if (msmSummaryValid !== undefined) projected.msm_summary_valid = msmSummaryValid;
+        if (msmSummaryMessageType !== undefined) projected.msm_summary_message_type = msmSummaryMessageType;
+        if (msmSummaryStationId !== undefined) projected.msm_summary_station_id = msmSummaryStationId;
         projected.msm_summary_constellations_seen = msmSummaryConstellationsSeen;
-        projected.msm_summary_satellite_count = msmSummarySatelliteCount ?? 0;
-        projected.msm_summary_signal_count = msmSummarySignalCount ?? 0;
-        projected.msm_summary_cell_count = msmSummaryCellCount ?? 0;
-        projected.msm_summary_age_s = msmSummaryAgeS ?? 0;
+        if (msmSummarySatelliteCount !== undefined) projected.msm_summary_satellite_count = msmSummarySatelliteCount;
+        if (msmSummarySignalCount !== undefined) projected.msm_summary_signal_count = msmSummarySignalCount;
+        if (msmSummaryCellCount !== undefined) projected.msm_summary_cell_count = msmSummaryCellCount;
+        if (msmSummaryAgeS !== undefined) projected.msm_summary_age_s = msmSummaryAgeS;
     }
     return projected;
 }
@@ -358,6 +387,12 @@ const CAPABILITY_GROUP_FIELDS: Array<{flag: number; fields: (keyof GnssStatus)[]
     },
 ];
 
+function copyDiagnosticField<K extends keyof GnssStatus>(
+    target: GnssStatus, source: GnssStatus, field: K,
+): void {
+    if (source[field] !== undefined) target[field] = source[field];
+}
+
 export function mergeGnssStatusDiagnosticProjection(
     gnssStatus: GnssStatus | undefined | null,
     diagnosticProjection: GnssStatus | undefined,
@@ -370,20 +405,22 @@ export function mergeGnssStatusDiagnosticProjection(
         return diagnosticProjection;
     }
 
-    const merged: GnssStatus = {
-        ...diagnosticProjection,
-        ...base,
-        capability_flags: (base.capability_flags ?? 0) | (diagnosticProjection.capability_flags ?? 0),
-        value_flags: (base.value_flags ?? 0) | (diagnosticProjection.value_flags ?? 0),
-    };
-
+    const merged: GnssStatus = {...base};
+    const coreFields = new Set(['header', 'backend', 'receiver_vendor', 'receiver_model', 'receiver_firmware',
+        'fix_type', 'fix_valid', 'dead_reckoning']);
+    // A single generated mask cannot express partial authority. Do not add a
+    // diagnostic-only mask that would make legacy typed RTK/channels unsupported.
+    if (Object.keys(base).some(field => !coreFields.has(field))) return merged;
+    // Typed positioning and identity never come from an unrelated diagnostic.
+    // Explicit masks define unsupported/unknown as well as available fields.
+    if (base.capability_flags !== undefined || base.value_flags !== undefined) return merged;
     for (const group of CAPABILITY_GROUP_FIELDS) {
-        if (((base.capability_flags ?? 0) & group.flag) !== 0 ||
-            ((diagnosticProjection.capability_flags ?? 0) & group.flag) === 0) {
-            continue;
-        }
-        for (const field of group.fields) {
-            (merged as Record<string, unknown>)[field] = diagnosticProjection[field];
+        if (group.fields.some(field => base[field] !== undefined) ||
+            !hasGnssCapability(diagnosticProjection, group.flag)) continue;
+        for (const field of group.fields) copyDiagnosticField(merged, diagnosticProjection, field);
+        merged.capability_flags = (merged.capability_flags ?? 0) | group.flag;
+        if (hasGnssValue(diagnosticProjection, group.flag)) {
+            merged.value_flags = (merged.value_flags ?? 0) | group.flag;
         }
     }
 
@@ -403,7 +440,8 @@ export function readGnssNumber(
     flag: number,
     value: number | undefined | null,
 ): number | undefined {
-    return hasGnssValue(gnssStatus, flag) && value != null ? value : undefined;
+    return hasGnssCapability(gnssStatus, flag) && hasGnssValue(gnssStatus, flag)
+        && typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 export function displayHorizontalAccuracyM(
