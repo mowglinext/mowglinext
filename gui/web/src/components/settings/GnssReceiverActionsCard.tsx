@@ -1,5 +1,5 @@
 import {useAsyncHandler} from "../../hooks/useAsyncHandler";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Card, Collapse, Select, Space, Tag, Typography } from "antd";
 import { PlayCircleOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
@@ -7,48 +7,10 @@ import { ContentType } from "../../api/Api.ts";
 import { useApi } from "../../hooks/useApi.ts";
 import { GNSS_EXECUTION_BAUD_OPTIONS, normalizeGnssString } from "./gnssConfig.ts";
 
+import {decodeGnssActionResponse, gnssActionOutcome, type GnssActionName, type GnssActionResponse} from '../../utils/gnssConfigContract';
+import {requestErrorMessage} from '../../utils/errors';
+
 const { Paragraph, Text } = Typography;
-
-type GnssActionName = "plan" | "apply" | "factory-reset-apply" | "restart";
-
-type GnssCommandExecution = {
-    tool?: string;
-    command?: string[];
-    exit_code?: number;
-    stdout?: string;
-    stderr?: string;
-    success?: boolean;
-};
-
-type GnssActionResponse = {
-    success?: boolean;
-    partial_failure?: boolean;
-    action?: string;
-    message?: string;
-    warnings?: string[];
-    receiver_family?: string;
-    profile?: string;
-    signal_profile?: string;
-    profile_rate_hz?: string;
-    serial_device?: string;
-    execution_baud?: string;
-    detected_baud?: string;
-    target_baud?: string;
-    active_verified_baud?: string;
-    manual_baud_required?: boolean;
-    runtime_baud?: string;
-    config_baud?: string;
-    runtime_baud_differs_from_config?: boolean;
-    runtime_baud_updated?: boolean;
-    gps_container?: string;
-    gps_image?: string;
-    gps_container_was_running?: boolean;
-    stop_attempted?: boolean;
-    restart_attempted?: boolean;
-    restart_succeeded?: boolean;
-    restart_error?: string;
-    executions?: GnssCommandExecution[];
-};
 
 type Props = {
     isDirty?: boolean;
@@ -69,39 +31,10 @@ const GNSS_ACTION_LABEL_KEYS: Record<GnssActionName, string> = {
     restart: "settingsGnssReceiver.actionRestart",
 };
 
-const describeApiError = (error: unknown, unknownErrorText: string): string => {
-    if (error && typeof error === "object") {
-        const apiError = (error as any).error?.error;
-        if (typeof apiError === "string" && apiError.trim()) {
-            return apiError;
-        }
-        if (typeof (error as any).message === "string" && (error as any).message.trim()) {
-            return (error as any).message;
-        }
-        if (typeof (error as any).statusText === "string" && (error as any).statusText.trim()) {
-            return (error as any).statusText;
-        }
-    }
-    return unknownErrorText;
-};
-
-const responseAlertType = (response: GnssActionResponse | null, errorMessage: string | null): "success" | "warning" | "error" | "info" => {
-    if (errorMessage) {
-        return "error";
-    }
-    if (!response) {
-        return "info";
-    }
-    if (response.partial_failure) {
-        return "warning";
-    }
-    if (response.success === false) {
-        return "error";
-    }
-    if (response.success) {
-        return "success";
-    }
-    return "info";
+const responseAlertType = (response: GnssActionResponse | null): "success" | "warning" | "error" | "info" => {
+    if (!response) return 'info';
+    const outcome = gnssActionOutcome(response);
+    return outcome === 'partial' || outcome === 'unconfirmed' ? 'warning' : outcome === 'failed' ? 'error' : 'success';
 };
 
 const formatCommand = (command?: string[]): string => {
@@ -136,89 +69,103 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
     const [pendingAction, setPendingAction] = useState<GnssActionName | null>(null);
     const [lastResponse, setLastResponse] = useState<GnssActionResponse | null>(null);
     const [transportError, setTransportError] = useState<string | null>(null);
+    const [lastAction, setLastAction] = useState<GnssActionName | null>(null);
+    const [dispatched, setDispatched] = useState(false);
+    const active = useRef(true);
+    const actionLock = useRef(false);
+    useEffect(() => {
+        active.current = true;
+        return () => { active.current = false; };
+    }, []);
 
     const actionSummary = useMemo(() => {
         if (transportError) {
             return {
                 type: "error" as const,
-                message: t("settingsGnssReceiver.backendRequestFailed"),
-                description: transportError,
+                message: t(dispatched ? "settingsGnssReceiver.operationUnconfirmed" : "settingsGnssReceiver.persistenceUnconfirmed"),
+                description: dispatched ? `${transportError} ${t("settingsGnssReceiver.operationUnconfirmedDesc")}` : transportError,
             };
         }
         if (!lastResponse) {
             return null;
         }
-        if (lastResponse.partial_failure) {
+        if (gnssActionOutcome(lastResponse) === 'partial') {
             return {
                 type: "warning" as const,
                 message: lastResponse.message || t("settingsGnssReceiver.summaryPartialFailure"),
                 description: t("settingsGnssReceiver.summaryPartialFailureDesc"),
             };
         }
-        if (lastResponse.success === false) {
+        if (gnssActionOutcome(lastResponse) === 'failed') {
             return {
                 type: "error" as const,
                 message: lastResponse.message || t("settingsGnssReceiver.summaryFailed"),
                 description: t("settingsGnssReceiver.summaryFailedDesc"),
             };
         }
+        if (gnssActionOutcome(lastResponse) === 'unconfirmed') return {
+            type: 'warning' as const, message: t('settingsGnssReceiver.restartUnconfirmed'),
+            description: t('settingsGnssReceiver.operationUnconfirmedDesc'),
+        };
         return {
             type: "success" as const,
             message: lastResponse.message || t("settingsGnssReceiver.summarySuccess"),
-            description: t("settingsGnssReceiver.summarySuccessDesc"),
+            description: t(lastAction === "plan" ? "settingsGnssReceiver.planOnlyDesc" : "settingsGnssReceiver.summarySuccessDesc"),
         };
-    }, [lastResponse, transportError, t]);
+    }, [lastResponse, transportError, dispatched, lastAction, t]);
 
-    const runAction = async (action: GnssActionName, body?: Record<string, any>) => {
+    const runAction = async (action: GnssActionName, body?: {confirm?: boolean; confirm_factory_reset?: boolean}) => {
+        // React state alone cannot prevent two clicks before the next render.
+        if (!active.current || actionLock.current || saving || gpsRestarting) return;
+        actionLock.current = true;
         setPendingAction(action);
+        setLastResponse(null);
         setTransportError(null);
-
+        setLastAction(action);
+        setDispatched(false);
+        let sent = false;
         try {
             if (onPersistBeforeAction) {
                 const persisted = await onPersistBeforeAction();
-                if (!persisted) {
-                    setPendingAction(null);
-                    return;
-                }
+                if (persisted !== true) throw new Error(t('settingsGnssReceiver.persistenceUnconfirmedDesc'));
+            } else if (isDirty) {
+                throw new Error(t('settingsGnssReceiver.persistenceUnconfirmedDesc'));
             }
-
-            const response = await guiApi.request<GnssActionResponse, { error?: string }>({
-                path: `/settings/gnss/${action}`,
-                method: "POST",
-                body,
-                type: ContentType.Json,
-                format: "json",
+            if (!active.current) return;
+            sent = true;
+            setDispatched(true);
+            const response = await guiApi.request<unknown>({
+                path: `/settings/gnss/${action}`, method: 'POST', body, type: ContentType.Json, format: 'json',
             });
-
-            const data = response.data ?? {};
+            if (!active.current) return;
+            if (response.error || response.ok === false || response.status >= 400) throw new Error(requestErrorMessage(response) ?? t('settingsGnssReceiver.unknownApiError'));
+            const data = decodeGnssActionResponse(response.data, action);
             setLastResponse(data);
-
+            const outcome = gnssActionOutcome(data);
             const actionLabel = t(GNSS_ACTION_LABEL_KEYS[action]);
-
-            if (data.partial_failure) {
-                notification.warning({
-                    message: data.message || t("settingsGnssReceiver.notifyPartialFailure", { action: actionLabel }),
-                    description: t("settingsGnssReceiver.notifyPartialFailureDesc"),
-                });
-            } else if (data.success === false) {
-                notification.error({
-                    message: data.message || t("settingsGnssReceiver.notifyFailed", { action: actionLabel }),
-                    description: t("settingsGnssReceiver.notifyFailedDesc"),
-                });
+            if (outcome === 'partial') {
+                notification.warning({message: data.message || t('settingsGnssReceiver.notifyPartialFailure', {action: actionLabel}),
+                    description: t('settingsGnssReceiver.notifyPartialFailureDesc')});
+            } else if (outcome === 'failed') {
+                notification.error({message: data.message || t('settingsGnssReceiver.notifyFailed', {action: actionLabel}),
+                    description: t('settingsGnssReceiver.notifyFailedDesc')});
+            } else if (outcome === 'unconfirmed') {
+                notification.warning({message: t('settingsGnssReceiver.restartUnconfirmed'), description: t('settingsGnssReceiver.operationUnconfirmedDesc')});
             } else {
-                notification.success({
-                    message: data.message || t("settingsGnssReceiver.notifyCompleted", { action: actionLabel }),
-                });
+                notification.success({message: data.message || t('settingsGnssReceiver.notifyCompleted', {action: actionLabel}),
+                    ...(action === 'plan' ? {description: t('settingsGnssReceiver.planOnlyDesc')} : {})});
             }
         } catch (error) {
-            const description = describeApiError(error, t("settingsGnssReceiver.unknownApiError"));
+            if (!active.current) return;
+            const rawMessage = requestErrorMessage(error);
+            const description = rawMessage === 'Invalid GNSS action response'
+                ? t('settingsGnssReceiver.invalidResponse') : rawMessage ?? t('settingsGnssReceiver.unknownApiError');
             setTransportError(description);
-            notification.error({
-                message: t("settingsGnssReceiver.notifyFailed", { action: t(GNSS_ACTION_LABEL_KEYS[action]) }),
-                description,
-            });
+            notification.error({message: t(sent ? 'settingsGnssReceiver.operationUnconfirmed' : 'settingsGnssReceiver.persistenceUnconfirmed'),
+                description: sent ? `${description} ${t('settingsGnssReceiver.operationUnconfirmedDesc')}` : description});
         } finally {
-            setPendingAction(null);
+            actionLock.current = false;
+            if (active.current) setPendingAction(null);
         }
     };
 
@@ -343,7 +290,7 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
                     showIcon
                     style={{ marginTop: 12 }}
                     message={t("settingsGnssReceiver.actionInProgress", { action: loadingActionLabel })}
-                    description={t("settingsGnssReceiver.actionInProgressDesc")}
+                    description={t(dispatched ? "settingsGnssReceiver.actionInProgressDesc" : "settingsGnssReceiver.persistenceInProgressDesc")}
                 />
             )}
 
@@ -379,16 +326,16 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
                     {lastResponse && (
                         <Card size="small" type="inner" title={t("settingsGnssReceiver.backendResult")}>
                             <Space wrap size={[8, 8]} style={{ marginBottom: 12 }}>
-                                <Tag color={responseAlertType(lastResponse, null) === "success" ? "success" : responseAlertType(lastResponse, null) === "warning" ? "warning" : "error"}>
+                                <Tag color={responseAlertType(lastResponse) === "success" ? "success" : responseAlertType(lastResponse) === "warning" ? "warning" : "error"}>
                                     {lastResponse.partial_failure
                                         ? t("settingsGnssReceiver.tagPartialFailure")
-                                        : lastResponse.success
+                                        : gnssActionOutcome(lastResponse) === 'success'
                                             ? t("settingsGnssReceiver.tagSuccess")
-                                            : t("settingsGnssReceiver.tagFailed")}
+                                            : gnssActionOutcome(lastResponse) === 'unconfirmed' ? t('settingsGnssReceiver.restartUnconfirmed') : t("settingsGnssReceiver.tagFailed")}
                                 </Tag>
                                 {lastResponse.restart_attempted && (
-                                    <Tag color={lastResponse.restart_succeeded ? "success" : "error"}>
-                                        {lastResponse.restart_succeeded ? t("settingsGnssReceiver.tagGpsRestarted") : t("settingsGnssReceiver.tagGpsRestartFailed")}
+                                    <Tag color={lastResponse.restart_succeeded === true ? 'success' : lastResponse.restart_succeeded === false || lastResponse.restart_error ? 'error' : 'warning'}>
+                                        {lastResponse.restart_succeeded === true ? t('settingsGnssReceiver.tagGpsRestarted') : lastResponse.restart_succeeded === false || lastResponse.restart_error ? t('settingsGnssReceiver.tagGpsRestartFailed') : t('settingsGnssReceiver.restartUnconfirmed')}
                                     </Tag>
                                 )}
                                 {lastResponse.runtime_baud_updated && (
