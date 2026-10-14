@@ -18,7 +18,7 @@ const { Paragraph } = Typography;
 type Props = {
     receiverFamily: unknown;
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: string | number | null) => void;
 };
 
 export const UniversalGnssAdvancedSettings: React.FC<Props> = ({
