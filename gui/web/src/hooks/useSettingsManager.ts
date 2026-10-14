@@ -1,3 +1,4 @@
+import type {PersistedDockPose} from '../utils/robotEditorContract';
 import {DOCK_VISUAL_KEYS} from "../components/robot/dockGeometry";
 import {materializeLegacyCasterPosition} from "../utils/casterPosition";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
@@ -379,6 +380,10 @@ export const useSettingsManager = () => {
     const hardware = useHardwareBackend();
     const { notification } = App.useApp();
     const [savedValues, setSavedValues] = useState<SettingsValues>({});
+    // A GPS write can have persisted even when its acknowledgement/readback fails.
+    const dockCaptureUnconfirmed = useRef(false);
+    const dockCapturePending = useRef(false);
+    const settingsWritesInFlight = useRef(0);
     const [localValues, setLocalValues] = useState<SettingsValues>({});
     // Schema defaults = the GUI's source of "default value" for each key.
     // (The backend derives these from the JSON schema, which stands in for the
@@ -587,7 +592,12 @@ export const useSettingsManager = () => {
 
     const persistSettings = useCallback(async (options?: { forceGpsRestart?: boolean }) => {
         let yamlPersisted = false;
+        settingsWritesInFlight.current++;
         try {
+            if (dockCapturePending.current) {
+                notification.warning({message: t('settingsSections.toasts.dockCapturePending')});
+                return;
+            }
             setSaving(true);
             const forceGpsRestart = options?.forceGpsRestart ?? false;
             // Capture which keys were dirty BEFORE we mark them saved, so we
@@ -599,6 +609,10 @@ export const useSettingsManager = () => {
                 dirtyKeys.has("dock_pose_x") ||
                 dirtyKeys.has("dock_pose_y") ||
                 dirtyKeys.has("dock_pose_yaw");
+            if (dockDirty && dockCaptureUnconfirmed.current) {
+                notification.warning({message: t('settingsSections.toasts.dockCaptureUnconfirmed')});
+                return;
+            }
             // Only runtime-confirmed routes may be pushed live. OpenMower and
             // pending MAVROS routes must be persisted and applied on restart.
             const plan = planHardwareParameters(dirtyKeys, localValues, hardware);
@@ -765,6 +779,7 @@ export const useSettingsManager = () => {
                 notification.error({message: t("settingsSections.toasts.saveFailed"), description: errorMessage(e)});
             }
         } finally {
+            settingsWritesInFlight.current--;
             setSaving(false);
         }
     }, [
@@ -788,7 +803,16 @@ export const useSettingsManager = () => {
             markRestartRequired?: boolean;
         },
     ) => {
+        settingsWritesInFlight.current++;
         try {
+            if (dockCapturePending.current) {
+                notification.warning({message: t('settingsSections.toasts.dockCapturePending')});
+                return false;
+            }
+            if (dockCaptureUnconfirmed.current && ['dock_pose_x', 'dock_pose_y', 'dock_pose_yaw'].some(key => key in partialValues)) {
+                notification.warning({message: t('settingsSections.toasts.dockCaptureUnconfirmed')});
+                return false;
+            }
             const changedPayload: SettingsValues = {};
             for (const [key, value] of Object.entries(partialValues)) {
                 if (JSON.stringify(value) !== JSON.stringify(savedValues[key])) {
@@ -843,6 +867,7 @@ export const useSettingsManager = () => {
             });
             return false;
         } finally {
+            settingsWritesInFlight.current--;
             setSaving(false);
         }
     }, [guiApi, notification, savedValues, t]);
@@ -851,6 +876,21 @@ export const useSettingsManager = () => {
         setLocalValues((prev) => ({ ...prev, ...persistedValues }));
     }, []);
 
+
+    const beginDockCapture = useCallback(() => {
+        if (settingsWritesInFlight.current > 0 || dockCapturePending.current) {
+            notification.warning({message: t('settingsSections.toasts.dockCaptureWhileSaving')});
+            return false;
+        }
+        dockCaptureUnconfirmed.current = true;
+        dockCapturePending.current = true;
+        return true;
+    }, [notification, t]);
+    const finishDockCapture = useCallback(() => {dockCapturePending.current = false;}, []);
+    const acceptPersistedDockPose = useCallback((pose: PersistedDockPose) => {
+        acceptPersistedValues(pose);
+        dockCaptureUnconfirmed.current = false;
+    }, [acceptPersistedValues]);
 
     const save = useCallback(async () => {
         await persistSettings();
@@ -937,6 +977,9 @@ export const useSettingsManager = () => {
         savePartialValues,
         saveAndRestartGps,
         acceptPersistedValues,
+        acceptPersistedDockPose,
+        beginDockCapture,
+        finishDockCapture,
         revert,
     };
 };

@@ -3,21 +3,27 @@ import {apiErrorMessage, errorMessage, requestErrorMessage} from "../utils/error
 import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
-import {useEffect, useEffectEvent, useState} from "react";
+import {useEffect, useEffectEvent, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
 
 export const useConfig = (keys: string[]) => {
     const guiApi = useApi()
     const {notification} = App.useApp();
     const {t} = useTranslation();
+    const active = useRef(true);
+    const [loading, setLoading] = useState(true);
     const [config, setConfig] = useState<Record<string, string>>({})
     const handleSetConfig = async (newConfig: Record<string, string>) => {
         try {
             const offsetConfig = await guiApi.config.keysSetCreate(decodeStringRecord(newConfig))
-            if (offsetConfig.error) {
+            if (offsetConfig.error || offsetConfig.ok === false) {
                 throw new Error(apiErrorMessage(offsetConfig.error) ?? "")
             }
             const savedConfig = decodeStringRecord(offsetConfig.data);
+            if (!Object.entries(newConfig).every(([key, value]) => Object.prototype.hasOwnProperty.call(savedConfig, key) && savedConfig[key] === value)) {
+                throw new Error('Configuration write was not confirmed');
+            }
+            if (!active.current) return;
             setConfig(oldConfig => ({
                 ...oldConfig,
                 ...savedConfig
@@ -36,17 +42,22 @@ export const useConfig = (keys: string[]) => {
     // literal each render). Keep it as initialization input, not a refetch trigger.
     const [requestedKeys] = useState(() => Object.fromEntries(keys.map(key => [key, ""])));
     useEffect(() => {
+        let current = true;
+        active.current = true;
+        setLoading(true);
         observeAsync((async () => {
             try {
                 const offsetConfig = await guiApi.config.keysGetCreate(requestedKeys)
-                if (offsetConfig.error) {
+                if (offsetConfig.error || offsetConfig.ok === false) {
                     throw new Error(apiErrorMessage(offsetConfig.error) ?? "")
                 }
-                setConfig(decodeStringRecord(offsetConfig.data))
+                const decoded = decodeStringRecord(offsetConfig.data);
+                if (current) setConfig(previous => ({...decoded, ...previous}))
             } catch (e: unknown) {
-                reportLoadError(e)
-            }
+                if (current) reportLoadError(e)
+            } finally { if (current) setLoading(false); }
         })())
+        return () => {current = false; active.current = false;};
     }, [guiApi.config, requestedKeys])
-    return {config, setConfig: handleSetConfig}
+    return {config, setConfig: handleSetConfig, loading}
 }

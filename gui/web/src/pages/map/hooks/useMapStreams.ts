@@ -1,3 +1,4 @@
+import {settingsCoordinate} from '../../../utils/settingsContract';
 import React, { useEffect, useRef, useState } from "react";
 import type { Map as MapboxMap } from "mapbox-gl";
 import { useWS } from "../../../hooks/useWS.ts";
@@ -32,7 +33,7 @@ export type MowProgressImage = GridImage;
 
 interface UseMapStreamsOptions {
     editMap: boolean;
-    settings: Record<string, string>;
+    settings: Record<string, unknown>;
     offsetX: number;
     offsetY: number;
     datum: [number, number, number];
@@ -208,9 +209,9 @@ export function useMapStreams({
         // mowgli_robot.yaml). Compose that mount transform with the robot
         // pose so points land at their true map position instead of being
         // drawn as if the lidar sat at base_footprint with zero yaw.
-        const lidarX = parseFloat(settings["lidar_x"]) || 0;
-        const lidarY = parseFloat(settings["lidar_y"]) || 0;
-        const lidarYaw = parseFloat(settings["lidar_yaw"]) || 0;
+        const lidarX = settingsCoordinate(settings["lidar_x"]) || 0;
+        const lidarY = settingsCoordinate(settings["lidar_y"]) || 0;
+        const lidarYaw = settingsCoordinate(settings["lidar_yaw"]) || 0;
         const cosH = Math.cos(pose.heading);
         const sinH = Math.sin(pose.heading);
 

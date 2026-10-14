@@ -1,3 +1,4 @@
+import {isIntegerSetting} from '../utils/settingsContract';
 import {observeAsync} from "../utils/async";
 import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {App, Modal, Radio, Switch, Tag, TimePicker, Tooltip} from "antd";
@@ -536,7 +537,7 @@ export const SchedulePage = () => {
             {t('schedulePage.rulesDescription')}
           </div>
           {[
-            {k: t('schedulePage.ruleRainAware'), on: Number.isInteger(rainMode) && rainLabels[rainMode] ? rainMode > 0 : null, hint: Number.isInteger(rainMode) && rainLabels[rainMode] ? t(`settingsRain.${rainLabels[rainMode]}`) : t('schedulePage.unknown')},
+            {k: t('schedulePage.ruleRainAware'), on: isIntegerSetting(rainMode) && rainLabels[rainMode] ? rainMode > 0 : null, hint: isIntegerSetting(rainMode) && rainLabels[rainMode] ? t(`settingsRain.${rainLabels[rainMode]}`) : t('schedulePage.unknown')},
             {k: t('schedulePage.ruleAutoDockLow'), on: typeof batteryLow === 'number' ? true : null, hint: typeof batteryLow === 'number' ? t('schedulePage.ruleAutoDockLowHint', {percent: batteryLow}) : t('schedulePage.unknown')},
           ].map(r => (
             <div key={r.k} style={{display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0'}}>

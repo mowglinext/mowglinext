@@ -1,12 +1,14 @@
-import {errorMessage} from "../utils/errors";
+import {errorMessage, requestErrorMessage} from "../utils/errors";
 import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
-import {useEffect, useEffectEvent, useState} from "react";
+import {useEffect, useEffectEvent, useMemo, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
 import {useConfig} from "./useConfig.tsx";
 import {parseBoolish} from "../utils/settingsValues.ts";
-import {stringifyValue} from "../utils/stringifyValue.ts";
+import {decodeSettings, flattenConfig, legacyEndpointMissing, type SettingsConfig} from '../utils/settingsContract';
+import {isJsonObject} from '../utils/json';
+export type {SettingsConfig} from '../utils/settingsContract';
 
 export enum SettingValueType {
     String = "string",
@@ -142,118 +144,75 @@ export const SettingsDesc: Record<string, Setting> = {
         description: "ROS node host",
     }
 }
-export type SettingsConfig = {
-    [P in keyof typeof SettingsDesc]: Record<P, typeof SettingsDesc[P]['defaultValue']>;
-}
-const SettingKeysFromDB = Object.keys(SettingsDesc).filter((key) => {
-    return SettingsDesc[key].settingType === SettingType.Db
-})
-const flattenConfig = (newConfig: Record<string, any>): Record<string, any> => {
-    const flatConfig: Record<string, any> = {}
-    Object.keys(newConfig).forEach((key) => {
-        // If the value is an object, flatten it recursively
-        if (typeof newConfig[key] === "object") {
-            const flat = flattenConfig(newConfig[key])
-            Object.keys(flat).forEach((subKey) => {
-                flatConfig[`${key}.${subKey}`] = flat[subKey]
-            })
-        } else {
-            flatConfig[key] = newConfig[key]
-        }
-    })
-    return flatConfig;
-};
+const SettingKeysFromDB = Object.keys(SettingsDesc).filter(key => SettingsDesc[key].settingType === SettingType.Db);
 export const useSettings = () => {
-    const guiApi = useApi()
+    const guiApi = useApi();
     const {notification} = App.useApp();
     const {t} = useTranslation();
-    const db = useConfig(SettingKeysFromDB)
-    const [loading, setLoading] = useState<boolean>(false)
-    const [settings, setSettings] = useState<Record<keyof typeof SettingsDesc, any>>({})
-    useEffect(() => {
-        if (db.config) {
-            const newSettings: Record<string, any> = {}
-            Object.keys(db.config).forEach((key) => {
-                if (SettingsDesc[key]?.type === SettingValueType.Boolean) {
-                    const parsed = parseBoolish(db.config[key])
-                    newSettings[key] = parsed ?? db.config[key]
-                } else {
-                    newSettings[key] = db.config[key]
-                }
-            })
-            setSettings((prev) => {
-                return {...prev, ...newSettings}
-            })
+    const db = useConfig(SettingKeysFromDB);
+    const active = useRef(true);
+    const saveLock = useRef(false);
+    const [fetching, setFetching] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [fileSettings, setFileSettings] = useState<SettingsConfig>({});
+    // DB descriptors own these keys regardless of API response arrival order.
+    const settings = useMemo(() => {
+        const entries: Array<[string, SettingsConfig[string]]> = Object.entries(fileSettings)
+            .filter(([key]) => !SettingKeysFromDB.includes(key));
+        for (const [key, value] of Object.entries(db.config)) {
+            entries.push([key, SettingsDesc[key]?.type === SettingValueType.Boolean ? parseBoolish(value) ?? value : value]);
         }
-    }, [db.config]);
+        return Object.fromEntries(entries);
+    }, [fileSettings, db.config]);
     const reportLoadError = useEffectEvent((error: unknown) => {
-        notification.error({message: t('useSettingsHook.loadFailed'), description: errorMessage(error)});
+        notification.error({message: t('useSettingsHook.loadFailed'), description: requestErrorMessage(error) ?? errorMessage(error)});
     });
-
     useEffect(() => {
+        let current = true;
+        active.current = true;
         observeAsync((async () => {
-            try {
-                setLoading(true)
-                // Load shell config settings
-                const settingsList = await guiApi.settings.settingsList()
-                if (settingsList.error) {
-                    throw new Error(settingsList.error.error)
-                }
-                const fetchedSettings = settingsList.data.settings ?? {};
-                const newSettings: Record<string, any> = {}
-                Object.keys(fetchedSettings).forEach((key) => {
-                    if (SettingsDesc[key]?.type === SettingValueType.Boolean) {
-                        const parsed = parseBoolish(fetchedSettings[key])
-                        newSettings[key] = parsed ?? fetchedSettings[key]
-                    } else {
-                        newSettings[key] = fetchedSettings[key]
-                    }
-                })
-                // Load YAML config settings (new snake_case keys)
+            const results = await Promise.allSettled([guiApi.settings.settingsList(), guiApi.settings.yamlList()]);
+            if (!current) return;
+            let next: SettingsConfig = {};
+            for (const [index, result] of results.entries()) {
                 try {
-                    const yamlSettings = await guiApi.settings.yamlList()
-                    if (!yamlSettings.error && yamlSettings.data) {
-                        Object.assign(newSettings, yamlSettings.data)
-                    }
-                } catch {
-                    // YAML endpoint may not exist on older backends
+                    if (result.status === 'rejected') throw result.reason instanceof Error ? result.reason : new Error(requestErrorMessage(result.reason) ?? 'Settings request failed');
+                    const response = result.value;
+                    if (response.error || response.ok === false) throw new Error(requestErrorMessage(response) ?? 'Settings request failed');
+                    const raw: unknown = response.data;
+                    if (index === 0 && (!isJsonObject(raw) || !('settings' in raw))) throw new Error('Invalid settings payload');
+                    const data = decodeSettings(index === 0 && isJsonObject(raw) ? raw.settings : raw);
+                    next = {...next, ...data};
+                } catch (error) {
+                    // Only an absent YAML endpoint is legacy compatibility.
+                    const missing = legacyEndpointMissing(result.status === 'rejected' ? result.reason : result.value);
+                    if (index !== 1 || !missing) reportLoadError(error);
                 }
-                setSettings((prev) => {
-                    return {...prev, ...newSettings}
-                })
-                setLoading(false)
-            } catch (e: any) {
-                reportLoadError(e)
-                setLoading(false)
             }
-        })())
-    }, [guiApi.settings])
+            setFileSettings(next);
+            setFetching(false);
+        })());
+        return () => {current = false; active.current = false;};
+    }, [guiApi.settings]);
     const handleSetConfig = async (newConfig: SettingsConfig) => {
+        if (!active.current || saveLock.current) return;
+        saveLock.current = true;
+        setSaving(true);
         try {
-            newConfig = flattenConfig(newConfig)
-            setLoading(true)
-            const dbFiltered = Object.keys(newConfig).reduce((acc, key) => {
-                if (SettingsDesc[key]?.settingType === SettingType.Db) {
-                    if (SettingsDesc[key]?.type === SettingValueType.Boolean) {
-                        acc[key] = stringifyValue(newConfig[key])
-                    } else {
-                        acc[key] = newConfig[key]
-                    }
-                }
-                return acc
-            }, {} as Record<string, any>)
-            await db.setConfig(dbFiltered)
-            notification.success({
-                message: t("useSettingsHook.saved"),
-            })
-            setLoading(false)
-        } catch (e: any) {
-            notification.error({
-                message: t("useSettingsHook.saveFailed"),
-                description: e.message,
-            })
-            setLoading(false)
-        }
+            const flat = flattenConfig(newConfig);
+            const entries: Array<[string, string]> = [];
+            for (const [key, value] of Object.entries(flat)) {
+                if (!Object.prototype.hasOwnProperty.call(SettingsDesc, key) || SettingsDesc[key].settingType !== SettingType.Db) continue;
+                if (SettingsDesc[key].type === SettingValueType.Boolean && typeof value === 'boolean') entries.push([key, String(value)]);
+                else if (typeof value === 'string') entries.push([key, value]);
+                else throw new Error(`Configuration value for ${key} must be a string`);
+            }
+            if (entries.length === 0) return; // This hook does not persist YAML.
+            await db.setConfig(Object.fromEntries(entries));
+            if (active.current) notification.success({message: t('useSettingsHook.saved')});
+        } catch (error) {
+            if (active.current) notification.error({message: t('useSettingsHook.saveFailed'), description: requestErrorMessage(error) ?? errorMessage(error)});
+        } finally {saveLock.current = false; if (active.current) setSaving(false);}
     };
-    return {settings, setSettings: handleSetConfig, loading}
-}
+    return {settings, setSettings: handleSetConfig, loading: fetching || db.loading || saving};
+};

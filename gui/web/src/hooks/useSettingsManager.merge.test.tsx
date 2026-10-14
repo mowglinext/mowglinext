@@ -189,3 +189,30 @@ it('emits only the partial-persistence warning after the response and keeps newe
     expect(result.current.dirtyCount).toBe(1); expect(result.current.restartRequired).toBe(true);
     expect(mocks.api.request.mock.calls.some(([args]) => args.path === '/params')).toBe(false);
 });
+
+it('protects partial dock saves after an unconfirmed GPS capture while allowing unrelated partial writes', async () => {
+    const {result} = renderHook(useSettingsManager);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.beginDockCapture()).toBe(true);
+    result.current.finishDockCapture();
+    let saved: boolean | undefined;
+    await act(async () => {saved = await result.current.savePartialValues({dock_pose_yaw: .5});});
+    expect(saved).toBe(false); expect(mocks.api.settings.yamlCreate).not.toHaveBeenCalled();
+    await act(async () => {saved = await result.current.savePartialValues({ntrip_host: 'host'});});
+    expect(saved).toBe(true);
+    expect(mocks.api.settings.yamlCreate).toHaveBeenCalledExactlyOnceWith({ntrip_host: 'host'});
+});
+
+it.each(['regular', 'partial'])('refuses a capture during a %s YAML write, then releases the guard', async kind => {
+    let finish: (value: unknown) => void = () => {};
+    mocks.api.settings.yamlCreate.mockReturnValue(new Promise(resolve => {finish = resolve;}));
+    const {result} = renderHook(useSettingsManager);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.handleChange('mower_visual_colour', '#123456'));
+    let pending: Promise<unknown>;
+    act(() => {pending = kind === 'regular' ? result.current.save() : result.current.savePartialValues({ntrip_host: 'host'});});
+    expect(result.current.beginDockCapture()).toBe(false);
+    await act(async () => {finish({}); await pending;});
+    expect(result.current.beginDockCapture()).toBe(true);
+    result.current.finishDockCapture();
+});

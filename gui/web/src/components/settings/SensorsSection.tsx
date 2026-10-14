@@ -3,16 +3,20 @@ import { Card, Col, Form, InputNumber, Row, Switch, Typography } from "antd";
 import { AimOutlined, RadarChartOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { RobotComponentEditor } from "../RobotComponentEditor.tsx";
+import type {PersistedDockPose} from '../../utils/robotEditorContract';
 import type {SettingsValues} from "../../types/settings.generated";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: number | boolean | null) => void;
+    onDockPosePersisted?: (pose: PersistedDockPose) => void;
+    onDockCaptureStart?: () => boolean;
+    onDockCaptureFinished?: () => void;
 };
 
-export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
+export const SensorsSection: React.FC<Props> = ({ values, onChange, onDockPosePersisted, onDockCaptureStart, onDockCaptureFinished }) => {
     const { t } = useTranslation();
     const handleLidarToggle = (enabled: boolean) => {
         onChange("lidar_enabled", enabled);
@@ -41,7 +45,7 @@ export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
             </Card>
 
             {/* Sensor placement visual editor */}
-            <RobotComponentEditor values={values} onChange={onChange} />
+            <RobotComponentEditor values={values} onChange={onChange} onDockPosePersisted={onDockPosePersisted} onDockCaptureStart={onDockCaptureStart} onDockCaptureFinished={onDockCaptureFinished} />
 
             {/* IMU bias calibration (hardware_bridge_node, auto-triggered on dock) */}
             <Card size="small" style={{ marginTop: 16 }} title={

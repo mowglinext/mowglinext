@@ -124,3 +124,75 @@ describe('configuration failure propagation to the settings caller', () => {
         expect(result.current.loading).toBe(false);
     });
 });
+
+describe('Batch 10 settings boundaries', () => {
+    beforeEach(() => {
+        mock.config.keysGetCreate.mockReset().mockResolvedValue({data: {}});
+        mock.config.keysSetCreate.mockReset();
+        mock.settings.settingsList.mockReset().mockResolvedValue({data: {settings: {}}});
+        mock.settings.yamlList.mockReset().mockResolvedValue({data: {}});
+        mock.notification.error.mockClear(); mock.notification.success.mockClear();
+    });
+    it('keeps DB ownership, YAML precedence and optional values', async () => {
+        mock.config.keysGetCreate.mockResolvedValue({data: {'system.ros.nodeName': 'db', 'system.mqtt.enabled': 'false'}});
+        mock.settings.settingsList.mockResolvedValue({data: {settings: {'system.ros.nodeName': 'shell', shell: '', zero: 1}}});
+        mock.settings.yamlList.mockResolvedValue({data: {'system.ros.nodeName': 'yaml', zero: 0, list: [1], nil: null}});
+        const {result} = renderHook(useSettings);
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        expect(result.current.settings).toEqual({'system.ros.nodeName': 'db', 'system.mqtt.enabled': false, shell: '', zero: 0, list: [1], nil: null});
+    });
+    it.each([404, 405])('supports older backends without YAML endpoint (%s)', async status => {
+        mock.settings.yamlList.mockResolvedValue({status, ok: false, error: {error: 'Missing'}});
+        const {result} = renderHook(useSettings);
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        expect(mock.notification.error).not.toHaveBeenCalled();
+    });
+    it.each([{data: {}}, {data: {settings: []}}, {data: {settings: {}}, error: {error: 'Failed'}}])('reports invalid shell responses while retaining independent YAML data %j', async response => {
+        mock.settings.settingsList.mockResolvedValue(response);
+        mock.settings.yamlList.mockResolvedValue({data: {lidar_x: 0}});
+        const {result} = renderHook(useSettings);
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        expect(result.current.settings.lidar_x).toBe(0);
+        expect(mock.notification.error).toHaveBeenCalledOnce();
+    });
+    it('does not route YAML settings to the DB or claim persistence', async () => {
+        const {result} = renderHook(useSettings);
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        await act(async () => result.current.setSettings({dock_pose_x: 0, nested: {array: [1], nil: null}}));
+        expect(mock.config.keysSetCreate).not.toHaveBeenCalled();
+        expect(mock.notification.success).not.toHaveBeenCalled();
+    });
+    it.each([{data: {}}, {data: {'system.ros.nodeName': 'different'}}, {data: {'system.ros.nodeName': 'new'}, error: {error: 'Rejected'}}])('never announces success for an unconfirmed DB write %j', async response => {
+        mock.config.keysSetCreate.mockResolvedValue(response);
+        const {result} = renderHook(useSettings);
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        await act(async () => result.current.setSettings({'system.ros.nodeName': 'new'}));
+        expect(mock.notification.success).not.toHaveBeenCalled();
+        expect(mock.notification.error).toHaveBeenCalledOnce();
+    });
+    it('waits for DB loading and retains a successful edit against a late initial read', async () => {
+        let resolve: (value: unknown) => void = () => {};
+        mock.config.keysGetCreate.mockReturnValue(new Promise(r => {resolve = r;}));
+        mock.config.keysSetCreate.mockResolvedValue({data: {'system.ros.nodeName': 'new'}});
+        const {result} = renderHook(useSettings);
+        await act(async () => {await Promise.resolve();});
+        expect(result.current.loading).toBe(true);
+        await act(async () => result.current.setSettings({'system.ros.nodeName': 'new'}));
+        await act(async () => {resolve({data: {'system.ros.nodeName': 'old'}}); await Promise.resolve();});
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        expect(result.current.settings['system.ros.nodeName']).toBe('new');
+    });
+    it('submits only one concurrent DB write and avoids post-unmount notifications', async () => {
+        let resolve: (value: unknown) => void = () => {};
+        mock.config.keysSetCreate.mockReturnValue(new Promise(r => {resolve = r;}));
+        const {result, unmount} = renderHook(useSettings);
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        let first: Promise<void>;
+        act(() => {first = result.current.setSettings({'system.ros.nodeName': 'new'});});
+        await act(async () => result.current.setSettings({'system.ros.nodeName': 'second'}));
+        expect(mock.config.keysSetCreate).toHaveBeenCalledOnce();
+        unmount();
+        await act(async () => {resolve({data: {'system.ros.nodeName': 'new'}}); await first;});
+        expect(mock.notification.success).not.toHaveBeenCalled();
+    });
+});

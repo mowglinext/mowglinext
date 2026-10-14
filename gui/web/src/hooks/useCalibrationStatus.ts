@@ -4,9 +4,10 @@ import {useApi} from "./useApi.ts";
 
 export interface DockCalibrationStatus {
     present: boolean;
-    dock_pose_x?: number;
-    dock_pose_y?: number;
-    dock_pose_yaw_rad?: number;
+    pose_values_valid?: boolean;
+    dock_pose_x?: number | null;
+    dock_pose_y?: number | null;
+    dock_pose_yaw_rad?: number | null;
     dock_pose_yaw_deg?: number;
     error?: string;
 }

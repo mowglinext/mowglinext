@@ -107,6 +107,9 @@ export const SettingsPage = () => {
         savePartialValues,
         saveAndRestartGps,
         acceptPersistedValues,
+        acceptPersistedDockPose,
+        beginDockCapture,
+        finishDockCapture,
         revert,
         gpsRestarting,
         hardwareBackend,
@@ -270,7 +273,7 @@ export const SettingsPage = () => {
                     />
                 );
             case "sensors":
-                return <SensorsSection values={values} onChange={handleChange} />;
+                return <SensorsSection values={values} onChange={handleChange} onDockPosePersisted={acceptPersistedDockPose} onDockCaptureStart={beginDockCapture} onDockCaptureFinished={finishDockCapture} />;
             case "localization":
                 return (
                     <>

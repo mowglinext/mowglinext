@@ -1,3 +1,4 @@
+import {settingsCoordinate} from '../utils/settingsContract';
 import {visibleRobotGeometry} from "../utils/robotModel";
 import {dockVisualGeometry} from "../components/robot/dockGeometry";
 import {useMowerVisual} from "../hooks/useMowerVisual";
@@ -267,8 +268,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
     const onMapLoad = useMapBearingCamera({mapInstanceRef, bearing, onBearingChange: handleBearing, interactive: !compact});
 
-    const _datumLon = parseFloat(settings["datum_lon"] ?? 0)
-    const _datumLat = parseFloat(settings["datum_lat"] ?? 0)
+    const _datumLon = settingsCoordinate(settings["datum_lon"])
+    const _datumLat = settingsCoordinate(settings["datum_lat"])
 
     // Datum as [lat, lon, 0] for equirectangular projection
     // (matches the navsat_to_absolute_pose ROS node projection)
