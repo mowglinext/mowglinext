@@ -30,6 +30,7 @@
 #include "geometry_msgs/msg/point32.hpp"
 #include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_behavior/blade_direction.hpp"
+#include "mowgli_behavior/blade_ready.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
@@ -138,6 +139,11 @@ struct BTContext
   /// operator service and explicit start handlers. Direction resets only at
   /// EndSession; operator inhibition also clears on an explicit mowing start.
   bool blade_auto_reverse{false};
+  bool mowing_enabled{true};  // explicit commissioning dry run; hardware also enforces it
+  BladeReadyConfig blade_ready_config;
+  // Sticky provenance: a controller stream that disappears cannot become a
+  // telemetry-less installation and regain permission via the timer fallback.
+  bool blade_telemetry_seen{false};  // guarded by context_mutex
   BladeDirection blade_direction;
   // One DDS request writer preserves ordering between coverage, manual and
   // operator blade requests. Access only from the owning callback group.

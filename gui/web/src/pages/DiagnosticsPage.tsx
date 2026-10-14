@@ -91,6 +91,7 @@ import {groupAlertsByComponent} from "../utils/diagnosticsAlerts.ts";
 import {deriveLidarAnchor} from "../utils/lidarAnchor.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
 import {SystemPowerCard} from "../components/SystemPowerCard.tsx";
+import {BlackboxPanel} from "../components/BlackboxPanel.tsx";
 import "./DiagnosticsPage.css";
 import {apiErrorMessage, errorMessage, isAbortError} from "../utils/errors";
 import {voidify} from "../utils/promises";
@@ -806,6 +807,7 @@ export const DiagnosticsPage = () => {
 
     const sectionRosbag = (
         <Row gutter={[12, 12]}>
+            <Col span={24}><BlackboxPanel/></Col>
             <Col span={24}>
                 <Card
                     title={
@@ -2072,7 +2074,7 @@ export const DiagnosticsPage = () => {
                         },
                         {
                             key: "rosbag",
-                            label: <Space><VideoCameraOutlined/> {t('diagnosticsPage.rosbagTitle')}</Space>,
+                            label: <Space><VideoCameraOutlined/> {t('blackbox.recordingsTab')}</Space>,
                             children: sectionRosbag,
                         },
                         {

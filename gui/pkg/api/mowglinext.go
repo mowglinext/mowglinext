@@ -117,7 +117,7 @@ func MowgliNextRoutes(r *gin.RouterGroup, provider types.IRosProvider) {
 // goroutines on bad input.
 func topicSubscribeInterval(topic string) (int, bool) {
 	switch topic {
-	case "gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar":
+	case "gps", "gpsRaw", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar", "cmdVel", "cmdVelApplied":
 		return 100, true
 	case "fusionRaw", "cogHeading", "magYaw", "obstacles":
 		return 200, true
@@ -128,7 +128,7 @@ func topicSubscribeInterval(topic string) (int, bool) {
 		"robotDescription", "recordingTrajectory",
 		"coverageResumeAvailable", "coverageSession",
 		"fusionDiag", "dockCalibrationStatus", "firmwareParams",
-		"mavrosState", "mavrosVehicleInfo":
+		"digEvent", "localizationMode", "collisionMonitor", "mavrosState", "mavrosVehicleInfo":
 		return -1, true
 	default:
 		return -1, false

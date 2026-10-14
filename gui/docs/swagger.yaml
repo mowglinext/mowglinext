@@ -1,108 +1,50 @@
 basePath: /api
 definitions:
-  providers.NotifyDeliveryStatus:
-    type: object
+  api.BlackboxStatusResponse:
     properties:
-      channel:
-        type: string
-      configured:
-        type: boolean
-      enabled:
-        type: boolean
-      failedCount:
+      buffered_bytes:
         type: integer
-      lastError:
-        type: string
-      lastErrorAt:
-        type: string
-      lastMessage:
-        type: string
-      lastSentAt:
-        type: string
-      sentCount:
+      buffered_records:
         type: integer
-  api.NotificationSettingsUpdate:
-    type: object
-    properties:
-      pushoverAppToken:
+      buffered_seconds:
+        type: number
+      capture_id:
         type: string
-      clearPushoverAppToken:
+      coalesced_triggers:
+        type: integer
+      completed_snapshots:
+        type: integer
+      config:
+        $ref: '#/definitions/blackbox.Config'
+      dropped_messages:
+        type: integer
+      effective_memory_bytes:
+        type: integer
+      effective_pre_seconds:
+        type: integer
+      history_evictions:
+        type: integer
+      last_error:
+        type: string
+      last_write_seconds:
+        type: number
+      memory_pressure:
         type: boolean
-      pushoverUserKey:
+      phase:
         type: string
-      channel:
-        type: string
-      clearNtfyToken:
-        type: boolean
-      clearTelegramBotToken:
-        type: boolean
-      enabled:
-        type: boolean
-      events:
-        type: object
-        additionalProperties:
-          type: boolean
-      language:
-        type: string
-      ntfyServer:
-        type: string
-      ntfyToken:
-        type: string
-      ntfyTopic:
-        type: string
-      telegramBotToken:
-        type: string
-      telegramChatId:
-        type: string
-      title:
-        type: string
-      webhookUrl:
-        type: string
-  api.NotificationSettingsResponse:
-    type: object
-    properties:
-      pushoverAppTokenMasked:
-        type: string
-      pushoverAppTokenSet:
-        type: boolean
-      pushoverUserKey:
-        type: string
-      channels:
-        type: array
+      recordings:
         items:
-          type: string
-      channel:
-        type: string
-      enabled:
-        type: boolean
-      eventKinds:
+          $ref: '#/definitions/blackbox.Snapshot'
         type: array
+      skipped_trigger_sources:
+        type: integer
+      topics:
         items:
-          type: string
-      events:
-        type: object
-        additionalProperties:
-          type: boolean
-      language:
+          $ref: '#/definitions/api.blackboxTopicStatus'
+        type: array
+      warning:
         type: string
-      ntfyServer:
-        type: string
-      ntfyTokenMasked:
-        type: string
-      ntfyTokenSet:
-        type: boolean
-      ntfyTopic:
-        type: string
-      telegramBotTokenMasked:
-        type: string
-      telegramBotTokenSet:
-        type: boolean
-      telegramChatId:
-        type: string
-      title:
-        type: string
-      webhookUrl:
-        type: string
+    type: object
   api.Container:
     properties:
       id:
@@ -130,6 +72,13 @@ definitions:
       error:
         type: string
     type: object
+  api.FleetCoordinationResponse:
+    properties:
+      settings:
+        $ref: '#/definitions/providers.CoordinatorSettings'
+      status:
+        $ref: '#/definitions/providers.CoordinatorStatus'
+    type: object
   api.GetConfigResponse:
     properties:
       tileUri:
@@ -140,6 +89,27 @@ definitions:
       settings:
         additionalProperties: {}
         type: object
+    type: object
+  api.HardwareBackendResponse:
+    properties:
+      backend:
+        type: string
+      default_overrides:
+        additionalProperties: {}
+        description: |-
+          DefaultOverrides are the settings whose default this backend replaces
+          (config/backends/<backend>.yaml). A mower-model preset must not write
+          these: the preset describes the machine, not its electronics.
+        type: object
+      robot_name:
+        description: |-
+          RobotName is robot_name from the installed config (or its default):
+          the header badge shows it beside the backend.
+        type: string
+      supported:
+        items:
+          type: string
+        type: array
     type: object
   api.ImportDockPose:
     properties:
@@ -307,6 +277,93 @@ definitions:
           type: string
         type: array
     type: object
+  api.NotificationSettingsResponse:
+    properties:
+      channel:
+        type: string
+      channels:
+        items:
+          type: string
+        type: array
+      enabled:
+        type: boolean
+      eventKinds:
+        items:
+          type: string
+        type: array
+      events:
+        additionalProperties:
+          type: boolean
+        type: object
+      language:
+        type: string
+      ntfyServer:
+        type: string
+      ntfyTokenMasked:
+        type: string
+      ntfyTokenSet:
+        type: boolean
+      ntfyTopic:
+        type: string
+      pushoverAppTokenMasked:
+        type: string
+      pushoverAppTokenSet:
+        type: boolean
+      pushoverUserKey:
+        type: string
+      telegramBotTokenMasked:
+        type: string
+      telegramBotTokenSet:
+        type: boolean
+      telegramChatId:
+        type: string
+      title:
+        type: string
+      webhookUrl:
+        type: string
+    type: object
+  api.NotificationSettingsUpdate:
+    properties:
+      channel:
+        type: string
+      clearNtfyToken:
+        type: boolean
+      clearPushoverAppToken:
+        type: boolean
+      clearTelegramBotToken:
+        type: boolean
+      enabled:
+        type: boolean
+      events:
+        additionalProperties:
+          type: boolean
+        type: object
+      language:
+        type: string
+      ntfyServer:
+        type: string
+      ntfyToken:
+        type: string
+      ntfyTopic:
+        type: string
+      pushoverAppToken:
+        type: string
+      pushoverUserKey:
+        type: string
+      telegramBotToken:
+        type: string
+      telegramChatId:
+        type: string
+      title:
+        type: string
+      webhookUrl:
+        type: string
+    type: object
+  api.OkResponse:
+    properties:
+      ok:
+        type: string
+    type: object
   api.RemoteAccessSettingsResponse:
     properties:
       authKeyMasked:
@@ -340,11 +397,6 @@ definitions:
         type: string
       serveHttps:
         type: boolean
-    type: object
-  api.OkResponse:
-    properties:
-      ok:
-        type: string
     type: object
   api.Schedule:
     properties:
@@ -449,6 +501,124 @@ definitions:
       server:
         $ref: '#/definitions/buildinfo.Info'
     type: object
+  api.addPeerRequest:
+    properties:
+      address:
+        type: string
+    type: object
+  api.blackboxTopicStatus:
+    properties:
+      last_received_at:
+        type: string
+      topic:
+        type: string
+    type: object
+  api.registerPeerRequest:
+    properties:
+      api_version:
+        type: integer
+      id:
+        type: string
+      name:
+        type: string
+      port:
+        type: integer
+    type: object
+  blackbox.Config:
+    properties:
+      cooldown_seconds:
+        type: integer
+      enabled:
+        type: boolean
+      max_disk_bytes:
+        type: integer
+      max_message_bytes:
+        type: integer
+      max_snapshots:
+        type: integer
+      memory_bytes:
+        type: integer
+      min_free_disk_bytes:
+        type: integer
+      post_seconds:
+        type: integer
+      pre_seconds:
+        type: integer
+    type: object
+  blackbox.Snapshot:
+    properties:
+      actual_post_seconds:
+        type: number
+      actual_pre_seconds:
+        type: number
+      capture_dropped_messages:
+        type: integer
+      capture_id:
+        type: string
+      config:
+        $ref: '#/definitions/blackbox.Config'
+      dropped_messages:
+        type: integer
+      format_version:
+        type: integer
+      identifiers:
+        additionalProperties:
+          type: string
+        type: object
+      interrupted:
+        type: boolean
+      kind:
+        type: string
+      name:
+        type: string
+      reasons:
+        items:
+          type: string
+        type: array
+      records:
+        type: integer
+      size:
+        type: integer
+      triggered_at:
+        type: string
+      window_elapsed_seconds:
+        type: number
+    type: object
+  blackbox.Status:
+    properties:
+      buffered_bytes:
+        type: integer
+      buffered_records:
+        type: integer
+      buffered_seconds:
+        type: number
+      capture_id:
+        type: string
+      coalesced_triggers:
+        type: integer
+      completed_snapshots:
+        type: integer
+      config:
+        $ref: '#/definitions/blackbox.Config'
+      dropped_messages:
+        type: integer
+      effective_memory_bytes:
+        type: integer
+      effective_pre_seconds:
+        type: integer
+      history_evictions:
+        type: integer
+      last_error:
+        type: string
+      last_write_seconds:
+        type: number
+      memory_pressure:
+        type: boolean
+      phase:
+        type: string
+      skipped_trigger_sources:
+        type: integer
+    type: object
   buildinfo.Info:
     properties:
       built_at:
@@ -536,6 +706,14 @@ definitions:
         items:
           $ref: '#/definitions/geometry.Polygon'
         type: array
+      proposed_obstacle_info:
+        items:
+          $ref: '#/definitions/mowgli.MapObstacleInfo'
+        type: array
+      proposed_obstacles:
+        items:
+          $ref: '#/definitions/geometry.Polygon'
+        type: array
       ring_direction:
         type: integer
       start_x:
@@ -583,6 +761,78 @@ definitions:
       yaw_source:
         type: integer
     type: object
+  providers.AddPeerResult:
+    properties:
+      peer:
+        $ref: '#/definitions/providers.FleetPeer'
+      reciprocal:
+        type: boolean
+      warning:
+        type: string
+    type: object
+  providers.CoordinatorSettings:
+    properties:
+      completed_ttl_h:
+        type: number
+      enabled:
+        type: boolean
+      resume_distance_m:
+        type: number
+      yield_distance_m:
+        type: number
+    type: object
+  providers.CoordinatorStatus:
+    properties:
+      completed_areas:
+        items:
+          type: integer
+        type: array
+      enabled:
+        type: boolean
+      excluded_areas:
+        items:
+          type: integer
+        type: array
+      last_error:
+        type: string
+      last_push_at:
+        type: string
+      preferred_start:
+        type: integer
+      yielded:
+        type: boolean
+    type: object
+  providers.FleetPeer:
+    properties:
+      address:
+        description: host:port of the peer's GUI backend
+        type: string
+      api_version:
+        type: integer
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  providers.FleetRobot:
+    properties:
+      address:
+        type: string
+      identity:
+        $ref: '#/definitions/providers.RobotIdentity'
+      last_seen:
+        type: string
+      online:
+        type: boolean
+      self:
+        type: boolean
+      topics:
+        additionalProperties:
+          items:
+            type: integer
+          type: array
+        type: object
+    type: object
   providers.IrriSenseGardenSummary:
     properties:
       id:
@@ -602,6 +852,49 @@ definitions:
         type: string
       label:
         type: string
+    type: object
+  providers.MapPushPeerResult:
+    properties:
+      address:
+        type: string
+      error:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      ok:
+        type: boolean
+    type: object
+  providers.MapPushResult:
+    properties:
+      areas:
+        type: integer
+      peers:
+        items:
+          $ref: '#/definitions/providers.MapPushPeerResult'
+        type: array
+    type: object
+  providers.NotifyDeliveryStatus:
+    properties:
+      channel:
+        type: string
+      configured:
+        type: boolean
+      enabled:
+        type: boolean
+      failedCount:
+        type: integer
+      lastError:
+        type: string
+      lastErrorAt:
+        type: string
+      lastMessage:
+        type: string
+      lastSentAt:
+        type: string
+      sentCount:
+        type: integer
     type: object
   providers.RemoteAccessPhase:
     enum:
@@ -627,7 +920,7 @@ definitions:
       checkedAt:
         type: string
       containerState:
-        description: "ContainerState is Docker's state string, or \"absent\"."
+        description: ContainerState is Docker's state string, or "absent".
         type: string
       dnsName:
         type: string
@@ -659,6 +952,44 @@ definitions:
           type: string
         type: array
       version:
+        type: string
+    type: object
+  providers.RobotIdentity:
+    properties:
+      api_version:
+        type: integer
+      datum_lat:
+        type: number
+      datum_lon:
+        type: number
+      id:
+        type: string
+      name:
+        type: string
+      revision:
+        type: string
+      version:
+        type: string
+    type: object
+  types.FirmwareAvailability:
+    properties:
+      available:
+        type: boolean
+      board:
+        type: string
+      fw_version:
+        type: string
+      own_release:
+        type: boolean
+      panel:
+        type: string
+      protocol_version:
+        type: integer
+      release:
+        description: |-
+          Release the manifest came from; OwnRelease is false when this
+          installation's release carries no firmware and the latest stable one
+          was used instead.
         type: string
     type: object
   types.FirmwareConfig:
@@ -790,6 +1121,41 @@ definitions:
       wet:
         type: boolean
     type: object
+  updates.Changelog:
+    properties:
+      features:
+        items:
+          $ref: '#/definitions/updates.ChangelogEntry'
+        type: array
+      fixes:
+        items:
+          $ref: '#/definitions/updates.ChangelogEntry'
+        type: array
+      other:
+        description: Commits that are neither a feature nor a fix (ci, docs, test,
+          chore, ...).
+        type: integer
+      total:
+        type: integer
+      truncated:
+        description: |-
+          The installed revision was not found in the first page of history, so
+          the lists cover the most recent changes only.
+        type: boolean
+      url:
+        type: string
+    type: object
+  updates.ChangelogEntry:
+    properties:
+      breaking:
+        type: boolean
+      pr:
+        type: integer
+      scope:
+        type: string
+      title:
+        type: string
+    type: object
 host: localhost:4200
 info:
   contact: {}
@@ -797,74 +1163,6 @@ info:
   title: MowgliNext GUI API
   version: "1.0"
 paths:
-  /notifications/test:
-    post:
-      produces:
-        - application/json
-      tags:
-        - notifications
-      summary: send a test notification
-      responses:
-        200:
-          description: "OK"
-          schema:
-            $ref: "#/definitions/api.OkResponse"
-        400:
-          description: Bad Request
-          schema:
-            $ref: "#/definitions/api.ErrorResponse"
-        502:
-          description: Bad Gateway
-          schema:
-            $ref: "#/definitions/api.ErrorResponse"
-  /notifications/status:
-    get:
-      produces:
-        - application/json
-      tags:
-        - notifications
-      summary: notification delivery status
-      responses:
-        200:
-          description: "OK"
-          schema:
-            $ref: "#/definitions/providers.NotifyDeliveryStatus"
-  /notifications/settings:
-    get:
-      produces:
-        - application/json
-      tags:
-        - notifications
-      summary: notification settings
-      responses:
-        200:
-          description: "OK"
-          schema:
-            $ref: "#/definitions/api.NotificationSettingsResponse"
-    put:
-      consumes:
-        - application/json
-      produces:
-        - application/json
-      tags:
-        - notifications
-      summary: update notification settings
-      parameters:
-        - description: partial settings
-          name: settings
-          in: body
-          required: true
-          schema:
-            $ref: "#/definitions/api.NotificationSettingsUpdate"
-      responses:
-        200:
-          description: "OK"
-          schema:
-            $ref: "#/definitions/api.NotificationSettingsResponse"
-        400:
-          description: Bad Request
-          schema:
-            $ref: "#/definitions/api.ErrorResponse"
   /config/envs:
     get:
       description: get config env from backend
@@ -999,6 +1297,231 @@ paths:
       summary: get container logs
       tags:
       - containers
+  /fleet/coordination:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.FleetCoordinationResponse'
+      summary: coordinated mowing settings and status
+      tags:
+      - fleet
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: settings
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/providers.CoordinatorSettings'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.FleetCoordinationResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: update coordinated mowing settings
+      tags:
+      - fleet
+  /fleet/coordination/reset:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: fleet-wide start fresh
+      tags:
+      - fleet
+  /fleet/identity:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/providers.RobotIdentity'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: this robot's fleet identity
+      tags:
+      - fleet
+  /fleet/map/push:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/providers.MapPushResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: push this robot's map to the fleet
+      tags:
+      - fleet
+  /fleet/peers:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: peer GUI address (host[:port])
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.addPeerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/providers.AddPeerResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: add a fleet peer
+      tags:
+      - fleet
+  /fleet/peers/{id}:
+    delete:
+      parameters:
+      - description: peer robot id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: remove a fleet peer
+      tags:
+      - fleet
+  /fleet/peers/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: peer identity + API port
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.registerPeerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/providers.FleetPeer'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: reverse-register a peer
+      tags:
+      - fleet
+  /fleet/peers/unregister:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+      summary: a peer asks to be forgotten
+      tags:
+      - fleet
+  /fleet/robots:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/providers.FleetRobot'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: fleet snapshot
+      tags:
+      - fleet
+  /fleet/robots/{id}/call/{command}:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: robot id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: high_level_control | emergency | coverage_clear_resume
+        in: path
+        name: command
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: send a command to a fleet robot
+      tags:
+      - fleet
   /import/openmower:
     post:
       consumes:
@@ -1104,84 +1627,6 @@ paths:
       summary: IrriSense soil status
       tags:
       - irrisense
-  /remote-access/apply:
-    post:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.OkResponse'
-      summary: Retry applying remote access settings
-      tags:
-      - remote-access
-  /remote-access/logout:
-    post:
-      description: the node key is discarded; the sidecar restarts and logs in again (interactively or with the stored auth key)
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.OkResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.ErrorResponse'
-      summary: Log the robot out of the tailnet
-      tags:
-      - remote-access
-  /remote-access/settings:
-    get:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.RemoteAccessSettingsResponse'
-      summary: Remote access settings
-      tags:
-      - remote-access
-    put:
-      consumes:
-      - application/json
-      parameters:
-      - description: partial settings
-        in: body
-        name: settings
-        required: true
-        schema:
-          $ref: '#/definitions/api.RemoteAccessSettingsUpdate'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.RemoteAccessSettingsResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/api.ErrorResponse'
-      summary: update remote access settings
-      tags:
-      - remote-access
-  /remote-access/status:
-    get:
-      description: "container phase, tailscaled login state, login URL while waiting, reachable URLs once connected"
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/providers.RemoteAccessStatus'
-      summary: Remote access status
-      tags:
-      - remote-access
   /mowglinext/call/{command}:
     post:
       consumes:
@@ -1346,6 +1791,154 @@ paths:
       summary: subscribe to a topic
       tags:
       - mowglinext
+  /notifications/settings:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.NotificationSettingsResponse'
+      summary: notification settings
+      tags:
+      - notifications
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: partial settings
+        in: body
+        name: settings
+        required: true
+        schema:
+          $ref: '#/definitions/api.NotificationSettingsUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.NotificationSettingsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: update notification settings
+      tags:
+      - notifications
+  /notifications/status:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/providers.NotifyDeliveryStatus'
+      summary: notification delivery status
+      tags:
+      - notifications
+  /notifications/test:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: send a test notification
+      tags:
+      - notifications
+  /remote-access/apply:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+      summary: Retry applying remote access settings
+      tags:
+      - remote-access
+  /remote-access/logout:
+    post:
+      description: the node key is discarded; the sidecar restarts and logs in again
+        (interactively or with the stored auth key)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Log the robot out of the tailnet
+      tags:
+      - remote-access
+  /remote-access/settings:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.RemoteAccessSettingsResponse'
+      summary: Remote access settings
+      tags:
+      - remote-access
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: partial settings
+        in: body
+        name: settings
+        required: true
+        schema:
+          $ref: '#/definitions/api.RemoteAccessSettingsUpdate'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.RemoteAccessSettingsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: update remote access settings
+      tags:
+      - remote-access
+  /remote-access/status:
+    get:
+      description: container phase, tailscaled login state, login URL while waiting,
+        reachable URLs once connected
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/providers.RemoteAccessStatus'
+      summary: Remote access status
+      tags:
+      - remote-access
   /schedules:
     get:
       description: list all mowing schedules
@@ -1492,6 +2085,19 @@ paths:
       summary: saves the settings to the mower_config.sh file
       tags:
       - settings
+  /settings/hardware-backend:
+    get:
+      description: HARDWARE_BACKEND from the runtime env (default mowgli)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.HardwareBackendResponse'
+      summary: returns the active hardware backend
+      tags:
+      - settings
   /settings/schema:
     get:
       description: returns the JSON Schema for mower configuration parameters
@@ -1607,6 +2213,25 @@ paths:
       summary: returns the schema default value for every known parameter
       tags:
       - settings
+  /setup/firmware/available:
+    get:
+      description: Version and protocol of the prebuilt firmware that /setup/flashBoard
+        would install for the saved board selection, taken from this installation's
+        release (or the latest stable one when it carries none).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.FirmwareAvailability'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: prebuilt firmware available for the saved board
+      tags:
+      - setup
   /setup/flashBoard:
     post:
       consumes:
@@ -1783,6 +2408,44 @@ paths:
       summary: Check available software versions
       tags:
       - system
+  /system/updates/changelog:
+    get:
+      description: Features and fixes read from the commit subjects between the installed
+        and the candidate revision.
+      parameters:
+      - description: owner/name
+        in: query
+        name: repository
+        required: true
+        type: string
+      - description: Installed 40-hex revision
+        in: query
+        name: installed
+        required: true
+        type: string
+      - description: Candidate 40-hex revision
+        in: query
+        name: available
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/updates.Changelog'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: What changed between two source revisions
+      tags:
+      - system
   /system/versions:
     get:
       produces:
@@ -1795,4 +2458,80 @@ paths:
       summary: Installed software versions
       tags:
       - system
+  /tools/blackbox/{name}:
+    delete:
+      parameters:
+      - description: Completed snapshot name
+        in: path
+        name: name
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.OkResponse'
+      summary: Delete a completed blackbox recording
+      tags:
+      - diagnostics
+  /tools/blackbox/config:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Recorder limits
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/blackbox.Config'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/blackbox.Status'
+      summary: Configure passive blackbox (complete configuration)
+      tags:
+      - diagnostics
+  /tools/blackbox/download/{name}:
+    get:
+      parameters:
+      - description: Completed snapshot name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/x-ndjson
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+      summary: Download a completed timestamped blackbox timeline
+      tags:
+      - diagnostics
+  /tools/blackbox/save:
+    post:
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Save available pre-event history and collect post-event window
+      tags:
+      - diagnostics
+  /tools/blackbox/status:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BlackboxStatusResponse'
+      summary: Passive blackbox status and completed recordings
+      tags:
+      - diagnostics
 swagger: "2.0"
