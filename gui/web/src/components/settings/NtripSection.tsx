@@ -67,7 +67,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
       }
     }
     return all;
-  }, [values.ntrip_host, values.ntrip_port, values.ntrip_user, values.ntrip_password]);
+  }, [guiApi, values.ntrip_host, values.ntrip_port, values.ntrip_user, values.ntrip_password]);
 
   const loadProvider = useCallback(async (p: NtripProvider) => {
     setLoading(true);

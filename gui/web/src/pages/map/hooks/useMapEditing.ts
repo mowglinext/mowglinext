@@ -335,7 +335,7 @@ export function useMapEditing({
     // -----------------------------------------------------------------------
     // Labels
     // -----------------------------------------------------------------------
-    const buildLabels = (param: MowingFeature[]) => {
+    const buildLabels = useCallback((param: MowingFeature[]) => {
         return param.flatMap((feature) => {
             if (!(feature instanceof MowingAreaFeature)) return [];
             if (!feature.geometry?.coordinates?.[0]?.length) return [];
@@ -354,7 +354,7 @@ export function useMapEditing({
             centroidPt.id = feature.id;
             return [centroidPt];
         });
-    };
+    }, [t, i18n.language]);
 
     // -----------------------------------------------------------------------
     // Internal helpers that need closure over state

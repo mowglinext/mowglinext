@@ -35,9 +35,9 @@ const BatteryGauge: React.FC<{
     // Scale voltage to position (use range from criticalV-1 to fullV+1)
     const minV = criticalV - 1;
     const maxV = fullV + 1;
-    const toX = (v: number) => barX + ((v - minV) / (maxV - minV)) * barW;
 
     const markers = useMemo(() => {
+        const toX = (v: number) => barX + ((v - minV) / (maxV - minV)) * barW;
         const items: React.ReactNode[] = [];
         // Bar background
         items.push(
@@ -107,7 +107,7 @@ const BatteryGauge: React.FC<{
         }
 
         return items;
-    }, [fullV, emptyV, criticalV, currentV, mode]);
+    }, [fullV, emptyV, criticalV, currentV, mode, minV, maxV, barW]);
 
     return (
         <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: "block", margin: "0 auto" }}>

@@ -1,6 +1,6 @@
 import {observeAsync} from "../utils/async";
 import {App, Input, Select, Space} from "antd";
-import {useEffect, useMemo, useRef, useState} from "react";
+import {useCallback, useEffect, useEffectEvent, useMemo, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
 import AsyncButton from "../components/AsyncButton.tsx";
 import {useWS} from "../hooks/useWS.ts";
@@ -115,7 +115,11 @@ export const LogsPage = () => {
             });
         });
 
-    async function listContainers() {
+    const reportListError = useCallback((error: unknown) => {
+        notification.error({message: t('logsPage.failedToListContainers'),
+            description: error instanceof Error ? error.message : String(error)});
+    }, [notification, t]);
+    const listContainers = useCallback(async () => {
         try {
             const res = await guiApi.containers.containersList();
             if (res.error) throw new Error(res.error.error);
@@ -130,24 +134,23 @@ export const LogsPage = () => {
                 }];
             });
             setContainers(options ?? []);
-            if (options?.length && !containerId) setContainerId(options[0].value);
+            if (options?.length) setContainerId(current => current || options[0].value);
         } catch (e: unknown) {
-            notification.error({
-                message: t('logsPage.failedToListContainers'),
-                description: e instanceof Error ? e.message : String(e),
-            });
+            reportListError(e);
         }
-    }
+    }, [guiApi, reportListError]);
 
-    useEffect(() => { observeAsync(listContainers()); }, []);
+    const initialList = useEffectEvent(() => { observeAsync(listContainers()); });
+    useEffect(() => { initialList(); }, []);
 
+    const {start: startStream, stop: stopStream} = stream;
     useEffect(() => {
         if (!containerId) return;
         resetLogs();
-        stream.start(`/api/containers/${containerId}/logs`);
+        startStream(`/api/containers/${containerId}/logs`);
         // Switching containers (or unmounting) closes the socket on purpose.
-        return () => { intentionalStopRef.current = true; stream?.stop(); };
-    }, [containerId]);
+        return () => { intentionalStopRef.current = true; stopStream(); };
+    }, [containerId, startStream, stopStream]);
 
     useEffect(() => () => batcherRef.current?.reset(), []);
 
@@ -162,11 +165,11 @@ export const LogsPage = () => {
             const res = await guiApi.containers.containersCreate(containerId, command);
             if (res.error) throw new Error(res.error.error);
             if (command === "start" || command === "restart") {
-                stream.start(`/api/containers/${containerId}/logs`);
+                startStream(`/api/containers/${containerId}/logs`);
             } else {
                 // Stopping the container intentionally closes the stream.
                 intentionalStopRef.current = true;
-                stream?.stop();
+                stopStream();
             }
             await listContainers();
             notification.success({message: messages[command]});

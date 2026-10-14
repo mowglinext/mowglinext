@@ -1,7 +1,8 @@
+import {errorMessage} from "../utils/errors";
 import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
-import {useEffect, useState} from "react";
+import {useEffect, useEffectEvent, useState} from "react";
 import {useTranslation} from "react-i18next";
 import {useConfig} from "./useConfig.tsx";
 import {parseBoolish} from "../utils/settingsValues.ts";
@@ -185,6 +186,10 @@ export const useSettings = () => {
             })
         }
     }, [db.config]);
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('useSettingsHook.loadFailed'), description: errorMessage(error)});
+    });
+
     useEffect(() => {
         observeAsync((async () => {
             try {
@@ -218,14 +223,11 @@ export const useSettings = () => {
                 })
                 setLoading(false)
             } catch (e: any) {
-                notification.error({
-                    message: t("useSettingsHook.loadFailed"),
-                    description: e.message,
-                })
+                reportLoadError(e)
                 setLoading(false)
             }
         })())
-    }, [])
+    }, [guiApi.settings])
     const handleSetConfig = async (newConfig: SettingsConfig) => {
         try {
             newConfig = flattenConfig(newConfig)

@@ -59,15 +59,17 @@ export const useDiagnostics = () => {
             }
         })
 
+    const {start, stop} = diagnosticsStream;
     useEffect(() => {
-        diagnosticsStream.start("/api/mowglinext/subscribe/diagnostics")
+        start("/api/mowglinext/subscribe/diagnostics")
         return () => {
-            diagnosticsStream.stop()
+            stop()
             if (throttleRef.current) {
                 clearTimeout(throttleRef.current);
+                throttleRef.current = null;
             }
         }
-    }, []);
+    }, [start, stop]);
 
     return {diagnostics, stop: diagnosticsStream.stop, start: diagnosticsStream.start};
 };

@@ -1,5 +1,5 @@
 import {useSectionFocus} from "../hooks/useSectionFocus.ts";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -1077,13 +1077,19 @@ const OnboardingWizard: React.FC = () => {
         }
     }, [savedValues]);
 
+    // Capture the committed draft only on step entry; edits within this step
+    // must not replace the comparison baseline used to decide a GPS restart.
+    const snapshotGpsOnEntry = useEffectEvent(() => {
+        const snap: SettingsValues = {};
+        for (const k of GPS_RESTART_KEYS) snap[k] = localValues[k];
+        gpsSnapshotRef.current = snap;
+    });
+
     // Snapshot GPS-affecting fields whenever the user enters the GPS step,
     // so we can compare on Next and decide whether to auto-restart mowgli-gps.
     useEffect(() => {
         if (currentStep === STEP_GPS) {
-            const snap: SettingsValues = {};
-            for (const k of GPS_RESTART_KEYS) snap[k] = localValues[k];
-            gpsSnapshotRef.current = snap;
+            snapshotGpsOnEntry();
         }
     }, [currentStep]);
 
@@ -1150,6 +1156,10 @@ const OnboardingWizard: React.FC = () => {
         setCurrentStep((s) => Math.min(s + 1, STEP_TITLES.length - 1));
     }, [currentStep, localValues, saveValues, guiApi, gpsRestart, notification, t]);
 
+    // Construct the async adapter only when invoked, never by inspecting the
+    // ref-bearing GPS transition callback during render.
+    const onNext = () => { voidify(handleNext)(); };
+
     const handlePrev = useCallback(() => {
         setCurrentStep((s) => Math.max(s - 1, 0));
     }, []);
@@ -1162,9 +1172,9 @@ const OnboardingWizard: React.FC = () => {
 
     const stepContent = (
         <div ref={stepRef} tabIndex={-1} role="region" aria-label={t(STEP_TITLES[currentStep])}>
-            {currentStep === 0 && <WelcomeStep onNext={voidify(handleNext)} />}
+            {currentStep === 0 && <WelcomeStep onNext={onNext} />}
             {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
-            {currentStep === 2 && <FirmwareStep onNext={voidify(handleNext)} autoFlash={autoFlash} mowerModel={localValues.mower_model} />}
+            {currentStep === 2 && <FirmwareStep onNext={onNext} autoFlash={autoFlash} mowerModel={localValues.mower_model} />}
             {currentStep === 3 && <NtripStep values={localValues} onChange={handleChange} />}
             {currentStep === 4 && (
                 <GpsStep
@@ -1206,7 +1216,7 @@ const OnboardingWizard: React.FC = () => {
                 <Button
                     type="primary"
                     icon={currentStep === STEP_DATUM ? <SaveOutlined /> : <ArrowRightOutlined />}
-                    onClick={voidify(handleNext)}
+                    onClick={onNext}
                     loading={saving || loading || gpsRestarting}
                 >
                     {gpsRestarting

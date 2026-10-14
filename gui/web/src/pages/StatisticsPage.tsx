@@ -101,7 +101,7 @@ export const StatisticsPage = () => {
       console.error('Failed to refresh mowing statistics', error);
     }
     finally { setLoading(false); }
-  }, []);
+  }, [guiApi]);
 
   const clearStats = useCallback(async () => {
     try {
@@ -111,7 +111,7 @@ export const StatisticsPage = () => {
     } catch {
       message.error(t('statisticsPage.failedToClearStatistics'));
     }
-  }, [fetchData, t]);
+  }, [fetchData, guiApi, t]);
 
   useEffect(() => {
     observeAsync(fetchData());

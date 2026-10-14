@@ -329,6 +329,23 @@ export function useMapStreams({
         }
     );
 
+    const {start: poseStart, stop: poseStop} = poseStream;
+    const {start: mapStart, stop: mapStop} = mapStream;
+    const {start: pathStart, stop: pathStop} = pathStream;
+    const {start: joyStart, stop: joyStop} = joyStream;
+    const {start: planStart, stop: planStop} = planStream;
+    const {start: lidarStart, stop: lidarStop} = lidarStream;
+    const {start: obstaclesStart, stop: obstaclesStop} = obstaclesStream;
+    const {start: recordingStart, stop: recordingStop} = recordingTrajectoryStream;
+    const {start: highLevelStart, stop: highLevelStop} = highLevelStatus;
+    const {start: progressStart, stop: progressStop} = mowProgress.stream;
+    const {start: lidarMapStart, stop: lidarMapStop} = lidarMap.stream;
+    const {cancel: cancelProgress} = mowProgress;
+    const {cancel: cancelLidarMap} = lidarMap;
+    const stateName = highLevelStatus.highLevelStatus.state_name;
+
+    const datumLongitude = settings["datum_lon"];
+    const datumLatitude = settings["datum_lat"];
     // Keep lidar layer on top of draw layers
     useEffect(() => {
         const m = mapInstanceRef.current;
@@ -338,7 +355,7 @@ export function useMapStreams({
                 m.moveLayer("lidar-points");
             }
         } catch { /* layer may not exist yet */ }
-    }, [lidarCollection]);
+    }, [lidarCollection, mapInstanceRef]);
 
     // Start/stop the view-mode streams. Triggered by EITHER editMap leaving
     // edit mode OR the datum becoming available — deliberately ONE effect,
@@ -357,54 +374,52 @@ export function useMapStreams({
     // see the removed effect's own comment for why that distinction matters.
     useEffect(() => {
         if (editMap) {
-            mapStream.stop();
-            poseStream.stop();
-            pathStream.stop();
-            planStream.stop();
-            lidarStream.stop();
+            mapStop();
+            poseStop();
+            pathStop();
+            planStop();
+            lidarStop();
             poseRender.cancel();
             lidarRender.cancel();
-            obstaclesStream.stop();
-            recordingTrajectoryStream.stop();
-            highLevelStatus.stop();
+            obstaclesStop();
+            recordingStop();
+            highLevelStop();
             setPath(undefined);
             setPlan(undefined);
             setLidarCollection({ type: "FeatureCollection", features: [] });
             return;
         }
         if (
-            settings["datum_lon"] == undefined ||
-            settings["datum_lat"] == undefined
+            datumLongitude == undefined ||
+            datumLatitude == undefined
         ) {
             return;
         }
-        highLevelStatus.start("/api/mowglinext/subscribe/highLevelStatus");
-        poseStream.start("/api/mowglinext/subscribe/pose");
-        mapStream.start("/api/mowglinext/subscribe/map");
-        pathStream.start("/api/mowglinext/subscribe/path");
-        planStream.start("/api/mowglinext/subscribe/plan");
-        lidarStream.start("/api/mowglinext/subscribe/lidar");
-        obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
-        mowProgress.stream.start("/api/mowglinext/subscribe/mowProgress");
-        lidarMap.stream.start("/api/mowglinext/subscribe/lidarMap");
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [editMap, settings["datum_lon"], settings["datum_lat"]]);
+        highLevelStart("/api/mowglinext/subscribe/highLevelStatus");
+        poseStart("/api/mowglinext/subscribe/pose");
+        mapStart("/api/mowglinext/subscribe/map");
+        pathStart("/api/mowglinext/subscribe/path");
+        planStart("/api/mowglinext/subscribe/plan");
+        lidarStart("/api/mowglinext/subscribe/lidar");
+        obstaclesStart("/api/mowglinext/subscribe/obstacles");
+        progressStart("/api/mowglinext/subscribe/mowProgress");
+        lidarMapStart("/api/mowglinext/subscribe/lidarMap");
+    }, [editMap, datumLongitude, datumLatitude, poseStart, mapStart, pathStart, joyStart, planStart, lidarStart, obstaclesStart, recordingStart, highLevelStart, progressStart, lidarMapStart, poseStop, mapStop, pathStop, joyStop, planStop, lidarStop, obstaclesStop, recordingStop, highLevelStop, progressStop, lidarMapStop, poseRender, lidarRender]);
 
     // Start joy + recording trajectory streams on RECORDING state
     useEffect(() => {
-        const stateName = highLevelStatus.highLevelStatus.state_name;
         if (stateName === "RECORDING") {
             clearTimeout(joyStopTimerRef.current);
             joyStopTimerRef.current = undefined;
-            joyStream.start("/api/mowglinext/publish/joy");
-            recordingTrajectoryStream.start("/api/mowglinext/subscribe/recordingTrajectory");
+            joyStart("/api/mowglinext/publish/joy");
+            recordingStart("/api/mowglinext/subscribe/recordingTrajectory");
             setEditMap(false);
             return;
         }
         if (stateName === "MANUAL_MOWING") {
             clearTimeout(joyStopTimerRef.current);
             joyStopTimerRef.current = undefined;
-            joyStream.start("/api/mowglinext/publish/joy");
+            joyStart("/api/mowglinext/publish/joy");
             return;
         }
         // Leaving a joy-eligible state: DEBOUNCE the joy teardown so a single
@@ -414,17 +429,17 @@ export function useMapStreams({
         if (joyStopTimerRef.current === undefined) {
             joyStopTimerRef.current = setTimeout(() => {
                 joyStopTimerRef.current = undefined;
-                joyStream.stop();
+                joyStop();
             }, 1200);
         }
-        recordingTrajectoryStream.stop();
+        recordingStop();
         // Clear trajectory feature when leaving recording mode
         setFeatures((oldFeatures) => {
             const newFeatures = { ...oldFeatures };
             delete newFeatures["recording-trajectory"];
             return newFeatures;
         });
-    }, [highLevelStatus.highLevelStatus.state_name]);
+    }, [stateName, joyStart, joyStop, recordingStart, recordingStop, setEditMap, setFeatures]);
 
     // Clear the joy-stop debounce on unmount so it can't fire after teardown.
     useEffect(() => {
@@ -434,23 +449,23 @@ export function useMapStreams({
     // Cleanup all streams on unmount
     useEffect(() => {
         return () => {
-            poseStream.stop();
-            mapStream.stop();
-            pathStream.stop();
-            joyStream.stop();
-            planStream.stop();
-            lidarStream.stop();
+            poseStop();
+            mapStop();
+            pathStop();
+            joyStop();
+            planStop();
+            lidarStop();
             poseRender.cancel();
             lidarRender.cancel();
-            obstaclesStream.stop();
-            mowProgress.stream.stop();
-            mowProgress.cancel();
-            lidarMap.stream.stop();
-            lidarMap.cancel();
-            recordingTrajectoryStream.stop();
-            highLevelStatus.stop();
+            obstaclesStop();
+            progressStop();
+            cancelProgress();
+            lidarMapStop();
+            cancelLidarMap();
+            recordingStop();
+            highLevelStop();
         };
-    }, []);
+    }, [poseStop, mapStop, pathStop, joyStop, planStop, lidarStop, obstaclesStop, recordingStop, highLevelStop, progressStop, lidarMapStop, poseRender, lidarRender, cancelProgress, cancelLidarMap]);
 
     return {
         map,

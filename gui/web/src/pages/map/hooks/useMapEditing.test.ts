@@ -10,7 +10,7 @@ interface DeleteDialog {
 }
 const {confirm} = vi.hoisted(() => ({confirm: vi.fn<(dialog: DeleteDialog) => void>()}));
 vi.mock('antd', () => ({App: {useApp: () => ({modal: {confirm}})}}));
-vi.mock('react-i18next', () => ({useTranslation: () => ({t: (key: string) => key})}));
+vi.mock('react-i18next', () => ({useTranslation: () => ({t: (key: string) => key, i18n: {language: 'en'}})}));
 
 describe('map delete confirmation', () => {
     beforeEach(() => confirm.mockClear());

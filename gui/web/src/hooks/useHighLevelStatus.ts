@@ -10,11 +10,12 @@ export const useHighLevelStatus = () => {
         (e) => {
             setHighLevelStatus((e as any))
         })
+    const {start, stop} = highLevelStatusStream;
     useEffect(() => {
-        highLevelStatusStream.start("/api/mowglinext/subscribe/highLevelStatus",)
+        start("/api/mowglinext/subscribe/highLevelStatus",)
         return () => {
-            highLevelStatusStream.stop()
+            stop()
         }
-    }, []);
+    }, [start, stop]);
     return {highLevelStatus, stop: highLevelStatusStream.stop, start: highLevelStatusStream.start};
 }

@@ -64,7 +64,7 @@ export const useCalibrationStatus = () => {
         } catch (e) {
             setError(e instanceof Error ? e.message : "Failed to fetch calibration status");
         }
-    }, []);
+    }, [guiApi]);
 
     useEffect(() => {
         observeAsync(refresh());

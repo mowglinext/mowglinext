@@ -476,7 +476,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             );
         }
         return lines;
-    }, [cx, cy, SCALE, mode, toSvg]);
+    }, [cx, cy, mode, toSvg]);
 
     const robotBody = liveRobot.fromUrdf ? <g transform={`translate(${cx} ${cy}) scale(${SCALE})`}>
         <g opacity={setupDockOpacity(transparent)} pointerEvents="none"><DockGraphic geometry={dockGeometry} style={dockStyle}/></g>

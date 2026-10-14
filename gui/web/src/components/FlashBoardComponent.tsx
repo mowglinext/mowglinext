@@ -1,5 +1,5 @@
 import {Alert, App, Button, Col, Collapse, Row, Typography} from "antd";
-import {useEffect, useMemo, useRef, useState} from "react";
+import {useEffect, useEffectEvent, useMemo, useRef, useState} from "react";
 import {fetchEventSource} from "@microsoft/fetch-event-source";
 import {createSchemaField} from "@formily/react";
 import {
@@ -166,6 +166,10 @@ export const FlashBoardComponent = (props: {
         mowerModelRef.current = props.mowerModel;
     }, [props.mowerModel]);
 
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('flashBoard.errorRetrievingConfig'), description: String(error)});
+    });
+
     useEffect(() => {
         let disposed = false;
         void (async () => {
@@ -237,10 +241,7 @@ export const FlashBoardComponent = (props: {
                 }
                 initializedModelRef.current = true;
             } catch (e) {
-                notification.error({
-                    message: t('flashBoard.errorRetrievingConfig'),
-                    description: String(e),
-                });
+                reportLoadError(e);
             }
         })()
         return () => {
@@ -249,7 +250,7 @@ export const FlashBoardComponent = (props: {
                 abortControllerRef.current.abort();
             }
         };
-    }, []);
+    }, [form, guiApi.config, guiApi.settings]);
 
     // The onboarding wizard keeps the selected mower model in local state. If
     // it changes while this step is mounted, update only fields still following

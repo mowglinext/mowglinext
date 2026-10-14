@@ -191,3 +191,5 @@ behavior. These checks can be performed without actuation. Physical acceptance
 is outside this frontend cleanup and is not claimed by these results.
 
 No commit, push, merge, deployment or pull request was created.
+
+Follow-up investigation: [React hooks lifecycle and stability](react-hooks-lifecycle-safety.md).

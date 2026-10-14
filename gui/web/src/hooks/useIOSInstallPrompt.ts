@@ -1,4 +1,4 @@
-import {useState, useEffect} from "react";
+import {useState} from "react";
 
 function isIOSSafari(): boolean {
     if (typeof navigator === "undefined") return false;
@@ -19,15 +19,10 @@ function isStandalone(): boolean {
 const DISMISSED_KEY = "pwa-install-dismissed";
 
 export function useIOSInstallPrompt() {
-    const [showPrompt, setShowPrompt] = useState(false);
-
-    useEffect(() => {
-        if (!isIOSSafari() || isStandalone()) return;
-        const dismissed = sessionStorage.getItem(DISMISSED_KEY);
-        if (!dismissed) {
-            setShowPrompt(true);
-        }
-    }, []);
+    const [showPrompt, setShowPrompt] = useState(() => {
+        if (!isIOSSafari() || isStandalone()) return false;
+        return !sessionStorage.getItem(DISMISSED_KEY);
+    });
 
     const dismiss = () => {
         setShowPrompt(false);

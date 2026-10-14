@@ -1,7 +1,8 @@
+import {errorMessage} from "../utils/errors";
 import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
-import {useEffect, useState} from "react";
+import {useEffect, useEffectEvent, useState} from "react";
 import {useTranslation} from "react-i18next";
 
 export const useEnv = () => {
@@ -9,6 +10,10 @@ export const useEnv = () => {
     const {notification} = App.useApp();
     const {t} = useTranslation();
     const [env, setEnv] = useState<Record<string, any>>({})
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('hookNotifications.failedToLoadConfig'), description: errorMessage(error)});
+    });
+
     useEffect(() => {
         observeAsync((async () => {
             try {
@@ -18,12 +23,9 @@ export const useEnv = () => {
                 }
                 setEnv(envs.data)
             } catch (e: any) {
-                notification.error({
-                    message: t('hookNotifications.failedToLoadConfig'),
-                    description: e.message,
-                })
+                reportLoadError(e)
             }
         })())
-    }, [])
+    }, [guiApi.config])
     return env
 }

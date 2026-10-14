@@ -54,13 +54,15 @@ export const useBTLog = () => {
             }
         });
 
+    const {start, stop} = stream;
     useEffect(() => {
-        stream.start("/api/mowglinext/subscribe/btLog");
+        start("/api/mowglinext/subscribe/btLog");
         return () => {
-            stream.stop();
+            stop();
             if (throttleRef.current) clearTimeout(throttleRef.current);
+            throttleRef.current = null;
         };
-    }, []);
+    }, [start, stop]);
 
     return nodeStates;
 };

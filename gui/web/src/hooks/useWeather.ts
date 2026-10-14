@@ -29,7 +29,7 @@ export function useWeather(pollMs = 10 * 60 * 1000): Weather | null {
       // Retain the last good weather; expose transport failures in diagnostics.
       console.error('Failed to refresh weather', error);
     }
-  }, []);
+  }, [guiApi]);
 
   useEffect(() => {
     observeAsync(fetchWeather());

@@ -542,6 +542,55 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         }
     }, [curMowingAreaFeature, features, datum, offsetX, offsetY, guiApi, notification, t, updateMowingArea]);
 
+    const buildFeatures = useCallback((areas: MapArea[], type: string, fromLiveMap = false) : Record<string, MowingFeatureBase> => {
+
+
+        return areas?.flatMap((area, index) : MowingFeatureBase[] => {
+            if (!area.area?.points?.length) {
+                return []
+            }
+
+            const nfeat = type=="area" ? new MowingAreaFeature(type + "-" + index.toString() + "-area-0", index+1)
+                : new NavigationFeature(type + "-" + index.toString() + "-area-0");//, offsetX, offsetY, datum.
+            nfeat.setArea(area, offsetX, offsetY, datum);
+            // Preserve source identity separately from editable mowing order.
+            // Restored/imported maps cannot target live ROS areas until saved.
+            // source_working_area_id (mowglinext#637) is the STABLE identity;
+            // source_working_area_index is only the array position at build
+            // time and can point at a different area by the time it is
+            // re-resolved (the area list is rebuilt wholesale on any edit
+            // save) — prefer the id via mowingAreaIndexById where the value
+            // outlives this render (e.g. a later button click).
+            if (fromLiveMap) {
+                nfeat.properties.source_working_area_index = index;
+                nfeat.properties.source_working_area_id = area.id;
+            }
+
+            let obstacles:  ObstacleFeature[] = [];
+
+            if ((nfeat instanceof MowingAreaFeature) && (area.obstacles))
+                obstacles = area.obstacles.map((obstacle, oindex) => {
+                const nobst =  new ObstacleFeature(
+                    type + "-" + index.toString() + "-obstacle-" + oindex.toString(),
+                    nfeat
+                );
+
+                if (obstacle.points)
+                    nobst.transpose(obstacle.points, offsetX, offsetY, datum);
+
+                return nobst;
+
+            })
+            return [nfeat, ...obstacles ]
+        }).reduce((acc, val) :Record<string, MowingFeatureBase> => {
+            if (val.id == undefined) {
+                return acc
+            }
+            acc[val.id] = val;
+            return acc;
+        }, {} as Record<string, MowingFeatureBase>);
+    }, [offsetX, offsetY, datum]);
+
     useEffect(() => {
         // Don't rebuild features from stream data while in edit mode —
         // path/plan becoming undefined when streams stop would wipe user edits.
@@ -601,7 +650,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 Object.entries(old).filter(([k]) => k === "mower" || k.startsWith("mower-"))
             ),
         }))
-    }, [map, path, plan, offsetX, offsetY, datum, editMap, LAYER_COLORS]);
+    }, [map, path, plan, offsetX, offsetY, datum, editMap, LAYER_COLORS, buildFeatures]);
 
     useEffect(() => {
         const labels = buildLabels(Object.values(features))
@@ -619,7 +668,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 feat: feat
             }]
         }))
-    }, [features]);
+    }, [features, buildLabels]);
 
     // For each tracked obstacle (transient /obstacle_tracker/obstacles
     // observation), figure out which mowing area's polygon contains its
@@ -771,7 +820,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 const mowingOrder = f instanceof MowingAreaFeature ? f.getMowingOrder() : undefined;
                 return { id: f.id, name, ftype, areaLabel, mowingOrder };
             });
-    }, [features, t]);
+    }, [features, t, i18n.language]);
 
     const handleReorder = useCallback((id: string, direction: 'up' | 'down') => {
         setFeatures((curr) => {
@@ -790,55 +839,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             return next;
         });
     }, []);
-
-    function buildFeatures(areas: MapArea[], type: string, fromLiveMap = false) : Record<string, MowingFeatureBase> {
-
-
-        return areas?.flatMap((area, index) : MowingFeatureBase[] => {
-            if (!area.area?.points?.length) {
-                return []
-            }
-
-            const nfeat = type=="area" ? new MowingAreaFeature(type + "-" + index.toString() + "-area-0", index+1)
-                : new NavigationFeature(type + "-" + index.toString() + "-area-0");//, offsetX, offsetY, datum.
-            nfeat.setArea(area, offsetX, offsetY, datum);
-            // Preserve source identity separately from editable mowing order.
-            // Restored/imported maps cannot target live ROS areas until saved.
-            // source_working_area_id (mowglinext#637) is the STABLE identity;
-            // source_working_area_index is only the array position at build
-            // time and can point at a different area by the time it is
-            // re-resolved (the area list is rebuilt wholesale on any edit
-            // save) — prefer the id via mowingAreaIndexById where the value
-            // outlives this render (e.g. a later button click).
-            if (fromLiveMap) {
-                nfeat.properties.source_working_area_index = index;
-                nfeat.properties.source_working_area_id = area.id;
-            }
-
-            let obstacles:  ObstacleFeature[] = [];
-
-            if ((nfeat instanceof MowingAreaFeature) && (area.obstacles))
-                obstacles = area.obstacles.map((obstacle, oindex) => {
-                const nobst =  new ObstacleFeature(
-                    type + "-" + index.toString() + "-obstacle-" + oindex.toString(),
-                    nfeat
-                );
-                
-                if (obstacle.points)
-                    nobst.transpose(obstacle.points, offsetX, offsetY, datum);
-
-                return nobst;
-
-            })
-            return [nfeat, ...obstacles ]
-        }).reduce((acc, val) :Record<string, MowingFeatureBase> => {
-            if (val.id == undefined) {
-                return acc
-            }
-            acc[val.id] = val;
-            return acc;
-        }, {} as Record<string, MowingFeatureBase>);
-    }
 
     // Build the full editable feature set (areas, obstacles and dock) from a
     // Map message. The stream-driven effect above does the same thing but is

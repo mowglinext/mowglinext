@@ -64,7 +64,7 @@ export const useDiagnosticsSnapshot = () => {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [guiApi]);
 
     useEffect(() => {
         observeAsync(refresh());

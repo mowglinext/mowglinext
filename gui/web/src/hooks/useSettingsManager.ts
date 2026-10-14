@@ -1,6 +1,6 @@
 import {DOCK_VISUAL_KEYS} from "../components/robot/dockGeometry";
 import {materializeLegacyCasterPosition} from "../utils/casterPosition";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "./useApi.ts";
 import { App } from "antd";
@@ -338,6 +338,32 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
 ];
 
 
+const HIDDEN_FROM_ADVANCED = new Set([
+    "dock_pose_x",
+    "dock_pose_y",
+    "slam_mode",
+    "map_save_on_dock",
+    "map_save_path",
+    "gps_antenna_x",
+    "gps_antenna_y",
+    "gps_antenna_z",
+    "automatic_mode",
+    // Retired in issue #195: removed from the ROS2 template AND the GUI
+    // schema because no node ever read them. Belt-and-braces for a robot
+    // whose installed yaml still carries them between the schema removal
+    // and the retired-key scrub that runs on the next Settings save
+    // (gui/pkg/api/settings.go retiredParamKeys) — same rationale as
+    // slam_mode / map_save_on_dock above: dead config that would silently
+    // mislead anyone who edits it.
+    "outline_passes",
+    "outline_offset",
+    "outline_overlap",
+    "mow_angle_offset_deg",
+    "mow_angle_increment_deg",
+    "motor_temp_high_c",
+    "motor_temp_low_c",
+]);
+
 export const useSettingsManager = () => {
     const { t } = useTranslation();
     const guiApi = useApi();
@@ -377,6 +403,10 @@ export const useSettingsManager = () => {
 
 
     // Load values on mount
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('settingsSections.toasts.loadFailed'), description: errorMessage(error)});
+    });
+
     useEffect(() => {
         void (async () => {
             try {
@@ -388,15 +418,12 @@ export const useSettingsManager = () => {
                 setLocalValues(data);
                 initialLoadDone.current = true;
             } catch (e) {
-                notification.error({
-                    message: t("settingsSections.toasts.loadFailed"),
-                    description: errorMessage(e),
-                });
+                reportLoadError(e);
             } finally {
                 setLoading(false);
             }
         })();
-    }, []);
+    }, [guiApi.settings]);
 
     // The reset value follows the draft preset, including before Save.
     // Discard responses from an earlier selection to avoid stale defaults.
@@ -713,7 +740,6 @@ export const useSettingsManager = () => {
         gpsRestart,
         t,
         hardware.parameterRoutes,
-        hardware.backend,
     ]);
 
 
@@ -811,31 +837,6 @@ export const useSettingsManager = () => {
     // we read/write the new names and hide the old ones so operators don't
     // edit a key that has no consumer. automatic_mode is OpenMower legacy
     // only consumed by the migration script, not by ROS2 itself.
-    const HIDDEN_FROM_ADVANCED = new Set([
-        "dock_pose_x",
-        "dock_pose_y",
-        "slam_mode",
-        "map_save_on_dock",
-        "map_save_path",
-        "gps_antenna_x",
-        "gps_antenna_y",
-        "gps_antenna_z",
-        "automatic_mode",
-        // Retired in issue #195: removed from the ROS2 template AND the GUI
-        // schema because no node ever read them. Belt-and-braces for a robot
-        // whose installed yaml still carries them between the schema removal
-        // and the retired-key scrub that runs on the next Settings save
-        // (gui/pkg/api/settings.go retiredParamKeys) — same rationale as
-        // slam_mode / map_save_on_dock above: dead config that would silently
-        // mislead anyone who edits it.
-        "outline_passes",
-        "outline_offset",
-        "outline_overlap",
-        "mow_angle_offset_deg",
-        "mow_angle_increment_deg",
-        "motor_temp_high_c",
-        "motor_temp_low_c",
-    ]);
     const advancedKeys = useMemo(() => {
         const knownKeys = new Set(
             SECTION_DEFINITIONS.filter((s) => s.id !== "advanced").flatMap((s) => s.keys)

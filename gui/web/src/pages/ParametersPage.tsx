@@ -202,7 +202,7 @@ export const ParametersPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [guiApi, t]);
 
   useEffect(() => { observeAsync(fetchParams()); }, [fetchParams]);
 
@@ -219,7 +219,7 @@ export const ParametersPage = () => {
       notification.error({message: t("parametersPage.updateFailure", {name})});
       throw new Error("commit failed");
     }
-  }, [notification, t]);
+  }, [guiApi, notification, t]);
 
   // Filter by the selected profile (cumulative) and the search box, then group.
   const groups = useMemo(() => {

@@ -1,7 +1,7 @@
 import {errorMessage} from "../../utils/errors";
 import {observeAsync} from "../../utils/async";
 import {useAsyncHandler} from "../../hooks/useAsyncHandler";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     Alert,
     App,
@@ -151,9 +151,9 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
 
     const feedForwardSummary = tuningStatus?.feed_forward;
     const pidSummary = tuningStatus?.pid;
-    const translateBackendMessage = (message?: string | null) => (
+    const translateBackendMessage = useCallback((message?: string | null) => (
         translateDriveTuningBackendMessage(t, message) ?? message ?? undefined
-    );
+    ), [t]);
     const formatBackendError = (error: any) => (
         translateDriveTuningBackendMessage(t, error?.error?.error ?? error?.message)
         ?? error?.error?.error
@@ -242,7 +242,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             );
         }
         return alerts;
-    }, [isEmergencyActive, onDock, t, tuningError]);
+    }, [isEmergencyActive, onDock, t, tuningError, translateBackendMessage]);
 
     const openLatestReport = async () => {
         try {

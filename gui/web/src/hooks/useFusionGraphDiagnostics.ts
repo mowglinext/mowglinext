@@ -76,10 +76,11 @@ export const useFusionGraphDiagnostics = () => {
         },
     );
 
+    const {start, stop} = stream;
     useEffect(() => {
-        stream.start("/api/mowglinext/subscribe/fusionDiag");
-        return () => stream.stop();
-    }, []);
+        start("/api/mowglinext/subscribe/fusionDiag");
+        return () => stop();
+    }, [start, stop]);
 
     return {stats};
 };

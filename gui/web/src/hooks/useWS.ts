@@ -1,5 +1,5 @@
 import reactUseWebSocketModule from "react-use-websocket";
-import {useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {createUtf8StreamDecoder} from "../utils/utf8Stream.ts";
 import {wsBase} from "../utils/apiHost";
 import {
@@ -43,11 +43,15 @@ export const useWS = <T>(
 ) => {
     // Refs to always invoke the latest callbacks, avoiding stale closures.
     const onDataRef = useRef(onData);
-    onDataRef.current = onData;
     const onErrorRef = useRef(onError);
-    onErrorRef.current = onError;
     const onInfoRef = useRef(onInfo);
-    onInfoRef.current = onInfo;
+
+    // Publish only committed callbacks before consumers' passive subscriptions run.
+    useLayoutEffect(() => {
+        onDataRef.current = onData;
+        onErrorRef.current = onError;
+        onInfoRef.current = onInfo;
+    }, [onData, onError, onInfo]);
 
     // Active multiplex unsubscribe + status-listener unregister (set when
     // start() targets a subscribe URI).
@@ -95,7 +99,7 @@ export const useWS = <T>(
         },
     });
 
-    const teardown = () => {
+    const teardown = useCallback(() => {
         // Removing the final topic closes the shared socket synchronously.
         // Intentional teardown must not report that close as a stream error.
         if (muxStatusUnsubRef.current) {
@@ -111,9 +115,9 @@ export const useWS = <T>(
             setPubUri(null);
             pubFirstRef.current = false;
         }
-    };
+    }, []);
 
-    const start = (uri: string) => {
+    const start = useCallback((uri: string) => {
         teardown();
 
         if (isMultiplexableSubscribeUri(uri)) {
@@ -150,11 +154,9 @@ export const useWS = <T>(
         pubDecodeWarnedRef.current = false;
         pubUriRef.current = `${wsBase()}${uri}`;
         setPubUri(pubUriRef.current);
-    };
+    }, [teardown]);
 
-    const stop = () => {
-        teardown();
-    };
-
-    return {start, stop, sendJsonMessage: ws.sendJsonMessage};
+    const stop = teardown;
+    const sendJsonMessage = ws.sendJsonMessage;
+    return useMemo(() => ({start, stop, sendJsonMessage}), [start, stop, sendJsonMessage]);
 };

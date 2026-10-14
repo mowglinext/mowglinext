@@ -2,7 +2,7 @@ import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import type {ControlPosition} from 'mapbox-gl';
 import {useControl} from 'react-map-gl/mapbox';
 import type {MapRef} from 'react-map-gl/mapbox';
-import {useEffect, useRef} from "react";
+import {useEffect, useLayoutEffect, useRef} from "react";
 import type {RefObject} from "react";
 import DirectSelectWithBoxMode from '../modes/DirectSelectWithBoxMode';
 import SplitLineMode from '../modes/SplitLineMode';
@@ -34,23 +34,28 @@ export default function DrawControl(props: DrawControlProps) {
     } = props;
     const rawMapRef = useRef<ReturnType<MapRef['getMap']> | null>(null);
     const editModeRef = useRef(editMode);
-    editModeRef.current = editMode;
 
     // Use refs for all callbacks so event listeners always call the latest version.
     // useControl only binds listeners once during setup — without refs, stale closures
     // would be called when the callbacks change (e.g. when splitTargetId updates).
     const onCreateRef = useRef(onCreate);
-    onCreateRef.current = onCreate;
     const onUpdateRef = useRef(onUpdate);
-    onUpdateRef.current = onUpdate;
     const onCombineRef = useRef(onCombine);
-    onCombineRef.current = onCombine;
     const onDeleteRef = useRef(onDelete);
-    onDeleteRef.current = onDelete;
     const onSelectionChangeRef = useRef(onSelectionChange);
-    onSelectionChangeRef.current = onSelectionChange;
     const onOpenDetailsRef = useRef(onOpenDetails);
-    onOpenDetailsRef.current = onOpenDetails;
+
+    // Do not expose callbacks from an uncommitted render to Mapbox listeners.
+    // Layout effects run before useControl's passive listener registration.
+    useLayoutEffect(() => {
+        editModeRef.current = editMode;
+        onCreateRef.current = onCreate;
+        onUpdateRef.current = onUpdate;
+        onCombineRef.current = onCombine;
+        onDeleteRef.current = onDelete;
+        onSelectionChangeRef.current = onSelectionChange;
+        onOpenDetailsRef.current = onOpenDetails;
+    }, [editMode, onCreate, onUpdate, onCombine, onDelete, onSelectionChange, onOpenDetails]);
 
     // Keep stable references to the bound listeners so cleanup can map.off()
     // exactly what was map.on()'d. Without this, StrictMode's mount/unmount/
@@ -150,17 +155,21 @@ export default function DrawControl(props: DrawControlProps) {
         const rawMap = rawMapRef.current;
         if (!rawMap) return;
 
+        const pending = new Set<ReturnType<typeof setTimeout>>();
         const blockSelection = () => {
             if (!editModeRef.current) {
                 // Use setTimeout to avoid re-entrant mode changes during event dispatch
-                setTimeout(() => {
+                const timer = setTimeout(() => {
+                    pending.delete(timer);
                     mp.changeMode('simple_select', { featureIds: [] });
                 }, 0);
+                pending.add(timer);
             }
         };
         rawMap.on('draw.selectionchange', blockSelection);
         return () => {
             rawMap.off('draw.selectionchange', blockSelection);
+            pending.forEach(clearTimeout);
         };
     }, [mp]);
     return null;

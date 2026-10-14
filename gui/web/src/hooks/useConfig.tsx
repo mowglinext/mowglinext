@@ -1,7 +1,8 @@
+import {errorMessage} from "../utils/errors";
 import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
-import {useEffect, useState} from "react";
+import {useEffect, useEffectEvent, useState} from "react";
 import {useTranslation} from "react-i18next";
 
 export const useConfig = (keys: string[]) => {
@@ -26,25 +27,25 @@ export const useConfig = (keys: string[]) => {
             })
         }
     }
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('hookNotifications.failedToLoadConfig'), description: errorMessage(error)});
+    });
+
+    // Both consumers declare a fixed mount-time key set (one passes a fresh
+    // literal each render). Keep it as initialization input, not a refetch trigger.
+    const [requestedKeys] = useState(() => Object.fromEntries(keys.map(key => [key, ""])));
     useEffect(() => {
         observeAsync((async () => {
             try {
-                const keysMap: Record<string, any> = {}
-                keys.forEach((key) => {
-                    keysMap[key] = ""
-                })
-                const offsetConfig = await guiApi.config.keysGetCreate(keysMap)
+                const offsetConfig = await guiApi.config.keysGetCreate(requestedKeys)
                 if (offsetConfig.error) {
                     throw new Error(offsetConfig.error.error ?? "")
                 }
                 setConfig(offsetConfig.data)
             } catch (e: any) {
-                notification.error({
-                    message: t('hookNotifications.failedToLoadConfig'),
-                    description: e.message,
-                })
+                reportLoadError(e)
             }
         })())
-    }, [])
+    }, [guiApi.config, requestedKeys])
     return {config, setConfig: handleSetConfig}
 }

@@ -1,7 +1,7 @@
 import {observeAsync} from "../utils/async";
 import { useApi } from "./useApi.ts";
 import { App } from "antd";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {apiErrorMessage, errorMessage} from "../utils/errors";
 import type {SettingsValues} from "../types/settings.generated";
@@ -54,6 +54,10 @@ export const useSettingsSchema = () => {
     const [loading, setLoading] = useState(false);
     const [restartRequired, setRestartRequired] = useState(false);
 
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('settingsSchema.loadFailed'), description: errorMessage(error)});
+    });
+
     useEffect(() => {
         observeAsync((async () => {
             try {
@@ -70,15 +74,12 @@ export const useSettingsSchema = () => {
                     setValues((valuesRes.data) || {});
                 }
             } catch (e) {
-                notification.error({
-                    message: t("settingsSchema.loadFailed"),
-                    description: errorMessage(e),
-                });
+                reportLoadError(e);
             } finally {
                 setLoading(false);
             }
         })());
-    }, []);
+    }, [guiApi.settings]);
 
     const saveValues = useCallback(
         async (newValues: SettingsValues) => {

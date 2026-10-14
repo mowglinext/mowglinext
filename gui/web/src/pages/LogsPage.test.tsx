@@ -9,10 +9,11 @@ import {TimeFormatProvider} from "../hooks/useTimeFormat.tsx";
 type StreamHandler = (data: string, first?: boolean) => void;
 let pushLine: StreamHandler = () => { /* replaced on render */ };
 
+const streamMethods = vi.hoisted(() => ({start: vi.fn(), stop: vi.fn()}));
 vi.mock("../hooks/useWS.ts", () => ({
     useWS: (_onError: unknown, _onInfo: unknown, onData: StreamHandler) => {
         pushLine = onData;
-        return {start: vi.fn(), stop: vi.fn()};
+        return streamMethods;
     },
 }));
 

@@ -72,12 +72,13 @@ export const useRobotDescription = (): RobotGeometry => {
         }
     );
 
+    const {start, stop} = stream;
     useEffect(() => {
-        stream.start("/api/mowglinext/subscribe/robotDescription");
+        start("/api/mowglinext/subscribe/robotDescription");
         return () => {
-            stream.stop();
+            stop();
         };
-    }, []);
+    }, [start, stop]);
 
     return geometry;
 };

@@ -24,12 +24,13 @@ export const useGnssStatus = () => {
             }
         }
     });
+    const {start, stop} = gnssStatusStream;
     useEffect(() => {
-        gnssStatusStream.start("/api/mowglinext/subscribe/gnssStatus");
+        start("/api/mowglinext/subscribe/gnssStatus");
         return () => {
-            gnssStatusStream.stop();
+            stop();
         };
-    }, []);
+    }, [start, stop]);
 
     const diagnosticFallback = useMemo(
         () => deriveGnssStatusFromDiagnostics(diagnostics),
