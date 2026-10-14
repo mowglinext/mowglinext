@@ -38,6 +38,9 @@ stack-wide autonomous-motion invariant or physical containment.
 
 ### Rebased software checks (2026-10-14)
 
+The following table records ROS source baseline `daa6b402`. The later
+recovery-acquisition increment has separate results below.
+
 Fresh UID1000 Release builds against the new interfaces install compile and
 install controllers, map, behavior and coverage. An independent integration
 review found no concrete source blocker. Two new corner controls preserve
@@ -150,12 +153,81 @@ undock 11.8 s, planning 40.8 s, mowing 2275.7 s, dock/charging 42.3 s; total
 wholly skipped paths and 371.3 m. Nearest-path tracking over 54,220 samples is
 median 3.9 mm, P95 45.2 mm and maximum 80 mm. The full stack records 16 pivots,
 no FTC authorization denial and no resume-cursor or unmowed-span accounting
-message in this run. This observed uninterrupted GPS-only pass is a positive
-functionality control; it does not establish physical blade coverage, blind
+message in this run. Four obstacle-recovery waits resume within the active
+action. The goal checker accepts index 9740/9756 with 0.480 m remaining and
+0.493 m endpoint error; those path-tail measurements are not a measured unmowed
+area. This observed GPS-only pass is a positive functionality control; it does not establish physical blade coverage, blind
 obstacle detection or continuous containment. The raw recorder ends with
 305,978 message receipts, cap/timeout false and ready true; offline decoding
-is separately recorded. Later documentation commits do not change the running
+passes with matching terminal/topic counts. Receipt metadata does not prove
+ownership, acquisition freshness or lossless delivery. Later documentation
+commits do not change the running
 ROS baseline `daa6b402` used for this completed mission.
+
+LiDAR repeat attempt28-06-01, on the same ROS source baseline `daa6b402`,
+reports **FAIL**, with authoritative outer exit 1 and no outer timeout. Readiness,
+scan/Collision Monitor, signed catcher, datum and pre-START recorder gates pass.
+Undock 11.4 s, planning 39.3 s and fallback dock/charging 41.1 s pass, but mowing
+fails after 2464.2 s: 0/1 completed paths, zero wholly skipped; total 2570 s and
+378.8 m. Median tracking error is 7.2 mm, P95 61.8 mm over 58,260 samples.
+The final persisted cursor is 9738/9757. Four AREA_UNREACHABLE transitions lead
+to COVERAGE_FAILED_DOCKING. The earlier LiDAR cycle PASS is therefore not stable
+whole-mission acceptance. Its original missing outer exit remains unknown.
+
+The terminal chain is a genuine FTC forward chassis/response-sweep lethal-cell
+abort followed by a blade-off detour whose target the transit planner rejects
+as GOAL_OCCUPIED. The last displayed suffix spans 0.539567 m; it cannot satisfy
+the existing 2 m blocked-stretch skip or 0.60 m remembered-failure exclusion.
+No safe alternative is established, so those policies and the authorizer remain
+unchanged. Source-world ideal geometry is not a substitute for captured costmaps.
+
+Independent review confirms a separate production recovery defect: FollowStrip
+only consumes full global OccupancyGrid messages while the configured publisher
+normally sends deltas after initial/geometry-change publication. Its cached grid
+can therefore miss added or cleared obstacles. The observed stale-clear detour
+is consistent with this defect, but exact causality for the last suffix is not
+proved because raw costmaps were not recorded. The request-scoped GetCostmap
+repair is implemented at `042329de`; no repaired mission result is claimed.
+The failed repeat's 326,763 decoded CDR receipts have consistent terminal counts;
+ownership, acquisition freshness, lossless delivery and continuous containment
+remain unestablished.
+
+### Recovery acquisition increment (`042329de`)
+
+FollowStrip now requests a new full global GetCostmap response for each detour
+decision. Pending acquisition preserves the failed action episode with the
+blade off; a three-second steady-clock bound covers discovery and reply.
+Halt, restart, fleet yield and unit changes remove the pending request, so a
+late response cannot dispatch a replacement goal. Missing or malformed data
+retains reached progress and leaves the unit incomplete instead of inventing a
+clear path or advancing the non-obstacle cursor. Valid current data uses the
+existing detour distance, clearance, attempt and blade-off transit policies.
+No new velocity publisher or geometry-permission bypass is introduced.
+
+The same public action/service regression fails on matching old production
+source and headers: the retained-clear grid selects target X 0.8 m despite the
+current obstacle; the required target is at least 1.5 m. The repaired production
+path passes. Eighteen new cases cover add/remove, valid continuation, invalid
+metadata, missing/delayed responses, halt/restart/fleet ownership, scan restoration
+and exact reciprocal rounding at the cell-index limit. An independent strong
+review found that rounding defect; it was corrected and its public-path test
+passes. Existing near-end and rejoin controls retain their assertions and now
+provide the real fresh-map service used in production.
+
+Fresh UID1000 behavior results are **600/600 GTests**, zero disabled/error cases,
+and **55/56 mounted CTest targets**. The sole mounted failure is the unchanged
+120-second cpplint I/O timeout. Its registered check passes in 4.79 s on all
+109 byte-identical package files with the exact ancestor CPPLINT.cfg; the
+registered copyright check also passes. Earlier fixture/license diagnostics
+remain recorded. Clang-format18 whole-file and changed-line checks pass, and
+the new behavior install matches source headers with no missing ELF dependency.
+The prior runtime prefixes for other packages are unchanged.
+
+This repair establishes request ownership and validated response data. The
+upstream service response is not an atomic costmap-generation certificate, an
+execution permission, or a physical observation-freshness guarantee. Planner,
+FTC, collision and firmware guards remain necessary. A new mission on this
+source is pending; the completed missions above retain baseline `daa6b402`.
 
 No paired unmodified-dev run, repeated reliability, connected multi-area
 coverage, hole/revocation mission, non-default docking, explicit HOME,
