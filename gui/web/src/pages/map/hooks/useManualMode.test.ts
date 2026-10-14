@@ -4,13 +4,15 @@ import {useManualMode} from './useManualMode.ts';
 
 describe('useManualMode', () => {
     let mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
-    let sendJsonMessage: (msg: unknown) => void;
-    let startStream: (uri: string) => void;
+    let sendCommand: (msg: any) => void;
+    let requestControl: () => void;
+    let releaseControl: () => void;
 
     beforeEach(() => {
         mowerAction = vi.fn(() => vi.fn().mockResolvedValue(undefined));
-        sendJsonMessage = vi.fn();
-        startStream = vi.fn();
+        sendCommand = vi.fn();
+        requestControl = vi.fn();
+        releaseControl = vi.fn();
         vi.useFakeTimers();
     });
 
@@ -22,7 +24,7 @@ describe('useManualMode', () => {
         return renderHook(() =>
             useManualMode({
                 mowerAction,
-                joyStream: {sendJsonMessage, start: startStream},
+                joyStream: {sendCommand, requestControl, releaseControl, isOwner: true},
             })
         );
     }
@@ -39,7 +41,28 @@ describe('useManualMode', () => {
         });
         expect(mowerAction).toHaveBeenCalledTimes(1);
         expect(mowerAction).toHaveBeenCalledWith('high_level_control', {Command: 7});
+        expect(requestControl).toHaveBeenCalledTimes(1);
         expect(result.current.manualMode).toBe(true);
+    });
+
+    it('requests teleop control only after the manual-mode request succeeds', async () => {
+        let completeAction!: () => void;
+        mowerAction = vi.fn(() => () => new Promise<void>((resolve) => {
+            completeAction = resolve;
+        }));
+        const {result} = renderManualMode();
+
+        let pending!: Promise<void>;
+        act(() => {
+            pending = result.current.handleManualMode();
+        });
+        expect(requestControl).not.toHaveBeenCalled();
+
+        await act(async () => {
+            completeAction();
+            await pending;
+        });
+        expect(requestControl).toHaveBeenCalledTimes(1);
     });
 
     it('stops in place, disables the blade, and deactivates manual mode', async () => {
@@ -63,7 +86,7 @@ describe('useManualMode', () => {
         const {result, rerender} = renderHook(
             ({stateName}: {stateName: string | undefined}) => useManualMode({
                 mowerAction,
-                joyStream: {sendJsonMessage, start: startStream},
+                joyStream: {sendCommand, requestControl, releaseControl, isOwner: true},
                 stateName,
             }),
             {initialProps: {stateName: 'MANUAL_MOWING'}},
@@ -84,7 +107,7 @@ describe('useManualMode', () => {
             result.current.handleJoyMove({x: 0.5, y: 0.8} as any);
         });
         // Raw joystick: x=0.5, y=0.8 → scaled to linear=0.8*0.25=0.2, angular=-0.5*0.6=-0.3
-        expect(sendJsonMessage).toHaveBeenCalledWith({
+        expect(sendCommand).toHaveBeenCalledWith({
             header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
             twist: {linear: {x: 0.2, y: 0, z: 0}, angular: {z: -0.3, x: 0, y: 0}},
         });
@@ -95,7 +118,7 @@ describe('useManualMode', () => {
         act(() => {
             result.current.handleJoyStop();
         });
-        expect(sendJsonMessage).toHaveBeenCalledWith({
+        expect(sendCommand).toHaveBeenCalledWith({
             header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
             twist: {linear: {x: 0, y: 0, z: 0}, angular: {z: 0, x: 0, y: 0}},
         });

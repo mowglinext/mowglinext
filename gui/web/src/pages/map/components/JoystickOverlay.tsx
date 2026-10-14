@@ -1,15 +1,19 @@
 import {Joystick} from "react-joystick-component";
 import {IJoystickUpdateEvent} from "react-joystick-component/build/lib/Joystick";
 import {CheckOutlined, CloseOutlined, HomeOutlined} from "@ant-design/icons";
+import {Button} from "antd";
 import {useTranslation} from "react-i18next";
 import AsyncButton from "../../../components/AsyncButton.tsx";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 import {limeAlpha} from "../../../theme/colors.ts";
+import type {TeleopControlState} from "../hooks/useTeleopControl.ts";
 
 interface JoystickOverlayProps {
     visible: boolean;
     isRecording?: boolean;
     mobile?: boolean;
+    controlState?: TeleopControlState;
+    onTakeControl?: () => void;
     onMove: (event: IJoystickUpdateEvent) => void;
     onStop: () => void;
     onFinishRecording?: () => Promise<void>;
@@ -18,7 +22,7 @@ interface JoystickOverlayProps {
 }
 
 export const JoystickOverlay = ({
-    visible, isRecording, mobile,
+    visible, isRecording, mobile, controlState = "owner", onTakeControl,
     onMove, onStop, onFinishRecording, onCancelRecording, onHome,
 }: JoystickOverlayProps) => {
     const {colors, displayMode} = useThemeMode();
@@ -59,26 +63,54 @@ export const JoystickOverlay = ({
             // Don't let dragging the stick pan/scroll the map underneath.
             touchAction: "none",
         }}>
-            <div style={{
-                position: "relative",
-                padding: 6,
-                borderRadius: "50%",
-                background: colors.glassBackground,
-                border: `1px solid ${limeAlpha(0.28)}`,
-                boxShadow: `0 10px 30px -10px rgba(0,0,0,0.6), inset 0 0 24px ${limeAlpha(0.06)}`,
-                backdropFilter: displayMode === 'visual' ? 'blur(8px)' : undefined,
-                WebkitBackdropFilter: displayMode === 'visual' ? 'blur(8px)' : undefined,
-            }}>
-                <Joystick
-                    size={size}
-                    baseColor={baseColor}
-                    stickColor={stickColor}
-                    stickSize={Math.round(size * 0.42)}
-                    move={onMove}
-                    stop={onStop}
-                    throttle={50}
-                />
-            </div>
+            {controlState === "owner" ? (
+                <div style={{
+                    position: "relative",
+                    padding: 6,
+                    borderRadius: "50%",
+                    background: colors.glassBackground,
+                    border: `1px solid ${limeAlpha(0.28)}`,
+                    boxShadow: `0 10px 30px -10px rgba(0,0,0,0.6), inset 0 0 24px ${limeAlpha(0.06)}`,
+                    backdropFilter: displayMode === 'visual' ? 'blur(8px)' : undefined,
+                    WebkitBackdropFilter: displayMode === 'visual' ? 'blur(8px)' : undefined,
+                }}>
+                    <Joystick
+                        size={size}
+                        baseColor={baseColor}
+                        stickColor={stickColor}
+                        stickSize={Math.round(size * 0.42)}
+                        move={onMove}
+                        stop={onStop}
+                        throttle={50}
+                    />
+                </div>
+            ) : (
+                <div style={{
+                    maxWidth: 220,
+                    padding: 12,
+                    borderRadius: 10,
+                    color: colors.text,
+                    background: colors.glassBackground,
+                    border: `1px solid ${limeAlpha(0.28)}`,
+                    boxShadow: `0 10px 30px -10px rgba(0,0,0,0.6)`,
+                    backdropFilter: displayMode === 'visual' ? 'blur(8px)' : undefined,
+                }}>
+                    <div style={{marginBottom: controlState === "available" ? 8 : 0}}>
+                        {t(controlState === "busy"
+                            ? 'mapJoystick.controlInUse'
+                            : controlState === "available"
+                                ? 'mapJoystick.controlAvailable'
+                                : controlState === "stopped"
+                                    ? 'mapJoystick.controlStopped'
+                                    : 'mapJoystick.connecting')}
+                    </div>
+                    {controlState === "available" && (
+                        <Button type="primary" onClick={onTakeControl}>
+                            {t('mapJoystick.takeControl')}
+                        </Button>
+                    )}
+                </div>
+            )}
 
             {isRecording && (
                 <div style={{display: "flex", flexDirection: "column", gap: 8, marginBottom: 4}}>
