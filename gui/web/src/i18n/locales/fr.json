@@ -2988,6 +2988,14 @@
       }
     },
     "backend": {
+      "invalidStatus": "Réponse d’état du réglage moteur invalide",
+      "invalidReport": "Réponse du rapport de réglage moteur invalide",
+      "invalidParsedReport": "Données du rapport de réglage moteur invalides",
+      "invalidRollback": "Réponse de restauration du réglage moteur invalide",
+      "rollbackFailed": "Échec de restauration du réglage moteur",
+      "invalidStart": "Démarrage du réglage moteur non confirmé",
+      "invalidRequest": "Valeurs du réglage moteur invalides ; aucune requête envoyée",
+      "requestFailed": "Échec de la requête de réglage moteur",
       "statusFetchFailed": "Échec de récupération de l'état du réglage drive",
       "rollback": {
         "successMessage": "Le rollback du réglage drive a été appliqué en direct et sauvegardé dans mowgli_robot.yaml"

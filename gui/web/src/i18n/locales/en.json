@@ -2992,6 +2992,14 @@
       }
     },
     "backend": {
+      "invalidStatus": "Invalid drive tuning status response",
+      "invalidReport": "Invalid drive tuning report response",
+      "invalidParsedReport": "Invalid drive tuning report data",
+      "invalidRollback": "Invalid drive tuning rollback response",
+      "rollbackFailed": "Drive tuning rollback failed",
+      "invalidStart": "Drive tuning start was not confirmed",
+      "invalidRequest": "Invalid drive tuning inputs; no request was sent",
+      "requestFailed": "Drive tuning request failed",
       "statusFetchFailed": "Failed to fetch drive tuning status",
       "rollback": {
         "successMessage": "Drive tuning rollback applied live and persisted to mowgli_robot.yaml"

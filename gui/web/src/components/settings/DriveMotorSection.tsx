@@ -1,4 +1,4 @@
-import {errorMessage} from "../../utils/errors";
+import {errorMessage, requestErrorMessage} from "../../utils/errors";
 import {observeAsync} from "../../utils/async";
 import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -34,15 +34,18 @@ import {
     translateDriveTuningTrialPhase,
     translateDriveTuningTrialQuality,
 } from "../../utils/driveTuningI18n.ts";
+import {isJsonObject} from '../../utils/json';
+import type {DriveFeedForwardRequest, DrivePIDRequest} from '../../utils/driveTuningContract';
+import type {HardwareBackend} from '../../constants/hardwareBackends';
 import type {SettingsValues} from "../../types/settings.generated";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
-    acceptPersistedValues?: (values: Record<string, any>) => void;
-    hardwareBackend?: string;
+    onChange: (key: string, value: number | null) => void;
+    acceptPersistedValues?: (values: Record<string, number>) => void;
+    hardwareBackend?: HardwareBackend;
 };
 
 const DRIVE_PARAM_KEYS = [
@@ -100,11 +103,11 @@ const jobTag = (t: TFunction, state?: string) => {
     return <Tag>{t("settingsDriveMotor.job.idle")}</Tag>;
 };
 
-const pickPersistedDriveValues = (report: Record<string, any> | undefined, odometryOnly = false) => {
+const pickPersistedDriveValues = (report: Record<string, number> | undefined, odometryOnly = false) => {
     if (!report) return {};
-    const picked: Record<string, any> = {};
+    const picked: Record<string, number> = {};
     for (const key of odometryOnly ? ["ticks_per_meter"] : DRIVE_PARAM_KEYS) {
-        if (key in report) {
+        if (Object.prototype.hasOwnProperty.call(report, key) && Number.isFinite(report[key])) {
             picked[key] = report[key];
         }
     }
@@ -140,8 +143,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
     const [reportOpen, setReportOpen] = useState(false);
     const [startingAction, setStartingAction] = useState<"ff" | "pid" | null>(null);
     const [rollingBack, setRollingBack] = useState(false);
-    const [ffForm] = Form.useForm();
-    const [pidForm] = Form.useForm();
+    const [ffForm] = Form.useForm<Omit<DriveFeedForwardRequest, 'turn_direction'>>();
+    const [pidForm] = Form.useForm<DrivePIDRequest>();
     const appliedJobIdsRef = useRef<Set<string>>(new Set());
 
     const isEmergencyActive = !!emergency.active_emergency || !!emergency.latched_emergency;
@@ -154,12 +157,11 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
     const translateBackendMessage = useCallback((message?: string | null) => (
         translateDriveTuningBackendMessage(t, message) ?? message ?? undefined
     ), [t]);
-    const formatBackendError = (error: any) => (
-        translateDriveTuningBackendMessage(t, error?.error?.error ?? error?.message)
-        ?? error?.error?.error
-        ?? error?.message
-        ?? t("settingsDriveMotor.common.unknownBackendError")
-    );
+    const formatBackendError = (error: unknown) => {
+        const message = requestErrorMessage(error);
+        return translateDriveTuningBackendMessage(t, message) ?? message
+            ?? t("settingsDriveMotor.common.unknownBackendError");
+    };
     const translatedFeedForwardSummary = translateBackendMessage(feedForwardSummary?.message)
         ?? t("settingsDriveMotor.common.noReportYetSentence");
     const translatedPidSummary = translateBackendMessage(pidSummary?.message)
@@ -278,8 +280,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     ? t(isMavros ? "settingsDriveMotor.odometry.applyDescription" : "settingsDriveMotor.notifications.ffStarted.applyDescription")
                     : t(isMavros ? "settingsDriveMotor.odometry.reportOnlyDescription" : "settingsDriveMotor.notifications.ffStarted.reportOnlyDescription"),
             });
-        } catch (e: any) {
-            if (e?.errorFields) {
+        } catch (e) {
+            if (isJsonObject(e) && Array.isArray(e.errorFields)) {
                 return;
             }
             notification.error({
@@ -310,8 +312,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     ? t("settingsDriveMotor.notifications.pidStarted.applyDescription")
                     : t("settingsDriveMotor.notifications.pidStarted.reportOnlyDescription"),
             });
-        } catch (e: any) {
-            if (e?.errorFields) {
+        } catch (e) {
+            if (isJsonObject(e) && Array.isArray(e.errorFields)) {
                 return;
             }
             notification.error({
@@ -364,10 +366,10 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
         });
     };
 
-    const ffApply = Form.useWatch("apply", ffForm);
-    const ffAllowUndock = Form.useWatch("allow_undock", ffForm);
-    const pidApply = Form.useWatch("apply", pidForm);
-    const pidAllowUndock = Form.useWatch("allow_undock", pidForm);
+    const ffApply: unknown = Form.useWatch("apply", ffForm);
+    const ffAllowUndock: unknown = Form.useWatch("allow_undock", ffForm);
+    const pidApply: unknown = Form.useWatch("apply", pidForm);
+    const pidAllowUndock: unknown = Form.useWatch("allow_undock", pidForm);
 
     const latestParsedReport = latestReport?.parsed;
     const latestReasons = latestParsedReport?.reasons ?? [];
@@ -592,11 +594,11 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                 cancelText={t("settingsDriveMotor.common.cancel")}
                 confirmLoading={startingAction === "ff"}
                 okButtonProps={{
-                    disabled: isEmergencyActive || (onDock && !ffAllowUndock),
+                    disabled: isEmergencyActive || (onDock && ffAllowUndock !== true),
                 }}
             >
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                    {onDock && !ffAllowUndock && (
+                    {onDock && ffAllowUndock !== true && (
                         <Alert
                             type="warning"
                             showIcon
@@ -685,7 +687,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             </Col>
                         </Row>
                     </Form>
-                    {ffApply ? (
+                    {ffApply === true ? (
                         <Alert
                             type="success"
                             showIcon
@@ -712,7 +714,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                 cancelText={t("settingsDriveMotor.common.cancel")}
                 confirmLoading={startingAction === "pid"}
                 okButtonProps={{
-                    disabled: isEmergencyActive || (onDock && !pidAllowUndock),
+                    disabled: isEmergencyActive || (onDock && pidAllowUndock !== true),
                 }}
             >
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
@@ -724,7 +726,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             description={t("settingsDriveMotor.pidModal.precheck.description")}
                         />
                     )}
-                    {onDock && !pidAllowUndock && (
+                    {onDock && pidAllowUndock !== true && (
                         <Alert
                             type="warning"
                             showIcon
@@ -793,7 +795,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             </Col>
                         </Row>
                     </Form>
-                    {pidApply ? (
+                    {pidApply === true ? (
                         <Alert
                             type="success"
                             showIcon
