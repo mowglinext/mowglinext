@@ -1,3 +1,4 @@
+import {hasEmergency, emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
 import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {useBladeTelemetry} from "../hooks/useBladeTelemetry";
 import {motorDisplayValue} from "../utils/motorTelemetry";
@@ -76,14 +77,15 @@ function useMowerData(backend?: string) {
   const areaMap = useMowingMap();
 
   const isCharging = highLevelStatus.is_charging ?? status.is_charging ?? false;
-  const isEmergency = highLevelStatus.emergency ?? emergency.active_emergency ?? false;
+  const isEmergency = hasEmergency(emergency, highLevelStatus);
+  const commandEmergency = highLevelStatus.emergency ?? emergency.active_emergency ?? false;
   const batteryPercent = computeBatteryPercent(
     highLevelStatus.battery_percent, power.v_battery, settings,
   );
   const gpsStatus = deriveGpsStatus(gnss);
 
-  const stateName = highLevelStatus.state_name ?? (
-    isEmergency ? "EMERGENCY" : isCharging ? "CHARGING" : "IDLE_DOCKED"
+  const stateName = isEmergency ? "EMERGENCY" : highLevelStatus.state_name ?? (
+    isCharging ? "CHARGING" : ""
   );
 
   // Motion is derived from the NUMERIC high-level state, which status_nodes.cpp
@@ -97,6 +99,9 @@ function useMowerData(backend?: string) {
 
   return {
     state: stateName,
+    statusKnown: (highLevelStatus.state !== undefined && highLevelStatus.state !== 0) || isEmergency || isCharging,
+    emergencyKnown: emergencyIsKnown(emergency, highLevelStatus),
+    clearanceUnverified: emergencyClearanceUnverified(emergency, highLevelStatus),
     battery: batteryPercent,
     batteryKnown: hasBatteryReading(power.v_battery),
     charging: isCharging,
@@ -105,6 +110,8 @@ function useMowerData(backend?: string) {
     docked: power.charger_enabled ?? status.is_charging ?? highLevelStatus.is_charging,
     settings,
     emergency: isEmergency,
+    commandEmergency,
+    commandState: highLevelStatus.state_name ?? (commandEmergency ? "EMERGENCY" : isCharging ? "CHARGING" : "IDLE_DOCKED"),
     gps: gpsStatus.percent,
     gpsLabel: gpsStatus.label,
     vBattery: power.v_battery ?? 0,
@@ -118,6 +125,7 @@ function useMowerData(backend?: string) {
     escTemp: blade.escTemp,
     motorTemp: blade.motorTemp,
     rain: status.rain_detected ?? false,
+    rainKnown: status.rain_detected !== undefined,
     isMoving,
     scanPaused,
     toolWidth: (settings?.tool_width as number | undefined) ?? 0.18,
@@ -233,14 +241,14 @@ export const MowgliNextPage = () => {
     : null;
 
   const phase: "idle" | "playing" | "returning" | "alert" =
-    data.emergency ? "alert" :
-    data.state === "RETURNING_HOME" ? "returning" :
+    data.commandEmergency ? "alert" :
+    data.commandState === "RETURNING_HOME" ? "returning" :
     data.isMoving ? "playing" : "idle";
   const chargeHold: ChargeHold | undefined = deriveChargeHold(
-    data.state, data.battery, data.batteryManualResumePercent, data.batteryLowPercent,
+    data.commandState, data.battery, data.batteryManualResumePercent, data.batteryLowPercent,
     data.batteryFullPercent, data.coverageSessionActive,
   );
-  const isResumingMowing = data.state === "RESUMING_UNDOCKING";
+  const isResumingMowing = data.commandState === "RESUMING_UNDOCKING";
 
   // ── ETA estimate ──
   //
@@ -262,7 +270,11 @@ export const MowgliNextPage = () => {
   // Headline mirrors the subline's branch order: SCAN_PAUSED gets the operator
   // explanation first while the mission remains active; otherwise a moving mower
   // gets its ETA/mowing copy instead of falling through to the idle text.
-  const headline = data.scanPaused
+  const headline = data.clearanceUnverified
+    ? t("telemetry.emergencyClearanceUnverified")
+    : !data.statusKnown && !data.emergency
+    ? t("telemetry.statusUnknown")
+    : data.scanPaused
     ? <>{t('mowgliNextPage.headlineScanPausedPrefix')}<em style={{fontStyle: 'italic', color: 'var(--amber, #FFB84D)'}}>{t('mowgliNextPage.headlineScanPausedEmphasis')}</em>{t('mowgliNextPage.headlineScanPausedSuffix')}</>
     : isResumingMowing
       ? t('mowgliNextPage.headlineResumingMowing')
@@ -290,7 +302,11 @@ export const MowgliNextPage = () => {
         ? <span style={{color: 'var(--rose, #FF6B7A)'}}>{t('mowgliNextPage.emergencyStop')}</span>
         : <>{t('mowgliNextPage.headlineIdlePrefix')}<em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>{t('mowgliNextPage.headlineIdleEmphasis')}</em>{t('mowgliNextPage.headlineIdleSuffix')}</>;
 
-  const subline = data.scanPaused
+  const subline = data.clearanceUnverified
+    ? t("telemetry.emergencyClearanceUnverified")
+    : !data.statusKnown && !data.emergency
+    ? t("telemetry.statusUnknown")
+    : data.scanPaused
     ? t('mowgliNextPage.sublineScanPaused')
     : isResumingMowing
       ? t('mowgliNextPage.sublineResumingMowing')
@@ -387,8 +403,9 @@ export const MowgliNextPage = () => {
           <StatusOrb
             tone={data.emergency ? "alert" : data.isMoving ? "live" : data.charging ? "charging" : "resting"}
             size={10}
-            label={data.scanPaused ? t('mowgliNextPage.orbScanPaused') : data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
+            label={!data.statusKnown && !data.emergency ? t("telemetry.statusUnknown") : data.scanPaused ? t('mowgliNextPage.orbScanPaused') : data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
           />
+          <span style={{fontSize: 11, color: "var(--ink-2)"}}>{t("telemetry.freshnessUnverified")}</span>
         </motion.header>
 
         {/* Repeat-dig escalation: hardware_bridge halted the mission — the
@@ -714,10 +731,10 @@ export function HealthCard({data, hardware, mavros}: {
   const weather = useWeather();
   const rows: HealthRow[] = [
     {k: t('mowgliNextPage.gpsSignal'),         ok: data.gps > 0,           note: data.gpsLabel},
-    {k: data.rain ? t('mowgliNextPage.rainDetectedRow') : t('mowgliNextPage.noRain'),
-                              ok: !data.rain,             note: data.rain ? t('mowgliNextPage.mowingPausedShort') : t('mowgliNextPage.conditionsOk')},
-    {k: data.emergency ? t('mowgliNextPage.alertActive') : t('mowgliNextPage.noAlerts'),
-                              ok: !data.emergency,        note: data.emergency ? t('mowgliNextPage.toRearm') : t('mowgliNextPage.allClear')},
+    {k: data.rain ? t('mowgliNextPage.rainDetectedRow') : data.rainKnown ? t('mowgliNextPage.noRain') : t('telemetry.statusUnknown'),
+                              ok: data.rainKnown && !data.rain, note: data.rain ? t('mowgliNextPage.mowingPausedShort') : data.rainKnown ? t('telemetry.freshnessUnverified') : t('telemetry.statusUnknown')},
+    {k: data.clearanceUnverified ? t('telemetry.emergencyClearanceUnverified') : data.emergency ? t('mowgliNextPage.alertActive') : data.emergencyKnown ? t('mowgliNextPage.noAlerts') : t('telemetry.statusUnknown'),
+                              ok: data.emergencyKnown && !data.emergency, note: data.emergency ? t('mowgliNextPage.toRearm') : data.emergencyKnown ? t('telemetry.freshnessUnverified') : t('telemetry.statusUnknown')},
     ...(Number.isFinite(data.motorTemp) ? [{k: t('mowgliNextPage.motorTemp', {temp: motorDisplayValue(data.motorTemp)}),
                               ok: data.motorTemp < 55,    note: data.motorTemp >= 55 ? t('mowgliNextPage.runningHot') : t('mowgliNextPage.nominal')}] : []),
   ];

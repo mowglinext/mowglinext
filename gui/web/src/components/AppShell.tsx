@@ -118,7 +118,7 @@ export function AppShell() {
   const emergency = useEmergency();
   const hwStatus = useStatus();
   useAutoNotifications({
-    emergencyActive: highLevelStatus.emergency ?? emergency.active_emergency ?? false,
+    emergencyActive: highLevelStatus.emergency === true || emergency.active_emergency === true,
     emergencyLatched: emergency.latched_emergency ?? false,
     rainDetected: hwStatus.rain_detected ?? false,
     state: highLevelStatus.state_name,

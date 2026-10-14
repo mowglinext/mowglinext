@@ -5,22 +5,22 @@ import {MowerStatus} from './MowerStatus.tsx';
 // Assert against the active locale (pinned to English in test/setup.ts) rather
 // than hardcoded copy, so reworded translations don't break these tests.
 import en from '../i18n/locales/en.json';
-import {GnssStatusConstants} from '../types/ros.ts';
+import {GnssStatusConstants, type Status, type HighLevelStatus, type GnssStatus} from '../types/ros.ts';
 
 // MowerStatus reads snake_case rosbridge fields and pulls GPS from
 // useGnssStatus / battery from usePower+useSettings — NOT from highLevelStatus.
 // All hooks are mocked so the test exercises the real state-label + derivation
 // logic in isolation.
-const mockHighLevelStatus = vi.fn();
+const mockHighLevelStatus = vi.fn<() => {highLevelStatus: HighLevelStatus}>();
 vi.mock('../hooks/useHighLevelStatus.ts', () => ({
     useHighLevelStatus: () => mockHighLevelStatus(),
 }));
-vi.mock('../hooks/useStatus.ts', () => ({useStatus: () => ({})}));
-vi.mock('../hooks/useEmergency.ts', () => ({
-    useEmergency: () => ({active_emergency: false, latched_emergency: false}),
-}));
+const mockStatus = vi.fn<() => Status>();
+vi.mock('../hooks/useStatus.ts', () => ({useStatus: () => mockStatus()}));
+const mockEmergency = vi.fn<() => import('../utils/statusTelemetry').EmergencyDisplay>();
+vi.mock('../hooks/useEmergency.ts', () => ({useEmergency: () => mockEmergency()}));
 vi.mock('../hooks/usePower.ts', () => ({usePower: () => ({v_battery: 0})}));
-const mockGnss = vi.fn();
+const mockGnss = vi.fn<() => GnssStatus>();
 vi.mock('../hooks/useGnssStatus.ts', () => ({useGnssStatus: () => mockGnss()}));
 vi.mock('../hooks/useSettings.ts', () => ({useSettings: () => ({settings: {}})}));
 vi.mock('../hooks/useApi.ts', () => ({useApi: () => ({request: vi.fn()})}));
@@ -35,8 +35,50 @@ vi.mock('../theme/ThemeContext.tsx', () => ({
 const renderStatus = () => render(<App><MowerStatus/></App>);
 
 describe('MowerStatus', () => {
+    it('does not invent idle from a hardware initialization or OK report', () => {
+        mockHighLevelStatus.mockReturnValue({highLevelStatus: {}});
+        mockStatus.mockReturnValue({mower_status: 255});
+        renderStatus();
+        expect(screen.getAllByText(en.telemetry.statusUnknown).length).toBeGreaterThan(0);
+        expect(screen.queryByText(en.utils.stateAtBase)).not.toBeInTheDocument();
+    });
+
+    it('does not let a false high-level bit mask an active hardware emergency', () => {
+        mockHighLevelStatus.mockReturnValue({highLevelStatus: {state: 1, state_name: 'IDLE', emergency: false}});
+        mockEmergency.mockReturnValue({active_emergency: true});
+        renderStatus();
+        expect(screen.getByText(en.utils.stateEmergencyStop)).toBeInTheDocument();
+        expect(screen.getByText(en.mowerStatus.rearm)).toBeInTheDocument();
+        expect(rearm).not.toHaveBeenCalled();
+    });
+
+    it('shows the latch when the active bit is missing without sending a reset', () => {
+        mockHighLevelStatus.mockReturnValue({highLevelStatus: {}});
+        mockEmergency.mockReturnValue({latched_emergency: true});
+        renderStatus();
+        expect(screen.getByText(en.utils.stateEmergencyStop)).toBeInTheDocument();
+        expect(rearm).not.toHaveBeenCalled();
+    });
+
+    it('labels replayed clearance as unverified rather than a currently cleared emergency', () => {
+        mockHighLevelStatus.mockReturnValue({highLevelStatus: {state: 1, state_name: 'IDLE', emergency: false}});
+        mockEmergency.mockReturnValue({active_emergency: false, latched_emergency: false, clearanceUnverified: true});
+        renderStatus();
+        expect(screen.getByText(en.telemetry.emergencyClearanceUnverified)).toBeInTheDocument();
+        expect(screen.queryByText(en.utils.stateIdle)).not.toBeInTheDocument();
+        expect(rearm).not.toHaveBeenCalled();
+    });
+
+    it('qualifies a reported state instead of claiming proven acquisition freshness', () => {
+        mockHighLevelStatus.mockReturnValue({highLevelStatus: {state: 2, state_name: 'MOWING'}});
+        renderStatus();
+        expect(screen.getByText(en.telemetry.freshnessUnverified)).toBeInTheDocument();
+    });
+
     beforeEach(() => {
         rearm.mockReset();
+        mockStatus.mockReturnValue({});
+        mockEmergency.mockReturnValue({active_emergency: false, latched_emergency: false});
         mockGnss.mockReturnValue({
             fix_valid: true,
             fix_type: GnssStatusConstants.FIX_TYPE_RTK_FIXED,
@@ -74,7 +116,7 @@ describe('MowerStatus', () => {
     it('falls back to Offline when state_name is absent', () => {
         mockHighLevelStatus.mockReturnValue({highLevelStatus: {}});
         renderStatus();
-        expect(screen.getByText(en.utils.stateOffline)).toBeInTheDocument();
+        expect(screen.getAllByText(en.telemetry.statusUnknown).length).toBeGreaterThan(0);
     });
 
     it('renders the compact canonical GNSS solution label', () => {

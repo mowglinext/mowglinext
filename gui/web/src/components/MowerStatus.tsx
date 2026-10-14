@@ -1,3 +1,4 @@
+import {hasEmergency, emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
 import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useStatus} from "../hooks/useStatus.ts";
@@ -41,18 +42,17 @@ export const MowerStatus = () => {
     const {settings} = useSettings();
 
     // Derive state with fallbacks
-    const isEmergency = highLevelStatus.emergency ?? emergencyData.active_emergency ?? false;
+    const isEmergency = hasEmergency(emergencyData, highLevelStatus);
     const isCharging = highLevelStatus.is_charging ?? hwStatus.is_charging ?? false;
 
-    const stateName = highLevelStatus.state_name ?? (
-        isEmergency ? "EMERGENCY" :
-        isCharging ? "CHARGING" :
-        hwStatus.mower_status != null ? "IDLE_DOCKED" :
-        undefined
+    const stateName = isEmergency ? "EMERGENCY" : highLevelStatus.state_name ?? (
+        isCharging ? "CHARGING" : undefined
     );
     // Numeric high-level state (reliable, published every tick): 2=AUTONOMOUS,
     // 3=RECORDING, 4=MANUAL_MOWING. Drives colour/pulse/mowing so transient
     // state=2 substates (planning, obstacle backoff) never read as idle.
+    const emergencyKnown = emergencyIsKnown(emergencyData, highLevelStatus);
+    const clearanceUnverified = emergencyClearanceUnverified(emergencyData, highLevelStatus);
     const stateNum = highLevelStatus.state ?? -1;
 
     const gpsStatus = deriveGpsStatus(gnss);
@@ -118,9 +118,12 @@ export const MowerStatus = () => {
                         } as CSSProperties}
                     />
                     <Typography.Text style={{fontSize: 12, color: colors.text, whiteSpace: 'nowrap'}}>
-                        {stateRenderer(stateName)}
+                        {clearanceUnverified ? t("telemetry.emergencyClearanceUnverified") : stateName ? stateRenderer(stateName) : t("telemetry.statusUnknown")}
                     </Typography.Text>
                 </Space>
+                <Typography.Text type="secondary" style={{fontSize: 11}}>
+                    {t(emergencyKnown && stateName ? "telemetry.freshnessUnverified" : "telemetry.statusUnknown")}
+                </Typography.Text>
                 {isMowing && hasArea && (
                     <Typography.Text style={{fontSize: 11, color: colors.primary, whiteSpace: 'nowrap'}}>
                         A{(highLevelStatus.current_area ?? 0) + 1}

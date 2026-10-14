@@ -1,4 +1,9 @@
 {
+  "telemetry": {
+    "emergencyClearanceUnverified": "Emergency was reported · clearing unverified",
+    "statusUnknown": "Status unknown",
+    "freshnessUnverified": "Reported status · freshness unverified"
+  },
   "blackbox": {
     "title": "Automatic blackbox",
     "recordingsTab": "Recordings",

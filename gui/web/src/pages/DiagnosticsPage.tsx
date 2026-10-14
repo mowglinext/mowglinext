@@ -1,3 +1,4 @@
+import {hasEmergency, emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
 import {useBladeTelemetry} from '../hooks/useBladeTelemetry';
 import {useHardwareBackend} from '../hooks/useHardwareBackend';
 import {motorDisplayValue, wheelControllerFromDiagnostics, wheelControllerFields, showEncoderWheel, type WheelRole} from '../utils/motorTelemetry';
@@ -168,7 +169,9 @@ function HealthBadge({label, color, numericValue, valueWidth = 3}: {
 // A Tag whose color is not the sole signal: the label text never changes
 // (e.g. "ESC power"), so pair it with a check/cross icon whose SHAPE (not
 // just color) carries the on/off state for color-blind / low-vision users.
-function BoolStatusTag({label, ok}: {label: string; ok: boolean}) {
+function BoolStatusTag({label, ok}: {label: string; ok: boolean | undefined}) {
+    const {t} = useTranslation();
+    if (ok === undefined) return <Tag color="warning">{label}: {t('telemetry.statusUnknown')}</Tag>;
     return (
         <Tag color={ok ? "success" : "default"} icon={ok ? <CheckCircleOutlined/> : <CloseCircleOutlined/>}>
             {label}
@@ -312,17 +315,22 @@ export const DiagnosticsPage = () => {
     // The emergency signal proper — only this drives the big "Emergency"
     // wording. Other danger causes (low battery, hot CPU, stopped container,
     // no GPS) surface as "Critical".
-    const emergencyActive = (emergency.active_emergency ?? highLevelStatus.emergency) ?? false;
+    const emergencyActive = hasEmergency(emergency, highLevelStatus);
+
+    const emergencyKnown = emergencyIsKnown(emergency, highLevelStatus);
+    const clearanceUnverified = emergencyClearanceUnverified(emergency, highLevelStatus);
+    const operationalKnown = highLevelStatus.state !== undefined || status.mower_status !== undefined;
 
     const healthLevel: "ok" | "warn" | "danger" =
         emergencyActive || !allContainersOk || (!gpsOk && !gpsWarn) || cpuHot || batteryLow
             ? "danger"
-            : gpsWarn || cpuWarm || batteryMid || recoveryStuck || alerts.length > 0
+            : !emergencyKnown || !operationalKnown || gpsWarn || cpuWarm || batteryMid || recoveryStuck || alerts.length > 0
                 ? "warn"
                 : "ok";
 
-    const healthVerdict =
-        healthLevel === "danger"
+    const healthVerdict = clearanceUnverified ? t("telemetry.emergencyClearanceUnverified") : healthLevel !== "danger" && (!emergencyKnown || !operationalKnown)
+        ? t("telemetry.statusUnknown")
+        : healthLevel === "danger"
             ? (emergencyActive ? t('diagnosticsPage.verdictEmergency') : t('diagnosticsPage.verdictCritical'))
             : healthLevel === "warn"
                 ? (recoveryStuck ? t('diagnosticsPage.verdictStuck') : t('diagnosticsPage.verdictAttention'))
@@ -345,7 +353,7 @@ export const DiagnosticsPage = () => {
                         ? t('diagnosticsPage.subtitleWatch')
                         : alerts.length > 0
                             ? t('diagnosticsPage.subtitleAlerts', {count: alerts.length})
-                            : t('diagnosticsPage.subtitleAllOperational');
+                            : t("telemetry.freshnessUnverified");
 
     const healthHero = (
         <DashCard tone={healthLevel === "danger" ? "danger" : "glow"} style={{marginBottom: 4}}>
@@ -353,7 +361,7 @@ export const DiagnosticsPage = () => {
                 fontSize: 11, color: colors.textMuted, letterSpacing: "0.08em",
                 textTransform: "uppercase" as const, fontWeight: 600, marginBottom: 8,
             }}>
-                {t('diagnosticsPage.robotStatus')}
+                {t('diagnosticsPage.robotStatus')} · {t('telemetry.freshnessUnverified')}
             </div>
             <div className="mn-num" style={{fontSize: isMobile ? 40 : 56, lineHeight: 1, color: healthColor}}>
                 {healthVerdict}
@@ -396,8 +404,8 @@ export const DiagnosticsPage = () => {
                     numericValue={batteryKnown ? batteryPercent.toFixed(0) : undefined}
                 />
                 <HealthBadge
-                    label={emergencyActive ? t('diagnosticsPage.emergencyUpper') : t('diagnosticsPage.noEmergency')}
-                    color={emergencyActive ? "error" : "success"}
+                    label={clearanceUnverified ? t('telemetry.emergencyClearanceUnverified') : emergencyActive ? t('diagnosticsPage.emergencyUpper') : emergencyKnown ? t('diagnosticsPage.noEmergency') : t('telemetry.statusUnknown')}
+                    color={emergencyActive ? "error" : emergencyKnown ? "success" : "warning"}
                 />
                 <HealthBadge
                     label={cpuTemp > 0 ? t('diagnosticsPage.cpuTemp', {value: cpuTemp.toFixed(1)}) : t('diagnosticsPage.cpuTempUnknown')}
@@ -1332,11 +1340,11 @@ export const DiagnosticsPage = () => {
                         <Space wrap>
                             <Typography.Text type="secondary" style={{fontSize: 12}}>{t('diagnosticsPage.emergency')}</Typography.Text>
                             <Tag color={emergency.active_emergency ? "error" : emergency.latched_emergency ? "warning" : "default"}>
-                                {emergency.active_emergency
+                                {clearanceUnverified ? t("telemetry.emergencyClearanceUnverified") : emergency.active_emergency
                                     ? (emergency.reason ?? t('diagnosticsPage.emergencyActive'))
                                     : emergency.latched_emergency
                                         ? t('diagnosticsPage.latched')
-                                        : t('diagnosticsPage.clear')}
+                                        : emergencyKnown ? t('diagnosticsPage.clear') : t('telemetry.statusUnknown')}
                             </Tag>
                             {(emergency.active_emergency || emergency.latched_emergency) && (
                                 <AsyncButton
@@ -1888,14 +1896,14 @@ export const DiagnosticsPage = () => {
                         <Col xs={12} lg={4}>
                             <Statistic
                                 title={t('diagnosticsPage.mowerStatus')}
-                                value={status.mower_status === 255 ? t('diagnosticsPage.statusOk') : t('diagnosticsPage.initializing')}
+                                value={status.mower_status === 255 ? t('diagnosticsPage.statusOk') : status.mower_status === 0 ? t('diagnosticsPage.initializing') : t('telemetry.statusUnknown')}
                                 valueStyle={{color: status.mower_status === 255 ? undefined : colors.warning}}
                             />
                         </Col>
                         <Col xs={12} lg={4}>
                             <Statistic
                                 title={t('diagnosticsPage.rain')}
-                                value={status.rain_detected ? t('diagnosticsPage.detected') : t('diagnosticsPage.none')}
+                                value={status.rain_detected === true ? t('diagnosticsPage.detected') : status.rain_detected === false ? t('diagnosticsPage.none') : t('telemetry.statusUnknown')}
                                 valueStyle={{color: status.rain_detected ? colors.warning : undefined}}
                             />
                         </Col>
@@ -1926,11 +1934,11 @@ export const DiagnosticsPage = () => {
                         </Col>
                     </Row>
                     <Flex wrap gap="small" style={{marginTop: 12}}>
-                        <BoolStatusTag label={t('diagnosticsPage.rpiPower')} ok={!!status.raspberry_pi_power}/>
-                        <BoolStatusTag label={t('diagnosticsPage.escPower')} ok={!!status.esc_power}/>
-                        <BoolStatusTag label={t('diagnosticsPage.uiBoard')} ok={!!status.ui_board_available}/>
-                        <BoolStatusTag label={t('diagnosticsPage.soundModule')} ok={!!status.sound_module_available}/>
-                        <BoolStatusTag label={t('diagnosticsPage.mowEnabled')} ok={!!status.mow_enabled}/>
+                        <BoolStatusTag label={t('diagnosticsPage.rpiPower')} ok={status.raspberry_pi_power}/>
+                        <BoolStatusTag label={t('diagnosticsPage.escPower')} ok={status.esc_power}/>
+                        <BoolStatusTag label={t('diagnosticsPage.uiBoard')} ok={status.ui_board_available}/>
+                        <BoolStatusTag label={t('diagnosticsPage.soundModule')} ok={status.sound_module_available}/>
+                        <BoolStatusTag label={t('diagnosticsPage.mowEnabled')} ok={status.mow_enabled}/>
                     </Flex>
                 </Card>
             </Col>

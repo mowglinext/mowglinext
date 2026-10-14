@@ -1,4 +1,9 @@
 {
+  "telemetry": {
+    "emergencyClearanceUnverified": "Urgence signalée · levée non vérifiée",
+    "statusUnknown": "État inconnu",
+    "freshnessUnverified": "État rapporté · fraîcheur non vérifiée"
+  },
   "blackbox": {
     "title": "Boîte noire automatique",
     "recordingsTab": "Enregistrements",
