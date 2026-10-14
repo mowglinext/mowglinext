@@ -9,7 +9,12 @@ stack-wide autonomous-motion invariant or physical containment.
 - Branch: `feat/924-motion-authorization`, isolated worktree `.motion-924`.
 - Draft PR: [#950](https://github.com/mowglinext/mowglinext/pull/950), against
   `dev`; no merge, ready-for-review transition or physical deployment performed.
-- Base: `dev` `9f39497f26f4759a0b26e601904710fb934beb65`.
+- Current base after the requested rebase: `dev`
+  `50b1c361b1bf8d51c9ce95b64a7ab77f9efa9fc8`.
+  The initial implementation and historical evidence used
+  `9f39497f26f4759a0b26e601904710fb934beb65`; earlier results do not validate the
+  rebased runtime. Fresh core integration results are recorded below; full
+  rebased mission validation remains pending.
 - Original #942 regression source: `ddd49d9f59e202c265d5aca5e0d1154b79a721af`.
   Its branch and Draft PR were not modified. The original assertions and
   scenarios were retained; additional tests and real map-publication fixtures
@@ -23,10 +28,56 @@ stack-wide autonomous-motion invariant or physical containment.
   Test-only checkpoint `8671b3a4` verifies automatic permission publication;
   its expanded map suite passed under Fast DDS and CycloneDDS.
 - #905 merged on 2026-10-13 and #906 on 2026-10-10. This branch retains its
-  named original dev baseline and #905-compatible raw MarkerArray publication
-  and segment logic. Integration with current dev is still required: a
-  nonmutating merge preview identified six conflicts in coverage planning,
-  map publication and FTC. Neither a merge nor latest-dev validation is claimed.
+  #905-compatible raw MarkerArray publication and segment logic. The requested
+  rebase integrates current dev's planning-grid invalidation, dock datum
+  identity, legal sharp-corner pivots and collision-monitor hold recovery.
+  Conflict resolutions preserve the added mowing/navigation purpose labels,
+  strict failed-load cleanup and final FTC authorization. Fresh validation is
+  recorded below with the source-mount limitation and remaining mission gaps;
+  no PR merge is claimed.
+
+### Rebased software checks (2026-10-14)
+
+Fresh UID1000 Release builds against the new interfaces install compile and
+install controllers, map, behavior and coverage. An independent integration
+review found no concrete source blocker. Two new corner controls preserve
+eligible pivots at actual vertices and retain supported fillets when pivots are
+rejected. The paused-clock parameter-startup test now waits, within its existing
+three-second deadline, for the nonempty wall-timer publication after current
+dev's intentional initial revocation. Its validity and interior/exterior
+permission assertions remain unchanged; a nonempty malformed snapshot still
+fails. No original #942 assertion or scenario was changed.
+
+| Package | CTest targets | GTest cases | Current result |
+|---|---:|---:|---|
+| Nav2 plugins | 26/26 | 368/368 | PASS; fresh installed plugin index selected |
+| Map | 12/12 | 228/228 | PASS after startup-observation correction |
+| Behavior | 54/55 on source mount | 582/582 | Mounted `cpplint` timeout; unchanged registered check passes on identical local source/config |
+| Coverage | 16/16 | 156/156 | PASS, including both new pivot controls |
+
+These are 1,334 passing GTest cases and 108/109 passing CTest entries on the
+Windows source mount. The remaining registered `cpplint` check passes in 4.73 s
+on a byte-identical builder-local package with the same ancestor `ros2/CPPLINT.cfg`
+and unchanged 120-second timeout. This validates the check without claiming
+the mounted suite passed 109/109. Earlier failed discovery, paused-clock startup,
+14 structural XML assertions and both lint timeouts remain recorded. Windows
+checkout CRLF bytes caused the structural XML comparisons to fail; restoring
+only LF line endings leaves the Git blob and assertions unchanged and the
+actual source/installed XML is compared. Clang-format18 whole-file and changed-line
+checks pass. A bounded trace confirmed mount I/O wait during lint file reading.
+An earlier local probe omitted the ancestor config and reported 94 warnings;
+that probe did not use the repository's configured rules. Both probes and
+timeouts remain recorded. No filters, assertions or timeouts were changed.
+Standalone interfaces have no registered test suite here.
+
+The isolated builder required the matching HDF5/OpenMPI development package
+`1.14.6+repack-2` for current dev's Smac exported headers. Only system package
+installation used root; all project builds/tests/installations used UID1000.
+Actual C/C++ compilers remain GCC15.2.0; core runtime dependency checks report
+no missing libraries and HDF5 serial runtime linkage. This modified SDK and its
+package provenance must be distinguished from the earlier immutable image;
+fresh mission runtime dependencies and source/install identities remain owed.
+No rebased Webots mission or hardware validation has run.
 
 ## Authorization policy
 
