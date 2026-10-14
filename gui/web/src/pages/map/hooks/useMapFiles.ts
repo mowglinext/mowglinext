@@ -1,3 +1,5 @@
+import {asyncEvent, reportAsyncError} from "../../../utils/async";
+import {errorMessage} from "../../../utils/errors";
 import React, {ChangeEvent} from "react";
 import {useTranslation} from "react-i18next";
 import type {NotificationInstance} from "antd/es/notification/interface";
@@ -286,7 +288,9 @@ export function useMapFiles({
         input.type = "file";
         input.style.display = "none";
         document.body.appendChild(input);
-        input.addEventListener('change', async (event) => {
+        input.addEventListener('cancel', () => input.remove(), {once: true});
+        input.addEventListener('change', asyncEvent(async (event: Event) => {
+            input.remove();
             const file = (event as unknown as ChangeEvent<HTMLInputElement>).target?.files?.[0];
             if (!file) {
                 return;
@@ -349,7 +353,10 @@ export function useMapFiles({
                     });
                 }
             }
-        });
+        }, (error) => {
+            reportAsyncError(error);
+            notification.error({message: t('mapFiles.restoreFailed'), description: errorMessage(error)});
+        }), {once: true});
         input.click();
     };
 
@@ -406,7 +413,9 @@ export function useMapFiles({
         input.accept = ".json,.bag,application/json";
         input.style.display = "none";
         document.body.appendChild(input);
-        input.addEventListener('change', async (event) => {
+        input.addEventListener('cancel', () => input.remove(), {once: true});
+        input.addEventListener('change', asyncEvent(async (event: Event) => {
+            input.remove();
             const file = (event as unknown as ChangeEvent<HTMLInputElement>).target?.files?.[0];
             if (!file) {
                 return;
@@ -444,7 +453,10 @@ export function useMapFiles({
                     description: e?.message ?? String(e),
                 });
             }
-        });
+        }, (error) => {
+            reportAsyncError(error);
+            notification.error({message: t('mapFiles.openMowerImportFailed'), description: errorMessage(error)});
+        }), {once: true});
         input.click();
     };
 

@@ -71,10 +71,10 @@ describe('useManualMode', () => {
         expect(result.current.manualMode).toBe(true);
 
         rerender({stateName: 'IDLE'});
-        act(() => vi.advanceTimersByTime(1199));
+        act(() => { vi.advanceTimersByTime(1199); });
         expect(result.current.manualMode).toBe(true);
 
-        act(() => vi.advanceTimersByTime(1));
+        act(() => { vi.advanceTimersByTime(1); });
         expect(result.current.manualMode).toBe(false);
     });
 

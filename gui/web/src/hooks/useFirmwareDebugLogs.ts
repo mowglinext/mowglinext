@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {useEffect, useRef, useState} from "react";
 import {useApi} from "./useApi.ts";
 import {useWS} from "./useWS.ts";
@@ -119,7 +120,7 @@ export const useFirmwareDebugLogs = (enabled: boolean) => {
             }
         }
 
-        connect();
+        observeAsync(connect());
         return () => {
             cancelled = true;
             stop();

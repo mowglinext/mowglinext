@@ -1,3 +1,5 @@
+import {observeAsync} from "../utils/async";
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {App, Modal, Radio, Switch, Tag, TimePicker, Tooltip} from "antd";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
@@ -48,6 +50,7 @@ function errorMessage(e: unknown): string | undefined {
 }
 
 export const SchedulePage = () => {
+  const asyncHandler = useAsyncHandler();
   const {t} = useTranslation();
   const {colors} = useThemeMode();
   const {settings} = useSettings();
@@ -79,7 +82,7 @@ export const SchedulePage = () => {
   useEffect(() => {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
-    fetchSchedules();
+    observeAsync(fetchSchedules());
   }, [fetchSchedules]);
 
   const handleCreate = async (body?: Partial<Schedule>) => {
@@ -133,7 +136,7 @@ export const SchedulePage = () => {
         return (
           <button
             key={tpl.name}
-            onClick={() => handleCreate(tpl.body)}
+            onClick={asyncHandler(() => handleCreate(tpl.body))}
             disabled={loading}
             style={{
               textAlign: 'left',
@@ -235,7 +238,7 @@ export const SchedulePage = () => {
     const days = isRemoving
       ? sched.daysOfWeek.filter(d => d !== day)
       : [...sched.daysOfWeek, day];
-    handleUpdate({...sched, daysOfWeek: days});
+    observeAsync(handleUpdate({...sched, daysOfWeek: days}));
   };
 
   // Color per schedule index
@@ -269,7 +272,7 @@ export const SchedulePage = () => {
           <Switch
             aria-label={t("schedulePage.enableSchedule", {index: idx + 1})}
             checked={sched.enabled}
-            onChange={(checked) => handleUpdate({...sched, enabled: checked})}
+            onChange={asyncHandler((checked) => handleUpdate({...sched, enabled: checked}))}
           />
           <Tag color={sched.enabled ? "success" : "default"}>{t(sched.enabled ? "schedulePage.on" : "schedulePage.inactive")}</Tag>
           {/* One area or all: "all" is a plain Start, a specific area goes through
@@ -293,7 +296,7 @@ export const SchedulePage = () => {
           aria-label={t("schedulePage.startTime")}
           value={dayjs(sched.time, "HH:mm")}
           format="HH:mm"
-          onChange={(val) => { if (val) handleUpdate({...sched, time: val.format("HH:mm")}); }}
+          onChange={(val) => { if (val) observeAsync(handleUpdate({...sched, time: val.format("HH:mm")})); }}
           style={{width: '100%'}}
           size="large"
         />
@@ -414,7 +417,7 @@ export const SchedulePage = () => {
       <div style={{display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 8}}>
         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12}}>
           {pageHeader}
-          <ActionButton primary icon={<IconPlus size={14}/>} label={t('schedulePage.newRun')} onClick={() => handleCreate()} disabled={loading}/>
+          <ActionButton primary icon={<IconPlus size={14}/>} label={t('schedulePage.newRun')} onClick={asyncHandler(() => handleCreate())} disabled={loading}/>
         </div>
         {schedules.length === 0 && (
           <>
@@ -517,7 +520,7 @@ export const SchedulePage = () => {
           <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12}}>
             <div style={{fontSize: 13, fontWeight: 600}}>{t('schedulePage.schedules')}</div>
             <ActionButton primary icon={<IconPlus size={14}/>} label={t('schedulePage.newRun')}
-                     onClick={() => handleCreate()} disabled={loading}
+                     onClick={asyncHandler(() => handleCreate())} disabled={loading}
                      style={{padding: '8px 14px', fontSize: 12}}/>
           </div>
           <div style={{fontSize: 13, color: colors.textDim, lineHeight: 1.6}}>

@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
 import {useEffect, useState} from "react";
@@ -9,7 +10,7 @@ export const useEnv = () => {
     const {t} = useTranslation();
     const [env, setEnv] = useState<Record<string, any>>({})
     useEffect(() => {
-        (async () => {
+        observeAsync((async () => {
             try {
                 const envs = await guiApi.config.envsList()
                 if (envs.error) {
@@ -22,7 +23,7 @@ export const useEnv = () => {
                     description: e.message,
                 })
             }
-        })()
+        })())
     }, [])
     return env
 }

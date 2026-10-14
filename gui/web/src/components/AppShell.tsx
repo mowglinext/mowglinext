@@ -1,3 +1,5 @@
+import {observeAsync} from "../utils/async";
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {type ReactNode, useEffect, useMemo, useState} from "react";
 import {useMatches, useNavigate, useOutlet} from "react-router-dom";
 import {AnimatePresence, motion, LayoutGroup} from "framer-motion";
@@ -72,6 +74,7 @@ const PAGE_META: Record<string, {titleKey: string; subtitleKey?: string}> = {
 };
 
 export function AppShell() {
+  const asyncHandler = useAsyncHandler();
   const {colors} = useThemeMode();
   const {t} = useTranslation();
   const navigate = useNavigate();
@@ -90,7 +93,7 @@ export function AppShell() {
   // and we lost it in the AppShell rewrite).
   useEffect(() => {
     if (route.length === 1 && route[0].pathname === '/') {
-      navigate({pathname: '/mowglinext'}, {replace: true});
+      observeAsync(navigate({pathname: '/mowglinext'}, {replace: true}));
     }
   }, [route, navigate]);
 
@@ -98,16 +101,16 @@ export function AppShell() {
   const [configChecked, setConfigChecked] = useState(false);
   useEffect(() => {
     if (configChecked) return;
-    (async () => {
+    observeAsync((async () => {
       try {
         const res = await fetch(`${httpBase()}/api/settings/status`);
         const data = await res.json();
         if (!data.onboarding_completed && currentPath !== '/onboarding') {
-          navigate({pathname: '/onboarding'});
+          observeAsync(navigate({pathname: '/onboarding'}));
         }
-      } catch { /* ignore */ }
+      } catch (error) { console.error('Failed to check onboarding status', error); }
       setConfigChecked(true);
-    })();
+    })());
   }, [configChecked, currentPath, navigate]);
 
   // Auto-notifications hook (BT-state derived push notifications)
@@ -191,13 +194,13 @@ export function AppShell() {
           items={overflowItems}
           activePath={currentPath}
           onClose={() => setMoreOpen(false)}
-          onNavigate={(k) => { setMoreOpen(false); navigate({pathname: k}); }}
+          onNavigate={(k) => { setMoreOpen(false); observeAsync(navigate({pathname: k})); }}
         />
 
         <MobileBottomNav
           items={bottomItems}
           activePath={currentPath}
-          onNavigate={(k) => navigate({pathname: k})}
+          onNavigate={asyncHandler((k) => navigate({pathname: k}))}
           onMore={() => setMoreOpen(true)}
           moreActive={overflowItems.some(n => n.key === currentPath) || moreOpen}
         />
@@ -219,7 +222,7 @@ export function AppShell() {
       <DesktopSideRail
         items={NAV}
         activePath={currentPath}
-        onNavigate={(k) => navigate({pathname: k})}
+        onNavigate={asyncHandler((k) => navigate({pathname: k}))}
       />
 
       <div style={{

@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import { useCallback, useEffect, useState } from "react";
 import { ContentType } from "../api/Api.ts";
 import { useApi } from "./useApi.ts";
@@ -154,8 +155,8 @@ export const useDriveTuning = () => {
     }, [guiApi]);
 
     useEffect(() => {
-        refresh();
-        const id = setInterval(refresh, POLL_INTERVAL_MS);
+        observeAsync(refresh());
+        const id = setInterval(() => observeAsync(refresh()), POLL_INTERVAL_MS);
         return () => clearInterval(id);
     }, [refresh]);
 

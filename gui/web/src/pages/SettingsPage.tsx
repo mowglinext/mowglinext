@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import "./SettingsPage.css";
 import {useSectionFocus} from "../hooks/useSectionFocus.ts";
 import {settingSearchText} from "../utils/settingsSearch.ts";
@@ -68,6 +69,7 @@ import {
 const { Text } = Typography;
 
 export const SettingsPage = () => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const { modal } = App.useApp();
     const guiApi = useApi();
@@ -569,7 +571,7 @@ export const SettingsPage = () => {
                 <Button
                     type="primary"
                     icon={<SaveOutlined />}
-                    onClick={save}
+                    onClick={asyncHandler(save)}
                     loading={saving}
                     disabled={!isDirty || ros2Restart.pending}
                 >

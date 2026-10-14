@@ -1,3 +1,5 @@
+import {observeAsync} from "../../utils/async";
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import React, {useMemo, useState} from "react";
 import {useNavigate} from "react-router-dom";
 import {useTranslation} from "react-i18next";
@@ -63,6 +65,7 @@ function stateIcon(check: ReadinessCheck): React.ReactNode {
 }
 
 export const ReadinessStep: React.FC<ReadinessStepProps> = ({values, onJumpToStep}) => {
+    const asyncHandler = useAsyncHandler();
     const {t} = useTranslation();
     const {colors} = useThemeMode();
     const guiApi = useApi();
@@ -101,7 +104,7 @@ export const ReadinessStep: React.FC<ReadinessStepProps> = ({values, onJumpToSte
             onJumpToStep(stepIndex);
             return;
         }
-        navigate(target === "map" ? "/map" : "/diagnostics");
+        observeAsync(navigate(target === "map" ? "/map" : "/diagnostics"));
     };
 
     const commit = async () => {
@@ -155,11 +158,11 @@ export const ReadinessStep: React.FC<ReadinessStepProps> = ({values, onJumpToSte
                         type="primary"
                         size="large"
                         icon={<EnvironmentOutlined />}
-                        onClick={() => navigate("/map")}
+                        onClick={asyncHandler(() => navigate("/map"))}
                     >
                         {t("onboardingPage.drawMowingArea")}
                     </Button>,
-                    <Button key="dashboard" size="large" onClick={() => navigate("/mowglinext")}>
+                    <Button key="dashboard" size="large" onClick={asyncHandler(() => navigate("/mowglinext"))}>
                         {t("onboardingPage.goToDashboard")}
                     </Button>,
                 ]}
@@ -252,7 +255,7 @@ export const ReadinessStep: React.FC<ReadinessStepProps> = ({values, onJumpToSte
                         size="large"
                         icon={<CheckCircleOutlined />}
                         disabled={gated}
-                        onClick={commit}
+                        onClick={asyncHandler(commit)}
                     >
                         {t("onboardingPage.readinessFinishApply")}
                     </Button>

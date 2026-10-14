@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useStatus} from "../hooks/useStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
@@ -29,6 +30,7 @@ const statusColor = (stateNum: number | undefined, isEmergency: boolean, colors:
 };
 
 export const MowerStatus = () => {
+    const asyncHandler = useAsyncHandler();
     const {t} = useTranslation();
     const {colors, displayMode} = useThemeMode();
     const {highLevelStatus} = useHighLevelStatus();
@@ -140,7 +142,7 @@ export const MowerStatus = () => {
                             danger
                             size="small"
                             icon={<AlertOutlined/>}
-                            onClick={resetEmergencyAction}
+                            onClick={asyncHandler(resetEmergencyAction)}
                         >
                             {t('mowerStatus.rearm')}
                         </Button>

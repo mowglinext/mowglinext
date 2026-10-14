@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import { useApi } from "./useApi.ts";
 import { App } from "antd";
 import { useCallback, useEffect, useState } from "react";
@@ -54,7 +55,7 @@ export const useSettingsSchema = () => {
     const [restartRequired, setRestartRequired] = useState(false);
 
     useEffect(() => {
-        (async () => {
+        observeAsync((async () => {
             try {
                 setLoading(true);
                 const [schemaRes, valuesRes] = await Promise.all([
@@ -76,7 +77,7 @@ export const useSettingsSchema = () => {
             } finally {
                 setLoading(false);
             }
-        })();
+        })());
     }, []);
 
     const saveValues = useCallback(

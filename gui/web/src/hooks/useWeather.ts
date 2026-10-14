@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useState} from "react";
 import {useApi} from "./useApi.ts";
 import type {Condition} from "../concept/components/WeatherChip.tsx";
@@ -24,12 +25,15 @@ export function useWeather(pollMs = 10 * 60 * 1000): Weather | null {
     try {
       const res = await guiApi.request<Weather>({path: "/weather", method: "GET", format: "json"});
       if (res.data) setWeather(res.data);
-    } catch { /* keep last good value */ }
+    } catch (error) {
+      // Retain the last good weather; expose transport failures in diagnostics.
+      console.error('Failed to refresh weather', error);
+    }
   }, []);
 
   useEffect(() => {
-    fetchWeather();
-    const id = setInterval(fetchWeather, pollMs);
+    observeAsync(fetchWeather());
+    const id = setInterval(() => observeAsync(fetchWeather()), pollMs);
     return () => clearInterval(id);
   }, [fetchWeather, pollMs]);
 

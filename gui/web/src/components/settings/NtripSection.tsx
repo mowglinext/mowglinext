@@ -1,3 +1,5 @@
+import {observeAsync} from "../../utils/async";
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {Alert, Button, Card, Collapse, Input, InputNumber, Select, Space, Spin, Switch, Tag, Typography} from "antd";
 import {WifiOutlined, ReloadOutlined, EnvironmentOutlined} from "@ant-design/icons";
@@ -29,6 +31,7 @@ interface Props {
 // caster host/port and free-network credentials are filled in automatically, so
 // the operator normally never types a host or a password.
 export const NtripSection: React.FC<Props> = ({values, onChange}) => {
+    const asyncHandler = useAsyncHandler();
   const guiApi = useApi();
   const {t} = useTranslation();
   const {colors} = useThemeMode();
@@ -101,7 +104,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
     }
     onChange("ntrip_mountpoint", "");
     setStations([]);
-    if (p.host && !p.requiresOwnCreds) loadProvider(p);
+    if (p.host && !p.requiresOwnCreds) observeAsync(loadProvider(p));
   };
 
   const selectStation = (s: MapStation) => {
@@ -120,7 +123,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
 
   // Auto-load the initially-selected provider's stations on mount.
   useEffect(() => {
-    if (ntripEnabled && provider?.host && !provider.requiresOwnCreds) loadProvider(provider);
+    if (ntripEnabled && provider?.host && !provider.requiresOwnCreds) observeAsync(loadProvider(provider));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -160,7 +163,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
                 </button>
               );
             })}
-            <Button size="small" onClick={loadAllFree} icon={<EnvironmentOutlined/>} style={{alignSelf: "center"}}>
+            <Button size="small" onClick={asyncHandler(loadAllFree)} icon={<EnvironmentOutlined/>} style={{alignSelf: "center"}}>
               {t("settingsNtrip.showAllFreeNetworks")}
             </Button>
           </div>
@@ -184,7 +187,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
                                   onChange={(e) => onChange("ntrip_password", e.target.value)}/>
                 </>
               )}
-              <Button icon={<ReloadOutlined/>} onClick={() => provider && loadProvider(provider)}
+              <Button icon={<ReloadOutlined/>} onClick={asyncHandler(() => provider && loadProvider(provider))}
                       disabled={!values.ntrip_host}>{t("settingsNtrip.loadStations")}</Button>
             </Space>
           )}

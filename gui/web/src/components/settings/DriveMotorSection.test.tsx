@@ -75,6 +75,16 @@ describe("shared motor calibration", () => {
         expect(screen.getByText(i18n.t("settingsDriveMotor.odometry.validation.validated", { errorPct: "0.5" }))).toBeInTheDocument();
     });
 
+    it("reports a failed applied-report fetch without accepting values or announcing success", async () => {
+        tuning.status = { job: { id: "failed-read", apply: true, state: "succeeded", report_path: "/report.yaml" } };
+        tuning.loadLatestReport.mockRejectedValueOnce(new Error("Report unavailable"));
+        const accept = vi.fn();
+        render(<App><DriveMotorSection hardwareBackend="mavros" values={{}} onChange={vi.fn()} acceptPersistedValues={accept} /></App>);
+        expect(await screen.findByText("Report unavailable")).toBeInTheDocument();
+        expect(accept).not.toHaveBeenCalled();
+        expect(screen.queryByText(i18n.t("settingsDriveMotor.notifications.applied.title"))).not.toBeInTheDocument();
+    });
+
     it("syncs only float ticks from an applied MAVROS report, including legacy reports", async () => {
         tuning.status = { job: { id: "one", apply: true, state: "succeeded", report_path: "/report.yaml" } };
         tuning.loadLatestReport.mockResolvedValue({

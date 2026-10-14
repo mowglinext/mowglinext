@@ -1,7 +1,9 @@
+import {observeAsync} from "../utils/async";
+import {AsyncPopconfirm} from "../components/AsyncPopconfirm";
 import {useCallback, useEffect, useState} from "react";
 import {useTranslation} from "react-i18next";
 import i18n from "../i18n";
-import {Table, Tag, Button, Popconfirm, message} from "antd";
+import {Table, Tag, Button, message} from "antd";
 import {DeleteOutlined} from "@ant-design/icons";
 import {useApi} from "../hooks/useApi.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
@@ -95,7 +97,9 @@ export const StatisticsPage = () => {
       ]);
       setSessions(sessionsRes.data?.sessions ?? []);
       setStats(statsRes.data ?? null);
-    } catch { /* silently degrade */ }
+    } catch (error) {
+      console.error('Failed to refresh mowing statistics', error);
+    }
     finally { setLoading(false); }
   }, []);
 
@@ -110,8 +114,8 @@ export const StatisticsPage = () => {
   }, [fetchData, t]);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
+    observeAsync(fetchData());
+    const interval = setInterval(() => observeAsync(fetchData()), 30000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -359,7 +363,7 @@ export const StatisticsPage = () => {
                 {t('statisticsPage.sessionsRecorded', {count: sessions.length})}
               </div>
             </div>
-            <Popconfirm
+            <AsyncPopconfirm
               title={t('statisticsPage.clearAllTitle')}
               description={t('statisticsPage.clearAllDescription')}
               okText={t('statisticsPage.clear')}
@@ -370,7 +374,7 @@ export const StatisticsPage = () => {
               <Button size="small" danger icon={<DeleteOutlined/>} disabled={sessions.length === 0}>
                 {t('statisticsPage.clear')}
               </Button>
-            </Popconfirm>
+            </AsyncPopconfirm>
           </div>
           <Table
             size="small"

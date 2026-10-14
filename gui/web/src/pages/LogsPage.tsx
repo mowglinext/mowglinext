@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {App, Input, Select, Space} from "antd";
 import {useEffect, useMemo, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
@@ -138,7 +139,7 @@ export const LogsPage = () => {
         }
     }
 
-    useEffect(() => { listContainers(); }, []);
+    useEffect(() => { observeAsync(listContainers()); }, []);
 
     useEffect(() => {
         if (!containerId) return;

@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {useTranslation} from "react-i18next";
 import {stringifyValue} from "../utils/stringifyValue.ts";
@@ -82,7 +83,7 @@ function ParamRow({
   const guardedCommit = useCallback((raw: unknown) => {
     const next = coerce(raw);
     if (next == null) { setValue(param.value); return; } // don't blank a live param
-    if (!danger) { commit(next); return; }
+    if (!danger) { observeAsync(commit(next)); return; }
     modal.confirm({
       title: t("parametersPage.confirmSafetyTitle"),
       icon: <WarningOutlined style={{color: colors.danger}}/>,
@@ -203,7 +204,7 @@ export const ParametersPage = () => {
     }
   }, [t]);
 
-  useEffect(() => { fetchParams(); }, [fetchParams]);
+  useEffect(() => { observeAsync(fetchParams()); }, [fetchParams]);
 
   const commit = useCallback(async (name: string, value: unknown) => {
     try {

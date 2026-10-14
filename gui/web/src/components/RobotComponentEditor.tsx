@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {DEFAULT_DOCK_STYLE} from "./robot/dockAssets";
 import {resolveDockAppearance} from "../constants/mowerAppearances";
 import {DockGraphic} from "./robot/DockGraphic";
@@ -125,6 +126,7 @@ type Props = {
 };
 
 export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const { colors, mode } = useThemeMode();
     const isMobile = useIsMobile();
@@ -948,7 +950,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                     <div style={{ textAlign: "right", marginTop: 16 }}>
                         <Space>
                             <Button onClick={closeCalibration}>{t("robotComponentEditor.cancel")}</Button>
-                            <Button type="primary" icon={<CompassOutlined />} onClick={startCalibration}>
+                            <Button type="primary" icon={<CompassOutlined />} onClick={asyncHandler(startCalibration)}>
                                 {t("robotComponentEditor.start")}
                             </Button>
                         </Space>

@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useState} from "react";
 import {useApi} from "./useApi.ts";
 
@@ -66,8 +67,8 @@ export const useCalibrationStatus = () => {
     }, []);
 
     useEffect(() => {
-        refresh();
-        const id = setInterval(refresh, 5000);
+        observeAsync(refresh());
+        const id = setInterval(() => observeAsync(refresh()), 5000);
         return () => clearInterval(id);
     }, [refresh]);
 

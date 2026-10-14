@@ -1,4 +1,4 @@
-import {act, renderHook} from '@testing-library/react';
+import {act, fireEvent, renderHook, waitFor} from '@testing-library/react';
 import {describe, expect, it, vi} from 'vitest';
 import {useMapFiles} from './useMapFiles';
 import {MowingAreaFeature, NavigationFeature} from '../../../types/map.ts';
@@ -290,5 +290,42 @@ describe('useMapFiles backup carries the ignore lines', () => {
             {name: 'Hedge', polyline: line.polyline, width_m: 0.4},
         ]);
         expect(saved.working_area).toEqual([]);
+    });
+});
+
+
+describe('map file reader failures', () => {
+    it('reports a failed backup read without changing the editor and removes the input', async () => {
+        const options = backupOptions({});
+        const hook = renderHook(() => useMapFiles(options));
+        const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => undefined);
+        hook.result.current.handleRestoreMap();
+        const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+        expect(input).not.toBeNull();
+        const file = new File(['unreadable'], 'map.json');
+        Object.defineProperty(file, 'text', {value: () => Promise.reject(new Error('Cannot read backup'))});
+        if (!input) throw new Error('Missing file input');
+        fireEvent.change(input, {target: {files: [file]}});
+        await waitFor(() => expect(options.notification.error).toHaveBeenCalledWith({
+            message: 'mapFiles.restoreFailed', description: 'Cannot read backup',
+        }));
+        expect(options.setFeatures).not.toHaveBeenCalled();
+        expect(options.setEditMap).not.toHaveBeenCalled();
+        expect(options.notification.success).not.toHaveBeenCalled();
+        expect(input).not.toBeInTheDocument();
+        log.mockRestore();
+        click.mockRestore();
+    });
+
+    it('removes the temporary input when file selection is cancelled', () => {
+        const hook = renderHook(() => useMapFiles(backupOptions({})));
+        const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => undefined);
+        hook.result.current.handleImportOpenMower(vi.fn(), vi.fn());
+        const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+        if (!input) throw new Error('Missing file input');
+        fireEvent(input, new Event('cancel'));
+        expect(input).not.toBeInTheDocument();
+        click.mockRestore();
     });
 });

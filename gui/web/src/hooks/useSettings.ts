@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
 import {useEffect, useState} from "react";
@@ -185,7 +186,7 @@ export const useSettings = () => {
         }
     }, [db.config]);
     useEffect(() => {
-        (async () => {
+        observeAsync((async () => {
             try {
                 setLoading(true)
                 // Load shell config settings
@@ -223,7 +224,7 @@ export const useSettings = () => {
                 })
                 setLoading(false)
             }
-        })()
+        })())
     }, [])
     const handleSetConfig = async (newConfig: SettingsConfig) => {
         try {

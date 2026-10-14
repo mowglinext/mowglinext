@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {ContentType} from "../api/Api.ts";
 import {useApi} from "./useApi.ts";
@@ -65,9 +66,9 @@ export const useRosbag = (enabled: boolean = true) => {
 
     useEffect(() => {
         if (!enabled) return;
-        refresh();
+        observeAsync(refresh());
         const id = setInterval(() => {
-            if (enabledRef.current) refresh();
+            if (enabledRef.current) observeAsync(refresh());
         }, POLL_INTERVAL_MS);
         return () => clearInterval(id);
     }, [enabled, refresh]);

@@ -1,3 +1,6 @@
+import {errorMessage} from "../../utils/errors";
+import {observeAsync} from "../../utils/async";
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
     Alert,
@@ -109,6 +112,7 @@ const pickPersistedDriveValues = (report: Record<string, any> | undefined, odome
 };
 
 export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPersistedValues, hardwareBackend = "mowgli" }) => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const { formatAbsolute } = useTimeFormat();
     // "never" rather than the em-dash placeholder: an absent calibration
@@ -174,7 +178,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
         }
 
         let cancelled = false;
-        (async () => {
+        observeAsync((async () => {
             try {
                 const reportResponse = await loadLatestReport();
                 const sameReport = reportResponse?.latest_report?.report_path === job.report_path;
@@ -187,10 +191,15 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         description: t("settingsDriveMotor.notifications.applied.description"),
                     });
                 }
-            } catch {
-                // The status panel still shows the backend error; keep this effect best-effort.
+            } catch (error) {
+                if (!cancelled) {
+                    notification.error({
+                        message: t("settingsDriveMotor.notifications.loadReportFailed.title"),
+                        description: errorMessage(error),
+                    });
+                }
             }
-        })();
+        })());
 
         return () => {
             cancelled = true;
@@ -440,7 +449,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         {!isMavros && <Button onClick={() => setPidOpen(true)} disabled={runningJob || isEmergencyActive}>
                             {t("settingsDriveMotor.actions.startPid")}
                         </Button>}
-                        <Button icon={<FileTextOutlined />} onClick={openLatestReport} loading={loadingLatestReport}>
+                        <Button icon={<FileTextOutlined />} onClick={asyncHandler(openLatestReport)} loading={loadingLatestReport}>
                             {t("settingsDriveMotor.actions.viewLastReport")}
                         </Button>
                         <Button
@@ -578,7 +587,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                 title={t(isMavros ? "settingsDriveMotor.odometry.modalTitle" : "settingsDriveMotor.ffModal.title")}
                 open={ffOpen}
                 onCancel={() => setFfOpen(false)}
-                onOk={handleStartFeedForward}
+                onOk={asyncHandler(handleStartFeedForward)}
                 okText={t("settingsDriveMotor.ffModal.ok")}
                 cancelText={t("settingsDriveMotor.common.cancel")}
                 confirmLoading={startingAction === "ff"}
@@ -698,7 +707,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                 title={t("settingsDriveMotor.pidModal.title")}
                 open={pidOpen}
                 onCancel={() => setPidOpen(false)}
-                onOk={handleStartPid}
+                onOk={asyncHandler(handleStartPid)}
                 okText={t("settingsDriveMotor.pidModal.ok")}
                 cancelText={t("settingsDriveMotor.common.cancel")}
                 confirmLoading={startingAction === "pid"}

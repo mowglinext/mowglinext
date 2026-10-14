@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import React, { useState } from "react";
 import { Alert, App, Button, Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
 import { GlobalOutlined, SettingOutlined } from "@ant-design/icons";
@@ -47,6 +48,7 @@ export const PositioningSection: React.FC<Props> = ({
     onSaveAndRestartGps,
     onPersistGnssSettings,
 }) => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const guiApi = useApi();
     const { notification } = App.useApp();
@@ -136,7 +138,7 @@ export const PositioningSection: React.FC<Props> = ({
                                     size="small"
                                     type="link"
                                     loading={datumLoading}
-                                    onClick={setDatumFromGps}
+                                    onClick={asyncHandler(setDatumFromGps)}
                                     style={{ fontSize: 12, padding: 0 }}
                                 >
                                     {t("settingsPositioning.useCurrentGpsPosition")}

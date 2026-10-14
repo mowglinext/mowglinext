@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../../../hooks/useAsyncHandler";
 import {useState} from "react";
 import {Alert, Checkbox, InputNumber, Modal, Space, Statistic, Table, Tag, Typography} from "antd";
 import {useTranslation} from "react-i18next";
@@ -34,6 +35,7 @@ interface ImportOpenMowerModalProps {
  * `onApply` callback wired from MapPage / useMapFiles.
  */
 export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: ImportOpenMowerModalProps) {
+    const asyncHandler = useAsyncHandler();
     const {t} = useTranslation();
     const open = preview !== null;
     const summary = preview;
@@ -110,7 +112,7 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
             title={t('mapImportOpenMower.title')}
             open={open}
             onCancel={handleCancel}
-            onOk={handleOk}
+            onOk={asyncHandler(handleOk)}
             okText={applying ? t('mapImportOpenMower.applying') : t('mapImportOpenMower.applyReplaces')}
             okButtonProps={{
                 disabled: applying || reprojecting || noMowAreas,
@@ -142,8 +144,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
                                 addonBefore={t('mapImportOpenMower.omDatumLat')}
                                 value={omLat}
                                 onChange={(v) => setOmLat(typeof v === "number" ? v : null)}
-                                onBlur={handleReproject}
-                                onPressEnter={handleReproject}
+                                onBlur={asyncHandler(handleReproject)}
+                                onPressEnter={asyncHandler(handleReproject)}
                                 disabled={applying || reprojecting}
                                 step={0.000000001}
                                 precision={9}
@@ -154,8 +156,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
                                 addonBefore={t('mapImportOpenMower.omDatumLon')}
                                 value={omLon}
                                 onChange={(v) => setOmLon(typeof v === "number" ? v : null)}
-                                onBlur={handleReproject}
-                                onPressEnter={handleReproject}
+                                onBlur={asyncHandler(handleReproject)}
+                                onPressEnter={asyncHandler(handleReproject)}
                                 disabled={applying || reprojecting}
                                 step={0.000000001}
                                 precision={9}

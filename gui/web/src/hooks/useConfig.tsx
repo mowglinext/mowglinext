@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
 import {useEffect, useState} from "react";
@@ -26,7 +27,7 @@ export const useConfig = (keys: string[]) => {
         }
     }
     useEffect(() => {
-        (async () => {
+        observeAsync((async () => {
             try {
                 const keysMap: Record<string, any> = {}
                 keys.forEach((key) => {
@@ -43,7 +44,7 @@ export const useConfig = (keys: string[]) => {
                     description: e.message,
                 })
             }
-        })()
+        })())
     }, [])
     return {config, setConfig: handleSetConfig}
 }

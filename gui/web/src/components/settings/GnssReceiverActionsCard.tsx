@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import React, { useMemo, useState } from "react";
 import { Alert, App, Button, Card, Collapse, Select, Space, Tag, Typography } from "antd";
 import { PlayCircleOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
@@ -128,6 +129,7 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
     manualCurrentBaud,
     onManualCurrentBaudChange,
 }) => {
+    const asyncHandler = useAsyncHandler();
     const guiApi = useApi();
     const { t } = useTranslation();
     const { notification, modal } = App.useApp();
@@ -273,7 +275,7 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
                     <Button
                         type="primary"
                         icon={<SaveOutlined />}
-                        onClick={onSave}
+                        onClick={asyncHandler(onSave)}
                         loading={saving && !gpsRestarting && !pendingAction}
                         disabled={actionDisabled || !isDirty}
                     >
@@ -282,7 +284,7 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
                 )}
                 <Button
                     icon={<PlayCircleOutlined />}
-                    onClick={() => runAction("plan")}
+                    onClick={asyncHandler(() => runAction("plan"))}
                     loading={pendingAction === "plan"}
                     disabled={actionDisabled}
                 >
@@ -298,7 +300,7 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
                 {showSaveButtons && onSaveAndRestartGps && (
                     <Button
                         icon={<ReloadOutlined />}
-                        onClick={onSaveAndRestartGps}
+                        onClick={asyncHandler(onSaveAndRestartGps)}
                         loading={gpsRestarting && !pendingAction}
                         disabled={Boolean(pendingAction) || saving || gpsRestarting}
                     >
@@ -307,7 +309,7 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
                 )}
                 <Button
                     icon={<ReloadOutlined />}
-                    onClick={() => runAction("restart", {})}
+                    onClick={asyncHandler(() => runAction("restart", {}))}
                     loading={pendingAction === "restart"}
                     disabled={actionDisabled}
                 >

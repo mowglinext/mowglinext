@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest';
-import {render, screen} from '@testing-library/react';
+import {fireEvent, render, screen} from '@testing-library/react';
 import {App} from 'antd';
 import {MowerStatus} from './MowerStatus.tsx';
 // Assert against the active locale (pinned to English in test/setup.ts) rather
@@ -24,7 +24,8 @@ const mockGnss = vi.fn();
 vi.mock('../hooks/useGnssStatus.ts', () => ({useGnssStatus: () => mockGnss()}));
 vi.mock('../hooks/useSettings.ts', () => ({useSettings: () => ({settings: {}})}));
 vi.mock('../hooks/useApi.ts', () => ({useApi: () => ({request: vi.fn()})}));
-vi.mock('./MowerActions.tsx', () => ({useMowerAction: () => () => vi.fn()}));
+const rearm = vi.hoisted(() => vi.fn());
+vi.mock('./MowerActions.tsx', () => ({useMowerAction: () => () => rearm}));
 vi.mock('../theme/ThemeContext.tsx', () => ({
     useThemeMode: () => ({
         colors: {primary: '#52c41a', warning: '#faad14', danger: '#ff4d4f', text: '#000', muted: '#888'},
@@ -35,10 +36,23 @@ const renderStatus = () => render(<App><MowerStatus/></App>);
 
 describe('MowerStatus', () => {
     beforeEach(() => {
+        rearm.mockReset();
         mockGnss.mockReturnValue({
             fix_valid: true,
             fix_type: GnssStatusConstants.FIX_TYPE_RTK_FIXED,
         });
+    });
+
+    it('notifies the operator when rearming is rejected', async () => {
+        const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        mockHighLevelStatus.mockReturnValue({highLevelStatus: {state_name: 'IDLE', emergency: true}});
+        rearm.mockRejectedValueOnce(new Error('Firmware refused rearm'));
+        renderStatus();
+        fireEvent.click(screen.getByText(en.mowerStatus.rearm));
+        expect(await screen.findByText('Firmware refused rearm')).toBeInTheDocument();
+        expect(rearm).toHaveBeenCalledOnce();
+        expect(screen.queryByText(/success/i)).not.toBeInTheDocument();
+        log.mockRestore();
     });
 
     it('displays idle state', () => {

@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {useBladeTelemetry} from "../hooks/useBladeTelemetry";
 import {motorDisplayValue} from "../utils/motorTelemetry";
 import {StatusMowerIllustration} from "../components/dashboard/StatusMowerIllustration";
@@ -137,6 +138,7 @@ function useMowerData(backend?: string) {
 }
 
 export const MowgliNextPage = () => {
+  const asyncHandler = useAsyncHandler();
   const {t} = useTranslation();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
@@ -407,7 +409,7 @@ export const MowgliNextPage = () => {
                 todayMowedM2={todayMowedM2} totalArea={totalArea}
               />
             </motion.div>
-            <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} onViewMap={() => navigate("/map")}/></motion.div>
+            <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} onViewMap={asyncHandler(() => navigate("/map"))}/></motion.div>
             <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             <motion.div variants={riseFade}><HealthCard data={data} hardware={hardware} mavros={mavros}/></motion.div>
           </div>
@@ -426,7 +428,7 @@ export const MowgliNextPage = () => {
               <motion.div variants={riseFade}><HealthCard data={data} hardware={hardware} mavros={mavros}/></motion.div>
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-              <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} height={300} onViewMap={() => navigate("/map")}/></motion.div>
+              <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} height={300} onViewMap={asyncHandler(() => navigate("/map"))}/></motion.div>
               <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             </div>
           </div>
@@ -706,6 +708,7 @@ export function HealthCard({data, hardware, mavros}: {
   hardware: DashboardHardware;
   mavros: DashboardMavros;
 }) {
+  const asyncHandler = useAsyncHandler();
   const {t} = useTranslation();
   const navigate = useNavigate();
   const weather = useWeather();
@@ -739,7 +742,7 @@ export function HealthCard({data, hardware, mavros}: {
         <Button
           type="primary"
           size="small"
-          onClick={() => navigate('/settings?section=updates')}
+          onClick={asyncHandler(() => navigate('/settings?section=updates'))}
         >
           {t('mowgliNextPage.firmwareFlashCta')}
         </Button>
@@ -801,7 +804,7 @@ export function HealthCard({data, hardware, mavros}: {
         </div>
         <StatusMowerIllustration settings={data.settings} docked={data.docked}/>
       </div>
-      <Button type="link" onClick={() => navigate('/settings?section=updates')} style={{paddingLeft: 0, marginTop: 10}}>
+      <Button type="link" onClick={asyncHandler(() => navigate('/settings?section=updates'))} style={{paddingLeft: 0, marginTop: 10}}>
         {t('updates.title')}
       </Button>
     </GlassCard>
