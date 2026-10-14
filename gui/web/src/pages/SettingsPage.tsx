@@ -95,6 +95,7 @@ export const SettingsPage = () => {
         acknowledgeRestart,
         searchQuery,
         advancedKeys,
+        validateAdvancedKey,
         setSearchQuery,
         matchesSearch,
         handleChange,
@@ -407,7 +408,7 @@ export const SettingsPage = () => {
                     />
                 );
             case "advanced":
-                return <AdvancedSection values={values} advancedKeys={advancedKeys} onChange={handleChange} />;
+                return <AdvancedSection values={values} advancedKeys={advancedKeys} onChange={handleChange} validateNewKey={validateAdvancedKey} />;
             default:
                 return null;
         }

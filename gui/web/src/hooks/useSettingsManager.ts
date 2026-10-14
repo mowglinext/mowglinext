@@ -1,3 +1,4 @@
+import {validAdvancedKeyName, type AdvancedKeyError} from '../components/settings/advancedSettings';
 import type {PersistedDockPose} from '../utils/robotEditorContract';
 import {DOCK_VISUAL_KEYS} from "../components/robot/dockGeometry";
 import {materializeLegacyCasterPosition} from "../utils/casterPosition";
@@ -372,6 +373,40 @@ const HIDDEN_FROM_ADVANCED = new Set([
     "mow_angle_increment_deg",
     "motor_temp_high_c",
     "motor_temp_low_c",
+    // Also block retired localizer keys scrubbed by the YAML producer.
+    "use_scan_matching",
+    "use_loop_closure",
+    "icp_max_iter",
+    "icp_max_corresp_dist",
+    "icp_source_subsample",
+    "scan_min_inliers",
+    "icp_sigma_xy_base",
+    "icp_sigma_theta_base",
+    "icp_max_rmse_m",
+    "icp_max_delta_xy_m",
+    "icp_max_delta_theta_rad",
+    "icp_max_divergence_xy_m",
+    "icp_max_divergence_theta_rad",
+    "scan_yield_to_rtk",
+    "scan_yield_timeout_s",
+    "scan_yield_sigma_xy",
+    "scan_yield_sigma_theta",
+    "scan_yaw_sigma_floor_rad",
+    "lc_max_dist_m",
+    "lc_min_age_s",
+    "lc_max_candidates",
+    "lc_min_delta_m",
+    "lc_min_delta_theta",
+    "lc_max_rmse",
+    "lc_sigma_xy",
+    "lc_sigma_theta",
+    "lc_skip_when_rtk_fixed",
+    "lc_min_travel_m",
+    "lc_min_interval_s",
+    "lc_gps_sigma_ratio",
+    "scan_retention_nodes",
+    "lidar_map_half_extent_m",
+    "ticks_per_revolution",
 ]);
 
 export const useSettingsManager = () => {
@@ -921,14 +956,18 @@ export const useSettingsManager = () => {
     // we read/write the new names and hide the old ones so operators don't
     // edit a key that has no consumer. automatic_mode is OpenMower legacy
     // only consumed by the migration script, not by ROS2 itself.
-    const advancedKeys = useMemo(() => {
-        const knownKeys = new Set(
-            SECTION_DEFINITIONS.filter((s) => s.id !== "advanced").flatMap((s) => s.keys)
-        );
-        return Object.keys(localValues).filter(
-            (k) => !knownKeys.has(k) && !HIDDEN_FROM_ADVANCED.has(k),
-        );
-    }, [localValues]);
+    const protectedAdvancedKeys = useMemo(() => new Set([
+        ...SECTION_DEFINITIONS.filter(section => section.id !== 'advanced').flatMap(section => section.keys),
+        ...HIDDEN_FROM_ADVANCED,
+    ]), []);
+    const validateAdvancedKey = useCallback((key: string): AdvancedKeyError | undefined => {
+        if (!validAdvancedKeyName(key)) return 'invalidName';
+        if (protectedAdvancedKeys.has(key)) return 'protectedKey';
+        if (Object.prototype.hasOwnProperty.call(localValues, key)) return 'duplicateKey';
+        return undefined;
+    }, [localValues, protectedAdvancedKeys]);
+    const advancedKeys = useMemo(() => Object.keys(localValues).filter(key => !protectedAdvancedKeys.has(key)),
+        [localValues, protectedAdvancedKeys]);
 
 
     // Search filtering
@@ -964,6 +1003,7 @@ export const useSettingsManager = () => {
         acknowledgeRestart,
         searchQuery,
         advancedKeys,
+        validateAdvancedKey,
         setSearchQuery,
         handleChange,
         handleBulkChange,

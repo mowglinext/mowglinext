@@ -1,3 +1,4 @@
+import yamlSettingsProducer from '../../../pkg/api/settings.go?raw';
 import {act, renderHook, waitFor} from "@testing-library/react";
 import {beforeEach, expect, it, vi} from "vitest";
 
@@ -215,4 +216,27 @@ it.each(['regular', 'partial'])('refuses a capture during a %s YAML write, then 
     await act(async () => {finish({}); await pending;});
     expect(result.current.beginDockCapture()).toBe(true);
     result.current.finishDockCapture();
+});
+
+it('owns advanced key authorization across all sections and backend-retired keys', async () => {
+    const producer = yamlSettingsProducer;
+    const retiredBlock = /var retiredParamKeys = map\[string\]bool\{([\s\S]*?)\n\}/.exec(producer)?.[1];
+    expect(retiredBlock).toBeDefined();
+    const retired = [...(retiredBlock ?? '').matchAll(/"([^"]+)":\s*true/g)].map(match => match[1]);
+    expect(retired.length).toBeGreaterThan(20);
+    mocks.api.settings.yamlList.mockResolvedValue({data: {custom: 0, deleted: null, use_scan_matching: true}});
+    const {result} = renderHook(useSettingsManager);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    for (const key of retired) {
+        expect(result.current.validateAdvancedKey(key), key).toBe('protectedKey');
+        expect(result.current.advancedKeys).not.toContain(key);
+    }
+    for (const key of ['dock_pose_x', 'dock_pose_y', 'dock_pose_yaw', 'gps_x', 'gnss_receiver_family', 'openmower_wheel_kp']) {
+        expect(result.current.validateAdvancedKey(key), key).toBe('protectedKey');
+    }
+    expect(result.current.validateAdvancedKey('custom')).toBe('duplicateKey');
+    expect(result.current.validateAdvancedKey('deleted')).toBe('duplicateKey');
+    expect(result.current.validateAdvancedKey('custom_new')).toBeUndefined();
+    for (const name of ['', ' x ', 'a.b', '__proto__']) expect(result.current.validateAdvancedKey(name)).toBe('invalidName');
+    expect(mocks.api.settings.yamlCreate).not.toHaveBeenCalled();
 });
