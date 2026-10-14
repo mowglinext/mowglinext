@@ -97,8 +97,7 @@ TEST(CoveragePersistence, StoppedChargeHoldPersistsStopWithoutDroppingResumeCurs
   EXPECT_EQ(restarted.area_resume_pose_index.at(2), 42u);
 
   const bool auto_continue =
-      restarted.current_command == 1 &&
-      (!restarted.area_resume_pose_index.empty() || !restarted.completed_areas.empty());
+      restarted.current_command == 1 && mowgli_behavior::hasCoverageResumeState(restarted);
   EXPECT_FALSE(auto_continue);
   std::remove(cancelled.coverage_resume_path.c_str());
 }
@@ -206,6 +205,95 @@ TEST(CoveragePersistence, RoundTripsAllResumeState)
   std::remove(path.c_str());
 }
 
+TEST(CoveragePersistence, CompletedSubpathWithoutCursorRemainsResumableAfterRestart)
+{
+  const auto path = tempPath("coverage_resume_partial_subpaths.txt");
+  BTContext saved;
+  saved.coverage_resume_path = path;
+  saved.current_command = 1;
+  saved.current_area = 2;
+  saved.single_area_target = 2;
+  saved.single_area_target_id = 502;
+  saved.area_ids[2] = 502;
+  saved.area_path_pose_count[2] = 1000;
+  saved.area_plan_fingerprint[2] = 1234;
+  saved.area_resume_pose_index[2] = 400;
+  saved.area_completed_swaths[2].insert(0);
+  saved.area_resume_pose_index.erase(2);  // completing the unit clears its cursor
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+  EXPECT_TRUE(mowgli_behavior::hasCoverageResumeState(restarted));
+  EXPECT_EQ(restarted.current_command, 1u);  // START remains eligible to continue
+  EXPECT_EQ(restarted.current_area, 2);
+  EXPECT_EQ(restarted.single_area_target, 2u);
+  EXPECT_EQ(restarted.single_area_target_id, 502u);
+  EXPECT_EQ(restarted.area_ids.at(2), 502u);
+  EXPECT_EQ(restarted.area_plan_fingerprint.at(2), 1234u);
+  EXPECT_EQ(restarted.area_completed_swaths.at(2), (std::set<std::size_t>{0}));
+  EXPECT_TRUE(restarted.area_resume_pose_index.empty());
+  EXPECT_TRUE(restarted.completed_areas.empty());
+  std::remove(path.c_str());
+}
+
+TEST(CoveragePersistence, MetadataAndEmptyCompletionSetsAreNotResumable)
+{
+  const auto path = tempPath("coverage_resume_metadata_only.txt");
+  BTContext saved;
+  saved.coverage_resume_path = path;
+  saved.current_command = 1;
+  saved.area_ids[2] = 502;
+  saved.area_path_pose_count[2] = 1000;
+  saved.area_plan_fingerprint[2] = 1234;
+  saved.area_completed_swaths[2] = {};
+  saved.cross_hatch[2].begin(true);
+  saved.base_orientation_areas.insert(3);
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+  EXPECT_FALSE(mowgli_behavior::hasCoverageResumeState(restarted));
+  restarted.area_resume_pose_index[2] = 0;
+  EXPECT_TRUE(mowgli_behavior::hasCoverageResumeState(restarted));
+  restarted.area_resume_pose_index.clear();
+  restarted.completed_areas.insert(0);
+  EXPECT_TRUE(mowgli_behavior::hasCoverageResumeState(restarted));
+  std::remove(path.c_str());
+}
+
+TEST(CoveragePersistence, FailedWriteLeavesPreviousDurableCheckpointIntact)
+{
+  const auto path = tempPath("coverage_resume_failed_write.txt");
+  BTContext saved;
+  seedContext(saved, path);
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+  const auto tmp = path + ".tmp";
+  ASSERT_TRUE(std::filesystem::create_directory(tmp));  // temp file cannot open
+  saved.area_resume_pose_index[2] = 2000;
+  EXPECT_FALSE(saveCoverageResumeState(saved));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+  EXPECT_EQ(restarted.area_resume_pose_index.at(2), 1234u);
+  EXPECT_TRUE(std::filesystem::remove(tmp));
+  std::remove(path.c_str());
+}
+
+TEST(CoveragePersistence, FailedRenameIsReported)
+{
+  const auto path = tempPath("coverage_resume_failed_rename");
+  ASSERT_TRUE(std::filesystem::create_directory(path));
+  BTContext saved;
+  seedContext(saved, path);  // file cannot replace the destination directory
+  EXPECT_FALSE(saveCoverageResumeState(saved));
+  EXPECT_TRUE(std::filesystem::remove(path + ".tmp"));
+  EXPECT_TRUE(std::filesystem::remove(path));
+}
+
 // mowglinext#637 phase 2: the last-observed area id round-trips per index,
 // including an index that carries NO other resume-relevant state (only
 // cross-hatch history) — it must still get an id row so a later load can
@@ -311,6 +399,22 @@ TEST(CoveragePersistence, MalformedRowIsSkippedNotFatal)
   std::remove(path.c_str());
 }
 
+TEST(CoveragePersistence, InvalidCompletionTagCannotCreateResumableProgress)
+{
+  const auto path = tempPath("coverage_resume_bad_completion_tag.txt");
+  {
+    std::ofstream out(path);
+    out << "mowgli_coverage_resume v3\ncurrent_command 1\n";
+    out << "area 2 502 1000 1234 -1 garbage 0\n";
+  }
+  BTContext restarted;
+  restarted.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+  EXPECT_FALSE(mowgli_behavior::hasCoverageResumeState(restarted));
+  EXPECT_TRUE(restarted.area_completed_swaths.empty());
+  std::remove(path.c_str());
+}
+
 // mowglinext#637 phase 2: the header bump is deliberately a hard break, not a
 // soft/optional column — an old v2 row parsed against the new column layout
 // would silently read the pose count into the id field and shift every field
@@ -379,8 +483,7 @@ TEST(CoveragePersistence, FailedPhaseWriteCannotRestoreAnEndedSession)
     EXPECT_TRUE(restarted.completed_areas.empty());
     EXPECT_FALSE(restarted.single_area_target.has_value());
     const bool auto_continue =
-        restarted.current_command == 1 &&
-        (!restarted.area_resume_pose_index.empty() || !restarted.completed_areas.empty());
+        restarted.current_command == 1 && mowgli_behavior::hasCoverageResumeState(restarted);
     EXPECT_FALSE(auto_continue);
     std::remove(path.c_str());
   }

@@ -15,6 +15,7 @@
 
 #include "mowgli_behavior/coverage_persistence.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -54,6 +55,14 @@ void writeCrossHatch(std::ostream& out, const std::map<uint32_t, CrossHatch>& ar
 
 bool writeSnapshot(const BTContext& ctx, const std::string& contents)
 {
+  const auto failed = [&ctx]()
+  {
+    if (ctx.node)
+      RCLCPP_WARN(ctx.node->get_logger(),
+                  "Coverage checkpoint write failed for '%s'; checkpoint was not saved",
+                  ctx.coverage_resume_path.c_str());
+    return false;
+  };
   // Atomic replace: write a sibling temp file then rename over the target so a
   // reader never sees a half-written file (mirrors persist_dock_pose_yaw).
   const std::string tmp_path = ctx.coverage_resume_path + ".tmp";
@@ -61,18 +70,32 @@ bool writeSnapshot(const BTContext& ctx, const std::string& contents)
     std::ofstream f(tmp_path, std::ios::trunc);
     if (!f)
     {
-      return false;
+      return failed();
     }
     f << contents;
     f.flush();
+    f.close();
     if (!f)
     {
-      return false;
+      return failed();
     }
   }
-  return std::rename(tmp_path.c_str(), ctx.coverage_resume_path.c_str()) == 0;
+  if (std::rename(tmp_path.c_str(), ctx.coverage_resume_path.c_str()) != 0)
+    return failed();
+  return true;
 }
 }  // namespace
+
+bool hasCoverageResumeState(const BTContext& ctx)
+{
+  return !ctx.area_resume_pose_index.empty() || !ctx.completed_areas.empty() ||
+         std::any_of(ctx.area_completed_swaths.begin(),
+                     ctx.area_completed_swaths.end(),
+                     [](const auto& area)
+                     {
+                       return !area.second.empty();
+                     });
+}
 
 bool beginCoverageOrientation(BTContext& ctx, uint32_t area)
 {
@@ -327,7 +350,8 @@ bool loadCoverageResumeState(BTContext& ctx)
       uint64_t fingerprint;
       int64_t resume;
       std::string completed_tag;
-      if (!(ls >> idx >> id >> pose_count >> fingerprint >> resume >> completed_tag))
+      if (!(ls >> idx >> id >> pose_count >> fingerprint >> resume >> completed_tag) ||
+          completed_tag != "completed")
       {
         continue;  // malformed row — skip, don't abort the whole load
       }

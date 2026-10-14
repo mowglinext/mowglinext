@@ -2,11 +2,12 @@ import React from "react";
 import { Alert, Card, Typography } from "antd";
 import { WarningOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const { Paragraph } = Typography;
 
 type Props = {
-    values: Record<string, any>;
+    values: SettingsValues;
     onChange: (key: string, value: any) => void;
 };
 

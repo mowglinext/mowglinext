@@ -2,11 +2,12 @@ import React, { useState } from "react";
 import { Alert, Button, Card, Input, Space, Table, Typography, Popconfirm } from "antd";
 import { CodeOutlined, DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const { Text } = Typography;
 
 type Props = {
-    values: Record<string, any>;
+    values: SettingsValues;
     advancedKeys: string[];
     onChange: (key: string, value: any) => void;
 };

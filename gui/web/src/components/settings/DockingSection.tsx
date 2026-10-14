@@ -5,11 +5,12 @@ import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 import { DockCalibrationCard } from "./DockCalibrationCard.tsx";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
-    values: Record<string, any>;
+    values: SettingsValues;
     onChange: (key: string, value: any) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;

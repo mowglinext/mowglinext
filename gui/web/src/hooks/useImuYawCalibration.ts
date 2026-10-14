@@ -62,7 +62,7 @@ interface UseImuYawCalibrationOptions {
     onApplyValue: (key: string, value: number) => void;
     /// Read by `applyCalibration` to log the previous imu_yaw alongside
     /// the new one so operators can sanity-check the delta.
-    currentImuYawRad?: number;
+    currentImuYawRad?: number | null;
 }
 
 export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYawCalibrationOptions) => {

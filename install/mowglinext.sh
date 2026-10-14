@@ -119,7 +119,7 @@ list_only_steps() {
 Available --only= steps (mirrors mowglinext.sh run_install()'s sequence):
   docker         Installing Docker
   backend        Selecting hardware backend
-  gps            Configuring the GNSS serial link (transport + port)
+  gps            Configuring the GNSS source / serial link
   lidar          Configuring LiDAR
   uart           Enabling UARTs + rc.local
   directory      Preparing repository
@@ -154,7 +154,7 @@ run_only_step() {
         select_hardware_backend
       ;;
     gps)
-      progress_run_interactive 1 1 "Configuring GNSS serial link" \
+      progress_run_interactive 1 1 "Configuring GNSS source / serial link" \
         run_gps_configuration_step
       ;;
     lidar)
@@ -232,7 +232,7 @@ run_install() {
   progress_run_interactive 2 "$TOTAL_STEPS" "Selecting hardware backend" \
     select_hardware_backend
 
-  progress_run_interactive 3 "$TOTAL_STEPS" "Configuring GNSS serial link" \
+  progress_run_interactive 3 "$TOTAL_STEPS" "Configuring GNSS source / serial link" \
     run_gps_configuration_step
 
   progress_run_interactive 4 "$TOTAL_STEPS" "Configuring LiDAR" \

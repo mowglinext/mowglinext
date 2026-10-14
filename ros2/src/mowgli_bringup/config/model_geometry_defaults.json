@@ -1,0 +1,28 @@
+{
+  "_comment": "GENERATED from gui/web mowerModels.ts: npm run generate:model-geometry",
+  "models": {
+    "YardForce500": {
+      "chassis_z_offset": -0.05
+    },
+    "YardForce500B": {
+      "chassis_z_offset": -0.05
+    },
+    "YardForceSA650": {
+      "chassis_z_offset": 0
+    },
+    "BiltemaRM1000": {},
+    "YardForce900ECO": {
+      "chassis_z_offset": 0
+    },
+    "LUV1000RI": {
+      "chassis_z_offset": 0
+    },
+    "Sabo": {
+      "chassis_z_offset": 0
+    },
+    "Worx500MPlus": {
+      "chassis_z_offset": -0.07
+    },
+    "CUSTOM": {}
+  }
+}

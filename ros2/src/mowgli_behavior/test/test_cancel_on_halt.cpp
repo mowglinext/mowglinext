@@ -44,9 +44,12 @@
 #include "nav2_msgs/action/dock_robot.hpp"
 #include <gtest/gtest.h>
 
+using mowgli_behavior::abandonGoal;
 using mowgli_behavior::BTContext;
 using mowgli_behavior::cancelGoalQuietly;
+using mowgli_behavior::cancelWhenAbandoned;
 using mowgli_behavior::DockRobot;
+using mowgli_behavior::GoalAbandonment;
 using Dock = nav2_msgs::action::DockRobot;
 
 namespace
@@ -255,6 +258,62 @@ TEST_F(CancelOnHaltTest, TheHelperStillCancelsAnActiveGoal)
         return dock->isCanceling(0);
       },
       5.0));
+}
+
+// A goal that was SENT but not yet ANSWERED has no handle, so a plain cancel has nothing to
+// cancel; the server then accepts it for a sender that has already moved on. Field 2026-10-09:
+// a FollowStrip transit orphaned this way kept bt_navigator busy for seven minutes.
+TEST_F(CancelOnHaltTest, AGoalAbandonedBeforeTheServerAnswersIsCanceledWhenAccepted)
+{
+  // Arrange
+  auto client = rclcpp_action::create_client<Dock>(ctx->node, "/dock_robot");
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
+  auto abandonment = std::make_shared<GoalAbandonment>();
+  rclcpp_action::Client<Dock>::SendGoalOptions opts;
+  opts.goal_response_callback = cancelWhenAbandoned<Dock>(client, abandonment);
+
+  // Act: send the goal and give it up in the same breath.
+  auto future = client->async_send_goal(Dock::Goal{}, opts);
+  abandonGoal<Dock>(client, nullptr, future, abandonment, ctx->node->get_logger(), "test");
+
+  // Assert: the server accepts it a moment later and it is cancelled at once.
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 1;
+      },
+      5.0));
+  EXPECT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->isCanceling(0);
+      },
+      5.0));
+}
+
+TEST_F(CancelOnHaltTest, AGoalThatIsStillWantedIsNotCanceledWhenAccepted)
+{
+  // Arrange
+  auto client = rclcpp_action::create_client<Dock>(ctx->node, "/dock_robot");
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
+  auto abandonment = std::make_shared<GoalAbandonment>();
+  rclcpp_action::Client<Dock>::SendGoalOptions opts;
+  opts.goal_response_callback = cancelWhenAbandoned<Dock>(client, abandonment);
+
+  // Act
+  auto future = client->async_send_goal(Dock::Goal{}, opts);
+  ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+  ASSERT_TRUE(future.get());
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 1;
+      },
+      5.0));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  // Assert
+  EXPECT_FALSE(dock->isCanceling(0));
 }
 
 TEST_F(CancelOnHaltTest, DockRobotHaltedAfterItsGoalFinishedDoesNotWedgeTheTree)

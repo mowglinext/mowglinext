@@ -1,6 +1,15 @@
 import {pack} from "msgpackr";
 import type {Page, Route} from "@playwright/test";
 import type {Scenario} from "./scenarios.ts";
+import type {BlackboxStatus} from "../../../src/hooks/useBlackbox.ts";
+
+export const BLACKBOX_STATUS: BlackboxStatus = {
+    config: {enabled: true, pre_seconds: 60, post_seconds: 15, memory_bytes: 16 << 20,
+        max_message_bytes: 8192, max_snapshots: 20, max_disk_bytes: 256 << 20,
+        cooldown_seconds: 60, min_free_disk_bytes: 32 << 20},
+    phase: "ready", buffered_seconds: 0, buffered_bytes: 0, effective_memory_bytes: 16 << 20,
+    dropped_messages: 0, memory_pressure: false, topics: [], recordings: [],
+};
 
 /**
  * Neutral REST responses so every page renders without the real Go backend.
@@ -14,10 +23,30 @@ const DEFAULT_REST: Record<string, unknown> = {
     "/api/settings/yaml": {},
     "/api/settings/yaml/defaults": {},
     "/api/settings/schema": {properties: {}},
+    "/api/settings/hardware-backend": {
+        backend: "mowgli",
+        supported: ["mowgli", "mavros"],
+        runtime_routing: "available",
+        parameter_routes: {
+            ticks_per_meter: {parameter: "hardware_bridge.ticks_per_meter", runtime: "available"},
+            wheel_pid_kp: {parameter: "hardware_bridge.wheel_pid_kp", runtime: "available"},
+            wheel_pid_ki: {parameter: "hardware_bridge.wheel_pid_ki", runtime: "available"},
+            wheel_pid_kd: {parameter: "hardware_bridge.wheel_pid_kd", runtime: "available"},
+            wheel_pid_integral_limit: {
+                parameter: "hardware_bridge.wheel_pid_integral_limit",
+                runtime: "available",
+            },
+            wheel_pid_pwm_per_mps: {
+                parameter: "hardware_bridge.wheel_pid_pwm_per_mps",
+                runtime: "available",
+            },
+        },
+    },
     "/api/weather": {current: {temp_c: 19, condition: "clear", is_raining: false}, daily: []},
     "/api/diagnostics/snapshot": {coverage: [], crossChecks: {status: "ok", warnings: []}, containers: []},
     "/api/diagnostics/sessions": {sessions: []},
     "/api/diagnostics/sessions/stats": {total_sessions: 0, total_area_m2: 0, total_seconds: 0},
+    "/api/tools/blackbox/status": BLACKBOX_STATUS,
     "/api/calibration/status": {imu: {present: false}, magnetometer: {present: false}},
     "/api/schedules": {schedules: []},
     "/api/containers": {containers: []},

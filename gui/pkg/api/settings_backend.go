@@ -17,21 +17,13 @@ import (
 
 // Hardware backends (HARDWARE_BACKEND: which hardware bridge drives the robot).
 //
-// A backend changes two things the Settings page must follow:
+// A backend changes the runtime parameter routes, a few configuration defaults,
+// and the hardware-specific settings shown in the Settings page.
 //
-//  1. a few DEFAULTS. ros2/src/mowgli_bringup/config/backends/<backend>.yaml is
-//     layered between the template and the installed config by every consumer
-//     (robot_config_util.load_robot_config, the OpenMower bridge's launch file),
-//     so on an OpenMower robot "default" — the overridden dot, reset-to-default
-//     and the sparse prune — must mean OpenMower's value. The GUI image cannot
-//     read ros2/, so the overlays are baked into asserts/backend_defaults.json
-//     (TestBackendDefaultsAssetMatchesOverlays keeps it in sync);
-//  2. which hardware settings exist at all (serial ports, controller type):
-//     the frontend shows the active backend's section only.
-//
-// The backend itself is still chosen by the installer (docker/.env decides
-// which containers run); this file only reads it.
-
+// ROS2 backend overlays are layered between the template and the installed
+// config. The GUI image cannot read ros2/, so the overlays are baked into
+// asserts/backend_defaults.json (guarded by TestBackendDefaultsAssetMatchesOverlays).
+// The backend itself is chosen by the installer; this API only reports it.
 const (
 	defaultHardwareBackend    = "mowgli"
 	backendDefaultsAssetPath  = "asserts/backend_defaults.json"
@@ -43,10 +35,9 @@ const (
 // supportedHardwareBackends mirrors mowgli.launch.py SUPPORTED_HARDWARE_BACKENDS.
 var supportedHardwareBackends = []string{"mowgli", "mavros", "openmower"}
 
-// openMowerRuntimeEnvKeys maps the OpenMower wiring keys to the docker/.env
-// entries the installer writes. The bridge layers .env between the defaults
-// and the installed config, so an ABSENT key runs with the .env value — the
-// GUI must show that one, not the template's.
+// openMowerRuntimeEnvKeys maps OpenMower wiring settings to the installer env.
+// If a key is absent from the installed YAML, the bridge uses the .env value;
+// the GUI must report that same effective value.
 var openMowerRuntimeEnvKeys = map[string]string{
 	"openmower_ll_port":         "OPENMOWER_LL_PORT",
 	"openmower_xesc_type":       "OPENMOWER_XESC_TYPE",
@@ -60,7 +51,34 @@ type backendDefaultsFile struct {
 	Backends map[string]map[string]any `json:"backends"`
 }
 
-// normalizeHardwareBackend returns a known backend name, or the default.
+// HardwareParameterRoute maps a canonical mowgli_robot.yaml setting to a live
+// ROS parameter on the selected backend. YAML persistence remains canonical;
+// Runtime controls whether the live update is currently possible.
+type HardwareParameterRoute struct {
+	Parameter string `json:"parameter"`
+	Runtime   string `json:"runtime"`
+}
+
+var hardwareParameterRoutes = map[string]map[string]HardwareParameterRoute{
+	"mowgli": {
+		"ticks_per_meter":          {Parameter: "hardware_bridge.ticks_per_meter", Runtime: "available"},
+		"wheel_pid_kp":             {Parameter: "hardware_bridge.wheel_pid_kp", Runtime: "available"},
+		"wheel_pid_ki":             {Parameter: "hardware_bridge.wheel_pid_ki", Runtime: "available"},
+		"wheel_pid_kd":             {Parameter: "hardware_bridge.wheel_pid_kd", Runtime: "available"},
+		"wheel_pid_integral_limit": {Parameter: "hardware_bridge.wheel_pid_integral_limit", Runtime: "available"},
+		"wheel_pid_pwm_per_mps":    {Parameter: "hardware_bridge.wheel_pid_pwm_per_mps", Runtime: "available"},
+	},
+	"mavros": {
+		"ticks_per_meter":       {Parameter: "mavros/esc_wheel_odometry.ticks_per_meter", Runtime: "available"},
+		"wheel_track":           {Parameter: "mavros/esc_wheel_odometry.track_width_m", Runtime: "available"},
+		"wheel_pid_pwm_per_mps": {Parameter: "hardware_bridge.manual_control_linear_scale", Runtime: "available"},
+		"mowing_enabled":        {Parameter: "hardware_bridge.mowing_enabled", Runtime: "restart_required"},
+	},
+	// OpenMower drive settings are not live-routed through this parameter API.
+	"openmower": {},
+}
+
+// normalizeHardwareBackend returns a supported backend or the default.
 func normalizeHardwareBackend(value string) string {
 	name := strings.ToLower(strings.TrimSpace(value))
 	for _, known := range supportedHardwareBackends {
@@ -71,8 +89,7 @@ func normalizeHardwareBackend(value string) string {
 	return defaultHardwareBackend
 }
 
-// loadRuntimeEnv reads docker/.env (system.mower.runtimeEnvFile); empty on any
-// failure, which every caller treats as "installer chose nothing".
+// loadRuntimeEnv reads docker/.env via system.mower.runtimeEnvFile.
 func loadRuntimeEnv(dbProvider types.IDBProvider) map[string]string {
 	path, err := dbProvider.Get("system.mower.runtimeEnvFile")
 	if err != nil || len(path) == 0 {
@@ -86,8 +103,7 @@ func loadRuntimeEnv(dbProvider types.IDBProvider) map[string]string {
 	return env
 }
 
-// activeHardwareBackend is HARDWARE_BACKEND from docker/.env, then from this
-// process's environment, then "mowgli".
+// activeHardwareBackend prefers docker/.env over the process environment.
 func activeHardwareBackend(runtimeEnv map[string]string) string {
 	if value := strings.TrimSpace(runtimeEnv["HARDWARE_BACKEND"]); value != "" {
 		return normalizeHardwareBackend(value)
@@ -95,7 +111,11 @@ func activeHardwareBackend(runtimeEnv map[string]string) string {
 	return normalizeHardwareBackend(os.Getenv("HARDWARE_BACKEND"))
 }
 
-// buildBackendDefaultsFile parses every overlay in dir.
+func activeHardwareBackendForDB(dbProvider types.IDBProvider) string {
+	return activeHardwareBackend(loadRuntimeEnv(dbProvider))
+}
+
+// buildBackendDefaultsFile parses all ROS2 hardware backend YAML overlays.
 func buildBackendDefaultsFile(dir string) (backendDefaultsFile, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
 	if err != nil {
@@ -126,7 +146,7 @@ func marshalBackendDefaultsFile(file backendDefaultsFile) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
-// GenerateBackendDefaultsAsset rewrites the asset from the ROS2 overlays.
+// GenerateBackendDefaultsAsset regenerates the committed GUI overlay asset.
 func GenerateBackendDefaultsAsset(overlaysDir, output string) error {
 	file, err := buildBackendDefaultsFile(overlaysDir)
 	if err != nil {
@@ -139,9 +159,7 @@ func GenerateBackendDefaultsAsset(overlaysDir, output string) error {
 	return os.WriteFile(output, out, 0o644)
 }
 
-// backendDefaults returns the default overrides of one backend (empty when the
-// backend has none or the asset is unavailable — then the schema defaults,
-// i.e. the template, apply unchanged).
+// backendDefaults returns one backend's overrides, or an empty map if missing.
 func backendDefaults(backend string) map[string]any {
 	raw, err := os.ReadFile(backendDefaultsAssetPath)
 	if err != nil {
@@ -160,9 +178,8 @@ func backendDefaults(backend string) map[string]any {
 	return out
 }
 
-// applyBackendDefaults layers a backend's defaults over the schema defaults —
-// the same template <- backend order the robot uses. Only keys the schema
-// already knows are replaced, so an overlay can never invent a setting.
+// applyBackendDefaults layers backend defaults over template defaults, but only
+// for schema-recognized keys.
 func applyBackendDefaults(defaults map[string]any, backend string) {
 	for key, value := range backendDefaults(backend) {
 		if _, known := defaults[key]; known {
@@ -171,9 +188,8 @@ func applyBackendDefaults(defaults map[string]any, backend string) {
 	}
 }
 
-// applyOpenMowerRuntimeFallbacks shows the installer's wiring (docker/.env)
-// for every OpenMower wiring key the installed config does not set — that is
-// the value the bridge runs with.
+// applyOpenMowerRuntimeFallbacks uses installer wiring values only when the
+// installed config does not explicitly set the corresponding key.
 func applyOpenMowerRuntimeFallbacks(flat map[string]any, runtimeEnv map[string]string) {
 	for key, envKey := range openMowerRuntimeEnvKeys {
 		if hasExplicitFlatValue(flat[key]) {
@@ -185,20 +201,17 @@ func applyOpenMowerRuntimeFallbacks(flat map[string]any, runtimeEnv map[string]s
 	}
 }
 
-// HardwareBackendResponse is the body of GET /settings/hardware-backend.
+// HardwareBackendResponse is the GET /settings/hardware-backend response.
 type HardwareBackendResponse struct {
-	Backend   string   `json:"backend"`
-	Supported []string `json:"supported"`
-	// DefaultOverrides are the settings whose default this backend replaces
-	// (config/backends/<backend>.yaml). A mower-model preset must not write
-	// these: the preset describes the machine, not its electronics.
-	DefaultOverrides map[string]any `json:"default_overrides"`
-	// RobotName is robot_name from the installed config (or its default):
-	// the header badge shows it beside the backend.
-	RobotName string `json:"robot_name"`
+	Backend          string                            `json:"backend"`
+	Supported        []string                          `json:"supported"`
+	DefaultOverrides map[string]any                    `json:"default_overrides"`
+	ParameterRoutes  map[string]HardwareParameterRoute `json:"parameter_routes"`
+	RuntimeRouting   string                            `json:"runtime_routing"`
+	RobotName        string                            `json:"robot_name"`
 }
 
-// GetSettingsHardwareBackend reports the active hardware backend.
+// GetSettingsHardwareBackend reports the installer's selected backend.
 //
 // @Summary returns the active hardware backend
 // @Description HARDWARE_BACKEND from the runtime env (default mowgli)
@@ -208,12 +221,29 @@ type HardwareBackendResponse struct {
 // @Router /settings/hardware-backend [get]
 func GetSettingsHardwareBackend(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes {
 	return r.GET("/settings/hardware-backend", func(c *gin.Context) {
-		backend := activeHardwareBackend(loadRuntimeEnv(dbProvider))
+		backend := activeHardwareBackendForDB(dbProvider)
+
 		c.JSON(200, HardwareBackendResponse{
 			Backend:          backend,
 			Supported:        append([]string(nil), supportedHardwareBackends...),
 			DefaultOverrides: backendDefaults(backend),
+			ParameterRoutes:  hardwareParameterRoutes[backend],
+			RuntimeRouting:   "available",
 			RobotName:        providers.ReadRobotName(dbProvider),
 		})
 	})
+}
+
+// requireMowgliHardwareBackend rejects STM32-only drive/PID endpoints on
+// MAVROS and OpenMower backends.
+func requireMowgliHardwareBackend(dbProvider types.IDBProvider) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if backend := activeHardwareBackendForDB(dbProvider); backend != "mowgli" {
+			c.AbortWithStatusJSON(409, ErrorResponse{
+				Error: "Mowgli drive PID/feed-forward tools are unavailable for HARDWARE_BACKEND=" + backend,
+			})
+			return
+		}
+		c.Next()
+	}
 }

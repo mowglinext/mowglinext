@@ -72,3 +72,23 @@ No CI workflow runs this suite — it is a by-hand gate (see
 [`docs/claude/testing-ci.md`](../../../../docs/claude/testing-ci.md) for what CI
 does gate, and [`docs/claude/codemaps/gui_frontend.md`](../../../../docs/claude/codemaps/gui_frontend.md)
 for the pages, hooks and topic keys these specs drive).
+
+
+## Robot artwork across browser engines
+
+```sh
+npx playwright install chromium firefox webkit
+npx playwright test --config playwright.robot-artwork.config.ts --workers=3
+```
+
+This opt-in matrix runs 48 cases: Chromium, Firefox and WebKit, widths 390/768/
+1440/2046, and CSS layout scaling 80/100/125/150%. Each case checks LiDAR, GPS and
+IMU at two LiDAR yaw values (-90 and +45 degrees). Isolated screenshots must
+contain the actual sensor raster (highlight outlines are excluded), centred
+within 1.75 pixels of the independently rasterised position marker. This catches
+Firefox rendering errors that correct SVG transform matrices alone cannot detect
+and WebKit filter/clipping failures that hide pictures entirely.
+
+The fixture uses mocked settings and telemetry. CSS `zoom` is simulated layout
+scaling, not browser-toolbar zoom. Playwright WebKit on Windows is not a physical
+iPhone/Safari test. Screenshots are saved under the usual runner artifacts.

@@ -10,12 +10,13 @@ import {
     normalizeGnssString,
     rawGnssInputString,
 } from "./gnssConfig.ts";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const { Paragraph } = Typography;
 
 type Props = {
     receiverFamily: unknown;
-    values: Record<string, any>;
+    values: SettingsValues;
     onChange: (key: string, value: any) => void;
 };
 
@@ -145,7 +146,7 @@ export const UniversalGnssAdvancedSettings: React.FC<Props> = ({
                             <div key={field.key}>
                                 <Form.Item label={t(field.label)} tooltip={t(field.tooltip)}>
                                     <InputNumber
-                                        value={values[field.key]}
+                                        value={values[field.key] as number | null | undefined}
                                         onChange={(value) => onChange(field.key, value)}
                                         placeholder={field.placeholder ? t(field.placeholder) : field.placeholder}
                                         min={field.min}

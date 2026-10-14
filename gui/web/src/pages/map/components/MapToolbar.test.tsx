@@ -39,6 +39,15 @@ describe('MapToolbar', () => {
         onEmergencyOff: vi.fn().mockResolvedValue(undefined),
     };
 
+    it("links to Hardware instead of offering separate mower/dock image selectors", async () => {
+        const user = userEvent.setup();
+        render(<MapToolbar {...defaultProps} />);
+        await user.click(screen.getByText(en.mapToolbar.more));
+        expect(screen.getByRole("link", {name: en.mowerVisual.hardwareLink})).toHaveAttribute("href", "#/settings?section=hardware");
+        expect(screen.queryByText(en.mapToolbar.dockAppearance)).not.toBeInTheDocument();
+        expect(screen.queryByText(en.mapToolbar.mowerAppearance)).not.toBeInTheDocument();
+    });
+
     beforeEach(() => {
         vi.clearAllMocks();
     });

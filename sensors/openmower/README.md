@@ -268,6 +268,17 @@ saves the wiring and a lift delay "from the GUI" while `docker/.env` names the
 wrong ports and controller type, and checks the GUI values win and a 0 ms
 period is refused.
 
+Stop latency is measured from received motor-command history, so a delayed
+service response does not change the result. Odometry and ground motion are
+integrated over the same message-stamp interval. Calibration checks the actual
+start against stationary wheel ticks and pins the 200-sample requirement;
+insufficient IMU delivery remains a separate failure. A failed scenario stops
+dependent scenarios for that controller without resetting its latch. The other
+controller still runs, and the overall result stays failed.
+Ground history uses monotonic time mapped to ROS stamps through independently
+measured clock bounds. A clock-epoch change invalidates the crossing measurement
+and remains a fixture failure.
+
 `sim/run_stack_integration.py` adds the real `mowgli_bringup/launch/mowgli.launch.py`:
 exactly one `/hardware_bridge` with `HARDWARE_BACKEND=openmower`, a command on
 the twist_mux teleop lane reaching the emulated wheels, the STM32 bridge still
@@ -302,6 +313,7 @@ colcon test --packages-select mowgli_openmower_bridge && colcon test-result --ve
 python3 -m pytest sensors/openmower/mowgli_openmower_bridge/test/test_launch_config.py  # launch layering
 
 # simulation (needs the workspace above + mowgli_bringup for the stack check)
+python3 -m unittest discover -s sensors/openmower/sim -p 'test_*.py'  # measurement regressions, no ROS
 python3 sensors/openmower/sim/run_simulation.py            # both controller types
 python3 sensors/openmower/sim/run_stack_integration.py
 ```

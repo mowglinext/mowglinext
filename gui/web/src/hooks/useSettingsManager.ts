@@ -1,3 +1,5 @@
+import {DOCK_VISUAL_KEYS} from "../components/robot/dockGeometry";
+import {materializeLegacyCasterPosition} from "../utils/casterPosition";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "./useApi.ts";
@@ -6,7 +8,7 @@ import { dirtyKeysRequireGpsRestart, restartGps } from "../utils/containers.ts";
 import { useContainerRestart } from "./useContainerRestart.ts";
 import { getQuaternionFromHeading } from "../utils/map.tsx";
 import { ContentType } from "../api/Api.ts";
-import {matchesSettingSearch, settingSearchText} from "../utils/settingsSearch.ts";
+import { matchesSettingSearch, settingSearchText } from "../utils/settingsSearch.ts";
 import { valuesMatch } from "../utils/settingsValues.ts";
 import {
     AREA_RECORDING_GROUP,
@@ -24,7 +26,11 @@ import {
     YAW_LOOP_GROUP,
     groupKeys,
 } from "../components/settings/settingsFieldGroups.ts";
+import { liveHardwareParameters, settingsSectionsForBackend } from "../constants/hardwareBackends.ts";
 import { useHardwareBackend } from "./useHardwareBackend.ts";
+import {apiErrorMessage, errorMessage} from "../utils/errors";
+import type {SettingsValues} from "../types/settings.generated";
+
 
 /** A section that saves outside mowgli_robot.yaml but wants the page's Save button. */
 export interface ExternalSaver {
@@ -35,6 +41,7 @@ export interface ExternalSaver {
     /** Drop pending edits (page-level Revert). */
     revert?: () => void;
 }
+
 
 export type SettingsSection =
     | "updates"
@@ -58,6 +65,7 @@ export type SettingsSection =
     | "notifications"
     | "advanced";
 
+
 export type SectionMeta = {
     id: SettingsSection;
     label: string;
@@ -65,6 +73,7 @@ export type SectionMeta = {
     description: string;
     keys: string[];
 };
+
 
 const SECTION_DEFINITIONS: SectionMeta[] = [
     {
@@ -89,8 +98,8 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "robot_name", "mower_model", "wheel_radius", "wheel_track", "wheel_width",
             "wheel_x_offset", "chassis_center_x", "chassis_length", "chassis_width",
-            "chassis_height", "chassis_mass_kg", "caster_radius", "caster_track",
-            "ticks_per_meter", "tool_width", "blade_radius",
+            "mower_visual_style", "mower_visual_colour", ...DOCK_VISUAL_KEYS, "chassis_height", "chassis_z_offset", "chassis_mass_kg", "caster_radius", "caster_track", "caster_x_offset",
+            "ticks_per_meter", "tool_width", "blade_radius", "blade_x_offset", "blade_y_offset",
             // The hardware backend's own wiring (ports, controller type), in
             // the same section: one place for "what this robot is made of".
             ...groupKeys(OPENMOWER_WIRING_GROUP),
@@ -328,17 +337,19 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
     },
 ];
 
+
 export const useSettingsManager = () => {
     const { t } = useTranslation();
     const guiApi = useApi();
+    const hardware = useHardwareBackend();
     const { notification } = App.useApp();
-    const [savedValues, setSavedValues] = useState<Record<string, any>>({});
-    const [localValues, setLocalValues] = useState<Record<string, any>>({});
+    const [savedValues, setSavedValues] = useState<SettingsValues>({});
+    const [localValues, setLocalValues] = useState<SettingsValues>({});
     // Schema defaults = the GUI's source of "default value" for each key.
     // (The backend derives these from the JSON schema, which stands in for the
     // ROS2 package template it cannot read at runtime.) Used for the
     // per-field "reset to default" affordance and the overridden indicator.
-    const [defaults, setDefaults] = useState<Record<string, any>>({});
+    const [defaults, setDefaults] = useState<SettingsValues>({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [restartRequired, setRestartRequired] = useState(() => {
@@ -362,37 +373,24 @@ export const useSettingsManager = () => {
     });
     const [searchQuery, setSearchQuery] = useState("");
     const initialLoadDone = useRef(false);
-    const hardware = useHardwareBackend();
+
+
 
     // Load values on mount
     useEffect(() => {
-        (async () => {
+        void (async () => {
             try {
                 setLoading(true);
                 const res = await guiApi.settings.yamlList();
-                if (res.error) throw new Error((res.error as any).error);
+                if (res.error) throw new Error(apiErrorMessage(res.error));
                 const data = (res.data) || {};
                 setSavedValues(data);
                 setLocalValues(data);
-                // Best-effort: the reset-to-default UI degrades gracefully
-                // (no reset icons) if this fails, so it must not block load.
-                try {
-                    const defRes = await guiApi.request({
-                        path: "/settings/yaml/defaults",
-                        method: "GET",
-                        format: "json",
-                    });
-                    if (!defRes.error) {
-                        setDefaults((defRes.data as Record<string, any>) || {});
-                    }
-                } catch {
-                    /* defaults unavailable — reset affordance hidden */
-                }
                 initialLoadDone.current = true;
-            } catch (e: any) {
+            } catch (e) {
                 notification.error({
                     message: t("settingsSections.toasts.loadFailed"),
-                    description: e.message,
+                    description: errorMessage(e),
                 });
             } finally {
                 setLoading(false);
@@ -400,12 +398,49 @@ export const useSettingsManager = () => {
         })();
     }, []);
 
-    const handleChange = useCallback((key: string, value: any) => {
-        setLocalValues((prev) => ({ ...prev, [key]: value }));
+    // The reset value follows the draft preset, including before Save.
+    // Discard responses from an earlier selection to avoid stale defaults.
+    const draftModel: unknown = localValues.mower_model;
+    const draftMowerModel = typeof draftModel === "string" ? draftModel : undefined;
+
+    useEffect(() => {
+        if (loading) return;
+
+        let active = true;
+        setDefaults({});
+
+        guiApi.request({
+            path: "/settings/yaml/defaults",
+            method: "GET",
+            format: "json",
+            query: draftMowerModel === undefined
+                ? {}
+                : {mower_model: draftMowerModel},
+        }).then(res => {
+            if (active && !res.error) {
+                setDefaults((res.data as SettingsValues) || {});
+            }
+        }).catch(() => {
+            /* defaults unavailable: reset affordance stays hidden */
+        });
+
+        return () => {
+            active = false;
+        };
+    }, [loading, draftMowerModel, guiApi]);
+
+    const handleChange = useCallback((key: string, value: unknown) => {
+        setLocalValues((prev) => ({
+            ...materializeLegacyCasterPosition(prev),
+            [key]: value,
+        }));
     }, []);
 
-    const handleBulkChange = useCallback((changes: Record<string, any>) => {
-        setLocalValues((prev) => ({ ...prev, ...changes }));
+    const handleBulkChange = useCallback((changes: SettingsValues) => {
+        setLocalValues((prev) => ({
+            ...materializeLegacyCasterPosition(prev),
+            ...changes,
+        }));
     }, []);
 
     // hasDefault: the schema knows a default for this key (so a reset is
@@ -420,11 +455,13 @@ export const useSettingsManager = () => {
         [defaults]
     );
 
+
     const isDefault = useCallback(
         (key: string): boolean =>
             key in defaults && valuesMatch(localValues[key], defaults[key]),
         [defaults, localValues]
     );
+
 
     const isOverridden = useCallback(
         (key: string): boolean =>
@@ -432,16 +469,18 @@ export const useSettingsManager = () => {
         [defaults, localValues]
     );
 
+
     // resetToDefault reverts a field to its schema default in the local (unsaved)
     // state; the operator still presses Save to persist. On save the backend
     // prunes default-valued keys, so the installed config stays sparse.
     const resetToDefault = useCallback(
         (key: string) => {
             if (!(key in defaults)) return;
-            setLocalValues((prev) => ({ ...prev, [key]: defaults[key] }));
+            setLocalValues((prev) => ({ ...materializeLegacyCasterPosition(prev), [key]: defaults[key] }));
         },
         [defaults]
     );
+
 
     // Dirty detection
     const dirtyKeys = useMemo(() => {
@@ -458,6 +497,7 @@ export const useSettingsManager = () => {
         }
         return dirty;
     }, [localValues, savedValues]);
+
 
     // External savers: sections whose settings do not live in mowgli_robot.yaml
     // (IrriSense keeps its token in the GUI DB) register here so the page's
@@ -487,6 +527,7 @@ export const useSettingsManager = () => {
     const dirtyCount = dirtyKeys.size + externalDirtyCount;
     const isDirty = dirtyCount > 0;
 
+
     const isSectionDirty = useCallback(
         (sectionId: SettingsSection): boolean => {
             const section = SECTION_DEFINITIONS.find((s) => s.id === sectionId);
@@ -507,6 +548,7 @@ export const useSettingsManager = () => {
         [dirtyKeys, externalDirtyCounts]
     );
 
+
     const persistSettings = useCallback(async (options?: { forceGpsRestart?: boolean }) => {
         try {
             setSaving(true);
@@ -520,16 +562,25 @@ export const useSettingsManager = () => {
                 dirtyKeys.has("dock_pose_x") ||
                 dirtyKeys.has("dock_pose_y") ||
                 dirtyKeys.has("dock_pose_yaw");
-            const driveKeys = [
-                "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
-                "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
-            ];
-            // Live push to the Mowgli STM32 bridge only: on another backend
-            // these parameters do not exist on the node named hardware_bridge
-            // (the OpenMower bridge reads them at start-up).
-            const liveHardwareKeys = hardware.backend === "mowgli" ? ["ticks_per_meter", ...driveKeys] : [];
-            const liveHardwareDirty = liveHardwareKeys.some((k) => dirtyKeys.has(k));
-            const requiresRosRestart = [...dirtyKeys].some(key => !liveHardwareKeys.includes(key));
+            // Only runtime-confirmed routes may be pushed live. OpenMower and
+            // pending MAVROS routes must be persisted and applied on restart.
+            const liveParameters = liveHardwareParameters(
+                dirtyKeys,
+                localValues,
+                hardware.parameterRoutes,
+            );
+            const liveHardwareKeys = new Set(
+                [...dirtyKeys].filter((key) =>
+                    hardware.parameterRoutes[key]?.runtime === "available" && key in localValues,
+                ),
+            );
+            const liveHardwareDirty = liveHardwareKeys.size > 0;
+            // Appearance-only changes are persisted without restarting ROS;
+            // geometry and unavailable runtime routes still require a restart.
+            const requiresRosRestart = [...dirtyKeys].some((key) =>
+                !liveHardwareKeys.has(key) && !DOCK_VISUAL_KEYS.includes(key) &&
+                key !== "mower_visual_style" && key !== "mower_visual_colour",
+            );
             const hasDirtyChanges = dirtyKeys.size > 0;
             const externalSavers = Object.values(externalSaversRef.current).filter((x) => x.dirtyCount > 0);
             if (!hasDirtyChanges && !shouldRestartGps && externalSavers.length === 0) {
@@ -543,7 +594,7 @@ export const useSettingsManager = () => {
             // preserves anything other processes may have written between
             // load and save (e.g. dock_pose_x/y from the calibration
             // service or the map "set dock pose" action).
-            const dirtyPayload: Record<string, any> = {};
+            const dirtyPayload: SettingsValues = {};
             for (const key of dirtyKeys) {
                 if (key in localValues) {
                     dirtyPayload[key] = localValues[key];
@@ -551,11 +602,11 @@ export const useSettingsManager = () => {
             }
             if (hasDirtyChanges) {
                 const res = await guiApi.settings.yamlCreate(dirtyPayload);
-                if (res.error) throw new Error((res.error as any).error);
+                if (res.error) throw new Error(apiErrorMessage(res.error));
                 // AdvancedSection deletes surface as null-valued keys. The
                 // backend drops null keys from the YAML on save, so prune them
                 // from local state too — otherwise the deleted rows reappear.
-                const pruned: Record<string, any> = {};
+                const pruned: SettingsValues = {};
                 for (const [key, value] of Object.entries(localValues)) {
                     if (value !== null) {
                         pruned[key] = value;
@@ -568,7 +619,7 @@ export const useSettingsManager = () => {
                     message: t("settingsSections.toasts.saved"),
                     description: shouldRestartGps
                         ? t("settingsSections.toasts.savedGpsRestartDescription")
-                        : t(requiresRosRestart ? "settingsSections.toasts.savedDescription" : "settingsSections.toasts.savedApplyingLive"),
+                        : t(requiresRosRestart ? "settingsSections.toasts.savedDescription" : liveHardwareDirty ? "settingsSections.toasts.savedApplyingLive" : "settingsSections.toasts.savedDisplaySettings"),
                 });
             } else if (shouldRestartGps) {
                 notification.info({
@@ -614,55 +665,60 @@ export const useSettingsManager = () => {
                         // an operator-entered yaw is explicit, never circular.
                         yaw_source: 1,
                     });
-                } catch (e: any) {
+                } catch (e) {
                     notification.warning({
                         message: t("settingsSections.toasts.dockRefreshFailed"),
-                        description: e?.message ??
+                        description: errorMessage(e) ??
                             t("settingsSections.toasts.dockRefreshFailedDescription"),
                     });
                 }
             }
-            // Push live-tunable wheel/drive parameters to the running
-            // hardware_bridge node so they take effect immediately (no
-            // restart). yamlCreate above persisted them to mowgli_robot.yaml
-            // for the next boot; this sets the live ROS params too. The
-            // hardware_bridge callback applies ticks_per_meter in-process and
-            // re-sends the full drive runtime tuning packet to the STM32 firmware.
-            if (hasDirtyChanges && liveHardwareDirty) {
-                const parameters = liveHardwareKeys
-                    .filter((k) => dirtyKeys.has(k) && k in localValues)
-                    .map((k) => ({ name: `hardware_bridge.${k}`, value: Number(localValues[k]) }));
-                if (parameters.length > 0) {
-                    try {
-                        await guiApi.request({
-                            path: "/params",
-                            method: "POST",
-                            type: ContentType.Json,
-                            format: "json",
-                            body: { parameters },
-                        });
-                    } catch (e: any) {
-                        setRestartRequired(true);
-                        notification.warning({
-                            message: t("settingsSections.toasts.drivePidUpdateFailed"),
-                            description: e?.message ??
-                                t("settingsSections.toasts.drivePidUpdateFailedDescription"),
-                        });
+            // Persisting YAML does not guarantee the runtime accepted a live
+            // parameter update. Only send routes the active backend reports as available.
+            if (hasDirtyChanges && liveParameters.length > 0) {
+                try {
+                    const liveResponse = await guiApi.request({
+                        path: "/params",
+                        method: "POST",
+                        type: ContentType.Json,
+                        format: "json",
+                        body: { parameters: liveParameters },
+                    });
+
+                    if (liveResponse.error) {
+                        throw new Error(apiErrorMessage(liveResponse.error));
                     }
+                } catch (e) {
+                    setRestartRequired(true);
+                    notification.warning({
+                        message: t("settingsSections.toasts.drivePidUpdateFailed"),
+                        description: errorMessage(e) ??
+                            t("settingsSections.toasts.drivePidUpdateFailedDescription"),
+                    });
                 }
             }
-        } catch (e: any) {
+        } catch (e) {
             notification.error({
                 message: t("settingsSections.toasts.saveFailed"),
-                description: e.message,
+                description: errorMessage(e),
             });
         } finally {
             setSaving(false);
         }
-    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, t, hardware.backend]);
+    }, [
+        localValues,
+        dirtyKeys,
+        guiApi,
+        notification,
+        gpsRestart,
+        t,
+        hardware.parameterRoutes,
+        hardware.backend,
+    ]);
+
 
     const savePartialValues = useCallback(async (
-        partialValues: Record<string, any>,
+        partialValues: SettingsValues,
         options?: {
             successMessage?: string;
             successDescription?: string;
@@ -672,29 +728,34 @@ export const useSettingsManager = () => {
         },
     ) => {
         try {
-            const changedPayload: Record<string, any> = {};
+            const changedPayload: SettingsValues = {};
             for (const [key, value] of Object.entries(partialValues)) {
                 if (JSON.stringify(value) !== JSON.stringify(savedValues[key])) {
                     changedPayload[key] = value;
                 }
             }
 
+
             if (Object.keys(changedPayload).length === 0) {
                 return true;
             }
 
+
             setSaving(true);
             const res = await guiApi.settings.yamlCreate(changedPayload);
             if (res.error) {
-                throw new Error((res.error as any).error);
+                throw new Error(apiErrorMessage(res.error));
             }
+
 
             setSavedValues((prev) => ({ ...prev, ...changedPayload }));
             setLocalValues((prev) => ({ ...prev, ...changedPayload }));
 
+
             if (options?.markRestartRequired ?? true) {
                 setRestartRequired(true);
             }
+
 
             if (!options?.silentSuccess) {
                 notification.success({
@@ -703,30 +764,33 @@ export const useSettingsManager = () => {
                 });
             }
 
+
             return true;
-        } catch (e: any) {
+        } catch (e) {
             notification.error({
                 message: options?.errorMessage ?? t("settingsSections.toasts.saveFailed"),
-                description: e.message,
+                description: errorMessage(e),
             });
             return false;
         } finally {
             setSaving(false);
         }
     }, [guiApi, notification, savedValues, t]);
-
-    const acceptPersistedValues = useCallback((persistedValues: Record<string, any>) => {
+    const acceptPersistedValues = useCallback((persistedValues: SettingsValues) => {
         setSavedValues((prev) => ({ ...prev, ...persistedValues }));
         setLocalValues((prev) => ({ ...prev, ...persistedValues }));
     }, []);
+
 
     const save = useCallback(async () => {
         await persistSettings();
     }, [persistSettings]);
 
+
     const saveAndRestartGps = useCallback(async () => {
         await persistSettings({ forceGpsRestart: true });
     }, [persistSettings]);
+
 
     const revert = useCallback(() => {
         setLocalValues({ ...savedValues });
@@ -734,6 +798,7 @@ export const useSettingsManager = () => {
             saver.revert?.();
         }
     }, [savedValues]);
+
 
     // Get keys that don't belong to any defined section.
     // dock_pose_x/y/yaw are excluded because they are written by the
@@ -780,6 +845,7 @@ export const useSettingsManager = () => {
         );
     }, [localValues]);
 
+
     // Search filtering
     const matchesSearch = useCallback(
         (key: string, label?: string): boolean => {
@@ -789,14 +855,19 @@ export const useSettingsManager = () => {
         [searchQuery, t]
     );
 
+
     return {
-        sections: SECTION_DEFINITIONS,
-        hardwareBackend: hardware.backend,
+        sections: settingsSectionsForBackend(SECTION_DEFINITIONS, hardware.backend).map(section =>
+            hardware.backend === "mavros" && section.id === "drive_motor"
+                ? { ...section, description: "settingsDriveMotor.odometry.sectionDescription" }
+                : section
+        ),
+        hardwareBackend: hardware,
         backendDefaultOverrides: hardware.defaultOverrides,
         values: localValues,
         savedValues,
         defaults,
-        loading,
+        loading: loading || hardware.loading,
         saving,
         gpsRestarting: gpsRestart.pending,
         isDirty,

@@ -5,7 +5,7 @@ import { normalizeDigSensitivity, ObstaclesSection } from "./ObstaclesSection.ts
 describe("dig obstacle setting", () => {
     it.each([true, false, "false"])("renders %s and changes the map setting only", (value) => {
         const onChange = vi.fn();
-        render(<ObstaclesSection values={{ dig_obstacle_enabled: value }} onChange={onChange} />);
+        render(<ObstaclesSection values={{ dig_obstacle_enabled: value as boolean }} onChange={onChange} />);
         const toggle = screen.getByRole("switch", { name: "Propose an obstacle where the robot dug in" });
         const enabled = value === true;
         expect(toggle).toHaveAttribute("aria-checked", String(enabled));

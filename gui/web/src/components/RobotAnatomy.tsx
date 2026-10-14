@@ -1,3 +1,4 @@
+import {motorDisplayValue} from '../utils/motorTelemetry';
 import {useState} from "react";
 import type {ReactNode} from "react";
 import {useTranslation} from "react-i18next";
@@ -24,7 +25,7 @@ export interface AnatomyInputs {
   lidarOk?: boolean;
   wheelLeftRpm: number;
   wheelRightRpm: number;
-  bladeOn: boolean;
+  bladeOn?: boolean;
   rain: boolean;
   dockCharging: boolean;
 }
@@ -57,20 +58,35 @@ function partInfo(part: Part, inputs: AnatomyInputs, t: TFunction): PartInfo {
     case 'battery':
       return {
         label: t('robotAnatomy.battery'),
-        value: <><span className="diagnostics-battery-percent">{inputs.batteryPct.toFixed(0)}</span>% · <span className="diagnostics-battery-voltage">{inputs.vBattery.toFixed(1)}</span> V</>,
-        tone: boolTone(inputs.batteryPct > 20),
+        value: Number.isFinite(inputs.batteryPct) && Number.isFinite(inputs.vBattery)
+          ? (
+              <>
+                <span className="diagnostics-battery-percent">
+                  {inputs.batteryPct.toFixed(0)}
+                </span>
+                % ·{" "}
+                <span className="diagnostics-battery-voltage">
+                  {inputs.vBattery.toFixed(1)}
+                </span>{" "}
+                V
+              </>
+            )
+          : "—",
+        tone: Number.isFinite(inputs.batteryPct)
+          ? boolTone(inputs.batteryPct > 20)
+          : "unknown",
       };
     case 'blade':
-      return {label: t('robotAnatomy.blade'), value: inputs.bladeOn ? t('robotAnatomy.spinning') : t('robotAnatomy.off'), tone: boolTone(!inputs.bladeOn)};
+      return {label: t('robotAnatomy.blade'), value: inputs.bladeOn === undefined ? t('robotAnatomy.noData') : inputs.bladeOn ? t('robotAnatomy.spinning') : t('robotAnatomy.off'), tone: inputs.bladeOn === undefined ? 'unknown' : boolTone(!inputs.bladeOn)};
     case 'wheelL':
-      return {label: `${t('robotAnatomy.leftWheel')} (rpm)`, value: inputs.wheelLeftRpm.toFixed(0), tone: 'ok'};
+      return {label: `${t('robotAnatomy.leftWheel')} (rpm)`, value: motorDisplayValue(inputs.wheelLeftRpm), tone: Number.isFinite(inputs.wheelLeftRpm) ? 'ok' : 'unknown'};
     case 'wheelR':
-      return {label: `${t('robotAnatomy.rightWheel')} (rpm)`, value: inputs.wheelRightRpm.toFixed(0), tone: 'ok'};
+      return {label: `${t('robotAnatomy.rightWheel')} (rpm)`, value: motorDisplayValue(inputs.wheelRightRpm), tone: Number.isFinite(inputs.wheelRightRpm) ? 'ok' : 'unknown'};
     case 'motor':
       return {
         label: `${t('robotAnatomy.motors')} (°C)`,
-        value: t('robotAnatomy.motorTemps', {motor: inputs.motorTempC.toFixed(0), esc: inputs.escTempC.toFixed(0)}),
-        tone: boolTone(inputs.motorTempC < 55),
+        value: t('robotAnatomy.motorTemps', {motor: motorDisplayValue(inputs.motorTempC), esc: motorDisplayValue(inputs.escTempC)}),
+        tone: Number.isFinite(inputs.motorTempC) ? boolTone(inputs.motorTempC < 55) : 'unknown',
       };
     case 'dock':
       return {label: t('robotAnatomy.dock'), value: inputs.dockCharging ? t('robotAnatomy.charging') : t('robotAnatomy.offDock'), tone: 'ok'};
@@ -165,10 +181,9 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
           <g onMouseEnter={handleEnter('battery')} onMouseLeave={handleLeave} style={{cursor: 'pointer'}}>
             <rect x={120} y={150} width={80} height={26} rx={4}
                   fill={fill('battery')} stroke={stroke('battery')} strokeWidth={sw('battery')}/>
-            <text x={166} y={166} textAnchor="end" fontSize={9} fontWeight={600} fill={colors.text}>
-              {inputs.batteryPct.toFixed(0)}
+            <text x={160} y={166} textAnchor="middle" fontSize={9} fontWeight={600} fill={colors.text}>
+              {Number.isFinite(inputs.batteryPct) ? `${inputs.batteryPct.toFixed(0)}%` : "—"}
             </text>
-            <text x={168} y={166} textAnchor="start" fontSize={9} fontWeight={600} fill={colors.text}>%</text>
           </g>
 
           {/* Blade (center, below IMU) */}

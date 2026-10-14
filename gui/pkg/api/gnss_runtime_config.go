@@ -106,6 +106,7 @@ func loadGNSSSettingsDocument(dbProvider pkgtypes.IDBProvider) (gnssSettingsDocu
 	if err == nil {
 		defaults := map[string]any{}
 		extractDefaults(schema, defaults)
+		applyModelGeometryDefaults(defaults, explicitFlat)
 		for key, value := range defaults {
 			if _, exists := flat[key]; !exists {
 				flat[key] = value

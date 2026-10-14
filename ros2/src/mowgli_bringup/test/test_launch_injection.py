@@ -245,6 +245,7 @@ def test_navigation_launch_injects_connector_max_headland_passes() -> None:
     [
         ("pivot_sweep_radius", "chassis_circumscribed_radius"),
         ("boundary_soft_margin", "boundary_soft_margin"),
+        ("footprint_half_width", "chassis_half_width"),
     ],
 )
 def test_navigation_launch_injects_pivot_join_limits(key: str, helper: str) -> None:

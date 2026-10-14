@@ -26,6 +26,7 @@
 # identical template default; a no-op merge).
 
 import math
+import json
 import copy
 import os
 import sys
@@ -495,7 +496,7 @@ def _load_yaml_file(path):
 def load_robot_config(bringup_dir, runtime_path=DEFAULT_RUNTIME_PATH, hardware_backend=None):
     """Return the merged full mowgli_robot config dict.
 
-    template <- backend defaults (config/backends/<backend>.yaml) <- runtime.
+    template <- backend defaults <- selected preset upgrade geometry <- runtime.
     ``bringup_dir`` is the mowgli_bringup share directory
     (get_package_share_directory("mowgli_bringup")); ``hardware_backend``
     defaults to resolve_hardware_backend().
@@ -504,7 +505,18 @@ def load_robot_config(bringup_dir, runtime_path=DEFAULT_RUNTIME_PATH, hardware_b
     template = _load_yaml_file(os.path.join(bringup_dir, "config", "mowgli_robot.yaml"))
     overlay = _load_yaml_file(backend_defaults_path(bringup_dir, backend))
     runtime = _load_yaml_file(runtime_path)
-    return deep_merge(deep_merge(template, overlay), runtime)
+    defaults = deep_merge(template, overlay)
+    default_params = defaults.get("mowgli", {}).get("ros__parameters", {})
+    runtime_params = runtime.get("mowgli", {}).get("ros__parameters", {})
+    model = runtime_params.get("mower_model", default_params.get("mower_model"))
+    # Generated from the UI presets, restricted to new upgrade geometry keys.
+    # Apply before runtime so a measured value (including zero) always wins.
+    model_path = os.path.join(bringup_dir, "config", "model_geometry_defaults.json")
+    if os.path.isfile(model_path):
+        with open(model_path, "r") as handle:
+            model_defaults = json.load(handle)["models"].get(model, {})
+        default_params.update(model_defaults)
+    return deep_merge(defaults, runtime)
 
 
 def load_robot_params(bringup_dir, runtime_path=DEFAULT_RUNTIME_PATH, hardware_backend=None):

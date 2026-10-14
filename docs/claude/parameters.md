@@ -36,6 +36,14 @@ Operator-facing rule of thumb: **the GUI only ever writes `mowgli_robot.yaml`.**
 
 All 202 template keys. `L###` = line in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`. **GUI** = present in `mower_config.schema.json` (section name), or `no` — a `no` key still shows up in Settings → *Advanced* once it exists in the installed file (`gui/web/src/hooks/useSettingsManager.ts:679` `advancedKeys`). **Life** = `launch` (injected at launch, restart to apply), `dynamic` (also honoured live via `ros2 param set`), `INERT` (never injected — node compiled default wins), `sidecar` (consumed outside ROS2).
 
+### Dock illustration (GUI only)
+
+`mower_visual_style` (empty string) selects the shared shell and matching dock artwork. Empty follows the hardware model. Hardware edits are drafts until Settings Save; Sensors and Map read the mower configuration. Legacy browser shell choices are ignored. This display-only key needs no ROS restart.
+
+`mower_visual_colour` (empty string) selects paint for the shell body panels. Empty preserves original artwork; otherwise use a six-digit hex colour (`#RRGGBB`). Hardware edits and Settings Save behave like the shell choice. Shared with Sensors and Map, display only, no ROS restart.
+
+`dock_visual_length` (0.67 m), `dock_visual_width` (0.46 m), `dock_visual_x_offset` and `dock_visual_y_offset` (both 0 m adjustments from the registered artwork alignment) size and position the dock artwork in Hardware, Sensors and the map. They live in the robot template and Hardware schema, persist in the sparse robot YAML, and apply without a ROS restart. Defaults are nominal illustration dimensions. These keys do not affect dock calibration, navigation or collision geometry.
+
 ### Dig obstacle proposals
 
 | Key | Default | Consumer · where read | GUI | Life |
@@ -70,6 +78,7 @@ It is the radius around a session dig point inside which FollowStrip skips cover
 | `chassis_length` (L24) | 0.60 | xacro `mowgli.launch.py:94`; Nav2 footprint `navigation.launch.py:304` | Hardware | launch |
 | `chassis_width` (L25) | 0.45 | xacro `mowgli.launch.py:95`; footprint `navigation.launch.py:305`; `map_server.chassis_width` `full_system.launch.py:389`; `coverage_server.robot_width` `navigation.launch.py:930` | Hardware | launch |
 | `chassis_height` (L26) | 0.19 | xacro `mowgli.launch.py:96` | Hardware | launch |
+| `chassis_z_offset` | 0.0 (preserves legacy height) | Body bottom relative to rear axle; xacro visual/collision only | Hardware | launch |
 | `chassis_mass_kg` (L27) | 8.76 | xacro `mowgli.launch.py:97` (base_link inertial; pinned by `test_urdf_xacro.py`) | Hardware | launch |
 | `wheel_radius` | 0.1 | xacro `mowgli.launch.py:99` → `base_z_offset` (base_link height above ground, so every sensor z) + wheel visuals. Nothing else; odometry uses `ticks_per_meter`. Was 0.04475 (xacro default 0.093) until 2026-09-05 | Hardware | launch |
 | `wheel_width` (L31) | 0.04 | xacro `mowgli.launch.py:100` | Hardware | launch |
@@ -79,6 +88,7 @@ It is the radius around a session dig point inside which FollowStrip skips cover
 | `ticks_per_meter` (L43) | 399.0 | `hardware_bridge.ticks_per_meter` `mowgli.launch.py:210` (host odom + re-sent to STM32) | Hardware | launch |
 | `caster_radius` (L190) | 0.03 | xacro `mowgli.launch.py:103` | Hardware | launch |
 | `caster_track` (L191) | 0.36 | xacro `mowgli.launch.py:104` | Hardware | launch |
+| `caster_x_offset` | -1.0 (legacy derived placement; GUI shows numeric position) | xacro `mowgli.launch.py`; caster axle X from base_link, metres | Hardware | launch |
 | `blade_radius` (L194) | 0.09 | xacro `mowgli.launch.py:105` (`blade_link`) | Hardware | launch |
 | `tool_width` (L195) | 0.18 | `map_server.tool_width` `full_system.launch.py:426` (mow-progress stamp radius); `coverage_server.operation_width = tool_width − swath_overlap` `navigation.launch.py:924`. Fallback single-sourced as `DEFAULT_TOOL_WIDTH_M` (`robot_config_util.py:48`) — **Invariant 6** | Hardware | launch |
 
@@ -544,3 +554,7 @@ Follow all six steps, in order. Skipping step 2 is the classic failure: the key 
 6. **Guards and docs.** Add an AST guard to `ros2/src/mowgli_bringup/test/test_launch_injection.py` if the injection has semantics a refactor could break (clamping, sentinel ranges, which node receives it); add a static pin to `test/test_nav2_params.py` if it lands in the merged Nav2 doc; extend `ros2/scripts/check_config_drift.py`'s field lists if it is structural or a calibration output. Then update this file, the relevant codemap, and — only if it changes an architecture rule — CLAUDE.md.
 
 **Removing** a parameter: delete it from the template *and* the schema, add it to `settings.go` `retiredParamKeys` so existing installed yamls get scrubbed on the next save, and add it to `useSettingsManager.ts` `HIDDEN_FROM_ADVANCED` (L654) so it stops rendering in the meantime.
+
+Dock Center X and Dock Center Y locate the centre of the full visible footprint, including any side pedestal. X is forward from the parked rear axle; Y is left from the mower centreline. The renderer has no additional per-style lateral offset. Existing saved X values retain their meaning.
+
+Blade geometry: `blade_x_offset` / `blade_y_offset` (both 0.0 m) move the blade centre relative to the chassis centre (+X forward, +Y left). `mowgli.launch.py` forwards both to `mowgli.urdf.xacro`; the Hardware measurement editor previews and saves them. Zero preserves the original chassis-centred blade.

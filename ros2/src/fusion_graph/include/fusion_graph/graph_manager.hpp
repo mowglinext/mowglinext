@@ -231,16 +231,19 @@ public:
   //
   // Save the current optimized values and metadata to disk under
   // `prefix`:
-  //   <prefix>.graph    -- gtsam values (XML)
-  //   <prefix>.meta     -- text: next_index, last_node_time_s, datum
+  //   <prefix>.checkpoint -- framed graph XML + metadata, one generation
+  //   <prefix>.checkpoint.previous -- retained complete recovery generation
   //
-  // Idempotent; overwrites existing files. Returns false on I/O
-  // error.
+  // Returns false on write/flush/sync/close/publication errors. After a
+  // publication error either complete generation may be visible; the previous
+  // remains recoverable. One writer per prefix, serialized by the node.
   bool Save(const std::string& prefix) const;
 
   // Load a previously-saved graph. The graph manager must NOT have
   // been initialized; on success, IsInitialized() becomes true and
-  // next_index_ resumes after the highest loaded index.
+  // next_index_ resumes after the highest loaded index. Tries the previous
+  // complete generation if current is corrupt; legacy .graph/.meta are read
+  // only when neither modern file exists.
   bool Load(const std::string& prefix);
 
   // Wipe all graph state (iSAM2, accumulators, queues, latest snapshot).

@@ -3,3 +3,5 @@
 *.sh text eol=lf
 # Python simulation nodes are executable inside Linux containers as well.
 *.py text eol=lf
+# Preserve the synthetic parser fixture exactly, including CRLF.
+gui/web/src/utils/fixtures/synthetic-runtime.param -text whitespace=cr-at-eol

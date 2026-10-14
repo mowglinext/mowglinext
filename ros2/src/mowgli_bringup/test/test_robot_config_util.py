@@ -76,7 +76,9 @@ def test_template_only_returns_full_defaults():
 
     merged = load_robot_params(
         str(_PKG_DIR), runtime_path="/nonexistent/mowgli_robot.yaml")
-    assert merged == template
+    expected = dict(template)
+    expected.update(json.loads((_PKG_DIR / "config/model_geometry_defaults.json").read_text())["models"][template["mower_model"]])
+    assert merged == expected
 
 
 def test_sparse_overrides_and_falls_through():
@@ -105,7 +107,8 @@ def test_sparse_overrides_and_falls_through():
     # Install-decided key surfaces even though the template lacks it.
     assert "lidar_enabled" in merged
     assert merged["lidar_enabled"] is False
-    # Untouched keys fall through to the template default.
+    # Untouched keys use template plus the selected preset upgrade defaults.
+    template.update(json.loads((_PKG_DIR / "config/model_geometry_defaults.json").read_text())["models"][template["mower_model"]])
     for key, value in template.items():
         if key in ("ticks_per_meter", "datum_lat"):
             continue
@@ -1012,3 +1015,21 @@ def test_unknown_backend_has_no_overlay():
     finally:
         os.unlink(path)
     assert merged["ticks_per_meter"] == _template_params()["ticks_per_meter"]
+
+
+@pytest.mark.parametrize("model", ["YardForce500", "YardForce500B", "YardForceSA650", "CUSTOM", "unknown"])
+@pytest.mark.parametrize("offset", [None, 0.0, -0.073])
+def test_preset_upgrade_geometry_preserves_explicit_offsets(tmp_path, model, offset):
+    params = {"mower_model": model, "wheel_track": 0.371, "gps_z": 0.287}
+    if offset is not None:
+        params["chassis_z_offset"] = offset
+    path = tmp_path / "robot.yaml"
+    path.write_text(yaml.safe_dump({"mowgli": {"ros__parameters": params}}))
+    before = path.read_bytes()
+    actual = load_robot_params(str(_PKG_DIR), str(path), "mowgli")
+    preset = json.loads((_PKG_DIR / "config/model_geometry_defaults.json").read_text())["models"].get(model, {})
+    expected = offset if offset is not None else preset.get("chassis_z_offset", _template_params()["chassis_z_offset"])
+    assert actual["chassis_z_offset"] == expected
+    assert actual["wheel_track"] == 0.371
+    assert actual["gps_z"] == 0.287
+    assert path.read_bytes() == before  # No migration write on load.

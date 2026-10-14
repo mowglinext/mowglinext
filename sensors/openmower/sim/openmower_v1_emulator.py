@@ -50,6 +50,7 @@ No ROS import: this module only speaks bytes.
 from __future__ import annotations
 
 import collections
+import itertools
 import math
 import os
 import random
@@ -57,6 +58,8 @@ import struct
 import threading
 import time
 import tty
+
+from measurements import ClockEpoch, MotionHistory
 
 # ---------------------------------------------------------------------------
 # Framing
@@ -414,6 +417,7 @@ class LowLevelBoard:
         self._last_status_ms = 0.0
         self._last_imu_ms = 0.0
         self.status_sent = 0
+        self.imu_sent = collections.deque(maxlen=4000)  # (rig t_ms, host time_s)
 
     # --- physical stimuli -------------------------------------------------
     def hall_asserted(self, i: int) -> bool:
@@ -550,6 +554,7 @@ class LowLevelBoard:
         mag = (20.0, 0.0, -40.0)
         payload = struct.pack('<BH9f', LL_IMU, min(dt_ms, 0xFFFF), *accel, *gyro, *mag)
         self.port.write(cobs_packet(payload))
+        self.imu_sent.append((now, time.time()))
 
     def send_ui_event(self, button_id: int, press_duration: int):
         self.port.write(cobs_packet(struct.pack('<BBB', LL_UI_EVENT, button_id, press_duration)))
@@ -714,6 +719,14 @@ class OpenMowerV1Rig:
         self.escs = {n: cls(self.ports[n], self.motors[n]) for n in ('left', 'right', 'mow')}
         self.lock = threading.RLock()
         self._t0 = time.monotonic()
+        # ROS stamps use system time; plant/watchdogs use monotonic time.
+        # Sample their relationship every wake, never assume a fixed offset.
+        self.clock = ClockEpoch()
+        mono, _, _ = self.clock.sample()
+        self.clock_steps = []
+        self.motion = MotionHistory()
+        self.distance = 0.0
+        self.motion.append(mono, 0.0, 0.0, (0, 0))
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name='om-v1-rig', daemon=True)
 
@@ -733,11 +746,14 @@ class OpenMowerV1Rig:
         last = time.monotonic()
         while not self._stop.is_set():
             time.sleep(self.PERIOD_S)
-            t = time.monotonic()
-            elapsed = t - last
-            last = t
-            now = (t - self._t0) * 1000.0
             with self.lock:
+                t, host, clock_changed = self.clock.sample()
+                elapsed = t - last
+                last = t
+                now = (t - self._t0) * 1000.0
+                if clock_changed:
+                    self.clock_steps.append((now, host, self.clock.bounds))
+                    self.motion.rows.clear()
                 for esc in self.escs.values():
                     esc.receive(now)
                 self.ll.service(now)
@@ -749,11 +765,19 @@ class OpenMowerV1Rig:
                 steps = max(1, math.ceil(elapsed / self.PERIOD_S))
                 dt = elapsed / steps
                 duty = {n: self.escs[n].effective_duty(now) for n in ('left', 'right', 'mow')}
-                for _ in range(steps):
+                for i in range(steps):
                     for name in ('left', 'right', 'mow'):
                         self.motors[name].step(dt, duty[name])
                     # Real wiring: right wheel forward on a NEGATIVE controller duty.
                     self.plant.step(dt, self.motors['left'].speed, -self.motors['right'].speed)
+                    self.distance += self.plant.v * dt
+                    # Never invent samples across a system-clock step. Seed
+                    # only the current endpoint; a crossing measurement fails
+                    # for missing history, and the scenario stays red.
+                    if not clock_changed or i == steps - 1:
+                        stamp = t - (steps - i - 1) * dt
+                        self.motion.append(stamp, self.distance, self.plant.theta,
+                                           (int(self.motors['left'].ticks), int(self.motors['right'].ticks)))
                 # Report AFTER integrating: a status sent before it would carry
                 # the counts from before a stall, and the next one the whole
                 # stall's ticks at a normal 20 ms spacing — a jump no real
@@ -776,17 +800,27 @@ class OpenMowerV1Rig:
                 'latch': self.ll.latch, 'emergency_bitmask': self.ll.emergency_bitmask,
             }
 
-    def first_time_all_zero(self, names, since_ms: float):
+    def first_time_all_zero(self, names, since_ms: float, timeout_ms: float = 1000):
         """Earliest t >= since where every named controller's latest command is 0."""
-        with self.lock:
-            events = sorted((t, n, d) for n in names for (t, d) in self.escs[n].commands
-                            if t >= since_ms - 1000)
-        latest = {}
-        for t, n, d in events:
-            latest[n] = d
-            if t >= since_ms and len(latest) == len(names) and all(abs(v) < 1e-9 for v in latest.values()):
-                return t
-        return None
+        deadline = since_ms + timeout_ms
+        while True:
+            with self.lock:
+                # A receive pass can timestamp multiple commands identically.
+                # Preserve each UART's packet order and evaluate the complete
+                # timestamp batch, rather than sorting duty values into an
+                # invented transient stop.
+                events = sorted((t, n, i, d) for n in names
+                                for i, (t, d) in enumerate(self.escs[n].commands))
+            latest = {}
+            for t, batch in itertools.groupby(events, key=lambda event: event[0]):
+                for _, n, _, d in batch:
+                    latest[n] = d
+                if since_ms <= t <= deadline and len(latest) == len(names) and all(
+                        abs(v) < 1e-9 for v in latest.values()):
+                    return t
+            if self.now_ms() >= deadline:
+                return None
+            time.sleep(0.002)
 
     def first_zero_command(self, name: str, since_ms: float, timeout_ms: float):
         """When the controller RECEIVED its first zero duty since a moment.

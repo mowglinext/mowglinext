@@ -5,6 +5,7 @@ import {MowerStatus} from './MowerStatus.tsx';
 // Assert against the active locale (pinned to English in test/setup.ts) rather
 // than hardcoded copy, so reworded translations don't break these tests.
 import en from '../i18n/locales/en.json';
+import {GnssStatusConstants} from '../types/ros.ts';
 
 // MowerStatus reads snake_case rosbridge fields and pulls GPS from
 // useGnssStatus / battery from usePower+useSettings — NOT from highLevelStatus.
@@ -34,8 +35,10 @@ const renderStatus = () => render(<App><MowerStatus/></App>);
 
 describe('MowerStatus', () => {
     beforeEach(() => {
-        // RTK fixed -> deriveGpsStatus returns 100% by default.
-        mockGnss.mockReturnValue({fix_type: 4});
+        mockGnss.mockReturnValue({
+            fix_valid: true,
+            fix_type: GnssStatusConstants.FIX_TYPE_RTK_FIXED,
+        });
     });
 
     it('displays idle state', () => {
@@ -58,5 +61,15 @@ describe('MowerStatus', () => {
         mockHighLevelStatus.mockReturnValue({highLevelStatus: {}});
         renderStatus();
         expect(screen.getByText(en.utils.stateOffline)).toBeInTheDocument();
+    });
+
+    it('renders the compact canonical GNSS solution label', () => {
+        mockHighLevelStatus.mockReturnValue({highLevelStatus: {state_name: 'IDLE'}});
+        mockGnss.mockReturnValue({
+            fix_valid: true,
+            fix_type: GnssStatusConstants.FIX_TYPE_DGPS,
+        });
+        renderStatus();
+        expect(screen.getByText(`60% · ${en.gpsStatus.compactDgps}`)).toBeInTheDocument();
     });
 });

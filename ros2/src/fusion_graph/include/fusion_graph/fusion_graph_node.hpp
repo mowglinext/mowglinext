@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -133,7 +134,7 @@ private:
   void PublishLocalOdom();
   // Launch GraphManager::Save on a detached worker. No-op if a
   // previous async save is still running. `reason` is logged.
-  void DispatchAsyncSave(const char* reason);
+  bool DispatchAsyncSave(const char* reason, std::function<void(bool)> completion = {});
 
   // ── Members ────────────────────────────────────────────────────────
   // shared_ptr (not unique_ptr) so background save / rebase threads

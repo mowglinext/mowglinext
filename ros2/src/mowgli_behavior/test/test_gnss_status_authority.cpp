@@ -53,4 +53,37 @@ TEST(GnssStatusAuthorityTest, RtkFloatStatusKeepsSharedIntermediateState)
                                       AbsolutePose::FLAG_GPS_RTK_FLOAT));
 }
 
+TEST(GnssStatusAuthorityTest, RichNonRtkSolutionsRemainBasicFixes)
+{
+  GnssStatus status;
+  status.fix_valid = true;
+
+  status.fix_type = GnssStatus::FIX_TYPE_2D_FIX;
+  EXPECT_EQ(gnss::BehaviorTreeFixType(status), 2u);
+  EXPECT_EQ(gnss::HardwareQualityPercent(status), 40u);
+
+  status.fix_type = GnssStatus::FIX_TYPE_3D_FIX;
+  EXPECT_EQ(gnss::BehaviorTreeFixType(status), 2u);
+  EXPECT_EQ(gnss::HardwareQualityPercent(status), 40u);
+
+  status.fix_type = GnssStatus::FIX_TYPE_DGPS;
+  EXPECT_EQ(gnss::BehaviorTreeFixType(status), 2u);
+  EXPECT_EQ(gnss::HardwareQualityPercent(status), 40u);
+}
+
+TEST(GnssStatusAuthorityTest, ExplicitRtkNoneRejectsStaleRtkFixType)
+{
+  GnssStatus status;
+  status.fix_valid = true;
+  status.fix_type = GnssStatus::FIX_TYPE_RTK_FIXED;
+  status.rtk_mode = GnssStatus::RTK_MODE_NONE;
+  status.capability_flags = GnssStatus::CAP_RTK_MODE;
+  status.value_flags = GnssStatus::CAP_RTK_MODE;
+
+  EXPECT_FALSE(gnss::IsRtkFixed(status));
+  EXPECT_FALSE(gnss::IsRtkFloat(status));
+  EXPECT_FALSE(gnss::BehaviorTreeRtkFixed(status));
+  EXPECT_EQ(gnss::BehaviorTreeFixType(status), 0u);
+}
+
 }  // namespace

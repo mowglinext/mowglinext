@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { parseBoolish } from "../../utils/settingsValues.ts";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 import { besideBodyClearanceM, planningObstacleMarginFloorM } from "../../utils/obstacleMargin.ts";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const { Paragraph } = Typography;
 
@@ -25,14 +26,14 @@ export const normalizeDigSensitivity = (raw: unknown): DigSensitivity => {
 };
 
 type Props = {
-    values: Record<string, any>;
+    values: SettingsValues;
     onChange: (key: string, value: any) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
     onReset?: (key: string) => void;
     // Used only to fall back to the shipped chassis_width/obstacle_clearance_margin
     // when a sparse (untouched) robot config omits them — see obstacleMargin.ts.
-    defaults?: Record<string, any>;
+    defaults?: SettingsValues;
 };
 
 /**

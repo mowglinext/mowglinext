@@ -121,6 +121,11 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
   // was never told the chassis size never pivots. Read live per plan.
   declare_double("pivot_sweep_radius", 0.0);
   declare_double("boundary_soft_margin", 0.0);
+  // NARROW BOUNDARY TONGUES (removeNarrowBoundaryTongues): dead-end tongues of
+  // the recorded line narrower than the footprint (2 x this) are not planned.
+  // Injected at launch as robot_config_util.chassis_half_width; the 0.0 default
+  // plans the recorded line as drawn. Read live per plan.
+  declare_double("footprint_half_width", 0.0);
 
   // Lyrical's SimpleActionServer owns the standard ROS action options.
   // Result retention starts after completion; it is not a planning deadline.
@@ -228,6 +233,43 @@ constexpr double kSwathStep = 0.10;  // m between poses on a straight swath
   "connector_turn_radius=%.2f min_turning_radius=%.2f. A high fallback rate "  \
   "means the available headland/site geometry could not fit the configured "   \
   "turn-around arcs"
+
+// The pivot limits for one goal: the sweep is tested against the RECORDED geometry (the goal's
+// raw polygons, before the chassis inset / outward expansion and before obstacle_margin) — that
+// is what the soft band and the drawn obstacles are measured from. sweep_radius <= 0 leaves the
+// limits disabled (no recorded geometry is copied then). Shared by planCoverage and the preview,
+// so the ring corners the planner leaves sharp are the same in both.
+PivotJoinLimits makePivotLimits(const mowgli_interfaces::action::PlanCoverage::Goal& goal,
+                                double sweep_radius,
+                                double boundary_margin)
+{
+  PivotJoinLimits limits;
+  limits.sweep_radius = std::max(0.0, sweep_radius);
+  limits.boundary_margin = std::max(0.0, boundary_margin);
+  if (limits.sweep_radius <= 0.0)
+  {
+    return limits;
+  }
+  limits.recorded_boundary.reserve(goal.outer_boundary.points.size());
+  for (const auto& p : goal.outer_boundary.points)
+  {
+    limits.recorded_boundary.emplace_back(p.x, p.y);
+  }
+  for (const auto& obstacle : goal.obstacles)
+  {
+    std::vector<std::pair<double, double>> ring;
+    ring.reserve(obstacle.points.size());
+    for (const auto& p : obstacle.points)
+    {
+      ring.emplace_back(p.x, p.y);
+    }
+    if (ring.size() >= 3)
+    {
+      limits.recorded_obstacles.push_back(std::move(ring));
+    }
+  }
+  return limits;
+}
 
 // Build the F2C cell from the goal's outer boundary + obstacle holes.
 // F2C wants closed rings (first == last); the BT passes open rings.
@@ -489,6 +531,8 @@ CoverageServer::LivePlanParams CoverageServer::readLivePlanParams()
   // Perimeter/headland travel winding (#335): 0 = planner default, 1 = CW,
   // 2 = CCW.
   live.ring_direction = static_cast<int>(get_parameter("ring_direction").as_int());
+  // Dead-end boundary tongues narrower than the footprint are not planned.
+  live.footprint_width = 2.0 * std::max(0.0, get_parameter("footprint_half_width").as_double());
   return live;
 }
 
@@ -584,6 +628,13 @@ void CoverageServer::planCoverage()
     // #497), read live like the other connector geometry knobs.
     const int connector_max_headland_passes = live.connector_max_headland_passes;
 
+    // Pivot joins and pivot corners: the sweep is tested against the RECORDED geometry. Built
+    // before the plan because the ring stage leaves a corner SHARP where the robot will pivot.
+    const PivotJoinLimits pivot_limits =
+        makePivotLimits(*goal,
+                        get_parameter("pivot_sweep_radius").as_double(),
+                        get_parameter("boundary_soft_margin").as_double());
+
     const auto t_plan0 = now();
     BoustrophedonPlan plan = planBoustrophedon(cell,
                                                operation_width_,
@@ -596,7 +647,9 @@ void CoverageServer::planCoverage()
                                                min_turning_radius,
                                                goal->perpendicular,
                                                connector_max_headland_passes,
-                                               start_hint);
+                                               start_hint,
+                                               live.footprint_width,
+                                               &pivot_limits);
     const double plan_ms = 1e3 * (now() - t_plan0).seconds();
 
     // Instrumentation (no behaviour change): surface every piece the planner
@@ -735,30 +788,6 @@ void CoverageServer::planCoverage()
     // segment join resolved — a real turn-around arc, an aligned straight
     // connector, or a blade-off sub-path split. See ConnectorStats.
     mowgli_coverage::ConnectorStats connector_stats;
-    // Pivot joins: the sweep is tested against the RECORDED geometry (the goal's
-    // raw polygons, before the chassis inset / outward expansion and before
-    // obstacle_margin) — that is what the soft band and the drawn obstacles are
-    // measured from.
-    PivotJoinLimits pivot_limits;
-    pivot_limits.sweep_radius = std::max(0.0, get_parameter("pivot_sweep_radius").as_double());
-    pivot_limits.boundary_margin = std::max(0.0, get_parameter("boundary_soft_margin").as_double());
-    if (pivot_limits.sweep_radius > 0.0)
-    {
-      pivot_limits.recorded_boundary = outer;
-      for (const auto& obstacle : goal->obstacles)
-      {
-        std::vector<std::pair<double, double>> ring;
-        ring.reserve(obstacle.points.size());
-        for (const auto& p : obstacle.points)
-        {
-          ring.emplace_back(p.x, p.y);
-        }
-        if (ring.size() >= 3)
-        {
-          pivot_limits.recorded_obstacles.push_back(std::move(ring));
-        }
-      }
-    }
     const auto subpaths = buildContinuousSubPaths(plan,
                                                   connector_boundary,
                                                   connector_turn_radius,
@@ -1092,6 +1121,10 @@ void CoverageServer::previewCoverage(
         (goal.mow_angle_deg < 0.0) ? -1.0 : goal.mow_angle_deg * M_PI / 180.0;
 
     const f2c::types::Cell cell = buildCellFromGoal(goal, live.obstacle_margin);
+    const PivotJoinLimits preview_pivot_limits =
+        makePivotLimits(goal,
+                        get_parameter("pivot_sweep_radius").as_double(),
+                        get_parameter("boundary_soft_margin").as_double());
     const BoustrophedonPlan plan =
         planBoustrophedon(cell,
                           operation_width_,
@@ -1104,7 +1137,9 @@ void CoverageServer::previewCoverage(
                           live.min_turning_radius,
                           goal.perpendicular,
                           live.connector_max_headland_passes,
-                          startHint(request->has_start_point, request->start_x, request->start_y));
+                          startHint(request->has_start_point, request->start_x, request->start_y),
+                          live.footprint_width,
+                          &preview_pivot_limits);
 
     if (plan.rings.empty() && plan.swaths.empty())
     {

@@ -1288,7 +1288,9 @@
                   </Sequence>
                 </Fallback>
                 <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
-                <EndSession/>
+                <!-- The coverage did NOT finish: keep its progress, so the next Play resumes
+                     the area that was in progress instead of starting the lawn over. -->
+                <EndSession keep_incomplete="true"/>
                 <ClearCommand/>
               </Sequence>
             </Fallback>
@@ -1393,7 +1395,8 @@
               </Sequence>
             </ReactiveFallback>
             <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
-            <EndSession/>
+            <!-- HOME interrupts a mow: keep whatever progress it had, so Play continues it. -->
+            <EndSession keep_incomplete="true"/>
             <ClearCommand/>
           </Sequence>
         </ReactiveSequence>

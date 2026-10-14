@@ -1,0 +1,33 @@
+name: Sensors — MAVROS integration
+
+on:
+  push:
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
+    paths:
+      - 'sensors/mavros/**'
+      - 'install/compose/docker-compose.mavros.yml'
+      - 'install/lib/config.sh'
+      - 'install/lib/env.sh'
+      - 'ros2/src/mowgli_bringup/launch/mowgli.launch.py'
+      - '.github/workflows/sensors-mavros.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'sensors/mavros/**'
+      - 'install/compose/docker-compose.mavros.yml'
+      - 'install/lib/config.sh'
+      - 'install/lib/env.sh'
+      - 'ros2/src/mowgli_bringup/launch/mowgli.launch.py'
+      - '.github/workflows/sensors-mavros.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate external sidecar contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - run: python3 sensors/mavros/test_integration.py

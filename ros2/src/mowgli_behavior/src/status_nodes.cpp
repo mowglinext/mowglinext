@@ -252,6 +252,41 @@ BT::NodeStatus EndSession::tick()
   // session_dig_points — no context_mutex lock is needed here (see the
   // context_mutex doc comment in bt_context.hpp).
   ctx->session_failed_transit_targets.clear();
+  // The session ended WITHOUT finishing (failed coverage, HOME) and there is progress worth
+  // keeping: leave the coverage state exactly as it is, so the next Play resumes the area that was
+  // in progress. Everything per-run above (attempt budgets, dig zones, flags) is already reset;
+  // what stays is what describes the lawn — completed swaths and cursors, finished areas, the plan
+  // fingerprints (a changed fingerprint would discard the progress), the cross-hatch phase, the
+  // single-area target and the resume file. A finished session never takes this branch.
+  bool keep_incomplete = false;
+  getInput<bool>("keep_incomplete", keep_incomplete);
+  if (keep_incomplete && hasRecordedCoverageProgress(*ctx))
+  {
+    ctx->coverage_plausibility_warning = false;
+    ctx->resume_after_incomplete_end = true;
+    ctx->resume_after_incomplete_end_time = std::chrono::steady_clock::now();
+    // The snapshot carries current_command, and ClearCommand (which follows) does not rewrite it:
+    // a START left in the file would make a restart before the next Play re-enter MowingSequence
+    // and mow on its own. The finished-session path removes the file for the same reason.
+    ctx->current_command = 0;
+    if (!ctx->coverage_resume_path.empty() && !saveCoverageResumeState(*ctx))
+    {
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "EndSession: could not save the kept coverage progress to '%s'; a restart "
+                   "before the next Start will lose it.",
+                   ctx->coverage_resume_path.c_str());
+    }
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "EndSession: the session did not finish — keeping its coverage progress "
+                "(%zu finished area(s), %zu area(s) with a resume cursor%s); the next Start "
+                "resumes it",
+                ctx->completed_areas.size(),
+                ctx->area_resume_pose_index.size(),
+                ctx->single_area_target.has_value() ? ", single-area run" : "");
+    return BT::NodeStatus::SUCCESS;
+  }
+  ctx->resume_after_incomplete_end = false;
+
   // Swath-completion model (replaces the cell coverage grid): clear the
   // per-area completed-swath sets, swath counts, and the completed-area set so
   // the next COMMAND_START re-plans and re-mows every area from swath 0.

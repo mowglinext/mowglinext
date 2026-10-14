@@ -126,6 +126,15 @@ if(BUILD_TESTING)
   # colcon tests packages in parallel, and on one shared DDS domain the test
   # processes discover each other's nodes (docs/claude/testing-ci.md).
   find_package(ament_cmake_ros REQUIRED)
+  find_package(launch_testing_ament_cmake REQUIRED)
+
+  # Restart the real behavior process at a completed-subpath checkpoint.
+  add_launch_test(test/test_coverage_restart.launch.py
+    TARGET test_coverage_restart
+    TIMEOUT 90
+    RUNNER "${ament_cmake_ros_DIR}/run_test_isolated.py"
+    ENV "MOWGLI_BEHAVIOR_EXECUTABLE=$<TARGET_FILE:behavior_tree_node>"
+  )
   find_package(tinyxml2 REQUIRED)
   # Exclude uncrustify — we use clang-format (see .clang-format)
   set(ament_cmake_uncrustify_FOUND TRUE)
@@ -654,6 +663,11 @@ if(BUILD_TESTING)
     TIMEOUT 180
   )
 
+  # Capture ROS 2 logs reliably in the checkpoint regression test.
+  set_tests_properties(test_follow_strip_dig PROPERTIES
+    ENVIRONMENT "RCUTILS_LOGGING_USE_STDOUT=1;RCUTILS_LOGGING_BUFFERED_STREAM=0"
+  )
+
   target_include_directories(test_follow_strip_dig PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
@@ -851,6 +865,40 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_battery_critical_resume
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
+  # ---- test_incomplete_resume ----
+  # Play resumes the area that was in progress when a session ended unfinished:
+  # EndSession(keep_incomplete) keeps the coverage progress (and the single-area target) for
+  # failed coverage / HOME, a plain Start continues it, a finished session still wipes it, and
+  # kept progress older than a day is not resumed. Structural half: only those two endings of
+  # main_tree.xml keep.
+  ament_add_ros_isolated_gtest(test_incomplete_resume
+    test/test_incomplete_resume.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+  )
+  target_include_directories(test_incomplete_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  target_compile_definitions(test_incomplete_resume PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+  target_link_libraries(test_incomplete_resume
     ${rclcpp_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}

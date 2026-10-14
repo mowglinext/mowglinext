@@ -232,6 +232,7 @@ jobs:
           source /opt/ros/lyrical/setup.bash
           source /ws/install/setup.bash
           export ROS_DOMAIN_ID=46
+          python3 -m unittest discover -s "$GITHUB_WORKSPACE/sensors/openmower/sim" -p 'test_*.py' -v
           python3 "$GITHUB_WORKSPACE/sensors/openmower/sim/run_simulation.py" --logdir /tmp/simlogs
           python3 "$GITHUB_WORKSPACE/sensors/openmower/sim/run_stack_integration.py" /tmp/simlogs
           SIM

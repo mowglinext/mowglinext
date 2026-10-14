@@ -1,91 +1,46 @@
-import {useEffect, useRef, useState} from "react";
-import {useWheelTicks} from "./useWheelTicks.ts";
+import {useEffect, useRef, useState} from 'react';
+import type {WheelTick} from '../types/ros';
+import {useTopic} from './useTopic';
+import {MOTOR_DISPLAY_STALE_MS, unknownWheelRpm, wheelRpmBetween} from '../utils/motorTelemetry';
 
-/**
- * Differentiate raw wheel-tick counters into RPM per wheel.
- *
- * Firmware emits `WheelTick` at ~50 Hz with cumulative `wheel_ticks_*` and
- * direction (0/1) plus `wheel_tick_factor` (ticks per metre at the wheel
- * radius). We don't have ticks-per-revolution directly, so RPM is derived
- * from the radius supplied via `useSettings()` -- or, if we don't have it,
- * we fall back to the robot default wheel radius (0.04475 m, matching
- * `wheel_radius` in mowgli_bringup/config/mowgli_robot.yaml).
- *
- * Returns 0 per wheel until two samples have arrived.
- */
-
-/** Default wheel radius in metres — mirrors the mowgli_robot.yaml template. */
 export const DEFAULT_WHEEL_RADIUS_M = 0.04475;
+export type WheelRpm = ReturnType<typeof unknownWheelRpm>;
+interface UseWheelRpmOptions {wheelRadiusM?: number}
+interface Sample {ticks: WheelTick; radius: number; rpm: WheelRpm; advancedAt: number | null}
+const seconds = (t: WheelTick) => t.stamp ? t.stamp.sec + t.stamp.nanosec * 1e-9 : NaN;
 
-export interface WheelRpm {
-  fl: number;
-  fr: number;
-  rl: number;
-  rr: number;
-  /** rad/s of the body, derived from L/R difference (useful for sanity) */
-  bodyOmega: number;
-}
-
-interface UseWheelRpmOptions {
-  /** Wheel radius in metres -- supplied so we can convert m/s -> rpm */
-  wheelRadiusM?: number;
-}
-
+/** Shared calibrated wheel RPM display: native and MAVROS use the same WheelTick contract. */
 export function useWheelRpm({wheelRadiusM = DEFAULT_WHEEL_RADIUS_M}: UseWheelRpmOptions = {}): WheelRpm {
-  const ticks = useWheelTicks();
-  const [rpm, setRpm] = useState<WheelRpm>({fl: 0, fr: 0, rl: 0, rr: 0, bodyOmega: 0});
-  const lastSample = useRef<{
-    ts: number;
-    fl: number; fr: number; rl: number; rr: number;
-  } | null>(null);
-
-  useEffect(() => {
-    if (ticks.wheel_tick_factor == null || ticks.wheel_tick_factor === 0) return;
-    if (ticks.stamp == null) return;
-
-    const now = ticks.stamp.sec + ticks.stamp.nanosec * 1e-9;
-    const fl = ticks.wheel_ticks_fl ?? 0;
-    const fr = ticks.wheel_ticks_fr ?? 0;
-    const rl = ticks.wheel_ticks_rl ?? 0;
-    const rr = ticks.wheel_ticks_rr ?? 0;
-
-    const prev = lastSample.current;
-    if (prev != null) {
-      const dt = now - prev.ts;
-      if (dt > 0 && dt < 5) {
-        // ticks-per-metre at the wheel surface
-        const factor = ticks.wheel_tick_factor;
-        const circumference = 2 * Math.PI * wheelRadiusM;
-        // direction-aware delta -- direction byte tells us if ticks count
-        // up or down; firmware sends the *signed* delta encoded as raw
-        // counter, so we use raw delta and apply the direction sign.
-        const sign = (v: number | undefined) => (v ?? 1) === 1 ? 1 : -1;
-        const dFL = (fl - prev.fl) * sign(ticks.wheel_direction_fl);
-        const dFR = (fr - prev.fr) * sign(ticks.wheel_direction_fr);
-        const dRL = (rl - prev.rl) * sign(ticks.wheel_direction_rl);
-        const dRR = (rr - prev.rr) * sign(ticks.wheel_direction_rr);
-
-        const toRpm = (d: number) => (d / factor) / circumference * 60 / dt;
-        const newRpm = {
-          fl: toRpm(dFL),
-          fr: toRpm(dFR),
-          rl: toRpm(dRL),
-          rr: toRpm(dRR),
-          bodyOmega: 0,
-        };
-        // approx body omega from L/R wheel delta (assume track ~0.32 m).
-        // Use the DRIVEN rear wheels only: Mowgli is rear-axle drive and the
-        // front wheels are unencoded casters whose tick counters stay 0.
-        // Averaging (fl+rl)/2 folded that constant 0 in and halved bodyOmega.
-        const track = 0.32;
-        const leftAvg  = newRpm.rl * circumference / 60;
-        const rightAvg = newRpm.rr * circumference / 60;
-        newRpm.bodyOmega = (rightAvg - leftAvg) / track;
-        setRpm(newRpm);
-      }
-    }
-    lastSample.current = {ts: now, fl, fr, rl, rr};
-  }, [ticks, wheelRadiusM]);
-
-  return rpm;
+    const previous = useRef<Sample | null>(null);
+    const {data, lastMessageAt} = useTopic<Sample>('ticks', {
+        ticks: {}, radius: wheelRadiusM, rpm: unknownWheelRpm(), advancedAt: null,
+    }, {withTimestamp: true, select: raw => {
+        const ticks = (raw !== null && typeof raw === "object" ? raw : {}) as WheelTick;
+        const old = previous.current;
+        const sample: Sample = {ticks, radius: wheelRadiusM, rpm: unknownWheelRpm(), advancedAt: Date.now()};
+        if (!((ticks.wheel_tick_factor ?? 0) > 0) || !((ticks.valid_wheels ?? 0) > 0)) sample.advancedAt = null;
+        else if (old && old.radius === wheelRadiusM) {
+            if (seconds(ticks) === seconds(old.ticks)) {
+                // Cached delivery cannot renew or resurrect a measurement.
+                const mask = (ticks.valid_wheels ?? 0) & (old.ticks.valid_wheels ?? 0);
+                sample.ticks = {...ticks, valid_wheels: mask};
+                sample.rpm = {
+                    fl: mask & 1 ? old.rpm.fl : NaN, fr: mask & 2 ? old.rpm.fr : NaN,
+                    rl: mask & 4 ? old.rpm.rl : NaN, rr: mask & 8 ? old.rpm.rr : NaN,
+                    bodyOmega: (mask & 12) === 12 ? old.rpm.bodyOmega : NaN,
+                };
+                sample.advancedAt = old.advancedAt;
+            } else sample.rpm = wheelRpmBetween(old.ticks, ticks, wheelRadiusM);
+        }
+        previous.current = sample;
+        return sample;
+    }});
+    const [now, setNow] = useState(Date.now);
+    useEffect(() => {
+        const timer = window.setInterval(() => setNow(Date.now()), 1000);
+        return () => window.clearInterval(timer);
+    }, []);
+    const displayNow = Math.max(now, lastMessageAt ?? now);
+    return data.radius === wheelRadiusM && data.advancedAt !== null && displayNow - data.advancedAt >= 0
+        && displayNow - data.advancedAt < MOTOR_DISPLAY_STALE_MS ? data.rpm : unknownWheelRpm();
 }

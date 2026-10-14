@@ -32,10 +32,24 @@ approximation that may suit many conventional mower docks; its nominal 0.63 ×
 0.46 m visual footprint comes from the RM1000 product dimensions above and is
 not a claim about another station's actual dimensions. Use a dedicated
 model-specific image and calibration when exact geometry is needed. The
-existing dock marker remains the universal default and fallback.
+existing dock marker remains the fallback; the styled dock is the default.
 
-The mower and dock images originate from photographs taken by the contributor,
+The RM1000 mower and both dock images originate from photographs taken by the contributor,
 edited with AI-assisted tools and intentionally contributed under this
 repository's licensing terms. Keep the existing drawn footprint and dock
 marker as runtime fallbacks whenever an image or valid pose is missing or an
 image cannot be decoded.
+
+## Shared mower assemblies
+
+The generic static mower from #965 and the RM1000 static map option are replaced
+by shared URDF assemblies. Select a chassis style in Hardware; its registered
+dock pair follows automatically on the map. There is no separate dock selector.
+Existing generic map selections use the assembly; old RM1000 selections seed the
+RM1000 shell unless an explicit Hardware appearance has already been chosen.
+The old photographs are retained as contributed references and optional assets
+for future dock registrations; they no longer define mower dimensions.
+
+The assembly uses the running robot description for chassis, wheel, caster and
+sensor placement. See [`Layered mower artwork`](../../../src/components/robot/README.md)
+for provenance, scaling, compact map derivatives and geometry limitations.

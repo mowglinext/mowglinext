@@ -168,9 +168,15 @@ public:
   {
   }
 
+  /// keep_incomplete: the session ended WITHOUT finishing (failed coverage, HOME). When any
+  /// coverage progress was recorded, keep it — completed swaths, resume cursors, finished areas,
+  /// plan fingerprints, cross-hatch state, the single-area target and the resume file — so the
+  /// next Play resumes the area that was in progress instead of starting the lawn over. Default
+  /// false: a finished session still wipes everything.
   static BT::PortsList providedPorts()
   {
-    return {};
+    return {
+        BT::InputPort<bool>("keep_incomplete", false, "Keep coverage progress for the next Start")};
   }
 
   BT::NodeStatus tick() override;

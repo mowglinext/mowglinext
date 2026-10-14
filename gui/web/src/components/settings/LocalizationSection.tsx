@@ -9,11 +9,12 @@ import {
 import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../../theme/ThemeContext.tsx";
 import {useDiagnostics} from "../../hooks/useDiagnostics.ts";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const {Text, Paragraph, Link} = Typography;
 
 type Props = {
-    values: Record<string, any>;
+    values: SettingsValues;
     onChange: (key: string, value: any) => void;
 };
 

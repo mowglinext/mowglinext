@@ -7,6 +7,7 @@ import {useIsMobile} from "../../hooks/useIsMobile.ts";
 import {useThemeMode} from "../../theme/ThemeContext.tsx";
 import {NTRIP_PROVIDERS, NTRIP_PROVIDER_BY_ID, PUBLIC_SOURCETABLE_PROVIDERS, providerForHost, NtripProvider} from "./ntripProviders.ts";
 import {NtripStationMap, MapStation} from "./NtripStationMap.tsx";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const {Text, Paragraph} = Typography;
 
@@ -20,7 +21,7 @@ interface SourcetableStation {
 }
 
 interface Props {
-  values: Record<string, any>;
+  values: SettingsValues;
   onChange: (key: string, value: any) => void;
 }
 

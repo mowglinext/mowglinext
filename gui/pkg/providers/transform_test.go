@@ -178,6 +178,37 @@ func TestAdaptGnssStatusMapsUniversalPayloadToMowgliShape(t *testing.T) {
 	assert.Equal(t, status.CapabilityFlags, status.ValueFlags)
 }
 
+func TestAdaptGnssStatusPreservesExplicitSolutionTypes(t *testing.T) {
+	tests := []struct {
+		name             string
+		universalFixType uint8
+		mowgliFixType    uint8
+		qualityPercent   float32
+	}{
+		{"2D", universalFixType2DFix, mowgliFixType2DFix, 20.0},
+		{"3D", universalFixType3DFix, mowgliFixType3DFix, 40.0},
+		{"DGPS", universalFixTypeDGPS, mowgliFixTypeDGPS, 60.0},
+		{"RTK float", universalFixTypeRTKFloat, mowgliFixTypeRTKFloat, 80.0},
+		{"RTK fixed", universalFixTypeRTKFixed, mowgliFixTypeRTKFixed, 100.0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw := []byte(fmt.Sprintf(
+				`{"stamp":{"sec":1,"nanosec":2},"fix_valid":true,"fix_type":%d}`,
+				test.universalFixType,
+			))
+			adapted, err := adaptGnssStatus(raw)
+			require.NoError(t, err)
+
+			var status mowgli.GnssStatus
+			require.NoError(t, json.Unmarshal(adapted, &status))
+			assert.Equal(t, test.mowgliFixType, status.FixType)
+			assert.Equal(t, test.qualityPercent, status.QualityPercent)
+		})
+	}
+}
+
 func TestAdaptGnssStatusKeepsUnsupportedUniversalFieldsUnset(t *testing.T) {
 	raw := []byte(`{
 		"stamp":{"sec":2,"nanosec":3},
@@ -194,7 +225,7 @@ func TestAdaptGnssStatusKeepsUnsupportedUniversalFieldsUnset(t *testing.T) {
 	var status mowgli.GnssStatus
 	require.NoError(t, json.Unmarshal(adapted, &status))
 	assert.Equal(t, uint8(mowgliFixTypeGPSFix), status.FixType)
-	assert.Equal(t, float32(25.0), status.QualityPercent)
+	assert.Equal(t, float32(0.0), status.QualityPercent)
 	assert.Equal(t, uint32(mowgliCapRtkMode), status.CapabilityFlags)
 	assert.Zero(t, status.ValueFlags)
 	assert.Zero(t, status.HeadingAccuracyDeg)

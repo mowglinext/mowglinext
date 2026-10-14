@@ -22,8 +22,11 @@
 // pivot sweep fits the designed envelope. These tests run the REAL Fields2Cover
 // v3 pipeline (planBoustrophedon) and the join builder.
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -545,6 +548,135 @@ TEST(PivotJoinFieldObstacle, RingsOffWithOverlappingGrownObstaclesStillPlans)
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sharp ring corners (issue #973). The ring stage rounds every corner sharper than 30 degrees with
+// a forward arc, which cuts the tip of an acute corner off: the grass in the very corner is left
+// uncut. Where the robot can pivot there (pivotSweepFits), the ring now keeps the corner sharp and
+// buildContinuousSubPaths turns it into an in-place pivot corner.
+// ---------------------------------------------------------------------------
+double nearestRingPointTo(const BoustrophedonPlan& plan, const std::pair<double, double>& at)
+{
+  double best = std::numeric_limits<double>::max();
+  for (const auto& p : plan.rings.front())
+  {
+    best = std::min(best, std::hypot(p.first - at.first, p.second - at.second));
+  }
+  return best;
+}
+
+TEST(SharpRingCorner, AnAcuteTipIsReachedAndPivotedInsteadOfRounded)
+{
+  // A right triangle: 32 degrees at the origin (a 148 degree turn), 90 and 58 at the others.
+  const Pts recorded = {{0.0, 0.0}, {8.0, 0.0}, {8.0, 5.0}};
+  const f2c::types::Cell cell(toRing(recorded));
+  const PivotJoinLimits limits = shippedLimits(recorded);
+  const std::pair<double, double> tip{0.0, 0.0};
+
+  const auto rounded =
+      planBoustrophedon(cell, kOpWidth, kHeadland, 2, kInset, 0.0, kMinSwath, 0, kMinTurnRadius);
+  const auto sharp = planBoustrophedon(cell,
+                                       kOpWidth,
+                                       kHeadland,
+                                       2,
+                                       kInset,
+                                       0.0,
+                                       kMinSwath,
+                                       0,
+                                       kMinTurnRadius,
+                                       false,
+                                       0,
+                                       std::nullopt,
+                                       0.0,
+                                       &limits);
+  ASSERT_FALSE(rounded.rings.empty());
+  ASSERT_FALSE(sharp.rings.empty());
+
+  const double rounded_gap = nearestRingPointTo(rounded, tip);
+  const double sharp_gap = nearestRingPointTo(sharp, tip);
+  EXPECT_GT(rounded_gap, 0.25) << "precondition: the arc cuts the tip off";
+  EXPECT_LT(sharp_gap, 0.15) << "the outermost ring must reach the tip (rounded: " << rounded_gap
+                             << " m away)";
+
+  // And the finished sub-paths pivot there.
+  const auto subs = buildContinuousSubPaths(sharp,
+                                            clearanceOf(sharp),
+                                            kTurnRadius,
+                                            kMinTurnRadius,
+                                            kStep,
+                                            nullptr,
+                                            sharp.swath_turn_envelope,
+                                            limits);
+  expectCornerContract(subs);
+  bool pivots_at_tip = false;
+  for (const auto& [s, i] : cornersOf(subs))
+  {
+    const auto& p = subs[s][i];
+    EXPECT_TRUE(pivotSweepFits(p.first, p.second, limits));
+    pivots_at_tip = pivots_at_tip || std::hypot(p.first - tip.first, p.second - tip.second) < 0.25;
+  }
+  EXPECT_TRUE(pivots_at_tip) << "the robot must turn in place at the tip";
+}
+
+TEST(SharpRingCorner, DisabledLimitsKeepTheArc)
+{
+  const Pts recorded = {{0.0, 0.0}, {8.0, 0.0}, {8.0, 5.0}};
+  const f2c::types::Cell cell(toRing(recorded));
+  const PivotJoinLimits disabled{};
+
+  const auto without =
+      planBoustrophedon(cell, kOpWidth, kHeadland, 2, kInset, 0.0, kMinSwath, 0, kMinTurnRadius);
+  const auto with_disabled = planBoustrophedon(cell,
+                                               kOpWidth,
+                                               kHeadland,
+                                               2,
+                                               kInset,
+                                               0.0,
+                                               kMinSwath,
+                                               0,
+                                               kMinTurnRadius,
+                                               false,
+                                               0,
+                                               std::nullopt,
+                                               0.0,
+                                               &disabled);
+  EXPECT_EQ(without.rings, with_disabled.rings)
+      << "an uninjected server must plan exactly as before";
+}
+
+TEST(SharpRingCorner, GentleCornersKeepTheirArc)
+{
+  // A regular octagon (3 m sides): every corner turns 45 degrees, filleted by the ring stage but
+  // not sharper than the 60 degree pivot threshold.
+  const Pts recorded = {{2.1213, 0.0},
+                        {5.1213, 0.0},
+                        {7.2426, 2.1213},
+                        {7.2426, 5.1213},
+                        {5.1213, 7.2426},
+                        {2.1213, 7.2426},
+                        {0.0, 5.1213},
+                        {0.0, 2.1213}};
+  const f2c::types::Cell cell(toRing(recorded));
+  const PivotJoinLimits limits = shippedLimits(recorded);
+  const auto rounded =
+      planBoustrophedon(cell, kOpWidth, kHeadland, 2, kInset, 0.0, kMinSwath, 0, kMinTurnRadius);
+  const auto with_limits = planBoustrophedon(cell,
+                                             kOpWidth,
+                                             kHeadland,
+                                             2,
+                                             kInset,
+                                             0.0,
+                                             kMinSwath,
+                                             0,
+                                             kMinTurnRadius,
+                                             false,
+                                             0,
+                                             std::nullopt,
+                                             0.0,
+                                             &limits);
+  EXPECT_EQ(rounded.rings, with_limits.rings)
+      << "a corner that is not sharper than the pivot threshold keeps its fillet";
 }
 
 }  // namespace

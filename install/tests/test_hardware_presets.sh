@@ -48,6 +48,7 @@ else
   fail "mowgli backend: harness_run succeeds"
 fi
 assert_eq "mowgli backend: HARDWARE_BACKEND=mowgli" "mowgli" "$(env_value "$mowgli_repo" HARDWARE_BACKEND)"
+assert_eq "mowgli backend: GNSS_SOURCE=direct" "direct" "$(env_value "$mowgli_repo" GNSS_SOURCE)"
 assert_eq "mowgli backend: GNSS_BACKEND=universal" "universal" "$(env_value "$mowgli_repo" GNSS_BACKEND)"
 assert_eq "mowgli backend: GNSS_STACK=universal"   "universal" "$(env_value "$mowgli_repo" GNSS_STACK)"
 assert_eq "mowgli backend: GNSS_STATUS_SOURCE=universal" "universal" "$(env_value "$mowgli_repo" GNSS_STATUS_SOURCE)"
@@ -78,34 +79,97 @@ case "$mowgli_fragments" in
 esac
 assert_eq "mowgli backend: OPENMOWER_ENABLED=false" "false" "$(env_value "$mowgli_repo" OPENMOWER_ENABLED)"
 
-# ── Pixhawk MAVROS backend ────────────────────────────────────────────────
-section "HARDWARE_BACKEND=mavros (Pixhawk via MAVROS)"
+# ── Pixhawk MAVROS backend + GPS on Pixhawk ───────────────────────────────
+section "HARDWARE_BACKEND=mavros + GNSS_SOURCE=mavros"
 
 mavros_repo="$SANDBOX/repo_mavros"
 sandbox_repo "$mavros_repo"
 harness_init "$mavros_repo"
-harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart
+harness_set_preset backend=mavros gnss_source=mavros gnss=auto lidar=ldlidar-uart
 if harness_run; then
-  pass "mavros backend: harness_run succeeds"
+  pass "mavros/pixhawk GNSS: harness_run succeeds"
 else
-  fail "mavros backend: harness_run succeeds"
+  fail "mavros/pixhawk GNSS: harness_run succeeds"
 fi
-assert_eq "mavros backend: HARDWARE_BACKEND=mavros" "mavros" "$(env_value "$mavros_repo" HARDWARE_BACKEND)"
-assert_eq "mavros backend: GNSS_BACKEND remains universal" "universal" "$(env_value "$mavros_repo" GNSS_BACKEND)"
-assert_eq "mavros backend: GNSS_STACK remains universal" "universal" "$(env_value "$mavros_repo" GNSS_STACK)"
-assert_eq "mavros backend: GNSS_STATUS_SOURCE remains universal" "universal" "$(env_value "$mavros_repo" GNSS_STATUS_SOURCE)"
-assert_eq "mavros backend: MAVROS_ENABLED=true" "true" "$(env_value "$mavros_repo" MAVROS_ENABLED)"
+
+assert_eq "mavros/pixhawk GNSS: HARDWARE_BACKEND=mavros" \
+  "mavros" "$(env_value "$mavros_repo" HARDWARE_BACKEND)"
+assert_eq "mavros/pixhawk GNSS: GNSS_SOURCE=mavros" \
+  "mavros" "$(env_value "$mavros_repo" GNSS_SOURCE)"
+assert_eq "mavros/pixhawk GNSS: GNSS_BACKEND remains universal" \
+  "universal" "$(env_value "$mavros_repo" GNSS_BACKEND)"
+assert_eq "mavros/pixhawk GNSS: GNSS_STACK remains universal" \
+  "universal" "$(env_value "$mavros_repo" GNSS_STACK)"
+assert_eq "mavros/pixhawk GNSS: GNSS_STATUS_SOURCE=external" \
+  "external" "$(env_value "$mavros_repo" GNSS_STATUS_SOURCE)"
+assert_eq "mavros/pixhawk GNSS: direct serial device unused" \
+  "" "$(env_value "$mavros_repo" GNSS_SERIAL_DEVICE)"
+assert_eq "mavros/pixhawk GNSS: MAVROS_GPS1_CANONICAL=true" \
+  "true" "$(env_value "$mavros_repo" MAVROS_GPS1_CANONICAL)"
+assert_eq "mavros/pixhawk GNSS: MAVROS_ENABLED=true" \
+  "true" "$(env_value "$mavros_repo" MAVROS_ENABLED)"
+
+assert_eq "mavros/pixhawk GNSS: detected by-id path is the MAVROS port" \
+  "/dev/serial/by-id/usb-Pixhawk-stub" \
+  "$(env_value "$mavros_repo" MAVROS_PORT)"
 
 mavros_fragments=$(selected_fragments_in_current_run)
-for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.gps.yml docker-compose.mavros.yml docker-compose.lidar-ldlidar.yml; do
+for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.gps-mavros.yml docker-compose.mavros.yml docker-compose.lidar-ldlidar.yml; do
   case "$mavros_fragments" in
-    *"$required"*) pass "mavros backend: fragment $required present" ;;
-    *)             fail "mavros backend: fragment $required present" ;;
+    *"$required"*) pass "mavros/pixhawk GNSS: fragment $required present" ;;
+    *)             fail "mavros/pixhawk GNSS: fragment $required present" ;;
   esac
 done
 case "$mavros_fragments" in
-  *docker-compose.gps.yml*) pass "mavros backend: independent Universal GNSS fragment present" ;;
-  *) fail "mavros backend: independent Universal GNSS fragment present" ;;
+  *docker-compose.gps.yml*) fail "mavros/pixhawk GNSS: direct GPS fragment absent" ;;
+  *) pass "mavros/pixhawk GNSS: direct GPS fragment absent" ;;
+esac
+
+# The legacy MAVROS_GPS1_CANONICAL variable is only a deprecated
+# consistency guard for GPS1. GPS2 canonical ownership is selected by
+# GNSS_SOURCE/GNSS_MAVROS_SOURCE and must leave the GPS1 guard false.
+mavros_gps2_repo="$SANDBOX/repo_mavros_gps2"
+sandbox_repo "$mavros_gps2_repo"
+harness_init "$mavros_gps2_repo"
+harness_set_preset backend=mavros gnss_source=mavros gnss=auto lidar=none
+GNSS_MAVROS_SOURCE="gps2"
+if harness_run; then
+  pass "mavros/GPS2 GNSS: harness_run succeeds"
+else
+  fail "mavros/GPS2 GNSS: harness_run succeeds"
+fi
+assert_eq "mavros/GPS2 GNSS: GNSS_MAVROS_SOURCE=gps2" \
+  "gps2" "$(env_value "$mavros_gps2_repo" GNSS_MAVROS_SOURCE)"
+assert_eq "mavros/GPS2 GNSS: deprecated GPS1 guard remains false" \
+  "false" "$(env_value "$mavros_gps2_repo" MAVROS_GPS1_CANONICAL)"
+
+# ── Pixhawk MAVROS backend + GPS directly on SoC ──────────────────────────
+section "HARDWARE_BACKEND=mavros + GNSS_SOURCE=direct"
+
+mavros_direct_repo="$SANDBOX/repo_mavros_direct"
+sandbox_repo "$mavros_direct_repo"
+harness_init "$mavros_direct_repo"
+harness_set_preset backend=mavros gnss_source=direct gnss=auto gnss_connection=uart lidar=none
+if harness_run; then
+  pass "mavros/direct GNSS: harness_run succeeds"
+else
+  fail "mavros/direct GNSS: harness_run succeeds"
+fi
+assert_eq "mavros/direct GNSS: GNSS_SOURCE=direct" "direct" "$(env_value "$mavros_direct_repo" GNSS_SOURCE)"
+assert_eq "mavros/direct GNSS: GNSS_STATUS_SOURCE=universal" "universal" "$(env_value "$mavros_direct_repo" GNSS_STATUS_SOURCE)"
+assert_eq "mavros/direct GNSS: serial device retained" "/dev/ttyAMA4" "$(env_value "$mavros_direct_repo" GNSS_SERIAL_DEVICE)"
+assert_eq "mavros/direct GNSS: MAVROS_GPS1_CANONICAL=false" "false" "$(env_value "$mavros_direct_repo" MAVROS_GPS1_CANONICAL)"
+
+mavros_direct_fragments=$(selected_fragments_in_current_run)
+for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.gps.yml docker-compose.mavros.yml; do
+  case "$mavros_direct_fragments" in
+    *"$required"*) pass "mavros/direct GNSS: fragment $required present" ;;
+    *)             fail "mavros/direct GNSS: fragment $required present" ;;
+  esac
+done
+case "$mavros_direct_fragments" in
+  *docker-compose.gps-mavros.yml*) fail "mavros/direct GNSS: NTRIP-only fragment absent" ;;
+  *) pass "mavros/direct GNSS: NTRIP-only fragment absent" ;;
 esac
 
 section "HARDWARE_BACKEND=mavros + GNSS_STACK=disabled"
@@ -113,7 +177,7 @@ section "HARDWARE_BACKEND=mavros + GNSS_STACK=disabled"
 mavros_no_gnss_repo="$SANDBOX/repo_mavros_no_gnss"
 sandbox_repo "$mavros_no_gnss_repo"
 harness_init "$mavros_no_gnss_repo"
-harness_set_preset backend=mavros gnss=disabled lidar=none
+harness_set_preset backend=mavros gnss_source=direct gnss=disabled lidar=none
 if harness_run; then
   pass "mavros + disabled GNSS: harness_run succeeds"
 else
@@ -129,7 +193,7 @@ case "$mavros_no_gnss_fragments" in
   *) fail "mavros + disabled GNSS: MAVROS fragment present" ;;
 esac
 case "$mavros_no_gnss_fragments" in
-  *docker-compose.gps.yml*) fail "mavros + disabled GNSS: GPS fragment absent" ;;
+  *docker-compose.gps.yml*|*docker-compose.gps-mavros.yml*) fail "mavros + disabled GNSS: GPS fragment absent" ;;
   *) pass "mavros + disabled GNSS: GPS fragment absent" ;;
 esac
 

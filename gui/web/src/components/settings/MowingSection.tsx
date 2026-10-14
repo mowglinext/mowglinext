@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 import {CrossHatchSettings} from "./CrossHatchSettings.tsx";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const { Text, Paragraph } = Typography;
 
@@ -55,7 +56,7 @@ const BLADE_LOAD_MIN_SPEED_RATIO_FLOOR = 0.1;
 const BLADE_RPM_MAX = 10000;
 
 type Props = {
-    values: Record<string, any>;
+    values: SettingsValues;
     onChange: (key: string, value: any) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
@@ -64,7 +65,7 @@ type Props = {
     // yaml key — the same map hasDefault/isOverridden/onReset already read.
     // Used ONLY to derive HEADLAND_PASSES_FALLBACK_DEFAULT's replacement from
     // the schema instead of a literal that can drift from it.
-    defaults?: Record<string, any>;
+    defaults?: SettingsValues;
 };
 
 /** Mini SVG preview showing the strip pattern. Spacing == tool_width (F2C

@@ -28,9 +28,6 @@ import {useTranslation} from "react-i18next";
 import AsyncButton from "../../../components/AsyncButton.tsx";
 import AsyncDropDownButton from "../../../components/AsyncDropDownButton.tsx";
 import type {Feature} from "geojson";
-import {getAvailableDockAppearances, MOWER_APPEARANCES, type DockAppearanceId, type MowerAppearanceId} from "../../../constants/mowerAppearances.ts";
-import {parseMowerAppearanceMenuKey} from "../../../constants/mowerAppearanceMenuKey.ts";
-import {parseDockAppearanceMenuKey} from "../../../constants/dockAppearanceMenuKey.ts";
 
 interface MowingAreaItem extends MenuItemType {
     feat: Feature;
@@ -43,10 +40,6 @@ interface MapToolbarProps {
     stateName?: string;
     highLevelState?: number;
     emergency?: boolean;
-    mowerAppearanceId?: MowerAppearanceId;
-    onMowerAppearanceChange?: (id: MowerAppearanceId) => void;
-    dockAppearanceId?: DockAppearanceId;
-    onDockAppearanceChange?: (id: DockAppearanceId) => void;
     onEditMap: () => void;
     onToggleSatellite: () => void;
     showObstacleClearance?: boolean;
@@ -78,8 +71,6 @@ interface MapToolbarProps {
 
 export const MapToolbar = ({
     manualMode, useSatellite, mowingAreas, stateName, highLevelState, emergency,
-    mowerAppearanceId = "urdf", onMowerAppearanceChange = () => {},
-    dockAppearanceId = "marker", onDockAppearanceChange = () => {},
     onEditMap, onToggleSatellite,
     showObstacleClearance = false, onToggleObstacleClearance,
     showCoveragePreview = false, onToggleCoveragePreview,
@@ -134,24 +125,7 @@ export const MapToolbar = ({
             ...(onTogglePitch
                 ? [{key: "pitch", icon: <GlobalOutlined />, label: pitched ? t("mapToolbar.flattenMap") : t("mapToolbar.tilt3dView")} satisfies NonNullable<MenuProps["items"]>[number]]
                 : []),
-            {
-                key: "mowerAppearance",
-                label: t("mapToolbar.mowerAppearance"),
-                children: Object.values(MOWER_APPEARANCES).map((appearance) => ({
-                    key: `mowerAppearance:${appearance.id}`,
-                    icon: appearance.id === mowerAppearanceId ? <CheckOutlined /> : undefined,
-                    label: t(appearance.labelKey),
-                })),
-            },
-            {
-                key: "dockAppearance",
-                label: t("mapToolbar.dockAppearance"),
-                children: getAvailableDockAppearances(mowerAppearanceId).map((appearance) => ({
-                        key: `dockAppearance:${appearance.id}`,
-                        icon: appearance.id === dockAppearanceId ? <CheckOutlined /> : undefined,
-                        label: t(appearance.labelKey),
-                    })),
-            },
+            {key: "hardwareAppearance", label: <a href="#/settings?section=hardware">{t("mowerVisual.hardwareLink")}</a>},
         ]},
         {type: "group", label: t("mapToolbar.motionGroup"), children: [
             {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbar.areaRecording")},
@@ -184,17 +158,6 @@ export const MapToolbar = ({
     ];
 
     const handleMoreClick: MenuProps["onClick"] = ({key}: MenuInfo) => {
-        const appearanceId = parseMowerAppearanceMenuKey(key);
-        if (appearanceId) {
-            onMowerAppearanceChange(appearanceId);
-            return;
-        }
-        const dockAppearanceId = parseDockAppearanceMenuKey(key);
-        if (dockAppearanceId) {
-            onDockAppearanceChange(dockAppearanceId);
-            return;
-        }
-
         switch (key) {
             case "satellite": onToggleSatellite(); break;
             case "obstacleClearance": onToggleObstacleClearance?.(); break;

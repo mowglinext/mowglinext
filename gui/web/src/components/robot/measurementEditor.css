@@ -1,0 +1,15 @@
+.measurement-legend {display:flex; flex-wrap:wrap; gap:6px 20px; margin:8px 0; font-size:12px;}
+.measurement-legend b {color:#9ff4c8; margin-right:4px;}
+.measurement-input-label {display:block; margin:12px 0 6px;}
+.measurement-help {font-size:12px; margin:12px 0 8px;}
+.measurement-actions {display:flex; justify-content:flex-end; gap:8px;}
+.measurement-dialog-root .ant-modal-wrap {display:flex; align-items:flex-end;}
+.measurement-dialog-root .measurement-dialog {top:auto; padding-bottom:0; margin:0 auto; max-width:600px;}
+.measurement-dialog .ant-modal-content {display:flex; flex-direction:column; border-radius:20px 20px 0 0; padding-bottom:max(16px,env(safe-area-inset-bottom));}
+.measurement-dialog .ant-modal-header,.measurement-dialog .ant-modal-footer {flex:none;}
+.measurement-dialog input {font-size:16px;}
+.ant-card.measurement-preview-active {position:sticky; top:0; z-index:5; box-shadow:0 10px 24px #0006;}
+.measurement-preview-summary {display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:8px;}
+@media (max-width:767px) {.ant-card.measurement-preview-active {position:static;}}
+
+.hardware-settings input[id^="setting-"] {scroll-margin-bottom:120px;}

@@ -63,7 +63,7 @@ assert_eq "restart services for universal gps+nmea" "gps mowgli" "$restart_nmea"
 HARDWARE_BACKEND="mavros"
 GNSS_BACKEND="disabled"
 restart_mavros="$(compose_restart_services_for_backend mavros | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
-assert_eq "restart services for mavros" "mavros ntrip mowgli" "$restart_mavros"
+assert_eq "restart services for mavros + disabled GNSS" "mavros mowgli" "$restart_mavros"
 
 HARDWARE_BACKEND="openmower"
 GNSS_BACKEND="universal"
@@ -90,14 +90,23 @@ assert_runtime_check_case "mowgli gps+nmea" "$repo_nmea" "gps (mowgli-gps)"
 repo_mavros="$SANDBOX/repo_mavros"
 sandbox_repo "$repo_mavros"
 harness_init "$repo_mavros"
-harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart
+harness_set_preset backend=mavros gnss_source=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart
 harness_run >/dev/null 2>&1
 output_mavros="$(bash "$repo_mavros/install/mowglinext.sh" --check 2>&1)"
 ec=$?
 assert_eq "mavros: --check exits 0" "0" "$ec"
 assert_contains "mavros: expected mavros service" "mavros (mowgli-mavros)" "$output_mavros"
 assert_contains "mavros: firmware check skipped" "MAVROS backend: skipping direct Mowgli firmware check" "$output_mavros"
-assert_not_contains "mavros: no direct gps container expected" "gps (mowgli-gps)" "$output_mavros"
+assert_contains "mavros: Universal GNSS/NTRIP sidecar expected" "gps (mowgli-gps)" "$output_mavros"
+
+section "MAVROS state check runs in the MAVROS sidecar"
+
+checks_source="$(cat "$REPO_ROOT/install/lib/checks.sh")"
+mavros_check_source="$(printf '%s\n' "$checks_source" | sed -n '/^check_mavros() {/,/^}/p')"
+
+assert_contains   "mavros state check executes inside mowgli-mavros"   "docker_cmd exec mowgli-mavros bash -lc"   "$mavros_check_source"
+
+assert_not_contains   "mavros state check does not execute inside mowgli-ros2"   "docker_cmd exec mowgli-ros2 bash -lc"   "$mavros_check_source"
 
 repo_openmower="$SANDBOX/repo_openmower"
 sandbox_repo "$repo_openmower"

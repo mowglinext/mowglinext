@@ -244,3 +244,5 @@ Deployment entry points: `install/compose/docker-compose.base.yml` L42–44 `ros
 - `launch/nav2_navigation_launch.py` — vendored from `nav2_bringup/launch/navigation_launch.py` (Apache-2.0, Intel), edited only to drop `route_server` and add `docking_server`/`coverage_server`.
 - `/tmp/mowgli_nav2_*.yaml` — temp files written by `navigation.launch.py` `_inject_dock_pose_and_speeds` at every launch; never commit or edit.
 - `/ros2_ws/config/mowgli_robot.yaml` (runtime) is written back by `calibrate_imu_yaw_node`, `map_server_node` (`/set_docking_point`), and the GUI (`gui/pkg/api/drive_tuning.go`) via line-splice — the committed seed is `install/config/mowgli/mowgli_robot.yaml`, not this package.
+
+Blade placement uses `chassis_center_x + blade_x_offset`, `blade_y_offset`; both offsets default to zero and are forwarded from the template by `mowgli.launch.py`. `test_urdf_xacro.py` covers the legacy centre, right-offset cutting tool and independence from wheel X.

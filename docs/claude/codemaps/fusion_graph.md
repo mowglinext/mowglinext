@@ -19,7 +19,7 @@
 | Wheel σ random-walk model (#491), pivot release, adaptive inflation | `graph_manager_node.cpp:258-325`; `test_wheel_sigma_scaling.cpp`, `test_adaptive_noise.cpp` |
 | Stationary yaw snap, hand-push gate, gyro-bias EMA | `graph_manager_node.cpp:125-190`; `graph_manager.cpp` `AddGyroDelta` (:109); `test_stationary_yaw.cpp`, `test_gyro_bias.cpp` |
 | COG yaw gating, σ floor, 180° flip recovery | `fusion_graph_node_callbacks_b.cpp` `OnCogHeading` (:44); pure rules `include/fusion_graph/yaw_gates.hpp`, `include/fusion_graph/cog_flip_recovery.hpp` |
-| Graph persistence (`.graph/.meta`), datum cross-garden guard, autoload, empty-graph refusal | `src/graph_manager_persistence.cpp` `Save` / `Load`; `test_persistence.cpp` |
+| Graph persistence, crash recovery, legacy `.graph/.meta` loading, datum guard | `PERSISTENCE.md`; `src/graph_manager_persistence.cpp` `Save` / `Load`; `src/checkpoint_file.cpp`; persistence tests |
 | Save / clear services, auto-checkpoints | `fusion_graph_node_setup_comms.cpp:205-270`; `DispatchAsyncSave` `callbacks_b.cpp:363`; `OnHighLevelStatus` :276; `OnPeriodicSaveTimer` `misc.cpp:126` |
 | map→odom anchor, slew limiter (unwired), odom re-base, TF thread | `src/fusion_graph_node_publish.cpp` (`PublishOutputs` :153, `SlewPublishedAnchor` :278, `TfBroadcastLoop` :320); re-base `fusion_graph_node_timer.cpp:483-500`; pure `include/fusion_graph/anchor_slew.hpp` |
 | Published covariance frame (body→map) | `fusion_graph_node_publish.cpp:183` + `include/fusion_graph/covariance_frame.hpp`; `test_covariance_frame.cpp` |
@@ -68,9 +68,13 @@
 | `.../graph_manager.cpp` | | Accumulators, queues, initialization, statistics and pose snapshots |
 | `.../graph_manager_node.cpp` | 574 | `Tick` / `CreateNodeLocked`: all per-node gates + factor construction + iSAM2 update + throttled marginal |
 | `.../graph_manager_rebase.cpp` | | Windowed iSAM2 rebase, robust update/reset, rigid whole-graph transforms |
-| `.../graph_manager_persistence.cpp` | | Graph reset and `.graph`/`.meta` persistence with datum guard |
+| `.../graph_manager_persistence.cpp` | | Graph reset, snapshot/restore, semantic validation and datum guard |
+| `.../checkpoint_file.cpp` + `include/fusion_graph/checkpoint_file.hpp` | | Combined checkpoint publication, recovery copy, checksums and checked I/O |
+| `PERSISTENCE.md` | | Persistence protocol, recovery/compatibility contracts and validation limits |
 | `.../factors.cpp` | 162 | Factor `evaluateError` + analytic Jacobians + `clone` |
 | **`ros2/src/fusion_graph/test/`** | | |
+| `.../test_checkpoint_file.cpp`, `.../test_persistence_faults.cpp` | | Deterministic I/O faults, process interruption, recovery and legacy migration |
+| `.../test_save_service.py`, `.../checkpoint_test_delay.cpp` | | Real-node save result, busy failure and executor progress during held file I/O |
 | `.../test_factors.cpp` | | Graph factor residual and Jacobian tests |
 | `.../test_gnss_timestamp.cpp` | 142 | Delayed GNSS constrains the node at `header.stamp`, bounded by the window |
 | `.../test_rtk_wrongfix_gate.cpp` | 167 | Wrong-fix budget math; reject-forever regression if reset only on accept |

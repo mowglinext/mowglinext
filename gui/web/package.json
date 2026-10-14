@@ -6,12 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "prebuild": "node --experimental-strip-types scripts/appearance-registry.mjs",
+    "generate:model-geometry": "node --experimental-strip-types scripts/model-geometry-defaults.mjs --write",
+    "generate:appearances": "node --experimental-strip-types scripts/appearance-registry.mjs --write-schema && node --experimental-strip-types scripts/generate-map-artwork.mjs",
+    "test:appearances": "node --experimental-strip-types --test scripts/appearance-registry.test.mjs",
     "lint": "eslint src --report-unused-disable-directives --max-warnings 900",
     "lint:fix": "eslint src --fix",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "npm run test:appearances && vitest run",
     "test:watch": "vitest",
     "generate:api": "swagger-typescript-api generate -p ../docs/swagger.json -o src/api",
+    "generate:settings-types": "node scripts/gen-settings-types.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },
@@ -45,7 +50,8 @@
     "react-terminal-ui": "^1.4.0",
     "react-use-websocket": "4.13.0",
     "styled-components": "^6.4.1",
-    "usng.js": "^0.4.5"
+    "usng.js": "^0.4.5",
+    "yaml": "^2.8.2"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",

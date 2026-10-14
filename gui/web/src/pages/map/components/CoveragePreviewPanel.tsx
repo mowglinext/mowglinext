@@ -25,7 +25,7 @@ export const CoveragePreviewPanel = ({preview, areaLabel, resumeAvailable = fals
     const {
         areas, area, selectArea, editMode, choices, setAngleMode, setAngleDeg, commitAngle, setDirection,
         setStart, startAdjustable, robotWideAngle, robotWideDirection, shownAngle, changedFromServer,
-        loading, error, result,
+        loading, error, result, setEnabled,
     } = preview;
 
     const label = {
@@ -34,8 +34,19 @@ export const CoveragePreviewPanel = ({preview, areaLabel, resumeAvailable = fals
     };
     const stat = {fontSize: 12, color: colors.textSecondary};
 
+    // Always reachable, also while there is nothing to preview: the overlay can be switched off
+    // from the panel that controls it, not only from the map's tool menu.
+    const hideButton = (
+        <Button size="small" onClick={() => setEnabled(false)}>{t('coveragePreview.hide')}</Button>
+    );
+
     if (areas.length === 0) {
-        return <div style={{padding: 12, fontSize: 13, color: colors.textSecondary}}>{t('coveragePreview.noAreas')}</div>;
+        return (
+            <div style={{padding: 12, fontSize: 13, color: colors.textSecondary}}>
+                <div>{t('coveragePreview.noAreas')}</div>
+                <div style={{marginTop: 8}}>{hideButton}</div>
+            </div>
+        );
     }
 
     const directionName = (d: number) =>
@@ -54,7 +65,10 @@ export const CoveragePreviewPanel = ({preview, areaLabel, resumeAvailable = fals
 
     return (
         <div style={{padding: 12}}>
-            <div style={{fontSize: 14, fontWeight: 600, color: colors.text}}>{t('coveragePreview.title')}</div>
+            <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8}}>
+                <div style={{fontSize: 14, fontWeight: 600, color: colors.text}}>{t('coveragePreview.title')}</div>
+                {hideButton}
+            </div>
             <div style={{fontSize: 12, color: colors.textSecondary, marginTop: 2}}>{t('coveragePreview.hint')}</div>
             <div style={{fontSize: 12, color: colors.textSecondary, marginTop: 6}}>
                 {editMode ? t('coveragePreview.editHint') : t('coveragePreview.viewHint')}

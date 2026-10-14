@@ -23,9 +23,11 @@ below predates this change.
   The seed stays the first generated swath. The same boundary, hole, minimum-radius,
   pivot-sweep and optional swath-turn-envelope checks still decide each driven join.
 - `coverage_planning.cpp:2323`:
-  `orderSubPathsForMinimalTransit` now receives `preserve_direction_count` (default 1).
+  `orderSubPathsForMinimalTransit` receives `ring_bearing_count` (default 1).
   The builder protects **every** ring-bearing sub-path, including obstacle loops and
-  mixed ring/swath paths, from reversal; all may still move in the execution sequence.
+  mixed ring/swath paths, from reversal and keeps that group ahead of every interior-only
+  path. The outermost-ring path remains the route seed; ring-free plans retain the full
+  seed search.
 - `test/test_coverage_route.cpp`: Isabey route-length/transit bounds, all original
   swaths/rings retained inside the cut, sampled segment containment and obstacle checks,
   exact deterministic replay, wider-turn efficiency, and protected ring winding.
@@ -51,8 +53,9 @@ below predates this change.
   corner, which is what the field report of 2026-07 (ring-to-ring stalls) forbids; with no hint it
   is the midpoint of the longest side, exactly as before. With a hint the largest loop of the
   outermost pass (the perimeter, not a ring round a hole) is moved to `plan.rings[0]`, and
-  `buildContinuousSubPaths(..., pin_first_subpath)` → `orderSubPathsForMinimalTransit(...,
-  pin_first_seed)` stops the seed search moving the first sub-path. Rings off = no ring to start on:
+  `buildContinuousSubPaths` always keeps that outermost-ring sub-path first and keeps every
+  ring-bearing sub-path ahead of interior-only paths; `pin_first_subpath` additionally preserves a
+  selected first path for a ring-free direct caller. Rings off = no ring to start on:
   the hint is ignored and `PreviewCoverage.start_adjustable` is false. The preview answers with the
   real `start_x/y` (the snapped point). Tests `test/test_start_point.cpp`.
 - CMake registers `test_coverage_planning`, `test_pivot_joins`, `test_start_point`, `test_coverage_preview`
@@ -80,6 +83,7 @@ is the safety acceptance condition. Existing footprint/pivot gates remain tested
 | `mow_angle_deg` flow (GUI → BT → goal) | template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml:334-338` → `ros2/src/mowgli_bringup/launch/full_system.launch.py:246-250` → `ros2/src/mowgli_behavior/src/behavior_tree_node.cpp:946-948` (blackboard) → `ros2/src/mowgli_behavior/src/coverage_nodes.cpp:1823-1845` (`PlanCoverageArea::buildGoal`) → `coverage_server.cpp:450-451` (deg→rad, `<0` = auto) |
 | Turn-around connector (Dubins words, radius shrink loop, straight fallback) | `coverage_planning.cpp:543-580` (`buildConnector`, `r -= 0.02` loop `:555`), Dubins helpers `:257-500` (`dubinsLSL/RSR/LSR/RSL/RLR/LRL`, `sampleDubins`) |
 | Corner fillets (rings and sub-paths) | `coverage_planning.cpp:585-680` (`roundSharpCorners`); ring call `:1108-1116` (`kRingCornerThreshold` 30°); sub-path call `:1679-1690` (`kCornerThreshold` 88°, `fillet_r = max(turn_radius/2, min_radius)`) |
+| **Sharp ring corners (issue #973)** — a ring corner sharper than 60° (`kSharpCornerPivotRad`) where the pivot sweep fits is NOT filleted: the ring reaches the very corner and `buildContinuousSubPaths` pivots there (`pivotSharpCorners`) | `planBoustrophedon`'s `corner_pivot_limits` (default `nullptr` = old behaviour) → ring stage `keep_sharp` hook of `roundSharpCorners`; the sweep is judged with `kRingCornerPokeSlackM` (5 cm) extra reach for the outermost ring's pre-#388-clamp poke; `coverage_server.cpp` `makePivotLimits` builds the limits before the plan (also for the preview service). Corners 30–60° and corners beside a drawn obstacle keep the arc. Tests: `test_pivot_joins.cpp` `SharpRingCorner.*` |
 | Sub-path splitting (holes / unsafe joins), ring drive order, swath chaining, NN reorder | `coverage_planning.cpp:1337-1806` (`buildContinuousSubPaths`): ring outer/hole partition `:1359-1400`, ring start alignment `:1420-1462` (`kAlignCos` 45°), swath nearest-endpoint chain `:1469-1530`, join/split decision `:1578-1650`, sub-path NN reorder `:1724-1800` |
 | Which boundary the connectors are bounded by | `coverage_server.cpp` (`connector_clearance_boundary` → `safe_boundary` → raw; always ring 0, never moved by `connector_max_headland_passes`), definitions `coverage_planning.hpp` `BoustrophedonPlan` field docs, computed `coverage_planning.cpp` `ringCenterlineBoundary` lambda |
 | Limiting how many headland passes a turn may cross (`connector_max_headland_passes`, issue #497) | `coverage_planning.cpp` `ringCenterlineBoundary`/`swath_turn_envelope` block populates a SEPARATE envelope (ring `(n_rings − limit)`'s centerline) used ONLY for mainland swath-to-swath joins in `buildContinuousSubPaths`'s `swath_turn_boundary` param — `connector_clearance_boundary` itself never moves (the #388 clamp, the verify, and every ring-involving join stay on it — a maintainer review on PR #598 caught an earlier revision that moved `connector_clearance_boundary` directly and silently clamped ring 0's own poses onto a different ring); declared/read live `coverage_server.cpp` next to `connector_turn_radius`; tests `test_coverage_planning.cpp` `ConnectorMaxHeadlandPassesLimitsSwathTurnEnvelopeDepth`, `SwathTurnEnvelopeNeverRelocatesRingZero`, `ShippedGeometryTightSwathLimitFragmentsUTurns`, `ShippedGeometryP4OfFiveKeepsTurnAroundArcs` |
@@ -166,6 +170,7 @@ Declared in `on_configure` (`coverage_server.cpp:53-105`). "Injected" = overwrit
 | `obstacle_margin` | 0.0 | `obstacle_margin` (template 0.389) floored at `robot_config_util.planning_obstacle_margin_floor`, capped 1.0; server re-clamps `coverage_server.cpp:473-474` | LIVE |
 | `pivot_sweep_radius` | 0.0 (= pivot joins DISABLED) | `robot_config_util.chassis_circumscribed_radius(rp)` (0.597 m shipped) → `navigation.launch.py` `cov_params` | LIVE |
 | `boundary_soft_margin` | 0.0 | `robot_config_util.boundary_soft_margin(rp)` = `enforce_boundary_margin_m` (fallback 0.40) floored at the circumscribed radius — the same band `full_system.launch.py` gives map_server | LIVE |
+| `footprint_half_width` | 0.0 (= narrow boundary tongues KEPT) | `robot_config_util.chassis_half_width(rp)` (0.275 m shipped) → `navigation.launch.py` `cov_params`; dead-end tongues of the recorded line narrower than 2× this are not planned (`removeNarrowBoundaryTongues`, field 2026-10-10 dock wedge) | LIVE |
 | `action_server_result_timeout` | 15.0 | not injected | configure |
 | `use_sim_time` | false | `nav2_params_base.yaml:1152` | configure |
 
@@ -199,8 +204,9 @@ and `kRingSpikeTolM` 0.005 (`:1945-1946`).
    in-bounds, hole-free, pivot sweep inside recorded line + soft band and ≥ sweep radius from
    every drawn obstacle) → else split →
    `roundSharpCorners` (>88°, never at a zero-length twin) → `clampInsideRing` →
-   `enforcePivotCornerContract` → greedy NN sub-path reorder (adopted only if shorter; sub-path 0
-   fixed; reversing a sub-path keeps its twins).
+   `enforcePivotCornerContract` → constrained greedy NN sub-path reorder (adopted only if shorter;
+   outermost-ring path fixed first; every ring-bearing path stays ahead of interior-only paths;
+   ring-free plans may choose any seed; reversing an eligible sub-path keeps its twins).
 5. Pose yaws from `pathHeadings` (a corner's first twin = incoming heading, second = outgoing),
    verification + logs (`coverage_server.cpp`), result fill.
 

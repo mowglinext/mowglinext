@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -47,7 +47,14 @@ var feedForwardPersistedParamKeys = map[string]struct{}{
 // may persist: the FF allowlist above for feed-forward runs, everything for
 // the PID pass (which genuinely tunes the gains). A new map is returned; the
 // input is never mutated.
-func persistedParamsForMode(mode driveTuningMode, proposed map[string]float64) map[string]float64 {
+func persistedParamsForMode(mode driveTuningMode, proposed map[string]float64, backend ...string) map[string]float64 {
+	if len(backend) > 0 && backend[0] == "mavros" {
+		out := make(map[string]float64, 1)
+		if value, ok := proposed["ticks_per_meter"]; ok {
+			out["ticks_per_meter"] = value
+		}
+		return out
+	}
 	if mode != driveTuningModeFeedForward {
 		out := make(map[string]float64, len(proposed))
 		for key, value := range proposed {
@@ -177,6 +184,7 @@ type driveTuningRollbackResponse struct {
 }
 
 type driveTuningReport struct {
+	Recommended     map[string]float64       `json:"recommended,omitempty" yaml:"recommended"`
 	GeneratedAt     string                   `json:"generated_at" yaml:"generated_at"`
 	Mode            string                   `json:"mode" yaml:"mode"`
 	Profile         string                   `json:"profile" yaml:"profile"`
@@ -225,27 +233,48 @@ type driveTuningDrivetrain struct {
 	Notes                                    []string `json:"notes,omitempty" yaml:"notes"`
 }
 
+// The fit window is an estimation contract, never physical post-application evidence.
+type driveTuningCalibrationWindow struct {
+	StartStampNS          int64   `json:"start_stamp_ns" yaml:"start_stamp_ns"`
+	EndStampNS            int64   `json:"end_stamp_ns" yaml:"end_stamp_ns"`
+	LeftMotorRevolutions  float64 `json:"left_motor_revolutions" yaml:"left_motor_revolutions"`
+	RightMotorRevolutions float64 `json:"right_motor_revolutions" yaml:"right_motor_revolutions"`
+	RTKDistanceM          float64 `json:"rtk_distance_m" yaml:"rtk_distance_m"`
+	TicksPerMeter         float64 `json:"ticks_per_meter" yaml:"ticks_per_meter"`
+	CounterUnit           string  `json:"counter_unit" yaml:"counter_unit"`
+	Source                string  `json:"source" yaml:"source"`
+	LeftEpoch             int64   `json:"left_epoch" yaml:"left_epoch"`
+	RightEpoch            int64   `json:"right_epoch" yaml:"right_epoch"`
+	LeftSegment           int64   `json:"left_segment" yaml:"left_segment"`
+	RightSegment          int64   `json:"right_segment" yaml:"right_segment"`
+	GNSSBackend           string  `json:"gnss_backend" yaml:"gnss_backend"`
+}
+
 type driveTuningTrialReport struct {
-	Name                        string   `json:"name" yaml:"name"`
-	Phase                       string   `json:"phase" yaml:"phase"`
-	TargetSpeed                 float64  `json:"target_speed" yaml:"target_speed"`
-	MeasuredSpeedMean           float64  `json:"measured_speed_mean" yaml:"measured_speed_mean"`
-	Overshoot                   float64  `json:"overshoot" yaml:"overshoot"`
-	SettlingTime                *float64 `json:"settling_time,omitempty" yaml:"settling_time"`
-	StallDetected               bool     `json:"stall_detected" yaml:"stall_detected"`
-	OscillationDetected         bool     `json:"oscillation_detected" yaml:"oscillation_detected"`
-	LiveOscillationDetected     bool     `json:"live_oscillation_detected,omitempty" yaml:"live_oscillation_detected"`
-	OscillationSeverity         string   `json:"oscillation_severity,omitempty" yaml:"oscillation_severity"`
-	LiveOscillationSeverity     string   `json:"live_oscillation_severity,omitempty" yaml:"live_oscillation_severity"`
-	TrialQuality                string   `json:"trial_quality,omitempty" yaml:"trial_quality"`
-	IntegralSaturationSuspected bool     `json:"integral_saturation_suspected" yaml:"integral_saturation_suspected"`
-	GroundSpeedMean             *float64 `json:"ground_speed_mean,omitempty" yaml:"ground_speed_mean"`
-	OdomDistanceM               *float64 `json:"odom_distance_m,omitempty" yaml:"odom_distance_m"`
-	RTKDistanceM                *float64 `json:"rtk_distance_m,omitempty" yaml:"rtk_distance_m"`
-	RTKAccepted                 bool     `json:"rtk_accepted" yaml:"rtk_accepted"`
-	LeftRightTickImbalance      *float64 `json:"left_right_tick_imbalance,omitempty" yaml:"left_right_tick_imbalance"`
-	Warnings                    []string `json:"warnings,omitempty" yaml:"warnings"`
-	Notes                       []string `json:"notes,omitempty" yaml:"notes"`
+	CalibrationWindow           *driveTuningCalibrationWindow `json:"calibration_window,omitempty" yaml:"calibration_window"`
+	TicksPerMeter               *float64                      `json:"ticks_per_meter,omitempty" yaml:"ticks_per_meter"`
+	LeftTicksSeen               int64                         `json:"left_ticks_seen,omitempty" yaml:"left_ticks_seen"`
+	RightTicksSeen              int64                         `json:"right_ticks_seen,omitempty" yaml:"right_ticks_seen"`
+	Name                        string                        `json:"name" yaml:"name"`
+	Phase                       string                        `json:"phase" yaml:"phase"`
+	TargetSpeed                 float64                       `json:"target_speed" yaml:"target_speed"`
+	MeasuredSpeedMean           float64                       `json:"measured_speed_mean" yaml:"measured_speed_mean"`
+	Overshoot                   float64                       `json:"overshoot" yaml:"overshoot"`
+	SettlingTime                *float64                      `json:"settling_time,omitempty" yaml:"settling_time"`
+	StallDetected               bool                          `json:"stall_detected" yaml:"stall_detected"`
+	OscillationDetected         bool                          `json:"oscillation_detected" yaml:"oscillation_detected"`
+	LiveOscillationDetected     bool                          `json:"live_oscillation_detected,omitempty" yaml:"live_oscillation_detected"`
+	OscillationSeverity         string                        `json:"oscillation_severity,omitempty" yaml:"oscillation_severity"`
+	LiveOscillationSeverity     string                        `json:"live_oscillation_severity,omitempty" yaml:"live_oscillation_severity"`
+	TrialQuality                string                        `json:"trial_quality,omitempty" yaml:"trial_quality"`
+	IntegralSaturationSuspected bool                          `json:"integral_saturation_suspected" yaml:"integral_saturation_suspected"`
+	GroundSpeedMean             *float64                      `json:"ground_speed_mean,omitempty" yaml:"ground_speed_mean"`
+	OdomDistanceM               *float64                      `json:"odom_distance_m,omitempty" yaml:"odom_distance_m"`
+	RTKDistanceM                *float64                      `json:"rtk_distance_m,omitempty" yaml:"rtk_distance_m"`
+	RTKAccepted                 bool                          `json:"rtk_accepted" yaml:"rtk_accepted"`
+	LeftRightTickImbalance      *float64                      `json:"left_right_tick_imbalance,omitempty" yaml:"left_right_tick_imbalance"`
+	Warnings                    []string                      `json:"warnings,omitempty" yaml:"warnings"`
+	Notes                       []string                      `json:"notes,omitempty" yaml:"notes"`
 }
 
 type driveTuningBackupPayload struct {
@@ -256,6 +285,7 @@ type driveTuningJob struct {
 	mu         sync.Mutex
 	id         string
 	mode       driveTuningMode
+	backend    string
 	state      driveTuningRunState
 	startedAt  string
 	finishedAt string
@@ -322,8 +352,9 @@ func DriveTuningRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider, dockerP
 		dockerProvider: dockerProvider,
 	}
 	group := r.Group("/tools/drive")
+	backendGuard := requireMowgliHardwareBackend(dbProvider)
 	group.POST("/ff-calibration/start", manager.postFeedForwardStart())
-	group.POST("/pid-tuning/start", manager.postPIDStart())
+	group.POST("/pid-tuning/start", backendGuard, manager.postPIDStart())
 	group.POST("/tuning/rollback", manager.postRollback())
 	group.GET("/tuning/status", manager.getStatus())
 	group.GET("/tuning/report/latest", manager.getLatestReport())
@@ -342,8 +373,9 @@ func (m *driveTuningManager) postFeedForwardStart() gin.HandlerFunc {
 			return
 		}
 
-		commandArgs, reportPath := buildFeedForwardCommand(normalized)
-		job, err := m.startJob(driveTuningModeFeedForward, normalized.Apply, reportPath, commandArgs)
+		backend := activeHardwareBackendForDB(m.dbProvider)
+		commandArgs, reportPath := buildFeedForwardCommand(normalized, backend)
+		job, err := m.startJob(driveTuningModeFeedForward, normalized.Apply, reportPath, commandArgs, backend)
 		if err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, errDriveTuningAlreadyRunning) {
@@ -422,7 +454,7 @@ func (m *driveTuningManager) postRollback() gin.HandlerFunc {
 			return
 		}
 
-		command := buildRollbackExecCommand()
+		command := buildRollbackExecCommand(activeHardwareBackendForDB(m.dbProvider))
 		execution, err := m.dockerProvider.ContainerExec(ctx, containerDetails.ID, types.ContainerExecSpec{
 			Cmd: command,
 			Env: []string{
@@ -448,6 +480,7 @@ func (m *driveTuningManager) postRollback() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "backup file did not contain drive parameters"})
 			return
 		}
+		backup.Parameters = persistedParamsForMode(driveTuningModePID, backup.Parameters, activeHardwareBackendForDB(m.dbProvider))
 		if err := persistRobotYamlUpdates(m.dbProvider, floatMapToAnyMap(backup.Parameters)); err != nil {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 			return
@@ -516,7 +549,7 @@ func (m *driveTuningManager) getLatestReport() gin.HandlerFunc {
 
 var errDriveTuningAlreadyRunning = errors.New("a drive tuning job is already running")
 
-func (m *driveTuningManager) startJob(mode driveTuningMode, apply bool, reportPath string, commandArgs []string) (*driveTuningJob, error) {
+func (m *driveTuningManager) startJob(mode driveTuningMode, apply bool, reportPath string, commandArgs []string, backend ...string) (*driveTuningJob, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.current != nil {
@@ -527,9 +560,14 @@ func (m *driveTuningManager) startJob(mode driveTuningMode, apply bool, reportPa
 	}
 
 	jobID := fmt.Sprintf("%s-%d", mode, time.Now().UTC().Unix())
+	hardwareBackend := "mowgli"
+	if len(backend) > 0 {
+		hardwareBackend = backend[0]
+	}
 	job := &driveTuningJob{
 		id:         jobID,
 		mode:       mode,
+		backend:    hardwareBackend,
 		state:      driveTuningRunRunning,
 		startedAt:  time.Now().UTC().Format(time.RFC3339),
 		apply:      apply,
@@ -602,7 +640,11 @@ func (m *driveTuningManager) runJob(job *driveTuningJob, commandArgs []string) {
 	job.appendLog("\nSaved report: " + job.reportPath + "\n")
 
 	if job.apply {
-		toPersist := persistedParamsForMode(job.mode, report.ProposedParams)
+		if job.backend == "mavros" && !validOdometryProposal(report) {
+			job.finish(driveTuningRunWarning, &exitCode, "No valid aligned odometry proposal; coefficient was not persisted. Review the report.")
+			return
+		}
+		toPersist := persistedParamsForMode(job.mode, report.ProposedParams, job.backend)
 		if err := persistRobotYamlUpdates(m.dbProvider, floatMapToAnyMap(toPersist)); err != nil {
 			job.appendLog("\nYAML persistence error: " + err.Error() + "\n")
 			job.finish(driveTuningRunWarning, &exitCode, "drive tuning applied live, but mowgli_robot.yaml persistence failed")
@@ -636,6 +678,7 @@ func (m *driveTuningManager) buildStatusResponse(ctx context.Context) (driveTuni
 	ffSummary := driveTuningValidationSummary{Status: driveTuningStatusNotValidated}
 	pidSummary := driveTuningValidationSummary{Status: driveTuningStatusNotValidated}
 	var latestMeta *driveTuningLatestReportMeta
+	backend := activeHardwareBackendForDB(m.dbProvider)
 
 	for _, reportPath := range reportPaths {
 		raw, report, err := m.readReport(ctx, containerDetails.ID, reportPath)
@@ -654,10 +697,14 @@ func (m *driveTuningManager) buildStatusResponse(ctx context.Context) (driveTuni
 		switch driveTuningMode(report.Mode) {
 		case driveTuningModeFeedForward:
 			if ffSummary.Status == driveTuningStatusNotValidated {
-				ffSummary = evaluateFeedForwardReport(report, reportPath)
+				if backend == "mavros" {
+					ffSummary = evaluateOdometryReport(report, reportPath)
+				} else {
+					ffSummary = evaluateFeedForwardReport(report, reportPath)
+				}
 			}
 		case driveTuningModePID:
-			if pidSummary.Status == driveTuningStatusNotValidated {
+			if backend != "mavros" && pidSummary.Status == driveTuningStatusNotValidated {
 				pidSummary = evaluatePIDReport(report, reportPath)
 			}
 		}
@@ -792,7 +839,7 @@ func normalizePIDRequest(req drivePIDTuningStartRequest) (drivePIDTuningStartReq
 	return req, nil
 }
 
-func buildFeedForwardCommand(req driveFFCalibrationStartRequest) ([]string, string) {
+func buildFeedForwardCommand(req driveFFCalibrationStartRequest, backend ...string) ([]string, string) {
 	reportPath := driveReportPath(driveTuningModeFeedForward)
 	args := []string{
 		"--mode", "ff",
@@ -807,6 +854,13 @@ func buildFeedForwardCommand(req driveFFCalibrationStartRequest) ([]string, stri
 		"--turn-direction", req.TurnDirection,
 		"--output", reportPath,
 		"--backup-file", driveTuningBackupFile,
+	}
+	if len(backend) > 0 && backend[0] == "mavros" {
+		args = append(args,
+			"--hardware-backend", "mavros",
+			"--hardware-node", "/hardware_bridge",
+			"--odometry-node", "/mavros/esc_wheel_odometry",
+		)
 	}
 	// Deliberately NO --custom-kp/ki/kd/integral-limit: the FF run drives on
 	// the live hardware_bridge gains (template defaults unless the operator
@@ -847,10 +901,17 @@ func buildPIDCommand(req drivePIDTuningStartRequest) ([]string, string) {
 	return buildDriveTuningExecCommand(args), reportPath
 }
 
-func buildRollbackExecCommand() []string {
+func buildRollbackExecCommand(backend ...string) []string {
 	args := []string{
 		"--rollback",
 		"--backup-file", driveTuningBackupFile,
+	}
+	if len(backend) > 0 && backend[0] == "mavros" {
+		args = append(args,
+			"--hardware-backend", "mavros",
+			"--hardware-node", "/hardware_bridge",
+			"--odometry-node", "/mavros/esc_wheel_odometry",
+		)
 	}
 	return buildDriveTuningExecCommand(args)
 }
@@ -900,6 +961,7 @@ func listDriveReportPaths(ctx context.Context, dockerProvider types.IDockerProvi
 }
 
 func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]any) error {
+	mavros := activeHardwareBackendForDB(dbProvider) == "mavros"
 	configFilePath, err := dbProvider.Get("system.mower.yamlConfigFile")
 	if err != nil {
 		return err
@@ -920,9 +982,11 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 	if err == nil {
 		defaults := map[string]any{}
 		extractDefaults(schema, defaults)
-		for key, value := range defaults {
-			if _, exists := existing[key]; !exists {
-				existing[key] = value
+		if !mavros {
+			for key, value := range defaults {
+				if _, exists := existing[key]; !exists {
+					existing[key] = value
+				}
 			}
 		}
 		nodeMappings = extractNodeMappings(schema)
@@ -949,7 +1013,15 @@ func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]an
 	if err := os.MkdirAll(filepath.Dir(string(configFilePath)), 0o755); err != nil {
 		return err
 	}
-	return writePreservingPerms(string(configFilePath), []byte(driveTuningYamlHeader+string(out)))
+	if err := writePreservingPerms(string(configFilePath), []byte(driveTuningYamlHeader+string(out))); err != nil {
+		return err
+	}
+	if mavros {
+		if ticks, ok := asFloat64(payload["ticks_per_meter"]); ok {
+			return writeMavrosRuntimeConfig(dbProvider, ticks)
+		}
+	}
+	return nil
 }
 
 func floatMapToAnyMap(values map[string]float64) map[string]any {
@@ -977,6 +1049,99 @@ func waitForContainerExec(ctx context.Context, dockerProvider types.IDockerProvi
 		case <-ticker.C:
 		}
 	}
+}
+
+// Numerically compare the serialized fit arithmetic; this is not a physical
+// accuracy threshold. Independent measurements are still required after applying.
+func coherentFitNumber(actual, expected float64) bool {
+	return isFiniteFloat64(actual) && isFiniteFloat64(expected) && actual > 0 && expected > 0 &&
+		math.Abs(actual-expected) <= 1e-9*math.Max(actual, expected)
+}
+
+func validOdometryFit(trial driveTuningTrialReport) bool {
+	w := trial.CalibrationWindow
+	if !trial.RTKAccepted || trial.StallDetected || w == nil ||
+		w.CounterUnit != "motor_revolution" || w.StartStampNS <= 0 || w.EndStampNS <= w.StartStampNS ||
+		(w.Source != "esc_status" && w.Source != "ardupilot_legacy") || w.GNSSBackend == "" ||
+		w.LeftEpoch < 0 || w.RightEpoch != w.LeftEpoch || w.LeftSegment < 0 || w.RightSegment < 0 {
+		return false
+	}
+	for _, value := range []float64{w.LeftMotorRevolutions, w.RightMotorRevolutions, w.RTKDistanceM, w.TicksPerMeter} {
+		if !isFiniteFloat64(value) || value <= 0 {
+			return false
+		}
+	}
+	return coherentFitNumber(w.TicksPerMeter, (w.LeftMotorRevolutions/2+w.RightMotorRevolutions/2)/w.RTKDistanceM) &&
+		trial.RTKDistanceM != nil && coherentFitNumber(*trial.RTKDistanceM, w.RTKDistanceM) &&
+		(trial.TicksPerMeter == nil || coherentFitNumber(*trial.TicksPerMeter, w.TicksPerMeter))
+}
+
+// A rejected or historical report must not persist a coefficient, even if it
+// carries proposed_params or a successful process exit from an older tool.
+func validOdometryProposal(report *driveTuningReport) bool {
+	trials := filterTrialsByPhase(report.Trials, "odometry")
+	if report.FailureMessage != "" || len(trials) == 0 {
+		return false
+	}
+	mean := 0.0
+	for _, trial := range trials {
+		if !validOdometryFit(trial) {
+			return false
+		}
+		mean += trial.CalibrationWindow.TicksPerMeter / float64(len(trials))
+	}
+	return coherentFitNumber(report.ProposedParams["ticks_per_meter"], mean)
+}
+
+// The shared API transports an estimate in feed_forward. No report field here
+// proves physical precision, even when applied_live is true.
+func evaluateOdometryReport(report *driveTuningReport, reportPath string) driveTuningValidationSummary {
+	summary := func(status driveTuningValidationStatus, message string) driveTuningValidationSummary {
+		return driveTuningValidationSummary{Status: status, Message: message,
+			GeneratedAt: report.GeneratedAt, ReportPath: reportPath}
+	}
+	trials := filterTrialsByPhase(report.Trials, "odometry")
+	if len(trials) == 0 {
+		return summary(driveTuningStatusNotValidated, "No odometry passes recorded yet.")
+	}
+	if report.FailureMessage != "" {
+		return summary(driveTuningStatusWarning, "Odometry calibration did not complete successfully. Review the report failure details.")
+	}
+	fits := 0
+	measurementWarnings, oscillationWarning := false, false
+	for _, trial := range trials {
+		if trial.StallDetected {
+			return summary(driveTuningStatusWarning, "An odometry pass stalled or produced no wheel motion. Check wheel observations and mechanics.")
+		}
+		measurementWarnings = measurementWarnings || len(trial.Warnings) > 0 || trial.TrialQuality == "warning" || trial.TrialQuality == "poor"
+		oscillationWarning = oscillationWarning ||
+			driveTuningWarningOscillation(driveTuningOscillationSeverity(trial.OscillationSeverity, trial.OscillationDetected), trial.OscillationDetected) ||
+			driveTuningWarningOscillation(driveTuningOscillationSeverity(trial.LiveOscillationSeverity, trial.LiveOscillationDetected), trial.LiveOscillationDetected)
+		if validOdometryFit(trial) {
+			fits++
+		}
+	}
+	if fits == 0 {
+		message := "No valid aligned motor/RTK calibration window was accepted. Review pass rejection notes; historical reports require a new estimate."
+		if oscillationWarning {
+			return summary(driveTuningStatusWarning, message+" Motion stability warning: review wheel measurements.")
+		}
+		if measurementWarnings {
+			return summary(driveTuningStatusWarning, message+" Measurement warnings: review pass notes.")
+		}
+		return summary(driveTuningStatusNotValidated, message)
+	}
+	if fits != len(trials) {
+		return summary(driveTuningStatusWarning, "Some odometry passes lack a valid aligned motor/RTK calibration window. Review the rejected passes.")
+	}
+	message := fmt.Sprintf("Coefficient calculated: coherent estimate on %d RTK window(s). Physical accuracy remains unvalidated after application; independent measurement is required.", fits)
+	if oscillationWarning {
+		return summary(driveTuningStatusWarning, message+" Motion stability warning: review wheel measurements.")
+	}
+	if measurementWarnings {
+		return summary(driveTuningStatusWarning, message+" Measurement warnings: review pass notes.")
+	}
+	return summary(driveTuningStatusNotValidated, message)
 }
 
 func evaluateFeedForwardReport(report *driveTuningReport, reportPath string) driveTuningValidationSummary {
@@ -1397,7 +1562,15 @@ func sanitizeDriveTuningReport(report *driveTuningReport) {
 	report.CurrentParams = sanitizeFloat64Map(report.CurrentParams)
 	report.StartingParams = sanitizeFloat64Map(report.StartingParams)
 	report.ProposedParams = sanitizeFloat64Map(report.ProposedParams)
+	report.Recommended = sanitizeFloat64Map(report.Recommended)
 	for index := range report.Trials {
+		if w := report.Trials[index].CalibrationWindow; w != nil {
+			w.LeftMotorRevolutions = sanitizeFloat64Value(w.LeftMotorRevolutions)
+			w.RightMotorRevolutions = sanitizeFloat64Value(w.RightMotorRevolutions)
+			w.RTKDistanceM = sanitizeFloat64Value(w.RTKDistanceM)
+			w.TicksPerMeter = sanitizeFloat64Value(w.TicksPerMeter)
+		}
+		report.Trials[index].TicksPerMeter = sanitizeFloat64Ptr(report.Trials[index].TicksPerMeter)
 		report.Trials[index].TargetSpeed = sanitizeFloat64Value(report.Trials[index].TargetSpeed)
 		report.Trials[index].MeasuredSpeedMean = sanitizeFloat64Value(report.Trials[index].MeasuredSpeedMean)
 		report.Trials[index].Overshoot = sanitizeFloat64Value(report.Trials[index].Overshoot)

@@ -22,6 +22,11 @@ namespace mowgli_behavior
 
 struct BTContext;
 
+/// Whether the mission has progress to resume. Empty per-area completion sets
+/// and plan/orientation metadata alone do not count. Area identity and plan
+/// compatibility are still validated when the area is probed and dispatched.
+bool hasCoverageResumeState(const BTContext& ctx);
+
 /// Disk persistence of the coverage RESUME state, so an interrupted mowing
 /// session survives a full process/container restart (reboot, crash,
 /// `docker restart`, a power-cycle after an emergency stop) — not just the

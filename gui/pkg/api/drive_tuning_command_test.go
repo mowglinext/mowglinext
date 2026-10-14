@@ -44,6 +44,25 @@ func TestBuildFeedForwardCommandDoesNotForceSeedWheelPidGains(t *testing.T) {
 	}
 }
 
+func TestBuildFeedForwardCommandMapsMavrosRuntimeNodes(t *testing.T) {
+	args, _ := buildFeedForwardCommand(driveFFCalibrationStartRequest{
+		DistanceMeters: 3.0,
+		TestSpeedMps:   0.3,
+		OdomTimeoutS:   4.0,
+		Passes:         3,
+	}, "mavros")
+	script := args[len(args)-1]
+	for _, expected := range []string{
+		"'--hardware-backend' 'mavros'",
+		"'--hardware-node' '/hardware_bridge'",
+		"'--odometry-node' '/mavros/esc_wheel_odometry'",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("MAVROS feed-forward command missing %s: %s", expected, script)
+		}
+	}
+}
+
 // Apply after a feed-forward run persists ONLY the two quantities that run
 // measures; the wheel gains the tuner echoes back in proposed_params must not
 // reach mowgli_robot.yaml (they are whatever the run happened to drive with).

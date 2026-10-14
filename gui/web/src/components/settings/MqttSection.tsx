@@ -3,11 +3,12 @@ import { Alert, Card, Col, Form, Input, InputNumber, Row, Space, Switch, Typogra
 import { WifiOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
-    values: Record<string, any>;
+    values: SettingsValues;
     onChange: (key: string, value: any) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;

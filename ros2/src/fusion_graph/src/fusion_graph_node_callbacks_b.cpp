@@ -314,8 +314,8 @@ void FusionGraphNode::OnSetPose(geometry_msgs::msg::PoseWithCovarianceStamped::C
 // will come along). GraphManager::Save now does its file I/O outside
 // the graph mutex, but the file writes themselves are still serial,
 // so the in-flight guard prevents two writers fighting on the same
-// .graph / .scans / .meta files.
-void FusionGraphNode::DispatchAsyncSave(const char* reason)
+// checkpoint generation files.
+bool FusionGraphNode::DispatchAsyncSave(const char* reason, std::function<void(bool)> completion)
 {
   bool expected = false;
   if (!save_in_flight_->compare_exchange_strong(expected, true))
@@ -323,28 +323,50 @@ void FusionGraphNode::DispatchAsyncSave(const char* reason)
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: %s save skipped — previous save still in flight",
                 reason);
-    return;
+    return false;
   }
-  if (lidar_submaps_)
+  try
   {
-    lidar_submaps_->RequestSave();
-    lidar_mapper_ = lidar_submaps_->mapper();
+    if (lidar_submaps_)
+    {
+      lidar_submaps_->RequestSave();
+      lidar_mapper_ = lidar_submaps_->mapper();
+    }
+    std::thread(
+        [graph = graph_,
+         logger = get_logger(),
+         prefix = graph_save_prefix_,
+         reason = std::string(reason),
+         flag = save_in_flight_,
+         completion = std::move(completion)]()
+        {
+          bool ok = graph->Save(prefix);
+          if (ok)
+            RCLCPP_INFO(logger, "fusion_graph: %s checkpoint saved", reason.c_str());
+          else
+            RCLCPP_ERROR(logger, "fusion_graph: %s checkpoint save failed", reason.c_str());
+          flag->store(false);
+          if (completion)
+          {
+            try
+            {
+              completion(ok);
+            }
+            catch (const std::exception& e)
+            {
+              RCLCPP_ERROR(logger, "fusion_graph: save response failed: %s", e.what());
+            }
+          }
+        })
+        .detach();
   }
-  std::thread(
-      [graph = graph_,
-       logger = get_logger(),
-       prefix = graph_save_prefix_,
-       reason = std::string(reason),
-       flag = save_in_flight_]()
-      {
-        bool ok = graph->Save(prefix);
-        RCLCPP_INFO(logger,
-                    "fusion_graph: %s auto-save → %s",
-                    reason.c_str(),
-                    ok ? "ok" : "failed");
-        flag->store(false);
-      })
-      .detach();
+  catch (const std::exception& e)
+  {
+    save_in_flight_->store(false);
+    RCLCPP_ERROR(get_logger(), "fusion_graph: save dispatch failed: %s", e.what());
+    return false;
+  }
+  return true;
 }
 
 void FusionGraphNode::OnHardwareStatus(mowgli_interfaces::msg::Status::ConstSharedPtr msg)

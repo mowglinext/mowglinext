@@ -56,6 +56,7 @@ describe("deriveFleetRow", () => {
         expect(row.currentArea).toBe(3);
         expect(row.coveragePercent).toBe(41.5);
         expect(row.batteryPercent).toBe(72);
+        expect(row.batteryKnown).toBe(false); // cached status without pack voltage
         expect(row.gpsPercent).toBe(100);
         expect(row.position).toEqual({lat: 48.1, lon: 2.2});
         expect(row.apiVersionMismatch).toBe(false);
@@ -65,6 +66,13 @@ describe("deriveFleetRow", () => {
     it("falls back to the voltage when the BT has not published a percentage", () => {
         const row = deriveFleetRow(wire({}, {power: {v_battery: 29.0}}), {battery_full_voltage: "29.0", battery_empty_voltage: "22.0"});
         expect(row.batteryPercent).toBe(100);
+        expect(row.batteryKnown).toBe(true);
+    });
+
+    it("keeps a measured 0 % distinct from a missing voltage", () => {
+        const row = deriveFleetRow(wire({}, {power: {v_battery: 23.0}}));
+        expect(row.batteryPercent).toBe(0);
+        expect(row.batteryKnown).toBe(true);
     });
 
     it("treats a 0/0 fix as no position and flags a foreign API version", () => {

@@ -44,6 +44,7 @@ from std_srvs.srv import SetBool, Trigger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openmower_v1_emulator import OpenMowerV1Rig  # noqa: E402
+from measurements import calibration_attempt, drives_running, odometry_mean, run_scenario  # noqa: E402
 
 AUTONOMOUS, IDLE = 2, 1
 # xesc_odometry.hpp kMaxPlausibleWheelSpeedMps: no wheel of this robot goes faster.
@@ -177,17 +178,37 @@ class Probe(Node):
             data = [s[idx] for s in getattr(self, series) if s[0] >= since]
         return (statistics.fmean(data), len(data)) if data else (float('nan'), 0)
 
-    def odom_distance_mean(self, since: float, idx: int):
-        """Distance over time from /wheel_odom: each message's rate times the
-        interval its header stamp covers, which is what a consumer integrating
-        the odometry gets. A plain mean of jittery windows is biased up (0.03 +
-        0.71 averages 0.37), and receive times carry the probe's own latency."""
+    def odom_ground_means(self, rig, since: float, idx: int):
+        """Compare integration over the SAME header-stamp interval on both sides."""
         with self.lock:
-            data = [(s[3], s[idx]) for s in self.odom if s[0] >= since]
-        if len(data) < 2:
-            return float('nan'), len(data)
-        num = sum(v * (t - t_prev) for (t_prev, _), (t, v) in zip(data, data[1:]))
-        return num / (data[-1][0] - data[0][0]), len(data)
+            data = [s for s in self.odom if s[0] >= since]
+        try:
+            means, start, end = odometry_mean(data)
+            with rig.lock:
+                epoch = len(rig.clock_steps)
+                ground_start = rig.clock.to_monotonic(start)
+                ground_end = rig.clock.to_monotonic(end)
+            # The fitted last stamp can be slightly ahead of the fixture's
+            # latest integration step. Wait for coverage, without extrapolating
+            # or changing the selected odometry interval.
+            def covered():
+                with rig.lock:
+                    return rig.motion.rows[-1][0] >= ground_end
+            if not wait_for(covered, 1.0):
+                raise ValueError('ground history did not reach the odometry stamp')
+            with rig.lock:
+                if len(rig.clock_steps) != epoch:
+                    raise ValueError('clock epoch changed during measurement')
+                ground = rig.motion.mean(ground_start, ground_end)
+            return means[idx - 1], ground[idx - 1], len(data)
+        except ValueError as exc:
+            print(f'    invalid odometry measurement: {exc}', flush=True)
+            with rig.lock:
+                print(f'    odom interval {data[0][3] if data else None}..'
+                      f'{data[-1][3] if data else None}; ground monotonic history '
+                      f'{rig.motion.rows[0][0]}..{rig.motion.rows[-1][0]}; '
+                      f'host clock {time.time()}', flush=True)
+            return float('nan'), float('nan'), len(data)
 
     def call(self, client, request, timeout=5.0):
         if not client.wait_for_service(timeout_sec=timeout):
@@ -383,13 +404,13 @@ def s03_straight(probe, rig, R, esc):
     # Means over the window: an instantaneous plant speed or a single odometry
     # window is just jitter on a loaded runner.
     plant_v = forward_speed(s0, snap)
-    odom_vx, n = probe.odom_distance_mean(t_meas, 1)
-    if abs(plant_v - 0.30) >= 0.03 or abs(odom_vx - plant_v) >= 0.03:
+    odom_vx, ground_vx, n = probe.odom_ground_means(rig, t_meas, 1)
+    if abs(plant_v - 0.30) >= 0.03 or not abs(odom_vx - ground_vx) < 0.03:
         print('    diag: ' + _drive_diagnostics(probe, rig, t_meas, t_meas_ms, x_meas), flush=True)
     R.check(S, 'true ground speed tracks 0.30 m/s (closed loop beats the 0.85 motor gain)',
             abs(plant_v - 0.30) < 0.03, f"plant mean v={plant_v:.3f} m/s")
-    R.check(S, '/wheel_odom vx matches the ground', abs(odom_vx - plant_v) < 0.03,
-            f'odom vx={odom_vx:.3f} over {n} msgs')
+    R.check(S, '/wheel_odom vx matches the ground', abs(odom_vx - ground_vx) < 0.03,
+            f'odom vx={odom_vx:.3f}, same-window ground={ground_vx:.3f} over {n} msgs')
     R.check(S, 'no spurious rotation', abs(snap['w']) < 0.05, f"w={snap['w']:.3f}")
     R.check(S, 'real wiring: left duty > 0, right duty < 0',
             snap['duty']['left'] > 0.05 and snap['duty']['right'] < -0.05,
@@ -407,12 +428,12 @@ def s04_pivot(probe, rig, R, esc):
     # Mean yaw rate over the window (2 s at 0.6 rad/s never wraps past pi).
     plant_w = math.atan2(math.sin(snap['theta'] - s0['theta']), math.cos(snap['theta'] - s0['theta'])) \
         / ((snap['t'] - s0['t']) / 1000.0)
-    odom_w, _ = probe.odom_distance_mean(t_meas, 2)
+    odom_w, ground_w, _ = probe.odom_ground_means(rig, t_meas, 2)
     imu_w, _ = probe.mean_since('imu', t_meas, 1)
     R.check(S, 'true yaw rate tracks +0.6 rad/s, counter-clockwise', abs(plant_w - 0.6) < 0.08,
             f"plant mean w={plant_w:+.3f}")
-    R.check(S, '/wheel_odom angular.z agrees in sign and size', abs(odom_w - plant_w) < 0.08,
-            f'odom w={odom_w:+.3f}')
+    R.check(S, '/wheel_odom angular.z agrees in sign and size', abs(odom_w - ground_w) < 0.08,
+            f'odom w={odom_w:+.3f}, same-window ground={ground_w:+.3f}')
     R.check(S, '/imu/data gyro z agrees in sign and size', abs(imu_w - plant_w) < 0.08,
             f'imu gz={imu_w:+.3f}')
     R.check(S, 'no translation', abs(snap['v']) < 0.03, f"v={snap['v']:+.3f}")
@@ -435,9 +456,12 @@ def s05_slew(probe, rig, R, esc):
 def s06_cmd_timeout(probe, rig, R, esc):
     S = 'cmd_vel timeout'
     drive(probe, rig, 0.3, 0.0, 3.0)
+    if not R.check(S, 'both drives running before command publisher stops',
+                   drives_running(rig.snapshot()['effective'])):
+        return
     probe.cmd = None  # the publisher dies mid-drive
     t0 = rig.now_ms()
-    tz = rig.first_time_effective_zero(DRIVES, t0, 3000)
+    tz = rig.first_time_all_zero(DRIVES, t0, 3000)
     R.check(S, 'drives commanded to zero within 1.0 s timeout + one tick',
             tz is not None and tz - t0 < 1250, f'{(tz - t0) if tz else float("nan"):.0f} ms')
     wait_for(lambda: abs(rig.snapshot()['v']) < 0.01, 3)
@@ -506,8 +530,15 @@ def s10_lift(probe, rig, R, esc):
         rig.ll.lifted_wheels = 2
         t0 = rig.now_ms()
     tz = rig.first_time_effective_zero(DRIVES, t0, 3000)
-    R.check(S, "both wheels lifted: zero within the board's 100 ms lift period + chain (< 300 ms)",
-            tz is not None and tz - t0 < 300, f'{(tz - t0) if tz else float("nan"):.0f} ms')
+    # Controller command receipts have timestamps; polling effective duty
+    # every 2 ms introduces scheduler jitter. Explicit zero commands also
+    # guarantee that an ESC watchdog alone cannot make this test pass.
+    zeros = [rig.first_zero_command(name, t0, 3000) for name in DRIVES]
+    t_cmd = max(zeros) if all(t is not None for t in zeros) else None
+    R.check(S, "both wheels lifted: zero duty received within 100 ms + chain (< 300 ms)",
+            t_cmd is not None and tz is not None and t_cmd - t0 < 300,
+            f'cmd={(t_cmd - t0) if t_cmd is not None else float("nan"):.0f} ms; '
+            f'polled={(tz - t0) if tz is not None else float("nan"):.0f} ms')
     em = probe.get('emergency')
     wait_for(lambda: probe.get('emergency').reason == 'Lift detected', 1)
     R.check(S, 'reason "Lift detected"', probe.get('emergency').reason == 'Lift detected')
@@ -533,9 +564,12 @@ def s10_lift(probe, rig, R, esc):
 def s11_software_estop(probe, rig, R, esc):
     S = 'software e-stop'
     drive(probe, rig, 0.3, 0.0, 2.5)
+    if not R.check(S, 'both drives running before e-stop',
+                   drives_running(rig.snapshot()['effective'])):
+        return
     t0 = rig.now_ms()
     estop(probe, 1)
-    tz = rig.first_time_effective_zero(DRIVES, t0, 1000)
+    tz = rig.first_time_all_zero(DRIVES, t0, 1000)
     R.check(S, 'drives at zero within 100 ms of the service call',
             tz is not None and tz - t0 < 100, f'{(tz - t0) if tz else float("nan"):.0f} ms')
     R.check(S, 'board latched through the heartbeat request', wait_for(lambda: rig.snapshot()['latch'], 1))
@@ -665,8 +699,13 @@ def s15_esc_reboot(probe, rig, R, esc):
 
 def s16_docking(probe, rig, R, esc):
     S = 'docking (v1-fw)'
+    if not R.check(S, 'bridge calibration requires 200 raw IMU samples',
+                   _bridge_param(probe, 'imu_cal_samples') == 200):
+        return
     probe.hl_state = IDLE
     with rig.lock:
+        stimulus_ms = rig.now_ms()
+        stimulus_host = time.time()
         rig.ll.gyro_bias_z = 0.03
         rig.ll.v_battery = 27.0
         rig.ll.v_charge = 29.6
@@ -690,13 +729,41 @@ def s16_docking(probe, rig, R, esc):
     took = time.monotonic() - t_dock
     R.check(S, 'docked IMU calibration removes the 0.03 rad/s gyro bias', ok,
             f'gz={trailing_gz()[0]:+.4f}, {took:.1f} s after contact')
-    R.check(S, '...not before the wheels settled (1 s + 200 samples at 50 Hz)', took > 4.5,
-            f'{took:.1f} s')
+    # Battery DDS receipt is not when wheels became stationary. Inspect the
+    # bridge's actual calibration events against ground wheel-tick history;
+    # the default estimator's exact 200-sample contract has its own regression.
+    bridge_log = os.path.join(R.logdir, f'bridge-{esc}.log')
+    with open(bridge_log, encoding='utf-8') as fh:
+        lines = fh.read().splitlines()
+    start, rest, raw_samples = None, float('nan'), 0
+    try:
+        start, ready = calibration_attempt(lines, stimulus_host)
+        with rig.lock:
+            rest = rig.motion.stationary_for(rig.clock.to_monotonic(start))
+            raw_samples = sum(stamp_host <= ready for stamp, stamp_host in rig.ll.imu_sent
+                              if stamp >= stimulus_ms)
+    except ValueError as exc:
+        print(f'    invalid calibration measurement: {exc}', flush=True)
+        with rig.lock:
+            print(f'    calibration start={start}; '
+                  f'ground monotonic history={rig.motion.rows[0][0]}..{rig.motion.rows[-1][0]}; '
+                  f'host clock={time.time()}', flush=True)
+    R.check(S, 'calibration starts only after 1 s with stationary wheel ticks',
+            rest >= 1.0, f'rest at actual start={rest:.3f} s')
+    # Source emission bounds the maximum possible collection, not which
+    # packets Feed consumed. The parameter check and estimator tests
+    # separately pin the exact collection requirement, including abort/retry.
+    R.check(S, 'at least 200 biased raw IMU samples emitted before completion',
+            raw_samples >= 200, f'{raw_samples} raw samples since bias injection')
     time.sleep(1.5)  # crossing the threshold is not removal: check steady state
     steady, n = probe.mean_since('imu', time.monotonic() - 1.0, 1)
     # n only proves the stream is alive (a loaded runner delivers fewer of the
     # 50 Hz samples); the residual is the check.
-    R.check(S, 'steady-state residual after calibration < 0.002 rad/s', n > 20 and abs(steady) < 0.002,
+    with rig.lock:
+        raw_n = sum(stamp >= rig.now_ms() - 1000.0 for stamp, _ in rig.ll.imu_sent)
+    R.check(S, 'steady-state IMU delivery supplies >20 new samples/s', n > 20,
+            f'{n} received, {raw_n} raw samples emitted')
+    R.check(S, 'steady-state residual after calibration < 0.002 rad/s', abs(steady) < 0.002,
             f'gz={steady:+.5f} over {n}')
     t = time.monotonic() - 2.0
     vx, n = probe.mean_since('odom', t, 1)
@@ -802,15 +869,15 @@ def s19b_starved(probe, rig, R, esc, bridge):
     with probe.lock:
         vx = [v for (t, v, *_) in probe.odom if t >= t0]
     plant_v = forward_speed(s0, snap)
-    odom_v, _ = probe.odom_distance_mean(t0, 1)
+    odom_v, ground_v, _ = probe.odom_ground_means(rig, t0, 1)
     worst = max((abs(v) for v in vx), default=float('nan'))
     # The exact arithmetic (a 350 ms stall divided by 350 ms, not by a clamped
     # control period) is pinned by WheelTickSampler.AStalledBridgeMeasures-
     # TheWholeStall; here, what a consumer of the running bridge can see.
     R.check(S, 'the robot kept driving through the stall', abs(plant_v - 0.3) < 0.05,
             f'plant mean v={plant_v:.3f} m/s')
-    R.check(S, '/wheel_odom agrees with the ground on average', abs(odom_v - plant_v) < 0.05,
-            f'odom mean {odom_v:.3f} over {len(vx)} msgs')
+    R.check(S, '/wheel_odom agrees with the ground on average', abs(odom_v - ground_v) < 0.05,
+            f'odom mean {odom_v:.3f}, same-window ground={ground_v:.3f} over {len(vx)} msgs')
     if not worst < MAX_PLAUSIBLE_WHEEL_SPEED_MPS:
         print('    diag: vx series ' + ' '.join(f'{v:.2f}' for v in vx), flush=True)
     R.check(S, f'no physically impossible window (< {MAX_PLAUSIBLE_WHEEL_SPEED_MPS} m/s)',
@@ -834,9 +901,14 @@ def s20_crash(probe, rig, R, esc, bridge):
     wait_for(lambda: rig.snapshot()['latch'], 1.5)
     with rig.lock:
         latched = [t for t in rig.ll.latch_events if t >= t0]
-    dt = (latched[0] - t0) if latched else float('nan')
-    R.check(S, 'board latched on the missing heartbeat (~500 ms)', bool(latched) and 450 < dt < 650,
-            f'{dt:.0f} ms')
+        last_heartbeat = rig.ll.last_heartbeat_ms
+    # The watchdog starts at the last heartbeat, not at SIGKILL. The latter
+    # may occur partway through the 500 ms heartbeat period.
+    dt = (latched[0] - last_heartbeat) if latched else float('nan')
+    kill_dt = (latched[0] - t0) if latched else float('nan')
+    R.check(S, 'board latched 500 ms after its last heartbeat',
+            bool(latched) and 500 < dt < 650,
+            f'heartbeat age={dt:.0f} ms; after kill={kill_dt:.0f} ms')
     R.check(S, 'robot physically stopped', wait_for(lambda: abs(rig.snapshot()['v']) < 0.01, 2))
 
 
@@ -861,18 +933,18 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
             if only and sc.__name__ not in only:
                 continue
             print(f'-- {esc} / {sc.__name__}', flush=True)
-            try:
-                sc(probe, rig, R, esc)
-            except Exception as exc:  # a crashed scenario is a failure, not an abort
-                R.check(sc.__name__, 'scenario raised', False, f'{exc!r}')
-                traceback.print_exc()
+            if not run_scenario(sc, R, probe, rig, R, esc, fixture=rig):
+                print(f'    remaining {esc} scenarios NOT RUN: {sc.__name__} failed', flush=True)
+                return
             probe.cmd = None
         if not only or 's19b_starved' in only:
             print(f'-- {esc} / s19b_starved', flush=True)
-            s19b_starved(probe, rig, R, esc, bridge)
+            if not run_scenario(s19b_starved, R, probe, rig, R, esc, bridge, fixture=rig):
+                print(f'    {esc} / s20_crash NOT RUN: s19b_starved failed', flush=True)
+                return
         if not only or 's20_crash' in only:
             print(f'-- {esc} / s20_crash', flush=True)
-            s20_crash(probe, rig, R, esc, bridge)
+            run_scenario(s20_crash, R, probe, rig, R, esc, bridge, fixture=rig)
     finally:
         try:
             os.killpg(bridge.pid, signal.SIGKILL)
@@ -948,6 +1020,7 @@ def main():
     args = ap.parse_args()
     rclpy.init()
     R = Report()
+    R.logdir = args.logdir
     try:
         for esc in (['xesc_mini', 'xesc_2040'] if args.esc == 'both' else [args.esc]):
             # the R rows carry the scenario name; prefix with the controller

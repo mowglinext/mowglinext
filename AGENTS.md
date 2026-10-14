@@ -11,6 +11,18 @@ These files are the maintained map of the tree — read the relevant one before 
 - [`docs/claude/doc-index.md`](docs/claude/doc-index.md) — which document is authoritative and which is a historical record.
 - [`docs/claude/codemaps/`](docs/claude/codemaps/) (per-package file maps), [`ros-interfaces.md`](docs/claude/ros-interfaces.md) (every topic/service/action/TF), [`parameters.md`](docs/claude/parameters.md) (every config key and its default), [`testing-ci.md`](docs/claude/testing-ci.md) (every test and the CI job that gates it).
 
+Repository ownership and agent reports
+
+Each repository owns its code, documentation, tests, audits, logs, and validation reports.
+
+Before working in ros2/src/external/<submodule>/, read and follow that submodule's AGENTS.md, including its required reporting and artifact locations.
+
+Never store submodule-specific reports or evidence in MowgliNext. Follow the paths defined by the submodule's own agent instructions.
+
+MowgliNext retains only its own reports and cross-repository integration summaries, referencing submodule evidence instead of duplicating it.
+
+Keep temporary logs, build outputs, and intermediate artifacts outside version control. Do not generate large evidence archives unless explicitly requested.
+
 ## ROS2 formatting
 
 - Any change under `ros2/` that touches C++ source or headers (`.cpp`, `.hpp`, `.h`) must be `clang-format` clean before finishing.

@@ -38,6 +38,7 @@ See `docs/TRANSIT_AUTHORIZATION.md` for terminal exceptions and recovery.
 | Cul-de-sac guard (refuse to skirt a wall) | `obstacle_deviation.cpp` `hasClearExit` + `require_clear_exit` branch in `updateLateralDeviation()` |
 | Bounded straight reverse-escape (SAFETY-CRITICAL, only place FTC reverses) | `include/mowgli_nav2_plugins/ftc_reverse_escape.hpp` + `ftc_controller.cpp` `reverseEscapeOrWait()` (L1730); emitted at L921 |
 | Wait-before-abort window (`obstacle_wait_timeout_s`) | `ftc_controller.cpp` `waitOrThrowForObstacle()` (L1703) — the ControllerException throw is L1717 |
+| collision_monitor holds the wheels while FTC's costmap checks read clear → WEDGED (reverse-escape, hold, obstacle-marked abort) | `include/mowgli_nav2_plugins/ftc_collision_monitor_hold.hpp` `CmHoldStep`; `ftc_controller.cpp` `collisionMonitorHoldConfirmed()`, reads `/collision_monitor_state`; params `cm_hold_s` / `cm_stall_only_s` |
 | Smooth recovery after obstacle hold (continuous-clear debounce, one episode deadline, PID/carrot reset, linear + angular ramps) | `include/mowgli_nav2_plugins/ftc_obstacle_wait.hpp`, `ftc_stall.hpp` `ClampForwardToMovementRamp()`, and `ftc_controller.cpp` `holdObstacleMotion()` |
 | Body-in-lethal check at the ACTUAL robot pose (SAFETY_REVIEW F-C1) | `ftc_controller.cpp` `currentBodyInLethal()` (L1663), gated at L907 |
 | Legacy collision throw (deviation OFF, e.g. no-LiDAR) | `ftc_controller.cpp` `checkCollision()` (L1577) — frame caveat at L1621 |
@@ -65,6 +66,7 @@ See `docs/TRANSIT_AUTHORIZATION.md` for terminal exceptions and recovery.
 | **`include/mowgli_nav2_plugins/`** | | |
 | `ftc_controller.hpp` | 594 | `FTCController` class: FSM enum, carrot/PID/deviation/reverse/oscillation state, `struct Config` (all params + C++ defaults) |
 | `ftc_stall.hpp` | 95 | Pure `StallDecision()` plus acceleration-ramp clamp used after obstacle holds |
+| `ftc_collision_monitor_hold.hpp` | 86 | Pure `CmHoldStep()`: stopped while commanding forward under a collision_monitor STOP/APPROACH verdict (or with none, longer) → blocked |
 | `ftc_obstacle_wait.hpp` | 47 | Pure continuous-followable debounce and command slew clamp for obstacle-hold recovery |
 | `ftc_blade_load.hpp` | 105 | Pure `BladeLoadScale()` / `BladeLoadDecision()` — linear RPM→speed ramp, inactive/stale/degenerate gates fail OPEN, `stall_crawl_speed` floor |
 | `ftc_reverse_escape.hpp` | 83 | Pure `ReverseEscapeDecide()` / `ReverseEscapeAdvance()` — opt-in, budget cap, rear-clear gate |
@@ -173,6 +175,7 @@ colcon test --packages-select mowgli_bringup       # runs test/test_nav2_params.
 
 Unit tests (all ROS-free gtests, registered in `CMakeLists.txt`):
 - `test/test_ftc_stall.cpp` — `StallDecision` disable/grace/crawl/reset; stall flag caps output instead of flooring.
+- `test/test_ftc_collision_monitor_hold.cpp` — only STOP/APPROACH hold; field case confirms at `cm_hold_s`; no verdict needs `cm_stall_only_s`; motion or no forward command never confirms; each trigger can be disabled.
 - `test/test_ftc_obstacle_wait.cpp` — an obstacle wait resumes only after a continuous followable window; any blocked scan resets the evidence; obstacle restart steering respects its slew rate without overshoot.
 - `test/test_ftc_blade_load.cpp` — `BladeLoadDecision` fails open on disabled/inactive/stale/degenerate; linear ramp endpoints; floor never raises the speed; no hysteresis.
 - `test/test_ftc_reverse_escape.cpp` — default is opt-in OFF; rear-blocked never reverses; budget hard cap; negative dt ignored.

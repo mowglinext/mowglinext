@@ -25,6 +25,9 @@ UNIVERSAL_TO_PUBLIC_FIX_TYPE = {
     UniversalGnssStatus.FIX_TYPE_RTK_FLOAT: PublicGnssStatus.FIX_TYPE_RTK_FLOAT,
     UniversalGnssStatus.FIX_TYPE_RTK_FIXED: PublicGnssStatus.FIX_TYPE_RTK_FIXED,
     UniversalGnssStatus.FIX_TYPE_DEAD_RECKONING: PublicGnssStatus.FIX_TYPE_DEAD_RECKONING,
+    UniversalGnssStatus.FIX_TYPE_2D_FIX: PublicGnssStatus.FIX_TYPE_2D_FIX,
+    UniversalGnssStatus.FIX_TYPE_3D_FIX: PublicGnssStatus.FIX_TYPE_3D_FIX,
+    UniversalGnssStatus.FIX_TYPE_DGPS: PublicGnssStatus.FIX_TYPE_DGPS,
 }
 
 UNIVERSAL_TO_PUBLIC_RTK_MODE = {
@@ -78,10 +81,13 @@ UNIVERSAL_TO_PUBLIC_CAPABILITY = {
 
 FIX_TYPE_QUALITY = {
     PublicGnssStatus.FIX_TYPE_NO_FIX: 0.0,
-    PublicGnssStatus.FIX_TYPE_GPS_FIX: 25.0,
-    PublicGnssStatus.FIX_TYPE_RTK_FLOAT: 50.0,
+    PublicGnssStatus.FIX_TYPE_GPS_FIX: 0.0,
+    PublicGnssStatus.FIX_TYPE_2D_FIX: 20.0,
+    PublicGnssStatus.FIX_TYPE_3D_FIX: 40.0,
+    PublicGnssStatus.FIX_TYPE_DGPS: 60.0,
+    PublicGnssStatus.FIX_TYPE_RTK_FLOAT: 80.0,
     PublicGnssStatus.FIX_TYPE_RTK_FIXED: 100.0,
-    PublicGnssStatus.FIX_TYPE_DEAD_RECKONING: 10.0,
+    PublicGnssStatus.FIX_TYPE_DEAD_RECKONING: 0.0,
 }
 
 

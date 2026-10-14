@@ -3,6 +3,7 @@ import { Alert, Card, Col, Form, Input, InputNumber, Row, Select, Switch, Typogr
 import { useTranslation } from "react-i18next";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 import type { SettingsFieldGroup, SettingsFieldSpec } from "./settingsFieldGroups.ts";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const { Paragraph } = Typography;
 
@@ -10,7 +11,7 @@ type SettingValue = string | number | boolean | null | undefined;
 
 export interface SettingsFieldCardProps {
     group: SettingsFieldGroup;
-    values: Record<string, SettingValue>;
+    values: SettingsValues;
     onChange: (key: string, value: SettingValue) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
@@ -38,7 +39,8 @@ export const SettingsFieldCard: React.FC<SettingsFieldCardProps> = ({
     const { t } = useTranslation();
 
     const renderInput = (field: SettingsFieldSpec) => {
-        const value = values[field.key];
+        // The schema-typed settings reach this card by key; the card renders scalars only.
+        const value = values[field.key] as SettingValue;
         const label = t(`settingsFields.${field.key}.label`);
         switch (field.kind) {
             case "switch":

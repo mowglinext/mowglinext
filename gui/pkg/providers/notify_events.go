@@ -114,6 +114,18 @@ var blockedStates = map[string]bool{
 	"CRITICAL_BATTERY_NAV_FAILED": true,
 }
 
+// TerminalFailureMessage shares the notification classification with passive
+// diagnostic observers, without creating session/area notification state.
+func TerminalFailureMessage(stateName string) string {
+	if stateName == "DIG_OBSTRUCTION" {
+		return NotifyMsgDigObstruction
+	}
+	if blockedStates[stateName] {
+		return NotifyMsgNavFailed
+	}
+	return ""
+}
+
 // NotifyDetector turns the HighLevelStatus stream into notification events.
 // It is a pure state machine: no clock, no I/O — the caller supplies `now`
 // and decides what to do with the events. It mirrors the session tracker's

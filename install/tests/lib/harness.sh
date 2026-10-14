@@ -30,14 +30,14 @@ harness_init() {
 
   # Clear any state leaked from a previous harness_init in the same
   # shell so the matrix tests do not carry one preset into the next.
-  unset GNSS_BACKEND GNSS_STATUS_SOURCE GNSS_STACK GNSS_RECEIVER_FAMILY \
+  unset GNSS_BACKEND GNSS_STATUS_SOURCE GNSS_STACK GNSS_SOURCE GNSS_MAVROS_SOURCE GNSS_RECEIVER_FAMILY \
         GNSS_TRANSPORT GNSS_SERIAL_DEVICE GNSS_SERIAL_BAUD GNSS_FRAME_ID \
         GNSS_CONNECTION_HINT GNSS_RTCM_FORWARDING \
         GNSS_DEVICE GNSS_DEVICE_GID \
         GNSS_NTRIP_ENABLED GNSS_NTRIP_HOST GNSS_NTRIP_PORT \
         GNSS_NTRIP_MOUNTPOINT GNSS_NTRIP_USERNAME GNSS_NTRIP_PASSWORD \
         GNSS_NTRIP_GGA_ENABLED GNSS_NTRIP_GGA_INTERVAL_S \
-        GNSS_RECEIVER_FAMILY_CLI_PRESET GNSS_CONNECTION_CLI_PRESET \
+        GNSS_SOURCE_CLI_PRESET GNSS_RECEIVER_FAMILY_CLI_PRESET GNSS_CONNECTION_CLI_PRESET \
         GNSS_SERIAL_DEVICE_CLI_PRESET GNSS_SERIAL_BAUD_CLI_PRESET \
         GNSS_FRAME_ID_CLI_PRESET GNSS_NTRIP_GGA_ENABLED_CLI_PRESET \
         GNSS_NTRIP_GGA_INTERVAL_S_CLI_PRESET \
@@ -49,7 +49,7 @@ harness_init() {
         OPENMOWER_IMAGE GUI_IMAGE \
         HARDWARE_BACKEND MAVROS_BY_ID MAVROS_PORT MAVROS_BAUD \
         MAVROS_GCS_URL MAVROS_TGT_SYSTEM MAVROS_TGT_COMPONENT \
-        MAVROS_AUTOPILOT MAVROS_ENABLED \
+        MAVROS_AUTOPILOT MAVROS_ENABLED MAVROS_GPS1_CANONICAL \
         OPENMOWER_ENABLED OPENMOWER_LL_PORT OPENMOWER_XESC_TYPE \
         OPENMOWER_XESC_LEFT_PORT OPENMOWER_XESC_RIGHT_PORT OPENMOWER_XESC_MOW_PORT \
         CONFIG_NTRIP_ENABLED_EXPLICIT CONFIG_NTRIP_HOST_EXPLICIT \
@@ -134,6 +134,8 @@ harness_init() {
   # Defaults for backend selection — overridden by harness_set_preset().
   HARDWARE_BACKEND="${HARDWARE_BACKEND:-mowgli}"
   GNSS_BACKEND="${GNSS_BACKEND:-universal}"
+  GNSS_SOURCE="${GNSS_SOURCE:-direct}"
+  GNSS_MAVROS_SOURCE="${GNSS_MAVROS_SOURCE:-gps1}"
   GNSS_STATUS_SOURCE="${GNSS_STATUS_SOURCE:-universal}"
   GNSS_STACK="${GNSS_STACK:-universal}"
   GNSS_RECEIVER_FAMILY="${GNSS_RECEIVER_FAMILY:-auto}"
@@ -163,12 +165,16 @@ harness_set_preset() {
         if [ "$val" = "mavros" ]; then
           # Hardware backend selection is independent from GNSS ownership.
           export MAVROS_BY_ID="${MAVROS_BY_ID:-/dev/serial/by-id/usb-Pixhawk-stub}"
-          export MAVROS_PORT="${MAVROS_PORT:-/dev/mavros}"
+          export MAVROS_PORT="${MAVROS_PORT:-$MAVROS_BY_ID}"
           export MAVROS_BAUD="${MAVROS_BAUD:-921600}"
         fi
         if [ "$val" = "openmower" ]; then
           export OPENMOWER_XESC_TYPE="${OPENMOWER_XESC_TYPE:-xesc_mini}"
         fi
+        ;;
+      gnss_source)
+        GNSS_SOURCE_CLI_PRESET=true
+        GNSS_SOURCE="$(normalize_gnss_source "$val")"
         ;;
       gnss)
         case "$val" in

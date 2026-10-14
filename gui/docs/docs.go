@@ -15,112 +15,6 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/notifications/test": {
-            "post": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "notifications"
-                ],
-                "summary": "send a test notification",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.OkResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.ErrorResponse"
-                        }
-                    },
-                    "502": {
-                        "description": "Bad Gateway",
-                        "schema": {
-                            "$ref": "#/definitions/api.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/notifications/status": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "notifications"
-                ],
-                "summary": "notification delivery status",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/providers.NotifyDeliveryStatus"
-                        }
-                    }
-                }
-            }
-        },
-        "/notifications/settings": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "notifications"
-                ],
-                "summary": "notification settings",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.NotificationSettingsResponse"
-                        }
-                    }
-                }
-            },
-            "put": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "notifications"
-                ],
-                "summary": "update notification settings",
-                "parameters": [
-                    {
-                        "description": "partial settings",
-                        "name": "settings",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.NotificationSettingsUpdate"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.NotificationSettingsResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/config/envs": {
             "get": {
                 "description": "get config env from backend",
@@ -324,6 +218,355 @@ const docTemplate = `{
                 }
             }
         },
+        "/fleet/coordination": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "coordinated mowing settings and status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.FleetCoordinationResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "update coordinated mowing settings",
+                "parameters": [
+                    {
+                        "description": "settings",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/providers.CoordinatorSettings"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.FleetCoordinationResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fleet/coordination/reset": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "fleet-wide start fresh",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fleet/identity": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "this robot's fleet identity",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.RobotIdentity"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fleet/map/push": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "push this robot's map to the fleet",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.MapPushResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fleet/peers": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "add a fleet peer",
+                "parameters": [
+                    {
+                        "description": "peer GUI address (host[:port])",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.addPeerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.AddPeerResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fleet/peers/register": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "reverse-register a peer",
+                "parameters": [
+                    {
+                        "description": "peer identity + API port",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.registerPeerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.FleetPeer"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fleet/peers/unregister": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "a peer asks to be forgotten",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fleet/peers/{id}": {
+            "delete": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "remove a fleet peer",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "peer robot id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fleet/robots": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "fleet snapshot",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/providers.FleetRobot"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fleet/robots/{id}/call/{command}": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fleet"
+                ],
+                "summary": "send a command to a fleet robot",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "robot id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "high_level_control | emergency | coverage_clear_resume",
+                        "name": "command",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/import/openmower": {
             "post": {
                 "description": "Parse a user-supplied OpenMower map.json, translate it\ninto MowgliNext's coordinate frame, and return a summary\nfor confirmation. Setting ` + "`" + `apply=true` + "`" + ` runs the live write\npath (areas + dock pose). See docs/IMPORT_OPENMOWER_MAP.md.",
@@ -447,127 +690,6 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.IrriSenseSettingsResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/remote-access/settings": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "remote-access"
-                ],
-                "summary": "Remote access settings",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.RemoteAccessSettingsResponse"
-                        }
-                    }
-                }
-            },
-            "put": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "remote-access"
-                ],
-                "summary": "update remote access settings",
-                "parameters": [
-                    {
-                        "description": "partial settings",
-                        "name": "settings",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.RemoteAccessSettingsUpdate"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.RemoteAccessSettingsResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/api.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/remote-access/status": {
-            "get": {
-                "description": "container phase, tailscaled login state, login URL while waiting, reachable URLs once connected",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "remote-access"
-                ],
-                "summary": "Remote access status",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/providers.RemoteAccessStatus"
-                        }
-                    }
-                }
-            }
-        },
-        "/remote-access/apply": {
-            "post": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "remote-access"
-                ],
-                "summary": "Retry applying remote access settings",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.OkResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/remote-access/logout": {
-            "post": {
-                "description": "the node key is discarded; the sidecar restarts and logs in again (interactively or with the stored auth key)",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "remote-access"
-                ],
-                "summary": "Log the robot out of the tailnet",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.OkResponse"
                         }
                     },
                     "400": {
@@ -842,6 +964,233 @@ const docTemplate = `{
                 "responses": {}
             }
         },
+        "/notifications/settings": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "notification settings",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.NotificationSettingsResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "update notification settings",
+                "parameters": [
+                    {
+                        "description": "partial settings",
+                        "name": "settings",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.NotificationSettingsUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.NotificationSettingsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/status": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "notification delivery status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.NotifyDeliveryStatus"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/test": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "send a test notification",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/remote-access/apply": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "Retry applying remote access settings",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/remote-access/logout": {
+            "post": {
+                "description": "the node key is discarded; the sidecar restarts and logs in again (interactively or with the stored auth key)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "Log the robot out of the tailnet",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/remote-access/settings": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "Remote access settings",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.RemoteAccessSettingsResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "update remote access settings",
+                "parameters": [
+                    {
+                        "description": "partial settings",
+                        "name": "settings",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.RemoteAccessSettingsUpdate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.RemoteAccessSettingsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/remote-access/status": {
+            "get": {
+                "description": "container phase, tailscaled login state, login URL while waiting, reachable URLs once connected",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remote-access"
+                ],
+                "summary": "Remote access status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.RemoteAccessStatus"
+                        }
+                    }
+                }
+            }
+        },
         "/schedules": {
             "get": {
                 "description": "list all mowing schedules",
@@ -1063,6 +1412,26 @@ const docTemplate = `{
                 }
             }
         },
+        "/settings/hardware-backend": {
+            "get": {
+                "description": "HARDWARE_BACKEND from the runtime env (default mowgli)",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "settings"
+                ],
+                "summary": "returns the active hardware backend",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.HardwareBackendResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/settings/schema": {
             "get": {
                 "description": "returns the JSON Schema for mower configuration parameters",
@@ -1226,6 +1595,32 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/setup/firmware/available": {
+            "get": {
+                "description": "Version and protocol of the prebuilt firmware that /setup/flashBoard would install for the saved board selection, taken from this installation's release (or the latest stable one when it carries none).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "setup"
+                ],
+                "summary": "prebuilt firmware available for the saved board",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/types.FirmwareAvailability"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
                         "schema": {
                             "$ref": "#/definitions/api.ErrorResponse"
                         }
@@ -1494,6 +1889,61 @@ const docTemplate = `{
                 }
             }
         },
+        "/system/updates/changelog": {
+            "get": {
+                "description": "Features and fixes read from the commit subjects between the installed and the candidate revision.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "What changed between two source revisions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "owner/name",
+                        "name": "repository",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Installed 40-hex revision",
+                        "name": "installed",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Candidate 40-hex revision",
+                        "name": "available",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/updates.Changelog"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/system/versions": {
             "get": {
                 "produces": [
@@ -1512,161 +1962,192 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/tools/blackbox/config": {
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "diagnostics"
+                ],
+                "summary": "Configure passive blackbox (complete configuration)",
+                "parameters": [
+                    {
+                        "description": "Recorder limits",
+                        "name": "config",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/blackbox.Config"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/blackbox.Status"
+                        }
+                    }
+                }
+            }
+        },
+        "/tools/blackbox/download/{name}": {
+            "get": {
+                "produces": [
+                    "application/x-ndjson"
+                ],
+                "tags": [
+                    "diagnostics"
+                ],
+                "summary": "Download a completed timestamped blackbox timeline",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Completed snapshot name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    }
+                }
+            }
+        },
+        "/tools/blackbox/save": {
+            "post": {
+                "tags": [
+                    "diagnostics"
+                ],
+                "summary": "Save available pre-event history and collect post-event window",
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/tools/blackbox/status": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "diagnostics"
+                ],
+                "summary": "Passive blackbox status and completed recordings",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.BlackboxStatusResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/tools/blackbox/{name}": {
+            "delete": {
+                "tags": [
+                    "diagnostics"
+                ],
+                "summary": "Delete a completed blackbox recording",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Completed snapshot name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.OkResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
-        "providers.NotifyDeliveryStatus": {
+        "api.BlackboxStatusResponse": {
             "type": "object",
             "properties": {
-                "channel": {
-                    "type": "string"
-                },
-                "configured": {
-                    "type": "boolean"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "failedCount": {
+                "buffered_bytes": {
                     "type": "integer"
                 },
-                "lastError": {
-                    "type": "string"
-                },
-                "lastErrorAt": {
-                    "type": "string"
-                },
-                "lastMessage": {
-                    "type": "string"
-                },
-                "lastSentAt": {
-                    "type": "string"
-                },
-                "sentCount": {
+                "buffered_records": {
                     "type": "integer"
-                }
-            }
-        },
-        "api.NotificationSettingsUpdate": {
-            "type": "object",
-            "properties": {
-                "pushoverAppToken": {
+                },
+                "buffered_seconds": {
+                    "type": "number"
+                },
+                "capture_id": {
                     "type": "string"
                 },
-                "clearPushoverAppToken": {
+                "coalesced_triggers": {
+                    "type": "integer"
+                },
+                "completed_snapshots": {
+                    "type": "integer"
+                },
+                "config": {
+                    "$ref": "#/definitions/blackbox.Config"
+                },
+                "dropped_messages": {
+                    "type": "integer"
+                },
+                "effective_memory_bytes": {
+                    "type": "integer"
+                },
+                "effective_pre_seconds": {
+                    "type": "integer"
+                },
+                "history_evictions": {
+                    "type": "integer"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_write_seconds": {
+                    "type": "number"
+                },
+                "memory_pressure": {
                     "type": "boolean"
                 },
-                "pushoverUserKey": {
+                "phase": {
                     "type": "string"
                 },
-                "channel": {
-                    "type": "string"
-                },
-                "clearNtfyToken": {
-                    "type": "boolean"
-                },
-                "clearTelegramBotToken": {
-                    "type": "boolean"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "events": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "boolean"
-                    }
-                },
-                "language": {
-                    "type": "string"
-                },
-                "ntfyServer": {
-                    "type": "string"
-                },
-                "ntfyToken": {
-                    "type": "string"
-                },
-                "ntfyTopic": {
-                    "type": "string"
-                },
-                "telegramBotToken": {
-                    "type": "string"
-                },
-                "telegramChatId": {
-                    "type": "string"
-                },
-                "title": {
-                    "type": "string"
-                },
-                "webhookUrl": {
-                    "type": "string"
-                }
-            }
-        },
-        "api.NotificationSettingsResponse": {
-            "type": "object",
-            "properties": {
-                "pushoverAppTokenMasked": {
-                    "type": "string"
-                },
-                "pushoverAppTokenSet": {
-                    "type": "boolean"
-                },
-                "pushoverUserKey": {
-                    "type": "string"
-                },
-                "channels": {
+                "recordings": {
                     "type": "array",
                     "items": {
-                        "type": "string"
+                        "$ref": "#/definitions/blackbox.Snapshot"
                     }
                 },
-                "channel": {
-                    "type": "string"
+                "skipped_trigger_sources": {
+                    "type": "integer"
                 },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "eventKinds": {
+                "topics": {
                     "type": "array",
                     "items": {
-                        "type": "string"
+                        "$ref": "#/definitions/api.blackboxTopicStatus"
                     }
                 },
-                "events": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "boolean"
-                    }
-                },
-                "language": {
-                    "type": "string"
-                },
-                "ntfyServer": {
-                    "type": "string"
-                },
-                "ntfyTokenMasked": {
-                    "type": "string"
-                },
-                "ntfyTokenSet": {
-                    "type": "boolean"
-                },
-                "ntfyTopic": {
-                    "type": "string"
-                },
-                "telegramBotTokenMasked": {
-                    "type": "string"
-                },
-                "telegramBotTokenSet": {
-                    "type": "boolean"
-                },
-                "telegramChatId": {
-                    "type": "string"
-                },
-                "title": {
-                    "type": "string"
-                },
-                "webhookUrl": {
+                "warning": {
                     "type": "string"
                 }
             }
@@ -1713,6 +2194,17 @@ const docTemplate = `{
                 }
             }
         },
+        "api.FleetCoordinationResponse": {
+            "type": "object",
+            "properties": {
+                "settings": {
+                    "$ref": "#/definitions/providers.CoordinatorSettings"
+                },
+                "status": {
+                    "$ref": "#/definitions/providers.CoordinatorStatus"
+                }
+            }
+        },
         "api.GetConfigResponse": {
             "type": "object",
             "properties": {
@@ -1727,6 +2219,29 @@ const docTemplate = `{
                 "settings": {
                     "type": "object",
                     "additionalProperties": {}
+                }
+            }
+        },
+        "api.HardwareBackendResponse": {
+            "type": "object",
+            "properties": {
+                "backend": {
+                    "type": "string"
+                },
+                "default_overrides": {
+                    "description": "DefaultOverrides are the settings whose default this backend replaces\n(config/backends/\u003cbackend\u003e.yaml). A mower-model preset must not write\nthese: the preset describes the machine, not its electronics.",
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "robot_name": {
+                    "description": "RobotName is robot_name from the installed config (or its default):\nthe header badge shows it beside the backend.",
+                    "type": "string"
+                },
+                "supported": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -1972,6 +2487,138 @@ const docTemplate = `{
                 }
             }
         },
+        "api.NotificationSettingsResponse": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string"
+                },
+                "channels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "eventKinds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "events": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "boolean"
+                    }
+                },
+                "language": {
+                    "type": "string"
+                },
+                "ntfyServer": {
+                    "type": "string"
+                },
+                "ntfyTokenMasked": {
+                    "type": "string"
+                },
+                "ntfyTokenSet": {
+                    "type": "boolean"
+                },
+                "ntfyTopic": {
+                    "type": "string"
+                },
+                "pushoverAppTokenMasked": {
+                    "type": "string"
+                },
+                "pushoverAppTokenSet": {
+                    "type": "boolean"
+                },
+                "pushoverUserKey": {
+                    "type": "string"
+                },
+                "telegramBotTokenMasked": {
+                    "type": "string"
+                },
+                "telegramBotTokenSet": {
+                    "type": "boolean"
+                },
+                "telegramChatId": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "webhookUrl": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.NotificationSettingsUpdate": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string"
+                },
+                "clearNtfyToken": {
+                    "type": "boolean"
+                },
+                "clearPushoverAppToken": {
+                    "type": "boolean"
+                },
+                "clearTelegramBotToken": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "events": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "boolean"
+                    }
+                },
+                "language": {
+                    "type": "string"
+                },
+                "ntfyServer": {
+                    "type": "string"
+                },
+                "ntfyToken": {
+                    "type": "string"
+                },
+                "ntfyTopic": {
+                    "type": "string"
+                },
+                "pushoverAppToken": {
+                    "type": "string"
+                },
+                "pushoverUserKey": {
+                    "type": "string"
+                },
+                "telegramBotToken": {
+                    "type": "string"
+                },
+                "telegramChatId": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "webhookUrl": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.OkResponse": {
+            "type": "object",
+            "properties": {
+                "ok": {
+                    "type": "string"
+                }
+            }
+        },
         "api.RemoteAccessSettingsResponse": {
             "type": "object",
             "properties": {
@@ -2021,14 +2668,6 @@ const docTemplate = `{
                 },
                 "serveHttps": {
                     "type": "boolean"
-                }
-            }
-        },
-        "api.OkResponse": {
-            "type": "object",
-            "properties": {
-                "ok": {
-                    "type": "string"
                 }
             }
         },
@@ -2179,6 +2818,186 @@ const docTemplate = `{
                 }
             }
         },
+        "api.addPeerRequest": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.blackboxTopicStatus": {
+            "type": "object",
+            "properties": {
+                "last_received_at": {
+                    "type": "string"
+                },
+                "topic": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.registerPeerRequest": {
+            "type": "object",
+            "properties": {
+                "api_version": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                }
+            }
+        },
+        "blackbox.Config": {
+            "type": "object",
+            "properties": {
+                "cooldown_seconds": {
+                    "type": "integer"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "max_disk_bytes": {
+                    "type": "integer"
+                },
+                "max_message_bytes": {
+                    "type": "integer"
+                },
+                "max_snapshots": {
+                    "type": "integer"
+                },
+                "memory_bytes": {
+                    "type": "integer"
+                },
+                "min_free_disk_bytes": {
+                    "type": "integer"
+                },
+                "post_seconds": {
+                    "type": "integer"
+                },
+                "pre_seconds": {
+                    "type": "integer"
+                }
+            }
+        },
+        "blackbox.Snapshot": {
+            "type": "object",
+            "properties": {
+                "actual_post_seconds": {
+                    "type": "number"
+                },
+                "actual_pre_seconds": {
+                    "type": "number"
+                },
+                "capture_dropped_messages": {
+                    "type": "integer"
+                },
+                "capture_id": {
+                    "type": "string"
+                },
+                "config": {
+                    "$ref": "#/definitions/blackbox.Config"
+                },
+                "dropped_messages": {
+                    "type": "integer"
+                },
+                "format_version": {
+                    "type": "integer"
+                },
+                "identifiers": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "interrupted": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "reasons": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "records": {
+                    "type": "integer"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "triggered_at": {
+                    "type": "string"
+                },
+                "window_elapsed_seconds": {
+                    "type": "number"
+                }
+            }
+        },
+        "blackbox.Status": {
+            "type": "object",
+            "properties": {
+                "buffered_bytes": {
+                    "type": "integer"
+                },
+                "buffered_records": {
+                    "type": "integer"
+                },
+                "buffered_seconds": {
+                    "type": "number"
+                },
+                "capture_id": {
+                    "type": "string"
+                },
+                "coalesced_triggers": {
+                    "type": "integer"
+                },
+                "completed_snapshots": {
+                    "type": "integer"
+                },
+                "config": {
+                    "$ref": "#/definitions/blackbox.Config"
+                },
+                "dropped_messages": {
+                    "type": "integer"
+                },
+                "effective_memory_bytes": {
+                    "type": "integer"
+                },
+                "effective_pre_seconds": {
+                    "type": "integer"
+                },
+                "history_evictions": {
+                    "type": "integer"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_write_seconds": {
+                    "type": "number"
+                },
+                "memory_pressure": {
+                    "type": "boolean"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "skipped_trigger_sources": {
+                    "type": "integer"
+                }
+            }
+        },
         "buildinfo.Info": {
             "type": "object",
             "properties": {
@@ -2313,6 +3132,18 @@ const docTemplate = `{
                         "$ref": "#/definitions/geometry.Polygon"
                     }
                 },
+                "proposed_obstacle_info": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/mowgli.MapObstacleInfo"
+                    }
+                },
+                "proposed_obstacles": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/geometry.Polygon"
+                    }
+                },
                 "ring_direction": {
                     "type": "integer"
                 },
@@ -2386,6 +3217,116 @@ const docTemplate = `{
                 }
             }
         },
+        "providers.AddPeerResult": {
+            "type": "object",
+            "properties": {
+                "peer": {
+                    "$ref": "#/definitions/providers.FleetPeer"
+                },
+                "reciprocal": {
+                    "type": "boolean"
+                },
+                "warning": {
+                    "type": "string"
+                }
+            }
+        },
+        "providers.CoordinatorSettings": {
+            "type": "object",
+            "properties": {
+                "completed_ttl_h": {
+                    "type": "number"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "resume_distance_m": {
+                    "type": "number"
+                },
+                "yield_distance_m": {
+                    "type": "number"
+                }
+            }
+        },
+        "providers.CoordinatorStatus": {
+            "type": "object",
+            "properties": {
+                "completed_areas": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "excluded_areas": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_push_at": {
+                    "type": "string"
+                },
+                "preferred_start": {
+                    "type": "integer"
+                },
+                "yielded": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "providers.FleetPeer": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "description": "host:port of the peer's GUI backend",
+                    "type": "string"
+                },
+                "api_version": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "providers.FleetRobot": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "identity": {
+                    "$ref": "#/definitions/providers.RobotIdentity"
+                },
+                "last_seen": {
+                    "type": "string"
+                },
+                "online": {
+                    "type": "boolean"
+                },
+                "self": {
+                    "type": "boolean"
+                },
+                "topics": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                }
+            }
+        },
         "providers.IrriSenseGardenSummary": {
             "type": "object",
             "properties": {
@@ -2414,6 +3355,72 @@ const docTemplate = `{
                 },
                 "label": {
                     "type": "string"
+                }
+            }
+        },
+        "providers.MapPushPeerResult": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "providers.MapPushResult": {
+            "type": "object",
+            "properties": {
+                "areas": {
+                    "type": "integer"
+                },
+                "peers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/providers.MapPushPeerResult"
+                    }
+                }
+            }
+        },
+        "providers.NotifyDeliveryStatus": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string"
+                },
+                "configured": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "failedCount": {
+                    "type": "integer"
+                },
+                "lastError": {
+                    "type": "string"
+                },
+                "lastErrorAt": {
+                    "type": "string"
+                },
+                "lastMessage": {
+                    "type": "string"
+                },
+                "lastSentAt": {
+                    "type": "string"
+                },
+                "sentCount": {
+                    "type": "integer"
                 }
             }
         },
@@ -2492,6 +3499,59 @@ const docTemplate = `{
                     }
                 },
                 "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "providers.RobotIdentity": {
+            "type": "object",
+            "properties": {
+                "api_version": {
+                    "type": "integer"
+                },
+                "datum_lat": {
+                    "type": "number"
+                },
+                "datum_lon": {
+                    "type": "number"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "types.FirmwareAvailability": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "board": {
+                    "type": "string"
+                },
+                "fw_version": {
+                    "type": "string"
+                },
+                "own_release": {
+                    "type": "boolean"
+                },
+                "panel": {
+                    "type": "string"
+                },
+                "protocol_version": {
+                    "type": "integer"
+                },
+                "release": {
+                    "description": "Release the manifest came from; OwnRelease is false when this\ninstallation's release carries no firmware and the latest stable one\nwas used instead.",
                     "type": "string"
                 }
             }
@@ -2668,6 +3728,54 @@ const docTemplate = `{
                 },
                 "wet": {
                     "type": "boolean"
+                }
+            }
+        },
+        "updates.Changelog": {
+            "type": "object",
+            "properties": {
+                "features": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/updates.ChangelogEntry"
+                    }
+                },
+                "fixes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/updates.ChangelogEntry"
+                    }
+                },
+                "other": {
+                    "description": "Commits that are neither a feature nor a fix (ci, docs, test, chore, ...).",
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "description": "The installed revision was not found in the first page of history, so\nthe lists cover the most recent changes only.",
+                    "type": "boolean"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "updates.ChangelogEntry": {
+            "type": "object",
+            "properties": {
+                "breaking": {
+                    "type": "boolean"
+                },
+                "pr": {
+                    "type": "integer"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
                 }
             }
         }

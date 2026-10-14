@@ -1,0 +1,38 @@
+/* AntD small forms fix labels at 24px. Wrapped text (including the default
+   indicator/reset controls) needs its full height before the input starts.
+   Scope this to settings so horizontal forms elsewhere keep their alignment. */
+.settings-page .ant-form-item .ant-form-item-label > label {
+    height: auto;
+    min-height: 24px;
+    max-width: 100%;
+    white-space: normal;
+}
+
+/* Long translated measurement names must also fit beside reset/help icons. */
+.settings-page .ant-form-item-label .ant-space-item {
+    overflow-wrap: anywhere;
+}
+
+/* Grid columns share a flex-line height. Stretch each field into that space and
+   keep its control at the bottom, so a taller label grows the entire row. */
+.settings-page .ant-form-vertical > .ant-row > .ant-col {
+    display: flex;
+    flex-direction: column;
+}
+.settings-page .ant-form-vertical > .ant-row > .ant-col > .ant-form-item {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+.settings-page .ant-form-vertical > .ant-row > .ant-col > .ant-form-item > .ant-form-item-row {
+    flex: 1;
+    flex-wrap: nowrap;
+}
+.settings-page .ant-form-vertical > .ant-row > .ant-col > .ant-form-item > .ant-form-item-row > .ant-form-item-control {
+    flex: 0 0 auto;
+    margin-top: auto;
+}
+
+.settings-page .ant-form-vertical > .ant-row > .ant-col > .ant-form-item > .ant-form-item-row > .ant-form-item-label {
+    flex: 0 0 auto;
+}

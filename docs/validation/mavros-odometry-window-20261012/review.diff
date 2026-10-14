@@ -1,0 +1,836 @@
+diff --git a/tools/motor/mowgli_tools/drive_pid_math.py b/tools/motor/mowgli_tools/drive_pid_math.py
+index 7669423b..a2f70c3e 100644
+--- a/tools/motor/mowgli_tools/drive_pid_math.py
++++ b/tools/motor/mowgli_tools/drive_pid_math.py
+@@ -283,6 +283,65 @@ class TickSample:
+     right_ticks: int
+ 
+ 
++@dataclass(frozen=True)
++class MotorCounterSample:
++    """Source-owned signed motor revolutions, with ROS acquisition provenance."""
++
++    stamp_ns: int
++    revolutions: float
++    source: str
++    epoch: int
++    segment: int
++    valid: bool = True
++    delivery_ns: int = 0
++
++
++def motor_revolutions_between(
++    samples: Sequence[MotorCounterSample], start_ns: int, end_ns: int, maximum_gap_s: float,
++) -> float:
++    """Interpolate cumulative counters at exact RTK bounds; never extrapolate."""
++    if start_ns <= 0 or end_ns <= start_ns or maximum_gap_s <= 0:
++        raise ValueError("Invalid motor/RTK observation window")
++    unique: list[MotorCounterSample] = []
++    for sample in samples:
++        if not sample.valid and start_ns <= sample.delivery_ns <= end_ns:
++            raise ValueError("Unavailable motor observation inside RTK window")
++        if unique and sample.stamp_ns == unique[-1].stamp_ns:
++            if sample != replace(unique[-1], delivery_ns=sample.delivery_ns):
++                raise ValueError("Changed motor counter under cached acquisition stamp")
++            continue
++        if unique and sample.stamp_ns < unique[-1].stamp_ns:
++            raise ValueError("Motor acquisition timestamp rollback")
++        unique.append(sample)
++    before = [i for i, sample in enumerate(unique) if sample.stamp_ns <= start_ns]
++    after = [i for i, sample in enumerate(unique) if sample.stamp_ns >= end_ns]
++    if not before or not after:
++        raise ValueError("Motor observations do not bracket accepted RTK window")
++    window = unique[before[-1]:after[0] + 1]
++    identity = (window[0].source, window[0].epoch, window[0].segment)
++    for sample in window:
++        if (not sample.valid or not math.isfinite(sample.revolutions)
++                or (sample.source, sample.epoch, sample.segment) != identity):
++            raise ValueError("Motor source, epoch or segment discontinuity")
++    for previous, current in zip(window, window[1:]):
++        if current.stamp_ns - previous.stamp_ns > maximum_gap_s * 1e9:
++            raise ValueError("Motor acquisition gap exceeds odometry timeout")
++        if current.revolutions < previous.revolutions:
++            raise ValueError("Motor counter rollback or reverse motion during straight pass")
++
++    def at(stamp: int) -> float:
++        for sample in window:
++            if sample.stamp_ns == stamp:
++                return sample.revolutions
++        for previous, current in zip(window, window[1:]):
++            if previous.stamp_ns < stamp < current.stamp_ns:
++                fraction = (stamp - previous.stamp_ns) / (current.stamp_ns - previous.stamp_ns)
++                return previous.revolutions + fraction * (current.revolutions - previous.revolutions)
++        raise ValueError("Unbracketed motor acquisition")
++
++    return at(end_ns) - at(start_ns)
++
++
+ @dataclass(frozen=True)
+ class TickActivity:
+     wheel_ticks_delta: int
+@@ -475,6 +534,7 @@ class TrialMetrics:
+     rtk_accepted: bool = False
+     left_right_tick_imbalance: float | None = None
+     notes: tuple[str, ...] = ()
++    calibration_window: dict[str, Any] | None = None
+ 
+     def to_dict(self) -> dict[str, Any]:
+         out = {
+@@ -507,6 +567,8 @@ class TrialMetrics:
+             "left_right_tick_imbalance": self.left_right_tick_imbalance,
+             "notes": list(self.notes),
+         }
++        if self.calibration_window is not None:
++            out["calibration_window"] = dict(self.calibration_window)
+         return out
+ 
+ 
+@@ -834,6 +896,10 @@ def compute_trial_metrics(
+     stall_detected = False
+     if not is_stop_trial:
+         stall_detected = ticks_seen <= 2 or measured_speed_mean < speed_floor
++        if phase == "odometry" and isinstance(params_used, OdometryParams):
++            # The coefficient under calibration cannot establish physical underspeed.
++            # RTK applicability/provenance and counter continuity are checked by the tuner.
++            stall_detected = left_ticks_seen <= 2 or right_ticks_seen <= 2
+         if ground_speed_mean is not None and ground_speed_mean < speed_floor:
+             stall_detected = True
+     ground_error_mean = None
+@@ -874,6 +940,9 @@ def compute_trial_metrics(
+     )
+     warning_list = list(dict.fromkeys(warnings))
+     note_list = list(dict.fromkeys(notes))
++    if (phase == "odometry" and isinstance(params_used, OdometryParams)
++            and measured_speed_mean < speed_floor and not stall_detected):
++        warning_list.append("Low coefficient-derived odometry speed is not proof of physical stall; RTK calibration required.")
+     stop_behavior_note = (
+         is_stop_trial
+         and (
+diff --git a/tools/motor/mowgli_tools/drive_pid_tuner.py b/tools/motor/mowgli_tools/drive_pid_tuner.py
+index e3795d19..96a364e2 100644
+--- a/tools/motor/mowgli_tools/drive_pid_tuner.py
++++ b/tools/motor/mowgli_tools/drive_pid_tuner.py
+@@ -13,6 +13,7 @@ import sys
+ import time
+ from typing import Any
+ 
++from diagnostic_msgs.msg import DiagnosticArray
+ from geometry_msgs.msg import TwistStamped
+ from mowgli_interfaces.msg import (
+     AbsolutePose,
+@@ -34,6 +35,7 @@ import yaml
+ from .drive_pid_math import (
+     DrivePidParams,
+     OdometryParams,
++    MotorCounterSample,
+     LiveStallDiagnostic,
+     OscillationAssessment,
+     SpeedSample,
+@@ -51,7 +53,7 @@ from .drive_pid_math import (
+     integrate_distance,
+     is_warning_oscillation_severity,
+     max_oscillation_severity,
+-    mavros_ticks_per_meter_from_motor_revolutions,
++    motor_revolutions_between,
+     oscillation_severity_rank,
+     recommend_drive_pid_params,
+     recommend_pid_only_params,
+@@ -122,6 +124,10 @@ class RtkPoseSample:
+     corrections_active: bool
+     rtk_mode: int
+     mode_label: str
++    observation_stamp_ns: int = 0
++    observation_sequence: int = 0
++    backend: str = ""
++    provenance_valid: bool = False
+ 
+ 
+ @dataclass(frozen=True)
+@@ -151,6 +157,9 @@ class TrialRecorder:
+     speed_samples: list[SpeedSample] = field(default_factory=list)
+     rtk_samples: list[RtkPoseSample] = field(default_factory=list)
+     tick_samples: list[TickSample] = field(default_factory=list)
++    left_motor_samples: list[MotorCounterSample] = field(default_factory=list)
++    right_motor_samples: list[MotorCounterSample] = field(default_factory=list)
++    accepted_rtk_samples: list[RtkPoseSample] = field(default_factory=list)
+ 
+     @property
+     def command_end_s(self) -> float:
+@@ -160,9 +169,11 @@ class TrialRecorder:
+ 
+ 
+ class TrialAbortedError(RuntimeError):
+-    def __init__(self, message: str, metrics: TrialMetrics | None = None) -> None:
++    def __init__(self, message: str, metrics: TrialMetrics | None = None,
++                 completed_trials: list[TrialMetrics] | None = None) -> None:
+         super().__init__(message)
+         self.metrics = metrics
++        self.completed_trials = completed_trials
+ 
+ 
+ def _default_backup_path() -> Path:
+@@ -272,6 +283,7 @@ class DrivePidTuner(Node):
+         self._latest_emergency: Emergency | None = None
+         self._latest_high_level_status: HighLevelStatus | None = None
+         self._latest_gnss_status: GnssStatus | None = None
++        self._gnss_status_history: dict[int, GnssStatus] = {}
+         self._latest_odom_time: float | None = None
+         self._latest_wheel_tick_time: float | None = None
+         self._latest_wheel_tick_factor: float | None = None
+@@ -317,6 +329,8 @@ class DrivePidTuner(Node):
+         self.create_subscription(AbsolutePose, "/gps/absolute_pose", self._on_absolute_pose, reliable_qos)
+         self.create_subscription(GnssStatus, "/gps/status", self._on_gnss_status, reliable_qos)
+         self.create_subscription(Odometry, "/odometry/filtered_map", self._on_filtered_map_odom, sensor_qos)
++        if args.hardware_backend == "mavros":
++            self.create_subscription(DiagnosticArray, "/diagnostics", self._on_motor_diagnostics, reliable_qos)
+ 
+     # ------------------------------------------------------------------
+     # ROS callbacks
+@@ -333,6 +347,39 @@ class DrivePidTuner(Node):
+ 
+     def _on_gnss_status(self, msg: GnssStatus) -> None:
+         self._latest_gnss_status = msg
++        if self._args.hardware_backend == "mavros":
++            self._gnss_status_history[self._stamp_ns(msg.header.stamp)] = msg
++            while len(self._gnss_status_history) > 128:
++                del self._gnss_status_history[next(iter(self._gnss_status_history))]
++
++    @staticmethod
++    def _stamp_ns(stamp: Any) -> int:
++        return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
++
++    def _on_motor_diagnostics(self, msg: DiagnosticArray) -> None:
++        if self._active_trial is None:
++            return
++        for status in msg.status:
++            if status.name != "mavros_esc_wheel_odometry/source":
++                continue
++            values = {item.key: item.value for item in status.values}
++            source = values.get("active_source", "")
++            delivery = self._stamp_ns(msg.header.stamp)
++            for wheel in ("left", "right"):
++                try:
++                    sample = MotorCounterSample(
++                        stamp_ns=int(values[f"{source}/{wheel}_sample_stamp_ns"]),
++                        revolutions=float(values[f"{source}/{wheel}_raw_ticks"]),
++                        source=source, epoch=int(values[f"{source}/epoch"]),
++                        segment=int(values[f"{source}/{wheel}_segment"]),
++                        valid=(values.get("ticks_unit") == "motor_revolution"
++                               and source in ("esc_status", "ardupilot_legacy")
++                               and values.get(f"{source}/{wheel}_valid") == "true"),
++                        delivery_ns=delivery,
++                    )
++                except (KeyError, ValueError):
++                    sample = MotorCounterSample(delivery, float("nan"), source, 0, 0, False, delivery)
++                getattr(self._active_trial, f"{wheel}_motor_samples").append(sample)
+ 
+     def _on_wheel_odom(self, msg: Odometry) -> None:
+         now_s = time.monotonic()
+@@ -379,6 +426,24 @@ class DrivePidTuner(Node):
+         if self._active_trial is None:
+             return
+         status = self._latest_gnss_status
++        stamp_ns = self._stamp_ns(msg.header.stamp)
++        observation_time = time.monotonic()
++        provenance_valid = False
++        if self._args.hardware_backend == "mavros":
++            # Bind quality and receiver identity to this pose, not to the latest cached status.
++            status = self._gnss_status_history.get(stamp_ns)
++            age_s = (self.get_clock().now().nanoseconds - stamp_ns) / 1e9
++            provenance_valid = (
++                status is not None and stamp_ns > 0 and 0 <= age_s <= self._args.odom_timeout
++                and msg.source == AbsolutePose.SOURCE_GPS
++                and not (msg.flags & AbsolutePose.FLAG_GPS_DEAD_RECKONING)
++                and math.isfinite(msg.position_accuracy)
++                and 0 <= msg.position_accuracy <= self._args.rtk_accuracy_threshold
++                and bool(msg.flags & (AbsolutePose.FLAG_GPS_RTK_FIXED
++                                      | (AbsolutePose.FLAG_GPS_RTK_FLOAT if self._args.allow_rtk_float else 0)))
++            )
++            # Explicit ROS-acquisition -> monotonic trial-window conversion at delivery.
++            observation_time -= age_s
+         rtk_mode = GnssStatus.RTK_MODE_UNKNOWN if status is None else int(status.rtk_mode)
+         fix_valid = False if status is None else bool(status.fix_valid)
+         corrections_active = False if status is None else bool(status.corrections_active)
+@@ -389,7 +454,7 @@ class DrivePidTuner(Node):
+             mode_label = "RTK_FLOAT"
+         self._active_trial.rtk_samples.append(
+             RtkPoseSample(
+-                time_s=time.monotonic(),
++                time_s=observation_time,
+                 x_m=float(msg.pose.pose.position.x),
+                 y_m=float(msg.pose.pose.position.y),
+                 horizontal_accuracy_m=(
+@@ -401,6 +466,10 @@ class DrivePidTuner(Node):
+                 corrections_active=corrections_active,
+                 rtk_mode=rtk_mode,
+                 mode_label=mode_label,
++                observation_stamp_ns=stamp_ns,
++                observation_sequence=0 if status is None else status.position_observation_sequence,
++                backend="" if status is None else status.backend,
++                provenance_valid=provenance_valid,
+             )
+         )
+ 
+@@ -547,6 +616,8 @@ class DrivePidTuner(Node):
+             )
+             return 0
+         except Exception as exc:
++            if self._args.hardware_backend == "mavros" and isinstance(exc, TrialAbortedError) and exc.metrics is not None:
++                feedforward_trials.extend(exc.completed_trials or [exc.metrics])
+             self._remember_failure(str(exc))
+             raise
+         finally:
+@@ -1032,29 +1103,31 @@ class DrivePidTuner(Node):
+         duration = self._feedforward_duration(speed)
+         self.get_logger().info(f"Odometry calibration: {self._args.passes} straight pass(es).")
+         for index in range(self._args.passes):
+-            trial = self._run_speed_trial(
+-                name=f"odom_pass_{index + 1}_{speed:.2f}mps",
+-                phase="odometry",
+-                initial_speed=0.0,
+-                target_speed=speed,
+-                params=params,
+-                duration_s=duration,
+-            )
++            try:
++                trial = self._run_speed_trial(
++                    name=f"odom_pass_{index + 1}_{speed:.2f}mps",
++                    phase="odometry",
++                    initial_speed=0.0,
++                    target_speed=speed,
++                    params=params,
++                    duration_s=duration,
++                )
++            except TrialAbortedError as exc:
++                exc.completed_trials = [*trials, *([exc.metrics] if exc.metrics is not None else [])]
++                raise
+             trials.append(trial)
+             if trial.stall_detected:
+-                raise RuntimeError("Odometry calibration observed no wheel motion.")
+-            if trial.rtk_accepted and trial.rtk_distance_m is not None:
+-                coefficient = mavros_ticks_per_meter_from_motor_revolutions(
+-                    trial.left_ticks_seen, trial.right_ticks_seen, trial.rtk_distance_m
+-                )
++                raise TrialAbortedError("Odometry calibration observed no wheel/ground motion.", trial, trials)
++            if trial.rtk_accepted and trial.calibration_window is not None:
++                coefficient = trial.calibration_window["ticks_per_meter"]
+                 if not math.isfinite(coefficient) or coefficient <= 0.0:
+-                    raise RuntimeError("Odometry calibration produced an invalid ticks_per_meter.")
++                    raise TrialAbortedError("Odometry calibration produced an invalid ticks_per_meter.", trial, trials)
+                 coefficients.append(coefficient)
+                 reasons.append(f"Pass {index + 1}: ticks_per_meter -> {coefficient!r} from wheel rotations/reference distance.")
+-            elif self._latest_gnss_status is not None:
+-                raise RuntimeError("No trustworthy RTK/GNSS distance was accepted during the odometry pass.")
+             else:
+-                reasons.append(f"Pass {index + 1}: reference unavailable, leaving ticks_per_meter unchanged.")
++                raise TrialAbortedError(
++                    "No trustworthy aligned motor/RTK window was accepted during the odometry pass.", trial, trials,
++                )
+             # All passes use the same live reference, including report-only runs.
+             if index < self._args.passes - 1:
+                 if self._args.auto_turn:
+@@ -1958,6 +2031,10 @@ class DrivePidTuner(Node):
+         steady_end = recorder.command_end_s
+         if recorder.ramp_down:
+             steady_end = recorder.command_end_s - max(0.5, recorder.ramp_time_s * 0.5)
++        if isinstance(recorder.params, OdometryParams):
++            # Use the commanded plateau, excluding all ramp-down and stop/hold time.
++            steady_end = min(recorder.command_end_s, recorder.command_start_s + recorder.command_duration_s
++                             - (recorder.ramp_time_s if recorder.ramp_down else 0.0))
+         speed_samples = [
+             sample for sample in recorder.speed_samples
+             if steady_start <= sample.time_s <= steady_end
+@@ -2010,7 +2087,7 @@ class DrivePidTuner(Node):
+             steady_end=steady_end,
+         )
+         notes.extend(rtk_notes)
+-        return compute_trial_metrics(
++        metrics = compute_trial_metrics(
+             name=recorder.name,
+             phase=recorder.phase,
+             target_speed=recorder.target_speed,
+@@ -2028,6 +2105,61 @@ class DrivePidTuner(Node):
+             warnings=recorder.warnings,
+             notes=notes,
+         )
++        if (isinstance(recorder.params, OdometryParams) and metrics.rtk_distance_m is not None
++                and metrics.rtk_distance_m < 1.0):
++            metrics = replace(metrics, rtk_accepted=False)
++        if isinstance(recorder.params, OdometryParams) and metrics.rtk_accepted:
++            try:
++                anchor = recorder.accepted_rtk_samples[0]
++                # Restrict interpolation brackets themselves to the commanded plateau.
++                # Explicitly map monotonic trial bounds into the ROS acquisition domain.
++                plateau_start = anchor.observation_stamp_ns + round((steady_start - anchor.time_s) * 1e9)
++                plateau_end = anchor.observation_stamp_ns + round((steady_end - anchor.time_s) * 1e9)
++                counters = [
++                    [sample for sample in samples if plateau_start <= sample.stamp_ns <= plateau_end
++                     or (not sample.valid and plateau_start <= sample.delivery_ns <= plateau_end)]
++                    for samples in (recorder.left_motor_samples, recorder.right_motor_samples)
++                ]
++                if not all(counters):
++                    raise ValueError("Motor acquisition provenance unavailable on plateau")
++                common_start = max(min(sample.stamp_ns for sample in samples) for samples in counters)
++                common_end = min(max(sample.stamp_ns for sample in samples) for samples in counters)
++                aligned = [sample for sample in recorder.accepted_rtk_samples
++                           if common_start <= sample.observation_stamp_ns <= common_end]
++                if len(aligned) < 2:
++                    raise ValueError("Insufficient common motor/RTK coverage on plateau")
++                ground_speed_mean, rtk_distance_m, alignment_notes = self._compute_rtk_metrics(
++                    recorder=recorder, steady_start=aligned[0].time_s, steady_end=aligned[-1].time_s,
++                )
++                if ground_speed_mean is None or rtk_distance_m is None or rtk_distance_m < 1.0:
++                    raise ValueError("Aligned RTK window rejected: " + "; ".join(alignment_notes))
++                start = recorder.accepted_rtk_samples[0].observation_stamp_ns
++                end = recorder.accepted_rtk_samples[-1].observation_stamp_ns
++                left = motor_revolutions_between(counters[0], start, end, self._args.odom_timeout)
++                right = motor_revolutions_between(counters[1], start, end, self._args.odom_timeout)
++                if (counters[0][0].source, counters[0][0].epoch) != (counters[1][0].source, counters[1][0].epoch):
++                    raise ValueError("Different motor source/epoch between wheels")
++                if left <= 0 or right <= 0:
++                    metrics = replace(metrics, stall_detected=True, trial_quality="poor")
++                    raise ValueError("No forward movement of both motor counters in accepted RTK window")
++                metrics = replace(
++                    metrics, ground_speed_mean=ground_speed_mean,
++                    ground_error_mean=recorder.target_speed - ground_speed_mean,
++                    rtk_distance_m=rtk_distance_m, calibration_window={
++                        "start_stamp_ns": start, "end_stamp_ns": end,
++                        "left_motor_revolutions": left, "right_motor_revolutions": right,
++                        "rtk_distance_m": rtk_distance_m,
++                        "ticks_per_meter": (left + right) * 0.5 / rtk_distance_m,
++                        "counter_unit": "motor_revolution",
++                        "source": counters[0][0].source,
++                        "left_epoch": counters[0][0].epoch, "left_segment": counters[0][0].segment,
++                        "right_epoch": counters[1][0].epoch, "right_segment": counters[1][0].segment,
++                        "gnss_backend": anchor.backend,
++                    },
++                )
++            except ValueError as exc:
++                metrics = replace(metrics, notes=(*metrics.notes, str(exc)))
++        return metrics
+ 
+     def _ticks_seen(self, samples: list[TickSample]) -> tuple[int, int, int]:
+         activity = compute_tick_activity(samples)
+@@ -2045,6 +2177,7 @@ class DrivePidTuner(Node):
+         steady_end: float,
+     ) -> tuple[float | None, float | None, list[str]]:
+         notes: list[str] = []
++        recorder.accepted_rtk_samples = []
+         if self._latest_gnss_status is None:
+             notes.append("/gps/status absent, RTK validation disabled.")
+             return None, None, notes
+@@ -2054,6 +2187,22 @@ class DrivePidTuner(Node):
+         for sample in recorder.rtk_samples:
+             if not (steady_start <= sample.time_s <= steady_end):
+                 continue
++            if isinstance(recorder.params, OdometryParams) and not sample.provenance_valid:
++                notes.append("RTK pose provenance/freshness unavailable for odometry calibration.")
++                return None, None, notes
++            if isinstance(recorder.params, OdometryParams) and (
++                not sample.fix_valid or not sample.corrections_active
++                or sample.observation_sequence <= 0 or not sample.backend
++                or not math.isfinite(sample.x_m) or not math.isfinite(sample.y_m)
++                or not math.isfinite(sample.horizontal_accuracy_m)
++                or not 0 <= sample.horizontal_accuracy_m <= self._args.rtk_accuracy_threshold
++                or sample.rtk_mode not in (
++                    (GnssStatus.RTK_MODE_FIXED,) if require_fixed
++                    else (GnssStatus.RTK_MODE_FIXED, GnssStatus.RTK_MODE_FLOAT)
++                )
++            ):
++                notes.append("RTK quality rejected inside odometry plateau; window rejected.")
++                return None, None, notes
+             if not sample.fix_valid:
+                 continue
+             if not sample.corrections_active:
+@@ -2092,7 +2241,16 @@ class DrivePidTuner(Node):
+ 
+         start = accepted[0]
+         end = accepted[-1]
+-        dt = end.time_s - start.time_s
++        if isinstance(recorder.params, OdometryParams):
++            for previous, current in zip(accepted, accepted[1:]):
++                gap = (current.observation_stamp_ns - previous.observation_stamp_ns) / 1e9
++                if (gap <= 0 or gap > self._args.odom_timeout or current.backend != previous.backend
++                        or (previous.observation_sequence and current.observation_sequence <= previous.observation_sequence)):
++                    notes.append("RTK acquisition gap, duplicate, restart or source change; window rejected.")
++                    return None, None, notes
++            recorder.accepted_rtk_samples = accepted
++        dt = ((end.observation_stamp_ns - start.observation_stamp_ns) / 1e9
++              if isinstance(recorder.params, OdometryParams) else end.time_s - start.time_s)
+         if dt <= 0.5:
+             notes.append("RTK steady-state time span too short.")
+             return None, None, notes
+@@ -2101,6 +2259,9 @@ class DrivePidTuner(Node):
+         distance = (dx * dx + dy * dy) ** 0.5
+         if distance < 1.0:
+             notes.append("RTK segment too short for a stable distance estimate.")
++            if isinstance(recorder.params, OdometryParams):
++                # Valid RTK still diagnoses stationary ground/slip, but cannot fit a coefficient.
++                return distance / dt, distance, notes
+             return None, None, notes
+         return distance / dt, distance, notes
+ 
+@@ -2239,10 +2400,8 @@ class DrivePidTuner(Node):
+             payload["recommended"] = proposed_params.to_dict()
+             for entry, trial in zip(payload["trials"], trials):
+                 entry.pop("integral_saturation_suspected", None)
+-                if trial.rtk_accepted and trial.rtk_distance_m is not None:
+-                    entry["ticks_per_meter"] = mavros_ticks_per_meter_from_motor_revolutions(
+-                        trial.left_ticks_seen, trial.right_ticks_seen, trial.rtk_distance_m
+-                    )
++                if trial.rtk_accepted and trial.calibration_window is not None:
++                    entry["ticks_per_meter"] = trial.calibration_window["ticks_per_meter"]
+         if failure_message is not None:
+             payload["failure_message"] = failure_message
+         output_path.write_text(
+diff --git a/tools/motor/package.xml b/tools/motor/package.xml
+index d77b375e..0629f1bf 100644
+--- a/tools/motor/package.xml
++++ b/tools/motor/package.xml
+@@ -15,6 +15,7 @@
+ 
+   <exec_depend>rclpy</exec_depend>
+   <exec_depend>geometry_msgs</exec_depend>
++  <exec_depend>diagnostic_msgs</exec_depend>
+   <exec_depend>nav_msgs</exec_depend>
+   <exec_depend>sensor_msgs</exec_depend>
+   <exec_depend>mowgli_interfaces</exec_depend>
+diff --git a/tools/motor/test/test_drive_pid_math.py b/tools/motor/test/test_drive_pid_math.py
+index 5ce22862..4dce3bf9 100644
+--- a/tools/motor/test/test_drive_pid_math.py
++++ b/tools/motor/test/test_drive_pid_math.py
+@@ -13,6 +13,8 @@ from mowgli_tools.drive_pid_math import (
+     WHEEL_PID_TEMPLATE_KP,
+     DrivePidParams,
+     OdometryParams,
++    MotorCounterSample,
++    motor_revolutions_between,
+     LiveOscillationDecision,
+     LiveStallDiagnostic,
+     SpeedSample,
+@@ -1130,7 +1132,7 @@ def test_recommend_pid_only_params_mass_tier_does_not_lower_the_floor() -> None:
+ 
+ 
+ @pytest.mark.parametrize("params, speed, stalled, saturation", [
+-    (OdometryParams(343.0), 0.051, True, False),
++    (OdometryParams(343.0), 0.051, False, False),
+     (OdometryParams(343.0), 0.4, False, False),
+     (_params(), 0.051, True, True),
+ ])
+@@ -1156,3 +1158,40 @@ def test_trial_metrics_integrator_diagnostic_requires_real_pid(params, speed, st
+     assert "existing warning" in metrics.warnings
+     assert "existing note" in metrics.notes
+     assert metrics.trial_quality == ("poor" if stalled else "warning")
++
++
++def _motor_samples():
++    return [
++        MotorCounterSample(i * 1_000_000_000, i * 12.0, "ardupilot_legacy", 2, 1,
++                           delivery_ns=i * 1_000_000_000) for i in range(1, 6)
++    ]
++
++
++def test_motor_counter_exact_rtk_bounds_and_cache_republication():
++    samples = _motor_samples()
++    samples.insert(2, replace(samples[1], delivery_ns=2_100_000_000))
++    assert motor_revolutions_between(samples, 1_500_000_000, 4_500_000_000, 4) == 36.0
++
++
++@pytest.mark.parametrize("fault", ["epoch", "segment", "source", "rollback", "time", "cache",
++                                   "invalid", "nonfinite", "gap", "unbracketed"])
++def test_motor_window_rejects_discontinuous_or_unproven_observations(fault):
++    samples = _motor_samples()
++    if fault in ("epoch", "segment", "source"):
++        samples[2] = replace(samples[2], **{fault: "esc_status" if fault == "source" else 3})
++    elif fault == "rollback":
++        samples[2] = replace(samples[2], revolutions=0)
++    elif fault == "time":
++        samples[2] = replace(samples[2], stamp_ns=1_900_000_000)
++    elif fault == "cache":
++        samples.insert(2, replace(samples[1], revolutions=999))
++    elif fault == "invalid":
++        samples[2] = replace(samples[2], valid=False)
++    elif fault == "nonfinite":
++        samples[2] = replace(samples[2], revolutions=float("nan"))
++    elif fault == "gap":
++        samples = [samples[0], samples[-1]]
++    elif fault == "unbracketed":
++        samples = samples[1:]
++    with pytest.raises(ValueError):
++        motor_revolutions_between(samples, 1_500_000_000, 4_500_000_000, 3)
+diff --git a/tools/motor/test/test_mavros_odometry_tuner.py b/tools/motor/test/test_mavros_odometry_tuner.py
+index f57dabed..d35f56c6 100644
+--- a/tools/motor/test/test_mavros_odometry_tuner.py
++++ b/tools/motor/test/test_mavros_odometry_tuner.py
+@@ -1,3 +1,5 @@
++import json
++from pathlib import Path
+ from dataclasses import replace
+ from types import SimpleNamespace
+ from unittest.mock import Mock
+@@ -12,13 +14,14 @@ pytest.importorskip(
+ from mowgli_tools.drive_pid_math import (  # noqa: E402
+     DrivePidParams,
+     OdometryParams,
++    MotorCounterSample,
+     SpeedSample,
+     TickSample,
+     TrialMetrics,
+     resolve_robot_tuning_tier,
+ )
+ from mowgli_tools.drive_pid_tuner import (  # noqa: E402
+-    DrivePidTuner, RtkPoseSample, TrialAbortedError, _build_parser,
++    DrivePidTuner, RtkPoseSample, TrialRecorder, TrialAbortedError, _build_parser,
+ )
+ from mowgli_interfaces.msg import GnssStatus  # noqa: E402
+ from mowgli_tools.robot_hardware_config import extract_robot_hardware_config  # noqa: E402
+@@ -76,6 +79,7 @@ def wheel_trial(coefficient=343.596, distance=3.0):
+         rtk_accepted=True,
+         rtk_distance_m=distance,
+         odom_distance_m=3.0,
++        calibration_window={"ticks_per_meter": coefficient, "counter_unit": "motor_revolution"},
+     )
+ 
+ 
+@@ -133,7 +137,8 @@ def test_mavros_report_only_writes_no_live_parameters_and_apply_writes_only_tick
+ 
+ 
+ def test_mavros_report_retains_separate_wheels_and_each_pass_coefficient(tuner):
+-    trial = replace(wheel_trial(), right_ticks_seen=1_030_800)
++    trial = replace(wheel_trial(), right_ticks_seen=1_030_800,
++                    calibration_window={"ticks_per_meter": 343.598, "counter_unit": "motor_revolution"})
+     tuner._write_result_file(
+         mode="ff",
+         current_params=OdometryParams(300.125),
+@@ -223,16 +228,23 @@ def test_mavros_real_metrics_session_to_report_without_motion(tuner, monkeypatch
+         recorder.rtk_samples = [
+             RtkPoseSample(100 + i, (i - 1) * 0.4, 0.0, 0.01, True, True,
+                           GnssStatus.RTK_MODE_FIXED if rtk_fixed else GnssStatus.RTK_MODE_FLOAT,
+-                          "FIXED" if rtk_fixed else "FLOAT")
++                          "FIXED" if rtk_fixed else "FLOAT",
++                          observation_stamp_ns=(100 + i) * 1_000_000_000,
++                          observation_sequence=i, backend="mavros_gps2", provenance_valid=True)
+             for i in range(1, 8)
+         ]
++        recorder.left_motor_samples = [
++            MotorCounterSample((100 + i) * 1_000_000_000, (i - 1) * 137.2,
++                               "ardupilot_legacy", 1, 1) for i in range(1, 8)
++        ]
++        recorder.right_motor_samples = list(recorder.left_motor_samples)
+         clock[0] = 110.0
+ 
+     tuner._drive_segment = simulated_segment
+     if rtk_fixed:
+         assert tuner.run() == 0
+     else:
+-        with pytest.raises(RuntimeError, match="No trustworthy RTK/GNSS distance"):
++        with pytest.raises(RuntimeError, match="No trustworthy aligned motor/RTK window"):
+             tuner.run()
+     with open(tuner._args.output) as stream:
+         report = yaml.safe_load(stream)
+@@ -248,7 +260,7 @@ def test_mavros_real_metrics_session_to_report_without_motion(tuner, monkeypatch
+         assert trial["params_used"] == {"ticks_per_meter": 343.0}
+         assert "integral_saturation_suspected" not in trial
+     else:
+-        assert "No trustworthy RTK/GNSS distance" in report["failure_message"]
++        assert "No trustworthy aligned motor/RTK window" in report["failure_message"]
+     tuner._publish_cmd.assert_not_called()
+     tuner._apply_drive_pid_params.assert_not_called()
+     tuner._stop_robot.assert_called()
+@@ -271,7 +283,8 @@ def test_mavros_aborted_speed_trial_keeps_metrics_without_pid_exception(tuner):
+             target_speed=0.4, params=OdometryParams(343.0), duration_s=8.5,
+         )
+     metrics = caught.value.metrics
+-    assert metrics.stall_detected is True
++    assert metrics.stall_detected is False  # underspeed alone is not physical immobilisation
++    assert metrics.rtk_accepted is False
+     assert metrics.integral_saturation_suspected is False
+     assert metrics.left_ticks_seen == 12534
+     assert metrics.right_ticks_seen == 12818
+@@ -279,3 +292,167 @@ def test_mavros_aborted_speed_trial_keeps_metrics_without_pid_exception(tuner):
+     assert any("Partial trial metrics recorded after abort" in note for note in metrics.notes)
+     tuner._stop_robot.assert_called_once()
+     assert tuner._active_trial is None
++
++
++@pytest.fixture
++def recorded_trial(tuner):
++    data = json.loads((Path(__file__).parent / "fixtures/odom_second_trial.json").read_text())
++    tuner._latest_gnss_status = GnssStatus(
++        fix_valid=True, corrections_active=True, rtk_mode=GnssStatus.RTK_MODE_FIXED,
++    )
++    rec = TrialRecorder(
++        "second_real_trial", "odometry", 0, .4, OdometryParams(343),
++        data["trial_start_s"], 1, 8.5, actual_end_s=data["trial_start_s"] + 8.75,
++    )
++    rec.speed_samples = [SpeedSample(*row) for row in data["speed_samples"]]
++    rec.tick_samples = [TickSample(*row) for row in data["tick_samples"]]
++    rec.rtk_samples = [
++        RtkPoseSample(t, x, y, .014, True, True, GnssStatus.RTK_MODE_FIXED,
++                      "FIXED", stamp, seq, "mavros_gps2", True)
++        for t, x, y, stamp, seq in data["rtk_samples"]
++    ]
++    for wheel in ("left", "right"):
++        setattr(rec, wheel + "_motor_samples", [
++            MotorCounterSample(stamp, rev, "ardupilot_legacy", epoch, segment, True, delivery)
++            for stamp, rev, epoch, segment, delivery in data[wheel + "_motor_samples"]
++        ])
++    return rec
++
++
++def finalize(tuner, rec):
++    return tuner._finalize_trial_with_options(rec, allow_incomplete=False, additional_notes=[])
++
++
++def test_recorded_trial_low_odometry_does_not_mean_stall_and_window_excludes_ramps(tuner, recorded_trial):
++    rec = recorded_trial
++    metrics = finalize(tuner, rec)
++    assert metrics.stall_detected is False
++    assert metrics.rtk_accepted is True
++    assert any("not proof of physical stall" in warning for warning in metrics.warnings)
++    assert metrics.measured_speed_mean == pytest.approx(.0504521119541996)
++    assert metrics.ground_speed_mean == pytest.approx(.40400444440119526)
++    assert metrics.calibration_window["ticks_per_meter"] == pytest.approx(43.96782262055455)
++    assert metrics.calibration_window["left_epoch"] == 2
++    assert metrics.calibration_window["left_segment"] == 1
++    # Huge unrelated unsigned tick totals do not enter the motor-revolution fit.
++    rec.tick_samples[-1] = replace(rec.tick_samples[-1], left_ticks=99_000_000, right_ticks=99_000_000)
++    assert finalize(tuner, rec).calibration_window == metrics.calibration_window
++    assert metrics.integral_saturation_suspected is False
++    plateau_start = rec.command_start_s + rec.ramp_time_s
++    plateau_end = rec.command_start_s + rec.command_duration_s - rec.ramp_time_s
++    # Bad measurements outside the plateau cannot pollute or extend the fit.
++    rec.rtk_samples = [p if plateau_start <= p.time_s <= plateau_end
++                       else replace(p, provenance_valid=False, x_m=999) for p in rec.rtk_samples]
++    assert finalize(tuner, rec).calibration_window == metrics.calibration_window
++
++
++@pytest.mark.parametrize("fault", [
++    "absent", "float", "immobile", "slip", "one_wheel", "cached_gnss", "rtk_gap", "rtk_restart",
++    "epoch", "segment", "counter_reset", "counter_gap", "cached_counter", "stale_pose", "missing_identity",
++])
++def test_odometry_rejects_real_motion_and_provenance_failures(tuner, recorded_trial, fault):
++    rec = recorded_trial
++    if fault == "absent":
++        tuner._latest_gnss_status = None
++    if fault == "float":
++        rec.rtk_samples = [replace(p, rtk_mode=GnssStatus.RTK_MODE_FLOAT) for p in rec.rtk_samples]
++    if fault in ("immobile", "slip"):
++        rec.rtk_samples = [replace(p, x_m=0, y_m=0) for p in rec.rtk_samples]
++    if fault in ("immobile", "one_wheel"):
++        rec.tick_samples = [replace(p, left_ticks=0, right_ticks=0 if fault == "immobile" else p.right_ticks)
++                            for p in rec.tick_samples]
++    if fault == "missing_identity":
++        rec.rtk_samples = [replace(p, observation_sequence=0, backend="") for p in rec.rtk_samples]
++    if fault == "cached_gnss":
++        rec.rtk_samples = [replace(p, observation_sequence=1) for p in rec.rtk_samples]
++    if fault == "rtk_gap":
++        rec.rtk_samples = [rec.rtk_samples[3], rec.rtk_samples[13]]
++    if fault == "rtk_restart":
++        rec.rtk_samples[7] = replace(rec.rtk_samples[7], observation_sequence=1)
++    if fault == "stale_pose":
++        rec.rtk_samples[7] = replace(rec.rtk_samples[7], provenance_valid=False)
++    if fault in ("epoch", "segment"):
++        rec.left_motor_samples[7] = replace(rec.left_motor_samples[7], **{fault: 99})
++    if fault == "counter_reset":
++        rec.left_motor_samples[7] = replace(rec.left_motor_samples[7], revolutions=0)
++    if fault == "counter_gap":
++        rec.left_motor_samples = [rec.left_motor_samples[3], rec.left_motor_samples[14]]
++    if fault == "cached_counter":
++        rec.left_motor_samples = [rec.left_motor_samples[3]] * 20
++    metrics = finalize(tuner, rec)
++    tuner._args.passes = 1
++    tuner._run_speed_trial = Mock(return_value=metrics)
++    with pytest.raises(TrialAbortedError):
++        tuner._run_odometry_session(OdometryParams(343))
++    assert metrics.calibration_window is None or metrics.stall_detected
++    if fault in ("immobile", "slip", "one_wheel"):
++        assert metrics.stall_detected is True
++    tuner._apply_drive_pid_params.assert_not_called()
++
++
++@pytest.mark.parametrize("failed", [False, True])
++def test_recorded_calibration_report_retains_success_and_rejected_trial(tuner, recorded_trial, failed):
++    tuner._args.passes = 1
++    if failed:
++        recorded_trial.left_motor_samples[7] = replace(recorded_trial.left_motor_samples[7], segment=99)
++    metrics = finalize(tuner, recorded_trial)
++    tuner._get_drive_pid_params = Mock(return_value=OdometryParams(343))
++    tuner._run_speed_trial = Mock(return_value=metrics)
++    for name in ("_wait_for_initial_state", "_ensure_safe_to_start", "_log_motion_gate_state",
++                 "_enter_recording_if_needed", "_stop_robot", "_cancel_recording_if_needed", "_print_summary"):
++        setattr(tuner, name, Mock())
++    if failed:
++        with pytest.raises(TrialAbortedError):
++            tuner.run()
++    else:
++        assert tuner.run() == 0
++    report = yaml.safe_load(Path(tuner._args.output).read_text())
++    assert len(report["trials"]) == 1
++    assert report["trials"][0]["params_used"] == {"ticks_per_meter": 343.0}
++    assert report["applied_live"] is False
++    assert "wheel_pid" not in yaml.safe_dump(report)
++    if failed:
++        assert report["proposed_params"] == {"ticks_per_meter": 343.0}
++        assert "discontinuity" in " ".join(report["trials"][0]["notes"])
++    else:
++        assert report["recommended"]["ticks_per_meter"] == pytest.approx(43.96782262055455)
++    tuner._stop_robot.assert_called()
++    tuner._cancel_recording_if_needed.assert_called()
++    tuner._apply_drive_pid_params.assert_not_called()
++
++
++@pytest.mark.parametrize("age, matching, valid", [(2, True, True), (5, True, False),
++                                                  (-1, True, False), (2, False, False)])
++def test_pose_callback_uses_matching_observation_stamp_and_real_age(
++    tuner, recorded_trial, monkeypatch, age, matching, valid,
++):
++    from mowgli_interfaces.msg import AbsolutePose
++    stamp_ns = int((100 - age) * 1e9)
++    tuner._gnss_status_history = {}
++    status = GnssStatus(fix_valid=True, corrections_active=True, rtk_mode=GnssStatus.RTK_MODE_FIXED,
++                        horizontal_accuracy_m=.014, position_observation_sequence=9, backend="mavros_gps2")
++    status.header.stamp.sec = stamp_ns // 1_000_000_000 + (0 if matching else 1)
++    tuner._on_gnss_status(status)
++    pose = AbsolutePose(source=AbsolutePose.SOURCE_GPS, flags=3, position_accuracy=.014)
++    pose.header.stamp.sec = stamp_ns // 1_000_000_000
++    tuner._active_trial = recorded_trial
++    tuner.get_clock = Mock(return_value=Mock(now=Mock(return_value=Mock(nanoseconds=100_000_000_000))))
++    monkeypatch.setattr("mowgli_tools.drive_pid_tuner.time.monotonic", lambda: 200)
++    tuner._on_absolute_pose(pose)
++    sample = recorded_trial.rtk_samples[-1]
++    assert sample.provenance_valid is valid
++    assert sample.time_s == 200 - age  # explicit clock-domain conversion, not receipt as acquisition
++
++
++@pytest.mark.parametrize("fault", ["emergency", "charging", "odom_lost", "rtk_lost"])
++def test_existing_live_safety_paths_remain_active(tuner, recorded_trial, fault):
++    tuner._failure_message = None
++    tuner._latest_odom_time = 0
++    tuner._latest_emergency = SimpleNamespace(active_emergency=fault == "emergency",
++                                              latched_emergency=False, reason="TEST")
++    tuner._latest_status = SimpleNamespace(is_charging=fault == "charging")
++    if fault == "rtk_lost":
++        tuner._latest_gnss_status.fix_valid = False
++    now = recorded_trial.speed_samples[-1].time_s + (.1 if fault != "odom_lost" else 5)
++    with pytest.raises(RuntimeError):
++        tuner._check_live_trial_safety(recorded_trial, now, 5, commanded_speed=.4)
+diff --git a/tools/motor/test/fixtures/odom_second_trial.json b/tools/motor/test/fixtures/odom_second_trial.json
+new file mode 100644
+index 00000000..1a9169de
+--- /dev/null
++++ b/tools/motor/test/fixtures/odom_second_trial.json
+@@ -0,0 +1,13 @@
++{
++  "trial_start_s": 22.352920397,
++  "duration_s": 8.5,
++  "ramp_s": 1,
++  "speed_samples": [[22.358590848, 0.0], [22.463000986, 0.0], [22.562568987, 0.0], [22.658924356, 0.0], [22.756770689, 0.0], [22.854386611, 0.0], [22.955658781, 0.0], [23.057353275, 0.0003753692461983224], [23.161244842, 0.005733722060252672], [23.255201017, 0.011745274194359664], [23.355845244, 0.01922520525369746], [23.480042461, 0.02773657558726616], [23.560028713, 0.03330970074623041], [23.65995604, 0.040614051930063316], [23.756985727, 0.048553650673439024], [23.8563484, 0.05102937066288569], [23.958594715, 0.051071306382486026], [24.055304451, 0.05188768866921769], [24.154190844, 0.05218122387766491], [24.256868524, 0.052338592558954386], [24.357397546, 0.05197102627323251], [24.475870648, 0.05132342191201257], [24.558543087, 0.05196793002915452], [24.657359774, 0.05267249757045675], [24.754681121, 0.05160349854227405], [24.876402439, 0.05192797839699496], [24.957888115, 0.051189230575042516], [25.054764097, 0.051393028088746656], [25.17822575, 0.05137295885150935], [25.258080173, 0.051867216089839956], [25.357802464, 0.051751225566956695], [25.477454747, 0.051569715672262206], [25.558366146, 0.05163163165656888], [25.659143662, 0.05135443773631104], [25.755152832, 0.05241488353851585], [25.852575677, 0.05182533078800716], [25.954999322, 0.05184165428169035], [26.055380182, 0.05217215164525632], [26.152983273, 0.05132343080926567], [26.255770327, 0.05228405536321672], [26.356402014, 0.05171378592592171], [26.477416058, 0.051268608901428876], [26.558109003, 0.05191933916423712], [26.658695483, 0.05135400770241132], [26.754921649, 0.05138483965014577], [26.877278495, 0.05211027421571307], [26.955083716, 0.05272214424274174], [27.054300562, 0.05258448297706359], [27.153049585, 0.05221242951002946], [27.255519022, 0.05077121686425687], [27.356817444, 0.05110610353935101], [27.477228337, 0.051296940721042884], [27.559234918, 0.051554907677356654], [27.65745283, 0.052891156462585034], [27.756415348, 0.052478134110787174], [27.856415884, 0.051487671135697584], [27.957316191, 0.05153061224489795], [28.055705307, 0.05167638483965015], [28.156388327, 0.05190032573436741], [28.255040229, 0.0529008277767022], [28.358796761, 0.053000972291818514], [28.475892065, 0.051060626713017795], [28.558741253, 0.05170068027210884], [28.657526151, 0.052527748159810796], [28.756489837, 0.051835610081086], [28.880318983, 0.05242912804072522], [28.957364432, 0.05174297188183309], [29.053363979, 0.05162731945456754], [29.152949484, 0.051232432670333755], [29.257128924, 0.05161162470010326], [29.358982084, 0.05229549129919825], [29.480134086, 0.05219633141342475], [29.56064737, 0.05160810731937864], [29.65581452, 0.051919339164237126], [29.754613711, 0.05233003043572339], [29.855215067, 0.052235179786200195], [29.956593406, 0.05204081632653061], [30.057473881, 0.052665278932443514], [30.15759925, 0.052407395017158645], [30.260921502, 0.05251677191523931], [30.355402668, 0.05208594319424198], [30.477964554, 0.05199318636494776], [30.574646003, 0.05114688261604865], [30.656929372, 0.046695821185617103], [30.75655396, 0.03882410106899903], [30.860370575, 0.031632653061224494], [30.954334629, 0.02455510842904405], [31.05687465, 0.017131264170358436], [31.161277502, 0.008570361716638386], [31.256502986, 0.0], [31.356403193, 0.0], [31.479968681, 0.0], [31.559373659, 0.0], [31.656831216, 0.0], [31.757837689, 0.0], [31.884222944, 0.0], [31.95545328, 0.0], [32.055621523, 0.0], [32.159385058, 0.0], [32.255596644, 0.0]],
++  "tick_samples": [[22.358554099, 0, 83], [22.462989611, 0, 83], [22.562553238, 0, 83], [22.659289222, 0, 83], [22.756763689, 0, 83], [22.854627814, 0, 83], [22.956334265, 0, 83], [23.057623935, 8, 88], [23.163011426, 117, 194], [23.255176518, 394, 476], [23.355811703, 920, 1010], [23.480618198, 1923, 1997], [23.561724715, 2794, 2852], [23.65994729, 4084, 4108], [23.756969394, 5562, 5544], [23.856331776, 7287, 7242], [23.958579548, 9084, 9014], [24.055603985, 10827, 10726], [24.154184428, 12600, 12468], [24.256850733, 14420, 14291], [24.357371296, 16207, 16093], [24.475865398, 18334, 18218], [24.558519171, 19783, 19663], [24.657323609, 21549, 21431], [24.754657788, 23317, 23199], [24.876386689, 25444, 25331], [24.957867115, 26887, 26788], [25.055008508, 28618, 28523], [25.178620366, 30793, 30683], [25.258066465, 32169, 32055], [25.357796048, 33936, 33825], [25.477441914, 36079, 35974], [25.558345438, 37523, 37411], [25.659111288, 39295, 39160], [25.755128916, 41026, 40882], [25.852565469, 42777, 42629], [25.954994655, 44612, 44444], [26.055808922, 46403, 46202], [26.15297744, 48172, 47941], [26.255755744, 49991, 49740], [26.361150528, 51808, 51536], [26.477409641, 53952, 53670], [26.558103462, 55393, 55095], [26.658659901, 57139, 56811], [26.754889566, 58862, 58510], [26.877257495, 61052, 60662], [26.955063883, 62479, 62058], [27.054293562, 64306, 63860], [27.153011378, 66054, 65627], [27.255502689, 67850, 67447], [27.356801112, 69601, 69201], [27.477504247, 71757, 71344], [27.559223835, 73203, 72768], [27.65741958, 74934, 74473], [27.756378307, 76734, 76265], [27.85639926, 78527, 78081], [27.957295775, 80274, 79866], [28.055688682, 82025, 81641], [28.15633962, 83817, 83424], [28.255018063, 85605, 85195], [28.358728221, 87486, 87051], [28.475877774, 89604, 89158], [28.558722878, 91032, 90588], [28.65750311, 92814, 92353], [28.756470587, 94610, 94129], [28.880311692, 96780, 96284], [28.95735889, 98199, 97695], [29.054974233, 99932, 99408], [29.153879004, 101706, 101159], [29.257094508, 103527, 102952], [29.358964293, 105355, 104771], [29.480117461, 107504, 106934], [29.560629579, 108934, 108365], [29.655794396, 110646, 110077], [29.756960406, 112417, 111846], [29.855204568, 114226, 113652], [29.956580864, 116027, 115461], [30.057450548, 117859, 117285], [30.157575334, 119652, 119060], [30.260899919, 121494, 120917], [30.355373503, 123191, 122647], [30.477956971, 125339, 124869], [30.575526816, 127030, 126635], [30.657203824, 128379, 128040], [30.756943909, 129817, 129530], [30.860349576, 131046, 130784], [30.954322963, 131958, 131705], [31.056854525, 132682, 132431], [31.163180875, 133148, 132887], [31.256467695, 133292, 133022], [31.356387444, 133292, 133022], [31.480328298, 133292, 133022], [31.562402255, 133292, 133022], [31.656819841, 133292, 133022], [31.757821648, 133292, 133022], [31.884205153, 133292, 133022], [31.955439572, 133292, 133022], [32.055616274, 133292, 133022], [32.159365225, 133292, 133022], [32.255577686, 133292, 133022]],
++  "rtk_samples": [[22.501853576000002, 0.0, 0.0, 1791821862501853576, 276], [22.996282913, -2.5151456768957026e-05, 4.134010991307946e-06, 1791821862996282913, 277], [23.495559055999998, 0.0013990769875773523, -0.00023572728364307238, 1791821863495559056, 278], [23.995160982999998, 0.005720555574338149, -0.012167765668381847, 1791821863995160983, 279], [24.497805801, -0.03255746118301306, -0.011050107331955772, 1791821864497805801, 280], [24.993225037, -0.19177057007833498, -0.0557529652262847, 1791821864993225037, 281], [25.515150907, -0.42987974950842056, -0.11181477859269506, 1791821865515150907, 282], [25.994509606, -0.6109495693262685, -0.1792255539766785, 1791821865994509606, 283], [26.515079843000002, -0.853659948755735, -0.24725862616645244, 1791821866515079843, 284], [26.993777936, -1.0337379510508284, -0.29283374284239905, 1791821866993777936, 285], [27.498877663, -1.2822054369272777, -0.33735147326911985, 1791821867498877663, 286], [27.995088474, -1.3995080765070087, -0.36949999655378285, 1791821867995088474, 287], [28.496031761, -1.720044909403923, -0.4383238447690605, 1791821868496031761, 288], [28.996645471, -1.9734433714032522, -0.4837258970924019, 1791821868996645471, 289], [29.517098472, -2.1645646022322587, -0.5286175911787687, 1791821869517098472, 290], [29.998810586, -2.347285390049346, -0.5625077809024255, 1791821869998810586, 291], [30.498860232000002, -2.624566161834363, -0.6146482098186254, 1791821870498860232, 292], [30.994275696, -2.8842286695978445, -0.6473182226735652, 1791821870994275696, 293], [31.496159303000002, -3.020113806375562, -0.6807899609203094, 1791821871496159303, 294], [31.993665679, -3.23650747832286, -0.736445294805387, 1791821871993665679, 295]],
++  "left_motor_samples": [[1791821862657942337, 0.0, 2, 1, 1791821862667467656], [1791821863159940831, 0.11778010202431913, 2, 1, 1791821863165693821], [1791821863659272390, 4.084011477542724, 2, 1, 1791821863666051439], [1791821864153016038, 12.600593713026408, 2, 1, 1791821864165525912], [1791821864655091536, 21.549146136093864, 2, 1, 1791821864665423877], [1791821865054378523, 28.61828354721145, 2, 1, 1791821865165625753], [1791821865656686720, 39.29569056176843, 2, 1, 1791821865665786798], [1791821866152465577, 48.17260851246552, 2, 1, 1791821866165914596], [1791821866655376394, 57.13908833176851, 2, 1, 1791821866664283103], [1791821867151579328, 66.0548866316177, 2, 1, 1791821867165250592], [1791821867653892246, 74.93458964795407, 2, 1, 1791821867666028504], [1791821868154692617, 83.81798434717408, 2, 1, 1791821868166263930], [1791821868655245663, 92.81451549272583, 2, 1, 1791821868670055858], [1791821869152286541, 101.70692131821748, 2, 1, 1791821869164849206], [1791821869654138351, 110.6465107123912, 2, 1, 1791821869665063054], [1791821870155652420, 119.65216336392012, 2, 1, 1791821870164759207], [1791821870656136932, 128.37957234485634, 2, 1, 1791821870665158263], [1791821871159899410, 133.14894228595014, 2, 1, 1791821871167100783], [1791821871656108774, 133.29231191469185, 2, 1, 1791821871664543285], [1791821872156121384, 133.29231191469185, 2, 1, 1791821872165111216]],
++  "right_motor_samples": [[1791821862657942337, -0.0563610231462628, 2, 1, 1791821862667467656], [1791821863159940831, 0.05485263496591783, 2, 1, 1791821863165693821], [1791821863659272390, 3.968047973912535, 2, 1, 1791821863666051439], [1791821864153016038, 12.328583050603978, 2, 1, 1791821864165525912], [1791821864655091536, 21.29158337893394, 2, 1, 1791821864665423877], [1791821865054378523, 28.38317614061724, 2, 1, 1791821865165625753], [1791821865656686720, 39.02082036499413, 2, 1, 1791821865665786798], [1791821866152465577, 47.80136207124238, 2, 1, 1791821866165914596], [1791821866655376394, 56.67174621796493, 2, 1, 1791821866664283103], [1791821867151579328, 65.48749414979886, 2, 1, 1791821867165250592], [1791821867653892246, 74.33317429107373, 2, 1, 1791821867666028504], [1791821868154692617, 83.28444515528197, 2, 1, 1791821868166263930], [1791821868655245663, 92.21376526388492, 2, 1, 1791821868670055858], [1791821869152286541, 101.01982113671455, 2, 1, 1791821869164849206], [1791821869654138351, 109.93769611539979, 2, 1, 1791821869665063054], [1791821870155652420, 118.92069000984279, 2, 1, 1791821870164759207], [1791821870656136932, 127.90011441225596, 2, 1, 1791821870665158263], [1791821871159899410, 132.74778847608022, 2, 1, 1791821871167100783], [1791821871656108774, 132.8829133941321, 2, 1, 1791821871664543285], [1791821872156121384, 132.8829133941321, 2, 1, 1791821872165111216]],
++  "archive_sha256": "9e8f3662f7bc5926f546c5fff310e62fb24eda8b8fd0127db8c0ad7145bd1ac3",
++  "coordinates": "Translated relative XY only, no geographic datum",
++  "expected_diagnostic_ticks_per_meter": 43.96782262055455
++}

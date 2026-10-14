@@ -690,6 +690,15 @@ controller_server:
       # only the C++ declare_double default applied.
       obstacle_wait_timeout_s: 2.5
       obstacle_clear_hold_s: 1.5
+      # collision_monitor reads raw scan points downstream of FTC and can hold
+      # the wheels at zero while every FTC costmap check reads clear (field
+      # 2026-10-10: 30 s "following" a stopped robot, then a progress-checker
+      # abort FollowStrip could not detour). Stopped this long while commanding
+      # forward under a STOP/APPROACH verdict (cm_hold_s), or with no verdict at
+      # all (cm_stall_only_s, below movement_time_allowance), FTC takes the
+      # WEDGED path: reverse-escape, hold, obstacle-marked abort. 0 disables.
+      cm_hold_s: 3.0
+      cm_stall_only_s: 10.0
       # Bounded reverse-escape for the WEDGED case (both sides of an obstacle
       # blocked, or the skirt needed exceeds max_lateral_deviation). Before
       # holding zero velocity and aborting the strip, FTC backs STRAIGHT up (no
@@ -1324,6 +1333,10 @@ collision_monitor:
   ros__parameters:
     use_sim_time: false
     enable_stamped_cmd_vel: true
+    # Publish the active verdict (nav2_msgs/CollisionMonitorState, on change).
+    # FTCController reads it to notice that this node is holding the wheels at
+    # zero while its own costmap checks read clear (cm_hold_s in the FTC block).
+    state_topic: "/collision_monitor_state"
     base_frame_id: base_footprint
     odom_frame_id: odom
     cmd_vel_in_topic: cmd_vel_nav

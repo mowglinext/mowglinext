@@ -67,6 +67,12 @@ MSG_UART_AFTER_REBOOT="disponible apres redemarrage"
 
 # ── GPS (gps.sh) ──
 MSG_GNSS_CONNECTION="Connexion GNSS :"
+MSG_MAVROS_GNSS_SOURCE_TITLE="Où est raccordé le récepteur GNSS ?"
+MSG_MAVROS_GNSS_SOURCE_PIXHAWK="GPS raccordé au Pixhawk (MAVROS possède le récepteur)"
+MSG_MAVROS_GNSS_SOURCE_SOC="GPS raccordé directement au calculateur compagnon / SoC"
+MSG_MAVROS_GNSS_SOURCE_EXISTING="Source GNSS prédéfinie/conservée :"
+MSG_MAVROS_GNSS_SOURCE_SELECTED="Source GNSS sélectionnée :"
+MSG_MAVROS_GNSS_SOURCE_INVALID="Choix de source GNSS invalide"
 MSG_GPS_DEBUG_CONFIRM="Activer le port GPS debug (miniUART / gps_debug) ?"
 MSG_GPS_INVALID_CONNECTION="Choix connexion GPS invalide"
 MSG_GPS_INVALID_PROTOCOL="Choix protocole invalide"

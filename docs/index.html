@@ -248,7 +248,7 @@
     <div><span class="eyebrow-muted">Compute</span><strong>Raspberry Pi 4 / 5</strong><span>RK3566 / RK3588, arm64 or amd64</span></div>
     <div><span class="eyebrow-muted">RTK GNSS</span><strong>u-blox ZED-F9P</strong><span>Unicore UM98x, generic NMEA</span></div>
     <div><span class="eyebrow-muted">LiDAR · obstacles + RTK backup</span><strong>LD06 / LD14 / LD19</strong><span>RPLIDAR A1–A3, STL27L</span></div>
-    <div><span class="eyebrow-muted">Other boards</span><strong>OpenMower v1 <span class="tag">soon</span></strong><span>Pixhawk via MAVROS <span class="tag">soon</span></span></div>
+    <div><span class="eyebrow-muted">Other boards</span><strong>OpenMower v1 <span class="tag">soon</span></strong><span><a href="https://github.com/Pepeuch/mowglimavros">Pixhawk via MAVROS →</a></span></div>
   </div>
 </section>
 
@@ -264,7 +264,7 @@
 
       <div class="composer-group" id="backend-group">
         <h3><small>Step 1</small>Hardware backend</h3>
-        <p class="composer-hint">Mowgli is the supported backend. OpenMower boards and Pixhawk via MAVROS are coming soon.</p>
+        <p class="composer-hint">Mowgli is the stable backend. MAVROS is available for evaluation. OpenMower v1 is coming soon; hardware validation is still required.</p>
         <div class="composer-options" data-group="backend">
           <button class="composer-option active" data-value="mowgli" aria-pressed="true">
             <span class="option-head"><span class="option-label">Mowgli</span></span>
@@ -274,11 +274,12 @@
             <span class="option-head"><span class="option-label">OpenMower v1</span><span class="tag">Soon</span></span>
             <span class="option-desc">v1 LowLevel board + xESC, on their own firmware (v2 boards not supported)</span>
           </button>
-          <button class="composer-option" data-value="mavros" aria-pressed="false" disabled>
-            <span class="option-head"><span class="option-label">MAVROS</span><span class="tag">Soon</span></span>
+          <button class="composer-option" data-value="mavros" aria-pressed="false" aria-describedby="mavros-backend-status">
+            <span class="option-head"><span class="option-label">MAVROS</span></span>
             <span class="option-desc">Pixhawk via MAVROS — GPS comes from the flight controller</span>
           </button>
         </div>
+        <p class="composer-hint" id="mavros-backend-status"><a href="https://github.com/Pepeuch/mowglimavros">MAVROS documentation →</a> ARM64 validation is pending.</p>
       </div>
 
       <div class="composer-group" id="gnss-group">

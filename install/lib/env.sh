@@ -148,28 +148,34 @@ load_gnss_ntrip_runtime_defaults() {
 }
 
 sync_gnss_env_contract_values() {
+  local gnss_source
+
   load_gnss_ntrip_runtime_defaults
 
   GNSS_STACK="$(effective_gnss_stack 2>/dev/null || default_gnss_stack)"
+  gnss_source="$(effective_gnss_source 2>/dev/null || default_gnss_source)"
+  GNSS_SOURCE="$gnss_source"
 
-  case "$GNSS_STACK" in
-    disabled)
-      GNSS_STATUS_SOURCE="external"
-      ;;
-    *)
-      GNSS_STATUS_SOURCE="universal"
-      ;;
-  esac
+  if [[ "$GNSS_STACK" == "disabled" || "$GNSS_SOURCE" == "mavros" ]]; then
+    GNSS_STATUS_SOURCE="external"
+  else
+    GNSS_STATUS_SOURCE="universal"
+  fi
 
   GNSS_RECEIVER_FAMILY="$(gnss_receiver_family_from_state)"
   GNSS_TRANSPORT="$(gnss_transport_from_state)"
-  GNSS_SERIAL_DEVICE="$(gnss_serial_device_from_state)"
-  GNSS_SERIAL_BAUD="$(gnss_serial_baud_from_state)"
+  if [[ "$GNSS_SOURCE" == "mavros" ]]; then
+    GNSS_SERIAL_DEVICE=""
+    GNSS_SERIAL_BAUD=""
+  else
+    GNSS_SERIAL_DEVICE="$(gnss_serial_device_from_state)"
+    GNSS_SERIAL_BAUD="$(gnss_serial_baud_from_state)"
+  fi
   GNSS_FRAME_ID="${GNSS_FRAME_ID:-gps_link}"
-  # The sidecar opens whatever gnss_serial_device names in mowgli_robot.yaml;
-  # compose only needs the GROUP that owns that tty (dialout, normally 20).
+  : "${GNSS_MAVROS_SOURCE:=gps1}"
+  # Direct receivers need the GROUP that owns their tty (dialout, normally 20).
   : "${GNSS_DEVICE_GID:=20}"
-  if [[ -n "$GNSS_SERIAL_DEVICE" && -e "$GNSS_SERIAL_DEVICE" ]]; then
+  if [[ "$GNSS_SOURCE" == "direct" && -n "$GNSS_SERIAL_DEVICE" && -e "$GNSS_SERIAL_DEVICE" ]]; then
     GNSS_DEVICE_GID="$(stat -Lc '%g' -- "$GNSS_SERIAL_DEVICE")"
   fi
 
@@ -206,6 +212,8 @@ write_gnss_env_contract_keys() {
   ensure_env_comment_line "$env_file" "# GNSS_* values below are fallback-only first-boot defaults."
   ensure_env_comment_line "$env_file" "# Active operator GNSS settings live in docker/config/mowgli/mowgli_robot.yaml and the GUI."
   upsert_env_key "$env_file" "GNSS_STACK" "$GNSS_STACK"
+  upsert_env_key "$env_file" "GNSS_SOURCE" "$GNSS_SOURCE"
+  upsert_env_key "$env_file" "GNSS_MAVROS_SOURCE" "$GNSS_MAVROS_SOURCE"
   upsert_env_key "$env_file" "GNSS_RECEIVER_FAMILY" "$GNSS_RECEIVER_FAMILY"
   upsert_env_key "$env_file" "GNSS_TRANSPORT" "$GNSS_TRANSPORT"
   upsert_env_key "$env_file" "GNSS_SERIAL_DEVICE" "$GNSS_SERIAL_DEVICE"
@@ -250,6 +258,8 @@ setup_env() {
   # headless recovery. The active operator configuration lives in YAML/GUI and
   # is resolved at runtime before these env values are consulted.
   : "${GNSS_BACKEND:=universal}"
+  : "${GNSS_SOURCE:=$(default_gnss_source)}"
+  : "${GNSS_MAVROS_SOURCE:=gps1}"
   : "${GNSS_STATUS_SOURCE:=$(default_gnss_status_source)}"
   : "${GNSS_STACK:=$(default_gnss_stack)}"
   : "${GNSS_RECEIVER_FAMILY:=auto}"
@@ -316,6 +326,10 @@ setup_env() {
   : "${MAVROS_GCS_URL:=udp-b://@255.255.255.255:14550}" # udp-b = broadcast, udp = unicast, empty = disabled
   : "${MAVROS_TGT_SYSTEM:=1}"
   : "${MAVROS_TGT_COMPONENT:=1}"
+  # Prefer the persistent USB identity when available.
+  if [[ "$HARDWARE_BACKEND" == "mavros" && "$MAVROS_BY_ID" == /dev/serial/by-id/* ]]; then
+    MAVROS_PORT="$MAVROS_BY_ID"
+  fi
 
   # OpenMower electronics (LowLevel board + xESC on the Pi UARTs). GNSS is NOT
   # affected: the OpenMower GPS is a plain receiver and keeps the Universal
@@ -333,6 +347,8 @@ setup_env() {
       ;;
   esac
 
+  # MAVROS and Universal GNSS are independent sidecars.
+  # Selecting MAVROS as the hardware backend must not disable GNSS.
   if [[ "${GNSS_BACKEND:-universal}" == "nmea" ]]; then
     warn_legacy_nmea_backend_once
     GNSS_BACKEND="universal"
@@ -342,18 +358,35 @@ setup_env() {
     GNSS_BACKEND="universal"
   fi
 
+  if [[ "$HARDWARE_BACKEND" != "mavros" ]]; then
+    GNSS_SOURCE="direct"
+  fi
+  if ! GNSS_SOURCE="$(effective_gnss_source 2>/dev/null)"; then
+    error "Unknown GNSS_SOURCE=${GNSS_SOURCE:-unset} for HARDWARE_BACKEND=$HARDWARE_BACKEND (expected direct${HARDWARE_BACKEND:+ or mavros})"
+    return 1
+  fi
+
   sync_gnss_env_contract_values
 
+  # Hardware backends are mutually exclusive.
+  # GNSS_SOURCE remains independent of HARDWARE_BACKEND.
   local enable_mavros="false"
+  local enable_openmower="false"
+
   if [[ "$HARDWARE_BACKEND" == "mavros" ]]; then
     enable_mavros="true"
-  fi
-  MAVROS_ENABLED="$enable_mavros"
-  local enable_openmower="false"
-  if [[ "$HARDWARE_BACKEND" == "openmower" ]]; then
+  elif [[ "$HARDWARE_BACKEND" == "openmower" ]]; then
     enable_openmower="true"
   fi
+
+  MAVROS_ENABLED="$enable_mavros"
   OPENMOWER_ENABLED="$enable_openmower"
+
+  if [[ "$HARDWARE_BACKEND" == "mavros" && "$GNSS_SOURCE" == "mavros" && "$GNSS_MAVROS_SOURCE" == "gps1" ]]; then
+    MAVROS_GPS1_CANONICAL="true"
+  else
+    MAVROS_GPS1_CANONICAL="false"
+  fi
 
   touch "$env_file"
 
@@ -407,12 +440,13 @@ setup_env() {
   upsert_env_key "$env_file" "OPENMOWER_XESC_LEFT_PORT" "$OPENMOWER_XESC_LEFT_PORT"
   upsert_env_key "$env_file" "OPENMOWER_XESC_RIGHT_PORT" "$OPENMOWER_XESC_RIGHT_PORT"
   upsert_env_key "$env_file" "OPENMOWER_XESC_MOW_PORT" "$OPENMOWER_XESC_MOW_PORT"
+  upsert_env_key "$env_file" "MAVROS_GPS1_CANONICAL" "$MAVROS_GPS1_CANONICAL"
 
   remove_legacy_gnss_env_keys "$env_file"
   remove_env_key "$env_file" "GPS_IMAGE"
   remove_env_key "$env_file" "NMEA_IMAGE"
 
-  info "Backend selection : HARDWARE_BACKEND=$HARDWARE_BACKEND GNSS_BACKEND=$GNSS_BACKEND GNSS_STACK=$GNSS_STACK"
+  info "Backend selection : HARDWARE_BACKEND=$HARDWARE_BACKEND GNSS_SOURCE=$GNSS_SOURCE GNSS_BACKEND=$GNSS_BACKEND GNSS_STACK=$GNSS_STACK"
   info "Updated $env_file"
 
   prune_backup_if_unchanged "$env_file" "${MIGRATED_ENV_BACKUP:-}"

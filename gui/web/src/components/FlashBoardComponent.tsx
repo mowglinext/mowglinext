@@ -27,6 +27,8 @@ import {PANEL_OPTIONS, VERMUT_BOARD, boardOptionsForModel, hasPrebuiltFirmware} 
 import {FlashProgressView} from "./FlashProgressView.tsx";
 import {parseFlashStage, type FlashStage} from "./flashStage.ts";
 import {FlashTargetSummary} from "./FlashTargetSummary.tsx";
+import {isAbortError} from "../utils/errors";
+import type {SettingsValues} from "../types/settings.generated";
 
 const SchemaField = createSchemaField({
     components: {
@@ -37,6 +39,12 @@ const SchemaField = createSchemaField({
         NumberPicker,
     },
 })
+// A config saved by an earlier GUI: the firmware selection, plus the fields the loader maps or
+// ignores. Parsed from JSON, so every field is optional.
+type SavedFirmwareConfig = FirmwareSelection & Record<string, unknown> & {
+    firmwareSource?: string,
+    expertBuild?: boolean,
+}
 type Config = {
     repository: string
     branch: string
@@ -160,7 +168,7 @@ export const FlashBoardComponent = (props: {
 
     useEffect(() => {
         let disposed = false;
-        (async () => {
+        void (async () => {
             try {
                 // Keep the existing firmware-config read independent from the
                 // settings read: a settings endpoint failure must not prevent
@@ -169,7 +177,7 @@ export const FlashBoardComponent = (props: {
                 let configuredModel: string | undefined;
                 try {
                     const settings = await guiApi.settings.yamlList();
-                    configuredModel = settings.data?.mower_model;
+                    configuredModel = (settings.data as SettingsValues | undefined)?.mower_model;
                 } catch {
                     // Model inference is best-effort; the normal manual form
                     // remains available if settings cannot be read.
@@ -179,7 +187,7 @@ export const FlashBoardComponent = (props: {
                 const model = mowerModelRef.current ?? configuredModel;
                 setConfiguredMowerModel(model);
                 if (jsonConfig) {
-                    const saved = JSON.parse(jsonConfig)
+                    const saved = JSON.parse(jsonConfig) as SavedFirmwareConfig
                     // Back-compat: a config saved before the Firmware source
                     // dropdown existed only carried `expertBuild`. Map it so a
                     // returning user's custom-build choice stays preselected.
@@ -228,10 +236,10 @@ export const FlashBoardComponent = (props: {
                     applyingModelDefaultsRef.current = false;
                 }
                 initializedModelRef.current = true;
-            } catch (e: any) {
+            } catch (e) {
                 notification.error({
                     message: t('flashBoard.errorRetrievingConfig'),
-                    description: e.toString(),
+                    description: String(e),
                 });
             }
         })()
@@ -347,7 +355,7 @@ export const FlashBoardComponent = (props: {
                     setIsFlashing(false);
                 },
                 onerror(err) {
-                    setFlashError(err.toString());
+                    setFlashError(String(err));
                     // Re-throw to stop fetch-event-source's automatic retry.
                     // Otherwise the library re-POSTs on any stream error and
                     // relaunches the flash; we surface the error in the UI and
@@ -355,9 +363,9 @@ export const FlashBoardComponent = (props: {
                     throw err;
                 },
             });
-        } catch (e: any) {
-            if (e.name !== 'AbortError') {
-                setFlashError(e.toString());
+        } catch (e) {
+            if (!isAbortError(e)) {
+                setFlashError(String(e));
             }
         } finally {
             // Belt-and-braces: whatever path ended the stream (end event,
@@ -421,7 +429,7 @@ export const FlashBoardComponent = (props: {
             cancelText: t('flashBoard.cancel'),
             onOk: () => {
                 confirmModal.destroy();
-                doFlashFirmware(payload);
+                void doFlashFirmware(payload);
             },
         });
     };

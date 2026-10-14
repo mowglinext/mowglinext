@@ -52,6 +52,24 @@ const button = (name: string) => screen.getByRole('button', {name});
 describe('coverage preview panel', () => {
     beforeEach(() => vi.clearAllMocks());
 
+    it('switches the overlay off from the panel itself', () => {
+        show(makePreview());
+        fireEvent.click(button('Hide mowing lines'));
+        expect(fns.setEnabled).toHaveBeenCalledWith(false);
+    });
+
+    it('can be switched off in read-only mode too', () => {
+        show(makePreview({editMode: false}));
+        fireEvent.click(button('Hide mowing lines'));
+        expect(fns.setEnabled).toHaveBeenCalledWith(false);
+    });
+
+    it('can be switched off even when there is no area to preview', () => {
+        show(makePreview({areas: [], area: undefined}));
+        fireEvent.click(button('Hide mowing lines'));
+        expect(fns.setEnabled).toHaveBeenCalledWith(false);
+    });
+
     it('asks for an area when there is none to preview', () => {
         show(makePreview({areas: [], area: undefined}));
         expect(screen.getByText('Draw a mowing area first.')).toBeInTheDocument();

@@ -21,6 +21,7 @@
 // then drive ~10 m off elsewhere"). This test pins the mapping so that failure
 // mode cannot silently reopen.
 
+#include <set>
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -57,6 +58,7 @@ std::size_t totalPoses(const std::vector<nav_msgs::msg::Path>& units)
 
 }  // namespace
 
+using mowgli_behavior::resolveFirstDrive;
 using mowgli_behavior::resolveResumeLocation;
 
 // A cursor of 0 (never interrupted) is not resumable — mow fresh from pose 0.
@@ -202,4 +204,54 @@ TEST(ForwardSkipIndex, DegenerateInputsReturnFrom)
   EXPECT_EQ(forwardSkipIndex(makePoses(1, 0.1), 0, 0.8), 0u);  // too short
   const std::vector<geometry_msgs::msg::PoseStamped> empty;
   EXPECT_EQ(forwardSkipIndex(empty, 0, 0.8), 0u);  // empty
+}
+
+// The reproduction of field 2026-10-12: the cursor is in a late unit but the earlier units were
+// never recorded as mowed. FollowStrip drives the FIRST unit not recorded as mowed, so that is
+// where the first transit must go; the cursor's unit is trimmed only when it is reached.
+TEST(ResolveFirstDrive, AnEarlierOpenUnitIsDrivenBeforeTheCursorsUnit)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100), makeUnit(100)};
+  const auto first = resolveFirstDrive(units, {}, true, 250, 300);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 0u);
+  EXPECT_EQ(first.local, 0u) << "the cursor's trim belongs to unit 2, not to the first unit";
+}
+
+TEST(ResolveFirstDrive, TheCursorsUnitIsTrimmedWhenEarlierUnitsAreDone)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100), makeUnit(100)};
+  const auto first = resolveFirstDrive(units, {0, 1}, true, 250, 300);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 2u);
+  EXPECT_EQ(first.local, 50u);
+}
+
+TEST(ResolveFirstDrive, ACursorInTheFirstOpenUnitResumesMidUnit)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100)};
+  const auto first = resolveFirstDrive(units, {}, true, 40, 200);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 0u);
+  EXPECT_EQ(first.local, 40u);
+}
+
+TEST(ResolveFirstDrive, WithoutACursorTheFirstOpenUnitStartsAtItsFront)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100), makeUnit(100)};
+  const auto first = resolveFirstDrive(units, {0}, false, 0, 300);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 1u);
+  EXPECT_EQ(first.local, 0u);
+
+  const auto stale = resolveFirstDrive(units, {0}, false, 250, 300);
+  ASSERT_TRUE(stale.valid);
+  EXPECT_EQ(stale.unit, 1u);
+  EXPECT_EQ(stale.local, 0u) << "a cursor of a stale plan must be ignored";
+}
+
+TEST(ResolveFirstDrive, NothingIsDrivenWhenEveryUnitIsDone)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100)};
+  EXPECT_FALSE(resolveFirstDrive(units, {0, 1}, true, 150, 200).valid);
 }

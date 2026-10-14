@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- KEEP IN SYNC with install/config/cyclonedds-mavros.xml. The MAVROS sidecar
+     alone mounts this compatibility profile for the older DDS parser. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <!-- Every container runs with network_mode: host + ipc: host, so all
+           ROS2 participants share this host's loopback. Pin DDS to "lo" and
+           disable multicast so discovery/traffic never leaves the machine.
+           The previous autodetermine="true" let Cyclone pick an external
+           NIC and try to talk over WiFi/Ethernet, which broke GPS/RTK
+           (UDP write failures + bridge crashes). See issue #418. -->
+      <AllowMulticast>false</AllowMulticast>
+      <Interfaces>
+        <NetworkInterface name="lo" priority="default"/>
+      </Interfaces>
+    </General>
+    <Discovery>
+      <!-- Raised from default (9) to keep us comfortably above the
+           total participant count once every container + short-lived
+           CLI clients have joined. -->
+      <MaxAutoParticipantIndex>500</MaxAutoParticipantIndex>
+      <!-- Multicast is disabled above, so seed unicast discovery on lo. -->
+      <Peers>
+        <!-- Keep this peer entry compatible with the Cyclone DDS versions used
+             by the deployed ROS images. In particular, do not add the Peer
+             PruneDelay attribute: older Cyclone DDS releases reject it and abort
+             ROS node initialization. The installer raises the DDS socket buffers
+             separately in install/lib/sysctl.sh to reduce boot-burst packet loss. -->
+        <Peer Address="localhost"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

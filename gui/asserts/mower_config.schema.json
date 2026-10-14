@@ -16,10 +16,26 @@
             "YardForce900ECO",
             "LUV1000RI",
             "Sabo",
+            "Worx500MPlus",
             "CUSTOM"
           ],
           "default": "YardForce500",
           "description": "The type of mower you are using."
+        },
+        "mower_visual_style": {
+          "type": "string",
+          "title": "Body Style",
+          "$comment": "enum generated from web/src/components/robot/appearanceRegistry.ts by npm run generate:appearances",
+          "enum": ["","tron","rounded","sculpted","utility","yardforce","rm1000","worx"],
+          "default": "",
+          "description": "Shared shell and matching dock illustration. Empty follows the mower model. Display only; does not change robot geometry."
+        },
+        "mower_visual_colour": {
+          "type": "string",
+          "title": "Body Colour",
+          "default": "",
+          "pattern": "^(|#[0-9a-fA-F]{6})$",
+          "description": "Shared body panel colour. Empty preserves original artwork. Display only; no ROS restart."
         },
         "robot_name": {
           "type": "string",
@@ -69,11 +85,51 @@
           "default": 0.45,
           "description": "Chassis width in metres."
         },
+        "chassis_z_offset": {
+          "type": "number",
+          "title": "Chassis Vertical Offset",
+          "default": 0.0,
+          "minimum": -0.3,
+          "maximum": 0.3,
+          "description": "Chassis bottom height relative to the rear axle, in metres. Zero preserves the legacy chassis height; model presets may supply a measured or provisional offset."
+        },
         "chassis_height": {
           "type": "number",
           "title": "Chassis Height",
           "default": 0.19,
           "description": "Chassis height in metres."
+        },
+        "dock_visual_length": {
+          "type": "number",
+          "title": "Dock Length",
+          "default": 0.67,
+          "minimum": 0.1,
+          "maximum": 3,
+          "description": "Measure the full dock from front to back, including the charging head, in metres. Scales its visible length in previews and on the map; does not move the docking pose."
+        },
+        "dock_visual_width": {
+          "type": "number",
+          "title": "Dock Width",
+          "default": 0.46,
+          "minimum": 0.1,
+          "maximum": 3,
+          "description": "Measure the full dock from left to right, including a side charging pedestal, in metres. Scales its visible width in top views and on the map."
+        },
+        "dock_visual_x_offset": {
+          "type": "number",
+          "title": "Dock Center X",
+          "default": 0.0,
+          "minimum": -2,
+          "maximum": 2,
+          "description": "Additional forward/backward adjustment from the dock artwork’s built-in alignment, in metres. Zero uses that alignment: the standard dock centre is 0.220 m ahead of the rear axle; the Worx slatted platform is centred on the chassis. Positive moves the dock forwards, negative backwards. Illustration only; does not change the calibrated docking pose."
+        },
+        "dock_visual_y_offset": {
+          "type": "number",
+          "title": "Dock Center Y",
+          "default": 0.0,
+          "minimum": -2,
+          "maximum": 2,
+          "description": "Additional left/right adjustment from the dock artwork’s built-in alignment, in metres. Zero keeps its registered centre aligned with the mower; side charging pedestals do not shift the platform centre. Positive moves left, negative right. Illustration only; does not change docking calibration."
         },
         "chassis_mass_kg": {
           "type": "number",
@@ -93,6 +149,14 @@
           "default": 0.36,
           "description": "Centre-to-centre distance between front casters in metres."
         },
+        "caster_x_offset": {
+          "type": "number",
+          "title": "Caster X Offset",
+          "default": -1.0,
+          "minimum": -1.0,
+          "maximum": 2,
+          "description": "Fixed caster axle position from base_link in metres; positive forward. The compatibility default -1 preserves the legacy chassis-derived position, shown numerically in Hardware. Applying a model preset supplies an explicit position."
+        },
         "ticks_per_meter": {
           "type": "number",
           "title": "Encoder Ticks per Meter",
@@ -104,6 +168,18 @@
           "title": "Mowing Tool Width",
           "default": 0.18,
           "description": "Effective cutting width in metres (2 x blade_radius)."
+        },
+        "blade_x_offset": {
+          "type": "number",
+          "title": "Blade Forward Offset",
+          "default": 0.0,
+          "description": "Blade centre offset from the chassis centre in metres; positive forward, negative backward. Used by the blade URDF transform."
+        },
+        "blade_y_offset": {
+          "type": "number",
+          "title": "Blade Side Offset",
+          "default": 0.0,
+          "description": "Blade centre offset from the chassis centre in metres; positive left, negative right. Used by the blade URDF transform."
         },
         "blade_radius": {
           "type": "number",

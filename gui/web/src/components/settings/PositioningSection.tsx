@@ -21,11 +21,13 @@ import { GnssSignalProfileHelp } from "./GnssSignalProfileHelp.tsx";
 import { UniversalGnssAdvancedSettings } from "./UniversalGnssAdvancedSettings.tsx";
 import { GnssReceiverActionsCard } from "./GnssReceiverActionsCard.tsx";
 import { GnssSerialDeviceConfigField } from "./GnssSerialDeviceConfigField.tsx";
+import type {SettingsValues} from "../../types/settings.generated";
+import {errorMessage} from "../../utils/errors";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
-    values: Record<string, any>;
+    values: SettingsValues;
     onChange: (key: string, value: any) => void;
     isDirty: boolean;
     saving: boolean;
@@ -72,8 +74,8 @@ export const PositioningSection: React.FC<Props> = ({
                 onChange("datum_lon", parseFloat(parts[1]));
                 notification.success({ message: t("settingsPositioning.datumSetFromGps") });
             }
-        } catch (e: any) {
-            notification.error({ message: t("settingsPositioning.datumGpsFailed"), description: e.message });
+        } catch (e) {
+            notification.error({ message: t("settingsPositioning.datumGpsFailed"), description: errorMessage(e) });
         } finally {
             setDatumLoading(false);
         }

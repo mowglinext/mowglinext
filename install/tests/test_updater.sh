@@ -18,6 +18,14 @@ updater_compose_arguments
 error() { printf '%s\n' "$*" >&2; }
 warn() { printf '%s\n' "$*" >&2; }
 info() { :; }
+
+assert_fails() {
+  if "$@"; then
+    printf 'ASSERTION FAILED: expected command to fail: %s\n' "$*" >&2
+    return 1
+  fi
+  return 0
+}
 # install_host_updater() now calls require_root_for itself (issue #632's
 # --only=updater exposed that it used to rely on an earlier full-flow step
 # having already set $SUDO as a side effect) — this test sources only
@@ -30,13 +38,22 @@ REPO_DIR="$ROOT"; INSTALL_DIR="$ROOT/install"
 source "$ROOT/install/lib/compose.sh"
 effective_gnss_backend() { echo disabled; }
 effective_gnss_stack() { echo disabled; }
+effective_gnss_source() { echo direct; }
 is_supported_gnss_backend() { return 0; }
 # Same reason as the GNSS stub above: this file exercises compose.sh in
 # isolation, so every collaborator it calls has to be provided here. The real
 # definition lives in config.sh — the stack.sh source-set guard at the bottom
 # is what checks that compose.sh's dependencies are actually reachable in
 # production.
-is_supported_hardware_backend() { case "${1:-}" in mowgli|mavros|openmower) return 0;; *) return 1;; esac; }
+is_supported_gnss_source() { return 0; }
+list_supported_gnss_sources() { echo "direct mavros"; }
+
+is_supported_hardware_backend() {
+  case "${1:-}" in
+    mowgli|mavros|openmower) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 LIDAR_ENABLED=false
 MSG_UPDATER_HARDWARE_MANAGED='unsupported managed hardware'
 MSG_UPDATER_HARDWARE_LEGACY='preserving legacy hardware selection'
@@ -47,15 +64,15 @@ for choice in mowgli openmower mavros; do
   rm -f -- "$sandbox/.updater-managed"
   check_updater_hardware
   if [[ "$choice" == mavros ]]; then
-    ! updater_hardware_supported
+    assert_fails updater_hardware_supported
     install_host_updater
     [[ ! -e "$sandbox/.updater-managed" ]]
     build_compose_stack
     fragment=docker-compose.mavros.yml
     [[ " ${COMPOSE_FILES[*]} " == *"/$fragment "* ]]
     touch "$sandbox/.updater-managed"
-    ! check_updater_hardware
-    ! install_host_updater
+    assert_fails check_updater_hardware
+    assert_fails install_host_updater
   else
     updater_hardware_supported
     touch "$sandbox/.updater-managed"
@@ -74,7 +91,7 @@ uname() { echo Linux; }
 systemctl() { echo 'unexpected systemctl mutation' >&2; return 99; }
 curl() { return 22; }
 git() { printf '%040d\n' 1; }
-! install_host_updater
+assert_fails install_host_updater
 [[ ! -e "$sandbox/.updater-managed" ]]
 grep -q 'ExecStart=/usr/local/bin/mowgli-updater supervise' "$ROOT/install/systemd/mowgli-updater.service"
 grep -q 'MOWGLI_UPDATE_MAINTENANCE' "$ROOT/install/compose/docker-compose.updater.yml"

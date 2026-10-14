@@ -1,0 +1,14 @@
+﻿# Synthetic parser fixture; not a robot configuration
+; No firmware or board metadata
+MAV_SYSID,23
+MAV_GCS_SYSID , 201 # synthetic identity
+MAV1_EXTRA1,3
+ARMING_REQUIRE,2
+ARMING_SKIPCHK,0
+ATC_SPEED_P	1.25000
+BATT_VOLT_MULT,9.25
+SERVO1_FUNCTION,0
+RPM1_ESC_MASK,16
+RPM2_ESC_MASK,32
+CAN_D1_UC_ESC_BM,16
+WRC_ENABLE,0

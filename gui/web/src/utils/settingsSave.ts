@@ -1,4 +1,5 @@
 import { Api } from "../api/Api.ts";
+import {apiErrorMessage, errorMessage} from "./errors";
 
 type GuiApi = Api<unknown>;
 
@@ -53,7 +54,7 @@ export const savePartialSettingsValues = async (params: {
         setBusy(true);
         const res = await guiApi.settings.yamlCreate(changedPayload);
         if (res.error) {
-            throw new Error((res.error as any).error);
+            throw new Error(apiErrorMessage(res.error));
         }
 
         applyChanged(changedPayload);
@@ -69,10 +70,10 @@ export const savePartialSettingsValues = async (params: {
             });
         }
         return true;
-    } catch (e: any) {
+    } catch (e) {
         notification.error({
             message: options?.errorMessage ?? params.defaultErrorMessage,
-            description: e.message,
+            description: errorMessage(e),
         });
         return false;
     } finally {

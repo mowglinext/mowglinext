@@ -1,3 +1,4 @@
+import {MowerPreview} from "../robot/MowerPreview";
 import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../../theme/ThemeContext.tsx";
 
@@ -24,106 +25,6 @@ const m = (v: unknown, fallback = 0): number => {
   }
   return fallback;
 };
-
-function ChassisPreview({values}: {values: Record<string, unknown>}) {
-  const {t} = useTranslation();
-  const {colors} = useThemeMode();
-  const length = m(values.chassis_length, 0.62);
-  const width = m(values.chassis_width, 0.46);
-  const wheelTrack = m(values.wheel_track, 0.32);
-  const toolWidth = m(values.tool_width, 0.18);
-  const bladeRadius = m(values.blade_radius, 0.09);
-  const wheelRadius = m(values.wheel_radius, 0.045);
-  const wheelWidth = m(values.wheel_width, 0.04);
-  const chassisCenterX = m(values.chassis_center_x, 0.18);
-  const wheelXOffset = m(values.wheel_x_offset, 0);
-
-  // Scale so the longest dimension fits the SVG, with padding.
-  const longest = Math.max(length, width) || 1;
-  const target = 180;
-  const scale = target / longest;
-  const px = (v: number) => v * scale;
-
-  const cw = px(width);
-  const cl = px(length);
-  const svgW = 220;
-  const svgH = 220;
-  const cx = svgW / 2;
-  const cy = svgH / 2;
-  // base_link is the rear drive-wheel axle, offset toward the rear (down in
-  // this forward-up view) from the chassis centre by chassis_center_x. The
-  // drive wheels sit there (shifted forward by wheel_x_offset when set).
-  const axleY = cy + px(chassisCenterX - wheelXOffset);
-
-  const labelStyle = {fontSize: 9, fill: colors.textDim};
-
-  return (
-    <div>
-      <div style={{
-        fontSize: 11, color: colors.textMuted, letterSpacing: '0.08em',
-        textTransform: 'uppercase' as const, marginBottom: 8,
-      }}>
-        {t("settingsPreview.chassisTitle")}
-      </div>
-      <svg viewBox={`0 0 ${svgW} ${svgH}`} width="100%" style={{display: 'block', maxHeight: svgH}}>
-        {/* tool-width footprint (cut area) */}
-        <rect x={cx - px(toolWidth) / 2} y={cy - cl / 2 + 4}
-              width={px(toolWidth)} height={cl - 8}
-              fill={colors.accentSoft} stroke={colors.accent} strokeWidth={1} strokeDasharray="3 3"/>
-        <text x={cx + px(toolWidth) / 2 + 4} y={cy + 3} {...labelStyle}>
-          {t("settingsPreview.cutLabel", {cm: (toolWidth * 100).toFixed(0)})}
-        </text>
-
-        {/* chassis */}
-        <rect x={cx - cw / 2} y={cy - cl / 2}
-              width={cw} height={cl} rx={Math.min(cw, cl) * 0.12}
-              fill={colors.bgElevated} stroke={colors.text} strokeWidth={1.5}/>
-
-        {/* wheel track (dashed band across the rear axle) */}
-        <rect x={cx - px(wheelTrack) / 2 - 4} y={axleY - 4}
-              width={px(wheelTrack) + 8} height={8}
-              fill="none" stroke={colors.amber} strokeWidth={0.8} strokeDasharray="2 2"/>
-        <text x={cx - px(wheelTrack) / 2 - 6} y={axleY + 18} textAnchor="end" {...labelStyle}>
-          {t("settingsPreview.trackLabel", {cm: (wheelTrack * 100).toFixed(0)})}
-        </text>
-
-        {/* drive wheels at the rear axle. Seen from above, a wheel's diameter
-            runs along the forward (vertical) axis and the tyre width laterally,
-            so each is a tall rectangle — not a square. */}
-        <rect x={cx - px(wheelTrack) / 2 - px(wheelWidth) / 2} y={axleY - px(wheelRadius)}
-              width={px(wheelWidth)} height={px(wheelRadius) * 2}
-              rx={2} fill={colors.text}/>
-        <rect x={cx + px(wheelTrack) / 2 - px(wheelWidth) / 2} y={axleY - px(wheelRadius)}
-              width={px(wheelWidth)} height={px(wheelRadius) * 2}
-              rx={2} fill={colors.text}/>
-
-        {/* base_link marker at the rear axle */}
-        <circle cx={cx} cy={axleY} r={2} fill={colors.textDim}/>
-        <text x={cx} y={axleY + px(wheelRadius) + 9} textAnchor="middle"
-              fontSize={7} fill={colors.textDim} fontFamily="monospace">
-          base_link
-        </text>
-
-        {/* blade (centred under the chassis, per the URDF) */}
-        <circle cx={cx} cy={cy} r={px(bladeRadius)}
-                fill={colors.amberSoft} stroke={colors.amber}/>
-
-        {/* length / width labels */}
-        <text x={cx} y={cy - cl / 2 - 6} textAnchor="middle" {...labelStyle}>
-          {(length * 100).toFixed(0)}cm
-        </text>
-        <text x={cx + cw / 2 + 4} y={cy} {...labelStyle}>
-          {(width * 100).toFixed(0)}cm
-        </text>
-      </svg>
-      <div style={{
-        marginTop: 8, fontSize: 11, color: colors.textDim, lineHeight: 1.5,
-      }}>
-        {t("settingsPreview.toolWidthNote")}
-      </div>
-    </div>
-  );
-}
 
 function SwathsPreview({values}: {values: Record<string, unknown>}) {
   const {t} = useTranslation();
@@ -237,7 +138,7 @@ export function SettingsPreview({values, section}: SettingsPreviewProps) {
   const {t} = useTranslation();
   const {colors} = useThemeMode();
 
-  const showChassis = section === 'hardware' || section === 'mowing' || section === 'navigation';
+  const showChassis = section === 'mowing' || section === 'navigation';
   const showSwaths = section === 'hardware' || section === 'mowing';
   const showBattery = section === 'battery';
 
@@ -257,7 +158,7 @@ export function SettingsPreview({values, section}: SettingsPreviewProps) {
       background: colors.bgCard, borderRadius: 12, padding: 16,
       position: 'sticky', top: 8,
     }}>
-      {showChassis && <ChassisPreview values={values}/>}
+      {showChassis && <MowerPreview values={values} compact/>}
       {showSwaths && <SwathsPreview values={values}/>}
       {showBattery && <BatteryPreview values={values}/>}
     </div>

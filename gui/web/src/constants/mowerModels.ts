@@ -1,3 +1,5 @@
+import type {MowerVisualPreset} from "../hooks/useMowerVisual";
+
 // Per-model physical presets applied by the GUI's "mower model" picker.
 //
 // PARITY CONTRACT (guarded by gui/pkg/api/schema_template_parity_test.go,
@@ -12,39 +14,47 @@
 // IMU 19.5 cm sideways. The other presets describe DIFFERENT machines and are
 // not compared to the template.
 //
-// wheel_radius: 0.1 m is the maintainer's measurement on the YardForce 500
-// (2026-09-05). Every preset here carried 0.04475 m — an 8.95 cm DIAMETER
-// drive wheel — copied identically across six different machines, while
-// mowgli.urdf.xacro and all three Webots surfaces independently used 0.093 for
-// the same wheel. Only the two YardForce 500 variants are corrected here,
-// because that is the only machine anyone has actually measured; SA650 /
-// 900ECO / LUV1000RI / Sabo still carry the legacy 0.04475 and each needs its
-// own measurement. wheel_radius feeds only the URDF (base_link's height above
-// ground + wheel visuals) — nothing computes odometry from it — so a wrong
-// value silently offsets every sensor z rather than corrupting distance.
+// Wheel dimensions are radii in metres, not diameters.
+// YardForce 500/500B: rear radius 0.1 m, maintainer measurement (2026-09-05).
+// SA650: owner-reported diameters on 2026-10-11 are 190 mm rear / 90 mm caster,
+// giving radii 0.095 / 0.045 m. Wheel variant and measurement method were not supplied.
+// 900ECO / LUV1000RI / Sabo: use those same radii as PROVISIONAL assumptions,
+// requested by the contributor to replace the implausible copied 0.04475 m
+// rear radius. They are NOT measurements of these three models; verify on each
+// robot and override where necessary. See docs/WHEEL_PRESET_DIMENSIONS.md.
+// wheel_radius feeds the URDF (base_link height, wheel geometry and derived
+// caster/blade positions); it does not compute odometry or ticks_per_meter.
 
 export type MowerModel = {
     value: string;
     label: string;
     description: string;
     tag?: string;
+    /** Optional matched chassis/dock appearance; never passed to ROS parameters. */
+    appearance?: MowerVisualPreset;
     defaults: Record<string, number>;
 };
 
+// Caster X positions are fixed, provisional starting points inferred from the
+// preset body envelope (roughly 50 mm tyre clearance from the front edge),
+// not measured wheelbases. Measure the actual axle position on each robot.
 export const MOWER_MODELS: MowerModel[] = [
     {
         value: "YardForce500",
         label: "mowerModels.YardForce500.label",
         description: "mowerModels.YardForce500.description",
+        appearance: {style: "yardforce", dockAppearance: "styled"},
         tag: "mowerModels.YardForce500.tag",
         defaults: {
             wheel_radius: 0.1, wheel_track: 0.325, wheel_x_offset: 0.0,
-            wheel_width: 0.04, chassis_height: 0.19, chassis_mass_kg: 8.76,
-            caster_radius: 0.03, caster_track: 0.36,
-            blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 300,
+            wheel_width: 0.04, chassis_height: 0.19, chassis_z_offset: -0.05, chassis_mass_kg: 8.76,
+            caster_x_offset: 0.40, caster_radius: 0.03, caster_track: 0.36,
+            blade_x_offset: 0.0, blade_y_offset: 0.0, blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 300,
             battery_full_voltage: 28.5, battery_empty_voltage: 24.0,
             battery_critical_voltage: 23.0,
-            gps_x: 0.3, gps_y: 0.0, gps_z: 0.2,
+            // gps_z centres the 0.02 m URDF antenna puck on the shell top:
+            // chassis_z_offset + chassis_height + 0.01 = -0.05 + 0.19 + 0.01.
+            gps_x: 0.3, gps_y: 0.0, gps_z: 0.15,
             imu_x: 0.187, imu_y: -0.195, imu_z: 0.0, imu_yaw: 0.0,
             lidar_x: 0.0, lidar_y: 0.025, lidar_z: 0.3, lidar_yaw: -3.1416,
             chassis_length: 0.60, chassis_width: 0.45, chassis_center_x: 0.18,
@@ -54,14 +64,17 @@ export const MOWER_MODELS: MowerModel[] = [
         value: "YardForce500B",
         label: "mowerModels.YardForce500B.label",
         description: "mowerModels.YardForce500B.description",
+        appearance: {style: "yardforce", dockAppearance: "styled"},
         defaults: {
             wheel_radius: 0.1, wheel_track: 0.325, wheel_x_offset: 0.0,
-            wheel_width: 0.04, chassis_height: 0.19, chassis_mass_kg: 8.76,
-            caster_radius: 0.03, caster_track: 0.36,
-            blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 300,
+            wheel_width: 0.04, chassis_height: 0.19, chassis_z_offset: -0.05, chassis_mass_kg: 8.76,
+            caster_x_offset: 0.40, caster_radius: 0.03, caster_track: 0.36,
+            blade_x_offset: 0.0, blade_y_offset: 0.0, blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 300,
             battery_full_voltage: 28.5, battery_empty_voltage: 24.0,
             battery_critical_voltage: 23.0,
-            gps_x: 0.3, gps_y: 0.0, gps_z: 0.2,
+            // gps_z centres the 0.02 m URDF antenna puck on the shell top:
+            // chassis_z_offset + chassis_height + 0.01 = -0.05 + 0.19 + 0.01.
+            gps_x: 0.3, gps_y: 0.0, gps_z: 0.15,
             imu_x: 0.187, imu_y: -0.195, imu_z: 0.0, imu_yaw: 0.0,
             lidar_x: 0.0, lidar_y: 0.025, lidar_z: 0.3, lidar_yaw: -3.1416,
             chassis_length: 0.60, chassis_width: 0.45, chassis_center_x: 0.18,
@@ -71,11 +84,12 @@ export const MOWER_MODELS: MowerModel[] = [
         value: "YardForceSA650",
         label: "mowerModels.YardForceSA650.label",
         description: "mowerModels.YardForceSA650.description",
+        // Owner-reported diameters: rear 190 mm, caster 90 mm (2026-10-11).
         defaults: {
-            wheel_radius: 0.04475, wheel_track: 0.325, wheel_x_offset: 0.0,
-            wheel_width: 0.04, chassis_height: 0.26, chassis_mass_kg: 9.5,
-            caster_radius: 0.03, caster_track: 0.36,
-            blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 1050,
+            wheel_radius: 0.095, wheel_track: 0.325, wheel_x_offset: 0.0,
+            wheel_width: 0.04, chassis_height: 0.26, chassis_z_offset: 0, chassis_mass_kg: 9.5,
+            caster_x_offset: 0.39, caster_radius: 0.045, caster_track: 0.36,
+            blade_x_offset: 0.0, blade_y_offset: 0.0, blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 1050,
             battery_full_voltage: 28.5, battery_empty_voltage: 24.0,
             battery_critical_voltage: 23.0,
             gps_x: 0.1, gps_y: 0.0, gps_z: 0.26,
@@ -87,19 +101,21 @@ export const MOWER_MODELS: MowerModel[] = [
         value: "BiltemaRM1000",
         label: "mowerModels.BiltemaRM1000.label",
         description: "mowerModels.BiltemaRM1000.description",
-        // RM1000-specific geometry has not been measured for this preset.
-        // Keep it selectable without copying a different mower's calibration.
-        defaults: {},
+        appearance: {style: "rm1000", dockAppearance: "styled"},
+        // Provisional caster position only; retain the user's other dimensions
+        // and calibration until RM1000 hardware measurements are available.
+        defaults: {caster_x_offset: 0.35},
     },
     {
         value: "YardForce900ECO",
         label: "mowerModels.YardForce900ECO.label",
         description: "mowerModels.YardForce900ECO.description",
+        // Provisional SA650-based radii; this model has not been measured.
         defaults: {
-            wheel_radius: 0.04475, wheel_track: 0.325, wheel_x_offset: 0.0,
-            wheel_width: 0.04, chassis_height: 0.26, chassis_mass_kg: 10.0,
-            caster_radius: 0.03, caster_track: 0.36,
-            blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 1050,
+            wheel_radius: 0.095, wheel_track: 0.325, wheel_x_offset: 0.0,
+            wheel_width: 0.04, chassis_height: 0.26, chassis_z_offset: 0, chassis_mass_kg: 10.0,
+            caster_x_offset: 0.39, caster_radius: 0.045, caster_track: 0.36,
+            blade_x_offset: 0.0, blade_y_offset: 0.0, blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 1050,
             battery_full_voltage: 28.5, battery_empty_voltage: 24.0,
             battery_critical_voltage: 23.0,
             gps_x: 0.3, gps_y: 0.0, gps_z: 0.26,
@@ -111,11 +127,12 @@ export const MOWER_MODELS: MowerModel[] = [
         value: "LUV1000RI",
         label: "mowerModels.LUV1000RI.label",
         description: "mowerModels.LUV1000RI.description",
+        // Provisional SA650-based radii; this model has not been measured.
         defaults: {
-            wheel_radius: 0.04475, wheel_track: 0.285, wheel_x_offset: 0.0,
-            wheel_width: 0.04, chassis_height: 0.282, chassis_mass_kg: 9.0,
-            caster_radius: 0.03, caster_track: 0.36,
-            blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 1050,
+            wheel_radius: 0.095, wheel_track: 0.285, wheel_x_offset: 0.0,
+            wheel_width: 0.04, chassis_height: 0.282, chassis_z_offset: 0, chassis_mass_kg: 9.0,
+            caster_x_offset: 0.40, caster_radius: 0.045, caster_track: 0.36,
+            blade_x_offset: 0.0, blade_y_offset: 0.0, blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 1050,
             battery_full_voltage: 28.5, battery_empty_voltage: 24.0,
             battery_critical_voltage: 23.0,
             gps_x: 0.3, gps_y: 0.0, gps_z: 0.28,
@@ -127,16 +144,37 @@ export const MOWER_MODELS: MowerModel[] = [
         value: "Sabo",
         label: "mowerModels.Sabo.label",
         description: "mowerModels.Sabo.description",
+        // Provisional SA650-based radii; this model has not been measured.
         defaults: {
-            wheel_radius: 0.04475, wheel_track: 0.45, wheel_x_offset: 0.0,
-            wheel_width: 0.05, chassis_height: 0.36, chassis_mass_kg: 14.0,
-            caster_radius: 0.035, caster_track: 0.45,
-            blade_radius: 0.16, tool_width: 0.32, ticks_per_meter: 1050,
+            wheel_radius: 0.095, wheel_track: 0.45, wheel_x_offset: 0.0,
+            wheel_width: 0.05, chassis_height: 0.36, chassis_z_offset: 0, chassis_mass_kg: 14.0,
+            caster_x_offset: 0.59, caster_radius: 0.045, caster_track: 0.45,
+            blade_x_offset: 0.0, blade_y_offset: 0.0, blade_radius: 0.16, tool_width: 0.32, ticks_per_meter: 1050,
             battery_full_voltage: 28.5, battery_empty_voltage: 21.0,
             battery_critical_voltage: 20.0,
             gps_x: 0.18, gps_y: 0.0, gps_z: 0.36,
             lidar_x: 0.49, imu_x: 0.29,
             chassis_length: 0.775, chassis_width: 0.535, chassis_center_x: 0.29,
+        },
+    },
+    {
+        value: "Worx500MPlus",
+        label: "mowerModels.Worx500MPlus.label",
+        description: "mowerModels.Worx500MPlus.description",
+        appearance: {style: "worx", dockAppearance: "worx"},
+        // Contributor configuration screenshot (2026-10-11), not factory specifications.
+        // Blade centre confirmed at (0.195, -0.0575) m from base_link, NOT the axle.
+        // No battery, sensor or firmware calibration is inferred from this body model.
+        defaults: {
+            wheel_radius: 0.1, wheel_track: 0.36, wheel_x_offset: -0.005,
+            // Provisional shallow shell envelope from the reference photos/approved preview.
+            // The screenshot's 230 mm value was not a measured shell height.
+            wheel_width: 0.04, chassis_height: 0.14, chassis_z_offset: -0.07, chassis_mass_kg: 8.76,
+            // Provisional front caster position: 50 mm tyre clearance from the front edge.
+            caster_x_offset: 0.405, caster_radius: 0.03, caster_track: 0.0,
+            blade_radius: 0.1, tool_width: 0.20, ticks_per_meter: 343,
+            chassis_length: 0.58, chassis_width: 0.395, chassis_center_x: 0.195,
+            blade_x_offset: 0.0, blade_y_offset: -0.0575,
         },
     },
     {
