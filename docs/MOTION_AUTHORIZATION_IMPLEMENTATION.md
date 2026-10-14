@@ -143,9 +143,19 @@ Its direct service gate confirms active collision_monitor ID 3 / label `active`,
 six correctly typed active settings, the exact FootprintApproach/fleet_peers
 lists, controller collision flags, disabled LiDAR anchor and enabled local/global
 fleet protections. Datum, tool/fixture/actuation readiness and observers pass;
-final-output recorder PID 2540 is ready before START. These are confirmed
-startup facts; **the mission verdict remains pending** at this documentation
-checkpoint. Later documentation commits do not change that running ROS baseline.
+final-output recorder PID 2540 is ready before START. The canonical mission
+then reports **PASS**, with an independently captured outer Docker exit 0:
+undock 11.8 s, planning 40.8 s, mowing 2275.7 s, dock/charging 42.3 s; total
+2390 s. It ends IDLE_DOCKED and charging, reports 1/1 completed paths, zero
+wholly skipped paths and 371.3 m. Nearest-path tracking over 54,220 samples is
+median 3.9 mm, P95 45.2 mm and maximum 80 mm. The full stack records 16 pivots,
+no FTC authorization denial and no resume-cursor or unmowed-span accounting
+message in this run. This observed uninterrupted GPS-only pass is a positive
+functionality control; it does not establish physical blade coverage, blind
+obstacle detection or continuous containment. The raw recorder ends with
+305,978 message receipts, cap/timeout false and ready true; offline decoding
+is separately recorded. Later documentation commits do not change the running
+ROS baseline `daa6b402` used for this completed mission.
 
 No paired unmodified-dev run, repeated reliability, connected multi-area
 coverage, hole/revocation mission, non-default docking, explicit HOME,
