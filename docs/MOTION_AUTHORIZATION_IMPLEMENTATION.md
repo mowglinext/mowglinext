@@ -13,8 +13,8 @@ stack-wide autonomous-motion invariant or physical containment.
   `50b1c361b1bf8d51c9ce95b64a7ab77f9efa9fc8`.
   The initial implementation and historical evidence used
   `9f39497f26f4759a0b26e601904710fb934beb65`; earlier results do not validate the
-  rebased runtime. Fresh core integration results are recorded below; full
-  rebased mission validation remains pending.
+  rebased runtime. Fresh core integration results are recorded below;
+  rebased mission evidence and its remaining limits are recorded below.
 - Original #942 regression source: `ddd49d9f59e202c265d5aca5e0d1154b79a721af`.
   Its branch and Draft PR were not modified. The original assertions and
   scenarios were retained; additional tests and real map-publication fixtures
@@ -76,8 +76,84 @@ installation used root; all project builds/tests/installations used UID1000.
 Actual C/C++ compilers remain GCC15.2.0; core runtime dependency checks report
 no missing libraries and HDF5 serial runtime linkage. This modified SDK and its
 package provenance must be distinguished from the earlier immutable image;
-fresh mission runtime dependencies and source/install identities remain owed.
-No rebased Webots mission or hardware validation has run.
+fresh mission runtime dependencies and source/install identities are recorded
+below. No hardware validation has run.
+
+### Rebased Webots mission evidence (2026-10-14)
+
+LiDAR-enabled attempt28-02-01 executed the actual production stack at source
+`daa6b402be48816820b858992abb8ac416cefad0` on the rebased dev above. All twelve
+first-party runtime packages were rebuilt and installed as UID 1000; the pinned
+prefix manifest covers 1,699 files. Webots R2025a and the external ROS driver,
+rootfs and dependency bytes were recorded, including modified-driver status;
+their complete source-image provenance remains unverified. The unchanged
+canonical harness filename is `e2e_test_no_lidar.py`, but explicit config and
+live checks establish that this run had LiDAR enabled.
+
+The canonical harness reports PASS: undock 11.5 s, planning 38.5 s, mowing 2348.6 s,
+dock/charging 44.0 s; total 2459 s. It reports 1/1 completed paths, 0 whole paths
+skipped and 378.1 m. Nearest-path errors over 56,786 samples are median 7.1 mm,
+P95 61 mm and maximum 80 mm. These establish observed software progress, not
+continuous containment or complete blade coverage. FollowStrip explicitly
+reports **260 poses / 11.4 m of planned path left unmowed by ten obstacle detours**.
+A separate non-obstacle abort advances its blade-off resume cursor 152->161
+poses (~0.80 m); later saved cursors 2305 and 7285 are recorded. Cycle PASS must
+not be read as full coverage PASS, and retry spans must not simply be summed.
+
+One outward near-boundary intended FTC command remains rejected, followed by
+abort and blade-off transit. The final-output recorder was ready before START;
+319,033 message receipts include 120,544 final wheel commands and one stamp-zero
+raw rectangle/corridor snapshot, with no holes. A receipt-near zero wheel command
+follows the denial log by 12.97 ms. Different source/receipt clocks and missing
+owner identity prevent treating that interval as a stopping bound or cancellation
+proof. Terminal/count consistency does not establish lossless delivery,
+acquisition freshness, geometry revision/epoch, or continuous containment.
+
+Canonical harness and inner cleanup record exit 0; the original host collector
+records **null**. The authoritative outer Docker/GNU-timeout exit remains
+unknown and must not be inferred from cleanup status. A separately reviewed
+collector now rejects missing status before integer conversion and passes
+real exit 0/31 and missing-status fault tests. That repair does not retroactively
+validate the old outer status. Recorder shutdown tracebacks after its terminal
+record and original prestart/setup failures remain retained.
+
+GPS-only attempt28-03-01 launched the current fleet-protected no-LiDAR overlay
+but stopped **before canonical START**, with captured outer exit 1. Direct
+readiness saw collision_monitor active; the subsequent CLI lookup reported
+`Node not found`. No crash/deactivation was logged, but the exact CLI discovery
+cause is unconfirmed. No GPS-only mission or final-output recorder ran on that
+attempt. A new isolated attempt uses fresh typed service responses for those
+checks while preserving the active lifecycle and fleet/controller assertions.
+
+The subsequent direct-service GPS-only attempt28-04-01 also stops before
+START, with captured outer exit 29. Its raw collision-monitor log explicitly
+reports `Failed to get parameters: PolygonStop.enabled`; requesting that
+undeclared inactive-polygon setting makes the entire parameter batch empty.
+This is a private validation-contract defect. The corrected probe requests
+only active settings while retaining an exact active polygon list of
+`[FootprintApproach]`, rejecting any extra PolygonStop, and retaining the
+source/installed disabled-setting assertion. Active lifecycle, fleet source,
+controller, geometry/datum and recorder guards are not relaxed. Test-only mock
+service endpoints use a separate DDS domain from the real mission. No mission
+result is inferred from either prestart failure or the helper transport tests.
+
+GPS-only attempt28-05-01 actually starts the canonical harness at
+2026-10-14T03:42:32Z (PID 2632), at the same runtime source HEAD `daa6b402`.
+Its direct service gate confirms active collision_monitor ID 3 / label `active`,
+six correctly typed active settings, the exact FootprintApproach/fleet_peers
+lists, controller collision flags, disabled LiDAR anchor and enabled local/global
+fleet protections. Datum, tool/fixture/actuation readiness and observers pass;
+final-output recorder PID 2540 is ready before START. These are confirmed
+startup facts; **the mission verdict remains pending** at this documentation
+checkpoint. Later documentation commits do not change that running ROS baseline.
+
+No paired unmodified-dev run, repeated reliability, connected multi-area
+coverage, hole/revocation mission, non-default docking, explicit HOME,
+charge-resume, or physical acceptance is established by these new results.
+Earlier failures remain pinned to their own source/runtime. No unique causal
+attribution of improvement to the implementation versus the dev rebase is made.
+Independent review confirms this evidence scope; the full #924 contract remains
+incomplete. Private checkpoints/raw artifacts retain exact script/input hashes.
 
 ## Authorization policy
 
@@ -151,7 +227,7 @@ add-area requests reject without altering the live map.
 
 | Producer / path | Command path and authorization in this slice | Evidence / remaining acceptance |
 |---|---|---|
-| FTC swaths, connectors, headlands, deviations | Raw mowing lattice critic plus `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav`; forward lattice output also checks closed lethal-cell response sweep | 26 command cases, including original 12 negative and 4 positive controls; 21 critic and 18 real-controller cases. Strong modeled obstacles safely abort; full LiDAR mission progress remains OPEN |
+| FTC swaths, connectors, headlands, deviations | Raw mowing lattice critic plus `computeVelocityCommands` common final gate -> Nav2 `/cmd_vel_nav`; forward lattice output also checks closed lethal-cell response sweep | 26 command cases, including original 12 negative and 4 positive controls; 21 critic and 18 real-controller cases. Strong modeled obstacles safely abort; rebased LiDAR cycle passes with known unmowed spans; continuous containment remains OPEN |
 | FTC PRE/PIVOT/POST and fallback reverse | Directed full rotation and final Twist sweep; existing costmap collision checks retained | Real-controller wheel-lag turn scenarios and complete footprint tests; passed on the final production source |
 | Webots no-LiDAR mission cycle | Current coverage/interface/map/nav/behavior overlays plus cached remaining runtime; real launch and strict E2E harness | Attempt 17 PASS: undock, plan, mow, return-to-dock and charging; 2539 s. Three recovery cursor advances omit partial spans. Exact area coverage, explicit HOME command and charging-resume remain unverified |
 | EscapeStartBlocked | Bound action instance -> `/cmd_vel_nav`; geometry, pose, blade, arming and budgets; rejection/halt zero | 17 production-path DDS/command cases; passed on the final production source |
@@ -729,7 +805,8 @@ and signed 3 mm XY biases. This is selected wheel-response model evidence,
 not actual mission LiDAR, physical stopping distance or whole-route acceptance.
 The raw-path and naive-pivot progress failures remain RED. The reviewer reran all
 nine seam tests and the pipeline regression, and exercised 20,000 randomized
-bevel inputs. No full corrected Webots mission has run yet. A separately
+bevel inputs. At that checkpoint no corrected full mission had run; the
+subsequent rebased cycle is recorded above. A separately
 constructed beveled-field probe still has unsupported later 33.75-degree and
 90-degree corners before and after this change; general corner feasibility is
 not established. The inherited radius-retry routine also needs configuration
@@ -849,10 +926,11 @@ less-than-100-ms assertions pass. Measurements exclude MarkerArray parsing and
 are not ARM or generic hard-deadline evidence. Adversarial cache-budget
 exhaustion passes predicate equivalence, but does not prove its decision latency.
 
-No fresh full Webots mission has yet accepted this increment. The last complete
-LiDAR mission remains attempt 25-03 FAIL. Navigation-to-mowing handoff, full
-mission progress, worst-case deadlines, ownership/leases and the other OPEN
-paths in the acceptance matrix remain owed. Hardware acceptance remains
+At this pre-rebase checkpoint the last complete LiDAR mission was attempt
+25-03 FAIL. The subsequent rebased cycle passes the canonical harness with
+known unmowed spans and an unknown outer exit status, as recorded above.
+General navigation-to-mowing handoff, worst-case deadlines, ownership/leases
+and the other OPEN paths in the acceptance matrix remain owed. Hardware acceptance remains
 `HARDWARE_REQUIRED` under the exact-baseline procedure below.
 
 Available controller fixtures execute the real FTC with modeled wheel response
