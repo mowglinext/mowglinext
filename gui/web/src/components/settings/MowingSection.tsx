@@ -1,3 +1,4 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React, { useMemo } from "react";
 import { Alert, Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
 import { DashboardOutlined, ScissorOutlined } from "@ant-design/icons";
@@ -278,21 +279,21 @@ export const MowingSection: React.FC<Props> = ({
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-mowing_speed" data-setting-key="mowing_speed" label={fieldLabel("mowing_speed", t("settingsMowing.mowingSpeed"))} tooltip={t("settingsMowing.mowingSpeedTooltip")}>
-                                    <InputNumber aria-label={t("settingsMowing.mowingSpeed") + ", m/s"} aria-description={t("settingsMowing.mowingSpeedTooltip")}  id="setting-mowing_speed"
+                                    <NumberWithAddon aria-label={t("settingsMowing.mowingSpeed") + ", m/s"} aria-description={t("settingsMowing.mowingSpeedTooltip")}  id="setting-mowing_speed"
                                         value={values.mowing_speed}
                                         onChange={(v) => onChange("mowing_speed", v)}
                                         min={0.05} max={0.6} step={0.05} precision={2}
-                                        style={{ width: "100%" }} addonAfter="m/s"
+                                        style={{ width: "100%" }} after="m/s"
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-transit_speed" data-setting-key="transit_speed" label={fieldLabel("transit_speed", t("settingsMowing.transitSpeed"))} tooltip={t("settingsMowing.transitSpeedTooltip")}>
-                                    <InputNumber aria-label={t("settingsMowing.transitSpeed") + ", m/s"} aria-description={t("settingsMowing.transitSpeedTooltip")}  id="setting-transit_speed"
+                                    <NumberWithAddon aria-label={t("settingsMowing.transitSpeed") + ", m/s"} aria-description={t("settingsMowing.transitSpeedTooltip")}  id="setting-transit_speed"
                                         value={values.transit_speed}
                                         onChange={(v) => onChange("transit_speed", v)}
                                         min={0.05} max={0.6} step={0.05} precision={2}
-                                        style={{ width: "100%" }} addonAfter="m/s"
+                                        style={{ width: "100%" }} after="m/s"
                                     />
                                 </Form.Item>
                             </Col>
@@ -330,25 +331,25 @@ export const MowingSection: React.FC<Props> = ({
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
                                 <Form.Item label={fieldLabel("blade_load_rpm_full", t("settingsMowing.bladeLoadRpmFull"))} tooltip={t("settingsMowing.bladeLoadRpmFullTooltip")}>
-                                    <InputNumber
+                                    <NumberWithAddon
                                         aria-label={t("settingsMowing.bladeLoadRpmFull") + ", rpm"}
                                         value={bladeLoadRpmFull}
                                         onChange={(v) => onChange("blade_load_rpm_full", v)}
                                         disabled={!bladeLoadEnabled}
                                         min={0} max={BLADE_RPM_MAX} step={50} precision={0}
-                                        style={{ width: "100%" }} addonAfter="rpm"
+                                        style={{ width: "100%" }} after="rpm"
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
                                 <Form.Item label={fieldLabel("blade_load_rpm_min", t("settingsMowing.bladeLoadRpmMin"))} tooltip={t("settingsMowing.bladeLoadRpmMinTooltip")}>
-                                    <InputNumber
+                                    <NumberWithAddon
                                         aria-label={t("settingsMowing.bladeLoadRpmMin") + ", rpm"}
                                         value={bladeLoadRpmMin}
                                         onChange={(v) => onChange("blade_load_rpm_min", v)}
                                         disabled={!bladeLoadEnabled}
                                         min={0} max={BLADE_RPM_MAX} step={50} precision={0}
-                                        style={{ width: "100%" }} addonAfter="rpm"
+                                        style={{ width: "100%" }} after="rpm"
                                     />
                                 </Form.Item>
                             </Col>
@@ -376,11 +377,11 @@ export const MowingSection: React.FC<Props> = ({
                             <Row gutter={[16, 0]}>
                                 <Col xs={12}>
                                     <Form.Item htmlFor="setting-headland_width" data-setting-key="headland_width" label={fieldLabel("headland_width", t("settingsMowing.headlandWidth"))} tooltip={t("settingsMowing.headlandWidthTooltip")}>
-                                        <InputNumber aria-label={t("settingsMowing.headlandWidth") + ", m"} aria-description={t("settingsMowing.headlandWidthTooltip")}  id="setting-headland_width"
+                                        <NumberWithAddon aria-label={t("settingsMowing.headlandWidth") + ", m"} aria-description={t("settingsMowing.headlandWidthTooltip")}  id="setting-headland_width"
                                             value={values.headland_width}
                                             onChange={(v) => onChange("headland_width", v)}
                                             min={0} max={1.0} step={0.05} precision={2}
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -422,31 +423,31 @@ export const MowingSection: React.FC<Props> = ({
                                 </Col>
                                 <Col xs={12}>
                                     <Form.Item htmlFor="setting-chassis_safety_inset" data-setting-key="chassis_safety_inset" label={fieldLabel("chassis_safety_inset", t("settingsMowing.chassisSafetyInset"))} tooltip={t("settingsMowing.chassisSafetyInsetTooltip")}>
-                                        <InputNumber aria-label={t("settingsMowing.chassisSafetyInset") + ", m"} aria-description={t("settingsMowing.chassisSafetyInsetTooltip")}  id="setting-chassis_safety_inset"
+                                        <NumberWithAddon aria-label={t("settingsMowing.chassisSafetyInset") + ", m"} aria-description={t("settingsMowing.chassisSafetyInsetTooltip")}  id="setting-chassis_safety_inset"
                                             value={values.chassis_safety_inset}
                                             onChange={(v) => onChange("chassis_safety_inset", v)}
                                             min={0} max={0.5} step={0.01} precision={2}
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
                                     <Form.Item htmlFor="setting-min_turning_radius" data-setting-key="min_turning_radius" label={fieldLabel("min_turning_radius", t("settingsMowing.minTurningRadius"))} tooltip={t("settingsMowing.minTurningRadiusTooltip")}>
-                                        <InputNumber aria-label={t("settingsMowing.minTurningRadius") + ", m"} aria-description={t("settingsMowing.minTurningRadiusTooltip")}  id="setting-min_turning_radius"
+                                        <NumberWithAddon aria-label={t("settingsMowing.minTurningRadius") + ", m"} aria-description={t("settingsMowing.minTurningRadiusTooltip")}  id="setting-min_turning_radius"
                                             value={values.min_turning_radius}
                                             onChange={(v) => onChange("min_turning_radius", v)}
                                             min={0.05} max={1.0} step={0.01} precision={2}
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
                                     <Form.Item htmlFor="setting-swath_overlap" data-setting-key="swath_overlap" label={fieldLabel("swath_overlap", t("settingsMowing.swathOverlap"))} tooltip={t("settingsMowing.swathOverlapTooltip")}>
-                                        <InputNumber aria-label={t("settingsMowing.swathOverlap") + ", m"} aria-description={t("settingsMowing.swathOverlapTooltip")}  id="setting-swath_overlap"
+                                        <NumberWithAddon aria-label={t("settingsMowing.swathOverlap") + ", m"} aria-description={t("settingsMowing.swathOverlapTooltip")}  id="setting-swath_overlap"
                                             value={values.swath_overlap}
                                             onChange={(v) => onChange("swath_overlap", v)}
                                             min={0} max={0.2} step={0.01} precision={3}
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -482,14 +483,14 @@ export const MowingSection: React.FC<Props> = ({
                                                 checked={mowAngleIsAuto}
                                                 onChange={(auto) => onChange("mow_angle_deg", auto ? MOW_ANGLE_AUTO : 0)}
                                             />
-                                            <InputNumber
+                                            <NumberWithAddon
                                                 aria-label={t("settingsMowing.mowAngle")}
                                                 value={mowAngleIsAuto ? undefined : values.mow_angle_deg}
                                                 onChange={(v) => onChange("mow_angle_deg", v ?? 0)}
                                                 disabled={mowAngleIsAuto}
                                                 min={0} max={MOW_ANGLE_MAX_DEG} step={1} precision={0}
                                                 placeholder={t("settingsMowing.mowAngleAuto")}
-                                                style={{ width: "100%" }} addonAfter="°"
+                                                style={{ width: "100%" }} after="°"
                                             />
                                         </Space>
                                     </Form.Item>

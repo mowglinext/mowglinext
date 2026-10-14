@@ -1,3 +1,4 @@
+import {NumberWithAddon} from './inputs/NumberWithAddon';
 import {requestErrorMessage} from '../utils/errors';
 import {finiteNumber, geometryNumber, roundTo, radToDeg, degToRad, yawRadToCompassBearing, compassBearingToYawRad, decodeStoredDockPose, decodeDockWriteAcknowledgement, type PersistedDockPose} from '../utils/robotEditorContract';
 import {useAsyncHandler} from "../hooks/useAsyncHandler";
@@ -11,7 +12,7 @@ import {previewRobotGeometry, type Bounds} from "../utils/robotModel";
 import {useMowerVisual} from "../hooks/useMowerVisual";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, App, Card, InputNumber, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
+import { Alert, App, Card, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
 import { AimOutlined, CompassOutlined, EnvironmentOutlined, UndoOutlined } from "@ant-design/icons";
 import { useThemeMode } from "../theme/ThemeContext.tsx";
 import { getColors, inkAlpha } from "../theme/colors.ts";
@@ -712,32 +713,32 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange, onDock
                                 <Row gutter={[8, 4]}>
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.xForward")}</Text>
-                                        <InputNumber
+                                        <NumberWithAddon
                                             data-setting-key={meta.xKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.xForward")}, m`}
                                             value={values[meta.xKey] == null ? val.x : geometryNumber(values[meta.xKey]) ?? null} onChange={(v) => onChange(meta.xKey, finiteNumber(v) ? v : null)}
                                             step={0.005} precision={3} size="small"
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Col>
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.yLeft")}</Text>
-                                        <InputNumber
+                                        <NumberWithAddon
                                             data-setting-key={meta.yKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.yLeft")}, m`}
                                             value={values[meta.yKey] == null ? val.y : geometryNumber(values[meta.yKey]) ?? null} onChange={(v) => onChange(meta.yKey, finiteNumber(v) ? v : null)}
                                             step={0.005} precision={3} size="small"
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Col>
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.zHeight")}</Text>
-                                        <InputNumber
+                                        <NumberWithAddon
                                             data-setting-key={meta.zKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.zHeight")}, m`}
                                             value={values[meta.zKey] == null ? val.z : geometryNumber(values[meta.zKey]) ?? null} onChange={(v) => onChange(meta.zKey, finiteNumber(v) ? v : null)}
                                             step={0.005} precision={3} size="small"
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Col>
                                     {meta.yawKey && (
@@ -745,13 +746,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange, onDock
                                             <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.yaw")}</Text>
                                             {meta.id === "imu" ? (
                                                 <Space.Compact style={{ width: "100%" }}>
-                                                    <InputNumber
+                                                    <NumberWithAddon
                                                         data-setting-key={meta.yawKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.yaw")}, °`}
                                                         value={values[meta.yawKey] != null && geometryNumber(values[meta.yawKey]) === undefined ? null : roundTo(radToDeg(val.yaw), 1)}
                                                         onChange={(v) => onChange(meta.yawKey, finiteNumber(v) ? roundTo(degToRad(v), 4) : null)}
                                                         step={1} precision={1} size="small"
-                                                        style={{ width: "100%" }} addonAfter="°"
+                                                        style={{ width: "100%" }} after="°"
                                                     />
                                                     <Tooltip title={t("robotComponentEditor.autoCalibrateImuTooltip")}>
                                                         <Button
@@ -763,13 +764,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange, onDock
                                                     </Tooltip>
                                                 </Space.Compact>
                                             ) : (
-                                                <InputNumber
+                                                <NumberWithAddon
                                                     data-setting-key={meta.yawKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.yaw")}, °`}
                                                         value={values[meta.yawKey] != null && geometryNumber(values[meta.yawKey]) === undefined ? null : roundTo(radToDeg(val.yaw), 1)}
                                                     onChange={(v) => onChange(meta.yawKey, finiteNumber(v) ? roundTo(degToRad(v), 4) : null)}
                                                     step={1} precision={1} size="small"
-                                                    style={{ width: "100%" }} addonAfter="°"
+                                                    style={{ width: "100%" }} after="°"
                                                 />
                                             )}
                                         </Col>
@@ -795,7 +796,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange, onDock
                         <Row gutter={[8, 4]} align="middle">
                             <Col span={12}>
                                 <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.bearingCompass")}</Text>
-                                <InputNumber
+                                <NumberWithAddon
                                     aria-label={t("robotComponentEditor.dockHeading")}
                                     value={dockYawRad === undefined ? null : roundTo(yawRadToCompassBearing(dockYawRad), 1)}
                                     onChange={(v) => {
@@ -809,7 +810,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange, onDock
                                     max={360}
                                     size="small"
                                     style={{ width: "100%" }}
-                                    addonAfter="°"
+                                    after="°"
                                 />
                             </Col>
                             <Col span={12}>

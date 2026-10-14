@@ -1,8 +1,9 @@
+import {NumberWithAddon} from '../components/inputs/NumberWithAddon';
 import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {useTranslation} from "react-i18next";
 import {stringifyValue} from "../utils/stringifyValue.ts";
-import {Segmented, Input, InputNumber, Switch, Collapse, Spin, Empty, Tag, Alert, Button, App, Tooltip} from "antd";
+import {Segmented, Input, Switch, Collapse, Spin, Empty, Tag, Alert, Button, App, Tooltip} from "antd";
 import {SearchOutlined, WarningOutlined, InfoCircleOutlined} from "@ant-design/icons";
 import {useApi} from "../hooks/useApi.ts";
 import {useIsMobile} from "../hooks/useIsMobile.ts";
@@ -113,9 +114,9 @@ function ParamRow({
                      onChange={(v) => { setValue(v); guardedCommit(v); }}/>;
     }
     if (typeof param.value === "number") {
-      return <InputNumber value={value as number} disabled={saving || disabled}
+      return <NumberWithAddon value={value as number} disabled={saving || disabled}
                           style={{width: controlWidth ?? 160}}
-                          addonAfter={meta.unit}
+                          after={meta.unit}
                           onChange={(v) => setValue(v)}
                           onBlur={() => value !== param.value && guardedCommit(value)}
                           onPressEnter={() => value !== param.value && guardedCommit(value)}/>;

@@ -1,3 +1,4 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React from "react";
 import { Alert, Card, Col, Form, Input, InputNumber, Row, Space, Switch, Typography } from "antd";
 import { BulbOutlined } from "@ant-design/icons";
@@ -138,11 +139,11 @@ export const LedsSection: React.FC<Props> = ({
                                         label={label("led_spi_speed_hz", t("settingsLeds.spiClock"))}
                                         tooltip={t("settingsLeds.spiClockTooltip")}
                                     >
-                                        <InputNumber aria-label={t("settingsLeds.spiClock") + ", Hz"} aria-description={t("settingsLeds.spiClockTooltip")}  id="setting-led_spi_speed_hz"
+                                        <NumberWithAddon aria-label={t("settingsLeds.spiClock") + ", Hz"} aria-description={t("settingsLeds.spiClockTooltip")}  id="setting-led_spi_speed_hz"
                                             value={values.led_spi_speed_hz}
                                             onChange={(v) => onChange("led_spi_speed_hz", v)}
                                             min={1} step={100000} precision={0}
-                                            style={{ width: "100%" }} addonAfter="Hz"
+                                            style={{ width: "100%" }} after="Hz"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -185,11 +186,11 @@ export const LedsSection: React.FC<Props> = ({
                                         label={label("led_refresh_hz", t("settingsLeds.refreshRate"))}
                                         tooltip={t("settingsLeds.refreshRateTooltip")}
                                     >
-                                        <InputNumber aria-label={t("settingsLeds.refreshRate") + ", Hz"} aria-description={t("settingsLeds.refreshRateTooltip")}  id="setting-led_refresh_hz"
+                                        <NumberWithAddon aria-label={t("settingsLeds.refreshRate") + ", Hz"} aria-description={t("settingsLeds.refreshRateTooltip")}  id="setting-led_refresh_hz"
                                             value={values.led_refresh_hz}
                                             onChange={(v) => onChange("led_refresh_hz", v)}
                                             min={1} max={60} step={1}
-                                            style={{ width: "100%" }} addonAfter="Hz"
+                                            style={{ width: "100%" }} after="Hz"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -206,11 +207,11 @@ export const LedsSection: React.FC<Props> = ({
                                         label={label("led_low_battery_percent", t("settingsLeds.lowBattery"))}
                                         tooltip={t("settingsLeds.lowBatteryTooltip")}
                                     >
-                                        <InputNumber aria-label={t("settingsLeds.lowBattery") + ", %"} aria-description={t("settingsLeds.lowBatteryTooltip")}  id="setting-led_low_battery_percent"
+                                        <NumberWithAddon aria-label={t("settingsLeds.lowBattery") + ", %"} aria-description={t("settingsLeds.lowBatteryTooltip")}  id="setting-led_low_battery_percent"
                                             value={values.led_low_battery_percent}
                                             onChange={(v) => onChange("led_low_battery_percent", v)}
                                             min={0} max={100} step={1}
-                                            style={{ width: "100%" }} addonAfter="%"
+                                            style={{ width: "100%" }} after="%"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -219,11 +220,11 @@ export const LedsSection: React.FC<Props> = ({
                                         label={label("led_charge_full_percent", t("settingsLeds.chargeFull"))}
                                         tooltip={t("settingsLeds.chargeFullTooltip")}
                                     >
-                                        <InputNumber aria-label={t("settingsLeds.chargeFull") + ", %"} aria-description={t("settingsLeds.chargeFullTooltip")}  id="setting-led_charge_full_percent"
+                                        <NumberWithAddon aria-label={t("settingsLeds.chargeFull") + ", %"} aria-description={t("settingsLeds.chargeFullTooltip")}  id="setting-led_charge_full_percent"
                                             value={values.led_charge_full_percent}
                                             onChange={(v) => onChange("led_charge_full_percent", v)}
                                             min={0} max={100} step={1}
-                                            style={{ width: "100%" }} addonAfter="%"
+                                            style={{ width: "100%" }} after="%"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -232,11 +233,11 @@ export const LedsSection: React.FC<Props> = ({
                                         label={label("led_status_timeout_s", t("settingsLeds.statusTimeout"))}
                                         tooltip={t("settingsLeds.statusTimeoutTooltip")}
                                     >
-                                        <InputNumber aria-label={t("settingsLeds.statusTimeout") + ", s"} aria-description={t("settingsLeds.statusTimeoutTooltip")}  id="setting-led_status_timeout_s"
+                                        <NumberWithAddon aria-label={t("settingsLeds.statusTimeout") + ", s"} aria-description={t("settingsLeds.statusTimeoutTooltip")}  id="setting-led_status_timeout_s"
                                             value={values.led_status_timeout_s}
                                             onChange={(v) => onChange("led_status_timeout_s", v)}
                                             min={0.5} step={0.5}
-                                            style={{ width: "100%" }} addonAfter="s"
+                                            style={{ width: "100%" }} after="s"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -245,11 +246,11 @@ export const LedsSection: React.FC<Props> = ({
                                         label={label("led_keepalive_s", t("settingsLeds.keepalive"))}
                                         tooltip={t("settingsLeds.keepaliveTooltip")}
                                     >
-                                        <InputNumber aria-label={t("settingsLeds.keepalive") + ", s"} aria-description={t("settingsLeds.keepaliveTooltip")}  id="setting-led_keepalive_s"
+                                        <NumberWithAddon aria-label={t("settingsLeds.keepalive") + ", s"} aria-description={t("settingsLeds.keepaliveTooltip")}  id="setting-led_keepalive_s"
                                             value={values.led_keepalive_s}
                                             onChange={(v) => onChange("led_keepalive_s", v)}
                                             min={0.2} step={0.5}
-                                            style={{ width: "100%" }} addonAfter="s"
+                                            style={{ width: "100%" }} after="s"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -258,11 +259,11 @@ export const LedsSection: React.FC<Props> = ({
                                         label={label("led_device_retry_s", t("settingsLeds.deviceRetry"))}
                                         tooltip={t("settingsLeds.deviceRetryTooltip")}
                                     >
-                                        <InputNumber aria-label={t("settingsLeds.deviceRetry") + ", s"} aria-description={t("settingsLeds.deviceRetryTooltip")}  id="setting-led_device_retry_s"
+                                        <NumberWithAddon aria-label={t("settingsLeds.deviceRetry") + ", s"} aria-description={t("settingsLeds.deviceRetryTooltip")}  id="setting-led_device_retry_s"
                                             value={values.led_device_retry_s}
                                             onChange={(v) => onChange("led_device_retry_s", v)}
                                             min={1} step={5}
-                                            style={{ width: "100%" }} addonAfter="s"
+                                            style={{ width: "100%" }} after="s"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -274,11 +275,11 @@ export const LedsSection: React.FC<Props> = ({
                                         )}
                                         tooltip={t("settingsLeds.chargeCompleteTimeoutTooltip")}
                                     >
-                                        <InputNumber aria-label={t("settingsLeds.chargeCompleteTimeout") + ", s"} aria-description={t("settingsLeds.chargeCompleteTimeoutTooltip")}  id="setting-led_charge_complete_timeout_s"
+                                        <NumberWithAddon aria-label={t("settingsLeds.chargeCompleteTimeout") + ", s"} aria-description={t("settingsLeds.chargeCompleteTimeoutTooltip")}  id="setting-led_charge_complete_timeout_s"
                                             value={values.led_charge_complete_timeout_s}
                                             onChange={(v) => onChange("led_charge_complete_timeout_s", v)}
                                             min={0} step={60}
-                                            style={{ width: "100%" }} addonAfter="s"
+                                            style={{ width: "100%" }} after="s"
                                         />
                                     </Form.Item>
                                 </Col>

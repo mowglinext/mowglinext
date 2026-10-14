@@ -1,3 +1,4 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import {errorMessage, requestErrorMessage} from "../../utils/errors";
 import {observeAsync} from "../../utils/async";
 import {useAsyncHandler} from "../../hooks/useAsyncHandler";
@@ -539,11 +540,11 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             </Col>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-wheel_pid_integral_limit" data-setting-key="wheel_pid_integral_limit" label={t("settingsDriveMotor.integralLimit")} tooltip={t("settingsDriveMotor.integralLimitTooltip")}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.integralLimit") + ", PWM"} aria-description={t("settingsDriveMotor.integralLimitTooltip")}  id="setting-wheel_pid_integral_limit"
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.integralLimit") + ", PWM"} aria-description={t("settingsDriveMotor.integralLimitTooltip")}  id="setting-wheel_pid_integral_limit"
                                         value={values.wheel_pid_integral_limit}
                                         onChange={(v) => onChange("wheel_pid_integral_limit", v)}
                                         min={0} max={255} step={0.001} precision={3}
-                                        style={{ width: "100%" }} addonAfter="PWM"
+                                        style={{ width: "100%" }} after="PWM"
                                     />
                                 </Form.Item>
                             </Col>
@@ -555,13 +556,13 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             {isMavros ? <Card size="small" title={t("settingsDriveMotor.odometry.label")} style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
                     <Form.Item htmlFor="setting-ticks_per_meter" data-setting-key="ticks_per_meter" label={t("settingsDriveMotor.odometry.ticksPerMeter")}>
-                        <InputNumber
+                        <NumberWithAddon
                             id="setting-ticks_per_meter"
                             aria-label={t("settingsDriveMotor.odometry.ticksPerMeter")}
                             value={values.ticks_per_meter}
                             onChange={(v) => onChange("ticks_per_meter", v)}
                             min={0.001} step={0.001}
-                            style={{ width: "100%" }} addonAfter="ticks/m"
+                            style={{ width: "100%" }} after="ticks/m"
                         />
                     </Form.Item>
                 </Form>
@@ -573,11 +574,11 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                 label={t("settingsDriveMotor.pwmPerMps")}
                                 tooltip={t("settingsDriveMotor.pwmPerMpsTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsDriveMotor.pwmPerMps") + ", PWM"} aria-description={t("settingsDriveMotor.pwmPerMpsTooltip")}  id="setting-wheel_pid_pwm_per_mps"
+                                <NumberWithAddon aria-label={t("settingsDriveMotor.pwmPerMps") + ", PWM"} aria-description={t("settingsDriveMotor.pwmPerMpsTooltip")}  id="setting-wheel_pid_pwm_per_mps"
                                     value={values.wheel_pid_pwm_per_mps}
                                     onChange={(v) => onChange("wheel_pid_pwm_per_mps", v)}
                                     min={50} max={600} step={0.001} precision={3}
-                                    style={{ width: "100%" }} addonAfter="PWM"
+                                    style={{ width: "100%" }} after="PWM"
                                 />
                             </Form.Item>
                         </Col>
@@ -629,12 +630,12 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         <Row gutter={[16, 0]}>
                             <Col xs={24} sm={12}>
                                 <Form.Item name="distance_m" label={t("settingsDriveMotor.ffModal.fields.distance")} rules={[{ required: true }]}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.ffModal.fields.distance") + ", m"} min={2} max={10} step={0.5} precision={1} style={{ width: "100%" }} addonAfter="m" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.ffModal.fields.distance") + ", m"} min={2} max={10} step={0.5} precision={1} style={{ width: "100%" }} after="m" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
                                 <Form.Item name="test_speed_mps" label={t("settingsDriveMotor.ffModal.fields.testSpeed")} rules={[{ required: true }]}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.ffModal.fields.testSpeed") + ", m/s"} min={0.05} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} addonAfter="m/s" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.ffModal.fields.testSpeed") + ", m/s"} min={0.05} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} after="m/s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
@@ -649,7 +650,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                     tooltip={t("settingsDriveMotor.ffModal.fields.odomTimeoutTooltip")}
                                     rules={[{ required: true }]}
                                 >
-                                    <InputNumber aria-label={t("settingsDriveMotor.ffModal.fields.odomTimeout") + ", s"} aria-description={t("settingsDriveMotor.ffModal.fields.odomTimeoutTooltip")}  min={0.5} max={15} step={0.5} precision={1} style={{ width: "100%" }} addonAfter="s" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.ffModal.fields.odomTimeout") + ", s"} aria-description={t("settingsDriveMotor.ffModal.fields.odomTimeoutTooltip")}  min={0.5} max={15} step={0.5} precision={1} style={{ width: "100%" }} after="s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
@@ -682,7 +683,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                     label={t("settingsDriveMotor.common.undockDistance")}
                                     tooltip={t("settingsDriveMotor.common.undockDistanceTooltip")}
                                 >
-                                    <InputNumber aria-label={t("settingsDriveMotor.common.undockDistance") + ", m"} aria-description={t("settingsDriveMotor.common.undockDistanceTooltip")}  min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} addonAfter="m" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.common.undockDistance") + ", m"} aria-description={t("settingsDriveMotor.common.undockDistanceTooltip")}  min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} after="m" />
                                 </Form.Item>
                             </Col>
                         </Row>
@@ -755,12 +756,12 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         <Row gutter={[16, 0]}>
                             <Col xs={24} sm={12}>
                                 <Form.Item name="max_speed_mps" label={t("settingsDriveMotor.pidModal.fields.maxSpeed")} rules={[{ required: true }]}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.pidModal.fields.maxSpeed") + ", m/s"} min={0.1} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} addonAfter="m/s" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.pidModal.fields.maxSpeed") + ", m/s"} min={0.1} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} after="m/s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
                                 <Form.Item name="segment_duration_s" label={t("settingsDriveMotor.pidModal.fields.segmentDuration")} rules={[{ required: true }]}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.pidModal.fields.segmentDuration") + ", s"} min={2} max={20} step={0.5} precision={1} style={{ width: "100%" }} addonAfter="s" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.pidModal.fields.segmentDuration") + ", s"} min={2} max={20} step={0.5} precision={1} style={{ width: "100%" }} after="s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
@@ -790,7 +791,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                     label={t("settingsDriveMotor.common.undockDistance")}
                                     tooltip={t("settingsDriveMotor.common.undockDistanceTooltip")}
                                 >
-                                    <InputNumber aria-label={t("settingsDriveMotor.common.undockDistance") + ", m"} aria-description={t("settingsDriveMotor.common.undockDistanceTooltip")}  min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} addonAfter="m" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.common.undockDistance") + ", m"} aria-description={t("settingsDriveMotor.common.undockDistanceTooltip")}  min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} after="m" />
                                 </Form.Item>
                             </Col>
                         </Row>

@@ -1,7 +1,8 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import {observeAsync} from "../../utils/async";
 import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import {useCallback, useEffect, useMemo, useState} from "react";
-import {Alert, Button, Card, Collapse, Input, InputNumber, Select, Space, Spin, Switch, Tag, Typography} from "antd";
+import {Alert, Button, Card, Collapse, Input, Select, Space, Spin, Switch, Tag, Typography} from "antd";
 import {WifiOutlined, ReloadOutlined, EnvironmentOutlined} from "@ant-design/icons";
 import {useTranslation} from "react-i18next";
 import {useApi} from "../../hooks/useApi.ts";
@@ -177,7 +178,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
             <Space wrap style={{marginBottom: 12}}>
               <Input aria-label={t("settingsNtrip.host")} addonBefore={t("settingsNtrip.host")} style={{width: 240}} value={values.ntrip_host ?? ""}
                      onChange={(e) => onChange("ntrip_host", e.target.value)} placeholder="caster.example.com"/>
-              <InputNumber aria-label={t("settingsNtrip.port")} addonBefore={t("settingsNtrip.port")} value={values.ntrip_port ?? 2101}
+              <NumberWithAddon aria-label={t("settingsNtrip.port")} before={t("settingsNtrip.port")} value={values.ntrip_port ?? 2101}
                            onChange={(v) => onChange("ntrip_port", v)}/>
               {provider?.requiresOwnCreds && (
                 <>
@@ -227,7 +228,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
             children: (
               <Space wrap>
                 <Input aria-label={t("settingsNtrip.host")} addonBefore={t("settingsNtrip.host")} value={values.ntrip_host ?? ""} onChange={(e) => onChange("ntrip_host", e.target.value)}/>
-                <InputNumber aria-label={t("settingsNtrip.port")} addonBefore={t("settingsNtrip.port")} value={values.ntrip_port ?? 2101} onChange={(v) => onChange("ntrip_port", v)}/>
+                <NumberWithAddon aria-label={t("settingsNtrip.port")} before={t("settingsNtrip.port")} value={values.ntrip_port ?? 2101} onChange={(v) => onChange("ntrip_port", v)}/>
                 <Input aria-label={t("settingsNtrip.mountpoint")} addonBefore={t("settingsNtrip.mountpoint")} value={values.ntrip_mountpoint ?? ""} onChange={(e) => onChange("ntrip_mountpoint", e.target.value)}/>
                 <Input aria-label={t("settingsNtrip.user")} addonBefore={t("settingsNtrip.user")} value={values.ntrip_user ?? ""} onChange={(e) => onChange("ntrip_user", e.target.value)}/>
                 <Input.Password aria-label={t("settingsNtrip.pass")} addonBefore={t("settingsNtrip.pass")} value={values.ntrip_password ?? ""} onChange={(e) => onChange("ntrip_password", e.target.value)}/>

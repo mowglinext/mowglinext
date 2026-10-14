@@ -1,7 +1,8 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import {DEFAULT_DOCK_STYLE} from "./dockAssets";
 import type {MeasurementEditorState} from "./useMeasurementEditor";
 import {useEffect, useRef, useState} from "react";
-import {Button, InputNumber, Modal, Typography} from "antd";
+import {Button, Modal, Typography} from "antd";
 import type {InputNumberRef} from "rc-input-number";
 import {useTranslation} from "react-i18next";
 import type {RobotGeometry} from "../../hooks/useRobotDescription";
@@ -59,10 +60,10 @@ export function MeasurementDialog({session, live, values, onCancel, onApply}: {
             : <Typography.Paragraph>{t("mowerVisual.waiting")}</Typography.Paragraph>}
         {measurement && live.fromUrdf && <MeasurementLegend measurement={measurement}/>}
         <label className="measurement-input-label" htmlFor="measurement-value">{label} (m)</label>
-        <InputNumber ref={input} id="measurement-value" aria-label={label+", m"} aria-invalid={!valid}
+        <NumberWithAddon ref={input} id="measurement-value" aria-label={label+", m"} aria-invalid={!valid}
             aria-describedby="measurement-help" value={value} onChange={setValue} onInput={text => setValue(text.trim() && Number.isFinite(Number(text)) ? Number(text) : null)}
             aria-valuemin={spec.min} aria-valuemax={"max" in spec ? spec.max : undefined} step={spec.step} precision={spec.precision}
-            inputMode="decimal" style={{width:"100%"}} size="large" addonAfter="m"
+            inputMode="decimal" style={{width:"100%"}} size="large" after="m"
             onPressEnter={confirm}/>
         {!valid && <Typography.Text type="danger" role="status">{t("measurementEditor.invalid")}</Typography.Text>}
         <Typography.Paragraph id="measurement-help" className="measurement-help">{t("settingsHardware."+spec.label+"Tooltip")}</Typography.Paragraph>

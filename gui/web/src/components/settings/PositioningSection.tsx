@@ -1,3 +1,4 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import React, { useState } from "react";
 import { Alert, App, Button, Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
@@ -296,25 +297,25 @@ export const PositioningSection: React.FC<Props> = ({
                             <Row gutter={[16, 0]}>
                                 <Col xs={12} sm={6}>
                                     <Form.Item htmlFor="setting-gps_wait_after_undock_sec" data-setting-key="gps_wait_after_undock_sec" label={t("settingsPositioning.rtkWaitAfterUndockLabel")}>
-                                        <InputNumber aria-label={t("settingsPositioning.rtkWaitAfterUndockLabel") + ", s"} id="setting-gps_wait_after_undock_sec"
+                                        <NumberWithAddon aria-label={t("settingsPositioning.rtkWaitAfterUndockLabel") + ", s"} id="setting-gps_wait_after_undock_sec"
                                             value={values.gps_wait_after_undock_sec}
                                             onChange={(value) => onChange("gps_wait_after_undock_sec", value)}
                                             min={0}
                                             step={1}
                                             style={{ width: "100%" }}
-                                            addonAfter="s"
+                                            after="s"
                                         />
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={6}>
                                     <Form.Item htmlFor="setting-gps_timeout_sec" data-setting-key="gps_timeout_sec" label={t("settingsPositioning.gpsTimeoutLabel")}>
-                                        <InputNumber aria-label={t("settingsPositioning.gpsTimeoutLabel") + ", s"} id="setting-gps_timeout_sec"
+                                        <NumberWithAddon aria-label={t("settingsPositioning.gpsTimeoutLabel") + ", s"} id="setting-gps_timeout_sec"
                                             value={values.gps_timeout_sec}
                                             onChange={(value) => onChange("gps_timeout_sec", value)}
                                             min={1}
                                             step={1}
                                             style={{ width: "100%" }}
-                                            addonAfter="s"
+                                            after="s"
                                         />
                                     </Form.Item>
                                 </Col>

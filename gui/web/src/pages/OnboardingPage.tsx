@@ -1,3 +1,4 @@
+import {NumberWithAddon} from '../components/inputs/NumberWithAddon';
 import {useSectionFocus} from "../hooks/useSectionFocus.ts";
 import React, { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -264,31 +265,31 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-wheel_radius" data-setting-key="wheel_radius" label={t("onboardingPage.wheelRadiusLabel")} tooltip={t("onboardingPage.wheelRadiusTooltip")}>
-                                    <InputNumber id="setting-wheel_radius"
+                                    <NumberWithAddon id="setting-wheel_radius"
                                         value={values.wheel_radius ?? 0.04475}
                                         onChange={(v) => onChange("wheel_radius", v)}
                                         step={0.001} precision={5} style={{ width: "100%" }}
-                                        addonAfter="m"
+                                        after="m"
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-wheel_track" data-setting-key="wheel_track" label={t("onboardingPage.wheelTrackLabel")} tooltip={t("onboardingPage.wheelTrackTooltip")}>
-                                    <InputNumber id="setting-wheel_track"
+                                    <NumberWithAddon id="setting-wheel_track"
                                         value={values.wheel_track ?? 0.325}
                                         onChange={(v) => onChange("wheel_track", v)}
                                         step={0.001} precision={3} style={{ width: "100%" }}
-                                        addonAfter="m"
+                                        after="m"
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-blade_radius" data-setting-key="blade_radius" label={t("onboardingPage.bladeRadiusLabel")} tooltip={t("onboardingPage.bladeRadiusTooltip")}>
-                                    <InputNumber id="setting-blade_radius"
+                                    <NumberWithAddon id="setting-blade_radius"
                                         value={values.blade_radius ?? 0.09}
                                         onChange={(v) => onChange("blade_radius", v)}
                                         step={0.01} precision={3} style={{ width: "100%" }}
-                                        addonAfter="m"
+                                        after="m"
                                     />
                                 </Form.Item>
                             </Col>

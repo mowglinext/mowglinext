@@ -1,3 +1,4 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React from "react";
 import { Alert, Card, Col, Form, InputNumber, Row, Segmented, Switch, Typography } from "antd";
 import { useTranslation } from "react-i18next";
@@ -126,11 +127,11 @@ export const ObstaclesSection: React.FC<Props> = ({
                                 label={fieldLabel("obstacle_inflation_radius", t("settingsObstacles.inflationRadius"))}
                                 tooltip={t("settingsObstacles.inflationRadiusTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsObstacles.inflationRadius") + ", m"} aria-description={t("settingsObstacles.inflationRadiusTooltip")}  id="setting-obstacle_inflation_radius"
+                                <NumberWithAddon aria-label={t("settingsObstacles.inflationRadius") + ", m"} aria-description={t("settingsObstacles.inflationRadiusTooltip")}  id="setting-obstacle_inflation_radius"
                                     value={values.obstacle_inflation_radius}
                                     onChange={(v) => onChange("obstacle_inflation_radius", v)}
                                     min={0.58} max={1.5} step={0.05} precision={2}
-                                    style={{ width: "100%" }} addonAfter="m"
+                                    style={{ width: "100%" }} after="m"
                                 />
                             </Form.Item>
                         </Col>
@@ -139,11 +140,11 @@ export const ObstaclesSection: React.FC<Props> = ({
                                 label={fieldLabel("max_obstacle_avoidance_distance", t("settingsObstacles.maxDetourDistance"))}
                                 tooltip={t("settingsObstacles.maxDetourDistanceTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsObstacles.maxDetourDistance") + ", m"} aria-description={t("settingsObstacles.maxDetourDistanceTooltip")}  id="setting-max_obstacle_avoidance_distance"
+                                <NumberWithAddon aria-label={t("settingsObstacles.maxDetourDistance") + ", m"} aria-description={t("settingsObstacles.maxDetourDistanceTooltip")}  id="setting-max_obstacle_avoidance_distance"
                                     value={values.max_obstacle_avoidance_distance}
                                     onChange={(v) => onChange("max_obstacle_avoidance_distance", v)}
                                     min={0.5} max={10} step={0.5} precision={1}
-                                    style={{ width: "100%" }} addonAfter="m"
+                                    style={{ width: "100%" }} after="m"
                                 />
                             </Form.Item>
                         </Col>
@@ -157,11 +158,11 @@ export const ObstaclesSection: React.FC<Props> = ({
                                         : t("settingsObstacles.drawnObstacleMarginBesideBody", { cm: besideBodyCm })
                                 }
                             >
-                                <InputNumber aria-label={t("settingsObstacles.drawnObstacleMargin") + ", m"} aria-description={t("settingsObstacles.drawnObstacleMarginTooltip")}  id="setting-obstacle_margin"
+                                <NumberWithAddon aria-label={t("settingsObstacles.drawnObstacleMargin") + ", m"} aria-description={t("settingsObstacles.drawnObstacleMarginTooltip")}  id="setting-obstacle_margin"
                                     value={values.obstacle_margin}
                                     onChange={(v) => onChange("obstacle_margin", v)}
                                     min={0} max={1} step={0.05} precision={2}
-                                    style={{ width: "100%" }} addonAfter="m"
+                                    style={{ width: "100%" }} after="m"
                                 />
                             </Form.Item>
                             {isBelowFloor && (
@@ -183,11 +184,11 @@ export const ObstaclesSection: React.FC<Props> = ({
                                 label={fieldLabel("obstacle_clearance_margin", t("settingsObstacles.clearanceMargin"))}
                                 tooltip={t("settingsObstacles.clearanceMarginTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsObstacles.clearanceMargin") + ", m"} aria-description={t("settingsObstacles.clearanceMarginTooltip")}  id="setting-obstacle_clearance_margin"
+                                <NumberWithAddon aria-label={t("settingsObstacles.clearanceMargin") + ", m"} aria-description={t("settingsObstacles.clearanceMarginTooltip")}  id="setting-obstacle_clearance_margin"
                                     value={values.obstacle_clearance_margin}
                                     onChange={(v) => onChange("obstacle_clearance_margin", v)}
                                     min={0} max={0.5} step={0.05} precision={2}
-                                    style={{ width: "100%" }} addonAfter="m"
+                                    style={{ width: "100%" }} after="m"
                                 />
                             </Form.Item>
                         </Col>
@@ -196,11 +197,11 @@ export const ObstaclesSection: React.FC<Props> = ({
                                 label={fieldLabel("obstacle_detection_range_m", t("settingsObstacles.detectionRange"))}
                                 tooltip={t("settingsObstacles.detectionRangeTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsObstacles.detectionRange") + ", m"} aria-description={t("settingsObstacles.detectionRangeTooltip")}  id="setting-obstacle_detection_range_m"
+                                <NumberWithAddon aria-label={t("settingsObstacles.detectionRange") + ", m"} aria-description={t("settingsObstacles.detectionRangeTooltip")}  id="setting-obstacle_detection_range_m"
                                     value={values.obstacle_detection_range_m}
                                     onChange={(v) => onChange("obstacle_detection_range_m", v)}
                                     min={0.2} max={5} step={0.1} precision={2}
-                                    style={{ width: "100%" }} addonAfter="m"
+                                    style={{ width: "100%" }} after="m"
                                 />
                             </Form.Item>
                         </Col>
@@ -209,11 +210,11 @@ export const ObstaclesSection: React.FC<Props> = ({
                                 label={fieldLabel("obstacle_wait_timeout_s", t("settingsObstacles.waitTimeout"))}
                                 tooltip={t("settingsObstacles.waitTimeoutTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsObstacles.waitTimeout") + ", s"} aria-description={t("settingsObstacles.waitTimeoutTooltip")}  id="setting-obstacle_wait_timeout_s"
+                                <NumberWithAddon aria-label={t("settingsObstacles.waitTimeout") + ", s"} aria-description={t("settingsObstacles.waitTimeoutTooltip")}  id="setting-obstacle_wait_timeout_s"
                                     value={values.obstacle_wait_timeout_s}
                                     onChange={(v) => onChange("obstacle_wait_timeout_s", v)}
                                     min={0.5} max={60} step={0.5} precision={1}
-                                    style={{ width: "100%" }} addonAfter="s"
+                                    style={{ width: "100%" }} after="s"
                                 />
                             </Form.Item>
                         </Col>

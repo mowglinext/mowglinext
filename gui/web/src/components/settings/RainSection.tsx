@@ -1,5 +1,6 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React from "react";
-import { Card, Col, Form, InputNumber, Row, Space, Typography } from "antd";
+import { Card, Col, Form, Row, Space, Typography } from "antd";
 import { CloudOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
@@ -78,21 +79,21 @@ export const RainSection: React.FC<Props> = ({ values, onChange }) => {
                         <Row gutter={[16, 0]}>
                             <Col xs={12}>
                                 <Form.Item htmlFor="setting-rain_delay_minutes" data-setting-key="rain_delay_minutes" label={t("settingsRain.resumeDelay")} tooltip={t("settingsRain.resumeDelayTooltip")}>
-                                    <InputNumber aria-label={t("settingsRain.resumeDelay") + ", min"} aria-description={t("settingsRain.resumeDelayTooltip")}  id="setting-rain_delay_minutes"
+                                    <NumberWithAddon aria-label={t("settingsRain.resumeDelay") + ", min"} aria-description={t("settingsRain.resumeDelayTooltip")}  id="setting-rain_delay_minutes"
                                         value={values.rain_delay_minutes}
                                         onChange={(v) => onChange("rain_delay_minutes", v)}
                                         min={0} max={240} step={5} precision={0}
-                                        style={{ width: "100%" }} addonAfter="min"
+                                        style={{ width: "100%" }} after="min"
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={12}>
                                 <Form.Item htmlFor="setting-rain_debounce_sec" data-setting-key="rain_debounce_sec" label={t("settingsRain.debounce")} tooltip={t("settingsRain.debounceTooltip")}>
-                                    <InputNumber aria-label={t("settingsRain.debounce") + ", s"} aria-description={t("settingsRain.debounceTooltip")}  id="setting-rain_debounce_sec"
+                                    <NumberWithAddon aria-label={t("settingsRain.debounce") + ", s"} aria-description={t("settingsRain.debounceTooltip")}  id="setting-rain_debounce_sec"
                                         value={values.rain_debounce_sec}
                                         onChange={(v) => onChange("rain_debounce_sec", v)}
                                         min={1} max={60} step={5} precision={0}
-                                        style={{ width: "100%" }} addonAfter="s"
+                                        style={{ width: "100%" }} after="s"
                                     />
                                 </Form.Item>
                             </Col>

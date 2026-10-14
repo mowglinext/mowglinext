@@ -1,7 +1,8 @@
+import {NumberWithAddon} from '../components/inputs/NumberWithAddon';
 import {AsyncPopconfirm} from "../components/AsyncPopconfirm";
 import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {useMemo, useState} from "react";
-import {Alert, App, Button, Card, Col, Input, InputNumber, Progress, Row, Space, Switch, Tag, Tooltip, Typography} from "antd";
+import {Alert, App, Button, Card, Col, Input, Progress, Row, Space, Switch, Tag, Tooltip, Typography} from "antd";
 import {CloudUploadOutlined, DeleteOutlined, ExportOutlined, HomeOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, RedoOutlined} from "@ant-design/icons";
 import {useTranslation} from "react-i18next";
 import {useFleet} from "../hooks/useFleet.ts";
@@ -247,16 +248,16 @@ export default function FleetPage() {
                     <Row gutter={[12, 8]}>
                         <Col xs={12} md={6}>
                             <Text type="secondary" style={{fontSize: 11}}>{t("fleetPage.yieldDistance")}</Text>
-                            <InputNumber
-                                min={1} max={20} step={0.5} addonAfter="m" style={{width: "100%"}}
+                            <NumberWithAddon
+                                min={1} max={20} step={0.5} after="m" style={{width: "100%"}}
                                 value={coordination.settings.yield_distance_m}
                                 onChange={asyncHandler((v) => v != null && run("coord", () => fleet.setCoordination({...coordination.settings, yield_distance_m: v})))}
                             />
                         </Col>
                         <Col xs={12} md={6}>
                             <Text type="secondary" style={{fontSize: 11}}>{t("fleetPage.resumeDistance")}</Text>
-                            <InputNumber
-                                min={2} max={30} step={0.5} addonAfter="m" style={{width: "100%"}}
+                            <NumberWithAddon
+                                min={2} max={30} step={0.5} after="m" style={{width: "100%"}}
                                 value={coordination.settings.resume_distance_m}
                                 onChange={asyncHandler((v) => v != null && run("coord", () => fleet.setCoordination({...coordination.settings, resume_distance_m: v})))}
                             />

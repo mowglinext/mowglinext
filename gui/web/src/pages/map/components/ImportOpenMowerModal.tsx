@@ -1,6 +1,7 @@
+import {NumberWithAddon} from '../../../components/inputs/NumberWithAddon';
 import {useAsyncHandler} from "../../../hooks/useAsyncHandler";
 import {useState} from "react";
-import {Alert, Checkbox, InputNumber, Modal, Space, Statistic, Table, Tag, Typography} from "antd";
+import {Alert, Checkbox, Modal, Space, Statistic, Table, Tag, Typography} from "antd";
 import {useTranslation} from "react-i18next";
 import type {ImportOpenMowerSummary} from "../hooks/useMapFiles.ts";
 
@@ -140,8 +141,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
                             {t('mapImportOpenMower.omDatumHelp')}
                         </Typography.Paragraph>
                         <Space wrap>
-                            <InputNumber
-                                addonBefore={t('mapImportOpenMower.omDatumLat')}
+                            <NumberWithAddon
+                                before={t('mapImportOpenMower.omDatumLat')}
                                 value={omLat}
                                 onChange={(v) => setOmLat(typeof v === "number" ? v : null)}
                                 onBlur={asyncHandler(handleReproject)}
@@ -152,8 +153,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
                                 style={{width: 280}}
                                 placeholder="OM_DATUM_LAT"
                             />
-                            <InputNumber
-                                addonBefore={t('mapImportOpenMower.omDatumLon')}
+                            <NumberWithAddon
+                                before={t('mapImportOpenMower.omDatumLon')}
                                 value={omLon}
                                 onChange={(v) => setOmLon(typeof v === "number" ? v : null)}
                                 onBlur={asyncHandler(handleReproject)}

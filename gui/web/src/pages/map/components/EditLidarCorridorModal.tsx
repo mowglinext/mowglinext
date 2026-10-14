@@ -1,5 +1,6 @@
+import {NumberWithAddon} from '../../../components/inputs/NumberWithAddon';
 import {useAsyncHandler} from "../../../hooks/useAsyncHandler";
-import {Modal, InputNumber, Input, Form} from "antd";
+import {Modal, Input, Form} from "antd";
 import {useTranslation} from "react-i18next";
 import type {LidarIgnoreCorridor} from "../../../types/ros.ts";
 import {DEFAULT_CORRIDOR_WIDTH_M, MAX_CORRIDOR_WIDTH_CM, MIN_CORRIDOR_WIDTH_CM} from "../hooks/useLidarCorridors.ts";
@@ -71,7 +72,7 @@ const EditLidarCorridorForm = ({corridor, busy, onSave, onCancel}: EditLidarCorr
                         max: MAX_CORRIDOR_WIDTH_CM,
                         message: t('mapLidarCorridors.widthRange', {min: MIN_CORRIDOR_WIDTH_CM, max: MAX_CORRIDOR_WIDTH_CM}),
                     }]}>
-                    <InputNumber step={5} precision={0} addonAfter="cm" style={{width: '100%'}}/>
+                    <NumberWithAddon step={5} precision={0} after="cm" style={{width: '100%'}}/>
                 </Form.Item>
             </Form>
         </Modal>
