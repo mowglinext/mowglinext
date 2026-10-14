@@ -122,6 +122,9 @@ export interface SettingsValues {
     dock_calib_min_baseline_displacement_m?: number | null;
     mowing_enabled?: boolean;
     blade_auto_reverse?: boolean;
+    blade_ready_min_rpm?: number | null;
+    blade_spinup_delay_sec?: number | null;
+    blade_ready_timeout_sec?: number | null;
     mowing_speed?: number | null;
     transit_speed?: number | null;
     blade_load_slowdown_enabled?: boolean;
