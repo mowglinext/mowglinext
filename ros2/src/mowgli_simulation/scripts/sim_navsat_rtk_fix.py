@@ -338,7 +338,7 @@ class SimNavSatRtkFix(Node):
         self._check_clock_epoch()
         stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
         if (stamp_ns <= 0 or (self._last_truth_stamp_ns is not None
-                             and stamp_ns <= self._last_truth_stamp_ns)):
+                              and stamp_ns <= self._last_truth_stamp_ns)):
             return
         self._last_truth_stamp_ns = stamp_ns
         self._ground_truth_generation += 1

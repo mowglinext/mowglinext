@@ -1,7 +1,7 @@
 import importlib.util
 import math
-import random
 from pathlib import Path
+import random
 import sys
 from types import SimpleNamespace
 

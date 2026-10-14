@@ -81,5 +81,16 @@ def test_production_navigation_injects_signed_catcher_from_same_costmap_geometry
     assert len(no_lidar) == 1
     for doc in no_lidar:
         cm = doc["collision_monitor"]["ros__parameters"]
-        assert cm["scan"]["enabled"] is False
-        assert all(cm[name]["enabled"] is False for name in cm["polygons"])
+        # The GPS-only overlay has no scan source, but retains the fleet
+        # approach gate. Turning every polygon off would bypass peer safety.
+        assert cm["observation_sources"] == ["fleet_peers"]
+        assert "scan" not in cm
+        assert cm["polygons"] == ["FootprintApproach"]
+        assert cm["FootprintApproach"]["enabled"] is True
+        assert cm["FootprintApproach"]["min_points"] == 2
+        assert cm["FootprintApproach"]["footprint_topic"] == "/local_costmap/published_footprint"
+        assert cm["PolygonStop"]["enabled"] is False
+        assert cm["fleet_peers"]["enabled"] is True
+        assert cm["fleet_peers"]["type"] == "pointcloud"
+        assert cm["fleet_peers"]["topic"] == "/fleet/peer_obstacles"
+        assert cm["fleet_peers"]["source_timeout"] == 0.0
