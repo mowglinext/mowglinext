@@ -136,6 +136,50 @@ afterEach(() => {
 });
 
 describe('useBrowserGamepad session ownership', () => {
+    it('allows HTTP when the browser exposes Gamepad input and still stops on release or API loss', () => {
+        Object.defineProperty(window, 'isSecureContext', {configurable: true, value: false});
+        topics.status.data.state_name = 'RECORDING';
+        const {hook, onOwnershipChange} = mount();
+        act(() => { hook.result.current.enable(); });
+        expect(hook.result.current.enabled).toBe(true);
+        const socket = FakeWebSocket.instances[0];
+        socket.open();
+        poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true);
+        poll();
+        setAxis(1, -1);
+        poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({deadman: true, twist: {twist: {linear: {x: 0.25}}}});
+
+        setButton(DEFAULT_PROFILE.buttons.deadman, false);
+        poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({deadman: false, twist: {twist: {linear: {x: 0}, angular: {z: 0}}}});
+
+        Object.defineProperty(navigator, 'getGamepads', {configurable: true, value: () => {
+            throw new DOMException('Browser blocked input', 'SecurityError');
+        }});
+        poll();
+        expect(hook.result.current.enabled).toBe(false);
+        expect(hook.result.current.fault).toBe('unsupported');
+        expect(socket.closeCount).toBe(1);
+        expect(onOwnershipChange.mock.calls.map(([owns]) => owns)).toEqual([true, false]);
+        poll(500);
+        expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it.each(['missing', 'blocked'])('fails closed on HTTP when the Gamepad API is %s', availability => {
+        Object.defineProperty(window, 'isSecureContext', {configurable: true, value: false});
+        Object.defineProperty(navigator, 'getGamepads', {configurable: true, value: availability === 'missing' ? undefined : () => {
+            throw new DOMException('Browser blocked input', 'SecurityError');
+        }});
+        const {hook, onOwnershipChange} = mount();
+        act(() => { hook.result.current.enable(); });
+        expect(hook.result.current.enabled).toBe(false);
+        expect(hook.result.current.fault).toBe('unsupported');
+        expect(FakeWebSocket.instances).toHaveLength(0);
+        expect(onOwnershipChange).not.toHaveBeenCalled();
+    });
+
     it('opens only an explicit session, sends neutral on disable, and releases ownership once', () => {
         const {hook, onOwnershipChange} = mount();
         const socket = enable(hook);
