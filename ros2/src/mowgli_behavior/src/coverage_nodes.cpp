@@ -2487,7 +2487,14 @@ FollowStrip::DetourAttempt FollowStrip::tryStartDetour(const std::shared_ptr<BTC
                 swaths_.size());
     return DetourAttempt::kDeclined;
   }
-  const DetourDecision d = decideDetour(cm, poses, stuck, cfg);
+  const DetourDecision d = decideDetour(cm,
+                                        poses,
+                                        stuck,
+                                        cfg,
+                                        [&](double x, double y)
+                                        {
+                                          return detourTransitTargetCenterClear(cm, x, y);
+                                        });
 
   if (!d.obstacle_confirmed)
   {

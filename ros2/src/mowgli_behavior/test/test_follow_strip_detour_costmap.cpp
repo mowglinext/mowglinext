@@ -29,6 +29,7 @@
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/detour_costmap_snapshot.hpp"
 #include "mowgli_interfaces/ftc_abort_reason.hpp"
+#include "nav2_costmap_2d/costmap_2d.hpp"
 #include "nav2_msgs/srv/get_costmap.hpp"
 #include "rclcpp/executors/multi_threaded_executor.hpp"
 #include <gtest/gtest.h>
@@ -250,6 +251,43 @@ protected:
     map_cv_.notify_all();
   }
 
+  void expectPlannerEligibleResume(uint8_t raw_cost)
+  {
+    start();
+    pump(
+        [this]
+        {
+          return follow_->count() == 1;
+        });
+    ASSERT_EQ(follow_->count(), 1u);
+    {
+      std::lock_guard lock(map_mutex_);
+      for (unsigned y = 19; y <= 20; ++y)
+        for (unsigned x = 17; x <= 22; ++x)
+          current_map_.data[y * 120 + x] = raw_cost;
+    }
+    obstacleAbort();
+    pump(
+        [this]
+        {
+          return navigate_->count() == 1;
+        });
+    ASSERT_EQ(navigate_->count(), 1u);
+    const auto& target = navigate_->handle(0)->get_goal()->pose.pose.position;
+    // The producer uses double resolution; GetCostmap transports float32.
+    // At (0.8,0), these deliberately select (18,20) and (17,19).
+    nav2_costmap_2d::Costmap2D actual(120, 40, 0.1, -1.0, -2.0, 0);
+    std::copy(current_map_.data.begin(), current_map_.data.end(), actual.getCharMap());
+    unsigned x, y;
+    ASSERT_TRUE(actual.worldToMap(target.x, target.y, x, y));
+    EXPECT_LT(actual.getCost(x, y), 253);
+    EXPECT_GE(target.x, 1.3);
+    EXPECT_LE(target.x, 8.0);
+    EXPECT_FALSE(blade_enabled_.load());
+    EXPECT_EQ(requests_.load(), 1u);
+    EXPECT_TRUE(ctx_->completed_areas.empty());
+  }
+
   std::shared_ptr<mowgli_behavior::BTContext> ctx_;
   rclcpp::Node::SharedPtr server_;
   std::unique_ptr<ActionServer<Follow>> follow_;
@@ -330,6 +368,16 @@ TEST_F(FollowStripDetourCostmap, FreshClearSnapshotRestoresBoundedResumeAndCover
                 }),
             BT::NodeStatus::SUCCESS);
   EXPECT_EQ(ctx_->completed_areas.count(0), 1u);
+}
+
+TEST_F(FollowStripDetourCostmap, InscribedTargetCenterIsSkippedBeforeTransitDispatch)
+{
+  expectPlannerEligibleResume(253);
+}
+
+TEST_F(FollowStripDetourCostmap, UnknownTargetCenterIsSkippedBeforeTransitDispatch)
+{
+  expectPlannerEligibleResume(255);
 }
 
 TEST_F(FollowStripDetourCostmap, InvalidFreshResponseNeverUsesRetainedClearGrid)
@@ -789,4 +837,87 @@ TEST(DetourCostmapSnapshot, PreservesRawOccupancyConversionAndRejectsMalformedMe
       {
         m.header.frame_id = "odom";
       });
+}
+
+TEST(DetourTransitTargetCenter, FloatBoundaryIncludesTheRealCostmapCell)
+{
+  auto map = clearMap();
+  nav2_costmap_2d::Costmap2D actual(120, 40, 0.1, -1.0, -2.0, 0);
+  unsigned x, y;
+  ASSERT_TRUE(actual.worldToMap(0.8, 0.0, x, y));
+  ASSERT_EQ(x, 18u);
+  ASSERT_EQ(y, 20u);
+  for (const uint8_t cost : {253, 254, 255})
+  {
+    map.data[y * 120 + x] = cost;
+    const auto snapshot = mowgli_behavior::detourCostmapSnapshot(map);
+    ASSERT_TRUE(snapshot);
+    EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, 0.8, 0.0));
+  }
+  map.data[y * 120 + x] = 252;
+  auto snapshot = mowgli_behavior::detourCostmapSnapshot(map);
+  ASSERT_TRUE(snapshot);
+  EXPECT_TRUE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, 0.8, 0.0));
+  // A different consistent producer resolution selects the neighbouring cell.
+  // Rejecting that ambiguous boundary is deliberate even when actual is clear.
+  map.data[19 * 120 + 17] = 253;
+  snapshot = mowgli_behavior::detourCostmapSnapshot(map);
+  ASSERT_TRUE(snapshot);
+  EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, 0.8, 0.0));
+  // Body-only inflation must not become a centre-eligibility rejection.
+  EXPECT_TRUE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, 0.85, 0.05));
+}
+
+TEST(DetourTransitTargetCenter, ActualCostmapCellsAtTranslatedGridLinesCannotBeMissed)
+{
+  for (const double resolution : {0.05, 0.08, 0.1, 0.125})
+    for (const auto origin :
+         {std::pair{-1.0, -2.0}, std::pair{0.0, 0.0}, std::pair{100000.0, -100000.0}})
+    {
+      auto map = clearMap();
+      map.metadata.resolution = resolution;
+      map.metadata.origin.position.x = origin.first;
+      map.metadata.origin.position.y = origin.second;
+      nav2_costmap_2d::Costmap2D actual(120, 40, resolution, origin.first, origin.second, 0);
+      const double bx = origin.first + 18 * resolution;
+      const double by = origin.second + 20 * resolution;
+      for (double px : {std::nextafter(bx, -INFINITY), bx, std::nextafter(bx, INFINITY)})
+        for (double py : {std::nextafter(by, -INFINITY), by, std::nextafter(by, INFINITY)})
+        {
+          unsigned x, y;
+          ASSERT_TRUE(actual.worldToMap(px, py, x, y));
+          for (const uint8_t cost : {253, 254, 255})
+          {
+            map.data[y * 120 + x] = cost;
+            const auto snapshot = mowgli_behavior::detourCostmapSnapshot(map);
+            ASSERT_TRUE(snapshot);
+            EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, px, py));
+            map.data[y * 120 + x] = 0;
+          }
+          const auto clear = mowgli_behavior::detourCostmapSnapshot(map);
+          ASSERT_TRUE(clear);
+          EXPECT_TRUE(mowgli_behavior::detourTransitTargetCenterClear(*clear, px, py));
+        }
+    }
+}
+
+TEST(DetourTransitTargetCenter, OriginEdgesAndInvalidArithmeticFailSafely)
+{
+  auto snapshot = mowgli_behavior::detourCostmapSnapshot(clearMap());
+  ASSERT_TRUE(snapshot);
+  EXPECT_TRUE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, -1.0, -2.0));
+  EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, -1.00001, 0.0));
+  EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, 11.0, 0.0));
+  EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, INFINITY, 0.0));
+  EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, NAN, 0.0));
+  snapshot->resolution = 0.1;  // Not a float32 wire value.
+  EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, 0.8, 0.0));
+  snapshot->resolution = std::numeric_limits<float>::max();
+  EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, 0.8, 0.0));
+  snapshot->resolution = std::numeric_limits<float>::denorm_min();
+  snapshot->origin_x = snapshot->origin_y = 0.0;
+  EXPECT_TRUE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot, 0.0, 0.0));
+  EXPECT_FALSE(mowgli_behavior::detourTransitTargetCenterClear(*snapshot,
+                                                               std::numeric_limits<double>::max(),
+                                                               0.0));
 }

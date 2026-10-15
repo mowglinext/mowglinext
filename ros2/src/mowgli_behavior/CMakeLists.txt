@@ -665,6 +665,7 @@ if(BUILD_TESTING)
   )
 
   # ---- test_follow_strip_detour_costmap ----
+  find_package(nav2_costmap_2d REQUIRED)
   ament_add_ros_isolated_gtest(test_follow_strip_detour_costmap
     test/test_follow_strip_detour_costmap.cpp
     $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
@@ -673,7 +674,8 @@ if(BUILD_TESTING)
     TIMEOUT 120
   )
   target_include_directories(test_follow_strip_detour_costmap PUBLIC include)
-  target_link_libraries(test_follow_strip_detour_costmap ${behavior_node_dependencies})
+  target_link_libraries(test_follow_strip_detour_costmap ${behavior_node_dependencies}
+    ${nav2_costmap_2d_TARGETS})
 
   # ---- test_follow_strip_dig ----
   # Tick-level: FollowStrip against fake /follow_path + /navigate_to_pose
