@@ -8,8 +8,10 @@ export interface UseTopicOptions<T> {
      * final value is never dropped. 0/undefined = every message re-renders.
      */
     throttleMs?: number;
-    /** Track Date.now() of the last delivered message in `lastMessageAt`. */
+    /** Track delivery time in `lastMessageAt` using timestampClock (wall time by default). */
     withTimestamp?: boolean;
+    /** Monotonic delivery time is suitable for liveness checks across wall-clock changes. */
+    timestampClock?: 'wall' | 'monotonic';
     /**
      * Map the raw multiplex payload to the hook's value. Return `undefined`
      * to ignore the message (keeps the previous value). Read fresh on every
@@ -80,7 +82,7 @@ export const useTopic = <T>(
             const select = optsRef.current?.select;
             const next = select ? select(raw) : (raw as T);
             if (next === undefined) return;
-            latest = {data: next, at: Date.now()};
+            latest = {data: next, at: optsRef.current?.timestampClock === 'monotonic' ? performance.now() : Date.now()};
 
             const throttleMs = optsRef.current?.throttleMs ?? 0;
             if (throttleMs <= 0) {
