@@ -9,6 +9,7 @@ includes and node options; they do not simulate a running bridge or respawn.
 
 import ast
 import importlib.util
+import json
 import os
 import re
 from pathlib import Path
@@ -89,6 +90,7 @@ def _build(filename, robot_params_override=None, **overrides):
     namespace.update(
         {
             "os": os,
+            "json": json,
             "yaml": yaml,
             "LaunchDescription": Description,
             "DeclareLaunchArgument": Declaration,

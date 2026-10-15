@@ -56,6 +56,7 @@ from launch.actions import (
     ExecuteProcess,
     GroupAction,
     IncludeLaunchDescription,
+    OpaqueFunction,
     RegisterEventHandler,
 )
 from launch.conditions import IfCondition, UnlessCondition
@@ -96,6 +97,12 @@ from robot_config_util import (
     resolve_lidar_enabled,
     warn_lidar_key_absent,
 )
+
+
+# bringup already depends on fusion_graph; keep snapshot validation in one place.
+sys.path.insert(0, os.path.join(
+    get_package_share_directory("fusion_graph"), "launch"))
+from fusion_graph_simulation_geometry import resolve_simulation_geometry  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -223,6 +230,10 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # Resolved substitutions
     # ------------------------------------------------------------------
+    simulation_geometry_arg = DeclareLaunchArgument(
+        "simulation_geometry", default_value="",
+        description="Internal complete simulator datum/antenna snapshot; requires simulation time.",
+    )
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_lidar = LaunchConfiguration("use_lidar")
     use_magnetometer = LaunchConfiguration("use_magnetometer")
@@ -1286,80 +1297,86 @@ def generate_launch_description() -> LaunchDescription:
     # the use_fusion_graph flag in this refactor). Works WITHOUT LiDAR
     # when use_lidar_map_anchor=false (forced when use_lidar=false).
     # Reads datum + lever-arm from mowgli_robot.yaml inside the include.
-    fusion_graph_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("fusion_graph"),
-                "launch", "fusion_graph.launch.py",
-            )
-        ),
-        launch_arguments={
-            "use_sim_time": use_sim_time,
-            "use_magnetometer": use_magnetometer,
-            # LiDAR-gated: no scanner -> no scan factors, and no subscription to
-            # a topic nothing publishes. See lidar_gated() above.
-            "use_lidar_map_anchor": lidar_gated(use_lidar_map_anchor),
-            "lidar_anchor_shadow_mode": lidar_gated(lidar_anchor_shadow_mode),
-            "primary_mode": "true",
-            "tf_publish_lead_s": fusion_graph_tf_lead_s,
-            "node_period_s": fusion_graph_node_period_s,
-        }.items(),
-    )
+    def localization_nodes(context):
+        geometry_spec = LaunchConfiguration("simulation_geometry").perform(context)
+        geometry = resolve_simulation_geometry(geometry_spec, use_sim_time.perform(context))
+        fusion_graph_launch = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(
+                    get_package_share_directory("fusion_graph"),
+                    "launch", "fusion_graph.launch.py",
+                )
+            ),
+            launch_arguments={
+                "use_sim_time": use_sim_time,
+                "simulation_geometry": geometry_spec,
+                "use_magnetometer": use_magnetometer,
+                # LiDAR-gated: no scanner -> no scan factors, and no subscription to
+                # a topic nothing publishes. See lidar_gated() above.
+                "use_lidar_map_anchor": lidar_gated(use_lidar_map_anchor),
+                "lidar_anchor_shadow_mode": lidar_gated(lidar_anchor_shadow_mode),
+                "primary_mode": "true",
+                "tf_publish_lead_s": fusion_graph_tf_lead_s,
+                "node_period_s": fusion_graph_node_period_s,
+            }.items(),
+        )
 
-    # dock_yaw_to_set_pose was inlined into fusion_graph_node
-    # (FusionGraphNode::SeedFromDockPose) on 2026-05-18 — the dock
-    # pose anchor is now applied directly by the localizer on
-    # is_charging rising edge, without a separate node + topic round-trip.
+        # dock_yaw_to_set_pose was inlined into fusion_graph_node
+        # (FusionGraphNode::SeedFromDockPose) on 2026-05-18 — the dock
+        # pose anchor is now applied directly by the localizer on
+        # is_charging rising edge, without a separate node + topic round-trip.
 
-    # Publishes GPS course-over-ground as a synthetic sensor_msgs/Imu on
-    # /imu/cog_heading so ekf_map_node can fuse it as an absolute-yaw
-    # observation. Once the session is seeded and the robot is driving
-    # forward faster than min_speed_ms with RTK-Fixed, this node corrects
-    # gyro drift every /gps/absolute_pose sample.
-    # cog_to_imu publishes a stationary "anchor" yaw at
-    # stationary_seed_rate_hz Hz when GPS COG cannot be derived
-    # (robot not moving forward). On real hardware this anchors the
-    # fusion_graph yaw across long stationary periods. In sim with
-    # KinematicDrive (which teleports without forward GPS motion),
-    # the anchor pins ekf_map_node's yaw to a stale value and fights
-    # the gyro integration, so a robot in PRE_ROTATE never closes
-    # large heading errors (issue #200). Default 2.0 Hz, overridden
-    # to 0.0 in sim_full_system.launch.py.
-    cog_stationary_rate = LaunchConfiguration("cog_stationary_seed_rate_hz")
-    cog_to_imu = Node(
-        package="mowgli_localization",
-        executable="cog_to_imu",
-        name="cog_to_imu",
-        output="screen",
-        parameters=[
-            {"use_sim_time": use_sim_time,
-             "datum_lat": datum_lat,
-             "datum_lon": datum_lon,
-             # Lever arm from the same mowgli_robot.yaml source fusion_graph
-             # reads (gps_x/gps_y). Without this cog_to_imu silently used its
-             # hardcoded 0.30/0.0 default and de-biased COG with the wrong
-             # lever arm on any non-default antenna mount.
-             "lever_arm_x": gps_x,
-             "lever_arm_y": gps_y,
-             "enable_mag_cal": enable_mag_cal,
-             "mag_calibration_path": mag_cal_path,
-             "stationary_seed_rate_hz": cog_stationary_rate,
-             "physical_gnss_observation_rate_hz": physical_gnss_observation_rate_hz,
-             # Stationary-yaw aging penalty. The republish_latched path
-             # adds (rate · age)² to the variance to model the chance
-             # that the latched yaw has gone stale (manual rotation,
-             # gyro bias accumulation) since the last forward-motion
-             # measurement. Upstream default is 0.005 rad/s ≈ 0.29 °/s,
-             # which inflates σ to ~45° after 2-3 min stationary —
-             # aggressive enough that fusion_graph effectively ignores
-             # the seed during normal idle windows. On this chassis the
-             # post-calibration gyro bias drift is closer to 0.01-0.03 °/s,
-             # so 0.001 rad/s (= 0.057 °/s, ~3.4 °/min) is a much closer
-             # match and keeps σ ≈ 9° after 2-3 min — still penalises
-             # manual pushes but lets the EKF actually use the seed.
-             "stationary_yaw_drift_rate": 0.001},
-        ],
-    )
+        # Publishes GPS course-over-ground as a synthetic sensor_msgs/Imu on
+        # /imu/cog_heading so ekf_map_node can fuse it as an absolute-yaw
+        # observation. Once the session is seeded and the robot is driving
+        # forward faster than min_speed_ms with RTK-Fixed, this node corrects
+        # gyro drift every /gps/absolute_pose sample.
+        # cog_to_imu publishes a stationary "anchor" yaw at
+        # stationary_seed_rate_hz Hz when GPS COG cannot be derived
+        # (robot not moving forward). On real hardware this anchors the
+        # fusion_graph yaw across long stationary periods. In sim with
+        # KinematicDrive (which teleports without forward GPS motion),
+        # the anchor pins ekf_map_node's yaw to a stale value and fights
+        # the gyro integration, so a robot in PRE_ROTATE never closes
+        # large heading errors (issue #200). Default 2.0 Hz, overridden
+        # to 0.0 in sim_full_system.launch.py.
+        cog_stationary_rate = LaunchConfiguration("cog_stationary_seed_rate_hz")
+        cog_to_imu = Node(
+            package="mowgli_localization",
+            executable="cog_to_imu",
+            name="cog_to_imu",
+            output="screen",
+            parameters=[
+                {"use_sim_time": use_sim_time,
+                 "datum_lat": geometry.get("datum_lat", datum_lat),
+                 "datum_lon": geometry.get("datum_lon", datum_lon),
+                 # Lever arm from the same mowgli_robot.yaml source fusion_graph
+                 # reads (gps_x/gps_y). Without this cog_to_imu silently used its
+                 # hardcoded 0.30/0.0 default and de-biased COG with the wrong
+                 # lever arm on any non-default antenna mount.
+                 "lever_arm_x": geometry.get("lever_arm_x", gps_x),
+                 "lever_arm_y": geometry.get("lever_arm_y", gps_y),
+                 "enable_mag_cal": enable_mag_cal,
+                 "mag_calibration_path": mag_cal_path,
+                 "stationary_seed_rate_hz": cog_stationary_rate,
+                 "physical_gnss_observation_rate_hz": physical_gnss_observation_rate_hz,
+                 # Stationary-yaw aging penalty. The republish_latched path
+                 # adds (rate · age)² to the variance to model the chance
+                 # that the latched yaw has gone stale (manual rotation,
+                 # gyro bias accumulation) since the last forward-motion
+                 # measurement. Upstream default is 0.005 rad/s ≈ 0.29 °/s,
+                 # which inflates σ to ~45° after 2-3 min stationary —
+                 # aggressive enough that fusion_graph effectively ignores
+                 # the seed during normal idle windows. On this chassis the
+                 # post-calibration gyro bias drift is closer to 0.01-0.03 °/s,
+                 # so 0.001 rad/s (= 0.057 °/s, ~3.4 °/min) is a much closer
+                 # match and keeps σ ≈ 9° after 2-3 min — still penalises
+                 # manual pushes but lets the EKF actually use the seed.
+                 "stationary_yaw_drift_rate": 0.001},
+            ],
+        )
+
+        return [fusion_graph_launch, cog_to_imu]
 
     # Publishes tilt-compensated magnetic heading as a synthetic
     # sensor_msgs/Imu on /imu/mag_yaw. Gated on use_magnetometer:=true
@@ -1518,6 +1535,7 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             use_sim_time_arg,
+            simulation_geometry_arg,
             use_lidar_arg,
             use_magnetometer_arg,
             use_lidar_map_anchor_arg,
@@ -1530,8 +1548,7 @@ def generate_launch_description() -> LaunchDescription:
             # for both map→odom AND odom→base_footprint; ekf_odom_node
             # was removed 2026-05-18).
             static_gps_link_alias,
-            fusion_graph_launch,
-            cog_to_imu,
+            OpaqueFunction(function=localization_nodes),
             mag_yaw_publisher,
             scan_deskew,
             costmap_scan_filter,

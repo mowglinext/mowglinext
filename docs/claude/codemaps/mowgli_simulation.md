@@ -9,6 +9,12 @@
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
+## Simulator map-frame contract
+
+`sim_full_system.launch.py` takes the datum and antenna lever arm from the garden scenario and forwards one complete `simulation_geometry` snapshot through navigation to COG and Fusion Graph. The map server and GNSS adapter use that same scenario. The shared launch validator rejects partial, nonfinite, invalid or self-seeding geometry and requires `use_sim_time=true`; ordinary physical launches retain their merged robot configuration.
+
+With no installed site config, the old localizer auto-seeded its datum from the antenna, shifting the fused chassis position by 0.30 m relative to this garden. An estimated inside-boundary command therefore did not establish ground-truth containment. `test_sim_localization_geometry.py` executes the complete launch chain in both sensor modes and checks rotated lever arms and physical configuration preservation. Before a mission, verify the live localizer/COG datum and antenna parameters against the scenario and compare the stationary fused pose with simulator ground truth.
+
 ## Where to look
 | Task | Start here |
 |------|------------|

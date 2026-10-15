@@ -35,7 +35,7 @@ def test_production_navigation_injects_signed_catcher_from_same_costmap_geometry
         get_package_prefix=lambda package: str(tmp_path / package),
         load_robot_params=lambda *args: params)
     for name in ("LaunchDescription", "DeclareLaunchArgument", "ExecuteProcess",
-                 "GroupAction", "IncludeLaunchDescription", "RegisterEventHandler",
+                 "GroupAction", "IncludeLaunchDescription", "OpaqueFunction", "RegisterEventHandler",
                  "IfCondition", "UnlessCondition", "OnProcessExit",
                  "PythonLaunchDescriptionSource", "LaunchConfiguration",
                  "PythonExpression", "Node", "SetParameter", "RewrittenYaml"):
