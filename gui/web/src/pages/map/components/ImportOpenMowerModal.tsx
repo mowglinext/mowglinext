@@ -1,3 +1,4 @@
+import {errorMessage} from '../../../utils/errors';
 import {NumberWithAddon} from '../../../components/inputs/NumberWithAddon';
 import {useAsyncHandler} from "../../../hooks/useAsyncHandler";
 import {useState} from "react";
@@ -75,8 +76,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
             setOmLon(null);
             setImportDatum(true);
             onClose();
-        } catch (e: any) {
-            setApplyError(e?.message ?? String(e));
+        } catch (e) {
+            setApplyError(errorMessage(e));
             setApplying(false);
         }
     };
@@ -90,8 +91,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
         try {
             const [lat, lon] = datumPair(omLat, omLon);
             await onReproject(lat, lon);
-        } catch (e: any) {
-            setApplyError(e?.message ?? String(e));
+        } catch (e) {
+            setApplyError(errorMessage(e));
         } finally {
             setReprojecting(false);
         }

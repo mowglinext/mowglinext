@@ -1,9 +1,10 @@
 import {asyncEvent, reportAsyncError} from "../../../utils/async";
 import {errorMessage} from "../../../utils/errors";
-import React, {ChangeEvent} from "react";
+import React from "react";
 import {useTranslation} from "react-i18next";
 import type {NotificationInstance} from "antd/es/notification/interface";
-import type {FeatureCollection} from "geojson";
+import type {Point, Polygon, Position} from "geojson";
+import {isJsonObject} from "../../../utils/json";
 import type {LidarIgnoreCorridor, Map as MapType} from "../../../types/ros.ts";
 import {
     MowingFeature,
@@ -252,11 +253,11 @@ export function useMapFiles({
             });
             setHasUnsavedChanges(false);
             setEditMap(false);
-        } catch (e: any) {
+        } catch (e) {
             // Stay in edit mode so the user's changes are not lost.
             notification.error({
                 message: t('mapFiles.failedToSaveArea'),
-                description: e?.message ?? String(e),
+                description: errorMessage(e),
             });
         }
     }
@@ -289,9 +290,9 @@ export function useMapFiles({
         input.style.display = "none";
         document.body.appendChild(input);
         input.addEventListener('cancel', () => input.remove(), {once: true});
-        input.addEventListener('change', asyncEvent(async (event: Event) => {
+        input.addEventListener('change', asyncEvent(async () => {
             input.remove();
-            const file = (event as unknown as ChangeEvent<HTMLInputElement>).target?.files?.[0];
+            const file = input.files?.[0];
             if (!file) {
                 return;
             }
@@ -310,8 +311,8 @@ export function useMapFiles({
             let restoredFeatures: Record<string, MowingFeature>;
             try {
                 restoredFeatures = buildFeaturesFromMap(parsed.map);
-            } catch (e: any) {
-                fail(e?.message ?? String(e));
+            } catch (e) {
+                fail(errorMessage(e));
                 return;
             }
             // A backup without dock fields leaves the current dock alone: it
@@ -414,9 +415,9 @@ export function useMapFiles({
         input.style.display = "none";
         document.body.appendChild(input);
         input.addEventListener('cancel', () => input.remove(), {once: true});
-        input.addEventListener('change', asyncEvent(async (event: Event) => {
+        input.addEventListener('change', asyncEvent(async () => {
             input.remove();
-            const file = (event as unknown as ChangeEvent<HTMLInputElement>).target?.files?.[0];
+            const file = input.files?.[0];
             if (!file) {
                 return;
             }
@@ -433,7 +434,12 @@ export function useMapFiles({
                 const text = await file.text();
                 // Parse client-side first so a totally bogus file fails
                 // before we hit the network.
-                JSON.parse(text);
+                const candidate: unknown = JSON.parse(text);
+                // Files are data, not permission to run this route's write path.
+                if (isJsonObject(candidate) && Object.keys(candidate).some(key => key.toLowerCase() === 'map')
+                    && Object.entries(candidate).some(([key, value]) => key.toLowerCase() === 'apply' && value === true)) {
+                    throw new Error('An OpenMower file cannot request apply before confirmation');
+                }
 
                 const res = await fetch("/api/import/openmower", {
                     method: "POST",
@@ -444,13 +450,13 @@ export function useMapFiles({
                     const errBody = await res.text();
                     throw new Error(`HTTP ${res.status}: ${errBody}`);
                 }
-                const summary = (await res.json()) as ImportOpenMowerSummary;
+                const summary = decodeImportOpenMowerSummary(await res.json(), false);
                 setImportFileText(text);
                 setImportPreview(summary);
-            } catch (e: any) {
+            } catch (e) {
                 notification.error({
                     message: t('mapFiles.openMowerImportFailed'),
-                    description: e?.message ?? String(e),
+                    description: errorMessage(e),
                 });
             }
         }, (error) => {
@@ -477,7 +483,8 @@ export function useMapFiles({
         if (!importFileText) {
             throw new Error("no stashed map text — pick a file before re-projecting");
         }
-        const body: Record<string, unknown> = {map: JSON.parse(importFileText)};
+        const source: unknown = JSON.parse(importFileText);
+        const body: Record<string, unknown> = {map: source};
         if (omDatumLat !== undefined && omDatumLon !== undefined) {
             body.om_datum_lat = omDatumLat;
             body.om_datum_lon = omDatumLon;
@@ -491,7 +498,7 @@ export function useMapFiles({
             const errBody = await res.text();
             throw new Error(`HTTP ${res.status}: ${errBody}`);
         }
-        return (await res.json()) as ImportOpenMowerSummary;
+        return decodeImportOpenMowerSummary(await res.json(), false);
     };
 
     /**
@@ -525,7 +532,8 @@ export function useMapFiles({
         if (!importFileText) {
             throw new Error("no stashed map text — preview must run before apply");
         }
-        const body: Record<string, unknown> = {map: JSON.parse(importFileText), apply: true};
+        const source: unknown = JSON.parse(importFileText);
+        const body: Record<string, unknown> = {map: source, apply: true};
         if (omDatumLat !== undefined && omDatumLon !== undefined) {
             body.om_datum_lat = omDatumLat;
             body.om_datum_lon = omDatumLon;
@@ -537,7 +545,19 @@ export function useMapFiles({
         });
         if (!res.ok) {
             const errBody = await res.text();
-            throw new Error(`HTTP ${res.status}: ${errBody}`);
+            let body: unknown;
+            try {body = JSON.parse(errBody);} catch { /* Keep the original HTTP error below. */ }
+            // This Go error is emitted only after replaceMapInternal succeeded.
+            const partial = isJsonObject(body) && typeof body.error === 'string' && body.error.startsWith('set docking point:');
+            throw new Error(`${partial ? 'map replaced, but setting the dock failed — ' : ''}HTTP ${res.status}: ${errBody}`);
+        }
+
+        // The server may already have written the map. An invalid acknowledgment
+        // is unconfirmed success, never evidence of rollback; do not auto-retry.
+        try {
+            decodeImportOpenMowerSummary(await res.json(), true);
+        } catch (error) {
+            throw new Error(`map apply response not confirmed; server may have changed the map — ${errorMessage(error)}`);
         }
 
         // Persist the datum only after the map/dock apply succeeded, and only
@@ -572,67 +592,39 @@ export function useMapFiles({
         input.type = "file";
         input.style.display = "none";
         document.body.appendChild(input);
-        input.addEventListener('change', (event) => {
-            const file = (event as unknown as ChangeEvent<HTMLInputElement>).target?.files?.[0];
-            if (!file) {
-                return;
-            }
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                // Parse + VALIDATE the whole file into plain snapshots BEFORE
-                // touching state. The old code type-cast raw GeoJSON objects to
-                // feature classes (never constructing them), so every
-                // `instanceof` check downstream failed: the polygons never
-                // rendered and Save persisted an empty map. We now build a
-                // SerializedMapFeature snapshot and rehydrate real class
-                // instances through the same factory the edit-history uses.
-                let geojson: FeatureCollection;
-                try {
-                    geojson = JSON.parse(event.target?.result as string) as FeatureCollection;
-                } catch {
-                    notification.error({message: t('mapFiles.uploadParseError')});
+        input.addEventListener('cancel', () => input.remove(), {once: true});
+        input.addEventListener('change', asyncEvent(async () => {
+            input.remove();
+            const file = input.files?.[0];
+            if (!file) return;
+            try {
+                let raw: unknown;
+                try {raw = JSON.parse(await file.text());}
+                catch (error) {
+                    notification.error({message: t('mapFiles.uploadParseError'), description: errorMessage(error)});
                     return;
                 }
-                if (!geojson || !Array.isArray(geojson.features)) {
-                    notification.error({message: t('mapFiles.uploadParseError')});
-                    return;
+                const snapshot = decodeEditableGeoJSON(raw, {
+                    invalid: t('mapFiles.uploadParseError'), empty: t('mapFiles.uploadEmpty'),
+                    unknownType: type => t('mapFiles.unknownType', {type}),
+                });
+                // Rehydrate everything before committing any editor state.
+                const next = featuresFromJSON(snapshot);
+                if (Object.keys(next).length !== Object.keys(snapshot).length
+                    || Object.entries(next).some(([id, feature]) => feature.id !== id
+                        || feature instanceof ObstacleFeature && !(feature.getMowingArea() instanceof MowingAreaFeature))) {
+                    throw new Error(t('mapFiles.uploadParseError'));
                 }
-
-                const KNOWN_TYPES = new Set(['workarea', 'navigation', 'obstacle', 'dock']);
-                const snapshot: Record<string, SerializedMapFeature> = {};
-                for (const element of geojson.features) {
-                    if (element.id == null || !element.geometry) continue;
-                    const id = String(element.id);
-                    const featureType = element.properties?.feature_type as string | undefined;
-                    if (!featureType || !KNOWN_TYPES.has(featureType)) {
-                        // Abort WITHOUT mutating state — a single bad feature
-                        // must not partially overwrite the current map.
-                        notification.error({
-                            message: t('mapFiles.unknownType', {type: featureType ?? '?'}),
-                        });
-                        return;
-                    }
-                    snapshot[id] = {
-                        id,
-                        type: 'Feature',
-                        geometry: element.geometry as SerializedMapFeature['geometry'],
-                        properties: (element.properties ?? {}) as Record<string, unknown>,
-                        parent_id: element.properties?.mowing_area as string | undefined,
-                    };
-                }
-
-                if (Object.keys(snapshot).length === 0) {
-                    notification.error({message: t('mapFiles.uploadEmpty')});
-                    return;
-                }
-
-                const newFeatures = featuresFromJSON(snapshot);
-                setFeatures(newFeatures);
+                setFeatures(next);
                 setHasUnsavedChanges(true);
                 notification.success({message: t('mapFiles.uploadSuccess')});
-            };
-            reader.readAsText(file);
-        });
+            } catch (error) {
+                notification.error({message: errorMessage(error)});
+            }
+        }, error => {
+            reportAsyncError(error);
+            notification.error({message: t('mapFiles.uploadParseError'), description: errorMessage(error)});
+        }), {once: true});
         input.click();
     };
 
@@ -679,4 +671,82 @@ export interface ImportOpenMowerSummary {
         approx_area_sqm: number;
     }>;
     applied: boolean;
+}
+
+
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const count = (value: unknown): boolean => finite(value) && Number.isInteger(value) && value >= 0;
+function importArea(raw: unknown): raw is ImportOpenMowerSummary['areas'][number] {
+    return isJsonObject(raw) && typeof raw.name === 'string' && typeof raw.type === 'string'
+        && count(raw.vertices) && count(raw.obstacles) && typeof raw.is_navigation_area === 'boolean' && finite(raw.approx_area_sqm);
+}
+function importSummary(raw: unknown): raw is ImportOpenMowerSummary {
+    return isJsonObject(raw) && count(raw.mowing_areas) && count(raw.navigation_areas)
+        && count(raw.obstacles) && count(raw.orphan_obstacles) && finite(raw.datum_shift_east_m) && finite(raw.datum_shift_north_m)
+        && typeof raw.applied === 'boolean'
+        && (!('mn_datum_configured' in raw) || typeof raw.mn_datum_configured === 'boolean')
+        && (!('dock_pose' in raw) || raw.dock_pose === null || isJsonObject(raw.dock_pose)
+            && finite(raw.dock_pose.x) && finite(raw.dock_pose.y) && finite(raw.dock_pose.yaw_rad))
+        && Array.isArray(raw.warnings) && raw.warnings.every((warning: unknown) => typeof warning === 'string')
+        && Array.isArray(raw.areas) && raw.areas.every(importArea);
+}
+export function decodeImportOpenMowerSummary(raw: unknown, applied: boolean): ImportOpenMowerSummary {
+    if (!importSummary(raw) || raw.applied !== applied) throw new Error('Invalid OpenMower import summary');
+    return raw;
+}
+
+const position = (raw: unknown): raw is Position => Array.isArray(raw) && raw.length >= 2 && raw.every(finite);
+const bbox = (raw: unknown): boolean => raw === undefined || Array.isArray(raw) && (raw.length === 4 || raw.length === 6) && raw.every(finite);
+function editableGeometry(raw: unknown): raw is Point | Polygon {
+    if (!isJsonObject(raw) || !bbox(raw.bbox)) return false;
+    if (raw.type === 'Point') return position(raw.coordinates);
+    return raw.type === 'Polygon' && Array.isArray(raw.coordinates) && raw.coordinates.length > 0
+        && raw.coordinates.every((ring: unknown) => Array.isArray(ring) && ring.length >= 3 && ring.every(position));
+}
+
+export function decodeEditableGeoJSON(raw: unknown, messages: {invalid: string; empty: string; unknownType: (type: string) => string}): Record<string, SerializedMapFeature> {
+    if (!isJsonObject(raw) || raw.type !== 'FeatureCollection' || !Array.isArray(raw.features)) throw new Error(messages.invalid);
+    const entries = new Map<string, SerializedMapFeature>();
+    for (const value of raw.features) {
+        const element: unknown = value;
+        if (!isJsonObject(element) || element.type !== 'Feature'
+            || !(typeof element.id === 'string' || finite(element.id)) || !editableGeometry(element.geometry)) throw new Error(messages.invalid);
+        const props = element.properties;
+        const featureType = isJsonObject(props) ? props.feature_type : undefined;
+        if (typeof featureType !== 'string' || !['workarea', 'navigation', 'obstacle', 'dock'].includes(featureType)) {
+            throw new Error(messages.unknownType(typeof featureType === 'string' ? featureType : '?'));
+        }
+        if (!isJsonObject(props)) throw new Error(messages.invalid);
+        const id = String(element.id);
+        // The factory uses object dictionaries: duplicate IDs or a prototype
+        // setter must never cause a feature to disappear during rehydration.
+        if (id === '__proto__' || entries.has(id) || (featureType === 'dock' ? element.geometry.type !== 'Point' : element.geometry.type !== 'Polygon')) throw new Error(messages.invalid);
+        if (featureType === 'dock') {
+            // Null heading already means unavailable in the feature factory.
+            if (props.heading != null && !finite(props.heading)) throw new Error(messages.invalid);
+        } else {
+            // Present overrides must match the class contract: spreading null
+            // over its defaults would later break labels/order handling.
+            for (const key of ['index', 'mowing_order', 'source_working_area_index', 'source_working_area_id']) {
+                if (key in props && !finite(props[key])) throw new Error(messages.invalid);
+            }
+            for (const key of ['name', 'color']) {
+                if (key in props && typeof props[key] !== 'string') throw new Error(messages.invalid);
+            }
+        }
+        const parent = featureType === 'obstacle' ? props.mowing_area : undefined;
+        if (parent != null && typeof parent !== 'string' && !finite(parent)) throw new Error(messages.invalid);
+        entries.set(id, {id, type: 'Feature', geometry: element.geometry, properties: props,
+            ...(parent == null ? {} : {parent_id: String(parent)})});
+    }
+    if (entries.size === 0) throw new Error(messages.empty);
+    // Only actual workarea keys can be parents. Clear unresolved references so
+    // the existing factory falls back to an available area, never Object.prototype.
+    const areaIds = new Set([...entries].filter(([, feature]) => feature.properties.feature_type === 'workarea').map(([id]) => id));
+    for (const feature of entries.values()) {
+        if (feature.properties.feature_type === 'obstacle' && feature.parent_id !== undefined && !areaIds.has(feature.parent_id)) {
+            delete feature.parent_id;
+        }
+    }
+    return Object.fromEntries(entries);
 }

@@ -22,3 +22,25 @@ it('forwards each explicit Enter/blur to one preview reprojection, without apply
         expect(error.mock.calls.some(args => args.some(arg => typeof arg === 'string' && arg.includes('[antd: InputNumber]') && /addonBefore|addonAfter/.test(arg)))).toBe(false);
     } finally {error.mockRestore();}
 });
+
+it('keeps the dialog and error after partial apply failure; Cancel never retries or rolls back', async () => {
+    const apply = vi.fn<() => Promise<void>>().mockRejectedValue(new Error('map replaced, but setting the dock failed — HTTP 500'));
+    const close = vi.fn(), reproject = vi.fn<() => Promise<ImportOpenMowerSummary>>().mockResolvedValue(summary);
+    render(<App><ImportOpenMowerModal preview={summary} onApply={apply} onReproject={reproject} onClose={close}/></App>);
+    await act(async () => {fireEvent.click(screen.getByRole('button', {name: /Apply/})); await Promise.resolve();});
+    expect(await screen.findByText('map replaced, but setting the dock failed — HTTP 500')).toBeInTheDocument();
+    expect(close).not.toHaveBeenCalled(); expect(apply).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', {name: /Apply/})).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', {name: 'Cancel'}));
+    expect(close).toHaveBeenCalledOnce(); expect(apply).toHaveBeenCalledOnce(); expect(reproject).not.toHaveBeenCalled();
+});
+it('allows explicit apply retry after an error, without an implicit second request', async () => {
+    const apply = vi.fn<() => Promise<void>>().mockRejectedValueOnce('Connection lost').mockResolvedValueOnce();
+    const close = vi.fn();
+    render(<App><ImportOpenMowerModal preview={summary} onApply={apply} onReproject={vi.fn()} onClose={close}/></App>);
+    await act(async () => {fireEvent.click(screen.getByRole('button', {name: /Apply/})); await Promise.resolve();});
+    expect(await screen.findByText('Connection lost')).toBeInTheDocument();
+    expect(apply).toHaveBeenCalledOnce(); expect(close).not.toHaveBeenCalled();
+    await act(async () => {fireEvent.click(screen.getByRole('button', {name: /Apply/})); await Promise.resolve();});
+    expect(apply).toHaveBeenCalledTimes(2); expect(close).toHaveBeenCalledOnce();
+});
