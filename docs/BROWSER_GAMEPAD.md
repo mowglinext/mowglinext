@@ -22,7 +22,8 @@ robot-side Bluetooth management and standalone mapping files remain future work.
    then press one button or move one stick. Assign unique buttons and axes.
    Configure dead zone, inversion and speed scale, then save. Unknown layouts
    require testing and saving before Enable becomes available.
-5. Enable for this robot, center the sticks and release every mapped button.
+5. Enable for this robot. The configuration panel finishes closing and restores
+   focus before a control session opens. Center the sticks and release every mapped button.
    Press and hold the deadman with centered sticks, then move a stick. Maximum
    speeds match the touch joystick: 0.25 m/s and 0.6 rad/s, scaled down by the
    profile. A deflected stick on a new deadman press requires another neutral
@@ -59,6 +60,8 @@ valid polygon was saved. Check the resulting map.
   values into the touch joystick's cached-value repeater. The configuration
   preview refreshes only while its panel is open; closing it does not pause
   input reads or safety checks, and its hidden form is unmounted.
+- Changing input ownership does not restart the recording trajectory stream or
+  rebuild a map that has no trajectory to clear.
 - Missing/disconnected device, malformed inputs, changed device identity,
   invalid profile, browser blur/hide/page exit or >200 ms poll gap revoke the
   session. Nonfinite, zero, negative or regressed device timestamps fail closed.
@@ -108,11 +111,25 @@ be detected. Physical controller-disconnect tests remain required for each
 client/browser/controller combination. Browser input alone is not a safety-rated
 deadman or emergency stop.
 
+## Diagnosing an input stop
+
+An input-loss warning includes the first specific cause, such as lost page focus,
+a missing device, an invalid axis/button/timestamp or a measured polling gap.
+Reopen **Controller** to read or copy that diagnostic; reopening preserves it,
+and the next activation attempt clears it. When its close message reaches
+the server, the GUI log also records the reason and polling gap. These are browser
+observations, not proof of a physical Bluetooth disconnect. Record the client OS,
+browser/controller versions and exact diagnostic when reporting a failure.
+
+The panel closing/focus handoff and map ownership churn are covered in software
+tests. These tests cannot establish physical iPad/Safari/Bluetooth behavior.
+Safety deadlines and timestamp-order validation are unchanged.
+
 ## Validation and physical acceptance
 
 Automated coverage uses synthetic browser input, mocked robot commands and Go
 WebSocket/provider tests. It does not prove any physical controller, transport,
-blade or stopping-distance behavior. GUI CI runs both controller browser specs serially, including
+blade or stopping-distance behavior. GUI CI runs both controller browser specs serially in Chromium and WebKit, including
 change-only WebKit-style timestamps and configuration/drive handoff. The polling
 deadline remains active in these tests.
 

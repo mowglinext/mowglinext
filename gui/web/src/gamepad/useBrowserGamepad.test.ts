@@ -23,6 +23,7 @@ class FakeWebSocket {
     bufferedAmount = 0;
     readonly sent: string[] = [];
     closeCount = 0;
+    closeReason = '';
     onclose: ((event: CloseEvent) => unknown) | null = null;
     onerror: ((event: Event) => unknown) | null = null;
 
@@ -32,8 +33,9 @@ class FakeWebSocket {
 
     open() { this.readyState = FakeWebSocket.OPEN; }
     send(value: string) { this.sent.push(value); }
-    close() {
+    close(_code?: number, reason = '') {
         this.closeCount++;
+        this.closeReason = reason;
         this.readyState = FakeWebSocket.CLOSED;
         this.onclose?.({} as CloseEvent);
     }
@@ -136,6 +138,21 @@ afterEach(() => {
 });
 
 describe('useBrowserGamepad session ownership', () => {
+    it.each([
+        {change: {connected: false}, reason: 'disconnected'},
+        {change: {id: 'replacement'}, reason: 'identityChanged'},
+        {change: {index: 1}, reason: 'identityChanged'},
+        {change: {axes: [0]}, reason: 'mappingChanged'},
+    ])('revalidates changed native input before opening a session ($reason)', ({change, reason}) => {
+        const {hook, onOwnershipChange} = mount();
+        pad = {...pad, ...change}; // The configuration preview is no longer current.
+        act(() => { hook.result.current.enable(); });
+        expect(hook.result.current.fault).toBe('inputLost');
+        expect(hook.result.current.inputLoss).toEqual({reason});
+        expect(FakeWebSocket.instances).toHaveLength(0);
+        expect(onOwnershipChange).not.toHaveBeenCalled();
+    });
+
     it('keeps safety polling active while the configuration preview is hidden', () => {
         topics.status.data.state_name = 'RECORDING';
         const onSample = vi.fn();
@@ -355,13 +372,16 @@ describe('useBrowserGamepad session ownership', () => {
         expect(onOwnershipChange).not.toHaveBeenCalled();
     });
 
-    it.each(['pagehide', 'visibilitychange'])('revokes immediately on %s and requires explicit rearming', event => {
+    it.each(['blur', 'pagehide', 'visibilitychange'])('revokes immediately on %s and requires explicit rearming', event => {
         const {hook, onOwnershipChange} = mount();
         const socket = enable(hook);
         poll();
         act(() => { (event === 'visibilitychange' ? document : window).dispatchEvent(new Event(event)); });
         expect(socket.closeCount).toBe(1);
         expect(hook.result.current.enabled).toBe(false);
+        const reason = event === 'blur' ? 'focusLost' : event === 'pagehide' ? 'pageExit' : 'pageHidden';
+        expect(hook.result.current.inputLoss).toEqual({reason});
+        expect(socket.closeReason).toBe(`input:${reason}`);
         expect(onOwnershipChange.mock.calls.map(([owns]) => owns)).toEqual([true, false]);
         poll(500);
         expect(FakeWebSocket.instances).toHaveLength(1);
@@ -399,7 +419,28 @@ describe('useBrowserGamepad session ownership', () => {
         monotonic += 201;
         poll();
         expect(hook.result.current.fault).toBe('inputLost');
+        expect(hook.result.current.inputLoss).toEqual({reason: 'pollGap', pollGapMs: 201});
+        expect(socket.closeReason).toBe('input:pollGap:201ms');
         expect(socket.closeCount).toBe(1);
+        expect(FakeWebSocket.instances).toHaveLength(1);
+        act(() => { hook.result.current.disable(); }); // Opening configuration must retain the first cause.
+        poll();
+        expect(hook.result.current.inputLoss).toEqual({reason: 'pollGap', pollGapMs: 201});
+        enable(hook);
+        expect(hook.result.current.inputLoss).toBeNull();
+    });
+
+    it('identifies focus loss on a poll even when no blur event was dispatched', () => {
+        const {hook} = mount();
+        const socket = enable(hook);
+        poll();
+        vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+        poll();
+        expect(hook.result.current.inputLoss).toEqual({reason: 'focusLost'});
+        expect(socket.closeReason).toBe('input:focusLost');
+        vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+        poll(500);
+        expect(hook.result.current.enabled).toBe(false);
         expect(FakeWebSocket.instances).toHaveLength(1);
     });
 

@@ -10,6 +10,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -171,6 +172,11 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 	for {
 		kind, raw, err := conn.ReadMessage()
 		if err != nil {
+			var closed *websocket.CloseError
+			if errors.As(err, &closed) && strings.HasPrefix(closed.Text, "input:") {
+				// Client diagnostics only; never renew the lease or change cleanup.
+				log.Printf("gamepad browser input loss: %q", closed.Text)
+			}
 			return
 		}
 		if kind != websocket.TextMessage {

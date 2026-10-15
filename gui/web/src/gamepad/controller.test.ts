@@ -3,6 +3,7 @@ import {
     ACTION_COMMANDS, ACTION_HOLD_MS, ControllerDriver, DEFAULT_PROFILE,
     MAX_ANGULAR_RAD_S, MAX_LINEAR_MPS, POLL_MAX_GAP_MS, loadProfile, profileFits,
     saveProfile, validProfile, type ControllerContext, type ControllerProfile, type ControllerSample,
+    type InputLoss,
 } from './controller';
 
 const idle: ControllerContext = {stateName: 'IDLE', statusFresh: true, emergency: false, pending: false};
@@ -64,6 +65,33 @@ describe('controller profile validation and storage', () => {
 });
 
 describe('ControllerDriver', () => {
+    it.each<[string, ControllerSample | null, Partial<InputLoss>]>([
+        ['missing device', null, {reason: 'disconnected'}],
+        ['disconnected device', sample({connected: false}), {reason: 'disconnected'}],
+        ['different device', sample({id: 'replacement'}), {reason: 'identityChanged'}],
+        ['changed layout', sample({axes: [0]}), {reason: 'mappingChanged'}],
+        ['zero timestamp', sample({timestamp: 0}), {reason: 'timestampInvalid', timestamp: 0, previousTimestamp: 1000}],
+        ['regressed timestamp', sample({timestamp: 999}), {reason: 'timestampRegressed', timestamp: 999, previousTimestamp: 1000}],
+        ['out-of-range axis', sample({axes: [0, 1.01]}), {reason: 'axisInvalid', inputIndex: 1, inputValue: 1.01}],
+        ['out-of-range button', sample({buttons: sample().buttons.map((b, i) => i === 5 ? {...b, value: -0.01} : b)}),
+            {reason: 'buttonInvalid', inputIndex: 5, inputValue: -0.01}],
+    ])('retains the exact first failure for %s without emitting motion', (_name, badPad, detail) => {
+        const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        driver.step(sample(), 1000, idle);
+        const failed = driver.step(badPad, 1050, idle);
+        expect(failed).toMatchObject({linear: 0, angular: 0, deadman: false, state: 'inputLost', inputLoss: detail});
+        expect(driver.step(sample(), 2000, idle)).toEqual(failed);
+    });
+
+    it('reports the observed polling gap and rejects a regressed browser clock', () => {
+        const gap = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        gap.step(sample(), 1000, idle);
+        expect(gap.step(sample(), 1234.5, idle)).toMatchObject({state: 'inputLost', inputLoss: {reason: 'pollGap', pollGapMs: 234.5}});
+        const clock = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        clock.step(sample(), 1000, idle);
+        expect(clock.step(sample(), 999, idle)).toMatchObject({state: 'inputLost', inputLoss: {reason: 'clockInvalid'}});
+    });
+
     it.each([12.345, 864000.25])('accepts a change-only timestamp in an independent clock domain (%s)', timestamp => {
         const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
         const recording = {...idle, stateName: 'RECORDING'};

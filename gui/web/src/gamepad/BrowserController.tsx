@@ -1,10 +1,10 @@
-import {useRef, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {Alert, App, Button, Drawer, Form, Select, Slider, Space, Switch, Tag, Typography} from 'antd';
 import {ControlOutlined} from '@ant-design/icons';
 import {useTranslation} from 'react-i18next';
 import {useBrowserGamepad} from './useBrowserGamepad';
 import {
-    ACTION_COMMANDS, BUTTON_BINDINGS, DEFAULT_PROFILE, controllerKey, loadProfile, profileFits, saveProfile, validProfile,
+    ACTION_COMMANDS, BUTTON_BINDINGS, DEFAULT_PROFILE, POLL_MAX_GAP_MS, controllerKey, loadProfile, profileFits, saveProfile, validProfile,
     type ButtonBinding, type ControllerIdentity, type ControllerProfile, type ControllerSample,
 } from './controller';
 
@@ -16,6 +16,8 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
     const {t} = useTranslation();
     const {message} = App.useApp();
     const [open, setOpen] = useState(false);
+    const enableRequested = useRef(false);
+    const [drawerClosed, setDrawerClosed] = useState(false);
     const [selected, setSelected] = useState<ControllerIdentity | null>(null);
     const [profile, setProfile] = useState<ControllerProfile>(() => structuredClone(DEFAULT_PROFILE));
     const [profileState, setProfileState] = useState<'default' | 'saved' | 'unsaved'>('default');
@@ -40,6 +42,39 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
     const controller = useBrowserGamepad({profile, selected, onOwnershipChange, onSample: observeInput, preview: open,
         runAction: action => mowerAction('high_level_control', {Command: ACTION_COMMANDS[action]})(),
     });
+    const enableController = controller.enable;
+    const revokeInput = controller.revokeInput;
+    useEffect(() => {
+        const suspend = (event: Event) => {
+            if (!enableRequested.current) return;
+            if ((event.type === 'gamepaddisconnected' || event.type === 'gamepadconnected') &&
+                (event as GamepadEvent).gamepad.index !== selected?.index) return;
+            enableRequested.current = false;
+            revokeInput({reason: event.type === 'blur' ? 'focusLost' : event.type === 'pagehide' ? 'pageExit' :
+                event.type === 'gamepaddisconnected' ? 'disconnected' : event.type === 'gamepadconnected' ? 'controllerChanged' : 'pageHidden'});
+        };
+        window.addEventListener('blur', suspend);
+        window.addEventListener('pagehide', suspend);
+        document.addEventListener('visibilitychange', suspend);
+        window.addEventListener('gamepaddisconnected', suspend);
+        window.addEventListener('gamepadconnected', suspend);
+        return () => {
+            window.removeEventListener('blur', suspend);
+            window.removeEventListener('pagehide', suspend);
+            document.removeEventListener('visibilitychange', suspend);
+            window.removeEventListener('gamepaddisconnected', suspend);
+            window.removeEventListener('gamepadconnected', suspend);
+        };
+    }, [revokeInput, selected?.index]);
+    useEffect(() => {
+        if (drawerClosed && enableRequested.current) {
+            enableRequested.current = false;
+            // rc-drawer restores focus AFTER calling afterOpenChange(false).
+            // Start in the subsequent commit, after restoration and teardown,
+            // so that neither can interrupt a newly opened control session.
+            enableController();
+        }
+    }, [drawerClosed, enableController]);
     const pad = controller.pads.find(p => p.index === selected?.index && p.id === selected.id);
     const configured = !!pad && profileFits(profile, pad) && profileState !== 'unsaved';
     const update = (next: ControllerProfile) => { setProfile(next); setProfileState('unsaved'); };
@@ -60,8 +95,11 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
         try { saveProfile(controllerKey(pad), profile); setProfileState('saved'); }
         catch { void message.error(t('gamepad.saveFailed')); }
     };
-    const openSettings = () => { controller.disable(); setOpen(true); };
-    const enable = () => { setLearn(null); setOpen(false); controller.enable(); };
+    const openSettings = () => { enableRequested.current = false; setDrawerClosed(false); controller.disable(); setOpen(true); };
+    const enable = () => { enableRequested.current = true; setDrawerClosed(false); setLearn(null); setOpen(false); };
+    const inputLossText = controller.inputLoss ? t(`gamepad.inputLossReasons.${controller.inputLoss.reason}`, {
+        ...controller.inputLoss, pollGapMs: Math.round(controller.inputLoss.pollGapMs ?? 0), limit: POLL_MAX_GAP_MS,
+    }) : null;
     const buttonOptions = pad?.buttons.map((_, value) => ({value, label: t('gamepad.buttonIndex', {index: value})})) ?? [];
     const axisOptions = pad?.axes.map((_, value) => ({value, label: t('gamepad.axisIndex', {index: value})})) ?? [];
     return <>
@@ -71,9 +109,12 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
                 <Tag role="status" style={{whiteSpace: 'normal'}}>{t(`gamepad.states.${controller.state}`)}</Tag>
                 <Button danger onClick={controller.disable}>{t('gamepad.disable')}</Button>
             </>}
-            {!controller.enabled && controller.fault && <Tag color="warning" role="alert" style={{whiteSpace: 'normal'}}>{t(`gamepad.faults.${controller.fault}`)}</Tag>}
+            {!controller.enabled && controller.fault && <Tag color="warning" role="alert" style={{whiteSpace: 'normal'}}>
+                {t(`gamepad.faults.${controller.fault}`)} {inputLossText}
+            </Tag>}
         </Space>
-        <Drawer title={t('gamepad.title')} open={open} destroyOnHidden onClose={() => {setOpen(false); setLearn(null);}} width={480}>
+        <Drawer title={t('gamepad.title')} open={open} destroyOnHidden afterOpenChange={visible => setDrawerClosed(!visible)}
+            onClose={() => {enableRequested.current = false; setOpen(false); setLearn(null);}} width={480}>
             <Space direction="vertical" size="middle" style={{width: '100%'}}>
                 <Typography.Paragraph>{t('gamepad.connectHelp')}</Typography.Paragraph>
                 {typeof navigator.getGamepads !== 'function' && <Alert type="warning" showIcon message={t('gamepad.faults.unsupported')}/>}
@@ -129,6 +170,8 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
                 </Form>
                 <Alert type="info" showIcon message={t('gamepad.safetyHelp')}/>
                 {controller.fault && <Alert type="warning" showIcon message={t(`gamepad.faults.${controller.fault}`)}/>}
+                {controller.inputLoss && <Alert type="warning" showIcon message={inputLossText}
+                    description={<Typography.Text code copyable>{JSON.stringify(controller.inputLoss)}</Typography.Text>}/>}
                 <Button type="primary" block onClick={enable} disabled={!configured || !!learn || typeof navigator.getGamepads !== 'function'}>
                     {t('gamepad.enable')}
                 </Button>
