@@ -48,6 +48,15 @@
 
 namespace mowgli_nav2_plugins
 {
+namespace
+{
+// Existing intended-command certificate: shipped controller runs at 10 Hz.
+// This does not establish a downstream lease or a physical stopping bound.
+constexpr double kIntendedCommandHorizonSec = 0.1;
+// Existing integration ceiling; budget commands must also fit this longest
+// supported controller interval. This is not a downstream command lease.
+constexpr double kMaxControlDtSec = 0.5;
+}  // namespace
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -1016,6 +1025,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   stall_time_ = 0.0;
   is_stalled_ = false;
   last_cmd_fwd_speed_ = 0.0;
+  last_reverse_budget_speed_ = 0.0;
   cm_held_s_ = 0.0;
   cm_stalled_s_ = 0.0;
   is_blade_limited_ = false;
@@ -1183,10 +1193,10 @@ void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command)
                                              tf2::getYaw(robot.pose.orientation)};
   // The intended-command horizon is 0.1 s (shipped controller: 10 Hz).
   // This is not a downstream command lease or a stopping-distance guarantee.
-  bool permitted =
-      authorization_->permits(pose, footprint, command.linear.x, command.angular.z, 0.1, true);
+  bool permitted = authorization_->permits(
+      pose, footprint, command.linear.x, command.angular.z, kIntendedCommandHorizonSec, true);
   const char* checked_sweep = "command";
-  double checked_horizon = 0.1;
+  double checked_horizon = kIntendedCommandHorizonSec;
   double checked_omega = command.angular.z;
   if (permitted && command.linear.x == 0 && command.angular.z != 0 &&
       (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT ||
@@ -1254,6 +1264,23 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   {
     const double max_speed = maxLinearSpeed();
     cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
+    // Charge the requested escape speed after external caps, before tapering.
+    // Using only the tapered speed would approach the cap through arbitrarily
+    // small commands. Full requested-speed charging instead hands off early;
+    // at short intervals this deliberately leaves some physical travel unused.
+    const double reverse_budget_speed =
+        reverse_escape_active_ ? std::max(0.0, -cmd_vel.twist.linear.x) : 0.0;
+    if (reverse_budget_speed > 0.0)
+    {
+      // Fit the next command into the remaining budget even for the longest
+      // supported control interval, rather than clamping only bookkeeping.
+      // Geometry authorization retains its separate intended-command horizon;
+      // neither check certifies physical coast or holds beyond this interval.
+      const double remaining =
+          std::max(0.0, config_.obstacle_reverse_max_dist_m - reverse_distance_done_);
+      const double budget_speed = std::nextafter(remaining / kMaxControlDtSec, 0.0);
+      cmd_vel.twist.linear.x = std::max(cmd_vel.twist.linear.x, -budget_speed);
+    }
     if (config_.enable_obstacle_deviation && config_.use_offset_lattice &&
         current_state_ == PlannerState::FOLLOWING && cmd_vel.twist.linear.x > 0 &&
         !reverse_escape_active_ && !turnFallbackReversing() &&
@@ -1264,6 +1291,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     }
     authorizeCommand(cmd_vel.twist);
     last_cmd_fwd_speed_ = cmd_vel.twist.linear.x;
+    last_reverse_budget_speed_ = reverse_budget_speed;
     return cmd_vel;
   };
 
@@ -1281,11 +1309,26 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   //     controller_server logs `Velocity message contains NaNs or Infs!`
   //     and silently drops it — leaving the strip un-driven for the
   //     entire goal_timeout window.
-  const double safe_dt = std::clamp(dt, 0.01, 0.5);
+  const double safe_dt = std::clamp(dt, 0.01, kMaxControlDtSec);
 
   // Cache the measured forward speed (odom feedback) for update_control_point's
   // anti-wheelspin stall detection.
   last_measured_fwd_speed_ = velocity.linear.x;
+
+  // Charge measured travel and the previous authorized pre-taper escape speed.
+  // Under-reported/stalled odometry must not grant unlimited reverse commands.
+  // The charge is recorded only after geometry authorizes the command return.
+  // Account once at the compute boundary: planner early returns must not
+  // freeze an active escape budget or bypass charging the last held command.
+  if (reverse_escape_active_)
+  {
+    ReverseEscapeCfg cfg;
+    cfg.max_dist_m = config_.obstacle_reverse_max_dist_m;
+    const double consumed_speed =
+        std::max(std::abs(last_measured_fwd_speed_), last_reverse_budget_speed_);
+    reverse_distance_done_ =
+        ReverseEscapeAdvance(cfg, reverse_distance_done_, consumed_speed, safe_dt);
+  }
 
   if (is_crashed_)
   {
@@ -1426,18 +1469,6 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       turn_fallback_engaged_now_ = false;
       return bounded_command();  // zero velocity
     }
-    // updateLateralDeviation engaged the bounded reverse-escape sub-state
-    // (both sides of an obstacle blocked / skirt over cap, rear footprint
-    // clear). Emit a PURE STRAIGHT reverse (no rotation, distance hard-capped
-    // in updateLateralDeviation) bypassing the PID, then return. This is the
-    // ONLY place FTC drives backwards and it is a distinct escape sub-state —
-    // normal following stays forward_only.
-    if (reverse_escape_active_)
-    {
-      cmd_vel.twist.linear.x = -config_.obstacle_reverse_speed_mps;
-      cmd_vel.twist.angular.z = 0.0;
-      return bounded_command();
-    }
     // updateLateralDeviation flipped on the wait-before-abort gate (the
     // costmap is blocked beyond max_lateral_deviation and we're holding
     // for obstacle_wait_timeout_s). Hold zero velocity until either the
@@ -1446,6 +1477,19 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     {
       return bounded_command();
     }
+    // updateLateralDeviation engaged the bounded reverse-escape sub-state
+    // (both sides of an obstacle blocked / skirt over cap, rear footprint
+    // clear). Emit a PURE STRAIGHT reverse (no rotation, distance budget
+    // bounded at the output) bypassing the PID, then return. This is the
+    // ONLY place FTC drives backwards and it is a distinct escape sub-state —
+    // normal following stays forward_only.
+    if (reverse_escape_active_)
+    {
+      cmd_vel.twist.linear.x = -config_.obstacle_reverse_speed_mps;
+      cmd_vel.twist.angular.z = 0.0;
+      return bounded_command();
+    }
+
     // Every check above reads the local costmap and says "clear", yet
     // collision_monitor (raw /scan_collision points, downstream of us) can
     // hold the wheels at zero. Following a stopped robot only ends on the
@@ -1456,8 +1500,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     if (turn_fallback_.phase == TurnFallbackPhase::kIdle && collisionMonitorHoldConfirmed(safe_dt))
     {
       reverseEscapeOrWait("collision_monitor holds the robot while the path reads clear",
-                          costmap_ros_->getRobotFootprint(),
-                          safe_dt);
+                          costmap_ros_->getRobotFootprint());
       if (reverse_escape_active_)
       {
         cmd_vel.twist.linear.x = -config_.obstacle_reverse_speed_mps;
@@ -2584,8 +2627,7 @@ bool FTCController::collisionMonitorHoldConfirmed(double dt)
 // when the deviation search found no skirt this tick, and it fails safe — any
 // missing precondition (feature off, no footprint, budget spent, rear obstacle)
 // falls straight through to the existing waitOrThrowForObstacle behaviour.
-ReverseEscapeAction FTCController::reverseEscapeStep(const ObstacleDeviation::Footprint& footprint,
-                                                     double dt)
+ReverseEscapeAction FTCController::reverseEscapeStep(const ObstacleDeviation::Footprint& footprint)
 {
   ReverseEscapeCfg cfg;
   cfg.enabled = config_.obstacle_reverse_enabled;
@@ -2603,14 +2645,6 @@ ReverseEscapeAction FTCController::reverseEscapeStep(const ObstacleDeviation::Fo
   const bool have_footprint = footprint.size() >= 3;
   geometry_msgs::msg::PoseStamped robot_pose;
   const bool have_pose = have_footprint && costmap_ros_->getRobotPose(robot_pose);
-
-  // Integrate any reverse motion since the previous tick (odom-based, hard
-  // capped), so the budget reflects real travel, not commanded travel.
-  if (reverse_escape_active_)
-  {
-    reverse_distance_done_ =
-        ReverseEscapeAdvance(cfg, reverse_distance_done_, last_measured_fwd_speed_, dt);
-  }
 
   bool rear_clear = false;
   if (have_pose)
@@ -2660,8 +2694,7 @@ double FTCController::progressSinceReverseEngaged() const
 }
 
 bool FTCController::reverseEscapeOrWait(const std::string& reason,
-                                        const ObstacleDeviation::Footprint& footprint,
-                                        double dt)
+                                        const ObstacleDeviation::Footprint& footprint)
 {
   ReverseEscapeCfg cfg;
   cfg.enabled = config_.obstacle_reverse_enabled;
@@ -2671,7 +2704,7 @@ bool FTCController::reverseEscapeOrWait(const std::string& reason,
   // This tick is NOT followable: an engaged escape stays committed (see
   // ReverseEscapeShouldRelease).
   reverse_followable_time_ = 0.0;
-  const ReverseEscapeAction action = reverseEscapeStep(footprint, dt);
+  const ReverseEscapeAction action = reverseEscapeStep(footprint);
 
   if (action == ReverseEscapeAction::kReverse)
   {
@@ -2812,6 +2845,13 @@ void FTCController::updateLateralDeviation(double dt)
     boundary_lock.lock();
     if (!buildBoundaryGuard(guard))
     {
+      if (reverse_escape_active_ || obstacle_waiting_)
+      {
+        // The missing guard skips the rear-check path too. Keep the committed
+        // episode and spent budget, but never reuse its previous permission.
+        reverse_followable_time_ = 0.0;
+        waitOrThrowForObstacle("required boundary guard unavailable during reverse escape");
+      }
       return;
     }
   }
@@ -2859,7 +2899,7 @@ void FTCController::updateLateralDeviation(double dt)
     const ObstacleDeviation::Footprint body =
         ObstacleDeviation::expandFootprintLateral(detect_footprint,
                                                   std::max(0.0, config_.obstacle_clearance_margin));
-    if (!planOffsetLattice(start_idx, guard, body, dt))
+    if (!planOffsetLattice(start_idx, guard, body))
     {
       return;
     }
@@ -2984,8 +3024,7 @@ void FTCController::updateLateralDeviation(double dt)
                                              detect_footprint))
         {
           if (reverseEscapeOrWait("no clear exit past obstacle — refusing to skirt into a pocket",
-                                  detect_footprint,
-                                  dt))
+                                  detect_footprint))
           {
             return;
           }
@@ -3016,7 +3055,7 @@ void FTCController::updateLateralDeviation(double dt)
           // noise, a person crossing the path, inflation around the dock not yet
           // cleared by post-undock observations) can clear without burning a BT
           // retry.
-          if (reverseEscapeOrWait("obstacle blocks both sides, cannot skirt", detect_footprint, dt))
+          if (reverseEscapeOrWait("obstacle blocks both sides, cannot skirt", detect_footprint))
           {
             return;
           }
@@ -3085,8 +3124,7 @@ void FTCController::updateLateralDeviation(double dt)
         // obstacle is transient, the next tick will pull target_dev back
         // under the cap and we resume cleanly.
         if (reverseEscapeOrWait("lateral deviation needed > max_lateral_deviation",
-                                detect_footprint,
-                                dt))
+                                detect_footprint))
         {
           return;
         }
@@ -3141,7 +3179,7 @@ void FTCController::updateLateralDeviation(double dt)
   if (reverse_escape_active_)
   {
     const bool can_continue =
-        reverseEscapeStep(costmap_ros_->getRobotFootprint(), dt) == ReverseEscapeAction::kReverse;
+        reverseEscapeStep(costmap_ros_->getRobotFootprint()) == ReverseEscapeAction::kReverse;
     if (!ReverseEscapeShouldRelease(
             can_continue, dt, config_.obstacle_clear_hold_s, reverse_followable_time_))
     {
@@ -3297,7 +3335,7 @@ bool FTCController::forwardCommandSweepBlocked(const geometry_msgs::msg::Twist& 
                              {robot.pose.position.x, robot.pose.position.y, tf2::getYaw(q)},
                              command,
                              measured,
-                             .1,
+                             kIntendedCommandHorizonSec,
                              config_.obstacle_coast_time_bound_s);
 }
 
@@ -3364,8 +3402,7 @@ LatticeGeometryBlocked FTCController::motionLatticeCritic(
 
 bool FTCController::planOffsetLattice(std::size_t carrot_idx,
                                       const BoundaryGuard& guard,
-                                      const std::vector<geometry_msgs::msg::Point>& footprint,
-                                      double dt)
+                                      const std::vector<geometry_msgs::msg::Point>& footprint)
 {
   const LatticeSolverCfg solver_cfg = latticeSolverCfg();
   const double ds = solver_cfg.station_spacing_m;
@@ -3544,7 +3581,7 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
       return false;
     }
     const ObstacleDeviation::Footprint detect = costmap_ros_->getRobotFootprint();
-    reverseEscapeOrWait("no collision-free offset profile within the lattice", detect, dt);
+    reverseEscapeOrWait("no collision-free offset profile within the lattice", detect);
     return false;
   }
 

@@ -11,6 +11,23 @@ Global fixed-grid geometry and mandatory authorization are owned by `GardenKeepo
 current observation buffers. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md)
 for geometry synchronization, recovery toggles, budgets and hardware acceptance.
 
+## Reverse-escape budget authorization (#950)
+
+`FTCController::computeVelocityCommands` charges an active reverse attempt once
+per tick, independently of deviation-planner early returns. It uses the larger
+of measured speed and the preceding authorized request after external speed
+caps, before tapering. The outgoing reverse command fits the remaining budget
+for the existing 0.5 s maximum supported control interval. Conservative charging
+can end a short escape before its entire physical distance is used. The separate
+0.1 s geometry certificate remains unchanged; neither bound establishes an
+actuator lease, accurate physical pose or stopping response.
+
+A missing required zone guard holds an active escape or existing obstacle wait
+at zero through the existing abort deadline, retaining its spent budget across
+restoration. Real-controller controls are in `test/test_ftc_speed_limit.cpp`;
+`test/test_ftc_reverse_escape.cpp` covers conservative arithmetic. RPP/transit
+and final output authorization remain separate #924 work.
+
 ## Where to look
 
 Normal transit planning is now `include/mowgli_nav2_plugins/authorized_transit_planner.hpp`

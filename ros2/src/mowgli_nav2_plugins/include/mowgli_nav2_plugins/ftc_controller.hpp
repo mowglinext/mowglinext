@@ -297,8 +297,7 @@ private:
   /// engaged the reverse-escape / wait fallback and the caller must return.
   bool planOffsetLattice(std::size_t carrot_idx,
                          const BoundaryGuard& guard,
-                         const std::vector<geometry_msgs::msg::Point>& footprint,
-                         double dt);
+                         const std::vector<geometry_msgs::msg::Point>& footprint);
 
   /// Plan poses [first, last) expressed in the local costmap frame.
   bool planWindowInCostmapFrame(std::size_t first,
@@ -425,22 +424,23 @@ private:
   /// SAFETY-CRITICAL: probes the rear footprint at the ACTUAL robot pose
   /// (costmap_ros_->getRobotPose) and never reverses when it would hit lethal or
   /// the pose is unavailable.
-  /// One tick of the escape itself: integrate the distance reversed, probe the
-  /// rear footprint, decide. No side effects on the wait/abort state.
-  ReverseEscapeAction reverseEscapeStep(const ObstacleDeviation::Footprint& footprint, double dt);
+  /// Probe the rear footprint and decide. Budget charging occurs once at the
+  /// compute boundary. No side effects on the wait/abort state.
+  ReverseEscapeAction reverseEscapeStep(const ObstacleDeviation::Footprint& footprint);
   /// Path arc length from the index where the reverse budget was first touched
   /// to the current index (0 when the robot has not advanced).
   double progressSinceReverseEngaged() const;
   bool reverseEscapeOrWait(const std::string& reason,
-                           const ObstacleDeviation::Footprint& footprint,
-                           double dt);
+                           const ObstacleDeviation::Footprint& footprint);
 
   /// True while backing straight up as an obstacle-escape maneuver. Read in
   /// computeVelocityCommands to emit the reverse command (bypassing the PID).
   bool reverse_escape_active_{false};
-  /// Odom-integrated reversed distance for the current escape (m), hard-capped
-  /// at config_.obstacle_reverse_max_dist_m. Reset when the wedge clears.
+  /// Conservatively charged measured/commanded reverse distance (m), hard-capped
+  /// at config_.obstacle_reverse_max_dist_m. Refilled only after path progress.
   double reverse_distance_done_{0.0};
+  /// Last authorized reverse-escape speed after external caps, before tapering.
+  double last_reverse_budget_speed_{0.0};
   /// Time the planner has kept a usable profile since the last infeasible tick,
   /// while a reverse-escape is engaged (ReverseEscapeShouldRelease).
   double reverse_followable_time_{0.0};
