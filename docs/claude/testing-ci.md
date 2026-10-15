@@ -31,7 +31,7 @@
 | Firmware ↔ host msg/wire guards | `firmware/scripts/sync_ros_lib.py`, `protocol_version_guard.py`, `board_defaults_parity.py` (self-checking scripts, no test files) | plain Python `--check` gates | `python3 firmware/scripts/sync_ros_lib.py --check` · `python3 firmware/scripts/protocol_version_guard.py --check` · `python3 firmware/scripts/board_defaults_parity.py` | `msg-codegen-drift.yml`, `protocol-version-drift.yml`, `firmware-ci.yml` → `defaults-parity` |
 | GUI web unit tests (45 files) | `gui/web/src/**/*.test.ts`, `*.test.tsx` | vitest + jsdom + Testing Library (`gui/web/vitest.config.ts`) | `cd gui/web && yarn test` | `gui-ci.yml` → `unit-tests` |
 | GUI backend (36 files) | `gui/pkg/api/*_test.go`, `gui/pkg/providers/*_test.go`, `gui/pkg/foxglove/*_test.go`, `gui/pkg/msgs/mowgli/mower_control_bind_test.go`, `gui/pkg/types/mocks_test.go` | Go `testing` | `cd gui && go test ./...` | `gui-ci.yml` → `go-tests` |
-| GUI browser E2E | `gui/web/tests/e2e/*.spec.ts` (+ `mock/` backend, fully mocked REST + WebSocket) | Playwright (`gui/web/playwright.config.ts`) | `cd gui/web && yarn test:e2e` | `gui-ci.yml` → `unit-tests`: power menu, blackbox, and serial gamepad specs; remaining specs manual |
+| GUI browser E2E | `gui/web/tests/e2e/*.spec.ts` (+ `mock/` backend, fully mocked REST + WebSocket) | Playwright (`gui/web/playwright.config.ts`) | `cd gui/web && yarn test:e2e` | `gui-ci.yml` → `unit-tests`: power menu, blackbox, and serial Chromium/WebKit gamepad specs (`playwright.gamepad.config.ts`); remaining specs manual |
 | Installer suite (20 scripts) | `install/test_mowglinext.sh` + `install/tests/test_*.sh` (harness in `install/tests/lib/`) | Hand-rolled bash framework (`install/tests/lib/framework.sh`) | `bash install/test_mowglinext.sh` · `for t in install/tests/test_*.sh; do bash "$t" \|\| echo "FAILED: $t"; done` | **NONE** |
 | Landing page / bootstrap static checks | `docs/test_install.sh` (over `docs/install.sh`), `docs/test_web_composer.sh` (over `docs/index.html`) | Static grep assertions | `bash docs/test_install.sh` · `bash docs/test_web_composer.sh` | **NONE** — and both exit 1 at this SHA (2 failures each) |
 | Simulation E2E — LiDAR | `ros2/src/e2e_test.py` | rclpy script, self-scored | `cd ros2 && make e2e-test` | **NONE** |
@@ -78,7 +78,7 @@ Two more piles of test files exist but **never execute**: the 62 CTest suites in
 ### Gaps worth knowing
 
 - **`static-analysis` is `continue-on-error: true`** (`ros2-ci.yml:472`) — cppcheck findings never fail a PR; they only land in the log and the `cppcheck-report` artifact.
-- **GUI CI runs selected Playwright specs** (power menu, blackbox and serial gamepad workflows). The remaining browser specs, installer suite, `docs/` static checks and simulation E2E run by hand.
+- **GUI CI runs selected Playwright specs** (power menu, blackbox and serial Chromium/WebKit gamepad workflows). The remaining browser specs, installer suite, `docs/` static checks and simulation E2E run by hand.
 
 ### Tests that bring up rclcpp must be DDS-isolated
 
@@ -164,7 +164,7 @@ Both `e2e-test` targets depend on `sim-stop build`, launch the sim themselves, a
 
 **Simulator requirements:** Webots via `webots_ros2_driver` (`mowgli_simulation/package.xml`), 8 CPU cores minimum / 16 recommended (`.devcontainer/devcontainer.json` `hostRequirements` + the comment above it), and an X display for headless — `ros2/Makefile` exports `DISPLAY=:99` but does **not** start Xvfb; or the `docker/docker-compose.simulation.yaml` `simulation` / `simulation-gui` / `dev-sim` services. Before touching anything under `mowgli_simulation/worlds_webots/`, `protos/`, `urdf_webots/`, or `kinematic_drive.py`, read [`../WEBOTS_SIM.md`](../WEBOTS_SIM.md) — it documents five load-bearing ODE workarounds, each of which presents as a *Nav2* bug when broken.
 
-**GUI browser E2E** is a separate, much cheaper suite: `cd gui/web && yarn test:e2e` runs Playwright against the vite dev server with a fully mocked Go backend (REST via `page.route`, the multiplex WebSocket via `page.routeWebSocket`, scenarios in `tests/e2e/mock/scenarios.ts`). No robot or backend is required. GUI CI runs the power-menu, blackbox and serial gamepad specs; other specs run by hand. See `gui/web/tests/e2e/README.md`.
+**GUI browser E2E** is a separate, much cheaper suite: `cd gui/web && yarn test:e2e` runs Playwright against the vite dev server with a fully mocked Go backend (REST via `page.route`, the multiplex WebSocket via `page.routeWebSocket`, scenarios in `tests/e2e/mock/scenarios.ts`). No robot or backend is required. GUI CI runs the power-menu, blackbox and serial Chromium/WebKit gamepad specs; other specs run by hand. See `gui/web/tests/e2e/README.md`.
 
 ---
 

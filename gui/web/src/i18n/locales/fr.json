@@ -5248,6 +5248,21 @@
       "waitingForMode": "En attente du mode enregistrement / manuel en direct",
       "holding": "Maintenez pour confirmer l’action d’enregistrement"
     },
+    "inputLossReasons": {
+      "pollGap": "Le navigateur a suspendu la lecture de la manette pendant {{pollGapMs}} ms (limite {{limit}} ms).",
+      "clockInvalid": "L’horloge du navigateur a changé de façon inattendue.",
+      "disconnected": "Le navigateur ne signale plus la manette sélectionnée comme connectée.",
+      "identityChanged": "La manette à l’emplacement sélectionné a changé.",
+      "mappingChanged": "La configuration ne correspond plus aux entrées de la manette.",
+      "timestampInvalid": "Le navigateur a renvoyé un horodatage de manette invalide ({{timestamp}}).",
+      "timestampRegressed": "L’horodatage de la manette a reculé ({{previousTimestamp}} → {{timestamp}}).",
+      "axisInvalid": "L’axe {{inputIndex}} a renvoyé une valeur invalide ({{inputValue}}).",
+      "buttonInvalid": "Le bouton {{inputIndex}} a renvoyé une valeur invalide ({{inputValue}}).",
+      "focusLost": "La page du navigateur a perdu le focus.",
+      "pageHidden": "La page du navigateur a été masquée ou sa visibilité a changé.",
+      "pageExit": "Le navigateur a quitté cette page.",
+      "controllerChanged": "Le navigateur a remplacé ou reconnecté la manette sélectionnée."
+    },
     "faults": {
       "unsupported": "Les entrées de manette sont indisponibles ou bloquées par ce navigateur. Essayez un navigateur compatible avec l’API Gamepad, ou HTTPS si les entrées sont bloquées en HTTP.",
       "inputLost": "Entrée perdue ou périmée. Centrez les sticks, relâchez tous les boutons et activez à nouveau.",
