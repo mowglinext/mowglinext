@@ -1,5 +1,5 @@
 import {act, renderHook, waitFor} from '@testing-library/react';
-import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {useConfig} from './useConfig';
 import {useSettings} from './useSettings';
 
@@ -132,6 +132,56 @@ describe('Batch 10 settings boundaries', () => {
         mock.settings.settingsList.mockReset().mockResolvedValue({data: {settings: {}}});
         mock.settings.yamlList.mockReset().mockResolvedValue({data: {}});
         mock.notification.error.mockClear(); mock.notification.success.mockClear();
+    });
+    describe('shell settings read envelope', () => {
+        afterEach(() => {
+            expect(mock.settings.settingsList).toHaveBeenCalledOnce();
+            expect(mock.settings.yamlList).toHaveBeenCalledOnce();
+            expect(mock.config.keysGetCreate).toHaveBeenCalledOnce();
+            expect(mock.config.keysSetCreate).not.toHaveBeenCalled();
+            expect(mock.notification.success).not.toHaveBeenCalled();
+        });
+        it.each([
+            {settings: {}},
+            {settings: {zero: 0, disabled: false, text: '', nil: null}},
+        ])('accepts the canonical envelope without writes or notifications: %j', async data => {
+            mock.settings.settingsList.mockResolvedValue({data});
+            const {result, rerender} = renderHook(useSettings);
+            await waitFor(() => expect(result.current.loading).toBe(false));
+            expect(result.current.settings).toEqual(data.settings);
+            rerender();
+            expect(mock.notification.error).not.toHaveBeenCalled();
+        });
+        it.each([
+            {}, {settings: null}, {settings: []}, {settings: 'invalid'},
+            {settings: 0}, {settings: false}, {settings: {invalid: undefined}},
+        ])('rejects malformed envelopes once while keeping YAML usable: %j', async data => {
+            mock.settings.settingsList.mockResolvedValue({data});
+            mock.settings.yamlList.mockResolvedValue({data: {lidar_x: 0, enabled: false, text: '', nil: null}});
+            const {result, rerender} = renderHook(useSettings);
+            await waitFor(() => expect(result.current.loading).toBe(false));
+            expect(result.current.settings).toEqual({lidar_x: 0, enabled: false, text: '', nil: null});
+            expect(mock.notification.error).toHaveBeenCalledExactlyOnceWith({
+                message: `${mock.language}:useSettingsHook.loadFailed`, description: 'Invalid settings payload',
+            });
+            rerender();
+            expect(mock.notification.error).toHaveBeenCalledOnce();
+        });
+        it.each(['error body', 'HTTP failure', 'rejected request'])('reports %s once without losing YAML', async failure => {
+            const response = {status: 500, ok: false, error: {error: 'Shell read failed'}};
+            if (failure === 'rejected request') mock.settings.settingsList.mockRejectedValue(response);
+            else mock.settings.settingsList.mockResolvedValue(failure === 'error body'
+                ? {data: {settings: {}}, error: response.error} : response);
+            mock.settings.yamlList.mockResolvedValue({data: {lidar_x: 0}});
+            const {result, rerender} = renderHook(useSettings);
+            await waitFor(() => expect(result.current.loading).toBe(false));
+            expect(result.current.settings).toEqual({lidar_x: 0});
+            expect(mock.notification.error).toHaveBeenCalledExactlyOnceWith({
+                message: `${mock.language}:useSettingsHook.loadFailed`, description: 'Shell read failed',
+            });
+            rerender();
+            expect(mock.notification.error).toHaveBeenCalledOnce();
+        });
     });
     it('keeps DB ownership, YAML precedence and optional values', async () => {
         mock.config.keysGetCreate.mockResolvedValue({data: {'system.ros.nodeName': 'db', 'system.mqtt.enabled': 'false'}});

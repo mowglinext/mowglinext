@@ -2,6 +2,11 @@ import {describe, expect, it} from 'vitest';
 import {decodeSettings, flattenConfig, settingsCoordinate, isIntegerSetting} from './settingsContract';
 
 describe('settings JSON and flattening contract', () => {
+    it('accepts an empty settings object and preserves legitimate scalar leaves', () => {
+        expect(decodeSettings({})).toEqual({});
+        const values = {zero: 0, disabled: false, text: '', nil: null, nested: {value: 1}};
+        expect(decodeSettings(values)).toEqual(values);
+    });
     it('preserves null, arrays, empty containers, empty strings, zero and false as leaves', () => {
         expect(flattenConfig({nested: {nil: null, list: [0, {x: false}], empty: {}, text: '', zero: 0, disabled: false}, 'already.dotted': 12}))
             .toEqual({'nested.nil': null, 'nested.list': [0, {x: false}], 'nested.empty': {}, 'nested.text': '', 'nested.zero': 0, 'nested.disabled': false, 'already.dotted': 12});
