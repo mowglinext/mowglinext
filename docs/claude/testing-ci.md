@@ -165,7 +165,7 @@ cd ros2
 make sim                 # sim-stop, then sim_full_system.launch.py headless:=true use_rviz:=false
 make sim-stop            # scripts/sim-stop.sh — kills ROS2/Webots and clears DDS shm; MUST run before a new sim
 make e2e-test            # self-contained: sim-stop -> build -> launch sim -> wait for Nav2 active -> python3 src/e2e_test.py -> sim-stop
-make e2e-test-no-lidar   # same, with use_lidar:=false simulate_gps_degradation:=false -> src/e2e_test_no_lidar.py
+make e2e-test-no-lidar   # same, with use_lidar:=false -> src/e2e_test_no_lidar.py
 ```
 
 Both `e2e-test` targets depend on `sim-stop build`, launch the sim themselves, and (since commit `09cbad2b`, "test(sim): cover Nav2 readiness gating") poll `ros2/scripts/wait_for_nav2_active.sh` for a Nav2 lifecycle-active event — rather than a fixed sleep — before running the script; the script kills the sim and exits 1 on timeout instead of proceeding blind. You do **not** need a sim already running.

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from geometry_msgs.msg import PoseStamped
 from mowgli_interfaces.msg import GnssStatus
 import pytest
+import rclpy
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Header
 
@@ -28,6 +29,61 @@ def _load_module():
 
 
 sim_navsat = _load_module()
+
+
+def test_empty_quality_pattern_preserves_always_fixed_default():
+    assert sim_navsat._parse_pattern('') == []
+    node = SimpleNamespace(_segments=[], _cycle_total_s=0.0, _start_t=None)
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 123.0) == 'RTK_FIXED'
+
+
+def test_valid_quality_pattern_preserves_segment_timing_and_cycle():
+    segments = sim_navsat._parse_pattern(
+        ' 1.5,rtk_fixed ; 2, RTK_FLOAT ; 3,NO_FIX '
+    )
+    node = SimpleNamespace(
+        _segments=segments,
+        _cycle_total_s=sum(segment.duration_s for segment in segments),
+        _start_t=None,
+    )
+
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 10.0) == 'RTK_FIXED'
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 11.499) == 'RTK_FIXED'
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 11.5) == 'RTK_FLOAT'
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 13.5) == 'NO_FIX'
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 16.5) == 'RTK_FIXED'
+
+
+@pytest.mark.parametrize(
+    'pattern',
+    [
+        'RTK_FIXED',
+        'bad-duration,RTK_FIXED',
+        '1,UNKNOWN',
+        '1,RTK_FIXED;;2,NO_FIX',
+        'nan,RTK_FIXED',
+        'inf,RTK_FIXED',
+        '-inf,RTK_FIXED',
+        '1e308,RTK_FIXED;1e308,NO_FIX',
+        '0,RTK_FIXED',
+        '-1,RTK_FIXED',
+    ],
+)
+def test_invalid_quality_patterns_are_rejected(pattern):
+    with pytest.raises(ValueError):
+        sim_navsat._parse_pattern(pattern)
+
+
+def test_node_constructor_rejects_invalid_quality_pattern():
+    rclpy.init(args=['--ros-args', '-p', 'quality_pattern:=nan,RTK_FLOAT'])
+    node = None
+    try:
+        with pytest.raises(ValueError, match='Invalid quality_pattern'):
+            node = sim_navsat.SimNavSatRtkFix()
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.shutdown()
 
 
 @pytest.mark.parametrize(

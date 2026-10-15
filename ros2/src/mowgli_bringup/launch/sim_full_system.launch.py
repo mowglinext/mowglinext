@@ -135,6 +135,15 @@ def generate_launch_description() -> LaunchDescription:
         description="Webots execution mode: realtime | fast | pause.",
     )
 
+    gps_quality_pattern_arg = DeclareLaunchArgument(
+        "gps_quality_pattern",
+        default_value="",
+        description=(
+            "Simulated GNSS-quality cycle, e.g. "
+            "90,RTK_FIXED;30,RTK_FLOAT;10,NO_FIX. Empty keeps RTK-Fixed."
+        ),
+    )
+
     # use_magnetometer comes from mowgli_robot.yaml via navigation.launch.py
     # — no need to declare it here. CLI override still propagates.
     # (There is no use_fusion_graph arg; fusion_graph_node is the sole,
@@ -356,13 +365,11 @@ def generate_launch_description() -> LaunchDescription:
                 "datum_lon": datum_lon,
                 "lever_arm_x": lever_arm_x,
                 "lever_arm_y": lever_arm_y,
-                # Realistic mowing scenario: 90 s RTK-Fixed (open sky),
-                # 30 s RTK-Float (light tree cover), 10 s no-fix (dense
-                # canopy / multipath). Empty pattern → always RTK_FIXED
-                # (σ=3 mm, no Python noise injection). Bias disabled while
-                # debugging fusion_graph; restore the cycle pattern once
-                # the baseline is clean.
-                "quality_pattern": "",
+                # Keep the always-Fixed control by default. Recovery tests
+                # explicitly request the quality cycle; no second GPS producer.
+                "quality_pattern": ParameterValue(
+                    LaunchConfiguration("gps_quality_pattern"), value_type=str
+                ),
                 "noise_seed": 42,
             }
         ],
@@ -508,6 +515,7 @@ def generate_launch_description() -> LaunchDescription:
             headless_arg,
             use_lidar_arg,
             mode_arg,
+            gps_quality_pattern_arg,
             # Subsystem includes
             simulation_launch,
             navigation_launch,

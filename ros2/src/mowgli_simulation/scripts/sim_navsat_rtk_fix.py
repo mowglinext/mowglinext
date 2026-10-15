@@ -103,7 +103,7 @@ def _parse_pattern(spec: str) -> List[_Segment]:
     for raw in spec.split(';'):
         part = raw.strip()
         if not part:
-            continue
+            raise ValueError('quality_pattern contains an empty segment')
         if ',' not in part:
             raise ValueError(f"bad segment '{part}': expected 'duration,REGIME'")
         dur_s, name = part.split(',', 1)
@@ -112,9 +112,17 @@ def _parse_pattern(spec: str) -> List[_Segment]:
             raise ValueError(
                 f"unknown regime '{regime}'; valid: {sorted(QUALITY_REGIMES)}"
             )
-        out.append(_Segment(float(dur_s.strip()), regime))
-    if any(s.duration_s <= 0.0 for s in out):
-        raise ValueError('segment durations must be > 0')
+        try:
+            duration_s = float(dur_s.strip())
+        except ValueError as exc:
+            raise ValueError(
+                f"bad segment '{part}': duration must be a finite number"
+            ) from exc
+        if not math.isfinite(duration_s) or duration_s <= 0.0:
+            raise ValueError('segment durations must be finite and > 0')
+        out.append(_Segment(duration_s, regime))
+    if not math.isfinite(sum(segment.duration_s for segment in out)):
+        raise ValueError('quality_pattern total duration must be finite')
     return out
 
 
@@ -219,11 +227,10 @@ class SimNavSatRtkFix(Node):
         try:
             self._segments = _parse_pattern(pattern_spec)
         except ValueError as exc:
-            self.get_logger().error(
-                "Bad quality_pattern '%s': %s — falling back to always-FIXED"
-                % (pattern_spec, exc)
-            )
-            self._segments = []
+            message = f'Invalid quality_pattern {pattern_spec!r}: {exc}'
+            self.get_logger().error(message)
+            self.destroy_node()
+            raise ValueError(message) from exc
 
         self._cycle_total_s = sum(s.duration_s for s in self._segments) or 0.0
         self._start_t: Optional[float] = None  # ros time at first fix
