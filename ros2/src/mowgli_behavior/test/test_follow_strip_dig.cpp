@@ -168,6 +168,7 @@ public:
         {
           std::lock_guard<std::mutex> lock(mutex_);
           handles_.push_back(handle);
+          accepted_cv_.notify_all();
         });
   }
 
@@ -192,6 +193,17 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex_);
     return handles_.size();
+  }
+
+  bool waitForGoalCount(std::size_t count)
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return accepted_cv_.wait_for(lock,
+                                 std::chrono::seconds(2),
+                                 [this, count]()
+                                 {
+                                   return handles_.size() >= count;
+                                 });
   }
 
   // A promise owned by the test deterministically withholds the server's goal
@@ -241,6 +253,7 @@ private:
   typename rclcpp_action::Server<ActionT>::SharedPtr server_;
   std::mutex mutex_;
   std::condition_variable accept_cv_;
+  std::condition_variable accepted_cv_;
   bool hold_accept_ = false;
   std::size_t requests_ = 0;
   std::vector<std::shared_ptr<Handle>> handles_;
@@ -283,24 +296,9 @@ protected:
           map.metadata.origin.orientation.w = 1.0;
           map.data.resize(4800, 0);
         });
-    blade_service = server_node->create_service<MowerControl>(
-        "/hardware_bridge/mower_control",
-        [this](const std::shared_ptr<MowerControl::Request> request,
-               std::shared_ptr<MowerControl::Response> response)
-        {
-          std::lock_guard<std::mutex> lock(blade_mutex);
-          blade_requests.push_back(*request);
-          response->success = blade_service_success.load();
-        });
+    createBladeService();
 
-    executor = std::make_unique<rclcpp::executors::MultiThreadedExecutor>();
-    executor->add_node(ctx->node);
-    executor->add_node(server_node);
-    spinner = std::thread(
-        [this]()
-        {
-          executor->spin();
-        });
+    startExecutor();
 
     blackboard = BT::Blackboard::create();
     blackboard->set("context", ctx);
@@ -313,13 +311,96 @@ protected:
     follow->holdAccept(false);
     navigate->holdAccept(false);
     tree.reset();
+    stopExecutor();
+    stopBladeService();
+    follow.reset();
+    navigate.reset();
+  }
+
+  void startExecutor()
+  {
+    executor = std::make_unique<rclcpp::executors::MultiThreadedExecutor>();
+    executor->add_node(ctx->node);
+    executor->add_node(server_node);
+    spinner = std::thread(
+        [this]()
+        {
+          executor->spin();
+        });
+    // cancel() before spin() enters is lost when spin() sets its running flag.
+    while (!executor->is_spinning())
+    {
+      std::this_thread::yield();
+    }
+  }
+
+  void stopExecutor()
+  {
     executor->cancel();
     if (spinner.joinable())
     {
       spinner.join();
     }
-    follow.reset();
-    navigate.reset();
+    executor.reset();
+  }
+
+  void createBladeService()
+  {
+    blade_node = rclcpp::Node::make_shared("fake_blade_service");
+    blade_service = blade_node->create_service<MowerControl>(
+        "/hardware_bridge/mower_control",
+        [this](const std::shared_ptr<MowerControl::Request> request,
+               std::shared_ptr<MowerControl::Response> response)
+        {
+          std::lock_guard<std::mutex> lock(blade_mutex);
+          blade_requests.push_back(*request);
+          response->success = blade_service_success.load();
+        });
+    blade_executor = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
+    blade_executor->add_node(blade_node);
+    blade_stopping.store(false);
+    blade_spinner = std::thread(
+        [this]()
+        {
+          // A persistent stop flag also handles removal before this thread starts.
+          // spin_once waits for ROS work, with a bound so stopping needs no cancel().
+          while (!blade_stopping.load())
+          {
+            blade_executor->spin_once(std::chrono::milliseconds(20));
+          }
+        });
+  }
+
+  void stopBladeService()
+  {
+    blade_stopping.store(true);
+    if (blade_spinner.joinable())
+    {
+      blade_spinner.join();
+    }
+    // Release wait-set ownership only after all service callbacks have returned.
+    blade_executor.reset();
+    blade_service.reset();
+    blade_node.reset();
+  }
+
+  void removeBladeService()
+  {
+    const std::weak_ptr<rclcpp::Service<MowerControl>> removed_service = blade_service;
+    const std::weak_ptr<rclcpp::Node> removed_node = blade_node;
+    stopBladeService();
+    ASSERT_TRUE(removed_service.expired()) << "the fake mower-control service is still owned";
+    ASSERT_TRUE(removed_node.expired()) << "the fake blade-service node is still owned";
+    ASSERT_TRUE(executor->is_spinning()) << "removal must leave the main executor running";
+    auto probe = ctx->bladeClient();
+    // Check server endpoints: the global service-name list also includes clients.
+    const auto discovery_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while ((probe->service_is_ready() ||
+            ctx->node->count_services("/hardware_bridge/mower_control") != 0) &&
+           std::chrono::steady_clock::now() < discovery_deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_FALSE(probe->service_is_ready());
+    ASSERT_EQ(ctx->node->count_services("/hardware_bridge/mower_control"), 0u);
   }
 
   /// `yaw` matters: the progress cursor only accepts a path pose oriented with
@@ -387,8 +468,12 @@ protected:
   rclcpp::Node::SharedPtr server_node;
   std::unique_ptr<FakeActionServer<Follow>> follow;
   std::unique_ptr<FakeActionServer<Navigate>> navigate;
+  rclcpp::Node::SharedPtr blade_node;
   rclcpp::Service<MowerControl>::SharedPtr blade_service;
   rclcpp::Service<nav2_msgs::srv::GetCostmap>::SharedPtr costmap_service;
+  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> blade_executor;
+  std::atomic<bool> blade_stopping{false};
+  std::thread blade_spinner;
   std::mutex blade_mutex;
   std::vector<MowerControl::Request> blade_requests;
   std::atomic<bool> blade_service_success{true};
@@ -627,15 +712,40 @@ TEST_F(FollowStripDigTest, RejectedOnNeverDispatchesEvenWithHighRpm)
   EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
 }
 
+// Repeated removal must keep the main executor processing client responses and
+// fake Nav2 goals, even when the blade worker is stopped immediately after creation.
+TEST_F(FollowStripDigTest, BladeServiceRestartsKeepMainExecutorAndNav2Running)
+{
+  auto* const main_executor = executor.get();
+  auto probe = ctx->bladeClient();
+  auto follow_client = rclcpp_action::create_client<Follow>(ctx->node, "/follow_path");
+  ASSERT_TRUE(follow_client->wait_for_action_server(std::chrono::seconds(5)));
+  for (int cycle = 0; cycle < 20; ++cycle)
+  {
+    ASSERT_NO_FATAL_FAILURE(removeBladeService());
+    createBladeService();
+    // Stop immediately after creation, without relying on worker startup timing.
+    ASSERT_NO_FATAL_FAILURE(removeBladeService());
+    createBladeService();
+    ASSERT_TRUE(probe->wait_for_service(std::chrono::seconds(5)));
+    auto response = probe->async_send_request(std::make_shared<MowerControl::Request>());
+    ASSERT_EQ(response.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    ASSERT_TRUE(response.get()->success);
+    EXPECT_EQ(executor.get(), main_executor);
+    auto goal = follow_client->async_send_goal(Follow::Goal{});
+    ASSERT_EQ(goal.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    ASSERT_NE(goal.get(), nullptr);
+    // The client can receive acceptance before the server's accepted callback runs.
+    ASSERT_TRUE(follow->waitForGoalCount(cycle + 1));
+    follow->succeed(cycle);
+  }
+}
+
 TEST_F(FollowStripDigTest, MissingServiceDoesNotRenewTheReadinessTimeout)
 {
   auto probe = ctx->bladeClient();
   ASSERT_TRUE(probe->wait_for_service(std::chrono::seconds(5)));
-  blade_service.reset();
-  const auto discovery_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (probe->service_is_ready() && std::chrono::steady_clock::now() < discovery_deadline)
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  ASSERT_FALSE(probe->service_is_ready());
+  ASSERT_NO_FATAL_FAILURE(removeBladeService());
   ctx->blade_ready_config = {1000.0, 0.1, 0.6};
   startFollowStrip({straightUnit(0.0, 1.0)});
   const auto started = std::chrono::steady_clock::now();
@@ -655,11 +765,7 @@ TEST_F(FollowStripDigTest, ServiceAppearingDuringWaitGetsOnWithoutRestartingGate
 {
   auto probe = ctx->bladeClient();
   ASSERT_TRUE(probe->wait_for_service(std::chrono::seconds(5)));
-  blade_service.reset();
-  const auto discovery_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (probe->service_is_ready() && std::chrono::steady_clock::now() < discovery_deadline)
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  ASSERT_FALSE(probe->service_is_ready());
+  ASSERT_NO_FATAL_FAILURE(removeBladeService());
   ctx->blade_ready_config = {1000.0, 0.1, 2.0};
   reportBlade(0.0);
   startFollowStrip({straightUnit(0.0, 1.0)});
@@ -671,15 +777,7 @@ TEST_F(FollowStripDigTest, ServiceAppearingDuringWaitGetsOnWithoutRestartingGate
                 0.3),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 0u);
-  blade_service = server_node->create_service<MowerControl>(
-      "/hardware_bridge/mower_control",
-      [this](const std::shared_ptr<MowerControl::Request> request,
-             std::shared_ptr<MowerControl::Response> response)
-      {
-        std::lock_guard<std::mutex> lock(blade_mutex);
-        blade_requests.push_back(*request);
-        response->success = true;
-      });
+  createBladeService();
   EXPECT_EQ(tickUntil(
                 [&]()
                 {
