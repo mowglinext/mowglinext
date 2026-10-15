@@ -4,6 +4,313 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Ubuntu 26.04 continuation (2026-10-15)
+
+This section supersedes earlier checkpoints for the changes and runs described
+here. Older runs below retain their original baselines and limitations.
+
+### Source and environment
+
+The existing Draft PR #950 branch was advanced in a dedicated Linux worktree,
+preserving the other checkouts. Merge `fe26f7cc` incorporates requested latest
+`dev` `29eaf625a6a36f0ba151bd0076177b1bcd403218` into PR head `28184b52`;
+the only conflict preserves both fresh GetCostmap fixtures and dev's isolated
+blade-service executor lifecycle. No merge into `dev`, physical deployment or
+firmware flash was performed.
+
+The host is Ubuntu/Kubuntu 26.04.1 x86_64. Installed prerequisites include Docker
+29.1.3, Compose 2.40.3, Buildx 0.30.1, ROS 2 Lyrical base/testing tools,
+CycloneDDS, colcon/rosdep, compiler/CMake/Ninja, clang-format 18.1.8, and the
+documented planner dependencies. Fields2Cover 3.0.0 is pinned to
+`884d895b59192882476e986ba44ea9143a06a6a9` with the project's two missing-header
+build repairs. Project builds, installation, formatters and tests run as UID
+1000. Only system package/service configuration used sudo. Native development
+configuration is opt-in; the user's shell configuration was preserved.
+
+Full ROS builds reuse runtime digest
+`sha256:d414afdcf766094ffc845738a5a2ec23ed4292dcba22d65c763813fe51374076`
+(published source `28184b52`) as an underlay, with all first-party packages
+freshly rebuilt. Webots R2025a and ROS driver
+`db4a77c84ee91445d39de9a631e5b57a888814e2` are installed in the local simulation
+image. Missions use the rebuilt first-party overlay, loopback-only DDS and
+isolated Docker networking; no robot interface is connected. Source commit,
+scenario/world/config hashes, live datum/lever-arm parameters and stationary
+ground-truth alignment are recorded before START.
+
+### Planner replay: reproduced contract conflict and infrastructure repairs
+
+The unchanged strict comparator fails because the microscopic-bevel repair
+changes actual execution trajectories. Dev independently rounds each tiny
+bevel endpoint and cannot fit the configured minimum-radius fillet. The PR
+reconstructs the supporting-edge intersection and emits a validated tangent
+fillet. Execution coordinates, quaternions, lengths and fingerprints therefore
+change in 21 of 26 unchanged fixtures. Removing that repair solely to recover
+byte equality would restore the untrackable corner. This is not nondeterminism.
+
+The standalone replay harness previously omitted the 11 ring-corner safety
+GTests. Commit `7007929e` registers that existing suite, including it for a
+baseline revision when present. The CI baseline export also omitted the new
+private `ring_corner_rounding.hpp`; a later baseline containing the repair
+would fail to compile. The export now takes source, headers and tests from the
+same exact baseline Git tree. A baseline containing that private header is
+compiled and tested as a regression control. Fixtures, comparisons, safety
+assertions, process deadlines and `--require-identical` remain unchanged.
+
+Release, Debug and RelWithDebInfo each pass baseline 9/9 CTests (141 GTests)
+and candidate 11/11 CTests (156 GTests, including all 11 bevel safety cases).
+Each configuration contains 390 baseline, 390 candidate and 2,600 traced
+records: 3,380 per configuration, 10,140 total. All 26 cases are deterministic,
+fixture-identical and trace-passive in every configuration. All three unchanged
+comparisons return exit 1: 5/26 exact outputs match dev. Boundary/retained-swath
+stages, primitive/join counts and transit counts/distances remain unchanged.
+The synthetic future baseline export control passes 10/10 CTests. Compiled
+planner/public-header hashes match final motion source `cfd45403` across
+the matrix, despite differing build-time commit labels.
+
+**The exact-output replay gate remains an unresolved merge blocker.** The
+required trajectory repair and an unchanged requirement for exact dev
+trajectory equality cannot both hold. This evidence does not independently
+certify every changed swept footprint, and the PR remains Draft.
+
+### Simulation defects fixed with failing-before regressions
+
+Commit `e93f79d4` exposes `gps_quality_pattern` through the full-system launch.
+The previously documented `simulate_gps_degradation` flag was never declared
+and had no effect. Valid patterns now reach the existing single quality relay;
+empty defaults remain fixed quality. Malformed, empty-segment, unknown-regime,
+nonfinite, nonpositive and overflowing patterns fail explicitly at startup
+instead of silently becoming RTK_FIXED. The unchanged old relay fails five
+new cases (22 pass); the repaired suite passes all 27. Launch wiring fails
+three cases before the repair and passes all five afterward. Ament lint passes.
+NO_FIX here publishes invalid observations; it does not emulate transport
+silence or a frozen physical receiver.
+
+The first live LiDAR attempt exposed a real 0.30 m localization frame error:
+ground truth reached `(4.56, 6.69)` outside the `x <= 4.50` lawn while Fusion
+Graph reported approximately `(4.26063, 6.69523)`. The simulator/map adapters
+used the garden datum, but navigation's `(0,0)` default made Fusion Graph
+self-seed at the antenna's first fix, 0.30 m east of the chassis datum.
+Subtracting the antenna lever arm then shifted the estimated chassis west.
+
+Commit `c09d8fd1` forwards one complete validated garden datum/antenna snapshot
+through simulation -> navigation -> COG and both Fusion Graph variants. The
+override requires simulation time; empty overrides preserve physical robot
+configuration, including nondefault datum/lever arms. Regression tests execute
+the launch builders for both sensor modes, invalid bundles and rotated lever
+arms. Both sensor modes fail against the old launch chain and pass after the
+repair. A real ROS launch without an installed robot config verifies all four
+parameters in COG and Fusion Graph and stationary ground-truth error 0.015 m.
+Boundary assertions and all motion, collision, blade and recovery guards are
+unchanged. Early runs aborted after isolating this defect remain failures or
+incomplete diagnostic runs; none is counted as a completed mission.
+
+### Detour target eligibility
+
+The corrected LiDAR diagnostic run still records occupied transit goals and
+bounded RPP collision holds/timeouts. A static policy mismatch is independently
+reproduced: the old selector's lethal-only disc test permits target centers
+with raw cost 253 or 255, while AuthorizedTransitPlanner rejects center costs
+>=253. Two new public action/service regressions fail old production by
+actually dispatching X=0.8; real Costmap2D reports the forbidden costs.
+
+Commit `f8ae0408` adds a separate candidate-center predicate to the fresh
+snapshot search. Unknown, inscribed, lethal and outside target centers are
+rejected without creating obstacle evidence or altering lethal-only footprint
+clearance. Every cell consistent with float32 wire-resolution rounding must be
+eligible; binary32 midpoint bounds and outward division bounds avoid the
+previous deferred adjacent-cell precision defect. Ambiguous otherwise-clear
+centers can be rejected conservatively. The old unknown/sublethal clearance
+and inscribed-boundary confirmation assertions remain unchanged. Both public
+regressions pass afterward, choosing X=1.35, with blade off, one fresh request
+and no completed-area credit. Additional tests use actual Costmap2D at
+translated grid lines and adjacent double values. Independent strong review
+finds no actionable finding.
+
+This repairs the deterministic selector mismatch; it does not prove that the
+specific live goals were already occupied at selection. The first recorded
+rejection follows an initially accepted plan, so intervening map updates or
+different local/global footprint checks remain possible. Planner, RPP and
+collision guards retain authority, and later invalidation can still end
+the task without crediting completion. Search, clearance, minimum-remnant and retry budgets are
+unchanged; cumulative cutting-gap accounting remains open.
+
+### Regression and mission results
+
+On final motion source `cfd45403`, all 13 first-party/tools packages build in
+Release with tests enabled and all 248 registered CTest entries pass. The
+compiled suites contain 2,287 passing GTests. The aggregate is 3,743 checks,
+zero errors/failures and 407 skips, all from the installed ament wrapper's
+explicit cppcheck 2.x skip. This rerun includes the six new detour cases. An
+earlier full run exposed a missing direct `<algorithm>` include; `cfd45403`
+adds it and the unchanged registered lint check and entire suite then pass.
+The prior baseline run had 247 registered entries/2,281 GTests, and the datum
+increment's affected packages also passed separately. Clang-format 18
+changed-line checks pass for all 44 changed ROS C++ paths; config drift passes.
+Initial missing Git worktree metadata and schema-DNS failures are retained as
+setup failures; corrected mounts and schema-enabled tests pass without source
+bypasses. Source/header hashes confirm the replay matrix's planner is unchanged
+at final motion source `cfd45403`.
+
+A separate attempt to execute those skipped static-analysis checks uses pinned
+Cppcheck 2.18.0 (`bd62c8ca7be207583c60002a5af50e5f1d12660b`) with ament's explicit
+slow-version opt-in. It returns nonzero: 9/10 package CTests fail. The unchanged
+registered commands produce 59 GoogleTest-macro parser errors and 134
+branch-limit information diagnostics that ament treats as failures. The three
+remaining semantic diagnostics are inherited and source-inspected false
+positives: two ignore the packed, statically asserted 16-byte LlBladeStatus
+wire layout in protocol tests (31/31 compiled cases pass); one models an owning
+ROS string assignment as borrowed stack storage in calibration. The relevant
+files are identical to dev. Localization's 169 compiled tests pass but do not
+directly exercise that calibration callback. This analysis does not turn the
+cppcheck run green; the failure and original skipped results remain distinct.
+No suppression, filter or registered test was changed.
+
+The complete corrected diagnostic missions use ROS source `e93f79d4` plus an
+explicit sparse configuration containing the authoritative garden datum and
+antenna values. These are distinct from the later automatic launch fix and
+new recovery predicate. Both pass live datum/lever-arm and sensor-mode checks.
+
+| Scenario | Captured result | Observed outcome |
+|---|---|---|
+| GPS-only `gps-frame-config-01` | canonical 0 / outer 0 | PASS, 2,278 s; undock 11.8 s, plan 37.7 s, mow 2,174.9 s, dock/charging 40.0 s; 1/1 paths, 0 wholly skipped, 373.6 m; estimated tracking median 4.6 mm, P95 51.2 mm, max 80.0 mm |
+| LiDAR `lidar-frame-config-01` | canonical 1 / outer 1 | FAIL, 2,517 s; mowing fails after 2,425.5 s with no completed path; fallback docking/charging passes in 30.8 s; obstacle encounter/detection/departure passes, ground-truth coverage 94.3%, no boundary violation or <15 cm proximity event; manual/recording/emergency-reset phases pass |
+
+The failed LiDAR cycle retains its safety verdict despite high measured area
+coverage. Bounded collision aborts, detour transit failures and final resume
+cursor 9718/9757 end in AREA_UNREACHABLE and COVERAGE_FAILED_DOCKING. No timeout,
+short-tail tolerance or safety threshold is enlarged. The lack of a legacy
+SLAM map and idle-ratio metrics are also reported as failing informational
+checks by that harness; they are not upgraded to passes.
+
+Final-source missions use `cfd45403`, the rebuilt 1,875-file first-party overlay,
+automatic scenario geometry and no installed robot-config override. Both use
+`gps_quality_pattern:='180,RTK_FIXED;20,RTK_FLOAT;10,NO_FIX;3000,RTK_FIXED'`.
+The GPS-only scenario explicitly promotes polygon `(2.7,1.2)..(3.3,1.8)` around
+the existing Webots box at `(3,1.5)` before START, then verifies it through
+GetMowingArea. This exercises known-obstacle handling; it does not add blind
+detection. The LiDAR scenario leaves that box unmapped. Both live sensor-mode
+and datum checks pass, and both execute RTK_FLOAT -> NO_FIX -> RTK_FIXED with
+blade-off guard holds and saved-progress recovery.
+
+| Final scenario | Captured result | Observed outcome |
+|---|---|---|
+| GPS-only `gps-current-recovery-01` | canonical 0 / outer 0 | PASS, 2,350 s; undock 11.7 s, plan 37.1 s, mow 2,242.5 s, dock/charging 46.4 s; 1/1 paths, 0 wholly skipped, 364.2 m; estimated tracking median 5.1 mm, P95 49.3 mm, max 96.9 mm |
+| LiDAR `lidar-current-recovery-01` | canonical 1 / outer 1 | FAIL, 2,591 s; mowing completes in 2,471.5 s, docking/charging passes in 58.3 s; ground-truth coverage 94.4% (51.0/54.0 m²), 406.9 m total; obstacle encounter/detection/departure and manual/recording/emergency-reset phases pass; two boundary violations remain |
+
+The final GPS-only passive trace contains 21,051 samples, including 19,308
+receipt-correlated blade-active MOWING samples. None of those active samples
+places the reference point outside the lawn or inside the known obstacle;
+none of the full trace's sampled modeled bodies overlaps the physical box.
+One initial blade-off MOWING-labeled sample remains at the transit corridor,
+before entry into the lawn; it is retained. These are sampled observations,
+not continuous swept-containment or physical-blade certification.
+
+The final LiDAR trace contains 23,189 samples, including 19,313
+receipt-correlated blade-active MOWING samples. One active sample is
+outside the lawn; no sampled modeled body overlaps the box. The unchanged
+canonical boundary check records two violation episodes. Its legacy SLAM
+map-growth and idle-ratio informational checks also fail. Measured coverage
+still leaves 1,199 target cells (3.0 m²) uncovered; completion does not certify
+every blade footprint or close the cumulative skipped-gap issue. The
+passive costmap observer captures nine complete global/local pairs in the
+GPS-only mission and 24 in LiDAR; goal coordinates come from rounded logs,
+and each later service response is not the selector's original snapshot.
+
+The final LiDAR run retains real ground-truth boundary failures. Independent
+review establishes two distinct cases:
+
+- At wall time 1792084603.388, truth remains 10.456 mm inside the west edge,
+  while the estimated forward-stamped TF is already outside. FTC correctly
+  rejects the command. The later blade-off RPP transit issues `(0.2,-0.941661)`
+  at heading 114.91 degrees while truth is 6.10 mm inside; its initial world-X
+  velocity is outward at about 0.084 m/s. Truth subsequently crosses by
+  1.615 mm. RPP bypasses FTC's polygon command sweep; a legal plan does not
+  authorize the controller's executed arc. Available samples do not isolate
+  the residual-coast share from RPP's contribution.
+- At wall time 1792084999.342, a separate FTC reverse-escape episode has final
+  command `(-0.15,0)` and truth X=4.503416 (3.416 mm outside), before RPP starts
+  at 4999.737. The corresponding TF X=4.498367 is still 1.633 mm inside;
+  its proposed 0.1 s reverse sweep is correctly rejected. The sampled truth
+  is X=4.506369 at the first recorded zero-command/blade-off sample
+  (wall time 4999.480); source timing is not synchronized. Estimated
+  nominal-horizon authorization has not established physical containment
+  under pose and response uncertainty. The latest received 3,000 RPM sample
+  is receipt-correlated, not synchronized proof of actual blade state at
+  that instant.
+  Nearby wheel odometry also under-reports the straight truth displacement
+  and reports rotation absent from truth. The kinematic body consumes
+  `/cmd_vel_wheels`, while wheel odometry integrates simulated joint
+  positions. The evidence establishes model disagreement but lacks
+  synchronized wheel-command/source timestamps to isolate its cause.
+
+The datum is correct in these runs. The recorded FTC denials are consistent
+with their estimated input poses; they do not establish truth containment.
+Fixing RPP alone would not resolve the second case. Both are software/
+model acceptance blockers; hardware-only wording must not hide them. A
+conservative, measured pose/response model and coherent authorization of
+transit/recovery exceptions remain necessary. No epsilon, planner inset,
+noise setting, expected result, safety threshold or timeout is tuned to make
+the tests pass.
+
+A later subscribe-only drive-plant capture closes at its unchanged 600 s bound:
+29,997 achievable commands, 29,406 joint states, 28,868 raw odometry and 29,505
+truth messages. In a representative 33.90 s straight interval, command
+integration is 6.60 m / -2.46 degrees, truth is 6.49 m / -2.43 degrees and raw
+wheel odometry is 5.76 m / -42.84 degrees; joint deltas independently reproduce
+the odometry yaw. This establishes later divergence between command-integrated
+chassis motion and physical joint motion, not the cause of the earlier escape
+or the internal Webots/ODE/ros2_control defect. Ground-truth headers use system
+time, while command/joint/odometry headers use simulation time; analysis uses
+monotonic receipt interpolation, not a direct join of incompatible timestamps.
+The 60,179,219-byte trace has SHA-256
+`efc3e288259f8fe9c81d3f54eff2316453f7c00f7f459a992d758d733f349301`;
+exact receipt intervals, integration method and array-serialization caveats
+are preserved in the cache's `drive-plant-live-01/analysis.json`. Neither motion
+model was changed to hide the disagreement. This is not hardware evidence.
+
+During the diagnostic GPS-only run, a positive GNSS receipt stamp was rejected
+as future by consumers despite RTK_FIXED quality. Code review finds acquisition
+stamps preserved in the relay and independent ROS-clock checks in consumers;
+asynchronous per-process `/clock` delivery is the source-backed explanation,
+not a captured schedule proof (consumer ROS time is not logged). The existing
+guard revoked authority, disabled the blade, canceled motion, saved cursor
+1346 and resumed it after recovery persistence. No clock tolerance or freshness
+check was relaxed.
+
+The no-LiDAR canonical harness measures estimated path tracking and cycle
+progress; it does not establish blind-obstacle detection or independent blade
+coverage. The LiDAR harness additionally uses ground truth for boundary,
+coverage and obstacle checks. Supplemental passive traces record post-mux `/cmd_vel`
+commands, truth, BT and charging; receipt correlation does not prove producer
+identity, lossless delivery, physical freshness or continuous containment.
+Webots' kinematic drive and synthetic charger cannot certify contact dynamics,
+physical braking, blade safety or real charging.
+
+Independent strong review found no new actionable source finding in these
+continuation changes. The replay contract blocker and the broader unresolved
+#924 acceptance below remain open. **HARDWARE_REQUIRED** continues to apply;
+use the exact-baseline, supervised, blades-removed procedure in
+[Physical acceptance](#physical-acceptance), including the final ROS/image,
+firmware, GNSS driver/submodule/receiver, robot and configuration identities.
+
+The hardware candidate software baseline is ROS motion source `cfd45403`,
+base dev `29eaf625`, universal-GNSS gitlink
+`9a329cc216ed137d0e375a4cfe1f5c26e1dd52d0` and firmware source tree
+`a63eb82bbf6b6c0e73fb03883e340aabab6a2f7f`. No target ARM image, flashed firmware
+image, named robot unit or receiver/driver hardware revision was supplied or
+validated. These identities must be acquired and frozen before any field
+measurement; the desktop runtime digest is not a tested robot image. Measure
+the actual command-plus-STOP response against the configured
+`FollowCoveragePath.obstacle_coast_time_bound_s` (default 0.5 s integral bound)
+and fail acceptance if the measured response exceeds that assumption or crosses
+the declared geometry. Do not reduce the configured bound to obtain a pass.
+Unimplemented #924 command paths still prevent a stack-wide acceptance claim.
+
+Temporary logs, source/build manifests, replay reports and mission traces are
+outside version control under the task's local validation cache. They are not
+CI or hardware evidence; the counts and limitations above are the retained
+cross-package integration summary.
+
 ## Baselines and checkpoint
 
 - Branch: `feat/924-motion-authorization`, isolated worktree `.motion-924`.
