@@ -4,6 +4,234 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Scoped FTC/Escape follow-up (2026-10-16)
+
+This checkpoint supersedes earlier results only for its exact source and runs.
+Latest dev remains `29eaf625`; the earlier merge is retained. The continuation
+changes FTC reverse-escape code/tests and two test-harness logging calls,
+with matching documentation.
+RPP, transit, output authorization, localization and simulator models are not
+modified in this increment. The motion source for this checkpoint is
+`c2e470b7950c98ba9ce07266192d8a548c23c30d`; subsequent test-harness logging
+and evidence-only commits do not change the first-party controller binaries.
+
+### In-scope defects and bounded repair
+
+The real-controller regression reproduces a bookkeeping/output mismatch with
+accurate feedback and ideal actuation: a 0.10 m escape at 0.15 m/s with 100 ms
+holds issues 0.105 m before the old accumulator reports its capped 0.10 m.
+With frozen velocity feedback, the old code can keep issuing reverse commands.
+This is independent of pose/physics uncertainty and has a failing-before control.
+
+A second review finding concerns planner early returns: with an active escape,
+`confine_deviation_to_zone=true`, valid raw authorization geometry and TF, a
+malformed global boundary costmap bypasses the helper that used to charge the
+budget, while the controller continues returning reverse. A review control of
+the initial budget-only repair, before boundary hardening, returns 0.145 m
+against its 0.10 m budget after boundary loss/restoration. Charging now occurs
+once per compute tick. A missing required guard holds zero while preserving the attempt and spent
+budget; restoration cannot refill it. A further failing-before control proves
+that boundary loss after budget exhaustion froze the existing abort deadline.
+The wait now retains that deadline whether the escape is active or already
+exhausted. Real-subscription tests cover both failures and clear-path recovery.
+
+The outgoing command is capped by remaining distance using the existing 0.5 s
+control-interval ceiling. Budget charging conservatively covers measured speed
+and the last authorized request after external caps, before tapering. This can
+hand recovery back early rather than spending the entire physical distance;
+it is a maximum budget, not a promise of minimum travel. Logged escape
+distance is conservatively charged budget, not measured physical travel.
+Numeric accounting rounds consumption upward and available command speed toward zero. The existing
+0.1 s geometry certificate, safety checks, external speed caps, retry/clear-hold
+policy and all published assertions remain intact. No new control rate,
+physical stopping margin, timeout or output lease is introduced. Holds longer
+than 0.5 s, actuator response and inaccurate poses are not certified here.
+
+### Classification of the recorded violations
+
+The earlier west-edge event follows handoff to blade-off RPP after FTC refused
+motion. The accepted planner path does not authorize RPP's executed arc;
+residual motion and RPP contributions are not isolated by those samples.
+Controller/output authorization and coherent outside-start/transit exceptions
+remain #924 follow-up and are not implemented here.
+
+The earlier east-edge event occurs during FTC reverse escape, before RPP.
+The recorded FTC denial is consistent with its estimated input pose, which
+remains inside while truth has crossed. The later drive-plant capture proves
+joint/body divergence but does not isolate that original event. The newly
+reproduced budget defects are fixed within scope; they are not asserted to
+explain or eliminate either recorded truth crossing. No guessed pose margin,
+planner inset or simulator tuning is used.
+
+The new GPS attempt has one sampled blade-active north-edge episode: seven
+rows, maximum 6.869 mm outside. At the first sampled exit, the preceding retained
+TF estimate is still inside (Y=6.79395477 versus truth 6.80050263, 50.314 ms
+receipt separation). This is not simultaneous acquisition. FTC later denies
+its forward 0.1 s sweep at estimated Y=6.79998754; the computed arc endpoint
+exits at Y=6.80112208. A brief reverse-and-turn wheel command appears about
+0.819 s after the initial higher-rate crossing, followed by zero; downstream
+ownership is unresolved and it is not an unmodified straight escape twist.
+No new FTC predicate bypass or initial reverse-budget cause is demonstrated.
+The GPS canonical harness does not report this truth-boundary criterion;
+passive analysis exposes it separately. The excursion remains an unresolved
+safety limitation, not a passing containment result.
+
+The new LiDAR stationary handoff begins with the unchanged FTC pivot-sweep
+obstacle hold/abort, then blade-off detour, RPP collision/patience failures and
+Nav2 BackUp. Collision monitor stops the backup at truth (3.792446,1.233962).
+This is not FTC reverse escape or EscapeStartBlocked; neither new budget
+exhaustion nor a GNSS guard immediately triggers that handoff. Saved rounded
+detour centers are below raw cost 253, so no occupied-center regression is
+shown. The first rounded map goal (2.96,1.44) nevertheless lies inside the
+unchanged nominal physical box footprint [2.75,3.25] x [1.25,1.75], while its
+captured global center cost is 94; scene/global-center representation differs.
+This is not proof that the corrected center predicate failed; post-dispatch
+snapshots do not prove the exact pivot obstacle or full route viability. Pivot functions and detour/transit sources match `cfd45403`.
+No new in-scope defect is established. The RPP/BackUp/costmap/output/recovery
+work remains #924 follow-up, without weakening the pivot or collision guards.
+
+### Coverage replay contract blocker
+
+The actual Release and RelWithDebInfo jobs in CI run `38803346111` build and
+pass baseline 9/9 and candidate 11/11 CTests, then fail the unchanged comparison
+at `compare_replay.py`'s `all_planner_outputs_match` assertion under
+`--require-identical`: 5/26 exact outputs match. Independent local rechecking
+of the downloaded evidence returns exit 1; deterministic, fixture-equality,
+trace-passivity and preserved-stage checks pass. The completed Debug job also
+fails at that same final comparison step; its per-case artifacts were not independently re-audited in this continuation.
+
+A stronger causal control executes the existing unchanged
+`BufferedRectangleOuterRingHasSupportedFillets` regression against both sources
+with the same pinned dependency library. Dev fails its required maximum-turn
+bound (45.0578565 degrees versus <15) and tight-arc count (2 versus 0); the
+repaired planner passes. Reproducing dev trajectories would undo an existing
+required geometry improvement. No additional build/harness defect explains
+these CI failures. Exact equality to that dev planner and preservation of the
+repair cannot both hold. This needs an explicit maintainer compatibility-contract
+or reviewed dev-baseline decision; no exemption, normalization, expected-result
+edit, disabled gate or geometry rollback is made. The replay gate remains red.
+The subsequent exact-source `c2e470b7`
+[run 38811253896](https://github.com/mowglinext/mowglinext/actions/runs/38811253896)
+also fails all three configurations at that final comparison step; coverage
+planner source is unchanged by this FTC increment.
+
+### Separate simulation GNSS-authority failure
+
+Both new missions repeatedly trip the unchanged GNSS freshness guard after the
+programmed quality outage has recovered. At fixed wall-log cutoffs
+`1792101301.782909141` (GPS) and `1792101301.922098881` (LiDAR), GPS has 19
+feed-stale transitions and LiDAR 13 stale plus one expected accuracy transition.
+An explicit “receipt stamp is zero/future; authority denied” warning immediately
+precedes all 19 GPS and 10 LiDAR stale transitions. The behavior tracker rejects
+zero or consumer-future receipt evidence; low covariance and last-accepted
+RTK-Fixed quality cannot override that invalid authority. It requests blade off,
+stop and RTK wait, then resumes only through the existing healthy persistence.
+
+The guard, freshness helper, relay, navsat converter, tree and launch source are
+byte-identical to `cfd45403`; that earlier mission already contains this paired
+warning/failure class. Equal event frequency or scheduling is not established.
+Exact zero-versus-future condition, offending observation/publisher identity and
+producer/consumer clock delta are not logged, so a clock-order, 1 ns conversion,
+CPU-load or wheel/body explanation remains unproven. A direct FTC cause is not
+evidenced. No timeout/tolerance workaround or GNSS subsystem change is made;
+coherent producer/consumer evidence remains separate #924 follow-up. The bounded
+classification and exact line pairs are in `verified/guard-causal-classification.md`
+outside Git. These snapshot counts are not final mission verdicts.
+
+### Fresh validation and remaining acceptance
+
+Focused final-source validation passes 26/26 plugin CTests (395 GTests). The
+42-case real-controller executable also passes on its first isolated FastDDS
+control run, separate from the full CycloneDDS run. All five changed C++ files
+pass whole-file and changed-line clang-format 18 checks, and whitespace checks
+pass. Independent review closed the accounting and deadline findings with no
+remaining supported blocker in the incremental code diff.
+
+The final clean source builds all 13 selected first-party/tools packages and
+passes **248/248 registered CTests and 2,314 GTests**. Aggregate colcon output is
+**3,770 checks, 0 errors/failures, 407 skipped**; those skips are the installed
+ament cppcheck wrapper, not 407 successful analyses. The unchanged prior
+standalone cppcheck 2.18 failures remain separately disclosed below; no new
+complete static-analysis pass is claimed. The final overlay also passes the
+separate FastDDS 42/42 controller control. Build/test and both mission manifests
+record source `c2e470b7`, its clean source fingerprint and the pinned runtime
+image; the old successful workspace was copied independently as a cache seed,
+then the current build and full tests ran again. The simulator underlay remains
+source `28184b52`, separate from the current first-party overlay.
+
+GitHub [ROS2 CI run 38811254004](https://github.com/mowglinext/mowglinext/actions/runs/38811254004)
+passes on exact source `c2e470b7`: Lyrical build/test (protected legacy
+check name `Build & Test (ROS2 kilted)`), config drift, formatting and its
+report-only static-analysis job. That job success does not resolve the local
+cppcheck skips/earlier standalone opt-in failures.
+
+Fresh evidence is outside Git at
+`/home/bruno/.cache/mowglinext-pr950-scoped-continuation/verified/`: the install
+manifest, `suite-inventory.json`, build/test logs, `fastdds/`, and mission
+provenance/results. Failing-before controls remain in the earlier cache
+`/home/bruno/.cache/mowglinext-pr950/ftc-continuation/`. No evidence archive is
+added to the repository.
+
+Both full attempts retain their original worlds, scoring and 3000 s timeout.
+They are **FAIL**, not stable successful end-to-end mowing validation:
+
+| Scenario on motion source `c2e470b7` | Final result |
+|---|---|
+| GPS, physical box promoted to known keepout | Canonical/outer exit codes 1/1. Mowing FAIL after 1853.0 s, 0/1 paths, 0 wholly skipped; localization-guard re-dispatch budget exhausted. Undock 13.1 s, planning 27.7 s and fallback docking/charging 51.7 s PASS. Total 229.0 m. |
+| LiDAR, physical box unmapped | Canonical/outer exit codes 1/1. Timeout at 3000 s, 0/1 paths, 30.6% measured coverage, 136.5 m. Undock 12.3 s, planning 52.4 s and obstacle encounter/detection/departure PASS. RPP/BackUp stall prevents completion. The timeout path then raises `AttributeError` on obsolete `RcutilsLogger.warn`, preventing HOME/docking and post-dock feature tests in this attempt. |
+
+Closed passive traces contain 15,045 GPS samples (11,533 blade-active mowing;
+seven outside in one episode) and 23,748 LiDAR samples (6,373 blade-active mowing;
+zero outside). Both have zero sampled blade-active reference points in the
+known hole and zero modeled body/box overlaps. Initial blade-zero corridor
+samples are separate from blade-active excursions. These are sampled,
+latest-receipt correlations, not continuous footprint/blade containment,
+actuator synchronization or hardware evidence. The blocked LiDAR attempt does
+not clear its two earlier recorded violations.
+
+GPS FTC capture has four windows / 13,301 telemetry rows / 5,138,100 JSONL bytes and
+no cap; LiDAR's four-window capture reaches its 8 MiB bound. A separate passive
+LiDAR reference-exit observer (four 2 s-before/4 s-after windows, 2 MiB total) starts
+later with a recorded source/admission manifest and closes normally at the
+E2E exit with zero exit edges. The 32-pair map-observer cap remains intact;
+later goals may lack map pairs.
+
+The two obsolete `.warn()` calls are a test-tool compatibility defect, separate
+from the RPP stall. The narrow repair uses the supported `.warning()` API and
+preserves scoring, default timeout and controller code. Commit `7905ba1c`
+changes exactly those two calls. An actual runtime API
+smoke confirms `warning()` works and `warn` is absent. A separate LiDAR
+failure-path probe uses the same clean `c2e470b7` controller overlay and pinned
+runtime, with only that two-line harness mounted read-only. The override SHA256
+is `7cc7c1bab93633da1d83e060c492b887950cb2a0e6ba9598bf494feaeae5839e`;
+its bytes equal the committed harness. Only this diagnostic invocation sets
+`E2E_MOWING_TIMEOUT_S=15`; the source default stays 3000 and all scoring remains
+unchanged. The warning is emitted, HOME reaches IDLE_DOCKED/charging (15.7 s),
+then manual mowing, area recording and emergency auto-reset phases pass. The
+normal final report and both exit codes remain **FAIL / 1** for the deliberately
+incomplete mowing/obstacle coverage. This validates the repaired failure path,
+not a complete mowing mission or HOME from the earlier blocked pose. The full
+3000 s LiDAR attempt was not repeated after this logging-only change. Evidence
+and exact patch/override/overlay provenance are in `verified/timeout-compat/`
+and `verified/missions/lidar-timeout-compat/`; Python compilation and final
+whitespace checks pass.
+
+This remains Draft. Software simulation, GitHub CI and physical robot evidence
+are distinct. **HARDWARE_REQUIRED:** freeze the exact final ROS/ARM image,
+firmware image/source, universal-GNSS gitlink/receiver/driver revision, robot unit
+and configuration before the supervised blades-removed procedure in
+[Physical acceptance](#physical-acceptance). The software candidate is ROS
+`c2e470b7`, dev `29eaf625`, universal-GNSS
+gitlink `9a329cc216ed137d0e375a4cfe1f5c26e1dd52d0` and firmware source tree
+`a63eb82bbf6b6c0e73fb03883e340aabab6a2f7f`. The ARM image, flashed firmware,
+robot unit and receiver hardware/driver revisions remain unvalidated; the
+desktop image is not a validated robot baseline. Before accepting this escape
+on hardware, measure the actual command-plus-STOP response against the existing
+configured coast bound and confirm useful escape/recovery without refilling a
+spent attempt or crossing the declared geometry; exceedance fails acceptance.
+Use the blades-removed, exclusion-zone and verified-emergency-stop prerequisites
+in that procedure. No merge, deployment, flash or hardware motion occurs.
+
 ## Ubuntu 26.04 continuation (2026-10-15)
 
 This section supersedes earlier checkpoints for the changes and runs described
