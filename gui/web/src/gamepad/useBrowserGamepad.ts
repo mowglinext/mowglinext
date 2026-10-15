@@ -13,6 +13,8 @@ interface Options {
     runAction: (action: ControllerAction) => Promise<void>;
     onOwnershipChange: (owns: boolean) => void;
     onSample?: (devices: ControllerSample[]) => void;
+    /** Configuration preview only; input reads and safety polling never depend on it. */
+    preview?: boolean;
 }
 export type ControllerFault = 'unsupported' | 'inputLost' | 'connectionLost' | 'actionFailed' | null;
 const copyPad = (pad: Gamepad): ControllerSample => ({
@@ -91,7 +93,7 @@ export function useBrowserGamepad(options: Options) {
             }
             const now = performance.now();
             // Keep high-rate control out of React's render loop (including MapPage).
-            if (now - lastDisplay >= 100) {
+            if (opts.current.preview !== false && now - lastDisplay >= 100) {
                 const samples = devices.map(copyPad);
                 setPads(samples);
                 opts.current.onSample?.(samples);
