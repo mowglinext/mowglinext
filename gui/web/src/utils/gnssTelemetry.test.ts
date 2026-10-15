@@ -1,3 +1,4 @@
+import sanitizedMavros from '../test/fixtures/gnss-mavros-sanitized.json';
 import {describe, expect, it} from 'vitest';
 import {GnssStatusConstants as C} from '../types/ros';
 import {decodeGnssStatus} from './gnssTelemetry';
@@ -77,7 +78,9 @@ describe('GNSS runtime boundary and source authority', () => {
             {name: 'universal_gnss/summary', values: [{key: 'fix_valid', value: 'true'}]},
             {name: 'GPS', values: [{key: 'fix_status', value: '-1'}]},
         ]});
-        expect(negativeGps?.fix_valid).toBe(false);
+        // The unidentified GPS entry cannot override a different summary source.
+        expect(negativeGps?.fix_valid).toBe(true);
+        expect(negativeGps?.fix_type).toBeUndefined();
     });
     it.each(['0junk', '0x0', '255', '3', ''])('does not coerce unsupported GPS diagnostic %s', value => {
         const status = deriveGnssStatusFromDiagnostics({status: [{name: 'GPS', values: [{key: 'fix_status', value}]}]});
@@ -91,11 +94,70 @@ describe('GNSS runtime boundary and source authority', () => {
         expect(status?.value_flags).toBeUndefined();
     });
     it('does not confuse inactive with active correction forwarding', () => {
-        expect(projection({}, 'RTCM forwarding inactive')?.correction_stream_status).toBe(C.CORRECTION_STREAM_STATUS_UNKNOWN);
+        expect(projection({}, 'RTCM forwarding inactive')?.correction_stream_status).toBeUndefined();
+        expect(deriveGnssStatusFromDiagnostics({status: [{name: 'universal_gnss_ntrip/rtcm_forwarding', message: 'RTCM forwarding inactive'}]})?.correction_stream_status).toBe(C.CORRECTION_STREAM_STATUS_UNKNOWN);
     });
     it('guards numeric displays using both masks and finite values', () => {
         expect(readGnssNumber({capability_flags: 0, value_flags: C.CAP_HORIZONTAL_ACCURACY}, C.CAP_HORIZONTAL_ACCURACY, 0)).toBeUndefined();
         expect(readGnssNumber({capability_flags: 8, value_flags: 8}, 8, NaN)).toBeUndefined();
         expect(readGnssNumber({capability_flags: 8, value_flags: 8}, 8, 0)).toBe(0);
     });
+});
+
+describe('Lot 25 confirmed presentation/provenance defects', () => {
+    it('retains the producer position observation sequence', () => {
+        expect(decodeGnssStatus({fix_type: 3, fix_valid: true, position_observation_sequence: 42}))
+            .toEqual({kind: 'valid', data: {fix_type: 3, fix_valid: true, position_observation_sequence: 42}});
+    });
+    it('does not combine explicit 2D evidence with a contradictory Fixed mode', () => {
+        expect(deriveGpsStatus({fix_valid: true, fix_type: 5, rtk_mode: 3}).fixType).toBe('UNKNOWN');
+    });
+    it('does not hide a legacy explicit measured zero solely because masks are absent', () => {
+        expect(readGnssNumber({horizontal_accuracy_m: 0}, C.CAP_HORIZONTAL_ACCURACY, 0)).toBe(0);
+    });
+    it('does not enrich a MAVROS fix with unrelated Universal correction diagnostics', () => {
+        const typed = {backend: 'mavros_gps1', fix_valid: false};
+        expect(mergeGnssStatusDiagnosticProjection(typed, projection({fix_valid: 'true'}))).toEqual(typed);
+    });
+});
+
+it('does not merge positioning and correction diagnostics from distinct receivers', () => {
+    const status = deriveGnssStatusFromDiagnostics({status: [
+        {name: 'GPS', hardware_id: 'receiver-A', values: [{key: 'fix_status', value: '0'}]},
+        {name: 'universal_gnss_ntrip/rtcm_forwarding', hardware_id: 'receiver-B', message: 'RTCM forwarding active'},
+    ]});
+    expect(status?.correction_stream_status).toBeUndefined();
+});
+
+it('accepts the actual Foxglove NaN-to-null wire representation only for explicitly unavailable fields', () => {
+    const decoded = decodeGnssStatus(sanitizedMavros);
+    expect(decoded.kind).toBe('valid');
+    if (decoded.kind !== 'valid') throw new Error('Valid sanitized ROS frame rejected');
+    expect(deriveGpsStatus(decoded.data).fixType).toBe('RTK_FIX');
+    expect(readGnssNumber(decoded.data, C.CAP_HORIZONTAL_ACCURACY, decoded.data.horizontal_accuracy_m)).toBe(0);
+    expect(decoded.data.vertical_accuracy_m).toBeUndefined();
+    expect(decoded.data.msm_summary_age_s).toBeUndefined();
+});
+
+it.each([0, C.CAP_HORIZONTAL_ACCURACY])('honors measured-zero and unavailable flags %s after sanitization', value_flags => {
+    for (const value of [0, null, NaN]) {
+        const decoded = decodeGnssStatus({capability_flags: C.CAP_HORIZONTAL_ACCURACY, value_flags, horizontal_accuracy_m: value, fix_valid: true, fix_type: 6});
+        if (value_flags && value !== 0) expect(decoded.kind).toBe('invalid');
+        else {
+            expect(decoded.kind).toBe('valid');
+            if (decoded.kind !== 'valid') throw new Error('Unexpected rejection');
+            expect(readGnssNumber(decoded.data, C.CAP_HORIZONTAL_ACCURACY, decoded.data.horizontal_accuracy_m)).toBe(value_flags ? 0 : undefined);
+        }
+    }
+});
+it.each([9007199254740992, -1, 1.5, '42', null])('rejects untrustworthy position identities %s', position_observation_sequence => {
+    expect(decodeGnssStatus({fix_valid: true, fix_type: 3, position_observation_sequence}).kind).toBe('invalid');
+});
+it('preserves same-receiver legacy diagnostic enrichment without inventing a typed fix category', () => {
+    const projected = deriveGnssStatusFromDiagnostics({status: [
+        {name: 'GPS', hardware_id: 'A', values: [{key: 'fix_status', value: '0'}]},
+        {name: 'universal_gnss_ntrip/rtcm_forwarding', hardware_id: 'A', message: 'RTCM forwarding active'},
+    ]});
+    expect(projected?.correction_stream_status).toBe(C.CORRECTION_STREAM_STATUS_ACTIVE);
+    expect(deriveGpsStatus(projected).fixType).toBe('UNKNOWN');
 });

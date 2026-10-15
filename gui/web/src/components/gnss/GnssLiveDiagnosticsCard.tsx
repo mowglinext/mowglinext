@@ -60,12 +60,13 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
     const { t } = useTranslation();
     const unknownLabel = t("diagnosticsPage.unknown");
     const liveStatus = deriveGpsStatus(gnssStatus);
-    const receiverLabel = gnssReceiverLabel(gnssStatus);
+    const receiver = gnssReceiverLabel(gnssStatus);
+    const receiverLabel = receiver === 'GNSS' ? unknownLabel : receiver;
     const backendLabel = normalizeGnssString(gnssStatus?.backend) || t("diagnosticsPage.unknownLower");
     const correctionStreamLabel = gnssCorrectionStreamStatusLabel(gnssStatus) ?? unknownLabel;
     const baselineSolutionStatus = gnssBaselineSolutionStatusLabel(gnssStatus);
     const rtkModeLabel = (() => {
-        if (!hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_RTK_MODE)) {
+        if (currentRtkMode(gnssStatus) === undefined) {
             return unknownLabel;
         }
         switch (currentRtkMode(gnssStatus)) {

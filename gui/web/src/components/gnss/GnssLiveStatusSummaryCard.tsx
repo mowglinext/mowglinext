@@ -8,7 +8,6 @@ import {
     currentCorrectionStreamStatus,
     gnssCorrectionStreamStatusLabel,
     gnssReceiverLabel,
-    hasGnssCapability,
 } from "../../utils/gpsStatus.ts";
 import {
     correctionStreamTagColor,
@@ -26,18 +25,16 @@ type Props = {
 
 export const GnssLiveStatusSummaryCard: React.FC<Props> = ({
     gnssStatus,
-    selectedReceiverFamily,
 }) => {
     const { t } = useTranslation();
     const liveStatus = deriveGpsStatus(gnssStatus);
     const unknownLabel = t("settingsGnssLiveStatus.unknown");
     const detectedReceiver = gnssReceiverLabel(gnssStatus);
-    const receiverFamily = normalizeGnssString(selectedReceiverFamily) || "auto";
-    const receiverLabel = detectedReceiver !== "GNSS" ? detectedReceiver : receiverFamily;
+    const receiverLabel = detectedReceiver !== "GNSS" ? detectedReceiver : unknownLabel;
     const backendLabel = normalizeGnssString(gnssStatus?.backend) || unknownLabel;
     const correctionStreamLabel = gnssCorrectionStreamStatusLabel(gnssStatus) ?? unknownLabel;
     const rtkModeLabel = (() => {
-        if (!hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_RTK_MODE)) {
+        if (currentRtkMode(gnssStatus) === undefined) {
             return unknownLabel;
         }
         switch (currentRtkMode(gnssStatus)) {

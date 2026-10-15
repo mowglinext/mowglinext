@@ -1,6 +1,7 @@
 import type {GnssStatus} from '../types/ros';
 import {GnssStatusConstants as C} from '../types/ros';
 import {isJsonObject} from './json';
+import {diagnosticPublicationIdentity} from './diagnosticTelemetry';
 import {finiteMeasurement, isRosStamp} from './physicalTelemetry';
 import type {TelemetryDecode} from './statusTelemetry';
 
@@ -11,6 +12,7 @@ const string = (value: unknown): boolean => typeof value === 'string';
 const nonnegative = (value: unknown): boolean => finiteMeasurement(value) && value >= 0;
 const schema = {
     header: (v: unknown) => isJsonObject(v) && isRosStamp(v.stamp) && typeof v.frame_id === 'string',
+    position_observation_sequence: (v: unknown) => uint(v, Number.MAX_SAFE_INTEGER),
     backend: string, receiver_vendor: string, receiver_model: string, receiver_firmware: string,
     fix_type: (v: unknown) => uint(v, C.FIX_TYPE_DGPS),
     fix_valid: boolean, differential_corrections: boolean, corrections_active: boolean,
@@ -77,10 +79,11 @@ export function decodeGnssStatus(raw: unknown): TelemetryDecode<GnssStatus> {
         if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
         const value = raw[key];
         // MAVROS and native adapters can report NaN for unavailable float channels.
-        // Only an explicit absent-value bit permits that sentinel; never accept it
-        // as an available measurement, or permit strings/null as numeric sentinels.
+        // Foxglove JSON sanitizes that sentinel to null. Only an explicit absent-value bit
+        // permits either representation; never accept it
+        // as an available measurement, or permit strings as numeric sentinels.
         const flag = measurementFlags[key];
-        if (flag !== undefined && typeof value === 'number' && Number.isNaN(value)
+        if (flag !== undefined && (value === null || typeof value === 'number' && Number.isNaN(value))
             && uint(raw.value_flags, 0xffffffff) && typeof raw.value_flags === 'number'
             && (raw.value_flags & flag) === 0) continue;
         if (!validate(value)) return {kind: 'invalid'};
@@ -89,4 +92,15 @@ export function decodeGnssStatus(raw: unknown): TelemetryDecode<GnssStatus> {
     if (!Object.keys(decoded).some(key => key !== 'header')) return {kind: 'unsupported'};
     if (!isGnssStatus(decoded)) return {kind: 'invalid'};
     return {kind: 'valid', data: decoded};
+}
+
+/** Position sequence is producer-owned. Header alone can advance on non-position updates.
+ * There is no source-incarnation ID; this identity must not imply a global epoch. */
+export function gnssObservationIdentity(raw: unknown): string | null {
+    if (!isJsonObject(raw)) return null;
+    const source = typeof raw.backend === 'string' ? `${raw.backend}:` : '';
+    if (typeof raw.position_observation_sequence === 'number' && Number.isSafeInteger(raw.position_observation_sequence)
+        && raw.position_observation_sequence > 0) return `${source}position:${raw.position_observation_sequence}`;
+    const stamp = diagnosticPublicationIdentity(raw);
+    return stamp === null ? null : `${source}${stamp}`;
 }

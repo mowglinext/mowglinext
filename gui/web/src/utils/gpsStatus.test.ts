@@ -154,7 +154,6 @@ describe('deriveGpsStatus', () => {
             ],
         })).toEqual({
             backend: 'universal',
-            fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
             fix_valid: true,
         });
     });
@@ -302,7 +301,7 @@ describe('deriveGpsStatus', () => {
         expect(sample.msm_summary_cell_count).toBe(0);
     });
 
-    it('enriches a legacy mask-less typed sample with correction diagnostics', () => {
+    it('keeps uncorrelated correction diagnostics separate from a legacy typed sample', () => {
         const merged = mergeGnssStatusDiagnosticProjection(
             {
                 backend: 'universal',
@@ -319,8 +318,7 @@ describe('deriveGpsStatus', () => {
             }),
         );
 
-        expect(merged.correction_stream_status).toBe(GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE);
-        expect((merged.capability_flags ?? 0) & GnssStatusConstants.CAP_CORRECTION_STREAM).not.toBe(0);
+        expect(merged).toEqual({backend: 'universal', fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX});
     });
 
     it('formats user-facing receiver labels without leaking backend ids', () => {

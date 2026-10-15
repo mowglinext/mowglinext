@@ -70,8 +70,21 @@ export function currentCorrectionStreamStatus(status: GnssStatus | undefined | n
         ? status?.correction_stream_status : undefined;
 }
 
+function contradictoryRtk(status: GnssStatus | undefined | null): boolean {
+    if (!status || !optionalValueAvailable(status, GnssStatusConstants.CAP_RTK_MODE)) return false;
+    const basic = status.fix_type === GnssStatusConstants.FIX_TYPE_2D_FIX
+        || status.fix_type === GnssStatusConstants.FIX_TYPE_3D_FIX || status.fix_type === GnssStatusConstants.FIX_TYPE_DGPS;
+    return (status.rtk_mode === GnssStatusConstants.RTK_MODE_FIXED || status.rtk_mode === GnssStatusConstants.RTK_MODE_FLOAT) && basic
+        || status.rtk_mode === GnssStatusConstants.RTK_MODE_FIXED && status.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FLOAT
+        || status.rtk_mode === GnssStatusConstants.RTK_MODE_FLOAT && status.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FIXED
+        || status.rtk_mode === GnssStatusConstants.RTK_MODE_NONE
+            && (status.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FLOAT || status.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FIXED);
+}
+
 export function currentRtkMode(status: GnssStatus | undefined | null): number | undefined {
-    if (!status) return undefined;
+    if (!status || contradictoryRtk(status) || status.fix_valid === false || status.dead_reckoning === true
+        || status.fix_type === GnssStatusConstants.FIX_TYPE_NO_FIX
+        || status.fix_type === GnssStatusConstants.FIX_TYPE_DEAD_RECKONING) return undefined;
     if ((status.capability_flags !== undefined && !hasGnssCapability(status, GnssStatusConstants.CAP_RTK_MODE)) ||
         (status.value_flags !== undefined && !hasGnssValue(status, GnssStatusConstants.CAP_RTK_MODE))) return undefined;
     return status.rtk_mode;
@@ -93,6 +106,7 @@ export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsS
     if (gnssStatus?.rtk_mode !== undefined && (!Number.isInteger(gnssStatus.rtk_mode)
         || gnssStatus.rtk_mode < 0 || gnssStatus.rtk_mode > Number(GnssStatusConstants.RTK_MODE_FIXED))) return unknownGpsStatus();
     const rtkMode = currentRtkMode(gnssStatus);
+    if (contradictoryRtk(gnssStatus)) return unknownGpsStatus();
     switch (rtkMode) {
         case GnssStatusConstants.RTK_MODE_FIXED:
             return {fixType: "RTK_FIX", label: i18n.t("gpsStatus.compactRtkFixed"), percent: 100};
@@ -301,9 +315,17 @@ export function deriveGnssStatusFromDiagnostics(
     diagnostics: DiagnosticArrayLike | undefined | null,
 ): GnssStatus | undefined {
     const summary = findDiagnosticStatusByName(diagnostics, "universal_gnss/summary");
-    const gps = findDiagnosticStatusByName(diagnostics, "GPS");
-    const correctionStream = findDiagnosticStatusByNames(diagnostics, CORRECTION_STREAM_DIAGNOSTIC_NAMES);
-    const msmSummary = findDiagnosticStatusByNames(diagnostics, MSM_SUMMARY_DIAGNOSTIC_NAMES);
+    const gpsCandidate = findDiagnosticStatusByName(diagnostics, "GPS");
+    const sameReceiver = (a: DiagnosticStatusLike | undefined, b: DiagnosticStatusLike | undefined) =>
+        !a || !!a.hardware_id && a.hardware_id === b?.hardware_id;
+    // The diagnostic name identifies a legacy channel, not a physical receiver.
+    // Never build one status from unrelated or unidentifiable position sources.
+    const gps = sameReceiver(summary, gpsCandidate) ? gpsCandidate : undefined;
+    const positioning = summary ?? gps;
+    const correctionCandidate = findDiagnosticStatusByNames(diagnostics, CORRECTION_STREAM_DIAGNOSTIC_NAMES);
+    const correctionStream = sameReceiver(positioning, correctionCandidate) ? correctionCandidate : undefined;
+    const msmCandidate = findDiagnosticStatusByNames(diagnostics, MSM_SUMMARY_DIAGNOSTIC_NAMES);
+    const msmSummary = sameReceiver(positioning ?? correctionStream, msmCandidate) ? msmCandidate : undefined;
     if (!summary && !gps && !correctionStream && !msmSummary) {
         return undefined;
     }
@@ -365,66 +387,13 @@ export function deriveGnssStatusFromDiagnostics(
     return projected;
 }
 
-const CAPABILITY_GROUP_FIELDS: Array<{flag: number; fields: (keyof GnssStatus)[]}> = [
-    {
-        flag: GnssStatusConstants.CAP_CORRECTION_STREAM,
-        fields: ["correction_stream_status"],
-    },
-    {
-        flag: GnssStatusConstants.CAP_MSM_SUMMARY,
-        fields: [
-            "msm_summary_seen",
-            "msm_summary_decoded",
-            "msm_summary_valid",
-            "msm_summary_message_type",
-            "msm_summary_station_id",
-            "msm_summary_constellations_seen",
-            "msm_summary_satellite_count",
-            "msm_summary_signal_count",
-            "msm_summary_cell_count",
-            "msm_summary_age_s",
-        ],
-    },
-];
-
-function copyDiagnosticField<K extends keyof GnssStatus>(
-    target: GnssStatus, source: GnssStatus, field: K,
-): void {
-    if (source[field] !== undefined) target[field] = source[field];
-}
-
+/** Typed samples and diagnostic-only fallback have independent provenance.
+ * No receiver/acquisition correlation is available for filling typed fields. */
 export function mergeGnssStatusDiagnosticProjection(
     gnssStatus: GnssStatus | undefined | null,
     diagnosticProjection: GnssStatus | undefined,
 ): GnssStatus {
-    const base = gnssStatus ?? {};
-    if (!diagnosticProjection) {
-        return base;
-    }
-    if (!hasTypedGnssStatusSample(base)) {
-        return diagnosticProjection;
-    }
-
-    const merged: GnssStatus = {...base};
-    const coreFields = new Set(['header', 'backend', 'receiver_vendor', 'receiver_model', 'receiver_firmware',
-        'fix_type', 'fix_valid', 'dead_reckoning']);
-    // A single generated mask cannot express partial authority. Do not add a
-    // diagnostic-only mask that would make legacy typed RTK/channels unsupported.
-    if (Object.keys(base).some(field => !coreFields.has(field))) return merged;
-    // Typed positioning and identity never come from an unrelated diagnostic.
-    // Explicit masks define unsupported/unknown as well as available fields.
-    if (base.capability_flags !== undefined || base.value_flags !== undefined) return merged;
-    for (const group of CAPABILITY_GROUP_FIELDS) {
-        if (group.fields.some(field => base[field] !== undefined) ||
-            !hasGnssCapability(diagnosticProjection, group.flag)) continue;
-        for (const field of group.fields) copyDiagnosticField(merged, diagnosticProjection, field);
-        merged.capability_flags = (merged.capability_flags ?? 0) | group.flag;
-        if (hasGnssValue(diagnosticProjection, group.flag)) {
-            merged.value_flags = (merged.value_flags ?? 0) | group.flag;
-        }
-    }
-
-    return merged;
+    return hasTypedGnssStatusSample(gnssStatus) ? gnssStatus ?? {} : diagnosticProjection ?? {};
 }
 
 export function hasGnssCapability(gnssStatus: GnssStatus | undefined | null, flag: number): boolean {
@@ -440,7 +409,7 @@ export function readGnssNumber(
     flag: number,
     value: number | undefined | null,
 ): number | undefined {
-    return hasGnssCapability(gnssStatus, flag) && hasGnssValue(gnssStatus, flag)
+    return optionalValueAvailable(gnssStatus, flag)
         && typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 

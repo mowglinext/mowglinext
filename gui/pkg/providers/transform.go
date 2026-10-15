@@ -86,6 +86,7 @@ type rawOdometry struct {
 }
 
 type rawUniversalGnssStatus struct {
+	ObservationSequence     uint64   `json:"position_observation_sequence"`
 	Stamp                   rawStamp `json:"stamp"`
 	FixValid                bool     `json:"fix_valid"`
 	FixType                 uint8    `json:"fix_type"`
@@ -392,6 +393,7 @@ func adaptGnssStatus(raw []byte) ([]byte, error) {
 		BaselineSolutionStatus:  mapUniversalBaselineSolutionStatus(status.BaselineSolutionStatus),
 	}
 
+	adapted.PositionObservationSequence = status.ObservationSequence
 	return json.Marshal(adapted)
 }
 

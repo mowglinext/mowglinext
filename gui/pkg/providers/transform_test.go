@@ -293,3 +293,13 @@ func joinCSV(items []string) string {
 	}
 	return out
 }
+
+func TestAdaptGnssStatusPreservesUniversalObservationIdentity(t *testing.T) {
+	raw := []byte(`{"stamp":{"sec":12,"nanosec":34},"fix_valid":true,"fix_type":4,"rtk_mode":3,"position_observation_sequence":42}`)
+	adapted, err := adaptGnssStatus(raw)
+	require.NoError(t, err)
+	var status mowgli.GnssStatus
+	require.NoError(t, json.Unmarshal(adapted, &status))
+	assert.Equal(t, uint64(42), status.PositionObservationSequence)
+	assert.Equal(t, uint8(mowgliFixTypeRTKFixed), status.FixType)
+}
