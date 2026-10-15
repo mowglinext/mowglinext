@@ -59,13 +59,13 @@ export interface ControllerContext {
     emergency: boolean;
     pending: boolean;
 }
-export type ControllerState = 'releaseControls' | 'ready' | 'driving' | 'inputLost' | 'waitingForMode' | 'holding';
+export type ControllerState = 'releaseControls' | 'ready' | 'driving' | 'inputLost' | 'waitingForMode' | 'holding' | 'connecting' | 'statusLost' | 'emergency' | 'actionPending';
 export type InputLossReason = 'pollGap' | 'clockInvalid' | 'disconnected' | 'identityChanged' | 'mappingChanged' |
     'timestampInvalid' | 'timestampRegressed' | 'axisInvalid' | 'buttonInvalid' |
     'focusLost' | 'pageHidden' | 'pageExit' | 'controllerChanged';
 export interface InputLoss {
     reason: InputLossReason;
-    source?: 'enable' | 'poll' | 'windowBlur' | 'pendingBlur';
+    source?: 'enable' | 'poll' | 'windowBlur';
     documentFocused?: boolean;
     visibility?: DocumentVisibilityState;
     activeElement?: string;
@@ -140,7 +140,7 @@ export class ControllerDriver {
         if (!ctx.statusFresh || ctx.emergency || ctx.pending) {
             this.neutralSeen = false;
             this.held = null;
-            return zero('waitingForMode');
+            return zero(!ctx.statusFresh ? 'statusLost' : ctx.emergency ? 'emergency' : 'actionPending');
         }
         if (this.previousMode !== ctx.stateName) {
             this.neutralSeen = false;
@@ -177,7 +177,7 @@ export class ControllerDriver {
         const down = (Object.keys(ACTION_COMMANDS) as ControllerAction[]).filter(key => pressed(key));
         if (down.length !== 1 || !allowed.includes(down[0])) {
             this.held = null;
-            return zero('ready');
+            return zero(recording || ctx.stateName === 'MANUAL_MOWING' ? 'ready' : 'waitingForMode');
         }
         const action = down[0];
         if (this.held?.action !== action) this.held = {action, since: now, fired: false};
@@ -199,4 +199,14 @@ export function loadProfile(key: string): ControllerProfile | null {
 export function saveProfile(key: string, profile: ControllerProfile): void {
     if (!validProfile(profile)) throw new Error('Invalid controller profile');
     localStorage.setItem(`mowglinext.gamepad.v1:${key}`, JSON.stringify(profile));
+}
+
+// Remember a layout choice, never an enabled session or a reusable slot index.
+const selectedControllerStorageKey = 'mowglinext.gamepad.selected.v1';
+export function loadSelectedControllerKey(): string | null {
+    try { return localStorage.getItem(selectedControllerStorageKey); }
+    catch { return null; }
+}
+export function saveSelectedControllerKey(key: string): void {
+    localStorage.setItem(selectedControllerStorageKey, key);
 }

@@ -5206,7 +5206,7 @@
     "invalidProfile": "Utilisez un bouton différent par fonction et un axe différent pour avancer et tourner. Toutes les entrées affectées doivent exister sur cette manette.",
     "enable": "Activer pour ce robot",
     "disable": "Désactiver la manette",
-    "safetyHelp": "Centrez les sticks, relâchez tous les boutons, puis maintenez l’homme mort avant de déplacer un stick. Relâchez-le pour arrêter. En enregistrement, relâchez l’homme mort et maintenez un bouton d’enregistrement pendant 0,8 seconde. STOP est immédiat. La conduite fonctionne pendant l’enregistrement ou la tonte manuelle lancée depuis l’interface ; cette dernière active la lame et s’arrête au relâchement de l’homme mort. La configuration désactive la conduite par manette.",
+    "safetyHelp": "Choisissez d’abord l’enregistrement de zone ou la tonte manuelle, puis centrez les sticks et relâchez tous les boutons après le changement de mode. Maintenez l’homme mort affecté avant de déplacer un stick ; relâchez-le pour arrêter. La tonte manuelle démarre la lame et se termine au relâchement de l’homme mort. Pour les actions d’enregistrement, relâchez l’homme mort et maintenez le bouton affecté pendant 0,8 seconde. STOP est immédiat. Ouvrir les réglages arrête les entrées de la manette. Fermez-les avec Terminé, puis touchez Activer sur la carte.",
     "profiles": {
       "default": "Affectations standard intégrées",
       "saved": "Affectations enregistrées",
@@ -5220,12 +5220,16 @@
       "recordCancel": "Annuler et supprimer l’enregistrement"
     },
     "states": {
-      "releaseControls": "Centrez les sticks et relâchez les boutons",
-      "ready": "Prêt — maintenez l’homme mort pour conduire",
-      "driving": "Homme mort maintenu",
+      "releaseControls": "Centrez les sticks et relâchez {{deadman}} et tous les autres boutons",
+      "ready": "Prêt — maintenez {{deadman}}, puis déplacez un stick",
+      "driving": "{{deadman}} maintenu — relâchez pour arrêter",
       "inputLost": "Entrée perdue",
-      "waitingForMode": "En attente du mode enregistrement / manuel en direct",
-      "holding": "Maintenez pour confirmer l’action d’enregistrement"
+      "waitingForMode": "Choisissez l’enregistrement de zone ou la tonte manuelle dans les commandes du robot. La tonte manuelle démarre la lame.",
+      "holding": "Maintenez pour confirmer l’action d’enregistrement",
+      "connecting": "Connexion de la manette…",
+      "statusLost": "En attente de l’état du robot en direct — conduite arrêtée",
+      "emergency": "Arrêt d’urgence du robot actif — conduite arrêtée",
+      "actionPending": "En attente de la fin de la commande du robot — conduite arrêtée"
     },
     "inputLossReasons": {
       "pollGap": "Le navigateur a suspendu la lecture de la manette pendant {{pollGapMs}} ms (limite {{limit}} ms).",
@@ -5244,9 +5248,16 @@
     },
     "faults": {
       "unsupported": "Les entrées de manette sont indisponibles ou bloquées par ce navigateur. Essayez un navigateur compatible avec l’API Gamepad, ou HTTPS si les entrées sont bloquées en HTTP.",
-      "inputLost": "Entrée perdue ou périmée. Centrez les sticks, relâchez tous les boutons et activez à nouveau.",
-      "connectionLost": "Session de manette terminée. Vérifiez la connexion et si un autre onglet utilise la manette, puis activez à nouveau.",
+      "inputLost": "Manette arrêtée. Centrez les sticks, relâchez tous les boutons et activez à nouveau.",
+      "connectionLost": "Session de manette terminée. Si cet arrêt était inattendu, vérifiez la connexion ou si un autre onglet utilise la manette.",
       "actionFailed": "La commande du robot a échoué. Vérifiez son état et la connexion avant de réactiver."
-    }
+    },
+    "done": "Terminé",
+    "enableHelp": "Touchez Activer sur la carte quand vous êtes prêt. Les réglages de la manette ne démarrent jamais la conduite.",
+    "setupRequired": "Ouvrez Manette pour sélectionner un appareil et enregistrer des affectations valides.",
+    "driveSummary": "Conduire : maintenir {{deadman}} · Arrêter : {{stop}} · Max {{speed}} m/s",
+    "retryHelp": "Centrez les sticks, relâchez tous les boutons, puis touchez Activer à nouveau.",
+    "selectionSaveFailed": "Manette sélectionnée pour cet onglet uniquement. Le stockage du navigateur ne permet pas de mémoriser ce choix.",
+    "chooseController": "Appuyez sur un bouton de la manette, ou ouvrez Manette pour choisir un appareil."
   }
 }

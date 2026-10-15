@@ -5206,7 +5206,7 @@
     "invalidProfile": "Use a different button for each function and a different axis for driving and steering. All assigned inputs must exist on this controller.",
     "enable": "Enable for this robot",
     "disable": "Disable controller",
-    "safetyHelp": "Center the sticks, release all buttons, then hold the deadman before moving a stick. Release to stop. In recording mode, release the deadman and hold a recording button for 0.8 seconds. STOP is immediate. Driving works during area recording or GUI-started Manual Mowing; Manual Mowing runs the blade and deadman release exits that mode. Configuration disables controller driving.",
+    "safetyHelp": "Choose area recording or Manual Mowing first, then center the sticks and release all buttons after the mode changes. Hold the mapped deadman before moving a stick; release to stop. Manual Mowing starts the blade and deadman release exits that mode. For recording actions, release deadman and hold the assigned button for 0.8 seconds. STOP is immediate. Opening settings stops controller input. Close settings with Done, then tap Enable on the map.",
     "profiles": {
       "default": "Built-in standard mapping",
       "saved": "Saved mapping",
@@ -5220,12 +5220,16 @@
       "recordCancel": "Cancel and discard recording"
     },
     "states": {
-      "releaseControls": "Center sticks and release buttons",
-      "ready": "Ready — hold deadman to drive",
-      "driving": "Deadman held",
+      "releaseControls": "Center sticks and release {{deadman}} and all other buttons",
+      "ready": "Ready — hold {{deadman}}, then move a stick",
+      "driving": "{{deadman}} held — release to stop",
       "inputLost": "Input lost",
-      "waitingForMode": "Waiting for live recording / manual mode",
-      "holding": "Hold to confirm recording action"
+      "waitingForMode": "Choose area recording or Manual Mowing in robot controls. Manual Mowing starts the blade.",
+      "holding": "Hold to confirm recording action",
+      "connecting": "Connecting controller…",
+      "statusLost": "Waiting for live robot status — driving stopped",
+      "emergency": "Robot emergency active — driving stopped",
+      "actionPending": "Waiting for the robot command to finish — driving stopped"
     },
     "inputLossReasons": {
       "pollGap": "The browser paused controller reads for {{pollGapMs}} ms (limit {{limit}} ms).",
@@ -5244,9 +5248,16 @@
     },
     "faults": {
       "unsupported": "Controller input is unavailable or blocked by this browser. Try a browser with Gamepad API support, or HTTPS if input is blocked over HTTP.",
-      "inputLost": "Input lost or stale. Center the sticks, release all buttons and enable again.",
-      "connectionLost": "Controller session ended. Check the connection and whether another tab owns the controller, then enable again.",
+      "inputLost": "Controller stopped. Center the sticks, release all buttons and enable again.",
+      "connectionLost": "Controller session ended. If this was unexpected, check the connection or whether another tab owns the controller.",
       "actionFailed": "Robot command failed. Check the robot status and connection before enabling again."
-    }
+    },
+    "done": "Done",
+    "enableHelp": "Tap Enable on the map when you are ready. Controller settings never start driving.",
+    "setupRequired": "Open Controller to select a device and save a valid mapping.",
+    "driveSummary": "Drive: hold {{deadman}} · Stop: {{stop}} · Max {{speed}} m/s",
+    "retryHelp": "Center sticks, release all buttons, then tap Enable again.",
+    "selectionSaveFailed": "Controller selected for this tab only. Browser storage could not remember it.",
+    "chooseController": "Press a controller button, or open Controller to choose a device."
   }
 }

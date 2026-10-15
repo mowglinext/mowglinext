@@ -1,8 +1,8 @@
-import {beforeEach, describe, expect, it} from 'vitest';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {
     ACTION_COMMANDS, ACTION_HOLD_MS, ControllerDriver, DEFAULT_PROFILE,
-    MAX_ANGULAR_RAD_S, MAX_LINEAR_MPS, POLL_MAX_GAP_MS, loadProfile, profileFits,
-    saveProfile, validProfile, type ControllerContext, type ControllerProfile, type ControllerSample,
+    MAX_ANGULAR_RAD_S, MAX_LINEAR_MPS, POLL_MAX_GAP_MS, loadProfile, loadSelectedControllerKey, profileFits,
+    saveProfile, saveSelectedControllerKey, validProfile, type ControllerContext, type ControllerProfile, type ControllerSample,
     type InputLoss,
 } from './controller';
 
@@ -62,9 +62,54 @@ describe('controller profile validation and storage', () => {
         saveProfile(key, DEFAULT_PROFILE);
         expect(loadProfile(key)).toEqual(DEFAULT_PROFILE);
     });
+
+    it('remembers only a controller fingerprint and tolerates denied selection reads', () => {
+        expect(loadSelectedControllerKey()).toBeNull();
+        const key = JSON.stringify(['test pad', 'standard', 2, 8]);
+        saveSelectedControllerKey(key);
+        expect(loadSelectedControllerKey()).toBe(key);
+        const denied = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Storage denied'); });
+        expect(loadSelectedControllerKey()).toBeNull();
+        denied.mockRestore();
+    });
 });
 
 describe('ControllerDriver', () => {
+    it('waits for a drive mode in IDLE and requires release after entering Manual Mowing', () => {
+        const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        let now = prime(driver);
+        const step = (context = idle, down = false, linear = 0) => driver.step(sample({
+            timestamp: now += 50, buttons: down ? buttonsDown('deadman') : sample().buttons, axes: [0, linear],
+        }), now, context);
+        expect(step()).toMatchObject({state: 'waitingForMode', deadman: false, linear: 0});
+        expect(step(idle, true)).toMatchObject({state: 'waitingForMode', deadman: false});
+        const manual = {...idle, stateName: 'MANUAL_MOWING'};
+        expect(step(manual, true)).toMatchObject({state: 'releaseControls', deadman: false});
+        expect(step(manual, true, -1)).toMatchObject({state: 'releaseControls', deadman: false, linear: 0});
+        step(manual);
+        expect(step(manual)).toMatchObject({state: 'ready', deadman: false});
+        const armed = step(manual, true);
+        expect(armed).toMatchObject({state: 'driving', deadman: true});
+        expect(armed.linear).toBeCloseTo(0);
+        expect(step(manual, true, -1).linear).toBe(MAX_LINEAR_MPS);
+    });
+
+    it.each([
+        [{statusFresh: false}, 'statusLost'],
+        [{emergency: true}, 'emergency'],
+        [{pending: true}, 'actionPending'],
+    ] as const)('explains the active interlock without changing neutral rearming (%s)', (guard, state) => {
+        const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        const recording = {...idle, stateName: 'RECORDING'};
+        let now = prime(driver, recording.stateName);
+        const held = sample({timestamp: now, buttons: buttonsDown('deadman')});
+        expect(driver.step(held, now += 50, recording).deadman).toBe(true);
+        expect(driver.step(held, now += 50, {...recording, ...guard})).toMatchObject({state, deadman: false, linear: 0});
+        expect(driver.step(held, now += 50, recording)).toMatchObject({state: 'releaseControls', deadman: false});
+        driver.step(sample({timestamp: held.timestamp}), now += 50, recording);
+        expect(driver.step(held, now += 50, recording).deadman).toBe(true);
+    });
+
     it.each<[string, ControllerSample | null, Partial<InputLoss>]>([
         ['missing device', null, {reason: 'disconnected'}],
         ['disconnected device', sample({connected: false}), {reason: 'disconnected'}],
