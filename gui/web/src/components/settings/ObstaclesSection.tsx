@@ -28,7 +28,7 @@ export const normalizeDigSensitivity = (raw: unknown): DigSensitivity => {
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: string | number | boolean | null) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
     onReset?: (key: string) => void;
@@ -95,7 +95,7 @@ export const ObstaclesSection: React.FC<Props> = ({
                         label={fieldLabel("dig_sensitivity", t("settingsObstacles.digSensitivity"))}
                         extra={t("settingsObstacles.digSensitivityHelp")}
                     >
-                        <Segmented
+                        <Segmented<DigSensitivity>
                             aria-label={t("settingsObstacles.digSensitivity")}
                             value={normalizeDigSensitivity(values.dig_sensitivity)}
                             onChange={(level) => onChange("dig_sensitivity", level)}

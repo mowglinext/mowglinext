@@ -16,10 +16,10 @@ const {Text, Paragraph, Link} = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: number | boolean | null) => void;
 };
 
-const asBool = (v: any): boolean => v === true || v === "true";
+const asBool = (v: unknown): boolean => v === true || v === "true";
 
 type Toggle = {
     key: string;
