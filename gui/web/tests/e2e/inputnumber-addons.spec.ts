@@ -45,16 +45,40 @@ for (const width of [390, 1440]) {
         await page.goto('/tests/e2e/fixtures/number-addons.html');
         const fixed = page.getByRole('spinbutton', {name: 'Fixed-width datum'});
         await expect(fixed).toHaveValue('0.000');
+        const dialog = page.getByRole('dialog', {name: 'Numeric layout fixture'});
+        // Input readiness precedes the end of Ant Design's zoom entrance.
+        // Measure the final layout without disabling the animation or sleeping.
+        await expect(dialog).not.toHaveClass(/ant-zoom-(appear|enter)/);
+        await expect(dialog).toHaveCSS('transform', 'none');
+        await expect(dialog.getByText('OpenMower latitude', {exact: true})).toBeVisible();
+        await expect(dialog.getByText('PWM per metre per second', {exact: true})).toBeVisible();
         for (const name of ['Fixed-width datum', 'Fluid-width gain']) {
             const layout = await page.getByRole('spinbutton', {name}).evaluate(element => {
                 const compact = element.closest('.ant-space-compact');
                 const unit = compact?.querySelector('.ant-space-addon');
                 const numeric = compact?.querySelector('.ant-input-number');
                 if (!compact || !unit || !numeric) throw new Error('Missing numeric composition');
+                const modal = element.closest('.ant-modal');
+                const body = modal?.querySelector('.ant-modal-body');
+                if (!modal || !body) throw new Error('Missing modal layout');
                 const g = compact.getBoundingClientRect(), a = unit.getBoundingClientRect(), n = numeric.getBoundingClientRect();
-                return {width: g.width, right: g.right, left: g.left, viewport: window.innerWidth, inputWidth: n.width, heightDelta: Math.abs(a.height - n.height), unitRight: a.right};
+                const bodyRect = body.getBoundingClientRect(), bodyStyle = getComputedStyle(body);
+                return {width: g.width, right: g.right, left: g.left, viewport: window.innerWidth, inputWidth: n.width,
+                    textInputWidth: element.getBoundingClientRect().width, heightDelta: Math.abs(a.height - n.height),
+                    topDelta: Math.abs(a.top - n.top), unitRight: a.right, unitWidth: a.width,
+                    unitScrollWidth: unit.scrollWidth, unitClientWidth: unit.clientWidth,
+                    groupScrollWidth: compact.scrollWidth, groupClientWidth: compact.clientWidth,
+                    bodyLeft: bodyRect.left + parseFloat(bodyStyle.paddingLeft), bodyRight: bodyRect.right - parseFloat(bodyStyle.paddingRight),
+                    documentWidth: document.documentElement.clientWidth, documentScrollWidth: document.documentElement.scrollWidth,
+                    modalTransform: getComputedStyle(modal).transform, entering: /ant-zoom-(appear|enter)/.test(modal.className)};
             });
+            expect(layout.entering).toBe(false); expect(layout.modalTransform).toBe('none');
             expect(layout.left).toBeGreaterThanOrEqual(0); expect(layout.right).toBeLessThanOrEqual(layout.viewport);
+            expect(layout.left).toBeGreaterThanOrEqual(layout.bodyLeft); expect(layout.right).toBeLessThanOrEqual(layout.bodyRight + 1);
+            expect(layout.documentScrollWidth).toBeLessThanOrEqual(layout.documentWidth);
+            expect(layout.groupScrollWidth).toBeLessThanOrEqual(layout.groupClientWidth);
+            expect(layout.unitWidth).toBeGreaterThan(0); expect(layout.unitScrollWidth).toBeLessThanOrEqual(layout.unitClientWidth);
+            expect(layout.textInputWidth).toBeGreaterThan(30); expect(layout.topDelta).toBeLessThan(2);
             expect(layout.inputWidth).toBeGreaterThan(30); expect(layout.heightDelta).toBeLessThan(2);
             expect(layout.unitRight).toBeLessThanOrEqual(layout.right + 1);
             if (name === 'Fixed-width datum') expect(layout.width).toBeCloseTo(280, 0);
