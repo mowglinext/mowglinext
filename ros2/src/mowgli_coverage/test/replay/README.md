@@ -32,7 +32,10 @@ directories. The normal package's ament suite runs `test_planning_trace`, the
 Python runner/provenance tests and a 26-fixture replay matrix with two repetitions in each
 of two fresh processes (104 replay runs). Larger stress runs use the commands
 above. These are registered checks, not a statement that they have passed.
-The standalone suite builds all five existing planner test files unchanged.
+The standalone candidate suite builds all six planner test files unchanged,
+including the private ring-corner smoothing safety regressions. Baseline builds
+retain the five historical planner test files and also run the ring-corner suite
+when it exists in the extracted revision.
 
 For an isolated container with no network or robot/service mounts:
 
@@ -101,7 +104,8 @@ and not every submillimetre change changes that quantized fingerprint.
 ## Baseline and performance comparison
 
 Build the same harness against a separately extracted baseline implementation
-and matching headers using `-DPLANNER_SOURCE=... -DPLANNER_INCLUDE=...`
+and matching public and private source headers using
+`-DPLANNER_SOURCE=... -DPLANNER_INCLUDE=...`
 and `-DREPLAY_BASELINE=ON`. If the baseline tests differ, also supply
 `-DPLANNER_TEST_ROOT=...` with that revision's test sources and relative fixtures.
 Then run baseline and candidate with `--no-trace`

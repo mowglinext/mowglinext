@@ -36,6 +36,16 @@ foreach(test_name coverage_planning pivot_joins start_point coverage_preview cov
   target_link_libraries(test_${test_name} PRIVATE replay_planner GTest::gtest_main)
   add_test(NAME test_${test_name} COMMAND test_${test_name})
 endforeach()
+if(NOT REPLAY_BASELINE OR EXISTS "${PLANNER_TEST_ROOT}/test_ring_corner_smoothing.cpp")
+  # The bevel repair uses a private planner seam; exercise its containment,
+  # pivot-preservation and rollback controls in every replay configuration too.
+  get_filename_component(PLANNER_SOURCE_DIR "${PLANNER_SOURCE}" DIRECTORY)
+  add_executable(test_ring_corner_smoothing "${PLANNER_TEST_ROOT}/test_ring_corner_smoothing.cpp")
+  target_include_directories(test_ring_corner_smoothing PRIVATE "${PLANNER_SOURCE_DIR}")
+  target_link_libraries(test_ring_corner_smoothing PRIVATE replay_planner GTest::gtest_main)
+  add_test(NAME test_ring_corner_smoothing COMMAND test_ring_corner_smoothing)
+endif()
+
 if(NOT REPLAY_BASELINE)
   add_executable(test_replay_trace test_trace.cpp)
   target_link_libraries(test_replay_trace PRIVATE replay_planner GTest::gtest_main)

@@ -214,17 +214,13 @@ jobs:
           ROOT="$RUNNER_TEMP/coverage-replay-artifacts/$BUILD_TYPE"
           BUILD_ROOT="$RUNNER_TEMP/coverage-replay-build/$BUILD_TYPE"
           BASELINE_SOURCE="$RUNNER_TEMP/coverage-replay-baseline"
-          BASELINE_PLANNER="ros2/src/mowgli_coverage/src/coverage_planning.cpp"
-          BASELINE_HEADER="ros2/src/mowgli_coverage/include/mowgli_coverage/coverage_planning.hpp"
-          mkdir -p "$BASELINE_SOURCE/src" \
-            "$BASELINE_SOURCE/include/mowgli_coverage" "$BASELINE_SOURCE/test" \
-            "$ROOT/build-metadata"
-          git show "${BASELINE_SHA}:${BASELINE_PLANNER}" \
-            > "$BASELINE_SOURCE/src/coverage_planning.cpp"
-          git show "${BASELINE_SHA}:${BASELINE_HEADER}" \
-            > "$BASELINE_SOURCE/include/mowgli_coverage/coverage_planning.hpp"
-          # Keep relative fixture includes with the baseline's own test sources.
-          git -c core.autocrlf=false archive "$BASELINE_SHA" ros2/src/mowgli_coverage/test \
+          mkdir -p "$BASELINE_SOURCE" "$ROOT/build-metadata"
+          # Preserve private source headers as well as the public API, tests and
+          # relative fixtures from this exact revision. A planner-only export
+          # loses src/ring_corner_rounding.hpp once the bevel repair is the base.
+          git -c core.autocrlf=false archive "$BASELINE_SHA" \
+            ros2/src/mowgli_coverage/src ros2/src/mowgli_coverage/include \
+            ros2/src/mowgli_coverage/test \
             | tar -x -C "$BASELINE_SOURCE" --strip-components=3
           build_variant() {
             local label="$1"
