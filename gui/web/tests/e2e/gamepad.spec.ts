@@ -41,6 +41,7 @@ for (const width of [390, 1440]) {
         const frames: Array<{twist: {twist: {linear: {x: number}; angular: {z: number}}}; deadman: boolean}> = [];
         const commands: number[] = [];
         const errors: string[] = [];
+        let opened = 0;
         page.on('pageerror', error => errors.push(error.message));
         page.on('console', msg => { if (msg.type() === 'error' && msg.text().includes('same key')) errors.push(msg.text()); });
         await page.route('**/api/mowglinext/call/high_level_control', async route => {
@@ -48,6 +49,7 @@ for (const width of [390, 1440]) {
             await route.fulfill({json: {}});
         });
         await page.routeWebSocket(/\/api\/mowglinext\/publish\/gamepad/, socket => {
+            opened++;
             socket.onMessage(raw => frames.push(JSON.parse(String(raw))));
         });
         await page.routeWebSocket(/\/api\/mowglinext\/publish\/joy/, () => {});
@@ -71,14 +73,18 @@ for (const width of [390, 1440]) {
         await page.screenshot({path: `tests/e2e/.artifacts/gamepad-settings-${width}.png`, fullPage: true});
         expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
         await page.reload();
-        await page.getByRole('button', {name: 'Controller', exact: true}).click();
-        await dialog.getByRole('combobox').first().click();
-        await page.getByText('1: Fixture standard controller', {exact: true}).click();
-        await expect(dialog.getByText('Saved mapping', {exact: true})).toBeVisible();
-        await page.waitForTimeout(650); // Centered input need not emit fresh events.
-        await dialog.getByRole('button', {name: 'Enable for this robot', exact: true}).click();
+        await expect(dialog).not.toBeVisible();
+        const enable = page.getByRole('button', {name: 'Enable for this robot', exact: true});
+        await expect(enable).toBeEnabled();
+        await expect(page.getByText('1: Fixture standard controller', {exact: true})).toBeVisible();
+        await page.waitForTimeout(650); // Restoring centered input must not activate a session.
+        expect(opened).toBe(0);
+        expect(frames).toHaveLength(0);
+        await enable.click();
         await expect(page.getByRole('button', {name: 'Disable controller'})).toBeVisible();
         await expect.poll(() => frames.length).toBeGreaterThan(1);
+        await expect(page.getByRole('status')).toContainText('LB / L1 (Button 4)');
+        await expect(page.getByText('Drive: hold LB / L1 (Button 4) · Stop: A / × (Button 0) · Max 0.25 m/s')).toBeVisible();
         await page.evaluate(() => { (window as any).controllerTestInput.buttons[4] = true; });
         await expect.poll(() => frames.some(frame => frame.deadman)).toBe(true);
         await page.evaluate(() => { (window as any).controllerTestInput.axes[1] = -1; });
@@ -97,7 +103,7 @@ for (const width of [390, 1440]) {
         await expect.poll(() => commands).toEqual([5, 8]);
         await page.evaluate(() => { (window as any).controllerTestInput.connected = false; });
         await expect(page.getByRole('button', {name: 'Disable controller'})).toHaveCount(0);
-        await expect(page.getByRole('alert')).toContainText('Input lost or stale');
+        await expect(page.getByRole('alert')).toContainText('The browser no longer reports the selected controller as connected.');
         await page.evaluate(() => {
             const input = (window as any).controllerTestInput;
             input.connected = true;

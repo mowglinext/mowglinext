@@ -22,20 +22,35 @@ robot-side Bluetooth management and standalone mapping files remain future work.
    then press one button or move one stick. Assign unique buttons and axes.
    Configure dead zone, inversion and speed scale, then save. Unknown layouts
    require testing and saving before Enable becomes available.
-5. Enable for this robot. The configuration panel finishes closing and restores
-   focus before a control session opens. Explicit activation focuses the stable
-   Controller button once; it never continually refocuses a running session.
-   Center the sticks and release every mapped button.
+5. Close configuration with **Done**, then tap **Enable for this robot** directly
+   on the map. Done never opens a control session; activation stays unavailable
+   until the panel has finished closing. The map's Enable/Disable button stays
+   mounted and receives focus once on this explicit click, never continuously.
+   After a fault, use the same map button to enable again without reopening settings.
+   The hook rechecks the actual controller and mapping before each session.
+6. Choose area recording or explicitly start Manual Mowing using the robot's
+   controls. **Manual Mowing starts the blade.** After every mode change,
+   center the sticks and release every mapped button, including the deadman.
    Press and hold the deadman with centered sticks, then move a stick. Maximum
    speeds match the touch joystick: 0.25 m/s and 0.6 rad/s, scaled down by the
    profile. A deflected stick on a new deadman press requires another neutral
    release before motion is accepted.
 
+The map shows the mapped deadman and STOP buttons, configured maximum speed,
+and the next required step. Standard mappings include common Xbox/PlayStation
+button names alongside their browser indices. IDLE displays a mode instruction
+instead of Ready; missing status, emergency and pending commands have distinct
+messages. Opening Controller settings stops controller input.
+
 Mappings are versioned, validated and saved separately from robot settings, in
 this browser's local storage, per robot origin and controller layout/ID. They
 survive page reloads but do not transfer between browsers, origins or devices.
-Clearing browser storage removes them. Enable and the selected device are never
-persisted. Unavailable storage leaves the profile unsaved and driving disabled.
+Clearing browser storage removes them. The explicitly chosen controller layout
+is remembered, but activation is never persisted. On the next visit, press a
+controller button to expose it; a unique matching device is preselected using
+its current slot. If multiple connected devices have the same ID/layout, choose
+one explicitly. A remembered selection never opens a control session. An edited
+or unknown mapping that cannot be saved remains ineligible for driving.
 
 ## Driving and recording
 
@@ -125,7 +140,7 @@ the server, the GUI log also records the reason and polling gap. These are brows
 observations, not proof of a physical Bluetooth disconnect. Record the client OS,
 browser/controller versions and exact diagnostic when reporting a failure.
 
-The panel closing/focus handoff and map ownership churn are covered in software
+The direct activation, panel closing/focus handoff and map ownership churn are covered in software
 tests. These tests cannot establish physical iPad/Safari/Bluetooth behavior.
 Safety deadlines and timestamp-order validation are unchanged.
 

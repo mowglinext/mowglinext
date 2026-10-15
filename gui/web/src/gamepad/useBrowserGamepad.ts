@@ -13,6 +13,7 @@ interface Options {
     runAction: (action: ControllerAction) => Promise<void>;
     onOwnershipChange: (owns: boolean) => void;
     onSample?: (devices: ControllerSample[]) => void;
+    onInventoryChange?: (devices: ControllerSample[]) => void;
     /** Configuration preview only; input reads and safety polling never depend on it. */
     preview?: boolean;
 }
@@ -67,7 +68,6 @@ export function useBrowserGamepad(options: Options) {
             if (detail) setInputLoss(detail);
         }
     }, []);
-    const revokeInput = useCallback((detail: InputLoss) => cancel('inputLost', detail), [cancel]);
     const disable = () => cancel();
     const enable = () => {
         cancel();
@@ -94,12 +94,13 @@ export function useBrowserGamepad(options: Options) {
         opts.current.onOwnershipChange(true);
         setEnabled(true);
         setFault(null);
-        setState('releaseControls');
+        setState('connecting');
     };
 
     useEffect(() => {
         mounted.current = true;
         let lastDisplay = -Infinity;
+        let lastInventory = '';
         const poll = () => {
             let devices: Gamepad[] = [];
             try {
@@ -109,11 +110,20 @@ export function useBrowserGamepad(options: Options) {
             }
             const now = performance.now();
             // Keep high-rate control out of React's render loop (including MapPage).
-            if (opts.current.preview !== false && now - lastDisplay >= 100) {
+            // Inventory changes still reach the map so reconnect can offer an
+            // explicit Enable without reopening settings. Never render each stick
+            // sample or use this preview to validate an actual control session.
+            const inventory = JSON.stringify(devices.map(p => [p.index, p.id, p.mapping, p.axes.length, p.buttons.length]));
+            const inventoryChanged = inventory !== lastInventory;
+            lastInventory = inventory;
+            if (inventoryChanged || (opts.current.preview !== false && now - lastDisplay >= 100)) {
                 const samples = devices.map(copyPad);
                 setPads(samples);
-                opts.current.onSample?.(samples);
-                lastDisplay = now;
+                if (inventoryChanged) opts.current.onInventoryChange?.(samples);
+                if (opts.current.preview !== false) {
+                    opts.current.onSample?.(samples);
+                    lastDisplay = now;
+                }
             }
             const active = session.current;
             if (!active) return;
@@ -191,5 +201,5 @@ export function useBrowserGamepad(options: Options) {
             cancel();
         };
     }, [cancel]);
-    return {pads, enabled, state, fault, inputLoss, enable, disable, revokeInput};
+    return {pads, enabled, state, fault, inputLoss, enable, disable};
 }
