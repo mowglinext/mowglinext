@@ -1,4 +1,5 @@
 import {useEffect, useState} from "react";
+import {isJsonObject} from "../utils/json";
 import {useWS} from "./useWS.ts";
 
 export interface FusionGraphStats {
@@ -20,15 +21,48 @@ export interface FusionGraphStats {
     values: Record<string, string>;
 }
 
-interface DiagnosticArray {
-    header?: {stamp?: {sec: number; nanosec: number}};
-    status?: Array<{
-        hardware_id?: string;
-        level: number;
-        name: string;
-        message: string;
-        values: { key: string; value: string }[];
-    }>;
+type DiagnosticEntry = {
+    name: string;
+    hardware_id?: string;
+    level: number;
+    message: string;
+    values: Array<{key: string; value: string}>;
+};
+type DiagnosticFrame = {
+    entry: DiagnosticEntry;
+    stamp?: {sec: number; nanosec: number};
+};
+
+/** Decode the first status only, retaining support for absent legacy metadata. */
+function decodeDiagnosticFrame(raw: unknown): DiagnosticFrame | null {
+    if (!isJsonObject(raw) || !Array.isArray(raw.status)) return null;
+    const entry: unknown = raw.status[0];
+    if (!isJsonObject(entry) || typeof entry.name !== 'string' || typeof entry.message !== 'string'
+        || typeof entry.level !== 'number' || !Number.isInteger(entry.level) || entry.level < 0 || entry.level > 3
+        || ('hardware_id' in entry && typeof entry.hardware_id !== 'string')) return null;
+    const values: DiagnosticEntry['values'] = [];
+    if ('values' in entry) {
+        if (!Array.isArray(entry.values)) return null;
+        const items: unknown[] = entry.values;
+        for (const item of items) {
+            if (!isJsonObject(item) || typeof item.key !== 'string' || typeof item.value !== 'string') return null;
+            values.push({key: item.key, value: item.value});
+        }
+    }
+    let stamp: DiagnosticFrame['stamp'];
+    if ('header' in raw) {
+        if (!isJsonObject(raw.header)) return null;
+        if ('stamp' in raw.header) {
+            const candidate: unknown = raw.header.stamp;
+            if (!isJsonObject(candidate) || typeof candidate.sec !== 'number' || !Number.isInteger(candidate.sec)
+                || candidate.sec < -2147483648 || candidate.sec > 2147483647
+                || typeof candidate.nanosec !== 'number' || !Number.isInteger(candidate.nanosec)
+                || candidate.nanosec < 0 || candidate.nanosec >= 1_000_000_000) return null;
+            stamp = {sec: candidate.sec, nanosec: candidate.nanosec};
+        }
+    }
+    return {entry: {name: entry.name, message: entry.message, level: entry.level, values,
+        ...(typeof entry.hardware_id === 'string' ? {hardware_id: entry.hardware_id} : {})}, stamp};
 }
 
 /**
@@ -41,20 +75,16 @@ export const useFusionGraphDiagnostics = () => {
     const [stats, setStats] = useState<FusionGraphStats | null>(null);
 
 
-    const stream = useWS<string>(
+    const stream = useWS<unknown>(
         () => { /* closed */ },
         () => { /* connected */ },
         (e) => {
             try {
-                const msg: DiagnosticArray = (e as any);
-                const entry = msg.status?.[0];
-                if (!entry) return;
-                const values: Record<string, string> = {};
-                for (const v of entry.values ?? []) {
-                    values[v.key] = v.value;
-                }
+                const decoded = decodeDiagnosticFrame(e);
+                if (!decoded) return;
+                const {entry, stamp} = decoded;
+                const values: Record<string, string> = Object.fromEntries(entry.values.map(({key, value}) => [key, value]));
                 const receivedMonotonic = performance.now();
-                const stamp = msg.header?.stamp;
                 const sourceStamp = stamp && Number.isFinite(stamp.sec) && Number.isFinite(stamp.nanosec)
                     && (stamp.sec > 0 || stamp.nanosec > 0)
                     ? `${stamp.sec}.${String(stamp.nanosec).padStart(9, '0')}` : undefined;
