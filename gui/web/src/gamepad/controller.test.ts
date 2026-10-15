@@ -1,0 +1,209 @@
+import {beforeEach, describe, expect, it} from 'vitest';
+import {
+    ACTION_COMMANDS, ACTION_HOLD_MS, ControllerDriver, DEFAULT_PROFILE, INPUT_MAX_AGE_MS,
+    MAX_ANGULAR_RAD_S, MAX_LINEAR_MPS, POLL_MAX_GAP_MS, loadProfile, profileFits,
+    saveProfile, validProfile, type ControllerContext, type ControllerProfile, type ControllerSample,
+} from './controller';
+
+const idle: ControllerContext = {stateName: 'IDLE', statusFresh: true, emergency: false, pending: false};
+
+function sample(overrides: Partial<ControllerSample> = {}): ControllerSample {
+    return {
+        id: 'test pad', index: 0, mapping: 'standard', connected: true, timestamp: 1000,
+        axes: [0, 0],
+        buttons: Array.from({length: 8}, () => ({pressed: false, touched: false, value: 0})),
+        ...overrides,
+    } as ControllerSample;
+}
+
+function pressed(key: keyof ControllerProfile['buttons'], value = true): ControllerSample {
+    const buttons = sample().buttons.slice();
+    buttons[DEFAULT_PROFILE.buttons[key]] = {pressed: value, touched: value, value: value ? 1 : 0};
+    return sample({buttons});
+}
+
+function buttonsDown(...keys: Array<keyof ControllerProfile['buttons']>) {
+    const buttons = sample().buttons.slice();
+    for (const key of keys) {
+        buttons[DEFAULT_PROFILE.buttons[key]] = {pressed: true, touched: true, value: 1};
+    }
+    return buttons;
+}
+
+function prime(driver: ControllerDriver, mode = idle.stateName): number {
+    const ctx = {...idle, stateName: mode};
+    driver.step(sample({timestamp: 1000}), 1000, ctx);
+    driver.step(sample({timestamp: 1050}), 1050, ctx);
+    return 1050;
+}
+
+describe('controller profile validation and storage', () => {
+    beforeEach(() => localStorage.clear());
+
+    it('rejects invalid, conflicting, and out-of-range profile values', () => {
+        expect(validProfile(DEFAULT_PROFILE)).toBe(true);
+        expect(validProfile({...DEFAULT_PROFILE, version: 2})).toBe(false);
+        expect(validProfile({...DEFAULT_PROFILE, linearAxis: DEFAULT_PROFILE.angularAxis})).toBe(false);
+        expect(validProfile({...DEFAULT_PROFILE, deadzone: 0.41})).toBe(false);
+        expect(validProfile({...DEFAULT_PROFILE, speedScale: 0})).toBe(false);
+        expect(validProfile({...DEFAULT_PROFILE, buttons: {...DEFAULT_PROFILE.buttons, stop: 5}})).toBe(false);
+        expect(validProfile({...DEFAULT_PROFILE, buttons: {...DEFAULT_PROFILE.buttons, stop: -1}})).toBe(false);
+        expect(profileFits(DEFAULT_PROFILE, sample({axes: [0], buttons: Array.from({length: 5}, () => ({pressed: false, touched: false, value: 0}))}))).toBe(false);
+    });
+
+    it('loads corrupt storage as absent and refuses to save invalid profiles', () => {
+        const key = 'pad-layout';
+        localStorage.setItem(`mowglinext.gamepad.v1:${key}`, '{broken');
+        expect(loadProfile(key)).toBeNull();
+        localStorage.setItem(`mowglinext.gamepad.v1:${key}`, JSON.stringify({...DEFAULT_PROFILE, buttons: {...DEFAULT_PROFILE.buttons, stop: 5}}));
+        expect(loadProfile(key)).toBeNull();
+        expect(() => saveProfile(key, {...DEFAULT_PROFILE, speedScale: 2})).toThrow('Invalid controller profile');
+        saveProfile(key, DEFAULT_PROFILE);
+        expect(loadProfile(key)).toEqual(DEFAULT_PROFILE);
+    });
+});
+
+describe('ControllerDriver', () => {
+    it('requires neutral input, scales and caps axes, applies the deadzone and inversion', () => {
+        const profile: ControllerProfile = {
+            ...DEFAULT_PROFILE, invertLinear: false, invertAngular: true, deadzone: 0.2, speedScale: 0.5,
+        };
+        const driver = new ControllerDriver(profile, {id: 'test pad', index: 0});
+        const manual = {...idle, stateName: 'MANUAL_MOWING'};
+        driver.step(sample({timestamp: 1000}), 1000, manual);
+        expect(driver.step(sample({timestamp: 1050}), 1050, manual).state).toBe('ready');
+
+        const atDeadzone = driver.step(sample({timestamp: 1100, axes: [0.2, -0.2], buttons: pressed('deadman').buttons}), 1100, manual);
+        expect(atDeadzone.linear).toBe(0);
+        expect(atDeadzone.angular).toBeCloseTo(0);
+        expect(atDeadzone).toMatchObject({deadman: true, state: 'driving'});
+        const full = driver.step(sample({timestamp: 1150, axes: [-1, 1], buttons: pressed('deadman').buttons}), 1150, manual);
+        expect(full.linear).toBe(MAX_LINEAR_MPS * 0.5);
+        expect(full.angular).toBe(MAX_ANGULAR_RAD_S * 0.5);
+    });
+
+    it('stops when deadman is released and requires a neutral re-arm before a new press', () => {
+        const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        const manual = {...idle, stateName: 'MANUAL_MOWING'};
+        let now = prime(driver, manual.stateName);
+        const neutralDeadman = sample({timestamp: now + 50, buttons: pressed('deadman').buttons});
+        expect(driver.step(neutralDeadman, now += 50, manual)).toMatchObject({deadman: true, state: 'driving'});
+        const moving = sample({timestamp: now + 50, axes: [0, -0.5], buttons: pressed('deadman').buttons});
+        expect(driver.step(moving, now += 50, manual).deadman).toBe(true);
+
+        const releasedWithMotion = sample({timestamp: now + 50, axes: [0, -0.5]});
+        expect(driver.step(releasedWithMotion, now += 50, manual)).toMatchObject({linear: 0, angular: 0, deadman: false, state: 'releaseControls'});
+        const neutral = sample({timestamp: now + 50});
+        expect(driver.step(neutral, now += 50, manual).state).toBe('releaseControls');
+
+        const pressedWhileMoving = sample({timestamp: now + 50, axes: [0, -0.5], buttons: pressed('deadman').buttons});
+        expect(driver.step(pressedWhileMoving, now += 50, manual).state).toBe('releaseControls');
+        const stillHeldAndMoving = sample({timestamp: now + 50, axes: [0, -0.5], buttons: pressed('deadman').buttons});
+        expect(driver.step(stillHeldAndMoving, now += 50, manual)).toMatchObject({linear: 0, angular: 0, deadman: false, state: 'releaseControls'});
+    });
+
+    it.each([
+        {reason: 'STOP', buttons: ['deadman', 'stop'] as const, action: 'stop'},
+        {reason: 'an action pressed with deadman', buttons: ['deadman', 'recordFinish'] as const, action: undefined},
+    ])('re-arms deadman after $reason in RECORDING', ({buttons: rejectedButtons, action}) => {
+        const recording = {...idle, stateName: 'RECORDING'};
+        const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        let now = prime(driver, recording.stateName);
+        const step = (overrides: Partial<ControllerSample> = {}) => {
+            now += 50;
+            return driver.step(sample({timestamp: now, ...overrides}), now, recording);
+        };
+
+        expect(step({buttons: buttonsDown('deadman')})).toMatchObject({state: 'driving', deadman: true});
+        expect(step({axes: [0, -0.5], buttons: buttonsDown('deadman')})).toMatchObject({state: 'driving', deadman: true});
+        const rejected = step({axes: [0, -0.5], buttons: buttonsDown(...rejectedButtons)});
+        expect(rejected.action).toBe(action);
+        expect(rejected.state).toBe('releaseControls');
+        expect(rejected.deadman).toBe(false);
+        expect(rejected.linear).toBeCloseTo(0);
+        expect(rejected.angular).toBeCloseTo(0);
+
+        expect(step().state).toBe('releaseControls'); // All buttons and axes neutral.
+        const newPressWithDeflection = step({axes: [0, -0.5], buttons: buttonsDown('deadman')});
+        expect(newPressWithDeflection).toMatchObject({linear: 0, angular: 0, deadman: false, state: 'releaseControls'});
+        expect(step({axes: [0, -0.5], buttons: buttonsDown('deadman')})).toMatchObject({
+            linear: 0, angular: 0, deadman: false, state: 'releaseControls',
+        });
+        expect(step({axes: [0, -0.5]})).toMatchObject({linear: 0, angular: 0, deadman: false, state: 'releaseControls'});
+        expect(step().state).toBe('releaseControls'); // Re-arm after release plus centered stick.
+        const rearmed = step({buttons: buttonsDown('deadman')});
+        expect(rearmed.state).toBe('driving');
+        expect(rearmed.deadman).toBe(true);
+        expect(rearmed.linear).toBeCloseTo(0);
+        expect(rearmed.angular).toBeCloseTo(0);
+        expect(step({axes: [0, -0.5], buttons: buttonsDown('deadman')}).deadman).toBe(true);
+    });
+
+    it('holds actions for 800 ms, fires once, gives STOP priority, and enforces mode guards', () => {
+        expect(ACTION_COMMANDS).toEqual({stop: 8, recordStart: 3, recordFinish: 5, recordCancel: 6});
+        expect(Object.values(ACTION_COMMANDS)).not.toContain(7);
+        expect(ACTION_HOLD_MS).toBe(800);
+        const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        let now = prime(driver);
+        const finish = (t: number) => sample({timestamp: t, buttons: pressed('recordStart').buttons});
+        expect(driver.step(finish(now += 50), now, idle).state).toBe('holding');
+        let frame;
+        for (let i = 0; i < ACTION_HOLD_MS / 100; i++) {
+            now += 100;
+            frame = driver.step(finish(now), now, idle);
+        }
+        expect(frame).toMatchObject({action: 'recordStart', state: 'releaseControls'});
+        now += 50;
+        expect(driver.step(finish(now), now, idle).action).toBeUndefined();
+        now += 50;
+        expect(driver.step(finish(now), now, idle).action).toBeUndefined();
+
+        const stopDriver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        now = prime(stopDriver);
+        const bothButtons = pressed('stop').buttons.slice();
+        bothButtons[DEFAULT_PROFILE.buttons.recordStart] = {pressed: true, touched: true, value: 1};
+        const both = sample({timestamp: now + 50, buttons: bothButtons});
+        expect(stopDriver.step(both, now + 50, {...idle, emergency: true})).toMatchObject({action: 'stop', state: 'releaseControls'});
+        expect(stopDriver.step(sample({timestamp: now + 100, buttons: bothButtons}), now + 100, idle).action).toBeUndefined();
+
+        const guarded = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        now = prime(guarded, 'MANUAL_MOWING');
+        const startInManual = sample({timestamp: now + 50, buttons: pressed('recordStart').buttons});
+        expect(guarded.step(startInManual, now + 50, {...idle, stateName: 'MANUAL_MOWING'})).toMatchObject({state: 'ready'});
+    });
+
+    it('fails terminally on stale, zero, future, or regressed device timestamps', () => {
+        const invalid: Array<[string, ControllerSample, number]> = [
+            ['stale', sample({timestamp: 1000 - INPUT_MAX_AGE_MS - 1}), 1000],
+            ['zero', sample({timestamp: 0}), 1000],
+            ['future', sample({timestamp: 1006}), 1000],
+        ];
+        for (const [name, pad, now] of invalid) {
+            const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+            expect(driver.step(pad, now, idle).state, name).toBe('inputLost');
+            expect(driver.step(sample({timestamp: now + 50}), now + 50, idle).state, name).toBe('inputLost');
+        }
+
+        const regressed = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        regressed.step(sample({timestamp: 1000}), 1000, idle);
+        expect(regressed.step(sample({timestamp: 999}), 1050, idle).state).toBe('inputLost');
+    });
+
+    it('fails terminally for missing, disconnected, replaced, or late input', () => {
+        const cases: Array<[string, ControllerSample | null, number]> = [
+            ['missing', null, 1000],
+            ['disconnected', sample({connected: false}), 1000],
+            ['replaced', sample({id: 'another pad'}), 1000],
+        ];
+        for (const [name, pad, now] of cases) {
+            const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+            expect(driver.step(pad, now, idle).state, name).toBe('inputLost');
+            expect(driver.step(sample({timestamp: now + 50}), now + 50, idle).state, name).toBe('inputLost');
+        }
+
+        const gap = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        gap.step(sample({timestamp: 1000}), 1000, idle);
+        expect(gap.step(sample({timestamp: 1000 + POLL_MAX_GAP_MS}), 1000 + POLL_MAX_GAP_MS + 1, idle).state).toBe('inputLost');
+        expect(gap.step(sample({timestamp: 1300}), 1300, idle).state).toBe('inputLost');
+    });
+});

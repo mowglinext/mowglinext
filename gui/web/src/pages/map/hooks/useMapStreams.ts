@@ -32,6 +32,7 @@ import {MAP_RENDER_BUDGETS} from "./mapRenderBudget.ts";
 export type MowProgressImage = GridImage;
 
 interface UseMapStreamsOptions {
+    controllerOwnsInput?: boolean;
     editMap: boolean;
     settings: Record<string, unknown>;
     offsetX: number;
@@ -50,6 +51,7 @@ interface LidarRenderFrame {
 }
 
 export function useMapStreams({
+    controllerOwnsInput = false,
     editMap,
     settings,
     offsetX,
@@ -426,7 +428,8 @@ export function useMapStreams({
         if (stateName === "RECORDING") {
             clearTimeout(joyStopTimerRef.current);
             joyStopTimerRef.current = undefined;
-            joyStart("/api/mowglinext/publish/joy");
+            if (controllerOwnsInput) joyStop();
+            else joyStart("/api/mowglinext/publish/joy");
             recordingStart("/api/mowglinext/subscribe/recordingTrajectory");
             setEditMap(false);
             return;
@@ -434,7 +437,8 @@ export function useMapStreams({
         if (stateName === "MANUAL_MOWING") {
             clearTimeout(joyStopTimerRef.current);
             joyStopTimerRef.current = undefined;
-            joyStart("/api/mowglinext/publish/joy");
+            if (controllerOwnsInput) joyStop();
+            else joyStart("/api/mowglinext/publish/joy");
             return;
         }
         // Leaving a joy-eligible state: DEBOUNCE the joy teardown so a single
@@ -454,7 +458,7 @@ export function useMapStreams({
             delete newFeatures["recording-trajectory"];
             return newFeatures;
         });
-    }, [stateName, joyStart, joyStop, recordingStart, recordingStop, setEditMap, setFeatures]);
+    }, [stateName, controllerOwnsInput, joyStart, joyStop, recordingStart, recordingStop, setEditMap, setFeatures]);
 
     // Clear the joy-stop debounce on unmount so it can't fire after teardown.
     useEffect(() => {

@@ -55,7 +55,17 @@ func (c *cmdVelRelayClient) Send(msg interface{}) error {
 	if c.conn == nil {
 		return fmt.Errorf("cmd_vel relay: not connected")
 	}
-	return c.conn.WriteMessage(websocket.TextMessage, data)
+	// Bound a stalled relay so teleop session cleanup can acquire the writer
+	// and send its stop. A timed-out WebSocket is unusable; reconnect it.
+	if err := c.conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		_ = c.conn.Close()
+		return err
+	}
+	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		_ = c.conn.Close()
+		return err
+	}
+	return nil
 }
 
 // Connected reports whether the relay WebSocket is currently up.

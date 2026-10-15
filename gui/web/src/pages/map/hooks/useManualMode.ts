@@ -2,13 +2,12 @@ import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import type {TwistStamped} from "../../../types/ros.ts";
 import type {IJoystickUpdateEvent} from "react-joystick-component/build/lib/Joystick";
 
+import {MAX_LINEAR_MPS, MAX_ANGULAR_RAD_S} from "../../../gamepad/controller";
+
 const JOY_SEND_INTERVAL_MS = 100;
 // Keep the existing UI latch through short telemetry blips. Motion itself is
 // invalidated immediately on a mode change and requires a new pointer gesture.
 const MANUAL_EXIT_DEBOUNCE_MS = 1200;
-const MAX_LINEAR_MPS = 0.25;
-const MAX_ANGULAR_RAD_S = 0.6;
-
 interface UseManualModeOptions {
     mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
     joyStream: {
@@ -17,6 +16,7 @@ interface UseManualModeOptions {
         motionSession?: () => {connected: boolean; generation: number};
     };
     stateName?: string;
+    controllerOwnsInput?: boolean;
 }
 
 const neutralTwist = (): TwistStamped => ({
@@ -24,7 +24,9 @@ const neutralTwist = (): TwistStamped => ({
     twist: {linear: {x: 0, y: 0, z: 0}, angular: {z: 0, x: 0, y: 0}},
 });
 
-export function useManualMode({mowerAction, joyStream, stateName}: UseManualModeOptions) {
+export function useManualMode({mowerAction, joyStream, stateName, controllerOwnsInput = false}: UseManualModeOptions) {
+    const controllerOwnsRef = useRef(controllerOwnsInput);
+    useLayoutEffect(() => { controllerOwnsRef.current = controllerOwnsInput; });
     const [manualMode, setManualMode] = useState(() => stateName === "MANUAL_MOWING");
     const exitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const lastTwistRef = useRef<TwistStamped | null>(null);
@@ -132,7 +134,7 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
     }, [motionSession, neutralizeMotion]);
 
     const handleJoyMove = useCallback((event: IJoystickUpdateEvent) => {
-        if (!gestureRef.current) return;
+        if (controllerOwnsRef.current || !gestureRef.current) return;
         if (!gestureAllowed()) { neutralizeMotion(); return; }
         const msg: TwistStamped = {
             header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
@@ -154,6 +156,10 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
     }, [gestureAllowed, neutralizeMotion, sendJsonMessage]);
 
     const handleJoyStop = useCallback(() => neutralizeMotion(), [neutralizeMotion]);
+
+    useLayoutEffect(() => {
+        if (controllerOwnsInput) neutralizeMotion();
+    }, [controllerOwnsInput, neutralizeMotion]);
 
     return {manualMode, handleManualMode, handleStopManualMode, handleStopIntent, handleJoyStart, handleJoyMove, handleJoyStop};
 }

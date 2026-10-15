@@ -1,7 +1,7 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest';
 import {renderHook, act} from '@testing-library/react';
-import {useManualMode} from './useManualMode.ts';
 import type {IJoystickUpdateEvent} from 'react-joystick-component/build/lib/Joystick';
+import {useManualMode} from './useManualMode.ts';
 
 describe('useManualMode', () => {
     let mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
@@ -19,13 +19,23 @@ describe('useManualMode', () => {
         vi.useRealTimers();
     });
 
-    function renderManualMode() {
-        return renderHook(() =>
+    function renderManualMode(controllerOwnsInput = false) {
+        return renderHook(({ownsInput}: {ownsInput: boolean}) =>
             useManualMode({
                 mowerAction,
                 joyStream: {sendJsonMessage, start: startStream},
-            })
+                controllerOwnsInput: ownsInput,
+            }),
+            {initialProps: {ownsInput: controllerOwnsInput}},
         );
+    }
+
+    function advanceBy(milliseconds: number) {
+        act(() => { void vi.advanceTimersByTime(milliseconds); });
+    }
+
+    function joystickMove(x: number, y: number): IJoystickUpdateEvent {
+        return {type: 'move', x, y, direction: null, distance: 0};
     }
 
     it('starts with manual mode off', () => {
@@ -109,6 +119,40 @@ describe('useManualMode', () => {
             header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
             twist: {linear: {x: 0, y: 0, z: 0}, angular: {z: 0, x: 0, y: 0}},
         }, false);
+    });
+
+    it('revokes touch joystick ownership cleanly and requires fresh movement after gamepad release', () => {
+        const {result, rerender} = renderManualMode();
+        act(() => { result.current.handleJoyMove(joystickMove(0, 0.8)); });
+        advanceBy(200);
+        expect(sendJsonMessage).toHaveBeenCalledTimes(3);
+        const oldTouchFrame = {
+            header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
+            twist: {linear: {x: 0.2, y: 0, z: 0}, angular: {z: -0, x: 0, y: 0}},
+        };
+        expect(sendJsonMessage).toHaveBeenLastCalledWith(oldTouchFrame);
+
+        rerender({ownsInput: true});
+        advanceBy(200);
+        act(() => { result.current.handleJoyMove(joystickMove(-0.5, 0.2)); });
+        expect(sendJsonMessage).toHaveBeenCalledTimes(3);
+
+        rerender({ownsInput: false});
+        advanceBy(200);
+        expect(sendJsonMessage).toHaveBeenCalledTimes(3);
+
+        act(() => { result.current.handleJoyMove(joystickMove(-0.5, -0.4)); });
+        expect(sendJsonMessage).toHaveBeenCalledTimes(4);
+        expect(sendJsonMessage).toHaveBeenLastCalledWith({
+            header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
+            twist: {linear: {x: -0.1, y: 0, z: 0}, angular: {z: 0.3, x: 0, y: 0}},
+        });
+        advanceBy(100);
+        expect(sendJsonMessage).toHaveBeenCalledTimes(5);
+        expect(sendJsonMessage).toHaveBeenLastCalledWith({
+            header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
+            twist: {linear: {x: -0.1, y: 0, z: 0}, angular: {z: 0.3, x: 0, y: 0}},
+        });
     });
 
     it('cleans up timers on unmount', async () => {
