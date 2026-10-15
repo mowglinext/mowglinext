@@ -9,5 +9,7 @@ const decode = (raw: unknown): TelemetryDecode<Power> => {
 };
 const replace = (_previous: Power, next: Power): Power => next;
 
-export const usePower = (): Power =>
-    useValidatedTelemetry<Power>('power', {}, decode, replace).telemetry.data;
+export const usePowerState = () =>
+    useValidatedTelemetry<Power>('power', {}, decode, replace);
+
+export const usePower = (): Power => usePowerState().telemetry.data;

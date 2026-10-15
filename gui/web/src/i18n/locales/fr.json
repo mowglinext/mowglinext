@@ -5251,5 +5251,34 @@
     "mapAlt": "Tondeuse assemblée selon la description du robot en service",
     "dockStyle": "Base stylisée",
     "dockNote": "Base illustrative · 67 × 46 cm. Associée au châssis dans Matériel et affichée automatiquement sur la carte."
+  },
+  "diagnosticHealth": {
+    "operation": "État opérationnel",
+    "allConfirmed": "Tous les contrôles requis de cet affichage disposent d’éléments positifs actuels. Ce verdict n’autorise aucun mouvement.",
+    "level": {
+      "critical": "Critique",
+      "warning": "Attention",
+      "unknown": "Inconnu",
+      "ok": "OK",
+      "not_applicable": "Non applicable"
+    },
+    "containers": "Conteneurs",
+    "ros": "Diagnostics ROS",
+    "localizer": "Localisation",
+    "lastReported": "Dernier niveau ROS reçu : {{level}}",
+    "reason": {
+      "configuration": "Les contrôles de configuration signalent un avertissement ou des informations indisponibles.",
+      "clearance": "L’effacement d’une urgence antérieure reste non vérifié.",
+      "emergency": "Le statut d’urgence détermine ce verdict.",
+      "operation": "L’état opérationnel est absent, en initialisation ou non vérifié.",
+      "containers": "L’état des conteneurs ou la disponibilité des services requis détermine ce verdict.",
+      "cpu": "La température CPU détermine ce verdict ; une mesure indisponible reste inconnue.",
+      "battery": "L’estimation de batterie détermine ce verdict ; une télémétrie indisponible reste inconnue.",
+      "gnss": "La qualité GNSS est dégradée, absente ou non vérifiée. Son absence seule ne prouve pas une panne du robot.",
+      "ros": "Les diagnostics ROS signalent une dégradation ou des informations indisponibles.",
+      "lidar": "Le statut LiDAR est absent ou dégradé ; non applicable uniquement si sa désactivation est explicite.",
+      "localizer": "Le mode autonome nécessite un diagnostic de localisation actuel.",
+      "recovery": "La récupération de navigation dure plus longtemps que prévu."
+    }
   }
 }

@@ -119,6 +119,21 @@ describe('MowerStatus', () => {
         expect(screen.getAllByText(en.telemetry.statusUnknown).length).toBeGreaterThan(0);
     });
 
+    it('uses neutral status cues for absent operational and GNSS data without sending commands', () => {
+        mockHighLevelStatus.mockReturnValue({highLevelStatus: {}}); mockGnss.mockReturnValue({});
+        const {container}=renderStatus();
+        expect(container.querySelector('.ant-badge-status-dot')).toHaveStyle({backgroundColor:'#888'});
+        expect(screen.getByRole('img',{name:'wifi'})).toHaveStyle({color:'#888'});
+        expect(rearm).not.toHaveBeenCalled();
+    });
+
+    it('shows a valid reported percentage even when voltage is unavailable', () => {
+        mockHighLevelStatus.mockReturnValue({highLevelStatus: {state: 1, battery_percent: 72}});
+        renderStatus();
+        expect(screen.getByRole('button', {name: en.mowerStatus.powerMenuAria})).toHaveTextContent('72%');
+        expect(rearm).not.toHaveBeenCalled();
+    });
+
     it('renders the compact canonical GNSS solution label', () => {
         mockHighLevelStatus.mockReturnValue({highLevelStatus: {state_name: 'IDLE'}});
         mockGnss.mockReturnValue({

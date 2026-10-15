@@ -25,3 +25,25 @@ export function diagnosticPublicationIdentity(value: unknown): string | null {
     const {sec, nanosec} = value.header.stamp;
     return sec === 0 && nanosec === 0 ? null : `${sec}:${nanosec}`;
 }
+
+export interface DiagnosticProgress {
+    stamp?: {sec: number; nanosec: number};
+    at: number;
+    blocked: boolean;
+}
+
+/** Ordered diagnostic publication evidence, never a physical acquisition time. */
+export function advanceDiagnosticProgress(previous: DiagnosticProgress | undefined, raw: unknown, at: number): DiagnosticProgress {
+    const stamp = isJsonObject(raw) && isJsonObject(raw.header) && isRosStamp(raw.header.stamp)
+        && (raw.header.stamp.sec !== 0 || raw.header.stamp.nanosec !== 0)
+        ? {sec: raw.header.stamp.sec, nanosec: raw.header.stamp.nanosec} : undefined;
+    const high = previous?.stamp;
+    if (previous && high && (!stamp || stamp.sec < high.sec || stamp.sec === high.sec && stamp.nanosec < high.nanosec)) {
+        return {...previous, at: previous.at, blocked: true};
+    }
+    if (stamp && (!high || stamp.sec > high.sec || stamp.sec === high.sec && stamp.nanosec > high.nanosec)) {
+        return {stamp, at, blocked: false};
+    }
+    if (previous?.blocked || stamp && previous) return previous;
+    return {at, blocked: false}; // Initial unstamped legacy delivery remains explicitly unproven.
+}

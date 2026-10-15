@@ -5,6 +5,7 @@ import {decodeHighLevelStatus, retainHighLevelEmergency, accumulateHighLevelAsse
 export const useHighLevelStatus = () => {
     const {telemetry, start, stop} = useValidatedTelemetry<HighLevelStatus>(
         'highLevelStatus', {}, decodeHighLevelStatus, retainHighLevelEmergency, accumulateHighLevelAssertions,
+        undefined, 'receipt', // HighLevelStatus.msg has no producer timestamp or sequence.
     );
     const highLevelStatus: HighLevelDisplay = {
         ...telemetry.data,

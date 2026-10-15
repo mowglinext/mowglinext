@@ -1,5 +1,8 @@
+import {DiagnosticHealthSummary} from '../components/diagnostics/DiagnosticHealthSummary';
+import {deriveDiagnosticHealth, diagnosticTelemetryFresh, containerObservationLevel} from '../utils/diagnosticHealth';
+import {useMultiplexStatus} from '../hooks/useWS';
 import {powerDisplayValue} from '../utils/physicalTelemetry';
-import {hasEmergency, emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
+import {emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
 import {useBladeTelemetry} from '../hooks/useBladeTelemetry';
 import {useHardwareBackend} from '../hooks/useHardwareBackend';
 import {motorDisplayValue, wheelControllerFromDiagnostics, wheelControllerFields, showEncoderWheel, type WheelRole} from '../utils/motorTelemetry';
@@ -43,8 +46,8 @@ import {
 } from "@ant-design/icons";
 import {ContentType} from "../api/Api.ts";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
-import {useEmergency} from "../hooks/useEmergency.ts";
-import {usePower} from "../hooks/usePower.ts";
+import {useEmergencyState} from "../hooks/useEmergency.ts";
+import {usePowerState} from "../hooks/usePower.ts";
 import {useStatus} from "../hooks/useStatus.ts";
 import {BladeDirectionDisplay} from "../components/BladeDirectionDisplay.tsx";
 import {useGPS} from "../hooks/useGPS.ts";
@@ -57,7 +60,7 @@ import {useCalibrationStatus} from "../hooks/useCalibrationStatus.ts";
 import {useWheelOdom} from "../hooks/useWheelOdom.ts";
 import {useWheelTicks} from "../hooks/useWheelTicks.ts";
 import {useWheelRpm} from "../hooks/useWheelRpm.ts";
-import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
+import {useDiagnosticsSnapshot, SNAPSHOT_STALE_MS} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useDiagnostics} from "../hooks/useDiagnostics.ts";
 import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
@@ -71,7 +74,7 @@ import {useSearchParams} from "react-router-dom";
 import {App} from "antd";
 import {useTranslation} from "react-i18next";
 import {useSettings} from "../hooks/useSettings.ts";
-import {computeBatteryPercent, getBatteryLevel, hasBatteryReading} from "../utils/battery.ts";
+import {computeBatteryPercent} from "../utils/battery.ts";
 import {yawFromQuaternion, rollFromQuaternion, pitchFromQuaternion, wrapDeg180} from "../utils/quaternion.ts";
 import {useApi} from "../hooks/useApi.ts";
 import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
@@ -85,7 +88,6 @@ import {TelemetryStat} from "../components/TelemetryStat.tsx";
 import {BTStateGraph} from "../components/BTStateGraph.tsx";
 import {RobotAnatomy} from "../components/RobotAnatomy.tsx";
 import {AlertOutlined} from "@ant-design/icons";
-import {DashCard} from "../components/dashboard/Card.tsx";
 import {GnssLiveDiagnosticsCard} from "../components/gnss/GnssLiveDiagnosticsCard.tsx";
 import {clampTinyToZero} from "../utils/telemetryFormat.ts";
 import {detectNav2Recovery} from "../utils/nav2Recovery.ts";
@@ -149,24 +151,6 @@ const ESC_STATUS: Record<number, {labelKey: string; color: string}> = {
 
 // ── sub-components ───────────────────────────────────────────────────────────
 
-const HEALTH_BADGE_VALUE_MARKER = "\uFFF0";
-
-function HealthBadge({label, color, numericValue, valueWidth = 3}: {
-    label: string;
-    color: string;
-    numericValue?: string;
-    valueWidth?: number;
-}) {
-    const parts = label.split(HEALTH_BADGE_VALUE_MARKER);
-    return (
-        <Tag color={color} style={{fontSize: 12, padding: "2px 8px"}}>
-            {parts.length > 1 && numericValue !== undefined ? (
-                <>{parts[0]}<span className="diagnostics-health-badge-number" style={{inlineSize: `${valueWidth}ch`}}>{numericValue}</span>{parts.slice(1).join(HEALTH_BADGE_VALUE_MARKER)}</>
-            ) : label}
-        </Tag>
-    );
-}
-
 // A Tag whose color is not the sole signal: the label text never changes
 // (e.g. "ESC power"), so pair it with a check/cross icon whose SHAPE (not
 // just color) carries the on/off state for color-blind / low-vision users.
@@ -197,9 +181,11 @@ export const DiagnosticsPage = () => {
     const {formatAbsolute, formatLogTime} = useTimeFormat();
     const isMobile = useIsMobile();
 
-    const {highLevelStatus} = useHighLevelStatus();
-    const emergency = useEmergency();
-    const power = usePower();
+    const {highLevelStatus, telemetry: highLevelTelemetry} = useHighLevelStatus();
+    const {emergency, telemetry: emergencyTelemetry} = useEmergencyState();
+    const {telemetry: powerTelemetry} = usePowerState();
+    const power = powerTelemetry.data;
+    const connected = useMultiplexStatus() === 'open';
     const status = useStatus();
     const hardware = useHardwareBackend();
     const blade = useBladeTelemetry(hardware.loading ? undefined : hardware.backend);
@@ -222,8 +208,8 @@ export const DiagnosticsPage = () => {
         return () => clearInterval(id);
     }, []);
     const {modal} = App.useApp();
-    const {snapshot, loading, error: snapshotError, refresh} = useDiagnosticsSnapshot();
-    const {diagnostics} = useDiagnostics();
+    const {snapshot, receivedAt: snapshotReceivedAt, loading, error: snapshotError, refresh} = useDiagnosticsSnapshot();
+    const {diagnostics, disconnectedAt: diagnosticsDisconnectedAt} = useDiagnostics();
     const wheelControllers = {left_wheel: wheelControllerFromDiagnostics(diagnostics, 'left_wheel', nowMs),
         right_wheel: wheelControllerFromDiagnostics(diagnostics, 'right_wheel', nowMs)};
     // Mobile uses collapsible panels; desktop shows sensors in the Robot tab.
@@ -244,15 +230,16 @@ export const DiagnosticsPage = () => {
 
     // ── derived values ───────────────────────────────────────────────────────
 
-    const batteryPercent = useMemo(
-        () => computeBatteryPercent(highLevelStatus.battery_percent, power.v_battery, settings),
-        [highLevelStatus.battery_percent, power.v_battery, settings],
-    );
-
-    const batteryKnown = (hasBatteryReading(power.v_battery) && Number.isFinite(batteryPercent));
+    const nowMonotonic = performance.now();
+    const highLevelFresh = diagnosticTelemetryFresh(highLevelTelemetry, nowMonotonic);
+    const powerFresh = diagnosticTelemetryFresh(powerTelemetry, nowMonotonic);
+    const batteryPercent = computeBatteryPercent(highLevelFresh ? highLevelStatus.battery_percent : undefined,
+        powerFresh ? power.v_battery : undefined, settings);
+    const batteryKnown = connected && Number.isFinite(batteryPercent);
 
     const gpsFix = useMemo(() => deriveGpsStatus(gnssStatus), [gnssStatus]);
     const gpsFixType = gpsFix.label;
+    const gpsAccuracy = displayHorizontalAccuracyM(gnssStatus);
 
     const orientation = pose.pose?.pose?.orientation;
     const qx = orientation?.x ?? 0;
@@ -264,23 +251,10 @@ export const DiagnosticsPage = () => {
     const pitch = pitchFromQuaternion(qx, qy, qz, qw);
     const poseZ = pose.pose?.pose?.position?.z ?? 0;
 
-    const allContainersOk = !snapshot?.containers?.length || snapshot.containers.every(c => c.state === "running");
-    const gpsAccuracy = displayHorizontalAccuracyM(gnssStatus);
-    const gpsFixValid = gnssStatus.fix_valid ?? false;
-    const gpsOk = gpsFixValid && gpsAccuracy !== undefined && gpsAccuracy <= 0.1;
-    const gpsWarn = gpsFixValid && (gpsAccuracy === undefined || gpsAccuracy > 0.1);
-    const cpuTemp = snapshot?.system?.cpu_temperature ?? 0;
-    const cpuUsage = snapshot?.system?.cpu_usage;
-
-    const alerts = useMemo(
-        () => (diagnostics.status ?? []).filter(s =>
-            s.level >= 1 &&
-            // Filter out transient "no data since last update" from ublox driver
-            !s.message?.toLowerCase().includes("no data since last update")
-        ),
-        [diagnostics.status]
-    );
-    const alertGroups = useMemo(() => groupAlertsByComponent(alerts), [alerts]);
+    const snapshotFresh = !snapshotError && snapshotReceivedAt !== null && nowMonotonic >= snapshotReceivedAt
+        && nowMonotonic - snapshotReceivedAt < SNAPSHOT_STALE_MS;
+    const cpuTemp = snapshotFresh ? snapshot?.system?.cpu_temperature : undefined;
+    const cpuUsage = snapshotFresh ? snapshot?.system?.cpu_usage : undefined;
 
     // Nav2 recovery tracking (from /behavior_tree_log — Nav2's tree, not the
     // Mowgli BT). A long-running recovery is the "robot is stuck" signal.
@@ -299,126 +273,17 @@ export const DiagnosticsPage = () => {
     };
     const stateSinceLabel = stateSince !== null ? formatDuration(nowMs - stateSince) : undefined;
 
-    // ── Health Verdict Hero ──────────────────────────────────────────────────
-    // A single beginner-readable tile derived from the same booleans the
-    // expert health bar uses. Emergency (or a stopped container / no GPS) is
-    // "Urgence"; a soft warning (RTK-Float, warm CPU, low battery) is
-    // "Attention requise"; otherwise "Tout va bien".
-
-    const cpuHot = cpuTemp > 70;
-    const cpuWarm = cpuTemp > 55 && cpuTemp <= 70;
-    const batteryLevel = getBatteryLevel(batteryPercent);
-    const batteryLow = batteryKnown && batteryLevel === "danger";
-    const batteryMid = batteryKnown && batteryLevel === "warn";
-
-    // The emergency signal proper — only this drives the big "Emergency"
-    // wording. Other danger causes (low battery, hot CPU, stopped container,
-    // no GPS) surface as "Critical".
-    const emergencyActive = hasEmergency(emergency, highLevelStatus);
-
     const emergencyKnown = emergencyIsKnown(emergency, highLevelStatus);
     const clearanceUnverified = emergencyClearanceUnverified(emergency, highLevelStatus);
-    const operationalKnown = highLevelStatus.state !== undefined || status.mower_status !== undefined;
-
-    const healthLevel: "ok" | "warn" | "danger" =
-        emergencyActive || !allContainersOk || (!gpsOk && !gpsWarn) || cpuHot || batteryLow
-            ? "danger"
-            : !emergencyKnown || !operationalKnown || gpsWarn || cpuWarm || batteryMid || recoveryStuck || alerts.length > 0
-                ? "warn"
-                : "ok";
-
-    const healthVerdict = clearanceUnverified ? t("telemetry.emergencyClearanceUnverified") : healthLevel !== "danger" && (!emergencyKnown || !operationalKnown)
-        ? t("telemetry.statusUnknown")
-        : healthLevel === "danger"
-            ? (emergencyActive ? t('diagnosticsPage.verdictEmergency') : t('diagnosticsPage.verdictCritical'))
-            : healthLevel === "warn"
-                ? (recoveryStuck ? t('diagnosticsPage.verdictStuck') : t('diagnosticsPage.verdictAttention'))
-                : t('diagnosticsPage.verdictAllGood');
-
-    const healthColor =
-        healthLevel === "danger" ? colors.danger :
-        healthLevel === "warn" ? colors.warning :
-        colors.primary;
-
-    const healthSubtitle = emergencyActive
-        ? t('diagnosticsPage.subtitleEmergency')
-        : !allContainersOk
-            ? t('diagnosticsPage.subtitleContainerStopped')
-            : healthLevel === "danger"
-                ? t('diagnosticsPage.subtitleOutOfRange')
-                : recoveryStuck
-                    ? t('diagnosticsPage.subtitleRecoveryStuck', {duration: formatDuration(recoveryDurationMs)})
-                    : gpsWarn || cpuWarm || batteryMid
-                        ? t('diagnosticsPage.subtitleWatch')
-                        : alerts.length > 0
-                            ? t('diagnosticsPage.subtitleAlerts', {count: alerts.length})
-                            : t("telemetry.freshnessUnverified");
-
-    const healthHero = (
-        <DashCard tone={healthLevel === "danger" ? "danger" : "glow"} style={{marginBottom: 4}}>
-            <div style={{
-                fontSize: 11, color: colors.textMuted, letterSpacing: "0.08em",
-                textTransform: "uppercase" as const, fontWeight: 600, marginBottom: 8,
-            }}>
-                {t('diagnosticsPage.robotStatus')} · {t('telemetry.freshnessUnverified')}
-            </div>
-            <div className="mn-num" style={{fontSize: isMobile ? 40 : 56, lineHeight: 1, color: healthColor}}>
-                {healthVerdict}
-            </div>
-            <div style={{fontSize: 13, color: colors.textSecondary, marginTop: 10}}>
-                {healthSubtitle}
-            </div>
-        </DashCard>
-    );
-
-    // ── Health Summary Bar ───────────────────────────────────────────────────
-
-    const healthBar = (
-        <Card size="small" style={{marginBottom: 12}}>
-            <Flex wrap gap="small" align="center">
-                <Typography.Text type="secondary" style={{fontSize: 12, marginRight: 4}}>{t('diagnosticsPage.statusLabel')}</Typography.Text>
-                <HealthBadge
-                    label={allContainersOk ? t('diagnosticsPage.containersOk') : t('diagnosticsPage.containerProblem')}
-                    color={allContainersOk ? "success" : "error"}
-                />
-                <HealthBadge
-                    label={t('diagnosticsPage.gpsBadge', {value: gpsFixType})}
-                    color={gpsOk ? "success" : gpsWarn ? "warning" : "error"}
-                />
-                <HealthBadge
-                    label={
-                        batteryKnown
-                            ? t('diagnosticsPage.batteryBadge', {value: HEALTH_BADGE_VALUE_MARKER})
-                            : t('diagnosticsPage.battery')
-                    }
-                    color={
-                        !batteryKnown
-                            ? "warning"
-                            : batteryLevel === "ok"
-                                ? "success"
-                                : batteryLevel === "warn"
-                                    ? "warning"
-                                    : "error"
-                    }
-                    numericValue={batteryKnown ? batteryPercent.toFixed(0) : undefined}
-                />
-                <HealthBadge
-                    label={clearanceUnverified ? t('telemetry.emergencyClearanceUnverified') : emergencyActive ? t('diagnosticsPage.emergencyUpper') : emergencyKnown ? t('diagnosticsPage.noEmergency') : t('telemetry.statusUnknown')}
-                    color={emergencyActive ? "error" : emergencyKnown ? "success" : "warning"}
-                />
-                <HealthBadge
-                    label={cpuTemp > 0 ? t('diagnosticsPage.cpuTemp', {value: cpuTemp.toFixed(1)}) : t('diagnosticsPage.cpuTempUnknown')}
-                    color={cpuTemp > 70 ? "error" : cpuTemp > 55 ? "warning" : "success"}
-                />
-                <HealthBadge
-                    label={cpuUsage != null ? t('diagnosticsPage.cpuUsageBadge', {value: HEALTH_BADGE_VALUE_MARKER}) : t('diagnosticsPage.cpuUsageUnknown')}
-                    color="default"
-                    numericValue={cpuUsage != null ? cpuUsage.toFixed(0) : undefined}
-                    valueWidth={4}
-                />
-            </Flex>
-        </Card>
-    );
+    const health = deriveDiagnosticHealth({emergency, highLevel: highLevelStatus, connected,
+        emergencyFresh: diagnosticTelemetryFresh(emergencyTelemetry, nowMonotonic), operationalFresh: highLevelFresh,
+        batteryFresh: highLevelFresh || powerFresh, batteryPercent, gnss: gnssStatus,
+        snapshot, snapshotFresh, diagnostics: diagnostics.status ?? [], nowMs,
+        nowMonotonic, diagnosticsDisconnectedAt, settings, recoveryStuck, fusion: fusionStats});
+    const alerts = health.alerts;
+    const alertGroups = groupAlertsByComponent(alerts);
+    const healthSummary = <DiagnosticHealthSummary health={health} gpsLabel={gpsFixType}
+        batteryPercent={batteryPercent} cpuTemp={cpuTemp} cpuUsage={cpuUsage}/>;
 
     // ── Section 1: System ────────────────────────────────────────────────────
 
@@ -433,7 +298,7 @@ export const DiagnosticsPage = () => {
             title: t('diagnosticsPage.colState'),
             dataIndex: "state",
             key: "state",
-            render: (v: string) => <Tag color={v === "running" ? "success" : "error"}>{v}</Tag>,
+            render: (v: string) => <Tag color={containerObservationLevel(v) === "ok" ? "success" : containerObservationLevel(v) === "unknown" ? "default" : "error"}>{v || t("telemetry.statusUnknown")}</Tag>,
         },
         {
             title: t('diagnosticsPage.colStatus'),
@@ -482,10 +347,12 @@ export const DiagnosticsPage = () => {
         motorTempC: blade.motorTemp,
         escTempC: blade.escTemp,
         gpsLabel: anatomyGps.label,
-        gpsOk: anatomyGps.percent >= 50,
+        gpsOk: health.checks.find(c => c.id === 'gnss')?.level === 'unknown' ? undefined
+            : health.checks.find(c => c.id === 'gnss')?.level === 'ok' ? true : false,
         imuYawDeg: yaw,
-        imuOk: imuAlive,
-        lidarOk: lidarEnabled === false ? false : (lidarStreaming ? true : undefined),
+        imuOk: imuStatus ? imuAlive : undefined,
+        lidarDisabled: lidarEnabled === false,
+        lidarOk: lidarStreaming ? true : undefined,
         // Mowgli is rear-axle drive: only the rear wheels are encoded (the
         // fronts are unencoded casters whose RPM is always 0).
         wheelLeftRpm: wheelRpm.rl,
@@ -597,10 +464,10 @@ export const DiagnosticsPage = () => {
                     </Typography.Paragraph>
                     <Statistic
                         title={t('diagnosticsPage.temperature')}
-                        value={cpuTemp > 0 ? cpuTemp : undefined}
+                        value={health.checks.find(c => c.id === 'cpu')?.level !== 'unknown' ? cpuTemp : '—'}
                         precision={1}
                         valueStyle={{
-                            color: cpuTemp > 70 ? colors.danger : cpuTemp > 55 ? colors.warning : undefined,
+                            color: cpuTemp !== undefined && cpuTemp > 70 ? colors.danger : cpuTemp !== undefined && cpuTemp > 55 ? colors.warning : undefined,
                         }}
                     />
                 </Card>
@@ -1293,7 +1160,7 @@ export const DiagnosticsPage = () => {
                                 suffix={batteryKnown ? "%" : undefined}
                                 valueStyle={{
                                     color: batteryKnown
-                                        ? batteryPercent < 20 ? colors.danger : batteryPercent < 50 ? colors.warning : undefined
+                                        ? batteryPercent <= 20 ? colors.danger : batteryPercent <= 50 ? colors.warning : undefined
                                         : undefined,
                                 }}
                             />
@@ -1435,8 +1302,8 @@ export const DiagnosticsPage = () => {
     // occupancy grid is now published by map_server_node from recorded area
     // polygons, so there is no pbstream to save/delete.
 
-    const crossChecks = snapshot?.cross_checks;
-    const crossCheckStatus = crossChecks?.overall_status ?? "ok";
+    const crossChecks = snapshotFresh ? snapshot?.cross_checks : undefined;
+    const crossCheckStatus = crossChecks?.overall_status ?? "unknown";
 
     const sectionCrossChecks = (
         <Row gutter={[12, 12]}>
@@ -1447,11 +1314,11 @@ export const DiagnosticsPage = () => {
                     extra={
                         <Tag color={
                             crossCheckStatus === "ok" ? "success" :
-                            crossCheckStatus === "warn" ? "warning" : "error"
+                            crossCheckStatus === "warn" ? "warning" : crossCheckStatus === "unknown" ? "default" : "error"
                         }>
                             {crossCheckStatus === "ok" ? t('diagnosticsPage.crossCheckOk') :
                                 crossCheckStatus === "warn" ? t('diagnosticsPage.crossCheckWarn') :
-                                    t('diagnosticsPage.crossCheckError')}
+                                    crossCheckStatus === "unknown" ? t("telemetry.statusUnknown") : t('diagnosticsPage.crossCheckError')}
                         </Tag>
                     }
                 >
@@ -1463,7 +1330,7 @@ export const DiagnosticsPage = () => {
                         </Space>
                     ) : (
                         <Typography.Text type="secondary" style={{fontSize: 12, display: "block", marginBottom: 12}}>
-                            {t('diagnosticsPage.noWarnings')}
+                            {crossCheckStatus === 'unknown' ? t('telemetry.statusUnknown') : t('diagnosticsPage.noWarnings')}
                         </Typography.Text>
                     )}
                     {crossChecks?.dock_pose && (
@@ -2015,7 +1882,7 @@ export const DiagnosticsPage = () => {
                                     key={idx}
                                     type={item.level === 2 ? "error" : item.level === 3 ? "info" : "warning"}
                                     message={item.name}
-                                    description={item.message}
+                                    description={`${item.message}${item.reportedLevel !== item.level ? ` · ${t('diagnosticHealth.lastReported', {level: item.reportedLevel})}` : ''}${item.notApplicable ? ` · ${t('diagnosticHealth.level.not_applicable')}` : ''}`}
                                     showIcon
                                 />
                             ))}
@@ -2031,8 +1898,7 @@ export const DiagnosticsPage = () => {
     if (isMobile) {
         return (
             <div className="diagnostics-page" style={{display: "flex", flexDirection: "column", gap: 12, paddingBottom: 8}}>
-                {healthHero}
-                {healthBar}
+                {healthSummary}
                 {sectionAlerts}
                 <Collapse
                     activeKey={openPanels}
@@ -2147,8 +2013,7 @@ export const DiagnosticsPage = () => {
 
     return (
         <Space className="diagnostics-page" direction="vertical" size="middle" style={{width: "100%"}}>
-            {healthHero}
-            {healthBar}
+            {healthSummary}
             {sectionAlerts}
             <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} size="large"/>
         </Space>

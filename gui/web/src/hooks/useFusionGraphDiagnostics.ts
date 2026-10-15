@@ -1,10 +1,14 @@
-import {useEffect, useState} from "react";
+import {useEffect, useRef, useState} from "react";
+import {advanceDiagnosticProgress, type DiagnosticProgress} from '../utils/diagnosticTelemetry';
 import {isJsonObject} from "../utils/json";
 import {useWS} from "./useWS.ts";
 
 export interface FusionGraphStats {
     /** Browser receipt wall time, retained for existing readiness consumers. Not acquisition time. */
     receivedAt: number;
+    lastDisconnectAt?: number;
+    healthProgressAt?: number;
+    healthBlocked?: boolean;
     /** Monotonic browser delivery time; never compare with a ROS stamp. */
     receivedMonotonic?: number;
     /** First receipt of this producer + publication stamp (cached repeats do not renew it). */
@@ -72,11 +76,16 @@ function decodeDiagnosticFrame(raw: unknown): DiagnosticFrame | null {
  * KeyValue list.
  */
 export const useFusionGraphDiagnostics = () => {
+    const progressBySource = useRef(new Map<string, DiagnosticProgress>());
+    const lastSource = useRef<string | undefined>(undefined);
     const [stats, setStats] = useState<FusionGraphStats | null>(null);
 
 
     const stream = useWS<unknown>(
-        () => { /* closed */ },
+        () => {
+            for (const [key, value] of progressBySource.current) progressBySource.current.set(key, {...value, blocked: true});
+            setStats(previous => previous ? {...previous, lastDisconnectAt: performance.now(), healthBlocked: true} : null);
+        },
         () => { /* connected */ },
         (e) => {
             try {
@@ -89,7 +98,17 @@ export const useFusionGraphDiagnostics = () => {
                     && (stamp.sec > 0 || stamp.nanosec > 0)
                     ? `${stamp.sec}.${String(stamp.nanosec).padStart(9, '0')}` : undefined;
                 const sourceIdentity = sourceStamp ? `${entry.name}|${entry.hardware_id ?? ''}|${sourceStamp}` : undefined;
+                const key = JSON.stringify([entry.name, entry.hardware_id ?? '']);
+                const before = progressBySource.current.get(key);
+                let progress = advanceDiagnosticProgress(before, e, receivedMonotonic);
+                if (lastSource.current !== undefined && lastSource.current !== key && (!before || before.stamp === progress.stamp)) {
+                    progress = {...progress, blocked: true};
+                }
+                lastSource.current = key;
+                progressBySource.current.set(key, progress);
                 setStats(previous => ({
+                    healthProgressAt: progress.at, healthBlocked: progress.blocked,
+                    ...(previous?.lastDisconnectAt !== undefined ? {lastDisconnectAt: previous.lastDisconnectAt} : {}),
                     receivedAt: Date.now(),
                     receivedMonotonic,
                     distinctMonotonic: sourceIdentity && sourceIdentity === previous?.sourceIdentity

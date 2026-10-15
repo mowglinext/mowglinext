@@ -6,7 +6,7 @@ import {useEmergency} from "../hooks/useEmergency.ts";
 import {usePower} from "../hooks/usePower.ts";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useSettings} from "../hooks/useSettings.ts";
-import {computeBatteryPercent, hasBatteryReading} from "../utils/battery.ts";
+import {computeBatteryPercent} from "../utils/battery.ts";
 import {deriveGpsStatus} from "../utils/gpsStatus.ts";
 import {PowerMenu} from "./PowerMenu.tsx";
 import {useMowerAction} from "./MowerActions.tsx";
@@ -19,15 +19,15 @@ import {useTranslation} from "react-i18next";
 
 // Colour by the NUMERIC high-level state (status_nodes.cpp publishes it every
 // tick): 2=AUTONOMOUS / 3=RECORDING / 4=MANUAL_MOWING are active (primary);
-// 1=IDLE is resting (warning); 0=NULL/EMERGENCY or unknown is danger. The old
+// 1=IDLE is resting (warning); NULL/unknown is neutral unless an emergency is asserted. The old
 // string-allowlist approach mis-coloured legitimate state=2 substates
 // (PLANNING, OBSTACLE_BACKOFF, DYNAMIC_OBSTACLE_CLEARED, AREA_UNREACHABLE) as
 // danger-red because the set never enumerated them.
-const statusColor = (stateNum: number | undefined, isEmergency: boolean, colors: {primary: string; warning: string; danger: string}): string => {
+const statusColor = (stateNum: number | undefined, isEmergency: boolean, colors: {primary: string; warning: string; danger: string; muted: string}): string => {
     if (isEmergency) return colors.danger;
     if (stateNum === 2 || stateNum === 3 || stateNum === 4) return colors.primary;
     if (stateNum === 1) return colors.warning;
-    return colors.danger;
+    return colors.muted;
 };
 
 export const MowerStatus = () => {
@@ -62,7 +62,7 @@ export const MowerStatus = () => {
         gpsStatus.fixType === "DGPS" ? colors.warning :
         gpsStatus.fixType === "3D_FIX" ? colors.warning :
         gpsStatus.fixType === "2D_FIX" ? colors.warning :
-        colors.danger;
+        gpsStatus.fixType === "UNKNOWN" ? colors.muted : colors.warning;
 
     const batteryPercent = computeBatteryPercent(
         highLevelStatus.battery_percent, power.v_battery, settings,
@@ -167,7 +167,7 @@ export const MowerStatus = () => {
                                 fontSize: 13,
                             }}/>
                             <Typography.Text style={{fontSize: 12, color: colors.text}}>
-                                {(hasBatteryReading(power.v_battery) && Number.isFinite(batteryPercent)) ? (
+                                {Number.isFinite(batteryPercent) ? (
                                     <>
                                         <span
                                             style={{

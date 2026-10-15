@@ -5251,5 +5251,34 @@
     "mapAlt": "Assembled mower from the running robot description",
     "dockStyle": "Styled dock",
     "dockNote": "Illustrative dock · 67 × 46 cm. Paired with the chassis in Hardware and shown automatically on the map."
+  },
+  "diagnosticHealth": {
+    "operation": "Operational state",
+    "allConfirmed": "All required display checks have current positive evidence. This is not a motion authorization.",
+    "level": {
+      "critical": "Critical",
+      "warning": "Warning",
+      "unknown": "Unknown",
+      "ok": "OK",
+      "not_applicable": "Not applicable"
+    },
+    "containers": "Containers",
+    "ros": "ROS diagnostics",
+    "localizer": "Localizer",
+    "lastReported": "Last reported ROS level: {{level}}",
+    "reason": {
+      "configuration": "Configuration checks report a warning or unavailable information.",
+      "clearance": "An earlier emergency has no verified clearance.",
+      "emergency": "Emergency status determines this verdict.",
+      "operation": "Operational state is missing, initializing or unverified.",
+      "containers": "Container state or required service availability determines this verdict.",
+      "cpu": "CPU temperature determines this verdict; an unavailable reading is unknown.",
+      "battery": "Battery estimate determines this verdict; unavailable telemetry is unknown.",
+      "gnss": "GNSS quality is degraded, missing or unverified. Missing GNSS alone does not prove a robot fault.",
+      "ros": "ROS diagnostics report a degradation or unavailable information.",
+      "lidar": "LiDAR status is missing or degraded; not applicable only when explicitly disabled.",
+      "localizer": "Autonomous operation requires a current localizer diagnostic.",
+      "recovery": "Navigation recovery is taking longer than expected."
+    }
   }
 }

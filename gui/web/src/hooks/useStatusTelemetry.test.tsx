@@ -2,7 +2,7 @@ import {StrictMode} from 'react';
 import {act, renderHook} from '@testing-library/react';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import type {MultiplexStatus} from './multiplexedSocket';
-import type {Emergency} from '../types/ros';
+import type {HighLevelStatus, Emergency} from '../types/ros';
 import {decodeEmergency, retainEmergency, hasEmergency} from '../utils/statusTelemetry';
 
 const mock = vi.hoisted(() => ({
@@ -22,10 +22,12 @@ vi.mock('./multiplexedSocket.ts', () => ({
     isMultiplexableSubscribeUri: (uri: string) => uri.startsWith('/api/mowglinext/subscribe/'),
     topicFromSubscribeUri: (uri: string) => uri.split('/').pop(),
 }));
-import {useEmergency} from './useEmergency';
+import {useEmergency, useEmergencyState} from './useEmergency';
 import {useStatus} from './useStatus';
 import {useHighLevelStatus} from './useHighLevelStatus';
 import {useValidatedTelemetry} from './useValidatedTelemetry';
+import {diagnosticTelemetryFresh, deriveDiagnosticHealth} from '../utils/diagnosticHealth';
+import {healthy} from '../test/diagnosticHealthFixture';
 
 function emit(topic: string, value: unknown) {
     act(() => mock.listeners.get(topic)?.forEach(listener => listener(value)));
@@ -174,4 +176,107 @@ describe('validated status hooks', () => {
         expect(mock.listeners.size).toBe(0); expect(mock.statusListeners.size).toBe(0);
         expect(mock.send).not.toHaveBeenCalled();
     });
+});
+
+it('exposes disconnect metadata without changing retained emergency assertions or latest payload bits',()=>{
+    const clock=vi.spyOn(performance,'now').mockReturnValue(100);
+    const hook=renderHook(useEmergencyState);
+    emit('emergency',{active_emergency:false,stamp:{sec:1,nanosec:0}});
+    clock.mockReturnValue(200);connection('closed');connection('open');
+    clock.mockReturnValue(300);emit('emergency',{active_emergency:false,stamp:{sec:1,nanosec:0}});
+    expect(hook.result.current.telemetry.lastDisconnectAt).toBe(200);
+    expect(hook.result.current.telemetry.stampChangedAt).toBe(100);
+    emit('emergency',{active_emergency:false,stamp:{sec:2,nanosec:0}});
+    expect(hook.result.current.telemetry.stampChangedAt).toBe(300);
+    hook.unmount();clock.mockRestore();
+});
+
+it('does not treat an older different cached emergency stamp after reconnect as current health evidence',async()=>{
+    const {diagnosticTelemetryFresh}=await import('../utils/diagnosticHealth');
+    const clock=vi.spyOn(performance,'now').mockReturnValue(100);
+    const hook=renderHook(useEmergencyState);
+    emit('emergency',{active_emergency:false,stamp:{sec:10,nanosec:0}});
+    clock.mockReturnValue(200);connection('closed');connection('open');
+    clock.mockReturnValue(300);emit('emergency',{active_emergency:false,stamp:{sec:9,nanosec:0}});
+    expect(diagnosticTelemetryFresh(hook.result.current.telemetry,300)).toBe(false);
+    emit('emergency',{active_emergency:false,stamp:{sec:10,nanosec:0}});
+    expect(diagnosticTelemetryFresh(hook.result.current.telemetry,300)).toBe(false);
+    emit('emergency',{active_emergency:false,stamp:{sec:11,nanosec:0}});
+    expect(diagnosticTelemetryFresh(hook.result.current.telemetry,300)).toBe(true);
+    hook.unmount();clock.mockRestore();
+});
+
+it('requires ordered health progression after malformed data without changing the latest valid payload contract',async()=>{
+    const {diagnosticTelemetryFresh}=await import('../utils/diagnosticHealth');
+    const clock=vi.spyOn(performance,'now').mockReturnValue(100);
+    const hook=renderHook(useEmergencyState);
+    emit('emergency',{active_emergency:false,stamp:{sec:10,nanosec:0}});
+    emit('emergency',{active_emergency:'broken'});
+    clock.mockReturnValue(200);emit('emergency',{active_emergency:false,stamp:{sec:10,nanosec:0}});
+    expect(hook.result.current.emergency.active_emergency).toBe(false);
+    expect(diagnosticTelemetryFresh(hook.result.current.telemetry,200)).toBe(false);
+    emit('emergency',{active_emergency:false,stamp:{sec:11,nanosec:0}});
+    expect(diagnosticTelemetryFresh(hook.result.current.telemetry,200)).toBe(true);
+    hook.unmount();clock.mockRestore();
+});
+
+// All instance fields of HighLevelStatus.msg; this producer has no stamp/header.
+const realHighLevel = (state = 2): HighLevelStatus => ({
+    state, state_name: 'AUTONOMOUS', sub_state_name: '', current_area: 0, current_path: 0,
+    current_path_index: 0, total_swaths: 0, completed_swaths: 0, skipped_swaths: 0,
+    coverage_percent: 0, gps_quality_percent: 0, battery_percent: 80, is_charging: false, emergency: false,
+});
+it.each(['disconnect', 'invalid', 'expiry'])('recovers reported unstamped operational context after %s without inventing observation identity', interruption => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
+    const hook = renderHook(useHighLevelStatus);
+    try {
+        emit('highLevelStatus', realHighLevel());
+        expect(diagnosticTelemetryFresh(hook.result.current.telemetry, 100)).toBe(true);
+        clock.mockReturnValue(200);
+        emit('highLevelStatus', realHighLevel());
+        expect(diagnosticTelemetryFresh(hook.result.current.telemetry, 200)).toBe(true);
+        if (interruption === 'disconnect') {connection('closed'); connection('open');}
+        if (interruption === 'invalid') emit('highLevelStatus', {...realHighLevel(), state: 'invalid'});
+        const at = interruption === 'expiry' ? 30200 : 300;
+        expect(diagnosticTelemetryFresh(hook.result.current.telemetry, at)).toBe(false);
+        clock.mockReturnValue(at + 1);
+        emit('highLevelStatus', realHighLevel());
+        const telemetry = hook.result.current.telemetry;
+        expect(diagnosticTelemetryFresh(telemetry, at + 1)).toBe(true);
+        expect(telemetry.stampIdentity).toBeNull(); expect(telemetry.stampChangedAt).toBeNull();
+        expect(telemetry.publicationStamp).toBeUndefined(); expect(telemetry.publicationProgressAt).toBeUndefined();
+        const input = healthy();
+        input.highLevel = hook.result.current.highLevelStatus;
+        input.operationalFresh = diagnosticTelemetryFresh(telemetry, at + 1);
+        input.diagnostics = [{name: 'Path Tracking', hardware_id: 'mowgli/controller_server', level: 2,
+            message: 'Tracking error', values: [{key: 'recent_p95_lateral_error_m', value: '1.2'}], receivedAt: input.nowMs}];
+        const verdict = deriveDiagnosticHealth(input);
+        expect(verdict.checks.find(check => check.id === 'operation')?.level).toBe('ok');
+        expect(verdict.checks.find(check => check.id === 'localizer')?.level).toBe('unknown');
+        expect(verdict.level).toBe('critical');
+        expect(mock.send).not.toHaveBeenCalled();
+    } finally {hook.unmount(); clock.mockRestore();}
+});
+
+it('keeps continuous unstamped AUTONOMOUS context live beyond one expiry interval while preserving emergency history', () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
+    const hook = renderHook(useHighLevelStatus);
+    try {
+        emit('highLevelStatus', {...realHighLevel(), emergency: true});
+        for (const at of [20100, 40100, 60100]) {
+            clock.mockReturnValue(at);
+            emit('highLevelStatus', realHighLevel());
+            expect(diagnosticTelemetryFresh(hook.result.current.telemetry, at)).toBe(true);
+            expect(hook.result.current.telemetry.publicationProgressAt).toBeUndefined();
+            expect(hook.result.current.highLevelStatus.state).toBe(2);
+            expect(hook.result.current.highLevelStatus.coverage_percent).toBe(0);
+        }
+        connection('closed'); connection('open');
+        emit('highLevelStatus', realHighLevel());
+        expect(diagnosticTelemetryFresh(hook.result.current.telemetry, 60100)).toBe(true);
+        expect(hook.result.current.highLevelStatus.emergency).toBe(false);
+        expect(hook.result.current.highLevelStatus.clearanceUnverified).toBe(true);
+        expect(hasEmergency({}, hook.result.current.highLevelStatus)).toBe(true);
+        expect(mock.send).not.toHaveBeenCalled();
+    } finally {hook.unmount(); clock.mockRestore();}
 });

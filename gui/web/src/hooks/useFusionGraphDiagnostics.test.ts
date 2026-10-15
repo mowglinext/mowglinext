@@ -85,8 +85,48 @@ describe('fusion diagnostic boundary', () => {
         act(() => stream.receive({status: [...frame(1).status, {message: 'ignored'}]}));
         const previous = result.current.stats;
         act(() => {stream.error(new Error('closed')); stream.info('reconnected');});
-        rerender(); expect(result.current.stats).toBe(previous);
+        rerender(); expect(result.current.stats?.values).toBe(previous?.values);
+        expect(result.current.stats?.sourceIdentity).toBe(previous?.sourceIdentity);
+        expect(result.current.stats?.healthBlocked).toBe(true);
+        expect(result.current.stats?.lastDisconnectAt).toBeTypeOf('number');
         expect(stream.start).toHaveBeenCalledExactlyOnceWith('/api/mowglinext/subscribe/fusionDiag');
         expect(stream.stop).not.toHaveBeenCalled(); unmount(); expect(stream.stop).toHaveBeenCalledOnce();
     });
+});
+
+it('retains a disconnect barrier across cached replay and requires distinct publication progress', () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
+    const hook = renderHook(useFusionGraphDiagnostics);
+    act(() => stream.receive(frame(1)));
+    clock.mockReturnValue(200); act(() => stream.error(new Error('fixture close')));
+    clock.mockReturnValue(300); act(() => stream.receive(frame(1)));
+    expect(hook.result.current.stats?.distinctMonotonic).toBe(100);
+    expect(hook.result.current.stats?.lastDisconnectAt).toBe(200);
+    act(() => stream.receive(frame(2)));
+    expect(hook.result.current.stats?.distinctMonotonic).toBe(300);
+    hook.unmount(); vi.restoreAllMocks();
+});
+
+it('does not restore a healthy localizer verdict from an older different publication after reconnect',async()=>{
+    const {deriveDiagnosticHealth}=await import('../utils/diagnosticHealth');
+    const {healthy}=await import('../test/diagnosticHealthFixture');
+    const clock=vi.spyOn(performance,'now').mockReturnValue(100);
+    const hook=renderHook(useFusionGraphDiagnostics);
+    act(()=>stream.receive(frame(10)));clock.mockReturnValue(200);act(()=>stream.error(new Error('fixture close')));
+    clock.mockReturnValue(300);act(()=>stream.receive(frame(9)));
+    const verdict=()=>deriveDiagnosticHealth({...healthy(),highLevel:{state:2},nowMonotonic:300,fusion:hook.result.current.stats});
+    expect(verdict().checks.find(c=>c.id==='localizer')?.level).toBe('unknown');
+    act(()=>stream.receive(frame(10)));expect(verdict().checks.find(c=>c.id==='localizer')?.level).toBe('unknown');
+    act(()=>stream.receive(frame(11)));expect(verdict().checks.find(c=>c.id==='localizer')?.level).toBe('ok');
+    hook.unmount();clock.mockRestore();
+});
+it('retains per-source health barriers across a FusionGraph diagnostic source round trip',()=>{
+    const clock=vi.spyOn(performance,'now').mockReturnValue(100);
+    const hook=renderHook(useFusionGraphDiagnostics);
+    act(()=>stream.receive(frame(42,'source-A')));
+    clock.mockReturnValue(200);act(()=>stream.receive(frame(1,'source-B')));
+    clock.mockReturnValue(300);act(()=>stream.receive(frame(42,'source-A')));
+    expect(hook.result.current.stats?.healthBlocked).toBe(true);
+    act(()=>stream.receive(frame(43,'source-A')));expect(hook.result.current.stats?.healthBlocked).toBe(false);
+    hook.unmount();clock.mockRestore();
 });
