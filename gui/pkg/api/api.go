@@ -45,7 +45,7 @@ func NewAPI(dbProvider types.IDBProvider, dockerProvider types.IDockerProvider, 
 	SystemRoutes(apiGroup)
 	VersionsRoutes(apiGroup, dockerProvider)
 	UpdatesRoutes(apiGroup, dockerProvider)
-	UpdaterRoutes(apiGroup, rosProvider)
+	UpdaterRoutes(apiGroup, rosProvider, dbProvider)
 	DiagnosticsRoutes(apiGroup, dockerProvider, rosProvider, dbProvider)
 	RosbagRoutes(apiGroup, dockerProvider)
 	BlackboxRoutes(apiGroup, dbProvider, rosProvider)
