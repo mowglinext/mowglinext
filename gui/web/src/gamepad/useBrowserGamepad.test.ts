@@ -380,8 +380,9 @@ describe('useBrowserGamepad session ownership', () => {
         expect(socket.closeCount).toBe(1);
         expect(hook.result.current.enabled).toBe(false);
         const reason = event === 'blur' ? 'focusLost' : event === 'pagehide' ? 'pageExit' : 'pageHidden';
-        expect(hook.result.current.inputLoss).toEqual({reason});
-        expect(socket.closeReason).toBe(`input:${reason}`);
+        expect(hook.result.current.inputLoss).toEqual(event === 'blur' ?
+            {reason, source: 'windowBlur', documentFocused: true, visibility: 'visible', activeElement: 'BODY'} : {reason});
+        expect(socket.closeReason).toBe(event === 'blur' ? 'input:focusLost:windowBlur:BODY:visible:true' : `input:${reason}`);
         expect(onOwnershipChange.mock.calls.map(([owns]) => owns)).toEqual([true, false]);
         poll(500);
         expect(FakeWebSocket.instances).toHaveLength(1);
@@ -436,12 +437,37 @@ describe('useBrowserGamepad session ownership', () => {
         poll();
         vi.spyOn(document, 'hasFocus').mockReturnValue(false);
         poll();
-        expect(hook.result.current.inputLoss).toEqual({reason: 'focusLost'});
-        expect(socket.closeReason).toBe('input:focusLost');
+        expect(hook.result.current.inputLoss).toEqual({reason: 'focusLost', source: 'poll', documentFocused: false, visibility: 'visible', activeElement: 'BODY'});
+        expect(socket.closeReason).toBe('input:focusLost:poll:BODY:visible:false');
         vi.spyOn(document, 'hasFocus').mockReturnValue(true);
         poll(500);
         expect(hook.result.current.enabled).toBe(false);
         expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it('does not open a session if explicit activation still cannot obtain page focus', () => {
+        const {hook, onOwnershipChange} = mount();
+        vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+        act(() => { hook.result.current.enable(); });
+        expect(FakeWebSocket.instances).toHaveLength(0);
+        expect(onOwnershipChange).not.toHaveBeenCalled();
+        expect(hook.result.current.inputLoss).toEqual({reason: 'focusLost', source: 'enable', documentFocused: false, visibility: 'visible', activeElement: 'BODY'});
+    });
+
+    it('bounds focus metadata so reporting it cannot break the WebSocket close handshake', () => {
+        const {hook} = mount();
+        const socket = enable(hook);
+        const element = document.createElement('x-' + 'a'.repeat(180));
+        element.tabIndex = -1;
+        document.body.appendChild(element);
+        try {
+            element.focus();
+            vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+            poll();
+            expect(socket.closeCount).toBe(1);
+            expect(new TextEncoder().encode(socket.closeReason).length).toBeLessThanOrEqual(123);
+            expect(hook.result.current.inputLoss?.activeElement).toHaveLength(32);
+        } finally { element.remove(); }
     });
 
     it('stops and releases ownership on unmount', () => {

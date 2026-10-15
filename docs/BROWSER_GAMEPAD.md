@@ -23,7 +23,9 @@ robot-side Bluetooth management and standalone mapping files remain future work.
    Configure dead zone, inversion and speed scale, then save. Unknown layouts
    require testing and saving before Enable becomes available.
 5. Enable for this robot. The configuration panel finishes closing and restores
-   focus before a control session opens. Center the sticks and release every mapped button.
+   focus before a control session opens. Explicit activation focuses the stable
+   Controller button once; it never continually refocuses a running session.
+   Center the sticks and release every mapped button.
    Press and hold the deadman with centered sticks, then move a stick. Maximum
    speeds match the touch joystick: 0.25 m/s and 0.6 rad/s, scaled down by the
    profile. A deflected stick on a new deadman press requires another neutral
@@ -115,6 +117,8 @@ deadman or emergency stop.
 
 An input-loss warning includes the first specific cause, such as lost page focus,
 a missing device, an invalid axis/button/timestamp or a measured polling gap.
+Focus diagnostics distinguish activation, polling and a window blur event, and
+include page visibility, the actual focus flag and the active element's tag.
 Reopen **Controller** to read or copy that diagnostic; reopening preserves it,
 and the next activation attempt clears it. When its close message reaches
 the server, the GUI log also records the reason and polling gap. These are browser

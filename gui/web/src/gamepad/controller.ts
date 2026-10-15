@@ -65,6 +65,10 @@ export type InputLossReason = 'pollGap' | 'clockInvalid' | 'disconnected' | 'ide
     'focusLost' | 'pageHidden' | 'pageExit' | 'controllerChanged';
 export interface InputLoss {
     reason: InputLossReason;
+    source?: 'enable' | 'poll' | 'windowBlur' | 'pendingBlur';
+    documentFocused?: boolean;
+    visibility?: DocumentVisibilityState;
+    activeElement?: string;
     pollGapMs?: number;
     timestamp?: number;
     previousTimestamp?: number;
