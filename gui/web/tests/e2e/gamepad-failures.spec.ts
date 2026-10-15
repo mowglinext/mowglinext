@@ -3,6 +3,7 @@ import {installMockBackend} from './mock/mockBackend';
 
 interface InputOptions {
     mapping?: string;
+    insecureContext?: boolean;
     getGamepadsThrows?: boolean;
     denyProfileStorage?: boolean;
 }
@@ -21,7 +22,8 @@ interface FixtureState {
 }
 
 async function setup(page: Page, options: InputOptions = {}): Promise<FixtureState> {
-    await page.addInitScript(({mapping, getGamepadsThrows, denyProfileStorage}) => {
+    await page.addInitScript(({mapping, getGamepadsThrows, denyProfileStorage, insecureContext}) => {
+        if (insecureContext) Object.defineProperty(window, 'isSecureContext', {configurable: true, value: false});
         localStorage.setItem('i18nextLng', 'en');
         const input = {
             axes: [0, 0], buttons: Array(16).fill(false), connected: true,
@@ -48,6 +50,7 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
         }});
     }, {
         mapping: options.mapping ?? 'standard',
+        insecureContext: options.insecureContext ?? false,
         getGamepadsThrows: options.getGamepadsThrows ?? false,
         denyProfileStorage: options.denyProfileStorage ?? false,
     });
@@ -103,16 +106,40 @@ function expectClean(state: FixtureState) {
     expect(state.commands).toEqual([]);
 }
 
+test('an exposed Gamepad API can enable outside a secure context and stops on deadman release', async ({page}) => {
+    const state = await setup(page, {insecureContext: true});
+    expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
+    const dialog = await openSettings(page);
+    await selectController(page, dialog);
+    const enable = dialog.getByRole('button', {name: 'Enable for this robot', exact: true});
+    await expect(enable).toBeEnabled();
+    await enable.click();
+    await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toBeVisible();
+    await expect.poll(() => state.frames.length).toBeGreaterThan(2);
+    expect(state.frames.every(frame => frame.deadman === false && frame.twist?.twist?.linear?.x === 0)).toBe(true);
+
+    await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = true; });
+    await expect.poll(() => state.frames.at(-1)?.deadman).toBe(true);
+    await page.evaluate(() => { (window as any).controllerFailureInput.axes[1] = -1; });
+    await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0.25);
+    await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = false; });
+    await expect.poll(() => state.frames.at(-1)?.deadman).toBe(false);
+    expect(state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0);
+    expect(state.frames.at(-1)?.twist?.twist?.angular?.z).toBe(0);
+    expect(state.opened).toBe(1);
+    expectClean(state);
+});
+
 test('a blocked or missing Gamepad API reports the problem without opening a control socket', async ({page}) => {
-    const state = await setup(page, {getGamepadsThrows: true});
+    const state = await setup(page, {getGamepadsThrows: true, insecureContext: true});
     const dialog = await openSettings(page);
 
-    await expect(dialog.getByText('Controller input is unavailable or blocked by this browser. Use a browser with Gamepad API support.')).toBeVisible();
+    await expect(dialog.getByText('Controller input is unavailable or blocked by this browser. Try a browser with Gamepad API support, or HTTPS if input is blocked over HTTP.')).toBeVisible();
     await expect(dialog.getByRole('button', {name: 'Enable for this robot', exact: true})).toBeDisabled();
     await dialog.getByRole('button', {name: 'Close', exact: true}).click();
     await page.evaluate(() => Object.defineProperty(navigator, 'getGamepads', {configurable: true, value: undefined}));
     const missingApiDialog = await openSettings(page);
-    await expect(missingApiDialog.getByText('Controller input is unavailable or blocked by this browser. Use a browser with Gamepad API support.')).toBeVisible();
+    await expect(missingApiDialog.getByText('Controller input is unavailable or blocked by this browser. Try a browser with Gamepad API support, or HTTPS if input is blocked over HTTP.')).toBeVisible();
     await expect(missingApiDialog.getByRole('button', {name: 'Enable for this robot', exact: true})).toBeDisabled();
 
     expect(state.opened).toBe(0);

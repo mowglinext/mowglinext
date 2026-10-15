@@ -8,9 +8,10 @@ robot-side Bluetooth management and standalone mapping files remain future work.
 ## Connect and configure
 
 1. Pair using the client device's Bluetooth settings, or plug in USB. Open the
-   GUI over **HTTPS** (localhost also qualifies). Plain HTTP at a robot's LAN IP
-   does not provide the secure context required by current browsers. Use an
-   existing trusted HTTPS access path; do not disable browser security.
+   GUI using the robot's local HTTP address or an existing trusted HTTPS access
+   path. The GUI accepts either; Tailscale is optional. The browser must expose
+   the Gamepad API on that address. If input is unavailable or blocked over HTTP,
+   try HTTPS or a browser that supports it; the GUI cannot bypass browser policy.
 2. Press a controller button so the browser exposes it. Select the controller
    explicitly; a newly connected controller never takes over automatically.
 3. Test the live inputs. Standard-layout defaults are: axes 1/0 for drive/steer

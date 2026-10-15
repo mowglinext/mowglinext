@@ -5228,8 +5228,7 @@
       "holding": "Hold to confirm recording action"
     },
     "faults": {
-      "secureContext": "Open the GUI using HTTPS (or localhost) to use controllers.",
-      "unsupported": "Controller input is unavailable or blocked by this browser. Use a browser with Gamepad API support.",
+      "unsupported": "Controller input is unavailable or blocked by this browser. Try a browser with Gamepad API support, or HTTPS if input is blocked over HTTP.",
       "inputLost": "Input lost or stale. Center the sticks, release all buttons and enable again.",
       "connectionLost": "Controller session ended. Check the connection and whether another tab owns the controller, then enable again.",
       "actionFailed": "Robot command failed. Check the robot status and connection before enabling again."

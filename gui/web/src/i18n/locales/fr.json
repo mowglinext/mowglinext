@@ -5228,8 +5228,7 @@
       "holding": "Maintenez pour confirmer l’action d’enregistrement"
     },
     "faults": {
-      "secureContext": "Ouvrez l’interface en HTTPS (ou sur localhost) pour utiliser une manette.",
-      "unsupported": "Les entrées de manette sont indisponibles ou bloquées par ce navigateur. Utilisez un navigateur compatible avec l’API Gamepad.",
+      "unsupported": "Les entrées de manette sont indisponibles ou bloquées par ce navigateur. Essayez un navigateur compatible avec l’API Gamepad, ou HTTPS si les entrées sont bloquées en HTTP.",
       "inputLost": "Entrée perdue ou périmée. Centrez les sticks, relâchez tous les boutons et activez à nouveau.",
       "connectionLost": "Session de manette terminée. Vérifiez la connexion et si un autre onglet utilise la manette, puis activez à nouveau.",
       "actionFailed": "La commande du robot a échoué. Vérifiez son état et la connexion avant de réactiver."
