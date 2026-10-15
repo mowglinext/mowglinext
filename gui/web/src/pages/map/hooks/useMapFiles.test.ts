@@ -1,7 +1,8 @@
 import {act, fireEvent, renderHook, waitFor} from '@testing-library/react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {useMapFiles, decodeEditableGeoJSON, decodeImportOpenMowerSummary, decodeImportOutcome, type ImportOpenMowerSummary} from './useMapFiles';
-import {MowingAreaFeature, NavigationFeature, DockFeatureBase, ObstacleFeature} from '../../../types/map.ts';
+import {MowingAreaFeature, NavigationFeature, DockFeatureBase, ObstacleFeature, featuresFromJSON, serializeFeatures} from '../../../types/map.ts';
+import {transpose} from '../../../utils/map.tsx';
 import {Api} from '../../../api/Api.ts';
 import {parseMapBackup} from '../utils/mapBackup.ts';
 
@@ -14,6 +15,123 @@ function notifications(): Parameters<typeof useMapFiles>[0]['notification'] {
 }
 
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals();});
+
+const geometryRing = (x: number, y: number, size: number) =>
+    [[x, y], [x + size, y], [x + size, y + size], [x, y + size], [x, y]]
+        .map(([east, north]) => transpose(0, 0, [0, 0, 0], north, east));
+
+it('rejects two GeoJSON holes on import and refuses an older rehydrated draft without losing either ring', async () => {
+    const rings = [geometryRing(0, 0, 20), geometryRing(2, 2, 2), geometryRing(10, 10, 3)];
+    const source = {type: 'FeatureCollection', features: [{type: 'Feature', id: 'garden-A',
+        properties: {feature_type: 'workarea', name: 'Garden A', mowing_order: 1},
+        geometry: {type: 'Polygon', coordinates: rings}}]};
+    expect(() => decodeEditableGeoJSON(source, geoMessages)).toThrow('unsupported');
+    const draft = new MowingAreaFeature('garden-A', 1);
+    draft.setName('Garden A');
+    draft.setGeometry({type: 'Polygon', coordinates: rings});
+    const features = featuresFromJSON(serializeFeatures({[draft.id]: draft}));
+    expect(features['garden-A'].geometry).toEqual(source.features[0].geometry);
+    expect(serializeFeatures(features)['garden-A'].geometry).toEqual(source.features[0].geometry);
+    const options = backupOptions({features, editMap: true, dockDirty: true});
+    const put = vi.spyOn(options.guiApi.mowglinext, 'putMowglinext');
+    const hook = renderHook(() => useMapFiles(options));
+    await hook.result.current.handleSaveMap();
+    expect(put).not.toHaveBeenCalled();
+    expect(features['garden-A'].geometry.coordinates).toEqual(rings);
+    expect(options.notification.error).toHaveBeenCalledExactlyOnceWith({message: 'mapFiles.failedToSaveArea', description: 'mapFiles.unsupportedGeometry'});
+    expect(options.setEditMap).not.toHaveBeenCalled(); expect(options.setHasUnsavedChanges).not.toHaveBeenCalled();
+    expect(options.setDockDirty).not.toHaveBeenCalled(); expect(options.notification.success).not.toHaveBeenCalled();
+});
+
+describe('geometry integrity before any map/dock write', () => {
+    it.each([
+        {kind: 'workarea', holes: 1}, {kind: 'workarea', holes: 2},
+        {kind: 'navigation', holes: 1}, {kind: 'obstacle', holes: 1},
+    ])('rejects import of $kind with $holes holes, retaining the existing draft', async ({kind, holes}) => {
+        const outer = new MowingAreaFeature('existing', 1); outer.setGeometry({type: 'Polygon', coordinates: [geometryRing(0, 0, 20)]});
+        const before = serializeFeatures({existing: outer});
+        const options = backupOptions({features: {existing: outer}, editMap: true, dockDirty: true});
+        const put = vi.spyOn(options.guiApi.mowglinext, 'putMowglinext'), dock = vi.spyOn(options.guiApi.mowglinext, 'mapDockingCreate');
+        const hook = renderHook(() => useMapFiles(options));
+        const geometry = {type: 'Polygon', coordinates: [geometryRing(0, 0, 20), ...Array.from({length: holes}, (_, index) => geometryRing(2 + 5 * index, 2, 2))]};
+        selectedFile(hook.result.current.handleUploadGeoJSON, JSON.stringify({type: 'FeatureCollection', features: [{type: 'Feature', id: 'incoming', geometry, properties: {feature_type: kind}}]}));
+        await waitFor(() => expect(options.notification.error).toHaveBeenCalledExactlyOnceWith({message: 'mapFiles.unsupportedGeometry'}));
+        expect(put).not.toHaveBeenCalled(); expect(dock).not.toHaveBeenCalled();
+        for (const setter of [options.setFeatures, options.setEditMap, options.setHasUnsavedChanges, options.setDockDirty]) expect(setter).not.toHaveBeenCalled();
+        expect(serializeFeatures(options.features)).toEqual(before); expect(options.notification.success).not.toHaveBeenCalled();
+    });
+    it.each([
+        {type: 'Polygon', coordinates: []}, {type: 'Polygon', coordinates: [[]]},
+        {type: 'Polygon', coordinates: [[[0, 0], [1, 1], [0, 1], [1, 0], [0, 0]]]},
+        {type: 'Polygon', coordinates: [[[0, 0], [NaN, 0], [0, 1]]]},
+        {type: 'Polygon', coordinates: [[[0, 0], [Infinity, 0], [0, 1]]]},
+        {type: 'Polygon', coordinates: [[[0, 0], ['1', 0], [0, 1]]]},
+        {type: 'MultiPolygon', coordinates: [[geometryRing(0, 0, 20)]]},
+    ])('refuses invalid or unsupported geometry in a draft/history entry before saving: %j', raw => {
+        const feature = new MowingAreaFeature('draft', 1);
+        Reflect.set(feature, 'geometry', raw); // Models a malformed JS/history boundary without a cast.
+        const valid = new MowingAreaFeature('valid-first', 2); valid.setGeometry({type: 'Polygon', coordinates: [geometryRing(0, 0, 20)]});
+        const dock = new DockFeatureBase([0, 0], 0);
+        const options = backupOptions({features: {valid, draft: feature, dock}, editMap: true, dockDirty: true});
+        const put = vi.spyOn(options.guiApi.mowglinext, 'putMowglinext'), dockWrite = vi.spyOn(options.guiApi.mowglinext, 'mapDockingCreate');
+        const hook = renderHook(() => useMapFiles(options));
+        return hook.result.current.handleSaveMap().then(() => {
+            expect(put).not.toHaveBeenCalled(); expect(dockWrite).not.toHaveBeenCalled();
+            expect(options.notification.error).toHaveBeenCalledOnce(); expect(options.notification.success).not.toHaveBeenCalled();
+            expect(options.setEditMap).not.toHaveBeenCalled(); expect(options.setDockDirty).not.toHaveBeenCalled();
+            expect(options.setHasUnsavedChanges).not.toHaveBeenCalled(); expect(feature.geometry).toBe(raw);
+        });
+    });
+    it('exports every ring from an older unsupported draft unchanged', async () => {
+        const area = new MowingAreaFeature('recoverable', 1); area.setName('Recoverable garden');
+        const rings = [geometryRing(0, 0, 20), geometryRing(2, 2, 2), geometryRing(10, 10, 2)];
+        area.setGeometry({type: 'Polygon', coordinates: rings});
+        let blob: Blob | undefined;
+        Object.assign(window.URL, {createObjectURL: vi.fn((value: Blob) => {blob = value; return 'blob:recovery';}), revokeObjectURL: vi.fn()});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const options = backupOptions({features: {recoverable: area}, editMap: true});
+        renderHook(() => useMapFiles(options)).result.current.handleDownloadGeoJSON();
+        if (!blob) throw new Error('No export');
+        const actual: unknown = JSON.parse(await blob.text());
+        expect(actual).toMatchObject({type: 'FeatureCollection', features: [{id: 'recoverable', properties: {name: 'Recoverable garden'}, geometry: {type: 'Polygon', coordinates: rings}}]});
+        expect(options.setHasUnsavedChanges).not.toHaveBeenCalled();
+    });
+    it('keeps two explicit obstacles separate across import, save and ROS-style rehydration', async () => {
+        const outer = geometryRing(0, 0, 20), holeA = geometryRing(2, 2, 2), holeB = geometryRing(10, 10, 2);
+        const source = {type: 'FeatureCollection', features: [
+            {type: 'Feature', id: 'garden', properties: {feature_type: 'workarea', name: 'Garden', mowing_order: 0}, geometry: {type: 'Polygon', coordinates: [outer]}},
+            ...[holeA, holeB].map((ring, i) => ({type: 'Feature', id: `exclusion-${i}`, properties: {feature_type: 'obstacle', mowing_area: 'garden'}, geometry: {type: 'Polygon', coordinates: [ring]}})),
+        ]};
+        const features = featuresFromJSON(decodeEditableGeoJSON(source, geoMessages));
+        const options = backupOptions({features, editMap: true}); const put = vi.spyOn(options.guiApi.mowglinext, 'putMowglinext');
+        await renderHook(() => useMapFiles(options)).result.current.handleSaveMap();
+        expect(put).toHaveBeenCalledOnce();
+        const saved = put.mock.calls[0][0].areas?.[0].area;
+        if (!saved) throw new Error('No saved area');
+        expect(saved.name).toBe('Garden'); expect(saved.obstacles).toHaveLength(2);
+        const readback = new MowingAreaFeature('garden-readback', 1); readback.setArea(saved, 0, 0, [0, 0, 0]);
+        expect(readback.geometry.coordinates[0]).toHaveLength(outer.length);
+        for (const [i, polygon] of (saved.obstacles ?? []).entries()) {
+            const obstacle = new ObstacleFeature(`readback-${i}`, readback);
+            obstacle.transpose(polygon.points ?? [], 0, 0, [0, 0, 0]);
+            for (const [j, position] of obstacle.geometry.coordinates[0].entries()) {
+                expect(position[0]).toBeCloseTo([holeA, holeB][i][j][0], 12);
+                expect(position[1]).toBeCloseTo([holeA, holeB][i][j][1], 12);
+            }
+            expect(obstacle.getMowingArea()).toBe(readback);
+        }
+        expect(options.notification.success).toHaveBeenCalledOnce();
+    });
+    it('refuses an unparented explicit exclusion instead of saving a map without it', async () => {
+        const missing = new MowingAreaFeature('missing', 1);
+        const obstacle = new ObstacleFeature('exclusion', missing); obstacle.setGeometry({type: 'Polygon', coordinates: [geometryRing(0, 0, 2)]});
+        const options = backupOptions({features: {exclusion: obstacle}, editMap: true});
+        const put = vi.spyOn(options.guiApi.mowglinext, 'putMowglinext');
+        await renderHook(() => useMapFiles(options)).result.current.handleSaveMap();
+        expect(put).not.toHaveBeenCalled(); expect(options.notification.error).toHaveBeenCalledWith({message: 'mapFiles.failedToSaveArea', description: 'mapFiles.obstacleParentMissing'});
+        expect(options.setHasUnsavedChanges).not.toHaveBeenCalled(); expect(options.notification.success).not.toHaveBeenCalled();
+    });
+});
 
 vi.mock('react-i18next', () => ({useTranslation: () => ({t: (key: string) => key})}));
 

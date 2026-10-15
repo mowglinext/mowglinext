@@ -212,8 +212,28 @@ describe('performSplit re-parents obstacles by where they actually end up', () =
         act(() => {
             hook.result.current.setSelectedFeatureIds([parent.id]);
         });
-        return {hook, parent, obstacle, draw, setFeatures: options.setFeatures as ReturnType<typeof vi.fn>};
+        return {hook, parent, obstacle, draw, notification: options.notification, setFeatures: options.setFeatures as ReturnType<typeof vi.fn>};
     }
+
+    it.each(['split', 'conversion', 'correction'])('refuses a %s that could discard rings from an unsupported draft', action => {
+        const geometry = square(0,0,20,20);
+        if (action !== 'correction') geometry.coordinates.push(square(2,2,4,4).coordinates[0]);
+        const {hook,parent,draw,notification,setFeatures} = setup(geometry,square(10,10,12,12));
+        const before = structuredClone(parent.geometry);
+        if (action === 'split') {
+            act(() => hook.result.current.handleSplit());
+            act(() => hook.result.current.onCreate({features:[{type:'Feature', properties:{}, geometry:{type:'LineString',coordinates:[[5,-1],[5,21]]}}]}));
+            expect(draw.add).not.toHaveBeenCalled();
+        } else {
+            act(() => hook.result.current.setCurMowingAreaFeature({id:parent.id,index:0,name:'Changed',mowing_order:1,orig_mowing_order:1,
+                feature_type:'navigation',orig_feature_type:'workarea',shrink_recorded:false}));
+            const corrected = square(0,0,20,20); corrected.coordinates.push(square(2,2,4,4).coordinates[0]);
+            act(() => hook.result.current.updateMowingArea(action === 'correction' ? corrected : undefined));
+        }
+        expect(setFeatures).not.toHaveBeenCalled(); expect(parent.geometry).toEqual(before);
+        expect(notification.error).toHaveBeenCalledWith({message:'mapFiles.unsupportedGeometry'});
+        expect(notification.success).not.toHaveBeenCalled();
+    });
 
     it("reassigns an obstacle to the new half when the cut leaves it out of the original feature's half", () => {
         // 10x10 square cut at x=5: the segment-hit trace lands the RIGHT half

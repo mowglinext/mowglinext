@@ -436,6 +436,11 @@ export function useMapEditing({
                 return;
             }
 
+            if (targetFeat.geometry.coordinates.length > 1) {
+                notification.error({message: t('mapFiles.unsupportedGeometry')});
+                return;
+            }
+
             const polygon: Feature<Polygon> = {
                 type: "Feature",
                 properties: {},
@@ -1116,10 +1121,17 @@ export function useMapEditing({
     const updateMowingArea = useCallback((correctedGeometry?: Polygon) => {
         if (!curMowingAreaFeature || !curMowingAreaFeature.id) return;
 
-        setAreaModelOpen(false);
         const newFeatures = {...features} as Record<string, MowingFeature>;
         const oldFeature = newFeatures[curMowingAreaFeature.id];
         if (!oldFeature || !(oldFeature instanceof MowingFeatureBase)) return;
+
+        // Shrink memory and split/type conversions can only represent one ring.
+        // Do not let an older draft lose holes before the save preflight sees it.
+        if (oldFeature.geometry.coordinates.length > 1 || correctedGeometry && correctedGeometry.coordinates.length > 1) {
+            notification.error({message: t('mapFiles.unsupportedGeometry')});
+            return;
+        }
+        setAreaModelOpen(false);
 
         const typeChanged =
             curMowingAreaFeature.feature_type !==
@@ -1190,7 +1202,7 @@ export function useMapEditing({
         }
 
         setFeatures(newFeatures);
-    }, [curMowingAreaFeature, features, setFeatures, shrinkMemory]);
+    }, [curMowingAreaFeature, features, setFeatures, shrinkMemory, notification, t]);
 
     const cancelAreaModal = useCallback(() => {
         setAreaModelOpen(false);

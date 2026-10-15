@@ -2169,6 +2169,9 @@
   "mapFiles": {
     "areaSaved": "Area saved",
     "failedToSaveArea": "Failed to save area",
+    "unsupportedGeometry": "Polygons with interior rings (holes) and MultiPolygon geometries are not supported without losing exclusions. No map replacement or dock write was sent. The source file and local draft are unchanged. Review the exclusions before choosing a supported representation.",
+    "invalidGeometry": "Invalid or unrepresentable map geometry or coordinate transformation. No map replacement or dock write was sent. The source file and local draft are unchanged.",
+    "obstacleParentMissing": "Map not saved: obstacles {{ids}} have no matching parent area. The local draft is unchanged; no exclusion was discarded and no map replacement or dock write was sent.",
     "restoreFailed": "Could not restore this map backup",
     "restoreOriginalsFailed": "The map was restored, but the recorded obstacle outlines in the backup could not be stored",
     "restoreCorridorsFailed": "The map was restored, but the LiDAR ignore lines in the backup could not be written",

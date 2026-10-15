@@ -106,6 +106,20 @@ const eventCases = [
 describe('DrawControl event payload forwarding', () => {
     beforeEach(() => {mock.listeners.clear(); mock.on.mockClear(); mock.off.mockClear(); vi.useFakeTimers();});
     afterEach(() => vi.useRealTimers());
+    it('passes complete multi-ring draft geometry into Draw and back through update events', async () => {
+        const ring = (x: number, y: number, size: number) => [[x,y],[x+size,y],[x+size,y+size],[x,y+size],[x,y]];
+        const feature: GeoJSON.Feature<GeoJSON.Polygon> = {type: 'Feature', id: 'recoverable', properties: {feature_type: 'workarea'},
+            geometry: {type: 'Polygon', coordinates: [ring(0,0,20),ring(2,2,2),ring(10,10,2)]}};
+        const props = callbacks(), view = render(<DrawControl {...props} editMode features={[feature]}/>);
+        await act(() => vi.advanceTimersByTime(300)); // The existing Draw synchronization timer, not a real sleep.
+        const control = mock.controls[mock.controls.length - 1];
+        expect(control.add).toHaveBeenCalledWith(feature);
+        const update = {features: [feature], action: 'change_coordinates'};
+        act(() => mock.listeners.get('draw.update')?.forEach(listener => listener(update)));
+        expect(props.onUpdate).toHaveBeenCalledExactlyOnceWith(update);
+        expect(feature.geometry.coordinates).toHaveLength(3);
+        view.unmount();
+    });
     it.each(eventCases)('forwards $event to the current $callback without coercing its payload', ({event, callback, payload}) => {
         const first = callbacks(), current = callbacks();
         const view = render(<DrawControl {...first} editMode/>);

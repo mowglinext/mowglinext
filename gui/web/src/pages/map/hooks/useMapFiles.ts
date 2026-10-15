@@ -20,7 +20,8 @@ import {
 import type {Api, MowgliMapArea, MowgliReplaceMapReq} from "../../../api/Api.ts";
 import {BACKUP_CORRIDORS_KEY, BACKUP_ORIGINALS_KEY, parseMapBackup} from "../utils/mapBackup.ts";
 import {originalsForObstacles, type ObstacleOriginal} from "../utils/obstacleOriginals.ts";
-import {dedupePoints, getQuaternionFromHeading, isRingInsidePolygon, itranspose} from "../../../utils/map.tsx";
+import {getQuaternionFromHeading, isRingInsidePolygon, itranspose} from "../../../utils/map.tsx";
+import {MapGeometryError, assertSupportedMapPolygon, projectMapPolygon, projectMapPosition} from '../utils/mapGeometryContract';
 
 interface UseMapFilesOptions {
     features: Record<string, MowingFeature>;
@@ -75,6 +76,10 @@ export function useMapFiles({
 }: UseMapFilesOptions) {
     const {t} = useTranslation();
 
+    const geometryErrorMessage = (error: unknown) => error instanceof MapGeometryError
+        ? t(error.reason === 'unsupported' ? 'mapFiles.unsupportedGeometry' : 'mapFiles.invalidGeometry')
+        : errorMessage(error);
+
     async function handleSaveMap() {
         const areas: Record<string, MowgliMapArea[]> = {
             "area": [],
@@ -100,11 +105,28 @@ export function useMapFiles({
             return (a.properties.mowing_order ?? 9999) - (b.properties.mowing_order ?? 9999);
         });
 
+        // Validate every polygon and the edited dock before any ROS call. A
+        // draft/history entry may bypass the file decoder; never drop its rings.
+        let preparedAreas: Array<{feature: MowingFeatureBase; points: ReturnType<typeof projectMapPolygon>}>;
+        let preparedObstacles: Array<{feature: ObstacleFeature; points: ReturnType<typeof projectMapPolygon>}>;
+        try {
+            preparedAreas = areaFeatures.map(feature => ({feature, points: projectMapPolygon(feature.geometry, offsetX, offsetY, datum)}));
+            preparedObstacles = obstacleFeatures.map(feature => ({feature, points: projectMapPolygon(feature.geometry, offsetX, offsetY, datum)}));
+            const dock = features.dock;
+            if (dockDirty && dock instanceof DockFeatureBase) {
+                projectMapPosition(dock.getCoordinates(), offsetX, offsetY, datum);
+                if (!Number.isFinite(dock.getHeading())) throw new MapGeometryError('invalid');
+            }
+        } catch (error) {
+            notification.error({message: t('mapFiles.failedToSaveArea'), description: geometryErrorMessage(error)});
+            return;
+        }
+
         // Track per-type index counters and map feature ID → index in areas array
         const typeCounters: Record<string, number> = {"area": 0, "navigation": 0};
-        const featureIndexMap: Record<string, {type: string; index: number}> = {};
+        const featureIndexMap = new Map<string, {type: string; index: number}>();
 
-        for (const f of areaFeatures) {
+        for (const {feature: f, points} of preparedAreas) {
             // Bucket by CLASS, not by id prefix: a workarea↔navigation type
             // change keeps the old id (e.g. "area-1-area-1" is now a
             // NavigationFeature), so id-prefix bucketing silently dropped the
@@ -112,13 +134,7 @@ export function useMapFiles({
             const type = f instanceof NavigationFeature ? "navigation" : "area";
 
             const index = typeCounters[type]++;
-            featureIndexMap[f.id] = {type, index};
-
-            const rawPoints = f.geometry.coordinates[0].map((point) => {
-                const p = itranspose(offsetX, offsetY, datum, point[1], point[0]);
-                return {x: p[0], y: p[1], z: 0};
-            });
-            const points = dedupePoints(rawPoints);
+            featureIndexMap.set(f.id, {type, index});
 
             areas[type][index] = {
                 name: f.properties?.name ?? '',
@@ -158,9 +174,9 @@ export function useMapFiles({
         // still unmatched is reported to the user instead of vanishing
         // silently from the saved map.
         const droppedObstacles: string[] = [];
-        for (const f of obstacleFeatures) {
+        for (const {feature: f, points} of preparedObstacles) {
             const parentArea = f.getMowingArea();
-            let parentMapping = parentArea ? featureIndexMap[parentArea.id] : undefined;
+            let parentMapping = parentArea ? featureIndexMap.get(parentArea.id) : undefined;
             if (!parentMapping) {
                 const obstacleRing = f.geometry.coordinates[0] ?? [];
                 const containing = areaFeatures.find(
@@ -168,18 +184,12 @@ export function useMapFiles({
                         a instanceof MowingAreaFeature &&
                         isRingInsidePolygon(obstacleRing, a.geometry.coordinates[0] ?? [])
                 );
-                if (containing) parentMapping = featureIndexMap[containing.id];
+                if (containing) parentMapping = featureIndexMap.get(containing.id);
             }
             if (!parentMapping) {
                 droppedObstacles.push(String(f.id));
                 continue;
             }
-
-            const rawPoints = f.geometry.coordinates[0].map((point) => {
-                const p = itranspose(offsetX, offsetY, datum, point[1], point[0]);
-                return {x: p[0], y: p[1], z: 0};
-            });
-            const points = dedupePoints(rawPoints);
 
             const target = areas[parentMapping.type][parentMapping.index];
             target.obstacles = [...(target.obstacles ?? []), {points}];
@@ -198,12 +208,13 @@ export function useMapFiles({
         }
 
         if (droppedObstacles.length > 0) {
-            notification.warning({
-                message: t('mapFiles.obstaclesDropped'),
-                description: t('mapFiles.obstaclesDroppedDescription', {
+            notification.error({
+                message: t('mapFiles.failedToSaveArea'),
+                description: t('mapFiles.obstacleParentMissing', {
                     ids: droppedObstacles.join(", "),
                 }),
             });
+            return;
         }
 
         // Sequence BOTH saves in one try/catch: success is only reported (and
@@ -647,7 +658,7 @@ export function useMapFiles({
                 setHasUnsavedChanges(true);
                 notification.success({message: t('mapFiles.uploadSuccess')});
             } catch (error) {
-                notification.error({message: errorMessage(error)});
+                notification.error({message: geometryErrorMessage(error)});
             }
         }, error => {
             reportAsyncError(error);
@@ -758,8 +769,9 @@ const bbox = (raw: unknown): boolean => raw === undefined || Array.isArray(raw) 
 function editableGeometry(raw: unknown): raw is Point | Polygon {
     if (!isJsonObject(raw) || !bbox(raw.bbox)) return false;
     if (raw.type === 'Point') return position(raw.coordinates);
-    return raw.type === 'Polygon' && Array.isArray(raw.coordinates) && raw.coordinates.length > 0
-        && raw.coordinates.every((ring: unknown) => Array.isArray(ring) && ring.length >= 3 && ring.every(position));
+    if (raw.type !== 'Polygon' && raw.type !== 'MultiPolygon') return false;
+    assertSupportedMapPolygon(raw);
+    return true;
 }
 
 export function decodeEditableGeoJSON(raw: unknown, messages: {invalid: string; empty: string; unknownType: (type: string) => string}): Record<string, SerializedMapFeature> {

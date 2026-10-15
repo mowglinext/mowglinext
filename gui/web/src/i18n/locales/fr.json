@@ -2165,6 +2165,9 @@
   "mapFiles": {
     "areaSaved": "Zone enregistrée",
     "failedToSaveArea": "Échec de l'enregistrement de la zone",
+    "unsupportedGeometry": "Les polygones avec anneaux intérieurs (trous) et les géométries MultiPolygon ne sont pas pris en charge sans perte d'exclusions. Aucun remplacement de carte ni aucune écriture de la base n'ont été envoyés. Le fichier source et le brouillon local sont inchangés. Vérifiez les exclusions avant de choisir une représentation prise en charge.",
+    "invalidGeometry": "Géométrie cartographique ou transformation de coordonnées invalide ou non représentable. Aucun remplacement de carte ni aucune écriture de la base n'ont été envoyés. Le fichier source et le brouillon local sont inchangés.",
+    "obstacleParentMissing": "Carte non sauvegardée : les obstacles {{ids}} n'ont pas de zone parente correspondante. Le brouillon local est inchangé ; aucune exclusion n'a été supprimée et aucun remplacement de carte ni aucune écriture de la base n'ont été envoyés.",
     "restoreFailed": "Impossible de restaurer cette sauvegarde de carte",
     "restoreOriginalsFailed": "La carte a été restaurée, mais les contours d'obstacles enregistrés de la sauvegarde n'ont pas pu être stockés",
     "restoreCorridorsFailed": "La carte a été restaurée, mais les lignes d'exclusion LiDAR de la sauvegarde n'ont pas pu être écrites",
