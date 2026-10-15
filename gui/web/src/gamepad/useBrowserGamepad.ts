@@ -4,7 +4,7 @@ import {useTopic} from '../hooks/useTopic';
 import type {Emergency, HighLevelStatus} from '../types/ros';
 import {
     ControllerDriver, profileFits, teleopTwist,
-    type ControllerAction, type ControllerIdentity, type ControllerProfile, type ControllerSample, type ControllerState,
+    type ControllerAction, type ControllerIdentity, type ControllerProfile, type ControllerSample, type ControllerState, type InputLoss,
 } from './controller';
 
 interface Options {
@@ -36,11 +36,13 @@ export function useBrowserGamepad(options: Options) {
     const [enabled, setEnabled] = useState(false);
     const [state, setState] = useState<ControllerState>('releaseControls');
     const [fault, setFault] = useState<ControllerFault>(null);
+    // Retain the first cause when configuration is reopened, until Enable is retried.
+    const [inputLoss, setInputLoss] = useState<InputLoss | null>(null);
     const session = useRef<{socket: WebSocket; driver: ControllerDriver; identity: ControllerIdentity; opened: number} | null>(null);
     const pending = useRef(false);
     const actionTask = useRef<Promise<void> | null>(null);
     const mounted = useRef(true);
-    const cancel = useCallback((reason: ControllerFault = null) => {
+    const cancel = useCallback((reason: ControllerFault = null, detail: InputLoss | null = null) => {
         const active = session.current;
         session.current = null; // Revoke before onclose/late async callbacks.
         if (active) {
@@ -49,25 +51,34 @@ export function useBrowserGamepad(options: Options) {
                     active.socket.send(JSON.stringify({twist: teleopTwist(), deadman: false}));
                 }
             } catch { /* The server lease also handles an unusable socket. */ }
-            active.socket.close();
+            const report = detail ? `input:${detail.reason}${detail.pollGapMs === undefined ? '' : `:${Math.round(detail.pollGapMs)}ms`}` : '';
+            active.socket.close(1000, report);
             opts.current.onOwnershipChange(false);
         }
         if (mounted.current) {
             setEnabled(false);
             setState('releaseControls');
             setFault(reason);
+            if (detail) setInputLoss(detail);
         }
     }, []);
+    const revokeInput = useCallback((detail: InputLoss) => cancel('inputLost', detail), [cancel]);
     const disable = () => cancel();
     const enable = () => {
         cancel();
+        setInputLoss(null);
         if (typeof navigator.getGamepads !== 'function') { setFault('unsupported'); return; }
         const {selected, profile} = opts.current;
         let pad: Gamepad | null | undefined;
         try { pad = selected ? navigator.getGamepads()[selected.index] : null; }
         catch { setFault('unsupported'); return; }
-        if (!pad || !selected || pad.id !== selected.id || !profileFits(profile, pad) ||
-            document.visibilityState !== 'visible' || !document.hasFocus()) { setFault('inputLost'); return; }
+        if (!pad || !pad.connected || !selected || pad.id !== selected.id || pad.index !== selected.index || !profileFits(profile, pad)) {
+            setFault('inputLost'); setInputLoss({reason: !pad || !pad.connected ? 'disconnected' :
+                !selected || pad.id !== selected.id || pad.index !== selected.index ? 'identityChanged' : 'mappingChanged'}); return;
+        }
+        if (document.visibilityState !== 'visible' || !document.hasFocus()) {
+            setFault('inputLost'); setInputLoss({reason: document.visibilityState !== 'visible' ? 'pageHidden' : 'focusLost'}); return;
+        }
         let socket: WebSocket;
         try { socket = new WebSocket(`${wsBase()}/api/mowglinext/publish/gamepad`); }
         catch { setFault('connectionLost'); return; }
@@ -101,7 +112,9 @@ export function useBrowserGamepad(options: Options) {
             }
             const active = session.current;
             if (!active) return;
-            if (document.visibilityState !== 'visible' || !document.hasFocus()) { cancel('inputLost'); return; }
+            if (document.visibilityState !== 'visible' || !document.hasFocus()) {
+                cancel('inputLost', {reason: document.visibilityState !== 'visible' ? 'pageHidden' : 'focusLost'}); return;
+            }
             if (active.socket.readyState === WebSocket.CONNECTING) {
                 if (now - active.opened > 2000) cancel('connectionLost');
                 return;
@@ -118,7 +131,7 @@ export function useBrowserGamepad(options: Options) {
                 emergency: !!(current.status.data.emergency || current.emergency.data.active_emergency || current.emergency.data.latched_emergency),
                 pending: pending.current,
             });
-            if (frame.state === 'inputLost') { cancel('inputLost'); return; }
+            if (frame.state === 'inputLost') { cancel('inputLost', frame.inputLoss); return; }
             setState(frame.state);
             try { active.socket.send(JSON.stringify({twist: teleopTwist(frame.linear, frame.angular), deadman: frame.deadman})); }
             catch { cancel('connectionLost'); return; }
@@ -148,9 +161,13 @@ export function useBrowserGamepad(options: Options) {
         };
         const interval = window.setInterval(poll, 50);
         poll();
-        const suspend = () => { if (session.current) cancel('inputLost'); };
+        const suspend = (event: Event) => {
+            if (session.current) cancel('inputLost', {reason: event.type === 'blur' ? 'focusLost' : event.type === 'pagehide' ? 'pageExit' : 'pageHidden'});
+        };
         const disconnect = (event: GamepadEvent) => {
-            if (event.gamepad.index === session.current?.identity.index) suspend();
+            if (event.gamepad.index === session.current?.identity.index) {
+                cancel('inputLost', {reason: event.type === 'gamepaddisconnected' ? 'disconnected' : 'controllerChanged'});
+            }
         };
         window.addEventListener('blur', suspend);
         window.addEventListener('pagehide', suspend);
@@ -168,5 +185,5 @@ export function useBrowserGamepad(options: Options) {
             cancel();
         };
     }, [cancel]);
-    return {pads, enabled, state, fault, enable, disable};
+    return {pads, enabled, state, fault, inputLoss, enable, disable, revokeInput};
 }

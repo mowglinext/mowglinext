@@ -5227,6 +5227,21 @@
       "waitingForMode": "Waiting for live recording / manual mode",
       "holding": "Hold to confirm recording action"
     },
+    "inputLossReasons": {
+      "pollGap": "The browser paused controller reads for {{pollGapMs}} ms (limit {{limit}} ms).",
+      "clockInvalid": "The browser clock changed unexpectedly.",
+      "disconnected": "The browser no longer reports the selected controller as connected.",
+      "identityChanged": "The controller in the selected slot changed.",
+      "mappingChanged": "The selected mapping no longer matches the controller inputs.",
+      "timestampInvalid": "The browser returned an invalid controller timestamp ({{timestamp}}).",
+      "timestampRegressed": "The controller timestamp went backwards ({{previousTimestamp}} → {{timestamp}}).",
+      "axisInvalid": "Axis {{inputIndex}} returned an invalid value ({{inputValue}}).",
+      "buttonInvalid": "Button {{inputIndex}} returned an invalid value ({{inputValue}}).",
+      "focusLost": "The browser page lost focus.",
+      "pageHidden": "The browser page was hidden or its visibility changed.",
+      "pageExit": "The browser left this page.",
+      "controllerChanged": "The browser replaced or reconnected the selected controller."
+    },
     "faults": {
       "unsupported": "Controller input is unavailable or blocked by this browser. Try a browser with Gamepad API support, or HTTPS if input is blocked over HTTP.",
       "inputLost": "Input lost or stale. Center the sticks, release all buttons and enable again.",

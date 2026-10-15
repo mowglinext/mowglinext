@@ -60,12 +60,24 @@ export interface ControllerContext {
     pending: boolean;
 }
 export type ControllerState = 'releaseControls' | 'ready' | 'driving' | 'inputLost' | 'waitingForMode' | 'holding';
+export type InputLossReason = 'pollGap' | 'clockInvalid' | 'disconnected' | 'identityChanged' | 'mappingChanged' |
+    'timestampInvalid' | 'timestampRegressed' | 'axisInvalid' | 'buttonInvalid' |
+    'focusLost' | 'pageHidden' | 'pageExit' | 'controllerChanged';
+export interface InputLoss {
+    reason: InputLossReason;
+    pollGapMs?: number;
+    timestamp?: number;
+    previousTimestamp?: number;
+    inputIndex?: number;
+    inputValue?: number;
+}
 export interface ControllerFrame {
     linear: number;
     angular: number;
     deadman: boolean;
     state: ControllerState;
     action?: ControllerAction;
+    inputLoss?: InputLoss;
 }
 
 /** One explicit browser session. Faults are terminal: create a new driver only on Enable.
@@ -77,7 +89,7 @@ export class ControllerDriver {
     private neutralSeen = false;
     private lastPoll: number | null = null;
     private lastStamp = -1;
-    private faulted = false;
+    private inputLoss: InputLoss | null = null;
     private held: {action: ControllerAction; since: number; fired: boolean} | null = null;
     private previousMode: string | null = null;
     private deadmanHeld = false;
@@ -87,16 +99,25 @@ export class ControllerDriver {
     step(pad: ControllerSample | null, now: number, ctx: ControllerContext): ControllerFrame {
         const zero = (state: ControllerState, action?: ControllerAction): ControllerFrame =>
             ({linear: 0, angular: 0, deadman: false, state, ...(action ? {action} : {})});
-        const gap = this.lastPoll !== null && now - this.lastPoll > POLL_MAX_GAP_MS;
+        const lost = (inputLoss: InputLoss): ControllerFrame => {
+            this.inputLoss ??= inputLoss;
+            return {...zero('inputLost'), inputLoss: this.inputLoss};
+        };
+        if (this.inputLoss) return lost(this.inputLoss);
+        const pollGapMs = this.lastPoll === null ? 0 : now - this.lastPoll;
         this.lastPoll = now;
-        if (this.faulted || gap || !pad || !pad.connected || pad.id !== this.identity.id || pad.index !== this.identity.index ||
-            !profileFits(this.profile, pad) || !Number.isFinite(pad.timestamp) || pad.timestamp <= 0 ||
-            pad.timestamp < this.lastStamp ||
-            !pad.axes.every(v => Number.isFinite(v) && Math.abs(v) <= 1) ||
-            !pad.buttons.every(b => typeof b.pressed === 'boolean' && Number.isFinite(b.value) && b.value >= 0 && b.value <= 1)) {
-            this.faulted = true;
-            return zero('inputLost');
-        }
+        if (!Number.isFinite(now) || pollGapMs < 0) return lost({reason: 'clockInvalid'});
+        if (pollGapMs > POLL_MAX_GAP_MS) return lost({reason: 'pollGap', pollGapMs});
+        if (!pad || !pad.connected) return lost({reason: 'disconnected'});
+        if (pad.id !== this.identity.id || pad.index !== this.identity.index) return lost({reason: 'identityChanged'});
+        if (!profileFits(this.profile, pad)) return lost({reason: 'mappingChanged'});
+        const stamp = {timestamp: pad.timestamp, previousTimestamp: this.lastStamp};
+        if (!Number.isFinite(pad.timestamp) || pad.timestamp <= 0) return lost({reason: 'timestampInvalid', ...stamp});
+        if (pad.timestamp < this.lastStamp) return lost({reason: 'timestampRegressed', ...stamp});
+        const badAxis = pad.axes.findIndex(v => !Number.isFinite(v) || Math.abs(v) > 1);
+        if (badAxis !== -1) return lost({reason: 'axisInvalid', inputIndex: badAxis, inputValue: pad.axes[badAxis]});
+        const badButton = pad.buttons.findIndex(b => typeof b.pressed !== 'boolean' || !Number.isFinite(b.value) || b.value < 0 || b.value > 1);
+        if (badButton !== -1) return lost({reason: 'buttonInvalid', inputIndex: badButton, inputValue: pad.buttons[badButton].value});
         this.lastStamp = pad.timestamp;
         const p = this.profile;
         const linear = axis(pad.axes[p.linearAxis], p.deadzone) * (p.invertLinear ? -1 : 1);
