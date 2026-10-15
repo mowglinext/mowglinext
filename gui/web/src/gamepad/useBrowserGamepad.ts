@@ -14,7 +14,7 @@ interface Options {
     onOwnershipChange: (owns: boolean) => void;
     onSample?: (devices: ControllerSample[]) => void;
 }
-export type ControllerFault = 'secureContext' | 'unsupported' | 'inputLost' | 'connectionLost' | 'actionFailed' | null;
+export type ControllerFault = 'unsupported' | 'inputLost' | 'connectionLost' | 'actionFailed' | null;
 const copyPad = (pad: Gamepad): ControllerSample => ({
     id: pad.id, index: pad.index, mapping: pad.mapping, connected: pad.connected,
     timestamp: pad.timestamp, axes: [...pad.axes], buttons: pad.buttons.map(b => ({pressed: b.pressed, touched: b.touched, value: b.value})),
@@ -59,7 +59,6 @@ export function useBrowserGamepad(options: Options) {
     const disable = () => cancel();
     const enable = () => {
         cancel();
-        if (!window.isSecureContext) { setFault('secureContext'); return; }
         if (typeof navigator.getGamepads !== 'function') { setFault('unsupported'); return; }
         const {selected, profile} = opts.current;
         let pad: Gamepad | null | undefined;

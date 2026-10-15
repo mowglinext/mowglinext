@@ -76,7 +76,6 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
         <Drawer title={t('gamepad.title')} open={open} onClose={() => {setOpen(false); setLearn(null);}} width={480}>
             <Space direction="vertical" size="middle" style={{width: '100%'}}>
                 <Typography.Paragraph>{t('gamepad.connectHelp')}</Typography.Paragraph>
-                {!window.isSecureContext && <Alert type="warning" showIcon message={t('gamepad.faults.secureContext')}/>}
                 {typeof navigator.getGamepads !== 'function' && <Alert type="warning" showIcon message={t('gamepad.faults.unsupported')}/>}
                 <Form layout="vertical">
                     <Form.Item label={t('gamepad.controller')}>
@@ -130,7 +129,7 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
                 </Form>
                 <Alert type="info" showIcon message={t('gamepad.safetyHelp')}/>
                 {controller.fault && <Alert type="warning" showIcon message={t(`gamepad.faults.${controller.fault}`)}/>}
-                <Button type="primary" block onClick={enable} disabled={!configured || !!learn || !window.isSecureContext || typeof navigator.getGamepads !== 'function'}>
+                <Button type="primary" block onClick={enable} disabled={!configured || !!learn || typeof navigator.getGamepads !== 'function'}>
                     {t('gamepad.enable')}
                 </Button>
             </Space>
