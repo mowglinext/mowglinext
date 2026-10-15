@@ -1,18 +1,36 @@
 import {expect, test} from '@playwright/test';
 import {installMockBackend} from './mock/mockBackend';
 
+test.afterEach(async ({page}, info) => {
+    if (info.status !== info.expectedStatus) {
+        const trace = await page.evaluate(() => (window as any).controllerPollTrace ?? []).catch(() => []);
+        await info.attach('controller-poll-trace', {body: JSON.stringify(trace), contentType: 'application/json'});
+    }
+});
+
 for (const width of [390, 1440]) {
     test(`browser controller mapping, driving and loss at ${width}px`, async ({page}) => {
         await page.setViewportSize({width, height: 900});
         await page.addInitScript(() => {
             localStorage.setItem('i18nextLng', 'en');
-            const input = {axes: [0, 0], buttons: Array(16).fill(false), connected: true, frozen: false, timestamp: 0};
-            Object.assign(window, {controllerTestInput: input});
-            Object.defineProperty(navigator, 'getGamepads', {value: () => input.connected ? [{
-                id: 'Fixture standard controller', index: 0, mapping: 'standard', connected: true,
-                timestamp: input.frozen ? input.timestamp : performance.now(), axes: input.axes,
-                buttons: input.buttons.map(pressed => ({pressed, touched: pressed, value: pressed ? 1 : 0})),
-            }] : [null]});
+            // WebKit exposes an independent clock and updates only on value changes.
+            const input = {axes: [0, 0], buttons: Array(16).fill(false), connected: true, signature: '', timestamp: 864000};
+            const trace: Array<{at: number; stamp: number; axes: number[]; deadman: boolean}> = [];
+            Object.assign(window, {controllerTestInput: input, controllerPollTrace: trace});
+            Object.defineProperty(navigator, 'getGamepads', {value: () => {
+                const signature = JSON.stringify([input.axes, input.buttons]);
+                if (signature !== input.signature) {
+                    input.signature = signature;
+                    input.timestamp += 0.001;
+                }
+                trace.push({at: performance.now(), stamp: input.timestamp, axes: [...input.axes], deadman: input.buttons[4]});
+                if (trace.length > 1000) trace.shift();
+                return input.connected ? [{
+                    id: 'Fixture standard controller', index: 0, mapping: 'standard', connected: true,
+                    timestamp: input.timestamp, axes: input.axes,
+                    buttons: input.buttons.map(pressed => ({pressed, touched: pressed, value: pressed ? 1 : 0})),
+                }] : [null];
+            }});
         });
         await installMockBackend(page, {
             name: 'browser-controller',
@@ -57,6 +75,7 @@ for (const width of [390, 1440]) {
         await dialog.getByRole('combobox').first().click();
         await page.getByText('1: Fixture standard controller', {exact: true}).click();
         await expect(dialog.getByText('Saved mapping', {exact: true})).toBeVisible();
+        await page.waitForTimeout(650); // Centered input need not emit fresh events.
         await dialog.getByRole('button', {name: 'Enable for this robot', exact: true}).click();
         await expect(page.getByRole('button', {name: 'Disable controller'})).toBeVisible();
         await expect.poll(() => frames.length).toBeGreaterThan(1);
@@ -64,14 +83,32 @@ for (const width of [390, 1440]) {
         await expect.poll(() => frames.some(frame => frame.deadman)).toBe(true);
         await page.evaluate(() => { (window as any).controllerTestInput.axes[1] = -1; });
         await expect.poll(() => frames.at(-1)?.twist.twist.linear.x).toBe(0.25);
+        await page.waitForTimeout(650); // A constant stick/deadman is valid input.
+        await expect(page.getByRole('button', {name: 'Disable controller'})).toBeVisible();
+        expect(frames.at(-1)?.twist.twist.linear.x).toBe(0.25);
         await page.evaluate(() => { (window as any).controllerTestInput.buttons[4] = false; });
         await expect.poll(() => frames.at(-1)?.twist.twist.linear.x).toBe(0);
         expect(frames.at(-1)?.deadman).toBe(false);
-        await page.evaluate(() => { (window as any).controllerTestInput.axes[1] = 0; (window as any).controllerTestInput.buttons[0] = true; });
-        await expect.poll(() => commands).toEqual([8]);
-        await page.evaluate(() => { const input = (window as any).controllerTestInput; input.frozen = true; input.timestamp = performance.now(); });
+        await page.evaluate(() => { (window as any).controllerTestInput.axes[1] = 0; });
+        await page.waitForTimeout(150);
+        await page.evaluate(() => { (window as any).controllerTestInput.buttons[2] = true; });
+        await expect.poll(() => commands).toEqual([5]); // 800 ms hold, one input event.
+        await page.evaluate(() => { (window as any).controllerTestInput.buttons[2] = false; (window as any).controllerTestInput.buttons[0] = true; });
+        await expect.poll(() => commands).toEqual([5, 8]);
+        await page.evaluate(() => { (window as any).controllerTestInput.connected = false; });
         await expect(page.getByRole('button', {name: 'Disable controller'})).toHaveCount(0);
         await expect(page.getByRole('alert')).toContainText('Input lost or stale');
+        await page.evaluate(() => {
+            const input = (window as any).controllerTestInput;
+            input.connected = true;
+            input.buttons.fill(false);
+            input.axes[1] = 1;
+        });
+        await page.getByRole('button', {name: 'Controller', exact: true}).click();
+        const live = dialog.getByLabel('Live inputs (test before enabling)');
+        await expect(live).toContainText('Axis 1: 1.00');
+        await page.evaluate(() => { (window as any).controllerTestInput.axes[1] = 0; });
+        await expect(live).toContainText('Axis 1: 0.00');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         const stoppedCount = frames.length;
         await page.waitForTimeout(350);

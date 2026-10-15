@@ -37,7 +37,7 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
             setLearn(null);
         }
     };
-    const controller = useBrowserGamepad({profile, selected, onOwnershipChange, onSample: observeInput,
+    const controller = useBrowserGamepad({profile, selected, onOwnershipChange, onSample: observeInput, preview: open,
         runAction: action => mowerAction('high_level_control', {Command: ACTION_COMMANDS[action]})(),
     });
     const pad = controller.pads.find(p => p.index === selected?.index && p.id === selected.id);
@@ -73,7 +73,7 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
             </>}
             {!controller.enabled && controller.fault && <Tag color="warning" role="alert" style={{whiteSpace: 'normal'}}>{t(`gamepad.faults.${controller.fault}`)}</Tag>}
         </Space>
-        <Drawer title={t('gamepad.title')} open={open} onClose={() => {setOpen(false); setLearn(null);}} width={480}>
+        <Drawer title={t('gamepad.title')} open={open} destroyOnHidden onClose={() => {setOpen(false); setLearn(null);}} width={480}>
             <Space direction="vertical" size="middle" style={{width: '100%'}}>
                 <Typography.Paragraph>{t('gamepad.connectHelp')}</Typography.Paragraph>
                 {typeof navigator.getGamepads !== 'function' && <Alert type="warning" showIcon message={t('gamepad.faults.unsupported')}/>}

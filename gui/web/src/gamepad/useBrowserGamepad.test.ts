@@ -96,7 +96,7 @@ function mount(
     return {hook, runAction, onOwnershipChange};
 }
 
-function enable(hook: ReturnType<typeof mount>['hook']) {
+function enable(hook: {result: {current: ReturnType<typeof useBrowserGamepad>}}) {
     act(() => { hook.result.current.enable(); });
     const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
     socket.open();
@@ -136,6 +136,78 @@ afterEach(() => {
 });
 
 describe('useBrowserGamepad session ownership', () => {
+    it('keeps safety polling active while the configuration preview is hidden', () => {
+        topics.status.data.state_name = 'RECORDING';
+        const onSample = vi.fn();
+        const hook = renderHook(({preview}) => useBrowserGamepad({
+            profile: structuredClone(DEFAULT_PROFILE), selected: {id: 'test pad', index: 0},
+            runAction: async () => {}, onOwnershipChange: vi.fn(), onSample, preview,
+        }), {initialProps: {preview: true}});
+        const socket = enable(hook);
+        hook.rerender({preview: false});
+        const samplesBefore = onSample.mock.calls.length;
+        poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true);
+        poll();
+        setAxis(1, -1);
+        poll(600);
+        expect(parseControl(socket.sent[socket.sent.length - 1]).twist.twist.linear.x).toBe(0.25);
+        expect(onSample).toHaveBeenCalledTimes(samplesBefore);
+        setButton(DEFAULT_PROFILE.buttons.deadman, false);
+        poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(false);
+        act(() => { hook.result.current.disable(); });
+        setAxis(1, 0);
+        hook.rerender({preview: true});
+        poll(100);
+        expect(hook.result.current.pads[0].axes).toEqual([0, 0]);
+        expect(onSample.mock.calls.length).toBeGreaterThan(samplesBefore);
+    });
+
+    it('keeps reading change-only Safari input across enable, cancellation and configuration', () => {
+        topics.status.data.state_name = 'RECORDING';
+        pad = {...pad, timestamp: 864000.001};
+        const onSample = vi.fn();
+        const onOwnershipChange = vi.fn<OwnershipChange>();
+        const hook = renderHook(() => useBrowserGamepad({
+            profile: structuredClone(DEFAULT_PROFILE), selected: {id: 'test pad', index: 0},
+            runAction: async () => {}, onOwnershipChange, onSample,
+        }));
+        poll(1000); // A user pauses in configuration before enabling.
+        expect(onSample).toHaveBeenCalled();
+        expect(FakeWebSocket.instances).toHaveLength(0);
+        const socket = enable(hook);
+        poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true);
+        pad = {...pad, timestamp: 864000.002};
+        poll();
+        setAxis(1, -1);
+        pad = {...pad, timestamp: 864000.003};
+        poll(100);
+        expect(parseControl(socket.sent[socket.sent.length - 1]).twist.twist.linear.x).toBe(0.25);
+        poll(600); // Constant stick and deadman do not produce input changes.
+        expect(hook.result.current.enabled).toBe(true);
+        setButton(DEFAULT_PROFILE.buttons.deadman, false);
+        pad = {...pad, timestamp: 864000.004};
+        poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(false);
+        act(() => { hook.result.current.disable(); });
+        setAxis(1, 0);
+        pad = {...pad, timestamp: 864000.005};
+        poll(100);
+        expect(hook.result.current.pads[0].axes[1]).toBe(0);
+        setAxis(0, 1);
+        pad = {...pad, timestamp: 864000.006};
+        poll(100);
+        expect(hook.result.current.pads[0].axes).toEqual([1, 0]);
+        setAxis(0, 0);
+        pad = {...pad, timestamp: 864000.007};
+        poll(100);
+        expect(hook.result.current.pads[0].axes).toEqual([0, 0]);
+        expect(FakeWebSocket.instances).toHaveLength(1);
+        expect(onOwnershipChange.mock.calls.map(([owns]) => owns)).toEqual([true, false]);
+    });
+
     it('allows HTTP when the browser exposes Gamepad input and still stops on release or API loss', () => {
         Object.defineProperty(window, 'isSecureContext', {configurable: true, value: false});
         topics.status.data.state_name = 'RECORDING';

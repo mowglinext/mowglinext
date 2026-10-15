@@ -3,7 +3,6 @@ import type {TwistStamped} from '../types/ros';
 // Match the existing touch joystick caps. These affect teleop only.
 export const MAX_LINEAR_MPS = 0.25;
 export const MAX_ANGULAR_RAD_S = 0.6;
-export const INPUT_MAX_AGE_MS = 500;
 export const POLL_MAX_GAP_MS = 200;
 export const ACTION_HOLD_MS = 800;
 export const ACTION_COMMANDS = {stop: 8, recordStart: 3, recordFinish: 5, recordCancel: 6} as const;
@@ -70,7 +69,9 @@ export interface ControllerFrame {
 }
 
 /** One explicit browser session. Faults are terminal: create a new driver only on Enable.
- * Gamepad.timestamp is device-input identity, never replaced by poll/callback time.
+ * Gamepad.timestamp is an opaque input-change marker, not a heartbeat. Safari can
+ * use a different origin/unit from performance.now() and update only on changes.
+ * Check its ordering only; polling liveness belongs to the monotonic `now` clock.
  */
 export class ControllerDriver {
     private neutralSeen = false;
@@ -90,7 +91,7 @@ export class ControllerDriver {
         this.lastPoll = now;
         if (this.faulted || gap || !pad || !pad.connected || pad.id !== this.identity.id || pad.index !== this.identity.index ||
             !profileFits(this.profile, pad) || !Number.isFinite(pad.timestamp) || pad.timestamp <= 0 ||
-            pad.timestamp > now + 5 || now - pad.timestamp > INPUT_MAX_AGE_MS || pad.timestamp < this.lastStamp ||
+            pad.timestamp < this.lastStamp ||
             !pad.axes.every(v => Number.isFinite(v) && Math.abs(v) <= 1) ||
             !pad.buttons.every(b => typeof b.pressed === 'boolean' && Number.isFinite(b.value) && b.value >= 0 && b.value <= 1)) {
             this.faulted = true;

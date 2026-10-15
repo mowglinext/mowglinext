@@ -1,6 +1,6 @@
 import {beforeEach, describe, expect, it} from 'vitest';
 import {
-    ACTION_COMMANDS, ACTION_HOLD_MS, ControllerDriver, DEFAULT_PROFILE, INPUT_MAX_AGE_MS,
+    ACTION_COMMANDS, ACTION_HOLD_MS, ControllerDriver, DEFAULT_PROFILE,
     MAX_ANGULAR_RAD_S, MAX_LINEAR_MPS, POLL_MAX_GAP_MS, loadProfile, profileFits,
     saveProfile, validProfile, type ControllerContext, type ControllerProfile, type ControllerSample,
 } from './controller';
@@ -64,6 +64,40 @@ describe('controller profile validation and storage', () => {
 });
 
 describe('ControllerDriver', () => {
+    it.each([12.345, 864000.25])('accepts a change-only timestamp in an independent clock domain (%s)', timestamp => {
+        const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        const recording = {...idle, stateName: 'RECORDING'};
+        let now = 1000;
+        const step = (overrides: Partial<ControllerSample> = {}) => {
+            now += 50;
+            return driver.step(sample({timestamp, ...overrides}), now, recording);
+        };
+        expect(step().state).toBe('releaseControls');
+        // The operator can leave centered controls unchanged before enabling/driving.
+        for (let i = 0; i < 20; i++) expect(step().state).toBe('ready');
+        expect(step({timestamp: timestamp + 0.001, buttons: buttonsDown('deadman')}).deadman).toBe(true);
+        const held = {timestamp: timestamp + 0.002, axes: [0, -1], buttons: buttonsDown('deadman')};
+        for (let i = 0; i < 25; i++) {
+            expect(step(held)).toMatchObject({state: 'driving', deadman: true, linear: MAX_LINEAR_MPS});
+        }
+        expect(step({timestamp: timestamp + 0.003, axes: [0, -1]})).toMatchObject({deadman: false, linear: 0, angular: 0});
+        expect(step({timestamp: timestamp + 0.004, connected: false}).state).toBe('inputLost');
+        expect(step({timestamp: timestamp + 0.005}).state).toBe('inputLost');
+    });
+
+    it.each(['recordStart', 'recordFinish', 'recordCancel'] as const)('recognizes a held %s when the timestamp changes only on input events', action => {
+        const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        const context = {...idle, stateName: action === 'recordStart' ? 'IDLE' : 'RECORDING'};
+        let now = 1000;
+        driver.step(sample({timestamp: 10}), now, context);
+        driver.step(sample({timestamp: 10}), now += 50, context);
+        const held = sample({timestamp: 10.001, buttons: buttonsDown(action)});
+        expect(driver.step(held, now += 50, context).state).toBe('holding');
+        for (let i = 0; i < 15; i++) expect(driver.step(held, now += 50, context).action).toBeUndefined();
+        expect(driver.step(held, now += 50, context).action).toBe(action);
+        expect(driver.step(held, now += 50, context).action).toBeUndefined();
+    });
+
     it('requires neutral input, scales and caps axes, applies the deadzone and inversion', () => {
         const profile: ControllerProfile = {
             ...DEFAULT_PROFILE, invertLinear: false, invertAngular: true, deadzone: 0.2, speedScale: 0.5,
@@ -172,11 +206,12 @@ describe('ControllerDriver', () => {
         expect(guarded.step(startInManual, now + 50, {...idle, stateName: 'MANUAL_MOWING'})).toMatchObject({state: 'ready'});
     });
 
-    it('fails terminally on stale, zero, future, or regressed device timestamps', () => {
+    it('fails terminally on invalid, zero or regressed device timestamps', () => {
         const invalid: Array<[string, ControllerSample, number]> = [
-            ['stale', sample({timestamp: 1000 - INPUT_MAX_AGE_MS - 1}), 1000],
+            ['NaN', sample({timestamp: NaN}), 1000],
+            ['infinite', sample({timestamp: Infinity}), 1000],
+            ['negative', sample({timestamp: -1}), 1000],
             ['zero', sample({timestamp: 0}), 1000],
-            ['future', sample({timestamp: 1006}), 1000],
         ];
         for (const [name, pad, now] of invalid) {
             const driver = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
