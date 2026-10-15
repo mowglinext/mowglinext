@@ -58,7 +58,7 @@ const BLADE_RPM_MAX = 10000;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: number | boolean | null) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
     onReset?: (key: string) => void;
@@ -387,7 +387,7 @@ export const MowingSection: React.FC<Props> = ({
                                 </Col>
                                 <Col xs={12}>
                                     <Form.Item label={fieldLabel("num_headland_passes", t("settingsMowing.headlandPasses"))} tooltip={t("settingsMowing.headlandPassesTooltip")}>
-                                        <Select
+                                        <Select<number>
                                             value={currentHeadlandPasses}
                                             onChange={(v) => onChange("num_headland_passes", v)}
                                             style={{ width: "100%" }}
@@ -405,7 +405,7 @@ export const MowingSection: React.FC<Props> = ({
                                 </Col>
                                 <Col xs={12}>
                                     <Form.Item htmlFor="setting-connector_max_headland_passes" data-setting-key="connector_max_headland_passes" label={fieldLabel("connector_max_headland_passes", t("settingsMowing.connectorMaxHeadlandPasses"))} tooltip={t("settingsMowing.connectorMaxHeadlandPassesTooltip")}>
-                                        <Select id="setting-connector_max_headland_passes"
+                                        <Select<number> id="setting-connector_max_headland_passes"
                                             value={values.connector_max_headland_passes ?? 0}
                                             onChange={(v) => onChange("connector_max_headland_passes", v)}
                                             style={{ width: "100%" }}
@@ -453,7 +453,7 @@ export const MowingSection: React.FC<Props> = ({
                                 </Col>
                                 <Col xs={12}>
                                     <Form.Item htmlFor="setting-mow_direction" data-setting-key="mow_direction" label={fieldLabel("mow_direction", t("settingsMowing.mowDirection"))} tooltip={t("settingsMowing.mowDirectionTooltip")}>
-                                        <Select id="setting-mow_direction"
+                                        <Select<number> id="setting-mow_direction"
                                             value={values.mow_direction ?? 0}
                                             onChange={(v) => onChange("mow_direction", v)}
                                             style={{ width: "100%" }}

@@ -26,7 +26,7 @@ interface SourcetableStation {
 
 interface Props {
   values: SettingsValues;
-  onChange: (key: string, value: any) => void;
+  onChange: (key: string, value: string | number | boolean | null) => void;
 }
 
 // NtripSection: pick a provider, then a base station (from a map or list). The

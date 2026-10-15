@@ -10,7 +10,7 @@ const { Text, Paragraph } = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: number | null) => void;
 };
 
 const RAIN_MODES = [
