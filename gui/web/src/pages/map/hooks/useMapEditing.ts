@@ -1016,7 +1016,7 @@ export function useMapEditing({
         }
 
         const result = difference(
-            featureCollection([keepFeat as any, cutFeat as any])
+            featureCollection([keepFeat, cutFeat])
         );
         if (!result || result.geometry.type !== "Polygon") {
             notification.error({
@@ -1060,7 +1060,7 @@ export function useMapEditing({
         }
         setSplitTargetId(targetId);
         notification.info({message: t('mapEditing.drawLineAcrossArea')});
-        drawRef.current?.changeMode("split_line" as any);
+        drawRef.current?.changeMode("split_line");
     }, [selectedFeatureIds, features, notification, drawRef, t]);
 
     // -----------------------------------------------------------------------

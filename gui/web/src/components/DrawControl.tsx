@@ -7,18 +7,28 @@ import type {RefObject} from "react";
 import DirectSelectWithBoxMode from '../modes/DirectSelectWithBoxMode';
 import SplitLineMode from '../modes/SplitLineMode';
 
+type DrawEvents = {
+    'draw.create': {features: GeoJSON.Feature[]};
+    'draw.update': {features: GeoJSON.Feature[]; action: string};
+    'draw.combine': {createdFeatures: GeoJSON.Feature[]; deletedFeatures: GeoJSON.Feature[]};
+    'draw.delete': {features: GeoJSON.Feature[]};
+    'draw.selectionchange': {features: GeoJSON.Feature[]};
+    'feature.open': {feature?: GeoJSON.Feature};
+};
+type DrawHandlers = {[Event in keyof DrawEvents]: (event: DrawEvents[Event]) => void};
+
 type DrawControlProps = ConstructorParameters<typeof MapboxDraw>[0] & {
     position?: ControlPosition;
     features?: GeoJSON.Feature[];
     editMode?: boolean;
     drawRef?: RefObject<MapboxDraw | null>;
 
-    onCreate: (evt: { features: GeoJSON.Feature[] }) => void;
-    onUpdate: (evt: { features: GeoJSON.Feature[]; action: string }) => void;
-    onCombine: (evt: { createdFeatures: GeoJSON.Feature[]; deletedFeatures: GeoJSON.Feature[] }) => void;
-    onDelete: (evt: { features: GeoJSON.Feature[] }) => void;
-    onSelectionChange: (evt: { features: GeoJSON.Feature[] }) => void;
-    onOpenDetails: (evt: { feature?: GeoJSON.Feature }) => void;
+    onCreate: (evt: DrawEvents['draw.create']) => void;
+    onUpdate: (evt: DrawEvents['draw.update']) => void;
+    onCombine: (evt: DrawEvents['draw.combine']) => void;
+    onDelete: (evt: DrawEvents['draw.delete']) => void;
+    onSelectionChange: (evt: DrawEvents['draw.selectionchange']) => void;
+    onOpenDetails: (evt: DrawEvents['feature.open']) => void;
 };
 
 export default function DrawControl(props: DrawControlProps) {
@@ -60,7 +70,7 @@ export default function DrawControl(props: DrawControlProps) {
     // Keep stable references to the bound listeners so cleanup can map.off()
     // exactly what was map.on()'d. Without this, StrictMode's mount/unmount/
     // remount cycle stacks duplicate listeners → each draw.* event fires twice.
-    const drawHandlersRef = useRef<Record<string, (e: any) => void>>({});
+    const drawHandlersRef = useRef<DrawHandlers | null>(null);
     const mp = useControl<MapboxDraw>(
         () => new MapboxDraw({
             ...drawOptions,
@@ -72,24 +82,24 @@ export default function DrawControl(props: DrawControlProps) {
         }),
         ({map}: {map: MapRef}) => {
             rawMapRef.current = map.getMap();
-            const handlers: Record<string, (e: any) => void> = {
-                'draw.create': (e: any) => onCreateRef.current(e),
-                'draw.update': (e: any) => onUpdateRef.current(e),
-                'draw.combine': (e: any) => onCombineRef.current(e),
-                'draw.delete': (e: any) => onDeleteRef.current(e),
-                'draw.selectionchange': (e: any) => onSelectionChangeRef.current(e),
-                'feature.open': (e: any) => onOpenDetailsRef.current(e),
+            const handlers: DrawHandlers = {
+                'draw.create': (e) => onCreateRef.current(e),
+                'draw.update': (e) => onUpdateRef.current(e),
+                'draw.combine': (e) => onCombineRef.current(e),
+                'draw.delete': (e) => onDeleteRef.current(e),
+                'draw.selectionchange': (e) => onSelectionChangeRef.current(e),
+                'feature.open': (e) => onOpenDetailsRef.current(e),
             };
             drawHandlersRef.current = handlers;
             for (const [event, handler] of Object.entries(handlers)) {
-                map.on(event as any, handler);
+                map.on(event, handler);
             }
         },
         ({map}: {map: MapRef}) => {
-            for (const [event, handler] of Object.entries(drawHandlersRef.current)) {
-                map.off(event as any, handler);
+            for (const [event, handler] of Object.entries(drawHandlersRef.current ?? {})) {
+                map.off(event, handler);
             }
-            drawHandlersRef.current = {};
+            drawHandlersRef.current = null;
             rawMapRef.current = null;
         }
         ,
