@@ -1,6 +1,8 @@
-import {useCallback, useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import type {TwistStamped} from "../../../types/ros.ts";
 import type {IJoystickUpdateEvent} from "react-joystick-component/build/lib/Joystick";
+
+import {MAX_LINEAR_MPS, MAX_ANGULAR_RAD_S} from "../../../gamepad/controller";
 
 const JOY_SEND_INTERVAL_MS = 100;
 // How long a sustained non-MANUAL_MOWING state must persist before we tear
@@ -8,20 +10,16 @@ const JOY_SEND_INTERVAL_MS = 100;
 // blip emits one non-MANUAL tick) must NOT collapse manual mode and kill the
 // joystick socket mid-drive — only a genuine, sustained exit should.
 const MANUAL_EXIT_DEBOUNCE_MS = 1200;
-// Teleop velocity caps — raw joystick values are in [-1, 1] (normalized by
-// react-joystick-component). Multiplied at this layer (before twist_mux) so
-// Nav2 autonomous speeds are unaffected. Tuned for precise manual control:
-// at 1.0 m/s the robot was too twitchy on grass.
-const MAX_LINEAR_MPS = 0.25;
-const MAX_ANGULAR_RAD_S = 0.6;
-
 interface UseManualModeOptions {
     mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
     joyStream: { sendJsonMessage: (msg: unknown) => void; start: (uri: string) => void };
     stateName?: string;
+    controllerOwnsInput?: boolean;
 }
 
-export function useManualMode({mowerAction, joyStream, stateName}: UseManualModeOptions) {
+export function useManualMode({mowerAction, joyStream, stateName, controllerOwnsInput = false}: UseManualModeOptions) {
+    const controllerOwnsRef = useRef(controllerOwnsInput);
+    useLayoutEffect(() => { controllerOwnsRef.current = controllerOwnsInput; });
     const [manualMode, setManualMode] = useState(() => stateName === "MANUAL_MOWING");
     const exitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -53,7 +51,7 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
     const startJoyInterval = useCallback(() => {
         clearInterval(joyIntervalRef.current);
         joyIntervalRef.current = setInterval(() => {
-            if (lastTwistRef.current) {
+            if (!controllerOwnsRef.current && lastTwistRef.current) {
                 joyStream.sendJsonMessage(lastTwistRef.current);
             }
         }, JOY_SEND_INTERVAL_MS);
@@ -100,6 +98,7 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
     };
 
     const handleJoyMove = useCallback((event: IJoystickUpdateEvent) => {
+        if (controllerOwnsRef.current) return;
         const linear = (event.y ?? 0) * MAX_LINEAR_MPS;
         const angular = (event.x ?? 0) * -1 * MAX_ANGULAR_RAD_S;
         const msg: TwistStamped = {
@@ -122,6 +121,15 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
         stopJoyInterval();
         joyStream.sendJsonMessage(msg);
     }, [joyStream, stopJoyInterval]);
+
+    // Revoke the touch repeater before controller polling starts. The backend also
+    // excludes every legacy publisher while a controller session owns teleop.
+    useEffect(() => {
+        if (controllerOwnsInput) {
+            lastTwistRef.current = null;
+            stopJoyInterval();
+        }
+    }, [controllerOwnsInput, stopJoyInterval]);
 
     return {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop};
 }

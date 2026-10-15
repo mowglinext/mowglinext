@@ -156,5 +156,8 @@ export const useWS = <T>(
         teardown();
     };
 
-    return {start, stop, sendJsonMessage: ws.sendJsonMessage};
+    // Teleop must never queue a movement while disconnected and replay it on
+    // reconnect (including after a controller ownership handover).
+    const sendJsonMessage = (msg: unknown) => ws.sendJsonMessage(msg, false);
+    return {start, stop, sendJsonMessage};
 };
