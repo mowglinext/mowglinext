@@ -56,15 +56,19 @@ valid polygon was saved. Check the resulting map.
 ## Stops and ownership
 
 - Poll current `navigator.getGamepads()` state every 50 ms; never feed controller
-  values into the touch joystick's cached-value repeater.
+  values into the touch joystick's cached-value repeater. The configuration
+  preview refreshes only while its panel is open; closing it does not pause
+  input reads or safety checks, and its hidden form is unmounted.
 - Missing/disconnected device, malformed inputs, changed device identity,
-  invalid profile, browser blur/hide/page exit, >200 ms poll gap or >500 ms old
-  device timestamp revoke the session. Zero, backward or future timestamps fail
-  closed. Some browser/device combinations update timestamps only when values
-  change or expose no useful timestamp: they may stop while a stick is held.
-  They must not be used for driving unless this test passes; no receipt-time
-  fallback pretends a cached input is new hardware data. See the
-  [Gamepad timestamp contract](https://www.w3.org/TR/gamepad/#dom-gamepad-timestamp).
+  invalid profile, browser blur/hide/page exit or >200 ms poll gap revoke the
+  session. Nonfinite, zero, negative or regressed device timestamps fail closed.
+  `Gamepad.timestamp` marks input updates, not a periodic heartbeat: WebKit can
+  use a different clock origin/unit from `performance.now()` and update it only
+  when values change. Its ordering is checked independently from the browser's
+  monotonic polling clock; a centered or steadily held control does not expire
+  merely because its values remain unchanged. No timestamp is replaced with
+  callback/poll time. See the [Gamepad timestamp contract](https://www.w3.org/TR/gamepad/#dom-gamepad-timestamp)
+  and [WebKit's timestamp implementation](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/Modules/gamepad/Gamepad.h).
 - Loss of live GUI status delivery (>2.5 s on the monotonic browser clock),
   emergency status or an outstanding action suppresses motion and requires neutral rearming. This checks delivery
   liveness, not physical acquisition provenance. Robot-side interlocks remain
@@ -95,11 +99,22 @@ robot communication failure cannot guarantee immediate blade shutdown; zero
 velocity alone does not switch off the Manual Mowing blade. The controller is
 not a replacement for the physical emergency stop or firmware interlocks.
 
+The browser API does not expose an independent physical input heartbeat. If the
+browser/OS silently returns a frozen snapshot with `connected: true`, JavaScript
+cannot distinguish that from a legitimately held control. Disconnect events,
+failed/missing reads, invalid/regressed input, focus loss, polling interruption
+and network loss are detected; a silent native input freeze is not guaranteed to
+be detected. Physical controller-disconnect tests remain required for each
+client/browser/controller combination. Browser input alone is not a safety-rated
+deadman or emergency stop.
+
 ## Validation and physical acceptance
 
 Automated coverage uses synthetic browser input, mocked robot commands and Go
 WebSocket/provider tests. It does not prove any physical controller, transport,
-blade or stopping-distance behavior.
+blade or stopping-distance behavior. GUI CI runs both controller browser specs serially, including
+change-only WebKit-style timestamps and configuration/drive handoff. The polling
+deadline remains active in these tests.
 
 **HARDWARE_PENDING** — software prerequisites and the procedure are defined;
 physical USB/Bluetooth acceptance is outstanding. Baseline: record this PR's
@@ -121,7 +136,7 @@ least two controller families:
 2. Verify no motion on page load, enable with sticks deflected/deadman held,
    reconnect, controller selection, second-tab takeover attempt or configuration.
 3. Drive in recording mode; release deadman, unplug USB, power off Bluetooth,
-   freeze input, background the page, navigate away and interrupt the client
+   interrupt browser polling, background the page, navigate away and interrupt the client
    network. Observe the command stream become zero/expire and wheels stop;
    measure command and physical stop latency separately. Software targets are
    the deadlines above plus the downstream watchdog/scheduling latency, not a
@@ -133,7 +148,9 @@ least two controller families:
    loss; verify STOP is accepted and wheels and blade stop. A failed STOP or
    continuing blade fails acceptance; do not proceed to normal use.
 6. Confirm fresh status/interlocks, physical emergency stop and touch controls
-   still work after controller shutdown. Repeat steady held-stick driving to
-   confirm the browser/device reports meaningful advancing input timestamps.
+   still work after controller shutdown. Leave centered controls unchanged before
+   enabling, hold a steady stick for several seconds and complete each 0.8-second
+   recording gesture without further input changes. None may fail merely because
+   the browser updates timestamps only when values change.
 
 Keep observed timings and pass/fail results with the exact baseline above.
