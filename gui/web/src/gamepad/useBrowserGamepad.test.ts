@@ -138,6 +138,29 @@ afterEach(() => {
 });
 
 describe('useBrowserGamepad session ownership', () => {
+    it('updates device availability with settings closed without streaming stick previews or reconnecting', () => {
+        const onSample = vi.fn();
+        const hook = renderHook(() => useBrowserGamepad({
+            profile: structuredClone(DEFAULT_PROFILE), selected: {id: 'test pad', index: 0},
+            runAction: async () => {}, onOwnershipChange: vi.fn(), onSample, preview: false,
+        }));
+        expect(hook.result.current.pads).toHaveLength(1);
+        const preview = hook.result.current.pads;
+        setAxis(1, -1);
+        poll(150);
+        expect(hook.result.current.pads).toBe(preview);
+        expect(preview[0].axes).toEqual([0, 0]);
+        pad = {...pad, connected: false};
+        poll();
+        expect(hook.result.current.pads).toEqual([]);
+        pad = {...pad, connected: true};
+        poll();
+        expect(hook.result.current.pads).toHaveLength(1);
+        expect(onSample).not.toHaveBeenCalled();
+        expect(FakeWebSocket.instances).toHaveLength(0);
+        expect(hook.result.current.enabled).toBe(false);
+    });
+
     it.each([
         {change: {connected: false}, reason: 'disconnected'},
         {change: {id: 'replacement'}, reason: 'identityChanged'},
@@ -348,7 +371,7 @@ describe('useBrowserGamepad session ownership', () => {
         poll(2300);
         expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(false);
         expect(parseControl(socket.sent[socket.sent.length - 1]).twist.twist.linear.x).toBe(0);
-        expect(hook.result.current.state).toBe('waitingForMode');
+        expect(hook.result.current.state).toBe('statusLost');
         topics.status.lastMessageAt = performance.now();
         poll();
         expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(false);

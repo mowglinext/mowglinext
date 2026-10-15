@@ -1,10 +1,11 @@
-import {useEffect, useRef, useState} from 'react';
-import {Alert, App, Button, Drawer, Form, Select, Slider, Space, Switch, Tag, Typography} from 'antd';
+import {useRef, useState} from 'react';
+import {Alert, App, Button, Drawer, Form, Select, Slider, Space, Switch, Tag, Typography, theme} from 'antd';
 import {ControlOutlined} from '@ant-design/icons';
 import {useTranslation} from 'react-i18next';
-import {focusInputLoss, useBrowserGamepad} from './useBrowserGamepad';
+import {useBrowserGamepad} from './useBrowserGamepad';
 import {
-    ACTION_COMMANDS, BUTTON_BINDINGS, DEFAULT_PROFILE, POLL_MAX_GAP_MS, controllerKey, loadProfile, profileFits, saveProfile, validProfile,
+    ACTION_COMMANDS, BUTTON_BINDINGS, DEFAULT_PROFILE, MAX_LINEAR_MPS, POLL_MAX_GAP_MS, controllerKey, loadProfile, loadSelectedControllerKey,
+    profileFits, saveProfile, saveSelectedControllerKey, validProfile,
     type ButtonBinding, type ControllerIdentity, type ControllerProfile, type ControllerSample,
 } from './controller';
 
@@ -15,15 +16,30 @@ interface Props {
 export function BrowserController({mowerAction, onOwnershipChange}: Props) {
     const {t} = useTranslation();
     const {message} = App.useApp();
+    const {token} = theme.useToken();
     const [open, setOpen] = useState(false);
-    const activationFocus = useRef<HTMLButtonElement | HTMLAnchorElement>(null);
-    const enableRequested = useRef(false);
-    const [drawerClosed, setDrawerClosed] = useState(false);
+    const [drawerClosed, setDrawerClosed] = useState(true);
     const [selected, setSelected] = useState<ControllerIdentity | null>(null);
+    const selectionExplicit = useRef(false);
+    const [preferredController, setPreferredController] = useState(loadSelectedControllerKey);
     const [profile, setProfile] = useState<ControllerProfile>(() => structuredClone(DEFAULT_PROFILE));
     const [profileState, setProfileState] = useState<'default' | 'saved' | 'unsaved'>('default');
     const [learn, setLearn] = useState<ButtonBinding | 'linearAxis' | 'angularAxis' | null>(null);
     const learnNeutral = useRef(false);
+    const applySelection = (device: ControllerSample) => {
+        setSelected({index: device.index, id: device.id});
+        const saved = loadProfile(controllerKey(device));
+        setProfile(saved ?? structuredClone(DEFAULT_PROFILE));
+        // Unknown layouts require the operator to test and save the mapping first.
+        setProfileState(saved ? 'saved' : device.mapping === 'standard' ? 'default' : 'unsaved');
+    };
+    const observeInventory = (devices: ControllerSample[]) => {
+        if (selectionExplicit.current || !preferredController) return;
+        const matches = devices.filter(device => controllerKey(device) === preferredController);
+        // Gamepad IDs need not be unique. Ambiguous devices need an explicit choice.
+        if (matches.length !== 1) { setSelected(null); return; }
+        if (selected?.index !== matches[0].index || selected.id !== matches[0].id) applySelection(matches[0]);
+    };
     const observeInput = (devices: ControllerSample[]) => {
         const pad = devices.find(p => p.index === selected?.index && p.id === selected.id);
         if (!learn || !pad) return;
@@ -40,86 +56,79 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
             setLearn(null);
         }
     };
-    const controller = useBrowserGamepad({profile, selected, onOwnershipChange, onSample: observeInput, preview: open,
+    const controller = useBrowserGamepad({profile, selected, onOwnershipChange, onSample: observeInput, onInventoryChange: observeInventory, preview: open,
         runAction: action => mowerAction('high_level_control', {Command: ACTION_COMMANDS[action]})(),
     });
-    const enableController = controller.enable;
-    const revokeInput = controller.revokeInput;
-    useEffect(() => {
-        const suspend = (event: Event) => {
-            if (!enableRequested.current) return;
-            if ((event.type === 'gamepaddisconnected' || event.type === 'gamepadconnected') &&
-                (event as GamepadEvent).gamepad.index !== selected?.index) return;
-            enableRequested.current = false;
-            revokeInput(event.type === 'blur' ? focusInputLoss('pendingBlur') : {reason: event.type === 'pagehide' ? 'pageExit' :
-                event.type === 'gamepaddisconnected' ? 'disconnected' : event.type === 'gamepadconnected' ? 'controllerChanged' : 'pageHidden'});
-        };
-        window.addEventListener('blur', suspend);
-        window.addEventListener('pagehide', suspend);
-        document.addEventListener('visibilitychange', suspend);
-        window.addEventListener('gamepaddisconnected', suspend);
-        window.addEventListener('gamepadconnected', suspend);
-        return () => {
-            window.removeEventListener('blur', suspend);
-            window.removeEventListener('pagehide', suspend);
-            document.removeEventListener('visibilitychange', suspend);
-            window.removeEventListener('gamepaddisconnected', suspend);
-            window.removeEventListener('gamepadconnected', suspend);
-        };
-    }, [revokeInput, selected?.index]);
-    useEffect(() => {
-        if (drawerClosed && enableRequested.current) {
-            enableRequested.current = false;
-            // rc-drawer restores focus AFTER calling afterOpenChange(false).
-            // Start in the subsequent commit, after restoration and teardown,
-            // so that neither can interrupt a newly opened control session.
-            // Safari taps need not focus buttons; give this explicit activation
-            // a stable target instead of inheriting a destroyed form's focus.
-            // This is done only once. enable() still validates actual page focus.
-            activationFocus.current?.focus({preventScroll: true});
-            enableController();
-        }
-    }, [drawerClosed, enableController]);
     const pad = controller.pads.find(p => p.index === selected?.index && p.id === selected.id);
     const configured = !!pad && profileFits(profile, pad) && profileState !== 'unsaved';
-    const update = (next: ControllerProfile) => { setProfile(next); setProfileState('unsaved'); };
+    const update = (next: ControllerProfile) => { selectionExplicit.current = true; setProfile(next); setProfileState('unsaved'); };
     const select = (index: number) => {
         controller.disable();
         setLearn(null);
         const device = controller.pads.find(p => p.index === index);
         if (!device) { setSelected(null); return; }
-        setSelected({index, id: device.id});
-        const saved = loadProfile(controllerKey(device));
-        setProfile(saved ?? structuredClone(DEFAULT_PROFILE));
-        // Unknown layouts require the operator to test and save the mapping first.
-        setProfileState(saved ? 'saved' : device.mapping === 'standard' ? 'default' : 'unsaved');
+        selectionExplicit.current = true;
+        applySelection(device);
+        const key = controllerKey(device);
+        setPreferredController(key);
+        try { saveSelectedControllerKey(key); }
+        catch { void message.warning(t('gamepad.selectionSaveFailed')); }
     };
-    const bind = (key: NonNullable<typeof learn>) => { learnNeutral.current = false; setLearn(key); };
+    const bind = (key: NonNullable<typeof learn>) => { selectionExplicit.current = true; learnNeutral.current = false; setLearn(key); };
     const save = () => {
         if (!pad || !profileFits(profile, pad)) return;
+        selectionExplicit.current = true;
         try { saveProfile(controllerKey(pad), profile); setProfileState('saved'); }
         catch { void message.error(t('gamepad.saveFailed')); }
     };
-    const openSettings = () => { enableRequested.current = false; setDrawerClosed(false); controller.disable(); setOpen(true); };
-    const enable = () => { enableRequested.current = true; setDrawerClosed(false); setLearn(null); setOpen(false); };
+    const openSettings = () => { setDrawerClosed(false); controller.disable(); setOpen(true); };
+    const closeSettings = () => { setLearn(null); setOpen(false); };
     const inputLossText = controller.inputLoss ? t(`gamepad.inputLossReasons.${controller.inputLoss.reason}`, {
         ...controller.inputLoss, pollGapMs: Math.round(controller.inputLoss.pollGapMs ?? 0), limit: POLL_MAX_GAP_MS,
     }) : null;
-    const buttonOptions = pad?.buttons.map((_, value) => ({value, label: t('gamepad.buttonIndex', {index: value})})) ?? [];
+    const buttonLabel = (index: number) => {
+        const label = t('gamepad.buttonIndex', {index});
+        const names = ['A / ×', 'B / ○', 'X / □', 'Y / △', 'LB / L1', 'RB / R1', 'LT / L2', 'RT / R2'];
+        return pad?.mapping === 'standard' && names[index] ? `${names[index]} (${label})` : label;
+    };
+    const deadman = buttonLabel(profile.buttons.deadman);
+    const buttonOptions = pad?.buttons.map((_, value) => ({value, label: buttonLabel(value)})) ?? [];
     const axisOptions = pad?.axes.map((_, value) => ({value, label: t('gamepad.axisIndex', {index: value})})) ?? [];
     return <>
-        <Space wrap style={{position: 'absolute', top: 12, left: 16, zIndex: 20, maxWidth: 'calc(100% - 32px)'}}>
-            <Button ref={activationFocus} aria-label={t('gamepad.title')} icon={<ControlOutlined aria-hidden/>} onClick={openSettings}>{t('gamepad.title')}</Button>
+        <Space direction="vertical" size={4} style={{position: 'absolute', top: 12, left: 16, zIndex: 20,
+            maxWidth: 'calc(100% - 32px)', padding: 8, borderRadius: token.borderRadiusLG,
+            background: token.colorBgElevated, boxShadow: token.boxShadowSecondary}}>
+            <Space wrap>
+                <Button size="large" aria-label={t('gamepad.title')} icon={<ControlOutlined aria-hidden/>} onClick={openSettings}>{t('gamepad.title')}</Button>
+                {selected && <Button size="large" type={controller.enabled ? 'default' : 'primary'} danger={controller.enabled}
+                    disabled={open || !drawerClosed || (!controller.enabled && (!configured || typeof navigator.getGamepads !== 'function'))}
+                    onClick={event => {
+                        if (controller.enabled) { controller.disable(); return; }
+                        // An explicit tap on stable page content also requests native
+                        // WKContentView focus on iPad. Never activate from Drawer callbacks
+                        // or unmount this focused button when the session state changes.
+                        event.currentTarget.focus({preventScroll: true});
+                        selectionExplicit.current = true;
+                        controller.enable();
+                    }}>{t(controller.enabled ? 'gamepad.disable' : 'gamepad.enable')}</Button>}
+            </Space>
+            {selected && <Typography.Text type="secondary" ellipsis style={{maxWidth: 320}}>
+                {selected.index + 1}: {selected.id}
+            </Typography.Text>}
+            {!selected && preferredController && <Typography.Text type="secondary">{t('gamepad.chooseController')}</Typography.Text>}
+            {selected && !controller.enabled && !controller.fault && <Typography.Text type="secondary">
+                {t(configured ? 'gamepad.enableHelp' : 'gamepad.setupRequired')}
+            </Typography.Text>}
             {controller.enabled && <>
-                <Tag role="status" style={{whiteSpace: 'normal'}}>{t(`gamepad.states.${controller.state}`)}</Tag>
-                <Button danger onClick={controller.disable}>{t('gamepad.disable')}</Button>
+                <Typography.Text role="status">{t(`gamepad.states.${controller.state}`, {deadman})}</Typography.Text>
+                <Typography.Text type="secondary">{t('gamepad.driveSummary', {deadman, stop: buttonLabel(profile.buttons.stop), speed: (MAX_LINEAR_MPS * profile.speedScale).toFixed(2)})}</Typography.Text>
             </>}
-            {!controller.enabled && controller.fault && <Tag color="warning" role="alert" style={{whiteSpace: 'normal'}}>
-                {t(`gamepad.faults.${controller.fault}`)} {inputLossText}
+            {!controller.enabled && controller.fault && <Tag color="warning" role="alert" style={{whiteSpace: 'normal', margin: 0}}>
+                {inputLossText ?? t(`gamepad.faults.${controller.fault}`)} {t('gamepad.retryHelp')}
             </Tag>}
         </Space>
         <Drawer title={t('gamepad.title')} open={open} destroyOnHidden afterOpenChange={visible => setDrawerClosed(!visible)}
-            onClose={() => {enableRequested.current = false; setOpen(false); setLearn(null);}} width={480}>
+            onClose={closeSettings} width={480} footer={<Button size="large" type="primary" block onClick={closeSettings}>{t('gamepad.done')}</Button>}>
             <Space direction="vertical" size="middle" style={{width: '100%'}}>
                 <Typography.Paragraph>{t('gamepad.connectHelp')}</Typography.Paragraph>
                 {typeof navigator.getGamepads !== 'function' && <Alert type="warning" showIcon message={t('gamepad.faults.unsupported')}/>}
@@ -177,9 +186,7 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
                 {controller.fault && <Alert type="warning" showIcon message={t(`gamepad.faults.${controller.fault}`)}/>}
                 {controller.inputLoss && <Alert type="warning" showIcon message={inputLossText}
                     description={<Typography.Text code copyable>{JSON.stringify(controller.inputLoss)}</Typography.Text>}/>}
-                <Button type="primary" block onClick={enable} disabled={!configured || !!learn || typeof navigator.getGamepads !== 'function'}>
-                    {t('gamepad.enable')}
-                </Button>
+                <Typography.Paragraph type="secondary">{t('gamepad.enableHelp')}</Typography.Paragraph>
             </Space>
         </Drawer>
     </>;

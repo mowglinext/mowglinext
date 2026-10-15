@@ -19,6 +19,7 @@ interface FixtureState {
     frames: GamepadFrame[];
     commands: number[];
     pageErrors: string[];
+    status: {state: number; state_name: string; emergency: boolean};
 }
 
 async function setup(page: Page, options: InputOptions = {}): Promise<FixtureState> {
@@ -55,17 +56,15 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
         denyProfileStorage: options.denyProfileStorage ?? false,
     });
 
-    const state: FixtureState = {opened: 0, closed: 0, frames: [], commands: [], pageErrors: []};
+    const state: FixtureState = {opened: 0, closed: 0, frames: [], commands: [], pageErrors: [],
+        status: {state: 3, state_name: 'RECORDING', emergency: false}};
     page.on('pageerror', error => state.pageErrors.push(error.message));
     await installMockBackend(page, {
         name: 'browser-controller-failures',
         rest: {'/api/settings/yaml': {datum_lat: 48.1, datum_lon: 11.5}},
         topics: {emergency: {active_emergency: false, latched_emergency: false}},
         topicSequences: {
-            highLevelStatus: [
-                {state: 3, state_name: 'RECORDING', emergency: false},
-                {state: 3, state_name: 'RECORDING', emergency: false},
-            ],
+            highLevelStatus: [state.status, state.status],
         },
     }, {liveStatusIntervalMs: 200});
     await page.route('**/api/mowglinext/call/high_level_control', async route => {
@@ -101,6 +100,13 @@ async function selectController(page: Page, dialog: Awaited<ReturnType<typeof op
     await page.getByText('1: Fixture standard controller', {exact: true}).click();
 }
 
+async function finishSettings(page: Page, dialog: Awaited<ReturnType<typeof openSettings>>) {
+    await expect(dialog.getByRole('button', {name: 'Done', exact: true})).toBeEnabled();
+    await dialog.getByRole('button', {name: 'Done', exact: true}).click();
+    await expect(dialog).not.toBeVisible();
+    return page.getByRole('button', {name: 'Enable for this robot', exact: true});
+}
+
 function expectClean(state: FixtureState) {
     expect(state.pageErrors).toEqual([]);
     expect(state.commands).toEqual([]);
@@ -111,8 +117,9 @@ test('an exposed Gamepad API can enable outside a secure context and stops on de
     expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
     const dialog = await openSettings(page);
     await selectController(page, dialog);
-    const enable = dialog.getByRole('button', {name: 'Enable for this robot', exact: true});
+    const enable = await finishSettings(page, dialog);
     await expect(enable).toBeEnabled();
+    expect(state.opened).toBe(0);
     await enable.click();
     await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toBeVisible();
     await expect.poll(() => state.frames.length).toBeGreaterThan(2);
@@ -135,12 +142,13 @@ test('a blocked or missing Gamepad API reports the problem without opening a con
     const dialog = await openSettings(page);
 
     await expect(dialog.getByText('Controller input is unavailable or blocked by this browser. Try a browser with Gamepad API support, or HTTPS if input is blocked over HTTP.')).toBeVisible();
-    await expect(dialog.getByRole('button', {name: 'Enable for this robot', exact: true})).toBeDisabled();
-    await dialog.getByRole('button', {name: 'Close', exact: true}).click();
+    await finishSettings(page, dialog);
+    await expect(page.getByRole('button', {name: 'Enable for this robot', exact: true})).toHaveCount(0);
     await page.evaluate(() => Object.defineProperty(navigator, 'getGamepads', {configurable: true, value: undefined}));
     const missingApiDialog = await openSettings(page);
     await expect(missingApiDialog.getByText('Controller input is unavailable or blocked by this browser. Try a browser with Gamepad API support, or HTTPS if input is blocked over HTTP.')).toBeVisible();
-    await expect(missingApiDialog.getByRole('button', {name: 'Enable for this robot', exact: true})).toBeDisabled();
+    await finishSettings(page, missingApiDialog);
+    await expect(page.getByRole('button', {name: 'Enable for this robot', exact: true})).toHaveCount(0);
 
     expect(state.opened).toBe(0);
     expectClean(state);
@@ -152,11 +160,11 @@ test('unknown layouts stay disabled when saving the required mapping is denied',
     await selectController(page, dialog);
 
     await expect(dialog.getByText(/Unsaved mapping/)).toBeVisible();
-    const enable = dialog.getByRole('button', {name: 'Enable for this robot', exact: true});
-    await expect(enable).toBeDisabled();
+    await expect(page.getByRole('button', {name: 'Enable for this robot', exact: true})).toBeDisabled();
     await dialog.getByRole('button', {name: 'Save mapping', exact: true}).click();
     await expect(page.getByText('Could not save the mapping. Allow browser storage and try again.')).toBeVisible();
     await expect(dialog.getByText(/Unsaved mapping/)).toBeVisible();
+    const enable = await finishSettings(page, dialog);
     await expect(enable).toBeDisabled();
 
     expect(state.opened).toBe(0);
@@ -174,7 +182,8 @@ test('conflicting axes prevent saving or enabling a controller profile', async (
     await page.evaluate(() => { (window as any).controllerFailureInput.axes[0] = 1; });
     await expect(dialog.getByText('Use a different button for each function and a different axis for driving and steering. All assigned inputs must exist on this controller.')).toBeVisible();
     await expect(dialog.getByRole('button', {name: 'Save mapping', exact: true})).toBeDisabled();
-    await expect(dialog.getByRole('button', {name: 'Enable for this robot', exact: true})).toBeDisabled();
+    const enable = await finishSettings(page, dialog);
+    await expect(enable).toBeDisabled();
 
     expect(state.opened).toBe(0);
     expectClean(state);
@@ -184,7 +193,8 @@ test('disconnect and reconnect do not re-arm the browser controller session', as
     const state = await setup(page);
     const dialog = await openSettings(page);
     await selectController(page, dialog);
-    await dialog.getByRole('button', {name: 'Enable for this robot', exact: true}).click();
+    const enable = await finishSettings(page, dialog);
+    await enable.click();
     await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toBeVisible();
     await expect.poll(() => state.opened).toBe(1);
     await expect.poll(() => state.frames.length).toBeGreaterThan(0);
@@ -195,7 +205,7 @@ test('disconnect and reconnect do not re-arm the browser controller session', as
         window.dispatchEvent(Object.assign(new Event('gamepaddisconnected'), {gamepad: {index: 0}}));
     });
     await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toHaveCount(0);
-    await expect(page.locator('.ant-tag[role="alert"]')).toContainText('Input lost or stale');
+    await expect(page.locator('.ant-tag[role="alert"]')).toContainText('The browser no longer reports the selected controller as connected.');
     await expect.poll(() => state.closed).toBe(1);
     const neutralFrame = state.frames.at(-1);
     expect(neutralFrame?.deadman).toBe(false);
@@ -218,7 +228,8 @@ test('blur closes the controller stream and restores the recording touch control
     const dialog = await openSettings(page);
     await selectController(page, dialog);
     await expect(page.getByRole('button', {name: 'check Finish', exact: true})).toBeVisible();
-    await dialog.getByRole('button', {name: 'Enable for this robot', exact: true}).click();
+    const enable = await finishSettings(page, dialog);
+    await enable.click();
     await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toBeVisible();
     await expect(page.getByRole('button', {name: 'check Finish', exact: true})).toHaveCount(0);
     await expect.poll(() => state.opened).toBe(1);
@@ -226,11 +237,68 @@ test('blur closes the controller stream and restores the recording touch control
     await page.evaluate(() => window.dispatchEvent(new Event('blur')));
     await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toHaveCount(0);
     await expect.poll(() => state.closed).toBe(1);
-    await expect(page.locator('.ant-tag[role="alert"]')).toContainText('Input lost or stale');
+    await expect(page.locator('.ant-tag[role="alert"]')).toContainText('The browser page lost focus.');
     await expect(page.getByRole('button', {name: 'check Finish', exact: true})).toBeVisible();
     const neutralFrame = state.frames.at(-1);
     expect(neutralFrame?.deadman).toBe(false);
     expect(neutralFrame?.twist?.twist?.linear?.x).toBe(0);
     expect(neutralFrame?.twist?.twist?.angular?.z).toBe(0);
+    expectClean(state);
+});
+
+test('re-enables directly after a focus fault and rearms after switching to manual mowing', async ({page}) => {
+    const state = await setup(page);
+    const dialog = await openSettings(page);
+    await selectController(page, dialog);
+    const enable = await finishSettings(page, dialog);
+    const stableButton = await enable.elementHandle();
+    if (!stableButton) throw new Error('Controller activation button is missing');
+    expect(state.opened).toBe(0);
+    await enable.click();
+    await expect(page.getByRole('status')).toContainText('Ready — hold RB / R1 (Button 5)');
+
+    await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = true; });
+    await expect.poll(() => state.frames.at(-1)?.deadman).toBe(true);
+    await page.evaluate(() => { (window as any).controllerFailureInput.axes[1] = -1; });
+    await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0.25);
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await expect(enable).toBeEnabled();
+    await expect(page.locator('.ant-tag[role="alert"]')).toContainText('The browser page lost focus.');
+    await expect.poll(() => state.closed).toBe(1);
+    expect(await stableButton.evaluate(button => button.isConnected && button.textContent === 'Enable for this robot')).toBe(true);
+    await expect(dialog).not.toBeVisible();
+
+    await page.evaluate(() => {
+        const input = (window as any).controllerFailureInput;
+        input.axes.fill(0);
+        input.buttons.fill(false);
+    });
+    await enable.click();
+    await expect.poll(() => state.opened).toBe(2);
+    await expect(page.getByRole('status')).toContainText('Ready — hold RB / R1 (Button 5)');
+    expect(await stableButton.evaluate(button => document.activeElement === button && button.textContent === 'Disable controller')).toBe(true);
+    await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = true; });
+    await expect.poll(() => state.frames.at(-1)?.deadman).toBe(true);
+    await page.evaluate(() => { (window as any).controllerFailureInput.axes[1] = -1; });
+    await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0.25);
+
+    // The live mock robot changes mode while controls remain held. Old input
+    // must stay neutral until the operator releases and presses deadman again.
+    state.status.state = 4;
+    state.status.state_name = 'MANUAL_MOWING';
+    await expect(page.getByRole('status')).toContainText('Center sticks and release RB / R1 (Button 5)');
+    await expect.poll(() => state.frames.at(-1)?.deadman).toBe(false);
+    expect(state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0);
+    await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toBeVisible();
+    await page.evaluate(() => {
+        const input = (window as any).controllerFailureInput;
+        input.axes.fill(0);
+        input.buttons.fill(false);
+    });
+    await expect(page.getByRole('status')).toContainText('Ready — hold RB / R1 (Button 5)');
+    await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = true; });
+    await expect.poll(() => state.frames.at(-1)?.deadman).toBe(true);
+    await page.evaluate(() => { (window as any).controllerFailureInput.axes[1] = -1; });
+    await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0.25);
     expectClean(state);
 });
