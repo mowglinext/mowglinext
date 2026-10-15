@@ -64,8 +64,8 @@ valid polygon was saved. Check the resulting map.
   They must not be used for driving unless this test passes; no receipt-time
   fallback pretends a cached input is new hardware data. See the
   [Gamepad timestamp contract](https://www.w3.org/TR/gamepad/#dom-gamepad-timestamp).
-- Loss of live GUI status delivery (>2.5 s), emergency status or an outstanding
-  action suppresses motion and requires neutral rearming. This checks delivery
+- Loss of live GUI status delivery (>2.5 s on the monotonic browser clock),
+  emergency status or an outstanding action suppresses motion and requires neutral rearming. This checks delivery
   liveness, not physical acquisition provenance. Robot-side interlocks remain
   authoritative.
 - Movement is never queued by the browser, buffered for reconnect or replayed.
