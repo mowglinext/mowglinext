@@ -17,6 +17,10 @@ interface Options {
     preview?: boolean;
 }
 export type ControllerFault = 'unsupported' | 'inputLost' | 'connectionLost' | 'actionFailed' | null;
+export const focusInputLoss = (source: NonNullable<InputLoss['source']>): InputLoss => ({
+    reason: 'focusLost', source, documentFocused: document.hasFocus(), visibility: document.visibilityState,
+    activeElement: document.activeElement?.tagName.replace(/[^a-z0-9:-]/gi, '?').slice(0, 32) ?? 'none',
+});
 const copyPad = (pad: Gamepad): ControllerSample => ({
     id: pad.id, index: pad.index, mapping: pad.mapping, connected: pad.connected,
     timestamp: pad.timestamp, axes: [...pad.axes], buttons: pad.buttons.map(b => ({pressed: b.pressed, touched: b.touched, value: b.value})),
@@ -51,7 +55,8 @@ export function useBrowserGamepad(options: Options) {
                     active.socket.send(JSON.stringify({twist: teleopTwist(), deadman: false}));
                 }
             } catch { /* The server lease also handles an unusable socket. */ }
-            const report = detail ? `input:${detail.reason}${detail.pollGapMs === undefined ? '' : `:${Math.round(detail.pollGapMs)}ms`}` : '';
+            const report = detail ? `input:${detail.reason}${detail.pollGapMs === undefined ? '' : `:${Math.round(detail.pollGapMs)}ms`}` +
+                (detail.source ? `:${detail.source}:${detail.activeElement}:${detail.visibility}:${detail.documentFocused}` : '') : '';
             active.socket.close(1000, report);
             opts.current.onOwnershipChange(false);
         }
@@ -77,7 +82,7 @@ export function useBrowserGamepad(options: Options) {
                 !selected || pad.id !== selected.id || pad.index !== selected.index ? 'identityChanged' : 'mappingChanged'}); return;
         }
         if (document.visibilityState !== 'visible' || !document.hasFocus()) {
-            setFault('inputLost'); setInputLoss({reason: document.visibilityState !== 'visible' ? 'pageHidden' : 'focusLost'}); return;
+            setFault('inputLost'); setInputLoss(document.visibilityState !== 'visible' ? {reason: 'pageHidden'} : focusInputLoss('enable')); return;
         }
         let socket: WebSocket;
         try { socket = new WebSocket(`${wsBase()}/api/mowglinext/publish/gamepad`); }
@@ -113,7 +118,7 @@ export function useBrowserGamepad(options: Options) {
             const active = session.current;
             if (!active) return;
             if (document.visibilityState !== 'visible' || !document.hasFocus()) {
-                cancel('inputLost', {reason: document.visibilityState !== 'visible' ? 'pageHidden' : 'focusLost'}); return;
+                cancel('inputLost', document.visibilityState !== 'visible' ? {reason: 'pageHidden'} : focusInputLoss('poll')); return;
             }
             if (active.socket.readyState === WebSocket.CONNECTING) {
                 if (now - active.opened > 2000) cancel('connectionLost');
@@ -162,7 +167,8 @@ export function useBrowserGamepad(options: Options) {
         const interval = window.setInterval(poll, 50);
         poll();
         const suspend = (event: Event) => {
-            if (session.current) cancel('inputLost', {reason: event.type === 'blur' ? 'focusLost' : event.type === 'pagehide' ? 'pageExit' : 'pageHidden'});
+            if (session.current) cancel('inputLost', event.type === 'blur' ? focusInputLoss('windowBlur') :
+                {reason: event.type === 'pagehide' ? 'pageExit' : 'pageHidden'});
         };
         const disconnect = (event: GamepadEvent) => {
             if (event.gamepad.index === session.current?.identity.index) {

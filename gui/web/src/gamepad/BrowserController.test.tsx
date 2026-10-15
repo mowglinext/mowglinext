@@ -26,7 +26,8 @@ const mocks = vi.hoisted(() => ({
     },
 }));
 
-vi.mock('./useBrowserGamepad', () => ({
+vi.mock('./useBrowserGamepad', async () => ({
+    ...await vi.importActual<typeof import('./useBrowserGamepad')>('./useBrowserGamepad'),
     useBrowserGamepad: () => ({...mocks.controller, enable: () => mocks.controller.enable()}),
 }));
 vi.mock('antd', async () => {
@@ -92,6 +93,7 @@ beforeEach(() => {
     mocks.controller.enable.mockImplementation(() => {
         expect(mocks.focusRestored).toBe(true);
         expect(screen.queryByTestId('drawer-content')).not.toBeInTheDocument();
+        expect(document.activeElement).toBe(screen.getByRole('button', {name: 'Controller'}));
         mocks.trace.push('enable');
     });
     Object.defineProperty(navigator, 'getGamepads', {configurable: true, value: () => []});
@@ -99,6 +101,7 @@ beforeEach(() => {
 
 afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     if (originalGetGamepads) Object.defineProperty(navigator, 'getGamepads', originalGetGamepads);
     else Reflect.deleteProperty(navigator, 'getGamepads');
 });
@@ -125,27 +128,33 @@ function requestEnable() {
 describe('BrowserController staged activation', () => {
     it('enables once after the close callback, focus restoration and panel teardown', () => {
         const view = mount();
+        const focus = vi.spyOn(screen.getByRole('button', {name: 'Controller'}), 'focus');
         openSettings();
         selectController();
         requestEnable();
         expect(mocks.controller.enable).not.toHaveBeenCalled();
+        expect(focus).not.toHaveBeenCalled();
         expect(screen.getByTestId('drawer-content')).toBeInTheDocument();
 
         act(() => { mocks.completeClose(); });
         expect(mocks.trace).toEqual(['close callback', 'focus restored', 'teardown', 'enable']);
         expect(mocks.controller.enable).toHaveBeenCalledTimes(1);
+        expect(focus).toHaveBeenCalledExactlyOnceWith({preventScroll: true});
         view.rerender(<App><BrowserController mowerAction={vi.fn(() => vi.fn().mockResolvedValue(undefined))}
             onOwnershipChange={vi.fn()}/></App>);
         expect(mocks.controller.enable).toHaveBeenCalledTimes(1);
+        expect(focus).toHaveBeenCalledTimes(1);
     });
 
     it('does not activate when configuration is closed normally', () => {
         mount();
+        const focus = vi.spyOn(screen.getByRole('button', {name: 'Controller'}), 'focus');
         const dialog = openSettings();
         selectController();
         fireEvent.click(within(dialog).getByRole('button', {name: 'Close configuration'}));
         act(() => { mocks.completeClose(); });
         expect(mocks.controller.enable).not.toHaveBeenCalled();
+        expect(focus).not.toHaveBeenCalled();
     });
 
     it('cancels a pending activation when configuration is reopened during closing', () => {
@@ -173,10 +182,16 @@ describe('BrowserController staged activation', () => {
         ['gamepadconnected', 'controllerChanged'],
     ] as const)('cancels pending activation on %s and preserves its diagnostic', (eventType, reason) => {
         mount();
+        const focus = vi.spyOn(screen.getByRole('button', {name: 'Controller'}), 'focus');
         openSettings();
         selectController();
         requestEnable();
 
+        if (eventType === 'blur') vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+        const expectedDetail = eventType === 'blur' ? {
+            reason, source: 'pendingBlur', documentFocused: false,
+            visibility: document.visibilityState, activeElement: document.activeElement?.tagName ?? 'none',
+        } : {reason};
         act(() => {
             const event = new Event(eventType);
             if (eventType.startsWith('gamepad')) Object.assign(event, {gamepad: {index: 0}});
@@ -185,8 +200,9 @@ describe('BrowserController staged activation', () => {
         act(() => { mocks.completeClose(); });
 
         expect(mocks.controller.enable).not.toHaveBeenCalled();
-        expect(mocks.controller.revokeInput).toHaveBeenCalledExactlyOnceWith({reason});
-        expect(mocks.controller.inputLoss).toEqual({reason});
+        expect(focus).not.toHaveBeenCalled();
+        expect(mocks.controller.revokeInput).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(expectedDetail));
+        expect(mocks.controller.inputLoss).toEqual(expect.objectContaining(expectedDetail));
     });
 
     it.each(['gamepaddisconnected', 'gamepadconnected'])('ignores another controller slot during pending activation (%s)', eventType => {
@@ -206,18 +222,46 @@ describe('BrowserController staged activation', () => {
 
     it('allows another explicit activation after reopening configuration', () => {
         mount();
+        const focus = vi.spyOn(screen.getByRole('button', {name: 'Controller'}), 'focus');
         openSettings();
         selectController();
         requestEnable();
         act(() => { mocks.completeClose(); });
         expect(mocks.controller.enable).toHaveBeenCalledTimes(1);
+        expect(focus).toHaveBeenCalledTimes(1);
 
         openSettings();
         requestEnable();
         expect(mocks.controller.enable).toHaveBeenCalledTimes(1);
+        expect(focus).toHaveBeenCalledTimes(1);
         act(() => { mocks.completeClose(); });
         expect(mocks.controller.enable).toHaveBeenCalledTimes(2);
+        expect(focus).toHaveBeenCalledTimes(2);
         expect(mocks.trace.filter(event => event === 'enable')).toHaveLength(2);
+    });
+
+    it('does not refocus or reactivate after a later genuine blur', () => {
+        const view = mount();
+        const focus = vi.spyOn(screen.getByRole('button', {name: 'Controller'}), 'focus');
+        openSettings();
+        selectController();
+        requestEnable();
+        act(() => { mocks.completeClose(); });
+        expect(focus).toHaveBeenCalledTimes(1);
+
+        render(<input aria-label="Unrelated control"/>);
+        const other = screen.getByRole('textbox', {name: 'Unrelated control'});
+        vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+        act(() => {
+            other.focus();
+            window.dispatchEvent(new Event('blur'));
+        });
+        view.rerender(<App><BrowserController mowerAction={vi.fn(() => vi.fn().mockResolvedValue(undefined))}
+            onOwnershipChange={vi.fn()}/></App>);
+
+        expect(document.activeElement).toBe(other);
+        expect(focus).toHaveBeenCalledTimes(1);
+        expect(mocks.controller.enable).toHaveBeenCalledTimes(1);
     });
 
     it('keeps the prior input-loss diagnostic visible when configuration reopens', () => {

@@ -2,7 +2,7 @@ import {useEffect, useRef, useState} from 'react';
 import {Alert, App, Button, Drawer, Form, Select, Slider, Space, Switch, Tag, Typography} from 'antd';
 import {ControlOutlined} from '@ant-design/icons';
 import {useTranslation} from 'react-i18next';
-import {useBrowserGamepad} from './useBrowserGamepad';
+import {focusInputLoss, useBrowserGamepad} from './useBrowserGamepad';
 import {
     ACTION_COMMANDS, BUTTON_BINDINGS, DEFAULT_PROFILE, POLL_MAX_GAP_MS, controllerKey, loadProfile, profileFits, saveProfile, validProfile,
     type ButtonBinding, type ControllerIdentity, type ControllerProfile, type ControllerSample,
@@ -16,6 +16,7 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
     const {t} = useTranslation();
     const {message} = App.useApp();
     const [open, setOpen] = useState(false);
+    const activationFocus = useRef<HTMLButtonElement | HTMLAnchorElement>(null);
     const enableRequested = useRef(false);
     const [drawerClosed, setDrawerClosed] = useState(false);
     const [selected, setSelected] = useState<ControllerIdentity | null>(null);
@@ -50,7 +51,7 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
             if ((event.type === 'gamepaddisconnected' || event.type === 'gamepadconnected') &&
                 (event as GamepadEvent).gamepad.index !== selected?.index) return;
             enableRequested.current = false;
-            revokeInput({reason: event.type === 'blur' ? 'focusLost' : event.type === 'pagehide' ? 'pageExit' :
+            revokeInput(event.type === 'blur' ? focusInputLoss('pendingBlur') : {reason: event.type === 'pagehide' ? 'pageExit' :
                 event.type === 'gamepaddisconnected' ? 'disconnected' : event.type === 'gamepadconnected' ? 'controllerChanged' : 'pageHidden'});
         };
         window.addEventListener('blur', suspend);
@@ -72,6 +73,10 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
             // rc-drawer restores focus AFTER calling afterOpenChange(false).
             // Start in the subsequent commit, after restoration and teardown,
             // so that neither can interrupt a newly opened control session.
+            // Safari taps need not focus buttons; give this explicit activation
+            // a stable target instead of inheriting a destroyed form's focus.
+            // This is done only once. enable() still validates actual page focus.
+            activationFocus.current?.focus({preventScroll: true});
             enableController();
         }
     }, [drawerClosed, enableController]);
@@ -104,7 +109,7 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
     const axisOptions = pad?.axes.map((_, value) => ({value, label: t('gamepad.axisIndex', {index: value})})) ?? [];
     return <>
         <Space wrap style={{position: 'absolute', top: 12, left: 16, zIndex: 20, maxWidth: 'calc(100% - 32px)'}}>
-            <Button aria-label={t('gamepad.title')} icon={<ControlOutlined aria-hidden/>} onClick={openSettings}>{t('gamepad.title')}</Button>
+            <Button ref={activationFocus} aria-label={t('gamepad.title')} icon={<ControlOutlined aria-hidden/>} onClick={openSettings}>{t('gamepad.title')}</Button>
             {controller.enabled && <>
                 <Tag role="status" style={{whiteSpace: 'normal'}}>{t(`gamepad.states.${controller.state}`)}</Tag>
                 <Button danger onClick={controller.disable}>{t('gamepad.disable')}</Button>
