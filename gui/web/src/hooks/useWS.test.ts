@@ -5,9 +5,10 @@ import type {MultiplexStatus} from './multiplexedSocket';
 const mock = vi.hoisted(() => ({
     statusListeners: new Set<(status: MultiplexStatus) => void>(),
     subscribe: vi.fn(),
+    sendJsonMessage: vi.fn(),
 }));
 
-vi.mock('react-use-websocket', () => ({default: () => ({sendJsonMessage: vi.fn()})}));
+vi.mock('react-use-websocket', () => ({default: () => ({sendJsonMessage: mock.sendJsonMessage})}));
 vi.mock('./multiplexedSocket.ts', () => ({
     getMultiplexedSocket: () => ({
         subscribe: mock.subscribe,
@@ -23,6 +24,11 @@ vi.mock('./multiplexedSocket.ts', () => ({
 import {useWS} from './useWS';
 
 describe('useWS multiplex teardown', () => {
+    it('does not queue outbound commands for a later connection', () => {
+        const {result} = renderHook(() => useWS(vi.fn(), vi.fn(), vi.fn()));
+        result.current.sendJsonMessage({twist: {}});
+        expect(mock.sendJsonMessage).toHaveBeenCalledWith({twist: {}}, false);
+    });
     beforeEach(() => {
         mock.statusListeners.clear();
         mock.subscribe.mockReset();

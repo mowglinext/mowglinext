@@ -73,6 +73,7 @@ import {MapToolbarMobile} from "./map/components/MapToolbarMobile.tsx";
 import {MapEditorToolbar} from "./map/components/MapEditorToolbar.tsx";
 import {RestoreMapBackupModal} from "./map/components/RestoreMapBackupModal.tsx";
 import {useMapBackups} from "./map/hooks/useMapBackups.ts";
+import {BrowserController} from "../gamepad/BrowserController";
 import {JoystickOverlay} from "./map/components/JoystickOverlay.tsx";
 import {useIsMobile} from "../hooks/useIsMobile.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
@@ -357,9 +358,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         ]
     );
 
+    const [controllerOwnsInput, setControllerOwnsInput] = useState(false);
     const [mowingAreas, setMowingAreas] = useState<{ key: string, label: string, feat: Feature }[]>([])
 
     const {map, setMap, path, plan, lidarCollection, mowProgressImage, lidarMapImage, highLevelStatus, joyStream, dynamicObstacles} = useMapStreams({
+        controllerOwnsInput,
         editMap,
         settings,
         offsetX,
@@ -891,7 +894,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     });
 
 
-    const {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream, stateName: highLevelStatus.highLevelStatus.state_name});
+    const {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream, controllerOwnsInput, stateName: highLevelStatus.highLevelStatus.state_name});
 
     // Toggle dock placement mode: re-pressing the button (or pressing Escape)
     // cancels it, so the crosshair cursor is not a one-way trap.
@@ -1567,6 +1570,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             width:  isMobile ? 'calc(100% + 28px)'  : 'calc(100% + 64px)',
             margin: isMobile ? '-12px -14px calc(-110px - env(safe-area-inset-bottom, 0px))' : '-24px -32px -48px',
         }}>
+            {!editMap && <BrowserController mowerAction={mowerAction} onOwnershipChange={setControllerOwnsInput}/>}
             <NewAreaModal
                 open={modalOpen}
                 areaType={newAreaType}
@@ -1865,7 +1869,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     )}
                 </Map> : <Spinner/>}
                 <JoystickOverlay
-                    visible={highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode}
+                    visible={!controllerOwnsInput && (highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode)}
                     isRecording={highLevelStatus.highLevelStatus.state_name === "RECORDING"}
                     mobile={isMobile}
                     onMove={handleJoyMove}

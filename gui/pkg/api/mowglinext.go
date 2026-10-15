@@ -323,7 +323,13 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // @Param topic path string true "topic to publish to, could be: joy"
 // @Router /mowglinext/publish/{topic} [get]
 func PublisherRoute(group *gin.RouterGroup, provider types.IRosProvider) {
+	registerPublisherRoutes(group, &gamepadCoordinator{provider: provider})
+}
+
+func registerPublisherRoutes(group *gin.RouterGroup, teleop *gamepadCoordinator) {
+	group.GET("/publish/gamepad", teleop.handle)
 	group.GET("/publish/:topic", func(c *gin.Context) {
+		epoch := teleop.epoch.Load()
 		var err error
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
@@ -342,8 +348,16 @@ func PublisherRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				log.Printf("PublisherRoute: unmarshal error: %v", err)
 				continue
 			}
-			err = provider.Publish("/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", &msgObj)
+			err = teleop.publishLegacy(&msgObj, epoch)
 			if err != nil {
+				if errors.Is(err, errGamepadOwner) {
+					if epoch != teleop.epoch.Load() {
+						return
+					}
+					// A fresh socket can wait through controller cleanup. Drop
+					// this frame without queueing it; only later input may move.
+					continue
+				}
 				log.Printf("PublisherRoute: publish error: %v", err)
 				// Don't break — foxglove may reconnect; keep the browser WebSocket alive
 				continue
