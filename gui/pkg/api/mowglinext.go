@@ -162,6 +162,11 @@ func AddMapAreaRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		if CallReq.Area.Obstacles == nil {
 			CallReq.Area.Obstacles = []geometry.Polygon{}
 		}
+		if err := lockMapReplacement(ctx, nil); err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
+		defer unlockMapReplacement()
 		err = provider.CallService(ctx, "/map_server_node/add_area", &CallReq, &mowgli.AddMowingAreaRes{}, "mowgli_interfaces/srv/AddMowingArea")
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
@@ -186,6 +191,11 @@ func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 		defer cancel()
 
+		if err := lockMapReplacement(ctx, nil); err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
+		defer unlockMapReplacement()
 		err := provider.CallService(ctx, "/map_server_node/clear_map", &mowgli.ClearMapReq{}, &mowgli.ClearMapRes{}, "std_srvs/srv/Trigger")
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
@@ -234,17 +244,25 @@ func ReplaceMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // converged…) with {success:false, message}: the dock pose was NOT
 // committed, so that is an error too, carrying map_server's reason (#703).
 func setDockingPointInternal(ctx context.Context, provider types.IRosProvider, req *mowgli.SetDockingPointReq) error {
-	if req == nil {
-		return errors.New("setDockingPointInternal: nil request")
-	}
-	var res mowgli.SetDockingPointRes
-	if err := provider.CallService(ctx, "/map_server_node/set_docking_point", req, &res, "mowgli_interfaces/srv/SetDockingPoint"); err != nil {
+	res, err := requestDockingPoint(ctx, provider, req)
+	if err != nil {
 		return err
 	}
 	if !res.Success {
 		return fmt.Errorf("dock pose rejected by map_server: %s", res.Message)
 	}
 	return nil
+}
+
+// Preserve the complete acknowledgement for import callers that must also
+// distinguish an accepted in-memory pose from confirmed YAML persistence.
+func requestDockingPoint(ctx context.Context, provider types.IRosProvider, req *mowgli.SetDockingPointReq) (mowgli.SetDockingPointRes, error) {
+	var res mowgli.SetDockingPointRes
+	if req == nil {
+		return res, errors.New("setDockingPointInternal: nil request")
+	}
+	err := provider.CallService(ctx, "/map_server_node/set_docking_point", req, &res, "mowgli_interfaces/srv/SetDockingPoint")
+	return res, err
 }
 
 // SetDockingPointRoute set the docking point
@@ -268,6 +286,11 @@ func SetDockingPointRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
+		if err := lockMapReplacement(ctx, nil); err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
+		defer unlockMapReplacement()
 		if err := setDockingPointInternal(ctx, provider, &CallReq); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return

@@ -1,7 +1,7 @@
 import {errorMessage} from '../../../utils/errors';
 import {NumberWithAddon} from '../../../components/inputs/NumberWithAddon';
 import {useAsyncHandler} from "../../../hooks/useAsyncHandler";
-import {useState} from "react";
+import {useRef, useState} from "react";
 import {Alert, Checkbox, Modal, Space, Statistic, Table, Tag, Typography} from "antd";
 import {useTranslation} from "react-i18next";
 import type {ImportOpenMowerSummary} from "../hooks/useMapFiles.ts";
@@ -42,6 +42,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
     const open = preview !== null;
     const summary = preview;
     const [applying, setApplying] = useState(false);
+    const applyInFlight = useRef(false);
+    const hasApplyError = useRef(false);
     const [applyError, setApplyError] = useState<string | null>(null);
     // OpenMower datum (OM_DATUM_LAT/LONG) the source map was anchored at.
     // Both must be filled for the server to reproject; either left empty
@@ -64,6 +66,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
     const datumImportable = datumProvided && summary?.mn_datum_configured === false;
 
     const handleOk = async () => {
+        if (applyInFlight.current) return;
+        applyInFlight.current = true;
         setApplying(true);
         setApplyError(null);
         try {
@@ -75,10 +79,14 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
             setOmLat(null);
             setOmLon(null);
             setImportDatum(true);
+            hasApplyError.current = false;
             onClose();
         } catch (e) {
+            hasApplyError.current = true;
             setApplyError(errorMessage(e));
             setApplying(false);
+        } finally {
+            applyInFlight.current = false;
         }
     };
 
@@ -86,20 +94,23 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
     // onBlur / onPressEnter so the operator can tweak the datum and see
     // the reprojected preview without an extra button.
     const handleReproject = async () => {
-        setApplyError(null);
+        // A read-only preview cannot resolve an earlier write outcome.
+        if (!hasApplyError.current) setApplyError(null);
         setReprojecting(true);
         try {
             const [lat, lon] = datumPair(omLat, omLon);
             await onReproject(lat, lon);
         } catch (e) {
-            setApplyError(errorMessage(e));
+            setApplyError(previous => hasApplyError.current && previous
+                ? `${previous}\n${errorMessage(e)}` : errorMessage(e));
         } finally {
             setReprojecting(false);
         }
     };
 
     const handleCancel = () => {
-        if (applying) return;
+        if (applyInFlight.current) return;
+        hasApplyError.current = false;
         setApplyError(null);
         setOmLat(null);
         setOmLon(null);

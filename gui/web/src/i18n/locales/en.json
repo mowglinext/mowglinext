@@ -2026,7 +2026,16 @@
     "colApproxArea": "Approx area (m²)",
     "warningCount_one": "{{count}} warning",
     "warningCount_other": "{{count}} warnings",
-    "applyFailed": "Apply failed"
+    "applyFailed": "Import incomplete or unconfirmed",
+    "legacyApplied": "The legacy server acknowledged the import, but detailed map and dock persistence cannot be confirmed. Your local draft is preserved and may differ from the robot. Verify the map and dock before another operation; no datum write was attempted.",
+    "notStarted": "Import was not started; this request did not change the map or dock.",
+    "mapRestored": "Import failed; restoration of the previous areas was acknowledged. Your local draft is preserved.",
+    "outcomeUnknown": "Import outcome unconfirmed; the server may have changed the map or dock. Your local draft is preserved and may differ from the robot. Verify both before another operation; do not start mowing.",
+    "mapPersistenceUnconfirmed": "The new map is active, but persistence is unconfirmed. The dock was not updated. Your local draft is preserved; verify the map and dock before another operation.",
+    "dockRejected": "The new map was saved, but the dock update was explicitly rejected. Your local draft is preserved and may differ from the robot. Verify the map and dock before another operation.",
+    "dockUnconfirmed": "The new map was saved, but the dock outcome is unconfirmed. Your local draft is preserved and may differ from the robot. Verify the map and dock before another operation.",
+    "dockNotAttempted": "The service confirmed that the areas were saved. The dock update was not attempted. Your local draft is preserved. Verify the robot's state before trying again. No new import or datum write is started automatically.",
+    "dockPersistenceUnconfirmed": "The new map was saved and the dock update was accepted in memory, but dock persistence is unconfirmed. Your local draft is preserved; verify the map and dock before another operation."
   },
   "mapAreasList": {
     "typeWorkArea": "Work Area",
@@ -2168,6 +2177,7 @@
     "openMowerImportFailed": "OpenMower import failed",
     "openMowerMapImported": "OpenMower map imported",
     "openMowerMapImportedDescription": "Areas + dock pose written. /map should refresh shortly.",
+    "openMowerMapImportedWithoutDock": "Areas saved. No dock update was requested. /map should refresh shortly.",
     "unknownType": "Unknown type {{type}}",
     "obstaclesDropped": "Some obstacles were dropped",
     "obstaclesDroppedDescription": "These keep-out zones had no matching parent area and were not saved: {{ids}}",

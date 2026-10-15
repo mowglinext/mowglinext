@@ -1,6 +1,6 @@
 import {act, fireEvent, renderHook, waitFor} from '@testing-library/react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {useMapFiles, decodeEditableGeoJSON, decodeImportOpenMowerSummary, type ImportOpenMowerSummary} from './useMapFiles';
+import {useMapFiles, decodeEditableGeoJSON, decodeImportOpenMowerSummary, decodeImportOutcome, type ImportOpenMowerSummary} from './useMapFiles';
 import {MowingAreaFeature, NavigationFeature, DockFeatureBase, ObstacleFeature} from '../../../types/map.ts';
 import {Api} from '../../../api/Api.ts';
 import {parseMapBackup} from '../utils/mapBackup.ts';
@@ -407,15 +407,17 @@ describe('OpenMower response boundary', () => {
     it('does not clear edits or write datum after a partial backend dock failure', async () => {
         const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({error: 'set docking point: ROS rejected'}), {status: 500}));
         vi.stubGlobal('fetch', fetcher); const options = backupOptions({}); const hook = renderHook(() => useMapFiles(options));
-        await expect(hook.result.current.handleApplyOpenMowerImport('{"areas":[]}', 0, 0, true)).rejects.toThrow('map replaced, but setting the dock failed');
+        await expect(hook.result.current.handleApplyOpenMowerImport('{"areas":[]}', 0, 0, true)).rejects.toThrow('mapImportOpenMower.dockUnconfirmed');
         expect(fetcher).toHaveBeenCalledOnce(); expect(options.setFeatures).not.toHaveBeenCalled();
         expect(options.setEditMap).not.toHaveBeenCalled(); expect(options.setHasUnsavedChanges).not.toHaveBeenCalled();
         expect(options.notification.success).not.toHaveBeenCalled();
     });
     it('requires an applied acknowledgment before clearing drafts, including a possibly successful malformed response', async () => {
-        const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('{}')).mockResolvedValueOnce(new Response(JSON.stringify({...previewSummary(), applied: true})));
+        const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('{}')).mockResolvedValueOnce(new Response(JSON.stringify({
+            ...previewSummary(), applied: true, map_status: 'persisted', dock_status: 'confirmed',
+        })));
         vi.stubGlobal('fetch', fetcher); const options = backupOptions({}); const hook = renderHook(() => useMapFiles(options));
-        await expect(hook.result.current.handleApplyOpenMowerImport('{"areas":[]}')).rejects.toThrow('server may have changed the map');
+        await expect(hook.result.current.handleApplyOpenMowerImport('{"areas":[]}')).rejects.toThrow('mapImportOpenMower.outcomeUnknown');
         expect(options.setEditMap).not.toHaveBeenCalled(); expect(options.setDockDirty).not.toHaveBeenCalled(); expect(fetcher).toHaveBeenCalledOnce();
         await hook.result.current.handleApplyOpenMowerImport('{"areas":[]}');
         expect(options.setEditMap).toHaveBeenCalledWith(false); expect(options.setDockDirty).toHaveBeenCalledWith(false);
@@ -427,6 +429,99 @@ describe('OpenMower response boundary', () => {
         await expect(hook.result.current.handleReprojectOpenMowerPreview('{"areas":[]}', 0, 0)).rejects.toThrow('Invalid OpenMower');
         await expect(hook.result.current.handleReprojectOpenMowerPreview('{"areas":[]}', 0, 0)).resolves.toEqual(previewSummary());
         expect(fetcher).toHaveBeenLastCalledWith('/api/import/openmower', expect.objectContaining({body: '{"map":{"areas":[]},"om_datum_lat":0,"om_datum_lon":0}'}));
+    });
+});
+
+describe('structured OpenMower import outcomes', () => {
+    it.each([
+        ['unchanged', 'not_attempted'], ['restored', 'not_requested'],
+        ['unconfirmed', 'not_attempted'], ['active_persistence_unconfirmed', 'not_attempted'],
+        ['persisted', 'rejected'], ['persisted', 'unconfirmed'],
+        ['persisted', 'not_attempted'], ['persisted', 'active_persistence_unconfirmed'],
+        ['persisted', 'confirmed'], ['persisted', 'not_requested'],
+    ])('decodes the explicit pair %s / %s without inferring values', (map_status, dock_status) => {
+        expect(decodeImportOutcome({map_status, dock_status})).toEqual({map_status, dock_status});
+    });
+    it.each([
+        {map_status: 'persisted'}, {dock_status: 'rejected'},
+        {map_status: 'future', dock_status: 'confirmed'}, {map_status: null, dock_status: 'not_attempted'},
+        {map_status: 'unchanged', dock_status: 'confirmed'}, {map_status: 'restored', dock_status: 'unconfirmed'},
+        {map_status: 'persisted', dock_status: 'future'},
+    ])('rejects malformed or contradictory outcome %j', raw => {
+        expect(() => decodeImportOutcome(raw)).toThrow('Invalid OpenMower import outcome');
+    });
+    it('keeps absent legacy outcome distinct from confirmed success', () => {
+        expect(decodeImportOutcome(previewSummary())).toBeUndefined();
+        expect(decodeImportOpenMowerSummary(previewSummary(), false)).toEqual(previewSummary());
+    });
+    it.each([
+        {map_status: 'persisted', dock_status: 'rejected'},
+        {map_status: 'active_persistence_unconfirmed', dock_status: 'not_attempted'},
+        {map_status: 'persisted', dock_status: 'not_requested'},
+    ])('rejects an applied success inconsistent with its statuses or dock preview: %j', patch => {
+        expect(() => decodeImportOpenMowerSummary({...previewSummary(), applied: true, ...patch}, true)).toThrow();
+    });
+    it.each([
+        ['unchanged', 'not_attempted', 'notStarted'],
+        ['restored', 'not_attempted', 'mapRestored'],
+        ['unconfirmed', 'not_attempted', 'outcomeUnknown'],
+        ['active_persistence_unconfirmed', 'not_attempted', 'mapPersistenceUnconfirmed'],
+        ['persisted', 'rejected', 'dockRejected'],
+        ['persisted', 'unconfirmed', 'dockUnconfirmed'],
+        ['persisted', 'not_attempted', 'dockNotAttempted'],
+        ['persisted', 'active_persistence_unconfirmed', 'dockPersistenceUnconfirmed'],
+    ])('reports %s / %s and preserves every draft without writing datum or retrying', async (map_status, dock_status, key) => {
+        // Deliberately no English prefix: structured fields alone determine the message.
+        const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({error: 'raison locale', map_status, dock_status}), {status: 500}));
+        vi.stubGlobal('fetch', fetcher);
+        const options = backupOptions({}); const hook = renderHook(() => useMapFiles(options));
+        await expect(hook.result.current.handleApplyOpenMowerImport('{"areas":[]}', 0, 0, true)).rejects.toThrow(`mapImportOpenMower.${key}`);
+        expect(fetcher).toHaveBeenCalledExactlyOnceWith('/api/import/openmower', expect.objectContaining({method: 'POST'}));
+        for (const setter of [options.setFeatures, options.setMap, options.setEditMap, options.setHasUnsavedChanges, options.setDockDirty,
+            options.restoreCorridors, options.restoreObstacleOriginals]) expect(setter).not.toHaveBeenCalled();
+        expect(options.notification.success).not.toHaveBeenCalled();
+    });
+    it.each([
+        {error: 'legacy map error'},
+        {error: 'set docking point: legacy error', map_status: 'future', dock_status: 'rejected'},
+    ])('does not infer a safe state from missing/invalid metadata %j', async response => {
+        const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(response), {status: 500}));
+        vi.stubGlobal('fetch', fetcher);
+        const options = backupOptions({}); const hook = renderHook(() => useMapFiles(options));
+        await expect(hook.result.current.handleApplyOpenMowerImport('{"areas":[]}', 0, 0, true)).rejects.toThrow('mapImportOpenMower.outcomeUnknown');
+        expect(fetcher).toHaveBeenCalledOnce(); expect(options.setHasUnsavedChanges).not.toHaveBeenCalled();
+        expect(options.notification.success).not.toHaveBeenCalled();
+    });
+    it('retains a legacy applied acknowledgement without claiming detailed persistence or writing datum', async () => {
+        const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({...previewSummary(), applied: true})));
+        vi.stubGlobal('fetch', fetcher);
+        const options = backupOptions({}); const hook = renderHook(() => useMapFiles(options));
+        await expect(hook.result.current.handleApplyOpenMowerImport('{"areas":[]}', 0, 0, true)).rejects.toThrow('mapImportOpenMower.legacyApplied');
+        expect(fetcher).toHaveBeenCalledOnce(); expect(options.setEditMap).not.toHaveBeenCalled();
+        expect(options.setDockDirty).not.toHaveBeenCalled(); expect(options.notification.success).not.toHaveBeenCalled();
+    });
+    it('does not turn a lost response into success, retry or a datum write', async () => {
+        const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('Connection lost'));
+        vi.stubGlobal('fetch', fetcher);
+        const options = backupOptions({}); const hook = renderHook(() => useMapFiles(options));
+        await expect(hook.result.current.handleApplyOpenMowerImport('{"areas":[]}', 0, 0, true)).rejects.toThrow('mapImportOpenMower.outcomeUnknown');
+        expect(fetcher).toHaveBeenCalledOnce(); expect(options.setEditMap).not.toHaveBeenCalled();
+        expect(options.notification.success).not.toHaveBeenCalled();
+    });
+    it.each([true, false])('clears drafts only after confirmed success; dock requested=%s', async hasDock => {
+        const data = {...previewSummary(), applied: true, map_status: 'persisted',
+            dock_status: hasDock ? 'confirmed' : 'not_requested', dock_pose: hasDock ? previewSummary().dock_pose : null};
+        const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify(data))).mockResolvedValueOnce(new Response('{}'));
+        vi.stubGlobal('fetch', fetcher);
+        const options = backupOptions({}); const hook = renderHook(() => useMapFiles(options));
+        await hook.result.current.handleApplyOpenMowerImport('{"areas":[]}', 0, 0, true);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(fetcher).toHaveBeenNthCalledWith(2, '/api/settings/yaml', expect.objectContaining({body: '{"datum_lat":0,"datum_lon":0}'}));
+        expect(options.setEditMap).toHaveBeenCalledExactlyOnceWith(false);
+        expect(options.setHasUnsavedChanges).toHaveBeenCalledExactlyOnceWith(false);
+        expect(options.setDockDirty).toHaveBeenCalledExactlyOnceWith(false);
+        expect(options.notification.success).toHaveBeenCalledExactlyOnceWith({message: 'mapFiles.openMowerMapImported',
+            description: hasDock ? 'mapFiles.openMowerMapImportedDescription' : 'mapFiles.openMowerMapImportedWithoutDock'});
     });
 });
 

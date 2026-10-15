@@ -2022,7 +2022,16 @@
     "colApproxArea": "Surface approx. (m²)",
     "warningCount_one": "{{count}} avertissement",
     "warningCount_other": "{{count}} avertissements",
-    "applyFailed": "Échec de l'application"
+    "applyFailed": "Import incomplet ou non confirmé",
+    "legacyApplied": "L'ancien serveur a accepté l'import, mais la persistance détaillée de la carte et de la base ne peut pas être confirmée. Votre brouillon local est conservé et peut différer du robot. Vérifiez la carte et la base avant une nouvelle opération ; aucune écriture du datum n'a été tentée.",
+    "notStarted": "L'import n'a pas commencé ; cette requête n'a modifié ni la carte ni la base.",
+    "mapRestored": "L'import a échoué ; la restauration des zones précédentes a été confirmée. Votre brouillon local est conservé.",
+    "outcomeUnknown": "Résultat de l'import non confirmé ; le serveur peut avoir modifié la carte ou la base. Votre brouillon local est conservé et peut différer du robot. Vérifiez les deux avant une nouvelle opération ; ne démarrez pas la tonte.",
+    "mapPersistenceUnconfirmed": "La nouvelle carte est active, mais sa persistance n'est pas confirmée. La base n'a pas été mise à jour. Votre brouillon local est conservé ; vérifiez la carte et la base avant une nouvelle opération.",
+    "dockRejected": "La nouvelle carte a été sauvegardée, mais la modification de la base a été explicitement refusée. Votre brouillon local est conservé et peut différer du robot. Vérifiez la carte et la base avant une nouvelle opération.",
+    "dockUnconfirmed": "La nouvelle carte a été sauvegardée, mais le résultat pour la base n'est pas confirmé. Votre brouillon local est conservé et peut différer du robot. Vérifiez la carte et la base avant une nouvelle opération.",
+    "dockNotAttempted": "Le service a confirmé la sauvegarde des zones. La mise à jour de la base n'a pas été tentée. Votre brouillon local est conservé. Vérifiez l'état du robot avant de recommencer. Aucun nouvel import ni aucune écriture du datum ne sont lancés automatiquement.",
+    "dockPersistenceUnconfirmed": "La nouvelle carte a été sauvegardée et la modification de la base acceptée en mémoire, mais la persistance de la base n'est pas confirmée. Votre brouillon local est conservé ; vérifiez la carte et la base avant une nouvelle opération."
   },
   "mapAreasList": {
     "typeWorkArea": "Zone de travail",
@@ -2164,6 +2173,7 @@
     "openMowerImportFailed": "Échec de l'import OpenMower",
     "openMowerMapImported": "Carte OpenMower importée",
     "openMowerMapImportedDescription": "Zones + pose de la base écrites. /map devrait se rafraîchir sous peu.",
+    "openMowerMapImportedWithoutDock": "Zones sauvegardées. Aucune modification de la base demandée. /map devrait se rafraîchir sous peu.",
     "unknownType": "Type inconnu {{type}}",
     "obstaclesDropped": "Certains obstacles ont été ignorés",
     "obstaclesDroppedDescription": "Ces zones d’exclusion sans zone parente correspondante n’ont pas été enregistrées : {{ids}}",

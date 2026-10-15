@@ -12,10 +12,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/types"
-	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 )
 
@@ -100,6 +100,7 @@ type ImportOpenMowerRequest struct {
 // ImportOpenMowerSummary is the user-facing preview that the GUI shows
 // in its confirmation modal.
 type ImportOpenMowerSummary struct {
+	ImportOutcome
 	MowingAreas      int                 `json:"mowing_areas"`
 	NavigationAreas  int                 `json:"navigation_areas"`
 	Obstacles        int                 `json:"obstacles"`
@@ -118,6 +119,37 @@ type ImportOpenMowerSummary struct {
 	// so overwriting it would misalign the just-imported map — the GUI
 	// then hides the datum-import option.
 	MnDatumConfigured bool `json:"mn_datum_configured"`
+}
+
+type DockWriteStatus string
+
+const (
+	dockNotRequested      DockWriteStatus = "not_requested"
+	dockNotAttempted      DockWriteStatus = "not_attempted"
+	dockRejected          DockWriteStatus = "rejected"
+	dockUnconfirmed       DockWriteStatus = "unconfirmed"
+	dockActiveUnconfirmed DockWriteStatus = "active_persistence_unconfirmed"
+	dockConfirmed         DockWriteStatus = "confirmed"
+)
+
+// ImportOutcome is additive to both the legacy summary and {error: string}.
+// Statuses describe only the service acknowledgements within this operation.
+type ImportOutcome struct {
+	MapStatus  MapWriteStatus  `json:"map_status"`
+	DockStatus DockWriteStatus `json:"dock_status"`
+}
+
+type importApplyError struct {
+	outcome ImportOutcome
+	err     error
+}
+
+func (e *importApplyError) Error() string { return e.err.Error() }
+func (e *importApplyError) Unwrap() error { return e.err }
+
+type importErrorResponse struct {
+	ImportOutcome
+	Error string `json:"error"`
 }
 
 // ImportedAreaBrief is one row in the per-area preview table.
@@ -186,21 +218,29 @@ func ImportRoutes(r *gin.RouterGroup, rosProvider types.IRosProvider, dbProvider
 // @Router /import/openmower [post]
 func postImportOpenMower(rosProvider types.IRosProvider, dbProvider types.IDBProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		outcome := ImportOutcome{mapUnchanged, dockNotAttempted}
+		fail := func(status int, err error) {
+			var applied *importApplyError
+			if errors.As(err, &applied) {
+				outcome = applied.outcome
+			}
+			c.JSON(status, importErrorResponse{outcome, err.Error()})
+		}
 		raw, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "cannot read body: " + err.Error()})
+			fail(http.StatusBadRequest, fmt.Errorf("cannot read body: %w", err))
 			return
 		}
 
 		req, err := parseImportRequest(raw)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+			fail(http.StatusBadRequest, err)
 			return
 		}
 
 		var omMap openMowerMap
 		if err := json.Unmarshal(req.Map, &omMap); err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid OpenMower map.json: " + err.Error()})
+			fail(http.StatusBadRequest, fmt.Errorf("invalid OpenMower map.json: %w", err))
 			return
 		}
 
@@ -218,15 +258,23 @@ func postImportOpenMower(rosProvider types.IRosProvider, dbProvider types.IDBPro
 
 		// Build (in memory) the MowgliNext-shaped payload that *would*
 		// be POSTed to /map_server_node/add_area, plus the dock pose.
-		// Currently logged + counted but not actually written.
+		// Sent only after the operator explicitly requests apply.
 		replaceReq, dockReq := buildMowgliNextPayload(omMap, reproj)
+		if dockReq == nil {
+			outcome.DockStatus = dockNotRequested
+		}
+		summary.ImportOutcome = outcome
 
 		if req.Apply {
 			if err := applyImport(c, rosProvider, replaceReq, dockReq); err != nil {
-				c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+				fail(http.StatusInternalServerError, err)
 				return
 			}
 			summary.Applied = true
+			summary.MapStatus = mapPersisted
+			if dockReq != nil {
+				summary.DockStatus = dockConfirmed
+			}
 		} else {
 			logImportPreview(summary, replaceReq, dockReq)
 		}
@@ -812,15 +860,25 @@ func buildMowgliNextPayload(omMap openMowerMap, reproj datumReprojector) (*mowgl
 // Replace-mode only. Mirrors the same service sequence used by the
 // HTTP-driven ReplaceMapRoute + SetDockingPointRoute via the shared
 // helpers in mowglinext.go, so the importer and the regular save path
-// can't drift apart on what "save" means. A failure mid-sequence
-// surfaces as a 500 to the caller; replaceMapInternal puts the previous
-// map back and its error says whether that worked (map_replace.go).
+// can't drift apart on what "save" means. A failure surfaces as a 500 with
+// structured map/dock outcomes. Only failed clear/add operations attempt the
+// existing bounded area restoration. A dock failure never rolls back the
+// already-saved map. The lock covers both steps.
 func applyImport(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mowgli.ReplaceMapReq, dockReq *mowgli.SetDockingPointReq) error {
+	return applyImportWithLockWait(c, rosProvider, replaceReq, dockReq, nil)
+}
+
+func applyImportWithLockWait(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mowgli.ReplaceMapReq, dockReq *mowgli.SetDockingPointReq, onWait func()) error {
+	outcome := ImportOutcome{mapUnchanged, dockNotAttempted}
+	if dockReq == nil {
+		outcome.DockStatus = dockNotRequested
+	}
+	fail := func(err error) error { return &importApplyError{outcome, err} }
 	if rosProvider == nil {
-		return errors.New("apply: no ROS provider")
+		return fail(errors.New("apply: no ROS provider"))
 	}
 	if replaceReq == nil {
-		return errors.New("apply: nil replace request")
+		return fail(errors.New("apply: nil replace request"))
 	}
 	// Reuse the gin request context for cancellation propagation, but give the
 	// whole clear_map → add_area×N → save_areas sequence a size-scaled budget
@@ -828,14 +886,38 @@ func applyImport(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mow
 	// Shared with ReplaceMapRoute so the import and the map editor stay in sync.
 	ctx, cancel := context.WithTimeout(c.Request.Context(), mapWriteBudget(len(replaceReq.Areas)))
 	defer cancel()
+	if err := lockMapReplacement(ctx, onWait); err != nil {
+		return fail(fmt.Errorf("apply: waiting for another map replacement: %w", err))
+	}
+	defer unlockMapReplacement()
 
 	logImportf("import/openmower applying: %d areas, dock=%v", len(replaceReq.Areas), dockReq != nil)
-	if err := replaceMapInternal(ctx, rosProvider, replaceReq); err != nil {
-		return err // already says "replace map …" and what state the robot is in
+	if err := replaceMapLocked(ctx, rosProvider, replaceReq); err != nil {
+		var replacement *mapReplacementError
+		if errors.As(err, &replacement) {
+			outcome.MapStatus = replacement.status
+		} else {
+			outcome.MapStatus = mapUnconfirmed
+		}
+		return fail(err)
 	}
+	outcome.MapStatus = mapPersisted
 	if dockReq != nil {
-		if err := setDockingPointInternal(ctx, rosProvider, dockReq); err != nil {
-			return fmt.Errorf("set docking point: %w", err)
+		if err := ctx.Err(); err != nil {
+			return fail(fmt.Errorf("set docking point not attempted: %w", err))
+		}
+		res, err := requestDockingPoint(ctx, rosProvider, dockReq)
+		if err != nil {
+			outcome.DockStatus = dockUnconfirmed
+			return fail(fmt.Errorf("set docking point: %w", err))
+		}
+		if !res.Success {
+			outcome.DockStatus = dockRejected
+			return fail(fmt.Errorf("set docking point: dock pose rejected by map_server: %s", res.Message))
+		}
+		if res.Message != "" {
+			outcome.DockStatus = dockActiveUnconfirmed
+			return fail(fmt.Errorf("set docking point: persistence not confirmed: %s", res.Message))
 		}
 	}
 	return nil

@@ -538,26 +538,53 @@ export function useMapFiles({
             body.om_datum_lat = omDatumLat;
             body.om_datum_lon = omDatumLon;
         }
-        const res = await fetch("/api/import/openmower", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify(body),
-        });
+        let res: Response;
+        try {
+            res = await fetch("/api/import/openmower", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(body),
+            });
+        } catch (error) {
+            throw new Error(`${t('mapImportOpenMower.outcomeUnknown')} — ${errorMessage(error)}`);
+        }
         if (!res.ok) {
-            const errBody = await res.text();
-            let body: unknown;
-            try {body = JSON.parse(errBody);} catch { /* Keep the original HTTP error below. */ }
-            // This Go error is emitted only after replaceMapInternal succeeded.
-            const partial = isJsonObject(body) && typeof body.error === 'string' && body.error.startsWith('set docking point:');
-            throw new Error(`${partial ? 'map replaced, but setting the dock failed — ' : ''}HTTP ${res.status}: ${errBody}`);
+            let raw: unknown;
+            try {raw = await res.json();} catch { /* An unreadable response cannot establish an outcome. */ }
+            let outcome: ImportOutcome | undefined;
+            try {outcome = decodeImportOutcome(raw);} catch { /* Invalid structured metadata is unconfirmed. */ }
+            let key = 'outcomeUnknown';
+            if (outcome) {
+                key = outcome.map_status === 'persisted'
+                    ? outcome.dock_status === 'rejected' ? 'dockRejected'
+                        : outcome.dock_status === 'not_attempted' ? 'dockNotAttempted'
+                        : outcome.dock_status === 'active_persistence_unconfirmed' ? 'dockPersistenceUnconfirmed' : 'dockUnconfirmed'
+                    : outcome.map_status === 'unchanged' ? 'notStarted'
+                        : outcome.map_status === 'restored' ? 'mapRestored'
+                            : outcome.map_status === 'active_persistence_unconfirmed' ? 'mapPersistenceUnconfirmed' : 'outcomeUnknown';
+            } else if (isJsonObject(raw) && !('map_status' in raw) && !('dock_status' in raw)
+                && typeof raw.error === 'string' && raw.error.startsWith('set docking point:')) {
+                // Legacy servers prove only that map replacement finished. The
+                // old text does not distinguish a dock rejection from lost transport.
+                key = 'dockUnconfirmed';
+            }
+            const detail = isJsonObject(raw) && typeof raw.error === 'string' ? ` — ${raw.error}` : '';
+            throw new Error(`${t(`mapImportOpenMower.${key}`)} (HTTP ${res.status})${detail}`);
         }
 
         // The server may already have written the map. An invalid acknowledgment
         // is unconfirmed success, never evidence of rollback; do not auto-retry.
+        let appliedSummary: ImportOpenMowerSummary;
         try {
-            decodeImportOpenMowerSummary(await res.json(), true);
+            appliedSummary = decodeImportOpenMowerSummary(await res.json(), true);
         } catch (error) {
-            throw new Error(`map apply response not confirmed; server may have changed the map — ${errorMessage(error)}`);
+            throw new Error(`${t('mapImportOpenMower.outcomeUnknown')} — ${errorMessage(error)}`);
+        }
+
+        // Older servers acknowledge apply but do not expose dock-persistence
+        // warnings. Keep that acknowledgement distinct from full confirmation.
+        if (appliedSummary.map_status === undefined) {
+            throw new Error(t('mapImportOpenMower.legacyApplied'));
         }
 
         // Persist the datum only after the map/dock apply succeeded, and only
@@ -583,7 +610,8 @@ export function useMapFiles({
         setDockDirty(false);
         notification.success({
             message: t('mapFiles.openMowerMapImported'),
-            description: t('mapFiles.openMowerMapImportedDescription'),
+            description: t(appliedSummary.dock_status === 'not_requested' || !appliedSummary.dock_pose
+                ? 'mapFiles.openMowerMapImportedWithoutDock' : 'mapFiles.openMowerMapImportedDescription'),
         });
     };
 
@@ -648,6 +676,8 @@ export function useMapFiles({
  * re-generated.
  */
 export interface ImportOpenMowerSummary {
+    map_status?: ImportOutcome['map_status'];
+    dock_status?: ImportOutcome['dock_status'];
     mowing_areas: number;
     navigation_areas: number;
     obstacles: number;
@@ -673,6 +703,25 @@ export interface ImportOpenMowerSummary {
     applied: boolean;
 }
 
+export interface ImportOutcome {
+    map_status: 'unchanged' | 'restored' | 'unconfirmed' | 'active_persistence_unconfirmed' | 'persisted';
+    dock_status: 'not_requested' | 'not_attempted' | 'rejected' | 'unconfirmed' | 'active_persistence_unconfirmed' | 'confirmed';
+}
+
+/** Missing metadata is legacy; partial, unknown or contradictory metadata is invalid. */
+export function decodeImportOutcome(raw: unknown): ImportOutcome | undefined {
+    if (!isJsonObject(raw) || !('map_status' in raw) && !('dock_status' in raw)) return undefined;
+    const map = raw.map_status, dock = raw.dock_status;
+    if (!(map === 'unchanged' || map === 'restored' || map === 'unconfirmed'
+        || map === 'active_persistence_unconfirmed' || map === 'persisted')
+        || !(dock === 'not_requested' || dock === 'not_attempted' || dock === 'rejected'
+            || dock === 'unconfirmed' || dock === 'active_persistence_unconfirmed' || dock === 'confirmed')
+        || map !== 'persisted' && dock !== 'not_requested' && dock !== 'not_attempted') {
+        throw new Error('Invalid OpenMower import outcome');
+    }
+    return {map_status: map, dock_status: dock};
+}
+
 
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const count = (value: unknown): boolean => finite(value) && Number.isInteger(value) && value >= 0;
@@ -692,6 +741,15 @@ function importSummary(raw: unknown): raw is ImportOpenMowerSummary {
 }
 export function decodeImportOpenMowerSummary(raw: unknown, applied: boolean): ImportOpenMowerSummary {
     if (!importSummary(raw) || raw.applied !== applied) throw new Error('Invalid OpenMower import summary');
+    const outcome = decodeImportOutcome(raw);
+    if (outcome && (applied
+        ? outcome.map_status !== 'persisted' || outcome.dock_status !== 'confirmed' && outcome.dock_status !== 'not_requested'
+        : outcome.map_status !== 'unchanged' || outcome.dock_status !== 'not_attempted' && outcome.dock_status !== 'not_requested')) {
+        throw new Error('Contradictory OpenMower import summary');
+    }
+    if (outcome && (outcome.dock_status === 'not_requested' ? raw.dock_pose != null : raw.dock_pose == null)) {
+        throw new Error('Contradictory OpenMower dock summary');
+    }
     return raw;
 }
 
