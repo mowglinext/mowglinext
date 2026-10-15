@@ -108,7 +108,7 @@ beforeEach(() => {
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
     FakeWebSocket.instances = [];
     pad = makePad();
-    topics.status = {data: {state_name: 'IDLE', emergency: false}, lastMessageAt: Date.now()};
+    topics.status = {data: {state_name: 'IDLE', emergency: false}, lastMessageAt: performance.now()};
     topics.emergency = {data: {active_emergency: false, latched_emergency: false}, lastMessageAt: Date.now()};
 
     originalGetGamepads = Object.getOwnPropertyDescriptor(navigator, 'getGamepads');
@@ -194,6 +194,84 @@ describe('useBrowserGamepad session ownership', () => {
 
         act(() => { hook.result.current.enable(); });
         expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+
+    it.each([-1, 1])('expires status delivery on monotonic time after a wall-clock jump (%s)', direction => {
+        topics.status.data.state_name = 'RECORDING';
+        const {hook} = mount();
+        const socket = enable(hook);
+        poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true);
+        poll();
+        setAxis(1, -1);
+        poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(true);
+
+        vi.setSystemTime(Date.now() + direction * 60 * 60 * 1000);
+        poll();
+        // Changing the wall clock must neither expire a live status early nor
+        // preserve a stale status until the wall clock catches up again.
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(true);
+        poll(2300);
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(false);
+        expect(parseControl(socket.sent[socket.sent.length - 1]).twist.twist.linear.x).toBe(0);
+        expect(hook.result.current.state).toBe('waitingForMode');
+        topics.status.lastMessageAt = performance.now();
+        poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(false);
+        setButton(DEFAULT_PROFILE.buttons.deadman, false);
+        setAxis(1, 0);
+        poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true);
+        poll();
+        setAxis(1, -1);
+        poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(true);
+    });
+
+    it('reports a browser permission-policy failure before enabling', () => {
+        Object.defineProperty(navigator, 'getGamepads', {configurable: true, value: () => {
+            throw new DOMException('Blocked by permissions policy', 'SecurityError');
+        }});
+        const {hook, onOwnershipChange} = mount();
+        expect(hook.result.current.fault).toBe('unsupported');
+        expect(FakeWebSocket.instances).toHaveLength(0);
+        expect(onOwnershipChange).not.toHaveBeenCalled();
+    });
+
+    it.each(['pagehide', 'visibilitychange'])('revokes immediately on %s and requires explicit rearming', event => {
+        const {hook, onOwnershipChange} = mount();
+        const socket = enable(hook);
+        poll();
+        act(() => { (event === 'visibilitychange' ? document : window).dispatchEvent(new Event(event)); });
+        expect(socket.closeCount).toBe(1);
+        expect(hook.result.current.enabled).toBe(false);
+        expect(onOwnershipChange.mock.calls.map(([owns]) => owns)).toEqual([true, false]);
+        poll(500);
+        expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it('ends a connection that never opens without sending or reconnecting', () => {
+        const {hook} = mount();
+        act(() => { hook.result.current.enable(); });
+        const socket = FakeWebSocket.instances[0];
+        poll(2100);
+        expect(hook.result.current.fault).toBe('connectionLost');
+        expect(socket.sent).toHaveLength(0);
+        expect(socket.closeCount).toBe(1);
+        poll(1000);
+        expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it('revokes ownership when a live WebSocket send throws', () => {
+        const {hook, onOwnershipChange} = mount();
+        const socket = enable(hook);
+        poll();
+        vi.spyOn(socket, 'send').mockImplementation(() => { throw new Error('Transport failed'); });
+        poll();
+        expect(hook.result.current.fault).toBe('connectionLost');
+        expect(socket.closeCount).toBe(1);
+        expect(onOwnershipChange.mock.calls.map(([owns]) => owns)).toEqual([true, false]);
     });
 
     it('treats a delayed poll as terminal input loss', () => {

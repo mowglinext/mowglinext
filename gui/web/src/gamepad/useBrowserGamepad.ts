@@ -26,7 +26,7 @@ const copyPad = (pad: Gamepad): ControllerSample => ({
 export function useBrowserGamepad(options: Options) {
     const opts = useRef(options);
     useLayoutEffect(() => { opts.current = options; });
-    const status = useTopic<HighLevelStatus>('highLevelStatus', {}, {withTimestamp: true});
+    const status = useTopic<HighLevelStatus>('highLevelStatus', {}, {withTimestamp: true, timestampClock: 'monotonic'});
     const emergency = useTopic<Emergency>('emergency', {}, {withTimestamp: true});
     const context = useRef({status, emergency});
     useLayoutEffect(() => { context.current = {status, emergency}; });
@@ -88,7 +88,7 @@ export function useBrowserGamepad(options: Options) {
             try {
                 if (typeof navigator.getGamepads === 'function') devices = [...navigator.getGamepads()].filter((p): p is Gamepad => !!p && p.connected);
             } catch {
-                if (session.current) cancel('unsupported');
+                cancel('unsupported');
             }
             const now = performance.now();
             // Keep high-rate control out of React's render loop (including MapPage).
@@ -113,7 +113,7 @@ export function useBrowserGamepad(options: Options) {
             const frame = active.driver.step(pad, now, {
                 stateName: current.status.data.state_name ?? '',
                 // Delivery liveness only; robot-side interlocks remain authoritative.
-                statusFresh: current.status.lastMessageAt !== null && Date.now() - current.status.lastMessageAt < 2500,
+                statusFresh: current.status.lastMessageAt !== null && now >= current.status.lastMessageAt && now - current.status.lastMessageAt < 2500,
                 emergency: !!(current.status.data.emergency || current.emergency.data.active_emergency || current.emergency.data.latched_emergency),
                 pending: pending.current,
             });
