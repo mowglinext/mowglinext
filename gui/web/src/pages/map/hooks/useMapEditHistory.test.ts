@@ -6,11 +6,11 @@ import {MowingAreaFeature, cloneFeature, type MowingFeature} from '../../../type
 // Mock antd App.useApp to provide modal.confirm
 const mockConfirm = vi.fn(({onOk}: {onOk: () => void}) => onOk());
 vi.mock('antd', async () => {
-    const actual = await vi.importActual('antd');
+    const actual = await vi.importActual<typeof import('antd')>('antd');
     return {
         ...actual,
         App: {
-            ...((actual as Record<string, unknown>).App as Record<string, unknown>),
+            ...actual.App,
             useApp: () => ({
                 notification: {},
                 message: {},
@@ -28,7 +28,7 @@ describe('useMapEditHistory', () => {
 
     beforeEach(() => {
         features = {};
-        setFeatures = vi.fn((updater) => {
+        setFeatures = vi.fn<typeof setFeatures>((updater) => {
             if (typeof updater === 'function') {
                 features = updater(features);
             } else {
@@ -36,7 +36,7 @@ describe('useMapEditHistory', () => {
             }
         });
         editMap = false;
-        setEditMap = vi.fn((val) => {
+        setEditMap = vi.fn<typeof setEditMap>((val) => {
             editMap = val;
         });
     });

@@ -1,3 +1,5 @@
+import type AsyncButton from '../../../components/AsyncButton.tsx';
+import type {ShapePickerDropdown} from './ShapePickerDropdown.tsx';
 import {App} from "antd";
 import type {ComponentProps} from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,15 +22,15 @@ vi.mock("../../../theme/ThemeContext.tsx", () => ({
 }));
 
 vi.mock("../../../components/AsyncButton.tsx", () => ({
-  default: ({ children, onAsyncClick, ...props }: any) => (
-    <button onClick={onAsyncClick} {...props}>
+  default: ({ children, onAsyncClick, ...props }: Pick<ComponentProps<typeof AsyncButton>, 'children' | 'onAsyncClick'>) => (
+    <button onClick={event => {void onAsyncClick(event);}} {...props}>
       {children}
     </button>
   ),
 }));
 
 vi.mock("./ShapePickerDropdown.tsx", () => ({
-  ShapePickerDropdown: ({ children }: any) => children,
+  ShapePickerDropdown: ({ children }: Pick<ComponentProps<typeof ShapePickerDropdown>, 'children'>) => children,
 }));
 
 describe("MapToolbarMobile", () => {
