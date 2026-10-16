@@ -233,3 +233,73 @@ FMA/AVX2/fast-math/evaluation macros. Requested flags and compiler macros do not
 establish every dependency's effective flags; consult the retained binaries.
 All identities remain offline diagnostics, with production resume validation
 unchanged.
+
+## Certified microscopic bevel changes
+
+`--require-identical` retains its strict baseline/candidate equality contract.
+The workflow continues using that mode. A separate, opt-in
+`--require-certified-fillets` contract is limited to the microscopic bevel repair;
+it does not approve arbitrary changed geometry or update expected snapshots.
+
+Configure the extracted baseline build with both `-DREPLAY_BASELINE=ON` and
+`-DREPLAY_CERTIFIED_FILLET_REFERENCE=ON`. This additionally builds
+`coverage_replay_reference` and registers `test_ring_contract_reference`.
+The ordinary `coverage_replay` still compiles the pristine baseline directly.
+The reference adapter includes that byte-unchanged implementation in a separate
+translation unit to call its existing ordinary-rounding and densification helpers.
+It requires the original `PlanningTrace` API (present in `dev` at `e48cf12a`);
+missing or incompatible APIs/helpers fail the build. There is no compatibility
+patch or runtime planner policy switch.
+
+Candidate observation records the actual sparse ring, intermediate bevel-only
+replacement, ordinary-rounded result and accepted local spans. The oracle binds
+these observations to both real outputs: old rounding/densification of the sparse
+ring must reproduce the pristine baseline ring exactly, and old rounding of the
+independently checked intermediate must reproduce the candidate ring exactly.
+It accounts for every original vertex, requires unchanged start/closure/order and
+winding, preserves pivot twins, checks the existing bevel eligibility and radius
+floor, derives circle/tangency from emitted coordinates, and checks every emitted
+chord and both tangent connectors continuously against the original boundary and
+holes. Reference helper sampling must also match every replacement exactly.
+Every changed final densified ring receives the same continuous containment check,
+covering neighbouring ordinary fillets retuned after a support edge is shortened.
+The observer is passive; plain/traced execution must remain bit-identical.
+
+All non-ring plan state and existing planner trace stages must match the original
+baseline. Only after certification does the reference replace its public
+`plan.rings`, run its unchanged downstream planner, and require exact candidate
+execution coordinates, quaternions, fingerprint, fields and metrics. Its ordinary
+run must first match the separately compiled pristine baseline exactly, guarding
+against numerical changes caused by the adapter itself. Compiled baseline source,
+header, flags and reference-helper identities are checked against retained evidence.
+Raw baseline/candidate differences remain in the report.
+
+Run the real-planner rejection controls after building both variants:
+
+```sh
+python3 ros2/src/mowgli_coverage/test/replay/test_certified_fillets.py \
+  --baseline /tmp/replay-baseline/coverage_replay \
+  --reference /tmp/replay-baseline/coverage_replay_reference \
+  --candidate /tmp/replay-candidate/coverage_replay
+```
+
+The controls require the old identity contract to reject the repaired square,
+then reject downstream bit drift, inserted points, erased pivots, changed radius,
+forged observation/state, changed fixture, trace drift and unstable repetitions.
+The baseline-only GTests additionally reject tiny holes and concave boundary
+crossings between samples that the old sample-only helper accepts. Python unit
+controls reject changed baseline source/header/build and reference-helper identity.
+
+For the complete retained matrix use the same comparison command above, replacing
+`--require-identical` with:
+
+```sh
+--require-certified-fillets \
+--baseline-binary /tmp/replay-baseline/coverage_replay_reference
+```
+
+Every fixture still requires exact repeated outputs, exact shared inputs and exact
+candidate trace passivity. Unsupported deltas, missing evidence or incompatible
+reference builds fail closed. This certifies emitted planner polylines; the schema
+does not contain a chassis footprint/frame, and this mode supplies no physical
+swept-body or field-coverage evidence.

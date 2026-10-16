@@ -1057,9 +1057,15 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
     double fillet_r,
     double min_radius,
     double step,
-    const std::function<bool(const std::pair<double, double>&, double)>& keep_sharp)
+    const std::function<bool(const std::pair<double, double>&, double)>& keep_sharp,
+    detail::BevelTrace* trace)
 {
   constexpr double kMaxBevelM = 0.01;
+  if (trace)
+  {
+    *trace = {};
+    trace->source = pts;
+  }
   if (!std::isfinite(step) || step <= 0.0)
     return pts;
   if (pts.size() < 4)
@@ -1140,6 +1146,8 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
             }
             if (fits)
             {
+              if (trace)
+                trace->replacements.push_back({i, out.size(), local});
               out.insert(out.end(), local.begin() + 1, local.end() - 1);
               ++i;  // both bevel vertices have been replaced by the accepted arc
               accepted = true;
@@ -1152,8 +1160,13 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
       out.push_back(pts[i]);
   }
   out.push_back(pts.back());
-  return roundSharpCorners(
-      out, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
+  if (trace)
+    trace->intermediate = out;
+  auto rounded =
+      roundSharpCorners(out, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
+  if (trace)
+    trace->rounded = rounded;
+  return rounded;
 }
 
 // True iff every cell is a valid OGR/GEOS polygon (holes inside the shell, not
@@ -1777,6 +1790,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // centimetre-scale innermost ring that isn't worth driving).
   constexpr double kMinRingPerimeter = 1.0;  // m
   double ring_strip_area = 0.0;  // Σ perimeter·op_width of KEPT rings (for the fraction)
+  std::vector<detail::BevelTrace> ring_evidence;
   // Skipped ENTIRELY when the ring stage is disabled (n_rings == 0, issue
   // #429): generateHeadlandSwaths(…, 0, dir_out2in=true) happens to return {}
   // at the pinned F2C commit, but entering ringPassToLoops/fillet/ring_strip
@@ -1794,6 +1808,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       auto loops = ringPassToLoops(pass_lines);
       for (auto& loop : loops)
       {
+        detail::BevelTrace bevel_evidence;
         double perim = 0.0;
         for (std::size_t i = 1; i < loop.size(); ++i)
         {
@@ -1891,13 +1906,16 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                             std::max(2.0 * min_turn_radius, min_turn_radius),
                                             std::max(0.02, min_turn_radius),
                                             0.03,
-                                            keep_sharp);
+                                            keep_sharp,
+                                            trace ? &bevel_evidence : nullptr);
             loop = densifyPolyline(rounded, kDensifyStep);
           }
         }
 
         ring_strip_area += perim * op_width;
         plan.rings.push_back(std::move(loop));
+        if (trace)
+          ring_evidence.push_back(std::move(bevel_evidence));
       }
       if (first_pass)
       {
@@ -1938,6 +1956,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
         std::rotate(plan.rings.begin(),
                     plan.rings.begin() + static_cast<std::ptrdiff_t>(outer),
                     plan.rings.begin() + static_cast<std::ptrdiff_t>(outer) + 1);
+        if (trace)
+          std::rotate(ring_evidence.begin(),
+                      ring_evidence.begin() + static_cast<std::ptrdiff_t>(outer),
+                      ring_evidence.begin() + static_cast<std::ptrdiff_t>(outer) + 1);
       }
     }
   }
@@ -1952,7 +1974,25 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   f2c::types::Cells mainland =
       (n_rings > 0) ? hl.generateHeadlands(safe_cells, n_rings * op_width) : safe_cells;
   if (trace)
+  {
+    for (std::size_t i = 0; i < ring_evidence.size(); ++i)
+    {
+      const auto& evidence = ring_evidence[i];
+      const auto suffix = std::to_string(i);
+      trace->stages.push_back({"bevel_source." + suffix, {evidence.source}});
+      trace->stages.push_back({"bevel_intermediate." + suffix, {evidence.intermediate}});
+      trace->stages.push_back({"bevel_rounded." + suffix, {evidence.rounded}});
+      PlanningTrace::Stage replacements{"bevel_replacements." + suffix, {}};
+      for (const auto& replacement : evidence.replacements)
+      {
+        replacements.paths.push_back(replacement.local);
+        replacements.angles.push_back(static_cast<double>(replacement.source_vertex));
+        replacements.angles.push_back(static_cast<double>(replacement.output_begin));
+      }
+      trace->stages.push_back(std::move(replacements));
+    }
     trace->stages.push_back({"rings", plan.rings});
+  }
   traceCells(trace, "mainland", mainland);
   t_mainland_ms = elapsedMs(t_mainland0);
   mainland_area_m2 = mainland.area();

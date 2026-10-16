@@ -1,0 +1,8 @@
+// Copyright 2026 Mowgli Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Standalone reference only. Preserve the extracted baseline source unchanged;
+// inclusion makes its private ordinary-rounding helpers callable in this TU.
+// clang-format off: the adapter intentionally accesses helpers defined above it.
+#include "@PLANNER_SOURCE@"
+#include "@CMAKE_CURRENT_SOURCE_DIR@/ring_contract_reference.hpp"
+// clang-format on

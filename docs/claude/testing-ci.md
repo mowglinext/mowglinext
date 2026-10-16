@@ -54,6 +54,29 @@ adapters; it does not start a simulation.
 
 Two more piles of test files exist but **never execute**: the 62 CTest suites in the universal-gnss submodule's non-ROS libs (`gnss_core/`, `gnss_protocols/`, `gnss_driver/`, `gnss_transport/`, `gnss_ntrip/`, `gnss_tools/` — `gnss_ros2/CMakeLists.txt:31–66` forces `BUILD_TESTING OFF` around their `add_subdirectory` calls, so only `gnss_ros2`'s own 6 survive colcon), and the upstream `ros2/src/opennav_coverage/*/test/*.cpp` suites, whose packages are `COLCON_IGNORE`'d (only `opennav_coverage_msgs` is built).
 
+### Coverage planner replay contracts
+
+[`test/replay/README.md`](../../ros2/src/mowgli_coverage/test/replay/README.md)
+documents the standalone real-F2C replay. `.github/workflows/coverage-replay.yml`
+compares the synthetic merge's exact base parent with the candidate in Release,
+Debug and RelWithDebInfo. `--require-identical` requires unchanged execution bytes,
+fingerprints and metrics, along with repeated-output stability and trace passivity.
+
+The separate opt-in `--require-certified-fillets` mode keeps exact repetitions,
+fixture identity and trace passivity mandatory while accepting only independently
+certified microscopic bevel replacements. A directly compiled pristine baseline
+and a separate original-source helper adapter must agree exactly; only certified
+rings may be substituted before exact baseline downstream reconstruction.
+All other plan state and original trace stages remain exact. The workflow still
+uses strict identity mode. Build the opt-in baseline reference with
+`-DREPLAY_BASELINE=ON -DREPLAY_CERTIFIED_FILLET_REFERENCE=ON`; its CTest suite adds
+`test_ring_contract_reference` for locality, pivot, supported-radius and continuous
+chord boundary/hole rejection. Run `test_certified_fillets.py --baseline <binary>
+--reference <reference-binary> --candidate <binary>` for real-planner mutation
+controls; the README gives complete commands. Python comparator/provenance tests
+remain registered in both normal package and standalone suites. These checks
+provide planner software evidence, not chassis-sweep or physical validation.
+
 ---
 
 ## CI workflows

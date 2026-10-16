@@ -19,6 +19,9 @@
 #include "geos_c.h"
 #include "mowgli_coverage/coverage_planning.hpp"
 #include <nlohmann/json.hpp>
+#ifdef REPLAY_REFERENCE
+#include "ring_contract.hpp"
+#endif
 
 namespace
 {
@@ -156,7 +159,47 @@ double positive(const Json& params, const char* key, bool allow_zero = false)
   return value;
 }
 
-Json replay(const Json& input, bool trace_enabled)
+Json planState(const coverage::BoustrophedonPlan& plan)
+{
+  Paths swaths;
+  for (const auto& swath : plan.swaths)
+    swaths.push_back({swath.first, swath.second});
+  const auto number = [](double value)
+  {
+    return hex(std::bit_cast<uint64_t>(value));
+  };
+  return {{"boundaries",
+           exact(
+               {plan.safe_boundary, plan.connector_clearance_boundary, plan.swath_turn_envelope})},
+          {"holes", exact(plan.safe_holes)},
+          {"swaths", exact(swaths)},
+          {"swath_angle", number(plan.swath_angle_rad)},
+          {"headland_passes", plan.n_headland_passes},
+          {"drops", plan.diagnostics.drops},
+          {"notes", plan.diagnostics.notes},
+          {"field_area", number(plan.diagnostics.field_area)},
+          {"planned_area", number(plan.diagnostics.planned_area)},
+          {"planned_fraction", number(plan.diagnostics.planned_fraction)}};
+}
+
+#if !defined(REPLAY_BASELINE) || defined(REPLAY_REFERENCE)
+Json traceStages(const coverage::PlanningTrace& trace, std::size_t field)
+{
+  Json result = Json::array();
+  for (const auto& stage : trace.stages)
+  {
+    Json angles = Json::array();
+    for (double angle : stage.angles)
+      angles.push_back(hex(std::bit_cast<uint64_t>(angle)));
+    result.push_back({{"name", std::to_string(field) + "." + stage.name},
+                      {"geometry", exact(stage.paths)},
+                      {"angles", angles}});
+  }
+  return result;
+}
+#endif
+
+Json replay(const Json& input, bool trace_enabled, const Json* certificate = nullptr)
 {
   if (input.at("schema") != 1)
     throw std::runtime_error("unsupported fixture schema");
@@ -164,6 +207,18 @@ Json replay(const Json& input, bool trace_enabled)
   if (precision != "float32" && precision != "float64")
     throw std::runtime_error("precision must be float32 or float64");
   const bool float32 = precision == "float32";
+  if (certificate)
+    for (const auto& stage : certificate->at("stages"))
+    {
+      const auto name = stage.at("name").get<std::string>();
+      const auto separator = name.find('.');
+      if (separator == std::string::npos)
+        throw std::runtime_error("certified trace stage lacks a field identity");
+      const auto index = std::stoull(name.substr(0, separator));
+      if (index >= input.at("polygons").size() ||
+          name.substr(0, separator) != std::to_string(index))
+        throw std::runtime_error("certified trace stage has an unknown field identity");
+    }
   const auto& params = input.at("parameters");
   const double width = positive(params, "operation_width");
   const double headland = positive(params, "headland_width", true);
@@ -223,32 +278,40 @@ Json replay(const Json& input, bool trace_enabled)
     limits.boundary_margin = boundary_margin;
     limits.recorded_boundary = transported.front();
     limits.recorded_obstacles.assign(transported.begin() + 1, transported.end());
-#ifndef REPLAY_BASELINE
+#if !defined(REPLAY_BASELINE) || defined(REPLAY_REFERENCE)
     coverage::PlanningTrace trace;
-    auto* observer = trace_enabled ? &trace : nullptr;
+    auto* observer = trace_enabled || certificate ? &trace : nullptr;
 #else
     (void)trace_enabled;
 #endif
     const auto t0 = std::chrono::steady_clock::now();
-    const auto plan = coverage::planBoustrophedon(cell,
-                                                  width,
-                                                  headland,
-                                                  passes,
-                                                  inset,
-                                                  angle,
-                                                  min_length,
-                                                  direction,
-                                                  min_radius,
-                                                  perpendicular,
-                                                  max_passes,
-                                                  start
-#ifndef REPLAY_BASELINE
-                                                  ,
-                                                  0.0,
-                                                  nullptr,
-                                                  observer
+    auto plan = coverage::planBoustrophedon(cell,
+                                            width,
+                                            headland,
+                                            passes,
+                                            inset,
+                                            angle,
+                                            min_length,
+                                            direction,
+                                            min_radius,
+                                            perpendicular,
+                                            max_passes,
+                                            start
+#if !defined(REPLAY_BASELINE) || defined(REPLAY_REFERENCE)
+                                            ,
+                                            0.0,
+                                            nullptr,
+                                            observer
 #endif
     );
+#ifdef REPLAY_REFERENCE
+    if (certificate)
+      coverage::replay_contract::applyCertifiedRings(
+          plan, *certificate, f, planState(plan), params, transported.front());
+#else
+    if (certificate)
+      throw std::runtime_error("certification requires the pristine baseline adapter");
+#endif
     const auto t1 = std::chrono::steady_clock::now();
     const auto& boundary = plan.connector_clearance_boundary.size() >= 3
                                ? plan.connector_clearance_boundary
@@ -264,7 +327,7 @@ Json replay(const Json& input, bool trace_enabled)
                                                          plan.swath_turn_envelope,
                                                          limits,
                                                          start.has_value() && !plan.rings.empty()
-#ifndef REPLAY_BASELINE
+#if !defined(REPLAY_BASELINE) || defined(REPLAY_REFERENCE)
                                                              ,
                                                          observer
 #endif
@@ -274,17 +337,21 @@ Json replay(const Json& input, bool trace_enabled)
     const auto t2 = std::chrono::steady_clock::now();
     planning_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     connectors_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
-#ifndef REPLAY_BASELINE
-    for (const auto& stage : trace.stages)
-    {
-      Json angles = Json::array();
-      for (double angle : stage.angles)
-        angles.push_back(hex(std::bit_cast<uint64_t>(angle)));
-      stages.push_back({{"name", std::to_string(f) + "." + stage.name},
-                        {"geometry", exact(stage.paths)},
-                        {"angles", angles}});
-    }
+#ifdef REPLAY_REFERENCE
+    if (certificate)
+      coverage::replay_contract::verifyReferenceStages(*certificate,
+                                                       traceStages(trace, f),
+                                                       f,
+                                                       plan.rings.size());
 #endif
+#if !defined(REPLAY_BASELINE) || defined(REPLAY_REFERENCE)
+    if (trace_enabled)
+      for (const auto& stage : traceStages(trace, f))
+        stages.push_back(stage);
+#endif
+    stages.push_back({{"name", std::to_string(f) + ".plan_state"}, {"state", planState(plan)}});
+    stages.push_back(
+        {{"name", std::to_string(f) + ".plan_rings"}, {"geometry", exact(plan.rings)}});
     stages.push_back(
         {{"name", std::to_string(f) + ".boundaries"},
          {"geometry",
@@ -360,6 +427,7 @@ Json replay(const Json& input, bool trace_enabled)
            {{"revision", REPLAY_REVISION},
             {"planner_source_sha256", REPLAY_SOURCE_SHA256},
             {"planner_header_sha256", REPLAY_HEADER_SHA256},
+            {"reference_oracle_sha256", REPLAY_REFERENCE_SHA256},
             {"compiler", REPLAY_COMPILER},
             {"configuration", REPLAY_BUILD_TYPE},
             {"requested_cxx_flags_sha256", REPLAY_REQUESTED_FLAGS_SHA256},
@@ -378,6 +446,19 @@ int main(int argc, char** argv)
       std::cout << Json(isabeyRings()).dump() << '\n';
       return 0;
     }
+#ifdef REPLAY_REFERENCE
+    if (argc == 4 && std::string(argv[1]) == "--certify-fillets")
+    {
+      std::ifstream fixture(argv[2]), certificate(argv[3]);
+      if (!fixture || !certificate)
+        throw std::runtime_error("cannot read certification inputs");
+      const auto input = Json::parse(fixture), snapshot = Json::parse(certificate);
+      auto result = replay(input, false, &snapshot);
+      result["certified_fillets"] = true;
+      std::cout << result.dump() << '\n';
+      return 0;
+    }
+#endif
     if (argc < 2 || argc > 4)
       throw std::runtime_error("usage: coverage_replay fixture.json [repetitions] [--no-trace]");
     std::ifstream file(argv[1]);

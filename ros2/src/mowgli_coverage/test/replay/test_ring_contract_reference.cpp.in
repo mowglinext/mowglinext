@@ -1,0 +1,223 @@
+// Copyright 2026 Mowgli Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Same-TU test access to the independently checked baseline adapter internals.
+#include <iomanip>
+#include <sstream>
+
+// clang-format off: the oracle tests need the pristine helper definitions first.
+#include "@PLANNER_SOURCE@"
+#include "@CMAKE_CURRENT_SOURCE_DIR@/ring_contract_reference.hpp"
+// clang-format on
+#include <gtest/gtest.h>
+
+namespace
+{
+namespace rc = mowgli_coverage::replay_contract;
+using Path = std::vector<std::pair<double, double>>;
+using Json = nlohmann::json;
+const Path boundary{{-1, -1}, {5, -1}, {5, 5}, {-1, 5}};
+const Path source{{0, 2}, {2, 2}, {2.003, 2.003}, {2.003, 4}, {0, 4}, {0, 2}};
+const auto corner = []
+{
+  const auto incoming = rc::subtract(source[1], source[0]);
+  const auto outgoing = rc::subtract(source[3], source[2]);
+  const double t =
+      rc::cross(rc::subtract(source[2], source[0]), outgoing) / rc::cross(incoming, outgoing);
+  return std::pair<double, double>{source[0].first + t * incoming.first,
+                                   source[0].second + t * incoming.second};
+}();
+std::string exact(double number)
+{
+  std::ostringstream out;
+  out << std::hex << std::setfill('0') << std::setw(16) << std::bit_cast<uint64_t>(number);
+  return out.str();
+}
+Json certificate(const Path& local)
+{
+  Json points = Json::array();
+  for (const auto& p : local)
+    points.push_back({exact(p.first), exact(p.second)});
+  return {{"geometry", Json::array({points})}, {"angles", {exact(1), exact(1)}}};
+}
+Path localArc()
+{
+  return mowgli_coverage::roundSharpCorners(
+      {source[0], corner, source[3]}, boundary, {}, M_PI / 6, .4, .2, .03);
+}
+Path intermediate(const Path& local)
+{
+  Path result{source.front()};
+  result.insert(result.end(), local.begin() + 1, local.end() - 1);
+  result.insert(result.end(), source.begin() + 3, source.end());
+  return result;
+}
+TEST(CertifiedFilletOracle, AcceptsSupportedLocalReplacement)
+{
+  const auto local = localArc();
+  EXPECT_NO_THROW(
+      rc::validateIntermediate(source, intermediate(local), certificate(local), boundary, {}, .2));
+}
+TEST(CertifiedFilletOracle, RejectsArbitraryInsertedPointAndErasedPivot)
+{
+  const auto local = localArc();
+  auto changed = intermediate(local);
+  changed.insert(changed.begin() + 1, {1, 2});
+  EXPECT_THROW(rc::validateIntermediate(source, changed, certificate(local), boundary, {}, .2),
+               std::runtime_error);
+  auto pivot = source;
+  pivot.insert(pivot.begin() + 1, pivot[1]);
+  EXPECT_THROW(
+      rc::validateIntermediate(pivot, intermediate(local), certificate(local), boundary, {}, .2),
+      std::runtime_error);
+}
+TEST(CertifiedFilletOracle, IndependentlyRejectsWrongRadiusAndReversedArc)
+{
+  auto local = localArc();
+  EXPECT_THROW(rc::supportedArc(local, source[0], corner, source[3], .5, .8), std::runtime_error);
+  std::reverse(local.begin() + 1, local.end() - 1);
+  EXPECT_THROW(rc::supportedArc(local, source[0], corner, source[3], .2, .4), std::runtime_error);
+}
+TEST(CertifiedFilletOracle, RejectsHoleBetweenLegacySamples)
+{
+  const auto local = localArc();
+  const auto k = local.size() / 2;
+  const double x = (local[k].first + local[k + 1].first) / 2;
+  const double y = (local[k].second + local[k + 1].second) / 2;
+  const double e = 1e-5;
+  const Path hole{{x - e, y - e}, {x + e, y - e}, {x + e, y + e}, {x - e, y + e}};
+  const auto sampled = mowgli_coverage::roundSharpCorners(
+      {source[0], corner, source[3]}, boundary, {hole}, M_PI / 6, .4, .2, .03);
+  ASSERT_TRUE(rc::same(sampled, local))
+      << "negative control must pass the legacy sample-only check";
+  EXPECT_THROW(rc::validateIntermediate(
+                   source, intermediate(local), certificate(local), boundary, {hole}, .2),
+               std::runtime_error);
+}
+TEST(CertifiedFilletOracle, RejectsConcaveBoundaryBetweenLegacySamples)
+{
+  const auto local = localArc();
+  const auto k = local.size() / 2;
+  const double x = (local[k].first + local[k + 1].first) / 2;
+  const double y = (local[k].second + local[k + 1].second) / 2;
+  const double e = 1e-5;
+  const Path notched{
+      {-1, -1}, {5, -1}, {5, 5}, {x + e, 5}, {x + e, y - e}, {x - e, y - e}, {x - e, 5}, {-1, 5}};
+  const auto sampled = mowgli_coverage::roundSharpCorners(
+      {source[0], corner, source[3]}, notched, {}, M_PI / 6, .4, .2, .03);
+  ASSERT_TRUE(rc::same(sampled, local))
+      << "negative control must pass the legacy sample-only check";
+  EXPECT_THROW(
+      rc::validateIntermediate(source, intermediate(local), certificate(local), notched, {}, .2),
+      std::runtime_error);
+}
+TEST(CertifiedFilletOracle, BypassedSmoothingRejectsNullReplacementEvidence)
+{
+  mowgli_coverage::BoustrophedonPlan plan;
+  plan.rings = {{{0, 0}, {1, 0}, {1, 1}, {0, 1}, {0, 0}}};
+  const auto encoded = certificate(plan.rings[0])["geometry"];
+  const auto state = Json::object();
+  Json snapshot{{"stages",
+                 Json::array({
+                     {{"name", "0.plan_state"}, {"state", state}},
+                     {{"name", "0.plan_rings"}, {"geometry", encoded}},
+                     {{"name", "0.rings"}, {"geometry", encoded}, {"angles", Json::array()}},
+                 })}};
+  for (const auto* kind : {"bevel_source.", "bevel_intermediate.", "bevel_rounded."})
+    snapshot["stages"].push_back({{"name", std::string("0.") + kind + "0"},
+                                  {"geometry", Json::array({Json::array()})},
+                                  {"angles", Json::array()}});
+  snapshot["stages"].push_back(
+      {{"name", "0.bevel_replacements.0"}, {"geometry", Json::array()}, {"angles", Json::array()}});
+  const Json parameters{{"min_turn_radius", .2}};
+  EXPECT_NO_THROW(rc::applyCertifiedRings(plan, snapshot, 0, state, parameters, boundary));
+  for (const auto* field : {"geometry", "angles"})
+  {
+    auto malformed = snapshot;
+    malformed["stages"].back()[field] = nullptr;
+    EXPECT_THROW(rc::applyCertifiedRings(plan, malformed, 0, state, parameters, boundary),
+                 std::runtime_error);
+  }
+}
+TEST(CertifiedFilletOracle, RetunedNeighbourRejectsHoleBetweenFinalSamples)
+{
+  const Path tight{{0, 0}, {2, 0}, {2.003, .003}, {2.003, 1}, {0, 1}, {0, 0}};
+  const auto in = rc::subtract(tight[1], tight[0]), out = rc::subtract(tight[3], tight[2]);
+  const double t = rc::cross(rc::subtract(tight[2], tight[0]), out) / rc::cross(in, out);
+  const std::pair<double, double> vertex{tight[0].first + t * in.first,
+                                         tight[0].second + t * in.second};
+  const auto local = mowgli_coverage::roundSharpCorners(
+      {tight[0], vertex, tight[3]}, boundary, {}, M_PI / 6, .4, .2, .03);
+  Path transformed{tight.front()};
+  transformed.insert(transformed.end(), local.begin() + 1, local.end() - 1);
+  transformed.insert(transformed.end(), tight.begin() + 3, tight.end());
+  const auto rounded =
+      mowgli_coverage::roundSharpCorners(transformed, boundary, {}, M_PI / 6, .4, .2, .03);
+  const auto dense = mowgli_coverage::densifyPolyline(rounded, .10);
+  std::size_t k = 0;
+  for (std::size_t i = 1; i + 1 < dense.size(); ++i)
+    if (dense[i].first > 1.72 && dense[i].first < 1.99 && dense[i].second > .72 &&
+        dense[i].second < .99 && dense[i + 1].second > .72 && dense[i + 1].second < 1.0)
+    {
+      k = i;
+      break;
+    }
+  ASSERT_GT(k, 0u) << "must select the newly retuned neighbouring arc";
+  const double x = (dense[k].first + dense[k + 1].first) / 2;
+  const double y = (dense[k].second + dense[k + 1].second) / 2;
+  const double e = 1e-5;
+  const Path hole{{x - e, y - e}, {x + e, y - e}, {x + e, y + e}, {x - e, y + e}};
+  ASSERT_NO_THROW(rc::contains(local, boundary, {hole}));
+  const auto sampled =
+      mowgli_coverage::roundSharpCorners(transformed, boundary, {hole}, M_PI / 6, .4, .2, .03);
+  ASSERT_TRUE(rc::same(sampled, rounded)) << "legacy final sample-only guard must miss this hole";
+  ASSERT_NO_THROW(
+      rc::validateIntermediate(tight, transformed, certificate(local), boundary, {hole}, .2));
+  const auto legacy =
+      mowgli_coverage::roundSharpCorners(tight, boundary, {}, M_PI / 6, .4, .2, .03);
+  ASSERT_TRUE(
+      rc::same(legacy,
+               mowgli_coverage::roundSharpCorners(tight, boundary, {hole}, M_PI / 6, .4, .2, .03)));
+  ASSERT_TRUE(rc::same(dense, mowgli_coverage::densifyPolyline(sampled, .10)));
+  const auto state = Json::object();
+  const Json parameters{{"min_turn_radius", .2}};
+  const auto apply = [&](const std::vector<Path>& holes)
+  {
+    mowgli_coverage::BoustrophedonPlan plan;
+    plan.safe_boundary = boundary;
+    plan.safe_holes = holes;
+    plan.rings = {mowgli_coverage::densifyPolyline(
+        mowgli_coverage::roundSharpCorners(tight, boundary, holes, M_PI / 6, .4, .2, .03), .10)};
+    Json snapshot{{"stages",
+                   Json::array({
+                       {{"name", "0.plan_state"}, {"state", state}},
+                       {{"name", "0.plan_rings"}, {"geometry", certificate(dense)["geometry"]}},
+                       {{"name", "0.rings"},
+                        {"geometry", certificate(dense)["geometry"]},
+                        {"angles", Json::array()}},
+                       {{"name", "0.bevel_source.0"},
+                        {"geometry", certificate(tight)["geometry"]},
+                        {"angles", Json::array()}},
+                       {{"name", "0.bevel_intermediate.0"},
+                        {"geometry", certificate(transformed)["geometry"]},
+                        {"angles", Json::array()}},
+                       {{"name", "0.bevel_rounded.0"},
+                        {"geometry", certificate(rounded)["geometry"]},
+                        {"angles", Json::array()}},
+                   })}};
+    auto replacement = certificate(local);
+    replacement["name"] = "0.bevel_replacements.0";
+    snapshot["stages"].push_back(std::move(replacement));
+    rc::applyCertifiedRings(plan, snapshot, 0, state, parameters, boundary);
+  };
+  ASSERT_NO_THROW(apply({}));
+  try
+  {
+    apply({hole});
+    FAIL() << "final-ring oracle must reject the post-round chord crossing";
+  }
+  catch (const std::runtime_error& error)
+  {
+    EXPECT_NE(std::string(error.what()).find("replacement intersects hole"), std::string::npos);
+  }
+}
+}  // namespace

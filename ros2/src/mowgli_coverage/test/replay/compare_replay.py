@@ -3,12 +3,15 @@
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import pathlib
 import re
 import statistics
+import subprocess
 import sys
+import tempfile
 
 from run_replay import digest, input_identity, stable
 
@@ -248,6 +251,90 @@ def compatible_build_metadata(baseline, candidate):
     }
 
 
+def reference_oracle_hash():
+    root = pathlib.Path(__file__).resolve().parent
+    files = ('ring_contract_reference.hpp', 'ring_contract.hpp', 'ring_contract_adapter.cpp.in')
+    return hashlib.sha256(b''.join((root / name).read_bytes() for name in files)).hexdigest()
+
+
+def certify_fillets(name, baseline, candidate, traced, baseline_dir, candidate_dir,
+                    trace_dir, binary):
+    """Validate local changes with old helpers, then require exact old downstream output."""
+    original = validate_evidence(baseline_dir, name, baseline)
+    plain = validate_evidence(candidate_dir, name, candidate)
+    observed = validate_evidence(trace_dir, name, traced)
+    if not (baseline['fixture_sha256'] == candidate['fixture_sha256'] == traced['fixture_sha256']):
+        raise ValueError(f'{name}: certification fixture identities differ')
+    shared = {}
+    for stage in observed['stages']:
+        if stage['name'] in shared:
+            raise ValueError(f'{name}: duplicate traced stage')
+        shared[stage['name']] = stage
+    seen = set()
+    for stage in plain['stages']:
+        if stage['name'] in seen or shared.get(stage['name']) != stage:
+            raise ValueError(f'{name}: traced public planner stage differs from plain candidate')
+        seen.add(stage['name'])
+    for key in ('compiler', 'configuration', 'gdal', 'geos', 'requested_cxx_flags_sha256',
+                'compiler_fp_features'):
+        if key not in baseline['build'] or baseline['build'][key] != candidate['build'].get(key):
+            raise ValueError(f'{name}: incompatible baseline/candidate {key}')
+    for key in ('revision', 'planner_source_sha256', 'planner_header_sha256'):
+        if candidate['build'].get(key) != traced['build'].get(key):
+            raise ValueError(f'{name}: traced candidate source differs')
+    with tempfile.TemporaryDirectory(prefix='coverage-certified-fillets-') as temporary:
+        certificate = pathlib.Path(temporary) / 'trace.json'
+        certificate.write_text(json.dumps(observed, allow_nan=False), encoding='utf-8')
+        fixture = str(pathlib.Path(baseline_dir) / f'{name}.json')
+        control = subprocess.run([str(binary), fixture, '1', '--no-trace'],
+                                 capture_output=True, text=True, timeout=300, check=False)
+        if control.returncode:
+            raise ValueError(f'{name}: baseline reference control failed: {control.stderr.strip()}')
+        try:
+            control_snapshot = json.loads(control.stdout)
+            control_geometry = stable(control_snapshot)
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise ValueError(f'{name}: malformed baseline reference control') from error
+        if control_geometry != stable(original):
+            raise ValueError(f'{name}: reference adapter changes pristine baseline output')
+        command = [str(binary), '--certify-fillets', fixture, str(certificate)]
+        process = subprocess.run(command, capture_output=True, text=True, timeout=300, check=False)
+    if process.returncode:
+        raise ValueError(f'{name}: baseline ring oracle rejected: {process.stderr.strip()}')
+    try:
+        reconstructed = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError(f'{name}: invalid baseline oracle output') from error
+    if reconstructed.get('certified_fillets') is not True:
+        raise ValueError(f'{name}: baseline oracle did not certify the rings')
+    build = reconstructed.get('build', {})
+    for key in ('revision', 'planner_source_sha256', 'planner_header_sha256', 'compiler',
+                'configuration', 'gdal', 'geos', 'requested_cxx_flags_sha256',
+                'compiler_fp_features'):
+        if key not in baseline['build'] or build.get(key) != baseline['build'][key]:
+            raise ValueError(f'{name}: oracle uses a different pristine baseline {key}')
+    oracle_hash = reference_oracle_hash()
+    if (build.get('reference_oracle_sha256') != oracle_hash
+            or control_snapshot.get('build') != build):
+        raise ValueError(f'{name}: oracle helper source differs from reviewed tooling')
+    if stable(reconstructed) != stable(plain):
+        raise ValueError(f'{name}: candidate differs from exact baseline downstream reconstruction')
+    return {
+        'certified': True,
+        'baseline_revision': build['revision'],
+        'baseline_source_sha256': build['planner_source_sha256'],
+        'reference_oracle_sha256': oracle_hash,
+        'pristine_baseline_control_sha256': digest(stable(control_snapshot)),
+        'reconstructed_output_sha256': digest(stable(reconstructed)),
+        'candidate_output_sha256': candidate['output_sha256'],
+        'replacement_count': sum(
+            len(stage['geometry']) for stage in observed['stages']
+            if '.bevel_replacements.' in stage['name']
+        ),
+        'scope': 'certifies emitted ring polylines; no physical chassis-sweep claim',
+    }
+
+
 def case_comparison(name, baseline, candidate, trace, baseline_dir, candidate_dir,
                     trace_dir, expected_runs, expected_trace_runs, expected_processes,
                     expected_trace_processes):
@@ -404,6 +491,18 @@ def report_markdown(report):
         f'- Median per-case process time change: {wall_change}%',
         f'- Median per-case RSS change: {rss_change}%',
     ]
+    if report.get('require_certified_fillets'):
+        certified = sum(case.get('certified_fillets', {}).get('certified', False)
+                        for case in report['cases'].values())
+        lines.extend([
+            f'- Certified local-fillet/downstream reconstructions: {certified}/{case_count}',
+            '- Raw baseline/candidate differences above remain part of this report.',
+            '- Fillet certification checks emitted polylines, not physical chassis sweeps.',
+        ])
+        for name, case in report['cases'].items():
+            error = case.get('certified_fillets', {}).get('error')
+            if error:
+                lines.append(f'- Rejected {name}: {error}')
     environment = report.get('environment') or {}
     if environment:
         libraries = ', '.join(environment.get('fields2cover_library_sha256', []))
@@ -473,8 +572,13 @@ def main():
     parser.add_argument('--expected-trace-runs', type=int, default=100)
     parser.add_argument('--expected-processes', type=int, default=3)
     parser.add_argument('--expected-trace-processes', type=int, default=5)
-    parser.add_argument('--require-identical', action='store_true')
+    contract = parser.add_mutually_exclusive_group()
+    contract.add_argument('--require-identical', action='store_true')
+    contract.add_argument('--require-certified-fillets', action='store_true')
+    parser.add_argument('--baseline-binary', type=pathlib.Path)
     args = parser.parse_args()
+    if args.require_certified_fillets and (not args.trace_dir or not args.baseline_binary):
+        parser.error('certified fillets require --trace-dir and --baseline-binary')
     if min(
         args.expected_cases,
         args.expected_runs,
@@ -513,6 +617,7 @@ def main():
             'case_names_match': names_match,
             'trace_case_names_match': trace_names_match,
             'require_identical': args.require_identical,
+            'require_certified_fillets': args.require_certified_fillets,
             'environment': environment,
             'cases': {},
         }
@@ -532,6 +637,15 @@ def main():
                 args.expected_processes,
                 args.expected_trace_processes,
             )
+            if args.require_certified_fillets:
+                try:
+                    certification = certify_fillets(
+                        name, baseline[name], candidate[name], trace[name],
+                        args.baseline_dir, args.candidate_dir, args.trace_dir, args.baseline_binary,
+                    )
+                except (KeyError, TypeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
+                    certification = {'certified': False, 'error': str(error)}
+                report['cases'][name]['certified_fillets'] = certification
         valid_cases = [case for case in report['cases'].values() if case['comparison_valid']]
         report['exact_output_matches'] = sum(
             case.get('output_sha256_equal', False) for case in valid_cases
@@ -596,11 +710,18 @@ def main():
         report['all_trace_passivity_matches'] = (
             trace is None or report['trace_passivity_matches'] == args.expected_cases
         )
+        report['all_fillets_certified'] = args.require_certified_fillets and all(
+            case.get('certified_fillets', {}).get('certified') for case in report['cases'].values()
+        )
         report['passed'] = (
             report['case_count'] == args.expected_cases
             and report['stable_runs']
             and report['all_fixture_hashes_match']
             and report['performance_case_count'] == args.expected_cases
+            and (not args.require_certified_fillets or (
+                report['all_fillets_certified'] and trace is not None
+                and report['all_trace_passivity_matches']
+            ))
             and (
                 not args.require_identical
                 or (
@@ -627,7 +748,7 @@ def main():
             f'median case deltas wall={wall_change}%, RSS={rss_change}%'
         )
         return 0 if report['passed'] else 1
-    except (KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
         print(f'comparison failed: {error}', file=sys.stderr)
         return 2
 

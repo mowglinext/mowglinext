@@ -7,8 +7,11 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
+import subprocess
 
-from compare_replay import case_comparison, METRIC_KEYS, trace_geometry, validate_evidence
+from compare_replay import (case_comparison, certify_fillets, METRIC_KEYS,
+                            reference_oracle_hash, trace_geometry, validate_evidence)
 from run_replay import digest, input_identity, stable
 
 
@@ -38,6 +41,8 @@ class EvidenceTests(unittest.TestCase):
                 'compiler': 'GNU-15', 'configuration': 'Release', 'gdal': '3', 'geos': '3',
                 'revision': 'a' * 40, 'planner_source_sha256': 'b' * 64,
                 'planner_header_sha256': 'c' * 64,
+                'requested_cxx_flags_sha256': 'd' * 64,
+                'compiler_fp_features': {'fma': False},
             },
         }
 
@@ -145,6 +150,52 @@ class EvidenceTests(unittest.TestCase):
         )
         self.assertTrue(result['planner_identical'])
         self.assertFalse(result['trace_passivity']['passive'])
+
+    def certification_evidence(self):
+        baseline_dir, baseline = self.write_evidence('baseline')
+        candidate_dir, candidate = self.write_evidence('candidate')
+        trace_dir, traced = self.write_evidence('traced')
+        return ('case', baseline, candidate, traced, baseline_dir, candidate_dir,
+                trace_dir, pathlib.Path('/unused/reference-binary'))
+
+    def reference_response(self):
+        response = copy.deepcopy(self.snapshot)
+        response['certified_fillets'] = True
+        response['build']['reference_oracle_sha256'] = reference_oracle_hash()
+        return response
+
+    def test_certification_requires_exact_downstream_output(self):
+        arguments = self.certification_evidence()
+        response = self.reference_response()
+        with mock.patch('compare_replay.subprocess.run', return_value=
+                        subprocess.CompletedProcess([], 0, json.dumps(response), '')):
+            self.assertTrue(certify_fillets(*arguments)['certified'])
+        response['stages'][0]['geometry'][0][0][0] = '0000000000000001'
+        with mock.patch('compare_replay.subprocess.run', side_effect=[
+                subprocess.CompletedProcess([], 0, json.dumps(self.reference_response()), ''),
+                subprocess.CompletedProcess([], 0, json.dumps(response), '')]):
+            with self.assertRaisesRegex(ValueError, 'downstream reconstruction'):
+                certify_fillets(*arguments)
+
+    def test_certification_rejects_changed_baseline_or_helper(self):
+        arguments = self.certification_evidence()
+        for key in ('revision', 'planner_source_sha256', 'planner_header_sha256',
+                    'reference_oracle_sha256', 'requested_cxx_flags_sha256'):
+            with self.subTest(key=key):
+                response = self.reference_response()
+                response['build'][key] = 'f' * 64
+                with mock.patch('compare_replay.subprocess.run', return_value=
+                                subprocess.CompletedProcess([], 0, json.dumps(response), '')):
+                    with self.assertRaises(ValueError):
+                        certify_fillets(*arguments)
+
+    def test_certification_rejects_missing_oracle_and_false_verdict(self):
+        arguments = self.certification_evidence()
+        for response in (subprocess.CompletedProcess([], 1, '', 'unsupported source helper'),
+                         subprocess.CompletedProcess([], 0, '{}', '')):
+            with mock.patch('compare_replay.subprocess.run', return_value=response):
+                with self.assertRaises(ValueError):
+                    certify_fillets(*arguments)
 
 
 if __name__ == '__main__':
