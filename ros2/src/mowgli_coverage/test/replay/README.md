@@ -244,7 +244,9 @@ unchanged.
 `--require-identical` retains its strict baseline/candidate equality contract.
 The workflow continues using that mode. A separate, opt-in
 `--require-certified-fillets` contract is limited to the microscopic bevel repair;
-it does not approve arbitrary changed geometry or update expected snapshots.
+it accepts either the complete strict identity predicate or an independently
+certified microscopic bevel change, and reports the method per fixture. It does
+not approve arbitrary changed geometry or update expected snapshots.
 
 Configure the extracted baseline build with both `-DREPLAY_BASELINE=ON` and
 `-DREPLAY_CERTIFIED_FILLET_REFERENCE=ON`. This additionally builds
@@ -255,6 +257,14 @@ translation unit to call its existing ordinary-rounding and densification helper
 It requires the original `PlanningTrace` API (present in `dev` at `e48cf12a`);
 missing or incompatible APIs/helpers fail the build. There is no compatibility
 patch or runtime planner policy switch.
+
+Both paths require ordinary reference output to match the directly compiled
+pristine baseline, matching source/header/build/helper identities, exact fixture
+identity, deterministic repetitions and passive candidate observation. The exact
+identity path also compares every traced-reference stage in order. Once the
+baseline contains the repair, identical output needs no pre-repair reconstruction.
+If an older baseline lacks the new bevel observation records, those extra records
+still pass the geometry oracle below; unknown stages or malformed records fail.
 
 Candidate observation records the actual sparse ring, intermediate bevel-only
 replacement, ordinary-rounded result and accepted local spans. The oracle binds
@@ -288,10 +298,13 @@ python3 ros2/src/mowgli_coverage/test/replay/test_certified_fillets.py \
   --candidate /tmp/replay-candidate/coverage_replay
 ```
 
-The controls require the old identity contract to reject the repaired square,
-then reject downstream bit drift, inserted points, erased pivots, changed radius,
+The controls check the square's actual comparison method and the strict gate
+(expected RED for an old baseline, PASS for an identical future baseline), then reject downstream bit drift, inserted points, erased pivots, changed radius,
 forged observation/state, changed fixture, trace drift and unstable repetitions.
-The baseline-only GTests additionally reject tiny holes and concave boundary
+Use `--expect-method certified_fillets` or `--expect-method identical` to pin the
+intended contrast. All mutation controls run in both modes, including full CLI
+acceptance/rejection checks for exact identity, execution drift, trace drift and
+unstable data. The baseline-only GTests always run and additionally reject tiny holes and concave boundary
 crossings between samples that the old sample-only helper accepts. Python unit
 controls reject changed baseline source/header/build and reference-helper identity.
 `test_semantic_diagnostics` runs in both package and standalone CTest suites,

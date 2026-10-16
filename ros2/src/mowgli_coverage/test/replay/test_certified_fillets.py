@@ -63,13 +63,39 @@ class CertifiedReplayTests(unittest.TestCase):
         return next(stage['name'].split('.')[-1] for stage in self.snapshots['traced']['stages']
                     if '.bevel_replacements.' in stage['name'] and stage['geometry'])
 
-    def test_original_identity_gate_is_red_and_certified_reconstruction_matches(self):
+    def compare_cli(self, strict=False):
+        environment = self.root / 'test-environment.json'
+        # Synthetic metadata identifies comparator controls, not field/build evidence.
+        environment.write_text(json.dumps({'architecture': 'comparator-test', 'compiler': 'comparator-test',
+                                           'build_type': 'comparator-test', 'fields2cover_revision': 'comparator-test',
+                                           'fields2cover_library_sha256': ['comparator-test']}), encoding='utf-8')
+        command = [sys.executable, str(pathlib.Path(__file__).with_name('compare_replay.py')),
+                   '--baseline-dir', str(self.directories['baseline']), '--candidate-dir', str(self.directories['candidate']),
+                   '--trace-dir', str(self.directories['traced']), '--baseline-binary', str(OPTIONS.reference),
+                   '--environment', str(environment), '--output-json', str(self.root / 'comparison.json'),
+                   '--output-markdown', str(self.root / 'comparison.md'), '--expected-cases', '1', '--expected-runs', '1',
+                   '--expected-trace-runs', '1', '--expected-processes', '1', '--expected-trace-processes', '1',
+                   '--require-identical' if strict else '--require-certified-fillets']
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        self.assertIn(completed.returncode, (0, 1), completed.stderr)
+        return completed.returncode, json.loads((self.root / 'comparison.json').read_text())
+
+    def test_real_planner_contract_and_strict_diagnostic(self):
         result = case_comparison('control', self.summaries['baseline'], self.summaries['candidate'],
                                  self.summaries['traced'], self.directories['baseline'],
                                  self.directories['candidate'], self.directories['traced'], 1, 1, 1, 1)
-        self.assertFalse(result['planner_identical'], 'positive control must exercise the actual geometry repair')
+        method = 'identical' if result['planner_identical'] else 'certified_fillets'
+        if OPTIONS.expect_method:
+            self.assertEqual(method, OPTIONS.expect_method)
         self.assertTrue(result['trace_passivity']['passive'])
-        self.assertTrue(certify_fillets(*self.arguments())['certified'])
+        self.assertEqual(certify_fillets(*self.arguments())['method'], method)
+        status, report = self.compare_cli()
+        self.assertEqual(status, 0)
+        self.assertTrue(report['all_planner_contracts_match'])
+        self.assertEqual(report['cases']['control']['planner_contract']['method'], method)
+        strict_status, strict_report = self.compare_cli(strict=True)
+        self.assertEqual(strict_status, 0 if method == 'identical' else 1)
+        self.assertEqual(strict_report['all_planner_outputs_match'], method == 'identical')
 
     def test_unrelated_downstream_bit_change_is_rejected(self):
         stage = next(stage for stage in self.snapshots['candidate']['stages'] if stage['name'].endswith('.execution'))
@@ -77,8 +103,11 @@ class CertifiedReplayTests(unittest.TestCase):
         self.stage('.execution')['geometry'][0][0][0] = '0000000000000001'
         self.write('candidate')
         self.write('traced')
-        with self.assertRaisesRegex(ValueError, 'downstream reconstruction'):
+        with self.assertRaises(ValueError):
             certify_fillets(*self.arguments())
+        status, report = self.compare_cli()
+        self.assertEqual(status, 1)
+        self.assertFalse(report['all_planner_contracts_match'])
 
     def test_unaccounted_inserted_point_is_rejected(self):
         path = self.stage('bevel_intermediate.' + self.ring())['geometry'][0]
@@ -117,41 +146,49 @@ class CertifiedReplayTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'non-ring plan state'):
             certify_fillets(*self.arguments())
 
+    def test_malformed_observer_schema_is_rejected(self):
+        self.stage('bevel_replacements.' + self.ring())['geometry'] = None
+        self.write('traced')
+        status, report = self.compare_cli()
+        self.assertEqual(status, 1)
+        self.assertFalse(report['all_planner_contracts_match'])
+
+    def test_traced_build_identity_drift_is_rejected(self):
+        self.snapshots['traced']['build']['requested_cxx_flags_sha256'] = 'f' * 64
+        self.write('traced')
+        status, report = self.compare_cli()
+        self.assertEqual(status, 1)
+        self.assertFalse(report['all_planner_contracts_match'])
+
     def test_changed_fixture_is_rejected(self):
         changed = copy.deepcopy(self.data)
         changed['parameters']['operation_width'] = .19
         (self.directories['candidate'] / 'control.json').write_text(json.dumps(changed), encoding='utf-8')
         self.summaries['candidate']['fixture_sha256'] = digest(changed)
+        (self.directories['candidate'] / 'summary.json').write_text(
+            json.dumps({'control': self.summaries['candidate']}), encoding='utf-8')
         with self.assertRaisesRegex(ValueError, 'fixture identities differ'):
             certify_fillets(*self.arguments())
+        status, report = self.compare_cli()
+        self.assertEqual(status, 1)
+        self.assertFalse(report['all_planner_contracts_match'])
+        self.assertFalse(report['all_fixture_hashes_match'])
 
     def test_new_mode_still_rejects_trace_drift_and_unstable_runs(self):
-        environment = self.root / 'test-environment.json'
-        # Synthetic metadata identifies this comparator mutation test, not a field/build report.
-        environment.write_text(json.dumps({'architecture': 'comparator-test', 'compiler': 'comparator-test',
-                                           'build_type': 'comparator-test', 'fields2cover_revision': 'comparator-test',
-                                           'fields2cover_library_sha256': ['comparator-test']}), encoding='utf-8')
-        command = [sys.executable, str(pathlib.Path(__file__).with_name('compare_replay.py')),
-                   '--baseline-dir', str(self.directories['baseline']), '--candidate-dir', str(self.directories['candidate']),
-                   '--trace-dir', str(self.directories['traced']), '--baseline-binary', str(OPTIONS.reference),
-                   '--environment', str(environment), '--output-json', str(self.root / 'comparison.json'),
-                   '--output-markdown', str(self.root / 'comparison.md'), '--expected-cases', '1', '--expected-runs', '1',
-                   '--expected-trace-runs', '1', '--expected-processes', '1', '--expected-trace-processes', '1',
-                   '--require-certified-fillets']
         self.snapshots['traced']['followstrip_fingerprint'] = 'f' * 16
         self.write('traced')
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=60)
-        self.assertEqual(completed.returncode, 1, completed.stderr)
-        report = json.loads((self.root / 'comparison.json').read_text())
-        self.assertTrue(report['all_fillets_certified'])
+        status, report = self.compare_cli()
+        self.assertEqual(status, 1)
+        self.assertFalse(report['all_planner_contracts_match'])
         self.assertFalse(report['all_trace_passivity_matches'])
         self.snapshots['traced'] = copy.deepcopy(type(self).snapshots['traced'])
         self.write('traced')
         self.summaries['candidate']['unique_exact_outputs'] = 2
         (self.directories['candidate'] / 'summary.json').write_text(json.dumps({'control': self.summaries['candidate']}))
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=60)
-        self.assertEqual(completed.returncode, 1, completed.stderr)
-        self.assertFalse(json.loads((self.root / 'comparison.json').read_text())['stable_runs'])
+        status, report = self.compare_cli()
+        self.assertEqual(status, 1)
+        self.assertFalse(report['stable_runs'])
+        self.assertFalse(report['all_planner_contracts_match'])
 
 
 if __name__ == '__main__':
@@ -159,5 +196,6 @@ if __name__ == '__main__':
     parser.add_argument('--baseline', type=pathlib.Path, required=True)
     parser.add_argument('--reference', type=pathlib.Path, required=True)
     parser.add_argument('--candidate', type=pathlib.Path, required=True)
+    parser.add_argument('--expect-method', choices=('identical', 'certified_fillets'))
     OPTIONS, remaining = parser.parse_known_args()
     unittest.main(argv=[sys.argv[0], *remaining])

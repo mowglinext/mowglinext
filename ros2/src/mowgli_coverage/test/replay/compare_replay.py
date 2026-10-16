@@ -9,6 +9,7 @@ import math
 import pathlib
 import re
 import statistics
+import struct
 import subprocess
 import sys
 import tempfile
@@ -251,6 +252,68 @@ def compatible_build_metadata(baseline, candidate):
     }
 
 
+def planner_identity(baseline, candidate):
+    """The complete existing strict identity predicate, including structure/build."""
+    return (
+        baseline.get('output_sha256') == candidate.get('output_sha256')
+        and baseline.get('followstrip_fingerprint') == candidate.get('followstrip_fingerprint')
+        and baseline.get('fields') == candidate.get('fields')
+        and baseline.get('stage_hashes') == candidate.get('stage_hashes')
+        and all(value['equal'] for value in metric_comparison(baseline, candidate).values())
+        and all(value['equal'] for value in compatible_build_metadata(baseline, candidate).values())
+    )
+
+
+def validate_bevel_observer(snapshot, stages):
+    """Validate optional observer evidence even when strict output identity suffices."""
+    def path(points):
+        if not isinstance(points, list):
+            raise ValueError('invalid bevel observer path')
+        if points:
+            require_paths([points])
+        for point in points:
+            for number in point:
+                if not math.isfinite(struct.unpack('>d', bytes.fromhex(number))[0]):
+                    raise ValueError('nonfinite bevel observer coordinate')
+
+    expected = set()
+    for field, record in enumerate(snapshot['fields']):
+        rings = stages[f'{field}.plan_rings']['geometry']
+        if not isinstance(rings, list) or len(rings) != record['rings']:
+            raise ValueError('bevel observer ring count differs')
+        for index, ring in enumerate(rings):
+            require_paths([ring])
+            path(ring)
+            values = []
+            for kind in ('source', 'intermediate', 'rounded', 'replacements'):
+                name = f'{field}.bevel_{kind}.{index}'
+                expected.add(name)
+                item = stages[name]
+                if (set(item) != {'name', 'geometry', 'angles'}
+                        or not isinstance(item['geometry'], list)
+                        or not isinstance(item['angles'], list)):
+                    raise ValueError('invalid bevel observer schema')
+                for points in item['geometry']:
+                    path(points)
+                if kind != 'replacements':
+                    if len(item['geometry']) != 1 or item['angles']:
+                        raise ValueError('invalid bevel observer singleton')
+                    values.append(item['geometry'][0])
+                else:
+                    if len(item['angles']) != 2 * len(item['geometry']):
+                        raise ValueError('invalid bevel observer indices')
+                    for encoded in item['angles']:
+                        require_hex(encoded, 16)
+                        value = struct.unpack('>d', bytes.fromhex(encoded))[0]
+                        if not math.isfinite(value) or value < 1 or not value.is_integer():
+                            raise ValueError('invalid bevel observer index')
+                    if not values[0] and (any(values) or item['geometry'] or item['angles']):
+                        raise ValueError('invalid bypassed bevel observer')
+    if {name for name in stages if '.bevel_' in name} != expected:
+        raise ValueError('missing or unrecognized bevel observer stage')
+    return expected
+
+
 def reference_oracle_hash():
     root = pathlib.Path(__file__).resolve().parent
     files = ('ring_contract_reference.hpp', 'ring_contract.hpp', 'ring_contract_adapter.cpp.in',
@@ -260,12 +323,15 @@ def reference_oracle_hash():
 
 def certify_fillets(name, baseline, candidate, traced, baseline_dir, candidate_dir,
                     trace_dir, binary):
-    """Validate local changes with old helpers, then require exact old downstream output."""
+    """Require strict identity or a narrowly certified change, with common controls."""
     original = validate_evidence(baseline_dir, name, baseline)
     plain = validate_evidence(candidate_dir, name, candidate)
     observed = validate_evidence(trace_dir, name, traced)
     if not (baseline['fixture_sha256'] == candidate['fixture_sha256'] == traced['fixture_sha256']):
         raise ValueError(f'{name}: certification fixture identities differ')
+    for summary in (baseline, candidate, traced):
+        if summary['unique_exact_outputs'] != 1 or summary['failures']:
+            raise ValueError(f'{name}: unstable replay evidence')
     shared = {}
     for stage in observed['stages']:
         if stage['name'] in shared:
@@ -276,13 +342,34 @@ def certify_fillets(name, baseline, candidate, traced, baseline_dir, candidate_d
         if stage['name'] in seen or shared.get(stage['name']) != stage:
             raise ValueError(f'{name}: traced public planner stage differs from plain candidate')
         seen.add(stage['name'])
+    bevel_stages = validate_bevel_observer(observed, shared)
+    if (trace_geometry(plain) != trace_geometry(observed)
+            or candidate['followstrip_fingerprint'] != traced['followstrip_fingerprint']
+            or candidate['fields'] != traced['fields']
+            or not all(value['equal'] for value in metric_comparison(candidate, traced).values())):
+        raise ValueError(f'{name}: candidate trace is not passive')
     for key in ('compiler', 'configuration', 'gdal', 'geos', 'requested_cxx_flags_sha256',
                 'compiler_fp_features'):
         if key not in baseline['build'] or baseline['build'][key] != candidate['build'].get(key):
             raise ValueError(f'{name}: incompatible baseline/candidate {key}')
-    for key in ('revision', 'planner_source_sha256', 'planner_header_sha256'):
+    for key in ('revision', 'planner_source_sha256', 'planner_header_sha256', 'compiler',
+                'configuration', 'gdal', 'geos', 'requested_cxx_flags_sha256',
+                'compiler_fp_features'):
         if candidate['build'].get(key) != traced['build'].get(key):
             raise ValueError(f'{name}: traced candidate source differs')
+    oracle_hash = reference_oracle_hash()
+
+    def checked_build(snapshot):
+        build = snapshot.get('build', {})
+        for key in ('revision', 'planner_source_sha256', 'planner_header_sha256', 'compiler',
+                    'configuration', 'gdal', 'geos', 'requested_cxx_flags_sha256',
+                    'compiler_fp_features'):
+            if key not in baseline['build'] or build.get(key) != baseline['build'][key]:
+                raise ValueError(f'{name}: oracle uses a different pristine baseline {key}')
+        if build.get('reference_oracle_sha256') != oracle_hash:
+            raise ValueError(f'{name}: oracle helper source differs from reviewed tooling')
+        return build
+
     with tempfile.TemporaryDirectory(prefix='coverage-certified-fillets-') as temporary:
         certificate = pathlib.Path(temporary) / 'trace.json'
         certificate.write_text(json.dumps(observed, allow_nan=False), encoding='utf-8')
@@ -298,6 +385,50 @@ def certify_fillets(name, baseline, candidate, traced, baseline_dir, candidate_d
             raise ValueError(f'{name}: malformed baseline reference control') from error
         if control_geometry != stable(original):
             raise ValueError(f'{name}: reference adapter changes pristine baseline output')
+        build = checked_build(control_snapshot)
+        audit = {
+            'accepted': True,
+            'baseline_revision': build['revision'],
+            'baseline_source_sha256': build['planner_source_sha256'],
+            'reference_oracle_sha256': oracle_hash,
+            'pristine_baseline_control_sha256': digest(control_geometry),
+            'candidate_output_sha256': candidate['output_sha256'],
+        }
+        identical = planner_identity(baseline, candidate)
+        if identical:
+            # A baseline that already contains the repair must retain strict
+            # identity eligibility; its ring need not equal pre-repair oldRound(S).
+            observed_control = subprocess.run([str(binary), fixture, '1'], capture_output=True,
+                                              text=True, timeout=300, check=False)
+            if observed_control.returncode:
+                raise ValueError(f'{name}: traced baseline reference control failed')
+            observed_reference = json.loads(observed_control.stdout)
+            if checked_build(observed_reference) != build:
+                raise ValueError(f'{name}: traced reference build differs')
+            reference_names = set()
+            for stage in observed_reference['stages']:
+                if stage['name'] in reference_names or shared.get(stage['name']) != stage:
+                    raise ValueError(f'{name}: identical planner observer stage differs')
+                reference_names.add(stage['name'])
+            if ([stage['name'] for stage in observed_reference['stages']]
+                    != [stage['name'] for stage in observed['stages']
+                        if stage['name'] in reference_names]):
+                raise ValueError(f'{name}: identical planner observer stage order differs')
+            if set(shared) - reference_names - bevel_stages:
+                raise ValueError(f'{name}: unrecognized identical planner observer stage')
+            if (trace_geometry(observed_reference) != trace_geometry(original)
+                    or observed_reference['fields'] != original['fields']
+                    or observed_reference['metrics'] != original['metrics']
+                    or observed_reference['followstrip_fingerprint'] != original['followstrip_fingerprint']):
+                raise ValueError(f'{name}: baseline reference observer is not passive')
+            if not set(shared) - reference_names:
+                return {**audit, 'method': 'identical', 'replacement_count': 0,
+                        'observer_validation': 'exact traced pristine reference',
+                        'scope': 'strict output identity; no functional geometry change accepted'}
+            # Older baselines lack bevel observer records. Bind those extra records
+            # with the existing oracle; unchanged rings reconstruct the old output.
+            # Future baselines bind all records directly above and need no replay
+            # of a pre-repair ring that their planner no longer emits.
         command = [str(binary), '--certify-fillets', fixture, str(certificate)]
         process = subprocess.run(command, capture_output=True, text=True, timeout=300, check=False)
     if process.returncode:
@@ -308,31 +439,22 @@ def certify_fillets(name, baseline, candidate, traced, baseline_dir, candidate_d
         raise ValueError(f'{name}: invalid baseline oracle output') from error
     if reconstructed.get('certified_fillets') is not True:
         raise ValueError(f'{name}: baseline oracle did not certify the rings')
-    build = reconstructed.get('build', {})
-    for key in ('revision', 'planner_source_sha256', 'planner_header_sha256', 'compiler',
-                'configuration', 'gdal', 'geos', 'requested_cxx_flags_sha256',
-                'compiler_fp_features'):
-        if key not in baseline['build'] or build.get(key) != baseline['build'][key]:
-            raise ValueError(f'{name}: oracle uses a different pristine baseline {key}')
-    oracle_hash = reference_oracle_hash()
-    if (build.get('reference_oracle_sha256') != oracle_hash
-            or control_snapshot.get('build') != build):
+    if checked_build(reconstructed) != build:
         raise ValueError(f'{name}: oracle helper source differs from reviewed tooling')
     if stable(reconstructed) != stable(plain):
         raise ValueError(f'{name}: candidate differs from exact baseline downstream reconstruction')
     return {
-        'certified': True,
-        'baseline_revision': build['revision'],
-        'baseline_source_sha256': build['planner_source_sha256'],
-        'reference_oracle_sha256': oracle_hash,
-        'pristine_baseline_control_sha256': digest(stable(control_snapshot)),
+        **audit,
+        'method': 'identical' if identical else 'certified_fillets',
+        'observer_validation': ('old-baseline oracle for additional bevel records' if identical
+                                else 'independent fillet and downstream reconstruction'),
         'reconstructed_output_sha256': digest(stable(reconstructed)),
-        'candidate_output_sha256': candidate['output_sha256'],
         'replacement_count': sum(
             len(stage['geometry']) for stage in observed['stages']
             if '.bevel_replacements.' in stage['name']
         ),
-        'scope': 'certifies emitted ring polylines; no physical chassis-sweep claim',
+        'scope': ('strict output identity; no functional geometry change accepted' if identical
+                  else 'certifies emitted ring polylines; no physical chassis-sweep claim'),
     }
 
 
@@ -376,17 +498,7 @@ def case_comparison(name, baseline, candidate, trace, baseline_dir, candidate_di
             'build_compatibility': compatible_build_metadata(baseline, candidate),
         }
     )
-    build_compatible = all(
-        value['equal'] for value in result['build_compatibility'].values()
-    )
-    result['planner_identical'] = (
-        output_equal
-        and fingerprint_equal
-        and fields_equal
-        and stage_hashes_equal
-        and all(metric['equal'] for metric in metric_results.values())
-        and build_compatible
-    )
+    result['planner_identical'] = planner_identity(baseline, candidate)
 
     if trace:
         trace_fixture_equal = candidate.get('fixture_sha256') == trace.get('fixture_sha256')
@@ -493,15 +605,16 @@ def report_markdown(report):
         f'- Median per-case RSS change: {rss_change}%',
     ]
     if report.get('require_certified_fillets'):
-        certified = sum(case.get('certified_fillets', {}).get('certified', False)
-                        for case in report['cases'].values())
+        certified = report['certified_fillet_matches']
+        identical = report['exact_identity_matches']
         lines.extend([
+            f'- Accepted strict identity: {identical}/{case_count}',
             f'- Certified local-fillet/downstream reconstructions: {certified}/{case_count}',
             '- Raw baseline/candidate differences above remain part of this report.',
             '- Fillet certification checks emitted polylines, not physical chassis sweeps.',
         ])
         for name, case in report['cases'].items():
-            error = case.get('certified_fillets', {}).get('error')
+            error = case.get('planner_contract', {}).get('error')
             if error:
                 lines.append(f'- Rejected {name}: {error}')
     environment = report.get('environment') or {}
@@ -519,8 +632,8 @@ def report_markdown(report):
         [
             '',
             '| Fixture | Poses | Planner SHA | Fingerprint | Plan % | Connector % | '
-            'Process % | RSS % |',
-            '| --- | ---: | :---: | :---: | ---: | ---: | ---: | ---: |',
+            'Process % | RSS % | Contract |',
+            '| --- | ---: | :---: | :---: | ---: | ---: | ---: | ---: | --- |',
         ]
     )
     for name, case in report['cases'].items():
@@ -540,7 +653,8 @@ def report_markdown(report):
         lines.append(
             f'| {name} | {poses} | '
             f'{output_match} | {fingerprint_match} '
-            f'| {plan_text} | {connectors_text} | {wall_text} | {rss_text} |'
+            f'| {plan_text} | {connectors_text} | {wall_text} | {rss_text} '
+            f'| {case.get("planner_contract", {}).get("method", "n/a")} |'
         )
     lines.extend(
         [
@@ -645,8 +759,8 @@ def main():
                         args.baseline_dir, args.candidate_dir, args.trace_dir, args.baseline_binary,
                     )
                 except (KeyError, TypeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
-                    certification = {'certified': False, 'error': str(error)}
-                report['cases'][name]['certified_fillets'] = certification
+                    certification = {'accepted': False, 'method': 'rejected', 'error': str(error)}
+                report['cases'][name]['planner_contract'] = certification
         valid_cases = [case for case in report['cases'].values() if case['comparison_valid']]
         report['exact_output_matches'] = sum(
             case.get('output_sha256_equal', False) for case in valid_cases
@@ -711,16 +825,20 @@ def main():
         report['all_trace_passivity_matches'] = (
             trace is None or report['trace_passivity_matches'] == args.expected_cases
         )
-        report['all_fillets_certified'] = args.require_certified_fillets and all(
-            case.get('certified_fillets', {}).get('certified') for case in report['cases'].values()
+        report['all_planner_contracts_match'] = args.require_certified_fillets and all(
+            case.get('planner_contract', {}).get('accepted') for case in report['cases'].values()
         )
+        for method, key in (('identical', 'exact_identity_matches'),
+                            ('certified_fillets', 'certified_fillet_matches')):
+            report[key] = sum(case.get('planner_contract', {}).get('method') == method
+                              for case in report['cases'].values())
         report['passed'] = (
             report['case_count'] == args.expected_cases
             and report['stable_runs']
             and report['all_fixture_hashes_match']
             and report['performance_case_count'] == args.expected_cases
             and (not args.require_certified_fillets or (
-                report['all_fillets_certified'] and trace is not None
+                report['all_planner_contracts_match'] and trace is not None
                 and report['all_trace_passivity_matches']
             ))
             and (

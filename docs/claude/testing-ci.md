@@ -63,9 +63,13 @@ Debug and RelWithDebInfo. `--require-identical` requires unchanged execution byt
 fingerprints and metrics, along with repeated-output stability and trace passivity.
 
 The separate opt-in `--require-certified-fillets` mode keeps exact repetitions,
-fixture identity and trace passivity mandatory while accepting only independently
-certified microscopic bevel replacements. A directly compiled pristine baseline
-and a separate original-source helper adapter must agree exactly; only certified
+fixture identity and trace passivity mandatory. It accepts complete strict
+identity or independently certified microscopic bevel replacements, reporting
+the method per fixture. Exact identity retains traced-reference stage comparison;
+future baselines containing the repair need no pre-repair ring reconstruction.
+Extra bevel records absent from an old baseline still require the oracle.
+A directly compiled pristine baseline and a separate original-source helper
+adapter must agree exactly; only certified
 rings may be substituted before exact baseline downstream reconstruction.
 All other plan state and original trace stages remain exact. The workflow still
 uses strict identity mode. Build the opt-in baseline reference with
@@ -73,7 +77,9 @@ uses strict identity mode. Build the opt-in baseline reference with
 `test_ring_contract_reference` for locality, pivot, supported-radius and continuous
 chord boundary/hole rejection. Run `test_certified_fillets.py --baseline <binary>
 --reference <reference-binary> --candidate <binary>` for real-planner mutation
-controls; the README gives complete commands. Python comparator/provenance tests
+controls in both the old-baseline and identical future-baseline cases;
+`--expect-method` pins the intended contrast. No negative controls are skipped.
+The README gives complete commands. Python comparator/provenance tests
 remain registered in both normal package and standalone suites. These checks
 provide planner software evidence, not chassis-sweep or physical validation.
 `test_semantic_diagnostics` also runs in both suites: it excludes only the three

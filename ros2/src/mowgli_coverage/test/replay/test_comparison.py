@@ -30,6 +30,7 @@ class EvidenceTests(unittest.TestCase):
             'stages': [
                 {'name': '0.execution', 'geometry': paths},
                 {'name': '0.quaternions', 'geometry': paths},
+                {'name': '0.plan_rings', 'geometry': []},
             ],
             'fields': [{
                 'first_swath_heading_rad': -0.5, 'swaths': 1, 'rings': 0,
@@ -151,31 +152,85 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(result['planner_identical'])
         self.assertFalse(result['trace_passivity']['passive'])
 
-    def certification_evidence(self):
+    def certification_evidence(self, changed=False):
         baseline_dir, baseline = self.write_evidence('baseline')
-        candidate_dir, candidate = self.write_evidence('candidate')
-        trace_dir, traced = self.write_evidence('traced')
+        self.changed = copy.deepcopy(self.snapshot)
+        if changed:
+            self.changed['stages'][0]['geometry'][0][0][0] = '0000000000000001'
+        candidate_dir, candidate = self.write_evidence('candidate', self.changed)
+        trace_dir, traced = self.write_evidence('traced', self.changed)
         return ('case', baseline, candidate, traced, baseline_dir, candidate_dir,
                 trace_dir, pathlib.Path('/unused/reference-binary'))
 
-    def reference_response(self):
-        response = copy.deepcopy(self.snapshot)
+    def reference_response(self, snapshot=None):
+        response = copy.deepcopy(self.snapshot if snapshot is None else snapshot)
         response['certified_fillets'] = True
         response['build']['reference_oracle_sha256'] = reference_oracle_hash()
         return response
 
-    def test_certification_requires_exact_downstream_output(self):
+    def test_exact_identity_requires_pristine_and_traced_reference_controls(self):
         arguments = self.certification_evidence()
         response = self.reference_response()
         with mock.patch('compare_replay.subprocess.run', return_value=
-                        subprocess.CompletedProcess([], 0, json.dumps(response), '')):
-            self.assertTrue(certify_fillets(*arguments)['certified'])
-        response['stages'][0]['geometry'][0][0][0] = '0000000000000001'
+                        subprocess.CompletedProcess([], 0, json.dumps(response), '')) as run:
+            result = certify_fillets(*arguments)
+            self.assertTrue(result['accepted'])
+            self.assertEqual(result['method'], 'identical')
+            self.assertEqual(run.call_count, 2)
+            self.assertNotIn('--certify-fillets', run.call_args.args[0])
+        response['stages'].append({'name': '0.unrecognized', 'geometry': []})
         with mock.patch('compare_replay.subprocess.run', side_effect=[
                 subprocess.CompletedProcess([], 0, json.dumps(self.reference_response()), ''),
                 subprocess.CompletedProcess([], 0, json.dumps(response), '')]):
+            with self.assertRaisesRegex(ValueError, 'observer stage differs'):
+                certify_fillets(*arguments)
+
+    def test_old_exact_baseline_extra_records_still_require_oracle(self):
+        self.snapshot['fields'][0]['rings'] = 1
+        self.snapshot['stages'][-1]['geometry'] = copy.deepcopy(self.snapshot['stages'][0]['geometry'])
+        arguments = list(self.certification_evidence())
+        observed = copy.deepcopy(self.snapshot)
+        for kind in ('source', 'intermediate', 'rounded', 'replacements'):
+            observed['stages'].append({'name': f'0.bevel_{kind}.0',
+                                      'geometry': [] if kind == 'replacements' else [[]], 'angles': []})
+        arguments[6], arguments[3] = self.write_evidence('traced', observed)
+        response = self.reference_response()
+        with mock.patch('compare_replay.subprocess.run', return_value=
+                        subprocess.CompletedProcess([], 0, json.dumps(response), '')) as run:
+            result = certify_fillets(*arguments)
+            self.assertEqual(result['method'], 'identical')
+            self.assertIn('additional bevel records', result['observer_validation'])
+            self.assertEqual(run.call_count, 3)
+            self.assertIn('--certify-fillets', run.call_args.args[0])
+        with mock.patch('compare_replay.subprocess.run', side_effect=[
+                subprocess.CompletedProcess([], 0, json.dumps(response), ''),
+                subprocess.CompletedProcess([], 0, json.dumps(response), ''),
+                subprocess.CompletedProcess([], 1, '', 'forged source')]):
+            with self.assertRaisesRegex(ValueError, 'oracle rejected'):
+                certify_fillets(*arguments)
+
+    def test_certification_requires_exact_downstream_output(self):
+        arguments = self.certification_evidence(changed=True)
+        response = self.reference_response(self.changed)
+        control = subprocess.CompletedProcess([], 0, json.dumps(self.reference_response()), '')
+        with mock.patch('compare_replay.subprocess.run', side_effect=[control,
+                        subprocess.CompletedProcess([], 0, json.dumps(response), '')]):
+            result = certify_fillets(*arguments)
+            self.assertTrue(result['accepted'])
+            self.assertEqual(result['method'], 'certified_fillets')
+        response['stages'][0]['geometry'][0][0][0] = '0000000000000002'
+        with mock.patch('compare_replay.subprocess.run', side_effect=[control,
+                subprocess.CompletedProcess([], 0, json.dumps(response), '')]):
             with self.assertRaisesRegex(ValueError, 'downstream reconstruction'):
                 certify_fillets(*arguments)
+
+    def test_exact_identity_rejects_malformed_observer(self):
+        arguments = list(self.certification_evidence())
+        malformed = copy.deepcopy(self.snapshot)
+        malformed['stages'].append({'name': '0.bevel_source.0', 'geometry': None, 'angles': []})
+        arguments[6], arguments[3] = self.write_evidence('traced', malformed)
+        with self.assertRaisesRegex(ValueError, 'unrecognized bevel observer'):
+            certify_fillets(*arguments)
 
     def test_certification_rejects_changed_baseline_or_helper(self):
         arguments = self.certification_evidence()
@@ -190,10 +245,11 @@ class EvidenceTests(unittest.TestCase):
                         certify_fillets(*arguments)
 
     def test_certification_rejects_missing_oracle_and_false_verdict(self):
-        arguments = self.certification_evidence()
+        arguments = self.certification_evidence(changed=True)
         for response in (subprocess.CompletedProcess([], 1, '', 'unsupported source helper'),
                          subprocess.CompletedProcess([], 0, '{}', '')):
-            with mock.patch('compare_replay.subprocess.run', return_value=response):
+            with mock.patch('compare_replay.subprocess.run', side_effect=[
+                    subprocess.CompletedProcess([], 0, json.dumps(self.reference_response()), ''), response]):
                 with self.assertRaises(ValueError):
                     certify_fillets(*arguments)
 
