@@ -19,8 +19,8 @@ const { Text, Paragraph } = Typography;
 type Props = {
     revealAdvanced?: boolean;
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
-    onBulkChange: (changes: Record<string, any>) => void;
+    onChange: (key: string, value: unknown) => void;
+    onBulkChange: (changes: SettingsValues) => void;
     /** Settings whose default the robot's hardware backend replaces. */
     backendConfirmed?: boolean;
     backendDefaultOverrides?: Record<string, unknown>;
