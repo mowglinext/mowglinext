@@ -474,7 +474,7 @@ func (c *Client) CallService(ctx context.Context, service string, args interface
 	copy(buf[13:13+len(encoding)], encoding)
 	copy(buf[13+len(encoding):], cdrData)
 
-	err = c.writeMessageOn(conn, websocket.BinaryMessage, buf)
+	err = c.writeMessageOnContext(ctx, conn, websocket.BinaryMessage, buf)
 	if err != nil {
 		return nil, fmt.Errorf("foxglove: CallService send: %w", err)
 	}
@@ -526,18 +526,24 @@ func (c *Client) writeJSON(v interface{}) error {
 // terminal; close the socket so readPump triggers the existing reconnect and
 // desired subscriptions are replayed on the replacement connection.
 func (c *Client) writeMessage(messageType int, data []byte) error {
-	return c.writeMessageOn(nil, messageType, data)
+	return c.writeMessageOnContext(context.Background(), nil, messageType, data)
 }
 
-// A service request belongs to the connection that supplied its service ID.
-// Never send it on a replacement transport after serialization/registration.
-func (c *Client) writeMessageOn(expected *websocket.Conn, messageType int, data []byte) error {
+// Check both cancellation and the originating connection after acquiring the writer.
+func (c *Client) writeMessageOnContext(ctx context.Context, expected *websocket.Conn, messageType int, data []byte) error {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c.conn == nil || (expected != nil && c.conn != expected) {
 		return fmt.Errorf("foxglove: write: connection unavailable or replaced")
 	}
-	if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+	deadline := time.Now().Add(c.writeTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := c.conn.SetWriteDeadline(deadline); err != nil {
 		_ = c.conn.Close()
 		return err
 	}

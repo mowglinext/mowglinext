@@ -27,6 +27,15 @@ const copyPad = (pad: Gamepad): ControllerSample => ({
     id: pad.id, index: pad.index, mapping: pad.mapping, connected: pad.connected,
     timestamp: pad.timestamp, axes: [...pad.axes], buttons: pad.buttons.map(b => ({pressed: b.pressed, touched: b.touched, value: b.value})),
 });
+interface ControllerSession {
+    socket: WebSocket;
+    driver: ControllerDriver;
+    identity: ControllerIdentity;
+    opened: number;
+    attempt: string;
+    phase: 'hello' | 'claim' | 'ready';
+    challenge: string | null;
+}
 
 /** Browser-only input adapter. No queued sends, replay interval, or automatic reconnect.
  * The server owns the 300 ms session lease; the existing relay/firmware own robot safety.
@@ -46,7 +55,7 @@ export function useBrowserGamepad(options: Options) {
     const [inputLoss, setInputLoss] = useState<InputLoss | null>(null);
     const [diagnostics] = useState(() => new GamepadDiagnostics());
     const attemptNumber = useRef(0);
-    const session = useRef<{socket: WebSocket; driver: ControllerDriver; identity: ControllerIdentity; opened: number; attempt: string} | null>(null);
+    const session = useRef<ControllerSession | null>(null);
     const pending = useRef(false);
     const actionTask = useRef<Promise<void> | null>(null);
     const pendingSince = useRef<number | null>(null);
@@ -57,7 +66,7 @@ export function useBrowserGamepad(options: Options) {
         session.current = null; // Revoke before onclose/late async callbacks.
         if (active) {
             try {
-                if (active.socket.readyState === WebSocket.OPEN && active.socket.bufferedAmount === 0) {
+                if (active.phase === 'ready' && active.socket.readyState === WebSocket.OPEN && active.socket.bufferedAmount === 0) {
                     active.socket.send(JSON.stringify({twist: teleopTwist(), deadman: false}));
                 }
             } catch { /* The server lease also handles an unusable socket. */ }
@@ -85,6 +94,7 @@ export function useBrowserGamepad(options: Options) {
         setInputLoss(null);
         const attempt = `${diagnostics.clientId}-${++attemptNumber.current}`;
         diagnostics.update({attempt, enabled: false, fault: null, userAgent: navigator.userAgent.slice(0, 256),
+            origin: window.location.origin,
             standalone: !!(navigator as Navigator & {standalone?: boolean}).standalone || window.matchMedia('(display-mode: standalone)').matches,
             webBuild: import.meta.env.VITE_WEB_BUILD_ID as string | undefined,
             revision: import.meta.env.VITE_BUILD_REVISION as string | undefined});
@@ -107,7 +117,8 @@ export function useBrowserGamepad(options: Options) {
         let socket: WebSocket;
         try { socket = new WebSocket(`${wsBase()}/api/mowglinext/publish/gamepad?client=${encodeURIComponent(attempt)}`); }
         catch { reject('connectionLost'); return; }
-        const active = {socket, driver: new ControllerDriver(structuredClone(profile), selected), identity: selected, opened: performance.now(), attempt};
+        const active: ControllerSession = {socket, driver: new ControllerDriver(structuredClone(profile), selected),
+            identity: selected, opened: performance.now(), attempt, phase: 'hello', challenge: null};
         session.current = active;
         diagnostics.update({enabled: true, controller: pad.id.slice(0, 128), index: pad.index, mapping: pad.mapping,
             deadmanButton: profile.buttons.deadman, linearAxis: profile.linearAxis, angularAxis: profile.angularAxis});
@@ -119,6 +130,33 @@ export function useBrowserGamepad(options: Options) {
         socket.onerror = () => {
             diagnostics.record('socketError', {attempt, socketState: socket.readyState});
             if (session.current === active) cancel('connectionLost');
+        };
+        socket.onmessage = event => {
+            // A timed-out/disabled attempt must never claim a late upgrade or
+            // gain the backend's zero/STOP responsibility for a later mode.
+            if (session.current !== active) return;
+            if (performance.now() - active.opened > 2000) {
+                diagnostics.record('connectTimeout', {phase: active.phase}); cancel('connectionLost'); return;
+            }
+            try {
+                const data: unknown = event.data;
+                if (typeof data !== 'string' || data.length > 256) throw new Error('invalid server handshake');
+                const parsed: unknown = JSON.parse(data);
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid server handshake');
+                const message = parsed as {type?: unknown; challenge?: unknown};
+                if (message.type === 'gamepadHello' && active.phase === 'hello' && active.challenge === null &&
+                    Object.keys(message).length === 2 && typeof message.challenge === 'string' && /^[0-9a-f]{32}$/.test(message.challenge)) {
+                    active.challenge = message.challenge;
+                    diagnostics.record('helloReceived', {attempt, handshakeMs: Math.round(performance.now() - active.opened)});
+                } else if (message.type === 'gamepadReady' && active.phase === 'claim' && Object.keys(message).length === 1) {
+                    active.driver.requireNeutral();
+                    active.phase = 'ready';
+                    diagnostics.record('serverReady', {attempt, handshakeMs: Math.round(performance.now() - active.opened)});
+                } else throw new Error('unexpected server handshake');
+            } catch {
+                diagnostics.record('handshakeInvalid', {attempt, phase: active.phase});
+                cancel('connectionLost');
+            }
         };
         opts.current.onOwnershipChange(true);
         setEnabled(true);
@@ -167,7 +205,7 @@ export function useBrowserGamepad(options: Options) {
             const statusAge = current.status.lastMessageAt === null ? null : Math.round(now - current.status.lastMessageAt);
             const profile = opts.current.profile;
             diagnostics.update({at: new Date().toISOString(), attempt: active.attempt, sessionMs: Math.round(now - active.opened),
-                socketState: active.socket.readyState, bufferedBytes: active.socket.bufferedAmount,
+                socketState: active.socket.readyState, bufferedBytes: active.socket.bufferedAmount, handshake: active.phase,
                 pollGapMs: Math.round(pollGap), maxPollGapMs: Math.round(maxPollGap),
                 statusAgeMs: statusAge, mode: current.status.data.state_name ?? '',
                 emergency: !!(current.status.data.emergency || current.emergency.data.active_emergency || current.emergency.data.latched_emergency),
@@ -179,12 +217,10 @@ export function useBrowserGamepad(options: Options) {
             if (document.visibilityState !== 'visible' || !document.hasFocus()) {
                 cancel('inputLost', document.visibilityState !== 'visible' ? {reason: 'pageHidden'} : focusInputLoss('poll')); return;
             }
-            if (active.socket.readyState === WebSocket.CONNECTING) {
-                if (now - active.opened > 2000) {
-                    diagnostics.record('connectTimeout'); cancel('connectionLost');
-                }
-                return;
+            if (active.phase !== 'ready' && now - active.opened > 2000) {
+                diagnostics.record('connectTimeout', {phase: active.phase}); cancel('connectionLost'); return;
             }
+            if (active.socket.readyState === WebSocket.CONNECTING) return;
             if (active.socket.readyState !== WebSocket.OPEN || active.socket.bufferedAmount !== 0) {
                 diagnostics.record('socketUnavailable', {socketState: active.socket.readyState, bufferedBytes: active.socket.bufferedAmount});
                 cancel('connectionLost'); return;
@@ -196,6 +232,20 @@ export function useBrowserGamepad(options: Options) {
                 emergency: !!(current.status.data.emergency || current.emergency.data.active_emergency || current.emergency.data.latched_emergency),
                 pending: pending.current,
             });
+            if (frame.state === 'inputLost') { cancel('inputLost', frame.inputLoss); return; }
+            if (active.phase !== 'ready') {
+                // Claim only from this poll's valid native input. TCP opening
+                // alone is not proof that this browser attempt is still live.
+                // No velocity or robot action is sent until the server is ready.
+                if (active.phase === 'hello' && active.challenge !== null) {
+                    const challenge = active.challenge;
+                    active.challenge = null;
+                    active.phase = 'claim';
+                    try { active.socket.send(JSON.stringify({type: 'gamepadClaim', challenge})); }
+                    catch { diagnostics.record('sendFailed'); cancel('connectionLost'); }
+                }
+                return;
+            }
             diagnostics.update({state: frame.state});
             if (`${active.attempt}:${frame.state}` !== lastControlState) {
                 lastControlState = `${active.attempt}:${frame.state}`;
@@ -203,7 +253,6 @@ export function useBrowserGamepad(options: Options) {
                     statusAgeMs: statusAge, pending: pending.current});
                 if (['statusLost', 'emergency', 'actionPending'].includes(frame.state)) diagnostics.flushSoon();
             }
-            if (frame.state === 'inputLost') { cancel('inputLost', frame.inputLoss); return; }
             setState(frame.state);
             try { active.socket.send(JSON.stringify({twist: teleopTwist(frame.linear, frame.angular), deadman: frame.deadman})); }
             catch { diagnostics.record('sendFailed'); cancel('connectionLost'); return; }

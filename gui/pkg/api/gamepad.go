@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +24,7 @@ import (
 
 const gamepadLease = 300 * time.Millisecond
 const gamepadStopTimeout = time.Second
+const gamepadHandshakeWriteTimeout = 100 * time.Millisecond
 
 var errGamepadOwner = errors.New("gamepad owns teleop")
 
@@ -38,23 +41,26 @@ type gamepadCoordinator struct {
 }
 
 type gamepadSession struct {
-	coordinator *gamepadCoordinator
-	conn        *websocket.Conn
-	id          string
-	client      string
-	started     time.Time
-	mu          sync.Mutex
-	ended       bool
-	deadman     bool
-	state       uint8
-	manualOwned bool
-	lastValid   time.Time
-	frames      uint64
-	maxGap      time.Duration
-	timer       *time.Timer
+	coordinator   *gamepadCoordinator
+	conn          *websocket.Conn
+	id            string
+	client        string
+	started       time.Time
+	mu            sync.Mutex
+	ended         bool
+	deadman       bool
+	state         uint8
+	manualOwned   bool
+	lastValid     time.Time
+	frames        uint64
+	maxGap        time.Duration
+	timer         *time.Timer
+	subscribeDone chan struct{}
 }
 
-// Wire: every <=50 ms send {"twist": <TwistStamped>, "deadman": <bool>}.
+// Wire: echo gamepadHello's challenge in gamepadClaim and wait for gamepadReady,
+// then every <=50 ms send {"twist": <TwistStamped>, "deadman": <bool>}.
+// The initial claim proves a live client after upgrade, not ongoing input age.
 // There is no reconnect/replay support: 300 ms without a validated frame ends
 // the socket permanently. Deadman false carries zero motion and keeps only the
 // connection lease alive. Its falling edge also exits MANUAL_MOWING via STOP.
@@ -125,57 +131,126 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 		ctx.AbortWithStatus(http.StatusConflict)
 		return
 	}
-	c.mu.Lock()
-	if c.owner != nil {
-		c.mu.Unlock()
-		c.diagnostics.record(gamepadServerEvent{Event: "upgradeRejected", Cause: "active", Client: gamepadClientLabel(ctx.Query("client"))})
-		ctx.AbortWithStatus(http.StatusConflict)
+	// Upgrading is not ownership. A canceled request can reach a proxy/backend
+	// much later; only a live client echoing this connection's fresh challenge
+	// may acquire the robot cleanup obligation.
+	u := upgrader
+	u.HandshakeTimeout = gamepadHandshakeWriteTimeout
+	conn, err := u.Upgrade(ctx.Writer, ctx.Request, nil)
+	if err != nil {
 		return
 	}
-	conn, err := upgrader.Upgrade(ctx.Writer, ctx.Request, nil)
+	defer conn.Close()
+	conn.SetReadLimit(2048)
+	client := gamepadClientLabel(ctx.Query("client"))
+	reject := func(cause string) {
+		c.diagnostics.record(gamepadServerEvent{Event: "handshakeRejected", Cause: cause, Client: client})
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		reject("challengeFailed")
+		return
+	}
+	challenge := hex.EncodeToString(nonce[:])
+	issued := time.Now()
+	deadline := issued.Add(gamepadLease)
+	if err := writeGamepadHandshake(conn, struct {
+		Type      string `json:"type"`
+		Challenge string `json:"challenge"`
+	}{"gamepadHello", challenge}); err != nil {
+		reject("helloWriteFailed")
+		return
+	}
+	c.diagnostics.record(gamepadServerEvent{Event: "hello", Client: client})
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		reject("readDeadlineFailed")
+		return
+	}
+	kind, raw, err := conn.ReadMessage()
 	if err != nil {
+		reject("claimReadFailed")
+		return
+	}
+	if kind != websocket.TextMessage || !validGamepadClaim(raw, challenge) {
+		reject("invalidClaim")
+		return
+	}
+	if !time.Now().Before(deadline) {
+		reject("claimExpired")
+		return
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		reject("readDeadlineFailed")
+		return
+	}
+	c.mu.Lock()
+	// Claim freshness is checked again after lock acquisition: an unrelated
+	// blocked legacy publish cannot turn an expired claim into ownership.
+	if c.owner != nil || !time.Now().Before(deadline) {
+		active := c.owner != nil
 		c.mu.Unlock()
+		if active {
+			reject("active")
+		} else {
+			reject("claimExpired")
+		}
 		return
 	}
 	now := time.Now()
-	s := &gamepadSession{coordinator: c, conn: conn, id: fmt.Sprintf("gamepad-%p", conn), client: gamepadClientLabel(ctx.Query("client")), started: now, lastValid: now}
+	s := &gamepadSession{coordinator: c, conn: conn, id: fmt.Sprintf("gamepad-%p", conn), client: client, started: now, lastValid: now, subscribeDone: make(chan struct{})}
 	c.owner = s
 	c.epoch.Add(1)
 	c.active.Store(true)
+	// Ownership immediately starts the lease, including while Subscribe waits
+	// for a shared provider writer. No setup call may postpone the watchdog.
+	s.mu.Lock()
+	s.timer = time.AfterFunc(time.Until(s.lastValid.Add(gamepadLease)), s.expire)
+	s.mu.Unlock()
 	c.mu.Unlock()
+	s.record(gamepadServerEvent{Event: "claimed"})
 	s.record(gamepadServerEvent{Event: "sessionAccepted"})
-	conn.SetReadLimit(2048)
-	if err := c.provider.Subscribe("highLevelStatus", s.id, 0, func(raw []byte) {
-		var status mowgli.HighLevelStatus
-		if json.Unmarshal(raw, &status) != nil {
-			return
-		}
-		s.mu.Lock()
-		s.state = status.State
-		// Guard states (including emergency NULL and IDLE) can temporarily
-		// mask a still-latched manual command. Retain its cleanup obligation
-		// until the operator explicitly enters recording, whose trajectory a
-		// STOP would discard.
-		if status.State == 4 {
-			s.manualOwned = true
-		} else if status.State == 3 {
-			s.manualOwned = false
-		}
-		s.mu.Unlock()
-	}); err != nil {
+	defer s.end()
+	err = func() error {
+		defer close(s.subscribeDone)
+		return c.provider.Subscribe("highLevelStatus", s.id, 0, func(raw []byte) {
+			var status mowgli.HighLevelStatus
+			if json.Unmarshal(raw, &status) != nil {
+				return
+			}
+			s.mu.Lock()
+			if s.ended {
+				s.mu.Unlock()
+				return
+			}
+			s.state = status.State
+			// Guard states (including emergency NULL and IDLE) can temporarily
+			// mask a still-latched manual command. Retain its cleanup obligation
+			// until the operator explicitly enters recording, whose trajectory a
+			// STOP would discard.
+			if status.State == 4 {
+				s.manualOwned = true
+			} else if status.State == 3 {
+				s.manualOwned = false
+			}
+			s.mu.Unlock()
+		})
+	}()
+	if err != nil {
 		s.record(gamepadServerEvent{Event: "subscribeFailed", Error: err.Error()})
 		s.terminate(gamepadServerEvent{Cause: "subscribeFailed", Error: err.Error()})
 		return
 	}
 	// Subscribe may immediately replay cached status. This is a mode hint for
 	// best-effort STOP, not proof of fresh physical observation or BT liveness.
-	s.mu.Lock()
-	s.timer = time.AfterFunc(gamepadLease, s.expire)
-	s.mu.Unlock()
-	defer s.end()
 	// Preempt any already-active legacy touch command before accepting motion.
 	if err := s.publish(&geometry.TwistStamped{}); err != nil {
 		s.terminate(gamepadServerEvent{Cause: "publishFailed", Error: err.Error()})
+		return
+	}
+	if err := writeGamepadHandshake(conn, struct {
+		Type string `json:"type"`
+	}{"gamepadReady"}); err != nil {
+		s.terminate(gamepadServerEvent{Cause: "readyWriteFailed"})
 		return
 	}
 	for {
@@ -198,30 +273,17 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 			s.terminate(gamepadServerEvent{Cause: "invalidFrame", Error: err.Error()})
 			return
 		}
-		s.mu.Lock()
-		if s.ended {
-			s.mu.Unlock()
+		frame, accepted := s.acceptFrame(deadman)
+		if !accepted {
 			return
 		}
-		released := s.deadman && !deadman
-		s.deadman = deadman
-		now := time.Now()
-		if gap := now.Sub(s.lastValid); gap > s.maxGap {
-			s.maxGap = gap
-		}
-		s.frames++
-		s.lastValid = now
-		s.timer.Reset(gamepadLease)
-		state := s.state
-		manualOwned := s.manualOwned
-		s.mu.Unlock()
 		// Manual and recording are the existing teleop modes. A false deadman
 		// heartbeat is accepted in any state without initiating robot behavior.
-		if deadman && state != 3 && state != 4 {
+		if deadman && frame.state != 3 && frame.state != 4 {
 			s.terminate(gamepadServerEvent{Cause: "modeRejected"})
 			return
 		}
-		if released && manualOwned {
+		if frame.released && frame.manualOwned {
 			s.terminate(gamepadServerEvent{Cause: "deadmanReleased"})
 			return
 		}
@@ -232,17 +294,77 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 	}
 }
 
+func writeGamepadHandshake(conn *websocket.Conn, message any) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(gamepadHandshakeWriteTimeout)); err != nil {
+		return err
+	}
+	return conn.WriteJSON(message)
+}
+
+func validGamepadClaim(raw []byte, challenge string) bool {
+	var claim struct {
+		Type      string `json:"type"`
+		Challenge string `json:"challenge"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(&claim) == nil && decoder.Decode(new(any)) == io.EOF && claim.Type == "gamepadClaim" && claim.Challenge == challenge
+}
+
+type gamepadFrameContext struct {
+	state       uint8
+	manualOwned bool
+	released    bool
+}
+
+func (s *gamepadSession) acceptFrame(deadman bool) (gamepadFrameContext, bool) {
+	s.mu.Lock()
+	now := time.Now()
+	if s.ended {
+		s.mu.Unlock()
+		return gamepadFrameContext{}, false
+	}
+	if !now.Before(s.lastValid.Add(gamepadLease)) {
+		s.markEndedLocked(now)
+		s.mu.Unlock()
+		s.finishTermination(gamepadServerEvent{Cause: "leaseExpired"})
+		return gamepadFrameContext{}, false
+	}
+	frame := gamepadFrameContext{state: s.state, manualOwned: s.manualOwned, released: s.deadman && !deadman}
+	s.deadman = deadman
+	if gap := now.Sub(s.lastValid); gap > s.maxGap {
+		s.maxGap = gap
+	}
+	s.frames++
+	s.lastValid = now
+	s.timer.Reset(gamepadLease)
+	s.mu.Unlock()
+	return frame, true
+}
+
 func (s *gamepadSession) publish(msg *geometry.TwistStamped) error {
 	c := s.coordinator
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	s.mu.Lock()
-	ended := s.ended
-	s.mu.Unlock()
-	if ended || c.owner != s {
+	if s.ended || c.owner != s {
+		s.mu.Unlock()
+		c.mu.Unlock()
 		return errors.New("gamepad session ended")
 	}
-	return c.provider.Publish("/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", msg)
+	// The provider lock may have delayed a frame after acceptance. Never
+	// publish it after the lease merely because its timer has not run yet.
+	now := time.Now()
+	if !now.Before(s.lastValid.Add(gamepadLease)) {
+		s.markEndedLocked(now)
+		s.mu.Unlock()
+		c.mu.Unlock()
+		s.finishTermination(gamepadServerEvent{Cause: "leaseExpired"})
+		return errors.New("gamepad session expired")
+	}
+	s.mu.Unlock()
+	err := c.provider.Publish("/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", msg)
+	c.mu.Unlock()
+	return err
 }
 
 func (s *gamepadSession) expire() {
@@ -257,8 +379,9 @@ func (s *gamepadSession) expire() {
 		s.mu.Unlock()
 		return
 	}
+	s.markEndedLocked(time.Now())
 	s.mu.Unlock()
-	s.terminate(gamepadServerEvent{Cause: "leaseExpired"})
+	s.finishTermination(gamepadServerEvent{Cause: "leaseExpired"})
 }
 
 func (s *gamepadSession) stopManual() {
@@ -291,14 +414,24 @@ func (s *gamepadSession) terminate(cause gamepadServerEvent) {
 		s.mu.Unlock()
 		return
 	}
+	s.markEndedLocked(time.Now())
+	s.mu.Unlock()
+	s.finishTermination(cause)
+}
+
+// Caller holds s.mu: expiry validation and terminal-state transition must be
+// indivisible with respect to accepting/renewing an input frame.
+func (s *gamepadSession) markEndedLocked(now time.Time) {
 	s.ended = true
-	if gap := time.Since(s.lastValid); gap > s.maxGap {
+	if gap := now.Sub(s.lastValid); gap > s.maxGap {
 		s.maxGap = gap
 	}
 	if s.timer != nil {
 		s.timer.Stop()
 	}
-	s.mu.Unlock()
+}
+
+func (s *gamepadSession) finishTermination(cause gamepadServerEvent) {
 	_ = s.conn.Close()
 	cause.Event = "sessionEnded"
 	s.record(cause)
@@ -322,6 +455,11 @@ func (s *gamepadSession) terminate(cause gamepadServerEvent) {
 		}
 		s.record(zero)
 		<-stopped
+		// Subscribe may still be completing after lease expiry. Wait only here,
+		// after zero/STOP, so its late registration cannot outlive UnSubscribe.
+		if s.subscribeDone != nil {
+			<-s.subscribeDone
+		}
 		s.record(gamepadServerEvent{Event: "unsubscribeStarted"})
 		c.provider.UnSubscribe("highLevelStatus", s.id)
 		s.record(gamepadServerEvent{Event: "unsubscribeFinished"})

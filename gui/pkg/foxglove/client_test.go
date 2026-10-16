@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -154,5 +155,94 @@ func TestCallServiceFailsFastWhenTheConnectionDropsMidCall(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Fatalf("call waited %s for its deadline instead of failing on the drop", elapsed)
+	}
+}
+
+func TestCallServiceDoesNotWriteAfterContextExpiresBehindWriter(t *testing.T) {
+	type wireFrame struct {
+		kind int
+		data []byte
+		err  error
+	}
+	frames := make(chan wireFrame, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			frames <- wireFrame{err: err}
+			return
+		}
+		defer conn.Close()
+		kind, data, err := conn.ReadMessage()
+		frames <- wireFrame{kind: kind, data: data, err: err}
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	client := NewClient("")
+	client.conn = conn
+	client.connected.Store(true)
+	var service serviceDef
+	if err := json.Unmarshal([]byte(`{"id":1,"name":"/stop","request":{"schema":""},"response":{"schema":"bool success"}}`), &service); err != nil {
+		t.Fatal(err)
+	}
+	client.services["/stop"] = &serviceState{def: service}
+	client.connMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			client.connMu.Unlock()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { _, err := client.CallService(ctx, "/stop", struct{}{}); result <- err }()
+	// Observe registration to establish that CallService has reached its send
+	// path before allowing the context to expire behind the held writer lock.
+	deadline := time.Now().Add(time.Second)
+	for {
+		client.svcMu.Lock()
+		pending := len(client.pendingSvc)
+		client.svcMu.Unlock()
+		if pending == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("service never reached pending send")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	<-ctx.Done()
+	client.connMu.Unlock()
+	locked = false
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expired call returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired call did not finish after writer unlock")
+	}
+	client.svcMu.Lock()
+	pending := len(client.pendingSvc)
+	client.svcMu.Unlock()
+	if pending != 0 {
+		t.Fatalf("expired call left %d pending service requests", pending)
+	}
+	// A successful sentinel is positive proof that expiry did not close the
+	// healthy connection and that no service frame preceded it on the wire.
+	if err := client.writeMessage(websocket.TextMessage, []byte("still-connected")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case frame := <-frames:
+		if frame.err != nil || frame.kind != websocket.TextMessage || string(frame.data) != "still-connected" {
+			t.Fatalf("unexpected first wire frame: kind=%d data=%q error=%v", frame.kind, frame.data, frame.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sentinel did not reach bridge")
 	}
 }
