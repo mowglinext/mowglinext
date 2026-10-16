@@ -185,6 +185,8 @@ export interface SettingsValues {
     rain_mode?: number | null;
     rain_delay_minutes?: number | null;
     rain_debounce_sec?: number | null;
+    use_external_rain?: boolean;
+    external_rain_max_age_minutes?: number | null;
     led_enabled?: boolean;
     led_count?: number | null;
     led_spi_device?: string;

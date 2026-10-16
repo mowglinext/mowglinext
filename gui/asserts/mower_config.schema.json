@@ -1256,6 +1256,18 @@
           "title": "Rain Debounce",
           "default": 10.0,
           "description": "Seconds of continuous rain signal before triggering."
+        },
+        "use_external_rain": {
+          "type": "boolean",
+          "title": "Use External Rain Source",
+          "default": true,
+          "description": "Also treat a yes/no published to MQTT <prefix>/external_rain (e.g. a Home Assistant automation on a roof weather station) as rain. It only adds a reason to stop; the mower's own rain sensor still counts. Needs MQTT enabled."
+        },
+        "external_rain_max_age_minutes": {
+          "type": "number",
+          "title": "External Rain Expiry",
+          "default": 120.0,
+          "description": "Minutes after which an external rain 'yes' is ignored if it has not been refreshed (0 = never expires). Stops a dead automation from holding the mower in the rain wait."
         }
       }
     },

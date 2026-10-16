@@ -300,6 +300,14 @@ const FIELD_TEXT: Record<string, string[]> = {
         "settingsRain.debounce",
         "settingsRain.debounceTooltip"
     ],
+    "use_external_rain": [
+        "settingsRain.useExternal",
+        "settingsRain.useExternalTooltip"
+    ],
+    "external_rain_max_age_minutes": [
+        "settingsRain.externalExpiry",
+        "settingsRain.externalExpiryTooltip"
+    ],
     "led_count": [
         "settingsLeds.ledCount",
         "settingsLeds.ledCountTooltip"

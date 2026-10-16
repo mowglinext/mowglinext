@@ -391,9 +391,11 @@
              latch when the robot reaches the charger OR once the fused pose
              is 2x dig_escalate_radius_m away from the escalation point, so
              the robot holds here until the operator recalls it (COMMAND_HOME —
-             always plannable, a dig never stamps a keepout) or lifts it clear
-             and presses Play — it cannot quietly resume into the same
-             object. -->
+             always plannable, a dig never stamps a keepout), lifts it clear,
+             or acknowledges the hold through ~/clear_dig_escalation (the
+             GUI's Play does that, with a confirmation) — then one more dig
+             at the spot re-escalates at once. Nothing here releases it, so
+             it cannot quietly resume into the same object. -->
         <Sequence name="DigObstructionHandler">
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>

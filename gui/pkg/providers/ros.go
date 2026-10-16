@@ -62,6 +62,9 @@ var topicMap = map[string]topicDef{
 	// the GUI offers "Resume" vs "Start fresh" instead of silently resuming (the
 	// "starts at 2nd/3rd line" report).
 	"coverageResumeAvailable": {"/behavior_tree_node/coverage_resume_available", "std_msgs/msg/Bool"},
+	// Latched std_msgs/String holding JSON: what the mower makes of the external rain
+	// verdict (state, whether it is counted, ages). Feedback only.
+	"externalRainState": {"/behavior_tree_node/external_rain_state", "std_msgs/msg/String"},
 	// Synthetic heading sources fused by fusion_graph_node as yaw unary
 	// factors. Both carry sensor_msgs/Imu with only `orientation` and
 	// `orientation_covariance[8]` populated — see cog_to_imu.py and

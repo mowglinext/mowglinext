@@ -693,9 +693,54 @@ struct BTContext
   double transit_speed{0.25};
   double mowing_speed{0.2};
 
-  /// True if it was raining when the current mowing session started.
-  /// Set by WasRainingAtStart, checked by IsNewRain.
+  /// True if the MOWER's OWN sensor reported rain when the current mowing
+  /// session started ("the operator chose to mow in the rain"). Set by
+  /// WasRainingAtStart, checked by IsNewRain. Deliberately NOT fed by the
+  /// external verdict: a wet roof station at start must not license mowing
+  /// through the next real shower for the whole session.
   bool raining_at_mow_start{false};
+
+  /// Rain verdict pushed by an EXTERNAL source on `/external_rain`
+  /// (std_msgs/Bool, latched) — e.g. a roof weather station behind a Home
+  /// Assistant automation, relayed by mqtt_bridge_node from
+  /// `<prefix>/external_rain`. It only ever ADDS a reason to stop: the
+  /// on-board sensor (latest_status.rain_detected) is OR-ed with it in
+  /// RainingNow(), never overridden by it, so a "dry" external verdict can
+  /// not hide rain the mower itself feels. Written by the subscription
+  /// callback and read by the rain BT nodes under context_mutex.
+  bool external_rain{false};
+  /// Arrival time of the last /external_rain message; the epoch default
+  /// means "never received".
+  std::chrono::steady_clock::time_point external_rain_stamp{};
+  /// `use_external_rain`: master switch; false ignores /external_rain entirely.
+  bool use_external_rain{true};
+  /// A "wet" verdict older than this is ignored (fail back to the on-board
+  /// sensor alone) so a dead automation, broker or Home Assistant cannot park
+  /// the mower in RAIN_WAITING forever. 0 = never expires.
+  double external_rain_max_age_sec{7200.0};
+
+  /// True while a fresh external "wet" verdict is in force. Caller holds
+  /// context_mutex.
+  bool ExternalRainActive(std::chrono::steady_clock::time_point now) const
+  {
+    if (!use_external_rain || !external_rain || external_rain_stamp.time_since_epoch().count() == 0)
+    {
+      return false;
+    }
+    if (external_rain_max_age_sec <= 0.0)
+    {
+      return true;
+    }
+    return std::chrono::duration<double>(now - external_rain_stamp).count() <=
+           external_rain_max_age_sec;
+  }
+
+  /// Raining by ANY source: the on-board sensor or a fresh external verdict.
+  /// Caller holds context_mutex.
+  bool RainingNow(std::chrono::steady_clock::time_point now) const
+  {
+    return latest_status.rain_detected || ExternalRainActive(now);
+  }
 
   /// First time we observed continuous rain since the last dry sample.
   /// Used by IsNewRain to debounce short rain pulses (rain_debounce_sec).

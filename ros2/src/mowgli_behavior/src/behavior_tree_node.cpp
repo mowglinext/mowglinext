@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -37,6 +38,7 @@
 #include "mowgli_behavior/coverage_orientation_service.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/escape_nodes.hpp"
+#include "mowgli_behavior/external_rain_state.hpp"
 #include "mowgli_behavior/localization_health.hpp"
 #include "mowgli_behavior/recording_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
@@ -63,6 +65,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/int32.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/u_int64.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
@@ -205,6 +208,29 @@ private:
                                       // (issue #487 escape motion).
                                       context_->last_status_time = std::chrono::steady_clock::now();
                                     });
+
+    // External rain verdict (a roof weather station behind Home Assistant,
+    // relayed by mqtt_bridge_node from <prefix>/external_rain). transient_local
+    // on BOTH ends so the last value is delivered even when this node starts
+    // after the bridge. It is only ever OR-ed with the mower's own rain sensor
+    // (BTContext::RainingNow), so it can add a reason to stop but never remove
+    // one.
+    external_rain_sub_ = create_subscription<std_msgs::msg::Bool>(
+        "/external_rain",
+        rclcpp::QoS(1).transient_local(),
+        [this](std_msgs::msg::Bool::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          if (context_->external_rain != msg->data)
+          {
+            RCLCPP_INFO(get_logger(),
+                        "External rain verdict: %s (use_external_rain=%s)",
+                        msg->data ? "wet" : "dry",
+                        context_->use_external_rain ? "true" : "false");
+          }
+          context_->external_rain = msg->data;
+          context_->external_rain_stamp = std::chrono::steady_clock::now();
+        });
 
     // Last commanded MOTION direction, from twist_mux's MERGED output — the
     // direction source for the #487 start-pose escape.
@@ -976,6 +1002,46 @@ private:
                                                 });
 
     RCLCPP_DEBUG(get_logger(), "~/clear_coverage_resume service + resume-available signal created");
+
+    // What the mower makes of the external rain verdict, for operator feedback only (GUI,
+    // MQTT <prefix>/external_rain_state, Home Assistant). Latched JSON; read-only, it never
+    // changes what the rain guard does.
+    external_rain_state_pub_ =
+        create_publisher<std_msgs::msg::String>("~/external_rain_state",
+                                                rclcpp::QoS(1).transient_local());
+    external_rain_state_timer_ = create_wall_timer(1s,
+                                                   [this]()
+                                                   {
+                                                     publishExternalRainState();
+                                                   });
+  }
+
+  // Publish the external-rain picture when it changes, and every 30 s otherwise so the ages
+  // stay roughly current without a message per second on the broker.
+  void publishExternalRainState()
+  {
+    if (!external_rain_state_pub_)
+    {
+      return;
+    }
+    ExternalRainStatus status;
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      status = ComputeExternalRainStatus(*context_, std::chrono::steady_clock::now());
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (external_rain_state_published_ &&
+        SameExternalRainPicture(status, last_external_rain_state_) &&
+        now - last_external_rain_state_time_ < std::chrono::seconds(30))
+    {
+      return;
+    }
+    std_msgs::msg::String msg;
+    msg.data = ExternalRainStatusJson(status);
+    external_rain_state_pub_->publish(msg);
+    last_external_rain_state_ = status;
+    last_external_rain_state_time_ = now;
+    external_rain_state_published_ = true;
   }
 
   // Fold the latest observation into the LocalizationGuard latch and log
@@ -1294,6 +1360,14 @@ private:
     const double rain_debounce_sec = declare_parameter<double>("rain_debounce_sec", 0.0);
     blackboard_->set("rain_debounce_sec", rain_debounce_sec);
 
+    // External rain source (/external_rain, fed from MQTT by mqtt_bridge_node).
+    // `use_external_rain` is the master switch; a "wet" verdict older than
+    // `external_rain_max_age_minutes` is ignored (0 = never expires) so a dead
+    // automation cannot hold the mower in RAIN_WAITING forever.
+    context_->use_external_rain = declare_parameter<bool>("use_external_rain", true);
+    context_->external_rain_max_age_sec =
+        std::max(0.0, declare_parameter<double>("external_rain_max_age_minutes", 120.0)) * 60.0;
+
     declare_parameter<double>("tick_rate", 10.0);
 
     // Robot footprint — used by PlanCoverageArea to inset the perimeter
@@ -1577,6 +1651,7 @@ private:
 
   // Subscribers
   rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr status_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr external_rain_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::Emergency>::SharedPtr emergency_sub_;
   /// Merged twist_mux output — direction source for the #487 escape.
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
@@ -1606,6 +1681,11 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::StartInArea>::SharedPtr start_in_area_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_coverage_resume_srv_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr resume_available_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr external_rain_state_pub_;
+  rclcpp::TimerBase::SharedPtr external_rain_state_timer_;
+  ExternalRainStatus last_external_rain_state_;
+  std::chrono::steady_clock::time_point last_external_rain_state_time_{};
+  bool external_rain_state_published_{false};
   rclcpp::TimerBase::SharedPtr resume_available_timer_;
   // Periodic re-publish of the last HighLevelStatus so the topic stays fresh
   // during long-running actions (see setupHighLevelStatusRepublish).

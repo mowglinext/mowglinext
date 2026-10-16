@@ -126,7 +126,7 @@ func topicSubscribeInterval(topic string) (int, bool) {
 	case "diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",
-		"coverageResumeAvailable", "coverageSession",
+		"coverageResumeAvailable", "coverageSession", "externalRainState",
 		"fusionDiag", "dockCalibrationStatus", "firmwareParams",
 		"digEvent", "localizationMode", "collisionMonitor", "mavrosState", "mavrosVehicleInfo":
 		return -1, true

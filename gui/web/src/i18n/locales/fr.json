@@ -1054,7 +1054,7 @@
     "soilWetTitle": "Attention : le jardin est humide (IrriSense)",
     "soilWetBlocking": "tontes planifiées suspendues",
     "digEscalationTitle": "Tonte arrêtée — creusement répété détecté",
-    "digEscalationBody": "La tondeuse n'a pas pu se dégager et s'est arrêtée à {{distance}} m de l'endroit (il faut {{required}} m pour réinitialiser). Éloignez-la davantage, puis réessayez.",
+    "digEscalationBody": "La tondeuse n'a pas pu se dégager et s'est arrêtée à {{distance}} m de l'endroit. Reprenez d'ici (un dig de plus à cet endroit l'arrête de nouveau), éloignez-la de plus de {{required}} m, ou renvoyez-la à la station.",
     "digEscalationReady": "Éloignée de {{distance}} m de l'endroit — prête à réinitialiser.",
     "digEscalationClear": "Réinitialiser et reprendre"
   },
@@ -1742,7 +1742,7 @@
     },
     "DIG_OBSTRUCTION": {
       "label": "Blocage (creusage)",
-      "friendly": "Arrêt — creuse au même endroit. Dégagez-le, puis Lecture ou Retour base"
+      "friendly": "Arrêt — creuse au même endroit. Vérifiez, puis Lecture pour reprendre ou Retour base"
     },
     "UNDOCK_FAILED": {
       "label": "Échec départ",
@@ -3196,7 +3196,22 @@
     "resumeDelay": "Délai de reprise",
     "resumeDelayTooltip": "Minutes à attendre après l'arrêt de la pluie avant de reprendre",
     "debounce": "Anti-rebond",
-    "debounceTooltip": "Secondes de signal de pluie continu avant déclenchement"
+    "debounceTooltip": "Secondes de signal de pluie continu avant déclenchement",
+    "externalSource": "Source de pluie externe",
+    "externalSourceDescription": "Considère aussi comme de la pluie un oui/non publié sur le topic MQTT <prefix>/external_rain, par exemple depuis une automatisation Home Assistant liée à une station météo sur le toit. Cela ne peut qu'ajouter une raison de s'arrêter ; le capteur de pluie de la tondeuse compte toujours. Nécessite MQTT activé.",
+    "useExternal": "Utiliser la source de pluie externe",
+    "useExternalTooltip": "Traiter un « oui » externe sur <prefix>/external_rain comme de la pluie",
+    "externalStatus": "État",
+    "externalState_wet": "Pluie — prise en compte",
+    "externalState_dry": "Sec",
+    "externalState_expired": "Pluie, mais expirée — ignorée",
+    "externalState_disabled": "Désactivée",
+    "externalState_no_data": "Aucun message reçu",
+    "externalAge": "dernier message il y a {{age}}",
+    "externalExpiresIn": "comptée encore {{age}}",
+    "ownSensorWet": "Capteur de la tondeuse : pluie",
+    "externalExpiry": "Expiration de la pluie externe",
+    "externalExpiryTooltip": "Minutes après lesquelles un « oui » externe est ignoré s'il n'a pas été rafraîchi (0 = n'expire jamais). Évite qu'une automatisation défaillante bloque la tondeuse dans l'attente de pluie."
   },
   "settingsAdvanced": {
     "advancedParameters": "Paramètres avancés",
@@ -5172,5 +5187,11 @@
     "mapAlt": "Tondeuse assemblée selon la description du robot en service",
     "dockStyle": "Base stylisée",
     "dockNote": "Base illustrative · 67 × 46 cm. Associée au châssis dans Matériel et affichée automatiquement sur la carte."
+  },
+  "digObstructionAck": {
+    "title": "Reprendre depuis le point bloqué ?",
+    "body": "Les roues ont creusé plusieurs fois ici et la tondeuse n'est qu'à {{distance}} m du point. Vérifiez que rien n'est coincé dessous ou devant. Si elle creuse encore une fois à cet endroit, elle s'arrêtera de nouveau.",
+    "ok": "Reprendre la tonte",
+    "cancel": "Annuler"
   }
 }

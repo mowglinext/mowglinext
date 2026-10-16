@@ -1054,7 +1054,7 @@
     "soilWetTitle": "Careful: the garden is wet (IrriSense)",
     "soilWetBlocking": "scheduled mows are suspended",
     "digEscalationTitle": "Mowing halted — repeat dig detected",
-    "digEscalationBody": "The mower couldn't free itself and stopped {{distance}} m from the spot (needs {{required}} m to clear). Move it further away, then try again.",
+    "digEscalationBody": "The mower couldn't free itself and stopped {{distance}} m from the spot. Resume from here (one more dig at this spot stops it again), move it more than {{required}} m away, or send it home.",
     "digEscalationReady": "Moved {{distance}} m from the spot — ready to clear.",
     "digEscalationClear": "Clear & resume"
   },
@@ -1746,7 +1746,7 @@
     },
     "DIG_OBSTRUCTION": {
       "label": "Dig obstruction",
-      "friendly": "Stopped — kept digging at the same spot. Lift it clear, then Play or Home"
+      "friendly": "Stopped — kept digging at the same spot. Check it, then Play to resume or Home"
     },
     "UNDOCK_FAILED": {
       "label": "Start failed",
@@ -3200,7 +3200,22 @@
     "resumeDelay": "Resume Delay",
     "resumeDelayTooltip": "Minutes to wait after rain stops before resuming",
     "debounce": "Debounce",
-    "debounceTooltip": "Seconds of continuous rain signal before triggering"
+    "debounceTooltip": "Seconds of continuous rain signal before triggering",
+    "externalSource": "External rain source",
+    "externalSourceDescription": "Also treat a yes/no published to MQTT topic <prefix>/external_rain as rain, for example from a Home Assistant automation on a roof weather station. It can only add a reason to stop; the mower's own rain sensor always counts too. Requires MQTT to be enabled.",
+    "useExternal": "Use external rain source",
+    "useExternalTooltip": "Treat an external 'yes' on <prefix>/external_rain as rain",
+    "externalStatus": "Status",
+    "externalState_wet": "Wet — counted",
+    "externalState_dry": "Dry",
+    "externalState_expired": "Wet, but expired — not counted",
+    "externalState_disabled": "Switched off",
+    "externalState_no_data": "No message received yet",
+    "externalAge": "last message {{age}} ago",
+    "externalExpiresIn": "counts for another {{age}}",
+    "ownSensorWet": "Mower's own sensor: wet",
+    "externalExpiry": "External rain expiry",
+    "externalExpiryTooltip": "Minutes after which an external 'yes' is ignored if it was not refreshed (0 = never expires). Keeps a dead automation from holding the mower in the rain wait."
   },
   "settingsAdvanced": {
     "advancedParameters": "Advanced parameters",
@@ -5172,5 +5187,11 @@
     "mapAlt": "Assembled mower from the running robot description",
     "dockStyle": "Styled dock",
     "dockNote": "Illustrative dock · 67 × 46 cm. Paired with the chassis in Hardware and shown automatically on the map."
+  },
+  "digObstructionAck": {
+    "title": "Resume from the blocked spot?",
+    "body": "The wheels dug in repeatedly here and the mower is still {{distance}} m from the spot. Check that nothing is stuck under or in front of it. If it digs in once more at this spot, it will stop again.",
+    "ok": "Resume mowing",
+    "cancel": "Cancel"
   }
 }
