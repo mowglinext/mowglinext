@@ -339,7 +339,10 @@ private:
   {
     TurnFallbackPhase phase{TurnFallbackPhase::kIdle};
     double reverse_target_m{0.0};
+    /// Conservative distance charged from measured/authorized reverse output.
     double reverse_done_m{0.0};
+    /// Previous authorized reverse speed after all output caps and tapering.
+    double last_reverse_speed_mps{0.0};
     double reverse_time_s{0.0};
     rclcpp::Time started{0, 0, RCL_ROS_TIME};
     /// Working-plan index of the rejoin pose once spliced.

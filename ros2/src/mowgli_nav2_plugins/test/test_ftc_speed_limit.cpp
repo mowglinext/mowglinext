@@ -53,6 +53,18 @@ struct FTCSpeedLimitTestAccess
   {
     return controller.turnFallbackReversing();
   }
+  static double TurnFallbackReverseTarget(const FTCController& controller)
+  {
+    return controller.turn_fallback_.reverse_target_m;
+  }
+  static bool TurnFallbackRunning(const FTCController& controller)
+  {
+    return controller.turn_fallback_.phase == FTCController::TurnFallbackPhase::kRunning;
+  }
+  static double WorkingPlanStartX(const FTCController& controller)
+  {
+    return controller.global_plan_.front().pose.position.x;
+  }
 
   static bool Stalled(const FTCController& controller)
   {
@@ -665,4 +677,87 @@ TEST_F(FtcSpeedLimit, TurnFallbackReverseObeysTheSignedExternalCap)
   }
   EXPECT_TRUE(saw_fallback_reverse);
 }
+
+class FtcTurnFallbackBudget : public FtcSpeedLimit,
+                              public ::testing::WithParamInterface<std::tuple<double, double>>
+{
+};
+
+TEST_P(FtcTurnFallbackBudget, ReverseFitsItsTargetAndReplansFromTheActualRetreat)
+{
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  SetParameter("turn_fallback_enabled", true);
+  robot_x_ = 2.85;
+  measured_speed_ = 0.0;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  plan.poses.push_back(MakePose(2.85));
+  plan.poses.push_back(MakePose(2.90));
+  plan.poses.push_back(MakePose(2.95));
+  const int steps = static_cast<int>(std::ceil(M_PI * 0.30 / 0.05));
+  for (int i = 0; i <= steps; ++i)
+  {
+    const double angle = -M_PI / 2.0 + M_PI * i / steps;
+    plan.poses.push_back(
+        MakePose(3.0 + 0.30 * std::cos(angle), 0.30 + 0.30 * std::sin(angle), angle + M_PI / 2.0));
+  }
+  for (double x = 2.95; x >= 0.0; x -= 0.05)
+  {
+    plan.poses.push_back(MakePose(x, 0.60, M_PI));
+  }
+  controller_.newPathReceived(plan);
+  Wall(3.45);
+
+  double command = 0.0;
+  for (int i = 0; i < 30 && command >= 0.0; ++i)
+  {
+    command = Tick();
+  }
+  ASSERT_LT(command, 0.0) << "The production lattice must engage a legal fallback reverse";
+  ASSERT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReversing(controller_));
+  const double target =
+      mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReverseTarget(controller_);
+  ASSERT_GT(target, 0.0);
+  ASSERT_LE(target, 0.40);
+
+  const double feedback_scale = std::get<0>(GetParam());
+  const double hold_s = std::get<1>(GetParam());
+  double distance = 0.0;
+  bool stopped = false;
+  for (int i = 0; i < 128; ++i)
+  {
+    ASSERT_LT(command, 0.0);
+    distance -= command * hold_s;
+    robot_x_ += command * hold_s;
+    measured_speed_ = command * feedback_scale;
+    EXPECT_LE(distance, target) << "The next held fallback command must fit its selected target";
+    EXPECT_LE(distance, 0.40) << "Fallback execution must retain the configured reverse ceiling";
+    command = Tick(hold_s);
+    if (!mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReversing(controller_))
+    {
+      stopped = true;
+      EXPECT_DOUBLE_EQ(command, 0.0) << "Replanning must stop before the new pivot starts";
+      break;
+    }
+  }
+  EXPECT_TRUE(stopped);
+  EXPECT_GT(distance, target * 0.80) << "Conservative accounting must preserve necessary retreat";
+  ASSERT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackRunning(controller_))
+      << "The safe retreat must replan the pivot/connector rather than abandon recovery";
+  EXPECT_NEAR(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::WorkingPlanStartX(controller_),
+              robot_x_,
+              1e-9)
+      << "The restored working path must start at the actual retreated pose";
+}
+
+INSTANTIATE_TEST_SUITE_P(FallbackFeedback,
+                         FtcTurnFallbackBudget,
+                         ::testing::Values(std::tuple{0.0, 0.10},
+                                           std::tuple{0.5, 0.10},
+                                           std::tuple{1.0, 0.10},
+                                           std::tuple{0.0, 0.50},
+                                           std::tuple{0.5, 0.50},
+                                           std::tuple{1.0, 0.50}));
 }  // namespace

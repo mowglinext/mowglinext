@@ -1281,6 +1281,16 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       const double budget_speed = std::nextafter(remaining / kMaxControlDtSec, 0.0);
       cmd_vel.twist.linear.x = std::max(cmd_vel.twist.linear.x, -budget_speed);
     }
+    if (turnFallbackReversing() && cmd_vel.twist.linear.x < 0.0)
+    {
+      // Preserve the selected fallback's retreat distance even when measured
+      // velocity under-reports motion. Charge the resulting output next tick;
+      // the existing completion threshold ends the final taper finitely.
+      const double remaining =
+          std::max(0.0, turn_fallback_.reverse_target_m - turn_fallback_.reverse_done_m);
+      const double budget_speed = std::nextafter(remaining / kMaxControlDtSec, 0.0);
+      cmd_vel.twist.linear.x = std::max(cmd_vel.twist.linear.x, -budget_speed);
+    }
     if (config_.enable_obstacle_deviation && config_.use_offset_lattice &&
         current_state_ == PlannerState::FOLLOWING && cmd_vel.twist.linear.x > 0 &&
         !reverse_escape_active_ && !turnFallbackReversing() &&
@@ -1292,6 +1302,8 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     authorizeCommand(cmd_vel.twist);
     last_cmd_fwd_speed_ = cmd_vel.twist.linear.x;
     last_reverse_budget_speed_ = reverse_budget_speed;
+    turn_fallback_.last_reverse_speed_mps =
+        turnFallbackReversing() ? std::max(0.0, -cmd_vel.twist.linear.x) : 0.0;
     return cmd_vel;
   };
 
@@ -1328,6 +1340,15 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
         std::max(std::abs(last_measured_fwd_speed_), last_reverse_budget_speed_);
     reverse_distance_done_ =
         ReverseEscapeAdvance(cfg, reverse_distance_done_, consumed_speed, safe_dt);
+  }
+  if (turnFallbackReversing())
+  {
+    ReverseEscapeCfg cfg;
+    cfg.max_dist_m = turn_fallback_.reverse_target_m;
+    const double consumed_speed =
+        std::max(std::abs(last_measured_fwd_speed_), turn_fallback_.last_reverse_speed_mps);
+    turn_fallback_.reverse_done_m =
+        ReverseEscapeAdvance(cfg, turn_fallback_.reverse_done_m, consumed_speed, safe_dt);
   }
 
   if (is_crashed_)
