@@ -1,5 +1,6 @@
 import {expect, test} from '@playwright/test';
 import {installMockBackend} from './mock/mockBackend';
+import type {GamepadDiagnosticReport} from '../../src/gamepad/diagnostics';
 
 test.afterEach(async ({page}, info) => {
     if (info.status !== info.expectedStatus) {
@@ -40,6 +41,8 @@ for (const width of [390, 1440]) {
         }, {liveStatusIntervalMs: 200});
         const frames: Array<{twist: {twist: {linear: {x: number}; angular: {z: number}}}; deadman: boolean}> = [];
         const commands: number[] = [];
+        const reports: GamepadDiagnosticReport[] = [];
+        const reportOrigins: (string | undefined)[] = [];
         const errors: string[] = [];
         let opened = 0;
         page.on('pageerror', error => errors.push(error.message));
@@ -47,6 +50,11 @@ for (const width of [390, 1440]) {
         await page.route('**/api/mowglinext/call/high_level_control', async route => {
             commands.push(route.request().postDataJSON().Command);
             await route.fulfill({json: {}});
+        });
+        await page.route('**/api/mowglinext/gamepad/diagnostics', async route => {
+            reports.push(route.request().postDataJSON() as GamepadDiagnosticReport);
+            reportOrigins.push(route.request().headers().origin);
+            await route.fulfill({status: 204});
         });
         await page.routeWebSocket(/\/api\/mowglinext\/publish\/gamepad/, socket => {
             opened++;
@@ -104,6 +112,9 @@ for (const width of [390, 1440]) {
         await page.evaluate(() => { (window as any).controllerTestInput.connected = false; });
         await expect(page.getByRole('button', {name: 'Disable controller'})).toHaveCount(0);
         await expect(page.getByRole('alert')).toContainText('The browser no longer reports the selected controller as connected.');
+        await expect.poll(() => reports.some(report => report.events.some(event =>
+            event.event === 'sessionEnded' && event.detail.reason === 'disconnected'))).toBe(true);
+        expect(reportOrigins.every(origin => origin === new URL(page.url()).origin)).toBe(true);
         await page.evaluate(() => {
             const input = (window as any).controllerTestInput;
             input.connected = true;

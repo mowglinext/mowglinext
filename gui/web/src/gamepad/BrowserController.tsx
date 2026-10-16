@@ -131,6 +131,7 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
             onClose={closeSettings} width={480} footer={<Button size="large" type="primary" block onClick={closeSettings}>{t('gamepad.done')}</Button>}>
             <Space direction="vertical" size="middle" style={{width: '100%'}}>
                 <Typography.Paragraph>{t('gamepad.connectHelp')}</Typography.Paragraph>
+                <Typography.Paragraph type="secondary">{t('gamepad.pwaHelp')}</Typography.Paragraph>
                 {typeof navigator.getGamepads !== 'function' && <Alert type="warning" showIcon message={t('gamepad.faults.unsupported')}/>}
                 <Form layout="vertical">
                     <Form.Item label={t('gamepad.controller')}>
@@ -187,6 +188,7 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
                 {controller.inputLoss && <Alert type="warning" showIcon message={inputLossText}
                     description={<Typography.Text code copyable>{JSON.stringify(controller.inputLoss)}</Typography.Text>}/>}
                 <Typography.Paragraph type="secondary">{t('gamepad.enableHelp')}</Typography.Paragraph>
+                <Typography.Paragraph type="secondary">{t('gamepad.diagnosticsHelp')}</Typography.Paragraph>
             </Space>
         </Drawer>
     </>;

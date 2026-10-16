@@ -2,6 +2,7 @@ import {act, renderHook} from '@testing-library/react';
 import {afterEach, beforeEach, describe, expect, it, vi, type Mock} from 'vitest';
 import {DEFAULT_PROFILE, type ControllerAction} from './controller';
 import {useBrowserGamepad} from './useBrowserGamepad';
+import type {GamepadDiagnosticReport} from './diagnostics';
 
 const topics = vi.hoisted(() => ({
     status: {data: {state_name: 'IDLE', emergency: false}, lastMessageAt: null as number | null},
@@ -123,6 +124,7 @@ beforeEach(() => {
     Object.defineProperty(document, 'visibilityState', {configurable: true, value: 'visible'});
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue({ok: true} as Response));
 });
 
 afterEach(() => {
@@ -138,6 +140,67 @@ afterEach(() => {
 });
 
 describe('useBrowserGamepad session ownership', () => {
+    it('reports a persistent Gamepad permission failure once instead of uploading on every poll', async () => {
+        Object.defineProperty(navigator, 'getGamepads', {configurable: true, value: () => {
+            throw new DOMException('Blocked by permissions policy', 'SecurityError');
+        }});
+        const {hook} = mount();
+        await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+        expect(hook.result.current.fault).toBe('unsupported');
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(FakeWebSocket.instances).toHaveLength(0);
+        hook.unmount();
+    });
+
+    it('records a PWA disconnect and subsequent retry without losing the first fault', async () => {
+        vi.spyOn(window, 'matchMedia').mockReturnValue({...window.matchMedia(''), matches: true});
+        topics.status.data.state_name = 'RECORDING';
+        const {hook} = mount();
+        const socket = enable(hook);
+        poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true);
+        poll();
+        setAxis(1, -1);
+        poll();
+        act(() => { socket.serverClose(); });
+        setAxis(1, 0);
+        setButton(DEFAULT_PROFILE.buttons.deadman, false);
+        enable(hook);
+        poll();
+        await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+        const send = vi.mocked(fetch);
+        const body = send.mock.calls[send.mock.calls.length - 1][1]?.body;
+        if (typeof body !== 'string') throw new Error('Missing diagnostic body');
+        const report = JSON.parse(body) as GamepadDiagnosticReport;
+        expect(report.snapshot.standalone).toBe(true);
+        expect(report.snapshot.mode).toBe('RECORDING');
+        expect(report.events.find(event => event.event === 'sessionEnded')?.detail.fault).toBe('connectionLost');
+        expect(report.events.filter((event: {event: string}) => event.event === 'enableRequested')).toHaveLength(2);
+        expect(new URL(socket.url).searchParams.get('client')).toMatch(/^browser-/);
+        const retryFrames = FakeWebSocket.instances[1].sent;
+        expect(parseControl(retryFrames[retryFrames.length - 1]).deadman).toBe(false);
+        hook.unmount();
+    });
+
+    it('keeps a healthy session open beyond two minutes without a maximum-duration timer', () => {
+        topics.status.data.state_name = 'RECORDING';
+        const {hook} = mount();
+        const socket = enable(hook);
+        poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true);
+        poll();
+        setAxis(1, -1);
+        for (let i = 0; i < 2500; i++) {
+            topics.status.lastMessageAt = performance.now();
+            poll();
+        }
+        expect(hook.result.current.enabled).toBe(true);
+        expect(hook.result.current.state).toBe('driving');
+        expect(socket.closeCount).toBe(0);
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(true);
+        hook.unmount();
+    });
+
     it('updates device availability with settings closed without streaming stick previews or reconnecting', () => {
         const onSample = vi.fn();
         const hook = renderHook(() => useBrowserGamepad({
