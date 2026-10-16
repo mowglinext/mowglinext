@@ -5185,6 +5185,8 @@
     "controller": "Manette connectée",
     "selectController": "Sélectionner une manette",
     "connectHelp": "Associez la manette dans les réglages Bluetooth de ce téléphone, de cette tablette ou de cet ordinateur, ou branchez-la en USB. Appuyez sur un bouton pour la rendre visible, puis sélectionnez-la ici. Gardez la page Carte de ce robot ouverte et active.",
+    "pwaHelp": "Conseil iPad : essayez d’ajouter cette interface à l’écran d’accueil et de l’ouvrir comme app web (PWA), surtout si les boutons de la manette naviguent dans le navigateur. Gardez-la visible et active ; les mêmes contrôles d’arrêt s’appliquent.",
+    "diagnosticsHelp": "Les événements récents de la manette et l’état des connexions sont envoyés à ce robot pour le diagnostic, sans coordonnées de carte. Si la commande s’arrête, laissez cette page ouverte pour que le rapport arrive au retour de la connexion. Les rapports restent temporairement en mémoire et sont effacés au redémarrage du serveur de l’interface.",
     "noController": "Connectez une manette et appuyez sur un bouton.",
     "disconnected": "Manette déconnectée. Reconnectez-la, sélectionnez-la et activez-la à nouveau.",
     "storageHelp": "Les affectations sont enregistrées dans ce navigateur pour ce robot et cette manette. La conduite est toujours désactivée à l’ouverture de la page.",

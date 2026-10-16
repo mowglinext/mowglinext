@@ -769,6 +769,68 @@ const docTemplate = `{
                 }
             }
         },
+        "/mowglinext/gamepad/diagnostics": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gamepad"
+                ],
+                "summary": "Read bounded, memory-only gamepad diagnostics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.gamepadDiagnosticResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gamepad"
+                ],
+                "summary": "Store a bounded browser diagnostic report (same-origin JSON only)",
+                "parameters": [
+                    {
+                        "description": "Bounded controller diagnostics",
+                        "name": "report",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.gamepadBrowserEnvelope"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/mowglinext/map": {
             "put": {
                 "description": "clear the map and insert all provided areas in a single transaction",
@@ -2197,6 +2259,14 @@ const docTemplate = `{
         "api.FleetCoordinationResponse": {
             "type": "object",
             "properties": {
+                "peer_feed": {
+                    "description": "The /fleet/peers publisher — live whenever a peer is registered,\nindependent of the coordination toggle (docs/MULTI_ROBOT.md § 3c).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/providers.PeerFeedStatus"
+                        }
+                    ]
+                },
                 "settings": {
                     "$ref": "#/definitions/providers.CoordinatorSettings"
                 },
@@ -2229,12 +2299,19 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "default_overrides": {
-                    "description": "DefaultOverrides are the settings whose default this backend replaces\n(config/backends/\u003cbackend\u003e.yaml). A mower-model preset must not write\nthese: the preset describes the machine, not its electronics.",
                     "type": "object",
                     "additionalProperties": {}
                 },
+                "parameter_routes": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/api.HardwareParameterRoute"
+                    }
+                },
                 "robot_name": {
-                    "description": "RobotName is robot_name from the installed config (or its default):\nthe header badge shows it beside the backend.",
+                    "type": "string"
+                },
+                "runtime_routing": {
                     "type": "string"
                 },
                 "supported": {
@@ -2242,6 +2319,17 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "api.HardwareParameterRoute": {
+            "type": "object",
+            "properties": {
+                "parameter": {
+                    "type": "string"
+                },
+                "runtime": {
+                    "type": "string"
                 }
             }
         },
@@ -2837,6 +2925,127 @@ const docTemplate = `{
                 }
             }
         },
+        "api.gamepadBrowserEnvelope": {
+            "type": "object",
+            "properties": {
+                "clientId": {
+                    "type": "string"
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.gamepadBrowserEvent"
+                    }
+                },
+                "snapshot": {
+                    "type": "object"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.gamepadBrowserEvent": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "object"
+                },
+                "event": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.gamepadBrowserReport": {
+            "type": "object",
+            "properties": {
+                "receivedAt": {
+                    "type": "string"
+                },
+                "report": {
+                    "type": "object"
+                }
+            }
+        },
+        "api.gamepadDiagnosticResponse": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "boolean"
+                },
+                "browser": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.gamepadBrowserReport"
+                    }
+                },
+                "server": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.gamepadServerEvent"
+                    }
+                },
+                "startedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.gamepadServerEvent": {
+            "type": "object",
+            "properties": {
+                "ageMs": {
+                    "type": "integer"
+                },
+                "at": {
+                    "type": "string"
+                },
+                "cause": {
+                    "type": "string"
+                },
+                "client": {
+                    "type": "string"
+                },
+                "code": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "event": {
+                    "type": "string"
+                },
+                "frames": {
+                    "type": "integer"
+                },
+                "lastFrameMs": {
+                    "type": "integer"
+                },
+                "manualOwned": {
+                    "type": "boolean"
+                },
+                "maxGapMs": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "session": {
+                    "type": "string"
+                },
+                "skipped": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "integer"
+                },
+                "success": {
+                    "type": "boolean"
+                }
+            }
+        },
         "api.registerPeerRequest": {
             "type": "object",
             "properties": {
@@ -3243,7 +3452,15 @@ const docTemplate = `{
                 "resume_distance_m": {
                     "type": "number"
                 },
+                "yield_cooldown_s": {
+                    "description": "After any resume, no new yield for this long: lets the resumed robot\nactually clear the peer instead of stop/start flapping at 3 m.",
+                    "type": "number"
+                },
                 "yield_distance_m": {
+                    "type": "number"
+                },
+                "yield_max_hold_s": {
+                    "description": "Longest a yielded robot holds before resuming regardless of the peer:\nthe deadlock breaker when the priority robot stopped in front of it\n(its own collision checks) and neither will move first. Both robots\ncarry each other in their costmaps, so a resumed robot skirts the\nstopped one instead of hitting it.",
                     "type": "number"
                 }
             }
@@ -3315,6 +3532,14 @@ const docTemplate = `{
                 },
                 "self": {
                     "type": "boolean"
+                },
+                "topic_age_s": {
+                    "description": "Age of each cached topic in seconds — consumers that place a robot on\nthe lawn (peer feed, yield rule) must ignore stale samples.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "number",
+                        "format": "float64"
+                    }
                 },
                 "topics": {
                     "type": "object",
@@ -3421,6 +3646,29 @@ const docTemplate = `{
                 },
                 "sentCount": {
                     "type": "integer"
+                }
+            }
+        },
+        "providers.PeerFeedStatus": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "boolean"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_publish_at": {
+                    "type": "string"
+                },
+                "peers_published": {
+                    "type": "integer"
+                },
+                "publishes": {
+                    "type": "integer"
+                },
+                "rate_hz": {
+                    "type": "number"
                 }
             }
         },

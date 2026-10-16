@@ -56,6 +56,11 @@ export interface ApiErrorResponse {
 }
 
 export interface ApiFleetCoordinationResponse {
+  /**
+   * The /fleet/peers publisher — live whenever a peer is registered,
+   * independent of the coordination toggle (docs/MULTI_ROBOT.md § 3c).
+   */
+  peer_feed?: ProvidersPeerFeedStatus;
   settings?: ProvidersCoordinatorSettings;
   status?: ProvidersCoordinatorStatus;
 }
@@ -70,18 +75,16 @@ export interface ApiGetSettingsResponse {
 
 export interface ApiHardwareBackendResponse {
   backend?: string;
-  /**
-   * DefaultOverrides are the settings whose default this backend replaces
-   * (config/backends/<backend>.yaml). A mower-model preset must not write
-   * these: the preset describes the machine, not its electronics.
-   */
   default_overrides?: Record<string, any>;
-  /**
-   * RobotName is robot_name from the installed config (or its default):
-   * the header badge shows it beside the backend.
-   */
+  parameter_routes?: Record<string, ApiHardwareParameterRoute>;
   robot_name?: string;
+  runtime_routing?: string;
   supported?: string[];
+}
+
+export interface ApiHardwareParameterRoute {
+  parameter?: string;
+  runtime?: string;
 }
 
 export interface ApiImportDockPose {
@@ -317,6 +320,50 @@ export interface ApiBlackboxTopicStatus {
   topic?: string;
 }
 
+export interface ApiGamepadBrowserEnvelope {
+  clientId?: string;
+  events?: ApiGamepadBrowserEvent[];
+  snapshot?: object;
+  version?: number;
+}
+
+export interface ApiGamepadBrowserEvent {
+  at?: string;
+  detail?: object;
+  event?: string;
+}
+
+export interface ApiGamepadBrowserReport {
+  receivedAt?: string;
+  report?: object;
+}
+
+export interface ApiGamepadDiagnosticResponse {
+  active?: boolean;
+  browser?: ApiGamepadBrowserReport[];
+  server?: ApiGamepadServerEvent[];
+  startedAt?: string;
+}
+
+export interface ApiGamepadServerEvent {
+  ageMs?: number;
+  at?: string;
+  cause?: string;
+  client?: string;
+  code?: number;
+  error?: string;
+  event?: string;
+  frames?: number;
+  lastFrameMs?: number;
+  manualOwned?: boolean;
+  maxGapMs?: number;
+  reason?: string;
+  session?: string;
+  skipped?: boolean;
+  state?: number;
+  success?: boolean;
+}
+
 export interface ApiRegisterPeerRequest {
   api_version?: number;
   id?: string;
@@ -467,7 +514,20 @@ export interface ProvidersCoordinatorSettings {
   completed_ttl_h?: number;
   enabled?: boolean;
   resume_distance_m?: number;
+  /**
+   * After any resume, no new yield for this long: lets the resumed robot
+   * actually clear the peer instead of stop/start flapping at 3 m.
+   */
+  yield_cooldown_s?: number;
   yield_distance_m?: number;
+  /**
+   * Longest a yielded robot holds before resuming regardless of the peer:
+   * the deadlock breaker when the priority robot stopped in front of it
+   * (its own collision checks) and neither will move first. Both robots
+   * carry each other in their costmaps, so a resumed robot skirts the
+   * stopped one instead of hitting it.
+   */
+  yield_max_hold_s?: number;
 }
 
 export interface ProvidersCoordinatorStatus {
@@ -494,6 +554,11 @@ export interface ProvidersFleetRobot {
   last_seen?: string;
   online?: boolean;
   self?: boolean;
+  /**
+   * Age of each cached topic in seconds — consumers that place a robot on
+   * the lawn (peer feed, yield rule) must ignore stale samples.
+   */
+  topic_age_s?: Record<string, number>;
   topics?: Record<string, number[]>;
 }
 
@@ -532,6 +597,15 @@ export interface ProvidersNotifyDeliveryStatus {
   lastMessage?: string;
   lastSentAt?: string;
   sentCount?: number;
+}
+
+export interface ProvidersPeerFeedStatus {
+  active?: boolean;
+  last_error?: string;
+  last_publish_at?: string;
+  peers_published?: number;
+  publishes?: number;
+  rate_hz?: number;
 }
 
 export interface ProvidersRemoteAccessStatus {
@@ -1368,6 +1442,42 @@ export class Api<
         body: CallReq,
         type: ContentType.Json,
         format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags gamepad
+     * @name GamepadDiagnosticsList
+     * @summary Read bounded, memory-only gamepad diagnostics
+     * @request GET:/mowglinext/gamepad/diagnostics
+     */
+    gamepadDiagnosticsList: (params: RequestParams = {}) =>
+      this.request<ApiGamepadDiagnosticResponse, any>({
+        path: `/mowglinext/gamepad/diagnostics`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags gamepad
+     * @name GamepadDiagnosticsCreate
+     * @summary Store a bounded browser diagnostic report (same-origin JSON only)
+     * @request POST:/mowglinext/gamepad/diagnostics
+     */
+    gamepadDiagnosticsCreate: (
+      report: ApiGamepadBrowserEnvelope,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, ApiErrorResponse>({
+        path: `/mowglinext/gamepad/diagnostics`,
+        method: "POST",
+        body: report,
+        type: ContentType.Json,
         ...params,
       }),
 
