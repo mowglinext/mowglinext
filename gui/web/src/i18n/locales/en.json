@@ -5206,6 +5206,8 @@
     "controller": "Connected controller",
     "selectController": "Select a controller",
     "connectHelp": "Pair your controller in this phone, tablet or computer’s Bluetooth settings, or connect it by USB. Press a controller button to make it visible, then select it here. Keep this robot’s Map page open and in focus.",
+    "pwaHelp": "iPad tip: try adding this GUI to the Home Screen and opening it as a web app (PWA), especially if controller buttons navigate the browser. Keep it visible and focused; web apps use the same stop checks.",
+    "diagnosticsHelp": "Recent controller events and connection health are sent to this robot for troubleshooting, without map coordinates. If control stops, leave this page open so the report can arrive when the connection returns. Reports are kept briefly in memory and cleared when the GUI server restarts.",
     "noController": "Connect a controller and press a button.",
     "disconnected": "Controller disconnected. Reconnect, select it and enable again.",
     "storageHelp": "Mappings are saved in this browser for this robot and controller. Driving is always disabled when the page opens.",

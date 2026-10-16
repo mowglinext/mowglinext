@@ -3,7 +3,14 @@
 Use a USB or Bluetooth controller connected to the **phone, tablet or computer
 running the GUI**. Open that robot's **Map → Controller** panel. The GUI must
 remain open, visible and focused. Native SDL2 / ROS 2 `joy`, headless operation,
-robot-side Bluetooth management and standalone mapping files remain future work.
+robot-side Bluetooth management and standalone mapping files remain the required
+follow-up Part 2 for the complete #999 scope.
+
+For iPad, try the installed Home Screen web app (PWA), particularly if controller
+buttons also navigate browser controls. One user reports a better driving
+experience there; this is a recommendation, not a requirement or evidence that
+PWA mode fixes input loss. Follow Apple's [Home Screen web app instructions](https://support.apple.com/guide/ipad/ipad8f1f7a29/ipados).
+Keep the app visible and focused. All interlocks apply in both browser and PWA.
 
 ## Connect and configure
 
@@ -139,6 +146,39 @@ and the next activation attempt clears it. When its close message reaches
 the server, the GUI log also records the reason and polling gap. These are browser
 observations, not proof of a physical Bluetooth disconnect. Record the client OS,
 browser/controller versions and exact diagnostic when reporting a failure.
+
+There is **no maximum session duration**. The 200 ms input polling deadline,
+300 ms backend frame lease and 2.5 s status-delivery check apply continuously.
+Following a stop, check the map's next-step message: `waitingForMode` requires
+an explicit robot mode selection (a lost manual session requests STOP),
+`releaseControls` requires centered sticks and all mapped buttons released,
+`statusLost` requires fresh robot status, and `actionPending` requires the
+outstanding command to settle. Retrying Enable does not discard a command with
+an unknown outcome or restore blade-enabled Manual Mowing automatically.
+
+The GUI now records a bounded diagnostic history automatically. Browser reports
+include the web build ID, PWA flag, controller identity/mapping, mapped input
+values, poll gaps, status age, mode, pending-command age, socket state/buffer,
+and recent state/close/input-loss events. The browser retains 32 events across
+activation attempts while the map stays mounted, uploads at most one report at
+a time every five seconds while dirty, and attempts an immediate report after
+a fault. Uploads time out independently after two seconds; failed reports can
+be retried while this page stays open. No coordinates, credentials or map data
+are collected. Diagnostics never renew the lease or issue robot commands.
+
+Read **GET `/api/mowglinext/gamepad/diagnostics`** on the robot to inspect the
+last eight browser reports and 64 backend lifecycle events, including lease
+expiry, invalid mode/frame, transport errors, manual deadman release, STOP,
+zero-write completion and ownership release/rejection. The browser attempt ID
+matches the backend's `client` field. Backend causes also appear in GUI container
+logs. GET remains readable during cleanup; POST is size-limited and same-origin.
+This is temporary in-memory history, not a disk recording: a GUI restart clears
+it, older entries are overwritten, and a fully offline/closed browser may not
+deliver its last report. Capture it before restarting. For a supervised next
+test, keep the PWA open after a fault and note the approximate time; an observer
+can inspect this endpoint live without sending motion commands. A stalled
+telemetry WebSocket handshake now retries its existing subscription connection;
+the gamepad control connection still requires explicit Enable.
 
 The direct activation, panel closing/focus handoff and map ownership churn are covered in software
 tests. These tests cannot establish physical iPad/Safari/Bluetooth behavior.

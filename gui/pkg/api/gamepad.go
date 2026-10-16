@@ -7,10 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,23 +29,28 @@ var errGamepadOwner = errors.New("gamepad owns teleop")
 // Ownership remains reserved through cleanup, including a blocked transport
 // write, so an old session's delayed stop cannot affect a replacement session.
 type gamepadCoordinator struct {
-	mu       sync.Mutex
-	owner    *gamepadSession
-	provider types.IRosProvider
-	epoch    atomic.Uint64
-	active   atomic.Bool
+	mu          sync.Mutex
+	owner       *gamepadSession
+	provider    types.IRosProvider
+	epoch       atomic.Uint64
+	active      atomic.Bool
+	diagnostics gamepadDiagnosticHistory
 }
 
 type gamepadSession struct {
 	coordinator *gamepadCoordinator
 	conn        *websocket.Conn
 	id          string
+	client      string
+	started     time.Time
 	mu          sync.Mutex
 	ended       bool
 	deadman     bool
 	state       uint8
 	manualOwned bool
 	lastValid   time.Time
+	frames      uint64
+	maxGap      time.Duration
 	timer       *time.Timer
 }
 
@@ -118,12 +121,14 @@ func (c *gamepadCoordinator) publishLegacy(msg *geometry.TwistStamped, epoch uin
 
 func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 	if c.active.Load() {
+		c.diagnostics.record(gamepadServerEvent{Event: "upgradeRejected", Cause: "active", Client: gamepadClientLabel(ctx.Query("client"))})
 		ctx.AbortWithStatus(http.StatusConflict)
 		return
 	}
 	c.mu.Lock()
 	if c.owner != nil {
 		c.mu.Unlock()
+		c.diagnostics.record(gamepadServerEvent{Event: "upgradeRejected", Cause: "active", Client: gamepadClientLabel(ctx.Query("client"))})
 		ctx.AbortWithStatus(http.StatusConflict)
 		return
 	}
@@ -132,11 +137,13 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 		c.mu.Unlock()
 		return
 	}
-	s := &gamepadSession{coordinator: c, conn: conn, id: fmt.Sprintf("gamepad-%p", conn), lastValid: time.Now()}
+	now := time.Now()
+	s := &gamepadSession{coordinator: c, conn: conn, id: fmt.Sprintf("gamepad-%p", conn), client: gamepadClientLabel(ctx.Query("client")), started: now, lastValid: now}
 	c.owner = s
 	c.epoch.Add(1)
 	c.active.Store(true)
 	c.mu.Unlock()
+	s.record(gamepadServerEvent{Event: "sessionAccepted"})
 	conn.SetReadLimit(2048)
 	if err := c.provider.Subscribe("highLevelStatus", s.id, 0, func(raw []byte) {
 		var status mowgli.HighLevelStatus
@@ -156,7 +163,8 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 		}
 		s.mu.Unlock()
 	}); err != nil {
-		s.end()
+		s.record(gamepadServerEvent{Event: "subscribeFailed", Error: err.Error()})
+		s.terminate(gamepadServerEvent{Cause: "subscribeFailed", Error: err.Error()})
 		return
 	}
 	// Subscribe may immediately replay cached status. This is a mode hint for
@@ -167,23 +175,27 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 	defer s.end()
 	// Preempt any already-active legacy touch command before accepting motion.
 	if err := s.publish(&geometry.TwistStamped{}); err != nil {
+		s.terminate(gamepadServerEvent{Cause: "publishFailed", Error: err.Error()})
 		return
 	}
 	for {
 		kind, raw, err := conn.ReadMessage()
 		if err != nil {
 			var closed *websocket.CloseError
-			if errors.As(err, &closed) && strings.HasPrefix(closed.Text, "input:") {
-				// Client diagnostics only; never renew the lease or change cleanup.
-				log.Printf("gamepad browser input loss: %q", closed.Text)
+			cause := gamepadServerEvent{Cause: "readError", Error: err.Error()}
+			if errors.As(err, &closed) && closed.Code != websocket.CloseAbnormalClosure {
+				cause = gamepadServerEvent{Cause: "browserClose", Code: closed.Code, Reason: closed.Text}
 			}
+			s.terminate(cause)
 			return
 		}
 		if kind != websocket.TextMessage {
+			s.terminate(gamepadServerEvent{Cause: "unsupportedFrame"})
 			return
 		}
 		msg, deadman, err := decodeGamepadFrame(raw)
 		if err != nil {
+			s.terminate(gamepadServerEvent{Cause: "invalidFrame", Error: err.Error()})
 			return
 		}
 		s.mu.Lock()
@@ -193,7 +205,12 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 		}
 		released := s.deadman && !deadman
 		s.deadman = deadman
-		s.lastValid = time.Now()
+		now := time.Now()
+		if gap := now.Sub(s.lastValid); gap > s.maxGap {
+			s.maxGap = gap
+		}
+		s.frames++
+		s.lastValid = now
 		s.timer.Reset(gamepadLease)
 		state := s.state
 		manualOwned := s.manualOwned
@@ -201,12 +218,15 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 		// Manual and recording are the existing teleop modes. A false deadman
 		// heartbeat is accepted in any state without initiating robot behavior.
 		if deadman && state != 3 && state != 4 {
+			s.terminate(gamepadServerEvent{Cause: "modeRejected"})
 			return
 		}
 		if released && manualOwned {
+			s.terminate(gamepadServerEvent{Cause: "deadmanReleased"})
 			return
 		}
 		if err := s.publish(&msg); err != nil {
+			s.terminate(gamepadServerEvent{Cause: "publishFailed", Error: err.Error()})
 			return
 		}
 	}
@@ -238,37 +258,50 @@ func (s *gamepadSession) expire() {
 		return
 	}
 	s.mu.Unlock()
-	s.end()
+	s.terminate(gamepadServerEvent{Cause: "leaseExpired"})
 }
 
 func (s *gamepadSession) stopManual() {
 	s.mu.Lock()
 	manual := s.manualOwned
 	s.mu.Unlock()
+	s.record(gamepadServerEvent{Event: "stopStarted", Skipped: !manual})
 	if !manual {
+		s.record(gamepadServerEvent{Event: "stopFinished", Skipped: true})
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gamepadStopTimeout)
 	defer cancel()
 	var response mowgli.HighLevelControlRes
 	err := s.coordinator.provider.CallService(ctx, "/behavior_tree_node/high_level_control", &mowgli.HighLevelControlReq{Command: 8}, &response, "mowgli_interfaces/srv/HighLevelControl")
-	if err != nil || !response.Success {
-		log.Printf("gamepad STOP was not acknowledged: error=%v success=%v", err, response.Success)
+	event := gamepadServerEvent{Event: "stopFinished", Success: &response.Success}
+	if err != nil {
+		event.Error = err.Error()
 	}
+	s.record(event)
 }
 
 func (s *gamepadSession) end() {
+	s.terminate(gamepadServerEvent{Cause: "readError"})
+}
+
+func (s *gamepadSession) terminate(cause gamepadServerEvent) {
 	s.mu.Lock()
 	if s.ended {
 		s.mu.Unlock()
 		return
 	}
 	s.ended = true
+	if gap := time.Since(s.lastValid); gap > s.maxGap {
+		s.maxGap = gap
+	}
 	if s.timer != nil {
 		s.timer.Stop()
 	}
 	s.mu.Unlock()
 	_ = s.conn.Close()
+	cause.Event = "sessionEnded"
+	s.record(cause)
 	// STOP must not wait behind a stalled velocity transport. Its own ROS
 	// service context is bounded. A stuck zero write keeps ownership reserved
 	// until it completes rather than permitting an unsafe delayed takeover.
@@ -276,20 +309,39 @@ func (s *gamepadSession) end() {
 		stopped := make(chan struct{})
 		go func() { defer close(stopped); s.stopManual() }()
 		c := s.coordinator
+		s.record(gamepadServerEvent{Event: "cleanupZeroStarted"})
+		var publishErr error
 		c.mu.Lock()
 		if c.owner == s {
-			if err := c.provider.Publish("/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", &geometry.TwistStamped{}); err != nil {
-				log.Printf("gamepad stop velocity: %v", err)
-			}
+			publishErr = c.provider.Publish("/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", &geometry.TwistStamped{})
 		}
 		c.mu.Unlock()
+		zero := gamepadServerEvent{Event: "cleanupZeroFinished"}
+		if publishErr != nil {
+			zero.Error = publishErr.Error()
+		}
+		s.record(zero)
 		<-stopped
+		s.record(gamepadServerEvent{Event: "unsubscribeStarted"})
 		c.provider.UnSubscribe("highLevelStatus", s.id)
+		s.record(gamepadServerEvent{Event: "unsubscribeFinished"})
 		c.mu.Lock()
 		if c.owner == s {
 			c.owner = nil
 			c.active.Store(false)
 		}
 		c.mu.Unlock()
+		s.record(gamepadServerEvent{Event: "ownerReleased"})
 	}()
+}
+
+func (s *gamepadSession) record(event gamepadServerEvent) {
+	s.mu.Lock()
+	event.Session, event.Client = s.id, s.client
+	event.Frames, event.State, event.ManualOwned = s.frames, s.state, s.manualOwned
+	event.AgeMS = time.Since(s.started).Milliseconds()
+	event.LastFrameMS = time.Since(s.lastValid).Milliseconds()
+	event.MaxGapMS = s.maxGap.Milliseconds()
+	s.mu.Unlock()
+	s.coordinator.diagnostics.record(event)
 }

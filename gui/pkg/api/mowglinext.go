@@ -327,6 +327,9 @@ func PublisherRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 }
 
 func registerPublisherRoutes(group *gin.RouterGroup, teleop *gamepadCoordinator) {
+	teleop.diagnostics.initialize()
+	group.GET("/gamepad/diagnostics", teleop.getDiagnostics)
+	group.POST("/gamepad/diagnostics", teleop.postDiagnostics)
 	group.GET("/publish/gamepad", teleop.handle)
 	group.GET("/publish/:topic", func(c *gin.Context) {
 		epoch := teleop.epoch.Load()

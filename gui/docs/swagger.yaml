@@ -74,6 +74,12 @@ definitions:
     type: object
   api.FleetCoordinationResponse:
     properties:
+      peer_feed:
+        allOf:
+        - $ref: '#/definitions/providers.PeerFeedStatus'
+        description: |-
+          The /fleet/peers publisher — live whenever a peer is registered,
+          independent of the coordination toggle (docs/MULTI_ROBOT.md § 3c).
       settings:
         $ref: '#/definitions/providers.CoordinatorSettings'
       status:
@@ -96,20 +102,26 @@ definitions:
         type: string
       default_overrides:
         additionalProperties: {}
-        description: |-
-          DefaultOverrides are the settings whose default this backend replaces
-          (config/backends/<backend>.yaml). A mower-model preset must not write
-          these: the preset describes the machine, not its electronics.
+        type: object
+      parameter_routes:
+        additionalProperties:
+          $ref: '#/definitions/api.HardwareParameterRoute'
         type: object
       robot_name:
-        description: |-
-          RobotName is robot_name from the installed config (or its default):
-          the header badge shows it beside the backend.
+        type: string
+      runtime_routing:
         type: string
       supported:
         items:
           type: string
         type: array
+    type: object
+  api.HardwareParameterRoute:
+    properties:
+      parameter:
+        type: string
+      runtime:
+        type: string
     type: object
   api.ImportDockPose:
     properties:
@@ -513,6 +525,85 @@ definitions:
       topic:
         type: string
     type: object
+  api.gamepadBrowserEnvelope:
+    properties:
+      clientId:
+        type: string
+      events:
+        items:
+          $ref: '#/definitions/api.gamepadBrowserEvent'
+        type: array
+      snapshot:
+        type: object
+      version:
+        type: integer
+    type: object
+  api.gamepadBrowserEvent:
+    properties:
+      at:
+        type: string
+      detail:
+        type: object
+      event:
+        type: string
+    type: object
+  api.gamepadBrowserReport:
+    properties:
+      receivedAt:
+        type: string
+      report:
+        type: object
+    type: object
+  api.gamepadDiagnosticResponse:
+    properties:
+      active:
+        type: boolean
+      browser:
+        items:
+          $ref: '#/definitions/api.gamepadBrowserReport'
+        type: array
+      server:
+        items:
+          $ref: '#/definitions/api.gamepadServerEvent'
+        type: array
+      startedAt:
+        type: string
+    type: object
+  api.gamepadServerEvent:
+    properties:
+      ageMs:
+        type: integer
+      at:
+        type: string
+      cause:
+        type: string
+      client:
+        type: string
+      code:
+        type: integer
+      error:
+        type: string
+      event:
+        type: string
+      frames:
+        type: integer
+      lastFrameMs:
+        type: integer
+      manualOwned:
+        type: boolean
+      maxGapMs:
+        type: integer
+      reason:
+        type: string
+      session:
+        type: string
+      skipped:
+        type: boolean
+      state:
+        type: integer
+      success:
+        type: boolean
+    type: object
   api.registerPeerRequest:
     properties:
       api_version:
@@ -778,7 +869,20 @@ definitions:
         type: boolean
       resume_distance_m:
         type: number
+      yield_cooldown_s:
+        description: |-
+          After any resume, no new yield for this long: lets the resumed robot
+          actually clear the peer instead of stop/start flapping at 3 m.
+        type: number
       yield_distance_m:
+        type: number
+      yield_max_hold_s:
+        description: |-
+          Longest a yielded robot holds before resuming regardless of the peer:
+          the deadlock breaker when the priority robot stopped in front of it
+          (its own collision checks) and neither will move first. Both robots
+          carry each other in their costmaps, so a resumed robot skirts the
+          stopped one instead of hitting it.
         type: number
     type: object
   providers.CoordinatorStatus:
@@ -826,6 +930,14 @@ definitions:
         type: boolean
       self:
         type: boolean
+      topic_age_s:
+        additionalProperties:
+          format: float64
+          type: number
+        description: |-
+          Age of each cached topic in seconds — consumers that place a robot on
+          the lawn (peer feed, yield rule) must ignore stale samples.
+        type: object
       topics:
         additionalProperties:
           items:
@@ -895,6 +1007,21 @@ definitions:
         type: string
       sentCount:
         type: integer
+    type: object
+  providers.PeerFeedStatus:
+    properties:
+      active:
+        type: boolean
+      last_error:
+        type: string
+      last_publish_at:
+        type: string
+      peers_published:
+        type: integer
+      publishes:
+        type: integer
+      rate_hz:
+        type: number
     type: object
   providers.RemoteAccessPhase:
     enum:
@@ -1660,6 +1787,46 @@ paths:
       summary: call a service
       tags:
       - mowglinext
+  /mowglinext/gamepad/diagnostics:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.gamepadDiagnosticResponse'
+      summary: Read bounded, memory-only gamepad diagnostics
+      tags:
+      - gamepad
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Bounded controller diagnostics
+        in: body
+        name: report
+        required: true
+        schema:
+          $ref: '#/definitions/api.gamepadBrowserEnvelope'
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Store a bounded browser diagnostic report (same-origin JSON only)
+      tags:
+      - gamepad
   /mowglinext/map:
     delete:
       consumes:
