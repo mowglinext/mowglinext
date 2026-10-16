@@ -18,6 +18,7 @@
 #include "gdal.h"
 #include "geos_c.h"
 #include "mowgli_coverage/coverage_planning.hpp"
+#include "semantic_diagnostics.hpp"
 #include <nlohmann/json.hpp>
 #ifdef REPLAY_REFERENCE
 #include "ring_contract.hpp"
@@ -168,18 +169,18 @@ Json planState(const coverage::BoustrophedonPlan& plan)
   {
     return hex(std::bit_cast<uint64_t>(value));
   };
-  return {{"boundaries",
-           exact(
-               {plan.safe_boundary, plan.connector_clearance_boundary, plan.swath_turn_envelope})},
-          {"holes", exact(plan.safe_holes)},
-          {"swaths", exact(swaths)},
-          {"swath_angle", number(plan.swath_angle_rad)},
-          {"headland_passes", plan.n_headland_passes},
-          {"drops", plan.diagnostics.drops},
-          {"notes", plan.diagnostics.notes},
-          {"field_area", number(plan.diagnostics.field_area)},
-          {"planned_area", number(plan.diagnostics.planned_area)},
-          {"planned_fraction", number(plan.diagnostics.planned_fraction)}};
+  return {
+      {"boundaries",
+       exact({plan.safe_boundary, plan.connector_clearance_boundary, plan.swath_turn_envelope})},
+      {"holes", exact(plan.safe_holes)},
+      {"swaths", exact(swaths)},
+      {"swath_angle", number(plan.swath_angle_rad)},
+      {"headland_passes", plan.n_headland_passes},
+      {"drops", plan.diagnostics.drops},
+      {"notes", coverage::replay_contract::splitDiagnosticNotes(plan.diagnostics.notes).semantic},
+      {"field_area", number(plan.diagnostics.field_area)},
+      {"planned_area", number(plan.diagnostics.planned_area)},
+      {"planned_fraction", number(plan.diagnostics.planned_fraction)}};
 }
 
 #if !defined(REPLAY_BASELINE) || defined(REPLAY_REFERENCE)
@@ -252,6 +253,7 @@ Json replay(const Json& input, bool trace_enabled, const Json* certificate = nul
 
   Json stages = Json::array(), normalized = Json::array(), fields = Json::array();
   Json transported_polygons = Json::array();
+  Json planner_timing_notes = Json::array();
   Paths all_paths;
   double length = 0.0, transit = 0.0;
   std::size_t poses = 0, swath_count = 0, ring_count = 0;
@@ -337,6 +339,8 @@ Json replay(const Json& input, bool trace_enabled, const Json* certificate = nul
     const auto t2 = std::chrono::steady_clock::now();
     planning_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     connectors_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
+    planner_timing_notes.push_back(
+        coverage::replay_contract::splitDiagnosticNotes(plan.diagnostics.notes).elapsed);
 #ifdef REPLAY_REFERENCE
     if (certificate)
       coverage::replay_contract::verifyReferenceStages(*certificate,
@@ -421,7 +425,10 @@ Json replay(const Json& input, bool trace_enabled, const Json* certificate = nul
             {"straight_kept", stats.straight_kept},
             {"pivot", stats.pivot},
             {"split", stats.split}}},
-          {"timing", {{"planning_ms", planning_ms}, {"connectors_ms", connectors_ms}}},
+          {"timing",
+           {{"planning_ms", planning_ms},
+            {"connectors_ms", connectors_ms},
+            {"planner_notes", planner_timing_notes}}},
           {"followstrip_fingerprint", hex(fingerprint(all_paths))},
           {"build",
            {{"revision", REPLAY_REVISION},

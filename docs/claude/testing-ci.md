@@ -76,6 +76,9 @@ chord boundary/hole rejection. Run `test_certified_fillets.py --baseline <binary
 controls; the README gives complete commands. Python comparator/provenance tests
 remain registered in both normal package and standalone suites. These checks
 provide planner software evidence, not chassis-sweep or physical validation.
+`test_semantic_diagnostics` also runs in both suites: it excludes only the three
+elapsed values from the known mixed timing note, preserves its semantic suffix
+and all other diagnostics, and rejects malformed recognized timing schemas.
 
 ---
 

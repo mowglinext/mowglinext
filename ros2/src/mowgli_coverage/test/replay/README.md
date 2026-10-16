@@ -90,6 +90,11 @@ saves both snapshots and its first differing JSON location. Timing notes are
 excluded. Full snapshots are compressed; summaries contain SHA-256 stage/output
 hashes, pose/swath/ring/transit counts, path/endpoint-link lengths, connector
 outcomes, planner/connector times and process peak RSS.
+The known mixed diagnostic note keeps its `angles`/`mainland_area` suffix and
+all other characters in semantic identity, replacing only the three elapsed
+millisecond values. Raw timing notes remain under `timing.planner_notes`.
+Malformed notes using that recognized timing prefix fail closed; other notes
+and dropped-piece diagnostics remain exact.
 Use a fresh output directory for each comparison. A timeout or process failure
 returns nonzero and may leave a partial report; never treat it as a completed run.
 
@@ -289,6 +294,9 @@ forged observation/state, changed fixture, trace drift and unstable repetitions.
 The baseline-only GTests additionally reject tiny holes and concave boundary
 crossings between samples that the old sample-only helper accepts. Python unit
 controls reject changed baseline source/header/build and reference-helper identity.
+`test_semantic_diagnostics` runs in both package and standalone CTest suites,
+checking the clock-only separation, exact semantic suffix/other notes and
+malformed-timing rejection.
 
 For the complete retained matrix use the same comparison command above, replacing
 `--require-identical` with:

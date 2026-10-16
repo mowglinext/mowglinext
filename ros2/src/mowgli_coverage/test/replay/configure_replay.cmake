@@ -36,7 +36,8 @@ function(add_coverage_replay planner_target)
   string(SHA256 replay_flags_sha256
     "${CMAKE_CXX_FLAGS}\n${CMAKE_CXX_FLAGS_${replay_build_type}}")
   set(replay_reference_sources "")
-  foreach(reference_file ring_contract_reference.hpp ring_contract.hpp ring_contract_adapter.cpp.in)
+  foreach(reference_file ring_contract_reference.hpp ring_contract.hpp ring_contract_adapter.cpp.in
+      semantic_diagnostics.hpp)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
       "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/${reference_file}")
     file(READ "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/${reference_file}" reference_contents)

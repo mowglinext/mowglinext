@@ -253,7 +253,8 @@ def compatible_build_metadata(baseline, candidate):
 
 def reference_oracle_hash():
     root = pathlib.Path(__file__).resolve().parent
-    files = ('ring_contract_reference.hpp', 'ring_contract.hpp', 'ring_contract_adapter.cpp.in')
+    files = ('ring_contract_reference.hpp', 'ring_contract.hpp', 'ring_contract_adapter.cpp.in',
+             'semantic_diagnostics.hpp')
     return hashlib.sha256(b''.join((root / name).read_bytes() for name in files)).hexdigest()
 
 
