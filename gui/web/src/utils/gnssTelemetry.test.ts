@@ -2,7 +2,7 @@ import sanitizedMavros from '../test/fixtures/gnss-mavros-sanitized.json';
 import {describe, expect, it} from 'vitest';
 import {GnssStatusConstants as C} from '../types/ros';
 import {decodeGnssStatus} from './gnssTelemetry';
-import {deriveGpsStatus, deriveGnssStatusFromDiagnostics, mergeGnssStatusDiagnosticProjection, readGnssNumber} from './gpsStatus';
+import {currentRtkMode, deriveGpsStatus, deriveGnssStatusFromDiagnostics, mergeGnssStatusDiagnosticProjection, readGnssNumber} from './gpsStatus';
 
 const projection = (values: Record<string, string>, message = 'RTCM forwarding active') => deriveGnssStatusFromDiagnostics({status: [
     {name: 'universal_gnss/summary', values: Object.entries(values).map(([key, value]) => ({key, value}))},
@@ -109,8 +109,9 @@ describe('Lot 25 confirmed presentation/provenance defects', () => {
         expect(decodeGnssStatus({fix_type: 3, fix_valid: true, position_observation_sequence: 42}))
             .toEqual({kind: 'valid', data: {fix_type: 3, fix_valid: true, position_observation_sequence: 42}});
     });
-    it('does not combine explicit 2D evidence with a contradictory Fixed mode', () => {
-        expect(deriveGpsStatus({fix_valid: true, fix_type: 5, rtk_mode: 3}).fixType).toBe('UNKNOWN');
+    it('rejects contradictory Fixed mode without erasing explicit 2D evidence', () => {
+        expect(deriveGpsStatus({fix_valid: true, fix_type: 5, rtk_mode: 3}).fixType).toBe('2D_FIX');
+        expect(currentRtkMode({fix_valid: true, fix_type: 5, rtk_mode: 3})).toBeUndefined();
     });
     it('does not hide a legacy explicit measured zero solely because masks are absent', () => {
         expect(readGnssNumber({horizontal_accuracy_m: 0}, C.CAP_HORIZONTAL_ACCURACY, 0)).toBe(0);

@@ -72,8 +72,10 @@ export function currentCorrectionStreamStatus(status: GnssStatus | undefined | n
 
 function contradictoryRtk(status: GnssStatus | undefined | null): boolean {
     if (!status || !optionalValueAvailable(status, GnssStatusConstants.CAP_RTK_MODE)) return false;
+    // Universal/u-blox reports position dimension and carrier resolution
+    // independently: 3D + Float/Fixed is valid. 2D/DGPS cannot establish RTK.
     const basic = status.fix_type === GnssStatusConstants.FIX_TYPE_2D_FIX
-        || status.fix_type === GnssStatusConstants.FIX_TYPE_3D_FIX || status.fix_type === GnssStatusConstants.FIX_TYPE_DGPS;
+        || status.fix_type === GnssStatusConstants.FIX_TYPE_DGPS;
     return (status.rtk_mode === GnssStatusConstants.RTK_MODE_FIXED || status.rtk_mode === GnssStatusConstants.RTK_MODE_FLOAT) && basic
         || status.rtk_mode === GnssStatusConstants.RTK_MODE_FIXED && status.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FLOAT
         || status.rtk_mode === GnssStatusConstants.RTK_MODE_FLOAT && status.fix_type === GnssStatusConstants.FIX_TYPE_RTK_FIXED
@@ -106,7 +108,14 @@ export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsS
     if (gnssStatus?.rtk_mode !== undefined && (!Number.isInteger(gnssStatus.rtk_mode)
         || gnssStatus.rtk_mode < 0 || gnssStatus.rtk_mode > Number(GnssStatusConstants.RTK_MODE_FIXED))) return unknownGpsStatus();
     const rtkMode = currentRtkMode(gnssStatus);
-    if (contradictoryRtk(gnssStatus)) return unknownGpsStatus();
+    if (contradictoryRtk(gnssStatus)) {
+        // Reject the incompatible RTK claim without erasing a valid base category.
+        if (gnssStatus?.fix_type === GnssStatusConstants.FIX_TYPE_2D_FIX
+            || gnssStatus?.fix_type === GnssStatusConstants.FIX_TYPE_DGPS) {
+            return fromFixType(gnssStatus.fix_type) ?? unknownGpsStatus();
+        }
+        return unknownGpsStatus();
+    }
     switch (rtkMode) {
         case GnssStatusConstants.RTK_MODE_FIXED:
             return {fixType: "RTK_FIX", label: i18n.t("gpsStatus.compactRtkFixed"), percent: 100};

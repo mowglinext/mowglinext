@@ -1,3 +1,4 @@
+import {bridgeFixedWireFixture} from '../test/gnssBridgeFixedFixture';
 import sanitizedMavros from '../test/fixtures/gnss-mavros-sanitized.json';
 import {StrictMode} from 'react';
 import {act, renderHook} from '@testing-library/react';
@@ -326,4 +327,32 @@ it('retains initial named legacy reporting without pretending it proves acquisit
     emit('gnssStatus', {backend: 'mavros_gps1', fix_type: 0, fix_valid: false});
     emit('gnssStatus', {backend: 'universal', fix_type: 3, fix_valid: true});
     expect(deriveGpsStatus(hook.result.current.status).percent).toBe(0); hook.unmount();
+});
+
+it('preserves expiry, No Fix and reconnect barriers for the actual 3D + Fixed classification', () => {
+    const hook = renderHook(useGnssStatusState);
+    const fixed = bridgeFixedWireFixture;
+    const sequence = fixed.position_observation_sequence;
+    emit('gnssStatus', fixed);
+    expect(deriveGpsStatus(hook.result.current.status).percent).toBe(100);
+    act(() => {vi.advanceTimersByTime(30000);});
+    expect(deriveGpsStatus(hook.result.current.status).percent).toBe(0);
+    emit('gnssStatus', fixed);
+    expect(deriveGpsStatus(hook.result.current.status).percent).toBe(0);
+    const progressed = {...fixed, position_observation_sequence: sequence + 1};
+    emit('gnssStatus', progressed);
+    expect(deriveGpsStatus(hook.result.current.status).percent).toBe(100);
+    act(() => mock.statuses.forEach(listener => listener('closed')));
+    act(() => mock.statuses.forEach(listener => listener('open')));
+    emit('gnssStatus', progressed);
+    expect(deriveGpsStatus(hook.result.current.status).percent).toBe(0);
+    emit('gnssStatus', {...fixed, position_observation_sequence: sequence + 2});
+    expect(deriveGpsStatus(hook.result.current.status).percent).toBe(100);
+    emit('gnssStatus', {...fixed, fix_valid: false, position_observation_sequence: sequence + 3});
+    expect(deriveGpsStatus(hook.result.current.status).percent).toBe(0);
+    emit('gnssStatus', {...fixed, position_observation_sequence: sequence + 2});
+    expect(deriveGpsStatus(hook.result.current.status).percent).toBe(0);
+    emit('gnssStatus', {...fixed, position_observation_sequence: sequence + 4});
+    expect(deriveGpsStatus(hook.result.current.status).percent).toBe(100);
+    hook.unmount();
 });
