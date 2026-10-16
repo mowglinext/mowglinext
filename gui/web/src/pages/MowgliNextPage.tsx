@@ -405,7 +405,6 @@ export const MowgliNextPage = () => {
             size={10}
             label={!data.statusKnown && !data.emergency ? t("telemetry.statusUnknown") : data.scanPaused ? t('mowgliNextPage.orbScanPaused') : data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
           />
-          <span style={{fontSize: 11, color: "var(--ink-2)"}}>{t("telemetry.freshnessUnverified")}</span>
         </motion.header>
 
         {/* Repeat-dig escalation: hardware_bridge halted the mission — the
@@ -732,9 +731,9 @@ export function HealthCard({data, hardware, mavros}: {
   const rows: HealthRow[] = [
     {k: t('mowgliNextPage.gpsSignal'),         ok: data.gps > 0,           note: data.gpsLabel},
     {k: data.rain ? t('mowgliNextPage.rainDetectedRow') : data.rainKnown ? t('mowgliNextPage.noRain') : t('telemetry.statusUnknown'),
-                              ok: data.rainKnown && !data.rain, note: data.rain ? t('mowgliNextPage.mowingPausedShort') : data.rainKnown ? t('telemetry.freshnessUnverified') : t('telemetry.statusUnknown')},
+                              ok: data.rainKnown && !data.rain, note: data.rain ? t('mowgliNextPage.mowingPausedShort') : data.rainKnown ? '' : t('telemetry.statusUnknown')},
     {k: data.clearanceUnverified ? t('telemetry.emergencyClearanceUnverified') : data.emergency ? t('mowgliNextPage.alertActive') : data.emergencyKnown ? t('mowgliNextPage.noAlerts') : t('telemetry.statusUnknown'),
-                              ok: data.emergencyKnown && !data.emergency, note: data.emergency ? t('mowgliNextPage.toRearm') : data.emergencyKnown ? t('telemetry.freshnessUnverified') : t('telemetry.statusUnknown')},
+                              ok: data.emergencyKnown && !data.emergency, note: data.emergency ? t('mowgliNextPage.toRearm') : data.emergencyKnown ? '' : t('telemetry.statusUnknown')},
     ...(Number.isFinite(data.motorTemp) ? [{k: t('mowgliNextPage.motorTemp', {temp: motorDisplayValue(data.motorTemp)}),
                               ok: data.motorTemp < 55,    note: data.motorTemp >= 55 ? t('mowgliNextPage.runningHot') : t('mowgliNextPage.nominal')}] : []),
   ];

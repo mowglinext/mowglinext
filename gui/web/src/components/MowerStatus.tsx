@@ -1,4 +1,4 @@
-import {hasEmergency, emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
+import {hasEmergency, emergencyClearanceUnverified} from '../utils/statusTelemetry';
 import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useStatus} from "../hooks/useStatus.ts";
@@ -51,7 +51,6 @@ export const MowerStatus = () => {
     // Numeric high-level state (reliable, published every tick): 2=AUTONOMOUS,
     // 3=RECORDING, 4=MANUAL_MOWING. Drives colour/pulse/mowing so transient
     // state=2 substates (planning, obstacle backoff) never read as idle.
-    const emergencyKnown = emergencyIsKnown(emergencyData, highLevelStatus);
     const clearanceUnverified = emergencyClearanceUnverified(emergencyData, highLevelStatus);
     const stateNum = highLevelStatus.state ?? -1;
 
@@ -121,9 +120,6 @@ export const MowerStatus = () => {
                         {clearanceUnverified ? t("telemetry.emergencyClearanceUnverified") : stateName ? stateRenderer(stateName) : t("telemetry.statusUnknown")}
                     </Typography.Text>
                 </Space>
-                <Typography.Text type="secondary" style={{fontSize: 11}}>
-                    {t(emergencyKnown && stateName ? "telemetry.freshnessUnverified" : "telemetry.statusUnknown")}
-                </Typography.Text>
                 {isMowing && hasArea && (
                     <Typography.Text style={{fontSize: 11, color: colors.primary, whiteSpace: 'nowrap'}}>
                         A{(highLevelStatus.current_area ?? 0) + 1}

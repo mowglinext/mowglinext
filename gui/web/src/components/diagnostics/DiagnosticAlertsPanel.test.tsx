@@ -1,97 +1,64 @@
-import {cleanup, fireEvent, render, screen, within} from '@testing-library/react';
-import {afterEach, describe, expect, it} from 'vitest';
-import {ConfigProvider} from 'antd';
+import {cleanup, render, screen} from '@testing-library/react';
+import {afterEach, expect, it} from 'vitest';
 import {DiagnosticAlertsPanel} from './DiagnosticAlertsPanel';
-import type {CurrentDiagnosticAlert} from '../../utils/diagnosticAlertHistory';
 
-const report = (level = 1, name = 'component/detail', hardware_id = 'source-A'): CurrentDiagnosticAlert => ({
-    name, hardware_id, level, reportedLevel: level, message: 'Preserved diagnostic detail', receivedAt: 0,
-    values: [{key: 'reading', value: '0'}], notApplicable: false,
-});
-const wrapper = ({children}: {children: React.ReactNode}) => <ConfigProvider theme={{token: {motion: false}}}>{children}</ConfigProvider>;
 afterEach(cleanup);
-function panel() {return within(screen.getByTestId('diagnostic-alert-panel'));}
-function group(name = 'component') {return panel().getByRole('button', {name: new RegExp(name)});}
+it('does not turn a ten-second delivery gap into a visible stale/history alert', () => {
+    render(<DiagnosticAlertsPanel connected now={10000} observations={[]} alerts={[{
+        name: 'IMU', hardware_id: 'mowgli/imu', message: 'No data', level: 3,
+        reportedLevel: 0, receivedAt: 0, values: [], notApplicable: false,
+    }]}/>);
+    expect(screen.queryByTestId('diagnostic-alert-group')).not.toBeInTheDocument();
+    expect(screen.queryByText('State unverified')).not.toBeInTheDocument();
+});
 
-describe('stable diagnostic consultation', () => {
-    it('always mounts a panel including when there are no alerts', () => {
-        render(<DiagnosticAlertsPanel alerts={[]} connected now={0}/>, {wrapper});
-        expect(screen.getByTestId('diagnostic-alert-panel')).toBeVisible();
-        expect(screen.getByTestId('diagnostic-alert-empty')).toBeVisible();
+import {fireEvent} from '@testing-library/react';
+import i18n from '../../i18n';
+import en from '../../i18n/locales/en.json';
+import fr from '../../i18n/locales/fr.json';
+import {describe} from 'vitest';
+import type {RequiredDiagnosticSource} from '../../utils/diagnosticAlertPresentation';
+const required = (publication: number | null): RequiredDiagnosticSource[] => [{key:'imu',label:'IMU',publication,ageMs:0}];
+describe.each(['en','fr'])('quiet reception alerts in %s', lang => {
+    it('renders nothing at 10/30/59, one stable alert at 60/61/70/90, removes on valid recovery', async () => {
+        await i18n.changeLanguage(lang);
+        const locale=lang==='fr'?fr:en;
+        const view=render(<DiagnosticAlertsPanel connected now={0} alerts={[]} sources={required(0)}/>);
+        let row: HTMLElement | null=null;
+        for (const second of [10,30,59,60,61,70,90]) {
+            view.rerender(<DiagnosticAlertsPanel connected now={second*1000} alerts={[]} sources={required(null)}/>);
+            const rows=screen.queryAllByTestId('diagnostic-reception-alert');
+            expect(rows).toHaveLength(second<60?0:1);
+            if(second===60)row=rows[0];
+            if(second>=60){expect(rows[0]).toBe(row);expect(row).toHaveTextContent(locale.diagnosticReception.missing.replace('{{source}}','IMU'));}
+        }
+        view.rerender(<DiagnosticAlertsPanel connected now={90001} alerts={[]} sources={required(90001)}/>);
+        expect(screen.queryByTestId('diagnostic-reception-alert')).not.toBeInTheDocument();
+        expect(view.container).not.toHaveTextContent(/Resolved|Résolue|Unverified|non vérifié|Stale|Périmé/);
+        await i18n.changeLanguage('en');
     });
-    it('keeps the same focused open group and last fault through OK, reappearance and ERROR', () => {
-        const alert = report();
-        const view = render(<DiagnosticAlertsPanel alerts={[alert]} observations={[alert]} connected now={0}/>, {wrapper});
-        const header = group(); fireEvent.click(header); header.focus();
-        const row = screen.getByTestId('diagnostic-alert-episode');
-        view.rerender(<DiagnosticAlertsPanel alerts={[]} observations={[{...alert, level: 0, message: 'OK'}]} connected now={1000}/>);
-        expect(header).toHaveFocus(); expect(header).toHaveAttribute('aria-expanded', 'true');
-        expect(screen.getByTestId('diagnostic-alert-episode')).toBe(row);
-        expect(row).toHaveAttribute('data-state', 'resolved'); expect(row).toHaveTextContent('Preserved diagnostic detail');
-        expect(row).toHaveTextContent('0');
-        view.rerender(<DiagnosticAlertsPanel alerts={[{...alert, level: 2, reportedLevel: 2, message: 'New error'}]} connected now={2000}/>);
-        expect(header).toHaveFocus(); expect(row).toHaveAttribute('data-episode', '2');
-        expect(row).toHaveAttribute('data-state', 'active'); expect(row).toHaveTextContent('New error');
-        expect(row).toHaveClass('ant-alert-error');
-    });
-    it('does not lose an open resolved group on expiry, then permits explicit collapse and purge', () => {
-        const alert = report();
-        const view = render(<DiagnosticAlertsPanel alerts={[alert]} connected now={0}/>, {wrapper});
-        fireEvent.click(group());
-        const ok = [{...alert, level: 0}];
-        view.rerender(<DiagnosticAlertsPanel alerts={[]} observations={ok} connected now={1000}/>);
-        view.rerender(<DiagnosticAlertsPanel alerts={[]} observations={ok} connected now={900000}/>);
-        expect(group()).toHaveAttribute('aria-expanded', 'true'); expect(screen.getByTestId('diagnostic-alert-message')).toBeVisible();
-        fireEvent.click(panel().getByRole('button', {name: 'Collapse all groups'}));
+    it('shows a confirmed error immediately, clears on OK with no retained episode', async () => {
+        await i18n.changeLanguage(lang);
+        const alert={name:'Motor',hardware_id:'fictional-motor',level:2,reportedLevel:2,message:'Confirmed fault',receivedAt:0,values:[],notApplicable:false};
+        const view=render(<DiagnosticAlertsPanel connected now={0} alerts={[alert]}/>);
+        fireEvent.click(screen.getByRole('button',{name:/Motor/}));
+        expect(screen.getByTestId('diagnostic-alert-message')).toHaveTextContent('Confirmed fault');
+        view.rerender(<DiagnosticAlertsPanel connected now={1} alerts={[]}/>);
         expect(screen.queryByTestId('diagnostic-alert-group')).not.toBeInTheDocument();
-        expect(screen.getByTestId('diagnostic-alert-empty')).toBeVisible();
-    });
-    it('provides explicit access to recent resolved alerts and preserves their details until expiry', () => {
-        const alert = report(2);
-        const view = render(<DiagnosticAlertsPanel alerts={[alert]} connected now={0}/>, {wrapper});
-        const ok = [{...alert, level: 0}];
-        view.rerender(<DiagnosticAlertsPanel alerts={[]} observations={ok} connected now={1000}/>);
-        view.rerender(<DiagnosticAlertsPanel alerts={[]} observations={ok} connected now={31000}/>);
-        expect(screen.queryByTestId('diagnostic-alert-group')).not.toBeInTheDocument();
-        const recent = panel().getByRole('button', {name: 'Show recent alerts (1)'}); fireEvent.click(recent);
-        expect(recent).toHaveAttribute('aria-pressed', 'true');
-        fireEvent.click(group());
-        expect(screen.getByTestId('diagnostic-alert-episode')).toHaveTextContent('Error');
-        expect(screen.getByTestId('diagnostic-alert-episode')).toHaveAttribute('data-state', 'resolved');
-        // Hiding history does not remove a group the operator is consulting.
-        fireEvent.click(panel().getByRole('button', {name: 'Hide recent alerts'}));
-        expect(group()).toHaveAttribute('aria-expanded', 'true');
-        fireEvent.click(group()); expect(screen.queryByTestId('diagnostic-alert-group')).not.toBeInTheDocument();
-    });
-    it('distinguishes loss of the stream from an explicit OK on reconnect', () => {
-        const alert = report(2);
-        const view = render(<DiagnosticAlertsPanel alerts={[alert]} connected now={0}/>, {wrapper});
-        fireEvent.click(group());
-        view.rerender(<DiagnosticAlertsPanel alerts={[]} connected={false} now={1000}/>);
-        const row = screen.getByTestId('diagnostic-alert-episode');
-        expect(row).toHaveAttribute('data-state', 'unverified'); expect(row).toHaveTextContent('State unverified');
-        view.rerender(<DiagnosticAlertsPanel alerts={[]} connected now={2000}/>);
-        expect(row).toHaveAttribute('data-state', 'unverified');
-        view.rerender(<DiagnosticAlertsPanel alerts={[]} observations={[{...alert, level: 0}]} connected now={3000}/>);
-        expect(row).toHaveAttribute('data-state', 'resolved');
-    });
-    it('keeps distinct component sources and immediately updates severity without reordering headers', () => {
-        const first = report(), second = report(1, 'other/detail', 'source-B');
-        const view = render(<DiagnosticAlertsPanel alerts={[first, second]} connected now={0}/>, {wrapper});
-        const headers = panel().getAllByRole('button').filter(button => button.hasAttribute('aria-expanded'));
-        view.rerender(<DiagnosticAlertsPanel alerts={[first, {...second, level: 2, reportedLevel: 2}]} connected now={1000}/>);
-        expect(panel().getAllByRole('button').filter(button => button.hasAttribute('aria-expanded'))).toEqual(headers);
-        expect(headers[1]).toHaveTextContent('Error'); expect(headers[1]).toHaveTextContent('source-B');
+        expect(screen.queryByTestId('diagnostic-alert-episode')).not.toBeInTheDocument();
+        await i18n.changeLanguage('en');
     });
 });
-it('does not let a resolved ERROR label a currently warning group as ERROR', () => {
-    const error = report(2, 'component/old-error'), warning = report(1, 'component/current-warning');
-    const view = render(<DiagnosticAlertsPanel alerts={[error, warning]} connected now={0}/>, {wrapper});
-    view.rerender(<DiagnosticAlertsPanel alerts={[warning]} observations={[{...error, level: 0}, warning]} connected now={1000}/>);
-    const header = screen.getByTestId('diagnostic-alert-group');
-    expect(header).toHaveTextContent('Warning'); expect(header).not.toHaveTextContent('Error');
-    fireEvent.click(group());
-    const rows = screen.getAllByTestId('diagnostic-alert-episode');
-    expect(rows[0]).toHaveAttribute('data-state', 'resolved'); expect(rows[0]).toHaveTextContent('Error');
-    expect(rows[1]).toHaveAttribute('data-state', 'active');
+
+it('coalesces a global disconnect after 60 seconds and keeps the indication until admissible ROS delivery resumes', () => {
+    const sources=[...required(0),{key:'operation',label:'Robot',publication:0,ageMs:0}];
+    const view=render(<DiagnosticAlertsPanel connected now={0} alerts={[]} sources={sources}/>);
+    view.rerender(<DiagnosticAlertsPanel connected={false} now={1} alerts={[]} sources={sources.map(s=>({...s,publication:null}))}/>);
+    view.rerender(<DiagnosticAlertsPanel connected={false} now={60001} alerts={[]} sources={sources.map(s=>({...s,publication:null}))}/>);
+    expect(screen.getAllByTestId('diagnostic-reception-alert')).toHaveLength(1);
+    expect(screen.getByTestId('diagnostic-reception-alert')).toHaveAttribute('data-source','communication');
+    view.rerender(<DiagnosticAlertsPanel connected now={70000} alerts={[]} sources={sources}/>);
+    expect(screen.getByTestId('diagnostic-reception-alert')).toHaveAttribute('data-source','communication');
+    view.rerender(<DiagnosticAlertsPanel connected now={71000} alerts={[]} sources={sources.map(s=>({...s,publication:71000,ageMs:0}))}/>);
+    expect(screen.queryByTestId('diagnostic-reception-alert')).not.toBeInTheDocument();
 });

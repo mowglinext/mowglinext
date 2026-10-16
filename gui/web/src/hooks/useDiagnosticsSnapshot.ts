@@ -1,7 +1,7 @@
 import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {isJsonObject} from "../utils/json";
-import {requestErrorMessage} from "../utils/errors";
+import {isExplicitReadError, requestErrorMessage} from "../utils/errors";
 import {useApi} from "./useApi.ts";
 
 export interface ContainerHealth {
@@ -103,6 +103,7 @@ export const useDiagnosticsSnapshot = () => {
     const last = useRef<{timestamp: string; at: number} | null>(null);
     const [receivedAt, setReceivedAt] = useState<number | null>(null);
     const [loading, setLoading] = useState(false);
+    const [readError, setReadError] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
@@ -110,6 +111,7 @@ export const useDiagnosticsSnapshot = () => {
         const request = ++requestId.current;
         inFlight.current = true;
         setLoading(true);
+        let processing = false;
         try {
             const response = await guiApi.request<unknown>({
                 path: "/diagnostics/snapshot",
@@ -117,7 +119,10 @@ export const useDiagnosticsSnapshot = () => {
                 format: "json",
                 cache: "no-store",
             });
-            if (response.error || response.ok === false) throw new Error(requestErrorMessage(response) ?? 'Diagnostics request failed');
+            processing = response.error instanceof SyntaxError;
+            if (response.error || response.ok === false) throw Object.assign(
+                new Error(requestErrorMessage(response) || requestErrorMessage(response.error) || 'Read request failed'), {status: response.status});
+            processing = true;
             const next = decodeDiagnosticsSnapshot(response.data);
             if (!active.current || request !== requestId.current) return;
             if (last.current && Date.parse(next.timestamp) < Date.parse(last.current.timestamp)) throw new Error('Regressed diagnostics snapshot');
@@ -126,9 +131,12 @@ export const useDiagnosticsSnapshot = () => {
             setReceivedAt(at);
             setSnapshot(next);
             setError(null);
+            setReadError(null);
         } catch (e) {
             if (!active.current || request !== requestId.current) return;
-            setError(e instanceof Error && e.message.trim() ? e.message : "Failed to fetch diagnostics snapshot");
+            const message = requestErrorMessage(e)?.trim() || "Failed to fetch diagnostics snapshot";
+            setError(message);
+            setReadError(processing || isExplicitReadError(e) ? message : null);
         } finally {
             if (request === requestId.current) {
                 inFlight.current = false;
@@ -144,5 +152,5 @@ export const useDiagnosticsSnapshot = () => {
         return () => {active.current = false; clearInterval(interval);};
     }, [refresh]);
 
-    return {snapshot, receivedAt, loading, error, refresh};
+    return {snapshot, receivedAt, loading, error, readError, refresh};
 };

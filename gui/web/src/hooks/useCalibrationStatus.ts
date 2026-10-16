@@ -1,3 +1,5 @@
+import {isJsonObject} from "../utils/json";
+import {isExplicitReadError, requestErrorMessage} from "../utils/errors";
 import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useState} from "react";
 import {useApi} from "./useApi.ts";
@@ -51,19 +53,33 @@ export interface CalibrationStatus {
 export const useCalibrationStatus = () => {
     const guiApi = useApi();
     const [status, setStatus] = useState<CalibrationStatus | null>(null);
+    const [readError, setReadError] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
+        let processing = false;
         try {
-            const response = await guiApi.request<CalibrationStatus>({
+            const response = await guiApi.request<unknown>({
                 path: "/calibration/status",
                 method: "GET",
                 format: "json",
             });
-            setStatus(response.data);
+            processing = response.error instanceof SyntaxError;
+            if (response.error || response.ok === false) throw Object.assign(
+                new Error(requestErrorMessage(response) || requestErrorMessage(response.error) || 'Read request failed'), {status: response.status});
+            processing = true;
+            const data = response.data;
+            if (!isJsonObject(data) || ![data.dock, data.imu, data.mag].every(part =>
+                isJsonObject(part) && typeof part.present === 'boolean'
+                && (part.error === undefined || typeof part.error === 'string'))) throw new Error('Invalid calibration status');
+            // The envelope is checked here; artifact errors remain visible in their existing cards.
+            setStatus(data as unknown as CalibrationStatus);
             setError(null);
+            setReadError(null);
         } catch (e) {
-            setError(e instanceof Error ? e.message : "Failed to fetch calibration status");
+            const message = requestErrorMessage(e)?.trim() || "Failed to fetch calibration status";
+            setError(message);
+            setReadError(processing || isExplicitReadError(e) ? message : null);
         }
     }, [guiApi]);
 
@@ -73,5 +89,5 @@ export const useCalibrationStatus = () => {
         return () => clearInterval(id);
     }, [refresh]);
 
-    return {status, error, refresh};
+    return {status, error, readError, refresh};
 };

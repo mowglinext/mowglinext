@@ -73,3 +73,23 @@ it('does not represent an empty exception message as a successful read',async()=
     await waitFor(()=>expect(hook.result.current.loading).toBe(false));
     expect(hook.result.current.error).not.toBeNull();expect(hook.result.current.error).not.toBe('');
 });
+it('keeps temporary delivery failures quiet but exposes decoding and explicit server read errors',async()=>{
+    mock.request.mockRejectedValueOnce({status:503,error:{error:'temporarily unavailable'}});
+    const hook=renderHook(useDiagnosticsSnapshot);
+    await waitFor(()=>expect(hook.result.current.error).not.toBeNull());
+    expect(hook.result.current.readError).toBeNull();
+    mock.request.mockResolvedValueOnce({data:{}});
+    await act(()=>hook.result.current.refresh());
+    expect(hook.result.current.readError).toBe('Invalid diagnostics snapshot');
+    mock.request.mockRejectedValueOnce({status:500,error:{error:'snapshot processing failed'}});
+    await act(()=>hook.result.current.refresh());
+    expect(hook.result.current.readError).toBe('snapshot processing failed');
+    mock.request.mockResolvedValueOnce({data:healthy().snapshot});
+    await act(()=>hook.result.current.refresh());
+    expect(hook.result.current.readError).toBeNull();
+});
+it('exposes a JSON parsing failure returned by the API client as a read error',async()=>{
+    mock.request.mockResolvedValueOnce({ok:true,status:200,error:new SyntaxError('Invalid JSON'),data:null});
+    const hook=renderHook(useDiagnosticsSnapshot);
+    await waitFor(()=>expect(hook.result.current.readError).toBe('Invalid JSON'));
+});

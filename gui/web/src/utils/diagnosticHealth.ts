@@ -53,9 +53,19 @@ function diagnosticNumber(entry: TimestampedDiagnosticStatus, key: string): numb
     return Number.isFinite(value) ? value : undefined;
 }
 
+/** Optional producer declaration, never inferred from a running container. */
+export function mavrosWheelRequirement(entry: TimestampedDiagnosticStatus): boolean | undefined {
+    if (entry.name !== 'mowgli_mavros_bridge/wheel_odometry_source' || entry.hardware_id !== '') return undefined;
+    const value = entry.values.find(pair => pair.key === 'required')?.value;
+    return value === 'true' ? true : value === 'false' ? false : undefined;
+}
+
 /** These monitoring checks report only absence/age, not a measured hardware fault. */
-function unavailableReport(entry: TimestampedDiagnosticStatus): boolean {
+export function unavailableReport(entry: TimestampedDiagnosticStatus): boolean {
     if (entry.level === 0) return false;
+    // This exact readiness WARN reports missing input, not a measured fault.
+    // An ERROR or a different message retains its normal immediate severity.
+    if (entry.level === 1 && entry.message === 'missing_or_stale' && mavrosWheelRequirement(entry) !== undefined) return true;
     const ageOnly = new Map([['Hardware Bridge', 'mowgli/hardware_bridge'], ['IMU', 'mowgli/imu'],
         ['LiDAR', 'mowgli/lidar'], ['Odometry', 'mowgli/odometry']]);
     if (ageOnly.get(entry.name) === entry.hardware_id) return true;

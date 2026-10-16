@@ -181,3 +181,15 @@ it.each(['','unrecognized-state'])('does not turn an unknown Docker state %j int
     const input=healthy();if(!input.snapshot)throw new Error('fixture');input.snapshot.containers[0].state=state;
     expect(one(input,'containers')?.level).toBe('unknown');expect(deriveDiagnosticHealth(input).level).toBe('unknown');
 });
+
+it('treats explicit MAVROS wheel-source missing-input WARN as availability, but never suppresses its ERROR or another fault', () => {
+    const input=healthy();
+    const source={name:'mowgli_mavros_bridge/wheel_odometry_source',hardware_id:'',level:1,message:'missing_or_stale',
+        values:[{key:'required',value:'false'}],receivedAt:input.nowMs};
+    input.diagnostics=[source];
+    expect(deriveDiagnosticHealth(input).checks.find(c=>c.id==='ros')?.level).toBe('unknown');
+    input.diagnostics=[{...source,level:2}];
+    expect(deriveDiagnosticHealth(input).checks.find(c=>c.id==='ros')?.level).toBe('warning');
+    input.diagnostics=[{...source,message:'Other measured fault'}];
+    expect(deriveDiagnosticHealth(input).checks.find(c=>c.id==='ros')?.level).toBe('warning');
+});

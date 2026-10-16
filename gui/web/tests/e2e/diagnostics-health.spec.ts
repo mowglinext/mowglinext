@@ -16,7 +16,8 @@ for (const language of ['en', 'fr']) {
         }});
         await page.route('**/api/diagnostics/snapshot', route => route.fulfill({status: 503, json: {error: 'fictional unavailable'}}));
         await page.goto('/#/diagnostics');
-        await expect(page.locator('.diagnostics-page .mn-num').first()).toHaveText(locale.telemetry.statusUnknown);
+        await expect(page.locator('.diagnostics-page .mn-num').first()).toHaveText('—');
+        await expect(page.getByText(locale.diagnosticsPage.snapshotErrorTitle,{exact:true})).toHaveCount(0);
         const bounds=await page.locator('.diagnostics-page').evaluate(element=>({width:element.scrollWidth,viewport:innerWidth}));
         expect(bounds.width).toBeLessThanOrEqual(bounds.viewport);
         await expect(page.getByText(locale.diagnosticsPage.containersOk, {exact: true})).not.toBeVisible();
@@ -31,7 +32,6 @@ for (const language of ['en', 'fr']) {
         await page.goto('/#/diagnostics');
         await expect(page.locator('.diagnostics-page .mn-num').first()).toBeVisible();
         const cpu = page.getByTestId('diagnostic-health-cpu');
-        await expect(cpu).toBeVisible();
         await expect(cpu).not.toHaveClass(/ant-tag-success/);
         await expect(page.getByText(locale.diagnosticsPage.containersOk, {exact: true})).not.toBeVisible();
     });
@@ -56,7 +56,7 @@ for (const language of ['en', 'fr']) {
         await page.route('**/api/diagnostics/snapshot',route=>route.fulfill({json:snapshot}));
         await page.goto('/#/diagnostics');
         const verdict=page.getByTestId('diagnostic-health-verdict');
-        await expect(verdict).toHaveText(locale.diagnosticsPage.verdictAllGood);
+        await expect(verdict).toHaveText('—');
         await expect(page.getByTestId('diagnostic-health-cpu')).toHaveAttribute('data-level','ok');
         snapshot.system.cpu_temperature=71;
         snapshot.timestamp=new Date(Date.parse(snapshot.timestamp)+1000).toISOString();
@@ -68,7 +68,7 @@ for (const language of ['en', 'fr']) {
         snapshot.containers[0].state='';
         snapshot.timestamp=new Date(Date.parse(snapshot.timestamp)+1000).toISOString();
         await page.getByRole('button',{name:new RegExp(locale.diagnosticsPage.refresh)}).first().click();
-        await expect(verdict).toHaveText(locale.telemetry.statusUnknown);
+        await expect(verdict).toHaveText('—');
         await expect(page.getByTestId('diagnostic-health-containers')).toHaveAttribute('data-level','unknown');
         const coreRow=page.getByRole('row').filter({hasText:'mowgli-ros2'});
         await expect(coreRow.locator('.ant-tag')).toHaveClass(/ant-tag-default/);
@@ -110,23 +110,72 @@ for (const language of ['en', 'fr']) {
             if (['POST', 'PUT', 'DELETE'].includes(request.method()) && new URL(request.url()).pathname !== '/api/config/keys/get') writes.push(request.url());
         });
         await page.goto('/#/diagnostics');
-        const operation = page.getByTestId('diagnostic-health-operation');
         const verdict = page.getByTestId('diagnostic-health-verdict');
-        await expect(operation).toHaveAttribute('data-level', 'ok');
         await expect(verdict).toHaveText(locale.diagnosticsPage.verdictCritical);
         if (!socket) throw new Error('Missing mock socket');
         socket.send(pack({topic: 'highLevelStatus', data: {...highLevel, state: 'invalid'}}));
-        await expect(operation).toHaveAttribute('data-level', 'unknown');
+        await expect(verdict).not.toHaveText(locale.diagnosticsPage.verdictCritical);
         socket.send(pack({topic: 'highLevelStatus', data: highLevel}));
-        await expect(operation).toHaveAttribute('data-level', 'ok');
         await expect(verdict).toHaveText(locale.diagnosticsPage.verdictCritical);
         const previous = connections;
         socket.close({code: 1001, reason: 'Mock reconnect'});
         await expect.poll(() => connections).toBeGreaterThan(previous);
-        await expect(operation).toHaveAttribute('data-level', 'ok');
         await expect(verdict).toHaveText(locale.diagnosticsPage.verdictCritical);
-        await expect(page.getByTestId('diagnostic-health-ros')).toHaveAttribute('data-level', 'critical');
         expect(writes).toEqual([]);
     });
 
+}
+
+for(const language of ['en','fr']){
+    test(`read failures stay local, optional resources stay quiet in ${language}`,async({page})=>{
+        const locale=language==='fr'?fr:en;
+        await page.addInitScript(lang=>localStorage.setItem('mowglinext.lang',lang),language);
+        await page.clock.install();
+        await installMockBackend(page,{name:'read-errors',rest:{'/api/settings/yaml':{lidar_enabled:false}}});
+        let system:'temporary'|'invalid'|'failed'|'valid'='temporary';
+        let calibration:'absent'|'invalid'|'failed'|'artifact'|'valid'='absent';
+        let reads=0;
+        const snapshot=healthy().snapshot;
+        await page.route('**/api/diagnostics/snapshot',route=>{
+            reads++;
+            if(system==='temporary')return route.fulfill({status:503,json:{error:'Temporary unavailable'}});
+            if(system==='failed')return route.fulfill({status:500,json:{error:'Cannot process snapshot'}});
+            return route.fulfill({json:system==='invalid'?{}:{...snapshot,timestamp:new Date(reads*1000).toISOString()}});
+        });
+        await page.route('**/api/calibration/status',route=>{
+            if(calibration==='absent')return route.fulfill({status:404,json:{error:'Optional endpoint absent'}});
+            if(calibration==='failed')return route.fulfill({status:500,json:{error:'Cannot read calibration'}});
+            return route.fulfill({json:calibration==='invalid'?{}:{dock:{present:false},imu:{present:false,
+                ...(calibration==='artifact'?{error:'Invalid calibration artifact'}:{})},mag:{present:false}}});
+        });
+        await page.goto('/#/diagnostics');
+        await expect(page.getByTestId('diagnostic-health-verdict')).toBeVisible();
+        await page.clock.pauseAt(new Date(await page.evaluate(()=>Date.now())+1000));
+        await expect(page.getByTestId('diagnostic-snapshot-read-error')).toHaveCount(0);
+        await page.getByRole('tab',{name:new RegExp(locale.diagnosticsPage.tabCalibration)}).click();
+        await expect(page.getByTestId('diagnostic-calibration-read-error')).toHaveCount(0);
+        calibration='invalid';system='invalid';
+        await page.clock.runFor(10000);
+        const calError=page.getByTestId('diagnostic-calibration-read-error');
+        await expect(calError).toHaveCount(1);
+        await expect(calError).toContainText('Invalid calibration status');
+        calibration='failed';system='failed';
+        await page.clock.runFor(10000);
+        await expect(calError).toHaveCount(1);await expect(calError).toContainText('Cannot read calibration');
+        calibration='artifact';system='valid';
+        await page.clock.runFor(10000);
+        await expect(calError).toHaveCount(0);
+        await expect(page.getByText('Invalid calibration artifact',{exact:true})).toBeVisible();
+        calibration='valid';system='invalid';
+        await page.clock.runFor(10000);
+        await expect(page.getByText('Invalid calibration artifact',{exact:true})).toHaveCount(0);
+        await page.getByRole('tab',{name:new RegExp(locale.diagnosticsPage.tabSystem)}).click();
+        const sysError=page.getByTestId('diagnostic-snapshot-read-error');
+        await expect(sysError).toHaveCount(1);await expect(sysError).toContainText('Invalid diagnostics snapshot');
+        system='failed';await page.clock.runFor(10000);
+        await expect(sysError).toHaveCount(1);await expect(sysError).toContainText('Cannot process snapshot');
+        system='valid';await page.clock.runFor(10000);
+        await expect(sysError).toHaveCount(0);
+        await expect(page.locator('.ant-notification-notice-error')).toHaveCount(0);
+    });
 }

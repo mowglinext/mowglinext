@@ -72,7 +72,7 @@ describe('MowerStatus', () => {
     it('qualifies a reported state instead of claiming proven acquisition freshness', () => {
         mockHighLevelStatus.mockReturnValue({highLevelStatus: {state: 2, state_name: 'MOWING'}});
         renderStatus();
-        expect(screen.getByText(en.telemetry.freshnessUnverified)).toBeInTheDocument();
+        expect(screen.queryByText(en.telemetry.freshnessUnverified)).not.toBeInTheDocument();
     });
 
     beforeEach(() => {

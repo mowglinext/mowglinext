@@ -1,5 +1,5 @@
 import {DiagnosticHealthSummary} from '../components/diagnostics/DiagnosticHealthSummary';
-import {deriveDiagnosticHealth, diagnosticTelemetryFresh, containerObservationLevel} from '../utils/diagnosticHealth';
+import {deriveDiagnosticHealth, diagnosticTelemetryFresh, containerObservationLevel, unavailableReport, mavrosWheelRequirement} from '../utils/diagnosticHealth';
 import {useMultiplexStatus} from '../hooks/useWS';
 import {powerDisplayValue} from '../utils/physicalTelemetry';
 import {emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
@@ -50,7 +50,7 @@ import {usePowerState} from "../hooks/usePower.ts";
 import {useStatus} from "../hooks/useStatus.ts";
 import {BladeDirectionDisplay} from "../components/BladeDirectionDisplay.tsx";
 import {useGPS} from "../hooks/useGPS.ts";
-import {useGnssStatus} from "../hooks/useGnssStatus.ts";
+import {useGnssStatusState} from "../hooks/useGnssStatus.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
 import {useBTLog, isBTNodeStale} from "../hooks/useBTLog.ts";
 import {useCogHeading} from "../hooks/useCogHeading.ts";
@@ -60,7 +60,7 @@ import {useWheelOdom} from "../hooks/useWheelOdom.ts";
 import {useWheelTicks} from "../hooks/useWheelTicks.ts";
 import {useWheelRpm} from "../hooks/useWheelRpm.ts";
 import {useDiagnosticsSnapshot, SNAPSHOT_STALE_MS} from "../hooks/useDiagnosticsSnapshot.ts";
-import {useDiagnostics} from "../hooks/useDiagnostics.ts";
+import {useDiagnostics, type TimestampedDiagnosticStatus} from "../hooks/useDiagnostics.ts";
 import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
@@ -90,6 +90,8 @@ import {AlertOutlined} from "@ant-design/icons";
 import {GnssLiveDiagnosticsCard} from "../components/gnss/GnssLiveDiagnosticsCard.tsx";
 import {clampTinyToZero} from "../utils/telemetryFormat.ts";
 import {detectNav2Recovery} from "../utils/nav2Recovery.ts";
+import {autonomousReceptionRequired, backendReceptionReports, type RequiredDiagnosticSource} from '../utils/diagnosticAlertPresentation';
+import type {ValidatedTelemetry} from '../hooks/useValidatedTelemetry';
 import {DiagnosticAlertsPanel} from '../components/diagnostics/DiagnosticAlertsPanel';
 import {deriveLidarAnchor} from "../utils/lidarAnchor.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
@@ -190,14 +192,14 @@ export const DiagnosticsPage = () => {
     const blade = useBladeTelemetry(hardware.loading ? undefined : hardware.backend);
     const bladeEscStatus = blade.fresh ? status.mower_esc_status : undefined;
     const gps = useGPS();
-    const gnssStatus = useGnssStatus();
+    const {status: gnssStatus, telemetry: gnssTelemetry} = useGnssStatusState();
     const pose = useFusionOdom();
     const btNodeStates = useBTLog();
     const {imu: cogImu, lastMessageAt: cogLastAt} = useCogHeading();
     const {imu: magImu, lastMessageAt: magLastAt} = useMagYaw();
     const wheelOdom = useWheelOdom();
     const wheelTicks = useWheelTicks();
-    const {status: calibrationStatus, error: calibrationError, refresh: refreshCalibration} = useCalibrationStatus();
+    const {status: calibrationStatus, readError: calibrationReadError, refresh: refreshCalibration} = useCalibrationStatus();
 
     // Tick state once a second so the "Live/Stale" tags update even when no
     // new message has arrived (staleness is time-based, not message-driven).
@@ -207,7 +209,7 @@ export const DiagnosticsPage = () => {
         return () => clearInterval(id);
     }, []);
     const {modal} = App.useApp();
-    const {snapshot, receivedAt: snapshotReceivedAt, loading, error: snapshotError, refresh} = useDiagnosticsSnapshot();
+    const {snapshot, receivedAt: snapshotReceivedAt, loading, error: snapshotError, readError: snapshotReadError, refresh} = useDiagnosticsSnapshot();
     const {diagnostics, disconnectedAt: diagnosticsDisconnectedAt} = useDiagnostics();
     const wheelControllers = {left_wheel: wheelControllerFromDiagnostics(diagnostics, 'left_wheel', nowMs),
         right_wheel: wheelControllerFromDiagnostics(diagnostics, 'right_wheel', nowMs)};
@@ -279,6 +281,62 @@ export const DiagnosticsPage = () => {
         batteryFresh: highLevelFresh || powerFresh, batteryPercent, gnss: gnssStatus,
         snapshot, snapshotFresh, diagnostics: diagnostics.status ?? [], nowMs,
         nowMonotonic, diagnosticsDisconnectedAt, settings, recoveryStuck, fusion: fusionStats});
+    // Display-only reception watches. Never feed these deadlines back into health.
+    const source = (key: string, at: number | null, ageMs = at === null ? 0 : nowMonotonic - at): RequiredDiagnosticSource =>
+        ({key, label: t(`diagnosticReception.source.${key}`), publication: at, ageMs});
+    const telemetryAt = <T,>(value: ValidatedTelemetry<T>) => value.condition !== 'valid' || value.publicationBlocked === true
+        ? null : value.publicationPolicy === 'receipt' ? value.lastValidReceiptAt
+            : value.publicationProgressAt ?? value.stampChangedAt ?? value.lastValidReceiptAt;
+    const receptionSources = [source('operation', telemetryAt(highLevelTelemetry)),
+        source('emergency', telemetryAt(emergencyTelemetry)),
+        source('system', snapshotError ? null : snapshotReceivedAt)];
+    // Sensor requirements follow explicit configuration and the standard core
+    // monitoring producers. Do not declare every arbitrary ROS report required.
+    const [backendContext, setBackendContext] = useState(() => ({backend: hardware.backend, required: false, baseline: {} as Record<string, number>}));
+    let context = backendContext;
+    if (context.backend !== hardware.backend) {
+        context = {backend: hardware.backend, required: false, baseline: Object.fromEntries((diagnostics.status ?? [])
+            .filter(entry => entry.name === 'Hardware Bridge' || entry.name === 'Odometry'
+                || entry.name === 'mowgli_mavros_bridge/wheel_odometry_source')
+            .map(entry => [JSON.stringify([entry.hardware_id, entry.name]), entry.healthProgressAt ?? entry.receivedAt]))};
+        setBackendContext(context);
+    }
+    const inBackendContext = (entry: TimestampedDiagnosticStatus) => (entry.healthProgressAt ?? entry.receivedAt)
+        > (context.baseline[JSON.stringify([entry.hardware_id, entry.name])] ?? -Infinity);
+    const wheelRequirementReport = diagnostics.status?.find(entry => entry.name === 'mowgli_mavros_bridge/wheel_odometry_source' && entry.hardware_id === '');
+    // Accumulated diagnostics from the preceding backend cannot declare a new requirement.
+    const wheelRequirement = hardware.backend === 'mavros' && connected && wheelRequirementReport
+        && wheelRequirementReport.healthBlocked !== true
+        && inBackendContext(wheelRequirementReport)
+        ? mavrosWheelRequirement(wheelRequirementReport) : undefined;
+    if (wheelRequirement !== undefined && wheelRequirement !== context.required) {
+        context = {...context, required: wheelRequirement};
+        setBackendContext(context);
+    }
+    const requiredReports = [...backendReceptionReports(hardware.backend, context.required),
+        ...(settings.lidar_enabled === true ? [['lidar', 'LiDAR', 'mowgli/lidar']] : [])];
+    for (const [key, name, hardwareId] of requiredReports) {
+        const entry = diagnostics.status?.find(item => item.name === name && item.hardware_id === hardwareId);
+        const at = connected && entry && (key !== 'hardware' && key !== 'odometry'
+            || inBackendContext(entry))
+            && entry.healthBlocked !== true && entry.level !== 3 && !unavailableReport(entry)
+            ? entry.healthProgressAt ?? entry.receivedAt : null;
+        receptionSources.push({...source(key, at, at === null ? 0 : nowMs - at),
+            context: key === 'hardware' || key === 'odometry' ? hardware.backend : undefined});
+    }
+    if (settings.gnss_stack === 'universal' || hardware.backend === 'mavros') {
+        receptionSources.push(source('gnss', telemetryAt(gnssTelemetry)));
+    }
+    // Loss of context is not evidence that an autonomous requirement ended.
+    const [localizerRequired, setLocalizerRequired] = useState(false);
+    const reportedState = highLevelTelemetry.condition === 'valid' ? highLevelStatus.state : undefined;
+    const requirement = autonomousReceptionRequired(localizerRequired, reportedState);
+    if (requirement !== localizerRequired) setLocalizerRequired(requirement);
+    if (requirement) {
+        const at = connected && fusionStats && fusionStats.healthBlocked !== true && fusionStats.level !== 3
+            ? fusionStats.healthProgressAt ?? fusionStats.distinctMonotonic ?? null : null;
+        receptionSources.push(source('localizer', at));
+    }
     const alerts = health.alerts;
     const healthSummary = <DiagnosticHealthSummary health={health} gpsLabel={gpsFixType}
         batteryPercent={batteryPercent} cpuTemp={cpuTemp} cpuUsage={cpuUsage}/>;
@@ -429,15 +487,8 @@ export const DiagnosticsPage = () => {
                         </Button>
                     }
                 >
-                    {snapshotError && (
-                        <Alert
-                            type="error"
-                            showIcon
-                            style={{marginBottom: 12}}
-                            message={t('diagnosticsPage.snapshotErrorTitle')}
-                            description={snapshotError}
-                        />
-                    )}
+                    {snapshotReadError && <Alert data-testid="diagnostic-snapshot-read-error" type="error" showIcon
+                        style={{marginBottom: 12}} message={t('diagnosticsPage.snapshotErrorTitle')} description={snapshotReadError}/>}
                     <Table
                         size="small"
                         dataSource={snapshot?.containers ?? []}
@@ -899,7 +950,7 @@ export const DiagnosticsPage = () => {
                             <CompassOutlined/>
                             {t('diagnosticsPage.fusionGraphTitle')}
                             <Tag color={fusionStale ? "default" : (fusionStats?.level ?? 0) >= 1 ? "warning" : "success"}>
-                                {fusionStale ? t('diagnosticsPage.stale') : (fusionStats?.message ?? t('diagnosticsPage.running'))}
+                                {fusionStale ? '—' : (fusionStats?.message ?? t('diagnosticsPage.running'))}
                             </Tag>
                         </Space>
                     }
@@ -1061,7 +1112,7 @@ export const DiagnosticsPage = () => {
                                 <Space>
                                     <Typography.Text strong>{t('diagnosticsPage.cogGps')}</Typography.Text>
                                     <Tag color={cogStale ? "default" : "processing"}>
-                                        {cogStale ? t('diagnosticsPage.stale') : t('diagnosticsPage.live')}
+                                        {cogStale ? '—' : t('diagnosticsPage.live')}
                                     </Tag>
                                 </Space>
                                 <Statistic
@@ -1084,7 +1135,7 @@ export const DiagnosticsPage = () => {
                                 <Space>
                                     <Typography.Text strong>{t('diagnosticsPage.magnetometer')}</Typography.Text>
                                     <Tag color={magStale ? "default" : "processing"}>
-                                        {magStale ? t('diagnosticsPage.stale') : t('diagnosticsPage.live')}
+                                        {magStale ? '—' : t('diagnosticsPage.live')}
                                     </Tag>
                                 </Space>
                                 <Statistic
@@ -1477,16 +1528,8 @@ export const DiagnosticsPage = () => {
 
     const sectionCalibrationStatus = (
         <Row gutter={[12, 12]}>
-            {calibrationError && (
-                <Col xs={24}>
-                    <Alert
-                        type="error"
-                        showIcon
-                        message={t('diagnosticsPage.calibrationStatusErrorTitle')}
-                        description={calibrationError}
-                    />
-                </Col>
-            )}
+            {calibrationReadError && <Col xs={24}><Alert data-testid="diagnostic-calibration-read-error" type="error" showIcon
+                message={t('diagnosticsPage.calibrationStatusErrorTitle')} description={calibrationReadError}/></Col>}
             <Col xs={24} lg={8}>
                 <Card
                     title={<Space><CompassOutlined/> {t('diagnosticsPage.dockCalibration')}</Space>}
@@ -1851,7 +1894,7 @@ export const DiagnosticsPage = () => {
     // ── Section 6: Alerts ────────────────────────────────────────────────────
 
     const sectionAlerts = <DiagnosticAlertsPanel alerts={alerts} observations={diagnostics.status}
-        connected={connected} now={nowMonotonic}/>;
+        connected={connected} now={nowMonotonic} sources={receptionSources}/>;
 
     // ── layout ───────────────────────────────────────────────────────────────
 

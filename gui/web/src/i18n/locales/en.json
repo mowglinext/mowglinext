@@ -5295,5 +5295,19 @@
     "source": "Reported source",
     "unknownSource": "Source not provided",
     "unknownComponent": "Unnamed component"
+  },
+  "diagnosticReception": {
+    "communication": "Communication with the robot has been interrupted for at least 60 seconds.",
+    "missing": "No data received from {{source}} for at least 60 seconds.",
+    "source": {
+      "operation": "robot status",
+      "emergency": "emergency status",
+      "system": "system monitoring",
+      "hardware": "hardware bridge",
+      "odometry": "odometry",
+      "lidar": "LiDAR",
+      "gnss": "GNSS",
+      "localizer": "localization"
+    }
   }
 }

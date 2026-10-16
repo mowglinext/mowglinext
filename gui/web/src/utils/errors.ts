@@ -37,3 +37,10 @@ export function requestErrorMessage(thrown: unknown): string | undefined {
     if ('message' in thrown && typeof thrown.message === 'string') return thrown.message;
     return undefined;
 }
+
+/** Request failures worth explaining inline; temporary delivery failures stay quiet. */
+export function isExplicitReadError(error: unknown): boolean {
+    if (error instanceof SyntaxError) return true;
+    if (typeof error !== 'object' || error === null || !('status' in error) || typeof error.status !== 'number') return false;
+    return error.status >= 400 && ![404, 405, 408, 429, 502, 503, 504].includes(error.status);
+}
