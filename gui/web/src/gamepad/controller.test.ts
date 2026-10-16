@@ -297,6 +297,20 @@ describe('ControllerDriver', () => {
         expect(regressed.step(sample({timestamp: 999}), 1050, idle).state).toBe('inputLost');
     });
 
+    it('neutral rearming preserves timestamp ordering, polling deadlines and terminal faults', () => {
+        const regressed = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        prime(regressed);
+        regressed.requireNeutral();
+        expect(regressed.step(sample({timestamp: 1049}), 1100, idle).inputLoss?.reason).toBe('timestampRegressed');
+        regressed.requireNeutral();
+        expect(regressed.step(sample({timestamp: 1150}), 1150, idle).inputLoss?.reason).toBe('timestampRegressed');
+
+        const delayed = new ControllerDriver(DEFAULT_PROFILE, {id: 'test pad', index: 0});
+        prime(delayed);
+        delayed.requireNeutral();
+        expect(delayed.step(sample({timestamp: 1300}), 1300, idle).inputLoss?.reason).toBe('pollGap');
+    });
+
     it('fails terminally for missing, disconnected, replaced, or late input', () => {
         const cases: Array<[string, ControllerSample | null, number]> = [
             ['missing', null, 1000],

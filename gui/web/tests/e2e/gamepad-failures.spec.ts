@@ -6,6 +6,7 @@ interface InputOptions {
     insecureContext?: boolean;
     getGamepadsThrows?: boolean;
     denyProfileStorage?: boolean;
+    deferFirstGamepadHello?: boolean;
 }
 
 interface GamepadFrame {
@@ -17,8 +18,13 @@ interface FixtureState {
     opened: number;
     closed: number;
     frames: GamepadFrame[];
+    challenges: string[];
+    claims: string[];
+    echoedHellos: string[];
+    preReadyFrames: GamepadFrame[];
     commands: number[];
     pageErrors: string[];
+    releaseLateHello: (() => void) | null;
     status: {state: number; state_name: string; emergency: boolean};
 }
 
@@ -56,7 +62,8 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
         denyProfileStorage: options.denyProfileStorage ?? false,
     });
 
-    const state: FixtureState = {opened: 0, closed: 0, frames: [], commands: [], pageErrors: [],
+    const state: FixtureState = {opened: 0, closed: 0, frames: [], challenges: [], claims: [], echoedHellos: [], preReadyFrames: [], commands: [], pageErrors: [],
+        releaseLateHello: null,
         status: {state: 3, state_name: 'RECORDING', emergency: false}};
     page.on('pageerror', error => state.pageErrors.push(error.message));
     await installMockBackend(page, {
@@ -73,7 +80,29 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
     });
     await page.routeWebSocket(/\/api\/mowglinext\/publish\/gamepad/, socket => {
         state.opened++;
-        socket.onMessage(raw => state.frames.push(JSON.parse(String(raw)) as GamepadFrame));
+        const challenge = state.opened.toString(16).padStart(32, '0');
+        state.challenges.push(challenge);
+        let ready = false;
+        socket.onMessage(raw => {
+            const message = JSON.parse(String(raw)) as GamepadFrame & {type?: string; challenge?: string};
+            if (message.type === 'gamepadClaim') {
+                state.claims.push(message.challenge ?? '');
+                if (message.challenge === challenge) {
+                    ready = true;
+                    socket.send(JSON.stringify({type: 'gamepadReady'}));
+                }
+                return;
+            }
+            if (message.type === 'gamepadHello') {
+                state.echoedHellos.push(message.challenge ?? '');
+                return;
+            }
+            if (!ready) state.preReadyFrames.push(message);
+            state.frames.push(message);
+        });
+        const hello = JSON.stringify({type: 'gamepadHello', challenge});
+        if (options.deferFirstGamepadHello && state.opened === 1) state.releaseLateHello = () => socket.send(hello);
+        else socket.send(hello);
         socket.onClose(() => { state.closed++; });
     });
     await page.routeWebSocket(/\/api\/mowglinext\/publish\/joy/, () => {});
@@ -110,6 +139,12 @@ async function finishSettings(page: Page, dialog: Awaited<ReturnType<typeof open
 function expectClean(state: FixtureState) {
     expect(state.pageErrors).toEqual([]);
     expect(state.commands).toEqual([]);
+    expect(state.echoedHellos).toEqual([]);
+}
+
+function expectReadySessions(state: FixtureState) {
+    expect(state.claims).toEqual(state.challenges);
+    expect(state.preReadyFrames).toEqual([]);
 }
 
 test('an exposed Gamepad API can enable outside a secure context and stops on deadman release', async ({page}) => {
@@ -123,6 +158,7 @@ test('an exposed Gamepad API can enable outside a secure context and stops on de
     await enable.click();
     await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toBeVisible();
     await expect.poll(() => state.frames.length).toBeGreaterThan(2);
+    expectReadySessions(state);
     expect(state.frames.every(frame => frame.deadman === false && frame.twist?.twist?.linear?.x === 0)).toBe(true);
 
     await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = true; });
@@ -134,6 +170,7 @@ test('an exposed Gamepad API can enable outside a secure context and stops on de
     expect(state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0);
     expect(state.frames.at(-1)?.twist?.twist?.angular?.z).toBe(0);
     expect(state.opened).toBe(1);
+    expectReadySessions(state);
     expectClean(state);
 });
 
@@ -211,6 +248,7 @@ test('disconnect and reconnect do not re-arm the browser controller session', as
     expect(neutralFrame?.deadman).toBe(false);
     expect(neutralFrame?.twist?.twist?.linear?.x).toBe(0);
     expect(neutralFrame?.twist?.twist?.angular?.z).toBe(0);
+    expectReadySessions(state);
 
     await page.evaluate(() => {
         const input = (window as any).controllerFailureInput;
@@ -232,17 +270,62 @@ test('blur closes the controller stream and restores the recording touch control
     await enable.click();
     await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toBeVisible();
     await expect(page.getByRole('button', {name: 'check Finish', exact: true})).toHaveCount(0);
+    await expect(page.getByRole('status')).toContainText('Ready — hold RB / R1 (Button 5)');
     await expect.poll(() => state.opened).toBe(1);
+    await expect.poll(() => state.frames.length).toBeGreaterThan(0);
+    await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0);
+
+    await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = true; });
+    await expect.poll(() => state.frames.at(-1)?.deadman).toBe(true);
+    await page.evaluate(() => { (window as any).controllerFailureInput.axes[1] = -1; });
+    await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0.25);
 
     await page.evaluate(() => window.dispatchEvent(new Event('blur')));
     await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toHaveCount(0);
     await expect.poll(() => state.closed).toBe(1);
     await expect(page.locator('.ant-tag[role="alert"]')).toContainText('The browser page lost focus.');
     await expect(page.getByRole('button', {name: 'check Finish', exact: true})).toBeVisible();
+    await expect.poll(() => state.frames.at(-1)?.deadman).toBe(false);
     const neutralFrame = state.frames.at(-1);
     expect(neutralFrame?.deadman).toBe(false);
     expect(neutralFrame?.twist?.twist?.linear?.x).toBe(0);
     expect(neutralFrame?.twist?.twist?.angular?.z).toBe(0);
+    expectReadySessions(state);
+    expectClean(state);
+});
+
+test('canceling a pending hello sends no claim, then explicit enable claims a fresh socket', async ({page}) => {
+    const state = await setup(page, {deferFirstGamepadHello: true});
+    const dialog = await openSettings(page);
+    await selectController(page, dialog);
+    const enable = await finishSettings(page, dialog);
+
+    await enable.click();
+    await expect(page.getByRole('button', {name: 'Disable controller', exact: true})).toBeVisible();
+    await expect.poll(() => state.opened).toBe(1);
+    expect(state.claims).toEqual([]);
+    expect(state.frames).toEqual([]);
+
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await expect(enable).toBeEnabled();
+    await expect.poll(() => state.closed).toBe(1);
+    try { state.releaseLateHello?.(); } catch { /* A closed route cannot deliver a message to its retired socket. */ }
+    await page.waitForTimeout(100);
+    expect(state.claims).toEqual([]);
+    expect(state.frames).toEqual([]);
+
+    await page.evaluate(() => {
+        const input = (window as any).controllerFailureInput;
+        input.axes.fill(0);
+        input.buttons.fill(false);
+    });
+    await enable.click();
+    await expect.poll(() => state.opened).toBe(2);
+    await expect.poll(() => state.claims.length).toBe(1);
+    await expect.poll(() => state.frames.length).toBeGreaterThan(0);
+    expect(state.claims).toEqual([state.challenges[1]]);
+    expect(state.echoedHellos).toEqual([]);
+    expect(state.preReadyFrames).toEqual([]);
     expectClean(state);
 });
 
@@ -261,6 +344,7 @@ test('re-enables directly after a focus fault and rearms after switching to manu
     await expect.poll(() => state.frames.at(-1)?.deadman).toBe(true);
     await page.evaluate(() => { (window as any).controllerFailureInput.axes[1] = -1; });
     await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0.25);
+    expectReadySessions(state);
     await page.evaluate(() => window.dispatchEvent(new Event('blur')));
     await expect(enable).toBeEnabled();
     await expect(page.locator('.ant-tag[role="alert"]')).toContainText('The browser page lost focus.');
@@ -281,6 +365,7 @@ test('re-enables directly after a focus fault and rearms after switching to manu
     await expect.poll(() => state.frames.at(-1)?.deadman).toBe(true);
     await page.evaluate(() => { (window as any).controllerFailureInput.axes[1] = -1; });
     await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0.25);
+    expectReadySessions(state);
 
     // The live mock robot changes mode while controls remain held. Old input
     // must stay neutral until the operator releases and presses deadman again.

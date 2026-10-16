@@ -91,6 +91,13 @@ func TestGamepadConcurrentClaimsHaveOneOwner(t *testing.T) {
 				status = response.StatusCode
 			}
 			if conn != nil {
+				if claimErr := completeGamepadHandshake(conn); claimErr != nil {
+					_ = conn.Close()
+					conn = nil
+					err = claimErr
+				}
+			}
+			if conn != nil {
 				keepalive.Add(1)
 				go func() {
 					defer keepalive.Done()
@@ -122,7 +129,7 @@ func TestGamepadConcurrentClaimsHaveOneOwner(t *testing.T) {
 				require.NoError(t, result.err)
 			} else {
 				require.Error(t, result.err)
-				require.Equal(t, http.StatusConflict, result.status)
+				require.Contains(t, []int{http.StatusConflict, http.StatusSwitchingProtocols}, result.status)
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatal("concurrent ownership claim hung")

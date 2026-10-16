@@ -140,6 +140,7 @@ func TestGamepadDiagnosticLeaseCauseAndRecovery(t *testing.T) {
 	conn, _, err := websocket.DefaultDialer.Dial(gamepadURL(server)+"?client=browser-1", nil)
 	require.NoError(t, err)
 	defer conn.Close()
+	require.NoError(t, completeGamepadHandshake(conn))
 	_ = readGamepadVelocity(t, p)
 	writeGamepad(t, conn, 0, false)
 	_ = readGamepadVelocity(t, p)
@@ -159,6 +160,7 @@ func TestGamepadDiagnosticLeaseCauseAndRecovery(t *testing.T) {
 	next, _, err := websocket.DefaultDialer.Dial(gamepadURL(server), nil)
 	require.NoError(t, err)
 	defer next.Close()
+	require.NoError(t, completeGamepadHandshake(next))
 	require.Zero(t, readGamepadVelocity(t, p).Twist.Linear.X)
 }
 
@@ -187,6 +189,7 @@ func TestGamepadDiagnosticPublishFailureReleasesForNextSession(t *testing.T) {
 	conn, _, err := websocket.DefaultDialer.Dial(gamepadURL(server), nil)
 	require.NoError(t, err)
 	defer conn.Close()
+	require.NoError(t, sendGamepadClaim(conn))
 	events := awaitGamepadReleased(t, c)
 	found := false
 	for _, event := range events {
@@ -200,6 +203,7 @@ func TestGamepadDiagnosticPublishFailureReleasesForNextSession(t *testing.T) {
 	next, _, err := websocket.DefaultDialer.Dial(gamepadURL(server), nil)
 	require.NoError(t, err)
 	defer next.Close()
+	require.NoError(t, completeGamepadHandshake(next))
 }
 
 func TestGamepadDiagnosticClientLabel(t *testing.T) {
@@ -230,6 +234,7 @@ func TestGamepadBlockedDiagnosticLoggerDoesNotDelayCleanup(t *testing.T) {
 	conn, _, err := websocket.DefaultDialer.Dial(gamepadURL(server), nil)
 	require.NoError(t, err)
 	defer conn.Close()
+	require.NoError(t, completeGamepadHandshake(conn))
 	_ = readGamepadVelocity(t, p)
 	select {
 	case <-started:
