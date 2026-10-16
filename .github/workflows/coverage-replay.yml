@@ -38,6 +38,10 @@ jobs:
           fetch-depth: 0
 
       - name: Preinstall ROS apt source
+        env:
+          # Reuse the helper's authenticated lookup instead of the shared
+          # runner IP's restrictive anonymous GitHub API quota.
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash .github/scripts/install-ros-apt-source.sh ros2-apt-source
 
       - name: Setup ROS Lyrical
