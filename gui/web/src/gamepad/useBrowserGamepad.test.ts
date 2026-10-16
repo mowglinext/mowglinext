@@ -23,17 +23,30 @@ class FakeWebSocket {
     readyState = FakeWebSocket.CONNECTING;
     bufferedAmount = 0;
     readonly sent: string[] = [];
+    readonly claims: string[] = [];
+    autoReady = true;
     closeCount = 0;
     closeReason = '';
     onclose: ((event: CloseEvent) => unknown) | null = null;
     onerror: ((event: Event) => unknown) | null = null;
+    onmessage: ((event: MessageEvent) => unknown) | null = null;
 
     constructor(readonly url: string) {
         FakeWebSocket.instances.push(this);
     }
 
-    open() { this.readyState = FakeWebSocket.OPEN; }
-    send(value: string) { this.sent.push(value); }
+    message(value: unknown) { this.onmessage?.({data: JSON.stringify(value)} as MessageEvent); }
+    open(hello = true) {
+        this.readyState = FakeWebSocket.OPEN;
+        if (hello) this.message({type: 'gamepadHello', challenge: '0123456789abcdef0123456789abcdef'});
+    }
+    send(value: string) {
+        const parsed: unknown = JSON.parse(value);
+        if (parsed && typeof parsed === 'object' && 'type' in parsed && parsed.type === 'gamepadClaim') {
+            this.claims.push(value);
+            if (this.autoReady) this.message({type: 'gamepadReady'});
+        } else this.sent.push(value);
+    }
     close(_code?: number, reason = '') {
         this.closeCount++;
         this.closeReason = reason;
@@ -103,6 +116,7 @@ function enable(hook: {result: {current: ReturnType<typeof useBrowserGamepad>}})
     act(() => { hook.result.current.enable(); });
     const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
     socket.open();
+    poll(); // fresh native sample claims the server challenge
     return socket;
 }
 
@@ -140,6 +154,99 @@ afterEach(() => {
 });
 
 describe('useBrowserGamepad session ownership', () => {
+    it('claims only after a fresh input poll and waits for server readiness before controls or actions', async () => {
+        const {hook, runAction} = mount();
+        act(() => { hook.result.current.enable(); });
+        const socket = FakeWebSocket.instances[0];
+        socket.autoReady = false;
+        socket.open(false);
+        poll(100);
+        expect(socket.claims).toHaveLength(0);
+        expect(socket.sent).toHaveLength(0);
+        act(() => { socket.message({type: 'gamepadHello', challenge: '0123456789abcdef0123456789abcdef'}); });
+        expect(socket.claims).toHaveLength(0);
+        poll();
+        expect(socket.claims).toHaveLength(1);
+        expect(hook.result.current.state).toBe('connecting');
+        setButton(DEFAULT_PROFILE.buttons.stop, true);
+        poll(100);
+        expect(socket.sent).toHaveLength(0);
+        expect(runAction).not.toHaveBeenCalled();
+        act(() => { socket.message({type: 'gamepadReady'}); });
+        poll();
+        expect(runAction).toHaveBeenCalledExactlyOnceWith('stop');
+        expect(parseControl(socket.sent[0]).deadman).toBe(false);
+        await act(async () => { await Promise.resolve(); });
+        hook.unmount();
+    });
+
+    it('never claims a late server hello after cancellation or lets it affect the replacement', () => {
+        const {hook} = mount();
+        act(() => { hook.result.current.enable(); });
+        const retired = FakeWebSocket.instances[0];
+        retired.open(false);
+        poll(2100);
+        expect(hook.result.current.fault).toBe('connectionLost');
+        expect(retired.claims).toHaveLength(0);
+        expect(retired.sent).toHaveLength(0);
+        const replacement = enable(hook);
+        poll();
+        act(() => {
+            retired.message({type: 'gamepadHello', challenge: 'fedcba9876543210fedcba9876543210'});
+            retired.message({type: 'gamepadReady'});
+        });
+        expect(retired.claims).toHaveLength(0);
+        expect(retired.sent).toHaveLength(0);
+        expect(replacement.claims).toHaveLength(1);
+        expect(hook.result.current.enabled).toBe(true);
+        hook.unmount();
+    });
+
+    it('does not let a late Ready bypass the application handshake deadline between polls', () => {
+        const {hook} = mount();
+        act(() => { hook.result.current.enable(); });
+        const socket = FakeWebSocket.instances[0];
+        socket.autoReady = false;
+        socket.open();
+        poll(2000);
+        expect(hook.result.current.enabled).toBe(true);
+        act(() => { vi.advanceTimersByTime(1); socket.message({type: 'gamepadReady'}); });
+        expect(hook.result.current.fault).toBe('connectionLost');
+        expect(socket.sent).toHaveLength(0);
+        hook.unmount();
+    });
+
+    it.each([
+        {type: 'gamepadReady'},
+        {type: 'gamepadHello', challenge: 'too-short'},
+        {type: 'gamepadHello', challenge: '0123456789abcdef0123456789abcdef', unexpected: true},
+        {type: 'unknown'},
+    ])('fails closed on an invalid or out-of-order server handshake: %j', message => {
+        const {hook, runAction} = mount();
+        act(() => { hook.result.current.enable(); });
+        const socket = FakeWebSocket.instances[0];
+        socket.open(false);
+        act(() => { socket.message(message); });
+        expect(hook.result.current.fault).toBe('connectionLost');
+        expect(socket.claims).toHaveLength(0);
+        expect(socket.sent).toHaveLength(0);
+        expect(runAction).not.toHaveBeenCalled();
+        hook.unmount();
+    });
+
+    it('validates current input before claiming instead of using the enable-time preview', () => {
+        const {hook} = mount();
+        act(() => { hook.result.current.enable(); });
+        const socket = FakeWebSocket.instances[0];
+        socket.open();
+        pad = {...pad, connected: false};
+        poll();
+        expect(socket.claims).toHaveLength(0);
+        expect(socket.sent).toHaveLength(0);
+        expect(hook.result.current.inputLoss?.reason).toBe('disconnected');
+        hook.unmount();
+    });
+
     it('reports a persistent Gamepad permission failure once instead of uploading on every poll', async () => {
         Object.defineProperty(navigator, 'getGamepads', {configurable: true, value: () => {
             throw new DOMException('Blocked by permissions policy', 'SecurityError');

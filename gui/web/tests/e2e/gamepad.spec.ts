@@ -44,6 +44,10 @@ for (const width of [390, 1440]) {
         const reports: GamepadDiagnosticReport[] = [];
         const reportOrigins: (string | undefined)[] = [];
         const errors: string[] = [];
+        const challenges: string[] = [];
+        const claims: string[] = [];
+        const echoedHellos: string[] = [];
+        const preReadyFrames: unknown[] = [];
         let opened = 0;
         page.on('pageerror', error => errors.push(error.message));
         page.on('console', msg => { if (msg.type() === 'error' && msg.text().includes('same key')) errors.push(msg.text()); });
@@ -58,7 +62,27 @@ for (const width of [390, 1440]) {
         });
         await page.routeWebSocket(/\/api\/mowglinext\/publish\/gamepad/, socket => {
             opened++;
-            socket.onMessage(raw => frames.push(JSON.parse(String(raw))));
+            const challenge = opened.toString(16).padStart(32, '0');
+            challenges.push(challenge);
+            let ready = false;
+            socket.onMessage(raw => {
+                const message = JSON.parse(String(raw));
+                if (message.type === 'gamepadClaim') {
+                    claims.push(message.challenge);
+                    if (message.challenge === challenge) {
+                        ready = true;
+                        socket.send(JSON.stringify({type: 'gamepadReady'}));
+                    }
+                    return;
+                }
+                if (message.type === 'gamepadHello') {
+                    echoedHellos.push(message.challenge);
+                    return;
+                }
+                if (!ready) preReadyFrames.push(message);
+                frames.push(message);
+            });
+            socket.send(JSON.stringify({type: 'gamepadHello', challenge}));
         });
         await page.routeWebSocket(/\/api\/mowglinext\/publish\/joy/, () => {});
         await page.route('https://api.mapbox.com/styles/v1/**', route => route.fulfill({json: {version: 8, sources: {}, layers: [], glyphs: 'https://gamepad-fixture.invalid/fonts/{fontstack}/{range}.pbf'}}));
@@ -90,7 +114,10 @@ for (const width of [390, 1440]) {
         expect(frames).toHaveLength(0);
         await enable.click();
         await expect(page.getByRole('button', {name: 'Disable controller'})).toBeVisible();
+        await expect.poll(() => claims.length).toBe(1);
         await expect.poll(() => frames.length).toBeGreaterThan(1);
+        expect(claims).toEqual([challenges[0]]);
+        expect(preReadyFrames).toEqual([]);
         await expect(page.getByRole('status')).toContainText('LB / L1 (Button 4)');
         await expect(page.getByText('Drive: hold LB / L1 (Button 4) · Stop: A / × (Button 0) · Max 0.25 m/s')).toBeVisible();
         await page.evaluate(() => { (window as any).controllerTestInput.buttons[4] = true; });
@@ -132,5 +159,6 @@ for (const width of [390, 1440]) {
         expect(frames.length).toBe(stoppedCount);
         expect(frames.at(-1)?.twist.twist.linear.x).toBe(0);
         expect(errors).toEqual([]);
+        expect(echoedHellos).toEqual([]);
     });
 }

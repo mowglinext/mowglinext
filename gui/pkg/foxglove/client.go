@@ -463,7 +463,7 @@ func (c *Client) CallService(ctx context.Context, service string, args interface
 	copy(buf[13:13+len(encoding)], encoding)
 	copy(buf[13+len(encoding):], cdrData)
 
-	err = c.writeMessage(websocket.BinaryMessage, buf)
+	err = c.writeMessageContext(ctx, websocket.BinaryMessage, buf)
 	if err != nil {
 		return nil, fmt.Errorf("foxglove: CallService send: %w", err)
 	}
@@ -515,12 +515,26 @@ func (c *Client) writeJSON(v interface{}) error {
 // terminal; close the socket so readPump triggers the existing reconnect and
 // desired subscriptions are replayed on the replacement connection.
 func (c *Client) writeMessage(messageType int, data []byte) error {
+	return c.writeMessageContext(context.Background(), messageType, data)
+}
+
+// Acquiring connMu can outlast a service deadline. Check cancellation after
+// acquiring it, before touching the socket: an expired STOP must never be sent
+// later behind another writer. This bounds the write, not the mutex wait.
+func (c *Client) writeMessageContext(ctx context.Context, messageType int, data []byte) error {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c.conn == nil {
 		return fmt.Errorf("foxglove: write: no connection")
 	}
-	if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+	deadline := time.Now().Add(c.writeTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := c.conn.SetWriteDeadline(deadline); err != nil {
 		_ = c.conn.Close()
 		return err
 	}

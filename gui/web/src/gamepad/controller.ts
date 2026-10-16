@@ -100,6 +100,15 @@ export class ControllerDriver {
 
     constructor(private profile: ControllerProfile, private identity: ControllerIdentity) {}
 
+    /** Ownership confirmation requires new neutral input, while all polling,
+     * timestamp-order and terminal-fault evidence stays intact. */
+    requireNeutral() {
+        this.neutralSeen = false;
+        this.held = null;
+        this.previousMode = null;
+        this.deadmanHeld = false;
+    }
+
     step(pad: ControllerSample | null, now: number, ctx: ControllerContext): ControllerFrame {
         const zero = (state: ControllerState, action?: ControllerAction): ControllerFrame =>
             ({linear: 0, angular: 0, deadman: false, state, ...(action ? {action} : {})});
