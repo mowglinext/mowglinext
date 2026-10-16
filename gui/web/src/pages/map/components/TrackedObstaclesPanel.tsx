@@ -1,3 +1,4 @@
+import {requestErrorMessage} from "../../../utils/errors";
 import {StopOutlined, CheckCircleOutlined, CloseCircleOutlined} from "@ant-design/icons";
 import {App, Button} from "antd";
 import {useTranslation} from "react-i18next";
@@ -38,7 +39,9 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, 
 
     const handleIgnore = (obs: TrackedObstacle) => {
         const id = obs.id ?? 0;
-        modal.confirm({
+        // Observing the hook modal result lets AntD handle onOk rejection without
+        // a detached rejected promise; onOk still rejects to keep the dialog open.
+        void modal.confirm({
             title: t('mapTrackedObstacles.ignoreConfirmTitle', {id}),
             content: t('mapTrackedObstacles.ignoreConfirmBody'),
             okText: t('mapTrackedObstacles.ignore'),
@@ -51,15 +54,14 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, 
                 } catch (error: unknown) {
                     // The generated client rejects HTTP failures with a Response
                     // carrying the parsed backend error, not an Error instance.
-                    const backendError = (error as {error?: {error?: string}} | null)?.error?.error;
                     notification.error({
                         message: t('mapTrackedObstacles.ignoreFailed'),
-                        description: backendError ?? (error instanceof Error ? error.message : t('mapTrackedObstacles.ignoreFailed')),
+                        description: requestErrorMessage(error) ?? t('mapTrackedObstacles.ignoreFailed'),
                     });
                     throw error;
                 }
             },
-        });
+        }).then(() => undefined, () => undefined);
     };
 
     const handlePromote = (obs: TrackedObstacle) => {
@@ -74,7 +76,7 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, 
         }
         const areaLabel = areaNames[areaIdx] ?? t('mapAreasList.unnamedArea', {index: areaIdx + 1});
 
-        modal.confirm({
+        void modal.confirm({
             title: t('mapTrackedObstacles.confirmTitleWithId', {id}),
             content: (
                 <div>
@@ -97,16 +99,17 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, 
                         obstacle_id: id,
                         polygon: obs.polygon ?? {points: []},
                     });
-                    if ((res as any).error) throw new Error((res as any).error.error);
+                    if (res.error) throw new Error(res.error.error);
                     notification.success({message: t('mapTrackedObstacles.promotedSuccess', {area: areaLabel})});
-                } catch (e: any) {
+                } catch (error: unknown) {
                     notification.error({
                         message: t('mapTrackedObstacles.promoteFailed'),
-                        description: e.message,
+                        description: requestErrorMessage(error) ?? t('mapTrackedObstacles.promoteFailed'),
                     });
+                    throw error;
                 }
             },
-        });
+        }).then(() => undefined, () => undefined);
     };
 
     return (
