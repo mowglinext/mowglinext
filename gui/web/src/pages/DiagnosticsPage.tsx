@@ -42,7 +42,6 @@ import {
     StopOutlined,
     ThunderboltOutlined,
     VideoCameraOutlined,
-    WarningOutlined,
 } from "@ant-design/icons";
 import {ContentType} from "../api/Api.ts";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
@@ -91,7 +90,7 @@ import {AlertOutlined} from "@ant-design/icons";
 import {GnssLiveDiagnosticsCard} from "../components/gnss/GnssLiveDiagnosticsCard.tsx";
 import {clampTinyToZero} from "../utils/telemetryFormat.ts";
 import {detectNav2Recovery} from "../utils/nav2Recovery.ts";
-import {groupAlertsByComponent} from "../utils/diagnosticsAlerts.ts";
+import {DiagnosticAlertsPanel} from '../components/diagnostics/DiagnosticAlertsPanel';
 import {deriveLidarAnchor} from "../utils/lidarAnchor.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
 import {SystemPowerCard} from "../components/SystemPowerCard.tsx";
@@ -281,7 +280,6 @@ export const DiagnosticsPage = () => {
         snapshot, snapshotFresh, diagnostics: diagnostics.status ?? [], nowMs,
         nowMonotonic, diagnosticsDisconnectedAt, settings, recoveryStuck, fusion: fusionStats});
     const alerts = health.alerts;
-    const alertGroups = groupAlertsByComponent(alerts);
     const healthSummary = <DiagnosticHealthSummary health={health} gpsLabel={gpsFixType}
         batteryPercent={batteryPercent} cpuTemp={cpuTemp} cpuUsage={cpuUsage}/>;
 
@@ -1852,46 +1850,8 @@ export const DiagnosticsPage = () => {
 
     // ── Section 6: Alerts ────────────────────────────────────────────────────
 
-    // Alerts collapse to one row per source component (a GNSS hiccup emits
-    // 8 related messages at once — stacking them pushed the actual
-    // diagnostics content below the fold).
-    const sectionAlerts = alertGroups.length > 0 ? (
-        <Card title={<Space><WarningOutlined/> {t('diagnosticsPage.alerts')}</Space>} size="small">
-            <Collapse
-                size="small"
-                ghost
-                items={alertGroups.map(group => ({
-                    key: group.component,
-                    label: (
-                        <Space>
-                            <Tag color={group.worstLevel === 2 ? "error" : group.worstLevel === 3 ? "default" : "warning"}>
-                                {group.worstLevel === 2 ? t('diagnosticsPage.diagLevelError')
-                                    : group.worstLevel === 3 ? t('diagnosticsPage.diagLevelStale')
-                                    : t('diagnosticsPage.diagLevelWarn')}
-                            </Tag>
-                            <Typography.Text style={{fontSize: 13}}>{group.component}</Typography.Text>
-                            <Typography.Text type="secondary" style={{fontSize: 12}}>
-                                {t('diagnosticsPage.alertGroupCount', {count: group.items.length})}
-                            </Typography.Text>
-                        </Space>
-                    ),
-                    children: (
-                        <Space direction="vertical" style={{width: "100%"}}>
-                            {group.items.map((item, idx) => (
-                                <Alert
-                                    key={idx}
-                                    type={item.level === 2 ? "error" : item.level === 3 ? "info" : "warning"}
-                                    message={item.name}
-                                    description={`${item.message}${item.reportedLevel !== item.level ? ` · ${t('diagnosticHealth.lastReported', {level: item.reportedLevel})}` : ''}${item.notApplicable ? ` · ${t('diagnosticHealth.level.not_applicable')}` : ''}`}
-                                    showIcon
-                                />
-                            ))}
-                        </Space>
-                    ),
-                }))}
-            />
-        </Card>
-    ) : null;
+    const sectionAlerts = <DiagnosticAlertsPanel alerts={alerts} observations={diagnostics.status}
+        connected={connected} now={nowMonotonic}/>;
 
     // ── layout ───────────────────────────────────────────────────────────────
 
@@ -2012,11 +1972,11 @@ export const DiagnosticsPage = () => {
     ];
 
     return (
-        <Space className="diagnostics-page" direction="vertical" size="middle" style={{width: "100%"}}>
+        <div className="diagnostics-page" style={{display: "flex", flexDirection: "column", gap: 16, width: "100%"}}>
             {healthSummary}
             {sectionAlerts}
             <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} size="large"/>
-        </Space>
+        </div>
     );
 };
 

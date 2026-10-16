@@ -24,3 +24,13 @@ it('does not let an unknown container mask an unresolved emergency cause',()=>{
     expect(screen.getByTestId('diagnostic-health-containers')).toHaveAttribute('data-level','unknown');
     expect(screen.getByTestId('diagnostic-health-emergency')).toHaveAttribute('data-level','critical');
 });
+
+it('keeps the current cause keyboard accessible and severity width reserved without changing its conclusion', () => {
+    const input = healthy();
+    render(<DiagnosticHealthSummary health={deriveDiagnosticHealth(input)} gpsLabel="Fixture Fixed" batteryPercent={80}/>);
+    const cause = screen.getByRole('region', {name: 'Current verdict cause'});
+    expect(cause).toHaveAttribute('tabindex', '0'); expect(cause).toHaveStyle({overflowY: 'auto'});
+    const badge = screen.getByTestId('diagnostic-health-ros');
+    expect(badge.querySelectorAll('[aria-hidden="true"]')).toHaveLength(5);
+    expect(badge).toHaveAttribute('data-level', 'ok');
+});

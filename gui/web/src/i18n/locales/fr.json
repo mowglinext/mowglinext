@@ -5280,5 +5280,20 @@
       "localizer": "Le mode autonome nécessite un diagnostic de localisation actuel.",
       "recovery": "La récupération de navigation dure plus longtemps que prévu."
     }
+  },
+  "diagnosticAlertHistory": {
+    "currentCause": "Cause du verdict courant",
+    "active": "En cours",
+    "resolved": "Résolue",
+    "unverified": "État non vérifié",
+    "recent": "Récentes ({{count}})",
+    "showRecent": "Afficher les alertes récentes ({{count}})",
+    "hideRecent": "Masquer les alertes récentes",
+    "collapseAll": "Replier tous les groupes",
+    "empty": "Aucune alerte à afficher. L’historique récent reste consultable ici.",
+    "episode": "Épisode {{count}}",
+    "source": "Source déclarée",
+    "unknownSource": "Source non fournie",
+    "unknownComponent": "Composant sans nom"
   }
 }

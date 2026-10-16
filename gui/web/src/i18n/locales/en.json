@@ -5280,5 +5280,20 @@
       "localizer": "Autonomous operation requires a current localizer diagnostic.",
       "recovery": "Navigation recovery is taking longer than expected."
     }
+  },
+  "diagnosticAlertHistory": {
+    "currentCause": "Current verdict cause",
+    "active": "Active",
+    "resolved": "Resolved",
+    "unverified": "State unverified",
+    "recent": "Recent ({{count}})",
+    "showRecent": "Show recent alerts ({{count}})",
+    "hideRecent": "Hide recent alerts",
+    "collapseAll": "Collapse all groups",
+    "empty": "No alerts to display. Recent history remains available here.",
+    "episode": "Episode {{count}}",
+    "source": "Reported source",
+    "unknownSource": "Source not provided",
+    "unknownComponent": "Unnamed component"
   }
 }

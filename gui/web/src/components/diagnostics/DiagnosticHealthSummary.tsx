@@ -8,6 +8,7 @@ import type {deriveDiagnosticHealth, DiagnosticHealthLevel} from '../../utils/di
 type Health = ReturnType<typeof deriveDiagnosticHealth>;
 const tone: Record<DiagnosticHealthLevel, string> = {ok: 'success', warning: 'warning', critical: 'error', unknown: 'default', not_applicable: 'default'};
 const NUMBER = '\uFFF0';
+const levels: DiagnosticHealthLevel[] = ['ok', 'warning', 'critical', 'unknown', 'not_applicable'];
 function NumericLabel({label, value}: {label: string; value?: string}) {
     const parts = label.split(NUMBER);
     return parts.length > 1 && value !== undefined
@@ -33,7 +34,12 @@ export function DiagnosticHealthSummary({health, gpsLabel, batteryPercent, cpuTe
         return <Tag key={id} data-testid={`diagnostic-health-${id}`} data-level={item.level} color={tone[item.level]}
             style={{fontSize: 12, padding: '2px 8px'}}>
             <NumericLabel label={label} value={numeric}/>
-            {' · '}{t(`diagnosticHealth.level.${item.level}`)}
+            {' · '}<span style={{display: 'inline-grid'}}>
+                {/* Reserve the translated severity width so changing health does
+                    not wrap the mobile badge list into a different row count. */}
+                {levels.map(level => <span key={level} aria-hidden="true" style={{gridArea: '1 / 1', visibility: 'hidden'}}>{t(`diagnosticHealth.level.${level}`)}</span>)}
+                <span style={{gridArea: '1 / 1'}}>{t(`diagnosticHealth.level.${item.level}`)}</span>
+            </span>
         </Tag>;
     };
     const battery = health.checks.find(c => c.id === 'battery');
@@ -45,7 +51,9 @@ export function DiagnosticHealthSummary({health, gpsLabel, batteryPercent, cpuTe
             </div>
             <div className="mn-num" data-testid="diagnostic-health-verdict" data-level={health.level}
                 style={{fontSize: mobile ? 40 : 56, lineHeight: 1, color}}>{verdict}</div>
-            <div data-testid="diagnostic-health-cause" style={{fontSize: 13, color: colors.textSecondary, marginTop: 10}}>
+            <div data-testid="diagnostic-health-cause" role="region" tabIndex={0} aria-label={t('diagnosticAlertHistory.currentCause')}
+                style={{fontSize: 13, color: colors.textSecondary, marginTop: 10, lineHeight: 1.6,
+                    blockSize: mobile ? '4.8em' : '3.2em', overflowY: 'auto', overflowWrap: 'anywhere'}}>
                 {health.level === 'ok' ? t('diagnosticHealth.allConfirmed') : <>{t(`diagnosticHealth.level.${health.level}`)} · {t(`diagnosticHealth.reason.${health.primary.reason}`)}</>}
                 {!!health.primary.evidence?.length && `: ${health.primary.evidence.join('; ')}`}
             </div>
