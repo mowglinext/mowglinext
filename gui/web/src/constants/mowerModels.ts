@@ -84,6 +84,15 @@ export const MOWER_MODELS: MowerModel[] = [
         },
     },
     {
+        value: "YardForceNX100i",
+        label: "mowerModels.YardForceNX100i.label",
+        description: "mowerModels.YardForceNX100i.description",
+        // NX100i-specific geometry has not been measured for this preset. Per
+        // the header comment, another mower's calibration must not be copied,
+        // so keep it selectable without a borrowed calibration.
+        defaults: {},
+    },
+    {
         value: "BiltemaRM1000",
         label: "mowerModels.BiltemaRM1000.label",
         description: "mowerModels.BiltemaRM1000.description",

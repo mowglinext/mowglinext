@@ -42,6 +42,21 @@ typedef enum
     #define LED_CMD 0x508b
 
 
+#elif PANEL_TYPE==PANEL_TYPE_YARDFORCE_NX100I   // YardForce NX100i "RM EC3" LCD panel (no discrete LEDs)
+    #define PANEL_LED_LIFTED 0
+    #define PANEL_LED_SIGNAL 1
+    #define PANEL_LED_BATTERY_LOW 2
+    #define PANEL_LED_CHARGING 3
+    #define PANEL_LED_4H 4
+    #define PANEL_LED_6H 5
+    #define PANEL_LED_8H 6
+    #define PANEL_LED_10H 7
+    #define PANEL_LED_S1 8
+    #define PANEL_LED_S2 9
+    #define PANEL_LED_LOCK 10
+    #define PANEL_LED_GPS 11
+    #define LED_STATE_SIZE 12       // kept for the common API; the LCD shows message codes instead
+    #define LED_CMD 0x5084
 #elif PANEL_TYPE==PANEL_TYPE_YARDFORCE_LUV1000RI   
     #define PANEL_LED_LIFTED 0
     #define PANEL_LED_SIGNAL 1
@@ -169,6 +184,13 @@ extern uint8_t buttonstate[PANEL_BUTTON_BYTES+2];
 extern uint8_t buttonupdated;
 extern uint8_t buttoncleared;
 extern uint8_t Led_States[LED_STATE_SIZE];
+#if PANEL_TYPE==PANEL_TYPE_YARDFORCE_NX100I
+/* NX100i panel extras (panel_nx100i.c) */
+uint8_t PANEL_NX100I_Connected(void);
+const char *PANEL_NX100I_Id(void);
+void PANEL_NX100I_ShowMessageCode(uint8_t code);
+uint8_t PANEL_NX100I_VirtualPlayHeld(void); /* panel START acts as a held play button */
+#endif
 
 
 #ifdef __cplusplus

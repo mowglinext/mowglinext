@@ -11,6 +11,7 @@
           "enum": [
             "YardForce500",
             "YardForce500B",
+            "YardForceNX100i",
             "BiltemaRM1000",
             "YardForceSA650",
             "YardForce900ECO",
