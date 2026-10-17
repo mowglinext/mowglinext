@@ -209,6 +209,69 @@ Path deterministicCircularV1(const Path& selected, Point a, Point corner, Point 
   result.push_back(selected.back());
   return result;
 }
+// Independent bounded fallback for selector V2. The production builder is never
+// called here; strict geometry predicates remain separate from exact sampling.
+Path fallbackCircularV2(Point a,
+                        Point corner,
+                        Point d,
+                        const Path& boundary,
+                        const Paths& holes,
+                        double threshold,
+                        double maximum,
+                        double minimum,
+                        double step)
+{
+  double ix = corner.first - a.first, iy = corner.second - a.second;
+  double ox = d.first - corner.first, oy = d.second - corner.second;
+  const double in_len = std::hypot(ix, iy), out_len = std::hypot(ox, oy);
+  if (!std::isfinite(in_len) || !std::isfinite(out_len) || in_len <= 0.0 || out_len <= 0.0 ||
+      !std::isfinite(maximum) || !std::isfinite(minimum) || minimum <= 0.0)
+    return {};
+  ix /= in_len;
+  iy /= in_len;
+  ox /= out_len;
+  oy /= out_len;
+  const double angle = std::acos(std::clamp(ix * ox + iy * oy, -1.0, 1.0));
+  if (!std::isfinite(angle) || angle <= threshold || angle >= M_PI)
+    return {};
+  for (double r = std::max(maximum, minimum); r >= minimum - 1e-9; r -= 0.01)
+  {
+    const double distance = r / std::tan((M_PI - angle) / 2.0);
+    if (distance > 0.49 * in_len || distance > 0.49 * out_len)
+      continue;
+    const Point entry{corner.first - ix * distance, corner.second - iy * distance};
+    const Point exit{corner.first + ox * distance, corner.second + oy * distance};
+    auto expected = deterministicCircularV1({a, entry, exit, d}, a, corner, d, step);
+    if (expected.size() <= 3 || !allInside(expected, boundary) || !clearOfHoles(expected, holes))
+      continue;
+    try
+    {
+      contains(expected, boundary, holes);
+    }
+    catch (const std::runtime_error&)
+    {
+      continue;
+    }
+    return expected;
+  }
+  return {};
+}
+Path legacyFirstCircularV2(Point a,
+                           Point corner,
+                           Point d,
+                           const Path& boundary,
+                           const Paths& holes,
+                           double threshold,
+                           double maximum,
+                           double minimum,
+                           double step)
+{
+  const auto selected =
+      roundSharpCorners({a, corner, d}, boundary, holes, threshold, maximum, minimum, step);
+  if (selected.size() > 3)
+    return deterministicCircularV1(selected, a, corner, d, step);
+  return fallbackCircularV2(a, corner, d, boundary, holes, threshold, maximum, minimum, step);
+}
 Path validateIntermediate(const Path& source,
                           const Path& intermediate,
                           const Json& replacements,
@@ -250,9 +313,8 @@ Path validateIntermediate(const Path& source,
                 length(subtract(corner, c)) <= 0.01,
             "invalid supporting-edge intersection");
     // Reference sampling also rejects arbitrary extra/erased/shifted samples.
-    const auto selected = roundSharpCorners(
-        {a, corner, d}, boundary, holes, M_PI / 6, 2 * radius, std::max(0.02, radius), 0.03);
-    const auto reference = deterministicCircularV1(selected, a, corner, d, 0.03);
+    const auto reference = legacyFirstCircularV2(
+        a, corner, d, boundary, holes, M_PI / 6, 2 * radius, std::max(0.02, radius), 0.03);
     require(same(local, reference), "local samples differ from deterministic circular V1");
     supportedArc(local, a, corner, d, std::max(0.02, radius), std::max(0.02, 2 * radius));
     contains(local, boundary, holes);

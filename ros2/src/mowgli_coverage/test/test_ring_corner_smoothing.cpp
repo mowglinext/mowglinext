@@ -164,6 +164,12 @@ TEST(RingCornerSmoothing, TinyHoleBetweenSamplesRejectsBevel)
   const auto a = accepted[k], b = accepted[k + 1];
   double x = (a.first + b.first) / 2, y = (a.second + b.second) / 2, e = 1e-5;
   Pts hole{{x - e, y - e}, {x + e, y - e}, {x + e, y + e}, {x - e, y + e}};
+  const Pts support{pts[0], {2.003, 2}, pts[3]};
+  const auto legacy = mc::detail::roundBeveledCorners(support, boundary, {}, M_PI / 6, .4, .2, .03);
+  ASSERT_GT(legacy.size(), 3u);
+  ASSERT_EQ(mc::detail::roundBeveledCorners(support, boundary, {hole}, M_PI / 6, .4, .2, .03),
+            legacy)
+      << "a valid legacy selection must not retune after continuous local rejection";
   EXPECT_EQ(mc::detail::roundBeveledCorners(pts, boundary, {hole}, 30 * M_PI / 180, .4, .2, .03),
             pts);
 }
@@ -367,57 +373,6 @@ TEST(RingCornerSmoothing, HostedCapturedBevelsAreSingleCirclesWithoutDubinsSeams
                   << " intermediate=" << item.output_begin << "\n";
         dump("local", item.local);
       }
-      for (std::size_t source = 1; source + 2 < fixture.source.size(); ++source)
-      {
-        const auto b = fixture.source[source], c = fixture.source[source + 1];
-        if (std::hypot(c.first - b.first, c.second - b.second) > .01)
-          continue;
-        for (std::size_t index = 1; index + 1 < trace.intermediate.size(); ++index)
-        {
-          if (trace.intermediate[index] != b || trace.intermediate[index + 1] != c)
-            continue;
-          const auto a = trace.intermediate[index - 1], d = fixture.source[source + 2];
-          const double ix = b.first - a.first, iy = b.second - a.second;
-          const double ox = d.first - c.first, oy = d.second - c.second;
-          const double cross = ix * oy - iy * ox;
-          std::cerr << "MISSING_BEVEL " << fixture.name << " source=" << source
-                    << " intermediate=" << index << " cross=" << cross << "\n";
-          if (cross == 0.0)
-            continue;
-          const double t = ((c.first - a.first) * oy - (c.second - a.second) * ox) / cross;
-          const std::pair<double, double> corner{a.first + t * ix, a.second + t * iy};
-          dump("chooser_support", {a, b, c, d});
-          dump("chooser_corner", {corner});
-          // An empty boundary rejects every point. This diagnostic envelope
-          // instead encloses the support and four maximum radii on every side.
-          const double xmin = std::min({a.first, corner.first, d.first}) - 4 * .4;
-          const double xmax = std::max({a.first, corner.first, d.first}) + 4 * .4;
-          const double ymin = std::min({a.second, corner.second, d.second}) - 4 * .4;
-          const double ymax = std::max({a.second, corner.second, d.second}) + 4 * .4;
-          const Pts wide{{xmin, ymin}, {xmax, ymin}, {xmax, ymax}, {xmin, ymax}};
-          const auto probe = [&](const char* bounds, const Pts& boundary, double r, double floor)
-          {
-            // Three points delegate directly to unchanged ordinary rounding.
-            const auto selected = mc::detail::roundBeveledCorners(
-                {a, corner, d}, boundary, {}, M_PI / 6, r, floor, .03);
-            std::cerr << "LEGACY_CHOOSER " << fixture.name << " source=" << source
-                      << " bounds=" << bounds << " radius=" << r << " floor=" << floor
-                      << " size=" << selected.size();
-            if (selected.size() > 3)
-              std::cerr << " entry=[" << selected[1].first << "," << selected[1].second
-                        << "] exit=[" << selected[selected.size() - 2].first << ","
-                        << selected[selected.size() - 2].second << "]";
-            std::cerr << "\n";
-          };
-          probe("actual", fixture.boundary, .4, .2);
-          probe("wide", wide, .4, .2);
-          for (double r = .4; r >= .2 - 1e-9; r -= .01)
-          {
-            probe("actual_single_radius", fixture.boundary, r, r);
-            probe("wide_single_radius", wide, r, r);
-          }
-        }
-      }
       for (std::size_t i = 1; i + 1 < dense.size(); ++i)
       {
         // Reuse the unchanged predicate to identify only the failing triples.
@@ -483,6 +438,150 @@ TEST(RingCornerSmoothing, HostedCapturedBevelsAreSingleCirclesWithoutDubinsSeams
     }
   }
 }
+// Exact previous accepted arc exit and retained SW bevel from hosted Debug dcdcf0de.
+TEST(RingCornerSmoothing, HostedDebugRetainedSouthwestBevelGetsSupportedFillet)
+{
+  const Pts source = {{7.624034384594052, 0.0002851187706872866},
+                      {0.0025475343948440886, 0.006064513404893529},
+                      {8.728308542183383e-06, 0.008603319491195435},
+                      {0.006056183000392006, 5.997444135200655}};
+  const Pts boundary = {{-0.030614674589207, -0.073910362600903},
+                        {-0.073910362600903, -0.030614674589207},
+                        {-0.08, 0.0},
+                        {-0.073910362600903, 6.03061467458921},
+                        {-0.030614674589207, 6.0739103626009},
+                        {0.0, 6.08},
+                        {8.03061467458921, 6.0739103626009},
+                        {8.0739103626009, 6.03061467458921},
+                        {8.08, 6.0},
+                        {8.0739103626009, -0.030614674589207},
+                        {8.03061467458921, -0.073910362600903},
+                        {8.0, -0.08},
+                        {-0.030614674589207, -0.073910362600903}};
+  mc::detail::BevelTrace trace;
+  const auto rounded =
+      mc::detail::roundBeveledCorners(source, boundary, {}, M_PI / 6, .4, .2, .03, {}, &trace);
+  EXPECT_EQ(trace.replacements.size(), 1u);
+  EXPECT_EQ(unsupported(densify(rounded, .10)), 0u);
+}
+
+TEST(RingCornerSmoothing, ValidLegacySelectionKeepsExactTangentEndpoints)
+{
+  const Pts source{{0, 2}, {2, 2}, {2.003, 2.003}, {2.003, 4}};
+  const Pts boundary{{-1, -1}, {5, -1}, {5, 5}, {-1, 5}};
+  const std::pair<double, double> corner{2.003, 2};
+  const auto selected = mc::detail::roundBeveledCorners(
+      {source[0], corner, source[3]}, boundary, {}, M_PI / 6, .4, .2, .03);
+  ASSERT_GT(selected.size(), 3u);
+  mc::detail::BevelTrace trace;
+  mc::detail::roundBeveledCorners(source, boundary, {}, M_PI / 6, .4, .2, .03, {}, &trace);
+  ASSERT_EQ(trace.replacements.size(), 1u);
+  const auto& local = trace.replacements.front().local;
+  EXPECT_EQ(local[1], selected[1]);
+  EXPECT_EQ(local[local.size() - 2], selected[selected.size() - 2]);
+}
+
+TEST(RingCornerSmoothing, AnalyticFallbackPreservesRadiusAndRejectsHoleAndPivot)
+{
+  const Pts source = {{7.624034384594052, 0.0002851187706872866},
+                      {0.0025475343948440886, 0.006064513404893529},
+                      {8.728308542183383e-06, 0.008603319491195435},
+                      {0.006056183000392006, 5.997444135200655}};
+  const Pts boundary = {{-0.030614674589207, -0.073910362600903},
+                        {-0.073910362600903, -0.030614674589207},
+                        {-0.08, 0.0},
+                        {-0.073910362600903, 6.03061467458921},
+                        {-0.030614674589207, 6.0739103626009},
+                        {0.0, 6.08},
+                        {8.03061467458921, 6.0739103626009},
+                        {8.0739103626009, 6.03061467458921},
+                        {8.08, 6.0},
+                        {8.0739103626009, -0.030614674589207},
+                        {8.03061467458921, -0.073910362600903},
+                        {8.0, -0.08},
+                        {-0.030614674589207, -0.073910362600903}};
+  mc::detail::BevelTrace trace;
+  const auto rounded =
+      mc::detail::roundBeveledCorners(source, boundary, {}, M_PI / 6, .4, .4, .03, {}, &trace);
+  EXPECT_EQ(unsupported(densify(rounded, .10)), 0u);
+  ASSERT_EQ(trace.replacements.size(), 1u);
+  const auto& local = trace.replacements.front().local;
+  ASSERT_GT(local.size(), 4u);
+  EXPECT_TRUE(contained(densify(rounded, .10), boundary, {}));
+  const auto a = source[0], b = source[1], c = source[2], d = source[3];
+  const double ix = b.first - a.first, iy = b.second - a.second;
+  const double ox = d.first - c.first, oy = d.second - c.second;
+  const double t = ((c.first - a.first) * oy - (c.second - a.second) * ox) / (ix * oy - iy * ox);
+  const std::pair<double, double> corner{a.first + t * ix, a.second + t * iy};
+  const double il = std::hypot(corner.first - a.first, corner.second - a.second);
+  const double ol = std::hypot(d.first - corner.first, d.second - corner.second);
+  const double ux = (corner.first - a.first) / il, uy = (corner.second - a.second) / il;
+  const double vx = (d.first - corner.first) / ol, vy = (d.second - corner.second) / ol;
+  const double angle = std::acos(std::clamp(ux * vx + uy * vy, -1.0, 1.0));
+  const double sign = ux * vy - uy * vx > 0 ? 1.0 : -1.0;
+  const auto entry = local[1], exit = local[local.size() - 2];
+  const double trim = (corner.first - entry.first) * ux + (corner.second - entry.second) * uy;
+  const double radius = trim * std::tan((M_PI - angle) / 2.0);
+  EXPECT_LT(std::abs(radius - .4), 1e-8);
+  EXPECT_GT(trim, 0.0);
+  EXPECT_LE(trim, .49 * il);
+  EXPECT_LE(trim, .49 * ol);
+  EXPECT_LT(std::abs((corner.first - entry.first) * uy - (corner.second - entry.second) * ux),
+            1e-8);
+  EXPECT_LT(std::abs((exit.first - corner.first) * vy - (exit.second - corner.second) * vx), 1e-8);
+  EXPECT_LT(std::abs((exit.first - corner.first) * vx + (exit.second - corner.second) * vy - trim),
+            1e-8);
+  const std::pair<double, double> center{entry.first - sign * uy * radius,
+                                         entry.second + sign * ux * radius};
+  double sweep = 0;
+  for (std::size_t i = 1; i + 1 < local.size(); ++i)
+  {
+    EXPECT_TRUE(std::isfinite(local[i].first) && std::isfinite(local[i].second));
+    const double x = local[i].first - center.first, y = local[i].second - center.second;
+    EXPECT_LT(std::abs(std::hypot(x, y) - radius), 1e-8);
+    if (i > 1)
+    {
+      const double px = local[i - 1].first - center.first, py = local[i - 1].second - center.second;
+      const double delta = sign * std::atan2(px * y - py * x, px * x + py * y);
+      EXPECT_GT(delta, 0.0);
+      EXPECT_LE(delta, 15 * M_PI / 180);
+      sweep += delta;
+    }
+  }
+  EXPECT_LT(std::abs(sweep - angle), 1e-8);
+
+  const double x = (local[2].first + local[3].first) / 2;
+  const double y = (local[2].second + local[3].second) / 2;
+  const double e = 1e-5;
+  const Pts hole{{x - e, y - e}, {x + e, y - e}, {x + e, y + e}, {x - e, y + e}};
+  ASSERT_TRUE(std::none_of(local.begin(),
+                           local.end(),
+                           [&](const auto& point)
+                           {
+                             return mc::pointInRing(point.first, point.second, hole);
+                           }));
+  ASSERT_FALSE(contained(local, boundary, {hole}));
+  mc::detail::BevelTrace rejected;
+  EXPECT_EQ(mc::detail::roundBeveledCorners(
+                source, boundary, {hole}, M_PI / 6, .4, .4, .03, {}, &rejected),
+            source);
+  EXPECT_TRUE(rejected.replacements.empty());
+  EXPECT_EQ(rejected.intermediate, source);
+  EXPECT_EQ(rejected.rounded, source);
+  EXPECT_EQ(mc::detail::roundBeveledCorners(source,
+                                            boundary,
+                                            {},
+                                            M_PI / 6,
+                                            .4,
+                                            .4,
+                                            .03,
+                                            [](const auto&, double)
+                                            {
+                                              return true;
+                                            }),
+            source);
+}
+
 TEST(RingCornerSmoothing, CircularSamplerRetainsExistingTinyStepBound)
 {
   const Pts points{{0, 2}, {2, 2}, {2.003, 2.003}, {2.003, 4}};

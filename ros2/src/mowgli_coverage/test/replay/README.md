@@ -280,14 +280,15 @@ winding, preserves pivot twins, checks the existing bevel eligibility and radius
 floor, derives circle/tangency from emitted coordinates, and checks every emitted
 chord and both tangent connectors continuously against the original boundary and
 holes. Independent deterministic circular-V1 sampling must also match every replacement
-exactly. The pristine helper still selects the radius and tangent endpoints.
+exactly. The legacy-first selector V2 preserves valid pristine-helper radius and
+tangent choices; a rejected selection may use the bounded analytic fallback below.
 Every changed final densified ring receives the same continuous containment check,
 covering neighbouring ordinary fillets retuned after a support edge is shortened.
 The observer is passive; plain/traced execution must remain bit-identical.
 
-The bounded bevel pass uses circular sampler V1 only after the unchanged ordinary
-helper selects a supported fillet. It retains that helper's exact entry/exit and
-both supporting endpoints. The circle radius is inferred from the entry trim and
+The bounded bevel pass first asks the unchanged ordinary helper for a fillet.
+A valid selection retains that helper's exact entry/exit and both supporting
+endpoints before circular sampler V1 replaces only the interior samples. The circle radius is inferred from the entry trim and
 support turn; interior points follow the signed, unwrapped support angle. For
 radius `r`, support turn `theta` and requested step `s`, define
 `L = min(max(0.001, s/r), 15 degrees)` and `N = ceil(theta/L)`. This retains the
@@ -299,8 +300,19 @@ and the derived bound `N <= ceil(pi/0.001)` precede conversion/allocation; no co
 is clamped. Arc spacing is at most `max(0.001*r, s)`, with heading increments at
 most 15 degrees. The actual replay step is 0.03 m with radius at least 0.2 m.
 
-The reference implements this recipe separately, using its pristine ordinary
-helper's selected tangents. It requires exact local sample identity in addition
+Only an ordinary-helper result with at most three points triggers selector V2's
+analytic fallback. It enumerates the same `max(fillet_r, min_radius)` to
+`min_radius - 1e-9` sequence in 0.01 m decrements, retaining the 0.49 adjacent-edge
+trim budgets. For each radius it constructs the tangent pair with
+`trim = r/tan((pi-theta)/2)` and runs unchanged circular sampler V1. Sampled checks
+and strict continuous boundary/hole checks must pass before that radius is accepted.
+A valid legacy selection whose V1 conversion or containment fails is rejected;
+it never triggers fallback retuning. The ordinary helper and generic Dubins
+callers retain their original behavior.
+
+The reference implements both the legacy-first selection and fallback separately,
+using its pristine ordinary helper and its own tangent construction and V1 code.
+It requires exact local sample identity in addition
 to the unchanged independent radius, tangency, sweep, locality and containment
 checks. Old rounding/densification of S and T, and all downstream comparisons,
 remain exact. General Dubins connectors and ordinary corner rounding are unchanged.
@@ -312,6 +324,17 @@ straight length produced an 11.623 nm seam. The circular recipe preserves the
 selected tangents and radius model; uniform interior sampling also changes chord
 placement, so its geometry effect is not limited to those nanometres. Captured
 source/boundary regression inputs exercise both cases without F2C regeneration.
+
+Hosted Debug at diagnostic source `49bc04ee` also exposed a whole missed southwest
+bevel: all 21 legacy radii returned the unrounded triple with actual and wide
+diagnostic boundaries. Original source vertices survived into T/R/D, producing
+two approximately 45-degree turns with measured radii 0.07186/0.07173 m. This is
+separate from the earlier nanometre seam. The exact four-point support capture
+preserves this regression; a second case fixes minimum and maximum radius at
+0.4 m to isolate a genuinely rejected legacy choice. It measures the recovered
+0.4 m circle and rejects a 20-micrometre hole between samples. Native default
+0.4-to-0.2 selection accepted 0.25 m and passed before this repair, so that native
+run is not claimed as a reproduction of the hosted default-case failure.
 
 All non-ring plan state and existing planner trace stages must match the original
 baseline. Only after certification does the reference replace its public

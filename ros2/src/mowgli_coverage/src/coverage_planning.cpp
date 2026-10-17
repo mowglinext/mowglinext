@@ -1124,6 +1124,48 @@ std::vector<std::pair<double, double>> circularBevelSamplesV1(
   return result;
 }
 
+// Legacy-first selector V2 uses this only when the ordinary Dubins helper
+// selected no fillet. It constructs the same bounded single-circle primitive;
+// no generic Dubins or ordinary-rounding caller is changed.
+std::vector<std::pair<double, double>> fallbackCircularBevelV2(
+    std::pair<double, double> a,
+    std::pair<double, double> corner,
+    std::pair<double, double> d,
+    const std::vector<std::pair<double, double>>& boundary,
+    const std::vector<std::vector<std::pair<double, double>>>& holes,
+    double max_turn_rad,
+    double fillet_r,
+    double min_radius,
+    double step)
+{
+  double ix = corner.first - a.first, iy = corner.second - a.second;
+  double ox = d.first - corner.first, oy = d.second - corner.second;
+  const double in_len = std::hypot(ix, iy), out_len = std::hypot(ox, oy);
+  if (!std::isfinite(in_len) || !std::isfinite(out_len) || in_len <= 0.0 || out_len <= 0.0 ||
+      !std::isfinite(fillet_r) || !std::isfinite(min_radius) || min_radius <= 0.0)
+    return {};
+  ix /= in_len;
+  iy /= in_len;
+  ox /= out_len;
+  oy /= out_len;
+  const double turn = std::acos(std::clamp(ix * ox + iy * oy, -1.0, 1.0));
+  if (!std::isfinite(turn) || turn <= max_turn_rad || turn >= M_PI)
+    return {};
+  for (double r = std::max(fillet_r, min_radius); r >= min_radius - 1e-9; r -= 0.01)
+  {
+    const double trim = r / std::tan((M_PI - turn) / 2.0);
+    if (trim > 0.49 * in_len || trim > 0.49 * out_len)
+      continue;
+    const std::pair<double, double> entry{corner.first - ix * trim, corner.second - iy * trim};
+    const std::pair<double, double> exit{corner.first + ox * trim, corner.second + oy * trim};
+    auto local = circularBevelSamplesV1({a, entry, exit, d}, a, corner, d, step);
+    if (local.size() > 3 && allInside(local, boundary) && clearOfHoles(local, holes) &&
+        continuouslyContained(local, boundary, holes))
+      return local;
+  }
+  return {};
+}
+
 }  // namespace
 
 // GEOS can bevel a polygon vertex by a few millimetres. Filleting each end
@@ -1201,8 +1243,12 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
           auto local = roundSharpCorners(
               {a, corner, d}, boundary, holes, max_turn_rad, fillet_r, min_radius, step);
           // A rejected fillet is exactly the original three-point sharp path.
-          if (local.size() > 3)
+          const bool legacy_selected = local.size() > 3;
+          if (legacy_selected)
             local = circularBevelSamplesV1(local, a, corner, d, step);
+          else
+            local = fallbackCircularBevelV2(
+                a, corner, d, boundary, holes, max_turn_rad, fillet_r, min_radius, step);
           if (local.size() > 3 && allInside(local, boundary) && clearOfHoles(local, holes))
           {
             if (continuouslyContained(local, boundary, holes))

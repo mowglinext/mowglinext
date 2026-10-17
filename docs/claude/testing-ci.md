@@ -95,8 +95,14 @@ proposal; that envelope differs from the raw recorded boundary); conservative ro
 restores that exact legacy limit without approving the proposed change. The replay
 README records the measured witness and the distinction from global containment.
 The bounded bevel interiors use deterministic circular sampler V1 after the
-unchanged ordinary helper selects exact tangent endpoints. An independently
-implemented reference recipe requires byte-identical local samples; all existing
+unchanged ordinary helper selects exact tangent endpoints. Legacy-first selector
+V2 uses an analytic fallback only if that helper selected no fillet, retaining the
+same radius sequence and trim budgets and requiring strict local containment at
+each radius. A valid legacy selection is never retuned after conversion or
+containment rejection. Captured southwest support tests cover default legacy
+selection, fixed 0.4 m fallback, measured circle geometry, between-sample hole
+rejection and exact pivot denial. An independently implemented reference recipe
+requires byte-identical local samples; all existing
 radius/tangent/sweep/containment predicates and exact S/T/downstream reconstruction
 remain. Hosted multi-polygon and near-degenerate source/boundary captures test
 single-circle geometry and spacing without regenerating F2C inputs; a separate

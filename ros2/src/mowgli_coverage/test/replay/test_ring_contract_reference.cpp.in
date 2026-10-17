@@ -62,6 +62,42 @@ TEST(CertifiedFilletOracle, AcceptsSupportedLocalReplacement)
   EXPECT_NO_THROW(
       rc::validateIntermediate(source, intermediate(local), certificate(local), boundary, {}, .2));
 }
+TEST(CertifiedFilletOracle, LegacyFirstSelectionPreservesExactValidSamples)
+{
+  const auto selected = mowgli_coverage::roundSharpCorners(
+      {source[0], corner, source[3]}, boundary, {}, M_PI / 6, .4, .2, .03);
+  ASSERT_GT(selected.size(), 3u);
+  EXPECT_TRUE(rc::same(
+      rc::legacyFirstCircularV2(source[0], corner, source[3], boundary, {}, M_PI / 6, .4, .2, .03),
+      rc::deterministicCircularV1(selected, source[0], corner, source[3], .03)));
+}
+TEST(CertifiedFilletOracle, FallbackChecksCapturedRadiusAndContinuousHole)
+{
+  const std::pair<double, double> a{7.624034384594052, 0.0002851187706872866};
+  const std::pair<double, double> b{0.0025475343948440886, 0.006064513404893529};
+  const std::pair<double, double> c{8.728308542183383e-06, 0.008603319491195435};
+  const std::pair<double, double> d{0.006056183000392006, 5.997444135200655};
+  const auto in = rc::subtract(b, a), out = rc::subtract(d, c);
+  const double t = rc::cross(rc::subtract(c, a), out) / rc::cross(in, out);
+  const std::pair<double, double> vertex{a.first + t * in.first, a.second + t * in.second};
+  const Path envelope{{-1, -1}, {9, -1}, {9, 7}, {-1, 7}};
+  const auto local = rc::fallbackCircularV2(a, vertex, d, envelope, {}, M_PI / 6, .4, .4, .03);
+  ASSERT_GT(local.size(), 4u);
+  EXPECT_NO_THROW(rc::supportedArc(local, a, vertex, d, .4, .4));
+  EXPECT_NO_THROW(rc::contains(local, envelope, {}));
+  const double x = (local[2].first + local[3].first) / 2;
+  const double y = (local[2].second + local[3].second) / 2;
+  const double e = 1e-5;
+  const Path hole{{x - e, y - e}, {x + e, y - e}, {x + e, y + e}, {x - e, y + e}};
+  ASSERT_TRUE(mowgli_coverage::allInside(local, envelope));
+  ASSERT_TRUE(mowgli_coverage::clearOfHoles(local, {hole}));
+  ASSERT_THROW(rc::contains(local, envelope, {hole}), std::runtime_error);
+  EXPECT_TRUE(
+      rc::fallbackCircularV2(a, vertex, d, envelope, {hole}, M_PI / 6, .4, .4, .03).empty());
+  EXPECT_TRUE(
+      rc::fallbackCircularV2({0, 0}, {.04, 0}, {.04, .04}, envelope, {}, M_PI / 6, .4, .2, .03)
+          .empty());
+}
 TEST(CertifiedFilletOracle, RejectsArbitraryInsertedPointAndErasedPivot)
 {
   const auto local = localArc();
