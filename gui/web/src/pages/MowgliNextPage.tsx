@@ -714,7 +714,7 @@ function StatTile({label, value, unit, hint, accent, icon}: StatTileProps) {
   );
 }
 
-type HealthRow = {k: string; ok: boolean; note: string; action?: ReactNode};
+type HealthRow = {id: string; k: string; ok: boolean; note: string; action?: ReactNode};
 
 type DashboardHardware = ReturnType<typeof useHardwareBackend>;
 type DashboardMavros = ReturnType<typeof useMavrosInfo>;
@@ -729,12 +729,12 @@ export function HealthCard({data, hardware, mavros}: {
   const navigate = useNavigate();
   const weather = useWeather();
   const rows: HealthRow[] = [
-    {k: t('mowgliNextPage.gpsSignal'),         ok: data.gps > 0,           note: data.gpsLabel},
-    {k: data.rain ? t('mowgliNextPage.rainDetectedRow') : data.rainKnown ? t('mowgliNextPage.noRain') : t('telemetry.statusUnknown'),
+    {id: 'gnss', k: t('mowgliNextPage.gpsSignal'),         ok: data.gps > 0,           note: data.gpsLabel},
+    {id: 'rain', k: data.rain ? t('mowgliNextPage.rainDetectedRow') : data.rainKnown ? t('mowgliNextPage.noRain') : t('telemetry.statusUnknown'),
                               ok: data.rainKnown && !data.rain, note: data.rain ? t('mowgliNextPage.mowingPausedShort') : data.rainKnown ? '' : t('telemetry.statusUnknown')},
-    {k: data.clearanceUnverified ? t('telemetry.emergencyClearanceUnverified') : data.emergency ? t('mowgliNextPage.alertActive') : data.emergencyKnown ? t('mowgliNextPage.noAlerts') : t('telemetry.statusUnknown'),
+    {id: 'emergency', k: data.clearanceUnverified ? t('telemetry.emergencyClearanceUnverified') : data.emergency ? t('mowgliNextPage.alertActive') : data.emergencyKnown ? t('mowgliNextPage.noAlerts') : t('telemetry.statusUnknown'),
                               ok: data.emergencyKnown && !data.emergency, note: data.emergency ? t('mowgliNextPage.toRearm') : data.emergencyKnown ? '' : t('telemetry.statusUnknown')},
-    ...(Number.isFinite(data.motorTemp) ? [{k: t('mowgliNextPage.motorTemp', {temp: motorDisplayValue(data.motorTemp)}),
+    ...(Number.isFinite(data.motorTemp) ? [{id: 'motor-temperature', k: t('mowgliNextPage.motorTemp', {temp: motorDisplayValue(data.motorTemp)}),
                               ok: data.motorTemp < 55,    note: data.motorTemp >= 55 ? t('mowgliNextPage.runningHot') : t('mowgliNextPage.nominal')}] : []),
   ];
   // STM32 firmware compatibility belongs exclusively to the native Mowgli
@@ -745,6 +745,7 @@ export function HealthCard({data, hardware, mavros}: {
   // tells the operator to reflash; mowing is blocked by PreFlightCheck.
   if (!hardware.loading && hardware.backend === "mowgli" && data.firmwareCompatible !== null) {
     rows.push({
+      id: 'firmware',
       k: data.firmwareCompatible
         ? t('mowgliNextPage.firmwareOk')
         : t('mowgliNextPage.firmwareIncompatible'),
@@ -770,6 +771,7 @@ export function HealthCard({data, hardware, mavros}: {
     const firmware = formatMavrosFirmwareVersion(mavros.vehicle);
     const board = formatMavrosBoardIdentity(mavros.vehicle);
     rows.push({
+      id: 'fcu-connection',
       k: mavros.state.connected
         ? t('mowgliNextPage.mavrosFcuConnected')
         : t('mowgliNextPage.mavrosFcuDisconnected'),
@@ -778,6 +780,7 @@ export function HealthCard({data, hardware, mavros}: {
     });
     if (board) {
       rows.push({
+        id: 'fcu-board',
         k: t('mowgliNextPage.mavrosAutopilotBoard'),
         ok: mavros.state.connected === true,
         note: board,
@@ -803,7 +806,7 @@ export function HealthCard({data, hardware, mavros}: {
       <div className="health-card-body">
         <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
           {rows.map(r => (
-            <div key={r.k} style={{display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap'}}>
+            <div key={r.id} style={{display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap'}}>
               <span style={{
                 width: 8, height: 8, borderRadius: 4,
                 background: r.ok ? 'var(--lime, #7CFFB2)' : 'var(--rose, #FF6B7A)',
