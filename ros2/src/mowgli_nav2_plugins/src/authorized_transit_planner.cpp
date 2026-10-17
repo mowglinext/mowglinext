@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mowgli_nav2_plugins/authorized_transit_planner.hpp"
 
+#include "mowgli_nav2_plugins/transit_raster.hpp"
 #include <pluginlib/class_list_macros.hpp>
 
 namespace mowgli_nav2_plugins
@@ -127,9 +128,17 @@ void AuthorizedTransitPlanner::onGeometry(
 
 bool AuthorizedTransitPlanner::costSegmentClear(transit::Point a, transit::Point b) const
 {
+  std::vector<double> cuts;
+  return costSegmentClear(a, b, cuts);
+}
+
+bool AuthorizedTransitPlanner::costSegmentClear(transit::Point a,
+                                                transit::Point b,
+                                                std::vector<double>& ts) const
+{
   // Split at grid lines: every crossed cell is checked, even a very short
   // segment clipping a lethal corner. The copy retains shared obstacle costs.
-  std::vector<double> ts{0, 1};
+  ts.assign({0, 1});
   const auto split = [&](double start, double end, double origin)
   {
     if (start == end)
@@ -235,6 +244,17 @@ nav_msgs::msg::Path AuthorizedTransitPlanner::createPlan(
 {
   std::lock_guard planning_lock(planning_mutex_);
   const auto begin = std::chrono::steady_clock::now();
+  auto phase_begin = begin;
+  const auto profile = [&](const char* phase)
+  {
+    const auto now = std::chrono::steady_clock::now();
+    RCLCPP_DEBUG(_logger,
+                 "Transit phase %s: %.3f ms (elapsed %.3f ms)",
+                 phase,
+                 std::chrono::duration<double, std::milli>(now - phase_begin).count(),
+                 std::chrono::duration<double, std::milli>(now - begin).count());
+    phase_begin = now;
+  };
   double budget;
   {
     std::lock_guard lock(_mutex);
@@ -272,6 +292,7 @@ nav_msgs::msg::Path AuthorizedTransitPlanner::createPlan(
     std::unique_lock lock(*shared_map_->getMutex());
     private_map_ = *shared_map_;
   }
+  profile("snapshot");
   const auto occupied = [&](const auto& endpoint)
   {
     unsigned x, y;
@@ -286,26 +307,44 @@ nav_msgs::msg::Path AuthorizedTransitPlanner::createPlan(
   // Terminal exceptions never enter the search grid, so even nearby endpoints
   // cannot turn outside slack into a through-corridor.
   const auto start_anchor = anchor(start, geometry), goal_anchor = anchor(goal, geometry);
+  profile("anchors");
+  if (!geometry.boundsMayConnect(point(start_anchor), point(goal_anchor), check))
+  {
+    profile("static-disconnected");
+    throw nav2_core::NoValidPathCouldBeFound("Authorized transit polygon bounds are disconnected");
+  }
+  profile("connectivity");
+  const auto authorization = transit::rasterAuthorization(geometry,
+                                                          {private_map_.getSizeInCellsX(),
+                                                           private_map_.getSizeInCellsY(),
+                                                           private_map_.getResolution(),
+                                                           private_map_.getOriginX(),
+                                                           private_map_.getOriginY()},
+                                                          check);
   for (unsigned y = 0; y < private_map_.getSizeInCellsY(); ++y)
   {
     check();
     for (unsigned x = 0; x < private_map_.getSizeInCellsX(); ++x)
     {
-      transit::Point p;
-      private_map_.mapToWorld(x, y, p.x, p.y);
-      if (!geometry.authorized(p) || !geometry.clear(p))
+      if (!authorization[std::size_t{y} * private_map_.getSizeInCellsX() + x])
         private_map_.setCost(x, y, 254);
     }
   }
+  profile("authorization");
+  std::size_t edge_checks = 0;
+  // Buffers belong to this synchronous plan; only capacity is reused, never
+  // a geometry verdict or obstacle observation from a previous edge/plan.
+  std::vector<double> geometry_cuts, cost_cuts;
   TransitNode::edge_allowed = [&](uint64_t a, uint64_t b)
   {
+    ++edge_checks;
     check();
     transit::Point p, q;
     const auto width = private_map_.getSizeInCellsX();
     private_map_.mapToWorld(a % width, a / width, p.x, p.y);
     private_map_.mapToWorld(b % width, b / width, q.x, q.y);
-    return geometry.segmentAuthorized(p, q) && geometry.segmentClear(p, q) &&
-           costSegmentClear(p, q);
+    return geometry.segmentAuthorized(p, q, geometry_cuts) &&
+           geometry.segmentClear(p, q, geometry_cuts) && costSegmentClear(p, q, cost_cuts);
   };
   struct ResetContext
   {
@@ -314,14 +353,26 @@ nav_msgs::msg::Path AuthorizedTransitPlanner::createPlan(
       TransitNode::edge_allowed = {};
     }
   } reset_context;
-  auto raw = BasePlanner::createPlan(start_anchor,
-                                     goal_anchor,
-                                     {},
-                                     [&]
-                                     {
-                                       check();
-                                       return false;
-                                     });
+  nav_msgs::msg::Path raw;
+  try
+  {
+    raw = BasePlanner::createPlan(start_anchor,
+                                  goal_anchor,
+                                  {},
+                                  [&]
+                                  {
+                                    check();
+                                    return false;
+                                  });
+  }
+  catch (...)
+  {
+    profile("search-failed");
+    RCLCPP_DEBUG(_logger, "Transit edge checks: %zu", edge_checks);
+    throw;
+  }
+  profile("search");
+  RCLCPP_DEBUG(_logger, "Transit edge checks: %zu", edge_checks);
   // Smac's world conversion rounds the origin through float. Restore the
   // exact cell centres used by TransitNode's edge checks before validation;
   // otherwise a shifted diagonal can clip a forbidden corner by micrometres.
@@ -347,6 +398,7 @@ nav_msgs::msg::Path AuthorizedTransitPlanner::createPlan(
     throw nav2_core::NoValidPathCouldBeFound("Raw search path failed continuous validation");
   if (transit::distance(point(raw.poses.back()), point(goal_anchor)) > transit::kEpsilon)
     throw nav2_core::NoValidPathCouldBeFound("Search did not reach the authorized goal anchor");
+  profile("raw-validation");
   auto smoothed = raw;
   check();
   transit_smoother_->smooth(smoothed,
@@ -354,7 +406,10 @@ nav_msgs::msg::Path AuthorizedTransitPlanner::createPlan(
                             remaining(),
                             _costmap_ros->getUseRadius() ? std::vector<geometry_msgs::msg::Point>()
                                                          : _costmap_ros->getRobotFootprint());
-  auto result = pathValid(smoothed, geometry) ? std::move(smoothed) : std::move(raw);
+  const bool smoothing_valid = pathValid(smoothed, geometry);
+  RCLCPP_DEBUG(_logger, "Transit smoothing accepted: %d", smoothing_valid);
+  auto result = smoothing_valid ? std::move(smoothed) : std::move(raw);
+  profile("smoothing-validation");
   // Validate the bounded terminal legs against original obstacle costs, before
   // outside-center search cells were made lethal in the private view.
   result.poses.insert(result.poses.begin(), start);

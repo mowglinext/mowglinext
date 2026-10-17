@@ -39,6 +39,16 @@ planning discards that result. Explicit BoundaryGuard recovery selects
 keepout-disable/re-enable, timeout, cancellation and bounded BackUp paths
 remain separate from ordinary transit.
 
+Authorization preparation rasterizes polygon interiors by row and tests exact
+boundary distances in the affected cell windows. The mask and crossing scratch
+buffers belong to one plan and are never reused by later plans; the revision
+check still discards a result if geometry changes during its plan. A negative
+bounding-box connectivity preflight can reject separated authorized areas before
+search. Overlapping boxes still require the exact search, including current
+obstacle costs. These optimizations do not change the 8-second planning budget.
+See [planner performance evidence](TRANSIT_PLANNER_PERFORMANCE.md) for reproducible
+benchmarks and the remaining Raspberry Pi 4 validation.
+
 Stop the mission before editing or replacing a map. Invalidation rejects new
 plans; a controller already following a path may retain it until replanning.
 Controller deviations, autonomous backoff and bounded recovery/docking

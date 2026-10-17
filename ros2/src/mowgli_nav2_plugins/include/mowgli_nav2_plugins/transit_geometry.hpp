@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <span>
 #include <vector>
 
 namespace mowgli_nav2_plugins::transit
@@ -67,11 +68,40 @@ inline double ringDistance(Point p, const Ring& ring)
   return result;
 }
 
+// Reject only distance work for a provably remote ring. Crossing checks still
+// run independently. Widen for rounding in closestOnEdge's clamped interpolation;
+// extreme/non-finite intermediate padding simply disables the fast rejection.
+inline bool remoteRing(Point a, Point b, const Ring& ring, double margin)
+{
+  double min_x = INFINITY, min_y = INFINITY, max_x = -INFINITY, max_y = -INFINITY;
+  for (const auto& p : ring)
+  {
+    min_x = std::min(min_x, p.x);
+    min_y = std::min(min_y, p.y);
+    max_x = std::max(max_x, p.x);
+    max_y = std::max(max_y, p.y);
+  }
+  const double magnitude = std::max({std::abs(min_x),
+                                     std::abs(min_y),
+                                     std::abs(max_x),
+                                     std::abs(max_y),
+                                     std::abs(a.x),
+                                     std::abs(a.y),
+                                     std::abs(b.x),
+                                     std::abs(b.y),
+                                     std::abs(margin)});
+  const double padding =
+      std::max(0.0, margin) + 8 * (std::nextafter(magnitude, INFINITY) - magnitude);
+  return std::isfinite(padding) &&
+         (std::max(a.x, b.x) < min_x - padding || std::min(a.x, b.x) > max_x + padding ||
+          std::max(a.y, b.y) < min_y - padding || std::min(a.y, b.y) > max_y + padding);
+}
+
 // Split at EVERY polygon crossing, then classify each open interval. Sampling
 // at a fixed spacing can miss arbitrarily thin gaps and diagonal corner cuts.
-inline std::vector<double> cuts(Point a, Point b, const std::vector<Ring>& rings)
+inline void cuts(Point a, Point b, std::span<const Ring> rings, std::vector<double>& result)
 {
-  std::vector<double> result{0, 1};
+  result.assign({0, 1});
   const Point d{b.x - a.x, b.y - a.y};
   const double length2 = d.x * d.x + d.y * d.y;
   for (const auto& ring : rings)
@@ -94,6 +124,11 @@ inline std::vector<double> cuts(Point a, Point b, const std::vector<Ring>& rings
     }
   std::sort(result.begin(), result.end());
   result.erase(std::unique(result.begin(), result.end()), result.end());
+}
+inline std::vector<double> cuts(Point a, Point b, const std::vector<Ring>& rings)
+{
+  std::vector<double> result;
+  cuts(a, b, rings, result);
   return result;
 }
 
@@ -125,25 +160,90 @@ struct Geometry
         return false;
     return true;
   }
+
+  // A negative-only preflight for authorized anchors. Overlapping ring bounds
+  // are a superset of actual connectivity; a positive result still requires
+  // the exact search and current obstacle checks. No verdict survives a plan.
+  template <typename Check>
+  bool boundsMayConnect(Point start, Point goal, const Check& check) const
+  {
+    if (allowed.size() <= 1)
+      return !allowed.empty();
+    std::vector<bool> visited(allowed.size(), false);
+    std::vector<std::size_t> pending;
+    for (std::size_t i = 0; i < allowed.size(); ++i)
+    {
+      check();
+      if (inside(start, allowed[i]))
+      {
+        if (inside(goal, allowed[i]))
+          return true;
+        visited[i] = true;
+        pending.push_back(i);
+      }
+    }
+    while (!pending.empty())
+    {
+      check();
+      const auto current = pending.back();
+      pending.pop_back();
+      if (inside(goal, allowed[current]))
+        return true;
+      Point lo{INFINITY, INFINITY}, hi{-INFINITY, -INFINITY};
+      for (const auto& p : allowed[current])
+      {
+        lo.x = std::min(lo.x, p.x);
+        lo.y = std::min(lo.y, p.y);
+        hi.x = std::max(hi.x, p.x);
+        hi.y = std::max(hi.y, p.y);
+      }
+      for (std::size_t i = 0; i < allowed.size(); ++i)
+        if (!visited[i])
+        {
+          check();
+          // Each closed ring includes its own epsilon boundary tolerance.
+          if (!remoteRing(lo, hi, allowed[i], 2 * kEpsilon))
+          {
+            visited[i] = true;
+            pending.push_back(i);
+          }
+        }
+    }
+    return false;
+  }
+
   bool segmentAuthorized(Point a, Point b) const
+  {
+    std::vector<double> scratch;
+    return segmentAuthorized(a, b, scratch);
+  }
+  bool segmentAuthorized(Point a, Point b, std::vector<double>& scratch) const
   {
     if (!authorized(a) || !authorized(b))
       return false;
-    const auto ts = cuts(a, b, allowed);
-    for (std::size_t i = 1; i < ts.size(); ++i)
-      if (!authorized(interpolate(a, b, (ts[i - 1] + ts[i]) / 2)))
+    cuts(a, b, allowed, scratch);
+    for (std::size_t i = 1; i < scratch.size(); ++i)
+      if (!authorized(interpolate(a, b, (scratch[i - 1] + scratch[i]) / 2)))
         return false;
     return true;
   }
   bool segmentClear(Point a, Point b) const
+  {
+    std::vector<double> scratch;
+    return segmentClear(a, b, scratch);
+  }
+  bool segmentClear(Point a, Point b, std::vector<double>& scratch) const
   {
     if (!clear(a) || !clear(b))
       return false;
     for (std::size_t index = 0; index < blocked.size(); ++index)
     {
       const auto& ring = blocked[index];
-      if (cuts(a, b, {ring}).size() > 2)
+      cuts(a, b, std::span<const Ring>(&ring, 1), scratch);
+      if (scratch.size() > 2)
         return false;
+      if (remoteRing(a, b, ring, margin(index) + kEpsilon))
+        continue;
       for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
         if (std::min({edgeDistance(a, ring[j], ring[i]),
                       edgeDistance(b, ring[j], ring[i]),
