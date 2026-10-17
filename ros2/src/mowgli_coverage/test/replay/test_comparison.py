@@ -5,10 +5,10 @@ import copy
 import gzip
 import json
 import pathlib
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
-import subprocess
 
 from compare_replay import (case_comparison, certify_fillets, METRIC_KEYS,
                             reference_oracle_hash, trace_geometry, validate_evidence)
@@ -171,8 +171,10 @@ class EvidenceTests(unittest.TestCase):
     def test_exact_identity_requires_pristine_and_traced_reference_controls(self):
         arguments = self.certification_evidence()
         response = self.reference_response()
-        with mock.patch('compare_replay.subprocess.run', return_value=
-                        subprocess.CompletedProcess([], 0, json.dumps(response), '')) as run:
+        with mock.patch(
+            'compare_replay.subprocess.run',
+            return_value=subprocess.CompletedProcess([], 0, json.dumps(response), '')
+        ) as run:
             result = certify_fillets(*arguments)
             self.assertTrue(result['accepted'])
             self.assertEqual(result['method'], 'identical')
@@ -187,16 +189,20 @@ class EvidenceTests(unittest.TestCase):
 
     def test_old_exact_baseline_extra_records_still_require_oracle(self):
         self.snapshot['fields'][0]['rings'] = 1
-        self.snapshot['stages'][-1]['geometry'] = copy.deepcopy(self.snapshot['stages'][0]['geometry'])
+        self.snapshot['stages'][-1]['geometry'] = copy.deepcopy(
+            self.snapshot['stages'][0]['geometry'])
         arguments = list(self.certification_evidence())
         observed = copy.deepcopy(self.snapshot)
         for kind in ('source', 'intermediate', 'rounded', 'replacements'):
-            observed['stages'].append({'name': f'0.bevel_{kind}.0',
-                                      'geometry': [] if kind == 'replacements' else [[]], 'angles': []})
+            observed['stages'].append(
+                {'name': f'0.bevel_{kind}.0',
+                 'geometry': [] if kind == 'replacements' else [[]], 'angles': []})
         arguments[6], arguments[3] = self.write_evidence('traced', observed)
         response = self.reference_response()
-        with mock.patch('compare_replay.subprocess.run', return_value=
-                        subprocess.CompletedProcess([], 0, json.dumps(response), '')) as run:
+        with mock.patch(
+            'compare_replay.subprocess.run',
+            return_value=subprocess.CompletedProcess([], 0, json.dumps(response), '')
+        ) as run:
             result = certify_fillets(*arguments)
             self.assertEqual(result['method'], 'identical')
             self.assertIn('additional bevel records', result['observer_validation'])
@@ -219,8 +225,8 @@ class EvidenceTests(unittest.TestCase):
             self.assertTrue(result['accepted'])
             self.assertEqual(result['method'], 'certified_fillets')
         response['stages'][0]['geometry'][0][0][0] = '0000000000000002'
-        with mock.patch('compare_replay.subprocess.run', side_effect=[control,
-                subprocess.CompletedProcess([], 0, json.dumps(response), '')]):
+        with mock.patch('compare_replay.subprocess.run', side_effect=[
+                control, subprocess.CompletedProcess([], 0, json.dumps(response), '')]):
             with self.assertRaisesRegex(ValueError, 'downstream reconstruction'):
                 certify_fillets(*arguments)
 
@@ -239,8 +245,10 @@ class EvidenceTests(unittest.TestCase):
             with self.subTest(key=key):
                 response = self.reference_response()
                 response['build'][key] = 'f' * 64
-                with mock.patch('compare_replay.subprocess.run', return_value=
-                                subprocess.CompletedProcess([], 0, json.dumps(response), '')):
+                with mock.patch(
+                    'compare_replay.subprocess.run',
+                    return_value=subprocess.CompletedProcess([], 0, json.dumps(response), '')
+                ):
                     with self.assertRaises(ValueError):
                         certify_fillets(*arguments)
 
@@ -249,7 +257,8 @@ class EvidenceTests(unittest.TestCase):
         for response in (subprocess.CompletedProcess([], 1, '', 'unsupported source helper'),
                          subprocess.CompletedProcess([], 0, '{}', '')):
             with mock.patch('compare_replay.subprocess.run', side_effect=[
-                    subprocess.CompletedProcess([], 0, json.dumps(self.reference_response()), ''), response]):
+                    subprocess.CompletedProcess([], 0, json.dumps(self.reference_response()), ''),
+                    response]):
                 with self.assertRaises(ValueError):
                     certify_fillets(*arguments)
 

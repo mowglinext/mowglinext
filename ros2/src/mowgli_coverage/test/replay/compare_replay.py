@@ -253,14 +253,16 @@ def compatible_build_metadata(baseline, candidate):
 
 
 def planner_identity(baseline, candidate):
-    """The complete existing strict identity predicate, including structure/build."""
+    """Check complete strict planner identity, including structure and build."""
     return (
         baseline.get('output_sha256') == candidate.get('output_sha256')
         and baseline.get('followstrip_fingerprint') == candidate.get('followstrip_fingerprint')
         and baseline.get('fields') == candidate.get('fields')
         and baseline.get('stage_hashes') == candidate.get('stage_hashes')
         and all(value['equal'] for value in metric_comparison(baseline, candidate).values())
-        and all(value['equal'] for value in compatible_build_metadata(baseline, candidate).values())
+        and all(
+            value['equal'] for value in compatible_build_metadata(baseline, candidate).values()
+        )
     )
 
 
@@ -377,7 +379,8 @@ def certify_fillets(name, baseline, candidate, traced, baseline_dir, candidate_d
         control = subprocess.run([str(binary), fixture, '1', '--no-trace'],
                                  capture_output=True, text=True, timeout=300, check=False)
         if control.returncode:
-            raise ValueError(f'{name}: baseline reference control failed: {control.stderr.strip()}')
+            raise ValueError(
+                f'{name}: baseline reference control failed: {control.stderr.strip()}')
         try:
             control_snapshot = json.loads(control.stdout)
             control_geometry = stable(control_snapshot)
@@ -419,7 +422,8 @@ def certify_fillets(name, baseline, candidate, traced, baseline_dir, candidate_d
             if (trace_geometry(observed_reference) != trace_geometry(original)
                     or observed_reference['fields'] != original['fields']
                     or observed_reference['metrics'] != original['metrics']
-                    or observed_reference['followstrip_fingerprint'] != original['followstrip_fingerprint']):
+                    or observed_reference['followstrip_fingerprint']
+                    != original['followstrip_fingerprint']):
                 raise ValueError(f'{name}: baseline reference observer is not passive')
             if not set(shared) - reference_names:
                 return {**audit, 'method': 'identical', 'replacement_count': 0,
@@ -442,7 +446,8 @@ def certify_fillets(name, baseline, candidate, traced, baseline_dir, candidate_d
     if checked_build(reconstructed) != build:
         raise ValueError(f'{name}: oracle helper source differs from reviewed tooling')
     if stable(reconstructed) != stable(plain):
-        raise ValueError(f'{name}: candidate differs from exact baseline downstream reconstruction')
+        raise ValueError(
+            f'{name}: candidate differs from exact baseline downstream reconstruction')
     return {
         **audit,
         'method': 'identical' if identical else 'certified_fillets',
@@ -612,7 +617,8 @@ def report_markdown(report):
             f'- Accepted strict identity: {identical}/{case_count}',
             f'- Certified local-fillet/downstream reconstructions: {certified}/{case_count}',
             '- Raw baseline/candidate differences above remain part of this report.',
-            '- Fillet certification checks changed ring polylines; unchanged legacy rings are not containment-certified. No physical chassis-sweep claim.',
+            '- Fillet certification checks changed ring polylines; unchanged legacy rings are '
+            'not containment-certified. No physical chassis-sweep claim.',
         ])
         for name, case in report['cases'].items():
             error = case.get('planner_contract', {}).get('error')
@@ -757,9 +763,11 @@ def main():
                 try:
                     certification = certify_fillets(
                         name, baseline[name], candidate[name], trace[name],
-                        args.baseline_dir, args.candidate_dir, args.trace_dir, args.baseline_binary,
+                        args.baseline_dir, args.candidate_dir, args.trace_dir,
+                        args.baseline_binary,
                     )
-                except (KeyError, TypeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
+                except (KeyError, TypeError, ValueError, OSError,
+                        subprocess.TimeoutExpired) as error:
                     certification = {'accepted': False, 'method': 'rejected', 'error': str(error)}
                 report['cases'][name]['planner_contract'] = certification
         valid_cases = [case for case in report['cases'].values() if case['comparison_valid']]

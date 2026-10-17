@@ -16,6 +16,7 @@ from run_replay import digest, fixture, input_identity, rectangle, run_case, sta
 
 
 class CertifiedReplayTests(unittest.TestCase):
+
     @classmethod
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory(prefix='coverage-fillet-controls-')
@@ -32,7 +33,8 @@ class CertifiedReplayTests(unittest.TestCase):
             summary = run_case(binary, 'control', cls.data, directory, 1, 1, plain, 60)
             with gzip.open(directory / 'control.snapshot.json.gz', 'rt') as file:
                 snapshot = json.load(file)
-            cls.directories[label], cls.summaries[label], cls.snapshots[label] = directory, summary, snapshot
+            cls.directories[label], cls.summaries[label], cls.snapshots[label] = (
+                directory, summary, snapshot)
 
     def setUp(self):
         self.summaries = copy.deepcopy(type(self).summaries)
@@ -41,23 +43,27 @@ class CertifiedReplayTests(unittest.TestCase):
             self.write(label)
 
     def write(self, label):
-        directory, snapshot, summary = self.directories[label], self.snapshots[label], self.summaries[label]
+        directory, snapshot, summary = (
+            self.directories[label], self.snapshots[label], self.summaries[label])
         (directory / 'control.json').write_text(json.dumps(self.data), encoding='utf-8')
         with gzip.open(directory / 'control.snapshot.json.gz', 'wt') as file:
             json.dump(snapshot, file)
         for key in ('metrics', 'fields', 'build', 'followstrip_fingerprint'):
             summary[key] = snapshot[key]
-        summary.update(output_sha256=digest(stable(snapshot)), input_identity=input_identity(snapshot),
+        summary.update(output_sha256=digest(stable(snapshot)),
+                       input_identity=input_identity(snapshot),
                        stage_hashes=[{'name': stage['name'], 'sha256': digest(stage)}
                                      for stage in snapshot['stages']])
         (directory / 'summary.json').write_text(json.dumps({'control': summary}), encoding='utf-8')
 
     def arguments(self):
-        return ('control', self.summaries['baseline'], self.summaries['candidate'], self.summaries['traced'],
-                self.directories['baseline'], self.directories['candidate'], self.directories['traced'], OPTIONS.reference)
+        return ('control', self.summaries['baseline'], self.summaries['candidate'],
+                self.summaries['traced'], self.directories['baseline'],
+                self.directories['candidate'], self.directories['traced'], OPTIONS.reference)
 
     def stage(self, suffix):
-        return next(stage for stage in self.snapshots['traced']['stages'] if stage['name'].endswith(suffix))
+        return next(stage for stage in self.snapshots['traced']['stages']
+                    if stage['name'].endswith(suffix))
 
     def ring(self):
         return next(stage['name'].split('.')[-1] for stage in self.snapshots['traced']['stages']
@@ -66,24 +72,32 @@ class CertifiedReplayTests(unittest.TestCase):
     def compare_cli(self, strict=False):
         environment = self.root / 'test-environment.json'
         # Synthetic metadata identifies comparator controls, not field/build evidence.
-        environment.write_text(json.dumps({'architecture': 'comparator-test', 'compiler': 'comparator-test',
-                                           'build_type': 'comparator-test', 'fields2cover_revision': 'comparator-test',
-                                           'fields2cover_library_sha256': ['comparator-test']}), encoding='utf-8')
+        environment.write_text(
+            json.dumps({'architecture': 'comparator-test', 'compiler': 'comparator-test',
+                        'build_type': 'comparator-test',
+                        'fields2cover_revision': 'comparator-test',
+                        'fields2cover_library_sha256': ['comparator-test']}), encoding='utf-8')
         command = [sys.executable, str(pathlib.Path(__file__).with_name('compare_replay.py')),
-                   '--baseline-dir', str(self.directories['baseline']), '--candidate-dir', str(self.directories['candidate']),
-                   '--trace-dir', str(self.directories['traced']), '--baseline-binary', str(OPTIONS.reference),
-                   '--environment', str(environment), '--output-json', str(self.root / 'comparison.json'),
-                   '--output-markdown', str(self.root / 'comparison.md'), '--expected-cases', '1', '--expected-runs', '1',
-                   '--expected-trace-runs', '1', '--expected-processes', '1', '--expected-trace-processes', '1',
+                   '--baseline-dir', str(self.directories['baseline']),
+                   '--candidate-dir', str(self.directories['candidate']),
+                   '--trace-dir', str(self.directories['traced']),
+                   '--baseline-binary', str(OPTIONS.reference),
+                   '--environment', str(environment),
+                   '--output-json', str(self.root / 'comparison.json'),
+                   '--output-markdown', str(self.root / 'comparison.md'),
+                   '--expected-cases', '1', '--expected-runs', '1',
+                   '--expected-trace-runs', '1', '--expected-processes', '1',
+                   '--expected-trace-processes', '1',
                    '--require-identical' if strict else '--require-certified-fillets']
         completed = subprocess.run(command, capture_output=True, text=True, timeout=60)
         self.assertIn(completed.returncode, (0, 1), completed.stderr)
         return completed.returncode, json.loads((self.root / 'comparison.json').read_text())
 
     def test_real_planner_contract_and_strict_diagnostic(self):
-        result = case_comparison('control', self.summaries['baseline'], self.summaries['candidate'],
-                                 self.summaries['traced'], self.directories['baseline'],
-                                 self.directories['candidate'], self.directories['traced'], 1, 1, 1, 1)
+        result = case_comparison(
+            'control', self.summaries['baseline'], self.summaries['candidate'],
+            self.summaries['traced'], self.directories['baseline'],
+            self.directories['candidate'], self.directories['traced'], 1, 1, 1, 1)
         method = 'identical' if result['planner_identical'] else 'certified_fillets'
         if OPTIONS.expect_method:
             self.assertEqual(method, OPTIONS.expect_method)
@@ -98,7 +112,8 @@ class CertifiedReplayTests(unittest.TestCase):
         self.assertEqual(strict_report['all_planner_outputs_match'], method == 'identical')
 
     def test_unrelated_downstream_bit_change_is_rejected(self):
-        stage = next(stage for stage in self.snapshots['candidate']['stages'] if stage['name'].endswith('.execution'))
+        stage = next(stage for stage in self.snapshots['candidate']['stages']
+                     if stage['name'].endswith('.execution'))
         stage['geometry'][0][0][0] = '0000000000000001'
         self.stage('.execution')['geometry'][0][0][0] = '0000000000000001'
         self.write('candidate')
@@ -163,7 +178,8 @@ class CertifiedReplayTests(unittest.TestCase):
     def test_changed_fixture_is_rejected(self):
         changed = copy.deepcopy(self.data)
         changed['parameters']['operation_width'] = .19
-        (self.directories['candidate'] / 'control.json').write_text(json.dumps(changed), encoding='utf-8')
+        (self.directories['candidate'] / 'control.json').write_text(
+            json.dumps(changed), encoding='utf-8')
         self.summaries['candidate']['fixture_sha256'] = digest(changed)
         (self.directories['candidate'] / 'summary.json').write_text(
             json.dumps({'control': self.summaries['candidate']}), encoding='utf-8')
@@ -184,7 +200,8 @@ class CertifiedReplayTests(unittest.TestCase):
         self.snapshots['traced'] = copy.deepcopy(type(self).snapshots['traced'])
         self.write('traced')
         self.summaries['candidate']['unique_exact_outputs'] = 2
-        (self.directories['candidate'] / 'summary.json').write_text(json.dumps({'control': self.summaries['candidate']}))
+        (self.directories['candidate'] / 'summary.json').write_text(
+            json.dumps({'control': self.summaries['candidate']}))
         status, report = self.compare_cli()
         self.assertEqual(status, 1)
         self.assertFalse(report['stable_runs'])
