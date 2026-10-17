@@ -2,10 +2,12 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 
 #include "mowgli_coverage/coverage_planning.hpp"
 #include "ring_corner_rounding.hpp"
 #include <gtest/gtest.h>
+#include <ogr_geometry.h>
 
 namespace
 {
@@ -174,6 +176,86 @@ TEST(RingCornerSmoothing, ConcaveBoundaryRejectsCrossingChord)
   Pts notched{
       {-1, -1}, {5, -1}, {5, 5}, {x + e, 5}, {x + e, y - e}, {x - e, y - e}, {x - e, 5}, {-1, 5}};
   EXPECT_EQ(mc::detail::roundBeveledCorners(pts, notched, {}, 30 * M_PI / 180, .4, .2, .03), pts);
+}
+// Test the emitted chords continuously, rather than checking only sampled points.
+bool contained(const Pts& path, const Pts& boundary, const std::vector<Pts>& holes)
+{
+  OGRLineString line;
+  for (const auto& p : path)
+    line.addPoint(p.first, p.second);
+  const auto polygon = [](const Pts& points)
+  {
+    OGRLinearRing ring;
+    for (const auto& p : points)
+      ring.addPoint(p.first, p.second);
+    ring.closeRings();
+    OGRPolygon result;
+    result.addRing(&ring);
+    return result;
+  };
+  auto shell = polygon(boundary);
+  std::unique_ptr<OGRGeometry> outside(line.Difference(&shell));
+  if (!outside || !outside->IsEmpty())
+    return false;
+  for (const auto& points : holes)
+  {
+    auto hole = polygon(points);
+    if (line.Intersects(&hole))
+      return false;
+  }
+  return true;
+}
+TEST(RingCornerSmoothing, RetunedNeighbourHoleRollsBackEntireBevelChange)
+{
+  const Pts pts{{0, 0}, {2, 0}, {2.003, .003}, {2.003, 1}, {0, 1}, {0, 0}};
+  const Pts boundary{{-1, -1}, {5, -1}, {5, 5}, {-1, 5}};
+  mc::detail::BevelTrace accepted_trace;
+  const auto proposed = mc::detail::roundBeveledCorners(
+      pts, boundary, {}, M_PI / 6, .4, .2, .03, {}, &accepted_trace);
+  ASSERT_EQ(accepted_trace.replacements.size(), 1u);
+  const auto dense = densify(proposed, .10);
+  ASSERT_TRUE(contained(dense, boundary, {}));
+  std::size_t k = 0;
+  for (std::size_t i = 1; i + 1 < dense.size(); ++i)
+    if (dense[i].first > 1.72 && dense[i].first < 1.99 && dense[i].second > .72 &&
+        dense[i].second < .99 && dense[i + 1].second > .72 && dense[i + 1].second < 1.0)
+    {
+      k = i;
+      break;
+    }
+  ASSERT_GT(k, 0u) << "must select the retuned neighbouring ordinary fillet";
+  const double x = (dense[k].first + dense[k + 1].first) / 2;
+  const double y = (dense[k].second + dense[k + 1].second) / 2;
+  const double e = 1e-5;
+  const Pts hole{{x - e, y - e}, {x + e, y - e}, {x + e, y + e}, {x - e, y + e}};
+  ASSERT_TRUE(contained(accepted_trace.replacements.front().local, boundary, {hole}));
+  ASSERT_FALSE(contained(dense, boundary, {hole}));
+
+  // Keeping only the two microscopic bevel vertices disables their replacement.
+  // Their sub-4mm trim budgets already prevent ordinary radius >= .2 fillets;
+  // all other corners use the unchanged ordinary-rounding path and arguments.
+  const auto preserve_bevel = [&](const auto& point, double)
+  {
+    return point == pts[1] || point == pts[2];
+  };
+  const auto legacy =
+      mc::detail::roundBeveledCorners(pts, boundary, {hole}, M_PI / 6, .4, .2, .03, preserve_bevel);
+  ASSERT_EQ(
+      legacy,
+      mc::detail::roundBeveledCorners(pts, boundary, {}, M_PI / 6, .4, .2, .03, preserve_bevel));
+  ASSERT_TRUE(contained(densify(legacy, .10), boundary, {hole}));
+  ASSERT_LT(unsupported(dense), unsupported(densify(legacy, .10)));
+
+  mc::detail::BevelTrace rejected_trace;
+  const auto actual = mc::detail::roundBeveledCorners(
+      pts, boundary, {hole}, M_PI / 6, .4, .2, .03, {}, &rejected_trace);
+  EXPECT_TRUE(contained(densify(actual, .10), boundary, {hole}));
+  EXPECT_EQ(actual, legacy);
+  EXPECT_EQ(rejected_trace.source, pts);
+  EXPECT_EQ(rejected_trace.intermediate, pts);
+  EXPECT_EQ(rejected_trace.rounded, legacy);
+  EXPECT_TRUE(rejected_trace.replacements.empty());
+  EXPECT_EQ(actual, mc::detail::roundBeveledCorners(pts, boundary, {hole}, M_PI / 6, .4, .2, .03));
 }
 TEST(RingCornerSmoothing, RoundingIsIdempotentAndClosureStable)
 {

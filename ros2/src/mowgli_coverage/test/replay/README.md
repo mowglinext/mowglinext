@@ -321,6 +321,27 @@ For the complete retained matrix use the same comparison command above, replacin
 
 Every fixture still requires exact repeated outputs, exact shared inputs and exact
 candidate trace passivity. Unsupported deltas, missing evidence or incompatible
-reference builds fail closed. This certifies emitted planner polylines; the schema
-does not contain a chassis footprint/frame, and this mode supplies no physical
+reference builds fail closed. This certifies changed planner ring polylines;
+unchanged legacy rings are not containment-certified. The production bevel pass continuously checks the actual
+final densified proposal after ordinary rounding, which can retune a neighbouring
+corner. A failed check rolls back that entire ring to exact legacy rounding of
+the sparse source; its emitted provenance has no accepted replacements. Valid
+contained bevel fillets remain enabled.
+
+The first full native Release matrix (`e48cf12a` baseline, `4ec46f77` proposal)
+exposed an existing ordinary-rounding limit in both split-mainland fixtures: the old outer ring had 43.504 mm of chord length
+outside `plan.safe_boundary`, the working/headland envelope expanded outward by
+0.08 m (half the operation width), rather than the raw fixture boundary. The
+initial bevel proposal retained two byte-identical old
+chords totalling 29.442 mm outside that envelope, with a 5.155 mm outside midpoint.
+That midpoint is 85.155 mm outside the raw transported fixture boundary; these
+are software geometry measurements, not physical field observations. Full-ring
+validation rejected that proposal; conservative rollback restores the exact old
+ring, including its existing limit. This is a strict nonregression check and denial
+of unproven changes, not a claim that every legacy path is contained or safer.
+The production regression separately covers a new retuned-neighbour chord
+crossing a 20-micrometre hole where the exact legacy path is contained; it requires
+rollback, exact passive provenance and continued valid fillets without the hole.
+
+The schema does not contain a chassis footprint/frame, and this mode supplies no physical
 swept-body or field-coverage evidence.

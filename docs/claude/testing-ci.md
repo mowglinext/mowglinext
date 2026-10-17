@@ -82,6 +82,15 @@ controls in both the old-baseline and identical future-baseline cases;
 The README gives complete commands. Python comparator/provenance tests
 remain registered in both normal package and standalone suites. These checks
 provide planner software evidence, not chassis-sweep or physical validation.
+`test_ring_corner_smoothing` also checks exact final densified chords after bevel
+rounding: a retuned neighbour crossing a 20-micrometre hole must roll the ring
+back to exact contained legacy geometry with truthful empty replacement evidence.
+Unchanged legacy rings are not containment-certified. The native split-mainland
+fixtures expose inherited outer-ring excursions (43.504 mm of old chord length
+outside the working `safe_boundary`, versus 29.442 mm in the rejected initial
+proposal; that envelope differs from the raw recorded boundary); conservative rollback
+restores that exact legacy limit without approving the proposed change. The replay
+README records the measured witness and the distinction from global containment.
 `test_semantic_diagnostics` also runs in both suites: it excludes only the three
 elapsed values from the known mixed timing note, preserves its semantic suffix
 and all other diagnostics, and rejects malformed recognized timing schemas.

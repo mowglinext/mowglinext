@@ -1043,6 +1043,37 @@ std::vector<std::pair<double, double>> densifyPolyline(
   return out;
 }
 
+// Check every emitted chord, including the straight tangent connectors.
+bool continuouslyContained(const std::vector<std::pair<double, double>>& path,
+                           const std::vector<std::pair<double, double>>& boundary,
+                           const std::vector<std::vector<std::pair<double, double>>>& holes)
+{
+  OGRLineString line;
+  for (const auto& p : path)
+    line.addPoint(p.first, p.second);
+  const auto polygon = [](const std::vector<std::pair<double, double>>& points)
+  {
+    OGRLinearRing ring;
+    for (const auto& p : points)
+      ring.addPoint(p.first, p.second);
+    ring.closeRings();
+    OGRPolygon result;
+    result.addRing(&ring);
+    return result;
+  };
+  auto shell = polygon(boundary);
+  std::unique_ptr<OGRGeometry> outside(line.Difference(&shell));
+  if (!outside || !outside->IsEmpty())
+    return false;
+  for (const auto& points : holes)
+  {
+    auto hole = polygon(points);
+    if (line.Intersects(&hole))
+      return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 // GEOS can bevel a polygon vertex by a few millimetres. Filleting each end
@@ -1072,6 +1103,7 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
     return roundSharpCorners(
         pts, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
   std::vector<std::pair<double, double>> out{pts.front()};
+  bool replaced_bevel = false;
   for (std::size_t i = 1; i + 1 < pts.size(); ++i)
   {
     bool accepted = false;
@@ -1121,31 +1153,9 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
           // A rejected fillet is exactly the original three-point sharp path.
           if (local.size() > 3 && allInside(local, boundary) && clearOfHoles(local, holes))
           {
-            // Validate the entire emitted polyline, including both straight
-            // tangent connectors. Sample-only checks can miss a tiny hole.
-            OGRLineString line;
-            for (const auto& p : local)
-              line.addPoint(p.first, p.second);
-            OGRLinearRing shell;
-            for (const auto& p : boundary)
-              shell.addPoint(p.first, p.second);
-            shell.closeRings();
-            OGRPolygon polygon;
-            polygon.addRing(&shell);
-            std::unique_ptr<OGRGeometry> outside(line.Difference(&polygon));
-            bool fits = outside && outside->IsEmpty();
-            for (const auto& hole : holes)
+            if (continuouslyContained(local, boundary, holes))
             {
-              OGRLinearRing ring;
-              for (const auto& p : hole)
-                ring.addPoint(p.first, p.second);
-              ring.closeRings();
-              OGRPolygon obstacle;
-              obstacle.addRing(&ring);
-              fits = fits && !line.Intersects(&obstacle);
-            }
-            if (fits)
-            {
+              replaced_bevel = true;
               if (trace)
                 trace->replacements.push_back({i, out.size(), local});
               out.insert(out.end(), local.begin() + 1, local.end() - 1);
@@ -1160,12 +1170,26 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
       out.push_back(pts[i]);
   }
   out.push_back(pts.back());
-  if (trace)
-    trace->intermediate = out;
   auto rounded =
       roundSharpCorners(out, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
+  // A bevel replacement shortens neighbouring support edges, so ordinary rounding
+  // can retune another fillet. Check the exact final densified proposal, rather
+  // than only the accepted local arcs. Deny an unproven change by restoring the
+  // entire legacy ring; this does not certify containment of an unchanged ring.
+  if (replaced_bevel &&
+      !continuouslyContained(densifyPolyline(rounded, kDensifyStep), boundary, holes))
+  {
+    out = pts;
+    rounded = roundSharpCorners(
+        pts, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
+    if (trace)
+      trace->replacements.clear();
+  }
   if (trace)
+  {
+    trace->intermediate = out;
     trace->rounded = rounded;
+  }
   return rounded;
 }
 

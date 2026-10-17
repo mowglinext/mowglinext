@@ -454,7 +454,8 @@ def certify_fillets(name, baseline, candidate, traced, baseline_dir, candidate_d
             if '.bevel_replacements.' in stage['name']
         ),
         'scope': ('strict output identity; no functional geometry change accepted' if identical
-                  else 'certifies emitted ring polylines; no physical chassis-sweep claim'),
+                  else 'certifies changed ring polylines; unchanged legacy rings are not '
+                       'containment-certified; no physical chassis-sweep claim'),
     }
 
 
@@ -611,7 +612,7 @@ def report_markdown(report):
             f'- Accepted strict identity: {identical}/{case_count}',
             f'- Certified local-fillet/downstream reconstructions: {certified}/{case_count}',
             '- Raw baseline/candidate differences above remain part of this report.',
-            '- Fillet certification checks emitted polylines, not physical chassis sweeps.',
+            '- Fillet certification checks changed ring polylines; unchanged legacy rings are not containment-certified. No physical chassis-sweep claim.',
         ])
         for name, case in report['cases'].items():
             error = case.get('planner_contract', {}).get('error')
