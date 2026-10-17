@@ -41,6 +41,7 @@
 | **`firmware/` root + scripts** | | |
 | `firmware/README.md` | 53 | Area overview (partly stale — see structured findings) |
 | `firmware/.gitignore` | 3 | ignores `sync_msg.sh`, `.idea/` |
+| `firmware/scripts/test_odometry_time.py` | 132 | Compiles production odometry handler and USB gate helpers; checks acquisition time under 0/1/N drops, closed port, queue full and HAL tick wrap |
 | `firmware/scripts/protocol_version_guard.py` | 138 | Fingerprints `PKT_ID_*` + `pkt_*_t` in `mowgli_protocol.h`; `--check` fails on un-versioned wire drift or firmware/host version mismatch |
 | `firmware/scripts/protocol_baseline.json` | 4 | `{version: 6, hash}` baseline for the guard above |
 | `firmware/scripts/board_defaults_parity.py` | 108 | Asserts `board.h`/`board.h.template` consume `board_defaults.h` and never re-`#define` the 10 managed safety macros |
@@ -58,7 +59,7 @@
 | `firmware/stm32/ros_usbnode/README.md` | 218 | Legacy rosserial/ROS-noetic how-to (stale — see findings) |
 | `firmware/stm32/ros_usbnode/.gitignore` | 13 | ignores `.pio`, `raspi_remote_upload.py`, `*.bin`… and (already-tracked) `platformio.ini` |
 | **`ros_usbnode/include/` — protocol & control** | | |
-| `include/mowgli_protocol.h` | 739 | `MOWGLI_PROTOCOL_VERSION 8u`; `PKT_ID_*`; `STATUS_BIT_*`, `EMERGENCY_BIT_*`, `RESET_CAUSE_*`, `WATCHDOG_STAGE_*`, `HL_MODE_*`, `CONFIG_FLAG_FIRMWARE_DEBUG`; packed `pkt_*_t` + `_Static_assert` layout pins |
+| `include/mowgli_protocol.h` | 739 | `MOWGLI_PROTOCOL_VERSION 9u`; `PKT_ID_*`; `STATUS_BIT_*`, `EMERGENCY_BIT_*`, `RESET_CAUSE_*`, `WATCHDOG_STAGE_*`, `HL_MODE_*`, `CONFIG_FLAG_FIRMWARE_DEBUG`; packed `pkt_*_t` + `_Static_assert` layout pins |
 | `include/mowgli_comms.h` | 243 | RX frame assembly / CRC / dispatch API; `MOWGLI_COMMS_RX_BUF_SIZE` 512, `MOWGLI_COMMS_MAX_HANDLERS` 16; extern `usb_cdc_transmit()` |
 | `include/cobs.h`, `include/crc16.h` | 80, 41 | COBS encode/decode; CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) |
 | `include/pid.hpp` | 140 | Vendored PX4 PID (header-only, BSD-3): `setGains/setIntegralLimit/setOutputLimit/update(feedback, dt, update_integral)/setIntegral` |
@@ -108,7 +109,7 @@
 | 0x01 | `PKT_ID_STATUS` / `pkt_status_t` | F→H | 38 | `broadcast_handler()` | 4 Hz (`STATUS_NBT_TIME_MS` 250); `status_bitmask` (`STATUS_BIT_INITIALIZED\|RASPI_POWER\|CHARGING\|RAIN\|UI_AVAIL`), `emergency_bitmask` (`LATCH\|STOP\|LIFT`), `v_charge`, `v_system`, `charging_current`; `batt_percentage` always 0; `uss_ranges_m[5]` zero unless `OPTION_ULTRASONIC` |
 | 0x06 | `PKT_ID_RESET_CAUSE` / `pkt_reset_cause_t` | F→H | 5 | `broadcast_handler()` | sent immediately before every STATUS; `reset_cause` + WWDG breadcrumb `last_stage_before_reset` |
 | 0x02 | `PKT_ID_IMU` / `pkt_imu_t` | F→H | 41 | `broadcast_handler()` | 100 Hz (`IMU_NBT_TIME_MS` 10); accel/gyro/mag in m/s², rad/s, µT; skipped entirely if any `IMU_TryRead*` fails |
-| 0x04 | `PKT_ID_ODOMETRY` / `pkt_odometry_t` | F→H | 17 | `wheelTicks_handler()` ← `DRIVEMOTOR_App_Rx()` | per motor-controller frame (~20 ms); signed cumulative ticks + firmware-computed mm/s |
+| 0x04 | `PKT_ID_ODOMETRY` / `pkt_odometry_t` | F→H | 19 | `wheelTicks_handler()` ← `DRIVEMOTOR_App_Rx()` | per motor-controller frame (~20 ms); signed cumulative ticks + 32-bit acquisition HAL tick + firmware-computed mm/s |
 | 0x05 | `PKT_ID_BLADE_STATUS` / `pkt_blade_status_t` | F→H | 16 | `broadcast_handler()` | 4 Hz (`BLADE_NBT_TIME_MS`), only once a heartbeat has been seen |
 | 0x03 | `PKT_ID_UI_EVENT` / `pkt_ui_event_t` | F→H | 5 | `panel_handler()` | `button_id` 1=S1 2=S2 3=LOCK 4=START 5=HOME; `press_duration` always 0 |
 | 0x12 | `PKT_ID_CONFIG_RSP` / `pkt_config_rsp_t` | F→H | 8 | `on_config_req()` | `protocol_version`, `active_flags`, `fw_version_{major,minor,patch}` |
@@ -170,7 +171,7 @@ python3 firmware/scripts/protocol_version_guard.py        # refresh baseline AFT
 python3 firmware/scripts/package_release.py --build-root firmware/stm32/ros_usbnode --tag vX.Y.Z --repo mowglinext/mowglinext --out-dir dist
 ```
 
-Tests — there are **no firmware-side unit tests** (`test/README` is the PlatformIO placeholder). What pins firmware behaviour:
+Tests — native safety tests and Python production-source harnesses run in `firmware-ci.yml`. Odometry timing is pinned by `firmware/scripts/test_odometry_time.py` (0/1/N send-gate drops, closed port, queue full, HAL tick rollover). Additional checks:
 - `ros2/src/mowgli_hardware/test/test_protocol.cpp` — `ProtocolSizes.*` (every `Ll*` struct size), `ProtocolIds.PacketIdValues`, `OdometryPacket.FieldOffsetsAreCorrect`/`SignedDirectionEncoding`/`NegativeTicksRoundtrip`, `SetDrivePidPacket.FieldOffsetsAreCorrect`/`PreservesFractionalTicksPerMeter`, `ProtocolRoundtrip.*`, `StatusBitmask.BitPositions`, `EmergencyBitmask.BitPositions` (host mirror only — run via `cd ros2 && make test`).
 - `firmware/scripts/protocol_version_guard.py --check` — wire fingerprint vs `protocol_baseline.json` + firmware/host version lockstep.
 - `firmware/scripts/board_defaults_parity.py` — single-source safety defaults.
