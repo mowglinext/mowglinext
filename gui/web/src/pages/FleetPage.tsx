@@ -12,6 +12,7 @@ import type {FleetPhase, FleetRow} from "../utils/fleet.ts";
 import {FleetMapMini} from "../components/fleet/FleetMapMini.tsx";
 import {StatusOrb} from "../concept/components/StatusOrb.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
+import {requestErrorMessage} from "../utils/errors";
 
 const {Text, Title} = Typography;
 
@@ -72,8 +73,8 @@ export default function FleetPage() {
             } else if (okText) {
                 message.success(okText);
             }
-        } catch (e: any) {
-            message.error(e?.message ?? String(e));
+        } catch (e: unknown) {
+            message.error(requestErrorMessage(e) ?? String(e));
         } finally {
             setBusy(null);
         }
