@@ -1,6 +1,6 @@
 import {errorMessage, isAbortError} from "../utils/errors";
 import {isJsonObject} from "../utils/json";
-import {useCallback, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {App} from "antd";
 import {useTranslation} from "react-i18next";
 
@@ -95,8 +95,14 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
     const [calibOpen, setCalibOpen] = useState(false);
     const [calibRunning, setCalibRunning] = useState(false);
     const [calibResult, setCalibResult] = useState<ImuYawCalibrationResult | null>(null);
+    // Own only the local result; invalidating an invocation does not cancel
+    // the calibration already requested from the server.
+    const currentInvocation = useRef<symbol | null>(null);
+
+    useEffect(() => () => {currentInvocation.current = null;}, []);
 
     const resetCalibration = useCallback(() => {
+        currentInvocation.current = null;
         setCalibRunning(false);
         setCalibResult(null);
     }, []);
@@ -113,6 +119,8 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
     }, [resetCalibration]);
 
     const startCalibration = useCallback(async () => {
+        const invocation = Symbol();
+        currentInvocation.current = invocation;
         setCalibRunning(true);
         setCalibResult(null);
         const controller = new AbortController();
@@ -124,14 +132,17 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
                 body: JSON.stringify({duration_sec: CALIB_DURATION_SEC}),
                 signal: controller.signal,
             });
+            if (currentInvocation.current !== invocation) return;
             if (!res.ok) {
                 const errBody = await res.text();
                 throw new Error(`HTTP ${res.status}: ${errBody}`);
             }
             const data: unknown = await res.json();
+            if (currentInvocation.current !== invocation) return;
             if (!isImuYawCalibrationResult(data)) throw new Error("Invalid IMU yaw calibration response");
             setCalibResult(data);
         } catch (e: unknown) {
+            if (currentInvocation.current !== invocation) return;
             const msg = isAbortError(e)
                 ? t("imuYawCalibration.timedOut")
                 : (errorMessage(e) || String(e));
@@ -141,7 +152,7 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
             });
         } finally {
             clearTimeout(timeoutId);
-            setCalibRunning(false);
+            if (currentInvocation.current === invocation) setCalibRunning(false);
         }
     }, [notification, t]);
 

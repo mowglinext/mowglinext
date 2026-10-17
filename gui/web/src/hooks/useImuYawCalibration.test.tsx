@@ -1,4 +1,5 @@
 import {act, cleanup, renderHook} from '@testing-library/react';
+import {useEffect} from 'react';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {useImuYawCalibration} from './useImuYawCalibration';
 
@@ -6,9 +7,10 @@ const mock = vi.hoisted(() => ({
     fetch: vi.fn<typeof fetch>(),
     error: vi.fn<(config: {message: string; description: string}) => void>(),
     success: vi.fn<(config: {message: string; description: string; duration: number}) => void>(),
+    t: (key: string) => key,
 }));
-vi.mock('antd', () => ({App: {useApp: () => ({notification: {error: mock.error, success: mock.success}})}}));
-vi.mock('react-i18next', () => ({useTranslation: () => ({t: (key: string) => key})}));
+vi.mock('antd', () => ({App: {useApp: () => ({notification: mock})}}));
+vi.mock('react-i18next', () => ({useTranslation: () => ({t: mock.t})}));
 
 const complete = {
     success: true, message: 'Complete', imu_yaw_rad: .123456, imu_yaw_deg: 7.07,
@@ -275,4 +277,155 @@ it('does not retain a previous applicable result after a rejected subsequent res
     act(() => hook.result.current.applyCalibration());
     expect(hook.onApplyValue).not.toHaveBeenCalled();
     expect(mock.error).toHaveBeenCalledOnce();
+});
+
+describe('ownership of asynchronous calibration results', () => {
+    function deferred<T>() {
+        let resolve!: (value: T) => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<T>((yes, no) => {resolve = yes; reject = no;});
+        return {promise, resolve, reject};
+    }
+    it('invalidates a pending fetch on Reset without aborting the remote request', async () => {
+        const pending = deferred<Response>();
+        mock.fetch.mockReturnValue(pending.promise);
+        const hook = setup();
+        let task!: Promise<void>;
+        act(() => {task = hook.result.current.startCalibration();});
+        act(() => hook.result.current.resetCalibration());
+        const response = new Response(JSON.stringify(complete));
+        const json = vi.spyOn(response, 'json');
+        await act(async () => {pending.resolve(response); await task;});
+        expect(json).not.toHaveBeenCalled();
+        expect(hook.result.current.calibResult).toBeNull();
+        expect(hook.result.current.calibRunning).toBe(false);
+        act(() => hook.result.current.applyCalibration());
+        expect(hook.onApplyValue).not.toHaveBeenCalled();
+        expect(mock.error).not.toHaveBeenCalled();
+        expect(mock.success).not.toHaveBeenCalled();
+        expect(mock.fetch).toHaveBeenCalledOnce();
+        expect(mock.fetch.mock.calls[0][1]?.signal?.aborted).toBe(false);
+    });
+    it('invalidates a body decoded after Reset even when fetch has already completed', async () => {
+        const body = deferred<unknown>();
+        const response = new Response();
+        const json = vi.spyOn(response, 'json').mockReturnValue(body.promise);
+        mock.fetch.mockResolvedValue(response);
+        const hook = setup();
+        let task!: Promise<void>;
+        await act(async () => {task = hook.result.current.startCalibration(); await Promise.resolve();});
+        expect(json).toHaveBeenCalledOnce();
+        act(() => hook.result.current.resetCalibration());
+        await act(async () => {body.resolve(complete); await task;});
+        expect(hook.result.current.calibResult).toBeNull();
+        expect(hook.result.current.calibRunning).toBe(false);
+        expect(mock.error).not.toHaveBeenCalled();
+        expect(mock.success).not.toHaveBeenCalled();
+        expect(hook.onApplyValue).not.toHaveBeenCalled();
+    });
+    it('ignores an error after Reset', async () => {
+        const pending = deferred<Response>();
+        mock.fetch.mockReturnValue(pending.promise);
+        const hook = setup();
+        let task!: Promise<void>;
+        act(() => {task = hook.result.current.startCalibration();});
+        act(() => hook.result.current.resetCalibration());
+        await act(async () => {pending.reject(new TypeError('Old failure')); await task;});
+        expect(mock.error).not.toHaveBeenCalled();
+        expect(mock.success).not.toHaveBeenCalled();
+        expect(hook.result.current.calibResult).toBeNull();
+        expect(hook.result.current.calibRunning).toBe(false);
+    });
+    it.each(['old-first', 'new-first'])('only publishes the latest invocation: %s', async order => {
+        const old = deferred<Response>(), current = deferred<Response>();
+        mock.fetch.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+        const hook = setup();
+        let first!: Promise<void>, second!: Promise<void>;
+        act(() => {first = hook.result.current.startCalibration(); second = hook.result.current.startCalibration();});
+        const oldResponse = new Response(JSON.stringify({...minimal, imu_yaw_rad: .1}));
+        const newResponse = new Response(JSON.stringify({...minimal, imu_yaw_rad: .2}));
+        if (order === 'old-first') {
+            await act(async () => {old.resolve(oldResponse); await first;});
+            expect(hook.result.current.calibRunning).toBe(true);
+            expect(hook.result.current.calibResult).toBeNull();
+            await act(async () => {current.resolve(newResponse); await second;});
+        } else {
+            await act(async () => {current.resolve(newResponse); await second;});
+            expect(hook.result.current.calibRunning).toBe(false);
+            await act(async () => {old.resolve(oldResponse); await first;});
+        }
+        expect(hook.result.current.calibResult).toMatchObject({imu_yaw_rad: .2});
+        expect(hook.result.current.calibRunning).toBe(false);
+        expect(hook.onApplyValue).not.toHaveBeenCalled();
+        expect(mock.success).not.toHaveBeenCalled();
+        act(() => hook.result.current.applyCalibration());
+        expect(hook.onApplyValue).toHaveBeenCalledExactlyOnceWith('imu_yaw', .2);
+        expect(mock.success).toHaveBeenCalledOnce();
+        expect(mock.error).not.toHaveBeenCalled();
+        expect(mock.fetch).toHaveBeenCalledTimes(2);
+    });
+    it('ignores an old error after the current invocation succeeds', async () => {
+        const old = deferred<Response>();
+        mock.fetch.mockReturnValueOnce(old.promise).mockResolvedValueOnce(new Response(JSON.stringify(minimal)));
+        const hook = setup();
+        let first!: Promise<void>;
+        act(() => {first = hook.result.current.startCalibration();});
+        await act(() => hook.result.current.startCalibration());
+        await act(async () => {old.reject(new TypeError('Old failure')); await first;});
+        expect(mock.error).not.toHaveBeenCalled();
+        expect(hook.result.current.calibResult).toEqual(minimal);
+        expect(hook.result.current.calibRunning).toBe(false);
+        expect(hook.onApplyValue).not.toHaveBeenCalled();
+    });
+    it('ignores an error after unmount and clears its timeout', async () => {
+        vi.useFakeTimers();
+        const pending = deferred<Response>();
+        mock.fetch.mockReturnValue(pending.promise);
+        const hook = setup();
+        let task!: Promise<void>;
+        act(() => {task = hook.result.current.startCalibration();});
+        hook.unmount();
+        expect(mock.fetch.mock.calls[0][1]?.signal?.aborted).toBe(false);
+        await act(async () => {pending.reject(new TypeError('Unmounted failure')); await task;});
+        expect(mock.error).not.toHaveBeenCalled();
+        expect(mock.success).not.toHaveBeenCalled();
+        expect(hook.onApplyValue).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it('clears each obsolete timeout without clearing the current invocation timeout', async () => {
+        vi.useFakeTimers();
+        const old = deferred<Response>(), current = deferred<Response>();
+        mock.fetch.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+        const hook = setup();
+        let first!: Promise<void>, second!: Promise<void>;
+        act(() => {first = hook.result.current.startCalibration(); second = hook.result.current.startCalibration();});
+        expect(vi.getTimerCount()).toBe(2);
+        await act(async () => {old.resolve(new Response(JSON.stringify(minimal))); await first;});
+        expect(vi.getTimerCount()).toBe(1);
+        expect(hook.result.current.calibRunning).toBe(true);
+        await act(async () => {current.resolve(new Response(JSON.stringify(minimal))); await second;});
+        expect(vi.getTimerCount()).toBe(0);
+        expect(hook.result.current.calibResult).toEqual(minimal);
+    });
+    it('does not revive an identity during StrictMode effect replay', async () => {
+        const old = deferred<Response>(), current = deferred<Response>();
+        mock.fetch.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+        const tasks: Promise<void>[] = [];
+        const onApplyValue = vi.fn<(key: string, value: number) => void>();
+        const hook = renderHook(() => {
+            const calibration = useImuYawCalibration({onApplyValue});
+            const start = calibration.startCalibration;
+            useEffect(() => {tasks.push(start());}, [start]);
+            return calibration;
+        }, {reactStrictMode: true});
+        expect(tasks).toHaveLength(2);
+        await act(async () => {old.reject(new TypeError('Replayed mount')); await tasks[0];});
+        expect(mock.error).not.toHaveBeenCalled();
+        expect(hook.result.current.calibRunning).toBe(true);
+        await act(async () => {current.resolve(new Response(JSON.stringify(minimal))); await tasks[1];});
+        expect(hook.result.current.calibResult).toEqual(minimal);
+        expect(hook.result.current.calibRunning).toBe(false);
+        act(() => hook.result.current.applyCalibration());
+        expect(onApplyValue).toHaveBeenCalledExactlyOnceWith('imu_yaw', 0);
+    });
 });
