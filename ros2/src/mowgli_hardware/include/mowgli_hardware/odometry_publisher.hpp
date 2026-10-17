@@ -22,10 +22,9 @@
  *
  * Extracted from hardware_bridge_node's former handle_odometry() as part of
  * the god-node breakup (2616-line TU, see CLAUDE.md task board #11).
- * Behavior-preserving: the packet-handling logic below is a verbatim port —
- * see the .cpp for the detailed rationale comments (16-bit encoder-wrap
- * recovery, tick-spike rejection, 50 ms aggregation window, dock-charging
- * force-zero + covariance policy).
+ * Protocol v9 pairs cumulative ticks with firmware acquisition time, preserving
+ * elapsed time across skipped USB packets. See the .cpp for wrap recovery,
+ * tick-spike rejection, 50 ms aggregation and dock-charging force-zero policy.
  */
 
 #pragma once
@@ -104,6 +103,7 @@ private:
   HostFirmwareClockFit odom_clock_fit_;
 
   bool odom_initialized_{false};
+  uint32_t prev_acquisition_ms_{0};
   int32_t prev_left_ticks_{0};
   int32_t prev_right_ticks_{0};
   int32_t odom_acc_delta_left_{0};
