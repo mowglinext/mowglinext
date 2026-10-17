@@ -2,6 +2,7 @@ package providers
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -200,6 +201,9 @@ func newTestCoordinator(t *testing.T, rows *[]FleetRobot) (*FleetCoordinator, *t
 		if r, ok := res.(*mowgli.SetFleetAssignmentRes); ok {
 			r.Success = true
 		}
+		if r, ok := res.(*mowgli.HighLevelControlRes); ok {
+			r.Success = true
+		}
 	}
 	identity := func() (RobotIdentity, error) {
 		return RobotIdentity{ID: "b", Name: "bravo", DatumLat: 48.0, DatumLon: 2.0}, nil
@@ -302,6 +306,153 @@ func TestCoordinatorTick_YieldSendsStopThenResume(t *testing.T) {
 	require.Len(t, hl, 2)
 	assert.Equal(t, uint8(hlCommandStart), hl[1].Req.(*mowgli.HighLevelControlReq).Command)
 	assert.False(t, c.Status().Yielded)
+}
+
+// Start with a real coordinator-issued STOP and a peer that has moved clear.
+// The returned snapshot remains mutable, as it would between live ticks.
+func newYieldedTestCoordinator(t *testing.T) (*FleetCoordinator, *types.MockRosProvider, []FleetRobot, time.Time) {
+	t.Helper()
+	rows := []FleetRobot{
+		{Identity: RobotIdentity{ID: "b"}, Self: true, Online: true, Topics: map[string]json.RawMessage{
+			"highLevelStatus": json.RawMessage(`{"state":2,"state_name":"MOWING","current_area":0}`),
+			"gps":             gpsTopic(48.0, 2.0),
+		}, TopicAgeS: map[string]float64{"gps": 0}},
+		{Identity: RobotIdentity{ID: "a"}, Online: true, Topics: map[string]json.RawMessage{
+			"highLevelStatus": json.RawMessage(`{"state":2,"state_name":"MOWING","current_area":1}`),
+			"gps":             gpsTopic(48.00001, 2.0),
+		}, TopicAgeS: map[string]float64{"gps": 0}},
+	}
+	c, _, ros := newTestCoordinator(t, &rows)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	require.NoError(t, c.SetSettings(CoordinatorSettings{Enabled: true}))
+	require.True(t, c.Status().Yielded)
+	rows[0].Topics["highLevelStatus"] = json.RawMessage(`{"state":1,"state_name":"IDLE","current_area":0}`)
+	rows[1].Topics["gps"] = gpsTopic(48.001, 2.0)
+	c.tick(now.Add(2 * time.Second))
+	ros.ServiceCalls = nil
+	return c, ros, rows, now
+}
+
+func TestCoordinatorTick_ResumeRetriesUntilAccepted(t *testing.T) {
+	for _, trigger := range []string{"peers clear", "max hold"} {
+		for _, failure := range []string{"refused", "transport"} {
+			t.Run(trigger+"/"+failure, func(t *testing.T) {
+				c, ros, rows, now := newYieldedTestCoordinator(t)
+				attemptAt := now.Add(6 * time.Second)
+				if trigger == "max hold" {
+					rows[1].Topics["gps"] = gpsTopic(48.00001, 2.0)
+					attemptAt = now.Add(45 * time.Second)
+				}
+				held := c.yield
+				accept := false
+				ros.ServiceResponder = func(_ string, _ any, res any) {
+					switch r := res.(type) {
+					case *mowgli.SetFleetAssignmentRes:
+						r.Success = true
+					case *mowgli.HighLevelControlRes:
+						assert.True(t, c.Status().Yielded, "retain ownership while the reply is pending")
+						r.Success = accept || failure == "transport"
+					}
+				}
+				if failure == "transport" {
+					ros.ServiceErr = errors.New("bridge disconnected")
+				}
+				for i := 0; i < 2; i++ {
+					c.tick(attemptAt.Add(time.Duration(i) * coordinatorTick))
+					require.Len(t, serviceCalls(ros, highLevelControlService), i+1)
+					require.Equal(t, held, c.yield, "failed START must retain the hold and its timers")
+					require.NotEmpty(t, c.Status().LastError)
+				}
+				accept = true
+				ros.ServiceErr = nil
+				acceptedAt := attemptAt.Add(2 * coordinatorTick)
+				c.tick(acceptedAt)
+				calls := serviceCalls(ros, highLevelControlService)
+				require.Len(t, calls, 3)
+				for _, call := range calls {
+					require.Equal(t, uint8(hlCommandStart), call.Req.(*mowgli.HighLevelControlReq).Command)
+				}
+				require.False(t, c.Status().Yielded)
+				require.Equal(t, acceptedAt, c.yield.ResumedAt, "cooldown begins with the accepted attempt")
+				require.Empty(t, c.Status().LastError)
+
+				// Acceptance and the published autonomous state are asynchronous.
+				// A stale IDLE snapshot must not send another START; once MOWING,
+				// the cooldown must still prevent a new STOP for a nearby peer.
+				c.tick(acceptedAt.Add(coordinatorTick))
+				rows[0].Topics["highLevelStatus"] = json.RawMessage(`{"state":2,"state_name":"MOWING"}`)
+				rows[1].Topics["gps"] = gpsTopic(48.00001, 2.0)
+				c.tick(acceptedAt.Add(2 * coordinatorTick))
+				require.Len(t, serviceCalls(ros, highLevelControlService), 3)
+			})
+		}
+	}
+}
+
+func TestCoordinatorTick_FailedResumeRechecksPeerClearance(t *testing.T) {
+	c, ros, rows, now := newYieldedTestCoordinator(t)
+	ros.ServiceErr = errors.New("bridge disconnected")
+	c.tick(now.Add(6 * time.Second))
+	require.True(t, c.Status().Yielded)
+	ros.ServiceErr = nil
+	rows[1].Topics["gps"] = gpsTopic(48.00001, 2.0)
+	c.tick(now.Add(7 * time.Second))
+	require.True(t, c.Status().Yielded)
+	require.Len(t, serviceCalls(ros, highLevelControlService), 1, "a nearby peer makes the retry ineligible")
+	rows[1].Topics["gps"] = gpsTopic(48.001, 2.0)
+	c.tick(now.Add(8 * time.Second))
+	c.tick(now.Add(10 * time.Second))
+	require.Len(t, serviceCalls(ros, highLevelControlService), 1, "peer must remain clear for a new hold interval")
+	c.tick(now.Add(11 * time.Second))
+	require.Len(t, serviceCalls(ros, highLevelControlService), 2)
+	require.False(t, c.Status().Yielded)
+}
+
+func TestCoordinatorTick_FailedResumeCancelledByTransition(t *testing.T) {
+	for _, state := range []struct {
+		name string
+		hl   string
+	}{
+		{"operator resume", `{"state":2,"state_name":"MOWING"}`},
+		{"lost accepted reply", `{"state":2,"state_name":"MOWING"}`},
+		{"home", `{"state":2,"state_name":"RETURNING_HOME"}`},
+		{"charging", `{"state":1,"state_name":"CHARGING"}`},
+		{"manual charging", `{"state":1,"state_name":"MANUAL_CHARGING"}`},
+		{"disabled", `{"state":1,"state_name":"IDLE"}`},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			c, ros, rows, now := newYieldedTestCoordinator(t)
+			ros.ServiceResponder = func(_ string, _ any, res any) {
+				switch r := res.(type) {
+				case *mowgli.SetFleetAssignmentRes:
+					r.Success = true
+				case *mowgli.HighLevelControlRes:
+					// A transition may arrive while the failed call is in flight.
+					rows[0].Topics["highLevelStatus"] = json.RawMessage(state.hl)
+					r.Success = false
+					if state.name == "lost accepted reply" {
+						r.Success = true
+						ros.ServiceErr = errors.New("reply lost after acceptance")
+					}
+				}
+			}
+			c.tick(now.Add(6 * time.Second))
+			require.True(t, c.Status().Yielded)
+			require.Len(t, serviceCalls(ros, highLevelControlService), 1)
+			ros.ServiceErr = nil
+			if state.name == "disabled" {
+				require.NoError(t, c.SetSettings(CoordinatorSettings{Enabled: false}))
+			} else {
+				c.tick(now.Add(7 * time.Second))
+			}
+			require.False(t, c.Status().Yielded, "transition cancels pending auto-resume")
+			// Returning to IDLE later must not resurrect the cancelled retry.
+			rows[0].Topics["highLevelStatus"] = json.RawMessage(`{"state":1,"state_name":"IDLE"}`)
+			c.tick(now.Add(12 * time.Second))
+			require.Len(t, serviceCalls(ros, highLevelControlService), 1)
+		})
+	}
 }
 
 func TestCoordinator_DisablingHandsTheLawnBackOnce(t *testing.T) {

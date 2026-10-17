@@ -196,6 +196,13 @@ any resume no new yield is issued for `yield_cooldown_s` (20 s), so the
 resumed robot gets to skirt the peer instead of stopping again at 3 m. The
 coordinator ticks at 1 s.
 
+A resume releases the coordinator's yield only when `HighLevelControl` accepts
+START. A rejected response or transport failure keeps the hold and its timers;
+the next tick retries only if the current yield rule still permits it. An
+observed autonomous/Home, charging or `MANUAL_CHARGING` transition cancels the
+hold, as does disabling coordination. The cooldown starts on the accepted
+attempt, even if the BT has not yet published its autonomous state.
+
 ## Status (2026-10-10)
 
 All three phases are merged into `dev` (PR #615, 2026-09-21) and shown as
