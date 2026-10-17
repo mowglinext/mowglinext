@@ -4,6 +4,557 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Scoped overnight verification (2026-10-17)
+
+This checkpoint supersedes earlier readiness statements only for its exact
+source and executions. The motion source is
+`f44daf90da02bb49bf8be6fec48fccd9896cc2f5`; dev is
+`e48cf12a4d73d1a56fdd9d5829f359946e3a6924`, incorporated by merge `01d75ffe`.
+A remote check at 13:35 UTC on 2026-10-17 still identified that dev revision. PR #950 remains
+Draft. This continuation addresses FTC/Escape authorization and the necessary
+coverage replay repair. Broader RPP/transit, output and localization
+authorization remain #924 work. Every earlier failed run remains evidence.
+
+### In-scope repairs and failing-before controls
+
+Turn-fallback retreat now has its own conservative ledger using measured
+velocity or the preceding authorized command after caps/tapering. Six real
+old-controller regressions reproduce selected-budget overshoot under frozen,
+partial and accurate feedback at 100/500 ms holds. The corrected cases pass.
+Completion and replanning use the actual retreat pose. Existing per-compute
+charging also covers planner early returns, so boundary loss/restoration
+cannot refill an active budget or freeze its existing abort deadline.
+
+Physical reverse accounting now uses monotonic elapsed time. Four normal
+old-controller controls pass while eight shortened-ROS-clock controls exceed
+their unchanged travel budgets: approximately 0.10876 m for a single fallback
+step and 0.63298 m for repeated ordinary escape against 0.10 m budgets. All
+twelve pass with the repair. Active ROS-time simulations retain their time
+domain; PID and pose-age clocks remain unchanged. These are held-command
+software integrals, not measured robot travel or stopping/coast evidence.
+
+The proposed final densified ring now undergoes continuous boundary/hole
+containment after neighbouring ordinary fillets can be retuned. A real
+regression involving a 20 micrometre hole fails five safety assertions before
+the repair and passes afterwards. Rejection restores the entire exact legacy ring and
+clears replacement provenance. Unchanged legacy rings are not newly certified:
+retained split-field baseline rings themselves contain outside-working-boundary
+chords, and rollback preserves those exact legacy defects.
+
+Hosted replay on `2e466e63` exposed generic Dubins straight seams in
+`multi_polygon`/`near_degenerate`: radial residuals of 10.627/11.617 nm exceeded
+the unchanged 10 nm assertion. Bounded bevel interiors now follow one analytic
+circle, preserving the legacy helper's selected tangent endpoints and radius.
+Uniform sampling changes chord placement as well as the nanometre seam.
+General Dubins and ordinary corner rounding remain unchanged.
+
+Hosted Debug on `428a9dee` then retained two unsupported corners in
+`near_degenerate`. Diagnostic-only heads `dcdcf0de` and `49bc04ee` proved that
+all 21 legacy chooser radii were rejected before circular construction, despite
+valid eligibility/trim gates. Native selects one radius on that same default
+input; native therefore does not reproduce that platform-specific default
+failure. The identical captured geometry at a fixed 0.4 m radius provides a
+portable causal regression: compilation/linking succeed, all sixteen other
+cases pass and only the new case fails on the old library. The final library
+passes all seventeen production cases.
+
+A bounded native debugger capture of that old fixed-radius case confirms
+cancellation in the custom Dubins solver: the RSR squared-length expression
+is algebraically a sum of two squares, yet its expanded evaluation gives
+-8.881784197001252e-16 and rejects the word. The selected candidate length is
+3.1412908725 m; the intended single circle is 0.6284191244 m and the unchanged
+short-fillet limit is 1.7 m. The captured native discriminants and length are
+actual observations. The exact selected word and first caller rejection guard
+were not captured because the debugger script stopped on a conversion error;
+that attempt did not complete the GTest. The separate old-library regression
+above supplies the failing-test evidence. Hosted CI proves chooser rejection,
+while its internal discriminants/word remain unobserved. No generic solver
+change was introduced to repair other planning callers.
+
+The fallback is confined to eligible microscopic bevels where the old helper
+selected no fillet. It uses the same radius grid, minimum radius and 49% trim
+limits, retaining strict local and final-ring continuous containment. A valid
+legacy selection rejected by later containment is rejected, not retuned.
+Separate oracle cases measure radius, tangency, direction, complete sweep and
+continuous containment; deterministic sampling equality is an additional
+constraint. Pristine-baseline ordinary rounding and downstream reconstruction,
+exact non-ring state, fixture identity and real mutation controls remain in
+force. No golden output, fixture, assertion, tolerance, or recovery deadline was weakened.
+
+### Final software evidence
+
+At clean `f44daf90`, the pinned simulation image builds all thirteen selected
+packages. All 249 CTests and 2,367 actually executed GTests pass; the aggregate
+report is 3,834 checks, zero errors/failures and 412 skips. All 261 XML files
+match the fresh registration/results inventory, and all 1,876 installed-file
+hashes were checked. The final install manifest SHA256 is
+`b6eb4ead06fc9688a1b682e2be7cc11b93e0797de38be5e984663c0416c8e49f`.
+FTC's entire sixty-case speed/budget/boundary suite also passes with Fast DDS.
+Focused native Debug passes seventeen production, ten independent oracle and
+four semantic cases. Configuration checking and fifteen host regressions pass;
+those configuration sources are unchanged since that check.
+
+Final native Release replay covers all 26 fixtures with fifteen plain runs and
+100 traced runs each. All are stable, fixture-identical and trace-passive:
+seven strict identities and nineteen independently certified local changes.
+The strict identity diagnostic remains RED at 7/26 and is retained. Both
+11-method real control suites pass. There are 25 CTest targets, 335 GTests and
+62 Python unit methods, plus 22 actual control-method executions.
+
+A future repaired-baseline control requires and produces 26 strict identities,
+with zero changed-output certificates. There are 3,770 new records: 3,380 main
+records plus 390 future-baseline records. The future comparison explicitly
+reuses the 390 candidate and 2,600 traced main records. The combined audit
+SHA256 is `9fa23b8646c036d16679c89100e16cb89a86976f3ea226ef5f737af3294b7077`.
+The native Fields2Cover library is
+`632a9a9e54ed84cb1029a097fdd73a066889a35eef6c891c0039316c1dd7091a`;
+its original source/compiler flags are unknown. This does not reproduce the
+hosted pinned-library environment. Historical three-configuration results at
+`1c3d6f3e` and intermediate `428a9dee` executions remain separate.
+
+Pinned cppcheck 2.18 on the three final production translation units remains
+**NOT CLEAN**: all analyses exit 1 with 37/130/111 information/style findings,
+including missing-include and bounded-analysis limits. No warning/error finding
+is emitted. Diagnostic ID/severity/message multisets match the preceding run
+exactly, ignoring line shifts; no new suppression was introduced. Earlier broad
+analysis failures and skipped checks are not converted to static-analysis passes.
+
+An independent cold-context safety/code review of the final repair series found
+no introduced BLOCKER or SHOULD-FIX. That code review does not establish
+simulation containment, hardware safety or overall merge readiness.
+
+Hosted GitHub replay on exact `f44daf90` passes in Debug, Release and
+RelWithDebInfo: [run 39018622393](https://github.com/mowglinext/mowglinext/actions/runs/39018622393).
+Each completed job passes pristine-baseline 11/11 CTests, candidate 12/12 CTests
+and the replay comparison; the primary completed logs were retained. Other
+required PR checks passed or were explicitly skipped. This is actual hosted
+evidence, separate from the native unknown-origin library results.
+
+### Complete simulations and comparison limits
+
+GPS-only canonical tracking uses `/odometry/filtered_map` against the nearest
+segment of the full plan; canonical travel is accumulated from `/wheel_odom`.
+These measurement paths are unchanged from dev. Their values are estimated-map
+tracking and wheel-odometry travel, including stationary samples while a cached
+MOWING phase persists. They are not ground-truth tracking or physical accuracy.
+The LiDAR harness instead uses `/sim/ground_truth_pose`. The separately recorded
+passive truth/command stream supplies the GPS containment observations below.
+
+The first final-source LiDAR cycle completed with canonical/container exits
+0/0: one unit completed, none skipped, 407.8 m total travel, 93.2% sampled area,
+and IDLE_DOCKED/charging at 2568.8 s. Its seven phases include the complete
+mowing cycle, obstacle handling, manual/HOME, recording/cancel and emergency
+reset. The canonical tracking metric has median 7.2 mm, p95 66.0 mm and maximum
+80.2 mm. Those values use minimum distance to any segment of the original
+full plan, allowing a different nearby swath to hide active-goal error. The
+last resumed 18-pose mowing-tail goal reports controller feedback maximum
+0.575 m, mean 0.480 m and RMS 0.490 m over 50 samples. Passive GT recomputation
+in its goal window gives approximately 0.587 m to that active tail versus
+0.078 m to the full plan. It was accepted at 23.5% with 0.378 m remaining and
+0.488 m endpoint error under the configured short-end rule. No raw feedback
+samples locate its exact peak. The remaining tail is not proved covered;
+Independent baseline review finds no introduced scoped defect in this chain:
+trimming persists a target cursor before transit, failed transit leaves that
+cursor, the immediate nearby retry bypasses transit, and the unchanged checker
+accepts the short remainder. Those semantics and the full-plan nearest-swath
+tracking alias predate this PR. Preserve them as a separate coverage/executor/
+test-observability concern; no out-of-scope rule was changed here.
+
+Informational SLAM-growth and idle-ratio checks remain FAIL. The original host
+client exited 143 for an undetermined reason; its outer exit is absent.
+The same container continued uninterrupted. A separate read-only waiter
+recorded completion and checked all 1,876 installed hashes; it did not recreate
+the missing outer result. This is a passing canonical/container cycle with an
+interrupted host client, not a clean outer pipeline pass.
+
+The full passive truth record contains 23,709 valid map-reference rows and
+19,301 latest-RPM-active rows. All 506 outside rows lie south, at initial or
+return dock/transit positions: 504 inactive, one unknown and **one active**.
+Autonomous MOWING has zero active/outside rows. The all-mode active/outside
+filter remains **FAIL** because of the post-dock manual feature described below.
+Neither this sampled result nor canonical boundary PASS proves continuous
+chassis containment. All 12,053 fix/status pairs join by exact ROS header stamp.
+Status application sequences are unique and cover 1..12053; headers are
+nonzero/nonfuture, and publisher GIDs/raw DDS timestamps are present. The
+untruncated GNSS capture has 54,388 rows below its 64 MiB cap; optional DDS
+sequences remain null.
+Timestamp pairing is not direct shared observation identity. FTC telemetry
+reached its separate 8 MiB cap. The first prospective Path recorder was attached
+late and ended footerless, missing the beginning and final approximately 54 s;
+its payloads remain useful partial receipt evidence only.
+
+The second final-source LiDAR cycle completes normally with outer/canonical
+exits 0/0, 410.4 m total travel, 94.9% sampled area and IDLE_DOCKED/charging at
+2601.8 s. Its full truth record has 24,012 finite map rows, 19,361 latest-RPM-
+active rows and zero active/outside rows. All 508 outside rows are south/dock-
+related: 507 inactive and one unknown. Logs independently confirm another
+approximately 100 ms manual-enable request while charging. The ten-hertz RPM
+samples miss it; this does not resolve the first manual/output observation or
+the charging-inhibit contract.
+Informational SLAM-growth and idle-ratio failures remain. Its nearest-full-plan
+median/p95/max are 7.7/69.7/87.6 mm, with the same aliasing limitation. Root's
+post-run check rehashes all 1,876 installed files:
+none differ, source remains clean `f44daf90`. Independent audit records the final
+13-pose tail accepted at 8.3%, remaining 0.318 m and endpoint error 0.491 m;
+active-goal feedback maximum/mean/RMS are 0.514/0.457/0.459 m. The unchanged
+short-end/nearby-retry policy and nearest-full-plan aliasing again limit the
+coverage claim. Its GNSS capture has 12,207 exact fix/status header-stamp pairs, a continuous
+status sequence 1..12207, meaningful DDS GIDs/raw timestamps, nonzero/nonfuture
+ROS headers, null optional DDS sequences and no output cap. FTC telemetry reaches
+its separate 8 MiB cap. The prospective Path recorder begins about 38 s after
+launch, preserves 33 unique CDRs with verified hashes and three publisher
+identities, and ends footerless after exit 137. Its last receipt precedes
+shutdown; do not call it complete history or consumed-path ownership. The first
+full plan retained early does not provide historical reception proof.
+
+The first final-candidate GPS run completed with outer/canonical exits 1/1
+after the unchanged 3000 s deadline. Undocking/planning passed; mowing/docking
+never completed. It travelled 160.7 m. Its tracking median/p95/maximum are
+7.1/56.1/95.6 mm, with a late stationary interval after runtime interruption.
+The cached MOWING dashboard is not evidence of a live BT after the abort.
+Automatic HOME was unreached; this GPS harness makes no explicit fallback
+HOME request after timeout. Its passive result is **FAIL**: one MOWING sample at GT stamp 1792235553.7118497 has latest RPM 3000,
+truth (2.503302786,0.786056269), 13.944 mm south of the reference edge, and
+latest command (0.15,-0.575614081). These latest receipts do not establish
+controller ownership or consumed pose. Independent scoped review confirms
+active FTC FOLLOWING at the crossing. The later rejected input at estimated
+y=0.812688878 produces a 0.1 s endpoint y=0.797754754, consistent with rejection.
+No introduced predicate or accounting bypass is proved. Missing preceding
+accepted-check inputs/commands and consumed pose/geometry/output bindings
+prevent exoneration. Preserve the failed active-FTC containment and unresolved
+ownership links as #924 follow-up, without assuming previous commands valid.
+The exact event-time 121-pose cusp window matches the prior 2e/428 pre-bevel
+artifact; those PR heads do not establish whole-PR e48 geometry provenance or
+explain the dynamics.
+The completed truth record has 23,424 finite map rows, 8,616 with latest
+received RPM active. Exactly one active/outside row is the event above. Total
+outside rows are 335: 333 inactive, one unknown and one active. The maximum
+truth-observer receipt gap is 142.199 s. All 1,876 installed files still match
+the final manifest and source remains clean `f44daf90`.
+
+Independent GNSS audit finds 11,979 unique header-paired fixes/statuses, with
+nonzero/nonfuture headers, DDS GIDs/raw timestamps and null optional DDS
+sequence numbers. Application sequences span 1..11980 with value 4886 missing;
+this is not uninterrupted observation delivery. The 31,490-row, 32,195,841-byte
+capture is below its 64 MiB cap. The prospective Path record retains twelve
+unique CDRs plus fifteen duplicate/identical-republication rows, below its
+limits; it ends footerless after observer exit 137. It cannot establish a
+complete history or consumer/action identity.
+
+A separate no-compile production-library probe ran the same reconstructed
+request against pristine `e48cf12a` in the pinned isolated image. Runtime
+before/after hashes and loaded-library identity pass; it completed in 1.563 s
+and its owned container was removed. The first tooling attempt failed with
+exit 127 because loader paths were incomplete; that failure and its cleanup
+diagnostics remain retained. The corrected environment does not change product
+code or request geometry.
+
+The exact original 121-pose comparison remains FAIL: its window is absent from
+e48's 9,371-pose output, compared with 9,420 candidate poses. A distinct narrower
+comparison finds fifty exact full poses ending at the cusp, including its
+predecessor and heading. Pristine dev already returns the approximately
+151.9136-degree non-pivot reversal and reports its pivot sweep as not fitting.
+The next sample differs by 0.146682 mm: a downstream bevel shortens a straight
+support segment, and the unchanged 0.1 m densifier divides it into 66 rather
+than 70 intervals. Ring 0 gains 49 points; the other four rings, connector
+boundary and examined non-ring/swath stages are exact. This establishes that
+the unsupported sharp reversal predates the PR for this request, while
+preserving the real sampling changes and failed larger comparison. It does
+not explain the physical simulation trajectory or exonerate accepted FTC
+commands. The planner/executor contract and pose/check/output ownership remain
+unresolved follow-up evidence.
+
+The first f44 GPS runtime interruption is documented by the run logs and
+coredump. GPS fix/status and scan receipts last arrived at 11:27:29.929 and
+11:27:29.903 UTC, respectively; the resulting delivery gaps began before
+the first recorded host OOM at 11:29:38 UTC. At 11:32:07 UTC, CycloneDDS
+logged a `ddsi_spdp_unref_locator` discovery assertion; the run-owned coredump
+records signal 6 (SIGABRT) in `behavior_tree_node`. Later OOM events overlap the
+failure sequence, but OOM is not proven to have caused the delivery gaps or
+abort. No evidence identifies FTC or EscapeStartBlocked as the aborting
+component. The 13.944 mm active-FTC boundary failure described above predates
+the interruption and remains **FAIL**. This continuation remains scoped to
+FTC/Escape; broader #924 work is out of scope.
+
+The common dev LiDAR control completed with outer/canonical exits 1/1.
+It stalled near 79 m with the blades off; final totals are 15.7% area and 80.0 m.
+The occupied-goal refusal at (2.68,1.12) is followed by repeated RPP transit
+collision/patience and BackUp failures while advancing later transit targets.
+These are NavigateToPose/FollowPath failures, separate from FTC CoveragePath.
+A nearby world box is consistent with a collision concern only if frames align;
+no synchronized goal/costmap/TF/footprint cell join proves the exact map cause.
+All-zero dev simulated observation sequences are an independent provenance
+confound, not a proved transit cause. Its canonical overall result is FAIL. Full truth has 28,803 finite map
+rows, 4,711 latest-RPM-active rows and 579 active/outside rows in four MOWING
+episodes, with a maximum of 78.067 mm north. HOME does not produce verified
+charging; cycle, boundary, coverage and emergency-reset failures remain. An independent final audit
+confirms the same truth pose after the last >1 mm movement, at wall stamp
+1792232811.908. This includes 115.7 s in RETURNING_HOME (1061 rows) with zero
+command/RPM and charging false. NAV_TO_DOCK_FAILED is followed by one
+uncharged IDLE_DOCKED sample; it is not successful docking. GNSS has 14,623
+header pairs; all application sequence values are 0, with meaningful DDS
+metadata, nonzero/nonfuture headers and no output-cap truncation. FTC/boundary/
+detour captures reach their own limits; the prospective Path recorder exits
+137 and leaves a footerless file. Those partial streams cannot certify the
+absence of later events. Cleanup's missing-PID warning runs under `set +e` and
+does not replace the canonical failure.
+
+The normalized common-harness dev GPS control completes with outer/canonical
+exits **1/1**, not a successful cycle. UNDOCKING and PLANNING pass; MOWING
+fails despite 1/1 booked paths and zero skips because BT reports
+COVERAGE_INCOMPLETE. DOCKING never meets actual IDLE_DOCKED/charging acceptance.
+The unchanged 3000 s deadline produces the overall FAIL (reported duration
+3013 s), 365.6 m of wheel-odometry travel and estimated-map/full-plan tracking
+median/p95/maximum 6.0/58.2/104.1 mm. The long stationary final interval is not
+additional traversal evidence.
+
+Full truth contains 27,497 finite map rows, 19,606 with latest synthetic RPM
+active and 835 active/outside rows in six MOWING episodes, maximum 104.407 mm
+south. Of 8,125 total outside rows, 7,289 are inactive and one unknown. Maximum
+truth-observer receipt gap is 4.319658 s. Final truth is IDLE at
+(-1.336487, 0.038781), command/RPM zero and charging=false. Brief uncharged
+IDLE_DOCKED telemetry after NAV_TO_DOCK_FAILED does not establish docking.
+All 1,876 stock installed hashes match clean dev e48cf12a, and all 53 frozen
+external helper hashes remain unchanged.
+
+Dock staging navigation succeeds, then initial perception times out with error
+904 because no first detected_dock_pose arrives. Source/log triage identifies
+a preexisting simulation integration incompatibility: the installed dev GNSS
+relay emits observation sequence 0, which the unchanged production association
+gate explicitly rejects. The dock detector requires a first Fixed absolute pose
+before it starts publishing. During the dock window, 36 header-matched Fixed
+fix/status pairs all have sequence 0; maximum observer pairing skew is 0.834 ms.
+The association and detector sources are byte-identical in candidate and dev;
+the candidate relay instead supplies nonzero identity. This supports suppression
+of the first detection, but consumer callback arrivals and absolute/detected-pose
+outputs were not captured. Complete runtime causality and additional TF/process
+faults are not excluded. The separate COVERAGE_INCOMPLETE/blade-link stamping
+failure is retained rather than treating booked paths as successful cutting.
+No baseline producer, localizer, docking or harness assertion was changed.
+
+Global host OOM kills at 12:45:57, 12:46:02 and 13:04:17 UTC materially confound
+this baseline interval. These occur after the successful candidate GPS rerun.
+They do not prove an OOM cause for any particular control/docking failure or
+explain away the producer identity incompatibility. Combined normalization,
+producer identity differences and host failures prevent a clean end-to-end
+FTC-only comparison. No automatic rerun or safety-green inference follows.
+
+The independent final audit confirms the full truth counts and 14,035 unique
+header-paired GNSS fixes/statuses, all status application sequences zero.
+Headers are nonzero/nonfuture; raw DDS metadata is retained and optional DDS
+sequence fields are null. The 37,661,596-byte GNSS capture is below its cap.
+Maximum fix/status receipt gaps are 8.445/8.446 s, overlapping recorded host OOM
+without establishing causality. Actual RTK Fixed→Float→NoFix→Fixed receipts and
+WAITING_FOR_RTK→MOWING recovery are observed. The prospective Path stream has
+nine first-seen topic records, eight distinct CDR hashes and nine duplicate
+receipts; every embedded payload hash validates. Its 25,461,816-byte stream is
+below its cap but footerless after observer exit 137. Four goal windows have
+paired global/local map captures; neither that evidence nor the harness supplies
+a separate successful obstacle-traversal assertion. No obstacle PASS is claimed.
+
+The final GPS rerun, `candidate-gps-fallback-final-02`, completes with host,
+outer and canonical exits 0/0/0. All four required phases pass: 1/1 mowing path,
+zero skipped, 364.2 m wheel-odometry travel and IDLE_DOCKED/charging at 2293.9 s.
+Estimated-map/full-plan tracking median/p95/maximum are 6.0/53.0/85.8 mm.
+The raw truth recorder's final cleanup sample instead says IDLE, zero command,
+RPM 0 and charging=true; this does not replace the earlier docked-state evidence.
+
+The actual log records WAITING_FOR_RTK at 174.0 s and a preflight/undock/
+calibration/replan/transit return to MOWING over 203.0–207.8 s. The known 0.5 m
+square keepout is promoted before START. Two FollowStrip detours, four
+obstacle-clear messages, four recovery-stable messages and all eight requested
+global/local costmap pairs are recorded. FTC also records a 0.30 m reverse-escape
+exhaustion followed by obstacle abort and detour. These are observed recovery
+and obstacle events; the GPS harness has no separate obstacle-pass assertion.
+
+Independent full-stream audit confirms 21,133 finite map rows, 19,539 with
+latest synthetic RPM active and zero active/outside rows. All 527 outside rows
+are 526 inactive and one unknown. The maximum truth-observer receipt gap is
+0.146438 s. A separate boundary-edge event is recorded during docking;
+outside docking/transit observations are retained without adjudication against
+a broader authorization policy. All 1,876 installed hashes still match clean
+`f44daf90` after this run.
+
+GNSS has 10,774 unique header-paired fixes/statuses, contiguous application
+sequence 1..10774, one observed GID per topic, raw DDS timestamps, nonzero/
+nonfuture ROS headers and null optional DDS sequence numbers. Maximum fix,
+status and scan receipt gaps are 0.401324/0.402015/0.403677 s. Its 28,973,485-byte
+capture is below its cap. All sixteen unique prospective Path CDR hashes and
+sixteen duplicate-delivery rows validate; the 44,340,711-byte capture remains
+footerless after exit 137. These are publication observations, not complete
+consumer/action ownership.
+
+The rerun has 47 resource samples, minimum available memory 19,158,765,568
+bytes, maximum sampled memory PSI avg10 of zero and no selected kernel OOM
+records during 12:04:50–12:43:40 UTC. The later baseline OOM events do not belong
+to this interval. Its canonical result precedes planned SIGINT by approximately
+2.019 s; the teardown failures described below still apply.
+
+Repeatability is limited to these exact executions: two completed final-source
+LiDAR cycles and one completed final-source GPS rerun, plus the failed first
+GPS attempt. The clean sampled GPS rerun does not clear the earlier 13.944 mm
+active-FTC failure, recover its missing accepted-check bindings or establish
+continuous/physical containment. No general safety-stability claim follows.
+
+All final missions use Webots R2025a, driver
+`db4a77c84ee91445d39de9a631e5b57a888814e2`, and the isolated image
+`sha256:0fc53b7941fabeed24dceaaa88097dcc7013072b3efe2e069495f8c1ea147f78`.
+They run as UID 1000 with network isolation, localhost DDS and fake hardware,
+using the unchanged worlds, assertions and 3000 s canonical deadline. The
+GNSS quality profile is 180 s Fixed, 20 s Float, 10 s NoFix, then Fixed.
+
+Teardown is **NOT CLEAN**. Both completed candidate LiDAR cycles, the final
+candidate GPS rerun and both completed common-dev controls log a Webots
+driver segmentation fault after the planned SIGINT. The GPS rerun and common-dev GPS control additionally
+log Python threading/shutdown errors and a driver respawn after canonical
+completion. These are retained teardown/integration failures, separate from
+canonical and outer exit results. No introduced FTC/Escape cause is established;
+no unrelated Webots/runtime repair is included in this scope.
+
+The pre-existing LiDAR harness still subscribes to obsolete Twist velocity
+interfaces, so its zero dashboard velocity and empty speed/time statistics are
+unavailable observations, not stop evidence. Its obstacle predicate instead
+requires ground-truth proximity, filtered scan detection and actual departure
+travel; that predicate does not pass merely because velocity defaults to zero.
+The independent stamped-command/wheel/truth record remains separate. The GPS
+harness uses the current TwistStamped interface. No unrelated product change
+was added to repair LiDAR dashboard statistics in this scoped continuation.
+
+External observer v2 records publisher GIDs and raw DDS timestamps separately
+from ROS header/callback clocks. Its actual isolated API smokes pass on both
+overlays. Per-run output caps and pairing/identity checks must be audited before
+claiming a complete capture. Null DDS sequence fields are retained honestly.
+Header freshness and delivery metadata are not physical acquisition identity.
+
+The final LiDAR run also has a bounded prospective Path receipt recorder,
+attached after the mission started. Actual retained messages from all three
+plan topics include exact CDR/JSON data and publisher GIDs/raw DDS timestamps.
+Its late start cannot identify earlier event-time paths. Volatile versus
+transient-local readers and duplicate-or-identical-republication records remain
+explicit; publication receipt alone does not prove consumer/action ownership.
+The capture has separate 64 MiB/120-path/3500 s limits and honestly incomplete
+termination markers. Audit its actual cap/footer status before using it.
+Passive boundary counts describe sampled map reference points paired with the
+latest received blade RPM; they do not establish continuous chassis/footprint
+containment or synchronized physical blade actuation.
+
+Pristine dev `e48cf12a` GPS/LiDAR attempts failed before START because dev did
+not forward the requested GNSS quality input. The first logger-compatible
+normalized dev GPS attempt also FAILED: the old harness saw no path poses and
+falsely reported zero-second docking; final truth was MOWING_COMPLETE, charging
+false, and the actual docking goal was cancelled during shutdown. Its complete
+truth capture has 812 latest-blade-active outside rows across six episodes,
+maximum 92.714 mm south. Those failures remain in the record.
+
+New controls are explicitly labelled normalized common-harness controls. They
+use the exact current candidate E2E harness externally, including current path
+interfaces and the GPS stamped-velocity interface, with stronger requirements
+for complete paths, tracking,
+all phases and actual IDLE_DOCKED/charging. Common scenario/quality forwarding,
+datum and antenna geometry are normalized. Dev controllers, BT, Nav2,
+localization, relay and world product code remain unchanged. All captured dev
+position-observation sequence values were zero in the earlier normalized run;
+relay identity/freshness semantics remain a comparison confound. These controls
+are not pristine dev and cannot isolate every localization effect.
+
+### Retained intermediate failures and causal limits
+
+Intermediate `2e466e63` GPS passed its canonical cycle: 1/1 path, 364.6 m,
+docked/charging at 2294.5 s, median tracking 5.7 mm. Its 21,119 map-reference
+samples include 19,550 latest-blade-active samples with zero sampled active
+outside episodes. Observer v1 has empty per-message DDS metadata. This does not
+validate final geometry, continuous containment or historical failure causes.
+
+Intermediate `428a9dee` GPS passed its canonical cycle: 1/1 path, 9,420 poses,
+367.0 m, docked/charging at 2281.7 s; median tracking 5.5 mm, p95 51.2 mm,
+maximum 94.7 mm. Eight complete detour map pairs and Float/NoFix recovery are
+retained. The independent passive result is **FAIL**: two latest-blade-active
+outside rows in one episode, maximum 20.163 mm south, among 20,973 valid map
+rows. There are also 502 outside inactive rows and one unknown. Complete v2
+capture has 10,727 fix/status pairs with nonzero/nonfuture headers, meaningful
+GIDs/raw DDS timestamps, null DDS sequence fields and no cap truncation.
+Invalid-fix rejections around NoFix remain recorded separately.
+
+A reconstructed offline request exactly reproduces all 9,420 later-plan poses,
+quaternions and duplicates using the actual `428a9dee` installed core. Only
+then was the old `2e466e63` core compared. Both have the same 151.9136-degree
+unpivoted cusp and identical 121-pose neighbourhood, already present in the
+identical 42-point pre-bevel geometry before sampling. The neighbourhood hash is
+`7853eacc39bbf6f6a13f67ebb87d068023747dd5a4bf213bbc9c3a024d5bd43b`.
+No safe pivot fits. This is a pre-existing planner/executor contract concern,
+not a new cusp introduced by the sampler. This later plan is not the crossing's
+event-time path and cannot establish dynamic causality or exonerate that event.
+Recent retained estimates were inside at the first truth crossing; FTC denied
+its subsequent sweep approximately 120.7 ms later. No predicate bypass or
+initial reverse-escape cause was established. Exact consumed pose and output
+ownership remain unresolved.
+
+The original complete LiDAR cycle's two truth-boundary failures, along with
+the later GPS/LiDAR failures described below, remain failures. Budget repairs do not prove
+those excursions eliminated. Out-of-scope RPP/transit/output authorization,
+pose-versus-truth and recovery exceptions remain #924 follow-up. No guessed
+pose margin, planner inset, simulator tuning or weakened pivot/collision guard
+was introduced to obtain a pass.
+
+### Remaining acceptance
+
+A separately reviewed post-dock manual observation remains outside this PR's
+FTC/Escape responsibility. One sample at truth (-0.27945, 0.00302) has latest
+MANUAL_MOWING, charging=true, synthetic RPM=3000 and zero command, surrounded
+by stationary samples reporting RPM0. Logs establish an approximately 100 ms
+manual ON→HOME→OFF request pulse. The fake bridge directly latches the service
+request and synthesizes RPM independently of charging; this is not measured
+physical blade activation. Source comparison shows the relevant manual tree,
+request/output paths and fake bridge unchanged from dev. The examined real
+bridge/firmware gates also contain no explicit charging predicate; this is an
+existing authorization-contract question for #924/manual-output/charging and
+simulation fidelity. No new policy was implemented here and the sample was not
+removed to make the passive filter pass. Physical acceptance of a manual request
+while charging remains HARDWARE_REQUIRED: freeze unit/image/firmware/config,
+remove blades, secure the chassis, verify emergency cutoff and safe charger
+setup, and capture charge/contact, HL mode, ON/OFF, ESC activity and independently
+observed motor rotation. The separate output-policy owner must specify the
+required charging-inhibit contract before calling that check a pass.
+
+Escape cancellation is proven for delivered geometry revocations. Its local
+reader generation is not a producer epoch: an omitted/coalesced revoke-restore
+or producer restart with identical content is not certified by that test.
+Producer/pose/output identity remains #924 work; a timeout does not repair
+observation ownership. The FTC geometry horizon is also not an actuator lease.
+
+The reproducible FTC budget/accounting and bounded-bevel replay defects identified
+in this continuation have causal regressions and verified scoped repairs.
+Independent source reviews found no further supported introduced defect in the
+reviewed changes. That finding does not establish mission safety acceptance:
+the first final-source GPS run has an unresolved 13.944 mm active-FTC truth
+crossing. Its preceding accepted checks and exact consumed pose/output ownership
+were not captured. The guard is not exonerated, and this failure cannot be
+classified confidently as entirely outside #950. A clean rerun or a preexisting
+planner cusp cannot supply the missing proof.
+
+This increment can be reviewed independently with its passing software evidence
+and retained failures, but overall motion containment and merge readiness remain
+unaccepted. Keep the PR Draft. Broader RPP/transit, producer/pose/output identity,
+manual charging-policy and runtime integration follow-ups remain separate;
+no unrelated policy repair was introduced to obtain green results. The next
+software investigation of the active-FTC event needs joined accepted/rejected
+check inputs, consumed geometry/pose identities and controller/output ownership;
+any repair must first establish an in-scope causal defect. Do not infer that
+remaining checks can be satisfied by further uninstrumented mission repetitions.
+
+**HARDWARE_REQUIRED.** No robot motion, deployment, flash or field validation
+was performed. The actual robot/ARM image, flashed firmware hash, unit/config,
+GNSS receiver/driver revision and submodule baseline have not been acquired.
+Before the physical procedure below, freeze those identities with the exact
+motion commit. Remove blades, establish an exclusion zone, verify emergency
+stop and supervise low-speed edge, concavity/hole, pivot, escape, transit,
+docking/charging, cancellation and resume cases. Pass/fail must measure the
+declared chassis/exception envelope, stopping/coast, blade-off preconditions
+and approved recovery completion. Simulation and held-command integrals prove
+none of those physical bounds. Clock mode must remain fixed per operation;
+holds over 0.5 s are outside the command-budget claim. The separate 0.1 s
+geometry horizon is unchanged and is not a downstream output lease.
+
 ## Scoped FTC/Escape follow-up (2026-10-16)
 
 This checkpoint supersedes earlier results only for its exact source and runs.
