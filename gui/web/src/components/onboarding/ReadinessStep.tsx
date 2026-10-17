@@ -22,6 +22,7 @@ import {useFirmwareStatus} from "../../hooks/useFirmwareStatus.ts";
 import {useMowingMap} from "../../hooks/useMowingMap.ts";
 import {restartRos2, restartGui} from "../../utils/containers.ts";
 import {httpBase} from "../../utils/apiHost.ts";
+import {requestErrorMessage} from "../../utils/errors";
 import {
     computeReadinessChecks,
     requiredFailingChecks,
@@ -70,7 +71,7 @@ export const ReadinessStep: React.FC<ReadinessStepProps> = ({values, onJumpToSte
     const {colors} = useThemeMode();
     const guiApi = useApi();
     const navigate = useNavigate();
-    const {modal} = App.useApp();
+    const {modal, notification} = App.useApp();
 
     const gnssStatus = useGnssStatus();
     const {stats: fusion} = useFusionGraphDiagnostics();
@@ -110,16 +111,29 @@ export const ReadinessStep: React.FC<ReadinessStepProps> = ({values, onJumpToSte
     const commit = async () => {
         setCommitting(true);
         setError(null);
+        let statusAcknowledged = false;
         try {
             // Mark onboarding done in the DB so the wizard doesn't redirect again,
             // then restart ROS2 (picks up the new mowgli_robot.yaml) and the GUI.
-            await fetch(`${httpBase()}/api/settings/status`, {method: "POST"});
+            const res = await fetch(`${httpBase()}/api/settings/status`, {method: "POST"});
+            if (!res.ok) {
+                const body: unknown = await res.json().catch(() => undefined);
+                throw new Error(requestErrorMessage(body) || t("asyncButton.errorOccurred"));
+            }
+            statusAcknowledged = true;
             await restartRos2(guiApi);
             await restartGui(guiApi);
             setCommitted(true);
         } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
-            setCommitted(true);
+            if (statusAcknowledged) {
+                setError(e instanceof Error ? e.message : String(e));
+                setCommitted(true);
+            } else {
+                notification.error({
+                    message: t("asyncButton.errorOccurred"),
+                    description: (typeof e === "string" ? e : requestErrorMessage(e)) || t("asyncButton.errorOccurred"),
+                });
+            }
         } finally {
             setCommitting(false);
         }
