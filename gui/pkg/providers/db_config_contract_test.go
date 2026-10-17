@@ -2,9 +2,12 @@ package providers
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"testing"
 
 	"git.mills.io/prologic/bitcask"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +42,7 @@ func TestDBProvider_ConfigReadFallbackCompatibility(t *testing.T) {
 	}
 }
 
-func TestDBProvider_ConfigMissingErrorHasNoPublicClassification(t *testing.T) {
+func TestDBProvider_ConfigMissingErrorPreservesClassification(t *testing.T) {
 	t.Setenv("DB_PATH", t.TempDir())
 	db := NewDBProvider()
 	t.Cleanup(func() { closeDB(t, db) })
@@ -48,9 +51,28 @@ func TestDBProvider_ConfigMissingErrorHasNoPublicClassification(t *testing.T) {
 	require.True(t, errors.Is(underlying, bitcask.ErrKeyNotFound))
 	_, exposed := db.Get(key)
 	require.Error(t, exposed)
-	// Get preserves legacy error behavior but loses the missing-key sentinel;
-	// callers cannot classify it safely by errors.Is through IDBProvider.
-	assert.False(t, errors.Is(exposed, bitcask.ErrKeyNotFound))
+	// A missing key must remain classifiable across the provider boundary.
+	assert.ErrorIs(t, exposed, types.ErrKeyNotFound)
+	assert.ErrorIs(t, fmt.Errorf("outer: %w", exposed), types.ErrKeyNotFound)
+	assert.EqualError(t, exposed, "config key "+key+" not found")
 }
 
 func configStoredString(value string) *string { return &value }
+
+func TestDBProvider_ClosedStorageDoesNotUseFallbacks(t *testing.T) {
+	t.Setenv("DB_PATH", t.TempDir())
+	t.Setenv("ROS_NODE_NAME", "environment-node")
+	db := NewDBProvider()
+	require.NoError(t, db.Set("present", []byte("true")))
+	require.NoError(t, db.Set("system.ros.nodeName", []byte("stored-node")))
+	closeDB(t, db)
+	for _, key := range []string{"present", "system.ros.nodeName"} {
+		_, native := db.db.Get([]byte(key))
+		require.Error(t, native)
+		require.NotErrorIs(t, native, bitcask.ErrKeyNotFound)
+		value, err := db.Get(key)
+		assert.Nil(t, value)
+		assert.ErrorIs(t, err, os.ErrClosed)
+		assert.NotErrorIs(t, err, types.ErrKeyNotFound)
+	}
+}

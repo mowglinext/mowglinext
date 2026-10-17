@@ -154,10 +154,15 @@ func SettingsRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider) {
 // @Tags settings
 // @Produce json
 // @Success 200 {object} SettingsStatusResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /settings/status [get]
 func GetSettingsStatus(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes {
 	return r.GET("/settings/status", func(c *gin.Context) {
 		val, err := dbProvider.Get("onboarding.completed")
+		if err != nil && !errors.Is(err, types.ErrKeyNotFound) {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
 		completed := err == nil && string(val) == "true"
 		c.JSON(200, gin.H{"onboarding_completed": completed})
 	})

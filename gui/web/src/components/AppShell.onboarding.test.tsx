@@ -87,9 +87,10 @@ describe('AppShell onboarding response boundary', () => {
         expectReadOnlyRequests();
     });
 
-    it.each([{error: 'fixture unavailable'}, {onboarding_completed: true}, {onboarding_completed: false}])('rejects HTTP 503 even with a valid-looking body: %j', async body => {
+    it.each([500, 503].flatMap(status => [{error: 'fixture unavailable'}, {onboarding_completed: true}, {onboarding_completed: false}]
+        .map(body => ({status, body}))))('rejects HTTP $status without redirecting, body=$body', async ({status, body}) => {
         const errors = vi.spyOn(console, 'error');
-        fetchMock.mockImplementation(() => Promise.resolve(reply(body, 503)));
+        fetchMock.mockImplementation(() => Promise.resolve(reply(body, status)));
         const router = mount();
         await waitFor(() => expect(failedChecks(errors.mock.calls).length).toBeGreaterThan(0));
         await screen.findByText('Settings route');
