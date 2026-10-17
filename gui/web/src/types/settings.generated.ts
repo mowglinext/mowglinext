@@ -218,6 +218,7 @@ export interface SettingsValues {
     progress_timeout_sec?: number | null;
     boundary_inner_margin_m?: number | null;
     dock_inner_margin_exempt_radius_m?: number | null;
+    obstacle_transit_margin_m?: number | null;
     tick_rate?: number | null;
     bt_debug_logging?: boolean;
     idle_nav2_suspend?: boolean;

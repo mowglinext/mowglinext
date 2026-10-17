@@ -169,6 +169,10 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // both on top of this compiled-in default) — see BoundaryInnerMarginTest
   // for the tests that exercise 0.20 on purpose.
   boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.0);
+  // Kept at 0.0 here for the same reason as boundary_inner_margin_m above: every unit test builds
+  // the node directly, so a non-zero compiled-in default would add the soft band to every existing
+  // keepout-mask test. The fleet default (0.30 m) lives in map_server.yaml + the template.
+  obstacle_transit_margin_m_ = declare_parameter<double>("obstacle_transit_margin_m", 0.0);
   // See map_server_node.hpp: the dock exemption isn't load-bearing for
   // safety with the mid-cost design (a soft-cost cell never fails "Start
   // occupied", so it can no longer strand the robot near the dock the way

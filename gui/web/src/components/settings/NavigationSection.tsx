@@ -125,6 +125,16 @@ export const NavigationSection: React.FC<Props> = ({
                                 />
                             </Form.Item>
                         </Col>
+                        <Col xs={12} sm={8}>
+                            <Form.Item htmlFor="setting-obstacle_transit_margin_m" data-setting-key="obstacle_transit_margin_m" label={fieldLabel("obstacle_transit_margin_m", t("settingsNavigation.obstacleTransitMargin"))} tooltip={t("settingsNavigation.obstacleTransitMarginTooltip")}>
+                                <InputNumber aria-label={t("settingsNavigation.obstacleTransitMargin") + ", m"} aria-description={t("settingsNavigation.obstacleTransitMarginTooltip")}  id="setting-obstacle_transit_margin_m"
+                                    value={values.obstacle_transit_margin_m}
+                                    onChange={(v) => onChange("obstacle_transit_margin_m", v)}
+                                    min={0} max={1.0} step={0.05} precision={2}
+                                    style={{ width: "100%" }} addonAfter="m"
+                                />
+                            </Form.Item>
+                        </Col>
                     </Row>
                 </Form>
             </Card>

@@ -990,6 +990,15 @@ private:
   /// "Start occupied".
   double boundary_inner_margin_m_{0.3};
 
+  /// Soft TRANSIT margin (m) around every drawn obstacle, outside its lethal keepout band
+  /// (keepout_obstacle_margin_m_): cells up to keepout_obstacle_margin_m_ + this far from the
+  /// polygon get kSoftPenaltyMaskCost in the keepout mask — the same mid-cost as the boundary
+  /// bands, NEVER lethal. It nudges the global planner (Smac, point-to-point TRANSIT) towards a
+  /// wider berth around drawn obstacles where there is room, because the lethal band is only the
+  /// body half-width while the controller tests the whole footprint against the real object. 0
+  /// disables it. Read declare_parameters(), not this initialiser (mowglinext#975).
+  double obstacle_transit_margin_m_{0.0};
+
   /// Cells within this distance of docking_pose_ are exempt from the
   /// boundary_inner_margin_m_ penalty above, regardless of direction — kept
   /// even though the mid-cost design no longer strictly needs it for
