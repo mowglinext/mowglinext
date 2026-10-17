@@ -3,6 +3,7 @@ package providers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func member(id string, autonomous bool, area int, pos *XY) fleetMember {
-	return fleetMember{ID: id, Online: true, Autonomous: autonomous, CurrentArea: area, Pos: pos}
+	return fleetMember{ID: id, Online: true, Autonomous: autonomous, StopHold: !autonomous, CurrentArea: area, Pos: pos}
 }
 
 func TestComputeAssignment_ExcludesPeerAreasAndCompletedMemory(t *testing.T) {
@@ -97,6 +98,7 @@ func TestDecideYield_StopsForAPriorityPeerAndResumesAfterHold(t *testing.T) {
 
 	// We are now IDLE (stop-hold). Peer still near → keep holding.
 	self.Autonomous = false
+	self.StopHold = true
 	st, action = decideYield(self, []fleetMember{member("a", true, 1, near)}, st, s, now.Add(2*time.Second))
 	assert.Equal(t, YieldNone, action)
 	assert.True(t, st.Yielded)
@@ -128,6 +130,7 @@ func TestDecideYield_PriorityRobotNeverYieldsAndIdleRobotsAreLeftAlone(t *testin
 	// A held robot that the operator sent home drops the hold without a resume.
 	self := member("b", false, 0, here)
 	self.StateName = "RETURNING_HOME"
+	self.StopHold = false
 	st, action := decideYield(self, nil, yieldState{Yielded: true}, s, now)
 	assert.Equal(t, YieldNone, action)
 	assert.False(t, st.Yielded)
@@ -360,6 +363,7 @@ func TestCoordinatorTick_ResumeRetriesUntilAccepted(t *testing.T) {
 				}
 				for i := 0; i < 2; i++ {
 					c.tick(attemptAt.Add(time.Duration(i) * coordinatorTick))
+					held.ResumeAttempted = true
 					require.Len(t, serviceCalls(ros, highLevelControlService), i+1)
 					require.Equal(t, held, c.yield, "failed START must retain the hold and its timers")
 					require.NotEmpty(t, c.Status().LastError)
@@ -447,6 +451,11 @@ func TestCoordinatorTick_FailedResumeCancelledByTransition(t *testing.T) {
 				c.tick(now.Add(7 * time.Second))
 			}
 			require.False(t, c.Status().Yielded, "transition cancels pending auto-resume")
+			if state.name == "operator resume" || state.name == "lost accepted reply" {
+				require.Equal(t, now.Add(7*time.Second), c.yield.ResumedAt)
+			} else {
+				require.True(t, c.yield.ResumedAt.IsZero(), "Home, charging and disable do not arm a resume cooldown")
+			}
 			// Returning to IDLE later must not resurrect the cancelled retry.
 			rows[0].Topics["highLevelStatus"] = json.RawMessage(`{"state":1,"state_name":"IDLE"}`)
 			c.tick(now.Add(12 * time.Second))
@@ -529,6 +538,7 @@ func TestDecideYield_MaxHoldBreaksADeadlockAndCooldownPreventsFlapping(t *testin
 	// never leaves: after yield_max_hold_s we resume anyway — both robots now
 	// carry each other in their costmaps, so our controllers skirt it.
 	self.Autonomous = false
+	self.StopHold = true
 	st, action = decideYield(self, peerNear, st, s, now.Add(44*time.Second))
 	assert.Equal(t, YieldNone, action)
 	st, action = decideYield(self, peerNear, st, s, now.Add(45*time.Second))
@@ -539,6 +549,7 @@ func TestDecideYield_MaxHoldBreaksADeadlockAndCooldownPreventsFlapping(t *testin
 	// Autonomous again with the peer still at 1 m: the cooldown blocks an
 	// immediate second stop, then expires.
 	self.Autonomous = true
+	self.StopHold = false
 	st, action = decideYield(self, peerNear, st, s, now.Add(50*time.Second))
 	assert.Equal(t, YieldNone, action, "inside yield_cooldown_s no new yield is issued")
 	st, action = decideYield(self, peerNear, st, s, now.Add(66*time.Second))
@@ -562,4 +573,87 @@ func TestCoordinatorSettings_NormalizeFillsTheYieldBounds(t *testing.T) {
 	assert.Equal(t, 45.0, s.YieldMaxHoldS)
 	assert.Equal(t, 20.0, s.YieldCooldownS)
 	assert.Equal(t, 5.0, CoordinatorSettings{YieldCooldownS: 5}.Normalize().YieldCooldownS)
+}
+
+func TestCoordinatorTick_LostAcceptedReplyKeepsCooldown(t *testing.T) {
+	for _, trigger := range []string{"peers clear", "max hold"} {
+		for _, delayedStatus := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/delayedStatus=%t", trigger, delayedStatus), func(t *testing.T) {
+				c, ros, rows, now := newYieldedTestCoordinator(t)
+				attemptAt := now.Add(6 * time.Second)
+				if trigger == "max hold" {
+					rows[1].Topics["gps"] = gpsTopic(48.00001, 2.0)
+					attemptAt = now.Add(45 * time.Second)
+				}
+				ros.ServiceErr = errors.New("accepted START response lost")
+				c.tick(attemptAt)
+				ros.ServiceErr = nil
+				rows[1].Topics["gps"] = gpsTopic(48.00001, 2.0)
+				observedAt := attemptAt.Add(time.Second)
+				if delayedStatus {
+					// The peer returns while status still says IDLE. Resetting
+					// clearance must not forget the ambiguous START attempt.
+					ros.ServiceErr = errors.New("status still pending")
+					c.tick(observedAt)
+					rows[1].Topics["gps"] = gpsTopic(48.001, 2.0)
+					c.tick(observedAt.Add(time.Second))
+					ros.ServiceErr = nil
+					observedAt = observedAt.Add(2 * time.Second)
+					rows[1].Topics["gps"] = gpsTopic(48.00001, 2.0)
+				}
+				callsBeforeObservation := len(serviceCalls(ros, highLevelControlService))
+				rows[0].Topics["highLevelStatus"] = json.RawMessage(`{"state":2,"state_name":"MOWING"}`)
+				c.tick(observedAt)
+				c.tick(observedAt.Add(time.Second))
+				require.Len(t, serviceCalls(ros, highLevelControlService), callsBeforeObservation, "lost acknowledgement must not cause an immediate STOP")
+				require.False(t, c.Status().Yielded)
+				require.Equal(t, observedAt, c.yield.ResumedAt)
+				c.tick(observedAt.Add(19 * time.Second))
+				require.Len(t, serviceCalls(ros, highLevelControlService), callsBeforeObservation, "cooldown lasts 20 s from observed autonomy")
+				c.tick(observedAt.Add(20 * time.Second))
+				calls := serviceCalls(ros, highLevelControlService)
+				require.Len(t, calls, callsBeforeObservation+1)
+				require.Equal(t, uint8(hlCommandStop), calls[len(calls)-1].Req.(*mowgli.HighLevelControlReq).Command)
+			})
+		}
+	}
+}
+
+func TestCoordinatorTick_FailedResumeDoesNotOverrideTakeover(t *testing.T) {
+	for _, state := range []string{
+		`{"state":4,"state_name":"MANUAL_MOWING"}`,
+		`{"state":3,"state_name":"RECORDING"}`,
+		`{"state":0,"state_name":"EMERGENCY"}`,
+		`{"state":1,"state_name":"DIG_OBSTRUCTION"}`,
+		`{"state":1,"state_name":"CRITICAL_BATTERY_CHARGING"}`,
+		`{"state":1,"state_name":"MOWING_COMPLETE"}`,
+		`{"state":1,"state_name":"RECORDING_COMPLETE"}`,
+		`{"state":1,"state_name":"RAIN"}`,
+		`{"state":4,"state_name":"IDLE"}`,
+		`{"state":1,"state_name":"UNKNOWN"}`,
+		`{"state":1}`,
+		`{}`,
+	} {
+		for _, noPosition := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/noPosition=%t", state, noPosition), func(t *testing.T) {
+				c, ros, rows, now := newYieldedTestCoordinator(t)
+				ros.ServiceResponder = func(_ string, _ any, res any) {
+					if r, ok := res.(*mowgli.SetFleetAssignmentRes); ok {
+						r.Success = true
+					}
+				}
+				c.tick(now.Add(6 * time.Second)) // START refused
+				rows[0].Topics["highLevelStatus"] = json.RawMessage(state)
+				if noPosition {
+					delete(rows[0].Topics, "gps")
+				}
+				c.tick(now.Add(7 * time.Second))
+				require.False(t, c.Status().Yielded, "the observed state is no longer our stop hold")
+				rows[0].Topics["highLevelStatus"] = json.RawMessage(`{"state":1,"state_name":"IDLE"}`)
+				rows[0].Topics["gps"] = gpsTopic(48.0, 2.0)
+				c.tick(now.Add(12 * time.Second))
+				require.Len(t, serviceCalls(ros, highLevelControlService), 1, "takeover must cancel the pending START permanently")
+			})
+		}
+	}
 }
