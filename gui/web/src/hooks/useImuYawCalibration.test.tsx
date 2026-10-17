@@ -78,6 +78,53 @@ it('preserves a complete result, request parameters, rounding and successful app
     expect(hook.result.current.calibResult).toBeNull();
     expect(hook.result.current.calibOpen).toBe(false);
 });
+it.each(['imu_yaw_rad', 'imu_pitch_rad', 'imu_roll_rad'].flatMap(field =>
+    [Number.MAX_VALUE, -Number.MAX_VALUE].map(value => ({field, value})),
+))('rejects non-finite derived candidates atomically: $field = $value', async ({field, value}) => {
+    const data = {...complete, [field]: value};
+    mock.fetch.mockResolvedValue(new Response(JSON.stringify(data)));
+    const hook = setup();
+    act(() => hook.result.current.openCalibration());
+    await act(() => hook.result.current.startCalibration());
+    // The HTTP response contains finite source numbers and passes the existing validator.
+    expect(hook.result.current.calibResult).toEqual(data);
+    expect(mock.error).not.toHaveBeenCalled();
+    act(() => hook.result.current.applyCalibration());
+    expect(hook.onApplyValue).not.toHaveBeenCalled();
+    expect(mock.success).not.toHaveBeenCalled();
+    expect(mock.error).toHaveBeenCalledExactlyOnceWith({
+        message: 'imuYawCalibration.failed', description: 'asyncButton.errorOccurred',
+    });
+    expect(hook.result.current.calibOpen).toBe(true);
+    expect(hook.result.current.calibResult).toEqual(data);
+    expect(mock.fetch).toHaveBeenCalledOnce();
+    act(() => hook.result.current.closeCalibration());
+    expect(hook.result.current.calibOpen).toBe(false);
+    expect(hook.result.current.calibResult).toBeNull();
+});
+it.each([
+    [0, 0], [.000049, 0], [.000051, .0001], [-.000051, -.0001],
+    [1e-12, 0], [-1e-12, -0], [.123456, .1235], [-.123456, -.1235],
+])('preserves four-decimal rounding for finite candidate %s', async (value, expected) => {
+    reply({...complete, imu_yaw_rad: value, imu_pitch_rad: value, imu_roll_rad: value});
+    const hook = setup();
+    await act(() => hook.result.current.startCalibration());
+    act(() => hook.result.current.applyCalibration());
+    expect(hook.onApplyValue.mock.calls).toEqual([
+        ['imu_yaw', expected], ['imu_pitch', expected], ['imu_roll', expected],
+    ]);
+    expect(mock.error).not.toHaveBeenCalled();
+    expect(mock.success).toHaveBeenCalledOnce();
+});
+it('does not apply or reject unused pitch/roll candidates below the stationary gate', async () => {
+    reply({...complete, stationary_samples_used: 149, imu_pitch_rad: Number.MAX_VALUE, imu_roll_rad: -Number.MAX_VALUE});
+    const hook = setup();
+    await act(() => hook.result.current.startCalibration());
+    act(() => hook.result.current.applyCalibration());
+    expect(hook.onApplyValue.mock.calls).toEqual([['imu_yaw', .1235]]);
+    expect(mock.error).not.toHaveBeenCalled();
+    expect(mock.success).toHaveBeenCalledOnce();
+});
 it.each([
     {success: false, message: 'Insufficient motion'},
     {...complete, success: false, message: 'Rejected by producer'},

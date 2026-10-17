@@ -56,6 +56,33 @@ async function expectClosed() {
 }
 
 describe('IMU modal lifecycle with the real calibration hook', () => {
+    it('rejects non-finite derived roll on real Apply without applying yaw or pitch', async () => {
+        fetchMock.mockResolvedValue(new Response(JSON.stringify({...result,
+            imu_pitch_rad: .012345, imu_pitch_deg: .7073,
+            imu_roll_rad: Number.MAX_VALUE, imu_roll_deg: 1,
+            stationary_samples_used: 150,
+        })));
+        const change = vi.fn(); render(<RobotComponentEditor values={{imu_yaw: 0}} onChange={change}/>);
+        const dialog = await openCalibration();
+        fireEvent.click(dialog.getByRole('button', {name: /Start$/}));
+        const apply = await dialog.findByRole('button', {name: 'Apply'});
+        expect(change).not.toHaveBeenCalled();
+        fireEvent.click(apply);
+        expect(change).not.toHaveBeenCalled();
+        expect(mock.notification.success).not.toHaveBeenCalled();
+        expect(mock.notification.error).toHaveBeenCalledExactlyOnceWith({
+            message: 'IMU yaw calibration failed', description: 'An error occured',
+        });
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        expect(fetchMock).toHaveBeenCalledExactlyOnceWith('/api/calibration/imu-yaw',
+            expect.objectContaining({method: 'POST', body: '{"duration_sec":30}'}));
+        fireEvent.click(dialog.getByRole('button', {name: 'Discard'}));
+        await expectClosed();
+        const reopened = await openCalibration();
+        expect(reopened.getByRole('button', {name: /Start$/})).toBeInTheDocument();
+        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(change).not.toHaveBeenCalled();
+    });
     it('cancels and reopens without a request or applying settings', async () => {
         const change = vi.fn(); render(<RobotComponentEditor values={{imu_yaw: 0}} onChange={change}/>);
         let dialog = await openCalibration();

@@ -150,7 +150,7 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
 
         const appliedBits: string[] = [];
 
-        onApplyValue("imu_yaw", roundTo(calibResult.imu_yaw_rad, 4));
+        const candidates: [string, number][] = [["imu_yaw", roundTo(calibResult.imu_yaw_rad, 4)]];
         appliedBits.push(`imu_yaw = ${calibResult.imu_yaw_deg.toFixed(2)}°`);
 
         // Pitch/roll: node returns these only when the stationary baseline
@@ -161,13 +161,26 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
             && Number.isFinite(calibResult.imu_pitch_rad)
             && Number.isFinite(calibResult.imu_roll_rad);
         if (stationaryOk) {
-            onApplyValue("imu_pitch", roundTo(calibResult.imu_pitch_rad!, 4));
-            onApplyValue("imu_roll", roundTo(calibResult.imu_roll_rad!, 4));
+            candidates.push(
+                ["imu_pitch", roundTo(calibResult.imu_pitch_rad!, 4)],
+                ["imu_roll", roundTo(calibResult.imu_roll_rad!, 4)],
+            );
             appliedBits.push(
                 `imu_pitch = ${calibResult.imu_pitch_deg!.toFixed(2)}°`,
                 `imu_roll = ${calibResult.imu_roll_deg!.toFixed(2)}°`,
             );
         }
+
+        // Finite source measurements can overflow during rounding. Validate
+        // the whole batch before applying even its first value.
+        if (candidates.some(([, value]) => !Number.isFinite(value))) {
+            notification.error({
+                message: t("imuYawCalibration.failed"),
+                description: t("asyncButton.errorOccurred"),
+            });
+            return;
+        }
+        for (const [key, value] of candidates) onApplyValue(key, value);
 
         // Dock pose: server pre-phase already wrote it to mowgli_robot.yaml.
         // Surface the result for verification — there is no form value to
