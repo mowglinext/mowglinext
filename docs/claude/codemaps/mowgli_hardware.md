@@ -28,7 +28,7 @@
 | IMU calibration persistence file | `persist_imu_calibration()` (:1445), `load_persisted_imu_calibration()` (:1468); format `# mowgli_imu_calibration_v1`; path param `imu_cal_persist_path` (:631) |
 | Dead-IMU (hung WT901 bus) detection | `include/mowgli_hardware/imu_liveness.hpp` (pure); `track_imu_liveness()` (:1709); gates in `handle_imu()` + `load_persisted_imu_calibration()` |
 | Wheel odometry (`/wheel_odom`, `/wheel_ticks`) | `src/odometry_publisher.cpp` `handle_packet()` (:54): 16-bit unwrap (:80), spike limit (:96), 50 ms aggregation (:156), dock force-zero (:228), covariances (:241–251) |
-| Timestamp smoothing (firmware `dt_millis` → host stamp) | `include/mowgli_hardware/clock_fit.hpp` `HostFirmwareClockFit`, `src/clock_fit.cpp` (`Ingest`, reset gap :16, window :29) |
+| Timestamp smoothing (differences of firmware acquisition time → host stamp) | `include/mowgli_hardware/clock_fit.hpp` `HostFirmwareClockFit`, `src/clock_fit.cpp` (`Ingest`, reset gap :16, window :29) |
 | Dig detector (wheel-slip) | `include/mowgli_hardware/dig_detector.hpp` (`WorstCommandedTyreSpeed`, `DigDecide`, `DigTrustSigma`, `DigEscapeStep`); node glue `dig_monitor_tick()`, `on_dig_detected()`, `publish_dig_event()`, `on_filtered_map_odom()` |
 | Repeat-dig escalation + operator clear override | `include/mowgli_hardware/dig_escalation.hpp` (`ShouldEscalate`, `CanClearDigEscalation`, `DigProbation`); node glue `note_dig_for_escalation()` (sets `dig_escalation_{x,y}_`), `on_clear_dig_escalation()` (`~/clear_dig_escalation`: plain clear past the clear distance, acknowledgement + probation closer), docking clear (`dig_escalated_` doc comment) |
 | `cmd_vel` path to the wire | `on_cmd_vel()` (:2828) → `include/mowgli_hardware/cmd_vel_slew.hpp` → `send_cmd_vel_packet()` (:3265); merged-command slew cap, `min_linear_vel` clamp, NULL→AUTONOMOUS fallback; exact encoded command published on `~/cmd_vel_applied` |
@@ -146,7 +146,7 @@ Frame = `0x00 | COBS(payload + CRC16-LE) | 0x00`; CRC-16/CCITT-FALSE over `type�
 | 0x01 | `LlStatus` (38) | FW→host | `handle_status` |
 | 0x02 | `LlImu` (41) | FW→host | `handle_imu` |
 | 0x03 | `LlUiEvent` (5) | FW→host | `handle_ui_event` |
-| 0x04 | `LlOdometry` (17) | FW→host | `handle_odometry` → `OdometryPublisher` |
+| 0x04 | `LlOdometry` (19) | FW→host | `handle_odometry` → `OdometryPublisher` |
 | 0x05 | `LlBladeStatus` (16) | FW→host | `handle_blade_status` |
 | 0x06 | `LlResetCause` (5) | FW→host | `handle_reset_cause` |
 | 0x11 / 0x12 | `LlConfigReq` (4) / `LlConfigRsp` (8) | host→FW / FW→host | `send_config_request` / `handle_config_rsp` |

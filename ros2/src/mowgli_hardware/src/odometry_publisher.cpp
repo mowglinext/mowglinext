@@ -15,10 +15,8 @@
 
 // SPDX-License-Identifier: GPL-3.0
 //
-// Verbatim port of hardware_bridge_node's former handle_odometry() — see
-// odometry_publisher.hpp for the extraction rationale. Every comment below
-// that isn't marked otherwise is carried over unchanged from the original
-// inline method; this file does not change behaviour.
+// Extracted from hardware_bridge_node's former handle_odometry().
+// Time and encoder deltas share the same firmware acquisition baselines.
 
 #include "mowgli_hardware/odometry_publisher.hpp"
 
@@ -44,6 +42,7 @@ void OdometryPublisher::reset()
 {
   odom_clock_fit_.Reset();
   odom_initialized_ = false;
+  prev_acquisition_ms_ = 0;
   prev_left_ticks_ = 0;
   prev_right_ticks_ = 0;
   odom_acc_delta_left_ = 0;
@@ -57,7 +56,23 @@ void OdometryPublisher::handle_packet(const LlOdometry& pkt,
                                       double wheel_track,
                                       bool is_charging)
 {
-  // Signed tick deltas since last firmware packet (polarity = direction).
+  // Derive time and tick deltas from the same received acquisition pair.
+  // Unsigned subtraction preserves elapsed firmware time across HAL tick wrap.
+  const uint32_t dt_ms = pkt.acquisition_millis - prev_acquisition_ms_;
+  if (odom_initialized_ && dt_ms > 0x7fffffffu)
+  {
+    // A backwards clock (e.g. firmware reboot) is not a forward HAL wrap.
+    // Re-seed time and ticks together instead of inventing a multi-week gap.
+    reset();
+  }
+  if (odom_initialized_ && dt_ms == 0)
+  {
+    // Keep both baselines until firmware time advances; retain any new ticks.
+    return;
+  }
+  prev_acquisition_ms_ = pkt.acquisition_millis;
+
+  // Signed tick deltas since last received firmware packet (polarity = direction).
   int32_t d_left = pkt.left_ticks - prev_left_ticks_;
   int32_t d_right = pkt.right_ticks - prev_right_ticks_;
   prev_left_ticks_ = pkt.left_ticks;
@@ -69,41 +84,34 @@ void OdometryPublisher::handle_packet(const LlOdometry& pkt,
     return;
   }
 
-  // 16-bit unsigned-counter wraparound recovery. Firmware packets carry
-  // int32_t left_ticks / right_ticks but the underlying motor-controller
-  // encoder counter is 16-bit and wraps 0xFFFF↔0x0000. After a wrap a
-  // raw subtraction produces a delta of ±65535 (with small ±N noise from
-  // the actual motion that occurred during the wrap), which is the
-  // signature we observe ("dL=-65528", "dR=65535" etc.). Unwrap any
-  // delta whose magnitude is closer to 65536 than to 0 by adding/
-  // subtracting 65536 — this recovers the true small physical delta
-  // instead of dropping the packet and losing position information.
-  auto unwrap_16bit = [](int32_t d)
+  // Preserve the existing 100-tick spike tolerance at 20 ms, scaling it
+  // with acquisition time so skipped packets can accumulate real motion.
+  const int64_t tick_spike_limit = std::max<int64_t>(100, int64_t{dt_ms} * 5);
+
+  // Recover the observed ±65536 controller-counter jumps only when the raw
+  // delta is implausible for this acquisition interval. A long send gap may
+  // legitimately span more than 32768 cumulative ticks; do not unwrap those.
+  auto unwrap_16bit = [tick_spike_limit](int32_t d)
   {
-    if (d > 32768)
+    if (d > 32768 && d > tick_spike_limit)
       return d - 65536;
-    if (d < -32768)
+    if (d < -32768 && -int64_t{d} > tick_spike_limit)
       return d + 65536;
     return d;
   };
   d_left = unwrap_16bit(d_left);
   d_right = unwrap_16bit(d_right);
 
-  // Sanity-clamp residual implausible deltas. After wrap-recovery the
-  // remaining oversize deltas are firmware glitches (e.g. motor-controller
-  // encoder reset on direction change not in lockstep with the firmware's
-  // own prev tracking). Drop those — at 21 ms packet period and a hard
-  // 2 m/s upper bound the physical max is ~13 ticks; 100 leaves margin.
-  constexpr int32_t kTickSpikeLimit = 100;
-  if (std::abs(d_left) > kTickSpikeLimit || std::abs(d_right) > kTickSpikeLimit)
+  // Drop residual implausible deltas after controller-wrap recovery.
+  if (std::abs(d_left) > tick_spike_limit || std::abs(d_right) > tick_spike_limit)
   {
     RCLCPP_WARN_THROTTLE(node_.get_logger(),
                          *node_.get_clock(),
                          2000,
-                         "Dropping residual wheel tick spike: dL=%d dR=%d (limit=%d).",
+                         "Dropping residual wheel tick spike: dL=%d dR=%d (limit=%lld).",
                          d_left,
                          d_right,
-                         kTickSpikeLimit);
+                         static_cast<long long>(tick_spike_limit));
     d_left = 0;
     d_right = 0;
   }
@@ -147,7 +155,7 @@ void OdometryPublisher::handle_packet(const LlOdometry& pkt,
   // grows and single-tick noise collapses to ~7 % relative error.
   odom_acc_delta_left_ += d_left;
   odom_acc_delta_right_ += d_right;
-  odom_acc_dt_ms_ += pkt.dt_millis;
+  odom_acc_dt_ms_ += dt_ms;
 
   // 50 ms aggregation → ~20 Hz /wheel_odom. Tested: 33 ms (30 Hz)
   // saturated the EKF on this ARM CPU and produced "Failed to meet
