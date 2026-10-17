@@ -21,16 +21,18 @@ vi.mock('../hooks/useIsMobile', () => ({useIsMobile: () => false}));
 
 const fetchMock = vi.fn<typeof fetch>();
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status});
-function mount(path = '/settings') {
+function mountShell(path = '/settings', strict = true) {
     const router = createMemoryRouter([{path: '/', element: <AppShell/>, children: [
         {path: 'settings', element: <div>Settings route</div>},
         {path: 'onboarding', element: <div>Onboarding route</div>},
         {path: 'mowglinext', element: <div>Home route</div>},
         {path: 'map', element: <div>Map route</div>},
     ]}], {initialEntries: [path]});
-    render(<StrictMode><RouterProvider router={router}/></StrictMode>);
-    return router;
+    const tree = <RouterProvider router={router}/>;
+    const view = render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+    return {router, view};
 }
+const mount = (path = '/settings') => mountShell(path).router;
 const failedChecks = (calls: unknown[][]) => calls.filter(args => args[0] === 'Failed to check onboarding status');
 function expectReadOnlyRequests() {
     expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
@@ -120,6 +122,170 @@ describe('AppShell onboarding response boundary', () => {
         await screen.findByText('Map route');
         expect(router.state.location.pathname).toBe('/map');
         expect(fetchMock).toHaveBeenCalledTimes(calls);
+        expectReadOnlyRequests();
+    });
+});
+
+interface PendingStatus {
+    response: Promise<Response>;
+    resolve: (response: Response) => void;
+}
+function queueStatusRequests() {
+    const pending: PendingStatus[] = [];
+    fetchMock.mockImplementation(() => {
+        let resolve!: (response: Response) => void;
+        const response = new Promise<Response>(accept => {resolve = accept;});
+        pending.push({response, resolve});
+        return response;
+    });
+    return pending;
+}
+function statusRequest(request: PendingStatus | undefined): PendingStatus {
+    if (!request) throw new Error('Expected a pending status request');
+    return request;
+}
+async function resolveStatus(request: PendingStatus, completed: boolean, status = 200) {
+    await act(async () => {
+        request.resolve(reply({onboarding_completed: completed}, status));
+        await request.response;
+    });
+}
+async function expectRenderedRoute(router: ReturnType<typeof createMemoryRouter>, path: string, text: string) {
+    expect(router.state.location.pathname).toBe(path);
+    await waitFor(() => expect(screen.getByText(text)).toBeVisible());
+}
+
+describe('AppShell obsolete responses', () => {
+    it('ignores an obsolete false after the current StrictMode response is true', async () => {
+        const pending = queueStatusRequests();
+        const {router} = mountShell();
+        const old = statusRequest(pending[0]);
+        const current = statusRequest(pending[pending.length - 1]);
+        expect(old).not.toBe(current); // Establish two effect lifetimes, not an exact request count.
+        await resolveStatus(current, true);
+        await resolveStatus(old, false);
+        await expectRenderedRoute(router, '/settings', 'Settings route');
+        expectReadOnlyRequests();
+    });
+
+    it('ignores an obsolete StrictMode false even before the current true', async () => {
+        const pending = queueStatusRequests();
+        const {router} = mountShell();
+        const old = statusRequest(pending[0]);
+        const current = statusRequest(pending[pending.length - 1]);
+        expect(old).not.toBe(current);
+        await resolveStatus(old, false);
+        await expectRenderedRoute(router, '/settings', 'Settings route');
+        await resolveStatus(current, true);
+        await expectRenderedRoute(router, '/settings', 'Settings route');
+        expectReadOnlyRequests();
+    });
+
+    it('does not finish configChecked from an invalidated invocation', async () => {
+        const pending = queueStatusRequests();
+        const {router} = mountShell();
+        const old = statusRequest(pending[0]);
+        const current = statusRequest(pending[pending.length - 1]);
+        expect(old).not.toBe(current);
+        await resolveStatus(old, true);
+        // The active request has not completed: a route change must still start its own check.
+        await act(async () => {await router.navigate('/map');});
+        const latest = statusRequest(pending[pending.length - 1]);
+        expect(latest).not.toBe(current);
+        await resolveStatus(latest, true);
+        await resolveStatus(current, false);
+        await expectRenderedRoute(router, '/map', 'Map route');
+        expectReadOnlyRequests();
+    });
+
+    it('ignores an obsolete response after /settings to /map without StrictMode', async () => {
+        const pending = queueStatusRequests();
+        const {router} = mountShell('/settings', false);
+        const old = statusRequest(pending[pending.length - 1]);
+        await act(async () => {await router.navigate('/map');});
+        const current = statusRequest(pending[pending.length - 1]);
+        expect(current).not.toBe(old);
+        await resolveStatus(current, true);
+        await resolveStatus(old, false);
+        await expectRenderedRoute(router, '/map', 'Map route');
+        expectReadOnlyRequests();
+    });
+
+    it('does not repeat onboarding navigation from an obsolete captured /settings path', async () => {
+        const pending = queueStatusRequests();
+        const {router} = mountShell('/settings', false);
+        const old = statusRequest(pending[pending.length - 1]);
+        await act(async () => {await router.navigate('/onboarding');});
+        const key = router.state.location.key;
+        const current = statusRequest(pending[pending.length - 1]);
+        expect(current).not.toBe(old);
+        await resolveStatus(current, true);
+        await resolveStatus(old, false);
+        expect(router.state.location.key).toBe(key);
+        await expectRenderedRoute(router, '/onboarding', 'Onboarding route');
+        expectReadOnlyRequests();
+    });
+
+    it.each([false, 'invalid'])('ignores an obsolete streamed JSON body: %s', async payload => {
+        const errors = vi.spyOn(console, 'error');
+        const pending = queueStatusRequests();
+        const {router} = mountShell('/settings', false);
+        const old = statusRequest(pending[pending.length - 1]);
+        let body!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({start(controller) {body = controller;}});
+        await act(async () => {old.resolve(new Response(stream)); await old.response;});
+        await act(async () => {await router.navigate('/map');});
+        const current = statusRequest(pending[pending.length - 1]);
+        expect(current).not.toBe(old);
+        await resolveStatus(current, true);
+        await act(async () => {
+            body.enqueue(new TextEncoder().encode(payload === false ? '{"onboarding_completed":false}' : '{invalid'));
+            body.close();
+            await Promise.resolve();
+        });
+        await expectRenderedRoute(router, '/map', 'Map route');
+        expect(failedChecks(errors.mock.calls)).toHaveLength(0);
+        expectReadOnlyRequests();
+    });
+
+    it.each([500, 503])('ignores an obsolete HTTP %s after an active valid response', async status => {
+        const errors = vi.spyOn(console, 'error');
+        const pending = queueStatusRequests();
+        const {router} = mountShell();
+        const old = statusRequest(pending[0]);
+        const current = statusRequest(pending[pending.length - 1]);
+        expect(old).not.toBe(current);
+        await resolveStatus(current, true);
+        await resolveStatus(old, false, status);
+        await expectRenderedRoute(router, '/settings', 'Settings route');
+        expect(failedChecks(errors.mock.calls)).toHaveLength(0);
+        expectReadOnlyRequests();
+    });
+
+    it('ignores an obsolete callback after real unmount and remount', async () => {
+        const pending = queueStatusRequests();
+        const first = mountShell('/settings', false);
+        const old = statusRequest(pending[pending.length - 1]);
+        first.view.unmount();
+        const second = mountShell('/map', false);
+        const current = statusRequest(pending[pending.length - 1]);
+        expect(current).not.toBe(old);
+        await resolveStatus(current, true);
+        await resolveStatus(old, false);
+        expect(first.router.state.location.pathname).toBe('/settings');
+        await expectRenderedRoute(second.router, '/map', 'Map route');
+        expectReadOnlyRequests();
+    });
+
+    it('preserves an active false even if an obsolete true finishes afterward', async () => {
+        const pending = queueStatusRequests();
+        const {router} = mountShell();
+        const old = statusRequest(pending[0]);
+        const current = statusRequest(pending[pending.length - 1]);
+        expect(old).not.toBe(current);
+        await resolveStatus(current, false);
+        await resolveStatus(old, true);
+        await expectRenderedRoute(router, '/onboarding', 'Onboarding route');
         expectReadOnlyRequests();
     });
 });

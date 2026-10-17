@@ -102,20 +102,26 @@ export function AppShell() {
   const [configChecked, setConfigChecked] = useState(false);
   useEffect(() => {
     if (configChecked) return;
+    let active = true;
     observeAsync((async () => {
       try {
         const res = await fetch(`${httpBase()}/api/settings/status`);
+        if (!active) return;
         if (!res.ok) throw new Error('Onboarding status unavailable');
         const data: unknown = await res.json();
+        if (!active) return;
         if (!isJsonObject(data) || typeof data.onboarding_completed !== 'boolean') {
           throw new Error('Invalid onboarding status');
         }
         if (data.onboarding_completed === false && currentPath !== '/onboarding') {
           observeAsync(navigate({pathname: '/onboarding'}));
         }
-      } catch (error) { console.error('Failed to check onboarding status', error); }
-      setConfigChecked(true);
+      } catch (error) {
+        if (active) console.error('Failed to check onboarding status', error);
+      }
+      if (active) setConfigChecked(true);
     })());
+    return () => { active = false; };
   }, [configChecked, currentPath, navigate]);
 
   // Auto-notifications hook (BT-state derived push notifications)
