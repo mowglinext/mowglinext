@@ -267,6 +267,9 @@ func (c *FleetCoordinator) tick(now time.Time) {
 		// On failure the next tick re-evaluates the current robot/peer state,
 		// including transitions that cancel our hold, before trying again.
 		if !c.sendHighLevel(hlCommandStart) {
+			c.mu.Lock()
+			c.yield.ResumeAttempted = true
+			c.mu.Unlock()
 			return
 		}
 	}

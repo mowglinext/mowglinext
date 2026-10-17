@@ -199,9 +199,12 @@ coordinator ticks at 1 s.
 A resume releases the coordinator's yield only when `HighLevelControl` accepts
 START. A rejected response or transport failure keeps the hold and its timers;
 the next tick retries only if the current yield rule still permits it. An
-observed autonomous/Home, charging or `MANUAL_CHARGING` transition cancels the
-hold, as does disabling coordination. The cooldown starts on the accepted
-attempt, even if the BT has not yet published its autonomous state.
+observed departure from the explicit IDLE stop-hold cancels the hold, including
+manual mowing, recording, Home, charging, emergency and other named holds, as
+does disabling coordination. The cooldown starts on the accepted attempt, even
+if the BT has not yet published its autonomous state. If a failed START reply
+is followed by observed autonomy (excluding Home), the cooldown starts at that
+observation, so a lost acknowledgement cannot cause an immediate re-yield.
 
 ## Status (2026-10-10)
 
