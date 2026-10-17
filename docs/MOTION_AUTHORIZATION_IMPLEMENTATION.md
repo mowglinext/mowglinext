@@ -4,6 +4,68 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Bounded FTC diagnostic continuation (2026-10-18)
+
+Latest fetched `dev` is `da1494f1e3a878383c86c2b5dbd518f4233dc330`,
+incorporated by merge `a5b02e46`. Its change since the previous `e48cf12a`
+baseline concerns GUI updater readiness. The `ros2/`, `sensors/`, `docker/`
+and `.github/` trees remain byte-identical to pushed `f31f22dc`; motion source
+remains `f44daf90`. All five required hosted checks passed on `f31f22dc`,
+including Debug, Release and RelWithDebInfo replay. That hosted result does
+not certify a later head or resolve the GPS01 containment failure below.
+
+An external diagnostic-only FTC overlay was built against the unchanged,
+previously attested thirteen-package installation. Its plugin and all its own
+test executables were rebuilt together; this was not a pristine product build
+or a new thirteen-package regression run. The overlay records actual accepted
+and rejected predicate calls, consumed pose/geometry/footprint and final
+returns without changing authorization policy. Independent source review and
+controlled validation preceded the single bounded simulation attempt.
+
+The complete controlled validation passes all 26 plugin CTest targets and all
+28 selected MotionAuthorization cases. Independent capture compares 258
+compute outcomes exactly with tracing off/on: 220 nonzero returns, 22 zero
+returns and 16 exceptions. All 248 actual predicate checks replay through the
+production C++ predicate, including first-check acceptance followed by
+remaining-rotation rejection. Nine finite numeric bit controls and six invalid
+controls pass. A private 4 KiB trace filesystem causes a recorded payload-write
+failure; all 258 outcomes still match tracing off, while the incomplete
+sidecar is retained and rejected. The specific OS errno was not captured.
+These are controlled software checks, not mission or physical evidence.
+
+The isolated observer control establishes exact command CDR/header identity
+and a known producer GUID through its own Cyclone graph, the passive FastDDS
+callback and a periodic endpoint inventory. The producer and controller retain
+Cyclone. Foreign graph node names are placeholders in this setup; the known
+test producer's identity does not establish arbitrary mission ownership.
+
+The subsequent GPS diagnostic is **INCOMPLETE**. It reaches undocking,
+planning a 9,420-pose path and transit, then the observer crashes while
+serializing generated UUID byte elements. Liveness monitoring stops the run
+in transit; no FTC compute call was captured. The trace retains an incomplete
+sidecar and has no footer, so it cannot prove that no call occurred. The
+interrupted canonical harness reports FAIL at approximately 36 seconds;
+no full mowing/docking/charging cycle or target
+event was obtained. Container exit is 1, no container OOM is recorded, and
+the owned container is removed. Previously attested inputs remain unchanged.
+
+The UUID conversion has an old-RED/new-GREEN control. A later isolated ROS
+probe retains one correctly projected UUID/status message without observer
+errors, but its exact action-status CDR comparison still fails. The sender's
+comparison bytes were not retained, so a padding or transport explanation is
+unproved. That validation remains **INCOMPLETE** and blocks the proposed
+single repair repeat. No further mission was launched through the failed gate.
+Earlier failed probes and the interrupted run remain evidence; no assertion,
+expected geometry, tolerance, deadline or safety policy was relaxed.
+
+This continuation adds no product motion change. It does not recover the
+missing preceding accepted tuple from GPS01 or exonerate FTC. The original
+13.944 mm active-FTC truth-reference crossing remains unresolved within this
+PR's acceptance boundary. Broader RPP/transit/output/localization authorization
+remains #924 work. Keep #950 Draft: passing CI and the earlier completed
+GPS/LiDAR runs do not establish merge readiness. Physical validation remains
+**HARDWARE_REQUIRED** under the exact-baseline procedure below.
+
 ## Scoped overnight verification (2026-10-17)
 
 This checkpoint supersedes earlier readiness statements only for its exact
