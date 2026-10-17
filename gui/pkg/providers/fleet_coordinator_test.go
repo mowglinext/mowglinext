@@ -657,3 +657,22 @@ func TestCoordinatorTick_FailedResumeDoesNotOverrideTakeover(t *testing.T) {
 		}
 	}
 }
+
+func TestCoordinatorTick_HomeCancellationStaysCancelled(t *testing.T) {
+	c, ros, rows, now := newYieldedTestCoordinator(t)
+	ros.ServiceErr = errors.New("START transport failed")
+	c.tick(now.Add(6 * time.Second))
+	ros.ServiceErr = nil
+	rows[0].Topics["highLevelStatus"] = json.RawMessage(`{"state":2,"state_name":"RETURNING_HOME"}`)
+	rows[1].Topics["gps"] = gpsTopic(48.00001, 2.0)
+	c.tick(now.Add(7 * time.Second))
+	require.False(t, c.Status().Yielded)
+	c.tick(now.Add(8 * time.Second))
+	require.Len(t, serviceCalls(ros, highLevelControlService), 1, "Home must not acquire another proximity yield")
+	// If Home is stopped again, the real BT publishes IDLE and max-hold
+	// sends START, replacing the operator's HOME with autonomous mowing.
+	rows[0].Topics["highLevelStatus"] = json.RawMessage(`{"state":1,"state_name":"IDLE"}`)
+	c.tick(now.Add(9 * time.Second))
+	c.tick(now.Add(53 * time.Second))
+	require.Len(t, serviceCalls(ros, highLevelControlService), 1, "Home cancellation must not create a new STOP/START cycle")
+}
