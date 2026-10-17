@@ -91,6 +91,7 @@ type fleetMember struct {
 	Self          bool
 	Online        bool
 	Autonomous    bool // HighLevelStatus.state == AUTONOMOUS (2)
+	StopHold      bool // state == IDLE (1) and state_name == IDLE, as published after STOP
 	StateName     string
 	CurrentArea   int // -1 when none
 	Completed     []uint32
@@ -121,6 +122,7 @@ func memberFromRobotAt(r FleetRobot, selfDatum LatLon, maxAge time.Duration) fle
 	if raw, ok := r.Topics["highLevelStatus"]; ok && json.Unmarshal(raw, &hl) == nil {
 		m.Autonomous = hl.State != nil && *hl.State == hlStateAutonomous
 		m.StateName = hl.StateName
+		m.StopHold = hl.State != nil && *hl.State == 1 && hl.StateName == "IDLE"
 		if hl.CurrentArea != nil {
 			m.CurrentArea = *hl.CurrentArea
 		}
@@ -254,10 +256,11 @@ func sameDatum(a, b LatLon) bool {
 
 // yieldState is the coordinator's memory of the proximity rule.
 type yieldState struct {
-	Yielded    bool
-	HoldSince  time.Time // when the hold started (max-hold deadlock breaker)
-	ClearSince time.Time // when the last priority peer left the resume radius
-	ResumedAt  time.Time // last resume this rule sent (re-yield cooldown)
+	Yielded         bool
+	HoldSince       time.Time // when the hold started (max-hold deadlock breaker)
+	ClearSince      time.Time // when the last priority peer left the resume radius
+	ResumedAt       time.Time // last accepted or observed resume (re-yield cooldown)
+	ResumeAttempted bool      // START failed; later autonomy may resolve a lost reply
 }
 
 // YieldAction is what the proximity rule wants sent to the local BT.
@@ -286,6 +289,18 @@ const yieldResumeHold = 3 * time.Second
 // no new yield is issued for yield_cooldown_s, so the resumed robot gets to
 // skirt the peer instead of stopping again at the same 3 m.
 func decideYield(self fleetMember, peers []fleetMember, st yieldState, s CoordinatorSettings, now time.Time) (yieldState, YieldAction) {
+	// Ownership ends on every observed departure from our explicit STOP hold,
+	// even when position is unavailable. Numeric IDLE alone also covers
+	// charging, rain, dig obstruction and completed sessions; none is ours.
+	if st.Yielded && !self.StopHold {
+		resumedAt := st.ResumedAt
+		if st.ResumeAttempted && self.Autonomous && self.StateName != "RETURNING_HOME" {
+			// A failed reply does not prove START failed to apply. Observing
+			// autonomy resolves that ambiguity and gives it a full cooldown.
+			resumedAt = now
+		}
+		return yieldState{ResumedAt: resumedAt}, YieldNone
+	}
 	if self.Pos == nil {
 		return st, YieldNone
 	}
@@ -301,25 +316,23 @@ func decideYield(self fleetMember, peers []fleetMember, st yieldState, s Coordin
 	cooldown := time.Duration(s.YieldCooldownS * float64(time.Second))
 	if !st.Yielded {
 		inCooldown := !st.ResumedAt.IsZero() && now.Sub(st.ResumedAt) < cooldown
-		if self.Autonomous && nearest < s.YieldDistanceM && !inCooldown {
+		// A STOP hold resumes with START, which would replace an operator HOME.
+		if self.Autonomous && self.StateName != "RETURNING_HOME" && nearest < s.YieldDistanceM && !inCooldown {
 			return yieldState{Yielded: true, HoldSince: now, ResumedAt: st.ResumedAt}, YieldStop
 		}
 		return st, YieldNone
-	}
-	// We are holding. If the operator moved the robot on (it is autonomous
-	// again, or docked / charging), our hold is over without a resume.
-	if self.Autonomous || self.StateName == "CHARGING" || self.StateName == "MANUAL_CHARGING" || self.StateName == "RETURNING_HOME" {
-		return yieldState{ResumedAt: st.ResumedAt}, YieldNone
 	}
 	maxHold := time.Duration(s.YieldMaxHoldS * float64(time.Second))
 	if !st.HoldSince.IsZero() && now.Sub(st.HoldSince) >= maxHold {
 		return yieldState{ResumedAt: now}, YieldStart
 	}
 	if nearest < s.ResumeDistanceM {
-		return yieldState{Yielded: true, HoldSince: st.HoldSince, ResumedAt: st.ResumedAt}, YieldNone
+		st.ClearSince = time.Time{}
+		return st, YieldNone
 	}
 	if st.ClearSince.IsZero() {
-		return yieldState{Yielded: true, HoldSince: st.HoldSince, ClearSince: now, ResumedAt: st.ResumedAt}, YieldNone
+		st.ClearSince = now
+		return st, YieldNone
 	}
 	if now.Sub(st.ClearSince) < yieldResumeHold {
 		return st, YieldNone

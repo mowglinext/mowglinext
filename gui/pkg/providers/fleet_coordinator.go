@@ -261,16 +261,24 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	}
 
 	next, action := decideYield(self, peers, yieldBefore, settings, now)
+	if action == YieldStart {
+		logrus.Info("fleet coordinator: peers are clear — resuming this mower (COMMAND_START)")
+		// Keep ownership and the hold timers until START is acknowledged.
+		// On failure the next tick re-evaluates the current robot/peer state,
+		// including transitions that cancel our hold, before trying again.
+		if !c.sendHighLevel(hlCommandStart) {
+			c.mu.Lock()
+			c.yield.ResumeAttempted = true
+			c.mu.Unlock()
+			return
+		}
+	}
 	c.mu.Lock()
 	c.yield = next
 	c.mu.Unlock()
-	switch action {
-	case YieldStop:
+	if action == YieldStop {
 		logrus.Info("fleet coordinator: a peer with priority is close — pausing this mower (COMMAND_STOP)")
 		c.sendHighLevel(hlCommandStop)
-	case YieldStart:
-		logrus.Info("fleet coordinator: peers are clear — resuming this mower (COMMAND_START)")
-		c.sendHighLevel(hlCommandStart)
 	}
 }
 
@@ -300,13 +308,23 @@ func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now 
 	return true
 }
 
-func (c *FleetCoordinator) sendHighLevel(command uint8) {
+func (c *FleetCoordinator) sendHighLevel(command uint8) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), coordinatorCallTimeout)
 	defer cancel()
 	req := mowgli.HighLevelControlReq{Command: command}
-	if err := c.ros.CallService(ctx, highLevelControlService, &req, &mowgli.HighLevelControlRes{}, highLevelControlType); err != nil {
+	var res mowgli.HighLevelControlRes
+	if err := c.ros.CallService(ctx, highLevelControlService, &req, &res, highLevelControlType); err != nil {
 		c.setError("high_level_control: " + err.Error())
+		return false
 	}
+	if !res.Success {
+		c.setError("high_level_control refused command " + strconv.Itoa(int(command)))
+		return false
+	}
+	c.mu.Lock()
+	c.lastError = ""
+	c.mu.Unlock()
+	return true
 }
 
 func (c *FleetCoordinator) setError(msg string) {
