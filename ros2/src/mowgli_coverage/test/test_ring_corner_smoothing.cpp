@@ -367,6 +367,57 @@ TEST(RingCornerSmoothing, HostedCapturedBevelsAreSingleCirclesWithoutDubinsSeams
                   << " intermediate=" << item.output_begin << "\n";
         dump("local", item.local);
       }
+      for (std::size_t source = 1; source + 2 < fixture.source.size(); ++source)
+      {
+        const auto b = fixture.source[source], c = fixture.source[source + 1];
+        if (std::hypot(c.first - b.first, c.second - b.second) > .01)
+          continue;
+        for (std::size_t index = 1; index + 1 < trace.intermediate.size(); ++index)
+        {
+          if (trace.intermediate[index] != b || trace.intermediate[index + 1] != c)
+            continue;
+          const auto a = trace.intermediate[index - 1], d = fixture.source[source + 2];
+          const double ix = b.first - a.first, iy = b.second - a.second;
+          const double ox = d.first - c.first, oy = d.second - c.second;
+          const double cross = ix * oy - iy * ox;
+          std::cerr << "MISSING_BEVEL " << fixture.name << " source=" << source
+                    << " intermediate=" << index << " cross=" << cross << "\n";
+          if (cross == 0.0)
+            continue;
+          const double t = ((c.first - a.first) * oy - (c.second - a.second) * ox) / cross;
+          const std::pair<double, double> corner{a.first + t * ix, a.second + t * iy};
+          dump("chooser_support", {a, b, c, d});
+          dump("chooser_corner", {corner});
+          // An empty boundary rejects every point. This diagnostic envelope
+          // instead encloses the support and four maximum radii on every side.
+          const double xmin = std::min({a.first, corner.first, d.first}) - 4 * .4;
+          const double xmax = std::max({a.first, corner.first, d.first}) + 4 * .4;
+          const double ymin = std::min({a.second, corner.second, d.second}) - 4 * .4;
+          const double ymax = std::max({a.second, corner.second, d.second}) + 4 * .4;
+          const Pts wide{{xmin, ymin}, {xmax, ymin}, {xmax, ymax}, {xmin, ymax}};
+          const auto probe = [&](const char* bounds, const Pts& boundary, double r, double floor)
+          {
+            // Three points delegate directly to unchanged ordinary rounding.
+            const auto selected = mc::detail::roundBeveledCorners(
+                {a, corner, d}, boundary, {}, M_PI / 6, r, floor, .03);
+            std::cerr << "LEGACY_CHOOSER " << fixture.name << " source=" << source
+                      << " bounds=" << bounds << " radius=" << r << " floor=" << floor
+                      << " size=" << selected.size();
+            if (selected.size() > 3)
+              std::cerr << " entry=[" << selected[1].first << "," << selected[1].second
+                        << "] exit=[" << selected[selected.size() - 2].first << ","
+                        << selected[selected.size() - 2].second << "]";
+            std::cerr << "\n";
+          };
+          probe("actual", fixture.boundary, .4, .2);
+          probe("wide", wide, .4, .2);
+          for (double r = .4; r >= .2 - 1e-9; r -= .01)
+          {
+            probe("actual_single_radius", fixture.boundary, r, r);
+            probe("wide_single_radius", wide, r, r);
+          }
+        }
+      }
       for (std::size_t i = 1; i + 1 < dense.size(); ++i)
       {
         // Reuse the unchanged predicate to identify only the failing triples.
