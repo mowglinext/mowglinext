@@ -167,6 +167,48 @@ void supportedArc(const Path& local, Point a, Point corner, Point d, double mini
   }
   require(std::abs(sweep - angle) < 1e-8, "arc sweep differs from support turn");
 }
+// Independent deterministic circular sampler V1. This never calls the candidate
+// builder. Source/helper identities pin the recipe; supportedArc independently
+// verifies its geometry rather than trusting this expected-sample construction.
+Path deterministicCircularV1(const Path& selected, Point a, Point corner, Point d, double step)
+{
+  if (selected.size() < 4 || !std::isfinite(step) || step <= 0.0)
+    return {};
+  const double ix = corner.first - a.first, iy = corner.second - a.second;
+  const double ox = d.first - corner.first, oy = d.second - corner.second;
+  const double il = std::hypot(ix, iy), ol = std::hypot(ox, oy);
+  if (!std::isfinite(il) || !std::isfinite(ol) || il <= 0.0 || ol <= 0.0)
+    return {};
+  const double ux = ix / il, uy = iy / il, vx = ox / ol, vy = oy / ol;
+  const double angle = std::acos(std::clamp(ux * vx + uy * vy, -1.0, 1.0));
+  const double sign = ux * vy - uy * vx > 0.0 ? 1.0 : -1.0;
+  const auto entry = selected[1], exit = selected[selected.size() - 2];
+  const double trim = (corner.first - entry.first) * ux + (corner.second - entry.second) * uy;
+  const double radius = trim * std::tan((M_PI - angle) / 2.0);
+  if (!std::isfinite(radius) || radius <= 0.0 || angle <= 0.0 || angle >= M_PI)
+    return {};
+  // Preserve the existing sampleDubins minimum angular step, then cap heading
+  // increments at the existing supported-turn threshold. No count is clamped.
+  const double limit = std::min(std::max(1e-3, step / radius), cg::kPivotCornerMinTurnRad);
+  const double count = std::ceil(angle / limit);
+  // This bound follows from angle < pi and the inherited 1e-3 angular floor.
+  if (!std::isfinite(count) || count < 1.0 || count > std::ceil(M_PI / 1e-3))
+    return {};
+  const auto segments = static_cast<std::size_t>(count);
+  Path result{selected.front(), entry};
+  result.reserve(segments + 3);
+  for (std::size_t k = 1; k < segments; ++k)
+  {
+    const double sweep = angle * static_cast<double>(k) / static_cast<double>(segments);
+    const double forward = radius * std::sin(sweep);
+    const double lateral = sign * radius * (1.0 - std::cos(sweep));
+    result.emplace_back(entry.first + ux * forward - uy * lateral,
+                        entry.second + uy * forward + ux * lateral);
+  }
+  result.push_back(exit);
+  result.push_back(selected.back());
+  return result;
+}
 Path validateIntermediate(const Path& source,
                           const Path& intermediate,
                           const Json& replacements,
@@ -208,9 +250,10 @@ Path validateIntermediate(const Path& source,
                 length(subtract(corner, c)) <= 0.01,
             "invalid supporting-edge intersection");
     // Reference sampling also rejects arbitrary extra/erased/shifted samples.
-    const auto reference = roundSharpCorners(
+    const auto selected = roundSharpCorners(
         {a, corner, d}, boundary, holes, M_PI / 6, 2 * radius, std::max(0.02, radius), 0.03);
-    require(same(local, reference), "local samples differ from pristine helper");
+    const auto reference = deterministicCircularV1(selected, a, corner, d, 0.03);
+    require(same(local, reference), "local samples differ from deterministic circular V1");
     supportedArc(local, a, corner, d, std::max(0.02, radius), std::max(0.02, 2 * radius));
     contains(local, boundary, holes);
     expected.insert(expected.end(), local.begin() + 1, local.end() - 1);

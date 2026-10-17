@@ -94,6 +94,15 @@ outside the working `safe_boundary`, versus 29.442 mm in the rejected initial
 proposal; that envelope differs from the raw recorded boundary); conservative rollback
 restores that exact legacy limit without approving the proposed change. The replay
 README records the measured witness and the distinction from global containment.
+The bounded bevel interiors use deterministic circular sampler V1 after the
+unchanged ordinary helper selects exact tangent endpoints. An independently
+implemented reference recipe requires byte-identical local samples; all existing
+radius/tangent/sweep/containment predicates and exact S/T/downstream reconstruction
+remain. Hosted multi-polygon and near-degenerate source/boundary captures test
+single-circle geometry and spacing without regenerating F2C inputs; a separate
+oracle mutation stays on a supported circle but must fail exact sample identity.
+The replay README defines the inherited angular floor, supported-turn cap, point
+count, endpoint inclusion and derived finite allocation bound.
 `test_semantic_diagnostics` also runs in both suites: it excludes only the three
 elapsed values from the known mixed timing note, preserves its semantic suffix
 and all other diagnostics, and rejects malformed recognized timing schemas.

@@ -276,6 +276,128 @@ TEST(RingCornerSmoothing, SameSignedReflexBevelRollsBack)
                 pts, {{-1, -1}, {5, -1}, {5, 5}, {-1, 5}}, {}, 30 * M_PI / 180, .4, .2, .03),
             pts);
 }
+TEST(RingCornerSmoothing, HostedCapturedBevelsAreSingleCirclesWithoutDubinsSeams)
+{
+  struct Captured
+  {
+    const char* name;
+    Pts source, boundary;
+  };
+  // Exact S and safe-boundary doubles from hosted run 38993303690, Release,
+  // artifact 12086422140. These isolate geometry from F2C/input generation.
+  const std::vector<Captured> captured{{"multi_polygon",
+                                        {{10.503019531776916, 3.9969699972664756},
+                                         {12.997437486710702, 3.993950465489558},
+                                         {12.999986916983707, 3.991401035216553},
+                                         {12.993960411938465, 0.0025724597382089784},
+                                         {12.991398423156863, 1.0470956606782714e-05},
+                                         {8.002562513289298, 0.00604953451043948},
+                                         {8.000013083016292, 0.008598964783445986},
+                                         {8.006039588061535, 3.997427540261797},
+                                         {8.00860157684313, 3.999989529043393},
+                                         {10.503019531776916, 3.9969699972664756}},
+                                        {{7.96938532541079, -0.073910362600903},
+                                         {7.9260896373991, -0.030614674589207},
+                                         {7.92, 0.0},
+                                         {7.9260896373991, 4.03061467458921},
+                                         {7.96938532541079, 4.0739103626009},
+                                         {8.0, 4.08},
+                                         {13.0306146745892, 4.0739103626009},
+                                         {13.0739103626009, 4.03061467458921},
+                                         {13.08, 4.0},
+                                         {13.0739103626009, -0.030614674589207},
+                                         {13.0306146745892, -0.073910362600903},
+                                         {13.0, -0.08},
+                                         {7.96938532541079, -0.073910362600903}}},
+                                       {"near_degenerate",
+                                        {{4.003028982415013, 5.996964469010116},
+                                         {7.997452465605159, 5.993935486595103},
+                                         {7.999991271691458, 5.991396680508804},
+                                         {7.993943816999605, 0.002555864799343048},
+                                         {7.991394500775132, 6.548574870030244e-06},
+                                         {0.0025475343948440886, 0.006064513404893529},
+                                         {8.728308542183383e-06, 0.008603319491195435},
+                                         {0.006056183000392006, 5.997444135200655},
+                                         {0.00860549922486762, 5.999993451425129},
+                                         {4.003028982415013, 5.996964469010116}},
+                                        {{-0.030614674589207, -0.073910362600903},
+                                         {-0.073910362600903, -0.030614674589207},
+                                         {-0.08, 0.0},
+                                         {-0.073910362600903, 6.03061467458921},
+                                         {-0.030614674589207, 6.0739103626009},
+                                         {0.0, 6.08},
+                                         {8.03061467458921, 6.0739103626009},
+                                         {8.0739103626009, 6.03061467458921},
+                                         {8.08, 6.0},
+                                         {8.0739103626009, -0.030614674589207},
+                                         {8.03061467458921, -0.073910362600903},
+                                         {8.0, -0.08},
+                                         {-0.030614674589207, -0.073910362600903}}}};
+  for (const auto& fixture : captured)
+  {
+    SCOPED_TRACE(fixture.name);
+    mc::detail::BevelTrace trace;
+    const auto rounded = mc::detail::roundBeveledCorners(
+        fixture.source, fixture.boundary, {}, M_PI / 6, .4, .2, .03, {}, &trace);
+    ASSERT_FALSE(trace.replacements.empty());
+    EXPECT_EQ(unsupported(densify(rounded, .10)), 0u);
+    for (const auto& replacement : trace.replacements)
+    {
+      const auto& local = replacement.local;
+      const auto a = local.front(), b = fixture.source[replacement.source_vertex];
+      const auto c = fixture.source[replacement.source_vertex + 1];
+      const auto d = fixture.source[replacement.source_vertex + 2];
+      const double ix = b.first - a.first, iy = b.second - a.second;
+      const double ox = d.first - c.first, oy = d.second - c.second;
+      const double t =
+          ((c.first - a.first) * oy - (c.second - a.second) * ox) / (ix * oy - iy * ox);
+      const std::pair<double, double> corner{a.first + t * ix, a.second + t * iy};
+      const double il = std::hypot(corner.first - a.first, corner.second - a.second);
+      const double ol = std::hypot(d.first - corner.first, d.second - corner.second);
+      const double ux = (corner.first - a.first) / il, uy = (corner.second - a.second) / il;
+      const double vx = (d.first - corner.first) / ol, vy = (d.second - corner.second) / ol;
+      const double angle = std::acos(std::clamp(ux * vx + uy * vy, -1.0, 1.0));
+      const double sign = ux * vy - uy * vx > 0 ? 1.0 : -1.0;
+      const double trim =
+          (corner.first - local[1].first) * ux + (corner.second - local[1].second) * uy;
+      const double radius = trim * std::tan((M_PI - angle) / 2.0);
+      EXPECT_GE(radius, .2 - 1e-6);
+      EXPECT_LE(radius, .4 + 1e-8);
+      const std::pair<double, double> center{local[1].first - sign * uy * radius,
+                                             local[1].second + sign * ux * radius};
+      const double limit = std::min(.03 / radius, 15 * M_PI / 180);
+      const auto segments = static_cast<std::size_t>(std::ceil(angle / limit));
+      EXPECT_EQ(local.size(), segments + 3);
+      EXPECT_EQ(local.back(), d);
+      for (std::size_t i = 1; i + 1 < local.size(); ++i)
+      {
+        EXPECT_LT(std::abs(
+                      std::hypot(local[i].first - center.first, local[i].second - center.second) -
+                      radius),
+                  1e-8);
+        if (i > 1)
+        {
+          const double px = local[i - 1].first - center.first;
+          const double py = local[i - 1].second - center.second;
+          const double x = local[i].first - center.first, y = local[i].second - center.second;
+          const double delta = sign * std::atan2(px * y - py * x, px * x + py * y);
+          EXPECT_GT(delta, 0.0);
+          EXPECT_LT(std::abs(delta - angle / segments), 1e-8);
+        }
+      }
+    }
+  }
+}
+TEST(RingCornerSmoothing, CircularSamplerRetainsExistingTinyStepBound)
+{
+  const Pts points{{0, 2}, {2, 2}, {2.003, 2.003}, {2.003, 4}};
+  mc::detail::BevelTrace trace;
+  mc::detail::roundBeveledCorners(
+      points, {{-1, -1}, {5, -1}, {5, 5}, {-1, 5}}, {}, M_PI / 6, .4, .2, 1e-12, {}, &trace);
+  ASSERT_EQ(trace.replacements.size(), 1u);
+  EXPECT_LE(trace.replacements.front().local.size(),
+            static_cast<std::size_t>(std::ceil(M_PI / 1e-3)) + 3);
+}
 TEST(RingCornerSmoothing, InvalidSamplingStepKeepsInput)
 {
   auto pts = capturedSparseOuterRing();

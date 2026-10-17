@@ -279,10 +279,39 @@ It accounts for every original vertex, requires unchanged start/closure/order an
 winding, preserves pivot twins, checks the existing bevel eligibility and radius
 floor, derives circle/tangency from emitted coordinates, and checks every emitted
 chord and both tangent connectors continuously against the original boundary and
-holes. Reference helper sampling must also match every replacement exactly.
+holes. Independent deterministic circular-V1 sampling must also match every replacement
+exactly. The pristine helper still selects the radius and tangent endpoints.
 Every changed final densified ring receives the same continuous containment check,
 covering neighbouring ordinary fillets retuned after a support edge is shortened.
 The observer is passive; plain/traced execution must remain bit-identical.
+
+The bounded bevel pass uses circular sampler V1 only after the unchanged ordinary
+helper selects a supported fillet. It retains that helper's exact entry/exit and
+both supporting endpoints. The circle radius is inferred from the entry trim and
+support turn; interior points follow the signed, unwrapped support angle. For
+radius `r`, support turn `theta` and requested step `s`, define
+`L = min(max(0.001, s/r), 15 degrees)` and `N = ceil(theta/L)`. This retains the
+existing Dubins minimum angular step, adds the existing supported-turn cap and
+emits interior angles `theta*k/N` for `k=1..N-1`. Entry and exit occur once each;
+there are no Dubins word boundaries or nearly zero straight seams. Total local
+point count, including both supporting endpoints, is `N+3`. Finite/positive checks
+and the derived bound `N <= ceil(pi/0.001)` precede conversion/allocation; no count
+is clamped. Arc spacing is at most `max(0.001*r, s)`, with heading increments at
+most 15 degrees. The actual replay step is 0.03 m with radius at least 0.2 m.
+
+The reference implements this recipe separately, using its pristine ordinary
+helper's selected tangents. It requires exact local sample identity in addition
+to the unchanged independent radius, tangency, sweep, locality and containment
+checks. Old rounding/densification of S and T, and all downstream comparisons,
+remain exact. General Dubins connectors and ordinary corner rounding are unchanged.
+
+Hosted run 38993303690 exposed two numerical seams in the generic Dubins sampler:
+`multi_polygon` and `near_degenerate` had radial residuals 10.627 and 11.617 nm,
+above the unchanged 10 nm check. A cancellation residual in the normalized RSR
+straight length produced an 11.623 nm seam. The circular recipe preserves the
+selected tangents and radius model; uniform interior sampling also changes chord
+placement, so its geometry effect is not limited to those nanometres. Captured
+source/boundary regression inputs exercise both cases without F2C regeneration.
 
 All non-ring plan state and existing planner trace stages must match the original
 baseline. Only after certification does the reference replace its public

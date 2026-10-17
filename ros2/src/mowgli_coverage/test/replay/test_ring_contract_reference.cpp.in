@@ -41,8 +41,13 @@ Json certificate(const Path& local)
 }
 Path localArc()
 {
-  return mowgli_coverage::roundSharpCorners(
-      {source[0], corner, source[3]}, boundary, {}, M_PI / 6, .4, .2, .03);
+  return rc::deterministicCircularV1(
+      mowgli_coverage::roundSharpCorners(
+          {source[0], corner, source[3]}, boundary, {}, M_PI / 6, .4, .2, .03),
+      source[0],
+      corner,
+      source[3],
+      .03);
 }
 Path intermediate(const Path& local)
 {
@@ -77,6 +82,35 @@ TEST(CertifiedFilletOracle, IndependentlyRejectsWrongRadiusAndReversedArc)
   std::reverse(local.begin() + 1, local.end() - 1);
   EXPECT_THROW(rc::supportedArc(local, source[0], corner, source[3], .2, .4), std::runtime_error);
 }
+TEST(CertifiedFilletOracle, RejectsChangedSpacingEvenOnSupportedCircle)
+{
+  auto local = localArc();
+  ASSERT_GT(local.size(), 7u);
+  const auto direction = rc::subtract(corner, source.front());
+  const double norm = rc::length(direction);
+  const std::pair<double, double> u{direction.first / norm, direction.second / norm};
+  const auto tail = rc::subtract(source[3], corner);
+  const double angle = rc::turn(direction, tail);
+  const double sign = rc::cross(direction, tail) > 0 ? 1.0 : -1.0;
+  const double radius = rc::dot(rc::subtract(corner, local[1]), u) * std::tan((M_PI - angle) / 2.0);
+  const std::pair<double, double> center{local[1].first - sign * u.second * radius,
+                                         local[1].second + sign * u.first * radius};
+  const auto offset = rc::subtract(local[5], center);
+  const double rotation = 1e-4;
+  local[5] = {center.first + offset.first * std::cos(rotation) - offset.second * std::sin(rotation),
+              center.second + offset.first * std::sin(rotation) +
+                  offset.second * std::cos(rotation)};
+  ASSERT_NO_THROW(rc::supportedArc(local, source.front(), corner, source[3], .2, .4));
+  try
+  {
+    rc::validateIntermediate(source, intermediate(local), certificate(local), boundary, {}, .2);
+    FAIL() << "supported circle membership must not replace exact sampler identity";
+  }
+  catch (const std::runtime_error& error)
+  {
+    EXPECT_NE(std::string(error.what()).find("deterministic circular V1"), std::string::npos);
+  }
+}
 TEST(CertifiedFilletOracle, RejectsHoleBetweenLegacySamples)
 {
   const auto local = localArc();
@@ -85,8 +119,13 @@ TEST(CertifiedFilletOracle, RejectsHoleBetweenLegacySamples)
   const double y = (local[k].second + local[k + 1].second) / 2;
   const double e = 1e-5;
   const Path hole{{x - e, y - e}, {x + e, y - e}, {x + e, y + e}, {x - e, y + e}};
-  const auto sampled = mowgli_coverage::roundSharpCorners(
-      {source[0], corner, source[3]}, boundary, {hole}, M_PI / 6, .4, .2, .03);
+  const auto sampled = rc::deterministicCircularV1(
+      mowgli_coverage::roundSharpCorners(
+          {source[0], corner, source[3]}, boundary, {hole}, M_PI / 6, .4, .2, .03),
+      source[0],
+      corner,
+      source[3],
+      .03);
   ASSERT_TRUE(rc::same(sampled, local))
       << "negative control must pass the legacy sample-only check";
   EXPECT_THROW(rc::validateIntermediate(
@@ -102,8 +141,13 @@ TEST(CertifiedFilletOracle, RejectsConcaveBoundaryBetweenLegacySamples)
   const double e = 1e-5;
   const Path notched{
       {-1, -1}, {5, -1}, {5, 5}, {x + e, 5}, {x + e, y - e}, {x - e, y - e}, {x - e, 5}, {-1, 5}};
-  const auto sampled = mowgli_coverage::roundSharpCorners(
-      {source[0], corner, source[3]}, notched, {}, M_PI / 6, .4, .2, .03);
+  const auto sampled = rc::deterministicCircularV1(
+      mowgli_coverage::roundSharpCorners(
+          {source[0], corner, source[3]}, notched, {}, M_PI / 6, .4, .2, .03),
+      source[0],
+      corner,
+      source[3],
+      .03);
   ASSERT_TRUE(rc::same(sampled, local))
       << "negative control must pass the legacy sample-only check";
   EXPECT_THROW(
@@ -145,8 +189,13 @@ TEST(CertifiedFilletOracle, RetunedNeighbourRejectsHoleBetweenFinalSamples)
   const double t = rc::cross(rc::subtract(tight[2], tight[0]), out) / rc::cross(in, out);
   const std::pair<double, double> vertex{tight[0].first + t * in.first,
                                          tight[0].second + t * in.second};
-  const auto local = mowgli_coverage::roundSharpCorners(
-      {tight[0], vertex, tight[3]}, boundary, {}, M_PI / 6, .4, .2, .03);
+  const auto local = rc::deterministicCircularV1(
+      mowgli_coverage::roundSharpCorners(
+          {tight[0], vertex, tight[3]}, boundary, {}, M_PI / 6, .4, .2, .03),
+      tight[0],
+      vertex,
+      tight[3],
+      .03);
   Path transformed{tight.front()};
   transformed.insert(transformed.end(), local.begin() + 1, local.end() - 1);
   transformed.insert(transformed.end(), tight.begin() + 3, tight.end());

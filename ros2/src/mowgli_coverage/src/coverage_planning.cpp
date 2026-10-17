@@ -1074,6 +1074,56 @@ bool continuouslyContained(const std::vector<std::pair<double, double>>& path,
   return true;
 }
 
+// Circular bevel sampler V1. The legacy helper chooses the radius and tangent
+// endpoints; only its generic Dubins interior samples are replaced. A nearly
+// degenerate RSR/LSL solve can otherwise insert a sqrt(epsilon) straight seam.
+std::vector<std::pair<double, double>> circularBevelSamplesV1(
+    const std::vector<std::pair<double, double>>& selected,
+    std::pair<double, double> a,
+    std::pair<double, double> corner,
+    std::pair<double, double> d,
+    double step)
+{
+  using Path = std::vector<std::pair<double, double>>;
+
+  if (selected.size() < 4 || !std::isfinite(step) || step <= 0.0)
+    return {};
+  const double ix = corner.first - a.first, iy = corner.second - a.second;
+  const double ox = d.first - corner.first, oy = d.second - corner.second;
+  const double il = std::hypot(ix, iy), ol = std::hypot(ox, oy);
+  if (!std::isfinite(il) || !std::isfinite(ol) || il <= 0.0 || ol <= 0.0)
+    return {};
+  const double ux = ix / il, uy = iy / il, vx = ox / ol, vy = oy / ol;
+  const double angle = std::acos(std::clamp(ux * vx + uy * vy, -1.0, 1.0));
+  const double sign = ux * vy - uy * vx > 0.0 ? 1.0 : -1.0;
+  const auto entry = selected[1], exit = selected[selected.size() - 2];
+  const double trim = (corner.first - entry.first) * ux + (corner.second - entry.second) * uy;
+  const double radius = trim * std::tan((M_PI - angle) / 2.0);
+  if (!std::isfinite(radius) || radius <= 0.0 || angle <= 0.0 || angle >= M_PI)
+    return {};
+  // Preserve the existing sampleDubins minimum angular step, then cap heading
+  // increments at the existing supported-turn threshold. No count is clamped.
+  const double limit = std::min(std::max(1e-3, step / radius), cg::kPivotCornerMinTurnRad);
+  const double count = std::ceil(angle / limit);
+  // This bound follows from angle < pi and the inherited 1e-3 angular floor.
+  if (!std::isfinite(count) || count < 1.0 || count > std::ceil(M_PI / 1e-3))
+    return {};
+  const auto segments = static_cast<std::size_t>(count);
+  Path result{selected.front(), entry};
+  result.reserve(segments + 3);
+  for (std::size_t k = 1; k < segments; ++k)
+  {
+    const double sweep = angle * static_cast<double>(k) / static_cast<double>(segments);
+    const double forward = radius * std::sin(sweep);
+    const double lateral = sign * radius * (1.0 - std::cos(sweep));
+    result.emplace_back(entry.first + ux * forward - uy * lateral,
+                        entry.second + uy * forward + ux * lateral);
+  }
+  result.push_back(exit);
+  result.push_back(selected.back());
+  return result;
+}
+
 }  // namespace
 
 // GEOS can bevel a polygon vertex by a few millimetres. Filleting each end
@@ -1151,6 +1201,8 @@ std::vector<std::pair<double, double>> detail::roundBeveledCorners(
           auto local = roundSharpCorners(
               {a, corner, d}, boundary, holes, max_turn_rad, fillet_r, min_radius, step);
           // A rejected fillet is exactly the original three-point sharp path.
+          if (local.size() > 3)
+            local = circularBevelSamplesV1(local, a, corner, d, step);
           if (local.size() > 3 && allInside(local, boundary) && clearOfHoles(local, holes))
           {
             if (continuouslyContained(local, boundary, holes))
