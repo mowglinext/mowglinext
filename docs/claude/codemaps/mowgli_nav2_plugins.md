@@ -38,6 +38,16 @@ pre-taper charging, this retains the retreat needed to make the planned turn.
 feedback at 100/500 ms holds, including the actual-pose replan. These command
 bounds do not establish a downstream lease or physical stopping distance.
 
+Both FTC reverse ledgers and the fallback reverse-time cap use the plant's
+elapsed-time domain: monotonic steady time for physical/system-time execution,
+and the existing ROS interval while ROS simulation time is active. PID and
+geometry pose-age clocks are unchanged. The steady timestamp is updated on
+every compute call and reset on configure/new path. Clock mode stays fixed for
+an operation; simulation clock resets/delivery faults while a plant advances
+remain separate #924 work. Physical-clock tests retain fresh TF and geometry,
+measure actual 100 ms command holds, and inject only FTC's prior ROS timestamp
+to cover negative and positive-short deltas without changing the OS clock.
+
 ## Where to look
 
 Normal transit planning is now `include/mowgli_nav2_plugins/authorized_transit_planner.hpp`

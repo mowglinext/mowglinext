@@ -439,6 +439,7 @@ void FTCController::turnFallbackReverseTick(double dt, geometry_msgs::msg::Twist
 {
   auto& fb = turn_fallback_;
   // Distance is charged once at the compute boundary, including early returns.
+  // The same physical-steady or simulation-ROS interval bounds reverse time.
   fb.reverse_time_s += dt;
   const double remaining = fb.reverse_target_m - fb.reverse_done_m;
   const double time_cap =

@@ -187,6 +187,7 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
 
   current_state_ = PlannerState::PRE_ROTATE;
   last_time_ = clock_->now();
+  last_budget_time_ = std::chrono::steady_clock::now();
   time_last_oscillation_ = clock_->now();
 
   failure_detector_.setBufferLength(
@@ -1021,6 +1022,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   }
 
   last_time_ = clock_->now();
+  last_budget_time_ = std::chrono::steady_clock::now();
   current_movement_speed_ = config_.speed_slow;
   stall_time_ = 0.0;
   is_stalled_ = false;
@@ -1307,6 +1309,11 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     return cmd_vel;
   };
 
+  // Sample/update on every compute, including calls that later hold or throw.
+  // These are elapsed durations in their own domains, never mixed timestamps.
+  const auto budget_now = std::chrono::steady_clock::now();
+  const double steady_dt = std::chrono::duration<double>(budget_now - last_budget_time_).count();
+  last_budget_time_ = budget_now;
   const rclcpp::Time now = clock_->now();
   const double dt = (now - last_time_).seconds();
   last_time_ = now;
@@ -1322,6 +1329,12 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   //     and silently drops it — leaving the strip un-driven for the
   //     entire goal_timeout window.
   const double safe_dt = std::clamp(dt, 0.01, kMaxControlDtSec);
+  // Hardware moves in steady elapsed time even if its ROS/system clock steps.
+  // A simulation-driven plant instead advances with its active ROS clock;
+  // spending wall time there would shorten a legitimate slow/paused retreat.
+  // The configured clock mode is assumed stable throughout the operation.
+  const double budget_dt =
+      clock_->ros_time_is_active() ? safe_dt : std::clamp(steady_dt, 0.0, kMaxControlDtSec);
 
   // Cache the measured forward speed (odom feedback) for update_control_point's
   // anti-wheelspin stall detection.
@@ -1339,7 +1352,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     const double consumed_speed =
         std::max(std::abs(last_measured_fwd_speed_), last_reverse_budget_speed_);
     reverse_distance_done_ =
-        ReverseEscapeAdvance(cfg, reverse_distance_done_, consumed_speed, safe_dt);
+        ReverseEscapeAdvance(cfg, reverse_distance_done_, consumed_speed, budget_dt);
   }
   if (turnFallbackReversing())
   {
@@ -1348,7 +1361,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     const double consumed_speed =
         std::max(std::abs(last_measured_fwd_speed_), turn_fallback_.last_reverse_speed_mps);
     turn_fallback_.reverse_done_m =
-        ReverseEscapeAdvance(cfg, turn_fallback_.reverse_done_m, consumed_speed, safe_dt);
+        ReverseEscapeAdvance(cfg, turn_fallback_.reverse_done_m, consumed_speed, budget_dt);
   }
 
   if (is_crashed_)
@@ -1461,7 +1474,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     // bounded in distance and time; then the pivots are spliced in.
     if (turnFallbackReversing())
     {
-      turnFallbackReverseTick(safe_dt, cmd_vel);
+      turnFallbackReverseTick(budget_dt, cmd_vel);
       return bounded_command();
     }
     if (current_state_ == PlannerState::PIVOT)

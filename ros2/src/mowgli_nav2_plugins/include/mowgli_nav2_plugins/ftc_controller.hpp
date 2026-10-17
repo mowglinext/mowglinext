@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -249,6 +250,8 @@ private:
   double i_angle_error_{0.0};
 
   rclcpp::Time last_time_;
+  /// Physical-plant accounting is monotonic even when the ROS/system clock steps.
+  std::chrono::steady_clock::time_point last_budget_time_;
 
   // ── Collision checking ────────────────────────────────────────────────────
 
