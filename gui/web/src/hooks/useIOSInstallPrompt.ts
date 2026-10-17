@@ -11,7 +11,7 @@ function isIOSSafari(): boolean {
 function isStandalone(): boolean {
     if (typeof window === "undefined") return false;
     return (
-        ("standalone" in window.navigator && (window.navigator as any).standalone === true) ||
+        ("standalone" in window.navigator && window.navigator.standalone === true) ||
         window.matchMedia("(display-mode: standalone)").matches
     );
 }
