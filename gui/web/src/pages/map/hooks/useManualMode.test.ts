@@ -1,5 +1,6 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest';
 import {renderHook, act} from '@testing-library/react';
+import type {IJoystickUpdateEvent} from 'react-joystick-component/build/lib/Joystick';
 import {useManualMode} from './useManualMode.ts';
 
 describe('useManualMode', () => {
@@ -18,13 +19,23 @@ describe('useManualMode', () => {
         vi.useRealTimers();
     });
 
-    function renderManualMode() {
-        return renderHook(() =>
+    function renderManualMode(controllerOwnsInput = false) {
+        return renderHook(({ownsInput}: {ownsInput: boolean}) =>
             useManualMode({
                 mowerAction,
                 joyStream: {sendJsonMessage, start: startStream},
-            })
+                controllerOwnsInput: ownsInput,
+            }),
+            {initialProps: {ownsInput: controllerOwnsInput}},
         );
+    }
+
+    function advanceBy(milliseconds: number) {
+        act(() => { void vi.advanceTimersByTime(milliseconds); });
+    }
+
+    function joystickMove(x: number, y: number): IJoystickUpdateEvent {
+        return {type: 'move', x, y, direction: null, distance: 0};
     }
 
     it('starts with manual mode off', () => {
@@ -71,17 +82,17 @@ describe('useManualMode', () => {
         expect(result.current.manualMode).toBe(true);
 
         rerender({stateName: 'IDLE'});
-        act(() => vi.advanceTimersByTime(1199));
+        advanceBy(1199);
         expect(result.current.manualMode).toBe(true);
 
-        act(() => vi.advanceTimersByTime(1));
+        advanceBy(1);
         expect(result.current.manualMode).toBe(false);
     });
 
     it('handleJoyMove scales joystick input by MAX_LINEAR_MPS and MAX_ANGULAR_RAD_S', () => {
         const {result} = renderManualMode();
         act(() => {
-            result.current.handleJoyMove({x: 0.5, y: 0.8} as any);
+            result.current.handleJoyMove(joystickMove(0.5, 0.8));
         });
         // Raw joystick: x=0.5, y=0.8 → scaled to linear=0.8*0.25=0.2, angular=-0.5*0.6=-0.3
         expect(sendJsonMessage).toHaveBeenCalledWith({
@@ -98,6 +109,40 @@ describe('useManualMode', () => {
         expect(sendJsonMessage).toHaveBeenCalledWith({
             header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
             twist: {linear: {x: 0, y: 0, z: 0}, angular: {z: 0, x: 0, y: 0}},
+        });
+    });
+
+    it('revokes touch joystick ownership cleanly and requires fresh movement after gamepad release', () => {
+        const {result, rerender} = renderManualMode();
+        act(() => { result.current.handleJoyMove(joystickMove(0, 0.8)); });
+        advanceBy(200);
+        expect(sendJsonMessage).toHaveBeenCalledTimes(3);
+        const oldTouchFrame = {
+            header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
+            twist: {linear: {x: 0.2, y: 0, z: 0}, angular: {z: -0, x: 0, y: 0}},
+        };
+        expect(sendJsonMessage).toHaveBeenLastCalledWith(oldTouchFrame);
+
+        rerender({ownsInput: true});
+        advanceBy(200);
+        act(() => { result.current.handleJoyMove(joystickMove(-0.5, 0.2)); });
+        expect(sendJsonMessage).toHaveBeenCalledTimes(3);
+
+        rerender({ownsInput: false});
+        advanceBy(200);
+        expect(sendJsonMessage).toHaveBeenCalledTimes(3);
+
+        act(() => { result.current.handleJoyMove(joystickMove(-0.5, -0.4)); });
+        expect(sendJsonMessage).toHaveBeenCalledTimes(4);
+        expect(sendJsonMessage).toHaveBeenLastCalledWith({
+            header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
+            twist: {linear: {x: -0.1, y: 0, z: 0}, angular: {z: 0.3, x: 0, y: 0}},
+        });
+        advanceBy(100);
+        expect(sendJsonMessage).toHaveBeenCalledTimes(5);
+        expect(sendJsonMessage).toHaveBeenLastCalledWith({
+            header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
+            twist: {linear: {x: -0.1, y: 0, z: 0}, angular: {z: 0.3, x: 0, y: 0}},
         });
     });
 
