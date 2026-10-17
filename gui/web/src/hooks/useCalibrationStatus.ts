@@ -1,7 +1,7 @@
 import {isJsonObject} from "../utils/json";
 import {isExplicitReadError, requestErrorMessage} from "../utils/errors";
 import {observeAsync} from "../utils/async";
-import {useCallback, useEffect, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {useApi} from "./useApi.ts";
 
 export interface DockCalibrationStatus {
@@ -55,8 +55,16 @@ export const useCalibrationStatus = () => {
     const [status, setStatus] = useState<CalibrationStatus | null>(null);
     const [readError, setReadError] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const nextRead = useRef(0);
+    const activeLifetime = useRef<{lastPublished: number} | null>(null);
 
     const refresh = useCallback(async () => {
+        const lifetime = activeLifetime.current;
+        if (!lifetime) return;
+        const read = ++nextRead.current;
+        // A newer pending read must not starve this one. Only a published
+        // result (success or error) supersedes earlier reads in this lifetime.
+        const canPublish = () => activeLifetime.current === lifetime && read > lifetime.lastPublished;
         let processing = false;
         try {
             const response = await guiApi.request<unknown>({
@@ -64,6 +72,7 @@ export const useCalibrationStatus = () => {
                 method: "GET",
                 format: "json",
             });
+            if (!canPublish()) return;
             processing = response.error instanceof SyntaxError;
             if (response.error || response.ok === false) throw Object.assign(
                 new Error(requestErrorMessage(response) || requestErrorMessage(response.error) || 'Read request failed'), {status: response.status});
@@ -73,20 +82,28 @@ export const useCalibrationStatus = () => {
                 isJsonObject(part) && typeof part.present === 'boolean'
                 && (part.error === undefined || typeof part.error === 'string'))) throw new Error('Invalid calibration status');
             // The envelope is checked here; artifact errors remain visible in their existing cards.
+            lifetime.lastPublished = read;
             setStatus(data as unknown as CalibrationStatus);
             setError(null);
             setReadError(null);
         } catch (e) {
+            if (!canPublish()) return;
             const message = requestErrorMessage(e)?.trim() || "Failed to fetch calibration status";
+            lifetime.lastPublished = read;
             setError(message);
             setReadError(processing || isExplicitReadError(e) ? message : null);
         }
     }, [guiApi]);
 
     useEffect(() => {
+        const lifetime = {lastPublished: 0};
+        activeLifetime.current = lifetime;
         observeAsync(refresh());
         const id = setInterval(() => observeAsync(refresh()), 5000);
-        return () => clearInterval(id);
+        return () => {
+            activeLifetime.current = null;
+            clearInterval(id);
+        };
     }, [refresh]);
 
     return {status, error, readError, refresh};
