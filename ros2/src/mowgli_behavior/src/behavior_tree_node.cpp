@@ -1561,6 +1561,7 @@ private:
       context_->area_completed_swaths.clear();
       context_->area_swath_count.clear();
       context_->area_resume_pose_index.clear();
+      context_->area_unit_progress.clear();
       context_->area_path_pose_count.clear();
       context_->area_plan_fingerprint.clear();
       context_->completed_areas.clear();

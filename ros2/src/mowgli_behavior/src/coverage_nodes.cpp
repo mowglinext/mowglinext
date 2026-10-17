@@ -145,18 +145,28 @@ ResumeLocation resolveResumeLocation(const std::vector<nav_msgs::msg::Path>& uni
   // Interruption is not completion. This must remain longer than the coverage
   // goal checker's proximity-only short-path exception: otherwise an aborted
   // near-end resume can immediately succeed without traversing its replay.
+  loc.local = resumeOffsetForUnit(units[k].poses.size(), local);
+  return loc;
+}
+
+std::size_t resumeOffsetForUnit(std::size_t unit_poses, std::size_t local)
+{
+  if (local == 0)
+  {
+    return 0;
+  }
   constexpr std::size_t kMinResumeTailPoses = mowgli_interfaces::kCoverageResumeReplayPoses;
   const std::size_t replay_from =
-      units[k].poses.size() > kMinResumeTailPoses ? units[k].poses.size() - kMinResumeTailPoses : 0;
-  loc.local = std::min(local, replay_from);
-  return loc;
+      unit_poses > kMinResumeTailPoses ? unit_poses - kMinResumeTailPoses : 0;
+  return std::min(local, replay_from);
 }
 
 FirstDrive resolveFirstDrive(const std::vector<nav_msgs::msg::Path>& units,
                              const std::set<std::size_t>& done,
                              bool cursor_valid,
                              std::size_t cursor,
-                             std::size_t total_poses)
+                             std::size_t total_poses,
+                             const std::map<std::size_t, std::size_t>* unit_progress)
 {
   FirstDrive first;
   const std::size_t unit = nextUndoneUnit(0, units.size(), done);
@@ -172,6 +182,17 @@ FirstDrive resolveFirstDrive(const std::vector<nav_msgs::msg::Path>& units,
     if (rl.valid && rl.unit == unit)
     {
       first.local = rl.local;
+    }
+  }
+  if (unit_progress != nullptr)
+  {
+    // The unit's own progress: it was abandoned part-way on an earlier pass and must not restart
+    // from its first pose (the single cursor only ever describes the LAST unit dispatched).
+    const auto it = unit_progress->find(unit);
+    if (it != unit_progress->end())
+    {
+      first.local =
+          std::max(first.local, resumeOffsetForUnit(units[unit].poses.size(), it->second));
     }
   }
   return first;
@@ -356,6 +377,7 @@ BT::NodeStatus FollowStrip::onStart()
                   plan_fingerprint,
                   total_path_poses_);
       ctx->area_resume_pose_index.erase(area_idx_);
+      ctx->area_unit_progress.erase(area_idx_);
       ctx->area_completed_swaths.erase(area_idx_);
       ctx->completed_areas.erase(area_idx_);
       saveCoverageResumeState(*ctx);
@@ -401,6 +423,43 @@ BT::NodeStatus FollowStrip::onStart()
                     100.0 * static_cast<double>(cursor) / static_cast<double>(total_path_poses_),
                     rl.unit + 1,
                     units.size());
+      }
+    }
+  }
+  // PER-UNIT PROGRESS: a unit abandoned part-way on an earlier pass resumes where it stopped
+  // instead of from its first pose, whichever unit the global cursor happens to describe now. Units
+  // recorded mowed are skipped anyway, and the cursor's unit was trimmed just above.
+  {
+    static const std::set<std::size_t> kNoUnitsMowed;
+    const auto mowed_it = ctx->area_completed_swaths.find(area_idx_);
+    const std::set<std::size_t>& mowed =
+        mowed_it != ctx->area_completed_swaths.end() ? mowed_it->second : kNoUnitsMowed;
+    const auto progress_it = ctx->area_unit_progress.find(area_idx_);
+    if (progress_it != ctx->area_unit_progress.end())
+    {
+      for (const auto& [unit, local] : progress_it->second)
+      {
+        if (unit >= units.size() || mowed.count(unit) > 0 || swath_resume_start_indices_[unit] > 0)
+        {
+          continue;
+        }
+        const std::size_t offset = resumeOffsetForUnit(units[unit].poses.size(), local);
+        if (offset == 0)
+        {
+          continue;
+        }
+        swath_resume_start_indices_[unit] = offset;
+        nav_msgs::msg::Path trimmed;
+        trimmed.header = units[unit].header;
+        trimmed.poses.assign(units[unit].poses.begin() + static_cast<std::ptrdiff_t>(offset),
+                             units[unit].poses.end());
+        units[unit] = std::move(trimmed);
+        RCLCPP_INFO(ctx->node->get_logger(),
+                    "FollowStrip: unit %zu/%zu resumes at its own pose %zu (kept from an earlier "
+                    "pass) instead of restarting from its first pose",
+                    unit + 1,
+                    units.size(),
+                    offset);
       }
     }
   }
@@ -692,6 +751,7 @@ void FollowStrip::persistResumeCursor(const std::shared_ptr<BTContext>& ctx)
                                       : 0;
   const std::size_t absolute = base + trim_offset + path_progress_idx_;
   recordInterruptedCoverageProgress(*ctx, area_idx_, absolute, total_path_poses_);
+  noteUnitProgress(ctx, trim_offset + path_progress_idx_);
   // Report a saved cursor only after the atomic checkpoint write succeeds.
   // Failed writes are reported by the persistence layer; live progress remains
   // available for an in-process resume even when disk persistence fails.
@@ -808,6 +868,7 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
                                       ? swath_resume_start_indices_[swath_idx_]
                                       : 0;
   ctx->area_resume_pose_index[area_idx_] = base + trim_offset;
+  noteUnitProgress(ctx, trim_offset);
   saveCoverageResumeState(*ctx);
 
   follow_handle_.reset();
@@ -2092,12 +2153,32 @@ void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t 
   // during transit must resume PAST the skipped span, not at the stuck pose.
   const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
   ctx->area_resume_pose_index[area_idx_] = base + swath_resume_start_indices_[swath_idx_];
+  noteUnitProgress(ctx, swath_resume_start_indices_[swath_idx_]);
   saveCoverageResumeState(*ctx);
+}
+
+void FollowStrip::noteUnitProgress(const std::shared_ptr<BTContext>& ctx, std::size_t local)
+{
+  if (swath_idx_ >= swaths_.size())
+  {
+    return;
+  }
+  std::size_t& recorded = ctx->area_unit_progress[area_idx_][swath_idx_];
+  recorded = std::max(recorded, local);
 }
 
 void FollowStrip::markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx)
 {
   ctx->area_resume_pose_index.erase(area_idx_);
+  if (const auto progress = ctx->area_unit_progress.find(area_idx_);
+      progress != ctx->area_unit_progress.end())
+  {
+    progress->second.erase(swath_idx_);
+    if (progress->second.empty())
+    {
+      ctx->area_unit_progress.erase(progress);
+    }
+  }
   ctx->area_completed_swaths[area_idx_].insert(swath_idx_);
   ++swaths_mowed_this_pass_;
   saveCoverageResumeState(*ctx);
@@ -3290,6 +3371,7 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     ctx->attempted_areas.erase(current_area_idx_);
     ctx->area_completed_swaths.erase(current_area_idx_);
     ctx->area_resume_pose_index.erase(current_area_idx_);
+    ctx->area_unit_progress.erase(current_area_idx_);
     ctx->area_path_pose_count.erase(current_area_idx_);
     ctx->area_plan_fingerprint.erase(current_area_idx_);
     ctx->area_swath_count.erase(current_area_idx_);
@@ -3931,8 +4013,15 @@ BT::NodeStatus PlanCoverageArea::onRunning()
       // the cursor lands in. The first transit must aim where that first goal is driven: aiming at
       // the cursor's unit while an earlier one is still open sent the robot to unit 7 and straight
       // back to unit 1 (field 2026-10-12).
+      const auto uit = ctx->area_unit_progress.find(area_idx);
       const FirstDrive first =
-          resolveFirstDrive(units, done, has_cursor, has_cursor ? cit->second : 0, total);
+          resolveFirstDrive(units,
+                            done,
+                            has_cursor,
+                            has_cursor ? cit->second : 0,
+                            total,
+                            (fingerprint_ok && uit != ctx->area_unit_progress.end()) ? &uit->second
+                                                                                     : nullptr);
       if (first.valid)
       {
         transit_goal = units[first.unit].poses[first.local];

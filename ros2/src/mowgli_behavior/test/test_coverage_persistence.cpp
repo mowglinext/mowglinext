@@ -727,3 +727,48 @@ TEST(CoveragePersistence, AreasAndNextOverridesRoundTripIndependently)
   EXPECT_FALSE(restored.cross_hatch[0].begin(true));
   std::remove(ctx.coverage_resume_path.c_str());
 }
+
+TEST(CoveragePersistence, PerUnitProgressRoundTripsAndKeepsTheAreaResumable)
+{
+  const auto path = tempPath("coverage_resume_unit_progress.txt");
+  std::remove(path.c_str());
+  BTContext saved;
+  saved.coverage_resume_path = path;
+  saved.current_command = 1;
+  saved.current_area = 1;
+  saved.area_path_pose_count[1] = 5000;
+  saved.area_plan_fingerprint[1] = 77;
+  saved.area_unit_progress[1][4] = 2280;
+  saved.area_unit_progress[1][6] = 120;
+  // No cursor and no mowed unit: the progress alone must make this a resumable state.
+  EXPECT_TRUE(mowgli_behavior::hasCoverageResumeState(saved));
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+  ASSERT_EQ(restarted.area_unit_progress.count(1), 1u);
+  EXPECT_EQ(restarted.area_unit_progress.at(1).at(4), 2280u);
+  EXPECT_EQ(restarted.area_unit_progress.at(1).at(6), 120u);
+  EXPECT_TRUE(mowgli_behavior::hasCoverageResumeState(restarted));
+  std::remove(path.c_str());
+}
+
+TEST(CoveragePersistence, MalformedUnitProgressRowIsSkipped)
+{
+  const auto path = tempPath("coverage_resume_unit_progress_bad.txt");
+  BTContext saved;
+  saved.coverage_resume_path = path;
+  saved.current_area = 0;
+  saved.area_unit_progress[0][1] = 10;
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+  {
+    std::ofstream out(path, std::ios::app);
+    out << "unit_progress 0 oops\n";
+  }
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  EXPECT_EQ(loaded.area_unit_progress.at(0).size(), 1u);
+  std::remove(path.c_str());
+}

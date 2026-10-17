@@ -296,6 +296,7 @@ BT::NodeStatus EndSession::tick()
   ctx->area_completed_swaths.clear();
   ctx->area_swath_count.clear();
   ctx->area_resume_pose_index.clear();
+  ctx->area_unit_progress.clear();
   ctx->area_path_pose_count.clear();
   ctx->area_plan_fingerprint.clear();
   ctx->completed_areas.clear();
