@@ -61,7 +61,8 @@ import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { GnssLiveStatusSummaryCard } from "../components/gnss/GnssLiveStatusSummaryCard.tsx";
 import { GnssSerialDeviceConfigField } from "../components/settings/GnssSerialDeviceConfigField.tsx";
 import type {SettingsValues} from "../types/settings.generated";
-import {errorMessage} from "../utils/errors";
+import {errorMessage, requestErrorMessage} from "../utils/errors";
+import {isJsonObject} from "../utils/json";
 import {voidify} from "../utils/promises";
 
 const { Title, Text, Paragraph } = Typography;
@@ -627,13 +628,19 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting, 
         setDatumLoading(true);
         try {
             const res = await guiApi.mowglinext.callCreate("set_datum", {});
-            if (res.error) throw new Error(res.error.error);
-            const msg: string = (res.data as { message?: string } | undefined)?.message ?? "";
-            const parts = msg.split(",");
-            if (parts.length === 2) {
-                onChange("datum_lat", parseFloat(parts[0]));
-                onChange("datum_lon", parseFloat(parts[1]));
-            }
+            if (!res.ok || res.error) throw new Error(requestErrorMessage(res) ?? t("onboardingPage.datumSetFailedDesc"));
+            const raw: unknown = res.data;
+            if (!isJsonObject(raw) || typeof raw.message !== "string" || "error" in raw
+                || ("success" in raw && raw.success !== true)) throw new Error(t("onboardingPage.datumSetFailedDesc"));
+            const parts = raw.message.split(",");
+            const decimal = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+            if (parts.length !== 2 || !parts.every(part => decimal.test(part.trim()))
+                || parts.some(part => Number(part) === 0 && /[1-9]/.test(part.split(/[eE]/)[0]))) throw new Error(t("onboardingPage.datumSetFailedDesc"));
+            const lat = Number(parts[0]);
+            const lon = Number(parts[1]);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new Error(t("onboardingPage.datumSetFailedDesc"));
+            onChange("datum_lat", lat);
+            onChange("datum_lon", lon);
         } catch (e) {
             notification.error({
                 message: t("onboardingPage.datumSetFailedTitle"),
