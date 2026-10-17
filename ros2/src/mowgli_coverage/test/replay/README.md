@@ -126,22 +126,26 @@ revision refresh at build time, including incremental and packed-ref updates.
 The dedicated `Coverage planner replay` workflow runs Release, Debug and
 RelWithDebInfo on changes to this package (or by manual dispatch). It extracts
 the tested synthetic merge's base parent (validated against the PR head), with
-matching planner/header/tests/fixtures, freezes the 26 fixture files once and feeds
-them to both implementations. Each configuration runs 15 untraced repetitions
+matching planner source, public and private headers, shared geometry header, tests
+and fixtures. It freezes the 26 fixture files once and feeds them to both
+implementations. Each configuration runs 15 untraced repetitions
 per fixture for each implementation and 100 traced candidate repetitions per
 fixture: 3,380 replay records, plus the standalone tests. Multi-polygon records
 contain more than one field-planning call.
 
 Artifacts named `coverage-planner-replay-<build type>` retain the exact fixtures,
 compressed snapshots, summaries, comparison JSON/Markdown, build logs/flags,
-dependency versions and library hashes for 14 days. Baseline and candidate must
-match exact execution output and geometry metrics; traced execution coordinates
-and quaternions must match the untraced candidate. Source identities are allowed
-to differ. Runtime/RSS measurements are reported rather than gated by a noisy
-percentage threshold. The job uses the existing pinned dependency cache; on a
-cache hit its original compiler flags are unavailable and are reported as such.
+dependency versions and library hashes for 14 days. The workflow retains the
+unchanged strict comparison and its raw differences, then gates on complete
+strict identity or the certified microscopic bevel contract below. The pristine
+baseline/reference equality and real-planner mutation controls are mandatory.
+Traced execution coordinates and quaternions must match the untraced candidate.
+Source identities are allowed to differ. Runtime/RSS measurements are reported
+rather than gated by a noisy percentage threshold. The job uses the existing
+pinned dependency cache; on a cache hit its original compiler flags are unavailable
+and are reported as such.
 The comparison verifies summaries against retained fixture/snapshot hashes and
-rejects missing, null or invalid evidence. Its nine rejection/passivity tests
+rejects missing, null or invalid evidence. Comparator rejection/passivity tests
 run in both the package and standalone suites.
 
 To compare downloaded artifacts locally:
@@ -242,8 +246,8 @@ unchanged.
 ## Certified microscopic bevel changes
 
 `--require-identical` retains its strict baseline/candidate equality contract.
-The workflow continues using that mode. A separate, opt-in
-`--require-certified-fillets` contract is limited to the microscopic bevel repair;
+The workflow retains that comparison as a diagnostic and gates on
+`--require-certified-fillets`, which is limited to the microscopic bevel repair;
 it accepts either the complete strict identity predicate or an independently
 certified microscopic bevel change, and reports the method per fixture. It does
 not approve arbitrary changed geometry or update expected snapshots.

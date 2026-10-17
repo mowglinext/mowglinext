@@ -71,8 +71,11 @@ Extra bevel records absent from an old baseline still require the oracle.
 A directly compiled pristine baseline and a separate original-source helper
 adapter must agree exactly; only certified
 rings may be substituted before exact baseline downstream reconstruction.
-All other plan state and original trace stages remain exact. The workflow still
-uses strict identity mode. Build the opt-in baseline reference with
+All other plan state and original trace stages remain exact. The workflow retains
+the strict comparison and raw differences, then gates on this contract, including
+the pristine baseline/reference equality and real-planner mutation controls.
+It extracts matching public/private and shared geometry headers from the exact
+baseline. Build the same baseline reference locally with
 `-DREPLAY_BASELINE=ON -DREPLAY_CERTIFIED_FILLET_REFERENCE=ON`; its CTest suite adds
 `test_ring_contract_reference` for locality, pivot, supported-radius and continuous
 chord boundary/hole rejection. Run `test_certified_fillets.py --baseline <binary>

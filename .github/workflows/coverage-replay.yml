@@ -225,6 +225,7 @@ jobs:
           git -c core.autocrlf=false archive "$BASELINE_SHA" \
             ros2/src/mowgli_coverage/src ros2/src/mowgli_coverage/include \
             ros2/src/mowgli_coverage/test \
+            ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp \
             | tar -x -C "$BASELINE_SOURCE" --strip-components=3
           build_variant() {
             local label="$1"
@@ -244,6 +245,7 @@ jobs:
               -DPLANNER_INCLUDE="$include" \
               -DPLANNER_TEST_ROOT="$test_root" \
               -DREPLAY_BASELINE="$baseline_mode" \
+              -DREPLAY_CERTIFIED_FILLET_REFERENCE="$baseline_mode" \
               -DREPLAY_REVISION="$revision" \
               2>&1 | tee "$metadata_dir/configure.log"
             cmake --build "$build_dir" --parallel "$(nproc)" --verbose \
@@ -263,11 +265,32 @@ jobs:
             sha256sum "$build_dir/coverage_replay" "$build_dir/libreplay_planner.a" \
               > "$metadata_dir/binary-sha256.txt"
             ldd "$build_dir/coverage_replay" > "$metadata_dir/linked-libraries.txt"
+            local shared_header="$REPO/ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp"
+            if [[ "$baseline_mode" == ON ]]; then
+              shared_header="$include/mowgli_interfaces/coverage_geometry.hpp"
+              cp "$build_dir/coverage_replay_reference" "$metadata_dir/"
+              cp "$build_dir/libreplay_reference_planner.a" "$metadata_dir/"
+              readelf -p .GCC.command.line "$build_dir/libreplay_reference_planner.a" \
+                > "$metadata_dir/reference-effective-gcc-switches.txt"
+              sha256sum "$build_dir/coverage_replay_reference" \
+                "$build_dir/libreplay_reference_planner.a" \
+                > "$metadata_dir/reference-binary-sha256.txt"
+              ldd "$build_dir/coverage_replay_reference" \
+                > "$metadata_dir/reference-linked-libraries.txt"
+            fi
+            sha256sum "$source" "$include/mowgli_coverage/coverage_planning.hpp" \
+              "$shared_header" > "$metadata_dir/planner-source-header-sha256.txt"
+            cp "$shared_header" "$metadata_dir/coverage_geometry.hpp"
           }
           build_variant baseline "$BASELINE_SOURCE/src/coverage_planning.cpp" \
             "$BASELINE_SOURCE/include" "$BASELINE_SHA" ON "$BASELINE_SOURCE/test"
           build_variant candidate "$PACKAGE/src/coverage_planning.cpp" \
             "$PACKAGE/include" "$CANDIDATE_SHA" OFF "$PACKAGE/test"
+          python3 "$REPLAY/test_certified_fillets.py" \
+            --baseline "$BUILD_ROOT/baseline/coverage_replay" \
+            --reference "$BUILD_ROOT/baseline/coverage_replay_reference" \
+            --candidate "$BUILD_ROOT/candidate/coverage_replay" \
+            2>&1 | tee "$ROOT/real-mutation-controls.log"
 
       - name: Replay identical fixtures and compare evidence
         env:
@@ -332,16 +355,32 @@ jobs:
           python3 "$REPLAY/run_replay.py" --binary "$CANDIDATE_BIN" \
             --same-process 20 --processes 5 \
             --output "$TRACE_RESULTS" "${FIXTURE_ARGS[@]}"
-          python3 "$REPLAY/compare_replay.py" \
-            --baseline-dir "$BASELINE_RESULTS" \
-            --candidate-dir "$CANDIDATE_RESULTS" \
-            --trace-dir "$TRACE_RESULTS" \
-            --environment "$ROOT/environment/environment.json" \
+          COMPARE_ARGS=(
+            --baseline-dir "$BASELINE_RESULTS"
+            --candidate-dir "$CANDIDATE_RESULTS"
+            --trace-dir "$TRACE_RESULTS"
+            --environment "$ROOT/environment/environment.json"
+            --expected-cases 26 --expected-runs 15
+            --expected-trace-runs 100 --expected-processes 3
+            --expected-trace-processes 5
+          )
+          # Retain the unchanged strict contract and every raw difference. An
+          # intentional certified fillet may differ; malformed evidence may not.
+          if python3 "$REPLAY/compare_replay.py" "${COMPARE_ARGS[@]}" \
+              --output-json "$ROOT/strict-comparison.json" \
+              --output-markdown "$ROOT/strict-comparison.md" --require-identical; then
+            strict_status=0
+          else
+            strict_status=$?
+          fi
+          if [[ "$strict_status" != 0 && "$strict_status" != 1 ]]; then
+            exit "$strict_status"
+          fi
+          python3 "$REPLAY/compare_replay.py" "${COMPARE_ARGS[@]}" \
             --output-json "$ROOT/comparison.json" \
             --output-markdown "$ROOT/comparison.md" \
-            --expected-cases 26 --expected-runs 15 \
-            --expected-trace-runs 100 --expected-processes 3 \
-            --require-identical
+            --baseline-binary "$BUILD_ROOT/baseline/coverage_replay_reference" \
+            --require-certified-fillets
 
       - name: Upload exact planner replay artifacts
         if: always()
