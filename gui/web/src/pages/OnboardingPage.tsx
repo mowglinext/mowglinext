@@ -61,7 +61,7 @@ import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { GnssLiveStatusSummaryCard } from "../components/gnss/GnssLiveStatusSummaryCard.tsx";
 import { GnssSerialDeviceConfigField } from "../components/settings/GnssSerialDeviceConfigField.tsx";
 import type {SettingsValues} from "../types/settings.generated";
-import {errorMessage, requestErrorMessage} from "../utils/errors";
+import {requestErrorMessage} from "../utils/errors";
 import {isJsonObject} from "../utils/json";
 import {voidify} from "../utils/promises";
 
@@ -644,7 +644,7 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting, 
         } catch (e) {
             notification.error({
                 message: t("onboardingPage.datumSetFailedTitle"),
-                description: errorMessage(e) || t("onboardingPage.datumSetFailedDesc"),
+                description: (typeof e === "string" ? e : requestErrorMessage(e)) || t("onboardingPage.datumSetFailedDesc"),
             });
         } finally {
             setDatumLoading(false);

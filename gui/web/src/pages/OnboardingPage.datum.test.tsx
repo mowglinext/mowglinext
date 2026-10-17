@@ -134,18 +134,76 @@ describe('Onboarding GNSS datum response boundary', () => {
     });
 
     it.each([
-        {name: 'invalid JSON', text: 'not JSON', status: 200},
-        {name: 'HTTP refusal', text: JSON.stringify({error: 'No GPS fix received yet'}), status: 500},
-    ])('handles $name through the existing notification', async ({text, status}) => {
+        {name: 'HTTP 500 textual error', text: JSON.stringify({error: 'No GPS fix received yet'}), status: 500, detail: 'No GPS fix received yet'},
+        {name: 'HTTP 400 textual error', text: JSON.stringify({error: 'Request refused'}), status: 400, detail: 'Request refused'},
+        {name: 'HTTP 500 error with coordinates', text: JSON.stringify({error: 'Refused', message: '48,2'}), status: 500, detail: 'Refused'},
+        {name: 'HTTP 500 empty body', text: '', status: 500},
+        {name: 'HTTP 500 invalid JSON', text: 'not JSON', status: 500},
+        {name: 'HTTP 500 empty error', text: JSON.stringify({error: ''}), status: 500},
+        {name: 'HTTP 500 null error', text: JSON.stringify({error: null}), status: 500},
+        {name: 'HTTP 500 numeric error', text: JSON.stringify({error: 42}), status: 500},
+        {name: 'HTTP 500 object error', text: JSON.stringify({error: {detail: 'Refused'}}), status: 500},
+        {name: 'HTTP 500 no detail', text: '{}', status: 500},
+        {name: 'HTTP 500 null body', text: 'null', status: 500},
+        {name: 'HTTP 200 invalid JSON', text: 'not JSON', status: 200},
+    ])('handles $name through the existing notification', async ({text, status, detail}) => {
         mock.fetch.mockImplementation(() => Promise.resolve(new Response(text, {status})));
         await datumStep();
-        clickText(en.onboardingPage.useCurrentGpsPosition);
+        const button = clickText(en.onboardingPage.useCurrentGpsPosition);
         await waitFor(() => expect(mock.error).toHaveBeenCalledOnce());
-        expect(mock.error).toHaveBeenCalledWith(expect.objectContaining({message: en.onboardingPage.datumSetFailedTitle}));
+        expect(mock.error).toHaveBeenCalledExactlyOnceWith({
+            message: en.onboardingPage.datumSetFailedTitle,
+            description: detail ?? en.onboardingPage.datumSetFailedDesc,
+        });
+        expect(latitude()).toHaveValue('12.000000000');
+        expect(longitude()).toHaveValue('34.000000000');
+        await waitFor(() => expect(button).not.toHaveClass('ant-btn-loading'));
+        expect(button).toBeEnabled();
+        expectNoPersistence();
+    });
+
+    it.each([
+        {name: 'textual primitive', rejection: 'Direct refusal', detail: 'Direct refusal'},
+        {name: 'empty primitive', rejection: '', detail: en.onboardingPage.datumSetFailedDesc},
+        {name: 'native Error', rejection: new Error('Native refusal'), detail: 'Native refusal'},
+        {name: 'non-textual message', rejection: {message: {detail: 'Refused'}}, detail: en.onboardingPage.datumSetFailedDesc},
+    ])('handles $name without coercing non-textual content', async ({rejection, detail}) => {
+        mock.fetch.mockRejectedValue(rejection);
+        await datumStep();
+        const button = clickText(en.onboardingPage.useCurrentGpsPosition);
+        await waitFor(() => expect(mock.error).toHaveBeenCalledExactlyOnceWith({
+            message: en.onboardingPage.datumSetFailedTitle, description: detail,
+        }));
+        expect(latitude()).toHaveValue('12.000000000');
+        expect(longitude()).toHaveValue('34.000000000');
+        await waitFor(() => expect(button).not.toHaveClass('ant-btn-loading'));
+        expect(button).toBeEnabled();
+        expectNoPersistence();
+    });
+
+    it('allows a deliberate retry after HTTP refusal with one command per click', async () => {
+        mock.fetch.mockResolvedValueOnce(new Response(JSON.stringify({error: 'Refused'}), {status: 500}));
+        await datumStep();
+        const button = clickText(en.onboardingPage.useCurrentGpsPosition);
+        await waitFor(() => expect(mock.error).toHaveBeenCalledOnce());
+        await waitFor(() => expect(button).not.toHaveClass('ant-btn-loading'));
         expect(latitude()).toHaveValue('12.000000000');
         expect(longitude()).toHaveValue('34.000000000');
         expectNoPersistence();
-        if (status === 500) expect(mock.error).toHaveBeenCalledWith(expect.objectContaining({description: '[object Response]'}));
+        expect(button).toBeEnabled();
+        clickText(en.onboardingPage.useCurrentGpsPosition);
+        await waitFor(() => expect(latitude()).toHaveValue('48.123456789'));
+        expect(longitude()).toHaveValue('-1.987654321');
+        expect(mock.fetch).toHaveBeenCalledTimes(2);
+        for (const call of mock.fetch.mock.calls) {
+            expect(call).toEqual(['/mowglinext/call/set_datum', expect.objectContaining({method: 'POST', body: '{}'})]);
+        }
+        expect(mock.error).toHaveBeenCalledOnce();
+        expect(mock.success).not.toHaveBeenCalled();
+        expect(mock.save).not.toHaveBeenCalled();
+        expect(mock.partial).not.toHaveBeenCalled();
+        expect(mock.restart).not.toHaveBeenCalled();
+        expect(screen.getByRole('region', {name: en.onboardingPage.stepDatum})).toBeVisible();
     });
 
     it('preserves the network error detail without retry or partial change', async () => {
