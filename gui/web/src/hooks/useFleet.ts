@@ -2,6 +2,7 @@ import {useCallback, useEffect, useRef, useState} from "react";
 import {httpBase} from "../utils/apiHost.ts";
 import {parseFleetRobots} from "../utils/fleet.ts";
 import type {FleetPeerWire, FleetRobotWire} from "../utils/fleet.ts";
+import {isJsonObject} from "../utils/json.ts";
 
 export interface CoordinatorSettings {
     enabled: boolean;
@@ -162,10 +163,21 @@ export function useFleet(pollMs: number = FLEET_POLL_MS) {
     }, [refresh]);
 
     const pushMap = useCallback(async (): Promise<MapPushResult> => {
-        const res = await request("/map/push", {method: "POST", body: "{}"}) as MapPushResult;
+        const res: unknown = await request("/map/push", {method: "POST", body: "{}"});
         await refresh();
+        if (!isMapPushResult(res)) {
+            throw new Error("Unusable map sharing result: the response is invalid; remote delivery is not determined.");
+        }
         return res;
     }, [refresh]);
 
     return {...state, refresh, addPeer, removePeer, call, listPeers, setCoordination, startFresh, pushMap};
+}
+
+function isMapPushResult(value: unknown): value is MapPushResult {
+    if (!isJsonObject(value) || typeof value.areas !== "number"
+        || !Number.isFinite(value.areas) || !Number.isInteger(value.areas) || !Array.isArray(value.peers)) return false;
+    return value.peers.every((peer: unknown) => isJsonObject(peer)
+        && typeof peer.id === "string" && typeof peer.name === "string" && typeof peer.address === "string"
+        && typeof peer.ok === "boolean" && (!("error" in peer) || typeof peer.error === "string"));
 }

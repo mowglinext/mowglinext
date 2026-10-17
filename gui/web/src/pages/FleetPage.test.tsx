@@ -14,7 +14,7 @@ const mock = vi.hoisted(() => {
         peer_feed: {active: false, peers_published: 0, rate_hz: 5, publishes: 0},
     };
     return {
-        robots, coordination,
+        robots, coordination, realFleet: false,
         addPeer: vi.fn<(address: string) => Promise<string | undefined>>(),
         removePeer: vi.fn<(id: string) => Promise<void>>(),
         call: vi.fn<(id: string, command: string, args: Record<string, unknown>) => Promise<void>>(),
@@ -33,7 +33,10 @@ vi.mock('antd', async importOriginal => {
         notification: {error: mock.error},
     })}};
 });
-vi.mock('../hooks/useFleet.ts', () => ({useFleet: () => ({...mock, error: undefined, loading: false})}));
+vi.mock('../hooks/useFleet.ts', async importOriginal => {
+    const original = await importOriginal<typeof import('../hooks/useFleet.ts')>();
+    return {...original, useFleet: () => mock.realFleet ? original.useFleet() : {...mock, error: undefined, loading: false}};
+});
 vi.mock('../hooks/useSettings.ts', () => ({useSettings: () => ({settings: {}})}));
 vi.mock('../theme/ThemeContext.tsx', () => ({useThemeMode: () => ({colors: getColors('dark')})}));
 
@@ -49,6 +52,7 @@ function enterAddress() {
 
 beforeEach(() => {
     vi.resetAllMocks();
+    mock.realFleet = false;
     mock.robots = [];
     mock.addPeer.mockResolvedValue(undefined);
     mock.removePeer.mockResolvedValue(undefined);
@@ -57,7 +61,11 @@ beforeEach(() => {
     mock.startFresh.mockResolvedValue(undefined);
     mock.pushMap.mockResolvedValue({areas: 2, peers: []});
 });
-afterEach(cleanup);
+afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+});
 
 describe('FleetPage action errors', () => {
     it.each([
@@ -167,5 +175,55 @@ describe('FleetPage action errors', () => {
             }
         }
         expect(mock.error).not.toHaveBeenCalled();
+    });
+});
+
+
+describe('FleetPage map sharing with the real useFleet HTTP boundary', () => {
+    const requestUrl = (url: Parameters<typeof fetch>[0]) => typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    it.each([
+        {name: 'string false', payload: {areas: 2, peers: [{id: 'b', name: 'Bravo', address: 'b', ok: 'false', error: 'Refused'}]}},
+        {name: 'missing peers', payload: {areas: 2}},
+        {name: 'non-array peers', payload: {areas: 2, peers: {}}},
+        {name: 'null peer', payload: {areas: 2, peers: [null]}},
+        {name: 'non-textual peer error', payload: {areas: 2, peers: [{id: 'b', name: 'Bravo', address: 'b', ok: false, error: {reason: 'Refused'}}]}},
+    ])('rejects $name without business notification, closes confirmation, then permits an explicit retry', async ({payload}) => {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        mock.realFleet = true;
+        let responseText = JSON.stringify(payload);
+        const fetchMock = vi.fn<typeof fetch>(url => Promise.resolve(new Response(
+            requestUrl(url).endsWith('/map/push') ? responseText : requestUrl(url).endsWith('/robots')
+                ? JSON.stringify([robot('alpha'), robot('bravo')]) : '{}',
+        )));
+        vi.stubGlobal('fetch', fetchMock);
+        render(<ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider>);
+        const button = screen.getByText(en.fleetPage.pushMap, {exact: true}).closest('button');
+        if (!button) throw new Error('Missing map sharing button');
+        const pushButton = () => button;
+        await waitFor(() => expect(button).toBeEnabled());
+        fireEvent.click(pushButton());
+        fireEvent.click(await screen.findByText('OK', {exact: true}));
+        await waitFor(() => expect(mock.error).toHaveBeenCalledExactlyOnceWith(
+            'Unusable map sharing result: the response is invalid; remote delivery is not determined.',
+        ));
+        expect(mock.success).not.toHaveBeenCalled();
+        expect(mock.warning).not.toHaveBeenCalled();
+        await waitFor(() => expect(pushButton()).not.toHaveClass('ant-btn-loading'));
+        await waitFor(() => {
+            const popup = document.querySelector('.ant-popover');
+            expect(popup === null || popup.classList.contains('ant-popover-hidden')).toBe(true);
+        });
+        const posts = () => fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST');
+        expect(posts()).toHaveLength(1);
+        expect(posts()[0]).toEqual([expect.stringMatching(/\/api\/fleet\/map\/push$/), {
+            headers: {'Content-Type': 'application/json'}, method: 'POST', body: '{}',
+        }]);
+        responseText = JSON.stringify({areas: 2, peers: [{id: 'b', name: 'Bravo', address: 'b', ok: true}]});
+        fireEvent.click(pushButton());
+        fireEvent.click(await screen.findByText('OK', {exact: true}));
+        await waitFor(() => expect(mock.success).toHaveBeenCalledExactlyOnceWith(en.fleetPage.mapPushed));
+        expect(posts()).toHaveLength(2);
+        expect(mock.error).toHaveBeenCalledOnce();
+        expect(mock.warning).not.toHaveBeenCalled();
     });
 });
