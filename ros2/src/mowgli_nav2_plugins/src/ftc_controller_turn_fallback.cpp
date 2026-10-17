@@ -125,6 +125,7 @@ TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
     return out;
   };
   const LatticeSolverCfg solver_cfg = latticeSolverCfg();
+  const auto geometry_blocked = motionLatticeCritic(&plan_to_costmap);
   problem.followable = [&, first = first](std::size_t w)
   {
     const std::size_t j = first + w;
@@ -139,7 +140,8 @@ TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
                                NextPivotCorner(pivot_corners_, j),
                                to_costmap,
                                solver_cfg,
-                               config_.avoidance_horizon_m);
+                               config_.avoidance_horizon_m,
+                               geometry_blocked);
   };
   const TurnFallbackPlan plan = PlanTurnFallback(problem, cfg);
   if (problem_out != nullptr)
@@ -234,6 +236,7 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
       ms);
   turn_fallback_.started = clock_->now();
   turn_fallback_.reverse_done_m = 0.0;
+  turn_fallback_.last_reverse_speed_mps = 0.0;
   turn_fallback_.reverse_time_s = 0.0;
   ++turn_fallback_.count;
   if (plan.reverse_m > kTurnFallbackReverseDoneM)
@@ -435,9 +438,8 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
 void FTCController::turnFallbackReverseTick(double dt, geometry_msgs::msg::TwistStamped& cmd_vel)
 {
   auto& fb = turn_fallback_;
-  // Odometry, not commanded travel, spends the reverse (as the reverse-escape).
-  fb.reverse_done_m =
-      std::min(fb.reverse_target_m, fb.reverse_done_m + std::abs(last_measured_fwd_speed_) * dt);
+  // Distance is charged once at the compute boundary, including early returns.
+  // The same physical-steady or simulation-ROS interval bounds reverse time.
   fb.reverse_time_s += dt;
   const double remaining = fb.reverse_target_m - fb.reverse_done_m;
   const double time_cap =

@@ -11,14 +11,19 @@ datum and antenna lever-arm from install/config/mowgli/mowgli_robot.yaml
 
 import copy
 import os
+import sys
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fusion_graph_simulation_geometry import resolve_simulation_geometry  # noqa: E402
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -148,6 +153,10 @@ def generate_launch_description() -> LaunchDescription:
         "node_period_s", default_value="0.04",
         description="Factor-graph node cadence (seconds). Hardware: 0.04 (25 Hz). Sim: 0.02 (50 Hz).",
     )
+    simulation_geometry_arg = DeclareLaunchArgument(
+        "simulation_geometry", default_value="",
+        description="Internal complete simulator datum/antenna snapshot; requires simulation time.",
+    )
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_magnetometer = LaunchConfiguration("use_magnetometer")
     use_lidar_map_anchor = LaunchConfiguration("use_lidar_map_anchor")
@@ -167,62 +176,69 @@ def generate_launch_description() -> LaunchDescription:
         "config", "fusion_graph.yaml",
     )
 
-    common_params = [
-        params_file,
-        # Runtime map geometry overrides the package defaults. The node
-        # validates the resolution, tile dimensions and range margin.
-        _map_geometry_params(cfg),
-        {
-            "use_sim_time": use_sim_time,
-            "datum_lat": datum_lat,
-            "datum_lon": datum_lon,
-            "lever_arm_x": lever_x,
-            "lever_arm_y": lever_y,
-            "use_magnetometer": use_magnetometer,
-            "use_lidar_map_anchor": use_lidar_map_anchor,
-            "lidar_anchor_shadow_mode": lidar_anchor_shadow_mode,
-            "dock_pose_x": float(cfg.get("dock_pose_x", 0.0) or 0.0),
-            "dock_pose_y": float(cfg.get("dock_pose_y", 0.0) or 0.0),
-            "dock_pose_yaw": float(cfg.get("dock_pose_yaw", 0.0) or 0.0),
-            "dock_pose_yaw_sigma_rad": float(
-                cfg.get("dock_pose_yaw_sigma_rad", 0.035) or 0.035),
-            "tf_publish_lead_s": tf_publish_lead_s,
-            "node_period_s": node_period_s,
-        },
-    ]
+    def localization_nodes(context):
+        geometry = resolve_simulation_geometry(
+            LaunchConfiguration("simulation_geometry").perform(context),
+            use_sim_time.perform(context),
+        )
+        common_params = [
+            params_file,
+            # Runtime map geometry overrides the package defaults. The node
+            # validates the resolution, tile dimensions and range margin.
+            _map_geometry_params(cfg),
+            {
+                "use_sim_time": use_sim_time,
+                "datum_lat": geometry.get("datum_lat", datum_lat),
+                "datum_lon": geometry.get("datum_lon", datum_lon),
+                "lever_arm_x": geometry.get("lever_arm_x", lever_x),
+                "lever_arm_y": geometry.get("lever_arm_y", lever_y),
+                "use_magnetometer": use_magnetometer,
+                "use_lidar_map_anchor": use_lidar_map_anchor,
+                "lidar_anchor_shadow_mode": lidar_anchor_shadow_mode,
+                "dock_pose_x": float(cfg.get("dock_pose_x", 0.0) or 0.0),
+                "dock_pose_y": float(cfg.get("dock_pose_y", 0.0) or 0.0),
+                "dock_pose_yaw": float(cfg.get("dock_pose_yaw", 0.0) or 0.0),
+                "dock_pose_yaw_sigma_rad": float(
+                    cfg.get("dock_pose_yaw_sigma_rad", 0.035) or 0.035),
+                "tf_publish_lead_s": tf_publish_lead_s,
+                "node_period_s": node_period_s,
+            },
+        ]
 
-    # Two mutually-exclusive Node actions gated on primary_mode. The
-    # split is purely about output topic + TF: primary publishes to
-    # /odometry/filtered_map and broadcasts map→odom; observer
-    # publishes the same payload to /fusion_graph/odometry and skips
-    # the TF broadcast (gated in C++ by primary_mode_).
-    fusion_graph_primary = Node(
-        condition=IfCondition(primary_mode),
-        package="fusion_graph",
-        executable="fusion_graph_node",
-        name="fusion_graph_node",
-        output="screen",
-        parameters=common_params + [{"primary_mode": True}],
-    )
+        # Two mutually-exclusive Node actions gated on primary_mode. The
+        # split is purely about output topic + TF: primary publishes to
+        # /odometry/filtered_map and broadcasts map→odom; observer
+        # publishes the same payload to /fusion_graph/odometry and skips
+        # the TF broadcast (gated in C++ by primary_mode_).
+        fusion_graph_primary = Node(
+            condition=IfCondition(primary_mode),
+            package="fusion_graph",
+            executable="fusion_graph_node",
+            name="fusion_graph_node",
+            output="screen",
+            parameters=common_params + [{"primary_mode": True}],
+        )
 
-    fusion_graph_observer = Node(
-        condition=UnlessCondition(primary_mode),
-        package="fusion_graph",
-        executable="fusion_graph_node",
-        name="fusion_graph_node",
-        output="screen",
-        parameters=common_params + [{"primary_mode": False}],
-        remappings=[("/odometry/filtered_map", "/fusion_graph/odometry")],
-    )
+        fusion_graph_observer = Node(
+            condition=UnlessCondition(primary_mode),
+            package="fusion_graph",
+            executable="fusion_graph_node",
+            name="fusion_graph_node",
+            output="screen",
+            parameters=common_params + [{"primary_mode": False}],
+            remappings=[("/odometry/filtered_map", "/fusion_graph/odometry")],
+        )
+
+        return [fusion_graph_primary, fusion_graph_observer]
 
     return LaunchDescription([
         use_sim_time_arg,
+        simulation_geometry_arg,
         use_magnetometer_arg,
         use_lidar_map_anchor_arg,
         lidar_anchor_shadow_mode_arg,
         primary_mode_arg,
         tf_publish_lead_s_arg,
         node_period_s_arg,
-        fusion_graph_primary,
-        fusion_graph_observer,
+        OpaqueFunction(function=localization_nodes),
     ])

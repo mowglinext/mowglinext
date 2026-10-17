@@ -9,6 +9,12 @@
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
+## Simulator map-frame contract
+
+`sim_full_system.launch.py` takes the datum and antenna lever arm from the garden scenario and forwards one complete `simulation_geometry` snapshot through navigation to COG and Fusion Graph. The map server and GNSS adapter use that same scenario. The shared launch validator rejects partial, nonfinite, invalid or self-seeding geometry and requires `use_sim_time=true`; ordinary physical launches retain their merged robot configuration.
+
+With no installed site config, the old localizer auto-seeded its datum from the antenna, shifting the fused chassis position by 0.30 m relative to this garden. An estimated inside-boundary command therefore did not establish ground-truth containment. `test_sim_localization_geometry.py` executes the complete launch chain in both sensor modes and checks rotated lever arms and physical configuration preservation. Before a mission, verify the live localizer/COG datum and antenna parameters against the scenario and compare the stationary fused pose with simulator ground truth.
+
 ## Where to look
 | Task | Start here |
 |------|------------|
@@ -19,7 +25,7 @@
 | Add a world or a static obstacle | `worlds_webots/mowgli_garden.wbt` (`test_obstacle` Solid :46–60); `world` launch arg in `launch/webots_minimal.launch.py:50` and `sim_full_system.launch.py:73` |
 | Change the sim mow polygon | `sim_full_system.launch.py:219–224` (`area_names` / `area_polygons` override on `map_server_node`) — see CLAUDE.md "What NOT to Do" on `map_server.yaml` |
 | Change the sim GPS datum | `mowgli_garden.wbt:19` (`gpsReference`) **and** `sim_full_system.launch.py:229–230` (map_server) **and** `:356–357` (navsat converter) |
-| Simulate RTK-Float / no-fix windows | `scripts/sim_navsat_rtk_fix.py` `quality_pattern` (:116–118, grammar :76–101); launch value `sim_full_system.launch.py:330` (currently `""` = always FIXED) |
+| Simulate RTK-Float / no-fix windows | `scripts/sim_navsat_rtk_fix.py` `quality_pattern` (:116–118, grammar :76–101); launch argument `gps_quality_pattern` (empty default = always FIXED) |
 | IMU noise, or a perfect IMU | `scripts/sim_imu_noise.py` params (:67–123); launch values `sim_full_system.launch.py:445–461` |
 | Wheel-slip injection / `/wheel_odom` covariance | `scripts/sim_wheel_slip.py` (:59–67 params, :131–138 covariance override); launch `sim_full_system.launch.py:406–412` |
 | Fake charging / dock detection / firmware handshake | `src/fake_hardware_bridge_node.cpp` — dock params (:83–90), `near_dock` (:151–166), `Status` field parity (:168–200) |
@@ -86,13 +92,13 @@
 | `sim_wheel_slip` | `sim_wheel_slip.py` (:51) | `sim_full_system.launch.py:396` | plain |
 | Production nodes also started by `sim_full_system.launch.py` | `navigation.launch.py` include (:159, `use_sim_time: true`, `use_lidar`), `behavior_tree_node` (:190), `map_server_node` (:204), `diagnostics_node` (:238), `foxglove_bridge` port 8765 (:256), `obstacle_tracker` if `use_lidar` (:282), `navsat_to_absolute_pose` (:348), `twist_mux` with `cmd_vel_out`→`/cmd_vel` (:372–381) | | |
 
-Every node gets `use_sim_time: True` (`sim_full_system.launch.py`); `webots_minimal.launch.py:44` defaults `use_sim_time` to `true`.
+Launch-managed nodes receive `use_sim_time: True` (`sim_full_system.launch.py`), and `webots_minimal.launch.py` defaults it to `true`. The kinematic plugin creates a separate rclpy node with system time; see the timestamp-domain pitfall below.
 
 ### Topics
 | Topic | Type | Dir (from this area) | QoS | Other end |
 |-------|------|----------------------|-----|-----------|
 | `/cmd_vel` | `geometry_msgs/TwistStamped` | sub — `sim_actuation_node.cpp:82` (SystemDefaults). `kinematic_drive` does NOT subscribe to this topic in the current wiring — see `/cmd_vel_wheels` below (PR #507, 2026-09-05) | | pub: `twist_mux` (`sim_full_system.launch.py:381`) |
-| `/cmd_vel_wheels` | `geometry_msgs/TwistStamped` | pub — `sim_actuation_node.cpp:80` | SystemDefaults | sub: `diffdrive_controller` via remap `webots_minimal.launch.py:111`, AND `kinematic_drive` (`urdf:205` `<cmdVelTopic>/cmd_vel_wheels</cmdVelTopic>`) — both get the identical post-firmware-model twist so ground truth and wheel odometry cannot diverge |
+| `/cmd_vel_wheels` | `geometry_msgs/TwistStamped` | pub — `sim_actuation_node.cpp:80` | SystemDefaults | sub: `diffdrive_controller` via remap `webots_minimal.launch.py:111`, AND `kinematic_drive` (`urdf:205` `<cmdVelTopic>/cmd_vel_wheels</cmdVelTopic>`) — both get the identical post-firmware-model twist, but chassis truth integrates it kinematically while wheel odometry integrates physical joint positions; equal inputs do not guarantee equal motion |
 | `/wheel_odom_raw` | `nav_msgs/Odometry` | pub — `diffdrive_controller` remap `webots_minimal.launch.py:112`; sub — `sim_wheel_slip.py:94` | reliable | internal to the sim chain |
 | `/wheel_odom` | `nav_msgs/Odometry` | pub — `sim_wheel_slip.py:93` (covariance :131–138: vx 0.01, vy 1e-4, wz 9e-4) | reliable | `fusion_graph_node`, `controller_server.odom_topic` (CLAUDE.md "What NOT to Do") |
 | `/imu/data_sim` | `sensor_msgs/Imu` | pub — `Ros2IMU` plugin 100 Hz (`mowgli_webots.urdf:182–191`); sub — `sim_imu_noise.py:143` | best-effort | raw Webots gyro/accel/inertial unit |
@@ -131,7 +137,7 @@ No actions are defined in this package.
 | `sim_imu_noise.gyro_white_std` / `gyro_bias_walk_std` / `gyro_bias_init_std` | 0.005 / 1e-4 / 1e-3 (`:76–83`) | `:445–447` (same) | startup |
 | `sim_imu_noise.accel_white_std` / `accel_bias_walk_std` / `accel_bias_init_std` | 0.05 / 1e-3 / 0.05 (`:87–94`) | `:448–450` (same) | startup |
 | `sim_imu_noise.synthesize_from_cmd_vel` / `cmd_vel_topic` / `noise_seed` | false / `/cmd_vel` / 42 (`:119,122,98`) | `:460` `False`, `:461`, `:451` | startup |
-| `sim_navsat_rtk_fix.quality_pattern` | `""` = always `RTK_FIXED` (`sim_navsat_rtk_fix.py:117`; grammar `"30,RTK_FIXED;15,RTK_FLOAT;5,NO_FIX"`) | `:330` `""` | startup |
+| `sim_navsat_rtk_fix.quality_pattern` | `""` = always `RTK_FIXED` (`sim_navsat_rtk_fix.py:117`; grammar `"30,RTK_FIXED;15,RTK_FLOAT;5,NO_FIX"`) | `gps_quality_pattern` launch argument (default `""`) | startup |
 | `sim_navsat_rtk_fix.input_topic` / `output_topic` / `noise_seed` | `/gps/fix_raw` / `/gps/fix` / 42 (`:110,113,122`) | `:321–322`, `:331` | startup |
 | `sim_wheel_slip.slip_period_s` / `slip_duration_s` / `slip_vx_bias` | 30 / 1.0 / 0.05 (`sim_wheel_slip.py:60,63,66`) | `:406–412` (same; `0.0` bias = slip-free baseline) | startup |
 | `KinematicDrive` `cmdVelTopic` (URDF plugin property) | `/cmd_vel` (`mowgli_webots.urdf:202`; fallback `kinematic_drive.py:158`) | — | plugin init |
@@ -164,6 +170,11 @@ cd ros2 && make sim            # = make sim-stop + sim_full_system.launch.py hea
 cd ros2 && make e2e-test       # sim-stop → build → launch → sleep 90 → python3 src/e2e_test.py → sim-stop
 cd ros2 && make e2e-test-no-lidar   # same with use_lidar:=false, runs src/e2e_test_no_lidar.py
 
+# Quality-loss/recovery scenario: same relay, no alternate GPS publisher.
+# The pattern starts at its first fix and repeats in simulated time.
+ros2 launch mowgli_bringup sim_full_system.launch.py use_lidar:=false \
+  gps_quality_pattern:='90,RTK_FIXED;30,RTK_FLOAT;10,NO_FIX'
+
 # Docker
 docker compose -f docker/docker-compose.simulation.yaml up -d simulation      # headless, Foxglove :8765
 docker compose -f docker/docker-compose.simulation.yaml up -d simulation-gui  # noVNC http://localhost:6080/vnc.html
@@ -171,13 +182,14 @@ cd ros2 && make docker-sim     # builds Dockerfile stage `simulation` (amd64 onl
 ```
 Test files:
 - `test/test_firmware_wheel_model.cpp` — pins `step_firmware_wheel_model`: straight-line and pivot convergence (:46, :57), sub-deadband stall then bounded buzz (:74), kinetic hysteresis keeps a rolling wheel moving (:102), saturation to `max_mps` (:124), stop settles to exactly 0 (:134), integrator clamp (:156), sign-flip integrator reset (:175). Registered `CMakeLists.txt:121`.
+- `ros2/src/mowgli_bringup/test/test_sim_gps_quality_launch.py` — executes the production launch builder for both sensor modes; preserves the empty default and forwards the exact requested pattern as a string. Invalid patterns or nonfinite/nonpositive cycle durations fail simulator startup.
 - `ros2/src/mowgli_bringup/test/test_gnss_launch_config.py:59` — pins that `sim_full_system.launch.py` carries no legacy `publish_gnss_status` / `gnss_backend` / `gps_protocol` params.
 - E2E (`ros2/src/e2e_test.py`, `ros2/src/e2e_test_no_lidar.py`) drive the BT through `/behavior_tree_node/high_level_control` and watch `/behavior_tree_node/high_level_status`, `/wheel_odom`, `/odometry/filtered_map`, `/scan`, `/map`, `/map_server_node/boundary_violation`; the fake bridge serves their `/hardware_bridge/emergency_stop` calls (`e2e_test.py:217`).
 
 CI: `.github/workflows/ros2-ci.yml` builds the whole workspace and runs `colcon test` (:347) — the gtest runs there; **no Webots/E2E in CI**. `.github/workflows/ros2-docker.yml` builds only `target: [runtime]` (:36) — the `simulation` image is never built or published by CI.
 
 ## Change coupling — "if you change X, also update Y"
-- **Wheel model gains** are quadruplicated: `firmware_wheel_model.hpp:60–72` ⇄ `kinematic_drive.py:147–155` ⇄ `sim_full_system.launch.py:491–502` ⇄ firmware `firmware/stm32/ros_usbnode/src/ros/ros_custom/cpp_main.cpp:111–115` (`WHEEL_PI_KP_PWM_PER_MPS` 30, `KI` 5000, `INT_MAX` 100) and `include/board.h` (`MAX_MPS`, `PWM_PER_MPS`, `WHEEL_BASE`). Body pose (Python) and `/wheel_odom_raw` (C++) only agree while the two copies match.
+- **Wheel model gains** are quadruplicated: `firmware_wheel_model.hpp:60–72` ⇄ `kinematic_drive.py:147–155` ⇄ `sim_full_system.launch.py:491–502` ⇄ firmware `firmware/stm32/ros_usbnode/src/ros/ros_custom/cpp_main.cpp:111–115` (`WHEEL_PI_KP_PWM_PER_MPS` 30, `KI` 5000, `INT_MAX` 100) and `include/board.h` (`MAX_MPS`, `PWM_PER_MPS`, `WHEEL_BASE`). The shipped kinematic plugin disables its embedded firmware model. Matching model constants does not ensure that teleported chassis motion agrees with wheel-joint odometry.
 - **Track / radius** `0.325` / `0.093`: `ros2_control.yaml:34–35`, `kinematic_drive.py:129–130`, `sim_actuation_node.cpp:66`, `MowgliMower.proto:147,205` (anchors ±0.1625), `mowgli_webots.urdf:72,97,121`.
 - **Sensor placement** must be changed in two places: Webots `extensionSlot` (`mowgli_garden.wbt:82–125`) and the URDF fixed joint (`mowgli_webots.urdf:126–158`); frame names in `<frameName>` (`:168,178,187`) must match the URDF links.
 - **Device names** `left_wheel_motor` / `right_wheel_motor` / `left_wheel_sensor` / `right_wheel_sensor` / `lidar` / `gps` / `inertial_unit` / `gyro` / `accelerometer`: PROTO (`:155,161,211,216`; world `:84–86,92,107`) ⇄ URDF `<device reference>` / plugin names (`:162,172,188–190`) ⇄ `ros2_control.yaml:31–32`.
@@ -190,11 +202,13 @@ CI: `.github/workflows/ros2-ci.yml` builds the whole workspace and runs `colcon 
 - **New sim script** → `CMakeLists.txt:78–84` (`install(PROGRAMS …)`); the Dockerfile CRLF fix (`:543`) only covers `lib/mowgli_simulation/*.py`.
 
 ## Pitfalls
+- **Two simulated motion plants:** `kinematic_drive.py` integrates `/cmd_vel_wheels` into chassis pose and sets body velocity; it does not force wheel-joint positions. `diffdrive_controller` integrates those independently simulated joints into `/wheel_odom_raw`. A recovery trace on ROS source `cfd45403` records substantial truth/odometry disagreement. Preserve both observables and capture source stamps plus command/joint data before attributing it; switching odometry to command-derived open-loop values would conceal the disagreement. See the Ubuntu continuation in `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
+- **Ground-truth timestamp domain:** the kinematic plugin creates its own rclpy node without `use_sim_time=true`, so `/sim/ground_truth_pose` headers use system time while wheel commands/joints/odometry use simulated time. Do not directly join those header stamps. Passive same-process monotonic receipt ordering is correlation evidence, not synchronized acquisition.
 - Read `docs/WEBOTS_SIM.md` §3–§7 before touching `worlds_webots/`, `protos/`, `urdf_webots/`, or `kinematic_drive.py`: wheel `Cylinder`+`boundingObject` need the `Pose { rotation 1 0 0 -1.5708 }` (`MowgliMower.proto:168,187,226`); `axis 0 -1 0` is deliberate (`:146,204`); the teleport + `setVelocity([…,0.0,…,wz])` pair and the single init-time `resetPhysics()` are load-bearing (`kinematic_drive.py:273–275,456–457,513–515`); never let the plugin write the motors (`:214–225,542–565`).
 - `/cmd_vel` in sim is `TwistStamped` (`kinematic_drive.py:241`, `ros2_control.yaml:40`). `ros2/src/e2e_test.py:202–206` subscribes `/cmd_vel` and `/cmd_vel_smoothed` as `geometry_msgs/Twist` — those callbacks never fire under Webots.
-- `ros2/src/e2e_test.py:561–583` spawns its obstacle with `gz service` (Gazebo); under Webots it fails and the obstacle test reports `SKIP`. `/gps_degradation_sim/status` (`:195`) has no publisher — no such node exists (grep the tree). `make e2e-test-no-lidar` passes `simulate_gps_degradation:=false` (`Makefile:118`), which no launch file declares.
+- `ros2/src/e2e_test.py:561–583` spawns its obstacle with `gz service` (Gazebo); under Webots it fails and the obstacle test reports `SKIP`. `/gps_degradation_sim/status` (`:195`) has no publisher — no such node exists (grep the tree). The no-LiDAR target uses the empty `gps_quality_pattern` default (always Fixed); the former `simulate_gps_degradation` flag was never declared and has been removed from that target.
 - `headless` and `use_rviz` args on `sim_full_system.launch.py` are accepted and ignored (`:85–93`, `use_rviz` is never consumed); GUI vs headless is decided by `DISPLAY` (Makefile `:87`, compose Xvfb). `rviz/mowgli_sim.rviz` is installed but never launched. The `mode_arg` comment at `:148–150` says "Defaults to fast" — the default is `realtime` (`:111`).
-- `sim_navsat_rtk_fix.py` **must** publish RELIABLE (`:144–153`); the docstring's "GBAS_FIX (4)" (`:13`) is wrong — the constant is `STATUS_GBAS_FIX = 2`, the code uses the symbol. `quality_pattern` is currently `""` in launch (`sim_full_system.launch.py:330`), so RTK-Float behaviour is untested unless you set it.
+- `sim_navsat_rtk_fix.py` **must** publish RELIABLE (`:144–153`); the docstring's "GBAS_FIX (4)" (`:13`) is wrong — the constant is `STATUS_GBAS_FIX = 2`, the code uses the symbol. `gps_quality_pattern` defaults to empty in launch, so a default mission does not exercise RTK-Float or NO_FIX. Request a cycle explicitly and verify the emitted quality regimes and pause/resume behavior.
 - `sim_imu_noise.py` defaults `input_topic` to the Gazebo-era `/imu/data_gz` (`:68`); standalone it produces nothing — only the launch override (`sim_full_system.launch.py:437`) makes it work (WEBOTS_SIM.md §10c).
 - `fake_hardware_bridge` reports `is_charging = true` before the first ground-truth pose arrives (`:162–165`) and whenever the truth pose is within `dock_proximity` (0.3 m) of the origin — the dock is hard-wired at (0,0) (`:83–86`), not read from `mowgli_robot.yaml` (Invariant 6 does not apply in sim). Its `emergency_stop` clears without a physical-trigger check (`:64–80`) — do not use it to reason about firmware latch semantics (Invariant 9).
 - The sim `PWM_PER_MPS = 300` matches `board.h:89` (LUV1000RI) only; YardForce 500 classic is 337 (`board.h:50`) and variant B is 275 (`:71`), and the firmware value is host-tunable at runtime (`cpp_main.cpp:171`). Deadband 40 comes from the `cpp_main.cpp:92` comment; kinetic 30 and `hold 0.02` are sim-side choices with no firmware `#define`.

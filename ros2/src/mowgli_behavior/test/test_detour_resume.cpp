@@ -311,6 +311,26 @@ TEST(DetourResume, FtcConfirmedObstacleDefaultsFalse)
   EXPECT_FALSE(DetourResumeCfg{}.ftc_confirmed_obstacle);
 }
 
+TEST(DetourResume, AdditionalTargetEligibilityCannotConfirmAnObstacle)
+{
+  auto cm = makeGrid();
+  addWall(cm, 0, 39, 99);
+  auto c = cfg();
+  c.lethal_cost = 100;
+  const auto poses = straightPath(40);
+  const auto reject = [](double, double)
+  {
+    return false;
+  };
+  const auto unconfirmed = decideDetour(cm, poses, 0, c, reject);
+  EXPECT_FALSE(unconfirmed.obstacle_confirmed);
+  EXPECT_FALSE(unconfirmed.resume_idx);
+  c.ftc_confirmed_obstacle = true;
+  const auto confirmed = decideDetour(cm, poses, 0, c, reject);
+  EXPECT_TRUE(confirmed.obstacle_confirmed);
+  EXPECT_FALSE(confirmed.resume_idx);
+}
+
 // ftc_abort_reason::HasObstacleAbortMarker — the structured signal
 // FollowStrip reads to fill ftc_confirmed_obstacle. Mirrors exactly how
 // FTCController stamps it (a fixed prefix) and how FollowStrip captures the

@@ -299,6 +299,12 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `start_blocked_escape_min_signal_speed` (L551) | 0.03 | Navigation | launch |
 | `start_blocked_escape_signal_max_age_s` (L558) | 90.0 | Navigation | launch |
 
+`motion_footprint` is an internal `behavior_tree_node` double array of chassis
+XY vertices. Both full launch files derive it from `chassis_footprint`, including
+the helper's existing 0.05 m navigation clearance. The ad-hoc node default is
+empty and disables Escape motion authorization. This is not a new operator YAML
+setting. See `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
+
 ### Obstacles (GUI → Settings → Obstacles; injected `navigation.launch.py:811–868`, clamps shown)
 
 | Key (L) | Default | Becomes · clamp | GUI | Life |
@@ -489,6 +495,7 @@ parameters remain directly under `FollowPath`.
 | `coverage_goal_checker` | 170–189 | `mowgli_nav2_plugins/PathProgressGoalChecker` L171, `plan_topic: /controller_server/FollowCoveragePath/global_plan` L189 — **never `StoppedGoalChecker`** |
 | `FollowPath` (transit) | 226–320 | RotationShim L227 wrapping RPP L228; `primary_controller.max_linear_vel: 0.30` L276 (overwritten by `transit_speed`) |
 | `FollowCoveragePath` (coverage) | 338–550 | `mowgli_nav2_plugins/FTCController` L339; `speed_fast` L346 / `speed_slow` L357 / `min_speed_mps` L364 (speed fast/slow launch-overwritten); obstacle restart angular acceleration `1.0 rad/s²` L363; `max_cmd_vel_ang: 0.8` L408; `max_goal_distance_error: 0.50` L414; `forward_only: true` L424; `check_obstacles` L429, `obstacle_lookahead` L435, `obstacle_body_half_width` L481, `enable_obstacle_deviation` L513, `max_lateral_deviation` L519, reverse-escape trio L548–550; turn fallback (`ftc_turn_fallback.hpp`) `turn_fallback_enabled: true`, `turn_fallback_max_reverse_m: 0.40`, `turn_fallback_max_rejoin_arc_m: 3.0`, `turn_fallback_min_turn_deg: 45.0`, `turn_fallback_timeout_s: 45.0` — static (not operator-facing, no template key, no launch injection), dynamic via `set_parameters`, pinned by `test_ftc_turn_fallback_is_configured_and_bounded` |
+| `FollowCoveragePath.obstacle_coast_time_bound_s` | FTC declaration and base YAML | `0.5 s`, finite startup/live range `[0.01, 2.0]`; assumed STOP-response integral bound for the forward lattice execution sweep. No operator template key, GUI control or launch injection. This is not physical stopping evidence; lowering requires a validated response assumption. |
 | `planner_server` | 551–590 | Smac |
 | `smoother_server` / `behavior_server` / `waypoint_follower` | 591 / 604 / 655 | BackUp lives in `behavior_server` (undock, Invariant 10) |
 | `global_costmap` | 674–789 | 70×70 m rolling L741–742, `resolution: 0.08` L715, `inflation_radius` overwritten at launch by `global_inflation_radius` (0.677 m shipped; the yaml carries 0.68 for reference), `cost_scaling_factor: 7.0`, **`keepout_filter` enabled** L782–785 |

@@ -32,6 +32,9 @@
 | Perf regression | `test/test_perf.cpp` (Release only, `TIMEOUT 300` in `CMakeLists.txt`) |
 
 ## Files
+
+The launch-only helper `launch/fusion_graph_simulation_geometry.py` validates the complete simulator datum/antenna snapshot forwarded by bringup. Nonempty overrides require simulation time and are applied together to COG and Fusion Graph; an empty snapshot preserves the physical robot configuration. See `mowgli_bringup/test/test_sim_localization_geometry.py` for the full launch-chain regression.
+
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`ros2/src/fusion_graph/` (package root)** | | |

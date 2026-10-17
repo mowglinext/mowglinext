@@ -100,13 +100,15 @@ LatticeSolver::LatticeSolver(const nav2_costmap_2d::Costmap2D& costmap,
                              std::vector<geometry_msgs::msg::PoseStamped> poses,
                              std::size_t carrot_pos,
                              bool corner_is_last_station,
-                             const LatticeSolverCfg& cfg)
+                             const LatticeSolverCfg& cfg,
+                             LatticeGeometryBlocked geometry_blocked)
     : costmap_(costmap),
       guard_(guard),
       body_(body),
       poses_(std::move(poses)),
       carrot_pos_(std::min(carrot_pos, poses_.empty() ? 0 : poses_.size() - 1)),
-      cfg_(cfg)
+      cfg_(cfg),
+      geometry_blocked_(std::move(geometry_blocked))
 {
   if (corner_is_last_station && !poses_.empty())
   {
@@ -127,6 +129,8 @@ LatticeSolver::LatticeSolver(const nav2_costmap_2d::Costmap2D& costmap,
       std::floor(cfg_.lattice.max_offset / std::max(1e-9, cfg_.lattice.offset_step) + 1e-9));
   width_ = static_cast<std::size_t>(2 * half_ + 1);
   memo_.assign(poses_.size() * width_, -1);
+  geometry_memo_.assign(poses_.size() * width_, -1);
+  edge_memo_.assign(poses_.size() * width_ * 3, -1);
   for (const auto& v : body_)
   {
     axis_rear_ = std::min(axis_rear_, v.x);
@@ -142,8 +146,65 @@ std::size_t LatticeSolver::StationsIn(double metres) const
   return static_cast<std::size_t>(std::ceil(std::max(0.0, metres) / std::max(1e-3, mean_ds)));
 }
 
+geometry_msgs::msg::PoseStamped LatticeSolver::OffsetPose(std::size_t pose, double offset) const
+{
+  auto result = poses_[pose];
+  const double yaw = tf2::getYaw(result.pose.orientation);
+  result.pose.position.x -= offset * std::sin(yaw);
+  result.pose.position.y += offset * std::cos(yaw);
+  return result;
+}
+
+bool LatticeSolver::GeometryPoseBlocked(std::size_t pose, double offset)
+{
+  if (!geometry_blocked_)
+    return false;
+  const int k = std::clamp(half_ + static_cast<int>(std::lround(offset / cfg_.lattice.offset_step)),
+                           0,
+                           2 * half_);
+  // The applied initial offset is continuous, not necessarily a lattice node.
+  if (offset != (k - half_) * cfg_.lattice.offset_step)
+  {
+    const auto p = OffsetPose(pose, offset);
+    return geometry_blocked_(p, p);
+  }
+  auto& cell = geometry_memo_[pose * width_ + static_cast<std::size_t>(k)];
+  if (cell < 0)
+  {
+    const auto p = OffsetPose(pose, offset);
+    cell = geometry_blocked_(p, p) ? 1 : 0;
+  }
+  return cell != 0;
+}
+
+bool LatticeSolver::GeometryEdgeBlocked(std::size_t pose, double from_offset, double to_offset)
+{
+  if (!geometry_blocked_)
+    return false;
+  const double from_grid =
+      std::round(from_offset / cfg_.lattice.offset_step) * cfg_.lattice.offset_step;
+  if (from_offset != from_grid)
+    return geometry_blocked_(OffsetPose(pose - 1, from_offset), OffsetPose(pose, to_offset));
+  const int k =
+      std::clamp(half_ + static_cast<int>(std::lround(to_offset / cfg_.lattice.offset_step)),
+                 0,
+                 2 * half_);
+  const int delta =
+      static_cast<int>(std::lround((from_offset - to_offset) / cfg_.lattice.offset_step));
+  if (delta < -1 || delta > 1)
+    return true;
+  auto& cell = edge_memo_[(pose * width_ + static_cast<std::size_t>(k)) * 3 +
+                          static_cast<std::size_t>(delta + 1)];
+  if (cell < 0)
+    cell =
+        geometry_blocked_(OffsetPose(pose - 1, from_offset), OffsetPose(pose, to_offset)) ? 1 : 0;
+  return cell != 0;
+}
+
 LatticeBlock LatticeSolver::PoseBlock(std::size_t pose, double offset)
 {
+  if (GeometryPoseBlocked(pose, offset))
+    return LatticeBlock::kGeometry;
   const std::size_t k = static_cast<std::size_t>(std::clamp(
       half_ + static_cast<int>(std::lround(offset / cfg_.lattice.offset_step)), 0, 2 * half_));
   signed char& cell = memo_[pose * width_ + k];
@@ -199,15 +260,18 @@ LatticeBlock LatticeSolver::SpanBlock(std::size_t station,
                                       std::size_t ahead,
                                       std::size_t grace)
 {
-  if (station <= grace)
-  {
-    return LatticeBlock::kFree;
-  }
   const std::size_t at = carrot_pos_ + station;
   const std::size_t from = at > carrot_pos_ ? at - carrot_pos_ : 0;
   const std::size_t to = std::min(poses_.size() - 1, at + ahead);
   for (std::size_t pose = from; pose <= to; ++pose)
   {
+    // Costmap degradation may ignore an existing obstacle; it cannot grant
+    // reference/body permission or skip a hole between adjacent poses.
+    if (GeometryPoseBlocked(pose, offset) ||
+        (pose > from && GeometryEdgeBlocked(pose, offset, offset)))
+      return LatticeBlock::kGeometry;
+    if (station <= grace)
+      continue;
     const LatticeBlock b = PoseBlock(pose, offset);
     if (b != LatticeBlock::kFree)
     {
@@ -233,7 +297,7 @@ LatticeSolution LatticeSolver::Solve(double start_offset, int preferred_sign, in
 {
   LatticeSolution out;
   out.planned_stations = stations_.size();
-  if (stations_.empty())
+  if (poses_.empty() || stations_.empty() || GeometryPoseBlocked(carrot_pos_, start_offset))
   {
     return out;
   }
@@ -263,7 +327,13 @@ LatticeSolution LatticeSolver::Solve(double start_offset, int preferred_sign, in
                    (station == corner_station_ && std::fabs(offset) > 1e-9) ||
                    SpanBlock(station, offset, ahead, grace) != LatticeBlock::kFree;
           },
-          cfg_.lattice);
+          cfg_.lattice,
+          [this, start_offset](std::size_t station, double from, double to)
+          {
+            return GeometryEdgeBlocked(carrot_pos_ + station,
+                                       station == 1 ? start_offset : from,
+                                       to);
+          });
       if (out.plan.feasible)
       {
         break;
@@ -290,7 +360,8 @@ bool LatticeFeasibleFrom(
     const std::function<geometry_msgs::msg::PoseStamped(const geometry_msgs::msg::PoseStamped&)>&
         to_costmap,
     const LatticeSolverCfg& cfg,
-    double horizon_m)
+    double horizon_m,
+    LatticeGeometryBlocked geometry_blocked)
 {
   const LatticeWindow window = ResampleLatticeWindow(
       plan, carrot_idx, leg_first, leg_last, corner, cfg.station_spacing_m, cfg.lead_m, horizon_m);
@@ -310,7 +381,8 @@ bool LatticeFeasibleFrom(
                        std::move(poses),
                        window.carrot_pos,
                        window.corner_is_last_station,
-                       cfg);
+                       cfg,
+                       std::move(geometry_blocked));
   return solver.Solve(0.0, 0, 0).plan.feasible;
 }
 

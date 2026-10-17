@@ -311,6 +311,7 @@ bool MapServerNode::apply_promoted_obstacle(size_t area_index,
     areas_[area_index].obstacles.push_back(make_obstacle_entry(polygon, name, source, false));
     obstacle_polygons_.push_back(polygon);
     masks_dirty_ = true;
+    transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
   }
   apply_area_classifications();
 
