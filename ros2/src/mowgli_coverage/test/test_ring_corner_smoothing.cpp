@@ -1,6 +1,8 @@
 // Copyright 2026 Mowgli Project
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
+#include <iostream>
 #include <limits>
 #include <memory>
 
@@ -340,6 +342,48 @@ TEST(RingCornerSmoothing, HostedCapturedBevelsAreSingleCirclesWithoutDubinsSeams
     const auto rounded = mc::detail::roundBeveledCorners(
         fixture.source, fixture.boundary, {}, M_PI / 6, .4, .2, .03, {}, &trace);
     ASSERT_FALSE(trace.replacements.empty());
+    const auto dense = densify(rounded, .10);
+    if (unsupported(dense) != 0)
+    {
+      std::cerr << std::setprecision(17);
+      const auto dump = [&](const char* stage, const Pts& points)
+      {
+        std::cerr << "GEOMETRY " << fixture.name << " " << stage << " [";
+        for (std::size_t i = 0; i < points.size(); ++i)
+        {
+          if (i)
+            std::cerr << ",";
+          std::cerr << "[" << points[i].first << "," << points[i].second << "]";
+        }
+        std::cerr << "]\n";
+      };
+      dump("S", trace.source);
+      dump("T", trace.intermediate);
+      dump("R", rounded);
+      dump("D", dense);
+      for (const auto& item : trace.replacements)
+      {
+        std::cerr << "REPLACEMENT " << fixture.name << " source=" << item.source_vertex
+                  << " intermediate=" << item.output_begin << "\n";
+        dump("local", item.local);
+      }
+      for (std::size_t i = 1; i + 1 < dense.size(); ++i)
+      {
+        // Reuse the unchanged predicate to identify only the failing triples.
+        if (unsupported({dense[i - 1], dense[i], dense[i + 1]}) == 0)
+          continue;
+        const auto a = dense[i - 1], b = dense[i], c = dense[i + 1];
+        const double ax = b.first - a.first, ay = b.second - a.second;
+        const double bx = c.first - b.first, by = c.second - b.second;
+        const double al = std::hypot(ax, ay), bl = std::hypot(bx, by);
+        const double turn = std::acos(std::clamp((ax * bx + ay * by) / (al * bl), -1.0, 1.0));
+        const double radius = std::hypot(ax + bx, ay + by) / (2 * std::abs(std::sin(turn)));
+        std::cerr << "UNSUPPORTED " << fixture.name << " D index=" << i << " lengths=[" << al << ","
+                  << bl << "] headings=[" << std::atan2(ay, ax) << "," << std::atan2(by, bx)
+                  << "] turn=" << turn << " radius=" << radius << "\n";
+        dump("D_triple", {a, b, c});
+      }
+    }
     EXPECT_EQ(unsupported(densify(rounded, .10)), 0u);
     for (const auto& replacement : trace.replacements)
     {
