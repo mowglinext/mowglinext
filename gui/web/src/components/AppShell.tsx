@@ -1,4 +1,5 @@
 import {observeAsync} from "../utils/async";
+import {isJsonObject} from "../utils/json";
 import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {type ReactNode, useEffect, useMemo, useState} from "react";
 import {useMatches, useNavigate, useOutlet} from "react-router-dom";
@@ -104,8 +105,12 @@ export function AppShell() {
     observeAsync((async () => {
       try {
         const res = await fetch(`${httpBase()}/api/settings/status`);
-        const data = await res.json();
-        if (!data.onboarding_completed && currentPath !== '/onboarding') {
+        if (!res.ok) throw new Error('Onboarding status unavailable');
+        const data: unknown = await res.json();
+        if (!isJsonObject(data) || typeof data.onboarding_completed !== 'boolean') {
+          throw new Error('Invalid onboarding status');
+        }
+        if (data.onboarding_completed === false && currentPath !== '/onboarding') {
           observeAsync(navigate({pathname: '/onboarding'}));
         }
       } catch (error) { console.error('Failed to check onboarding status', error); }
