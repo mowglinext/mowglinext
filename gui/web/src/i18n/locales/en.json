@@ -1945,7 +1945,9 @@
   "mapOffsetPanel": {
     "mapOffset": "Map Offset",
     "mapRotation": "Map Rotation",
-    "resetToNorthUp": "Reset to north-up"
+    "resetToNorthUp": "Reset to north-up",
+    "lockRotation": "Lock map rotation",
+    "unlockRotation": "Unlock map rotation"
   },
   "mapEditArea": {
     "areaTypeMowing": "Mowing Area",

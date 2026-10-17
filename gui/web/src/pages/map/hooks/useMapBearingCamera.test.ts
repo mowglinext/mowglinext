@@ -10,6 +10,8 @@ function camera() {
         setBearing: vi.fn((value: number) => { bearing = value; }),
         easeTo: vi.fn((value: {bearing: number}) => { bearing = value.bearing; }),
         on: vi.fn(), off: vi.fn(),
+        dragRotate: {disable: vi.fn(), enable: vi.fn()},
+        touchZoomRotate: {disableRotation: vi.fn(), enableRotation: vi.fn()},
     };
     return {map, target: map as unknown as MapboxMap};
 }
@@ -18,7 +20,13 @@ describe('saved map camera bearing', () => {
     it.each([true, false])('restores config loaded before the map (interactive=%s)', interactive => {
         const mapInstanceRef = {current: null as MapboxMap | null};
         const onBearingChange = vi.fn();
-        const {result} = renderHook(() => useMapBearingCamera({mapInstanceRef, bearing: 47, interactive, onBearingChange}));
+        const {result} = renderHook(() => useMapBearingCamera({
+            mapInstanceRef,
+            bearing: 47,
+            interactive,
+            rotationLocked: false,
+            onBearingChange,
+        }));
         const {map, target} = camera();
         act(() => result.current({target}));
         expect(map.getBearing()).toBe(47);
@@ -28,7 +36,13 @@ describe('saved map camera bearing', () => {
 
     it('applies a saved value arriving after map load', () => {
         const mapInstanceRef = {current: null as MapboxMap | null};
-        const {result, rerender} = renderHook(({bearing}) => useMapBearingCamera({mapInstanceRef, bearing, interactive: true, onBearingChange: vi.fn()}), {initialProps: {bearing: 0}});
+        const {result, rerender} = renderHook(({bearing}) => useMapBearingCamera({
+            mapInstanceRef,
+            bearing,
+            interactive: true,
+            rotationLocked: false,
+            onBearingChange: vi.fn(),
+        }), {initialProps: {bearing: 0}});
         const {map, target} = camera();
         act(() => result.current({target}));
         rerender({bearing: -35});
@@ -37,7 +51,13 @@ describe('saved map camera bearing', () => {
 
     it('restores replacement maps and removes listeners when leaving the page', () => {
         const mapInstanceRef = {current: null as MapboxMap | null};
-        const {result, unmount} = renderHook(() => useMapBearingCamera({mapInstanceRef, bearing: 73, interactive: true, onBearingChange: vi.fn()}));
+        const {result, unmount} = renderHook(() => useMapBearingCamera({
+            mapInstanceRef,
+            bearing: 73,
+            interactive: true,
+            rotationLocked: false,
+            onBearingChange: vi.fn(),
+        }));
         const first = camera();
         const second = camera();
         act(() => result.current({target: first.target}));
@@ -53,7 +73,13 @@ describe('saved map camera bearing', () => {
         const mapInstanceRef = {current: null as MapboxMap | null};
         const oldCallback = vi.fn();
         const nextCallback = vi.fn();
-        const {result, rerender} = renderHook(({onBearingChange}) => useMapBearingCamera({mapInstanceRef, bearing: 20, interactive: true, onBearingChange}), {initialProps: {onBearingChange: oldCallback}});
+        const {result, rerender} = renderHook(({onBearingChange}) => useMapBearingCamera({
+            mapInstanceRef,
+            bearing: 20,
+            interactive: true,
+            rotationLocked: false,
+            onBearingChange,
+        }), {initialProps: {onBearingChange: oldCallback}});
         const {map, target} = camera();
         act(() => result.current({target}));
         const rotateEnd = map.on.mock.calls[0][1] as (event: object) => void;
@@ -64,5 +90,25 @@ describe('saved map camera bearing', () => {
         rotateEnd({originalEvent: {type: 'touchend'}});
         expect(nextCallback).toHaveBeenCalledWith(82);
         expect(oldCallback).not.toHaveBeenCalled();
+    });
+
+    it('locks only rotation while preserving touch zoom and restores rotation when unlocked', () => {
+        const mapInstanceRef = {current: null as MapboxMap | null};
+        const {result, rerender} = renderHook(({rotationLocked}) => useMapBearingCamera({
+            mapInstanceRef,
+            bearing: 15,
+            interactive: true,
+            rotationLocked,
+            onBearingChange: vi.fn(),
+        }), {initialProps: {rotationLocked: true}});
+        const {map, target} = camera();
+
+        act(() => result.current({target}));
+        expect(map.dragRotate.disable).toHaveBeenCalled();
+        expect(map.touchZoomRotate.disableRotation).toHaveBeenCalled();
+
+        rerender({rotationLocked: false});
+        expect(map.dragRotate.enable).toHaveBeenCalled();
+        expect(map.touchZoomRotate.enableRotation).toHaveBeenCalled();
     });
 });

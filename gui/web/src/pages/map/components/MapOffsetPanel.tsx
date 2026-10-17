@@ -1,6 +1,6 @@
 import {Button, InputNumber, Slider} from "antd";
 import {useTranslation} from "react-i18next";
-import {CompassOutlined} from "@ant-design/icons";
+import {CompassOutlined, LockOutlined, UnlockOutlined} from "@ant-design/icons";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 
 interface MapOffsetPanelProps {
@@ -30,13 +30,21 @@ export const MapOffsetPanel = ({offsetX, offsetY, onChangeX, onChangeY}: MapOffs
 interface MapRotationPanelProps {
     bearing: number;
     onChangeBearing: (v: number) => void;
+    rotationLocked: boolean;
+    onChangeRotationLocked: (locked: boolean) => void;
 }
 
 /// Map rotation (bearing). The title ("Map rotation") is the sidebar section header.
-export const MapRotationPanel = ({bearing, onChangeBearing}: MapRotationPanelProps) => {
+export const MapRotationPanel = ({
+    bearing,
+    onChangeBearing,
+    rotationLocked,
+    onChangeRotationLocked,
+}: MapRotationPanelProps) => {
     const {t} = useTranslation();
+    const rotationLockLabel = t(rotationLocked ? 'mapOffsetPanel.unlockRotation' : 'mapOffsetPanel.lockRotation');
     return (
-        <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
+        <div data-testid="map-rotation-panel" style={{display: 'flex', gap: 8, alignItems: 'center'}}>
             <div style={{flex: 1}}>
                 <Slider
                     min={-180}
@@ -61,6 +69,15 @@ export const MapRotationPanel = ({bearing, onChangeBearing}: MapRotationPanelPro
                 icon={<CompassOutlined/>}
                 onClick={() => onChangeBearing(0)}
                 title={t('mapOffsetPanel.resetToNorthUp')}
+            />
+            <Button
+                size="small"
+                type={rotationLocked ? 'primary' : 'default'}
+                icon={rotationLocked ? <LockOutlined/> : <UnlockOutlined/>}
+                onClick={() => onChangeRotationLocked(!rotationLocked)}
+                title={rotationLockLabel}
+                aria-label={rotationLockLabel}
+                aria-pressed={rotationLocked}
             />
         </div>
     );
