@@ -81,9 +81,10 @@ export const useWS = <T>(
         onClose: () => {
             onErrorRef.current(new Error("Stream closed"));
         },
-        onMessage: (e: MessageEvent) => {
+        onMessage: (e: MessageEvent<unknown>) => {
             let decoded: string;
             try {
+                if (typeof e.data !== 'string') throw new Error('Expected a base64 text frame');
                 decoded = textDecoderRef.current(e.data);
             } catch (err) {
                 if (!pubDecodeWarnedRef.current) {
