@@ -84,6 +84,23 @@ describe('MultiplexedSocket grid deltas', () => {
         expect(ws.operations().filter(o => (o as {op: string}).op === 'resync')).toEqual([]);
     });
 
+    it('accepts an empty patch without resync and applies the next changed patch', () => {
+        open();
+        ws.frame({topic: 'mowProgress', seq: 1, data: grid(1, [0, 0, 0])});
+        ws.frame({topic: 'mowProgress', patch: {base: 1, seq: 2, header: {stamp: 2}, gaps: [], vals: []}});
+
+        expect(listener).toHaveBeenCalledTimes(2);
+        expect(lastGrid().data).toEqual([0, 0, 0]);
+        expect(lastGrid().header).toEqual({stamp: 2});
+        expect(ws.operations().filter(o => (o as {op: string}).op === 'resync')).toEqual([]);
+
+        ws.frame({topic: 'mowProgress', patch: {base: 2, seq: 3, header: {stamp: 3}, gaps: [1], vals: [100]}});
+        expect(listener).toHaveBeenCalledTimes(3);
+        expect(lastGrid().data).toEqual([0, 100, 0]);
+        expect(lastGrid().header).toEqual({stamp: 3});
+        expect(ws.operations().filter(o => (o as {op: string}).op === 'resync')).toEqual([]);
+    });
+
     it('delivers a new object per patch but never an old picture', () => {
         open();
         ws.frame({topic: 'mowProgress', seq: 1, data: grid(1, [0, 0, 0])});

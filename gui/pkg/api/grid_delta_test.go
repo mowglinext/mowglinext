@@ -70,7 +70,13 @@ func TestGridDeltaUnchangedGridIsAnEmptyPatch(t *testing.T) {
 	f, ok := d.next(gridMessage(t, 10, 10, 0, 2, a))
 	require.True(t, ok)
 	require.False(t, f.Full)
+	require.NotNil(t, f.Gaps)
+	require.NotNil(t, f.Vals)
+	require.Empty(t, f.Gaps)
 	require.Empty(t, f.Vals)
+	require.EqualValues(t, 1, f.Base)
+	require.EqualValues(t, 2, f.Seq)
+	require.Contains(t, string(f.Header), `"sec":2`)
 }
 
 func TestGridDeltaSendsFullWhenTheGridMoves(t *testing.T) {
@@ -249,6 +255,25 @@ func TestMultiplexSendsGridPatchesToADeltaSubscriber(t *testing.T) {
 	require.NotNil(t, again.Data)
 	require.EqualValues(t, 3, again.Seq)
 	require.Equal(t, b, again.Data.Data)
+}
+
+func TestUnchangedGridPatchArraysOnWire(t *testing.T) {
+	for _, topic := range []string{"mowProgress", "lidarMap"} {
+		t.Run(topic, func(t *testing.T) {
+			c := openDeltaClient(t, topic, true)
+			cells := zeros(100)
+			first, _ := c.deliver(gridMessage(t, 10, 10, 0, 1, cells))
+			require.NotNil(t, first.Data)
+			frame, _ := c.deliver(gridMessage(t, 10, 10, 0, 2, cells))
+			require.NotNil(t, frame.Patch)
+			require.NotNil(t, frame.Patch.Gaps, "wire gaps must be [], not null")
+			require.NotNil(t, frame.Patch.Vals, "wire vals must be [], not null")
+			require.Empty(t, frame.Patch.Gaps)
+			require.Empty(t, frame.Patch.Vals)
+			require.EqualValues(t, 1, frame.Patch.Base)
+			require.EqualValues(t, 2, frame.Patch.Seq)
+		})
+	}
 }
 
 func TestMultiplexKeepsSendingWholeGridsToASubscriberThatDidNotAskForDeltas(t *testing.T) {
