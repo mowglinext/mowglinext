@@ -201,7 +201,9 @@ START. A rejected response or transport failure keeps the hold and its timers;
 the next tick retries only if the current yield rule still permits it. An
 observed departure from the explicit IDLE stop-hold cancels the hold, including
 manual mowing, recording, Home, charging, emergency and other named holds, as
-does disabling coordination. The cooldown starts on the accepted attempt, even
+does disabling coordination. A robot returning Home is also excluded from new
+proximity yields, so later ticks cannot replace Home with a STOP/START cycle.
+The cooldown starts on the accepted attempt, even
 if the BT has not yet published its autonomous state. If a failed START reply
 is followed by observed autonomy (excluding Home), the cooldown starts at that
 observation, so a lost acknowledgement cannot cause an immediate re-yield.

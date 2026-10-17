@@ -316,7 +316,8 @@ func decideYield(self fleetMember, peers []fleetMember, st yieldState, s Coordin
 	cooldown := time.Duration(s.YieldCooldownS * float64(time.Second))
 	if !st.Yielded {
 		inCooldown := !st.ResumedAt.IsZero() && now.Sub(st.ResumedAt) < cooldown
-		if self.Autonomous && nearest < s.YieldDistanceM && !inCooldown {
+		// A STOP hold resumes with START, which would replace an operator HOME.
+		if self.Autonomous && self.StateName != "RETURNING_HOME" && nearest < s.YieldDistanceM && !inCooldown {
 			return yieldState{Yielded: true, HoldSince: now, ResumedAt: st.ResumedAt}, YieldStop
 		}
 		return st, YieldNone
