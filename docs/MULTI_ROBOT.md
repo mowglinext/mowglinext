@@ -94,10 +94,12 @@ them, and renaming the project orphans the maps volume.
 ## Phase 3 — Coordinated mowing
 
 Enabled per fleet with the DB flag `fleet.coordination.enabled` (default off).
-While it is off, the coordinator only clears its local BT's fleet assignment.
-It does this on disable and after GUI startup, retrying at the two-second tick
+While it is off, the coordinator clears its local BT's fleet assignment.
+It does this on disable and after GUI startup, retrying at the one-second tick
 cadence until acknowledged, then remaining silent. This reconciles stale
-exclusions if the BT outlives a GUI restart; it sends no START/STOP commands.
+exclusions if the BT outlives a GUI restart. Disabling also cancels any pause
+lifecycle owned by this GUI process, keeping the mower stopped; an uncertain
+cancellation remains pending even if coordination is re-enabled.
 
 ### 3a. Shared map
 
@@ -184,29 +186,44 @@ robot's obstacle map.
 
 **Yield rule** (the coordinator, only while coordination is ON): when a peer
 WITH PRIORITY (smaller `robot_id`) is autonomous within `yield_distance_m`
-(3.0 m) of us while we are autonomous, we are sent `COMMAND_STOP`; once no
-such peer has been within `resume_distance_m` (5.0 m) for 3 s we are sent
-`COMMAND_START`, which resumes at the saved cursor. Distances use the same
-map-frame positions as the feed (fused pose first, fix as the fallback,
-3 s freshness; no datum → the rule stands down). Two bounds keep it from
-deadlocking against the costmap avoidance above: a hold never lasts longer
-than `yield_max_hold_s` (45 s — the priority robot may itself have stopped in
-front of us on its own collision check, waiting for us to leave), and after
-any resume no new yield is issued for `yield_cooldown_s` (20 s), so the
-resumed robot gets to skirt the peer instead of stopping again at 3 m. The
-coordinator ticks at 1 s.
+(3.0 m) of us while we are mowing, planning or in transit, the coordinator
+requests a fleet-owned pause through `/behavior_tree_node/fleet_yield`
+(`mowgli_interfaces/srv/FleetYield`). Once no such peer has been within
+`resume_distance_m` (5.0 m) for 3 s, it requests resume of that same pause.
+Distances use the same map-frame positions as the feed (fused pose first,
+fix fallback, 3 s freshness; no datum means the rule stands down). Two bounds
+keep it from deadlocking against the costmap avoidance above: resume becomes
+eligible after `yield_max_hold_s` (45 s) even if the peer remains close, and
+a confirmed resume starts `yield_cooldown_s` (20 s) before another yield.
+The coordinator ticks at 1 s. Resume still requires a current local position.
 
-A resume releases the coordinator's yield only when `HighLevelControl` accepts
-START. A rejected response or transport failure keeps the hold and its timers;
-the next tick retries only if the current yield rule still permits it. An
-observed departure from the explicit IDLE stop-hold cancels the hold, including
-manual mowing, recording, Home, charging, emergency and other named holds, as
-does disabling coordination. A robot returning Home is also excluded from new
-proximity yields, so later ticks cannot replace Home with a STOP/START cycle.
-The cooldown starts on the accepted attempt, even
-if the BT has not yet published its autonomous state. If a failed START reply
-is followed by observed autonomy (excluding Home), the cooldown starts at that
-observation, so a lost acknowledgement cannot cause an immediate re-yield.
+The BT owns the pause identity and its eligibility. QUERY supplies a server
+epoch; each new pause lifecycle gets one fresh UUID. PAUSE, RESUME and CANCEL
+retain that original `(epoch, request_id)` through every transport retry.
+Response epochs describe the current server fence and never replace the
+request epoch. QUERY never adopts another process's hold, including after a
+GUI restart. This service is required: an older ROS stack produces an explicit
+fleet service error, with no fallback to ordinary STOP or START.
+
+An accepted PAUSE owns the BT's STOP checkpoint. Cached GUI MOWING status may
+lag that pause and does not discard ownership. RESUME waits for the BT's actual
+IDLE stop hold (`NOT_READY` is transient), then preserves the active area target,
+coverage session and blade inhibit. A duplicate resume returns
+`ALREADY_RESUMED` without replaying ordinary START, even while the GUI still
+shows IDLE. Cooldown begins on a confirmed `RESUMED` or `ALREADY_RESUMED`
+reply; abandoning an uncertain resume also conservatively starts a cooldown
+when the lifecycle terminates. Clearance/max-hold is checked again before
+retrying an uncertain resume, since a failed transport may also mean the first
+request never arrived.
+
+Operator commands (including another STOP or START), Home, manual mowing,
+recording, emergency, maintenance and other unsafe BT phases fence the old
+identity. Observed takeover or disabling coordination requests CANCEL, which
+also fences a delayed PAUSE even if cancellation arrived first. A lost CANCEL
+reply retains that cancellation intent until reconciled. Terminal outcomes stop
+retries and latch the finished proximity event; a new yield requires a peer to
+leave the resume radius or an observed inactive-to-eligible transition. Stale
+MOWING snapshots alone cannot mint replacement epochs after revocation.
 
 ## Status (2026-10-10)
 
@@ -225,9 +242,14 @@ its own field check is still owed.
 | Fleet view (registry, mirror, proxy, `/fleet` page) | `gui/pkg/providers/fleet*.go`, `gui/pkg/api/fleet.go`, `gui/web/src/pages/FleetPage.tsx` | two in-process robots in `gui/pkg/api/fleet_test.go` (handshake, live WebSocket mirror, proxy, removal); vitest `utils/fleet.test.ts` |
 | BT area assignment + yield | `mowgli_behavior` (`~/set_fleet_assignment`, `~/coverage_session`, `GetNextUnmowedArea`, `FollowStrip`) | 8 new gtests in `test_get_next_unmowed_area.cpp` (497/497 behavior tests green on Lyrical) |
 | Peer obstacles | `fleet_peer_obstacles.py`, Nav2 overlays | `test_fleet_peer_obstacles.py`, `test_nav2_params.py` (fleet source placement) |
-| Coordinator (exclusions, completed memory, peer poses, yield rule, map push) | `fleet_coordinator*.go`, `fleet_map.go` | `fleet_coordinator_test.go` (pure rules + `tick()` against the ROS mock) |
+| Coordinator (exclusions, completed memory, peer poses, yield rule, map push) | `fleet_coordinator*.go`, `fleet_yield.go`, `fleet_map.go` | `fleet_coordinator_test.go`, `fleet_yield_test.go` (rules and coordinator ticks against an ownership-enforcing service mock) |
 
-Field checks still owed before calling it done:
+Field checks remain `HARDWARE_REQUIRED`; deterministic GUI/service-mock tests do
+not establish physical avoidance. Before a run, record the exact repository and
+GUI/ROS image commits, firmware image, submodule gitlinks, robot units and receiver
+revisions. Use a supervised test area with blades disabled, working physical
+emergency stops and room to stop both robots before contact. The observable
+pass criteria are:
 
 1. Two mowers, one map, coordination ON: each picks a different area (rotation),
    neither re-enters an area the other finished (completed memory), and the
@@ -239,8 +261,8 @@ Field checks still owed before calling it done:
    the costmap), FTC skirts or stops for it, a transit routes around it, and
    the no-LiDAR collision monitor halts before contact.
 4. Coordination ON, drive the two within 3 m on transit: the lower-priority
-   one holds (`COMMAND_STOP`) and resumes after the 5 m / 3 s hysteresis; park
-   the priority robot in front of it and check the 45 s max-hold resume + the
+   one holds through the fleet-owned PAUSE and resumes after the 5 m / 3 s
+   hysteresis; park the priority robot in front of it and check the 45 s max-hold resume + the
    20 s cooldown.
 5. The Fleet page's "Peers in costmap" tag is green with the right count on
    both robots; `fleet_peer_obstacles.py` logs its first `/fleet/peers`
