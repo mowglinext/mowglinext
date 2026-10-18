@@ -552,3 +552,100 @@ describe('useFleet HighLevelStatus publication boundary', () => {
         expect(positions[0].y).toBeCloseTo(4);
     });
 });
+
+const fleetGnssBase = {fix_type: 6, rtk_mode: 3, fix_valid: true, dead_reckoning: false, capability_flags: 1, value_flags: 1};
+const fleetGnssInvalid = [
+    ...['fix_valid', 'dead_reckoning'].flatMap(field => ['false', 'true', 1, {}, []].map((value, index) => ({name: `${field} invalid ${index}`, value: {...fleetGnssBase, [field]: value}}))),
+    ...['fix_type', 'rtk_mode'].flatMap(field => ['3', true, {}, []].map((value, index) => ({name: `${field} invalid ${index}`, value: {...fleetGnssBase, [field]: value}}))),
+    ...['capability_flags', 'value_flags'].flatMap(field => ['1', [1], -1, 1.5, 0x100000000].map((value, index) => ({name: `${field} invalid ${index}`, value: {...fleetGnssBase, [field]: value}}))),
+    ...[[], 'bad', 0, false].map((value, index) => ({name: `topic shape ${index}`, value})),
+];
+describe('useFleet GNSS publication boundary', () => {
+    it.each(fleetGnssInvalid)('rejects $name and preserves the entire previous snapshot until recovery', async ({value}) => {
+        let robots: unknown = [{identity: {id: 'a', name: 'Alpha'}}, {identity: {id: 'b', name: 'Beta'}}];
+        let coordination: unknown = {settings: {yield_distance_m: 7}, status: {}};
+        fetchMock.mockImplementation(url => Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots') ? robots : coordination))));
+        const {result} = await mountedFleet();
+        const previous = result.current.robots;
+        const previousCoordination = result.current.coordination;
+        robots = [{identity: {id: 'a'}, topics: {gnssStatus: value}}, {identity: {id: 'b', name: 'New Beta'}}];
+        coordination = {settings: {yield_distance_m: 12}, status: {}};
+        await act(() => result.current.refresh());
+        expect(result.current.robots).toBe(previous);
+        expect(result.current.coordination).toBe(previousCoordination);
+        expect(result.current.loading).toBe(false);
+        expect(result.current.error).toBe('Invalid fleet gnssStatus response');
+        robots = [{identity: {id: 'recovered'}, topics: {gnssStatus: fleetGnssBase}}];
+        await act(() => result.current.refresh());
+        expect(result.current.robots[0].identity.id).toBe('recovered');
+        expect(result.current.coordination.settings.yield_distance_m).toBe(12);
+        expect(result.current.error).toBeUndefined();
+        expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
+    });
+    it.each([
+        ['fix_type', 100, 0], ['rtk_mode', 40, 0], ['fix_valid', 100, 100],
+        ['dead_reckoning', 100, 100], ['capability_flags', 100, 40], ['value_flags', 100, 40],
+    ] as const)('preserves distinct absent/null behavior for %s', async (field, absentPercent, nullPercent) => {
+        const gnss: Record<string, unknown> = {...fleetGnssBase};
+        delete gnss[field];
+        fetchMock.mockImplementation(url => Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots')
+            ? [{identity: {id: 'a'}, online: true, topics: {gnssStatus: gnss}}] : {}))));
+        const {result} = await mountedFleet();
+        expect(result.current.error).toBeUndefined();
+        expect(deriveFleetRow(result.current.robots[0]).gpsPercent).toBe(absentPercent);
+        gnss[field] = null;
+        await act(() => result.current.refresh());
+        expect(result.current.error).toBeUndefined();
+        expect(result.current.robots[0].topics?.gnssStatus).toEqual(gnss);
+        expect(deriveFleetRow(result.current.robots[0]).gpsPercent).toBe(nullPercent);
+    });
+    it.each([undefined, null, {}])('accepts absent/null/empty GNSS topic %s', async value => {
+        fetchMock.mockImplementation(url => Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots')
+            ? [{identity: {id: 'a'}, topics: {gnssStatus: value}}] : {}))));
+        const {result} = await mountedFleet();
+        expect(result.current.error).toBeUndefined();
+        expect(result.current.robots).toHaveLength(1);
+    });
+    it.each(['fix_type', 'rtk_mode', 'capability_flags', 'value_flags'])('rejects JSON overflow in %s', async field => {
+        fetchMock.mockImplementation(url => Promise.resolve(new Response(requestUrl(url).endsWith('/robots')
+            ? `[{"identity":{"id":"a"},"topics":{"gnssStatus":{"${field}":1e999}}}]` : '{}')));
+        const {result} = await mountedFleet();
+        expect(result.current.robots).toEqual([]);
+        expect(result.current.error).toBe('Invalid fleet gnssStatus response');
+    });
+    it('leaves the peer hook and its valid positions independent from GNSS validation', async () => {
+        const robots = [{identity: {id: 'a'}, online: true, self: false, topics: {gnssStatus: {fix_valid: 'false'},
+            pose: {pose: {pose: {position: {x: 3, y: 4}}}, motion_heading: 0.5}}}];
+        fetchMock.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(robots))));
+        const {result} = renderHook(() => useFleetPeers());
+        await waitFor(() => expect(result.current).toHaveLength(1));
+        expect(result.current).toEqual(robots);
+        const [pose] = peerMapPoses(result.current, [48, 2, 0]);
+        expect(pose.x).toBeCloseTo(3);
+        expect(pose.y).toBeCloseTo(4);
+    });
+});
+
+describe('useFleet GNSS publication ordering', () => {
+    it.each(['new-error', 'new-success'])('keeps the latest accepted result with %s', async mode => {
+        const reads: Array<(response: Response) => void> = [];
+        fetchMock.mockImplementation(() => new Promise(resolve => {reads.push(resolve);}));
+        const hook = renderHook(() => useFleet());
+        const good = (name: string) => [{identity: {id: 'a', name}, topics: {gnssStatus: fleetGnssBase}}];
+        const bad = [{identity: {id: 'a'}, topics: {gnssStatus: {fix_valid: 'false'}}}];
+        await act(async () => {reads[0](new Response(JSON.stringify(good('Initial')))); reads[1](new Response('{}')); await Promise.resolve();});
+        const previous = hook.result.current.robots;
+        let old!: Promise<void>;
+        let recent!: Promise<void>;
+        act(() => {old = hook.result.current.refresh(); recent = hook.result.current.refresh();});
+        await act(async () => {reads[4](new Response(JSON.stringify(mode === 'new-error' ? bad : good('Recent')))); reads[5](new Response('{}')); await recent;});
+        await act(async () => {reads[2](new Response(JSON.stringify(mode === 'new-error' ? good('Old') : bad))); reads[3](new Response('{}')); await old;});
+        if (mode === 'new-error') {
+            expect(hook.result.current.robots).toBe(previous);
+            expect(hook.result.current.error).toBe('Invalid fleet gnssStatus response');
+        } else {
+            expect(hook.result.current.robots[0].identity.name).toBe('Recent');
+            expect(hook.result.current.error).toBeUndefined();
+        }
+    });
+});

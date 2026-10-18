@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {canCommand, deriveFleetRow, derivePhase, parseFleetRobots, projectFleetPositions, validateFleetHighLevelStatus} from "./fleet.ts";
+import {canCommand, deriveFleetRow, derivePhase, parseFleetRobots, projectFleetPositions, validateFleetHighLevelStatus, validateFleetGnssStatus} from "./fleet.ts";
 import type {FleetRobotWire} from "./fleet.ts";
 import type {HighLevelStatus} from "../types/ros.ts";
 
@@ -208,5 +208,40 @@ describe('Fleet HighLevelStatus targeted validator', () => {
         const otherTopics = wire({}, {status: {is_charging: 'false'}, gnssStatus: {fix_valid: 'false'}, power: {v_battery: 'bad'}});
         expect(() => validateFleetHighLevelStatus([otherTopics])).not.toThrow();
         expect(otherTopics.topics?.gnssStatus).toEqual({fix_valid: 'false'});
+    });
+});
+
+describe('Fleet targeted GNSS validator', () => {
+    const base = {fix_type: 6, rtk_mode: 3, fix_valid: true, dead_reckoning: false, capability_flags: 1, value_flags: 1};
+    it.each([
+        {name: 'FIX', value: base, percent: 100},
+        {name: 'FLOAT', value: {...base, rtk_mode: 2}, percent: 80},
+        {name: '3D', value: {...base, capability_flags: 0, value_flags: 0}, percent: 40},
+        {name: 'UNKNOWN enum', value: {...base, fix_type: 999}, percent: 0},
+        {name: 'UNKNOWN mode', value: {...base, rtk_mode: 999}, percent: 0},
+        {name: 'finite fractional enum', value: {...base, fix_type: -0.5}, percent: 0},
+        {name: 'future mask bits', value: {...base, capability_flags: 0x80000001, value_flags: 0x80000001}, percent: 100},
+        {name: 'maximum uint32', value: {...base, capability_flags: 0xffffffff, value_flags: 0xffffffff}, percent: 100},
+    ])('preserves $name, references, extra fields and existing classification', ({value, percent}) => {
+        const gnss = {...value, extra: {keep: true}, horizontal_accuracy_m: 'outside this validator'};
+        const raw = wire({}, {gnssStatus: gnss, other: {keep: true}});
+        const robots = parseFleetRobots([raw]);
+        const before = JSON.stringify(robots);
+        validateFleetGnssStatus(robots);
+        expect(robots[0]).toBe(raw);
+        expect(robots[0].topics?.gnssStatus).toBe(gnss);
+        expect(JSON.stringify(robots)).toBe(before);
+        expect(deriveFleetRow(raw).gpsPercent).toBe(percent);
+    });
+    it.each(['fix_type', 'rtk_mode', 'capability_flags', 'value_flags'])('rejects nonfinite %s without changing the input', field => {
+        for (const value of [NaN, Infinity, -Infinity]) {
+            const gnss: Record<string, unknown> = {...base, [field]: value};
+            expect(() => validateFleetGnssStatus([wire({}, {gnssStatus: gnss})])).toThrow('Invalid fleet gnssStatus response');
+            expect(gnss[field]).toBe(value);
+        }
+    });
+    it('does not extend the shared identity parser to GNSS validation', () => {
+        const raw = wire({}, {gnssStatus: {fix_valid: 'false'}});
+        expect(parseFleetRobots([raw])[0]).toBe(raw);
     });
 });

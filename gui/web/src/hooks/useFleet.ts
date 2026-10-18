@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {httpBase} from "../utils/apiHost.ts";
-import {parseFleetRobots, validateFleetHighLevelStatus} from "../utils/fleet.ts";
+import {parseFleetRobots, validateFleetHighLevelStatus, validateFleetGnssStatus} from "../utils/fleet.ts";
 import type {FleetPeerWire, FleetRobotWire} from "../utils/fleet.ts";
 import {isJsonObject} from "../utils/json.ts";
 
@@ -145,6 +145,7 @@ export function useFleet(pollMs: number = FLEET_POLL_MS) {
             if (!lifetime || activeLifetime.current !== lifetime || cycle <= lifetime.lastPublished) return;
             const nextRobots = parseFleetRobots(robots);
             validateFleetHighLevelStatus(nextRobots);
+            validateFleetGnssStatus(nextRobots);
             // Advance outside the React updater, which may be replayed. A
             // pending newer cycle alone must not invalidate this publication.
             lifetime.lastPublished = cycle;

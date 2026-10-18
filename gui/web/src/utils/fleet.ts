@@ -98,6 +98,22 @@ export function validateFleetHighLevelStatus(robots: FleetRobotWire[]): void {
     }
 }
 
+/** Validate only Fleet's display inputs, preserving shared GNSS decisions. */
+export function validateFleetGnssStatus(robots: FleetRobotWire[]): void {
+    for (const robot of robots) {
+        const value = robot.topics?.gnssStatus;
+        if (value == null) continue;
+        if (!isJsonObject(value)
+            || !["fix_type", "rtk_mode"].every(key =>
+                value[key] == null || (typeof value[key] === "number" && Number.isFinite(value[key])))
+            || !["fix_valid", "dead_reckoning"].every(key => value[key] == null || typeof value[key] === "boolean")
+            || !["capability_flags", "value_flags"].every(key => value[key] == null
+                || (typeof value[key] === "number" && Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 0xffffffff))) {
+            throw new Error("Invalid fleet gnssStatus response");
+        }
+    }
+}
+
 function topic<T>(row: FleetRobotWire, key: string): T | undefined {
     const value = row.topics?.[key];
     return value && typeof value === "object" ? (value as T) : undefined;

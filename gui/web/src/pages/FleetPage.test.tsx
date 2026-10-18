@@ -400,3 +400,45 @@ describe('FleetPage HighLevelStatus publication boundary', () => {
         expect(commands[0][1]?.body).toBe('{"Command":1}');
     });
 });
+
+describe('FleetPage GNSS publication boundary', () => {
+    const base = {fix_type: 6, rtk_mode: 3, fix_valid: true, dead_reckoning: false, capability_flags: 1, value_flags: 1};
+    it.each([
+        {name: 'text false validity', gnss: {...base, fix_valid: 'false'}},
+        {name: 'text true dead reckoning', gnss: {...base, dead_reckoning: 'true'}},
+        {name: 'text mask', gnss: {...base, capability_flags: '1'}},
+        {name: 'array mask', gnss: {...base, value_flags: [1]}},
+        {name: 'negative mask', gnss: {...base, capability_flags: -1}},
+        {name: 'fractional mask', gnss: {...base, value_flags: 1.5}},
+        {name: 'text enum', gnss: {...base, rtk_mode: '3'}},
+        {name: 'JSON overflow enum', gnss: {...base, fix_type: '__OVERFLOW__'}},
+    ])('rejects $name before rendering and permits recovery with unchanged commands', async ({gnss}) => {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        mock.realFleet = true;
+        let robots: unknown = [robot('alpha'), robot('bravo')];
+        const urlOf = (url: Parameters<typeof fetch>[0]) => typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+        const fetchMock = vi.fn<typeof fetch>((url, init) => Promise.resolve(new Response(JSON.stringify(
+            init?.method === 'POST' ? {} : urlOf(url).endsWith('/robots') ? robots : {},
+        ).replace('"__OVERFLOW__"', '1e999'))));
+        vi.stubGlobal('fetch', fetchMock);
+        render(<ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider>);
+        await screen.findByTestId('fleet-card-alpha');
+        robots = [{...robot('alpha'), topics: {gnssStatus: gnss}}, {...robot('bravo'), identity: {id: 'bravo', name: 'New Bravo'}}];
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        const alpha = screen.getByTestId('fleet-card-alpha');
+        expect(alpha.textContent).not.toContain('FIX');
+        expect(within(screen.getByTestId('fleet-card-bravo')).getByText('bravo', {exact: true})).toBeVisible();
+        expect(screen.getByText('Invalid fleet gnssStatus response')).toBeVisible();
+        expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+        robots = [{...robot('alpha'), topics: {gnssStatus: base}}, robot('bravo')];
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        expect(screen.getByTestId('fleet-card-alpha').textContent).toContain('FIX');
+        expect(screen.queryByText('Invalid fleet gnssStatus response')).not.toBeInTheDocument();
+        fireEvent.click(within(screen.getByTestId('fleet-card-bravo')).getByRole('button', {name: /Start mowing$/}));
+        await waitFor(() => expect(mock.success).toHaveBeenCalledOnce());
+        const commands = fetchMock.mock.calls.filter(([url]) => urlOf(url).includes('/call/'));
+        expect(commands).toHaveLength(1);
+        expect(urlOf(commands[0][0])).toMatch(/\/robots\/bravo\/call\/high_level_control$/);
+        expect(commands[0][1]?.body).toBe('{"Command":1}');
+    });
+});
