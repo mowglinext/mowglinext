@@ -1,6 +1,9 @@
 import {act, cleanup, renderHook, waitFor} from '@testing-library/react';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {parseCoordination, useFleet, type FleetCoordination, type MapPushResult} from './useFleet';
+import {deriveFleetRow} from '../utils/fleet';
+import {useFleetPeers} from './useFleetPeers';
+import {peerMapPoses} from '../utils/fleetPeers';
 
 const peer = {id: 'arbitrary id / é', name: 'Bravo 🐢', address: 'not a constrained address', ok: true};
 const validCases = [
@@ -474,5 +477,78 @@ describe('useFleet robot identity rejection', () => {
         expect(result.current.robots[0].identity.id).toBe('new');
         expect(result.current.error).toBeUndefined();
         expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
+    });
+});
+
+const highLevelFields = ['state', 'state_name', 'sub_state_name', 'emergency', 'is_charging', 'current_area', 'coverage_percent'];
+const highLevelInvalid = [
+    ...['state', 'current_area', 'coverage_percent'].flatMap(key => [
+        {name: `${key} text`, value: {[key]: '2'}},
+        {name: `${key} object`, value: {[key]: {bad: true}}},
+    ]),
+    ...['state_name', 'sub_state_name'].map(key => ({name: `${key} object`, value: {[key]: {bad: true}}})),
+    ...['emergency', 'is_charging'].map(key => ({name: `${key} text`, value: {[key]: 'false'}})),
+    {name: 'array topic', value: []},
+    {name: 'text topic', value: 'bad'},
+    {name: 'boolean topic', value: false},
+];
+describe('useFleet HighLevelStatus publication boundary', () => {
+    it.each(highLevelInvalid)('rejects $name and keeps both robots and coordination until recovery', async ({value}) => {
+        let robots: unknown = [{identity: {id: 'a', name: 'Alpha'}}, {identity: {id: 'b', name: 'Beta'}}];
+        let coordination: unknown = {settings: {yield_distance_m: 7}, status: {}};
+        fetchMock.mockImplementation(url => Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots') ? robots : coordination))));
+        const {result} = await mountedFleet();
+        const previous = result.current.robots;
+        const previousCoordination = result.current.coordination;
+        robots = [{identity: {id: 'new'}, topics: {highLevelStatus: value}}, {identity: {id: 'b', name: 'New Beta'}}];
+        coordination = {settings: {yield_distance_m: 12}, status: {}};
+        await act(() => result.current.refresh());
+        expect(result.current.robots).toBe(previous);
+        expect(result.current.coordination).toBe(previousCoordination);
+        expect(result.current.error).toBe('Invalid fleet highLevelStatus response');
+        expect(result.current.loading).toBe(false);
+        robots = [{identity: {id: 'recovered'}, topics: {highLevelStatus: {state: 999, state_name: 'FUTURE'}}}];
+        await act(() => result.current.refresh());
+        expect(result.current.robots[0].identity.id).toBe('recovered');
+        expect(result.current.coordination.settings.yield_distance_m).toBe(12);
+        expect(result.current.error).toBeUndefined();
+        expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
+    });
+    it.each(highLevelFields)('keeps a missing or null %s with its existing fallback', async field => {
+        let topic: unknown = {};
+        fetchMock.mockImplementation(url => Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots')
+            ? [{identity: {id: 'a'}, online: true, topics: {highLevelStatus: topic}}] : {}))));
+        const {result} = await mountedFleet();
+        const absent = deriveFleetRow(result.current.robots[0]);
+        topic = {[field]: null};
+        await act(() => result.current.refresh());
+        expect(result.current.error).toBeUndefined();
+        expect(deriveFleetRow(result.current.robots[0])).toEqual(absent);
+    });
+    it.each([undefined, null, {}])('accepts optional topic %s', async topic => {
+        fetchMock.mockImplementation(url => Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots')
+            ? [{identity: {id: 'a'}, topics: {highLevelStatus: topic}}] : {}))));
+        const {result} = await mountedFleet();
+        expect(result.current.error).toBeUndefined();
+        expect(result.current.robots).toHaveLength(1);
+    });
+    it.each(['state', 'current_area', 'coverage_percent'])('rejects nonfinite %s decoded from an actual JSON number', async field => {
+        fetchMock.mockImplementation(url => Promise.resolve(new Response(requestUrl(url).endsWith('/robots')
+            ? `[{"identity":{"id":"a"},"topics":{"highLevelStatus":{"${field}":1e999}}}]` : '{}')));
+        const {result} = await mountedFleet();
+        expect(result.current.robots).toEqual([]);
+        expect(result.current.error).toBe('Invalid fleet highLevelStatus response');
+    });
+    it('does not apply HighLevelStatus validation to the peer hook or its valid poses', async () => {
+        const raw = [{identity: {id: 'a', name: 'Alpha'}, online: true, self: false,
+            topics: {highLevelStatus: {state_name: {bad: true}}, pose: {pose: {pose: {position: {x: 3, y: 4}}}, motion_heading: 0.5}}}];
+        fetchMock.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(raw))));
+        const {result} = renderHook(() => useFleetPeers());
+        await waitFor(() => expect(result.current).toHaveLength(1));
+        expect(result.current).toEqual(raw);
+        const positions = peerMapPoses(result.current, [48, 2, 0]);
+        expect(positions).toHaveLength(1);
+        expect(positions[0].x).toBeCloseTo(3);
+        expect(positions[0].y).toBeCloseTo(4);
     });
 });

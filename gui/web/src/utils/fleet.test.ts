@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {canCommand, deriveFleetRow, derivePhase, parseFleetRobots, projectFleetPositions} from "./fleet.ts";
+import {canCommand, deriveFleetRow, derivePhase, parseFleetRobots, projectFleetPositions, validateFleetHighLevelStatus} from "./fleet.ts";
 import type {FleetRobotWire} from "./fleet.ts";
 import type {HighLevelStatus} from "../types/ros.ts";
 
@@ -177,5 +177,36 @@ describe('Fleet robot identity boundary', () => {
         const raw = {...wire(), topics: {highLevelStatus: {state_name: {not: 'in this lot'}}}};
         expect(parseFleetRobots({})).toEqual([]);
         expect(parseFleetRobots([null, {identity: {id: 4}, online: 'bad'}, raw])).toEqual([raw]);
+    });
+});
+
+describe('Fleet HighLevelStatus targeted validator', () => {
+    it('keeps arbitrary finite states, precision, extra properties and object references unchanged', () => {
+        const status = {state: 999, state_name: 'FUTURE', sub_state_name: '', emergency: false, is_charging: true,
+            current_area: -12.5, coverage_percent: 140.123456, extra: {keep: true}};
+        const raw = wire({}, {highLevelStatus: status, other: {keep: true}});
+        const robots = parseFleetRobots([raw]);
+        const before = JSON.stringify(robots);
+        validateFleetHighLevelStatus(robots);
+        expect(robots[0]).toBe(raw);
+        expect(robots[0].topics?.highLevelStatus).toBe(status);
+        expect(JSON.stringify(robots)).toBe(before);
+        expect(deriveFleetRow(raw).coveragePercent).toBe(140.123456);
+        expect(deriveFleetRow(raw).phase).toBe('charging');
+        status.state = -0.5;
+        expect(() => validateFleetHighLevelStatus(robots)).not.toThrow();
+    });
+    it.each(['state', 'current_area', 'coverage_percent'])('rejects NaN and infinities for %s', field => {
+        for (const value of [NaN, Infinity, -Infinity]) {
+            expect(() => validateFleetHighLevelStatus([wire({}, {highLevelStatus: {[field]: value}})]))
+                .toThrow('Invalid fleet highLevelStatus response');
+        }
+    });
+    it('keeps the shared parser independent and leaves other topics outside this validator', () => {
+        const raw = wire({}, {highLevelStatus: {state_name: {bad: true}}, pose: {keep: true}});
+        expect(parseFleetRobots([raw])[0]).toBe(raw);
+        const otherTopics = wire({}, {status: {is_charging: 'false'}, gnssStatus: {fix_valid: 'false'}, power: {v_battery: 'bad'}});
+        expect(() => validateFleetHighLevelStatus([otherTopics])).not.toThrow();
+        expect(otherTopics.topics?.gnssStatus).toEqual({fix_valid: 'false'});
     });
 });

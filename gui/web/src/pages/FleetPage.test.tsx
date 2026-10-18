@@ -355,3 +355,48 @@ describe('FleetPage robot identity boundary with the real hook', () => {
     });
 
 });
+
+describe('FleetPage HighLevelStatus publication boundary', () => {
+    it.each([
+        {name: 'object state name', value: {state_name: {bad: true}}},
+        {name: 'text emergency', value: {emergency: 'false'}},
+        {name: 'text charging', value: {is_charging: 'false'}},
+        {name: 'text state', value: {state: '2', state_name: 'MOWING'}},
+        {name: 'object coverage', value: {state: 2, coverage_percent: {bad: true}}},
+        {name: 'infinite coverage', value: {state: 2, coverage_percent: '__OVERFLOW__'}},
+        {name: 'object area', value: {state: 2, current_area: {bad: true}}},
+    ])('rejects $name before rendering and recovers without changing the command target', async ({value}) => {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        mock.realFleet = true;
+        let robots: unknown = [robot('alpha'), robot('bravo')];
+        let coordination: unknown = {settings: {yield_distance_m: 7}, status: {}};
+        const urlOf = (url: Parameters<typeof fetch>[0]) => typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+        const fetchMock = vi.fn<typeof fetch>((url, options) => Promise.resolve(new Response(JSON.stringify(
+            options?.method === 'POST' ? {} : urlOf(url).endsWith('/robots') ? robots : coordination,
+        ).replace('"__OVERFLOW__"', '1e999'))));
+        vi.stubGlobal('fetch', fetchMock);
+        const caught = vi.fn<(error: Error) => void>();
+        render(<CoordinationRenderBoundary onError={caught}><ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider></CoordinationRenderBoundary>);
+        await screen.findByTestId('fleet-card-alpha');
+        robots = [{...robot('alpha'), topics: {highLevelStatus: value}}, {...robot('bravo'), identity: {id: 'bravo', name: 'New Bravo'}}];
+        coordination = {settings: {yield_distance_m: 12}, status: {}};
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        expect(caught).not.toHaveBeenCalled();
+        expect(screen.getByTestId('fleet-card-alpha')).toBeVisible();
+        const bravo = screen.getByTestId('fleet-card-bravo');
+        expect(within(bravo).getByText('bravo', {exact: true})).toBeVisible();
+        expect(screen.getByText('Invalid fleet highLevelStatus response')).toBeVisible();
+        expect(within(screen.getByTestId('fleet-card-alpha')).getByText('Idle', {exact: true})).toBeVisible();
+        expect(screen.getAllByRole('spinbutton')[0]).toHaveValue('7.0');
+        robots = [{...robot('alpha'), topics: {highLevelStatus: {state: 999, state_name: 'FUTURE_STATE'}}}, robot('bravo')];
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        expect(await screen.findByText('FUTURE_STATE')).toBeVisible();
+        expect(screen.queryByText('Invalid fleet highLevelStatus response')).not.toBeInTheDocument();
+        fireEvent.click(within(screen.getByTestId('fleet-card-bravo')).getByRole('button', {name: /Start mowing$/}));
+        await waitFor(() => expect(mock.success).toHaveBeenCalledOnce());
+        const commands = fetchMock.mock.calls.filter(([url]) => urlOf(url).includes('/call/'));
+        expect(commands).toHaveLength(1);
+        expect(urlOf(commands[0][0])).toMatch(/\/robots\/bravo\/call\/high_level_control$/);
+        expect(commands[0][1]?.body).toBe('{"Command":1}');
+    });
+});

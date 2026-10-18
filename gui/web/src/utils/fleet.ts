@@ -83,6 +83,21 @@ export function parseFleetRobots(payload: unknown): FleetRobotWire[] {
     return robots;
 }
 
+/** Fleet-page-only validation; peer-map consumers do not use this topic. */
+export function validateFleetHighLevelStatus(robots: FleetRobotWire[]): void {
+    for (const robot of robots) {
+        const value = robot.topics?.highLevelStatus;
+        if (value == null) continue;
+        if (!isJsonObject(value)
+            || !["state", "current_area", "coverage_percent"].every(key =>
+                value[key] == null || (typeof value[key] === "number" && Number.isFinite(value[key])))
+            || !["state_name", "sub_state_name"].every(key => value[key] == null || typeof value[key] === "string")
+            || !["emergency", "is_charging"].every(key => value[key] == null || typeof value[key] === "boolean")) {
+            throw new Error("Invalid fleet highLevelStatus response");
+        }
+    }
+}
+
 function topic<T>(row: FleetRobotWire, key: string): T | undefined {
     const value = row.topics?.[key];
     return value && typeof value === "object" ? (value as T) : undefined;
