@@ -177,10 +177,12 @@ export function useFleet(pollMs: number = FLEET_POLL_MS) {
         };
     }, [refresh, pollMs]);
 
-    const addPeer = useCallback(async (address: string) => {
-        const res = await request("/peers", {method: "POST", body: JSON.stringify({address})}) as {warning?: string};
+    const addPeer = useCallback(async (address: string): Promise<string | null | undefined> => {
+        const res: unknown = await request("/peers", {method: "POST", body: JSON.stringify({address})});
         await refresh();
-        return res?.warning;
+        if (!isJsonObject(res) || !("warning" in res)) return undefined;
+        const warning = res.warning;
+        return typeof warning === "string" && (warning === "" || warning.trim().length > 0) ? warning : null;
     }, [refresh]);
 
     const removePeer = useCallback(async (id: string) => {

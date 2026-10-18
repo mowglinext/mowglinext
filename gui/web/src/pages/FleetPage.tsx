@@ -89,7 +89,7 @@ export default function FleetPage() {
         void run("add", async () => {
             const warning = await fleet.addPeer(value);
             setAddress("");
-            return warning;
+            return warning === null ? t("fleetPage.peerAddWarningUnusable") : warning;
         }, t("fleetPage.peerAdded"));
     };
 

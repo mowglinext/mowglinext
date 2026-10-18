@@ -844,3 +844,63 @@ describe('useFleet HTTP non-OK messages', () => {
         expect(requests()).toEqual(['POST /robots/a/call/high_level_control']);
     });
 });
+
+describe('useFleet addPeer warning acknowledgement', () => {
+    afterEach(() => vi.useRealTimers());
+
+    async function ready(payload: unknown, status = 200) {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        fetchMock.mockImplementation((url, init) => Promise.resolve(init?.method === 'POST'
+            ? new Response(status === 204 ? null : JSON.stringify(payload), {status})
+            : new Response(requestUrl(url).endsWith('/robots') ? '[]' : '{}')));
+        const hook = renderHook(() => useFleet());
+        await act(() => vi.advanceTimersByTimeAsync(0));
+        expect(hook.result.current.loading).toBe(false);
+        fetchMock.mockClear();
+        return hook;
+    }
+
+    it.each([null, false, true, 42, {reason: 'partial registration'}, ['detail'], ' \t\n '].map(warning => ({warning})))(
+        'signals an unusable warning without rejecting the acknowledged action: $warning', async ({warning}) => {
+            const {result} = await ready({warning});
+            await act(async () => { expect(await result.current.addPeer('peer.local:4006')).toBeNull(); });
+            expect(requests()).toEqual(['POST /peers', 'GET /robots', 'GET /coordination']);
+            expect(fetchMock.mock.calls[0][1]).toEqual({headers: {'Content-Type': 'application/json'}, method: 'POST', body: '{"address":"peer.local:4006"}'});
+        },
+    );
+
+    it.each([
+        {payload: {}, expected: undefined, status: 200},
+        {payload: {warning: ''}, expected: '', status: 200},
+        {payload: {warning: '  Reverse registration pending \n'}, expected: '  Reverse registration pending \n', status: 200},
+        {payload: {}, expected: undefined, status: 204},
+    ])('preserves the native acknowledgement: $payload / $status', async ({payload, expected, status}) => {
+        const {result} = await ready(payload, status);
+        await act(async () => { expect(await result.current.addPeer('peer.local')).toBe(expected); });
+        expect(requests()).toEqual(['POST /peers', 'GET /robots', 'GET /coordination']);
+    });
+
+    it('waits for the existing refresh before resolving an unusable warning', async () => {
+        const {result} = await ready({warning: false});
+        let release: (value: Response) => void = () => { throw new Error('Refresh not started'); };
+        const original = fetchMock.getMockImplementation()!;
+        fetchMock.mockImplementation((url, init) => requestUrl(url).endsWith('/coordination')
+            ? new Promise(resolve => { release = resolve; }) : original(url, init));
+        const settled = vi.fn();
+        const pending = result.current.addPeer('peer.local').then(settled);
+        await act(() => vi.advanceTimersByTimeAsync(0));
+        await waitFor(() => expect(requests()).toEqual(['POST /peers', 'GET /robots', 'GET /coordination']));
+        expect(settled).not.toHaveBeenCalled();
+        await act(async () => { release(new Response('{}')); await pending; });
+        expect(settled).toHaveBeenCalledExactlyOnceWith(null);
+    });
+
+    it.each(['HTTP', 'network'])('does not retry or refresh after a %s refusal', async kind => {
+        const {result} = await ready({});
+        const failure = new TypeError('Network unavailable');
+        if (kind === 'HTTP') fetchMock.mockResolvedValueOnce(new Response('{"error":"Registration refused"}', {status: 503}));
+        else fetchMock.mockRejectedValueOnce(failure);
+        await expect(result.current.addPeer('peer.local')).rejects.toThrow(kind === 'HTTP' ? 'Registration refused' : 'Network unavailable');
+        expect(requests()).toEqual(['POST /peers']);
+    });
+});

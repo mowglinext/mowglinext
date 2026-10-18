@@ -16,7 +16,7 @@ const mock = vi.hoisted(() => {
     };
     return {
         robots, coordination, realFleet: false,
-        addPeer: vi.fn<(address: string) => Promise<string | undefined>>(),
+        addPeer: vi.fn<(address: string) => Promise<string | null | undefined>>(),
         removePeer: vi.fn<(id: string) => Promise<void>>(),
         call: vi.fn<(id: string, command: string, args: Record<string, unknown>) => Promise<void>>(),
         setCoordination: vi.fn<(settings: FleetCoordination['settings']) => Promise<void>>(),
@@ -507,5 +507,102 @@ describe('FleetPage HTTP error alert', () => {
         expect(screen.getByText(expected, {exact: true})).toBeVisible();
         expect(fetchMock).toHaveBeenCalledTimes(2);
         expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+    });
+});
+
+describe('FleetPage addPeer warning acknowledgement with the real hook', () => {
+    const neutral = 'The add request returned an unusable warning. Check the fleet list and reciprocal registration status.';
+    const urlOf = (url: Parameters<typeof fetch>[0]) => typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    async function ready(payload: unknown, status = 200) {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        mock.realFleet = true;
+        const fetchMock = vi.fn<typeof fetch>((url, init) => Promise.resolve(init?.method === 'POST'
+            ? new Response(status === 204 ? null : JSON.stringify(payload), {status})
+            : new Response(urlOf(url).endsWith('/robots') ? '[]' : '{}')));
+        vi.stubGlobal('fetch', fetchMock);
+        render(<ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider>);
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+        // Observe the initial snapshot's committed render before starting an action.
+        await act(() => Promise.resolve());
+        fetchMock.mockClear();
+        enterAddress();
+        return fetchMock;
+    }
+    const paths = (fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) => fetchMock.mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${urlOf(url).split('/api/fleet')[1]}`);
+
+    it.each([null, false, true, 42, {reason: 'partial registration'}, ['detail'], ' \t\n '].map(warning => ({warning})))(
+        'warns neutrally instead of claiming full success for $warning', async ({warning}) => {
+            const fetchMock = await ready({warning});
+            fireEvent.click(addButton());
+            await waitFor(() => expect(mock.warning).toHaveBeenCalledExactlyOnceWith(neutral, 8));
+            await waitFor(() => expect(addButton()).not.toHaveClass('ant-btn-loading'));
+            expect(mock.success).not.toHaveBeenCalled();
+            expect(mock.error).not.toHaveBeenCalled();
+            expect(screen.getByRole('textbox', {name: en.fleetPage.addPeerTitle})).toHaveValue('');
+            expect(paths(fetchMock)).toEqual(['POST /peers', 'GET /robots', 'GET /coordination']);
+            expect(fetchMock.mock.calls[0][1]?.body).toBe('{"address":"mower-b.local:4006"}');
+        },
+    );
+
+    it.each([
+        {payload: {}, status: 200, warning: undefined},
+        {payload: {warning: ''}, status: 200, warning: undefined},
+        {payload: {}, status: 204, warning: undefined},
+        {payload: {warning: '  Reverse registration pending \n'}, status: 200, warning: '  Reverse registration pending \n'},
+    ])('preserves success and native warning for $payload / $status', async ({payload, status, warning}) => {
+        const fetchMock = await ready(payload, status);
+        fireEvent.click(addButton());
+        await waitFor(() => warning === undefined
+            ? expect(mock.success).toHaveBeenCalledExactlyOnceWith(en.fleetPage.peerAdded)
+            : expect(mock.warning).toHaveBeenCalledExactlyOnceWith(warning, 8));
+        await waitFor(() => expect(addButton()).not.toHaveClass('ant-btn-loading'));
+        if (warning === undefined) expect(mock.warning).not.toHaveBeenCalled();
+        else expect(mock.success).not.toHaveBeenCalled();
+        expect(mock.error).not.toHaveBeenCalled();
+        expect(paths(fetchMock)).toEqual(['POST /peers', 'GET /robots', 'GET /coordination']);
+    });
+
+    it('translates the unusable acknowledgement in French', async () => {
+        const fetchMock = await ready({warning: null});
+        const {default: i18n} = await import('../i18n');
+        const {default: fr} = await import('../i18n/locales/fr.json');
+        try {
+            await act(() => i18n.changeLanguage('fr'));
+            fireEvent.click(screen.getByRole('button', {name: new RegExp(`${fr.fleetPage.add}$`)}));
+            await waitFor(() => expect(mock.warning).toHaveBeenCalledExactlyOnceWith(
+                "La demande d'ajout a renvoyé un avertissement inexploitable. Vérifiez la liste des robots et l'état de l'enregistrement réciproque.", 8));
+            expect(mock.success).not.toHaveBeenCalled();
+            expect(mock.error).not.toHaveBeenCalled();
+            expect(paths(fetchMock)).toEqual(['POST /peers', 'GET /robots', 'GET /coordination']);
+        } finally {
+            await act(() => i18n.changeLanguage('en'));
+        }
+    });
+
+    it('waits for refresh, releases busy and only repeats on another explicit click', async () => {
+        const fetchMock = await ready({warning: false});
+        const original = fetchMock.getMockImplementation()!;
+        let release: (response: Response) => void = () => { throw new Error('Refresh not started'); };
+        fetchMock.mockImplementation((url, init) => urlOf(url).endsWith('/coordination')
+            ? new Promise(resolve => { release = resolve; }) : original(url, init));
+        fireEvent.click(addButton());
+        await act(() => vi.advanceTimersByTimeAsync(0));
+        await waitFor(() => expect(paths(fetchMock)).toEqual(['POST /peers', 'GET /robots', 'GET /coordination']));
+        expect(addButton()).toHaveClass('ant-btn-loading');
+        expect(mock.warning).not.toHaveBeenCalled();
+        expect(mock.success).not.toHaveBeenCalled();
+        await act(() => {
+            release(new Response('{}'));
+            return Promise.resolve();
+        });
+        await waitFor(() => expect(addButton()).not.toHaveClass('ant-btn-loading'));
+        expect(mock.warning).toHaveBeenCalledExactlyOnceWith(neutral, 8);
+        fetchMock.mockImplementation((url, init) => Promise.resolve(new Response(init?.method === 'POST' ? '{}' : urlOf(url).endsWith('/robots') ? '[]' : '{}')));
+        enterAddress();
+        fireEvent.click(addButton());
+        await waitFor(() => expect(mock.success).toHaveBeenCalledExactlyOnceWith(en.fleetPage.peerAdded));
+        await waitFor(() => expect(addButton()).not.toHaveClass('ant-btn-loading'));
+        expect(paths(fetchMock)).toEqual(['POST /peers', 'GET /robots', 'GET /coordination', 'POST /peers', 'GET /robots', 'GET /coordination']);
+        expect(mock.error).not.toHaveBeenCalled();
     });
 });

@@ -4932,6 +4932,7 @@
     "openGui": "Ouvrir l'interface de ce robot",
     "removeConfirm": "Retirer {{robot}} de la flotte ? Il oubliera aussi ce robot.",
     "peerAdded": "Robot ajouté à la flotte",
+    "peerAddWarningUnusable": "La demande d'ajout a renvoyé un avertissement inexploitable. Vérifiez la liste des robots et l'état de l'enregistrement réciproque.",
     "peerRemoved": "Robot retiré de la flotte",
     "pollError": "État de la flotte indisponible",
     "apiMismatch": "Version logicielle différente",

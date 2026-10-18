@@ -4932,6 +4932,7 @@
     "openGui": "Open this robot's GUI",
     "removeConfirm": "Remove {{robot}} from the fleet? It will forget this robot too.",
     "peerAdded": "Robot added to the fleet",
+    "peerAddWarningUnusable": "The add request returned an unusable warning. Check the fleet list and reciprocal registration status.",
     "peerRemoved": "Robot removed from the fleet",
     "pollError": "Fleet snapshot unavailable",
     "apiMismatch": "Different software version",
