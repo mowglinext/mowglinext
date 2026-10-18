@@ -367,6 +367,7 @@
   },
   "flashBoard": {
     "boardBiltemaRM1000": "Mowgli - Biltema RM1000",
+    "boardYardForceNX100i": "Mowgli - YardForce NX100i",
     "firmwareSourceTitle": "Firmware source",
     "firmwareTargetTitle": "Firmware target",
     "firmwareTargetTooltip": "Advanced: choose an exact firmware build target. Automatic keeps the target inferred from the mower model.",
@@ -2345,6 +2346,10 @@
     "BiltemaRM1000": {
       "label": "Biltema RM1000",
       "description": "Biltema RM1000 robotic mower."
+    },
+    "YardForceNX100i": {
+      "label": "YardForce NX100i",
+      "description": "YardForce NX100i robotic mower (GForce STM32F401 mainboard, same as the Classic 500B)."
     },
     "YardForceSA650": {
       "label": "YardForce SA650",

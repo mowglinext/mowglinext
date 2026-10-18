@@ -7,6 +7,10 @@
 #include "main.h"
 #include "ultrasonic_sensor.h"
 
+/* The NX100i reads its hood ultrasonic board over I2C (ultrasonic_nx100i.c),
+ * which provides this same interface; keep this UART backend out then. */
+#if !((OPTION_ULTRASONIC == 1) && defined(ULTRASONIC_TYPE) && (ULTRASONIC_TYPE == ULTRASONIC_TYPE_NX100I_I2C))
+
 extern UART_HandleTypeDef MASTER_USART_Handler; // UART  Handle
 
 typedef enum {
@@ -94,3 +98,5 @@ uint32_t ULTRASONICSENSOR_u32GetLeftDistance(void){
 uint32_t ULTRASONICSENSOR_u32GetRightDistance(void){
     return ultrasonic_u32RightDistance;
 }
+
+#endif /* not the NX100i I2C backend */

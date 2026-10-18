@@ -52,6 +52,7 @@ or `BOARD_YARDFORCE500_VARIANT_B`.
 cd stm32/ros_usbnode
 pio run                   # default_envs = Yardforce500 (STM32F103VC)
 pio run -e Yardforce500B  # STM32F401VC
+pio run -e YardforceNX100i  # STM32F401VC, NX100i hood-stop wiring (extends Yardforce500B)
 ```
 
 Safety defaults (charge envelope, e-stop timeouts, tilt threshold) are single-sourced in
@@ -104,6 +105,13 @@ There are no firmware-side unit tests. Behaviour is pinned by the host mirror
 
 - YardForce Classic 500 — env `Yardforce500` (STM32F103VCT6), the default
 - YardForce Classic 500B — env `Yardforce500B` (STM32F401VC)
+- Biltema RM1000 — env `BiltemaRM1000` (STM32F401VC, 500B profile + RM-MB V6.1 panel protocol)
+- YardForce NX100i — env `YardforceNX100i` (STM32F401VC, 500B profile + `BOARD_YARDFORCE_NX100I`).
+  Same mainboard, pinout and drive/blade UART protocols as the 500B; the hood stop button's white
+  contact (PC8) is normally closed to GND and opens when pressed, so this build pulls PC8 up
+  (1 = pressed, also pressed when the hood cable is unplugged). PD2/PD3 hall-stop lines are
+  unconnected (`OPTION_BUMPER 0`). LCD panel protocol and hood ultrasonic sensors not supported yet
+  (display stays blank, control via the GUI). Hood ultrasonic board (I2C 0x51 on PC10/PC11) is read by `ultrasonic_nx100i.c` into `uss_ranges_m[0..1]`, and the hood's LCD panel ("RM EC3", USART1) is driven by `panel_nx100i.c` (START/HOME, emergency release from the hood, LCD message codes); protocol notes in `stm32/ros_usbnode/NX100I-HOOD.md`.
 
 `BOARD_LUV1000RI` exists in `board.h` / `board.h.template` and the GUI offers the board, but
 `platformio.ini` has **no `LUV1000RI` env** — the target MCU/clock and the LUV blade-motor UART

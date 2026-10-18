@@ -94,7 +94,7 @@ or `.srv`, and the COBS protocol-version bump).
 
 - **ROS2 — CI** (`ros2/**`, `tools/motor/**`, `install/config/mowgli/**`) — `colcon build` + `colcon test`, the `mowgli_robot.yaml` config-drift gate, `clang-format` on the lines you changed, and cppcheck. `Build & Test (ROS2 kilted)` is the required status check on `dev`.
 - **GUI — CI** (`gui/web/**`) — vitest unit tests + `tsc`.
-- **Firmware CI** (`firmware/**`) — PlatformIO builds for `Yardforce500` and `Yardforce500B`, plus the `board_defaults.h` single-source guard.
+- **Firmware CI** (`firmware/**`) — PlatformIO builds for `Yardforce500`, `Yardforce500B` and `YardforceNX100i`, plus the `board_defaults.h` single-source guard.
 - **Msg Codegen Drift** — fails if a `mowgli_interfaces` `.msg`/`.srv` changed without re-running the Go, TypeScript and firmware generators.
 - **Protocol Version Drift** — fails if the COBS wire layout changed without bumping `MOWGLI_PROTOCOL_VERSION` and its host mirror.
 

@@ -59,6 +59,11 @@ def main():
             "board": "BOARD_YARDFORCE500B",
             "panel": "PANEL_TYPE_YARDFORCE_900_ECO",
         },
+        "yardforce-nx100i": {
+            "env": "YardforceNX100i",
+            "board": "BOARD_YARDFORCE500B",
+            "panel": "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+        },
     }
     actual = {
         key: {field: entry[field] for field in ("env", "board", "panel")}
@@ -130,10 +135,25 @@ def main():
         for field, value in expected["biltema-rm1000"].items():
             if rm1000[field] != value:
                 raise AssertionError(f"RM1000 manifest {field}: {rm1000[field]!r}")
-        if "BiltemaRM1000_MPU6050_Yaw180" in {
-            item["env"] for item in manifest["permutations"].values()
-        }:
-            raise AssertionError("mount-specific yaw-180 firmware must not be a default prebuilt")
+        nx100i = manifest["permutations"]["yardforce-nx100i"]
+        for field, value in expected["yardforce-nx100i"].items():
+            if nx100i[field] != value:
+                raise AssertionError(f"NX100i manifest {field}: {nx100i[field]!r}")
+        # The NX100i shares the 500B board/panel identity; its artifact must
+        # still get its own file name instead of overwriting the 500B binary.
+        files = [item["file"] for item in manifest["permutations"].values()]
+        if len(set(files)) != len(files):
+            raise AssertionError(f"prebuilt artifact file names collide: {files}")
+        if "_nx100i_" not in nx100i["file"]:
+            raise AssertionError(f"NX100i artifact lacks its variant tag: {nx100i['file']!r}")
+        mount_specific = {
+            "BiltemaRM1000_MPU6050_Yaw180",
+            "YardforceNX100i_MPU6050_Roll180",
+            "YardforceNX100i_MPU6050_Pitch180",
+        }
+        prebuilt_envs = {item["env"] for item in manifest["permutations"].values()}
+        if mount_specific & prebuilt_envs:
+            raise AssertionError("mount-specific IMU-rotation firmware must not be a default prebuilt")
 
     print("Release catalog, PlatformIO targets, workflows, and manifest are aligned.")
 

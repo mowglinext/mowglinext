@@ -543,6 +543,9 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                                             label: "BiltemaRM1000",
                                             value: "BiltemaRM1000"
                                         }, {
+                                            label: "YardforceNX100i",
+                                            value: "YardforceNX100i"
+                                        }, {
                                             label: "LUV1000RI",
                                             value: "LUV1000RI"
                                         }]} x-component="Select"

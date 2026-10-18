@@ -56,6 +56,9 @@ jobs:
           - Yardforce500B
           - BiltemaRM1000
           - BiltemaRM1000_MPU6050_Yaw180
+          - YardforceNX100i
+          - YardforceNX100i_MPU6050_Roll180
+          - YardforceNX100i_MPU6050_Pitch180
           - Yardforce500_COASTDOWN_VALIDATION
     steps:
       - uses: actions/checkout@v6
@@ -92,7 +95,7 @@ jobs:
         run: pip install platformio
 
       - name: Run native firmware unit tests
-        run: pio test -e native -e native_rm1000_yaw180
+        run: pio test -e native -e native_rm1000_yaw180 -e native_roll180 -e native_pitch180
         working-directory: firmware/stm32/ros_usbnode
 
   # ─── Publish prebuilt binaries on a version tag ────────────────────────────
@@ -140,6 +143,7 @@ jobs:
           pio run -e Yardforce500
           pio run -e Yardforce500B
           pio run -e BiltemaRM1000
+          pio run -e YardforceNX100i
 
       - name: Package binaries + manifest
         env:

@@ -290,7 +290,7 @@ void ChargeController(void)
     case CHARGER_STATE_IDLE:
     default:
        
-        if (chargerInputVoltage >= 30.0 ) {
+        if (chargerInputVoltage >= CHARGER_CONNECT_VOLTAGE) {
             charger_state = CHARGER_STATE_CONNECTED;
             HAL_GPIO_WritePin(TF4_GPIO_PORT, TF4_PIN, 0); /* Power off the battery  Powerbus */
             timestamp = HAL_GetTick();

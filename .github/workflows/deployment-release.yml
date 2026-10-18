@@ -86,6 +86,7 @@ jobs:
           pio run -e Yardforce500
           pio run -e Yardforce500B
           pio run -e BiltemaRM1000
+          pio run -e YardforceNX100i
       - name: Package binaries + manifest for this deployment's release
         env:
           RELEASE: ${{ needs.identity.outputs.release }}
