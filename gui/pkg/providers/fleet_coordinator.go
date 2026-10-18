@@ -18,7 +18,8 @@ import (
 // it reads the fleet snapshot, decides which areas this robot must leave to
 // the others, pushes that to the local BT, publishes the peers' poses into
 // the local ROS graph for the costmap, and applies the proximity yield rule.
-// docs/MULTI_ROBOT.md § 3b/3c. While disabled, only reconciles an empty assignment.
+// docs/MULTI_ROBOT.md § 3b/3c. While disabled, reconciles an empty
+// assignment and cancels any fleet-owned pause without resuming it.
 
 const (
 	coordinationSettingsKey   = "fleet.coordination"
@@ -27,11 +28,7 @@ const (
 	assignmentRefresh         = 30 * time.Second
 	setFleetAssignmentService = "/behavior_tree_node/set_fleet_assignment"
 	setFleetAssignmentType    = "mowgli_interfaces/srv/SetFleetAssignment"
-	highLevelControlService   = "/behavior_tree_node/high_level_control"
-	highLevelControlType      = "mowgli_interfaces/srv/HighLevelControl"
 	coordinatorCallTimeout    = 5 * time.Second
-	hlCommandStart            = 1
-	hlCommandStop             = 8
 )
 
 // CoordinatorStatus is the live state shown on the Fleet page.
@@ -198,7 +195,6 @@ func (c *FleetCoordinator) tick(now time.Time) {
 			c.nextClearAttempt = now
 		}
 		c.wasEnabled = false
-		c.yield = yieldState{}
 		mustClear := c.clearPending && !now.Before(c.nextClearAttempt)
 		if mustClear {
 			c.nextClearAttempt = now.Add(coordinatorTick)
@@ -213,6 +209,7 @@ func (c *FleetCoordinator) tick(now time.Time) {
 				c.mu.Unlock()
 			}
 		}
+		c.stepYield(fleetMember{}, nil, settings, now)
 		return
 	}
 	c.mu.Lock()
@@ -227,6 +224,12 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	rows, err := c.snapshot()
 	if err != nil {
 		c.setError("fleet snapshot: " + err.Error())
+		c.mu.Lock()
+		cancelling := c.yield.Yielded && c.yield.Operation == fleetCancel
+		c.mu.Unlock()
+		if cancelling {
+			c.stepYield(fleetMember{}, nil, settings, now)
+		}
 		return
 	}
 	// Positions are placed in OUR map frame; without a datum there is no
@@ -248,7 +251,6 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	assignment := computeAssignment(self, peers, memory)
 	mustPush := c.lastPushed == nil || !assignmentEqual(*c.lastPushed, assignment) ||
 		now.Sub(c.lastPushAt) >= assignmentRefresh
-	yieldBefore := c.yield
 	c.mu.Unlock()
 
 	if memoryChanged {
@@ -260,26 +262,7 @@ func (c *FleetCoordinator) tick(now time.Time) {
 		c.pushAssignment(assignment, "fleet coordinator", now)
 	}
 
-	next, action := decideYield(self, peers, yieldBefore, settings, now)
-	if action == YieldStart {
-		logrus.Info("fleet coordinator: peers are clear — resuming this mower (COMMAND_START)")
-		// Keep ownership and the hold timers until START is acknowledged.
-		// On failure the next tick re-evaluates the current robot/peer state,
-		// including transitions that cancel our hold, before trying again.
-		if !c.sendHighLevel(hlCommandStart) {
-			c.mu.Lock()
-			c.yield.ResumeAttempted = true
-			c.mu.Unlock()
-			return
-		}
-	}
-	c.mu.Lock()
-	c.yield = next
-	c.mu.Unlock()
-	if action == YieldStop {
-		logrus.Info("fleet coordinator: a peer with priority is close — pausing this mower (COMMAND_STOP)")
-		c.sendHighLevel(hlCommandStop)
-	}
+	c.stepYield(self, peers, settings, now)
 }
 
 func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now time.Time) bool {
@@ -303,25 +286,6 @@ func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now 
 	copyA := a
 	c.lastPushed = &copyA
 	c.lastPushAt = now
-	c.lastError = ""
-	c.mu.Unlock()
-	return true
-}
-
-func (c *FleetCoordinator) sendHighLevel(command uint8) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), coordinatorCallTimeout)
-	defer cancel()
-	req := mowgli.HighLevelControlReq{Command: command}
-	var res mowgli.HighLevelControlRes
-	if err := c.ros.CallService(ctx, highLevelControlService, &req, &res, highLevelControlType); err != nil {
-		c.setError("high_level_control: " + err.Error())
-		return false
-	}
-	if !res.Success {
-		c.setError("high_level_control refused command " + strconv.Itoa(int(command)))
-		return false
-	}
-	c.mu.Lock()
 	c.lastError = ""
 	c.mu.Unlock()
 	return true
