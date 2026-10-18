@@ -41,7 +41,7 @@
 | **`firmware/` root + scripts** | | |
 | `firmware/README.md` | 53 | Area overview (partly stale — see structured findings) |
 | `firmware/.gitignore` | 3 | ignores `sync_msg.sh`, `.idea/` |
-| `firmware/scripts/test_odometry_time.py` | 230 | Compiles production encoder folding, odometry handler and USB gate helpers; checks raw counter wraps/glitches/resets and acquisition time under 0/1/N drops, closed port, queue full and HAL tick wrap |
+| `firmware/scripts/test_odometry_time.py` | 283 | Compiles production encoder folding, odometry handler and USB gate helpers; checks raw counter wraps/glitches/resets, low-speed quantization, source-acquisition gaps and 0/1/N USB drops, closed port, queue full and HAL tick wrap |
 | `firmware/scripts/protocol_version_guard.py` | 138 | Fingerprints `PKT_ID_*` + `pkt_*_t` in `mowgli_protocol.h`; `--check` fails on un-versioned wire drift or firmware/host version mismatch |
 | `firmware/scripts/protocol_baseline.json` | 4 | `{version: 6, hash}` baseline for the guard above |
 | `firmware/scripts/board_defaults_parity.py` | 108 | Asserts `board.h`/`board.h.template` consume `board_defaults.h` and never re-`#define` the 10 managed safety macros |

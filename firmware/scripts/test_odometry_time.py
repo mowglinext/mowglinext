@@ -36,6 +36,7 @@ SHIM = r'''
 #include <math.h>
 #include "mowgli_protocol.h"
 #include "fw_param_catalog.h"
+#define DRIVEMOTOR_FEEDBACK_TIMEOUT_MS 75u
 #define TICKS_PER_M 277.0f
 #define MAX_MPS 0.5f
 #define DRIVEMOTOR_MIN_TICKS_PER_M 50.0f
@@ -77,9 +78,9 @@ static void test_glitch_during_usb_gap() {
         const uint16_t left_raw = i == 50 ? 65535 : 1000 + i;
         const uint16_t right_raw = i == 50 ? 65535 : 2000 + 2 * i;
         DRIVEMOTOR_UpdateWheel(&left_filter, 1, 1, left_raw, &left_prev,
-                              &left_magnitude, &left);
+                              &left_magnitude, &left, tick);
         DRIVEMOTOR_UpdateWheel(&right_filter, -1, 1, right_raw, &right_prev,
-                              &right_magnitude, &right);
+                              &right_magnitude, &right, tick);
         const bool dropped = i >= 2 && i <= 1500;
         queue_free = dropped ? 0 : 1000;
         const unsigned before = sends;
@@ -97,42 +98,93 @@ static void test_glitch_during_usb_gap() {
 
 static void test_driver_edges() {
     DRIVEMOTOR_dirfilter_t filter{};
+    // Even the lowest supported runtime settings must retain quantized ticks:
+    // mean travel is below one tick/frame, but individual pulses are still 1.
+    g_ticks_per_meter = 50.0f;
+    g_max_mps = 0.1f;
+    uint16_t low_prev = 0;
+    uint32_t low_magnitude = 0;
+    int32_t low_total = 0;
+    for (unsigned i = 1; i <= 30; ++i) {
+        tick += 20;
+        // One tick per 200 ms at 50 ticks/m and 0.1 m/s.
+        DRIVEMOTOR_UpdateWheel(&filter, 1, 1, i / 10, &low_prev,
+                              &low_magnitude, &low_total, tick);
+        assert(low_total == static_cast<int32_t>(i / 10));
+    }
+    assert(low_total == 3 && low_magnitude == 3);
+    g_ticks_per_meter = TICKS_PER_M;
+    g_max_mps = MAX_MPS;
+    filter = {};
     uint16_t prev = 65534;
     uint32_t magnitude = 0;
     int32_t total = 0;
-    assert(DRIVEMOTOR_UpdateWheel(&filter, 1, 1, 1, &prev, &magnitude, &total) == 1);
+    assert(DRIVEMOTOR_UpdateWheel(&filter, 1, 1, 1, &prev, &magnitude, &total, tick) == 1);
     assert(total == 3 && magnitude == 3); // natural 16-bit wrap, not a reset
 
     prev = 100;
-    DRIVEMOTOR_UpdateWheel(&filter, 1, 1, 2, &prev, &magnitude, &total);
+    DRIVEMOTOR_UpdateWheel(&filter, 1, 1, 2, &prev, &magnitude, &total, tick);
     assert(total == 5); // ordinary controller reset retains its remainder
     for (const int direction : {-1, 1}) {
         filter = {};
         prev = 1;
         magnitude = 0;
         total = 0;
-        DRIVEMOTOR_UpdateWheel(&filter, direction, 1, 65535, &prev, &magnitude, &total);
+        DRIVEMOTOR_UpdateWheel(&filter, direction, 1, 65535, &prev, &magnitude, &total, tick);
         assert(total == 0 && magnitude == 0); // huge positive raw glitch
-        DRIVEMOTOR_UpdateWheel(&filter, direction, 1, 2, &prev, &magnitude, &total);
-        assert(std::abs(total) <= static_cast<int32_t>(drivemotor_max_ticks_per_frame()));
+        DRIVEMOTOR_UpdateWheel(&filter, direction, 1, 2, &prev, &magnitude, &total, tick);
+        assert(std::abs(total) <= static_cast<int32_t>(drivemotor_max_ticks_per_frame(20)));
         const int32_t recovered = total;
-        DRIVEMOTOR_UpdateWheel(&filter, direction, 1, 3, &prev, &magnitude, &total);
+        DRIVEMOTOR_UpdateWheel(&filter, direction, 1, 3, &prev, &magnitude, &total, tick);
         assert(total == recovered + direction); // normal motion resumes
     }
 
-    filter = {1, 0};
+    filter = {};
+    filter.s8Eff = 1;
     prev = 100;
     magnitude = 0;
     total = 0;
-    assert(DRIVEMOTOR_UpdateWheel(&filter, -1, 0, 101, &prev, &magnitude, &total) == 1);
-    assert(DRIVEMOTOR_UpdateWheel(&filter, -1, 0, 1, &prev, &magnitude, &total) == 1);
-    assert(DRIVEMOTOR_UpdateWheel(&filter, -1, 0, 0, &prev, &magnitude, &total) == -1);
-    assert(DRIVEMOTOR_UpdateWheel(&filter, -1, 1, 2, &prev, &magnitude, &total) == -1);
+    assert(DRIVEMOTOR_UpdateWheel(&filter, -1, 0, 101, &prev, &magnitude, &total, tick) == 1);
+    assert(DRIVEMOTOR_UpdateWheel(&filter, -1, 0, 1, &prev, &magnitude, &total, tick) == 1);
+    assert(DRIVEMOTOR_UpdateWheel(&filter, -1, 0, 0, &prev, &magnitude, &total, tick) == -1);
+    assert(DRIVEMOTOR_UpdateWheel(&filter, -1, 1, 2, &prev, &magnitude, &total, tick) == -1);
     assert(total == 0); // coast +2, then confirmed reverse -2
+}
+
+static void test_source_acquisition_gaps() {
+    for (const uint32_t start : {100u, 0xfffffff0u}) {
+        for (const uint16_t initial : {100, 65530}) {
+            for (const int direction : {-1, 1}) {
+                DRIVEMOTOR_dirfilter_t filter{};
+                uint16_t prev = initial;
+                uint32_t magnitude = 0;
+                int32_t total = 0;
+                DRIVEMOTOR_UpdateWheel(&filter, direction, 1, initial, &prev,
+                                      &magnitude, &total, start);
+                // 9 ticks / 70 ms = 0.464 m/s, below the 0.5 m/s cap and
+                // within the 75 ms source feedback deadline. Include wrap.
+                uint16_t raw = initial + 9;
+                DRIVEMOTOR_UpdateWheel(&filter, direction, 1, raw, &prev,
+                                      &magnitude, &total, start + 70);
+                assert(total == direction * 9 && magnitude == 9);
+                // A stale source cannot give a huge jump a huge budget.
+                raw += 10000;
+                DRIVEMOTOR_UpdateWheel(&filter, direction, 1, raw, &prev,
+                                      &magnitude, &total, start + 2000000);
+                assert(total == direction * 9 && magnitude == 9);
+            }
+        }
+    }
+    g_ticks_per_meter = 5000.0f;
+    g_max_mps = 0.6f;
+    assert(drivemotor_max_ticks_per_frame(0xffffffffu) <= 676);
+    g_ticks_per_meter = TICKS_PER_M;
+    g_max_mps = MAX_MPS;
 }
 
 int main(int argc, char **argv) {
     test_driver_edges();
+    test_source_acquisition_gaps();
     assert(argc == 4);
     const unsigned drops = static_cast<unsigned>(std::stoul(argv[1]));
     const bool closed = std::stoul(argv[2]) != 0;
@@ -153,9 +205,9 @@ int main(int argc, char **argv) {
         left_raw += 1;
         right_raw += 2;
         DRIVEMOTOR_UpdateWheel(&left_filter, 1, 1, left_raw, &left_prev,
-                              &left_magnitude, &left);
+                              &left_magnitude, &left, tick);
         DRIVEMOTOR_UpdateWheel(&right_filter, -1, 1, right_raw, &right_prev,
-                              &right_magnitude, &right);
+                              &right_magnitude, &right, tick);
         assert(left == static_cast<int32_t>(i));
         assert(right == -2 * static_cast<int32_t>(i));
         const bool drop = i >= 2 && i < drops + 2;
