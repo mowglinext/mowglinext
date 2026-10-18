@@ -3,6 +3,7 @@ import {httpBase} from "../utils/apiHost.ts";
 import {parseFleetRobots, validateFleetHighLevelStatus, validateFleetGnssStatus} from "../utils/fleet.ts";
 import type {FleetPeerWire, FleetRobotWire} from "../utils/fleet.ts";
 import {isJsonObject} from "../utils/json.ts";
+import {requestErrorMessage} from "../utils/errors.ts";
 
 export interface CoordinatorSettings {
     enabled: boolean;
@@ -115,10 +116,12 @@ async function request(path: string, init?: RequestInit, strictJson = false): Pr
         headers: {"Content-Type": "application/json"},
         ...init,
     });
-    const body = await readJson(res, res.ok && strictJson);
+    const body = res.ok
+        ? await readJson(res, strictJson)
+        : await readJson(res).catch(() => undefined);
     if (!res.ok) {
-        const msg = (body as {error?: string})?.error ?? `HTTP ${res.status}`;
-        throw new Error(msg);
+        const detail = requestErrorMessage(body);
+        throw new Error(detail?.trim() ? detail : `HTTP ${res.status}`);
     }
     return body;
 }

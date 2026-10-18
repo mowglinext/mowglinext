@@ -483,3 +483,29 @@ describe('FleetPage strict snapshot JSON', () => {
         expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
     });
 });
+
+describe('FleetPage HTTP error alert', () => {
+    it.each([
+        {error: '', expected: 'HTTP 503'},
+        {error: '   ', expected: 'HTTP 503'},
+        {error: {reason: 'DB failed'}, expected: 'HTTP 503'},
+        {error: {error: 'DB failed'}, expected: 'DB failed'},
+    ])('renders a nonempty real Alert for $error', async ({error, expected}) => {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        mock.realFleet = true;
+        const fetchMock = vi.fn<typeof fetch>(url => {
+            const path = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+            return Promise.resolve(path.endsWith('/robots')
+                ? new Response(JSON.stringify({error}), {status: 503}) : new Response('{}'));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        render(<ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider>);
+        const title = await screen.findByText(en.fleetPage.pollError);
+        const alert = title.closest('[role="alert"]');
+        expect(alert).not.toBeNull();
+        expect(alert).toHaveTextContent(expected);
+        expect(screen.getByText(expected, {exact: true})).toBeVisible();
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+    });
+});

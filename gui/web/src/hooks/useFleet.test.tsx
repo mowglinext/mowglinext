@@ -728,11 +728,14 @@ describe('useFleet strict snapshot JSON', () => {
         expect(requests().slice(1)).toEqual(['GET /robots', 'GET /coordination']);
     });
     it.each([
-        {text: '{"error":{"reason":"untyped"}}', error: '[object Object]'},
-        {text: '{"error":""}', error: ''},
+        {text: '{"error":{"reason":"untyped"}}', error: 'HTTP 503'},
+        {text: '{"error":""}', error: 'HTTP 503'},
+        {text: '{"error":"   "}', error: 'HTTP 503'},
+        {text: '{"error":{"error":"DB failed"}}', error: 'DB failed'},
+        {text: '{"error":"  Native detail  "}', error: '  Native detail  '},
         {text: '{bad', error: 'HTTP 503'},
         {text: '', error: 'HTTP 503'},
-    ])('does not change HTTP503 parsing for $text', async ({text, error}) => {
+    ])('HTTP non-OK messages: normalizes $text without changing refusal', async ({text, error}) => {
         fetchMock.mockImplementation(url => Promise.resolve(requestUrl(url).endsWith('/robots')
             ? new Response(text, {status: 503}) : new Response('{}')));
         const {result} = await mountedFleet();
@@ -757,5 +760,87 @@ describe('useFleet strict snapshot JSON', () => {
             expect(hook.result.current.robots[0].identity.name).toBe('Recent');
             expect(hook.result.current.error).toBeUndefined();
         }
+    });
+});
+
+describe('useFleet HTTP non-OK messages', () => {
+    it.each(['robots', 'coordination'])('retains usable data after an unreadable HTTP503 %s body and recovers', async path => {
+        let refused = false;
+        fetchMock.mockImplementation(url => {
+            if (refused && requestUrl(url).endsWith(`/${path}`)) {
+                return Promise.resolve(new Response(new ReadableStream({start(controller) {
+                    controller.error(new TypeError('Body read failed'));
+                }}), {status: 503}));
+            }
+            return Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots')
+                ? [{identity: {id: 'a', name: refused ? 'Recent' : 'Initial'}}]
+                : {settings: {yield_distance_m: refused ? 12 : 7}, status: {}})));
+        });
+        const {result} = await mountedFleet();
+        const previous = result.current.robots;
+        const coordination = result.current.coordination;
+        refused = true;
+        await act(() => result.current.refresh());
+        expect(result.current.error).toBe('HTTP 503');
+        expect(result.current.coordination).toBe(coordination);
+        if (path === 'robots') expect(result.current.robots).toBe(previous);
+        else expect(result.current.robots[0].identity.name).toBe('Recent');
+        refused = false;
+        await act(() => result.current.refresh());
+        expect(result.current.error).toBeUndefined();
+        expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
+    });
+
+    it.each(['robots', 'coordination'])('preserves snapshots and 2000ms polling after a textual HTTP503 %s failure', async path => {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        try {
+            let refused = false;
+            fetchMock.mockImplementation(url => Promise.resolve(refused && requestUrl(url).endsWith(`/${path}`)
+                ? new Response('{"error":{"error":"DB failed"}}', {status: 503})
+                : new Response(JSON.stringify(requestUrl(url).endsWith('/robots')
+                    ? [{identity: {id: 'a', name: refused ? 'Recent' : 'Initial'}}]
+                    : {settings: {yield_distance_m: 7}, status: {}}))));
+            const {result} = renderHook(() => useFleet());
+            await act(() => vi.advanceTimersByTimeAsync(0));
+            expect(result.current.loading).toBe(false);
+            fetchMock.mockClear();
+            const previous = result.current.robots;
+            const coordination = result.current.coordination;
+            refused = true;
+            await act(() => vi.advanceTimersByTimeAsync(1999));
+            expect(fetchMock).not.toHaveBeenCalled();
+            await act(() => vi.advanceTimersByTimeAsync(1));
+            expect(result.current.error).toBe('DB failed');
+            expect(result.current.coordination).toBe(coordination);
+            if (path === 'robots') expect(result.current.robots).toBe(previous);
+            else expect(result.current.robots[0].identity.name).toBe('Recent');
+            expect(requests()).toEqual(['GET /robots', 'GET /coordination']);
+            refused = false;
+            await act(() => vi.advanceTimersByTimeAsync(2000));
+            expect(result.current.error).toBeUndefined();
+            expect(fetchMock).toHaveBeenCalledTimes(4);
+        } finally { cleanup(); vi.useRealTimers(); }
+    });
+
+    it.each(['addPeer', 'call', 'pushMap', 'startFresh', 'setCoordination'] as const)('normalizes refused %s action without retry or refresh', async action => {
+        const {result} = await mountedFleet();
+        fetchMock.mockResolvedValue(new Response('{"error":" "}', {status: 503}));
+        await act(async () => {
+            const request = action === 'addPeer' ? result.current.addPeer('peer.local')
+                : action === 'call' ? result.current.call('a', 'high_level_control', {Command: 1})
+                : action === 'pushMap' ? result.current.pushMap()
+                : action === 'setCoordination' ? result.current.setCoordination(coordinationDefaults.settings)
+                : result.current.startFresh();
+            await expect(request).rejects.toThrow('HTTP 503');
+        });
+        expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it('keeps a fetch network rejection unchanged and does not refresh', async () => {
+        const {result} = await mountedFleet();
+        const failure = new TypeError('Network unavailable');
+        fetchMock.mockRejectedValueOnce(failure);
+        await expect(result.current.call('a', 'high_level_control', {Command: 1})).rejects.toBe(failure);
+        expect(requests()).toEqual(['POST /robots/a/call/high_level_control']);
     });
 });
