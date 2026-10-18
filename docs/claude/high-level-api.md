@@ -42,6 +42,71 @@ the live `TRANSIT` sub-state if a transit completion discovers the stale scan in
 ## Stop-in-place / Pause
 - `COMMAND_STOP` (8) routes to the BT `StopHoldSequence`: mower off, halt where it stands, and hold (state 1 / `IDLE`) — it does **not** drive to the dock (that is `COMMAND_HOME`), and unlike `IdleSequence` it does **not** PAUSE the Nav2 lifecycle, so a paused mission resumes promptly. Resumable with `COMMAND_START` (picks up from the persisted `mow_progress`); `~/clear_coverage_resume` is the operator's "start fresh" alternative. The GUI's Pause and "Stop Manual" buttons issue this; it is a true pause, distinct from Home/dock.
 
+## Fleet-owned pause/resume
+
+`~/fleet_yield` (`mowgli_interfaces/srv/FleetYield`) is the fleet coordinator's
+separate control surface. Ordinary `HighLevelControl` START/STOP semantics remain
+unchanged. Never retry an ambiguous fleet resume through raw START.
+
+The request is `uint8 operation`, `string epoch`, `string request_id`. Operations
+are QUERY=0, PAUSE=1, RESUME=2, CANCEL=3. The response is `uint8 result`,
+`string epoch`, `bool held`, `string message`. Results are AVAILABLE=0, HELD=1,
+RESUMED=2, ALREADY_RESUMED=3, CANCELLED=4, NOT_READY=5, INELIGIBLE=6, BUSY=7,
+REVOKED=8, INVALID=9. The `.srv` is the authoritative wire schema; generated Go
+bindings are produced by `gui/generate_go_msgs.sh`.
+
+- QUERY returns AVAILABLE, the current opaque server fence and whether **any**
+  client owns a hold. It never grants or adopts ownership. A client creates a
+  fresh UUID `request_id` for each legitimate yield lifecycle and retains the
+  original `(epoch, request_id)` across every retry. Response epochs describe the
+  current fence; they must not replace a lifecycle's original request epoch.
+- PAUSE acquires only with the current unused epoch, START command, numeric state
+  2 and name MOWING, PLANNING or TRANSIT. This conservative allowlist excludes
+  docking, undocking, calibration, recovery, completion and named safety/charge
+  holds. Emergency, charging, critical charge/dock latches and update maintenance
+  also exclude acquisition. Acquisition sets STOP without changing the pending
+  area, single-area target, coverage cursor, session or blade operator inhibit.
+  Exact active-tuple replays return HELD without mutation; another client gets
+  BUSY. Empty identities or identities longer than 128 bytes are INVALID.
+- An accepted PAUSE synchronously saves the STOP checkpoint **before** returning
+  HELD when coverage persistence is configured. This prevents the existing boot
+  auto-continue rule from restoring an older START after a process crash. The
+  checkpoint writer flushes/closes and atomically renames; it does not fsync and
+  provides no power-loss durability guarantee. Failure returns INELIGIBLE,
+  revokes ownership and retains STOP in memory. It does not claim that restart
+  is safe with an unwritable older checkpoint. Empty persistence paths disable
+  checkpoint loading as well as saving.
+- RESUME requires the exact active tuple, STOP and actual published numeric 1 /
+  name IDLE from StopHold. During that owner's accepted stop transition it returns
+  NOT_READY; numeric 2 / name IDLE during status debounce is insufficient. A
+  successful resume assigns START directly, preserving all run and blade state,
+  and rotates the fence. The single most recent completed tuple returns
+  ALREADY_RESUMED without any command or context mutation, including after MOWING
+  is published again. Older/unknown/revoked tuples are rejected without motion.
+- CANCEL of an active owner's tuple clears ownership, retains STOP and rotates
+  the fence. CANCEL of the current unused epoch also rotates it, fencing a PAUSE
+  that has not arrived yet. Another request ID cannot cancel an active owner.
+  Cancellation retries may return REVOKED; cancellation never starts motion.
+
+Every accepted external high-level command (including repeat STOP and normalized
+S2), start-in-area, immediate operator resume reset, ClearCommand and EndSession
+revokes fleet authority. `MarkGuardHalt` also fences unpublished root safety
+holds until the tree publishes an eligible state again; cached republishes do
+not restore eligibility. Emergency/charging assertions and unsafe published
+states revoke before a later IDLE can revive a hold. Safety-state transitions
+also fence unused epochs; leaving an unsafe state fences queries made during it.
+Maintenance is terminal, forces STOP and never auto-resumes when cleared. A
+sustained gate does not rotate the fence every tick. Clients must abandon terminal
+INELIGIBLE/BUSY/REVOKED lifecycles rather than query a fresh epoch for an obsolete
+yield event.
+
+Ownership and its one-entry completed-resume record live only in memory and use
+random 128-bit epochs. Restart never restores either. Service, tick and operator
+callbacks share the existing default MutuallyExclusive group; ownership/status
+access also takes `context_mutex`. Checkpoint I/O and tree ticking happen outside
+that mutex. This service changes command intent only; existing tree, navigation,
+blade and firmware safety gates still govern actuation.
+
 ## GUI Scheduler and the IrriSense Soil Gate
 The GUI's scheduler (`gui/pkg/providers/scheduler.go`) polls its `schedule:*` DB entries every minute and issues `COMMAND_START` (1) when one is due, after `safeToStart()` (no emergency, state not NULL/AUTONOMOUS/RECORDING). It then asks the soil provider (`types.ISoilProvider`, implemented by `gui/pkg/providers/irrisense.go`, the operator's **IrriSense Cloud** irrigation service polled every 10 min over its read-only `/api/ha/gardens/{id}` API with a read-only API token stored ONLY in the GUI key-value DB under `irrisense.*` — never in `mowgli_robot.yaml`). A zone is WET if enabled and (`deficit_mm ≤ wetDeficitMm` [2.0] OR `last_watered_at` within `dryAfterWateringHours` [3.0]); the garden is WET if ANY selected zone is (all enabled zones unless `irrisense.zoneIds` lists some) — pure rule in `irrisense_wetness.go`. The run is skipped ONLY when `Enabled && GateScheduler && Fresh && Wet` (`SoilStatus.BlocksScheduledMowing()`), and the skip is recorded on the schedule as `lastSkipReason` / `lastSkippedAt`. Everything else is **fail-open**: unreachable service, bad token, 429 (backed off per `Retry-After`), or a last good fetch older than `maxStaleMinutes` [90] reports `unknown` and the mow starts as before — a cloud outage must never keep the robot docked. Surface: `GET/PUT /api/irrisense/settings` (token write-only, masked on read), `GET /api/irrisense/status`, `GET /api/irrisense/gardens`; Settings → IrriSense section and the chip on the Schedule page.
 

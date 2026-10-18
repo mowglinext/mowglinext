@@ -33,6 +33,7 @@
 #include "mowgli_behavior/blade_ready.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
+#include "mowgli_behavior/fleet_yield.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_behavior/transit_avoidance.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
@@ -124,6 +125,9 @@ struct BTContext
   /// proofing note on behavior_tree_node's clear_resume_requested_ for the
   /// pattern to follow instead of a mutex if that ever happens.
   mutable std::mutex context_mutex;
+
+  /// Fleet stop ownership is never persisted; all access takes context_mutex.
+  FleetYieldState fleet_yield;
 
   // -----------------------------------------------------------------------
   // Command state (set by HighLevelControl service handler)
