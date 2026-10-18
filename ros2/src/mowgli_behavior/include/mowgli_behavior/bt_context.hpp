@@ -85,6 +85,9 @@ struct BTContext
   std::chrono::steady_clock::time_point last_status_time{};
   mowgli_interfaces::msg::Emergency latest_emergency;
   mowgli_interfaces::msg::Power latest_power;
+  /// Startup barrier: set only after live power has supplied a usable battery
+  /// reading and restored charging intent has been reconciled. Never persisted.
+  bool power_sample_received{false};
 
   /// Timestamp of the last emergency message received.
   std::chrono::steady_clock::time_point last_emergency_time{std::chrono::steady_clock::now()};

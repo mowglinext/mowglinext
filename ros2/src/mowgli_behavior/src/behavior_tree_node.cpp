@@ -287,7 +287,12 @@ private:
         {
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           context_->latest_power = *msg;
-          observeRestoredMowPower(*context_, msg->charger_enabled);
+          // A first invalid reading must not open startup with the default
+          // 100% battery or consume the restored mission's charger check.
+          if (!context_->power_sample_received && !std::isfinite(msg->v_battery))
+          {
+            return;
+          }
 
           // Smooth the rail voltage before deriving the percent — motor transients
           // sag it 0.5-1 V and used to trip the docking thresholds at a genuine
@@ -306,6 +311,8 @@ private:
           context_->battery_voltage_filtered = *v_filtered;
           context_->battery_percent =
               batteryPercentFromVoltage(*v_filtered, battery_empty_voltage_, battery_full_voltage_);
+          observeRestoredMowPower(*context_, msg->charger_enabled);
+          context_->power_sample_received = true;
         });
 
     // Replan / boundary signals from map_server_node

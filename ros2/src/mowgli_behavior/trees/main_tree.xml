@@ -59,6 +59,20 @@
         </Sequence>
       </Fallback>
 
+      <!-- Initial telemetry is a readiness event, not a timeout. Until the
+           first usable Power sample, battery/charger defaults say nothing
+           about whether it is safe to dock, undock or seed heading. Keep this
+           before every motion-capable guard; emergency handling stays first. -->
+      <ReactiveFallback name="InitialPowerGuard">
+        <HasPowerSample/>
+        <Sequence name="WaitingForPower">
+          <SetMowerEnabled enabled="false"/>
+          <StopMoving/>
+          <PublishHighLevelStatus state="1" state_name="WAITING_FOR_POWER"/>
+          <AlwaysFailure/>
+        </Sequence>
+      </ReactiveFallback>
+
       <!-- ================================================================
            GUARD 1.5: Sensor safety (SAFETY_REVIEW_2026-07-23 A-C2 + A-H1)
            Two faults, one response — halt mowing with the blade OFF:

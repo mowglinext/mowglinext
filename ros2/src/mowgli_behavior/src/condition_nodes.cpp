@@ -63,6 +63,17 @@ BT::NodeStatus IsEmergency::tick()
 }
 
 // ---------------------------------------------------------------------------
+// HasPowerSample
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus HasPowerSample::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  return ctx->power_sample_received ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
 // IsCharging
 // ---------------------------------------------------------------------------
 
