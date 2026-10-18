@@ -356,7 +356,7 @@ public:
   BT::NodeStatus tick() override;
 };
 
-/// Reads the operator-reset critical docking failure latch.
+/// Reads the critical docking failure latch, reset by a command or charger contact.
 class IsCriticalDockFailureLatched : public BT::ConditionNode
 {
 public:
@@ -373,7 +373,7 @@ public:
   BT::NodeStatus tick() override;
 };
 
-/// Latches a failed critical docking attempt until the next operator command.
+/// Latches a failed critical docking attempt until a command or charger contact.
 class LatchCriticalDockFailure : public BT::SyncActionNode
 {
 public:
@@ -387,6 +387,54 @@ public:
     return {};
   }
 
+  BT::NodeStatus tick() override;
+};
+
+/// Accept physical charger contact as docking success. Used reactively before
+/// DockRobot so an already charging robot never navigates to its staging pose.
+/// Contact also resolves a previous critical docking failure, including one
+/// restored from disk after the operator placed the mower on its charger.
+class ConfirmChargingDock : public BT::SyncActionNode
+{
+public:
+  ConfirmChargingDock(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+class IsBatteryChargePending : public BT::ConditionNode
+{
+public:
+  IsBatteryChargePending(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+  BT::NodeStatus tick() override;
+};
+
+class SetBatteryChargePending : public BT::SyncActionNode
+{
+public:
+  SetBatteryChargePending(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<bool>("pending")};
+  }
   BT::NodeStatus tick() override;
 };
 

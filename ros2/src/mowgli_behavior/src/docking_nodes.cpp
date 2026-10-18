@@ -76,6 +76,14 @@ BT::NodeStatus DockRobot::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   ctx->last_dock_succeeded = false;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    if (ctx->latest_power.charger_enabled)
+    {
+      ctx->last_dock_succeeded = true;
+      return BT::NodeStatus::SUCCESS;
+    }
+  }
 
   std::string dock_id = "home_dock";
   if (auto res = getInput<std::string>("dock_id"))
@@ -108,6 +116,9 @@ BT::NodeStatus DockRobot::onStart()
   last_feedback_state_ = DockAction::Feedback::NONE;
 
   auto send_goal_options = rclcpp_action::Client<DockAction>::SendGoalOptions{};
+  goal_abandonment_ = std::make_shared<GoalAbandonment>();
+  send_goal_options.goal_response_callback =
+      cancelWhenAbandoned<DockAction>(action_client_, goal_abandonment_);
   send_goal_options.feedback_callback =
       [this, ctx](GoalHandle::SharedPtr, const std::shared_ptr<const DockAction::Feedback> fb)
   {
@@ -148,6 +159,17 @@ BT::NodeStatus DockRobot::onStart()
 BT::NodeStatus DockRobot::onRunning()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  bool charging;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    charging = ctx->latest_power.charger_enabled;
+  }
+  if (charging)
+  {
+    onHalted();
+    ctx->last_dock_succeeded = true;
+    return BT::NodeStatus::SUCCESS;
+  }
 
   if (!goal_handle_)
   {
@@ -198,12 +220,15 @@ void DockRobot::onHalted()
   // otherwise BoundaryGuard would stay exempted after the transit ended.
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   ctx->docking_active = false;
-  if (goal_handle_)
-  {
-    RCLCPP_INFO(ctx->node->get_logger(), "DockRobot: canceling active goal");
-    cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "DockRobot");
-    goal_handle_.reset();
-  }
+  // A reactive charger fast path can halt us before the goal response arrives.
+  // Abandon that pending request too, so it cannot start navigating later.
+  abandonGoal(action_client_,
+              goal_handle_,
+              goal_handle_future_,
+              goal_abandonment_,
+              ctx->node->get_logger(),
+              "DockRobot");
+  goal_handle_.reset();
 }
 
 // ---------------------------------------------------------------------------

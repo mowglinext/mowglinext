@@ -42,6 +42,9 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<IsLastDockSucceeded>("IsLastDockSucceeded");
   factory.registerNodeType<IsCriticalDockFailureLatched>("IsCriticalDockFailureLatched");
   factory.registerNodeType<LatchCriticalDockFailure>("LatchCriticalDockFailure");
+  factory.registerNodeType<ConfirmChargingDock>("ConfirmChargingDock");
+  factory.registerNodeType<IsBatteryChargePending>("IsBatteryChargePending");
+  factory.registerNodeType<SetBatteryChargePending>("SetBatteryChargePending");
 
   factory.registerNodeType<IsGPSFixed>("IsGPSFixed");
   factory.registerNodeType<IsCoverageComplete>("IsCoverageComplete");

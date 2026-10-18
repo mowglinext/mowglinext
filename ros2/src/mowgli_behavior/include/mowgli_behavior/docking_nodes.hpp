@@ -24,6 +24,7 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
+#include "mowgli_behavior/cancel_goal.hpp"
 #include "nav2_msgs/action/dock_robot.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -82,6 +83,7 @@ private:
   rclcpp_action::Client<DockAction>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
+  std::shared_ptr<GoalAbandonment> goal_abandonment_;
 
   /// Last docking feedback state seen, so the contact delta is logged once per
   /// entry into WAIT_FOR_CHARGE rather than at the feedback rate. Written from

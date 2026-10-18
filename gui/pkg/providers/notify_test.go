@@ -367,6 +367,43 @@ func TestNotificationProvider_DisabledStillTracksState(t *testing.T) {
 	assert.Empty(t, requests(), "enabling mid-mow must not replay 'mowing started'")
 }
 
+func TestNotificationProvider_FailureIncidentSurvivesRestart(t *testing.T) {
+	srv, requests := newCaptureServer(t, http.StatusOK)
+	db := types.NewMockDBProvider()
+	cfg := DefaultNotificationConfig()
+	cfg.Enabled = true
+	cfg.Channel = NotifyChannelNtfy
+	cfg.NtfyServer = srv.URL
+	cfg.NtfyTopic = "garden"
+	cfg.Events[NotifyEventBattery] = false
+	require.NoError(t, SaveNotificationConfig(db, cfg))
+
+	now := t0
+	newProvider := func() *NotificationProvider {
+		return newNotificationProvider(db, srv.Client(), func() time.Time { return now })
+	}
+	failure := highLevelStatusJSON(0, "CRITICAL_BATTERY_NAV_FAILED", 0)
+	p := newProvider()
+	p.HandleStatus(failure)
+	require.Len(t, requests(), 1)
+
+	now = now.Add(30 * time.Minute)
+	p = newProvider()
+	p.HandleStatus(failure)
+	p.HandleStatus(highLevelStatusJSON(0, "EMERGENCY", 0))
+	p.HandleStatus(failure)
+	require.Len(t, requests(), 1, "restart and guard interruption must not replay the old incident")
+
+	// Persist the observed recovery too, so a genuinely new error is reported
+	// after another restart, without relying on a cooldown expiring.
+	p.HandleStatus(mustJSON(t, map[string]any{
+		"state": 1, "state_name": "IDLE_DOCKED", "is_charging": true,
+	}))
+	p = newProvider()
+	p.HandleStatus(failure)
+	require.Len(t, requests(), 2)
+}
+
 func TestNotificationProvider_RecordsFailures(t *testing.T) {
 	srv, _ := newCaptureServer(t, http.StatusUnauthorized)
 	db := types.NewMockDBProvider()
