@@ -93,8 +93,12 @@ S2), start-in-area, immediate operator resume reset, ClearCommand and EndSession
 revokes fleet authority. `MarkGuardHalt` also fences unpublished root safety
 holds until the tree publishes an eligible state again; cached republishes do
 not restore eligibility. Emergency/charging assertions and unsafe published
-states revoke before a later IDLE can revive a hold. Safety-state transitions
-also fence unused epochs; leaving an unsafe state fences queries made during it.
+states revoke before a later IDLE can revive a hold. Power's `charger_enabled`,
+either boundary-violation flag, and emergency telemetry stale for more than two
+seconds also block fleet operations before an unsafe status can be published.
+The emergency rule is shared with `IsEmergency`; its existing threshold is
+unchanged. Safety-state transitions also fence unused epochs; leaving an unsafe
+state fences queries made during it.
 Maintenance is terminal, forces STOP and never auto-resumes when cleared. A
 sustained gate does not rotate the fence every tick. Clients must abandon terminal
 INELIGIBLE/BUSY/REVOKED lifecycles rather than query a fresh epoch for an obsolete

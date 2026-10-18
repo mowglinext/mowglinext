@@ -278,9 +278,9 @@ private:
                                        {
                                          std::lock_guard<std::mutex> lock(context_->context_mutex);
                                          context_->latest_emergency = *msg;
-                                         refreshFleetYieldLocked(*context_);
                                          context_->last_emergency_time =
                                              std::chrono::steady_clock::now();
+                                         refreshFleetYieldLocked(*context_);
                                        });
 
     power_sub_ = create_subscription<Power>(
@@ -290,6 +290,7 @@ private:
         {
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           context_->latest_power = *msg;
+          refreshFleetYieldLocked(*context_);  // Charger authority is independent of valid voltage.
 
           // Smooth the rail voltage before deriving the percent — motor transients
           // sag it 0.5-1 V and used to trip the docking thresholds at a genuine
@@ -334,6 +335,7 @@ private:
                                                    std::lock_guard<std::mutex> lock(
                                                        context_->context_mutex);
                                                    context_->boundary_violation = msg->data;
+                                                   refreshFleetYieldLocked(*context_);
                                                  });
 
     // Lethal boundary: outside the allowed area by more than the
@@ -348,6 +350,7 @@ private:
                                                    std::lock_guard<std::mutex> lock(
                                                        context_->context_mutex);
                                                    context_->lethal_boundary_violation = msg->data;
+                                                   refreshFleetYieldLocked(*context_);
                                                  });
 
     // mowglinext#637 phase 2: map_server's area-list generation counter, so

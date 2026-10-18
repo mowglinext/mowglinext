@@ -33,8 +33,8 @@ inline void refreshFleetYieldLocked(BTContext& ctx)
   if (maintenance)
     ctx.current_command = 8;
   ctx.fleet_yield.observeInterlock(
-      maintenance || ctx.latest_emergency.active_emergency ||
-      ctx.latest_emergency.latched_emergency || ctx.latest_status.is_charging ||
+      maintenance || ctx.emergencyActiveOrStale() || ctx.latest_status.is_charging ||
+      ctx.latest_power.charger_enabled || ctx.boundary_violation || ctx.lethal_boundary_violation ||
       ctx.critical_charge_stop_latched || ctx.critical_dock_failure_latched);
 }
 

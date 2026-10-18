@@ -116,6 +116,7 @@ protected:
     client = client_node->create_client<Fleet>("/mowgli_behavior_node/fleet_yield");
     ASSERT_TRUE(client->wait_for_service(5s));
     ASSERT_TRUE(FleetYieldServiceTestPeer::sharedGroup(*node));
+    factory.registerNodeType<IsEmergency>("IsEmergency");
     factory.registerNodeType<PublishHighLevelStatus>("PublishHighLevelStatus");
     factory.registerNodeType<ClearCommand>("ClearCommand");
     factory.registerNodeType<MarkGuardHalt>("MarkGuardHalt");
@@ -127,6 +128,7 @@ protected:
         "<PublishHighLevelStatus state=\"{state}\" state_name=\"{name}\"/>"
         "</BehaviorTree></root>",
         blackboard);
+    ctx->last_emergency_time = std::chrono::steady_clock::now();
     ctx->current_command = 1;
     status(2, "MOWING");
   }
@@ -169,6 +171,10 @@ protected:
   }
   std::string pause()
   {
+    // Ordinary lifecycles start with healthy emergency telemetry. Stale-stream
+    // regressions explicitly age the receipt AFTER acquisition; call() never
+    // refreshes it, so those tests exercise the actual service-time predicate.
+    ctx->last_emergency_time = std::chrono::steady_clock::now();
     const auto epoch = call(Request::QUERY).epoch;
     EXPECT_EQ(call(Request::PAUSE, epoch, "client-a").result, Response::HELD);
     return epoch;
@@ -387,6 +393,127 @@ TEST_F(FleetYieldServices, ChargerTelemetryRevokesBeforeStatusCanReturnIdle)
           });
   idle();
   EXPECT_EQ(call(Request::RESUME, epoch, "client-a").result, Response::REVOKED);
+}
+
+TEST_F(FleetYieldServices, PowerChargerRevokesReadyHoldEvenWithInvalidVoltageAndNoStatusUpdate)
+{
+  for (float voltage : {0.0f, 1.0f})
+  {
+    ctx->current_command = 1;
+    status(2, "MOWING");
+    const auto epoch = pause();
+    idle();
+    ASSERT_TRUE(ctx->fleet_yield.held());
+    ASSERT_FALSE(ctx->latest_status.is_charging);  // Status may be absent or delayed.
+    mowgli_interfaces::msg::Power power;
+    power.charger_enabled = true;
+    power.v_battery = voltage;  // The battery filter rejects both readings.
+    deliver("/hardware_bridge/power",
+            power,
+            [&]
+            {
+              return ctx->latest_power.charger_enabled;
+            });
+    EXPECT_FALSE(ctx->fleet_yield.held());  // Revoke in the subscriber, before any request.
+    EXPECT_EQ(ctx->current_command, 8);
+    EXPECT_EQ(call(Request::RESUME, epoch, "client-a").result, Response::INELIGIBLE);
+    EXPECT_EQ(ctx->current_command, 8);
+    EXPECT_FALSE(ctx->latest_status.is_charging);
+    power.charger_enabled = false;
+    deliver("/hardware_bridge/power",
+            power,
+            [&]
+            {
+              return !ctx->latest_power.charger_enabled;
+            });
+    EXPECT_EQ(call(Request::RESUME, epoch, "client-a").result, Response::REVOKED);
+    EXPECT_EQ(call(Request::PAUSE, epoch, "client-a").result, Response::REVOKED);
+    EXPECT_EQ(ctx->current_command, 8);
+  }
+}
+
+TEST_F(FleetYieldServices, StaleClearEmergencyRevokesReadyHoldBeforeAnyEmergencyStatus)
+{
+  const auto epoch = pause();
+  idle();
+  auto emergency_tree = factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Emergency\">"
+      "<IsEmergency/></BehaviorTree></root>",
+      blackboard);
+  ASSERT_FALSE(ctx->latest_emergency.active_emergency);
+  ASSERT_FALSE(ctx->latest_emergency.latched_emergency);
+  const auto stale_receipt = std::chrono::steady_clock::now() - 3s;
+  ctx->last_emergency_time = stale_receipt;
+  // Preserve the existing strict >2 s boundary without sleeping on a timer.
+  EXPECT_FALSE(ctx->emergencyActiveOrStale(stale_receipt + 2s));
+  EXPECT_TRUE(ctx->emergencyActiveOrStale(stale_receipt + 2s + 1ns));
+  ASSERT_EQ(emergency_tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(call(Request::RESUME, epoch, "client-a").result, Response::INELIGIBLE);
+  EXPECT_FALSE(ctx->fleet_yield.held());
+  EXPECT_EQ(ctx->current_command, 8);
+  EXPECT_EQ(ctx->last_high_level_status.state_name, "IDLE");  // No EMERGENCY publication yet.
+  mowgli_interfaces::msg::Emergency fresh_clear;
+  deliver("/hardware_bridge/emergency",
+          fresh_clear,
+          [&]
+          {
+            return ctx->last_emergency_time > stale_receipt;
+          });
+  ASSERT_EQ(emergency_tree.tickOnce(), BT::NodeStatus::FAILURE);
+  const auto fresh_epoch = ctx->fleet_yield.epoch();  // Subscriber already observed the recovery.
+  EXPECT_EQ(call(Request::QUERY).epoch, fresh_epoch);
+  EXPECT_EQ(call(Request::RESUME, epoch, "client-a").result, Response::REVOKED);
+  EXPECT_EQ(call(Request::PAUSE, epoch, "client-a").result, Response::REVOKED);
+  EXPECT_EQ(ctx->current_command, 8);
+}
+
+TEST_F(FleetYieldServices, BoundarySubscribersFencePendingEpochAndOwnedHoldBeforeUnsafeStatus)
+{
+  for (bool lethal : {false, true})
+  {
+    const std::string topic = lethal ? "/map_server_node/lethal_boundary_violation"
+                                     : "/map_server_node/boundary_violation";
+    const auto asserted = [&]
+    {
+      return lethal ? ctx->lethal_boundary_violation : ctx->boundary_violation;
+    };
+    ctx->current_command = 1;
+    status(2, "MOWING");
+    const auto pending = call(Request::QUERY).epoch;
+    std_msgs::msg::Bool signal;
+    signal.data = true;
+    deliver(topic, signal, asserted);
+    const auto during = ctx->fleet_yield.epoch();
+    EXPECT_NE(pending, during);  // Immediate revocation, before any fleet request/status tick.
+    EXPECT_EQ(ctx->last_high_level_status.state_name, "MOWING");
+    EXPECT_EQ(call(Request::PAUSE, pending, "pending").result, Response::INELIGIBLE);
+    EXPECT_EQ(ctx->current_command, 1);  // Fleet interlock does not rewrite raw command policy.
+    signal.data = false;
+    deliver(topic,
+            signal,
+            [&]
+            {
+              return !asserted();
+            });
+    EXPECT_EQ(call(Request::PAUSE, pending, "pending").result, Response::REVOKED);
+    EXPECT_EQ(call(Request::PAUSE, during, "pending").result, Response::REVOKED);
+    const auto owned = pause();
+    idle();
+    signal.data = true;
+    deliver(topic, signal, asserted);
+    EXPECT_FALSE(ctx->fleet_yield.held());
+    EXPECT_EQ(ctx->last_high_level_status.state_name, "IDLE");
+    EXPECT_EQ(call(Request::RESUME, owned, "client-a").result, Response::INELIGIBLE);
+    signal.data = false;
+    deliver(topic,
+            signal,
+            [&]
+            {
+              return !asserted();
+            });
+    EXPECT_EQ(call(Request::RESUME, owned, "client-a").result, Response::REVOKED);
+    EXPECT_EQ(ctx->current_command, 8);
+  }
 }
 
 TEST_F(FleetYieldServices, MaintenanceIsTerminalAndDoesNotRotateEveryRequest)
