@@ -804,6 +804,15 @@ mowgli:
     rain_mode: 2
     rain_delay_minutes: 30.0       # wait after rain stops before resuming
     rain_debounce_sec: 10.0        # rain must persist this long to trigger
+    # External rain source: a "yes"/"no" published (retained) to MQTT
+    # <mqtt_topic_prefix>/external_rain by, e.g., a Home Assistant automation on
+    # a roof weather station. OR-ed with the mower's own rain sensor — it can add
+    # a reason to stop, never remove one. Needs mqtt_enabled.
+    use_external_rain: true
+    # A "wet" verdict older than this is ignored (0 = never expires), so a dead
+    # automation, broker or Home Assistant cannot hold the mower in RAIN_WAITING.
+    # Have the automation re-publish more often than this while it is wet.
+    external_rain_max_age_minutes: 120.0
 
     # -----------------------------------------------------------------
     # Safety

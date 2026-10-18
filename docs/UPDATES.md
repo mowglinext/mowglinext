@@ -93,7 +93,8 @@ every installer run (never from an earlier selection, so a robot moved back to
 the Mowgli board drops the bridge). The OpenMower bridge talks to the stock
 LowLevel and xESC firmware and reports firmware protocol 0, so the release's
 `firmware_protocol` (the Mowgli STM32 wire protocol) is waived there — decided
-from the host's `docker/.env`, not from the GUI. Everything else in the
+from the host's `docker/.env`, not from the GUI. The GUI's readiness verdict
+reads the same file (its container gets no `HARDWARE_BACKEND`). Everything else in the
 readiness gate still applies: fresh, idle, stationary, blade-off telemetry, and
 `firmware_compatible` (the bridge reaches the LowLevel board and both drive
 ESCs).

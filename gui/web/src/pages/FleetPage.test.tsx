@@ -87,16 +87,26 @@ describe('FleetPage action errors', () => {
         mock.addPeer.mockRejectedValueOnce(value);
         render(<FleetPage/>);
         enterAddress();
-        fireEvent.click(addButton());
+        // Flush the rejected action and its finally render, not just the
+        // synchronous error notification that precedes clearing busy.
+        await act(async () => {
+            fireEvent.click(addButton());
+            await expect(mock.addPeer.mock.results[0].value).rejects.toBe(value);
+        });
         await waitFor(() => expect(mock.error).toHaveBeenCalledOnce());
         expect(mock.error).toHaveBeenCalledWith(expected);
         expect(typeof mock.error.mock.calls[0][0]).toBe('string');
         expect(mock.success).not.toHaveBeenCalled();
         expect(mock.warning).not.toHaveBeenCalled();
         await waitFor(() => expect(addButton()).not.toHaveClass('ant-btn-loading'));
+        expect(mock.addPeer).toHaveBeenCalledExactlyOnceWith('mower-b.local:4006');
         expect(screen.getByRole('textbox', {name: en.fleetPage.addPeerTitle})).toHaveValue('  mower-b.local:4006  ');
-        fireEvent.click(addButton());
+        await act(async () => {
+            fireEvent.click(addButton());
+            await expect(mock.addPeer.mock.results[1].value).resolves.toBeUndefined();
+        });
         await waitFor(() => expect(mock.success).toHaveBeenCalledExactlyOnceWith(en.fleetPage.peerAdded));
+        expect(addButton()).not.toHaveClass('ant-btn-loading');
         expect(mock.addPeer.mock.calls).toEqual([['mower-b.local:4006'], ['mower-b.local:4006']]);
         expect(mock.error).toHaveBeenCalledOnce();
         expect(screen.getByRole('textbox', {name: en.fleetPage.addPeerTitle})).toHaveValue('');

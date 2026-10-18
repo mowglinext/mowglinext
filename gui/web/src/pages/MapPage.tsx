@@ -19,6 +19,7 @@ import type {Map as MapboxMap} from 'mapbox-gl';
 import type {Feature, LineString, Polygon} from 'geojson';
 import {FeatureCollection, Position} from "geojson";
 import {useMowerAction} from "../components/MowerActions.tsx";
+import {DIG_OBSTRUCTION_STATE, useDigObstructionAck} from "../hooks/useDigObstructionAck.ts";
 import {MapStyle} from "./MapStyle.tsx";
 import {drawLine, isRingInsidePolygon, itranspose, transpose} from "../utils/map.tsx";
 import {resolveDockAppearance, shouldDisplayMapImage} from "../constants/mowerAppearances.ts";
@@ -1337,15 +1338,19 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // stable id (mowglinext#637) at the moment this fires, not from a
     // position captured whenever mowingAreas last rebuilt, so a re-indexed
     // area list can never send COMMAND_START at the wrong area.
+    // Every start goes through the DIG_OBSTRUCTION acknowledgement: while the
+    // robot is held, START is refused until the hold is released.
+    const stateName = highLevelStatus.highLevelStatus.state_name;
+    const ackStart = useDigObstructionAck(stateName);
     const startSelectedArea = (key: string) => {
         const item = mowingAreas.find(item => item.key == key);
         const index = mowingAreaIndexById(map, item?.feat?.properties?.id);
         if (index === undefined) return Promise.reject(new Error(t("crossHatch.areaUnavailable")));
-        return mowerAction("start_in_area", {area: index})();
+        return ackStart(mowerAction("start_in_area", {area: index}))();
     };
 
     const mowerActions = useMemo(() => ({
-        onStart: mowerAction("high_level_control", {Command: 1}),
+        onStart: ackStart(mowerAction("high_level_control", {Command: 1})),
         onHome: mowerAction("high_level_control", {Command: 2}),
         onEmergencyOn: mowerAction("emergency", {Emergency: 1}),
         onEmergencyOff: mowerAction("emergency", {Emergency: 0}),
@@ -1359,10 +1364,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         // Continue = START (mow_progress persists, so it resumes where it left
         // off); Pause = STOP (COMMAND_STOP=8 → StopHoldSequence: mower off, halt
         // in place, Nav2 left up so the mission can resume, no dock drive).
+        // DIG_OBSTRUCTION is included: the toolbars label it Continue, and a
+        // STOP there would leave the robot held.
         onContinueOrPause:
-            highLevelStatus.highLevelStatus.state_name === "IDLE_DOCKED" ||
-            highLevelStatus.highLevelStatus.state_name === "IDLE"
-                ? mowerAction("high_level_control", {Command: 1})
+            stateName === "IDLE_DOCKED" || stateName === "IDLE" || stateName === DIG_OBSTRUCTION_STATE
+                ? ackStart(mowerAction("high_level_control", {Command: 1}))
                 : mowerAction("high_level_control", {Command: 8}),
         // Retain explicit direction/OFF choices in the tree's session policy;
         // direct hardware commands would be overwritten by its next tick.
@@ -1371,7 +1377,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onBladeOff: mowerAction("blade_control", {mow_enabled: 0, mow_direction: 0}),
         onRecordFinish: mowerAction("high_level_control", {Command: 5}),
         onRecordCancel: mowerAction("high_level_control", {Command: 6}),
-    }), [mowerAction, highLevelStatus.highLevelStatus.state_name]);
+    }), [mowerAction, ackStart, stateName]);
 
     // Centered message panel used for the missing-token and missing-datum
     // states — a plain, translated explanation instead of an eternal spinner

@@ -360,6 +360,15 @@ def generate_launch_description() -> LaunchDescription:
             {"rain_mode": int(robot_params.get("rain_mode", 2))},
             {"rain_delay_minutes": float(robot_params.get("rain_delay_minutes", 30.0))},
             {"rain_debounce_sec": float(robot_params.get("rain_debounce_sec", 0.0))},
+            # use_external_rain / external_rain_max_age_minutes: the
+            # /external_rain verdict (a roof weather station behind Home
+            # Assistant, relayed by mqtt_bridge_node) OR-ed with the mower's own
+            # rain sensor in BTContext::RainingNow. Template defaults live in
+            # mowgli_robot.yaml; these fallbacks only matter if the template key
+            # is missing.
+            {"use_external_rain": bool(robot_params.get("use_external_rain", True))},
+            {"external_rain_max_age_minutes":
+                float(robot_params.get("external_rain_max_age_minutes", 120.0))},
             # idle_nav2_suspend: PAUSE the Nav2 lifecycle stack while parked on
             # the dock to cut idle CPU/thermal load (costmaps stop looping).
             # Default off — a deliberate per-site opt-in. RESUME is guaranteed

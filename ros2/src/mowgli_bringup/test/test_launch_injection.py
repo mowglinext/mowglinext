@@ -335,6 +335,7 @@ def test_full_system_injects_blade_auto_reverse() -> None:
         ("rain_mode", "int", 2, 0),
         ("rain_delay_minutes", "float", 30.0, 5.0),
         ("rain_debounce_sec", "float", 0.0, 3.0),
+        ("external_rain_max_age_minutes", "float", 120.0, 30.0),
         # Same trap: declared in behavior_tree_node.cpp and present in the
         # template, but never injected, so a configured tail current (e.g. 0.3 A)
         # was ignored and the charge hold kept waiting for the compiled 0.08 A.
@@ -359,6 +360,24 @@ def test_full_system_injects_rain_settings(
     for robot_params, expected in [({}, default), ({key: configured}, configured)]:
         actual = eval(expression, scope, {"robot_params": robot_params})
         assert actual == pytest.approx(expected)
+
+
+def test_full_system_injects_use_external_rain() -> None:
+    """use_external_rain is the master switch for the /external_rain verdict. A
+    bool, so exercise both values: bool("false") would mistakenly enable it for
+    a string-based path, and losing the injection silently ignores the GUI
+    toggle (the node then runs its compiled default of true).
+    """
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    values = _node_parameter_values(call, "use_external_rain")
+    assert len(values) == 1, "behavior_tree_node must receive use_external_rain exactly once"
+    expression = compile(ast.Expression(values[0]), "full_system.launch.py", "eval")
+    scope = {"__builtins__": {}, "bool": bool}
+    for configured in (False, True):
+        actual = eval(expression, scope, {"robot_params": {"use_external_rain": configured}})
+        assert actual is configured
+    assert eval(expression, scope, {"robot_params": {}}) is True
 
 
 def test_mowing_enabled_is_not_wired_to_some_other_node() -> None:
