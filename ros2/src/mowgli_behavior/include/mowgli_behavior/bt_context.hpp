@@ -199,17 +199,27 @@ struct BTContext
   /// context_mutex.
   bool critical_charge_stop_latched{false};
 
+  /// Battery-driven charge waits survive guard halts and process restarts.
+  /// Both low and critical holds re-enter the shared critical recovery branch.
+  bool battery_charge_pending{false};
+
+  /// After restoring an active mow, inspect the first power sample. An old
+  /// snapshot may predate battery_charge_pending, but booting on the charger
+  /// must still complete charging before resuming the saved mission.
+  bool restored_mow_charge_check_pending{false};
+
   /// Outcome of the most recent DockRobot attempt. Reset when an action starts
-  /// and set only after its action result reports success. Used by the
+  /// and set after its action result or physical charger contact reports success. Used by the
   /// critical-battery tree to avoid treating a failed navigation attempt as
   /// arrival at the charger.
   bool last_dock_succeeded{false};
 
   /// Latches a failed critical-battery dock attempt. The mower stays stopped
-  /// until an operator sends a new command, rather than retrying at BT rate.
+  /// until a new operator command or physical charger contact resolves it,
+  /// rather than retrying at BT rate.
   bool critical_dock_failure_latched{false};
 
-  /// Set by LatchCriticalDockFailure and consumed by the node after the current
+  /// Set by battery recovery state transitions and consumed after the current
   /// tree tick, so persistence remains serialized with coverage-map access.
   bool critical_dock_failure_persistence_requested{false};
 

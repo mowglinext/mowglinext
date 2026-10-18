@@ -122,6 +122,7 @@ public:
       constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
       const bool has_resumable_state = hasCoverageResumeState(*context_);
       const bool auto_continue = context_->current_command == kCommandStart && has_resumable_state;
+      context_->restored_mow_charge_check_pending = auto_continue;
       constexpr uint8_t kCommandStop = 8;  // HighLevelControl::Request::COMMAND_STOP
       const bool preserve_stop_hold =
           context_->current_command == kCommandStop && context_->critical_charge_stop_latched;
@@ -286,6 +287,7 @@ private:
         {
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           context_->latest_power = *msg;
+          observeRestoredMowPower(*context_, msg->charger_enabled);
 
           // Smooth the rail voltage before deriving the percent — motor transients
           // sag it 0.5-1 V and used to trip the docking thresholds at a genuine
