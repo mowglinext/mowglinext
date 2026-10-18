@@ -128,9 +128,12 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
  */
 export function useFleet(pollMs: number = FLEET_POLL_MS) {
     const [state, setState] = useState<FleetState>({robots: [], coordination: EMPTY_COORDINATION, loading: true});
-    const alive = useRef(true);
+    const nextCycle = useRef(0);
+    const activeLifetime = useRef<{lastPublished: number} | null>(null);
 
     const refresh = useCallback(async () => {
+        const lifetime = activeLifetime.current;
+        const cycle = ++nextCycle.current;
         try {
             const [robots, coordination] = await Promise.all([
                 request("/robots"),
@@ -139,26 +142,30 @@ export function useFleet(pollMs: number = FLEET_POLL_MS) {
                     (e: unknown) => ({error: e instanceof Error ? e.message : String(e)}),
                 ),
             ]);
-            if (!alive.current) return;
+            if (!lifetime || activeLifetime.current !== lifetime || cycle <= lifetime.lastPublished) return;
             const nextRobots = parseFleetRobots(robots);
+            // Advance outside the React updater, which may be replayed. A
+            // pending newer cycle alone must not invalidate this publication.
+            lifetime.lastPublished = cycle;
             if ("error" in coordination) {
                 setState(prev => ({...prev, robots: nextRobots, loading: false, error: coordination.error}));
             } else {
                 setState({robots: nextRobots, coordination: coordination.value, loading: false});
             }
         } catch (e: unknown) {
-            if (!alive.current) return;
+            if (!lifetime || activeLifetime.current !== lifetime || cycle <= lifetime.lastPublished) return;
             const message = e instanceof Error ? e.message : String(e);
+            lifetime.lastPublished = cycle;
             setState(prev => ({...prev, loading: false, error: message}));
         }
     }, []);
 
     useEffect(() => {
-        alive.current = true;
+        activeLifetime.current = {lastPublished: 0};
         void refresh();
         const timer = setInterval(() => void refresh(), pollMs);
         return () => {
-            alive.current = false;
+            activeLifetime.current = null;
             clearInterval(timer);
         };
     }, [refresh, pollMs]);

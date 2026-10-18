@@ -259,3 +259,194 @@ describe('useFleet coordination response boundary', () => {
         expect(vi.getTimerCount()).toBe(0);
     });
 });
+
+describe('Fleet snapshot order and lifetime', () => {
+    function deferred() {
+        let resolve!: (value: Response) => void;
+        let reject!: (reason: unknown) => void;
+        const promise = new Promise<Response>((yes, no) => {resolve = yes; reject = no;});
+        return {promise, resolve, reject};
+    }
+    let reads: ReturnType<typeof deferred>[];
+    const snapshotRobots = (name: string) => [{identity: {id: 'a', name, api_version: 1}, online: true, self: false}];
+    const snapshotCoordination = (distance: number) => ({settings: {yield_distance_m: distance}, status: {}});
+    const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), {status});
+    async function finish(cycle: number, name: string, distance: number) {
+        await act(async () => {
+            reads[cycle * 2].resolve(response(snapshotRobots(name)));
+            reads[cycle * 2 + 1].resolve(response(snapshotCoordination(distance)));
+            await Promise.resolve();
+        });
+    }
+    beforeEach(() => {
+        vi.useFakeTimers();
+        reads = [];
+        fetchMock.mockImplementation((_url, init) => {
+            if (init?.method) return Promise.resolve(response({}));
+            const read = deferred();
+            reads.push(read);
+            return read.promise;
+        });
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it.each(['old-first', 'new-first'])('keeps the latest published snapshot with %s completion', async order => {
+        const hook = renderHook(() => useFleet());
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        if (order === 'old-first') {
+            await finish(0, 'Old', 2);
+            expect(hook.result.current.robots).toEqual(snapshotRobots('Old'));
+            await finish(1, 'New', 5);
+        } else {
+            await finish(1, 'New', 5);
+            await finish(0, 'Old', 2);
+        }
+        expect(hook.result.current.robots).toEqual(snapshotRobots('New'));
+        expect(hook.result.current.coordination.settings.yield_distance_m).toBe(5);
+        expect(hook.result.current.error).toBeUndefined();
+        expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
+    });
+    it.each(['robots', 'coordination'])('ignores an old %s error after a newer success', async field => {
+        const hook = renderHook(() => useFleet());
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        await finish(1, 'New', 5);
+        await act(async () => {
+            if (field === 'robots') {
+                reads[0].reject(new TypeError('Old robots failure'));
+                reads[1].resolve(response(snapshotCoordination(2)));
+            } else {
+                reads[0].resolve(response(snapshotRobots('Old')));
+                reads[1].reject(new TypeError('Old coordination failure'));
+            }
+            await Promise.resolve();
+        });
+        expect(hook.result.current.robots).toEqual(snapshotRobots('New'));
+        expect(hook.result.current.coordination.settings.yield_distance_m).toBe(5);
+        expect(hook.result.current.error).toBeUndefined();
+    });
+    it('keeps a recent robots error and the previous snapshot when an old success arrives', async () => {
+        const hook = renderHook(() => useFleet());
+        await finish(0, 'Initial', 7);
+        await act(() => vi.advanceTimersByTimeAsync(4000));
+        await act(async () => {
+            reads[4].reject(new TypeError('Current robots failure'));
+            reads[5].resolve(response(snapshotCoordination(9)));
+            await Promise.resolve();
+        });
+        await finish(1, 'Old', 2);
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Initial'));
+        expect(hook.result.current.coordination.settings.yield_distance_m).toBe(7);
+        expect(hook.result.current.error).toBe('Current robots failure');
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        await finish(3, 'Recovered', 8);
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Recovered'));
+        expect(hook.result.current.error).toBeUndefined();
+    });
+    it.each(['invalid', 'http', 'network'])('keeps recent robots with %s coordination against an old full success', async failure => {
+        const hook = renderHook(() => useFleet());
+        await finish(0, 'Initial', 7);
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        let manual!: Promise<void>;
+        act(() => {manual = hook.result.current.refresh();});
+        await act(async () => {
+            if (failure === 'network') reads[5].reject(new TypeError('Current coordination failure'));
+            else reads[5].resolve(response(failure === 'http'
+                ? {error: 'Current coordination failure'} : {settings: {enabled: 'false'}, status: {}}, failure === 'http' ? 503 : 200));
+            await Promise.resolve();
+        });
+        // Preserve the existing wait for both GETs, including on coordination failure.
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Initial'));
+        await act(async () => {reads[4].resolve(response(snapshotRobots('New'))); await manual;});
+        expect(hook.result.current.robots).toEqual(snapshotRobots('New'));
+        expect(hook.result.current.coordination.settings.yield_distance_m).toBe(7);
+        const error = failure === 'invalid' ? 'Invalid fleet coordination response' : 'Current coordination failure';
+        expect(hook.result.current.error).toBe(error);
+        await finish(1, 'Old', 2);
+        expect(hook.result.current.robots).toEqual(snapshotRobots('New'));
+        expect(hook.result.current.coordination.settings.yield_distance_m).toBe(7);
+        expect(hook.result.current.error).toBe(error);
+        expect(hook.result.current.loading).toBe(false);
+    });
+    it('does not reintroduce a removed peer after the action refresh publishes', async () => {
+        const hook = renderHook(() => useFleet());
+        const initialRobots = [...snapshotRobots('Alpha'), {identity: {id: 'b', name: 'Beta'}, online: true, self: false}];
+        await act(async () => {reads[0].resolve(response(initialRobots)); reads[1].resolve(response(snapshotCoordination(3))); await Promise.resolve();});
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        let removal!: Promise<void>;
+        await act(async () => {removal = hook.result.current.removePeer('b'); await Promise.resolve();});
+        await act(async () => {reads[4].resolve(response(snapshotRobots('Alpha'))); reads[5].resolve(response(snapshotCoordination(3))); await removal;});
+        await act(async () => {reads[2].resolve(response(initialRobots)); reads[3].resolve(response(snapshotCoordination(3))); await Promise.resolve();});
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Alpha'));
+        expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination',
+            'DELETE /peers/b', 'GET /robots', 'GET /coordination']);
+    });
+    it.each(['strict', 'pollMs'])('invalidates the old setup on %s replay even before the new setup publishes', async mode => {
+        const hook = renderHook(({pollMs}) => useFleet(pollMs), {initialProps: {pollMs: 2000}, reactStrictMode: mode === 'strict'});
+        if (mode === 'pollMs') hook.rerender({pollMs: 3000});
+        expect(reads).toHaveLength(4);
+        expect(vi.getTimerCount()).toBe(1);
+        await finish(0, 'Old', 2);
+        expect(hook.result.current.robots).toEqual([]);
+        expect(hook.result.current.loading).toBe(true);
+        await finish(1, 'Current', 5);
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Current'));
+        await act(() => vi.advanceTimersByTimeAsync(mode === 'strict' ? 2000 : 3000));
+        expect(reads).toHaveLength(6);
+        await finish(2, 'Next tick', 6);
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Next tick'));
+        hook.unmount();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it('ignores the old StrictMode error without replaying updater side effects', async () => {
+        const hook = renderHook(() => useFleet(), {reactStrictMode: true});
+        await act(async () => {reads[0].reject(new TypeError('Old setup')); reads[1].resolve(response({})); await Promise.resolve();});
+        expect(hook.result.current.error).toBeUndefined();
+        expect(hook.result.current.loading).toBe(true);
+        await act(async () => {reads[2].resolve(response(snapshotRobots('Active'))); reads[3].resolve(response({settings: {enabled: 'false'}, status: {}})); await Promise.resolve();});
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Active'));
+        expect(hook.result.current.error).toBe('Invalid fleet coordination response');
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        await finish(2, 'Recovered', 4);
+        expect(hook.result.current.error).toBeUndefined();
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Recovered'));
+    });
+    it('stops processing late data after unmount and clears polling', async () => {
+        const hook = renderHook(() => useFleet());
+        hook.unmount();
+        expect(vi.getTimerCount()).toBe(0);
+        await act(() => vi.advanceTimersByTimeAsync(6000));
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        const readIdentity = vi.fn(() => ({id: 'old', name: 'Old'}));
+        const json = vi.spyOn(JSON, 'parse');
+        json.mockImplementationOnce(() => [{get identity() {return readIdentity();}}]);
+        await act(async () => {reads[0].resolve(response([])); reads[1].resolve(response({})); await Promise.resolve();});
+        expect(readIdentity).not.toHaveBeenCalled();
+    });
+    it('continues to publish six-second cycles while newer polls are pending', async () => {
+        const hook = renderHook(() => useFleet());
+        await act(() => vi.advanceTimersByTimeAsync(6000));
+        for (let id = 0; id < 4; id++) {
+            if (id) await act(() => vi.advanceTimersByTimeAsync(2000));
+            expect(reads.length / 2).toBeGreaterThan(id + 1);
+            await finish(id, `Cycle ${id}`, 3 + id);
+            expect(hook.result.current.robots).toEqual(snapshotRobots(`Cycle ${id}`));
+            expect(hook.result.current.coordination.settings.yield_distance_m).toBe(3 + id);
+            expect(hook.result.current.error).toBeUndefined();
+        }
+        expect(reads).toHaveLength(14);
+        for (let id = 4; id < 7; id++) await finish(id, `Cycle ${id}`, 3 + id);
+        expect(fetchMock).toHaveBeenCalledTimes(14);
+    });
+    it('waits for both GETs and rejects late cycles completed out of order', async () => {
+        const hook = renderHook(() => useFleet());
+        await finish(0, 'Initial', 3);
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        await act(async () => {reads[2].resolve(response(snapshotRobots('Old'))); await Promise.resolve();});
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Initial'));
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        await finish(2, 'Current', 5);
+        await act(async () => {reads[3].resolve(response(snapshotCoordination(2))); await Promise.resolve();});
+        expect(hook.result.current.robots).toEqual(snapshotRobots('Current'));
+        expect(hook.result.current.coordination.settings.yield_distance_m).toBe(5);
+    });
+});
