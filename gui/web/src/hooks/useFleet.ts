@@ -99,21 +99,23 @@ interface FleetState {
     error?: string;
 }
 
-async function readJson(res: Response): Promise<unknown> {
+async function readJson(res: Response, strict = false): Promise<unknown> {
     const text = await res.text();
     try {
+        if (strict) return JSON.parse(text);
         return text ? JSON.parse(text) : {};
     } catch {
+        if (strict) throw new Error("Invalid fleet snapshot JSON response");
         return {};
     }
 }
 
-async function request(path: string, init?: RequestInit): Promise<unknown> {
+async function request(path: string, init?: RequestInit, strictJson = false): Promise<unknown> {
     const res = await fetch(`${httpBase()}/api/fleet${path}`, {
         headers: {"Content-Type": "application/json"},
         ...init,
     });
-    const body = await readJson(res);
+    const body = await readJson(res, res.ok && strictJson);
     if (!res.ok) {
         const msg = (body as {error?: string})?.error ?? `HTTP ${res.status}`;
         throw new Error(msg);
@@ -136,8 +138,8 @@ export function useFleet(pollMs: number = FLEET_POLL_MS) {
         const cycle = ++nextCycle.current;
         try {
             const [robots, coordination] = await Promise.all([
-                request("/robots"),
-                request("/coordination").then(parseCoordination).then(
+                request("/robots", undefined, true),
+                request("/coordination", undefined, true).then(parseCoordination).then(
                     value => ({value}),
                     (e: unknown) => ({error: e instanceof Error ? e.message : String(e)}),
                 ),

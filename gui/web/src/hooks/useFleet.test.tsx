@@ -649,3 +649,113 @@ describe('useFleet GNSS publication ordering', () => {
         }
     });
 });
+
+describe('useFleet strict snapshot JSON', () => {
+    it.each(['robots', 'coordination'].flatMap(path => [
+        {name: 'invalid JSON', text: '{bad'}, {name: 'empty body', text: ''}, {name: 'whitespace', text: '  \n '},
+    ].map(item => ({path, ...item}))))('rejects $path $name and recovers without losing usable data', async ({path, text}) => {
+        let invalid = false;
+        fetchMock.mockImplementation(url => {
+            const robots = requestUrl(url).endsWith('/robots');
+            if (invalid && requestUrl(url).endsWith(`/${path}`)) return Promise.resolve(new Response(text));
+            return Promise.resolve(new Response(JSON.stringify(robots
+                ? [{identity: {id: 'a', name: invalid ? 'Recent' : 'Initial'}}]
+                : {settings: {yield_distance_m: invalid ? 12 : 7}, status: {}})));
+        });
+        const {result} = await mountedFleet();
+        const previous = result.current.robots;
+        const previousCoordination = result.current.coordination;
+        invalid = true;
+        await act(() => result.current.refresh());
+        if (path === 'robots') expect(result.current.robots).toBe(previous);
+        else expect(result.current.robots[0].identity.name).toBe('Recent');
+        expect(result.current.coordination).toBe(previousCoordination);
+        expect(result.current.error).toBe('Invalid fleet snapshot JSON response');
+        expect(result.current.loading).toBe(false);
+        invalid = false;
+        await act(() => result.current.refresh());
+        expect(result.current.robots[0].identity.name).toBe('Initial');
+        expect(result.current.error).toBeUndefined();
+        expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
+    });
+    it.each(['{}', 'null', '[]'])('keeps the existing decoded-shape behavior for %s', async text => {
+        fetchMock.mockImplementation(() => Promise.resolve(new Response(text, {headers: {'Content-Type': 'text/plain'}})));
+        const {result} = await mountedFleet();
+        expect(result.current.robots).toEqual([]);
+        if (text === '{}') {
+            expect(result.current.error).toBeUndefined();
+            expect(result.current.coordination.settings.yield_distance_m).toBe(3);
+        } else expect(result.current.error).toBe('Invalid fleet coordination response');
+    });
+    it.each(['robots', 'coordination'])('keeps the existing %s body-read error path', async path => {
+        let unreadable = false;
+        fetchMock.mockImplementation(url => {
+            if (unreadable && requestUrl(url).endsWith(`/${path}`)) {
+                return Promise.resolve(new Response(new ReadableStream({start(controller) {controller.error(new TypeError('Body read failed'));}})));
+            }
+            return Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots')
+                ? [{identity: {id: 'a', name: unreadable ? 'Recent' : 'Initial'}}] : {})));
+        });
+        const {result} = await mountedFleet();
+        const previous = result.current.robots;
+        const previousCoordination = result.current.coordination;
+        unreadable = true;
+        await act(() => result.current.refresh());
+        expect(result.current.error).toBe('Body read failed');
+        expect(result.current.coordination).toBe(previousCoordination);
+        if (path === 'robots') expect(result.current.robots).toBe(previous);
+        else expect(result.current.robots[0].identity.name).toBe('Recent');
+        unreadable = false;
+        await act(() => result.current.refresh());
+        expect(result.current.error).toBeUndefined();
+    });
+    it.each(['call', 'removePeer', 'addPeer', 'setCoordination', 'startFresh'] as const)('preserves an empty HTTP204 acknowledgement for %s', async action => {
+        fetchMock.mockImplementation((url, init) => Promise.resolve(init?.method
+            ? new Response(null, {status: 204})
+            : new Response(requestUrl(url).endsWith('/robots') ? '[]' : '{}')));
+        const {result} = await mountedFleet();
+        await act(async () => {
+            switch (action) {
+                case 'call': await result.current.call('a', 'high_level_control', {Command: 1}); break;
+                case 'removePeer': await result.current.removePeer('a'); break;
+                case 'addPeer': expect(await result.current.addPeer('peer.local')).toBeUndefined(); break;
+                case 'setCoordination': await result.current.setCoordination(coordinationDefaults.settings); break;
+                case 'startFresh': await result.current.startFresh(); break;
+            }
+        });
+        expect(result.current.error).toBeUndefined();
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(requests().slice(1)).toEqual(['GET /robots', 'GET /coordination']);
+    });
+    it.each([
+        {text: '{"error":{"reason":"untyped"}}', error: '[object Object]'},
+        {text: '{"error":""}', error: ''},
+        {text: '{bad', error: 'HTTP 503'},
+        {text: '', error: 'HTTP 503'},
+    ])('does not change HTTP503 parsing for $text', async ({text, error}) => {
+        fetchMock.mockImplementation(url => Promise.resolve(requestUrl(url).endsWith('/robots')
+            ? new Response(text, {status: 503}) : new Response('{}')));
+        const {result} = await mountedFleet();
+        expect(result.current.error).toBe(error);
+    });
+    it.each(['new-error', 'new-success'])('keeps accepted publication order with a JSON $mode', async mode => {
+        const reads: Array<(res: Response) => void> = [];
+        fetchMock.mockImplementation(() => new Promise(resolve => {reads.push(resolve);}));
+        const hook = renderHook(() => useFleet());
+        const robots = (name: string) => JSON.stringify([{identity: {id: 'a', name}}]);
+        await act(async () => {reads[0](new Response(robots('Initial'))); reads[1](new Response('{}')); await Promise.resolve();});
+        const previous = hook.result.current.robots;
+        let old!: Promise<void>;
+        let recent!: Promise<void>;
+        act(() => {old = hook.result.current.refresh(); recent = hook.result.current.refresh();});
+        await act(async () => {reads[4](new Response(mode === 'new-error' ? '{bad' : robots('Recent'))); reads[5](new Response('{}')); await recent;});
+        await act(async () => {reads[2](new Response(mode === 'new-error' ? robots('Old') : '{bad')); reads[3](new Response('{}')); await old;});
+        if (mode === 'new-error') {
+            expect(hook.result.current.robots).toBe(previous);
+            expect(hook.result.current.error).toBe('Invalid fleet snapshot JSON response');
+        } else {
+            expect(hook.result.current.robots[0].identity.name).toBe('Recent');
+            expect(hook.result.current.error).toBeUndefined();
+        }
+    });
+});

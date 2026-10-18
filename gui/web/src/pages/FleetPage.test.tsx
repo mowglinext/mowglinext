@@ -442,3 +442,34 @@ describe('FleetPage GNSS publication boundary', () => {
         expect(commands[0][1]?.body).toBe('{"Command":1}');
     });
 });
+
+describe('FleetPage strict snapshot JSON', () => {
+    it.each(['robots', 'coordination'])('keeps usable cards/settings and shows the $path read error', async path => {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        mock.realFleet = true;
+        let invalid = false;
+        const urlOf = (url: Parameters<typeof fetch>[0]) => typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+        const fetchMock = vi.fn<typeof fetch>(url => {
+            if (invalid && urlOf(url).endsWith(`/${path}`)) return Promise.resolve(new Response('{bad'));
+            return Promise.resolve(new Response(JSON.stringify(urlOf(url).endsWith('/robots')
+                ? [{...robot('alpha'), identity: {id: 'alpha', name: invalid ? 'Recent Alpha' : 'Initial Alpha'}}, robot('bravo')]
+                : {settings: {enabled: true, yield_distance_m: invalid ? 12 : 7}, status: {}})));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        render(<ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider>);
+        await screen.findByTestId('fleet-card-alpha');
+        invalid = true;
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        expect(screen.getByTestId('fleet-card-alpha')).toBeVisible();
+        expect(screen.getByTestId('fleet-card-bravo')).toBeVisible();
+        expect(within(screen.getByTestId('fleet-card-alpha')).getByText(path === 'robots' ? 'Initial Alpha' : 'Recent Alpha')).toBeVisible();
+        expect(screen.getByRole('switch')).toBeChecked();
+        expect(screen.getAllByRole('spinbutton')[0]).toHaveValue('7.0');
+        expect(screen.getByText('Invalid fleet snapshot JSON response')).toBeVisible();
+        invalid = false;
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        expect(screen.queryByText('Invalid fleet snapshot JSON response')).not.toBeInTheDocument();
+        expect(screen.getByTestId('fleet-card-bravo')).toBeVisible();
+        expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+    });
+});
