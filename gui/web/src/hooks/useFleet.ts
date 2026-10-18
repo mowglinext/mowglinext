@@ -58,14 +58,35 @@ const EMPTY_COORDINATION: FleetCoordination = {
     peer_feed: {active: false, peers_published: 0, rate_hz: 5, publishes: 0},
 };
 
-/** The e2e mock answers `{}` for unknown routes: fall back to the defaults. */
+function isCoordinationPayload(payload: unknown): payload is {
+    settings?: Partial<CoordinatorSettings>;
+    status?: Partial<CoordinatorStatus>;
+    peer_feed?: Partial<PeerFeedStatus>;
+} {
+    const part = (value: unknown, booleans: string[], numbers: string[], arrays: string[] = [], texts: string[] = []) => {
+        if (value === undefined) return true;
+        if (!isJsonObject(value)) return false;
+        const finite = (item: unknown) => typeof item === "number" && Number.isFinite(item);
+        return booleans.every(key => !(key in value) || typeof value[key] === "boolean")
+            && numbers.every(key => !(key in value) || finite(value[key]))
+            && arrays.every(key => !(key in value) || Array.isArray(value[key]) && value[key].every(finite))
+            && texts.every(key => !(key in value) || typeof value[key] === "string");
+    };
+    return isJsonObject(payload)
+        && part(payload.settings, ["enabled"], ["yield_distance_m", "resume_distance_m", "completed_ttl_h", "yield_max_hold_s", "yield_cooldown_s"])
+        && part(payload.status, ["enabled", "yielded"], ["preferred_start"], ["excluded_areas", "completed_areas"], ["last_push_at", "last_error"])
+        && part(payload.peer_feed, ["active"], ["peers_published", "rate_hz", "publishes"], [], ["last_publish_at", "last_error"]);
+}
+
+/** Keep the existing defaults for absent sections/fields and the e2e `{}` response. */
 export function parseCoordination(payload: unknown): FleetCoordination {
-    const p = payload as Partial<FleetCoordination> | null;
-    if (!p || typeof p !== "object" || !p.settings || !p.status) return EMPTY_COORDINATION;
+    if (!isCoordinationPayload(payload)) throw new Error("Invalid fleet coordination response");
+    if (!payload.settings || !payload.status) return {...payload, ...EMPTY_COORDINATION};
     return {
-        settings: {...EMPTY_COORDINATION.settings, ...p.settings},
-        status: {...EMPTY_COORDINATION.status, ...p.status},
-        peer_feed: {...EMPTY_COORDINATION.peer_feed, ...(p.peer_feed ?? {})},
+        ...payload,
+        settings: {...EMPTY_COORDINATION.settings, ...payload.settings},
+        status: {...EMPTY_COORDINATION.status, ...payload.status},
+        peer_feed: {...EMPTY_COORDINATION.peer_feed, ...payload.peer_feed},
     };
 }
 
@@ -111,9 +132,20 @@ export function useFleet(pollMs: number = FLEET_POLL_MS) {
 
     const refresh = useCallback(async () => {
         try {
-            const [robots, coordination] = await Promise.all([request("/robots"), request("/coordination")]);
+            const [robots, coordination] = await Promise.all([
+                request("/robots"),
+                request("/coordination").then(parseCoordination).then(
+                    value => ({value}),
+                    (e: unknown) => ({error: e instanceof Error ? e.message : String(e)}),
+                ),
+            ]);
             if (!alive.current) return;
-            setState({robots: parseFleetRobots(robots), coordination: parseCoordination(coordination), loading: false});
+            const nextRobots = parseFleetRobots(robots);
+            if ("error" in coordination) {
+                setState(prev => ({...prev, robots: nextRobots, loading: false, error: coordination.error}));
+            } else {
+                setState({robots: nextRobots, coordination: coordination.value, loading: false});
+            }
         } catch (e: unknown) {
             if (!alive.current) return;
             const message = e instanceof Error ? e.message : String(e);

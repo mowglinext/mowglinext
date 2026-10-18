@@ -5,6 +5,7 @@ import type {FleetCoordination, MapPushResult} from '../hooks/useFleet';
 import {getColors} from '../theme/colors';
 import en from '../i18n/locales/en.json';
 import {ConfigProvider} from 'antd';
+import {Component, type ReactNode} from 'react';
 
 const mock = vi.hoisted(() => {
     const robots: FleetRobotWire[] = [];
@@ -225,5 +226,58 @@ describe('FleetPage map sharing with the real useFleet HTTP boundary', () => {
         expect(posts()).toHaveLength(2);
         expect(mock.error).toHaveBeenCalledOnce();
         expect(mock.warning).not.toHaveBeenCalled();
+    });
+});
+
+class CoordinationRenderBoundary extends Component<{
+    children: ReactNode;
+    onError: (error: Error) => void;
+}, {failed: boolean}> {
+    state = {failed: false};
+    static getDerivedStateFromError() {return {failed: true};}
+    componentDidCatch(error: Error) {this.props.onError(error);}
+    render() {return this.state.failed ? <div>Unexpected coordination render failure</div> : this.props.children;}
+}
+
+describe('FleetPage malformed coordination with the real hook', () => {
+    const requestUrl = (url: Parameters<typeof fetch>[0]) => typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    it.each([
+        {name: 'excluded areas object', invalid: {settings: {enabled: true}, status: {excluded_areas: {length: 1}}}},
+        {name: 'completed areas object', invalid: {settings: {enabled: true}, status: {completed_areas: {length: 1}}}},
+        {name: 'last error object', invalid: {settings: {}, status: {last_error: {reason: 'not text'}}}},
+        {name: 'enabled text', invalid: {settings: {enabled: 'false'}, status: {}}},
+        {name: 'peer active text', invalid: {settings: {}, status: {}, peer_feed: {active: 'false'}}},
+        {name: 'distance text', invalid: {settings: {yield_distance_m: '12'}, status: {}}},
+    ])('keeps the last valid controls and shows the poll error for $name', async ({invalid}) => {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        mock.realFleet = true;
+        let coordination: unknown = mock.coordination;
+        const fetchMock = vi.fn<typeof fetch>(url => Promise.resolve(new Response(JSON.stringify(
+            requestUrl(url).endsWith('/robots') ? [robot('alpha'), robot('bravo')] : coordination,
+        ))));
+        vi.stubGlobal('fetch', fetchMock);
+        const caught = vi.fn<(error: Error) => void>();
+        render(<CoordinationRenderBoundary onError={caught}>
+            <ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider>
+        </CoordinationRenderBoundary>);
+        await screen.findByTestId('fleet-card-alpha');
+        expect(screen.getByRole('switch')).not.toBeChecked();
+        const distances = screen.getAllByRole('spinbutton');
+        expect(distances[0]).toHaveValue('3.0');
+        coordination = invalid;
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        await screen.findByText('Invalid fleet coordination response');
+        expect(caught).not.toHaveBeenCalled();
+        expect(screen.queryByText('Unexpected coordination render failure')).not.toBeInTheDocument();
+        expect(screen.getByTestId('fleet-card-alpha')).toBeVisible();
+        expect(screen.getByTestId('fleet-card-bravo')).toBeVisible();
+        expect(screen.getByRole('switch')).not.toBeChecked();
+        expect(screen.getAllByRole('spinbutton')[0]).toHaveValue('3.0');
+        expect(within(screen.getByTestId('fleet-peer-feed')).getByText(en.fleetPage.peerFeedDown)).toBeVisible();
+        expect(mock.success).not.toHaveBeenCalled();
+        expect(mock.warning).not.toHaveBeenCalled();
+        expect(mock.error).not.toHaveBeenCalled();
+        expect(fetchMock.mock.calls).toHaveLength(4);
+        expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true);
     });
 });
