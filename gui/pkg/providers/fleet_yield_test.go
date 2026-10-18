@@ -311,7 +311,7 @@ func TestFleetYieldTakeoverCancelsEvenWithoutPosition(t *testing.T) {
 	for _, phase := range []struct {
 		state int
 		name  string
-	}{{2, "RETURNING_HOME"}, {4, "MANUAL_MOWING"}, {3, "RECORDING"}, {0, "EMERGENCY"}, {1, "CHARGING"}, {1, "RAIN"}, {1, "MOWING_COMPLETE"}, {1, "UNKNOWN"}, {4, "IDLE"}} {
+	}{{2, "RETURNING_HOME"}, {4, "MANUAL_MOWING"}, {3, "RECORDING"}, {0, "EMERGENCY"}, {1, "CHARGING"}, {1, "RAIN"}, {1, "MOWING_COMPLETE"}, {1, "UNKNOWN"}, {4, "IDLE"}, {3, "IDLE"}, {0, "IDLE"}} {
 		t.Run(phase.name, func(t *testing.T) {
 			h := newOwnedYieldTest(t)
 			h.enable(t)
@@ -516,4 +516,48 @@ func TestFleetYieldCancelledUncertainResumeStillGetsCooldown(t *testing.T) {
 			require.Len(t, h.calls(fleetPause), 1, "an uncertain accepted resume needs cooldown even after cancellation")
 		})
 	}
+}
+
+// PublishHighLevelStatus debounces numeric IDLE for two ticks while already
+// publishing the new IDLE name. This is a real StopHold transition, not takeover.
+func TestFleetYieldDebouncedIdleRetainsOwnershipUntilReady(t *testing.T) {
+	h := newOwnedYieldTest(t)
+	h.enable(t)
+	pause := h.calls(fleetPause)[0]
+	h.status(2, "IDLE")
+	h.tick(1)
+	h.tick(1)
+	require.Empty(t, h.calls(fleetCancel))
+	require.True(t, h.c.Status().Yielded)
+	require.False(t, h.c.yield.StopHoldObserved)
+	require.Equal(t, pause.Epoch, h.c.yield.Epoch)
+	require.Equal(t, pause.RequestId, h.c.yield.RequestID)
+	h.clear(t) // final {1,IDLE}, peer clearance and its three-second hold
+	require.Equal(t, 1, h.server.resumes)
+	require.Empty(t, h.calls(fleetCancel))
+	require.False(t, h.c.Status().Yielded)
+	require.Equal(t, 4, h.server.target)
+}
+
+func TestFleetYieldDebouncedIdleDoesNotAcquireOrReopenReadyHold(t *testing.T) {
+	t.Run("no existing ownership", func(t *testing.T) {
+		h := newOwnedYieldTest(t)
+		h.status(2, "IDLE")
+		h.enable(t)
+		require.Empty(t, h.calls(fleetPause))
+		require.False(t, h.c.Status().Yielded)
+	})
+	t.Run("after ready stop hold", func(t *testing.T) {
+		h := newOwnedYieldTest(t)
+		h.enable(t)
+		h.server.phase = "IDLE"
+		h.status(1, "IDLE")
+		h.tick(1)
+		require.True(t, h.c.yield.StopHoldObserved)
+		h.status(2, "IDLE")
+		h.tick(1)
+		require.Len(t, h.calls(fleetCancel), 1)
+		require.False(t, h.c.Status().Yielded)
+		require.Empty(t, h.calls(fleetResume))
+	})
 }

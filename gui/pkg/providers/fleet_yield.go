@@ -41,18 +41,19 @@ const yieldResumeHold = 3 * time.Second
 // Operation remains unchanged after a lost reply, except that cancellation
 // supersedes every other intent and remains pending even across re-enable.
 type yieldState struct {
-	Yielded        bool
-	Epoch          string
-	RequestID      string
-	Operation      uint8
-	Pending        bool
-	MayHaveResumed bool // a RESUME transport failure may have applied
-	HoldSince      time.Time
-	ClearSince     time.Time
-	ResumedAt      time.Time
-	NextAttempt    time.Time
-	Blocked        bool // terminal result: wait for a new proximity/autonomy event
-	SawInactive    bool
+	Yielded          bool
+	Epoch            string
+	RequestID        string
+	Operation        uint8
+	Pending          bool
+	MayHaveResumed   bool // a RESUME transport failure may have applied
+	StopHoldObserved bool // final numeric IDLE has been observed for this hold
+	HoldSince        time.Time
+	ClearSince       time.Time
+	ResumedAt        time.Time
+	NextAttempt      time.Time
+	Blocked          bool // terminal result: wait for a new proximity/autonomy event
+	SawInactive      bool
 }
 
 func yieldEligible(self fleetMember) bool {
@@ -110,8 +111,15 @@ func (c *FleetCoordinator) stepYield(self fleetMember, peers []fleetMember, s Co
 	if st.Yielded {
 		// Eligible autonomy can be the pre-PAUSE cached status, or the result
 		// of a lost RESUME reply. Only the server can distinguish those from
-		// a newer operator START. Every unsafe observed phase cancels instead.
-		if !s.Enabled || (!self.StopHold && !yieldEligible(self)) {
+		// a newer operator START. PublishHighLevelStatus also retains numeric
+		// AUTONOMOUS for the first two IDLE ticks. Tolerate that transition
+		// only before observing the final stop hold, as the server does; it
+		// does not establish readiness for RESUME.
+		debouncingStop := !st.StopHoldObserved && self.Online && self.Autonomous && self.StateName == "IDLE"
+		if self.StopHold {
+			st.StopHoldObserved = true
+		}
+		if !s.Enabled || (!self.StopHold && !yieldEligible(self) && !debouncingStop) {
 			st.Operation, st.Pending = fleetCancel, true
 		}
 		// Reconcile an uncertain PAUSE before attempting RESUME.
