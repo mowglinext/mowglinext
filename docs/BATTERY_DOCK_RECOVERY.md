@@ -102,6 +102,14 @@ resume remains required before continuing an active mow. Recovery undocking
 requires an active START command; idle/STOP preserve progress without departure.
 Valid persisted mowing resumes remain supported.
 
+Startup waits for the first usable live Power sample before any motion-capable
+guard or mission branch runs. The sample's battery percentage and restored
+charging intent are applied before releasing that barrier. Until then the
+tree holds blade/wheel commands off and reports `WAITING_FOR_POWER`; default
+100% battery and charger-off values cannot authorize heading seeding, docking
+or undocking. This is a process-local startup barrier, not a new timeout or
+runtime freshness policy.
+
 Failure notifications are remembered by terminal reason across guard statuses
 and GUI restarts. A concrete new attempt rearms them; confirmed charging also
 resolves navigation incidents. Contact alone does not clear `CHARGER_FAILED`.
@@ -111,10 +119,14 @@ incident's time-only suppression without changing other event cooldowns.
 ## Software validation
 
 On the development host as the normal project user, the behavior executable
-built and 89 focused ROS tests passed: battery recovery 20 (12 new production
-XML regressions), coverage persistence 30, manual resume 29 and guard structure
-10. The production XML tests control external actions and elapsed waits; they
-do not establish real robot motion or charger behavior.
+built and 129 focused ROS tests passed: battery recovery 24 (16 new production
+XML regressions), coverage persistence 30, manual resume 29, guard structure 11
+and startup pause 35. Package cpplint also passes. The startup tests reproduce
+the pre-fix heading motion with the power guard omitted, then delay initial
+power for 200 ticks with startup readiness/waits already satisfied and assert
+zero docking, heading-seed or backup commands. Charging and off-dock samples
+then take their respective recovery paths. External actions and elapsed waits
+are controlled; this does not establish physical robot or charger behavior.
 
 The GUI `go test ./...` suite passed. All notification tests were rerun after
 the independent review's dead-charger alert finding was fixed and passed.
@@ -123,6 +135,13 @@ Touched C++ passes clang-format 18, including changed lines against the
 The independent final safety review found no remaining blocker or should-fix.
 Whole-workspace ROS build/CI, simulation and patched hardware runs were not
 performed locally.
+
+The first PR head's full ROS CI exposed an outdated startup-test probe (it
+counted new reactive condition reads as replayed startup actions) and two
+cpplint false positives on unnamed lambda arguments. The test fixture now uses
+the real conditions with its replay assertions unchanged, and the lambda
+arguments are named. Both failing checks pass locally; full CI for the updated
+head must still run.
 
 ## Physical acceptance still required
 

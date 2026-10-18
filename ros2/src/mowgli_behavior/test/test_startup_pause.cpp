@@ -189,6 +189,8 @@ protected:
     blackboard = BT::Blackboard::create();
     blackboard->set("context", observations->context);
     factory.registerNodeType<mowgli_behavior::IsCommand>("IsCommand");
+    factory.registerNodeType<mowgli_behavior::IsBatteryChargePending>("IsBatteryChargePending");
+    factory.registerNodeType<mowgli_behavior::IsDocking>("IsDocking");
     factory.registerSimpleAction("HomeProbe",
                                  [this](BT::TreeNode&)
                                  {
@@ -202,7 +204,11 @@ protected:
     if (!element->FirstChildElement())
     {
       const std::string tag = element->Name();
-      if (tag == "IsCommand" || tag == "AlwaysSuccess" || tag == "AlwaysFailure")
+      // Reactive mission gates are conditions, not one-shot startup actions.
+      // Keep their production reads real, as with the command gate, so their
+      // repeated evaluations do not masquerade as replayed startup steps.
+      if (tag == "IsCommand" || tag == "IsBatteryChargePending" || tag == "IsDocking" ||
+          tag == "AlwaysSuccess" || tag == "AlwaysFailure")
         return;
       // Unique registration IDs give each leaf its static production-tree
       // occurrence, so two identical waits remain independently controllable.

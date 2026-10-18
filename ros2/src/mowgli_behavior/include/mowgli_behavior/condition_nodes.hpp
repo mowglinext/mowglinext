@@ -49,6 +49,27 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// HasPowerSample
+// ---------------------------------------------------------------------------
+
+/// Startup readiness only; runtime stream freshness keeps its existing policy.
+class HasPowerSample : public BT::ConditionNode
+{
+public:
+  HasPowerSample(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // IsCharging
 // ---------------------------------------------------------------------------
 

@@ -550,6 +550,7 @@ protected:
   bool dock_pending = false;
   bool wait_complete = false;
   int dock_halts = 0;
+  int heading_seed_count = 0;
   std::string last_state;
 
   void SetUp() override
@@ -630,7 +631,7 @@ protected:
                                                   return std::make_unique<BatteryProbeAction>(
                                                       name,
                                                       config,
-                                                      [this](bool)
+                                                      [this]([[maybe_unused]] bool start)
                                                       {
                                                         ++undock_count;
                                                         ctx->latest_power.charger_enabled = false;
@@ -645,7 +646,7 @@ protected:
                                                   return std::make_unique<BatteryProbeAction>(
                                                       name,
                                                       config,
-                                                      [this](bool)
+                                                      [this]([[maybe_unused]] bool start)
                                                       {
                                                         return wait_complete
                                                                    ? BT::NodeStatus::SUCCESS
@@ -687,6 +688,69 @@ protected:
     return factory.createTreeFromText("<root BTCPP_format=\"4\"><BehaviorTree ID=\"Main\">" +
                                           productionBranchXml(name, tag) + "</BehaviorTree></root>",
                                       blackboard);
+  }
+
+  BT::Tree productionPoweredStartup(bool include_power_guard = true)
+  {
+    factory.registerNodeType<mowgli_behavior::HasPowerSample>("HasPowerSample");
+    factory.registerNodeType<mowgli_behavior::IsCharging>("IsCharging");
+    factory.registerSimpleCondition("IsUndockInterrupted",
+                                    [](BT::TreeNode&)
+                                    {
+                                      return BT::NodeStatus::FAILURE;
+                                    });
+    for (const auto* name : {"Nav2Active",
+                             "PreFlightCheck",
+                             "WaitForGpsFix",
+                             "CalibrateHeadingFromUndock",
+                             "RecordUndockStart"})
+    {
+      factory.registerSimpleAction(name,
+                                   [](BT::TreeNode&)
+                                   {
+                                     return BT::NodeStatus::SUCCESS;
+                                   },
+                                   {BT::InputPort<double>("timeout_sec"),
+                                    BT::InputPort<double>("min_battery"),
+                                    BT::InputPort<int>("min_gps_fix_type"),
+                                    BT::InputPort<int>("min_fix_type"),
+                                    BT::InputPort<double>("tf_timeout_sec"),
+                                    BT::InputPort<double>("min_displacement_m")});
+    }
+    factory.registerSimpleAction("SeedYawFromMotion",
+                                 [this](BT::TreeNode&)
+                                 {
+                                   ++heading_seed_count;
+                                   return BT::NodeStatus::SUCCESS;
+                                 },
+                                 {BT::InputPort<double>("distance_m"),
+                                  BT::InputPort<double>("speed_ms"),
+                                  BT::InputPort<double>("timeout_sec")});
+    factory.registerSimpleAction("RemainingUndockDistance",
+                                 [](BT::TreeNode&)
+                                 {
+                                   return BT::NodeStatus::FAILURE;
+                                 },
+                                 {BT::InputPort<double>("undock_distance"),
+                                  BT::OutputPort<double>("remaining")});
+
+    // Retain the production startup waits, command/charge gates and complete
+    // UndockOrSkip decision. Nav2, preflight and GPS are already ready, and
+    // waits can complete immediately: none may conceal the missing power gate.
+    auto startup = productionBranchXml("MowingSequence", "ReactiveSequence");
+    const auto undock = productionBranchXml("UndockOrSkip", "Fallback");
+    const auto undock_begin = startup.find(undock);
+    if (undock_begin == std::string::npos)
+      throw std::runtime_error("UndockOrSkip missing from production startup");
+    startup = startup.substr(0, undock_begin + undock.size()) + "</Sequence></ReactiveSequence>";
+    const auto guard = include_power_guard
+                           ? productionBranchXml("InitialPowerGuard", "ReactiveFallback")
+                           : std::string();
+    return factory.createTreeFromText(
+        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Main\"><ReactiveSequence>" + guard +
+            "<Fallback>" + productionBranchXml("CriticalBatteryDock", "Sequence") + startup +
+            "</Fallback></ReactiveSequence></BehaviorTree></root>",
+        blackboard);
   }
 
   void restartFromSnapshot()
@@ -952,4 +1016,97 @@ TEST_F(ProductionBatteryRecoveryTest, FirstPowerWhileStartupRunsYieldsToChargeRe
   // or its result, rather than being canceled by its own pending charge flag.
   ctx->docking_active = true;
   EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+}
+
+TEST_F(ProductionBatteryRecoveryTest, UnguardedReadyStartupReproducesMotionBeforePower)
+{
+  ctx->current_command = 1;
+  ctx->area_resume_pose_index[0] = 42;
+  restartFromSnapshot();
+  wait_complete = true;
+  auto tree = productionPoweredStartup(false);
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(heading_seed_count, 1);  // Pre-fix: unknown charging looked off-dock.
+  EXPECT_EQ(dock_count, 0);
+  EXPECT_EQ(undock_count, 0);
+}
+
+TEST_F(ProductionBatteryRecoveryTest, DelayedFirstChargingPowerBlocksEveryStartupMotion)
+{
+  ctx->current_command = 1;
+  ctx->area_resume_pose_index[0] = 42;
+  restartFromSnapshot();
+  wait_complete = true;
+  auto tree = productionPoweredStartup();
+  for (int i = 0; i < 200; ++i)
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(last_state, "WAITING_FOR_POWER");
+  EXPECT_EQ(dock_count, 0);
+  EXPECT_EQ(heading_seed_count, 0);
+  EXPECT_EQ(undock_count, 0);
+
+  // Mirrors the subscriber's atomic publication of the first valid sample.
+  ctx->battery_percent = 75.0f;
+  ctx->latest_power.charger_enabled = true;
+  mowgli_behavior::observeRestoredMowPower(*ctx, true);
+  ctx->power_sample_received = true;
+  wait_complete = false;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(last_state, "CRITICAL_BATTERY_CHARGING");
+  EXPECT_EQ(dock_count, 0);
+  EXPECT_EQ(heading_seed_count, 0);
+  EXPECT_EQ(undock_count, 0);
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 42u);
+}
+
+TEST_F(ProductionBatteryRecoveryTest, DelayedFirstOffDockPowerReleasesValidStartupResume)
+{
+  ctx->current_command = 1;
+  ctx->area_resume_pose_index[0] = 42;
+  restartFromSnapshot();
+  wait_complete = true;
+  auto tree = productionPoweredStartup();
+  for (int i = 0; i < 200; ++i)
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(dock_count, 0);
+  EXPECT_EQ(heading_seed_count, 0);
+  EXPECT_EQ(undock_count, 0);
+
+  ctx->battery_percent = 75.0f;
+  ctx->latest_power.charger_enabled = false;
+  mowgli_behavior::observeRestoredMowPower(*ctx, false);
+  ctx->power_sample_received = true;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(heading_seed_count, 1);  // Actual NotDockedBranch selected.
+  EXPECT_EQ(dock_count, 0);
+  EXPECT_EQ(undock_count, 0);
+  EXPECT_EQ(ctx->current_command, 1);
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 42u);
+}
+
+TEST_F(ProductionBatteryRecoveryTest, SavedChargePendingCannotDockBeforeInitialPower)
+{
+  ctx->current_command = 1;
+  ctx->area_resume_pose_index[0] = 42;
+  ctx->battery_charge_pending = true;
+  restartFromSnapshot();
+  wait_complete = true;
+  auto tree = productionPoweredStartup();
+  for (int i = 0; i < 200; ++i)
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(dock_count, 0);
+  EXPECT_EQ(heading_seed_count, 0);
+  EXPECT_EQ(undock_count, 0);
+  EXPECT_TRUE(ctx->battery_charge_pending);
+
+  ctx->battery_percent = 75.0f;
+  ctx->latest_power.charger_enabled = true;
+  mowgli_behavior::observeRestoredMowPower(*ctx, true);
+  ctx->power_sample_received = true;
+  wait_complete = false;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(last_state, "CRITICAL_BATTERY_CHARGING");
+  EXPECT_EQ(dock_count, 0);
+  EXPECT_EQ(heading_seed_count, 0);
+  EXPECT_EQ(undock_count, 0);
 }

@@ -30,6 +30,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
 {
   // Condition nodes
   factory.registerNodeType<IsEmergency>("IsEmergency");
+  factory.registerNodeType<HasPowerSample>("HasPowerSample");
   factory.registerNodeType<IsCharging>("IsCharging");
   factory.registerNodeType<IsBatteryLow>("IsBatteryLow");
   factory.registerNodeType<IsRainDetected>("IsRainDetected");
