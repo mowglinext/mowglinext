@@ -41,7 +41,7 @@
 | **`firmware/` root + scripts** | | |
 | `firmware/README.md` | 53 | Area overview (partly stale — see structured findings) |
 | `firmware/.gitignore` | 3 | ignores `sync_msg.sh`, `.idea/` |
-| `firmware/scripts/test_odometry_time.py` | 132 | Compiles production odometry handler and USB gate helpers; checks acquisition time under 0/1/N drops, closed port, queue full and HAL tick wrap |
+| `firmware/scripts/test_odometry_time.py` | 230 | Compiles production encoder folding, odometry handler and USB gate helpers; checks raw counter wraps/glitches/resets and acquisition time under 0/1/N drops, closed port, queue full and HAL tick wrap |
 | `firmware/scripts/protocol_version_guard.py` | 138 | Fingerprints `PKT_ID_*` + `pkt_*_t` in `mowgli_protocol.h`; `--check` fails on un-versioned wire drift or firmware/host version mismatch |
 | `firmware/scripts/protocol_baseline.json` | 4 | `{version: 6, hash}` baseline for the guard above |
 | `firmware/scripts/board_defaults_parity.py` | 108 | Asserts `board.h`/`board.h.template` consume `board_defaults.h` and never re-`#define` the 10 managed safety macros |
@@ -171,7 +171,7 @@ python3 firmware/scripts/protocol_version_guard.py        # refresh baseline AFT
 python3 firmware/scripts/package_release.py --build-root firmware/stm32/ros_usbnode --tag vX.Y.Z --repo mowglinext/mowglinext --out-dir dist
 ```
 
-Tests — native safety tests and Python production-source harnesses run in `firmware-ci.yml`. Odometry timing is pinned by `firmware/scripts/test_odometry_time.py` (0/1/N send-gate drops, closed port, queue full, HAL tick rollover). Additional checks:
+Tests — native safety tests and Python production-source harnesses run in `firmware-ci.yml`. Odometry timing is pinned by `firmware/scripts/test_odometry_time.py` (0/1/N send-gate drops, closed port, queue full, HAL tick rollover, raw encoder wraps through long USB gaps, per-acquisition glitch rejection and reversal/reset behavior). Additional checks:
 - `ros2/src/mowgli_hardware/test/test_protocol.cpp` — `ProtocolSizes.*` (every `Ll*` struct size), `ProtocolIds.PacketIdValues`, `OdometryPacket.FieldOffsetsAreCorrect`/`SignedDirectionEncoding`/`NegativeTicksRoundtrip`, `SetDrivePidPacket.FieldOffsetsAreCorrect`/`PreservesFractionalTicksPerMeter`, `ProtocolRoundtrip.*`, `StatusBitmask.BitPositions`, `EmergencyBitmask.BitPositions` (host mirror only — run via `cd ros2 && make test`).
 - `firmware/scripts/protocol_version_guard.py --check` — wire fingerprint vs `protocol_baseline.json` + firmware/host version lockstep.
 - `firmware/scripts/board_defaults_parity.py` — single-source safety defaults.

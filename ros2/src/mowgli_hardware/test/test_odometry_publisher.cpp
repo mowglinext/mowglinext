@@ -92,7 +92,7 @@ TEST_F(OdometryPublisherTest, DroppedSamplesPreserveDistanceVelocityAndAcquisiti
 {
   // Same constant wheel motion at 20 ms acquisition cadence. The host sees
   // only delivered cumulative samples; arrival jitter must not set velocity.
-  for (const unsigned drops : {0u, 1u, 7u, 100u, 3502u, 35002u})
+  for (const unsigned drops : {0u, 1u, 7u, 100u, 3502u, 35002u, 70000u})
   {
     for (const uint32_t start : {100u, std::numeric_limits<uint32_t>::max() - 10u})
     {
@@ -166,7 +166,7 @@ TEST_F(OdometryPublisherTest, SameMillisecondSampleRetainsTickBaseline)
   EXPECT_NEAR(publisher.tyre_travelled(), 3.0 / 277.0, 1e-12);
 }
 
-TEST_F(OdometryPublisherTest, ShortIntervalStillRecoversControllerWrapAndRejectsSpikes)
+TEST_F(OdometryPublisherTest, ShortIntervalRejectsMalformedCumulativeJumpsAndSpikes)
 {
   auto node = std::make_shared<rclcpp::Node>("odometry_spike_test");
   mowgli_hardware::OdometryPublisher publisher(*node);
@@ -174,8 +174,10 @@ TEST_F(OdometryPublisherTest, ShortIntervalStillRecoversControllerWrapAndRejects
   packet.acquisition_millis = 100;
   publisher.handle_packet(packet, 277.0, 0.325, false);
   packet.acquisition_millis += 20;
-  packet.left_ticks = 65537;  // Raw delta +65536 + 1 => one valid tick.
-  packet.right_ticks = -65535;  // Raw delta -65536 + 1 => one valid tick.
+  // A malformed jump is rejected, never reinterpreted as a raw counter wrap.
+  // Firmware already handles those before constructing cumulative totals.
+  packet.left_ticks = 65537;
+  packet.right_ticks = -65535;
   publisher.handle_packet(packet, 277.0, 0.325, false);
   packet.acquisition_millis += 20;
   packet.left_ticks += 101;  // Still rejected at the normal 20 ms cadence.
@@ -185,7 +187,7 @@ TEST_F(OdometryPublisherTest, ShortIntervalStillRecoversControllerWrapAndRejects
   ++packet.left_ticks;
   ++packet.right_ticks;
   publisher.handle_packet(packet, 277.0, 0.325, false);
-  EXPECT_NEAR(publisher.tyre_travelled(), 2.0 / 277.0, 1e-12);
+  EXPECT_NEAR(publisher.tyre_travelled(), 1.0 / 277.0, 1e-12);
 }
 
 TEST_F(OdometryPublisherTest, FirmwareClockRestartReseedsTimeAndTicksTogether)
