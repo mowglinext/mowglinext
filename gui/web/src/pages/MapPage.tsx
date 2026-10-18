@@ -10,7 +10,7 @@ import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import {useApi} from "../hooks/useApi.ts";
 import {App, Button} from "antd";
 import turfArea from "@turf/area";
-import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
 import {MapArea, Map as MapType} from "../types/ros.ts";
 import DrawControl from "../components/DrawControl.tsx";
@@ -1342,11 +1342,20 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // robot is held, START is refused until the hold is released.
     const stateName = highLevelStatus.highLevelStatus.state_name;
     const ackStart = useDigObstructionAck(stateName);
+    const latestMap = useRef(map);
+    useLayoutEffect(() => { latestMap.current = map; }, [map]);
     const startSelectedArea = (key: string) => {
         const item = mowingAreas.find(item => item.key == key);
-        const index = mowingAreaIndexById(map, item?.feat?.properties?.id);
-        if (index === undefined) return Promise.reject(new Error(t("crossHatch.areaUnavailable")));
-        return ackStart(mowerAction("start_in_area", {area: index}))();
+        const selectedId: unknown = item?.feat?.properties?.id;
+        if (typeof selectedId !== "number" || mowingAreaIndexById(latestMap.current, selectedId) === undefined) {
+            return Promise.reject(new Error(t("crossHatch.areaUnavailable")));
+        }
+        return ackStart(async () => {
+            // The map may change while confirmation or clear is pending.
+            const index = mowingAreaIndexById(latestMap.current, selectedId);
+            if (index === undefined) throw new Error(t("crossHatch.areaUnavailable"));
+            await mowerAction("start_in_area", {area: index})();
+        })();
     };
 
     const mowerActions = useMemo(() => ({
