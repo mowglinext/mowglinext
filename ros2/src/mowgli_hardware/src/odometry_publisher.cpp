@@ -88,21 +88,10 @@ void OdometryPublisher::handle_packet(const LlOdometry& pkt,
   // with acquisition time so skipped packets can accumulate real motion.
   const int64_t tick_spike_limit = std::max<int64_t>(100, int64_t{dt_ms} * 5);
 
-  // Recover the observed ±65536 controller-counter jumps only when the raw
-  // delta is implausible for this acquisition interval. A long send gap may
-  // legitimately span more than 32768 cumulative ticks; do not unwrap those.
-  auto unwrap_16bit = [tick_spike_limit](int32_t d)
-  {
-    if (d > 32768 && d > tick_spike_limit)
-      return d - 65536;
-    if (d < -32768 && -int64_t{d} > tick_spike_limit)
-      return d + 65536;
-    return d;
-  };
-  d_left = unwrap_16bit(d_left);
-  d_right = unwrap_16bit(d_right);
-
-  // Drop residual implausible deltas after controller-wrap recovery.
+  // Protocol v9 firmware folds raw 16-bit counter wraps/resets and rejects
+  // glitches at EACH controller acquisition, before USB gating. These are
+  // signed cumulative totals, not raw counters: unwrapping them here would
+  // erase real motion during long gaps. Keep the host sanity check as well.
   if (std::abs(d_left) > tick_spike_limit || std::abs(d_right) > tick_spike_limit)
   {
     RCLCPP_WARN_THROTTLE(node_.get_logger(),

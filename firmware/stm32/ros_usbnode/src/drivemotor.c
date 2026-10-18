@@ -41,8 +41,8 @@
 /* Kinematic ceiling on per-frame encoder motion. cmd_vel is capped to the runtime max_mps,
  * so in one ~20 ms controller frame a wheel advances at most
  *   max_mps * ticks_per_meter * 0.02 s  ticks.
- * The x3 factor is slack for frame-time jitter; a "reset" whose remainder
- * exceeds this is not real motion (a glitch) and is dropped, not accumulated.
+ * The x3 factor is slack for frame-time jitter; any per-frame magnitude
+ * exceeding this is a glitch and is dropped before USB send gating.
  */
 #define DRIVEMOTOR_MIN_TICKS_PER_M 50.0f
 #define DRIVEMOTOR_MAX_TICKS_PER_M 5000.0f
@@ -559,13 +559,14 @@ static int8_t resolve_direction(DRIVEMOTOR_dirfilter_t *f, int8_t reported,
 
 /// @brief Fold one controller frame into a wheel's tick totals + travel dir.
 ///
-/// Rule 1 - detect the counter reset DIRECTLY: any decrease in the controller's
-/// per-wheel counter means it reset to 0, so the progress since the reset is
-/// the new value; otherwise the counter rose and we add the difference. (The
+/// Rule 1 - fold the raw 16-bit counter at every controller acquisition. A
+/// decrease with a plausible modular delta is a natural wrap; otherwise use
+/// the post-reset remainder. An increase uses the ordinary difference. (The
 /// old code PREDICTED the reset from direction/speed edges and pre-synced
 /// prev_*, which raced the controller's one-frame reset latency and scored the
-/// pre-reset count as a phantom jump.) A reset whose remainder exceeds one
-/// frame's kinematic limit is a glitch and is dropped rather than accumulated.
+/// pre-reset count as a phantom jump.) Apply the frame's kinematic limit to
+/// EVERY candidate before accumulation: USB gaps must never hide a 65536-tick
+/// glitch inside an otherwise plausible cumulative host-side delta.
 ///
 /// Rule 2 - the magnitude is signed by the CONFIRMED direction from
 /// resolve_direction(), not the reported byte, so coast ticks on a reversal
@@ -583,14 +584,18 @@ static int8_t DRIVEMOTOR_UpdateWheel(DRIVEMOTOR_dirfilter_t *f, int8_t reported,
   /* Confirmed travel direction for THIS frame's motion. */
   int8_t l_s8Eff = resolve_direction(f, reported, speed, l_s32Delta < 0);
 
+  const uint32_t frame_limit = drivemotor_max_ticks_per_frame();
   uint32_t l_u32Mag = 0;
   if (reported != 0) {
     if (l_s32Delta >= 0) {
       l_u32Mag = (uint32_t)l_s32Delta; /* progress within a segment */
-    } else if ((uint32_t)val <= drivemotor_max_ticks_per_frame()) {
-      l_u32Mag = (uint32_t)val; /* reset: new-segment progress so far */
+    } else {
+      const uint32_t wrapped_delta = (uint16_t)(val - *prev);
+      l_u32Mag = wrapped_delta <= frame_limit ? wrapped_delta : (uint32_t)val;
     }
-    /* else: implausibly large reset remainder => glitch, drop it */
+    if (l_u32Mag > frame_limit) {
+      l_u32Mag = 0; /* implausible progress/reset remainder: discard glitch */
+    }
   }
   *prev = val;
   *ticks += l_u32Mag; /* legacy unsigned-abs counter */
@@ -631,9 +636,9 @@ void DRIVEMOTOR_App_Rx(void) {
     /*
      * Fold each wheel's controller frame into its tick totals and resolve
      * the true travel direction (DRIVEMOTOR_UpdateWheel / resolve_direction).
-     * Reset detection is now DIRECT — any drop in the per-wheel counter is a
-     * reset, so the new value is the post-reset progress (a glitch beyond one
-     * frame's kinematic limit is dropped). The publishable direction is held
+     * Counter decreases use a plausible natural-wrap delta or the post-reset
+     * remainder; every candidate is bounded at acquisition before USB gating.
+     * The publishable direction is held
      * at the old sign through a reversal until the speed byte or a second
      * reset confirms the wheel has truly turned around, so the coast ticks
      * the controller emits one frame early are never mis-signed. This
