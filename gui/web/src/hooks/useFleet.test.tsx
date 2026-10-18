@@ -450,3 +450,29 @@ describe('Fleet snapshot order and lifetime', () => {
         expect(hook.result.current.coordination.settings.yield_distance_m).toBe(5);
     });
 });
+
+describe('useFleet robot identity rejection', () => {
+    it.each([
+        {name: 'duplicate ids', robots: [{identity: {id: 'same', name: 'Alpha'}}, {identity: {id: 'same', name: 'Beta'}}]},
+        {name: 'malformed name', robots: [{identity: {id: 'a', name: {bad: true}}}]},
+        {name: 'text availability', robots: [{identity: {id: 'a'}, online: 'false'}]},
+        {name: 'text self', robots: [{identity: {id: 'a'}, self: 'false'}]},
+    ])('keeps the last robots and coordination on $name then recovers', async ({robots}) => {
+        let payload: unknown = [{identity: {id: 'valid', name: 'Valid'}, online: true, self: false}];
+        fetchMock.mockImplementation(url => Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots') ? payload : {}))));
+        const {result} = await mountedFleet();
+        const previous = result.current.robots;
+        const coordination = result.current.coordination;
+        payload = robots;
+        await act(() => result.current.refresh());
+        expect(result.current.robots).toBe(previous);
+        expect(result.current.coordination).toBe(coordination);
+        expect(result.current.error).toBe('Invalid fleet robots response');
+        expect(result.current.loading).toBe(false);
+        payload = [{identity: {id: 'new', name: 'New'}}];
+        await act(() => result.current.refresh());
+        expect(result.current.robots[0].identity.id).toBe('new');
+        expect(result.current.error).toBeUndefined();
+        expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
+    });
+});

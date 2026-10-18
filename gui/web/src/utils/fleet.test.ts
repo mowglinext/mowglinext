@@ -130,3 +130,52 @@ describe("projectFleetPositions", () => {
         expect(Math.abs(a.y - b.y)).toBeLessThan(0.1);
     });
 });
+
+describe('Fleet robot identity boundary', () => {
+    const invalidRows = [
+        {name: 'name object', value: {...wire(), identity: {id: 'a', name: {label: 'bad'}}}},
+        {name: 'name null', value: {...wire(), identity: {id: 'a', name: null}}},
+        {name: 'address object', value: {...wire(), address: {host: 'bad'}}},
+        {name: 'online text', value: {...wire(), online: 'false'}},
+        {name: 'self text', value: {...wire(), self: 'false'}},
+        {name: 'online null', value: {...wire(), online: null}},
+        {name: 'self number', value: {...wire(), self: 0}},
+        {name: 'last seen number', value: {...wire(), last_seen: 123}},
+        {name: 'api text', value: {...wire(), identity: {id: 'a', api_version: '1'}}},
+        {name: 'api nonfinite', value: {...wire(), identity: {id: 'a', api_version: Infinity}}},
+    ];
+    it.each(invalidRows)('rejects the complete snapshot for $name', ({value}) => {
+        expect(() => parseFleetRobots([wire(), value])).toThrow('Invalid fleet robots response');
+    });
+    it('rejects duplicate retained ids including empty ids without choosing a winner', () => {
+        for (const id of ['same', '']) {
+            expect(() => parseFleetRobots([wire({identity: {id, name: 'Alpha'}}), wire({identity: {id, name: 'Beta'}})]))
+                .toThrow('Invalid fleet robots response');
+        }
+    });
+    it('preserves absent fields, an empty unique id, name fallback and additional properties by reference', () => {
+        const absent = {identity: {id: '', extra: {keep: true}}, extra: [1], topics: {unknown: {keep: true}}};
+        const named = wire({identity: {id: 'b', name: ''}, last_seen: null});
+        const parsed = parseFleetRobots([absent, named]);
+        expect(parsed).toEqual([absent, named]);
+        expect(parsed[0]).toBe(absent);
+        expect(parsed[1]).toBe(named);
+        expect(deriveFleetRow(parsed[1]).name).toBe('b');
+    });
+    it.each([undefined, null, 0, 1, 99])('preserves existing API compatibility for %s', version => {
+        const raw = {...wire(), identity: {id: 'a', name: 'Alpha', ...(version === undefined ? {} : {api_version: version})}};
+        const [parsed] = parseFleetRobots([raw]);
+        expect(parsed).toBe(raw);
+        expect(deriveFleetRow(parsed).apiVersionMismatch).toBe(version != null && version !== 1);
+    });
+    it('keeps valid text fields, booleans and timestamps without transforming them', () => {
+        const raw = wire({address: '', online: false, self: true, last_seen: '2026-10-18T12:00:00Z'});
+        expect(parseFleetRobots([raw])[0]).toBe(raw);
+        expect(parseFleetRobots([wire({last_seen: null})])[0].last_seen).toBeNull();
+    });
+    it('keeps legacy filtering and non-array compatibility and does not validate topics', () => {
+        const raw = {...wire(), topics: {highLevelStatus: {state_name: {not: 'in this lot'}}}};
+        expect(parseFleetRobots({})).toEqual([]);
+        expect(parseFleetRobots([null, {identity: {id: 4}, online: 'bad'}, raw])).toEqual([raw]);
+    });
+});

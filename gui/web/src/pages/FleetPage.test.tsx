@@ -281,3 +281,77 @@ describe('FleetPage malformed coordination with the real hook', () => {
         expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true);
     });
 });
+
+describe('FleetPage robot identity boundary with the real hook', () => {
+    const at = (id: string, name: string, lat: number) => ({...robot(id), identity: {id, name, api_version: 1},
+        topics: {gps: {pose: {pose: {position: {x: lat, y: 2, z: 0}}}}}});
+    const urlOf = (url: Parameters<typeof fetch>[0]) => typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    it.each(['duplicate', 'name', 'online'])('preserves the valid rendered inventory after %s rejection', async mode => {
+        vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        mock.realFleet = true;
+        let payload: unknown = [at('a', 'Alpha', 48), at('b', 'Beta', 48.0001)];
+        const fetchMock = vi.fn<typeof fetch>(url => Promise.resolve(new Response(JSON.stringify(urlOf(url).endsWith('/robots') ? payload : {}))));
+        vi.stubGlobal('fetch', fetchMock);
+        const caught = vi.fn<(error: Error) => void>();
+        render(<CoordinationRenderBoundary onError={caught}><ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider></CoordinationRenderBoundary>);
+        await screen.findByTestId('fleet-card-a');
+        if (mode === 'duplicate') payload = [at('same', 'Alpha', 48), at('same', 'Beta', 48.0001)];
+        if (mode === 'name') payload = [{...robot('bad'), identity: {id: 'bad', name: {label: 'invalid'}}}];
+        if (mode === 'online') payload = [{...robot('bad'), online: 'false'}];
+        await act(() => vi.advanceTimersByTimeAsync(2000));
+        expect(caught).not.toHaveBeenCalled();
+        const map = screen.getByRole('img', {name: 'fleet positions'});
+        expect(within(map).getAllByText('Alpha')).toHaveLength(1);
+        expect(within(map).getAllByText('Beta')).toHaveLength(1);
+        expect(screen.queryByTestId('fleet-card-same')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('fleet-card-bad')).not.toBeInTheDocument();
+        expect(screen.getByTestId('fleet-card-a')).toBeVisible();
+        expect(screen.getByTestId('fleet-card-b')).toBeVisible();
+        expect(screen.getByText('Invalid fleet robots response')).toBeVisible();
+        const card = screen.getByTestId('fleet-card-b');
+        fireEvent.click(within(card).getByRole('button', {name: /Start mowing$/}));
+        await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => urlOf(url).endsWith('/robots/b/call/high_level_control'))).toBe(true));
+        const command = fetchMock.mock.calls.find(([url]) => urlOf(url).includes('/call/'));
+        expect(command?.[1]?.body).toBe('{"Command":1}');
+        expect(fetchMock.mock.calls.filter(([url]) => urlOf(url).includes('/call/'))).toHaveLength(1);
+    });
+    it('does not expose or send a command from two cards with an ambiguous id', async () => {
+        mock.realFleet = true;
+        const payload = [at('same', 'Alpha', 48), at('same', 'Beta', 48.0001)];
+        const fetchMock = vi.fn<typeof fetch>(url => Promise.resolve(new Response(JSON.stringify(urlOf(url).endsWith('/robots') ? payload : {}))));
+        vi.stubGlobal('fetch', fetchMock);
+        render(<ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider>);
+        await waitFor(() => expect(screen.queryAllByTestId('fleet-card-same').length > 0 || screen.queryByText('Invalid fleet robots response') !== null).toBe(true));
+        // On HEAD both distinct cards are actionable and send the same target.
+        for (const index of [0, 1]) {
+            const cards = screen.queryAllByTestId('fleet-card-same');
+            const card = cards[index];
+            if (card) {
+                fireEvent.click(within(card).getByRole('button', {name: /Start mowing$/}));
+                await waitFor(() => expect(mock.success).toHaveBeenCalledTimes(index + 1));
+            }
+        }
+        expect(fetchMock.mock.calls.filter(([url]) => urlOf(url).includes('/call/'))).toHaveLength(0);
+        expect(screen.queryAllByTestId('fleet-card-same')).toHaveLength(0);
+        expect(screen.getByText('Invalid fleet robots response')).toBeVisible();
+    });
+    it('never exposes Start or sends a command for textual online=false', async () => {
+        mock.realFleet = true;
+        const payload = [{...robot('bad'), online: 'false'}];
+        const fetchMock = vi.fn<typeof fetch>(url => Promise.resolve(new Response(JSON.stringify(urlOf(url).endsWith('/robots') ? payload : {}))));
+        vi.stubGlobal('fetch', fetchMock);
+        render(<ConfigProvider theme={{token: {motion: false}}}><FleetPage/></ConfigProvider>);
+        await waitFor(() => expect(screen.queryByTestId('fleet-card-bad') !== null || screen.queryByText('Invalid fleet robots response') !== null).toBe(true));
+        const card = screen.queryByTestId('fleet-card-bad');
+        if (card) {
+            const start = within(card).getByRole('button', {name: /Start mowing$/});
+            expect(start).not.toBeDisabled();
+            fireEvent.click(start);
+            await waitFor(() => expect(mock.success).toHaveBeenCalledOnce());
+        }
+        expect(fetchMock.mock.calls.filter(([url]) => urlOf(url).includes('/call/'))).toHaveLength(0);
+        expect(screen.queryByTestId('fleet-card-bad')).not.toBeInTheDocument();
+        expect(screen.getByText('Invalid fleet robots response')).toBeVisible();
+    });
+
+});

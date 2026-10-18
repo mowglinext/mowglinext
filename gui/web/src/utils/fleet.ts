@@ -2,6 +2,7 @@ import {HighLevelStatusConstants} from "../types/ros.ts";
 import type {AbsolutePose, GnssStatus, HighLevelStatus, Power, Status} from "../types/ros.ts";
 import {computeBatteryPercent, hasBatteryReading} from "./battery.ts";
 import {deriveGpsStatus} from "./gpsStatus.ts";
+import {isJsonObject} from "./json.ts";
 
 /** Wire shape of GET /api/fleet/robots (gui/pkg/providers/fleet.go). */
 export interface FleetIdentity {
@@ -61,8 +62,25 @@ export const FLEET_API_VERSION = 1;
 /** Accept only the array shape; the e2e mock answers `{}` for unknown routes. */
 export function parseFleetRobots(payload: unknown): FleetRobotWire[] {
     if (!Array.isArray(payload)) return [];
-    return payload.filter((r): r is FleetRobotWire =>
+    const robots = payload.filter((r): r is FleetRobotWire =>
         !!r && typeof r === "object" && typeof (r as FleetRobotWire).identity?.id === "string");
+    const ids = new Set<string>();
+    for (const robot of robots) {
+        const identity = robot.identity;
+        if (!isJsonObject(identity)
+            || ("name" in identity && typeof identity.name !== "string")
+            || ("address" in robot && typeof robot.address !== "string")
+            || ("online" in robot && typeof robot.online !== "boolean")
+            || ("self" in robot && typeof robot.self !== "boolean")
+            || ("last_seen" in robot && robot.last_seen !== null && typeof robot.last_seen !== "string")
+            || ("api_version" in identity && identity.api_version !== null
+                && (typeof identity.api_version !== "number" || !Number.isFinite(identity.api_version)))
+            || ids.has(identity.id)) {
+            throw new Error("Invalid fleet robots response");
+        }
+        ids.add(identity.id);
+    }
+    return robots;
 }
 
 function topic<T>(row: FleetRobotWire, key: string): T | undefined {
