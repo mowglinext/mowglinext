@@ -22,11 +22,12 @@ vi.mock("../../../theme/ThemeContext.tsx", () => ({
 }));
 
 vi.mock("../../../components/AsyncButton.tsx", () => ({
-  default: ({ children, onAsyncClick, ...props }: Pick<ComponentProps<typeof AsyncButton>, 'children' | 'onAsyncClick'>) => (
-    <button onClick={event => {void onAsyncClick(event);}} {...props}>
+  default: ({ children, onAsyncClick, ...props }: Pick<ComponentProps<typeof AsyncButton>, 'children' | 'onAsyncClick' | 'danger'>) => {
+    delete props.danger;
+    return <button onClick={event => {void onAsyncClick(event);}} {...props}>
       {children}
-    </button>
-  ),
+    </button>;
+  },
 }));
 
 vi.mock("./ShapePickerDropdown.tsx", () => ({

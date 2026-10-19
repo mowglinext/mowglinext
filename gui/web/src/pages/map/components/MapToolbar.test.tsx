@@ -8,9 +8,10 @@ import {MapToolbar} from './MapToolbar.tsx';
 import en from "../../../i18n/locales/en.json";
 
 vi.mock('../../../components/AsyncButton.tsx', () => ({
-    default: ({children, onAsyncClick, ...props}: Pick<ComponentProps<typeof AsyncButton>, 'children' | 'onAsyncClick'>) => (
-        <button onClick={event => {void onAsyncClick(event);}} {...props}>{children}</button>
-    ),
+    default: ({children, onAsyncClick, ...props}: Pick<ComponentProps<typeof AsyncButton>, 'children' | 'onAsyncClick' | 'danger'>) => {
+        delete props.danger;
+        return <button onClick={event => {void onAsyncClick(event);}} {...props}>{children}</button>;
+    },
 }));
 vi.mock('../../../components/AsyncDropDownButton.tsx', () => ({
     default: ({children, ...props}: Pick<ComponentProps<typeof AsyncDropDownButton>, 'children'>) => (
