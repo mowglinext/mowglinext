@@ -301,3 +301,40 @@ describe('performSplit re-parents obstacles by where they actually end up', () =
         expect(obstacle.getMowingArea()).toBe(parent);
     });
 });
+
+describe('locally constructed area label properties', () => {
+    function labelsHook() {
+        return renderHook(() => useMapEditing({
+            features: {}, setFeatures: vi.fn(), editMap: false, mowingAreas: [],
+            drawRef: {current: null},
+            notification: {error: vi.fn(), info: vi.fn(), success: vi.fn(), warning: vi.fn(), open: vi.fn(), destroy: vi.fn()},
+            mapInstanceRef: {current: null},
+        }));
+    }
+
+    it('keeps the label text, feature identity and distinct ROS index and stable area ID', () => {
+        const feature = areaFeature('area-label', square(2, 48, 2.00001, 48.00001));
+        feature.setName('  Garden  ');
+        feature.properties.source_working_area_index = 7;
+        feature.properties.source_working_area_id = 42;
+        const hook = labelsHook();
+        const labels = hook.result.current.buildLabels([feature]);
+        expect(labels).toHaveLength(1);
+        expect(labels[0].id).toBe('area-label');
+        expect(labels[0].properties).toEqual({title: 'Garden\n< 1 m²', index: 7, id: 42});
+        expect(labels[0].geometry.type).toBe('Point');
+        expect(feature.getName()).toBe('  Garden  ');
+    });
+
+    it('keeps absent source identifiers and excludes empty areas and non-area features', () => {
+        const feature = areaFeature('unnamed', square(2, 48, 2.00001, 48.00001));
+        const empty = new MowingAreaFeature('empty', 2);
+        const obstacle = new ObstacleFeature('obstacle', feature);
+        const hook = labelsHook();
+        const labels = hook.result.current.buildLabels([feature, empty, obstacle]);
+        expect(labels).toHaveLength(1);
+        expect(labels[0].properties).toEqual({title: 'mapAreasList.unnamedArea\n< 1 m²', index: undefined, id: undefined});
+        expect(Object.prototype.hasOwnProperty.call(labels[0].properties, 'index')).toBe(true);
+        expect(Object.prototype.hasOwnProperty.call(labels[0].properties, 'id')).toBe(true);
+    });
+});

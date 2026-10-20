@@ -247,6 +247,12 @@ export interface UseMapEditingOptions {
     shrinkMemory?: ShrinkMemory;
 }
 
+type AreaLabelProperties = {
+    title?: string;
+    index?: MowingAreaFeature["properties"]["source_working_area_index"];
+    id?: MowingAreaFeature["properties"]["source_working_area_id"];
+};
+
 export interface UseMapEditingReturn {
     // Modal state
     modalOpen: boolean;
@@ -268,7 +274,7 @@ export interface UseMapEditingReturn {
     splitTargetId: string | null;
 
     // Labels helper
-    buildLabels: (param: MowingFeature[]) => ReturnType<typeof centroid>[];
+    buildLabels: (param: MowingFeature[]) => ReturnType<typeof centroid<AreaLabelProperties>>[];
 
     // Draw event callbacks
     onCreate: (e: { features: Feature[] }) => void;
@@ -340,7 +346,7 @@ export function useMapEditing({
             if (!(feature instanceof MowingAreaFeature)) return [];
             if (!feature.geometry?.coordinates?.[0]?.length) return [];
 
-            const centroidPt = centroid(feature);
+            const centroidPt = centroid<AreaLabelProperties>(feature);
             if (centroidPt.properties != null) {
                 const areaSqm = turfArea(feature);
                 const sizeLabel = formatArea(areaSqm, i18n.language);

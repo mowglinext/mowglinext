@@ -122,13 +122,13 @@ export function useMapStreams({
         });
     }, renderBudget.poseIntervalMs);
 
-    const poseStream = useWS<string>(
+    const poseStream = useWS<AbsolutePose>(
         () => {
         },
         () => {
         },
         (e) => {
-            const pose = (e as any) as AbsolutePose;
+            const pose = e;
             robotPoseRef.current = {
                 x: pose.pose?.pose?.position?.x ?? 0,
                 y: pose.pose?.pose?.position?.y ?? 0,
@@ -138,36 +138,36 @@ export function useMapStreams({
         }
     );
 
-    const mapStream = useWS<string>(
+    const mapStream = useWS<MapType>(
         () => {
         },
         () => {
         },
         (e) => {
-            const parse = (e as any) as MapType;
+            const parse = e;
             setMap(parse);
             setMapKey("live");
         }
     );
 
-    const pathStream = useWS<string>(
+    const pathStream = useWS<CoveragePlanPreview>(
         () => {
         },
         () => {
         },
         (e) => {
-            const parse = (e as any) as CoveragePlanPreview;
+            const parse = e;
             setPath(parse);
         }
     );
 
-    const planStream = useWS<string>(
+    const planStream = useWS<Path>(
         () => {
         },
         () => {
         },
         (e) => {
-            const parse = (e as any) as Path;
+            const parse = e;
             setPlan(parse);
         }
     );
@@ -248,7 +248,7 @@ export function useMapStreams({
         });
     }, renderBudget.lidarIntervalMs);
 
-    const lidarStream = useWS<string>(
+    const lidarStream = useWS<LaserScan>(
         () => {
         },
         () => {
@@ -257,15 +257,15 @@ export function useMapStreams({
             if (lidarMapPresentRef.current) return;
             const pose = robotPoseRef.current;
             if (!pose) return;
-            lidarRender.push({scan: (e as any) as LaserScan, pose});
+            lidarRender.push({scan: e, pose});
         }
     );
 
-    const obstaclesStream = useWS<string>(
+    const obstaclesStream = useWS<ObstacleArray>(
         () => {},
         () => {},
         (e) => {
-            const parsed = (e as any) as ObstacleArray;
+            const parsed = e;
             if (parsed.obstacles) {
                 // Only show persistent obstacles (status=1)
                 setDynamicObstacles(parsed.obstacles.filter(o => o.status === 1));
@@ -298,13 +298,13 @@ export function useMapStreams({
         }
     );
 
-    const recordingTrajectoryStream = useWS<string>(
+    const recordingTrajectoryStream = useWS<Path>(
         () => {
         },
         () => {
         },
         (e) => {
-            const path = (e as any) as Path;
+            const path = e;
             if (!path.poses || path.poses.length === 0) {
                 // Recording cleared — remove trajectory feature
                 setFeatures((oldFeatures) => {
