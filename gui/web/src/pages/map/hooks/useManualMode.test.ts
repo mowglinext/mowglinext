@@ -1,6 +1,7 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest';
 import {renderHook, act} from '@testing-library/react';
 import {useManualMode} from './useManualMode.ts';
+import type {IJoystickUpdateEvent} from 'react-joystick-component/build/lib/Joystick';
 
 describe('useManualMode', () => {
     let mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
@@ -80,8 +81,15 @@ describe('useManualMode', () => {
 
     it('handleJoyMove scales joystick input by MAX_LINEAR_MPS and MAX_ANGULAR_RAD_S', () => {
         const {result} = renderManualMode();
+        const joystickEvent = {
+            type: 'move',
+            x: 0.5,
+            y: 0.8,
+            direction: null,
+            distance: null,
+        } satisfies IJoystickUpdateEvent;
         act(() => {
-            result.current.handleJoyMove({x: 0.5, y: 0.8} as any);
+            result.current.handleJoyMove(joystickEvent);
         });
         // Raw joystick: x=0.5, y=0.8 → scaled to linear=0.8*0.25=0.2, angular=-0.5*0.6=-0.3
         expect(sendJsonMessage).toHaveBeenCalledWith({

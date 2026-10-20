@@ -1,18 +1,18 @@
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ThemeProvider } from "../../theme/ThemeContext.tsx";
 import { LedsSection } from "./LedsSection.tsx";
 
+type LedsSectionProps = ComponentProps<typeof LedsSection>;
+
 describe("LedsSection", () => {
     function renderSection(
-        values: Record<string, any> = {},
-        overrides: Partial<{
-            onChange: (key: string, value: any) => void;
-            isOverridden: (key: string) => boolean;
-            hasDefault: (key: string) => boolean;
-            onReset: (key: string) => void;
-        }> = {},
+        values: LedsSectionProps["values"] = {},
+        overrides: Partial<Pick<LedsSectionProps,
+            "onChange" | "isOverridden" | "hasDefault" | "onReset"
+        >> = {},
     ) {
         const onChange = overrides.onChange ?? vi.fn();
         render(
