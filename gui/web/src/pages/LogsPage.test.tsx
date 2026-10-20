@@ -2,7 +2,7 @@ import {beforeEach, describe, expect, it, vi} from "vitest";
 import {act, fireEvent, render, screen} from "@testing-library/react";
 import {App} from "antd";
 import {ThemeProvider} from "../theme/ThemeContext.tsx";
-import {TimeFormatProvider} from "../hooks/useTimeFormat.tsx";
+import {TimeFormatProvider} from "../hooks/TimeFormatProvider";
 
 // The page's only inputs are the log WebSocket and the container list, so both
 // are stubbed and the stream is driven by hand.
