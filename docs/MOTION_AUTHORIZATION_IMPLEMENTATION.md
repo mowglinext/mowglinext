@@ -140,6 +140,10 @@ it is **not** a reoptimized graph, a full repaired controller/plant run or proof
 that either prospective product change alone repairs the mission. Earlier
 controller controls also show that N10 filtering alone does not cross under
 every history/TF phase: all six steady-moving-history controls pass.
+The joint control still differs by approximately +13.84 mm from ground truth
+observed at ROS time 164.58 s, the TF's declared time. Flipping permission does
+not fully explain that declared-time pose error or make the pose accurate;
+earlier state/anchor history and constant-velocity prediction remain material.
 
 Separate minimal Webots world/driver/odometry controls confirm that explicitly
 setting the external `velocity_rolling_window_size` to 1 restores same-interval
