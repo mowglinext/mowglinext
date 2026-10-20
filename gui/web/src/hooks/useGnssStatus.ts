@@ -17,16 +17,17 @@ const laterHeader = (a: GnssStatus['header'], b: GnssStatus['header']): boolean 
 /** GNSS-only lifecycle: transport delivery and producer observation identity stay separate. */
 export const useGnssStatusState = () => {
     const {diagnostics} = useDiagnostics();
+    // This disconnect boundary is used only for local diagnostic delivery ages.
     const [state, setState] = useState<{telemetry: ValidatedTelemetry<GnssStatus>; disconnectedAt: number;
         blockedIdentity: string | null; blockedDiagnosticStamps: (string | undefined)[];
         sequence: number; blockedSequence: number; source: string | undefined; requiresIdentity: boolean;
         header: GnssStatus['header']; blockedHeader: GnssStatus['header'];
         sources: ReadonlyMap<string | undefined, {sequence: number; header: GnssStatus['header']}>}>(() => ({telemetry: initialTelemetry(), disconnectedAt: -Infinity,
         blockedIdentity: null, blockedDiagnosticStamps: [], sequence: 0, blockedSequence: 0, source: undefined, requiresIdentity: false, header: undefined, blockedHeader: undefined, sources: new Map()}));
-    const [clock, setClock] = useState(() => ({wall: Date.now(), mono: performance.now()}));
+    const [clock, setClock] = useState(() => ({mono: performance.now()}));
     const stream = useWS<unknown>(
         () => {
-            const at = Date.now();
+            const at = performance.now();
             setState(previous => ({...previous, disconnectedAt: at,
                 blockedIdentity: previous.telemetry.stampIdentity, blockedSequence: previous.sequence, blockedHeader: previous.header,
                 requiresIdentity: previous.requiresIdentity || previous.telemetry.lastValidReceiptAt !== null,
@@ -90,15 +91,15 @@ export const useGnssStatusState = () => {
     const {start, stop} = stream;
     useEffect(() => {
         start('/api/mowglinext/subscribe/gnssStatus');
-        const timer = setInterval(() => setClock({wall: Date.now(), mono: performance.now()}), 1000);
+        const timer = setInterval(() => setClock({mono: performance.now()}), 1000);
         return () => {clearInterval(timer); stop();};
     }, [start, stop]);
     const {telemetry} = state;
     const projection = useMemo(() => deriveGnssStatusFromDiagnostics({status: diagnostics.status?.filter(entry =>
-        (entry.receivedAt > state.disconnectedAt || entry.receivedAt === state.disconnectedAt
+        (entry.receivedMonotonic > state.disconnectedAt || entry.receivedMonotonic === state.disconnectedAt
             && entry.publicationStamp !== undefined && !state.blockedDiagnosticStamps.includes(entry.publicationStamp))
-        && Math.max(clock.wall, entry.receivedAt) - entry.receivedAt < DIAGNOSTIC_STALE_MS)}),
-    [diagnostics, state.disconnectedAt, state.blockedDiagnosticStamps, clock.wall]);
+        && Math.max(clock.mono, entry.receivedMonotonic) - entry.receivedMonotonic < DIAGNOSTIC_STALE_MS)}),
+    [diagnostics, state.disconnectedAt, state.blockedDiagnosticStamps, clock.mono]);
     const status = useMemo(() => {
         if (!telemetry.hasReceivedFrame) return projection ?? {};
         if (telemetry.condition !== 'valid' || telemetry.lastValidReceiptAt === null) return {};

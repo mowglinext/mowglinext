@@ -9,9 +9,9 @@ export const mavrosDiagnosticFields = (diagnostics: DiagnosticArray, name: strin
 
 export const useMavrosDiagnostics = () => {
     const { diagnostics } = useDiagnostics();
-    const [now, setNow] = useState(Date.now);
+    const [now, setNow] = useState(() => performance.now());
     useEffect(() => {
-        const timer = window.setInterval(() => setNow(Date.now()), 1000);
+        const timer = window.setInterval(() => setNow(performance.now()), 1000);
         return () => window.clearInterval(timer);
     }, []);
     return {

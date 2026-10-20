@@ -35,7 +35,7 @@ const emit = (raw: unknown) => act(() => { for (const listener of transport.list
 const flush = () => act(() => { vi.advanceTimersByTime(1000); });
 const mount = () => renderHook(() => useDiagnostics(context));
 const health = (state: ReturnType<typeof useDiagnostics>) => deriveDiagnosticHealth({...healthy(),
-    diagnostics: state.diagnostics.status ?? [], nowMs: Date.now(), diagnosticsDisconnectedAt: state.disconnectedAt});
+    diagnostics: state.diagnostics.status ?? [], nowMs: Date.now(), nowMonotonic: performance.now(), diagnosticsDisconnectedAt: state.disconnectedAt});
 
 beforeEach(() => {
     vi.useFakeTimers(); vi.setSystemTime(100000);
@@ -234,7 +234,7 @@ describe('02A: incremental observations before snapshot coalescence, without vis
         emit(frame(2, {...entry(2, 'Motors', 'mowgli/motors'), values: [{key: 'motor_temperature_c', value: '85'}]}));
         expect(hook.result.current.readTransitions().transitions.slice(-1)[0]?.level).toBe(2);
         expect(health(hook.result.current).checks.find(c => c.id === 'ros')?.level).toBe('ok');
-        const emergency = deriveDiagnosticHealth({...healthy(), nowMs: Date.now(), diagnostics: hook.result.current.diagnostics.status ?? [],
+        const emergency = deriveDiagnosticHealth({...healthy(), nowMs: Date.now(), nowMonotonic: performance.now(), diagnostics: hook.result.current.diagnostics.status ?? [],
             emergency: {active_emergency: true, latched_emergency: false}});
         expect(emergency.checks.find(c => c.id === 'emergency')?.level).toBe('critical');
         flush();

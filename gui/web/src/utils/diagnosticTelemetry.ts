@@ -16,7 +16,8 @@ export function isDiagnosticStatus(value: unknown): value is DiagnosticStatus {
     });
 }
 export function isTimestampedDiagnosticStatus(value: unknown): value is TimestampedDiagnosticStatus {
-    return isDiagnosticStatus(value) && 'receivedAt' in value && finiteMeasurement(value.receivedAt);
+    return isDiagnosticStatus(value) && 'receivedAt' in value && finiteMeasurement(value.receivedAt)
+        && 'receivedMonotonic' in value && finiteMeasurement(value.receivedMonotonic);
 }
 
 /** Publication identity only; not a new physical acquisition. */

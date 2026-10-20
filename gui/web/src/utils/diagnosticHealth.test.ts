@@ -80,7 +80,7 @@ describe('diagnostic display truth and priority', () => {
         const input=healthy();input.diagnostics[0].name='Optional Tool';input.diagnostics[0].hardware_id='fixture/tool';
         input.diagnostics[0].level=level;input.diagnostics[0].message='no data since last update';
         expect(one(input,'ros')?.level).toBe(expected);
-        input.nowMs=31000;expect(one(input,'ros')?.level).toBe('unknown');
+        input.nowMs=31000;input.nowMonotonic=31000;expect(one(input,'ros')?.level).toBe('unknown');
         const alerts=deriveDiagnosticHealth(input).alerts;expect(alerts[0].level).toBe(3);expect(alerts[0].reportedLevel).toBe(level);
     });
     it('does not infer optional LiDAR availability or hide its error when disabled',()=>{
@@ -102,7 +102,7 @@ describe('diagnostic display truth and priority', () => {
     it('cannot revive stale ROS alerts through reconnect or same cached publication',()=>{
         const input={...healthy(),diagnosticsDisconnectedAt:1000};
         expect(one(input,'ros')?.level).toBe('unknown');
-        input.diagnostics[0].publicationStamp='2:0';input.diagnostics[0].receivedAt=1001;input.nowMs=1001;
+        input.diagnostics[0].publicationStamp='2:0';input.diagnostics[0].receivedAt=1001;input.diagnostics[0].receivedMonotonic=1001;input.nowMs=1001;input.nowMonotonic=1001;
         expect(one(input,'ros')?.level).toBe('ok');
     });
     it('recovers from missing evidence when a genuinely valid sample becomes available',()=>{
@@ -124,11 +124,11 @@ it('distinguishes receipt freshness, disconnect barriers and producer progressio
 it('promotes a current, structured required motor temperature ERROR without promoting an unrelated ERROR',()=>{
     const input=healthy();
     input.diagnostics=[{name:'Motors',hardware_id:'mowgli/motors',message:'critical temperature',level:2,
-        receivedAt:1000,values:[{key:'motor_temperature_c',value:'90'}]}];
+        receivedAt:1000,receivedMonotonic:1000,values:[{key:'motor_temperature_c',value:'90'}]}];
     expect(deriveDiagnosticHealth(input).level).toBe('critical');
     expect(deriveDiagnosticHealth(input).primary.id).toBe('ros');
     input.diagnostics[0].hardware_id='optional-device';expect(deriveDiagnosticHealth(input).level).toBe('warning');
-    input.diagnostics[0].hardware_id='mowgli/motors';input.nowMs=31000;
+    input.diagnostics[0].hardware_id='mowgli/motors';input.nowMs=31000;input.nowMonotonic=31000;
     expect(deriveDiagnosticHealth(input).level).toBe('unknown');
 });
 it('does not report an initializing localizer as healthy merely because its publication level is OK',()=>{
@@ -156,25 +156,25 @@ it('does not require an explicitly disabled LiDAR container or an unrelated host
 });
 it.each([{name:'Hardware Bridge',hardware_id:'mowgli/hardware_bridge'}, {name:'IMU',hardware_id:'mowgli/imu'},
     {name:'LiDAR',hardware_id:'mowgli/lidar'}, {name:'Odometry',hardware_id:'mowgli/odometry'}])('keeps producer-confirmed availability errors unknown for $name',source=>{
-    const input=healthy();input.diagnostics=[{...source,level:2,message:'fixture unavailable',receivedAt:1000,values:[]}];
+    const input=healthy();input.diagnostics=[{...source,level:2,message:'fixture unavailable',receivedAt:1000,receivedMonotonic:1000,values:[]}];
     expect(one(input,'ros')?.level).toBe('unknown');
     expect(deriveDiagnosticHealth(input).alerts[0]).toMatchObject({level:3,reportedLevel:2});
 });
 it('keeps a structured live path-tracking ERROR critical during autonomous operation',()=>{
     const input=healthy();input.highLevel={state:2};input.diagnostics=[{name:'Path Tracking',hardware_id:'mowgli/controller_server',
-        level:2,message:'fixture active tracking fault',receivedAt:1000,values:[{key:'recent_p95_lateral_error_m',value:'0.5'}]}];
+        level:2,message:'fixture active tracking fault',receivedAt:1000,receivedMonotonic:1000,values:[{key:'recent_p95_lateral_error_m',value:'0.5'}]}];
     expect(deriveDiagnosticHealth(input).level).toBe('critical');
     input.highLevel={state:1};expect(one(input,'ros')?.level).toBe('warning');
 });
 it('keeps a structured required battery ERROR critical even when another estimate is positive',()=>{
     const input=healthy();input.diagnostics=[{name:'Battery',hardware_id:'mowgli/battery',message:'fixture battery critical',
-        level:2,receivedAt:1000,values:[{key:'voltage_v',value:'23'},{key:'percentage',value:'0'}]}];
+        level:2,receivedAt:1000,receivedMonotonic:1000,values:[{key:'voltage_v',value:'23'},{key:'percentage',value:'0'}]}];
     expect(deriveDiagnosticHealth(input).level).toBe('critical');
     expect(one(input,'battery')?.level).toBe('critical');
 });
 it.each(['0','NaN','0x17',''])('does not invent a critical measured battery from invalid/absent voltage %j',voltage=>{
     const input=healthy();input.diagnostics=[{name:'Battery',hardware_id:'mowgli/battery',message:'fixture unavailable estimate',
-        level:2,receivedAt:1000,values:[{key:'voltage_v',value:voltage},{key:'percentage',value:'0'}]}];
+        level:2,receivedAt:1000,receivedMonotonic:1000,values:[{key:'voltage_v',value:voltage},{key:'percentage',value:'0'}]}];
     expect(one(input,'battery')?.level).toBe('ok');expect(deriveDiagnosticHealth(input).critical).toEqual([]);
 });
 it.each(['','unrecognized-state'])('does not turn an unknown Docker state %j into a confirmed core failure',state=>{
@@ -185,7 +185,7 @@ it.each(['','unrecognized-state'])('does not turn an unknown Docker state %j int
 it('treats explicit MAVROS wheel-source missing-input WARN as availability, but never suppresses its ERROR or another fault', () => {
     const input=healthy();
     const source={name:'mowgli_mavros_bridge/wheel_odometry_source',hardware_id:'',level:1,message:'missing_or_stale',
-        values:[{key:'required',value:'false'}],receivedAt:input.nowMs};
+        values:[{key:'required',value:'false'}],receivedAt:input.nowMs,receivedMonotonic:input.nowMonotonic};
     input.diagnostics=[source];
     expect(deriveDiagnosticHealth(input).checks.find(c=>c.id==='ros')?.level).toBe('unknown');
     input.diagnostics=[{...source,level:2}];

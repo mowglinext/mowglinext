@@ -77,10 +77,10 @@ export function wheelControllerFromDiagnostics(diagnostics: unknown, role: Wheel
     if (!isTimestampedDiagnosticStatus(entry)) return undefined;
     const values = new Map(entry.values.map(value => [value.key, value.value]));
     const field = (key: string) => numberValue(values.get(key));
-    const elapsed = now - entry.receivedAt;
+    const elapsed = now - entry.receivedMonotonic;
     const age = field('age_ms');
     const ageMs = age >= 0 && Number.isFinite(elapsed) && elapsed >= 0 ? age + elapsed : NaN;
-    const receiptFresh = Number.isFinite(entry.receivedAt) && elapsed >= 0 && !isDiagnosticStale(entry, now)
+    const receiptFresh = Number.isFinite(entry.receivedMonotonic) && elapsed >= 0 && !isDiagnosticStale(entry, now)
         && elapsed < MOTOR_DISPLAY_STALE_MS;
     const online = values.get('online') === 'true';
     const absent = !online && values.get('stale') === 'false' && age < 0;

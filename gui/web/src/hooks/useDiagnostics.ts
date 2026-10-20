@@ -12,12 +12,15 @@ export interface DiagnosticStatus {
     values: { key: string; value: string }[];
 }
 
-/** A diagnostic entry stamped with the wall-clock time it was last received. */
+/** Browser receipt metadata, separate from ROS publication/acquisition time. */
 export interface TimestampedDiagnosticStatus extends DiagnosticStatus {
+    /** Civil date retained for the existing receipt contract; not an elapsed clock. */
     receivedAt: number;
+    /** Monotonic instant of that same distinct receipt; replay does not renew it. */
+    receivedMonotonic: number;
     /** Opaque publication identity; cached replay does not renew receivedAt. */
     publicationStamp?: string;
-    /** Display-only ordered publication evidence; does not alter legacy receipt semantics. */
+    /** Monotonic ordered-publication evidence; not a physical acquisition time. */
     healthProgressAt?: number;
     healthBlocked?: boolean;
 }
@@ -31,9 +34,10 @@ export const DIAGNOSTIC_STALE_MS = 30_000;
 
 /** True when an accumulated entry has not been refreshed for DIAGNOSTIC_STALE_MS. */
 export const isDiagnosticStale = (
-    entry: Pick<TimestampedDiagnosticStatus, "receivedAt">,
-    nowMs: number,
-): boolean => nowMs - entry.receivedAt > DIAGNOSTIC_STALE_MS;
+    entry: Pick<TimestampedDiagnosticStatus, "receivedMonotonic">,
+    nowMonotonic: number,
+): boolean => !Number.isFinite(entry.receivedMonotonic)
+    || nowMonotonic - entry.receivedMonotonic > DIAGNOSTIC_STALE_MS;
 
 /**
  * Subscribes to the /diagnostics topic and accumulates entries by name.
@@ -43,11 +47,12 @@ export const isDiagnosticStale = (
  */
 export const useDiagnostics = (transitionContext?: string) => {
     const [diagnostics, setDiagnostics] = useState<DiagnosticArray>({})
+    // Local monotonic disconnect boundary, never a civil date or ROS session.
     const [disconnectedAt, setDisconnectedAt] = useState<number | null>(null);
     const healthProgress = useRef(new Map<string, DiagnosticProgress>());
     const sourceForName = useRef(new Map<string, string>());
     const malformedNames = useRef(new Set<string>());
-    const receiptsRef = useRef(new Map<string, {identity: string; at: number}>());
+    const receiptsRef = useRef(new Map<string, {identity: string; at: number; monotonic: number}>());
     const accumulatorRef = useRef<Map<string, TimestampedDiagnosticStatus>>(new Map());
     const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [transitionMemory] = useState(() => new DiagnosticTransitionMemory());
@@ -62,7 +67,7 @@ export const useDiagnostics = (transitionContext?: string) => {
         transitionMemory.readAfter(cursor), [transitionMemory]);
 
     const diagnosticsStream = useWS<unknown>(() => {
-        setDisconnectedAt(Date.now());
+        setDisconnectedAt(performance.now());
         for (const [key, value] of healthProgress.current) healthProgress.current.set(key, {...value, blocked: true});
         for (const [key, entry] of accumulatorRef.current) {
             const next = {...entry, healthBlocked: true};
@@ -77,13 +82,14 @@ export const useDiagnostics = (transitionContext?: string) => {
             // Merge incoming entries by name (latest value wins)
             if (entries.length > 0) {
                 const receivedAt = Date.now();
+                const receivedMonotonic = performance.now();
                 const identity = diagnosticPublicationIdentity(e);
                 for (const entry of entries) {
                     if (isDiagnosticStatus(entry)) {
                         const key = JSON.stringify([entry.name, entry.hardware_id]);
                         const known = healthProgress.current.get(key);
                         const before = malformedNames.current.has(entry.name) && known ? {...known, blocked: true} : known;
-                        let progress = advanceDiagnosticProgress(before, e, receivedAt);
+                        let progress = advanceDiagnosticProgress(before, e, receivedMonotonic);
                         const oldSource = sourceForName.current.get(entry.name);
                         if (oldSource !== undefined && oldSource !== key && (!before || before.stamp === progress.stamp)) {
                             progress = {...progress, blocked: true};
@@ -93,9 +99,10 @@ export const useDiagnostics = (transitionContext?: string) => {
                         if (!progress.blocked) malformedNames.current.delete(entry.name);
                         const previous = receiptsRef.current.get(entry.name);
                         const at = identity !== null && previous?.identity === identity ? previous.at : receivedAt;
-                        if (identity !== null) receiptsRef.current.set(entry.name, {identity, at});
+                        const monotonic = identity !== null && previous?.identity === identity ? previous.monotonic : receivedMonotonic;
+                        if (identity !== null) receiptsRef.current.set(entry.name, {identity, at, monotonic});
                         const next = {
-                            ...entry, receivedAt: at, healthProgressAt: progress.at, healthBlocked: progress.blocked, ...(identity !== null ? {publicationStamp: identity} : {}),
+                            ...entry, receivedAt: at, receivedMonotonic: monotonic, healthProgressAt: progress.at, healthBlocked: progress.blocked, ...(identity !== null ? {publicationStamp: identity} : {}),
                         };
                         transitionMemory.observe(accumulatorRef.current.get(entry.name), next);
                         accumulatorRef.current.set(entry.name, next);

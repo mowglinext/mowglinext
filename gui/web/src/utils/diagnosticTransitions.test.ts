@@ -4,7 +4,7 @@ import {DIAGNOSTIC_TRANSITION_CAPACITY, DIAGNOSTIC_TRANSITION_IDENTITY_LIMIT, Di
 
 const entry = (level: number, hardware_id = 'receiver'): TimestampedDiagnosticStatus => ({
     name: 'status', hardware_id, level, message: 'native message', values: [{key: 'measurement', value: '123.4567'}],
-    receivedAt: 1000, publicationStamp: '1:0', healthBlocked: false,
+    receivedAt: 1000, receivedMonotonic: 1000, publicationStamp: '1:0', healthBlocked: false,
 });
 const memory = () => {
     const result = new DiagnosticTransitionMemory();

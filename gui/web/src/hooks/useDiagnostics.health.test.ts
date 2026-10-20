@@ -17,7 +17,7 @@ it('cannot turn older different cached diagnostic publications into current heal
     act(()=>stream.receive(frame(10)));act(()=>{vi.advanceTimersByTime(1000);});
     act(()=>stream.close());act(()=>{vi.advanceTimersByTime(1000);});
     act(()=>stream.receive(frame(9)));act(()=>{vi.advanceTimersByTime(1000);});
-    const verdict=()=>deriveDiagnosticHealth({...healthy(),nowMs:Date.now(),
+    const verdict=()=>deriveDiagnosticHealth({...healthy(),nowMs:Date.now(),nowMonotonic:performance.now(),
         diagnostics:hook.result.current.diagnostics.status??[],diagnosticsDisconnectedAt:hook.result.current.disconnectedAt});
     expect(verdict().checks.find(c=>c.id==='ros')?.level).toBe('unknown');
     act(()=>stream.receive(frame(10)));act(()=>{vi.advanceTimersByTime(1000);});

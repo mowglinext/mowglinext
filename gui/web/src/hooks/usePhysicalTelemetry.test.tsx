@@ -112,16 +112,16 @@ describe('physical hooks with real subscription lifecycle', () => {
         const hook = renderHook(useDiagnostics);
         const frame = diagnostic(10);
         emit('diagnostics', frame); advance(1000);
-        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', Date.now())?.current).toBe(0);
+        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', performance.now())?.current).toBe(0);
         advance(5000);
         emit('diagnostics', {...frame, status: [{...frame.status[0], values: [{key: 'age_ms', value: 0}]}]}); advance(1000);
-        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', Date.now())).toBeUndefined();
+        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', performance.now())).toBeUndefined();
         emit('diagnostics', frame); advance(1000);
-        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', Date.now())?.state).toBe('stale');
+        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', performance.now())?.state).toBe('stale');
         emit('diagnostics', diagnostic(18, {age_ms: '10000'})); advance(1000);
-        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', Date.now())?.state).toBe('stale');
+        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', performance.now())?.state).toBe('stale');
         emit('diagnostics', diagnostic(19)); advance(1000);
-        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', Date.now())?.current).toBe(0);
+        expect(wheelControllerFromDiagnostics(hook.result.current.diagnostics, 'left_wheel', performance.now())?.current).toBe(0);
         hook.unmount();
     });
     it('ignores malformed diagnostic envelopes and keeps the existing throttle/cleanup', () => {

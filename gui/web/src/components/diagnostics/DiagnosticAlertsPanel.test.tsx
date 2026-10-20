@@ -6,7 +6,7 @@ afterEach(cleanup);
 it('does not turn a ten-second delivery gap into a visible stale/history alert', () => {
     render(<DiagnosticAlertsPanel connected now={10000} observations={[]} alerts={[{
         name: 'IMU', hardware_id: 'mowgli/imu', message: 'No data', level: 3,
-        reportedLevel: 0, receivedAt: 0, values: [], notApplicable: false,
+        reportedLevel: 0, receivedAt: 0, receivedMonotonic: 0, values: [], notApplicable: false,
     }]}/>);
     expect(screen.queryByTestId('diagnostic-alert-group')).not.toBeInTheDocument();
     expect(screen.queryByText('State unverified')).not.toBeInTheDocument();
@@ -39,7 +39,7 @@ describe.each(['en','fr'])('quiet reception alerts in %s', lang => {
     });
     it('shows a confirmed error immediately, clears on OK with no retained episode', async () => {
         await i18n.changeLanguage(lang);
-        const alert={name:'Motor',hardware_id:'fictional-motor',level:2,reportedLevel:2,message:'Confirmed fault',receivedAt:0,values:[],notApplicable:false};
+        const alert={name:'Motor',hardware_id:'fictional-motor',level:2,reportedLevel:2,message:'Confirmed fault',receivedAt:0, receivedMonotonic: 0,values:[],notApplicable:false};
         const view=render(<DiagnosticAlertsPanel connected now={0} alerts={[alert]}/>);
         fireEvent.click(screen.getByRole('button',{name:/Motor/}));
         expect(screen.getByTestId('diagnostic-alert-message')).toHaveTextContent('Confirmed fault');

@@ -249,7 +249,7 @@ it.each(['disconnect', 'invalid', 'expiry'])('recovers reported unstamped operat
         input.highLevel = hook.result.current.highLevelStatus;
         input.operationalFresh = diagnosticTelemetryFresh(telemetry, at + 1);
         input.diagnostics = [{name: 'Path Tracking', hardware_id: 'mowgli/controller_server', level: 2,
-            message: 'Tracking error', values: [{key: 'recent_p95_lateral_error_m', value: '1.2'}], receivedAt: input.nowMs}];
+            message: 'Tracking error', values: [{key: 'recent_p95_lateral_error_m', value: '1.2'}], receivedAt: input.nowMs, receivedMonotonic: input.nowMonotonic}];
         const verdict = deriveDiagnosticHealth(input);
         expect(verdict.checks.find(check => check.id === 'operation')?.level).toBe('ok');
         expect(verdict.checks.find(check => check.id === 'localizer')?.level).toBe('unknown');

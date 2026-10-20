@@ -204,16 +204,18 @@ export const DiagnosticsPage = () => {
 
     // Tick state once a second so the "Live/Stale" tags update even when no
     // new message has arrived (staleness is time-based, not message-driven).
-    const [nowMs, setNowMs] = useState(Date.now());
+    // Keep the existing pulse even when civil time is frozen or corrected.
+    const [{nowMs}, setClock] = useState(() => ({nowMs: Date.now()}));
     useEffect(() => {
-        const id = setInterval(() => setNowMs(Date.now()), 1000);
+        const id = setInterval(() => setClock({nowMs: Date.now()}), 1000);
         return () => clearInterval(id);
     }, []);
     const {modal} = App.useApp();
     const {snapshot, receivedAt: snapshotReceivedAt, loading, error: snapshotError, readError: snapshotReadError, refresh} = useDiagnosticsSnapshot();
     const {diagnostics, disconnectedAt: diagnosticsDisconnectedAt} = useDiagnostics(JSON.stringify([apiHost(), hardware.robotName, hardware.backend]));
-    const wheelControllers = {left_wheel: wheelControllerFromDiagnostics(diagnostics, 'left_wheel', nowMs),
-        right_wheel: wheelControllerFromDiagnostics(diagnostics, 'right_wheel', nowMs)};
+    const nowMonotonic = performance.now();
+    const wheelControllers = {left_wheel: wheelControllerFromDiagnostics(diagnostics, 'left_wheel', nowMonotonic),
+        right_wheel: wheelControllerFromDiagnostics(diagnostics, 'right_wheel', nowMonotonic)};
     // Mobile uses collapsible panels; desktop shows sensors in the Robot tab.
     // Subscribe to the high-rate IMU stream only in the visible sensor view.
     // ?tab=parameters opens the advanced ROS parameters editor (formerly its
@@ -232,7 +234,6 @@ export const DiagnosticsPage = () => {
 
     // ── derived values ───────────────────────────────────────────────────────
 
-    const nowMonotonic = performance.now();
     const highLevelFresh = diagnosticTelemetryFresh(highLevelTelemetry, nowMonotonic);
     const powerFresh = diagnosticTelemetryFresh(powerTelemetry, nowMonotonic);
     const batteryPercent = computeBatteryPercent(highLevelFresh ? highLevelStatus.battery_percent : undefined,
@@ -299,10 +300,10 @@ export const DiagnosticsPage = () => {
         context = {backend: hardware.backend, required: false, baseline: Object.fromEntries((diagnostics.status ?? [])
             .filter(entry => entry.name === 'Hardware Bridge' || entry.name === 'Odometry'
                 || entry.name === 'mowgli_mavros_bridge/wheel_odometry_source')
-            .map(entry => [JSON.stringify([entry.hardware_id, entry.name]), entry.healthProgressAt ?? entry.receivedAt]))};
+            .map(entry => [JSON.stringify([entry.hardware_id, entry.name]), entry.healthProgressAt ?? entry.receivedMonotonic]))};
         setBackendContext(context);
     }
-    const inBackendContext = (entry: TimestampedDiagnosticStatus) => (entry.healthProgressAt ?? entry.receivedAt)
+    const inBackendContext = (entry: TimestampedDiagnosticStatus) => (entry.healthProgressAt ?? entry.receivedMonotonic)
         > (context.baseline[JSON.stringify([entry.hardware_id, entry.name])] ?? -Infinity);
     const wheelRequirementReport = diagnostics.status?.find(entry => entry.name === 'mowgli_mavros_bridge/wheel_odometry_source' && entry.hardware_id === '');
     // Accumulated diagnostics from the preceding backend cannot declare a new requirement.
@@ -321,8 +322,8 @@ export const DiagnosticsPage = () => {
         const at = connected && entry && (key !== 'hardware' && key !== 'odometry'
             || inBackendContext(entry))
             && entry.healthBlocked !== true && entry.level !== 3 && !unavailableReport(entry)
-            ? entry.healthProgressAt ?? entry.receivedAt : null;
-        receptionSources.push({...source(key, at, at === null ? 0 : nowMs - at),
+            ? entry.healthProgressAt ?? entry.receivedMonotonic : null;
+        receptionSources.push({...source(key, at, at === null ? 0 : nowMonotonic - at),
             context: key === 'hardware' || key === 'odometry' ? hardware.backend : undefined});
     }
     if (settings.gnss_stack === 'universal' || hardware.backend === 'mavros') {
@@ -397,7 +398,7 @@ export const DiagnosticsPage = () => {
     const imuAlive =
         imuStatus != null &&
         imuStatus.level < 2 && // OK or WARN; ERROR (2) / STALE (3) mean no fresh data
-        (nowMs - imuStatus.receivedAt) < 15_000;
+        (nowMonotonic - imuStatus.receivedMonotonic) < 15_000;
     const anatomyInputs = {
         batteryPct: batteryKnown ? batteryPercent : Number.NaN,
         vBattery: batteryKnown ? (power.v_battery ?? Number.NaN) : Number.NaN,

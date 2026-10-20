@@ -17,7 +17,9 @@ export interface DiagnosticHealthInput {
     emergencyFresh: boolean; operationalFresh: boolean; batteryFresh: boolean;
     connected: boolean; gnss: GnssStatus; batteryPercent: number;
     snapshot: DiagnosticsSnapshot | null; snapshotFresh: boolean;
-    diagnostics: TimestampedDiagnosticStatus[]; nowMs: number; nowMonotonic: number; diagnosticsDisconnectedAt?: number | null;
+    diagnostics: TimestampedDiagnosticStatus[]; nowMs: number; nowMonotonic: number;
+    /** Browser monotonic disconnect boundary, never a civil date or ROS epoch. */
+    diagnosticsDisconnectedAt?: number | null;
     settings: Record<string, unknown>; recoveryStuck?: boolean; fusion?: FusionGraphStats | null;
 }
 
@@ -83,7 +85,7 @@ export function unavailableReport(entry: TimestampedDiagnosticStatus): boolean {
 
 /** One display verdict and per-check conclusions; all inputs are already decoded. */
 export function deriveDiagnosticHealth(input: DiagnosticHealthInput) {
-    const {emergency, highLevel, connected, nowMs, settings} = input;
+    const {emergency, highLevel, connected, nowMonotonic, settings} = input;
     const checks: HealthCheck[] = [];
     const clearance = emergencyClearanceUnverified(emergency, highLevel);
     checks.push(check('emergency', hasEmergency(emergency, highLevel) ? 'critical'
@@ -128,11 +130,11 @@ export function deriveDiagnosticHealth(input: DiagnosticHealthInput) {
             : accuracy === undefined ? 'unknown' : accuracy > 0.1 ? 'warning' : 'ok', 'gnss', gps.fixType !== 'UNKNOWN' ? [gps.label, ...(accuracy !== undefined ? [`${accuracy} m`] : [])] : undefined));
     const entries = input.diagnostics;
     const fresh = (entry: TimestampedDiagnosticStatus) => {
-        const at = entry.healthProgressAt ?? entry.receivedAt;
+        const at = entry.healthProgressAt ?? entry.receivedMonotonic;
         return connected && entry.healthBlocked !== true && Number.isFinite(at)
-            && nowMs >= at && nowMs - at < DIAGNOSTIC_STALE_MS
+            && nowMonotonic >= at && nowMonotonic - at < DIAGNOSTIC_STALE_MS
             && (entry.healthBlocked === false || input.diagnosticsDisconnectedAt == null
-                || entry.publicationStamp !== undefined && entry.receivedAt > input.diagnosticsDisconnectedAt);
+                || entry.publicationStamp !== undefined && entry.receivedMonotonic > input.diagnosticsDisconnectedAt);
     };
     // No text-based exclusions: a driver phrase cannot erase an ERROR.
     const notApplicableReport = (entry: TimestampedDiagnosticStatus) => settings.lidar_enabled === false
