@@ -95,6 +95,7 @@ import type {ValidatedTelemetry} from '../hooks/useValidatedTelemetry';
 import {DiagnosticAlertsPanel} from '../components/diagnostics/DiagnosticAlertsPanel';
 import {deriveLidarAnchor} from "../utils/lidarAnchor.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
+import {apiHost} from "../utils/apiHost.ts";
 import {SystemPowerCard} from "../components/SystemPowerCard.tsx";
 import {BlackboxPanel} from "../components/BlackboxPanel.tsx";
 import "./DiagnosticsPage.css";
@@ -210,7 +211,7 @@ export const DiagnosticsPage = () => {
     }, []);
     const {modal} = App.useApp();
     const {snapshot, receivedAt: snapshotReceivedAt, loading, error: snapshotError, readError: snapshotReadError, refresh} = useDiagnosticsSnapshot();
-    const {diagnostics, disconnectedAt: diagnosticsDisconnectedAt} = useDiagnostics();
+    const {diagnostics, disconnectedAt: diagnosticsDisconnectedAt} = useDiagnostics(JSON.stringify([apiHost(), hardware.robotName, hardware.backend]));
     const wheelControllers = {left_wheel: wheelControllerFromDiagnostics(diagnostics, 'left_wheel', nowMs),
         right_wheel: wheelControllerFromDiagnostics(diagnostics, 'right_wheel', nowMs)};
     // Mobile uses collapsible panels; desktop shows sensors in the Robot tab.

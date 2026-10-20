@@ -1,5 +1,6 @@
-import {useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import {isDiagnosticStatus, diagnosticPublicationIdentity, advanceDiagnosticProgress, type DiagnosticProgress} from '../utils/diagnosticTelemetry';
+import {DiagnosticTransitionMemory, type DiagnosticTransitionCursor} from '../utils/diagnosticTransitions';
 import {isJsonObject} from '../utils/json';
 import {useWS} from "./useWS.ts";
 
@@ -40,7 +41,7 @@ export const isDiagnosticStale = (
  * so consumers can grey out entries that stopped updating, and throttled
  * to avoid flicker from high-frequency diagnostic updates.
  */
-export const useDiagnostics = () => {
+export const useDiagnostics = (transitionContext?: string) => {
     const [diagnostics, setDiagnostics] = useState<DiagnosticArray>({})
     const [disconnectedAt, setDisconnectedAt] = useState<number | null>(null);
     const healthProgress = useRef(new Map<string, DiagnosticProgress>());
@@ -49,11 +50,25 @@ export const useDiagnostics = () => {
     const receiptsRef = useRef(new Map<string, {identity: string; at: number}>());
     const accumulatorRef = useRef<Map<string, TimestampedDiagnosticStatus>>(new Map());
     const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [transitionMemory] = useState(() => new DiagnosticTransitionMemory());
+
+    // Opt-in only. Context changes clear observations without changing the
+    // current snapshot, its subscriptions, admission or freshness barriers.
+    useLayoutEffect(() => {
+        if (transitionContext !== undefined) transitionMemory.begin(transitionContext, accumulatorRef.current.values());
+        return () => transitionMemory.clear();
+    }, [transitionContext, transitionMemory]);
+    const readTransitions = useCallback((cursor?: DiagnosticTransitionCursor) =>
+        transitionMemory.readAfter(cursor), [transitionMemory]);
 
     const diagnosticsStream = useWS<unknown>(() => {
         setDisconnectedAt(Date.now());
         for (const [key, value] of healthProgress.current) healthProgress.current.set(key, {...value, blocked: true});
-        for (const [key, entry] of accumulatorRef.current) accumulatorRef.current.set(key, {...entry, healthBlocked: true});
+        for (const [key, entry] of accumulatorRef.current) {
+            const next = {...entry, healthBlocked: true};
+            transitionMemory.trackSnapshotCopy(entry, next);
+            accumulatorRef.current.set(key, next);
+        }
         setDiagnostics({status: Array.from(accumulatorRef.current.values())});
     }, () => {},
         (e) => {
@@ -79,9 +94,11 @@ export const useDiagnostics = () => {
                         const previous = receiptsRef.current.get(entry.name);
                         const at = identity !== null && previous?.identity === identity ? previous.at : receivedAt;
                         if (identity !== null) receiptsRef.current.set(entry.name, {identity, at});
-                        accumulatorRef.current.set(entry.name, {
+                        const next = {
                             ...entry, receivedAt: at, healthProgressAt: progress.at, healthBlocked: progress.blocked, ...(identity !== null ? {publicationStamp: identity} : {}),
-                        });
+                        };
+                        transitionMemory.observe(accumulatorRef.current.get(entry.name), next);
+                        accumulatorRef.current.set(entry.name, next);
                     } else if (isJsonObject(entry) && typeof entry.name === 'string') {
                         // A named malformed update cannot renew an older valid entry.
                         accumulatorRef.current.delete(entry.name);
@@ -112,5 +129,5 @@ export const useDiagnostics = () => {
         }
     }, [start, stop]);
 
-    return {diagnostics, disconnectedAt, stop: diagnosticsStream.stop, start: diagnosticsStream.start};
+    return {diagnostics, disconnectedAt, stop: diagnosticsStream.stop, start: diagnosticsStream.start, readTransitions};
 };
