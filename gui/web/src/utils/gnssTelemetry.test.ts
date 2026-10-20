@@ -162,3 +162,16 @@ it('preserves same-receiver legacy diagnostic enrichment without inventing a typ
     expect(projected?.correction_stream_status).toBe(C.CORRECTION_STREAM_STATUS_ACTIVE);
     expect(deriveGpsStatus(projected).fixType).toBe('UNKNOWN');
 });
+
+it('preserves source identity and incarnation without selecting a session', () => {
+    const raw = {fix_type: 6, fix_valid: true, rtk_mode: 1, position_observation_sequence: 42,
+        source_id: '/dev/receiver', source_incarnation: 'session-a'};
+    expect(decodeGnssStatus(raw)).toEqual({kind: 'valid', data: raw});
+});
+
+it.each(['source_id', 'source_incarnation'])('validates passive session field %s without coercion', key => {
+    for (const value of [null, false, 1, {}, []]) {
+        expect(decodeGnssStatus({fix_type: 6, [key]: value}).kind).toBe('invalid');
+    }
+    expect(decodeGnssStatus({fix_type: 6, [key]: ''})).toEqual({kind: 'valid', data: {fix_type: 6, [key]: ''}});
+});

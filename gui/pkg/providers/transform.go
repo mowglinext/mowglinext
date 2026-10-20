@@ -86,6 +86,8 @@ type rawOdometry struct {
 }
 
 type rawUniversalGnssStatus struct {
+	SourceID                string   `json:"source_id"`
+	SourceIncarnation       string   `json:"source_incarnation"`
 	ObservationSequence     uint64   `json:"position_observation_sequence"`
 	Stamp                   rawStamp `json:"stamp"`
 	FixValid                bool     `json:"fix_valid"`
@@ -394,6 +396,8 @@ func adaptGnssStatus(raw []byte) ([]byte, error) {
 	}
 
 	adapted.PositionObservationSequence = status.ObservationSequence
+	adapted.SourceId = status.SourceID
+	adapted.SourceIncarnation = status.SourceIncarnation
 	return json.Marshal(adapted)
 }
 

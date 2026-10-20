@@ -30,3 +30,19 @@ func TestGnssUnavailableMeasurementsMatchFrontendWireFixture(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, string(raw), string(sanitized))
 }
+
+func TestGnssSessionTupleWireIntegrity(t *testing.T) {
+	values := map[string]any{
+		"source_id": "/dev/serial/by-id/receiver", "source_incarnation": "session-a",
+		"position_observation_sequence": float64(42), "fix_type": float64(6), "fix_valid": true,
+	}
+	schema := mustParseSchema(t, "string source_id\nstring source_incarnation\nuint64 position_observation_sequence\nuint8 fix_type\nbool fix_valid")
+	wire := mustSerialize(t, values, schema)
+	decoded, err := DeserializeCDR(wire, schema)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(sanitizeJSONValue(decoded))
+	require.NoError(t, err)
+	var received map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &received))
+	require.Equal(t, values, received)
+}

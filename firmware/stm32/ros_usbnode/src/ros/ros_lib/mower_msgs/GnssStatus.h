@@ -122,6 +122,10 @@ namespace mower_msgs
       _correction_forwarding_source_type correction_forwarding_source;
       typedef const char* _msm_summary_source_type;
       _msm_summary_source_type msm_summary_source;
+      typedef const char* _source_id_type;
+      _source_id_type source_id;
+      typedef const char* _source_incarnation_type;
+      _source_incarnation_type source_incarnation;
       enum { FIX_TYPE_NO_FIX = 0 };
       enum { FIX_TYPE_GPS_FIX = 1 };
       enum { FIX_TYPE_RTK_FLOAT = 2 };
@@ -249,7 +253,9 @@ namespace mower_msgs
       correction_semantic_status(0),
       correction_source(""),
       correction_forwarding_source(""),
-      msm_summary_source("")
+      msm_summary_source(""),
+      source_id(""),
+      source_incarnation("")
     {
     }
 
@@ -633,6 +639,16 @@ namespace mower_msgs
       offset += 4;
       memcpy(outbuffer + offset, this->msm_summary_source, length_msm_summary_source);
       offset += length_msm_summary_source;
+      uint32_t length_source_id = strlen(this->source_id);
+      varToArr(outbuffer + offset, length_source_id);
+      offset += 4;
+      memcpy(outbuffer + offset, this->source_id, length_source_id);
+      offset += length_source_id;
+      uint32_t length_source_incarnation = strlen(this->source_incarnation);
+      varToArr(outbuffer + offset, length_source_incarnation);
+      offset += 4;
+      memcpy(outbuffer + offset, this->source_incarnation, length_source_incarnation);
+      offset += length_source_incarnation;
       return offset;
     }
 
@@ -1085,11 +1101,29 @@ namespace mower_msgs
       inbuffer[offset+length_msm_summary_source-1]=0;
       this->msm_summary_source = (char *)(inbuffer + offset-1);
       offset += length_msm_summary_source;
+      uint32_t length_source_id;
+      arrToVar(length_source_id, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_source_id; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_source_id-1]=0;
+      this->source_id = (char *)(inbuffer + offset-1);
+      offset += length_source_id;
+      uint32_t length_source_incarnation;
+      arrToVar(length_source_incarnation, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_source_incarnation; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_source_incarnation-1]=0;
+      this->source_incarnation = (char *)(inbuffer + offset-1);
+      offset += length_source_incarnation;
      return offset;
     }
 
     virtual const char * getType() override { return "mower_msgs/GnssStatus"; };
-    virtual const char * getMD5() override { return "b78b9b2a6de8230b1adb86ac7b5d9fd6"; };
+    virtual const char * getMD5() override { return "0611917eced94d1c778b1ae2debc74a4"; };
 
   };
 

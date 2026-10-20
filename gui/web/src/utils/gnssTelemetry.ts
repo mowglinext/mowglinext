@@ -13,6 +13,7 @@ const nonnegative = (value: unknown): boolean => finiteMeasurement(value) && val
 const schema = {
     header: (v: unknown) => isJsonObject(v) && isRosStamp(v.stamp) && typeof v.frame_id === 'string',
     position_observation_sequence: (v: unknown) => uint(v, Number.MAX_SAFE_INTEGER),
+    source_id: string, source_incarnation: string,
     backend: string, receiver_vendor: string, receiver_model: string, receiver_firmware: string,
     fix_type: (v: unknown) => uint(v, C.FIX_TYPE_DGPS),
     fix_valid: boolean, differential_corrections: boolean, corrections_active: boolean,

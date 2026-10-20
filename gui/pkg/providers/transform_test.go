@@ -303,3 +303,18 @@ func TestAdaptGnssStatusPreservesUniversalObservationIdentity(t *testing.T) {
 	assert.Equal(t, uint64(42), status.PositionObservationSequence)
 	assert.Equal(t, uint8(mowgliFixTypeRTKFixed), status.FixType)
 }
+
+func TestAdaptGnssStatusPreservesSourceSession(t *testing.T) {
+	for _, raw := range []string{
+		`{"stamp":{"sec":12,"nanosec":34},"fix_type":7,"fix_valid":true,"source_id":"serial:receiver","source_incarnation":"session-a","position_observation_sequence":42}`,
+		`{"header":{"stamp":{"sec":12,"nanosec":34},"frame_id":"gps"},"fix_type":6,"fix_valid":true,"source_id":"serial:receiver","source_incarnation":"session-a","position_observation_sequence":42}`,
+	} {
+		adapted, err := adaptGnssStatus([]byte(raw))
+		require.NoError(t, err)
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(adapted, &fields))
+		assert.Equal(t, "serial:receiver", fields["source_id"])
+		assert.Equal(t, "session-a", fields["source_incarnation"])
+		assert.Equal(t, float64(42), fields["position_observation_sequence"])
+	}
+}

@@ -170,6 +170,8 @@ type GnssStatus struct {
 	CorrectionSource          string                         `json:"correction_source"`
 	CorrectionForwardingSource string                         `json:"correction_forwarding_source"`
 	MsmSummarySource          string                         `json:"msm_summary_source"`
+	SourceId                  string                         `json:"source_id"`
+	SourceIncarnation         string                         `json:"source_incarnation"`
 }
 
 // HighLevelStatus matches mowgli_interfaces/msg/HighLevelStatus.
