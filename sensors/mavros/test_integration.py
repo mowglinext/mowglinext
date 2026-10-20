@@ -161,7 +161,7 @@ def main() -> int:
         "generic parameter API must not retain pending MAVROS route rejection",
     )
     require(
-        'route.runtime === "available"' in frontend_backends,
+        "route.runtime !== 'available'" in frontend_backends,
         "frontend must not apply pending MAVROS parameter routes",
     )
 
