@@ -4,6 +4,186 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Targeted first-cusp investigation (2026-10-21)
+
+The original GPS01 **13.943731 mm** active-MOWING departure remains a failed
+acceptance result. A new, bounded startup prefix reproduces the same failure
+mode with **12.328622 mm** departure. It captures the previously missing
+accepted FTC checks, actual returns, raw IMU, post-slip wheel odometry, TF,
+ground truth and command lanes. This is one targeted reproduction, not a full
+mowing/docking/charging mission or an exact replay of the old execution.
+
+The checkout is `0af8f4f3`, with motion source `f44daf90`. The latest inspected
+dev `708ef0f4` changes only firmware build configuration and the GUI Dockerfile
+since the incorporated `da1494f1`; it adds no controller/localizer/simulator
+change. All five required hosted checks passed on `0af8f4f3`, including all
+three replay configurations. No product source, safety assertion, tolerance,
+acceptance deadline or expected result changes in this investigation. External
+diagnostic fixtures and a separate bounded capture deadline are identified as
+such; they do not replace the unchanged mission acceptance criteria.
+
+The run uses the previously qualified diagnostic-only FTC plugin, with its
+matching dependencies, in the pinned ROS/Webots image. UID 1000, no network or
+physical devices, read-only source/install/helper mounts, a 300-second outer
+deadline and event-triggered cleanup bound the run. Actual plugin mapping and
+hash, unchanged source/helper hashes, container exit 0 and owned-container
+removal are recorded. The passive raw observer first passes an isolated real
+message/header/footer smoke test; it retains received CDR rather than the old
+action UUID projection. The older failed action-status comparison is not
+declared repaired or needed to infer an unrecorded action UUID.
+
+### Captured causal chain
+
+Every position and quaternion of the new 9,420-pose full plan and 9,268-pose
+event goal equals the respective historical captured path. The approximately
+151.9136-degree reversal at event indices 37/38 is identical. This is the same
+path/cusp input, with a different runtime sensor and command history.
+
+The captured geometry and runtime footprint are replayed through the unchanged
+native `Snapshot::permits`. All **808 retained checks** reproduce their actual
+verdicts. All 821 retained call records individually validate: 792 nonzero
+returns, 26 zero returns and three exceptions. **The trace is globally
+INCOMPLETE**: shutdown leaves no footer and an `.incomplete` marker. The
+unchanged whole-trace validator correctly exits 2. Individual complete records
+and positive command matches do not prove absence of unrecorded trailing calls.
+The separate raw observer has a footer with zero decoding errors.
+
+| Call | Controller ROS time | Consumed map TF stamp / y | Actual decision |
+|---|---:|---|---|
+| 819 | 164.48 s | 164.58 s / 0.825296981982 m | Permits and returns v=0.15 m/s, w=-0.552295465825 rad/s, horizon 0.1 s |
+| 820 | 164.58 s | 164.64 s / 0.816343690185 m | Permits and returns v=0.15 m/s, w=-0.613459508556 rad/s, horizon 0.1 s |
+| 821 | 164.68 s | 164.76 s / 0.764642172099 m | Denies the requested rotation; throws without returning a command |
+
+For calls 817–820, the exact source stamp and all six velocity components have
+one matching message on each of `/cmd_vel_nav`, `/cmd_vel_monitored` and
+`/cmd_vel`. The trace's `base_link` frame is explicitly rewritten to
+`base_footprint` on publication; downstream messages agree with each other.
+This is observed payload linkage, not an action lease or publisher ownership
+claim from Cyclone's callback handle.
+
+Ground truth acquired approximately 0.321 ms before call 819 starts is
+`(2.5018545376021035, 0.8136933586739398, -1.3322143324865787)`.
+Empirical host wall/monotonic alignment places its acquisition before that
+call and the next simulator update after the call exits; the kinematic plant
+holds this state between steps. This is stronger than selecting the nearest
+receipt, but is not a physical clock-calibration guarantee. Substituting this
+pose into the **same production predicate**, with the same captured geometry,
+footprint and request, **rejects**: the nominal reference-point endpoint is
+`y=0.799027790317`. The preceding sample permits and the following sample
+rejects, so timing qualification matters. The actual consumed pose permits.
+
+The first crossing, `y=0.799975848595`, is already received **during call 820,
+before it returns or publishes**. Actual plant increments identify a retained
+wheel payload from displacement and yaw; 46 consecutive increments match
+recorded wheel velocities, with maximum transverse residual below 2.2e-16 m.
+Travel from call 819's current state through first crossing is 0.0140145 m,
+below the nominal 0.015 m command distance. The maximum departure,
+`y=0.787671378399`, is already received before call 821 exits. Therefore neither
+excess travel nor a nonzero hold after denial is needed to explain this event.
+Immediate output at 164.68 s is zero on all three observed command lanes. A
+later 164.8 s recovery command rotates at -0.25 rad/s; it is not an FTC return.
+No denied rotation is treated as a returned command.
+
+Earlier upward map/odom-anchor changes re-enable forward motion. Holding the
+previous anchor fixed for call 817 changes its same-request predicate result
+from permit to deny. The final downward anchor correction is approximately
+32.774 mm, but is not necessary for call 821's rejection: the same odom pose
+under call 820's anchor already rejects. Moving RTK-Fixed fixes have exact
+payload ancestry in retained ground truth; a fabricated GPS displacement is
+not needed. These controls isolate input-pose/anchor effects without changing
+production motion policy.
+
+### Recorded input mechanism and focused controls
+
+Offline reconstruction from recorded local-odom seeds, actual IMU payloads and
+wheel payloads reproduces calls 819–821's odom TF to floating-point precision
+(x/y residual zero; maximum yaw residual 2.3e-16 rad). The matching wheel-cache
+identities are inferred from that arithmetic, not acknowledged FusionGraph
+callback order. An independent bounded search allows omitted IMU callbacks,
+alternative seed source epochs and nearby wheel caches; it finds exactly one
+matching sequence for each call within that explicit family. This strengthens
+the inference without proving unrestricted callback ownership or ordering.
+Each call uses its captured map/odom anchor unchanged.
+
+Two input effects are demonstrated:
+
+- Published wheel twist is a trailing ten-sample mean of instantaneous raw
+  wheel-pose increments: 116 samples give forward-speed RMSE 1.6e-15 m/s.
+  For call 819, the identified cached speed is 0.04557 m/s, versus instantaneous
+  0.123225 m/s for that same wheel interval. Post-slip and raw twist agree in
+  the critical window; the sampled DR slip veto is false. All 20 actual IMU
+  samples at 164.00–164.38 s exceed its gyro-stillness threshold, excluding that
+  veto as the cause of the earlier upward-anchor steps. After stopping, the
+  veto correctly suppresses the filtered wheel-speed tail; disabling it is not
+  a proposed repair.
+- The reconstructed integrated IMU epochs are 164.46/164.52/164.64 s, while
+  the consumed TF stamps are 164.58/164.64/164.76 s. Production predicts only
+  the configured 100 ms although these state-to-stamp intervals are 120 ms.
+  This is a 20 ms producer-time mismatch, distinct from the 20/60/40 ms state
+  ages at controller entry. A fresh or future TF header does not establish
+  the acquisition time of its represented state.
+
+The following controls use the **unchanged production predicate**, captured
+geometry/footprint/request and the same recorded local-state seed and anchor:
+
+| Local reconstruction | Call 819 | Call 820 |
+|---|---|---|
+| Captured N10 speed, 100 ms prediction | Permit | Permit |
+| Instantaneous wheel speed in post-seed DR steps and prediction | Permit | Deny |
+| Source-aligned 120 ms prediction, captured speed | Permit | Deny |
+| Both local changes | Deny | Deny |
+
+For call 819 the joint control moves predicted map y from 0.825296981982 to
+0.813811991578 m and changes permission to denial. Neither effect alone
+changes that call's verdict. This supplies a concrete joint input mechanism;
+it is **not** a reoptimized graph, a full repaired controller/plant run or proof
+that either prospective product change alone repairs the mission. Earlier
+controller controls also show that N10 filtering alone does not cross under
+every history/TF phase: all six steady-moving-history controls pass.
+
+Separate minimal Webots world/driver/odometry controls confirm that explicitly
+setting the external `velocity_rolling_window_size` to 1 restores same-interval
+pose/twist agreement under the same 1e-10 oracle; the default N10 fails it.
+No repository configuration was changed. An actual-method producer seam also
+demonstrates the source-time defect with controlled delayed IMU: the original
+timestamp/value contract fails 8/18 cases, while a source-aligned mathematical
+control passes 18/18. That control does not authorize unbounded extrapolation
+or establish safe stale-input behavior.
+
+### Scope and remaining evidence
+
+For this reproduction, the unchanged guard evaluates its captured inputs
+consistently; the consumed pose overstates clearance, and a true-pose
+substitution rejects the offending command. This does not exonerate every FTC
+path or recover the missing accepted tuple from historical GPS01. It does not
+justify a guessed margin or a relaxation of truth containment. The demonstrated
+input-filter/time effects are upstream of FTC; changing localizer provenance or
+the broader motion-authorization contract exceeds this PR's requested scope.
+The original active-FTC acceptance failure remains open, rather than silently
+being reclassified as resolved #924 work. This investigation adds no RPP,
+output or localization policy, and selects no unverified production repair.
+
+The next discriminating software experiment is a bounded producer trace with
+actual callback/source identities, atomic DR state/velocity snapshots and
+graph-node/anchor creation context, joined to the accepted FTC certificate.
+That distinguishes remaining graph-history/anchor and executor-order effects
+from the demonstrated local input mechanism before choosing a complete repair.
+The recorded-seed controls cannot partition the optimizer's earlier history or
+prove the prospective fixes' closed-loop behavior. Further uninstrumented full
+missions would not answer that question. Hardware is a separate outstanding
+acceptance requirement, not the blocker to this software experiment.
+
+Evidence is retained outside Git under
+`~/.cache/pr950-causal-20261021/prefix-run-2e748c5c52c8/`, including reproducible
+analyses in `analysis/{ftc,chain,lead,wheel}`. Raw CDR SHA-256 is
+`5dbd7688f5a1829a4e89ebb1e3e11dc566e14aa5114ac55c5a6b9324ea7be651`;
+FTC trace SHA-256 is
+`70ccf6f0603b255aada6e22bf1fcf0360de6df87ac0a6f1a18f91b34042dab2f`.
+The earlier diagnostic failures and all full-mission failures remain retained.
+No full regression rerun is claimed for this documentation-only increment.
+PR #950 remains Draft, with motion acceptance blocked and physical acceptance
+**HARDWARE_REQUIRED** under the exact-baseline procedure below.
+
 ## Bounded FTC diagnostic continuation (2026-10-18)
 
 Latest fetched `dev` is `da1494f1e3a878383c86c2b5dbd518f4233dc330`,
