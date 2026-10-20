@@ -136,7 +136,9 @@ BT::NodeStatus DockRobot::onStart()
   // signal that cannot be lost when the server finishes a goal in the same
   // instant it accepts it — "Robot is already docked, no need to dock" left a
   // polled handle stuck on ACCEPTED for 11.5 h on 2026-09-17.
-  outcome_->Reset();
+  // A halted attempt can deliver its result after this attempt starts. Keep
+  // its callback's slot separate so a late CANCELED cannot fail the new goal.
+  outcome_ = std::make_shared<ActionOutcomeSlot>();
   send_goal_options.result_callback = [slot = outcome_](const GoalHandle::WrappedResult& result)
   {
     slot->Record(OutcomeFromResultCode(result.code));
@@ -260,8 +262,9 @@ BT::NodeStatus UndockRobot::onStart()
   goal_msg.dock_type = dock_type;
 
   auto send_goal_options = rclcpp_action::Client<UndockAction>::SendGoalOptions{};
-  // See DockRobot::onStart — the terminal status can be lost, the result cannot.
-  outcome_->Reset();
+  // See DockRobot::onStart: request the result, with a fresh slot per attempt
+  // so a halted attempt's late callback cannot overwrite this goal's outcome.
+  outcome_ = std::make_shared<ActionOutcomeSlot>();
   send_goal_options.result_callback = [slot = outcome_](const GoalHandle::WrappedResult& result)
   {
     slot->Record(OutcomeFromResultCode(result.code));
