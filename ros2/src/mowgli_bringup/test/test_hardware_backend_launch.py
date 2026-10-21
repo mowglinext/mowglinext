@@ -18,7 +18,7 @@ import pytest
 
 
 LAUNCH_DIR = Path(__file__).resolve().parent.parent / "launch"
-EXPECTED_BACKENDS = ("mowgli", "mavros", "openmower")
+EXPECTED_BACKENDS = ("mowgli", "mavros", "openmower", "airseekers")
 
 
 def _parse(name: str) -> ast.Module:
@@ -165,12 +165,16 @@ def test_invalid_backend_is_rejected_before_nodes_are_launched() -> None:
     assert validator_index < first_node_index
 
 
-def test_openmower_sidecar_remaps_match_the_native_bridge() -> None:
-    """The sidecar launch must apply the same remaps as mowgli.launch.py."""
-    sidecar = (
-        Path(__file__).resolve().parents[4]
-        / "sensors/openmower/mowgli_openmower_bridge/launch/openmower_bridge.launch.py"
-    )
+@pytest.mark.parametrize(
+    "sidecar_launch",
+    [
+        "sensors/openmower/mowgli_openmower_bridge/launch/openmower_bridge.launch.py",
+        "sensors/airseekers/mowgli_airseekers_bridge/launch/airseekers_bridge.launch.py",
+    ],
+)
+def test_sidecar_remaps_match_the_native_bridge(sidecar_launch) -> None:
+    """Every sidecar launch must apply the same remaps as mowgli.launch.py."""
+    sidecar = Path(__file__).resolve().parents[4] / sidecar_launch
     if not sidecar.exists():
         pytest.skip("sensors/ tree not present in this workspace")
     native = (LAUNCH_DIR / "mowgli.launch.py").read_text(encoding="utf-8")

@@ -990,6 +990,24 @@ def test_openmower_defaults_replace_the_template_for_that_backend_only():
         assert mowgli[key] == template[key], key
 
 
+def test_airseekers_defaults_replace_the_template_for_that_backend_only():
+    path = _write_sparse({"datum_lat": 1.0})
+    try:
+        tron = load_robot_params(str(_PKG_DIR), runtime_path=path, hardware_backend="airseekers")
+        mowgli = load_robot_params(str(_PKG_DIR), runtime_path=path, hardware_backend="mowgli")
+    finally:
+        os.unlink(path)
+    template = _template_params()
+    assert tron["wheel_track"] == 0.48
+    assert tron["max_mps"] == 0.3
+    # The sidecar publishes /gps/* itself: mowgli-ros2 must not start the
+    # Universal GNSS bridge on a Tron.
+    assert tron["gnss_stack"] == "disabled"
+    assert tron["gnss_serial_device"] == "/dev/serial_rtk"
+    for key in _backend_overlay("airseekers"):
+        assert mowgli[key] == template[key], key
+
+
 def test_installed_config_still_wins_over_backend_defaults():
     path = _write_sparse({"both_wheels_lift_emergency_ms": 300})
     try:

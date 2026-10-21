@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>um960_gps_driver</name>
+  <version>0.2.0</version>
+  <description>
+    Serial driver for the Unicore UM960 GNSS/RTK receiver on the Airseekers Tron mower
+    (/dev/serial_rtk -> ttyS4, UART4 @ 0xfeb70000). Parses NMEA (GGA/RMC/GSA/GSV/VTG/GST/GPHPR)
+    and the Unicore proprietary ASCII logs ($GNVER/$GNSTA/$GNCON/$GNREF/$GNRTK, BESTNAVA) plus
+    the Unicore binary synch 0xAA 0x44 0xB5 framing (BESTNAV, msg id 0x0A), and publishes
+    sensor_msgs/NavSatFix /fix, geometry_msgs/TwistStamped /vel, std_msgs/Float32 /heading
+    and std_msgs/String /fix_status. Optional host NTRIP client (v1/v2) injects RTCM into the
+    receiver port and reports correction health on /gps/corrections. In MowgliNext it
+    runs inside the Airseekers backend sidecar (sensors/airseekers) and also publishes
+    the public /gps/status (mowgli_interfaces/GnssStatus). No third-party Python dependencies: the serial port is
+    opened directly with termios.
+  </description>
+
+  <maintainer email="cedric@mowgli.dev">Cedric</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <!-- MowgliNext /gps/status (GnssStatus) -->
+  <exec_depend>mowgli_interfaces</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

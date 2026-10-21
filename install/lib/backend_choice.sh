@@ -172,6 +172,13 @@ select_hardware_backend() {
         configure_openmower_backend_details true || return 1
         return 0
         ;;
+      airseekers)
+        export HARDWARE_BACKEND="airseekers"
+        export MAVROS_BY_ID=""
+        export GNSS_BACKEND="disabled" GNSS_STACK="disabled"
+        info "Hardware backend pre-configured: Airseekers Tron (vendor MCU, bridge sidecar)"
+        return 0
+        ;;
       *)
         error "Invalid HARDWARE_BACKEND preset: ${HARDWARE_BACKEND} (expected ${SUPPORTED_HARDWARE_BACKENDS// /|})"
         return 1
@@ -184,8 +191,9 @@ select_hardware_backend() {
   echo "  [1] Mowgli STM32 board"
   echo "  [2] Pixhawk via MAVROS"
   echo "  [3] OpenMower v1 electronics (LowLevel board + xESC, stock firmware)"
+  echo "  [4] Airseekers Tron (vendor MCU, stock firmware; the sidecar also owns the GNSS)"
   echo ""
-  prompt "Choice [1-3]" "1"
+  prompt "Choice [1-4]" "1"
   choice="$REPLY"
 
   case "$choice" in
@@ -205,6 +213,12 @@ select_hardware_backend() {
       export MAVROS_BY_ID=""
       info "Selected backend: OpenMower v1 electronics (LowLevel board + xESC)"
       configure_openmower_backend_details false || return 1
+      ;;
+    4)
+      export HARDWARE_BACKEND="airseekers"
+      export MAVROS_BY_ID=""
+      export GNSS_BACKEND="disabled" GNSS_STACK="disabled"
+      info "Selected backend: Airseekers Tron (bridge sidecar; GNSS handled by it)"
       ;;
     *)
       error "Invalid choice"

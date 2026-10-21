@@ -108,7 +108,7 @@ func TestHardwareBackendRoute(t *testing.T) {
 
 	assert.Equal(t, "openmower", got["backend"])
 	assert.Equal(t, "Garden-East", got["robot_name"], "the header badge names the robot")
-	assert.ElementsMatch(t, []any{"mowgli", "mavros", "openmower"}, got["supported"])
+	assert.ElementsMatch(t, []any{"mowgli", "mavros", "openmower", "airseekers"}, got["supported"])
 
 	overrides, ok := got["default_overrides"].(map[string]any)
 	require.True(t, ok)
@@ -166,6 +166,25 @@ func TestOpenMowerWiringShowsTheInstallersChoiceUntilSet(t *testing.T) {
 	assert.Equal(t, "/dev/ttyUSB0", got["openmower_xesc_left_port"], "an explicit value wins over .env")
 }
 
+func TestAirseekersWiringShowsTheInstallersChoiceUntilSet(t *testing.T) {
+	db, _ := newBackendTestDB(t,
+		"mowgli:\n  ros__parameters:\n    airseekers_imu_port: /dev/ttyUSB1\n",
+		"HARDWARE_BACKEND=airseekers\nAIRSEEKERS_MCU_PORT=/dev/ttyS9\nAIRSEEKERS_IMU_PORT=/dev/ttyS3\n")
+	got := getJSON(t, db, "/api/settings/yaml")
+	assert.Equal(t, "/dev/ttyS9", got["airseekers_mcu_port"])
+	assert.Equal(t, "/dev/ttyUSB1", got["airseekers_imu_port"], "an explicit value wins over .env")
+}
+
+func TestAirseekersDefaultsFollowTheBackend(t *testing.T) {
+	db, _ := newBackendTestDB(t, "mowgli:\n  ros__parameters: {}\n", "HARDWARE_BACKEND=airseekers\n")
+	got := getJSON(t, db, "/api/settings/hardware-backend")
+	assert.Equal(t, "airseekers", got["backend"])
+	overrides, ok := got["default_overrides"].(map[string]any)
+	require.True(t, ok)
+	assert.EqualValues(t, 0.48, overrides["wheel_track"])
+	assert.EqualValues(t, "disabled", overrides["gnss_stack"])
+}
+
 func TestOpenMowerWiringIsNotShownForAnotherBackend(t *testing.T) {
 	db, _ := newBackendTestDB(t, "mowgli:\n  ros__parameters: {}\n",
 		"HARDWARE_BACKEND=mowgli\nOPENMOWER_LL_PORT=/dev/ttyAMA1\n")
@@ -210,7 +229,7 @@ func TestHardwareBackendMavrosPublishesSourceContractRoutes(t *testing.T) {
 
 	assert.Equal(t, "mavros", response.Backend)
 	assert.Equal(t, "available", response.RuntimeRouting)
-	assert.ElementsMatch(t, []string{"mowgli", "mavros", "openmower"}, response.Supported)
+	assert.ElementsMatch(t, []string{"mowgli", "mavros", "openmower", "airseekers"}, response.Supported)
 
 	assert.Equal(t, HardwareParameterRoute{
 		Parameter: "mavros/esc_wheel_odometry.ticks_per_meter",

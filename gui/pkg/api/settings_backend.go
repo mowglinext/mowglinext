@@ -33,17 +33,20 @@ const (
 )
 
 // supportedHardwareBackends mirrors mowgli.launch.py SUPPORTED_HARDWARE_BACKENDS.
-var supportedHardwareBackends = []string{"mowgli", "mavros", "openmower"}
+var supportedHardwareBackends = []string{"mowgli", "mavros", "openmower", "airseekers"}
 
-// openMowerRuntimeEnvKeys maps OpenMower wiring settings to the installer env.
-// If a key is absent from the installed YAML, the bridge uses the .env value;
-// the GUI must report that same effective value.
-var openMowerRuntimeEnvKeys = map[string]string{
+// sidecarRuntimeEnvKeys maps the hardware-bridge sidecars' wiring keys
+// (OpenMower, Airseekers) to the docker/.env entries the installer writes. The bridge layers .env between the defaults
+// and the installed config, so an ABSENT key runs with the .env value — the
+// GUI must show that one, not the template's.
+var sidecarRuntimeEnvKeys = map[string]string{
 	"openmower_ll_port":         "OPENMOWER_LL_PORT",
 	"openmower_xesc_type":       "OPENMOWER_XESC_TYPE",
 	"openmower_xesc_left_port":  "OPENMOWER_XESC_LEFT_PORT",
 	"openmower_xesc_right_port": "OPENMOWER_XESC_RIGHT_PORT",
 	"openmower_xesc_mow_port":   "OPENMOWER_XESC_MOW_PORT",
+	"airseekers_mcu_port":       "AIRSEEKERS_MCU_PORT",
+	"airseekers_imu_port":       "AIRSEEKERS_IMU_PORT",
 }
 
 type backendDefaultsFile struct {
@@ -76,6 +79,8 @@ var hardwareParameterRoutes = map[string]map[string]HardwareParameterRoute{
 	},
 	// OpenMower drive settings are not live-routed through this parameter API.
 	"openmower": {},
+	// Airseekers drive settings are read by the bridge at start (Restart ROS2).
+	"airseekers": {},
 }
 
 // normalizeHardwareBackend returns a supported backend or the default.
@@ -188,10 +193,11 @@ func applyBackendDefaults(defaults map[string]any, backend string) {
 	}
 }
 
-// applyOpenMowerRuntimeFallbacks uses installer wiring values only when the
-// installed config does not explicitly set the corresponding key.
-func applyOpenMowerRuntimeFallbacks(flat map[string]any, runtimeEnv map[string]string) {
-	for key, envKey := range openMowerRuntimeEnvKeys {
+// applySidecarRuntimeFallbacks shows the installer's wiring (docker/.env)
+// for every sidecar wiring key the installed config does not set — that is
+// the value the bridge runs with.
+func applySidecarRuntimeFallbacks(flat map[string]any, runtimeEnv map[string]string) {
+	for key, envKey := range sidecarRuntimeEnvKeys {
 		if hasExplicitFlatValue(flat[key]) {
 			continue
 		}

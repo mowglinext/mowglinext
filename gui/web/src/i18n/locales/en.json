@@ -32,7 +32,14 @@
     "cancel": "Cancel",
     "interrupted": "Capture interrupted",
     "dropped": "{{count}} capture observations dropped",
-    "phase": {"ready": "Ready", "disabled": "Disabled", "capturing": "Collecting post-event history", "writing": "Saving snapshot", "pruning": "Applying storage limits", "stopped": "Stopped"}
+    "phase": {
+      "ready": "Ready",
+      "disabled": "Disabled",
+      "capturing": "Collecting post-event history",
+      "writing": "Saving snapshot",
+      "pruning": "Applying storage limits",
+      "stopped": "Stopped"
+    }
   },
   "bladeDirection": {
     "title": "Requested blade direction",
@@ -103,21 +110,25 @@
     "names": {
       "mowgli": "Mowgli board (STM32)",
       "openmower": "OpenMower v1 (LowLevel board + xESC)",
-      "mavros": "Pixhawk (MAVROS)"
+      "mavros": "Pixhawk (MAVROS)",
+      "airseekers": "Airseekers Tron (vendor MCU + WIT IMU + UM960)"
     },
     "descriptions": {
       "mowgli": "The Mowgli STM32 firmware drives the motors and owns blade and emergency safety. It needs no wiring settings here.",
       "openmower": "The stock OpenMower electronics keep their own firmware; a bridge container drives them. Settings MowgliNext already has (charge limits, lift delays, ticks per metre…) stay in their usual sections and are applied to the OpenMower hardware.",
-      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer."
+      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer.",
+      "airseekers": "The Tron keeps its vendor firmware; a bridge container drives its MCU, IMU, panel keys and GNSS receiver. Settings MowgliNext already has (wheel track, speed cap, NTRIP, GNSS port…) stay in their usual sections and are applied to the Tron hardware."
     },
     "choiceNote": "The backend is chosen when installing the robot.",
     "openmowerRestartNote": "The OpenMower bridge reads these settings when it starts: use \"Restart ROS2\" after saving, which restarts the bridge too.",
     "shortNames": {
       "mowgli": "Mowgli",
       "openmower": "OpenMower v1",
-      "mavros": "MAVROS"
+      "mavros": "MAVROS",
+      "airseekers": "Airseekers Tron"
     },
-    "badgeTooltip": "Hardware backend: {{name}} — open the hardware settings"
+    "badgeTooltip": "Hardware backend: {{name}} — open the hardware settings",
+    "airseekersRestartNote": "The Airseekers bridge reads these settings when it starts: use \"Restart ROS2\" after saving, which restarts the bridge too."
   },
   "settingsMavrosDrive": {
     "notice": {
@@ -4287,7 +4298,8 @@
     },
     "backendChoice": {
       "none": "Mowgli",
-      "openmower": "OpenMower v1"
+      "openmower": "OpenMower v1",
+      "airseekers": "Airseekers Tron"
     },
     "disabled": "Off",
     "enabled": "On",
@@ -4695,6 +4707,58 @@
     "openmower_wheel_ki": {
       "label": "Wheel loop Ki",
       "tooltip": "Integral gain [duty per (m/s × s) of speed error]."
+    },
+    "airseekers_mcu_port": {
+      "label": "MCU port",
+      "tooltip": "Serial device of the vendor chassis/cutter MCU (115200 baud). Stock Tron: /dev/serial_mower."
+    },
+    "airseekers_imu_port": {
+      "label": "IMU port",
+      "tooltip": "Serial device of the WIT JY61P IMU. Stock Tron: /dev/serial_imu. The MCU needs this IMU forwarded: without it it reports the mower lifted."
+    },
+    "airseekers_keys_device": {
+      "label": "Panel keys device",
+      "tooltip": "evdev device of the top-panel keys. Empty finds the \"key input\" device (/dev/keyboard)."
+    },
+    "airseekers_cutter_height_mm": {
+      "label": "Cutting height",
+      "tooltip": "Deck height while mowing [mm], 30 to 90 (90 = highest)."
+    },
+    "airseekers_imu_roll_offset_deg": {
+      "label": "IMU roll offset",
+      "tooltip": "Mounting correction of the IMU roll [deg]. 0 on a stock Tron. Safety-relevant: it feeds the MCU lift trip and the tilt monitor."
+    },
+    "airseekers_imu_pitch_offset_deg": {
+      "label": "IMU pitch offset",
+      "tooltip": "Mounting correction of the IMU pitch [deg]. 0 on a stock Tron."
+    },
+    "airseekers_max_angular_radps": {
+      "label": "Max turn rate",
+      "tooltip": "Yaw-rate cap applied before the MCU [rad/s]; the MCU clamps at 0.3 itself."
+    },
+    "airseekers_angular_trim_radps": {
+      "label": "Straight-line trim",
+      "tooltip": "Yaw rate added while driving to cancel a pull to one side [rad/s], signed with the driving direction. 0 = off."
+    },
+    "airseekers_angular_deadband_radps": {
+      "label": "Turn deadband",
+      "tooltip": "Commanded yaw rates below this are zeroed while driving [rad/s]. 0 = off."
+    },
+    "airseekers_heading_hold": {
+      "label": "Heading hold",
+      "tooltip": "Hold the IMU heading while a straight line is commanded."
+    },
+    "airseekers_heading_hold_kp": {
+      "label": "Heading hold Kp",
+      "tooltip": "rad/s per rad of heading error."
+    },
+    "airseekers_heading_hold_kd": {
+      "label": "Heading hold Kd",
+      "tooltip": "rad/s per rad/s of gyro yaw rate (damping)."
+    },
+    "airseekers_heading_hold_max_radps": {
+      "label": "Heading hold limit",
+      "tooltip": "Clamp on the heading-hold correction [rad/s]."
     }
   },
   "settingsFieldGroups": {
@@ -4750,6 +4814,14 @@
     "openmowerWheelLoop": {
       "title": "OpenMower Wheel Speed Loop",
       "description": "The xESC only takes a duty cycle, so the OpenMower bridge closes a per-wheel speed loop on the wheel tachometers. Takes effect when ROS2 is restarted."
+    },
+    "airseekersWiring": {
+      "title": "Airseekers Tron Electronics",
+      "description": "Serial devices of the vendor MCU, the IMU and the panel keys, the deck height and the IMU mounting. Until you set a port here, the one chosen in the installer applies. Takes effect when ROS2 is restarted."
+    },
+    "airseekersDrive": {
+      "title": "Airseekers Drive",
+      "description": "The Tron MCU has no yaw loop. A turn-rate cap and host-side straight-line compensation. Neutral defaults: tune on the lawn. Takes effect when ROS2 is restarted."
     }
   },
   "firmwareParams": {

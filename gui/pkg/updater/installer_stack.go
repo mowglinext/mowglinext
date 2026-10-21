@@ -376,7 +376,7 @@ func legacyDifferences(old, target []byte) []string {
 // installerBackendChoice maps docker/.env HARDWARE_BACKEND onto the bundle's
 // "backend" group. It is derived here, never preserved from an earlier
 // selection, so a robot moved back to the Mowgli board drops the OpenMower
-// bridge instead of keeping it. MAVROS has no release stack.
+// (or Airseekers) bridge instead of keeping it. MAVROS has no release stack.
 func installerBackendChoice(dir string) (string, error) {
 	env, err := godotenv.Read(filepath.Join(dir, ".env"))
 	if err != nil {
@@ -387,6 +387,8 @@ func installerBackendChoice(dir string) (string, error) {
 		return "none", nil
 	case "openmower":
 		return "openmower", nil
+	case "airseekers":
+		return "airseekers", nil
 	default:
 		return "", fmt.Errorf("release stacks do not cover HARDWARE_BACKEND=%s", backend)
 	}

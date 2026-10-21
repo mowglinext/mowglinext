@@ -104,6 +104,7 @@ export interface SettingsValues {
     loc_sigma_backstop_persist_s?: number | null;
     undock_distance?: number | null;
     undock_speed?: number | null;
+    undock_forward?: boolean;
     dock_approach_distance?: number | null;
     dock_approach_overshoot?: number | null;
     dock_max_retries?: number | null;
@@ -237,5 +238,18 @@ export interface SettingsValues {
     openmower_wheel_duty_per_mps?: number | null;
     openmower_wheel_kp?: number | null;
     openmower_wheel_ki?: number | null;
+    airseekers_mcu_port?: string;
+    airseekers_imu_port?: string;
+    airseekers_keys_device?: string;
+    airseekers_max_angular_radps?: number | null;
+    airseekers_cutter_height_mm?: number | null;
+    airseekers_angular_trim_radps?: number | null;
+    airseekers_angular_deadband_radps?: number | null;
+    airseekers_heading_hold?: boolean;
+    airseekers_heading_hold_kp?: number | null;
+    airseekers_heading_hold_kd?: number | null;
+    airseekers_heading_hold_max_radps?: number | null;
+    airseekers_imu_roll_offset_deg?: number | null;
+    airseekers_imu_pitch_offset_deg?: number | null;
     [key: string]: unknown;
 }

@@ -278,7 +278,7 @@ func TestInstallStackRegenerateOverridesActiveRelease(t *testing.T) {
 }
 
 func TestInstallerBackendChoiceFollowsDotEnv(t *testing.T) {
-	for backend, want := range map[string]string{"": "none", "mowgli": "none", "openmower": "openmower", "mavros": ""} {
+	for backend, want := range map[string]string{"": "none", "mowgli": "none", "openmower": "openmower", "airseekers": "airseekers", "mavros": ""} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("HARDWARE_BACKEND="+backend+"\n"), 0600); err != nil {
 			t.Fatal(err)

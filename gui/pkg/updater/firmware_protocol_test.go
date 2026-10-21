@@ -254,6 +254,7 @@ func TestFirmwareProtocolIsWaivedOnlyOnTheOpenMowerBackend(t *testing.T) {
 		exempt bool
 	}{
 		{"HARDWARE_BACKEND=openmower\n", true},
+		{"HARDWARE_BACKEND=airseekers\n", true},
 		{"HARDWARE_BACKEND=mowgli\n", false},
 		{"", false},
 		{"-", false}, // no .env at all

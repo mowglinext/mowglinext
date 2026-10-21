@@ -65,7 +65,7 @@ Also: [`.claude/rules/ros2.md`](.claude/rules/ros2.md) — ROS2 node/QoS/launch/
 This robot has spinning blades. The STM32 firmware is the sole blade safety authority.
 
 - NEVER bypass firmware blade safety checks from ROS2
-- On the **OpenMower backend** (`HARDWARE_BACKEND=openmower`, `sensors/openmower/`) the stock OpenMower controllers have no such policy — the bridge on the host is in the actuation path (zero duty on any emergency / stale link / stale `cmd_vel`, blade only in AUTONOMOUS or MANUAL_MOWING — `blade_policy.hpp`). Treat every change there as safety-critical too.
+- On the **OpenMower backend** (`HARDWARE_BACKEND=openmower`, `sensors/openmower/`) the stock OpenMower controllers have no such policy — the bridge on the host is in the actuation path (zero duty on any emergency / stale link / stale `cmd_vel`, blade only in AUTONOMOUS or MANUAL_MOWING — `blade_policy.hpp`). Treat every change there as safety-critical too. The same holds for the **Airseekers backend** (`HARDWARE_BACKEND=airseekers`, `sensors/airseekers/`, `safety.py`): the Tron's vendor MCU keeps executing the last speed command while host traffic continues.
 - Blade commands from ROS2 are fire-and-forget — firmware decides whether to execute
 - Emergency stop is handled by firmware, not software
 - Flag ANY change that could affect physical behavior as safety-critical in PR reviews

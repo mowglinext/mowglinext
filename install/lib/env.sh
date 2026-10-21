@@ -309,6 +309,7 @@ setup_env() {
   : "${GUI_IMAGE:=${GUI_IMAGE_DEFAULT}}"
   : "${MAVROS_IMAGE:=${MAVROS_IMAGE_DEFAULT}}"
   : "${OPENMOWER_IMAGE:=${OPENMOWER_IMAGE_DEFAULT}}"
+  : "${AIRSEEKERS_IMAGE:=${AIRSEEKERS_IMAGE_DEFAULT}}"
   if [[ -z "${LIDAR_IMAGE:-}" ]]; then
     case "${LIDAR_TYPE:-ldlidar}" in
       rplidar) LIDAR_IMAGE="${LIDAR_RPLIDAR_IMAGE_DEFAULT}" ;;
@@ -423,6 +424,7 @@ setup_env() {
   upsert_env_key "$env_file" "LIDAR_IMAGE" "$LIDAR_IMAGE"
   upsert_env_key "$env_file" "MAVROS_IMAGE" "$MAVROS_IMAGE"
   upsert_env_key "$env_file" "OPENMOWER_IMAGE" "$OPENMOWER_IMAGE"
+  upsert_env_key "$env_file" "AIRSEEKERS_IMAGE" "$AIRSEEKERS_IMAGE"
   upsert_env_key "$env_file" "GUI_IMAGE" "$GUI_IMAGE"
 
   upsert_env_key "$env_file" "HARDWARE_BACKEND" "$HARDWARE_BACKEND"

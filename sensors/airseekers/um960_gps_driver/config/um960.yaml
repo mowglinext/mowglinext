@@ -1,0 +1,105 @@
+# UM960 GNSS/RTK driver (Airseekers Tron)
+# Receiver: Unicore UM960 on /dev/serial_rtk -> ttyS4 (UART4 @ 0xfeb70000)
+# The vendor config (base_rtk/ntrip_client/scripts/serial_rtk_config.py) runs the
+# port at 115200 for configuration and streams ASCII logs at 115200 as well.
+
+um960_node:
+  ros__parameters:
+    # --- serial ---
+    port: "/dev/serial_rtk"
+    baud: 115200          # 921600 if the receiver is reconfigured for binary-heavy logs
+    serial_timeout_s: 0.2 # per-read() select() timeout
+
+    # --- framing / timestamps ---
+    frame_id: "gps"
+    publish_rate_hz: 10.0  # vendor /fix rate was 10 Hz
+    fix_timeout_s: 2.0     # no fresh solution for this long => stop publishing /fix
+
+    # --- topics ---
+    fix_topic: "/fix"
+    vel_topic: "/vel"
+    heading_topic: "/heading"
+    heading_valid_topic: "/heading_valid"  # Bool: /heading is a fresh, fixed dual-antenna GPHPR
+    # The UM960 is single-antenna: a GPHPR heading from it is motion-derived or invalid, so
+    # /heading_valid stays false until a dual-antenna receiver is confirmed (then true only
+    # for a GPHPR younger than heading_timeout_s with quality flag 4 = baseline RTK fixed).
+    publish_rtk_heading: false
+    heading_timeout_s: 1.0   # drop a GPHPR heading this old (/heading falls back to the track)
+    fix_status_topic: "/fix_status"
+    nmea_topic: "/nmea"
+    publish_nmea: false    # set true to debug the raw stream or feed an NTRIP client
+
+    # --- robustness ---
+    reconnect_period_s: 2.0
+    sane_lat_limit: 90.0
+    sane_lon_limit: 180.0
+
+    # --- receiver configuration sent once on (re)connect ---
+    # Left empty by default: the receiver keeps whatever the vendor wrote with
+    # `MODE ROVER` / `CONFIG ...` / `BESTNAVA 5`. Fill in only if you are
+    # deliberately reconfiguring the module.
+    config_commands: []
+
+    # --- RTK corrections: choosing the correction source ---
+    # ""     auto (default): "ntrip" if ntrip_config_file has ntrip_enable: true,
+    #        otherwise "lora".
+    # "lora" vendor RTK base station -> LoRa -> rtk_rover board -> UM960. The host
+    #        never writes corrections; it can only pair the radio (set_lora).
+    # "ntrip" host NTRIP client -> RTCM written into this serial port; the rover GGA
+    #        is uploaded to the caster every ntrip_gga_interval_s.
+    # "none" no corrections (single point / SBAS only).
+    correction_source: ""
+    # Preferred selector (wins when non-empty): auto | ntrip | lora | none.
+    #   auto: NTRIP while the caster delivers CRC-valid RTCM (and NTRIP is enabled in
+    #   ntrip_settings_file / ntrip_enabled / the vendor file), otherwise the LoRa
+    #   base. Only one source ever feeds the receiver. "" = use correction_source.
+    rtcm_source: ""
+    ntrip_enabled: false          # used only when ntrip_settings_file does not exist
+    # Owner caster settings (enabled, host, port, mountpoint, user, password). Written
+    # (mode 0600) by the driver when the GUI NTRIP card changes a field; re-read
+    # when its mtime changes. Wins over ntrip_host/... and the vendor file.
+    ntrip_settings_file: "/userdata/ros2/ntrip.yaml"
+    ntrip_status_topic: "/ntrip/status"   # 1 Hz JSON, latched (transient local)
+    ntrip_fallback_grace_s: 5.0   # auto: hand back to LoRa this long after the last valid frame
+    ntrip_validate_rtcm: true     # only whole CRC-24Q-valid RTCM3 frames reach the receiver
+
+    # NTRIP caster. Keep credentials OUT of this file: put them in a separate params
+    # file (config/um960_secrets.yaml is git-ignored; see um960_secrets.example.yaml)
+    # or in the vendor file below.
+    ntrip_host: ""
+    ntrip_port: 2101
+    ntrip_mountpoint: ""
+    ntrip_user: ""
+    ntrip_password: ""
+    ntrip_version: 2              # 2 = NTRIP 2.0 (HTTP/1.1), 1 = NTRIP 1.0 (ICY 200 OK)
+    ntrip_gga_interval_s: 10.0    # 0 disables the GGA upload (single-base mountpoints)
+    ntrip_no_data_timeout_s: 20.0 # reconnect when the caster goes silent this long
+    ntrip_reconnect_max_s: 30.0   # backoff ceiling (also used after auth failures)
+    ntrip_fallback_lat: 0.0       # position sent to a VRS caster before the first fix
+    ntrip_fallback_lon: 0.0       # (0/0 = none: wait for the receiver)
+    # Vendor credentials file, read only when ntrip_host (or correction_source) is
+    # empty. Keys: ntrip_enable, ntrip_ip, ntrip_port, ntrip_user, ntrip_passwd,
+    # ntrip_mountpoint. Set to "" to ignore it.
+    ntrip_config_file: "/userdata/mower/ntrip.yaml"
+    # Network-RTK handshake with the rtk_rover board (ntrip mode only):
+    # RTKRESET + "$GNRTK,ON*69" when the port opens or the board drops ON -> OFF,
+    # then "$GNRTK,ON*69" every ntrip_keepalive_s (the board falls back to LoRa
+    # after ~6 s without it).
+    ntrip_keepalive_s: 4.0
+    # RTCM is held until the board reports $GNRTK,ON. true = forward anyway (bench
+    # tests with a pty / no rover board).
+    forward_rtcm_without_board_ack: false
+    # "" or "auto" = any interface, "4g" = bind to usb0, "wifi" = bind to wlan0
+    # (vendor ntrip_netmode; falls back to the vendor file's value).
+    ntrip_netmode: ""
+
+    # --- diagnostics ---
+    corrections_topic: "/gps/corrections"  # 1 Hz JSON
+    corrections_stale_s: 10.0              # older corrections => corr_flow=stale
+
+    # --- vendor LoRa pairing (/mower_gps_node/set_lora, called by base_ble) ---
+    set_lora_service: "/mower_gps_node/set_lora"
+    # false: set_lora only logs the $GLIST/$GNCON commands it would send and returns
+    # false. true: writes them to this port like the vendor driver (unverified on
+    # hardware - see docs/um960.md).
+    lora_pairing_enabled: false

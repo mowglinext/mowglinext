@@ -1396,8 +1396,8 @@ func GetSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRout
 
 		responseFlat := cloneFlatMap(doc.Flat)
 		applyUniversalGnssCompatibility(responseFlat, loadSchemaDefaults(dbProvider))
-		if activeHardwareBackend(doc.RuntimeEnv) == "openmower" {
-			applyOpenMowerRuntimeFallbacks(responseFlat, doc.RuntimeEnv)
+		if backend := activeHardwareBackend(doc.RuntimeEnv); backend == "openmower" || backend == "airseekers" {
+			applySidecarRuntimeFallbacks(responseFlat, doc.RuntimeEnv)
 		}
 
 		c.JSON(200, responseFlat)

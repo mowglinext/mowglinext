@@ -60,6 +60,8 @@ import {
     TURN_SPEED_GROUP,
     YAW_LOOP_GROUP,
     OPENMOWER_WHEEL_LOOP_GROUP,
+    AIRSEEKERS_DRIVE_GROUP,
+    AIRSEEKERS_WIRING_GROUP,
     OPENMOWER_WIRING_GROUP,
     groupForBackend,
     type SettingsFieldGroup,
@@ -210,7 +212,7 @@ export const SettingsPage = () => {
                                 <HardwareBackendCard info={hardwareBackend} />
 
                                 <HardwareBackendSection backend={hardwareBackend.backend}>
-                                    {renderFieldCards(OPENMOWER_WIRING_GROUP)}
+                                    {renderFieldCards(OPENMOWER_WIRING_GROUP, AIRSEEKERS_WIRING_GROUP)}
                                 </HardwareBackendSection>
 
                                 <HardwareSection
@@ -230,8 +232,8 @@ export const SettingsPage = () => {
             case "drive_motor":
                 // Each backend exposes its own drive controls; never show
                 // Mowgli STM32 or OpenMower xESC controls on MAVROS.
-                if (hardwareBackend.backend === "openmower") {
-                    return <>{renderFieldCards(OPENMOWER_WHEEL_LOOP_GROUP)}</>;
+                if (hardwareBackend.backend === "openmower" || hardwareBackend.backend === "airseekers") {
+                    return <>{renderFieldCards(OPENMOWER_WHEEL_LOOP_GROUP, AIRSEEKERS_DRIVE_GROUP)}</>;
                 }
 
                 return (

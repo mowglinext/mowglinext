@@ -4,7 +4,8 @@
   "options": {
     "backend": {
       "none": [],
-      "openmower": ["docker-compose.openmower.yml"]
+      "openmower": ["docker-compose.openmower.yml"],
+      "airseekers": ["docker-compose.airseekers.yml"]
     },
     "gnss": {
       "none": [],

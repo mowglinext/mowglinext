@@ -2,7 +2,7 @@
 // Settings page sees them. The active one comes from GET
 // /settings/hardware-backend (gui/pkg/api/settings_backend.go).
 
-export type HardwareBackend = "mowgli" | "mavros" | "openmower";
+export type HardwareBackend = "mowgli" | "mavros" | "openmower" | "airseekers";
 
 export type HardwareParameterRoute = {
     parameter: string;
@@ -31,7 +31,9 @@ export interface HardwareBackendInfo {
 export const DEFAULT_HARDWARE_BACKEND: HardwareBackend = "mowgli";
 
 export const normalizeHardwareBackend = (value: unknown): HardwareBackend =>
-    value === "openmower" || value === "mavros" ? value : DEFAULT_HARDWARE_BACKEND;
+    value === "openmower" || value === "mavros" || value === "airseekers"
+        ? value
+        : DEFAULT_HARDWARE_BACKEND;
 
 /** True when an item limited to `backends` applies to `active` (no limit = all). */
 export const appliesToBackend = (
@@ -58,7 +60,7 @@ export const presetValuesForBackend = (
 };
 
 /**
- * All three hardware backends expose the Drive section.
+ * Every hardware backend exposes the Drive section.
  * SettingsPage selects the appropriate controls for each backend.
  */
 export const settingsSectionsForBackend = <T extends { id: string }>(
@@ -69,6 +71,7 @@ export const settingsSectionsForBackend = <T extends { id: string }>(
         case "mowgli":
         case "mavros":
         case "openmower":
+        case "airseekers":
             return [...sections];
     }
 };

@@ -27,8 +27,10 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
+#include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_interfaces/srv/get_recovery_point.hpp"
 #include "nav2_msgs/action/back_up.hpp"
+#include "nav2_msgs/action/drive_on_heading.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/srv/clear_entire_costmap.hpp"
 #include "nav2_msgs/srv/manage_lifecycle_nodes.hpp"
@@ -206,18 +208,159 @@ private:
 // BackUp
 // ---------------------------------------------------------------------------
 
-/// Calls the Nav2 /backup action to reverse the robot by a given distance.
-/// Used for undocking (reverse away from charger) and recovery (back away
-/// from unseen obstacles).
+/// One straight-line Nav2 behavior_server goal — /backup (reverse) or
+/// /drive_on_heading (forward). The two actions share the goal layout
+/// (target, speed, time_allowance), so BackUp drives both through this one
+/// halt-safe dispatch.
+template <class ActionT>
+struct StraightDriveGoal
+{
+  using GoalHandle = rclcpp_action::ClientGoalHandle<ActionT>;
+  using WrappedResult = typename GoalHandle::WrappedResult;
+
+  // One slot per dispatch: a halt can precede the goal response, and a late
+  // response must cancel that old goal even after this BT node is restarted.
+  struct GoalDispatch
+  {
+    std::mutex mutex;
+    bool halted{false};
+    typename GoalHandle::SharedPtr handle;
+  };
+
+  typename rclcpp_action::Client<ActionT>::SharedPtr action_client;
+  std::shared_ptr<GoalDispatch> goal_dispatch;
+  std::shared_future<typename GoalHandle::SharedPtr> goal_handle_future;
+  typename GoalHandle::SharedPtr goal_handle;
+  std::shared_future<WrappedResult> result_future;
+  bool result_requested{false};
+
+  /// Sends `target_x` (signed, base_link) at `speed` (signed like target_x).
+  /// FAILURE when the action server is not up within 5 s, else RUNNING.
+  BT::NodeStatus start(const rclcpp::Node::SharedPtr& node,
+                       const std::string& action_name,
+                       double target_x,
+                       double speed,
+                       double time_allowance_s)
+  {
+    if (!action_client)
+    {
+      action_client = rclcpp_action::create_client<ActionT>(node, action_name);
+    }
+    if (!action_client->wait_for_action_server(std::chrono::seconds(5)))
+    {
+      RCLCPP_ERROR(node->get_logger(),
+                   "BackUp: %s action server not available",
+                   action_name.c_str());
+      return BT::NodeStatus::FAILURE;
+    }
+
+    typename ActionT::Goal goal_msg{};
+    goal_msg.target.x = target_x;
+    goal_msg.target.y = 0.0;
+    goal_msg.speed = speed;
+    goal_msg.time_allowance = rclcpp::Duration::from_seconds(time_allowance_s);
+
+    goal_dispatch = std::make_shared<GoalDispatch>();
+    typename rclcpp_action::Client<ActionT>::SendGoalOptions options;
+    options.goal_response_callback =
+        [dispatch = goal_dispatch,
+         client = std::weak_ptr<rclcpp_action::Client<ActionT>>(action_client),
+         logger = node->get_logger()](typename GoalHandle::SharedPtr handle)
+    {
+      bool halted;
+      {
+        std::lock_guard<std::mutex> lock(dispatch->mutex);
+        dispatch->handle = handle;
+        halted = dispatch->halted;
+      }
+      if (halted)
+      {
+        cancelGoalQuietly(client.lock(), handle, logger, "BackUp");
+      }
+    };
+    goal_handle_future = action_client->async_send_goal(goal_msg, options);
+    goal_handle = nullptr;
+    result_requested = false;
+    return BT::NodeStatus::RUNNING;
+  }
+
+  BT::NodeStatus poll(const rclcpp::Logger& logger)
+  {
+    // Wait for goal acceptance
+    if (!goal_handle)
+    {
+      if (goal_handle_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+      {
+        return BT::NodeStatus::RUNNING;
+      }
+      goal_handle = goal_handle_future.get();
+      if (!goal_handle)
+      {
+        RCLCPP_ERROR(logger, "BackUp: goal rejected");
+        return BT::NodeStatus::FAILURE;
+      }
+    }
+
+    // Request result future only once
+    if (!result_requested)
+    {
+      result_future = action_client->async_get_result(goal_handle);
+      result_requested = true;
+    }
+
+    if (result_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+    {
+      return BT::NodeStatus::RUNNING;
+    }
+
+    auto wrapped = result_future.get();
+    if (wrapped.code == rclcpp_action::ResultCode::SUCCEEDED)
+    {
+      RCLCPP_INFO(logger, "BackUp: complete");
+      return BT::NodeStatus::SUCCESS;
+    }
+
+    RCLCPP_WARN(logger, "BackUp: action ended with code %d", static_cast<int>(wrapped.code));
+    return BT::NodeStatus::FAILURE;
+  }
+
+  void halt(const rclcpp::Logger& logger)
+  {
+    typename GoalHandle::SharedPtr handle;
+    if (goal_dispatch)
+    {
+      std::lock_guard<std::mutex> lock(goal_dispatch->mutex);
+      goal_dispatch->halted = true;
+      handle = goal_dispatch->handle;
+    }
+    if (handle)
+    {
+      cancelGoalQuietly(action_client, handle, logger, "BackUp");
+      RCLCPP_INFO(logger, "BackUp: halted, goal cancelled");
+    }
+    goal_handle = nullptr;
+  }
+};
+
+/// Drives the robot straight by a given distance through Nav2's
+/// behavior_server: reverse via /backup (the default), or forward via
+/// /drive_on_heading when `forward` is true. Used for undocking (away from
+/// the charger) and recovery (back away from unseen obstacles).
+///
+/// `forward` exists for robots that dock in REVERSE (charge contacts at the
+/// rear) and therefore have to drive forward off the dock: main_tree.xml binds
+/// it to {undock_forward} (mowgli_robot.yaml `undock_forward`) on the undock
+/// legs only. Recovery BackUps leave it at its default and always reverse.
 ///
 /// Input ports:
-///   backup_dist  (double, default "0.5") – distance to reverse in metres.
-///   backup_speed (double, default "0.15") – reverse speed in m/s.
+///   backup_dist  (double, default "0.5") – distance to drive in metres (> 0).
+///   backup_speed (double, default "0.15") – speed in m/s (> 0).
+///   forward      (bool, default "false") – drive forward instead of reversing.
 class BackUp : public BT::StatefulActionNode
 {
 public:
   using BackUpAction = nav2_msgs::action::BackUp;
-  using GoalHandle = rclcpp_action::ClientGoalHandle<BackUpAction>;
+  using DriveOnHeadingAction = nav2_msgs::action::DriveOnHeading;
 
   BackUp(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
@@ -226,8 +369,12 @@ public:
 
   static BT::PortsList providedPorts()
   {
-    return {BT::InputPort<double>("backup_dist", 0.5, "Distance to reverse (m)"),
-            BT::InputPort<double>("backup_speed", 0.15, "Reverse speed (m/s)")};
+    return {BT::InputPort<double>("backup_dist", 0.5, "Distance to drive (m)"),
+            BT::InputPort<double>("backup_speed", 0.15, "Speed (m/s)"),
+            BT::InputPort<bool>("forward",
+                                false,
+                                "Drive forward (/drive_on_heading) instead of reversing "
+                                "(/backup)")};
   }
 
   BT::NodeStatus onStart() override;
@@ -235,24 +382,12 @@ public:
   void onHalted() override;
 
 private:
-  using WrappedResult = rclcpp_action::ClientGoalHandle<BackUpAction>::WrappedResult;
   friend struct BackUpTestAccess;
 
-  // One slot per dispatch: a halt can precede the goal response, and a late
-  // response must cancel that old goal even after this BT node is restarted.
-  struct GoalDispatch
-  {
-    std::mutex mutex;
-    bool halted{false};
-    GoalHandle::SharedPtr handle;
-  };
-  std::shared_ptr<GoalDispatch> goal_dispatch_;
-
-  rclcpp_action::Client<BackUpAction>::SharedPtr action_client_;
-  std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
-  GoalHandle::SharedPtr goal_handle_;
-  std::shared_future<WrappedResult> result_future_;
-  bool result_requested_{false};
+  StraightDriveGoal<BackUpAction> reverse_;
+  StraightDriveGoal<DriveOnHeadingAction> forward_;
+  /// Direction of the goal in flight (latched in onStart).
+  bool driving_forward_{false};
 };
 
 // ---------------------------------------------------------------------------

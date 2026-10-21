@@ -100,7 +100,8 @@ export const FIRMWARE_SAFETY_GROUP: SettingsFieldGroup = {
         num("max_mps", 0.1, 0.6, 0.01, 2, "m/s"),
         num("one_wheel_lift_emergency_ms", 10, 5000, 10, 0, "ms", ["mowgli", "openmower"]),
         num("both_wheels_lift_emergency_ms", 10, 3000, 10, 0, "ms", ["mowgli", "openmower"]),
-        num("tilt_emergency_ms", 10, 1000, 10, 0, "ms", STM32_ONLY),
+        // Airseekers: the debounce of the bridge's own critical tilt trip.
+        num("tilt_emergency_ms", 10, 1000, 10, 0, "ms", ["mowgli", "airseekers"]),
         num("stop_button_emergency_ms", 10, 250, 10, 0, "ms", STM32_ONLY),
         num("play_button_clear_emergency_ms", 500, 10000, 100, 0, "ms", STM32_ONLY),
         num("imu_inclination_threshold", 44, 64, 1, 0, undefined, STM32_ONLY),
@@ -134,6 +135,40 @@ export const OPENMOWER_WHEEL_LOOP_GROUP: SettingsFieldGroup = {
         num("openmower_wheel_duty_per_mps", 0.1, 5, 0.05, 2),
         num("openmower_wheel_kp", 0, 10, 0.05, 2),
         num("openmower_wheel_ki", 0, 50, 0.1, 2),
+    ],
+};
+
+// Airseekers Tron: the serial devices of the vendor MCU, the IMU and the
+// panel keys, plus the deck height. Ports default from the installer
+// (docker/.env) until set here.
+export const AIRSEEKERS_WIRING_GROUP: SettingsFieldGroup = {
+    id: "airseekersWiring",
+    isSafetyRelevant: true,
+    backends: ["airseekers"],
+    fields: [
+        { key: "airseekers_mcu_port", kind: "text", placeholder: "/dev/serial_mower" },
+        { key: "airseekers_imu_port", kind: "text", placeholder: "/dev/serial_imu" },
+        { key: "airseekers_keys_device", kind: "text", placeholder: "/dev/keyboard" },
+        num("airseekers_cutter_height_mm", 30, 90, 5, 0, "mm"),
+        num("airseekers_imu_roll_offset_deg", -180, 180, 1, 1, "deg"),
+        num("airseekers_imu_pitch_offset_deg", -180, 180, 1, 1, "deg"),
+    ],
+};
+
+// The Tron's vendor MCU has no yaw loop: a yaw-rate cap and host-side
+// straight-line compensation (trim, deadband, heading hold).
+export const AIRSEEKERS_DRIVE_GROUP: SettingsFieldGroup = {
+    id: "airseekersDrive",
+    isSafetyRelevant: true,
+    backends: ["airseekers"],
+    fields: [
+        num("airseekers_max_angular_radps", 0.05, 0.3, 0.01, 2, "rad/s"),
+        num("airseekers_angular_trim_radps", -0.2, 0.2, 0.005, 3, "rad/s"),
+        num("airseekers_angular_deadband_radps", 0, 0.2, 0.005, 3, "rad/s"),
+        { key: "airseekers_heading_hold", kind: "switch" },
+        num("airseekers_heading_hold_kp", 0, 5, 0.1, 2),
+        num("airseekers_heading_hold_kd", 0, 2, 0.05, 2),
+        num("airseekers_heading_hold_max_radps", 0, 0.3, 0.01, 2, "rad/s"),
     ],
 };
 
@@ -232,6 +267,8 @@ export const ALL_FIELD_GROUPS: SettingsFieldGroup[] = [
     START_ESCAPE_GROUP,
     OPENMOWER_WIRING_GROUP,
     OPENMOWER_WHEEL_LOOP_GROUP,
+    AIRSEEKERS_WIRING_GROUP,
+    AIRSEEKERS_DRIVE_GROUP,
 ];
 
 export const groupKeys = (group: SettingsFieldGroup): string[] =>

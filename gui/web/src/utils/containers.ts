@@ -36,7 +36,7 @@ export const containerAction = async (
 };
 
 /** Hardware-bridge sidecars that read mowgli_robot.yaml at start-up. */
-const HARDWARE_BRIDGE_SIDECARS = ["mowgli-openmower"];
+const HARDWARE_BRIDGE_SIDECARS = ["mowgli-openmower", "mowgli-airseekers"];
 
 /**
  * Restart the ROS2 container, and the hardware-bridge sidecar when the robot

@@ -785,6 +785,12 @@ struct BTContext
   double undock_start_y{0.0};
   bool undock_start_recorded{false};
 
+  /// mowgli_robot.yaml `undock_forward` (also on the blackboard as
+  /// {undock_forward} for the undock BackUps): the robot docks in reverse and
+  /// undocks DRIVING FORWARD, so CalibrateHeadingFromUndock reads its heading
+  /// along the undock motion instead of opposite it. Set once at startup.
+  bool undock_forward{false};
+
   /// GPS samples (map-frame x, y) accumulated by the GPS subscriber while
   /// undock_start_recorded is true. CalibrateHeadingFromUndock fits a line
   /// through these to derive yaw with ~3× the precision of just using the

@@ -38,8 +38,9 @@ func (e FirmwareProtocolMismatch) Error() string {
 	return fmt.Sprintf("target requires a different mainboard firmware protocol (running %d, update requires %d); flash the matching firmware first, or confirm the firmware change to install now and flash from the new interface", e.Running, e.Required)
 }
 
-// FirmwareProtocolExempt is true on the OpenMower backend. Its bridge talks to
-// the stock OpenMower LowLevel and xESC firmware, so a release's
+// FirmwareProtocolExempt is true on the OpenMower and Airseekers backends.
+// Their bridges talk to stock vendor firmware (OpenMower LowLevel/xESC, the
+// Tron MCU), so a release's
 // firmware_protocol (the Mowgli STM32 wire protocol) does not describe that
 // board, and the bridge reports protocol 0. The mower readiness verdict
 // (fresh, idle, stationary, blade-off, firmware_compatible) still applies in
@@ -47,7 +48,14 @@ func (e FirmwareProtocolMismatch) Error() string {
 // GUI response can waive the check on a Mowgli board.
 func (b DockerBackend) FirmwareProtocolExempt() bool {
 	env, err := godotenv.Read(filepath.Join(b.Config.Directory, ".env"))
-	return err == nil && strings.TrimSpace(env["HARDWARE_BACKEND"]) == "openmower"
+	if err != nil {
+		return false
+	}
+	switch strings.TrimSpace(env["HARDWARE_BACKEND"]) {
+	case "openmower", "airseekers":
+		return true
+	}
+	return false
 }
 
 // checkFirmwareProtocol is firmwareProtocolChange, waived where the release's

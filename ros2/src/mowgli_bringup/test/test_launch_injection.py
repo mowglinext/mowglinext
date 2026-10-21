@@ -516,6 +516,22 @@ def test_cross_hatch_setting_reaches_behavior_tree() -> None:
                     {"robot_params": config}) is expected
 
 
+def test_undock_forward_reaches_behavior_tree() -> None:
+    """undock_forward picks the undock direction (forward="{undock_forward}" on
+    the undock BackUps, heading sign in CalibrateHeadingFromUndock). The
+    Airseekers backend sets it true; losing this line would silently make that
+    robot reverse into its charge contacts on every undock."""
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    values = _node_parameter_values(call, "undock_forward")
+    assert len(values) == 1, "behavior_tree_node must receive undock_forward exactly once"
+    expression = compile(ast.Expression(values[0]), "full_system.launch.py", "eval")
+    for config, expected in [({}, False), ({"undock_forward": False}, False),
+                             ({"undock_forward": True}, True)]:
+        assert eval(expression, {"__builtins__": {}, "bool": bool},
+                    {"robot_params": config}) is expected
+
+
 def test_home_assistant_discovery_setting_reaches_mqtt_bridge() -> None:
     """The GUI setting must reach the node that publishes discovery records."""
     call = _find_node_call(_parse("full_system.launch.py"), "mqtt_bridge_node")

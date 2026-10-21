@@ -1,0 +1,81 @@
+# Package defaults of the Airseekers hardware bridge (mowgli_airseekers_bridge).
+# Internal knobs only. Everything an operator sets lives in mowgli_robot.yaml
+# (template + config/backends/airseekers.yaml defaults + the robot's sparse
+# file) and is layered on top of this by launch/airseekers_bridge.launch.py.
+hardware_bridge:
+  ros__parameters:
+    # ── serial links (overridden from mowgli_robot.yaml airseekers_* keys) ──
+    mcu_port: "/dev/serial_mower"   # vendor MCU, 115200 8N1 (fixed by the MCU)
+    mcu_baud: 115200
+    imu_enabled: true
+    imu_port: "/dev/serial_imu"     # WIT JY61P
+    imu_baud: 115200
+    keys_enabled: true
+    keys_device: ""                 # "" = find the "key input" device
+
+    # ── timing ────────────────────────────────────────────────────────────
+    heartbeat_period_s: 0.1         # what the vendor host sends (measured)
+    control_rate: 20.0              # Hz — SpeedData while moving, blade gate
+    odom_rate: 50.0                 # Hz — /wheel_odom + /wheel_ticks
+    status_rate: 10.0               # Hz — status / emergency
+    mcu_status_timeout_s: 0.5       # no SensorInfo this long -> wheels + blade held
+    mcu_reopen_timeout_s: 2.0       # no bytes this long -> reopen the port
+    imu_timeout_s: 0.5
+    cmd_vel_timeout_s: 0.5          # stale /cmd_vel -> stop sequence
+    high_level_status_timeout_s: 5.0  # blade watchdog on the behaviour tree
+
+    # ── command shaping (same slew numbers as hardware_bridge.yaml) ───────
+    wheel_track: 0.48
+    ticks_per_meter: 1000.0         # scale of the DERIVED /wheel_ticks
+    max_mps: 0.3
+    max_angular_radps: 0.3
+    min_linear_vel: 0.0
+    cmd_vel_linear_accel_limit: 0.30
+    cmd_vel_linear_decel_limit: 0.60
+    cmd_vel_angular_accel_limit: 1.0
+    cmd_vel_angular_decel_limit: 2.0
+    stop_frames: 3                  # zeros that end every motion
+    stop_frame_spacing_s: 0.1
+    docked_allow_reverse: false     # the Tron reverses onto its charger
+    angular_trim_radps: 0.0
+    angular_deadband_radps: 0.0
+    heading_hold: false
+    heading_hold_kp: 1.0
+    heading_hold_kd: 0.1
+    heading_hold_max_radps: 0.15
+    odom_angular_source: "imu"      # imu (gyro z, what the vendor used) | mcu
+
+    # ── blade ─────────────────────────────────────────────────────────────
+    mowing_enabled: true
+    blade_speed_percent: 100
+    cutter_height_mm: 90            # 30..90; live: ros2 param set
+    blade_off_frames: 3
+
+    # ── charging ──────────────────────────────────────────────────────────
+    charging_current_min_a: 0.2
+    charge_on_dock: true            # ChargeControl(1) on dock arrival
+    charge_refresh_s: 30.0
+
+    # ── IMU ───────────────────────────────────────────────────────────────
+    imu_frame_id: "imu_link"
+    forward_imu: true               # the MCU needs it (lift detection)
+    forward_imu_rate: 45.0
+    forward_imu_roll_offset_deg: 0.0
+    forward_imu_pitch_offset_deg: 0.0
+    orientation_rp_covariance: 0.02
+    orientation_yaw_covariance: 1.0
+    angular_velocity_covariance: 0.005
+    linear_acceleration_covariance: 0.05
+    imu_cal_samples: 200
+    imu_cal_auto_rest_sec: 15.0
+
+    # ── emergency sources ─────────────────────────────────────────────────
+    tilt_emergency_enabled: true
+    tilt_critical_roll_deg: 30.0    # below the MCU's own lift window (38.5)
+    tilt_critical_pitch_deg: 32.0   # below the MCU's own lift window (-36.8/+40.1)
+    tilt_emergency_ms: 300
+    bumper_is_emergency: false
+    latch_emergency_on_boot: true
+
+    # ── panel keys ────────────────────────────────────────────────────────
+    power_short_resets_emergency: true

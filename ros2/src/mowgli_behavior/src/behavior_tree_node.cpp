@@ -1326,6 +1326,15 @@ private:
     blackboard_->set("undock_speed", undock_speed);
     const double undock_distance = declare_parameter<double>("undock_distance", 1.0);
     blackboard_->set("undock_distance", undock_distance);
+    // undock_forward (default false = reverse off the dock via /backup): a
+    // robot whose charge contacts are at the REAR docks in reverse and must
+    // drive forward off the dock. Read by the undock BackUps as
+    // forward="{undock_forward}" (/drive_on_heading) and by
+    // CalibrateHeadingFromUndock, which then reads the heading along the
+    // motion instead of opposite it.
+    const bool undock_forward = declare_parameter<bool>("undock_forward", false);
+    blackboard_->set("undock_forward", undock_forward);
+    context_->undock_forward = undock_forward;
 
     // idle_nav2_suspend (default false): when true, the BT PAUSEs the Nav2
     // lifecycle stack (via SetNav2Lifecycle) while parked on the dock to cut

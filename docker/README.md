@@ -190,8 +190,9 @@ ships; the full installer writes many more (`GNSS_*`, `LIDAR_TYPE`,
 | `GPS_IMAGE` | `ghcr.io/mowglinext/mowglinext/gps:main` | Universal GNSS sidecar + NTRIP client |
 | `LIDAR_IMAGE` | `ghcr.io/mowglinext/mowglinext/lidar-ldlidar:main` | LD19 LiDAR driver |
 | `MAVROS_IMAGE` | `ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:latest` | MAVROS bridge |
-| `GUI_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web GUI |
 | `OPENMOWER_IMAGE` | `ghcr.io/mowglinext/mowglinext/openmower:main` | OpenMower electronics bridge (`HARDWARE_BACKEND=openmower`) |
+| `AIRSEEKERS_IMAGE` | `ghcr.io/mowglinext/mowglinext/airseekers:main` | Airseekers Tron bridge (`HARDWARE_BACKEND=airseekers`) |
+| `GUI_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web GUI |
 For Universal GNSS, set `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...` — note that
 `gnss_serial_device` in `mowgli_robot.yaml` wins over the env value when both
 are set. The legacy `GPS_PORT` / `GPS_BAUD` / `GPS_PROTOCOL` keys are obsolete;

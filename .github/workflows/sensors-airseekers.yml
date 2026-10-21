@@ -1,0 +1,181 @@
+name: Sensors — Airseekers bridge
+
+on:
+  push:
+    tags: ['v*.*.*']
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
+    paths:
+      - 'sensors/airseekers/**'
+      - 'ros2/src/mowgli_interfaces'
+      - 'ros2/src/mowgli_interfaces/**'
+      - 'ros2/src/mowgli_bringup/config/mowgli_robot.yaml'
+      - 'ros2/src/mowgli_bringup/config/backends/airseekers.yaml'
+      - '.github/workflows/sensors-airseekers.yml'
+      - '.github/workflows/_sensor-docker.yml'
+  workflow_dispatch:
+    inputs:
+      no-cache:
+        description: 'Build without Docker layer cache'
+        type: boolean
+        default: false
+
+concurrency:
+  group: sensors-airseekers-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/_sensor-docker.yml
+    with:
+      image: airseekers
+      context: .
+      dockerfile: sensors/airseekers/Dockerfile
+      smoke-test: |
+        set -euo pipefail
+        set +u
+        source /opt/ros/lyrical/setup.bash
+        source /opt/airseekers_bridge/setup.bash
+        set -u
+        ros2 pkg list | grep -x mowgli_interfaces
+        ros2 pkg list | grep -x mowgli_airseekers_bridge
+        ros2 pkg list | grep -x um960_gps_driver
+        ros2 pkg executables mowgli_airseekers_bridge | grep -x "mowgli_airseekers_bridge airseekers_bridge_node"
+        ros2 pkg executables um960_gps_driver | grep -x "um960_gps_driver um960_node"
+        test -f "$(ros2 pkg prefix mowgli_airseekers_bridge)/share/mowgli_airseekers_bridge/launch/airseekers_bridge.launch.py"
+        test -f "$(ros2 pkg prefix mowgli_airseekers_bridge)/share/mowgli_airseekers_bridge/config/airseekers_bridge.yaml"
+        test -x /start_airseekers.sh
+        test -f /opt/airseekers_bridge/mowgli_robot.template.yaml
+        test -f /opt/airseekers_bridge/backend_defaults.yaml
+        python3 - <<'PY'
+        from mowgli_interfaces.msg import Emergency, GnssStatus, Power, Status, WheelTick
+        from mowgli_interfaces.srv import EmergencyStop, MowerControl
+        import mowgli_airseekers_bridge.bridge_node  # imports every module
+        import um960_gps_driver.um960_node
+        assert hasattr(Status, "firmware_compatible")
+        assert hasattr(GnssStatus, "position_observation_sequence")
+        PY
+      no-cache: ${{ inputs.no-cache == true }}
+
+  # ---------------------------------------------------------------------------
+  # sensors/airseekers is OUTSIDE the ros2/ colcon workspace, so "ROS2 — CI"
+  # never sees it. This job runs the pure-Python unit tests of both packages
+  # (protocol, safety model, launch layering, emulator rules, UM960 parsers,
+  # NTRIP client) against the real rclpy / message packages.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test mowgli_airseekers_bridge + um960_gps_driver
+    runs-on: ubuntu-latest
+    container: ros:lyrical-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake python3-colcon-common-extensions python3-pytest python3-yaml \
+            ros-lyrical-ament-cmake ros-lyrical-geometry-msgs ros-lyrical-launch \
+            ros-lyrical-launch-ros ros-lyrical-nav-msgs ros-lyrical-rclpy \
+            ros-lyrical-rosidl-default-generators ros-lyrical-rosidl-default-runtime \
+            ros-lyrical-sensor-msgs ros-lyrical-std-msgs ros-lyrical-std-srvs
+
+      - name: Build the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /ws/src
+          cp -r ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces
+          cp -r sensors/airseekers/um960_gps_driver /ws/src/um960_gps_driver
+          cp -r sensors/airseekers/mowgli_airseekers_bridge /ws/src/mowgli_airseekers_bridge
+          chown -R ubuntu:ubuntu /ws
+          runuser -u ubuntu -- bash <<'BUILD'
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          cd /ws
+          colcon build --packages-up-to mowgli_airseekers_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -Wno-dev \
+            --event-handlers console_cohesion+
+          BUILD
+
+      - name: Unit tests
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          source /ws/install/setup.bash
+          python3 -m pytest -q -p no:cacheprovider \
+            sensors/airseekers/mowgli_airseekers_bridge/test \
+            sensors/airseekers/sim/test_emulator.py
+          cd sensors/airseekers/um960_gps_driver
+          python3 -m pytest -q -p no:cacheprovider test
+
+  # ---------------------------------------------------------------------------
+  # The Tron hardware simulation (sensors/airseekers/sim/): the real bridge and
+  # UM960 node, through their production launch file, against the emulated
+  # MCU / IMU / GNSS / panel keys. Ends with a SIGKILL of the bridge mid-mow.
+  # ---------------------------------------------------------------------------
+  simulate:
+    name: Simulate Airseekers Tron hardware
+    runs-on: ubuntu-latest
+    container: ros:lyrical-ros-base
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake python3-colcon-common-extensions python3-yaml \
+            ros-lyrical-ament-cmake ros-lyrical-geometry-msgs ros-lyrical-launch \
+            ros-lyrical-launch-ros ros-lyrical-nav-msgs ros-lyrical-rclpy \
+            ros-lyrical-rmw-cyclonedds-cpp \
+            ros-lyrical-rosidl-default-generators ros-lyrical-rosidl-default-runtime \
+            ros-lyrical-sensor-msgs ros-lyrical-std-msgs ros-lyrical-std-srvs
+
+      - name: Build the workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /ws/src
+          cp -r ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces
+          cp -r sensors/airseekers/um960_gps_driver /ws/src/um960_gps_driver
+          cp -r sensors/airseekers/mowgli_airseekers_bridge /ws/src/mowgli_airseekers_bridge
+          chown -R ubuntu:ubuntu /ws
+          runuser -u ubuntu -- bash <<'BUILD'
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          cd /ws
+          colcon build --packages-up-to mowgli_airseekers_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -Wno-dev \
+            --event-handlers console_cohesion+
+          BUILD
+
+      - name: Run the simulation
+        shell: bash
+        run: |
+          mkdir -p /tmp/simlogs && chown ubuntu:ubuntu /tmp/simlogs
+          runuser -u ubuntu -- bash <<SIM
+          set -eo pipefail
+          source /opt/ros/lyrical/setup.bash
+          source /ws/install/setup.bash
+          export ROS_DOMAIN_ID=47
+          python3 "$GITHUB_WORKSPACE/sensors/airseekers/sim/run_simulation.py" --logdir /tmp/simlogs
+          SIM
+
+      - name: Upload simulation logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: airseekers-simulation-logs
+          path: /tmp/simlogs

@@ -36,12 +36,12 @@ export const HardwareBackendSection: React.FC<Props> = ({ backend, children }) =
                     {t("settingsHardwareBackend.choiceNote")}
                 </Paragraph>
             </Card>
-            {backend === "openmower" ? (
+            {backend === "openmower" || backend === "airseekers" ? (
                 <Alert
                     type="info"
                     showIcon
                     style={{ marginBottom: 16 }}
-                    message={t("settingsHardwareBackend.openmowerRestartNote")}
+                    message={t(`settingsHardwareBackend.${backend}RestartNote`)}
                 />
             ) : null}
             {children}

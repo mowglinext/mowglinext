@@ -1,0 +1,38 @@
+# Backend defaults for HARDWARE_BACKEND=airseekers (Airseekers Tron: vendor
+# chassis/cutter MCU, WIT JY61P IMU, Unicore UM960 behind the rover board).
+#
+# Layered between the template and the installed config (Invariant 15):
+#     template  <-  THIS FILE  <-  installed mowgli_robot.yaml
+# by robot_config_util.load_robot_config (mowgli-ros2), by the Airseekers
+# bridge sidecar's launch file, and by the GUI's "default" / reset-to-default
+# (gui/asserts/backend_defaults.json, generated from this file).
+#
+# Only keys whose MowgliNext DEFAULT is wrong for this hardware belong here --
+# the keys themselves are shared with every backend. Airseekers-only settings
+# (ports, deck height, straight-driving trim) are airseekers_* template keys.
+mowgli:
+  ros__parameters:
+    # Drive: the MCU clamps |linear| to 0.3 m/s (vendor value); the bridge
+    # mirrors it so the planners' targets are reachable. Track: centre-to-
+    # centre of the drive wheels (vendor URDF 2 x 0.24 m; measure your robot).
+    wheel_track: 0.48
+    max_mps: 0.3
+    # The sidecar publishes /gps/fix + /gps/status itself from the UM960
+    # (gnss_stack "disabled" = "a backend that publishes /gps/* itself").
+    gnss_stack: "disabled"
+    gnss_serial_device: "/dev/serial_rtk"
+    gnss_serial_baud: 115200
+    # Pack voltages for the BT's voltage-derived battery_percent. ESTIMATES
+    # from two live readings (24.8 V at 99 % on the dock, 19.7 V at 31 %);
+    # measure a full discharge before relying on them (README "Open
+    # measurements").
+    battery_full_voltage: 24.6
+    battery_empty_voltage: 20.0
+    battery_critical_voltage: 19.5
+    # Host tilt trip debounce (the bridge's critical tilt band). The vendor
+    # MCU has no tilt trip of its own short of its lift window.
+    tilt_emergency_ms: 300
+    # The Tron reverses onto its charger (rear contacts, rear marker), so it
+    # leaves the dock driving FORWARD; reversing there only pushes into the
+    # contacts, and the bridge refuses reverse motion while docked anyway.
+    undock_forward: true
