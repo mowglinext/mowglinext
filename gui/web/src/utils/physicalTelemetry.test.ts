@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {decodePower, decodeBladeMeasurements, decodeWheelTicks} from './physicalTelemetry';
 import {bladeTelemetry, motorDisplayValue, wheelControllerFromDiagnostics, wheelRpmBetween} from './motorTelemetry';
 const escDiagnostic = (role = 'left_wheel', fields: Record<string, string> = {}) => ({status: [{
-    name: `mowgli_mavros_bridge/vesc_${role}`, message: 'online', hardware_id: '', level: 0, receivedAt: 10000,
+    name: `mowgli_mavros_bridge/vesc_${role}`, message: 'online', hardware_id: '', level: 0, receivedAt: 10000, receivedMonotonic: 10000,
     values: Object.entries({online: 'true', stale: 'false', age_ms: '100', current_a: '2.5', ...fields})
         .map(([key, value]) => ({key, value})),
 }]});
