@@ -54,6 +54,17 @@ type peerCache struct {
 	socketUp   bool
 	identity   *RobotIdentity
 	expectedID string // empty only for the local robot's cache
+	coverage   *coverageObservation
+	// Not reset on disconnect: order deliveries even with a fixed test clock.
+	coverageSequence uint64
+}
+
+// One topic delivery, not one read of the cache. The pointer remains stable
+// across snapshots; a new delivery gets a new identity even at the same clock
+// instant. This is receipt provenance, not a ROS acquisition timestamp.
+type coverageObservation struct {
+	receivedAt time.Time
+	sequence   uint64
 }
 
 func newPeerCache() *peerCache {
@@ -69,6 +80,10 @@ func (c *peerCache) store(topic string, data json.RawMessage, now time.Time) {
 	c.topics[topic] = data
 	c.stamps[topic] = now
 	c.lastSeen = now
+	if topic == "coverageSession" {
+		c.coverageSequence++
+		c.coverage = &coverageObservation{receivedAt: now, sequence: c.coverageSequence}
+	}
 }
 
 func (c *peerCache) setSocket(up bool) {
@@ -94,6 +109,7 @@ func (c *peerCache) clearLocked() {
 	c.stamps = map[string]time.Time{}
 	c.lastSeen = time.Time{}
 	c.socketUp = false
+	c.coverage = nil
 }
 
 func (c *peerCache) invalidateIdentity() {
@@ -105,13 +121,30 @@ func (c *peerCache) invalidateIdentity() {
 // Identity and topics must be qualified under one lock; separate reads could
 // combine an old identity with a newly replaced peer's data.
 func (c *peerCache) snapshotForIdentity(expectedID string, now time.Time) (RobotIdentity, map[string]json.RawMessage, map[string]float64, time.Time, bool) {
+	r := c.robotSnapshot(expectedID, now)
+	var seen time.Time
+	if r.LastSeen != nil {
+		seen = *r.LastSeen
+	}
+	return r.Identity, r.Topics, r.TopicAgeS, seen, r.Online
+}
+
+// Include receipt identity under the SAME qualification lock as FLT-04. An
+// invalidated/reconnected peer cannot attach an old receipt to new topics.
+func (c *peerCache) robotSnapshot(expectedID string, now time.Time) FleetRobot {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.identity == nil || c.identity.ID != expectedID || c.identity.APIVersion != FleetAPIVersion {
-		return RobotIdentity{}, map[string]json.RawMessage{}, map[string]float64{}, time.Time{}, false
+	r := FleetRobot{Topics: map[string]json.RawMessage{}, TopicAgeS: map[string]float64{}}
+	if expectedID != "" && (c.identity == nil || c.identity.ID != expectedID || c.identity.APIVersion != FleetAPIVersion) {
+		return r
 	}
 	topics, ages, seen, online := c.snapshotLocked(now)
-	return *c.identity, topics, ages, seen, online
+	if c.identity != nil {
+		r.Identity = *c.identity
+	}
+	r.Topics, r.TopicAgeS, r.LastSeen, r.Online = topics, ages, timePtr(seen), online
+	r.coverageObservation = c.coverage
+	return r
 }
 
 // identitySnapshot returns the last identity the peer advertised, if any.

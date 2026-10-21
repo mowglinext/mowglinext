@@ -59,6 +59,9 @@ type FleetRobot struct {
 	// Age of each cached topic in seconds — consumers that place a robot on
 	// the lawn (peer feed, yield rule) must ignore stale samples.
 	TopicAgeS map[string]float64 `json:"topic_age_s"`
+	// Internal receipt identity, copied atomically with the qualified topics.
+	// Deliberately absent from the browser/API wire format.
+	coverageObservation *coverageObservation
 }
 
 // FleetProvider owns the peer registry and the per-peer mirrors.
@@ -355,15 +358,9 @@ func (f *FleetProvider) Robots() ([]FleetRobot, error) {
 		return nil, err
 	}
 	now := f.now()
-	topics, ages, seen, _ := f.self.snapshot(now)
-	rows := []FleetRobot{{
-		Identity:  self,
-		Self:      true,
-		Online:    true,
-		LastSeen:  timePtr(seen),
-		Topics:    topics,
-		TopicAgeS: ages,
-	}}
+	selfRow := f.self.robotSnapshot("", now)
+	selfRow.Identity, selfRow.Self, selfRow.Online = self, true, true
+	rows := []FleetRobot{selfRow}
 	f.mu.Lock()
 	peers := f.sortedPeersLocked()
 	clients := make(map[string]*peerClient, len(f.clients))
@@ -381,11 +378,12 @@ func (f *FleetProvider) Robots() ([]FleetRobot, error) {
 		if c := clients[p.ID]; c != nil {
 			// The live identity carries the peer's datum (and a renamed robot's
 			// new name); the registry only knows what it learnt at add time.
-			id, topics, ages, seen, online := c.cache.snapshotForIdentity(p.ID, now)
-			if id.ID != "" {
-				row.Identity = id
+			qualified := c.cache.robotSnapshot(p.ID, now)
+			if qualified.Identity.ID != "" {
+				row.Identity = qualified.Identity
 			}
-			row.Topics, row.TopicAgeS, row.LastSeen, row.Online = topics, ages, timePtr(seen), online
+			row.Topics, row.TopicAgeS, row.LastSeen, row.Online = qualified.Topics, qualified.TopicAgeS, qualified.LastSeen, qualified.Online
+			row.coverageObservation = qualified.coverageObservation
 		}
 		rows = append(rows, row)
 	}

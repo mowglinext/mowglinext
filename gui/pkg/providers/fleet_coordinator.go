@@ -52,14 +52,15 @@ type FleetCoordinator struct {
 	identity func() (RobotIdentity, error)
 	now      func() time.Time
 
-	tickMu     sync.Mutex // serialize ticker and immediate settings/reset ticks
-	mu         sync.Mutex
-	memory     map[uint32]time.Time
-	lastPushed *FleetAssignment
-	lastPushAt time.Time
-	yield      yieldState
-	wasEnabled bool
-	lastError  string
+	tickMu                 sync.Mutex // serialize ticker and immediate settings/reset ticks
+	mu                     sync.Mutex
+	memory                 map[uint32]time.Time
+	completionObservations map[string]completionObservation
+	lastPushed             *FleetAssignment
+	lastPushAt             time.Time
+	yield                  yieldState
+	wasEnabled             bool
+	lastError              string
 	// Disabled startup or transition is not finished until the BT accepts the
 	// empty assignment. Failed calls may have applied, so retain explicit intent.
 	clearPending     bool
@@ -78,14 +79,15 @@ func NewFleetCoordinator(db types.IDBProvider, ros types.IRosProvider, fleet *Fl
 
 func newFleetCoordinator(db types.IDBProvider, ros types.IRosProvider, snapshot func() ([]FleetRobot, error), identity func() (RobotIdentity, error), now func() time.Time) *FleetCoordinator {
 	c := &FleetCoordinator{
-		db:       db,
-		ros:      ros,
-		snapshot: snapshot,
-		identity: identity,
-		now:      now,
-		memory:   map[uint32]time.Time{},
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
+		db:                     db,
+		ros:                    ros,
+		snapshot:               snapshot,
+		identity:               identity,
+		now:                    now,
+		memory:                 map[uint32]time.Time{},
+		completionObservations: map[string]completionObservation{},
+		stop:                   make(chan struct{}),
+		done:                   make(chan struct{}),
 		// The BT can outlive the GUI process with an earlier assignment. On
 		// disabled startup, reconcile it until acknowledged; enabled startup
 		// supersedes this intent before computing its current assignment.
@@ -174,11 +176,23 @@ func (c *FleetCoordinator) Status() CoordinatorStatus {
 // a true "start fresh" also clear each member's coverage resume (the Fleet
 // page does both).
 func (c *FleetCoordinator) Reset() error {
+	// Do not let an in-flight tick persist its pre-reset memory afterwards.
+	c.tickMu.Lock()
 	c.mu.Lock()
 	c.memory = map[uint32]time.Time{}
+	// Keep receipt identity and membership as a replay barrier. Forget only
+	// completion times: the still-cached set must not undo Start fresh.
+	// A subsequently observed absence then completion gets a new timestamp.
+	for _, observation := range c.completionObservations {
+		for area := range observation.areas {
+			observation.areas[area] = time.Time{}
+		}
+	}
 	c.lastPushed = nil
 	c.mu.Unlock()
-	if err := c.saveMemory(map[uint32]time.Time{}); err != nil {
+	err := c.saveMemory(map[uint32]time.Time{})
+	c.tickMu.Unlock()
+	if err != nil {
 		return err
 	}
 	c.tick(c.now())
@@ -242,7 +256,7 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	self, peers := splitMembers(members)
 
 	c.mu.Lock()
-	memory := updateCompletedMemory(c.memory, members, now, time.Duration(settings.CompletedTTLHours*float64(time.Hour)))
+	memory := updateCompletedMemory(c.memory, members, now, time.Duration(settings.CompletedTTLHours*float64(time.Hour)), c.completionObservations)
 	memoryChanged := !reflect.DeepEqual(memory, c.memory)
 	c.memory = memory
 	assignment := computeAssignment(self, peers, memory)
