@@ -10,6 +10,7 @@ interface JoystickOverlayProps {
     visible: boolean;
     isRecording?: boolean;
     mobile?: boolean;
+    onStart?: () => void;
     onMove: (event: IJoystickUpdateEvent) => void;
     onStop: () => void;
     onFinishRecording?: () => Promise<void>;
@@ -19,7 +20,7 @@ interface JoystickOverlayProps {
 
 export const JoystickOverlay = ({
     visible, isRecording, mobile,
-    onMove, onStop, onFinishRecording, onCancelRecording, onHome,
+    onStart, onMove, onStop, onFinishRecording, onCancelRecording, onHome,
 }: JoystickOverlayProps) => {
     const {colors, displayMode} = useThemeMode();
     const {t} = useTranslation();
@@ -74,6 +75,7 @@ export const JoystickOverlay = ({
                     baseColor={baseColor}
                     stickColor={stickColor}
                     stickSize={Math.round(size * 0.42)}
+                    start={onStart}
                     move={onMove}
                     stop={onStop}
                     throttle={50}

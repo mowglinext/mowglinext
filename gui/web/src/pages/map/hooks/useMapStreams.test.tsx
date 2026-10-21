@@ -3,16 +3,18 @@ import {act, renderHook} from '@testing-library/react';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {Map as MapboxMap} from 'mapbox-gl';
 import {useMapStreams} from './useMapStreams';
+import {useManualMode} from './useManualMode';
+import type {TwistStamped} from '../../../types/ros';
 
-type Stream = {start: ReturnType<typeof vi.fn<(uri: string) => void>>; stop: ReturnType<typeof vi.fn<() => void>>; sendJsonMessage: ReturnType<typeof vi.fn<(message: unknown) => void>>};
+type Stream = {start: ReturnType<typeof vi.fn<(uri: string) => void>>; stop: ReturnType<typeof vi.fn<() => void>>; sendJsonMessage: ReturnType<typeof vi.fn<(message: unknown, keep?: boolean) => void>>; open: () => void; error: () => void};
 const mock = vi.hoisted(() => ({
     stateName: 'IDLE',
     streams: [] as Stream[],
     highStart: vi.fn<(uri: string) => void>(), highStop: vi.fn<() => void>(),
 }));
-vi.mock('../../../hooks/useWS.ts', () => ({useWS: () => {
+vi.mock('../../../hooks/useWS.ts', () => ({useWS: (onError: (error: Error) => void, onInfo: (message: string) => void) => {
     const [stream] = useState(() => {
-        const value = {start: vi.fn<(uri: string) => void>(), stop: vi.fn<() => void>(), sendJsonMessage: vi.fn<(message: unknown) => void>()};
+        const value = {start: vi.fn<(uri: string) => void>(), stop: vi.fn<() => void>(), sendJsonMessage: vi.fn<(message: unknown, keep?: boolean) => void>(), open: () => onInfo("Stream connected"), error: () => onError(new Error("Stream closed"))};
         mock.streams.push(value);
         return value;
     });
@@ -80,4 +82,34 @@ describe('map stream dependency transitions', () => {
         expect(joy.stop).toHaveBeenCalledOnce();
         unmount();
     });
+    it('never queues motion or revives a held gesture across a publisher reconnect', () => {
+        mock.stateName = 'MANUAL_MOWING';
+        const initial = options();
+        const {result, unmount} = renderHook(() => {
+            const streams = useMapStreams(initial);
+            const manual = useManualMode({mowerAction: () => () => Promise.resolve(), joyStream: streams.joyStream, stateName: mock.stateName});
+            return {streams, manual};
+        });
+        const raw = mock.streams.find(s => s.start === result.current.streams.joyStream.start)!;
+        const move = {type: 'move' as const, x: 0, y: 1, direction: null, distance: null};
+        const nonzero = () => raw.sendJsonMessage.mock.calls.filter(([m]) => (m as TwistStamped).twist?.linear?.x !== 0).length;
+        act(() => { result.current.manual.handleJoyStart(); result.current.manual.handleJoyMove(move); vi.advanceTimersByTime(200); });
+        expect(raw.sendJsonMessage).not.toHaveBeenCalled();
+        act(() => raw.open());
+        act(() => { vi.advanceTimersByTime(200); });
+        expect(nonzero()).toBe(0);
+        act(() => { result.current.manual.handleJoyStart(); result.current.manual.handleJoyMove(move); });
+        expect(nonzero()).toBe(1);
+        // Disconnect and reconnect before even one repeat timer gets a turn.
+        act(() => { raw.error(); raw.open(); result.current.manual.handleJoyMove(move); vi.advanceTimersByTime(500); });
+        expect(nonzero()).toBe(1);
+        act(() => { result.current.manual.handleJoyStart(); result.current.manual.handleJoyMove(move); });
+        expect(nonzero()).toBe(2);
+        expect(raw.sendJsonMessage.mock.calls.every(([, keep]) => keep === false)).toBe(true);
+        unmount();
+        const count = nonzero();
+        act(() => { vi.runAllTimers(); });
+        expect(nonzero()).toBe(count);
+    });
+
 });

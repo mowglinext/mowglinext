@@ -1,5 +1,5 @@
 import {settingsCoordinate} from '../../../utils/settingsContract';
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Map as MapboxMap } from "mapbox-gl";
 import { useWS } from "../../../hooks/useWS.ts";
 import { useHighLevelStatus } from "../../../hooks/useHighLevelStatus.ts";
@@ -172,13 +172,23 @@ export function useMapStreams({
         }
     );
 
-    const joyStream = useWS<string>(
-        () => {
-        },
-        () => {
-        },
-        () => {}
+    const motionSession = useRef({connected: false, generation: 0});
+    const rawJoyStream = useWS<string>(
+        () => { motionSession.current.connected = false; motionSession.current.generation++; },
+        () => { motionSession.current.connected = true; motionSession.current.generation++; },
+        () => {},
     );
+    const {sendJsonMessage: sendRawJoy} = rawJoyStream;
+    const readMotionSession = useCallback(() => motionSession.current, []);
+    const sendJoyMessage = useCallback((message: unknown) => {
+        if (motionSession.current.connected) sendRawJoy(message, false);
+    }, [sendRawJoy]);
+    const joyStream = useMemo(() => ({
+        ...rawJoyStream,
+        motionSession: readMotionSession,
+        // Commands are live input, never a queue to replay after reconnect.
+        sendJsonMessage: sendJoyMessage,
+    }), [rawJoyStream, sendJoyMessage, readMotionSession]);
 
     // Mow-progress overlay and the LiDAR anchor map are both OccupancyGrids
     // rasterized off the message handler (see useGridImageStream).
@@ -344,6 +354,10 @@ export function useMapStreams({
     const {cancel: cancelProgress} = mowProgress;
     const {cancel: cancelLidarMap} = lidarMap;
     const stateName = highLevelStatus.highLevelStatus.state_name;
+    useEffect(() => {
+        // A later socket reopen cannot authorize a gesture from an old mode.
+        motionSession.current.generation++;
+    }, [stateName]);
 
     const datumLongitude = settings["datum_lon"];
     const datumLatitude = settings["datum_lat"];

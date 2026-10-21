@@ -893,7 +893,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     });
 
 
-    const {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream, stateName: highLevelStatus.highLevelStatus.state_name});
+    const {manualMode, handleManualMode, handleStopManualMode, handleStopIntent, handleJoyStart, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream, stateName: highLevelStatus.highLevelStatus.state_name});
 
     // Toggle dock placement mode: re-pressing the button (or pressing Escape)
     // cancels it, so the crosshair cursor is not a one-way trap.
@@ -1378,7 +1378,10 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onContinueOrPause:
             stateName === "IDLE_DOCKED" || stateName === "IDLE" || stateName === DIG_OBSTRUCTION_STATE
                 ? ackStart(mowerAction("high_level_control", {Command: 1}))
-                : mowerAction("high_level_control", {Command: 8}),
+                : () => {
+                    handleStopIntent();
+                    return mowerAction("high_level_control", {Command: 8})();
+                },
         // Retain explicit direction/OFF choices in the tree's session policy;
         // direct hardware commands would be overwritten by its next tick.
         onBladeForward: mowerAction("blade_control", {mow_enabled: 1, mow_direction: 0}),
@@ -1386,7 +1389,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onBladeOff: mowerAction("blade_control", {mow_enabled: 0, mow_direction: 0}),
         onRecordFinish: mowerAction("high_level_control", {Command: 5}),
         onRecordCancel: mowerAction("high_level_control", {Command: 6}),
-    }), [mowerAction, ackStart, stateName]);
+    }), [mowerAction, ackStart, stateName, handleStopIntent]);
 
     // Centered message panel used for the missing-token and missing-datum
     // states — a plain, translated explanation instead of an eternal spinner
@@ -1884,6 +1887,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     visible={highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode}
                     isRecording={highLevelStatus.highLevelStatus.state_name === "RECORDING"}
                     mobile={isMobile}
+                    onStart={handleJoyStart}
                     onMove={handleJoyMove}
                     onStop={handleJoyStop}
                     onFinishRecording={mowerActions.onRecordFinish}

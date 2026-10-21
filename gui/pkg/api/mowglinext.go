@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/providers"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -718,7 +719,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(ctx, "/hardware_bridge/emergency_stop", &CallReq, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
+			err = providers.CallEmergencyStop(ctx, provider, &CallReq)
 		case "mow_enabled":
 			var CallReq mowgli.MowerControlReq
 			err = c.BindJSON(&CallReq)
@@ -728,7 +729,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(ctx, "/hardware_bridge/mower_control", &CallReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
+			err = providers.CallMowerControl(ctx, provider, &CallReq)
 		case "blade_control":
 			handleBladeControl(c, provider)
 			return

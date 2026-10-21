@@ -460,7 +460,7 @@ func (f *FleetProvider) callLocal(ctx context.Context, command string, body json
 		if err := json.Unmarshal(body, &req); err != nil {
 			return err
 		}
-		return f.ros.CallService(ctx, "/hardware_bridge/emergency_stop", &req, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
+		return CallEmergencyStop(ctx, f.ros, &req)
 	case "coverage_clear_resume":
 		var res struct {
 			Success bool   `json:"success"`
