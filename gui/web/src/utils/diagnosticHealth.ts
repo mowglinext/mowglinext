@@ -6,7 +6,8 @@ import {deriveGpsStatus, displayHorizontalAccuracyM} from './gpsStatus';
 import {getBatteryLevel} from './battery';
 import type {DiagnosticsSnapshot} from '../hooks/useDiagnosticsSnapshot';
 import type {TimestampedDiagnosticStatus} from '../hooks/useDiagnostics';
-import {DIAGNOSTIC_STALE_MS} from '../hooks/useDiagnostics';
+import {DIAGNOSTIC_STALE_MS, diagnosticReportFresh, diagnosticReportNotApplicable, unavailableReport} from './diagnosticReportPolicy';
+export {unavailableReport, mavrosWheelRequirement} from './diagnosticReportPolicy';
 import type {ValidatedTelemetry} from '../hooks/useValidatedTelemetry';
 import type {FusionGraphStats} from '../hooks/useFusionGraphDiagnostics';
 
@@ -55,37 +56,9 @@ function diagnosticNumber(entry: TimestampedDiagnosticStatus, key: string): numb
     return Number.isFinite(value) ? value : undefined;
 }
 
-/** Optional producer declaration, never inferred from a running container. */
-export function mavrosWheelRequirement(entry: TimestampedDiagnosticStatus): boolean | undefined {
-    if (entry.name !== 'mowgli_mavros_bridge/wheel_odometry_source' || entry.hardware_id !== '') return undefined;
-    const value = entry.values.find(pair => pair.key === 'required')?.value;
-    return value === 'true' ? true : value === 'false' ? false : undefined;
-}
-
-/** These monitoring checks report only absence/age, not a measured hardware fault. */
-export function unavailableReport(entry: TimestampedDiagnosticStatus): boolean {
-    if (entry.level === 0) return false;
-    // This exact readiness WARN reports missing input, not a measured fault.
-    // An ERROR or a different message retains its normal immediate severity.
-    if (entry.level === 1 && entry.message === 'missing_or_stale' && mavrosWheelRequirement(entry) !== undefined) return true;
-    const ageOnly = new Map([['Hardware Bridge', 'mowgli/hardware_bridge'], ['IMU', 'mowgli/imu'],
-        ['LiDAR', 'mowgli/lidar'], ['Odometry', 'mowgli/odometry']]);
-    if (ageOnly.get(entry.name) === entry.hardware_id) return true;
-    if (entry.name === 'GPS' && entry.hardware_id === 'mowgli/gps') {
-        const status = entry.values.find(pair => pair.key === 'fix_status')?.value;
-        // A negative NavSatStatus confirms No Fix; otherwise this check reports missing/old input.
-        return status === undefined || status.trim() === '' || !Number.isFinite(Number(status)) || Number(status) >= 0;
-    }
-    if (entry.name === 'EKF Map' && entry.hardware_id === 'robot_localization/filtered_map') {
-        return !entry.values.some(pair => ['flat_ok', 'z_drift_ok'].includes(pair.key) && pair.value === 'false');
-    }
-    if (entry.name === 'Emergency System' && entry.hardware_id === 'mowgli/emergency') return entry.values.length === 0;
-    return false;
-}
-
 /** One display verdict and per-check conclusions; all inputs are already decoded. */
 export function deriveDiagnosticHealth(input: DiagnosticHealthInput) {
-    const {emergency, highLevel, connected, nowMonotonic, settings} = input;
+    const {emergency, highLevel, connected, settings} = input;
     const checks: HealthCheck[] = [];
     const clearance = emergencyClearanceUnverified(emergency, highLevel);
     checks.push(check('emergency', hasEmergency(emergency, highLevel) ? 'critical'
@@ -129,16 +102,8 @@ export function deriveDiagnosticHealth(input: DiagnosticHealthInput) {
         : gps.fixType === 'UNKNOWN' ? 'unknown' : gps.fixType !== 'RTK_FIX' ? 'warning'
             : accuracy === undefined ? 'unknown' : accuracy > 0.1 ? 'warning' : 'ok', 'gnss', gps.fixType !== 'UNKNOWN' ? [gps.label, ...(accuracy !== undefined ? [`${accuracy} m`] : [])] : undefined));
     const entries = input.diagnostics;
-    const fresh = (entry: TimestampedDiagnosticStatus) => {
-        const at = entry.healthProgressAt ?? entry.receivedMonotonic;
-        return connected && entry.healthBlocked !== true && Number.isFinite(at)
-            && nowMonotonic >= at && nowMonotonic - at < DIAGNOSTIC_STALE_MS
-            && (entry.healthBlocked === false || input.diagnosticsDisconnectedAt == null
-                || entry.publicationStamp !== undefined && entry.receivedMonotonic > input.diagnosticsDisconnectedAt);
-    };
-    // No text-based exclusions: a driver phrase cannot erase an ERROR.
-    const notApplicableReport = (entry: TimestampedDiagnosticStatus) => settings.lidar_enabled === false
-        && entry.name === 'LiDAR' && entry.hardware_id === 'mowgli/lidar' && unavailableReport(entry);
+    const fresh = (entry: TimestampedDiagnosticStatus) => diagnosticReportFresh(entry, input);
+    const notApplicableReport = (entry: TimestampedDiagnosticStatus) => diagnosticReportNotApplicable(entry, settings.lidar_enabled);
     const current = entries.filter(entry => fresh(entry) && !notApplicableReport(entry));
     const failures = current.filter(entry => (entry.level === 1 || entry.level === 2) && !unavailableReport(entry));
     const stale = entries.filter(entry => !notApplicableReport(entry) && (!fresh(entry) || entry.level === 3 || unavailableReport(entry)));

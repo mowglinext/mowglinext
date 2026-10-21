@@ -212,7 +212,9 @@ export const DiagnosticsPage = () => {
     }, []);
     const {modal} = App.useApp();
     const {snapshot, receivedAt: snapshotReceivedAt, loading, error: snapshotError, readError: snapshotReadError, refresh} = useDiagnosticsSnapshot();
-    const {diagnostics, disconnectedAt: diagnosticsDisconnectedAt} = useDiagnostics(JSON.stringify([apiHost(), hardware.robotName, hardware.backend]));
+    const {settings, loading: episodeSettingsLoading} = useSettings();
+    const {diagnostics, disconnectedAt: diagnosticsDisconnectedAt} = useDiagnostics(JSON.stringify([apiHost(), hardware.robotName, hardware.backend]),
+        {connected, lidarEnabled: settings.lidar_enabled, ready: hardware.backend !== 'unknown' && !episodeSettingsLoading});
     const nowMonotonic = performance.now();
     const wheelControllers = {left_wheel: wheelControllerFromDiagnostics(diagnostics, 'left_wheel', nowMonotonic),
         right_wheel: wheelControllerFromDiagnostics(diagnostics, 'right_wheel', nowMonotonic)};
@@ -226,7 +228,6 @@ export const DiagnosticsPage = () => {
     const [activeTab, setActiveTab] = useState(requestedTab ?? "system");
     const sensorsPanelOpen = isMobile ? openPanels.includes("sensors") : activeTab === "robot";
     const imu = useImu(sensorsPanelOpen);
-    const {settings} = useSettings();
     const guiApi = useApi();
     const wheelRpm = useWheelRpm({wheelRadiusM: (settings?.wheel_radius as number | undefined) ?? 0.04475});
     const {stats: fusionStats} = useFusionGraphDiagnostics();

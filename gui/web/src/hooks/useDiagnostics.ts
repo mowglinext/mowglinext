@@ -1,6 +1,9 @@
 import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import {isDiagnosticStatus, diagnosticPublicationIdentity, advanceDiagnosticProgress, type DiagnosticProgress} from '../utils/diagnosticTelemetry';
 import {DiagnosticTransitionMemory, type DiagnosticTransitionCursor} from '../utils/diagnosticTransitions';
+import {createDiagnosticEpisodeState, readDiagnosticEpisodes, reduceDiagnosticEpisodes,
+    DIAGNOSTIC_EPISODE_IDENTITY_LIMIT, type DiagnosticEpisodeState} from '../utils/diagnosticEpisodes';
+import {DIAGNOSTIC_STALE_MS, diagnosticReportFresh, qualifyDiagnosticReport} from '../utils/diagnosticReportPolicy';
 import {isJsonObject} from '../utils/json';
 import {useWS} from "./useWS.ts";
 
@@ -30,7 +33,7 @@ export interface DiagnosticArray {
 }
 
 /** Entries not refreshed within this window should be rendered as stale. */
-export const DIAGNOSTIC_STALE_MS = 30_000;
+export {DIAGNOSTIC_STALE_MS} from '../utils/diagnosticReportPolicy';
 
 /** True when an accumulated entry has not been refreshed for DIAGNOSTIC_STALE_MS. */
 export const isDiagnosticStale = (
@@ -39,13 +42,20 @@ export const isDiagnosticStale = (
 ): boolean => !Number.isFinite(entry.receivedMonotonic)
     || nowMonotonic - entry.receivedMonotonic > DIAGNOSTIC_STALE_MS;
 
+export interface DiagnosticEpisodeAdmission {
+    connected: boolean;
+    lidarEnabled?: unknown;
+    /** Input availability only, not DDS/process authority. Missing inputs cannot qualify an observation. */
+    ready?: boolean;
+}
+
 /**
  * Subscribes to the /diagnostics topic and accumulates entries by name.
  * Entries are merged (latest wins per name), stamped with `receivedAt`
  * so consumers can grey out entries that stopped updating, and throttled
  * to avoid flicker from high-frequency diagnostic updates.
  */
-export const useDiagnostics = (transitionContext?: string) => {
+export const useDiagnostics = (transitionContext?: string, episodeAdmission?: DiagnosticEpisodeAdmission) => {
     const [diagnostics, setDiagnostics] = useState<DiagnosticArray>({})
     // Local monotonic disconnect boundary, never a civil date or ROS session.
     const [disconnectedAt, setDisconnectedAt] = useState<number | null>(null);
@@ -56,6 +66,54 @@ export const useDiagnostics = (transitionContext?: string) => {
     const accumulatorRef = useRef<Map<string, TimestampedDiagnosticStatus>>(new Map());
     const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [transitionMemory] = useState(() => new DiagnosticTransitionMemory());
+    const episodesRef = useRef<DiagnosticEpisodeState | null>(null);
+    const episodeAdmissionRef = useRef(episodeAdmission);
+    const episodeTransportConnected = useRef(true);
+    // A reconnect cannot reconstruct the context's missing history. This flag
+    // affects continuity only; an admissible OK still resolves immediately.
+    const episodeConnectionGap = useRef(false);
+    const episodesEnabled = episodeAdmission !== undefined;
+    useLayoutEffect(() => { episodeAdmissionRef.current = episodeAdmission; }, [episodeAdmission]);
+    useLayoutEffect(() => {
+        episodeConnectionGap.current = false;
+        episodesRef.current = episodesEnabled && transitionContext !== undefined && transitionContext.length <= DIAGNOSTIC_EPISODE_IDENTITY_LIMIT
+            ? createDiagnosticEpisodeState(Symbol('diagnostic episodes'), transitionContext) : null;
+        return () => { episodesRef.current = null; };
+    }, [transitionContext, episodesEnabled]);
+
+    // Lazy projection uses existing progress metadata, not a second payload cache
+    // or timer. Also run before new progress can hide an unobserved expiry gap.
+    const expireEpisodes = useCallback((nowMonotonic: number) => {
+        let state = episodesRef.current;
+        const options = episodeAdmissionRef.current;
+        if (!state || !options) return;
+        const admission = {...options, connected: options.connected && episodeTransportConnected.current};
+        for (const episode of state.episodes) {
+            if (episode.state !== 'active') continue;
+            const progress = healthProgress.current.get(JSON.stringify([episode.identity.name, episode.identity.hardware_id]));
+            if (admission.ready !== false && progress && diagnosticReportFresh({receivedMonotonic: progress.at, healthProgressAt: progress.at, healthBlocked: progress.blocked},
+                {...admission, nowMonotonic})) continue;
+            const expired = admission.ready !== false && admission.connected && progress && !progress.blocked && Number.isFinite(progress.at)
+                && nowMonotonic >= progress.at && nowMonotonic - progress.at >= DIAGNOSTIC_STALE_MS;
+            state = reduceDiagnosticEpisodes(state, {scope: state.scope, context: state.context, order: state.lastOrder + 1,
+                identity: episode.identity, continuity: 'unknown', admission: 'control', classification: expired ? 'expired' : 'unverified'});
+        }
+        episodesRef.current = state;
+    }, []);
+    const invalidateEpisodes = (name?: string) => {
+        let state = episodesRef.current;
+        if (!state) return;
+        for (const episode of state.episodes) {
+            if (episode.state === 'resolved' || name !== undefined && episode.identity.name !== name) continue;
+            state = reduceDiagnosticEpisodes(state, {scope: state.scope, context: state.context, order: state.lastOrder + 1,
+                identity: episode.identity, continuity: 'unknown', admission: 'control', classification: 'unverified'});
+        }
+        episodesRef.current = state;
+    };
+    const readEpisodes = useCallback(() => {
+        expireEpisodes(performance.now());
+        return episodesRef.current ? readDiagnosticEpisodes(episodesRef.current) : null;
+    }, [expireEpisodes]);
 
     // Opt-in only. Context changes clear observations without changing the
     // current snapshot, its subscriptions, admission or freshness barriers.
@@ -67,6 +125,9 @@ export const useDiagnostics = (transitionContext?: string) => {
         transitionMemory.readAfter(cursor), [transitionMemory]);
 
     const diagnosticsStream = useWS<unknown>(() => {
+        episodeTransportConnected.current = false;
+        episodeConnectionGap.current = true;
+        invalidateEpisodes();
         setDisconnectedAt(performance.now());
         for (const [key, value] of healthProgress.current) healthProgress.current.set(key, {...value, blocked: true});
         for (const [key, entry] of accumulatorRef.current) {
@@ -75,7 +136,7 @@ export const useDiagnostics = (transitionContext?: string) => {
             accumulatorRef.current.set(key, next);
         }
         setDiagnostics({status: Array.from(accumulatorRef.current.values())});
-    }, () => {},
+    }, () => { episodeTransportConnected.current = true; },
         (e) => {
             if (!isJsonObject(e) || !Array.isArray(e.status)) return;
             const entries: unknown[] = e.status;
@@ -83,12 +144,14 @@ export const useDiagnostics = (transitionContext?: string) => {
             if (entries.length > 0) {
                 const receivedAt = Date.now();
                 const receivedMonotonic = performance.now();
+                expireEpisodes(receivedMonotonic);
                 const identity = diagnosticPublicationIdentity(e);
                 for (const entry of entries) {
                     if (isDiagnosticStatus(entry)) {
                         const key = JSON.stringify([entry.name, entry.hardware_id]);
                         const known = healthProgress.current.get(key);
-                        const before = malformedNames.current.has(entry.name) && known ? {...known, blocked: true} : known;
+                        const wasMalformed = malformedNames.current.has(entry.name);
+                        const before = wasMalformed && known ? {...known, blocked: true} : known;
                         let progress = advanceDiagnosticProgress(before, e, receivedMonotonic);
                         const oldSource = sourceForName.current.get(entry.name);
                         if (oldSource !== undefined && oldSource !== key && (!before || before.stamp === progress.stamp)) {
@@ -105,11 +168,22 @@ export const useDiagnostics = (transitionContext?: string) => {
                             ...entry, receivedAt: at, receivedMonotonic: monotonic, healthProgressAt: progress.at, healthBlocked: progress.blocked, ...(identity !== null ? {publicationStamp: identity} : {}),
                         };
                         transitionMemory.observe(accumulatorRef.current.get(entry.name), next);
+                        const state = episodesRef.current;
+                        const admission = episodeAdmissionRef.current;
+                        if (state && admission) {
+                            const qualification = qualifyDiagnosticReport(next, {...admission,
+                                connected: admission.connected && episodeTransportConnected.current, nowMonotonic: receivedMonotonic});
+                            episodesRef.current = reduceDiagnosticEpisodes(state, {scope: state.scope, context: state.context,
+                                order: state.lastOrder + 1, identity: entry, continuity: qualification.admission === 'accepted'
+                                    && !wasMalformed && !before?.blocked && !episodeConnectionGap.current ? 'continuous' : 'unknown',
+                                ...qualification});
+                        }
                         accumulatorRef.current.set(entry.name, next);
                     } else if (isJsonObject(entry) && typeof entry.name === 'string') {
                         // A named malformed update cannot renew an older valid entry.
                         accumulatorRef.current.delete(entry.name);
                         malformedNames.current.add(entry.name);
+                        invalidateEpisodes(entry.name);
                     }
                 }
             }
@@ -136,5 +210,5 @@ export const useDiagnostics = (transitionContext?: string) => {
         }
     }, [start, stop]);
 
-    return {diagnostics, disconnectedAt, stop: diagnosticsStream.stop, start: diagnosticsStream.start, readTransitions};
+    return {diagnostics, disconnectedAt, stop: diagnosticsStream.stop, start: diagnosticsStream.start, readTransitions, readEpisodes};
 };
