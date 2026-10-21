@@ -88,7 +88,8 @@ bool writeSnapshot(const BTContext& ctx, const std::string& contents)
 
 bool hasCoverageResumeState(const BTContext& ctx)
 {
-  return !ctx.area_resume_pose_index.empty() || !ctx.completed_areas.empty() ||
+  return !ctx.area_resume_pose_index.empty() || !ctx.area_unit_progress.empty() ||
+         !ctx.completed_areas.empty() ||
          std::any_of(ctx.area_completed_swaths.begin(),
                      ctx.area_completed_swaths.end(),
                      [](const auto& area)
@@ -160,6 +161,8 @@ bool saveCoverageResumeState(const BTContext& ctx)
   for (const auto& [idx, _] : ctx.area_plan_fingerprint)
     areas.insert(idx);
   for (const auto& [idx, _] : ctx.area_resume_pose_index)
+    areas.insert(idx);
+  for (const auto& [idx, _] : ctx.area_unit_progress)
     areas.insert(idx);
   for (const auto& [idx, _] : ctx.area_completed_swaths)
     areas.insert(idx);
@@ -238,6 +241,15 @@ bool saveCoverageResumeState(const BTContext& ctx)
       for (std::size_t s : it->second)
         out << ' ' << s;
     out << '\n';
+  }
+  // Per-unit progress of interrupted units (area unit offset). A separate line type, so a file
+  // without it (older versions) simply loads with no per-unit progress.
+  for (const auto& [idx, units] : ctx.area_unit_progress)
+  {
+    for (const auto& [unit, offset] : units)
+    {
+      out << "unit_progress " << idx << ' ' << unit << ' ' << offset << '\n';
+    }
   }
 
   return writeSnapshot(ctx, out.str());
@@ -361,6 +373,16 @@ bool loadCoverageResumeState(BTContext& ctx)
       uint32_t idx;
       while (ls >> idx)
         ctx.completed_areas.insert(idx);
+    }
+    else if (tag == "unit_progress")
+    {
+      uint32_t area;
+      std::size_t unit;
+      std::size_t offset;
+      if (ls >> area >> unit >> offset)
+      {
+        ctx.area_unit_progress[area][unit] = offset;
+      }
     }
     else if (tag == "area")
     {

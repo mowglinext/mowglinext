@@ -1735,6 +1735,94 @@ TEST_F(FollowStripDigTest, RestartWithChangedPlanDiscardsCompletedSubpaths)
   EXPECT_TRUE(std::filesystem::remove(path));
 }
 
+// Per-unit progress alone is persisted resume state: against a changed plan it would trim a unit
+// of a DIFFERENT path and start the blade at the wrong place, so the plan-fingerprint guard must
+// discard it just like a stale cursor.
+TEST_F(FollowStripDigTest, ChangedPlanDiscardsAStateHoldingOnlyPerUnitProgress)
+{
+  const std::vector<nav_msgs::msg::Path> units{straightUnit(0.0, 10.0), straightUnit(10.0, 20.0)};
+  startFollowStrip(units);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);  // records the plan fingerprint
+  tree->haltTree();
+  tree.reset();
+  ctx->area_resume_pose_index.clear();
+  ctx->area_completed_swaths.clear();
+  ctx->area_unit_progress.clear();
+  ctx->area_unit_progress[0][0] = 100;  // 5 m into unit 0 of the OLD plan
+
+  auto changed = units;
+  changed[0].poses[10].pose.position.y = 0.1;  // changed geometry, identical pose count
+  startFollowStrip(changed);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 2 || navigate->goalCount() > 0;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(navigate->goalCount(), 0u) << "no transit to the stale progress point";
+  ASSERT_EQ(follow->goalCount(), 2u);
+  EXPECT_DOUBLE_EQ(follow->goal(1)->path.poses.front().pose.position.x, 0.0);
+  tree->haltTree();
+}
+
+// The cursor lands in unit 0 BEHIND that unit's own progress, and unit 1 (not the cursor's) was
+// abandoned part-way on an earlier pass. Each unit starts at the further of the two, and the
+// blade-off transit to it lands exactly where its follow goal starts.
+TEST_F(FollowStripDigTest, EveryUnitIsTrimmedAtItsOwnRecordedProgress)
+{
+  const std::vector<nav_msgs::msg::Path> units{straightUnit(0.0, 10.0), straightUnit(10.0, 20.0)};
+  ctx->area_resume_pose_index[0] = 40;  // unit 0, x = 2.0
+  ctx->area_unit_progress[0][0] = 100;  // unit 0, x = 5.0
+  ctx->area_unit_progress[0][1] = 60;  // unit 1, x = 13.0
+  startFollowStrip(units);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_NEAR(navigate->goal(0)->pose.pose.position.x, 5.0, 1e-9);
+  setRobot(5.0, 0.0);
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_NEAR(follow->goal(0)->path.poses.front().pose.position.x, 5.0, 1e-9);
+
+  follow->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 2;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_NEAR(navigate->goal(1)->pose.pose.position.x, 13.0, 1e-9);
+  setRobot(13.0, 0.0);
+  navigate->succeed(1);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 2;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_NEAR(follow->goal(1)->path.poses.front().pose.position.x, 13.0, 1e-9);
+  tree->haltTree();
+}
+
 TEST_F(FollowStripDigTest, FailedCheckpointWriteDoesNotLogCursorSaved)
 {
   const std::string path = ::testing::TempDir() + "/follow_strip_failed_write.txt";

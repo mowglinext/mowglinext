@@ -40,26 +40,7 @@ BT::NodeStatus IsEmergency::tick()
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   std::lock_guard<std::mutex> lock(ctx->context_mutex);
 
-  // Fail-safe: if emergency data is stale (>2 s since last message),
-  // treat as emergency so the robot stops.
-  const auto age = std::chrono::steady_clock::now() - ctx->last_emergency_time;
-  if (age > std::chrono::seconds(2))
-  {
-    return BT::NodeStatus::SUCCESS;  // stale data → assume emergency
-  }
-
-  // Treat a set firmware LATCH as emergency too, not just an actively-asserted
-  // physical trigger. A software e-stop (the /hardware_bridge/emergency_stop
-  // service, used by the GUI stop button and tooling) sets the firmware latch
-  // WITHOUT a physical lift/stop assertion, so active_emergency stays false
-  // while latched_emergency is true. Keying only off active_emergency let the
-  // BT keep ticking MainLogic (flapping into a spurious RECORDING state) while
-  // the firmware held the motors disabled — the BT must instead surface
-  // EMERGENCY and run its stop/auto-reset handler. The firmware remains the
-  // safety authority; this only fixes what the BT reports and does.
-  return (ctx->latest_emergency.active_emergency || ctx->latest_emergency.latched_emergency)
-             ? BT::NodeStatus::SUCCESS
-             : BT::NodeStatus::FAILURE;
+  return ctx->emergencyActiveOrStale() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 // ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@
 #include "mowgli_behavior/blade_ready.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
+#include "mowgli_behavior/fleet_yield.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_behavior/transit_avoidance.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
@@ -92,6 +93,17 @@ struct BTContext
   /// Timestamp of the last emergency message received.
   std::chrono::steady_clock::time_point last_emergency_time{std::chrono::steady_clock::now()};
 
+  /// Shared IsEmergency/fleet predicate. Caller holds context_mutex.
+  /// A stale stream (>2 s) fails safe even when cached bits are clear. The
+  /// firmware latch also counts: software e-stop can latch without an active
+  /// physical trigger. Keep the existing startup grace and strict > boundary.
+  bool emergencyActiveOrStale(
+      std::chrono::steady_clock::time_point steady_now = std::chrono::steady_clock::now()) const
+  {
+    return latest_emergency.active_emergency || latest_emergency.latched_emergency ||
+           steady_now - last_emergency_time > std::chrono::seconds(2);
+  }
+
   // -----------------------------------------------------------------------
   // Thread safety
   // -----------------------------------------------------------------------
@@ -127,6 +139,9 @@ struct BTContext
   /// proofing note on behavior_tree_node's clear_resume_requested_ for the
   /// pattern to follow instead of a mutex if that ever happens.
   mutable std::mutex context_mutex;
+
+  /// Fleet stop ownership is never persisted; all access takes context_mutex.
+  FleetYieldState fleet_yield;
 
   // -----------------------------------------------------------------------
   // Command state (set by HighLevelControl service handler)
@@ -489,6 +504,14 @@ struct BTContext
   /// a fixed area+params, so the re-planned path is identical and the index is
   /// stable. Cleared (erased) when the area completes; reset by EndSession.
   std::map<uint32_t, std::size_t> area_resume_pose_index;
+  /// How far each INTERRUPTED unit of an area got: area -> (unit -> local pose index inside the
+  /// full unit). area_resume_pose_index is ONE scalar for the unit being driven, so the moment a
+  /// later unit is dispatched it forgets an earlier unit that was abandoned at 99 % (field
+  /// 2026-10-14: a 2294-pose unit was re-driven from pose 0 on four passes in a row). FollowStrip
+  /// records a unit's furthest progress here whenever it persists the cursor and trims the unit at
+  /// it on the next pass; erased when the unit is booked mowed, with the rest of an area's state
+  /// when the plan changes, and by EndSession. Persisted with the resume cursor.
+  std::map<uint32_t, std::map<std::size_t, std::size_t>> area_unit_progress;
   /// Total pose count of the area's continuous full_path (the denominator for
   /// the resume-cursor coverage_percent). Set by FollowStrip at dispatch.
   std::map<uint32_t, std::size_t> area_path_pose_count;
@@ -1097,7 +1120,8 @@ inline constexpr std::chrono::hours kIncompleteResumeMaxAge{24};
 /// mid-path resume cursor. Nothing to keep (or resume) otherwise.
 inline bool hasRecordedCoverageProgress(const BTContext& ctx)
 {
-  if (!ctx.completed_areas.empty() || !ctx.area_resume_pose_index.empty())
+  if (!ctx.completed_areas.empty() || !ctx.area_resume_pose_index.empty() ||
+      !ctx.area_unit_progress.empty())
   {
     return true;
   }

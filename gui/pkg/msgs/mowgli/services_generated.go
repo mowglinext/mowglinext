@@ -150,6 +150,21 @@ type EmergencyStopRes struct {
 	Success                   bool                           `json:"success"`
 }
 
+// FleetYieldReq for mowgli_interfaces/srv/FleetYield request.
+type FleetYieldReq struct {
+	Operation                 uint8                          `json:"operation"`
+	Epoch                     string                         `json:"epoch"`
+	RequestId                 string                         `json:"request_id"`
+}
+
+// FleetYieldRes for mowgli_interfaces/srv/FleetYield response.
+type FleetYieldRes struct {
+	Result                    uint8                          `json:"result"`
+	Epoch                     string                         `json:"epoch"`
+	Held                      bool                           `json:"held"`
+	Message                   string                         `json:"message"`
+}
+
 // GetLidarIgnoreCorridorsReq for mowgli_interfaces/srv/GetLidarIgnoreCorridors request (empty).
 type GetLidarIgnoreCorridorsReq struct{}
 

@@ -55,6 +55,7 @@ public:
       return valid;
     };
     Node2D::NodeVector candidates;
+    candidates.reserve(8);  // Node2D has at most eight grid neighbors.
     Node2D::getNeighbors(bridge, collision_checker, unknown, candidates);
     for (auto* candidate : candidates)
       if (edge_allowed && edge_allowed(getIndex(), candidate->getIndex()))
@@ -78,7 +79,14 @@ public:
 private:
   friend class AuthorizedTransitPlannerTest;
   void onGeometry(visualization_msgs::msg::MarkerArray::ConstSharedPtr message);
+  // Connects a start that lies inside the dock body to the nearest clear authorized cell that does
+  // not lie toward the charging station; refuses a start too close to the station to pivot.
+  geometry_msgs::msg::PoseStamped dockExitAnchor(const geometry_msgs::msg::PoseStamped& start,
+                                                 const transit::Geometry& geometry,
+                                                 const transit::Geometry& relaxed,
+                                                 const std::function<void()>& check) const;
   bool costSegmentClear(transit::Point a, transit::Point b) const;
+  bool costSegmentClear(transit::Point a, transit::Point b, std::vector<double>& cuts) const;
   geometry_msgs::msg::PoseStamped anchor(const geometry_msgs::msg::PoseStamped& endpoint,
                                          const transit::Geometry& geometry) const;
   bool pathValid(const nav_msgs::msg::Path& path, const transit::Geometry& geometry) const;
