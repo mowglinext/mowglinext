@@ -533,7 +533,9 @@ describe('FleetPage addPeer warning acknowledgement with the real hook', () => {
     it.each([null, false, true, 42, {reason: 'partial registration'}, ['detail'], ' \t\n '].map(warning => ({warning})))(
         'warns neutrally instead of claiming full success for $warning', async ({warning}) => {
             const fetchMock = await ready({warning});
-            fireEvent.click(addButton());
+            // The warning is emitted before run()'s finally clears busy.
+            // Flush the complete async action and AntD's loading render.
+            await act(() => { fireEvent.click(addButton()); return Promise.resolve(); });
             await waitFor(() => expect(mock.warning).toHaveBeenCalledExactlyOnceWith(neutral, 8));
             await waitFor(() => expect(addButton()).not.toHaveClass('ant-btn-loading'));
             expect(mock.success).not.toHaveBeenCalled();
@@ -551,7 +553,7 @@ describe('FleetPage addPeer warning acknowledgement with the real hook', () => {
         {payload: {warning: '  Reverse registration pending \n'}, status: 200, warning: '  Reverse registration pending \n'},
     ])('preserves success and native warning for $payload / $status', async ({payload, status, warning}) => {
         const fetchMock = await ready(payload, status);
-        fireEvent.click(addButton());
+        await act(() => { fireEvent.click(addButton()); return Promise.resolve(); });
         await waitFor(() => warning === undefined
             ? expect(mock.success).toHaveBeenCalledExactlyOnceWith(en.fleetPage.peerAdded)
             : expect(mock.warning).toHaveBeenCalledExactlyOnceWith(warning, 8));
@@ -568,7 +570,10 @@ describe('FleetPage addPeer warning acknowledgement with the real hook', () => {
         const {default: fr} = await import('../i18n/locales/fr.json');
         try {
             await act(() => i18n.changeLanguage('fr'));
-            fireEvent.click(screen.getByRole('button', {name: new RegExp(`${fr.fleetPage.add}$`)}));
+            await act(() => {
+                fireEvent.click(screen.getByRole('button', {name: new RegExp(`${fr.fleetPage.add}$`)}));
+                return Promise.resolve();
+            });
             await waitFor(() => expect(mock.warning).toHaveBeenCalledExactlyOnceWith(
                 "La demande d'ajout a renvoyé un avertissement inexploitable. Vérifiez la liste des robots et l'état de l'enregistrement réciproque.", 8));
             expect(mock.success).not.toHaveBeenCalled();
@@ -585,12 +590,15 @@ describe('FleetPage addPeer warning acknowledgement with the real hook', () => {
         let release: (response: Response) => void = () => { throw new Error('Refresh not started'); };
         fetchMock.mockImplementation((url, init) => urlOf(url).endsWith('/coordination')
             ? new Promise(resolve => { release = resolve; }) : original(url, init));
-        fireEvent.click(addButton());
-        await act(() => vi.advanceTimersByTimeAsync(0));
+        await act(() => { fireEvent.click(addButton()); return Promise.resolve(); });
         await waitFor(() => expect(paths(fetchMock)).toEqual(['POST /peers', 'GET /robots', 'GET /coordination']));
         expect(addButton()).toHaveClass('ant-btn-loading');
         expect(mock.warning).not.toHaveBeenCalled();
         expect(mock.success).not.toHaveBeenCalled();
+        mock.warning.mockImplementationOnce(() => {
+            // Notification observation alone does not prove the final render.
+            expect(addButton()).toHaveClass('ant-btn-loading');
+        });
         await act(() => {
             release(new Response('{}'));
             return Promise.resolve();
@@ -599,7 +607,7 @@ describe('FleetPage addPeer warning acknowledgement with the real hook', () => {
         expect(mock.warning).toHaveBeenCalledExactlyOnceWith(neutral, 8);
         fetchMock.mockImplementation((url, init) => Promise.resolve(new Response(init?.method === 'POST' ? '{}' : urlOf(url).endsWith('/robots') ? '[]' : '{}')));
         enterAddress();
-        fireEvent.click(addButton());
+        await act(() => { fireEvent.click(addButton()); return Promise.resolve(); });
         await waitFor(() => expect(mock.success).toHaveBeenCalledExactlyOnceWith(en.fleetPage.peerAdded));
         await waitFor(() => expect(addButton()).not.toHaveClass('ant-btn-loading'));
         expect(paths(fetchMock)).toEqual(['POST /peers', 'GET /robots', 'GET /coordination', 'POST /peers', 'GET /robots', 'GET /coordination']);

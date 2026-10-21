@@ -304,8 +304,11 @@ func (c *FleetCoordinator) sendHighLevel(command uint8) {
 	ctx, cancel := context.WithTimeout(context.Background(), coordinatorCallTimeout)
 	defer cancel()
 	req := mowgli.HighLevelControlReq{Command: command}
-	if err := c.ros.CallService(ctx, highLevelControlService, &req, &mowgli.HighLevelControlRes{}, highLevelControlType); err != nil {
+	var res mowgli.HighLevelControlRes
+	if err := c.ros.CallService(ctx, highLevelControlService, &req, &res, highLevelControlType); err != nil {
 		c.setError("high_level_control: " + err.Error())
+	} else if !res.Success {
+		c.setError("high_level_control rejected the command")
 	}
 }
 
