@@ -66,6 +66,7 @@ set(srv_files
   "srv/AddLidarIgnoreCorridor.srv"
   "srv/GetLidarIgnoreCorridors.srv"
   "srv/ClearLidarIgnoreCorridors.srv"
+  "srv/ReplaceLidarIgnoreCorridors.srv"
 )
 
 # Declare action files
