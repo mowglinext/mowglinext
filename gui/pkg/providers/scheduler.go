@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
-	"github.com/mowglinext/mowglinext/pkg/msgs/std"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
 )
@@ -56,6 +55,7 @@ type SchedulerProvider struct {
 	lastHighLevelStateName  string
 	hasHighLevelStatus      bool
 	lastEmergency           bool
+	hasEmergencyStatus      bool
 	highLevelEmergency      bool
 	coverageSessionActive   bool
 	coverageSessionKnown    bool
@@ -78,101 +78,82 @@ func NewSchedulerProvider(rosProvider types.IRosProvider, dbProvider types.IDBPr
 	return s
 }
 
+// schedulerField requires a present, non-null value of the exact JSON type.
+// Supported aliases must agree; malformed fields never default to safe zeros.
+func schedulerField[T comparable](fields map[string]json.RawMessage, names ...string) (value T, known bool) {
+	for _, name := range names {
+		raw, present := fields[name]
+		if !present {
+			continue
+		}
+		var candidate *T
+		if err := json.Unmarshal(raw, &candidate); err != nil || candidate == nil {
+			return value, false
+		}
+		if known && value != *candidate {
+			return value, false
+		}
+		value, known = *candidate, true
+	}
+	return value, known
+}
+
 // subscribeToStatus subscribes to highLevelStatus and emergency so that the
 // scheduler can perform pre-flight safety checks without an extra service call.
+// Malformed frames revoke knowledge without clearing a stored positive guard.
 func (s *SchedulerProvider) subscribeToStatus() {
-	// highLevelStatus — tracks robot operational state and its co-reported
-	// emergency snapshot. Keep it separate from the hardware emergency topic so
-	// an older HLS snapshot can never clear a newer hardware emergency.
-	if err := s.rosProvider.Subscribe("highLevelStatus", "scheduler-hls", 0, func(msg []byte) {
-		var hls mowgli.HighLevelStatus
-		if err := json.Unmarshal(msg, &hls); err != nil {
-			// Fallback: try to find the state field by either name variant.
-			var raw map[string]json.RawMessage
-			if jsonErr := json.Unmarshal(msg, &raw); jsonErr != nil {
-				return
+	subscribe := func(topic, id string, consume func(map[string]json.RawMessage)) {
+		if err := s.rosProvider.Subscribe(topic, id, 0, func(msg []byte) {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(msg, &fields); err != nil {
+				fields = nil
 			}
-			// Accept "state" or "State"
-			for _, k := range []string{"state", "State"} {
-				if v, ok := raw[k]; ok {
-					_ = json.Unmarshal(v, &hls.State)
-					break
-				}
-			}
-			// Accept "state_name" or "StateName"
-			for _, k := range []string{"state_name", "StateName"} {
-				if v, ok := raw[k]; ok {
-					_ = json.Unmarshal(v, &hls.StateName)
-					break
-				}
-			}
+			consume(fields)
+			s.wakeStartupRetry()
+		}); err != nil {
+			logrus.Warnf("Scheduler: failed to subscribe to %s: %v", topic, err)
 		}
-		s.mu.Lock()
-		s.lastHighLevelState = hls.State
-		s.lastHighLevelStateName = hls.StateName
-		s.highLevelEmergency = hls.Emergency
-		s.hasHighLevelStatus = true
-		s.mu.Unlock()
-		s.wakeStartupRetry()
-	}); err != nil {
-		logrus.Warnf("Scheduler: failed to subscribe to highLevelStatus: %v", err)
 	}
-
-	// emergency — safety-critical, no throttle on this topic
-	if err := s.rosProvider.Subscribe("emergency", "scheduler-emg", 0, func(msg []byte) {
-		var emg mowgli.Emergency
-		if err := json.Unmarshal(msg, &emg); err != nil {
-			var raw map[string]json.RawMessage
-			if jsonErr := json.Unmarshal(msg, &raw); jsonErr != nil {
-				return
-			}
-			for _, k := range []string{"active_emergency", "ActiveEmergency"} {
-				if v, ok := raw[k]; ok {
-					_ = json.Unmarshal(v, &emg.ActiveEmergency)
-					break
-				}
-			}
+	subscribe("highLevelStatus", "scheduler-hls", func(fields map[string]json.RawMessage) {
+		state, stateKnown := schedulerField[uint8](fields, "state", "State")
+		name, nameKnown := schedulerField[string](fields, "state_name", "StateName")
+		emergency, emergencyKnown := schedulerField[bool](fields, "emergency", "Emergency")
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.hasHighLevelStatus = stateKnown && nameKnown && emergencyKnown
+		if s.hasHighLevelStatus {
+			s.lastHighLevelState, s.lastHighLevelStateName, s.highLevelEmergency = state, name, emergency
 		}
+	})
+	subscribe("emergency", "scheduler-emg", func(fields map[string]json.RawMessage) {
+		active, activeKnown := schedulerField[bool](fields, "active_emergency", "ActiveEmergency")
+		latched, latchedKnown := schedulerField[bool](fields, "latched_emergency", "LatchedEmergency")
 		s.mu.Lock()
-		s.lastEmergency = emg.ActiveEmergency
-		s.mu.Unlock()
-		s.wakeStartupRetry()
-	}); err != nil {
-		logrus.Warnf("Scheduler: failed to subscribe to emergency: %v", err)
-	}
-
-	// coverageSession identifies a live COMMAND_START session even while its
-	// high-level state is IDLE (for example, a mid-session recharge hold).
-	if err := s.rosProvider.Subscribe("coverageSession", "scheduler-session", 0, func(msg []byte) {
-		var session mowgli.CoverageSession
-		if err := json.Unmarshal(msg, &session); err != nil {
-			return
+		defer s.mu.Unlock()
+		s.hasEmergencyStatus = activeKnown && latchedKnown
+		if s.hasEmergencyStatus {
+			// Match the BT: a software stop can latch without an active trigger.
+			s.lastEmergency = active || latched
 		}
+	})
+	subscribe("coverageSession", "scheduler-session", func(fields map[string]json.RawMessage) {
+		active, known := schedulerField[bool](fields, "session_active", "SessionActive")
 		s.mu.Lock()
-		s.coverageSessionActive = session.SessionActive
-		s.coverageSessionKnown = true
-		s.mu.Unlock()
-		s.wakeStartupRetry()
-	}); err != nil {
-		logrus.Warnf("Scheduler: failed to subscribe to coverageSession: %v", err)
-	}
-
-	// coverageResumeAvailable is latched by the behavior tree. It is the
-	// session identity needed to distinguish a fresh IDLE status from a paused
-	// mow that COMMAND_START would resume.
-	if err := s.rosProvider.Subscribe("coverageResumeAvailable", "scheduler-resume", 0, func(msg []byte) {
-		var available std.Bool
-		if err := json.Unmarshal(msg, &available); err != nil {
-			return
+		defer s.mu.Unlock()
+		s.coverageSessionKnown = known
+		if known {
+			s.coverageSessionActive = active
 		}
+	})
+	subscribe("coverageResumeAvailable", "scheduler-resume", func(fields map[string]json.RawMessage) {
+		available, known := schedulerField[bool](fields, "data", "Data")
 		s.mu.Lock()
-		s.coverageResumeAvailable = available.Data
-		s.coverageResumeKnown = true
-		s.mu.Unlock()
-		s.wakeStartupRetry()
-	}); err != nil {
-		logrus.Warnf("Scheduler: failed to subscribe to coverageResumeAvailable: %v", err)
-	}
+		defer s.mu.Unlock()
+		s.coverageResumeKnown = known
+		if known {
+			s.coverageResumeAvailable = available
+		}
+	})
 }
 
 // wakeStartupRetry rechecks the bounded startup minute when any input to
@@ -392,6 +373,8 @@ func (s *SchedulerProvider) resolveAreaIndex(areaID uint32) (uint32, string) {
 // deleted meanwhile and reverted an edit or a disable (#702). A record that
 // is gone stays gone. mutate must only touch execution metadata.
 func (s *SchedulerProvider) updateRunMetadata(id string, mutate func(current *schedule)) {
+	ScheduleWriteMu.Lock()
+	defer ScheduleWriteMu.Unlock()
 	key := schedulerKeyPrefix + id
 	data, err := s.dbProvider.Get(key)
 	if err != nil {
@@ -437,7 +420,8 @@ func (s *SchedulerProvider) persistSkip(sched schedule, reason string, now time.
 }
 
 // safeToStart returns true when it is safe to send COMMAND_START.
-// It admits starts only from known, non-resumable idle status and coverage
+// It requires explicit hardware emergency telemetry and complete high-level
+// status, then admits starts only from non-resumable idle status and coverage
 // provenance. A charge hold belongs to a live session only when
 // CoverageSession.session_active is true; only then would COMMAND_START be an
 // operator manual-resume request.
@@ -454,6 +438,7 @@ func (s *SchedulerProvider) safeToStart() bool {
 	state := s.lastHighLevelState
 	stateName := s.lastHighLevelStateName
 	hasHighLevelStatus := s.hasHighLevelStatus
+	emergencyKnown := s.hasEmergencyStatus
 	emergency := s.lastEmergency || s.highLevelEmergency
 	sessionActive := s.coverageSessionActive
 	sessionKnown := s.coverageSessionKnown
@@ -461,7 +446,7 @@ func (s *SchedulerProvider) safeToStart() bool {
 	resumeKnown := s.coverageResumeKnown
 	s.mu.RUnlock()
 
-	if !hasHighLevelStatus || emergency || !sessionKnown || !resumeKnown {
+	if !hasHighLevelStatus || !emergencyKnown || emergency || !sessionKnown || !resumeKnown {
 		return false
 	}
 	if state != 1 || sessionActive || resumeAvailable {
