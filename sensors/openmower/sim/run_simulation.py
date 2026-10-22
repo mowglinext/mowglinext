@@ -6,12 +6,14 @@
 Launches the REAL bridge through its production launch file against the
 emulated LowLevel board + xESC controllers (openmower_v1_emulator.py), drives
 it over ROS the way MowgliNext does, and checks what the emulated hardware
-actually received. Timings are measured on the emulator's clock.
+actually received. Command receipt timings use the emulator's clock; native
+emission/guard observations keep their own monotonic and ROS clock domains.
 
   python3 run_simulation.py --esc xesc_2040        # one controller type
   python3 run_simulation.py                        # both (default)
 
-Needs a sourced workspace with mowgli_interfaces + mowgli_openmower_bridge.
+Needs a sourced workspace with mowgli_interfaces + mowgli_openmower_bridge,
+built for this bench with -DOPENMOWER_SIMULATION_TRACE=ON (production default OFF).
 Exit status 0 only when every check passes.
 """
 
@@ -45,6 +47,7 @@ from std_srvs.srv import SetBool, Trigger
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from openmower_v1_emulator import OpenMowerV1Rig  # noqa: E402
 from measurements import calibration_attempt, drives_running, odometry_mean, run_scenario  # noqa: E402
+from native_trace import NativeTrace, commanded_zero, heartbeat_cadence, matching_blade_write, stale_blade_window  # noqa: E402
 
 AUTONOMOUS, IDLE = 2, 1
 # xesc_odometry.hpp kMaxPlausibleWheelSpeedMps: no wheel of this robot goes faster.
@@ -55,6 +58,7 @@ ROBOT_TEMPLATE = os.path.normpath(os.path.join(
     'ros2', 'src', 'mowgli_bringup', 'config', 'mowgli_robot.yaml'))
 BACKEND_DEFAULTS = os.path.join(os.path.dirname(ROBOT_TEMPLATE), 'backends', 'openmower.yaml')
 DRIVES = ('left', 'right')
+HLS_PERIOD_S = 0.5  # Original 2 Hz publication cadence, also the stale observation unit.
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +119,7 @@ class Probe(Node):
         self.fw_debug = self.create_client(SetBool, '/hardware_bridge/set_firmware_debug')
         self.get_params = self.create_client(GetParameters, '/hardware_bridge/get_parameters')
         self.create_timer(0.05, self._publish_cmd)
-        self.create_timer(0.5, self._publish_hl)
+        self.create_timer(HLS_PERIOD_S, self._publish_hl)
 
     def _keeper(self, key):
         def cb(msg):
@@ -160,12 +164,14 @@ class Probe(Node):
         self.cmd_pub.publish(m)
 
     def _publish_hl(self):
-        state = self.hl_state
-        if state is None:
-            return
-        m = HighLevelStatus()
-        m.state = state
-        self.hl_pub.publish(m)
+        # Silence can be synchronized with an in-flight timer publication.
+        with self.lock:
+            state = self.hl_state
+            if state is None:
+                return
+            m = HighLevelStatus()
+            m.state = state
+            self.hl_pub.publish(m)
 
     # helpers
     def get(self, key):
@@ -278,6 +284,7 @@ def start_bridge(rig, esc_type, workdir, log_path, extra_yaml='', env_override=N
                # stdout redirected, its default block buffer hides calibration
                # events and can be lost by the intentional SIGKILL.
                RCUTILS_LOGGING_BUFFERED_STREAM='0')
+    env['OPENMOWER_SIMULATION_TRACE_PATH'] = log_path + '.native.jsonl'
     env.update(env_override or {})
     log = open(log_path, 'w', encoding='utf-8')
     return subprocess.Popen(['ros2', 'launch', 'mowgli_openmower_bridge', 'openmower_bridge.launch.py'],
@@ -350,8 +357,19 @@ def s01_boot(probe, rig, R, esc):
             _bridge_param(probe, 'ticks_per_meter') == 1600.0, f"{_bridge_param(probe, 'ticks_per_meter')}")
     hb = [t for (t, _, _) in rig.ll.heartbeats if t > rig.now_ms() - 3000]
     gaps = [b - a for a, b in zip(hb, hb[1:])]
-    R.check(S, 'heartbeat never gaps near the 500 ms board timeout',
-            bool(gaps) and max(gaps) < 150, f'max gap {max(gaps):.0f} ms over {len(gaps)}' if gaps else 'none')
+    end_ns = time.monotonic_ns()
+    ok, detail = heartbeat_cadence(probe.native_trace.read(), end_ns)
+    R.check(S, 'native heartbeat emissions stay below 150 ms (including a silent tail)', ok, detail)
+    R.check(S, 'LowLevel currently services heartbeat; Python pass timing is a separate observation',
+            rig.ll.ros_running and rig.now_ms()-rig.ll.last_heartbeat_ms <= 500,
+            f'Python service max gap {max(gaps):.0f} ms over {len(gaps)}; '
+            f'board latch={rig.ll.latch}' if gaps else 'no Python service observations')
+    rows = probe.native_trace.read()
+    first_ll = next((r['mono_ns'] for r in rows if r['event'] == 'll_rx'), None)
+    unavailable = [r for r in rows if r['event'] == 'gate' and first_ll is not None
+                   and r['mono_ns'] >= first_ll and not r['ll_alive']]
+    print(f'    [OBSERVE] LowLevel unavailable after initial receipt: {len(unavailable)} native '
+          'control samples; this is independent of native heartbeat cadence', flush=True)
     if esc == 'xesc_2040':
         R.check(S, 'every xESC 2040 received its settings',
                 all(rig.escs[n].settings_received for n in ('left', 'right', 'mow')))
@@ -584,6 +602,111 @@ def s11_software_estop(probe, rig, R, esc):
     stop_driving(probe, rig)
 
 
+def native_gate(probe, predicate, after_ns, timeout):
+    """A decision and its actual UART write must both be present."""
+    found = []
+
+    def ready():
+        rows = probe.native_trace.read()
+        for row in rows:
+            if (row['event'] == 'gate' and row['mono_ns'] >= after_ns
+                    and predicate(row) and matching_blade_write(rows, row) is not None):
+                found[:] = [row]
+                return True
+        return False
+    return found[0] if wait_for(ready, timeout) else None
+
+
+def blade_silence_scenario(probe, rig, R, S):
+    # Obtain a genuinely new receipt, rather than treating a remembered mode
+    # or the local publication intent as the origin of the five-second timer.
+    fresh_after = time.monotonic_ns()
+    probe._publish_hl()
+    def received():
+        return any(r['event'] == 'hl_rx' and r['mode'] == AUTONOMOUS
+                   and r['mono_ns'] >= fresh_after for r in probe.native_trace.read())
+    if not R.check(S, 'fresh native HLS receipt before testing silence', wait_for(received, 2)):
+        return False
+
+    with probe.lock:
+        probe.hl_state = None
+    start_ns = time.monotonic_ns()
+    with rig.lock:
+        start_ms = rig.now_ms()
+        rig.ll.status_paused = True
+    try:
+        held = native_gate(probe, lambda g: not g['ll_alive'] and g['hl_fresh']
+                           and not g['emergency'] and g['requested'] and g['mode'] == AUTONOMOUS,
+                           start_ns, 2)
+        stopped = held is not None and not held['allowed'] and commanded_zero(probe.native_trace.read(), held)
+        if not R.check(S, 'LowLevel status loss commands blade zero while HLS is still fresh', stopped):
+            return False
+        zero = rig.first_zero_command('mow', start_ms, 2000)
+        R.check(S, 'ESC receives that LowLevel stop within the existing 700 ms link-loss bound',
+                zero is not None and zero-start_ms < 700, f'{zero-start_ms:.0f} ms' if zero else 'no zero command')
+        R.check(S, 'status-only interruption preserves LowLevel heartbeat and does not create a latch',
+                rig.ll.ros_running and not rig.snapshot()['latch'])
+    finally:
+        with rig.lock:
+            rig.ll.status_paused = False
+
+    recovered = native_gate(probe, lambda g: g['ll_alive'] and g['hl_fresh'] and g['allowed']
+                            and not g['emergency'] and g['requested'] and g['mode'] == AUTONOMOUS,
+                            held['mono_ns'] + 1, 2)
+    resumed = (recovered is not None and
+               abs(matching_blade_write(probe.native_trace.read(), recovered)['duty']) > 0.9 and
+               matching_blade_write(probe.native_trace.read(), recovered)['written'] == 1)
+    if not R.check(S, 'LowLevel recovery reauthorizes only while every blade gate still permits it', resumed):
+        return False
+
+    # Keep silence through expiry and its entire observation window. An early
+    # zero from LL/ESC is not the BT event and cannot re-enable publication.
+    expired = native_gate(probe, lambda g: not g['hl_fresh'], recovered['mono_ns']+1, 6)
+    rows = probe.native_trace.read()
+    known_receipt = expired is not None and any(r['event'] == 'hl_rx'
+                          and r['mode'] == AUTONOMOUS
+                          and r['ros_ns'] == expired['hl_stamp_ns'] for r in rows)
+    age_ns = expired['ros_ns']-expired['hl_stamp_ns'] if known_receipt else 0
+    if not R.check(S, 'HLS expires five seconds after its actual native ROS receipt',
+                   known_receipt and 5_000_000_000 < age_ns < 6_000_000_000
+                   and expired['ll_alive'] and not expired['emergency']
+                   and expired['requested'] and expired['mode'] == AUTONOMOUS
+                   and not expired['allowed'] and commanded_zero(rows, expired),
+                   f'{age_ns/1e6:.3f} ms since receipt'):
+        return False
+
+    end_ns = expired['mono_ns'] + int(2*HLS_PERIOD_S*1e9)
+    # Wait for a complete native decision/write beyond the boundary, not an
+    # arbitrary synchronization sleep or an assumed network cancellation.
+    covered = native_gate(probe, lambda g: True, end_ns, 2*HLS_PERIOD_S+1)
+    rows = probe.native_trace.read()
+    ok, detail = stale_blade_window(rows, expired, end_ns)
+    if not R.check(S, 'stale HLS continuously emits zero; no spontaneous blade reactivation',
+                   covered is not None and ok, detail):
+        return False
+    with rig.lock:
+        commands = [(t, d) for t, d in rig.escs['mow'].commands
+                    if expired['mono_ns'] <= int((rig._t0+t/1000)*1e9) <= end_ns]
+    R.check(S, 'stale zero is a received bridge command, not merely an autonomous ESC watchdog',
+            len(commands) > 1 and all(abs(d) < 1e-9 for t, d in commands), f'{len(commands)} received zero commands')
+    ok, detail = heartbeat_cadence(rows, end_ns, start_ns)
+    R.check(S, 'native heartbeat cadence stays below 150 ms throughout the BT observation', ok, detail)
+
+    renewed_after = time.monotonic_ns()
+    with probe.lock:
+        probe.hl_state = AUTONOMOUS
+    probe._publish_hl()  # An explicit new valid publication, not a retry loop.
+    renewed = native_gate(probe, lambda g: g['hl_fresh'] and g['allowed']
+                          and g['hl_stamp_ns'] != expired['hl_stamp_ns'], renewed_after, 2)
+    R.check(S, 'blade recovery requires a new HLS receipt and the other guards still open',
+            renewed is not None and any(r['event'] == 'hl_rx' and r['mono_ns'] >= renewed_after
+                                        and r['mode'] == AUTONOMOUS
+                                        and r['ros_ns'] == renewed['hl_stamp_ns']
+                                        for r in probe.native_trace.read())
+            and wait_for(lambda: abs(rig.snapshot()['duty']['mow']) > 0.9, 2))
+    return True
+
+
 def s12_blade(probe, rig, R, esc):
     S = 'blade'
     probe.hl_state = AUTONOMOUS
@@ -615,13 +738,8 @@ def s12_blade(probe, rig, R, esc):
     R.check(S, 'IDLE stops the blade', tz is not None and tz - t0 < 800, f'{(tz - t0) if tz else float("nan"):.0f} ms')
     probe.hl_state = AUTONOMOUS
     R.check(S, 'blade back in AUTONOMOUS', wait_for(lambda: abs(rig.snapshot()['duty']['mow']) > 0.9, 2))
-    probe.hl_state = None  # behavior_tree_node dies
-    t1 = rig.now_ms()
-    tz = rig.first_time_effective_zero(('mow',), t1, 8000)
-    R.check(S, 'behaviour tree silent 5 s -> blade off (watchdog on the last reported mode)',
-            tz is not None and 4500 < tz - t1 < 6000, f'{(tz - t1) if tz else float("nan"):.0f} ms')
-    probe.hl_state = AUTONOMOUS
-    wait_for(lambda: abs(rig.snapshot()['duty']['mow']) > 0.9, 3)
+    if not blade_silence_scenario(probe, rig, R, S):
+        return
     t2 = rig.now_ms()
     estop(probe, 1)
     # From the controller's command log: estop() blocks on the service reply,
@@ -927,8 +1045,10 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
     workdir = tempfile.mkdtemp(prefix=f'omsim-{esc}-')
     rig = OpenMowerV1Rig(workdir, esc)
     rig.start()
-    bridge = start_bridge(rig, esc, workdir, os.path.join(logdir, f'bridge-{esc}.log'))
+    bridge_log = os.path.join(logdir, f'bridge-{esc}.log')
+    bridge = start_bridge(rig, esc, workdir, bridge_log)
     probe = Probe()
+    probe.native_trace = NativeTrace(bridge_log + '.native.jsonl')
     ex = MultiThreadedExecutor(num_threads=4)
     ex.add_node(probe)
     spinner = spin_in_background(ex)

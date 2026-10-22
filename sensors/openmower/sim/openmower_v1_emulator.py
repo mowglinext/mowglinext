@@ -414,6 +414,7 @@ class LowLevelBoard:
         self._charging_disabled_ms = -1e12
         self.gyro_bias_z = 0.0
         self.paused = False                    # cable unplugged: no bytes either way
+        self.status_paused = False             # test fault: status TX only; heartbeat still serviced
         self._last_status_ms = 0.0
         self._last_imu_ms = 0.0
         self.status_sent = 0
@@ -534,6 +535,8 @@ class LowLevelBoard:
                 self._charging_disabled_ms = now
 
     def _send_status(self):
+        if self.status_paused:
+            return
         bits = ST_INITIALIZED | ST_RASPI_POWER | ST_UI_AVAIL
         if self.charging_allowed:
             bits |= ST_CHARGING

@@ -11,6 +11,7 @@
 #include "mowgli_interfaces/update_maintenance.hpp"
 #include "mowgli_openmower_bridge/blade_policy.hpp"
 #include "mowgli_openmower_bridge/openmower_bridge_node.hpp"
+#include "mowgli_openmower_bridge/simulation_trace.hpp"
 
 namespace mowgli_openmower_bridge
 {
@@ -116,6 +117,20 @@ void OpenMowerBridgeNode::control_tick()
                                                      current_mode_,
                                                      hl_fresh,
                                                      mowgli_interfaces::updateMaintenanceActive()});
+  OM_SIM_TRACE("gate",
+               "\"cycle\":%llu,\"ros_ns\":%lld,\"hl_stamp_ns\":%lld,\"ll_stamp_ns\":%lld,"
+               "\"mode\":%u,\"hl_fresh\":%d,\"ll_alive\":%d,\"emergency\":%d,"
+               "\"requested\":%d,\"allowed\":%d",
+               static_cast<unsigned long long>(control_ticks_),
+               static_cast<long long>(now().nanoseconds()),
+               static_cast<long long>(hl_status_stamp_.nanoseconds()),
+               static_cast<long long>(ll_last_status_.nanoseconds()),
+               current_mode_,
+               hl_fresh,
+               ll_alive,
+               emergency,
+               mow_requested_,
+               blade_allowed);
   drive_blade(blade_allowed);
 
   // Heartbeat + config handshake ride on the control tick so the LowLevel
@@ -290,6 +305,11 @@ void OpenMowerBridgeNode::drive_blade(bool blade_allowed)
   // OpenMower convention (mower_comms_v1): direction 1 = +duty, 0 = -duty.
   const double duty = blade_allowed ? (mow_direction_ != 0u ? blade_duty_ : -blade_duty_) : 0.0;
   const bool written = motors_[kMow]->SendDuty(duty);
+  OM_SIM_TRACE("blade_write",
+               "\"cycle\":%llu,\"duty\":%.17g,\"written\":%d",
+               static_cast<unsigned long long>(control_ticks_),
+               duty,
+               written);
   // Mirrors hardware_bridge_node's mapping so the GUI and diagnostics read the
   // same vocabulary on both backends: the request never left the host ->
   // unknown; otherwise off, or the direction the operator asked for.
