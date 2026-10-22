@@ -1,6 +1,6 @@
 import {observeAsync} from "../utils/async";
 import {App, Input, Select, Space} from "antd";
-import {useCallback, useEffect, useEffectEvent, useMemo, useRef, useState} from "react";
+import {useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
 import AsyncButton from "../components/AsyncButton.tsx";
 import {useWS} from "../hooks/useWS.ts";
@@ -65,6 +65,20 @@ export const LogsPage = () => {
     const [levels, setLevels] = useState<Severity[]>(DEFAULT_LEVELS);
     const [search, setSearch] = useState('');
     const [autoScroll, setAutoScroll] = useState(true);
+    // Identities of committed lifetimes/selections, not a second selected ID.
+    // In particular, A -> B -> A must retire the original A operations.
+    const lifetimeRef = useRef<object | null>(null);
+    const selectionRef = useRef<object | null>(null);
+    const listRequestRef = useRef(0);
+    const commandRequestRef = useRef(0);
+    useLayoutEffect(() => {
+        lifetimeRef.current = {};
+        return () => { lifetimeRef.current = null; };
+    }, []);
+    useLayoutEffect(() => {
+        selectionRef.current = {};
+        return () => { selectionRef.current = null; };
+    }, [containerId]);
     const nextIdRef = useRef(0);
     const listRef = useRef<HTMLDivElement | null>(null);
     const batcherRef = useRef<LogBatcher<ParsedLog> | null>(null);
@@ -91,6 +105,7 @@ export const LogsPage = () => {
 
     const stream = useWS<string>(
         () => {
+            if (lifetimeRef.current === null) return;
             if (intentionalStopRef.current) {
                 intentionalStopRef.current = false;
                 return;
@@ -99,6 +114,7 @@ export const LogsPage = () => {
         },
         () => { /* connected */ },
         (line, first) => {
+            if (lifetimeRef.current === null) return;
             if (first) resetLogs();
             const stripped = line.replace(ANSI_REGEX, '');
             // Parse ONCE here, at ingest. Doing it in the render map or the
@@ -120,8 +136,12 @@ export const LogsPage = () => {
             description: error instanceof Error ? error.message : String(error)});
     }, [notification, t]);
     const listContainers = useCallback(async () => {
+        const lifetime = lifetimeRef.current;
+        if (lifetime === null) return;
+        const request = ++listRequestRef.current;
         try {
             const res = await guiApi.containers.containersList();
+            if (lifetimeRef.current !== lifetime || listRequestRef.current !== request) return;
             if (res.error) throw new Error(res.error.error);
             const options = res.data.containers?.flatMap<ContainerList>((c) => {
                 if (!c.names || !c.id) return [];
@@ -136,7 +156,7 @@ export const LogsPage = () => {
             setContainers(options ?? []);
             if (options?.length) setContainerId(current => current || options[0].value);
         } catch (e: unknown) {
-            reportListError(e);
+            if (lifetimeRef.current === lifetime && listRequestRef.current === request) reportListError(e);
         }
     }, [guiApi, reportListError]);
 
@@ -149,31 +169,44 @@ export const LogsPage = () => {
         resetLogs();
         startStream(`/api/containers/${containerId}/logs`);
         // Switching containers (or unmounting) closes the socket on purpose.
-        return () => { intentionalStopRef.current = true; stopStream(); };
+        return () => {
+            intentionalStopRef.current = true;
+            stopStream();
+            batcherRef.current?.reset();
+        };
     }, [containerId, startStream, stopStream]);
 
     useEffect(() => () => batcherRef.current?.reset(), []);
 
     const commandContainer = (command: "start" | "stop" | "restart") => async () => {
+        const lifetime = lifetimeRef.current;
+        const selection = selectionRef.current;
+        if (!containerId || lifetime === null || selection === null) return;
+        const request = ++commandRequestRef.current;
         const messages = {
             start: t('logsPage.containerStarted'),
             stop: t('logsPage.containerStopped'),
             restart: t('logsPage.containerRestarted'),
         };
         try {
-            if (!containerId) return;
             const res = await guiApi.containers.containersCreate(containerId, command);
+            if (lifetimeRef.current !== lifetime) return;
             if (res.error) throw new Error(res.error.error);
-            if (command === "start" || command === "restart") {
-                startStream(`/api/containers/${containerId}/logs`);
-            } else {
-                // Stopping the container intentionally closes the stream.
-                intentionalStopRef.current = true;
-                stopStream();
+            // Docker may finish a retired operation; it must not take control
+            // of the stream after another selection or a newer command.
+            if (selectionRef.current === selection && commandRequestRef.current === request) {
+                if (command === "start" || command === "restart") {
+                    startStream(`/api/containers/${containerId}/logs`);
+                } else {
+                    // Stopping the container intentionally closes the stream.
+                    intentionalStopRef.current = true;
+                    stopStream();
+                }
             }
             await listContainers();
-            notification.success({message: messages[command]});
+            if (lifetimeRef.current === lifetime) notification.success({message: messages[command]});
         } catch (e: unknown) {
+            if (lifetimeRef.current !== lifetime) return;
             notification.error({
                 message: t('logsPage.failedToCommandContainer', {command}),
                 description: e instanceof Error ? e.message : String(e),
