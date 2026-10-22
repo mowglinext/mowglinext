@@ -273,7 +273,11 @@ def start_bridge(rig, esc_type, workdir, log_path, extra_yaml='', env_override=N
                OPENMOWER_XESC_RIGHT_PORT=rig.paths['right'], OPENMOWER_XESC_MOW_PORT=rig.paths['mow'],
                OPENMOWER_XESC_TYPE=esc_type, OPENMOWER_ROBOT_CONFIG=cfg,
                OPENMOWER_ROBOT_TEMPLATE=ROBOT_TEMPLATE,
-               OPENMOWER_BACKEND_DEFAULTS=BACKEND_DEFAULTS)
+               OPENMOWER_BACKEND_DEFAULTS=BACKEND_DEFAULTS,
+               # Read the bridge's C logger while it is still alive. With
+               # stdout redirected, its default block buffer hides calibration
+               # events and can be lost by the intentional SIGKILL.
+               RCUTILS_LOGGING_BUFFERED_STREAM='0')
     env.update(env_override or {})
     log = open(log_path, 'w', encoding='utf-8')
     return subprocess.Popen(['ros2', 'launch', 'mowgli_openmower_bridge', 'openmower_bridge.launch.py'],
