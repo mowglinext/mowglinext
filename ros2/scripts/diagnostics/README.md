@@ -42,6 +42,30 @@ All motion scripts assume the robot has a clear zone in the commanded
 direction. The rotation script needs ~1.5 m radius; the straight-line
 script needs 5-6 m in front.
 
+## GNSS field-evidence capture (mowglinext#694)
+
+- **`capture_gnss_container_health.sh <session-name> [container-name]`** —
+  runs on the HOST (not via `docker exec` into `mowgli-ros2`), alongside
+  `mow_session_monitor.py` with the SAME session name. Records what the ROS
+  node has no visibility into: the `gps` container's `RestartCount` (sampled
+  once per second, to catch a mid-session recreate) and its raw
+  `docker logs -f` output (the `receiver_node`/`ntrip_node`
+  SIGINT/exit-code/restart lines). Writes
+  `<session>.container-health.jsonl` and `<session>.receiver-logs.txt` in the
+  current directory — cross-reference their timestamps against the monitor's
+  `session_elapsed_sec` to correlate a container restart with what the
+  fused pose/GPS were doing at that moment.
+
+`mow_session_monitor.py` itself additionally records, per sample: `/gps/fix`'s
+header stamp; the full bridged `/gps/status`
+(`mowgli_interfaces/GnssStatus`) including `position_observation_sequence`
+and the RTK/correction-stream fields; the RAW pre-bridge
+`/universal_gnss_receiver/status` (`universal_gnss_msgs/GnssStatus` — has its
+own `latitude_deg`/`longitude_deg`, independent of `/gps/fix`'s NavSatFix, so
+comparing the two localises a freeze to the receiver's solver vs the NavSatFix
+adapter specifically); and the receiver's own `runtime_observations` counter,
+polled once per second via `/universal_gnss_receiver/get_snapshot`.
+
 ## Session-log analyzers
 
 Used on the JSONL files produced by `ros2/scripts/mow_session_monitor.py`

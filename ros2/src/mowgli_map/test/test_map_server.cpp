@@ -226,6 +226,13 @@ TEST_F(MapServerTest, GuiAreaReplacementPreservesCalibratedDockGeometry)
   EXPECT_EQ(node_->docking_pose_for_test().position.x, -3.0);
   EXPECT_EQ(node_->docking_pose_for_test().position.y, -4.0);
   ASSERT_EQ(latest->markers.size(), dock_before.size());
+  // The dock body travels in its own namespace so the transit planner can let a start inside it
+  // plan its way out, while goals and paths keep it forbidden.
+  ASSERT_EQ(dock_before.size(), 3U);
+  EXPECT_EQ(dock_before[0].ns, "area");
+  EXPECT_EQ(dock_before[1].ns, "dock_corridor");
+  EXPECT_EQ(dock_before[2].ns, "dock_body");
+  EXPECT_EQ(dock_before[2].scale.x, 0.0);
   for (std::size_t i = 0; i < dock_before.size(); ++i)
   {
     EXPECT_EQ(latest->markers[i].ns, dock_before[i].ns);

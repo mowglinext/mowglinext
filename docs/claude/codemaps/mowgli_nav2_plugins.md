@@ -17,7 +17,7 @@ Normal transit planning is now `include/mowgli_nav2_plugins/authorized_transit_p
 and `src/authorized_transit_planner.cpp`: pinned Smac 2D with a private obstacle
 view and continuous polygon-union checks. `transit_geometry.hpp` owns the pure
 geometry rules; `test_authorized_transit.cpp` runs the real planner regressions.
-See `docs/TRANSIT_AUTHORIZATION.md` for terminal exceptions and recovery.
+See `docs/TRANSIT_AUTHORIZATION.md` for terminal exceptions and recovery. A start inside the `dock_body` ring (`Geometry::start_exempt`, `dockExitAnchor`) is connected to clear ground by a bounded exit leg instead of being refused; the leg never closes on the charging station (dock frame from the body + `dock_corridor` rings, `transit::dockFrame`) and a start whose pivot disc reaches the station is still refused.
 
 | Task | Start here |
 |------|------------|

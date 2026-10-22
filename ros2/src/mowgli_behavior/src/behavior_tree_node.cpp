@@ -39,6 +39,7 @@
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/escape_nodes.hpp"
 #include "mowgli_behavior/external_rain_state.hpp"
+#include "mowgli_behavior/fleet_yield_service.hpp"
 #include "mowgli_behavior/localization_health.hpp"
 #include "mowgli_behavior/recording_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
@@ -185,6 +186,7 @@ public:
 
 private:
   friend struct BladeServiceTestPeer;
+  friend struct FleetYieldServiceTestPeer;
   // ------------------------------------------------------------------
   // ROS2 infrastructure
   // ------------------------------------------------------------------
@@ -200,6 +202,7 @@ private:
                                     {
                                       std::lock_guard<std::mutex> lock(context_->context_mutex);
                                       context_->latest_status = *msg;
+                                      refreshFleetYieldLocked(*context_);
                                       context_->blade_telemetry_seen =
                                           context_->blade_telemetry_seen ||
                                           rclcpp::Time(msg->blade_status_stamp).nanoseconds() > 0;
@@ -277,6 +280,7 @@ private:
                                          context_->latest_emergency = *msg;
                                          context_->last_emergency_time =
                                              std::chrono::steady_clock::now();
+                                         refreshFleetYieldLocked(*context_);
                                        });
 
     power_sub_ = create_subscription<Power>(
@@ -286,6 +290,7 @@ private:
         {
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           context_->latest_power = *msg;
+          refreshFleetYieldLocked(*context_);  // Charger authority is independent of valid voltage.
 
           // Smooth the rail voltage before deriving the percent — motor transients
           // sag it 0.5-1 V and used to trip the docking thresholds at a genuine
@@ -330,6 +335,7 @@ private:
                                                    std::lock_guard<std::mutex> lock(
                                                        context_->context_mutex);
                                                    context_->boundary_violation = msg->data;
+                                                   refreshFleetYieldLocked(*context_);
                                                  });
 
     // Lethal boundary: outside the allowed area by more than the
@@ -344,6 +350,7 @@ private:
                                                    std::lock_guard<std::mutex> lock(
                                                        context_->context_mutex);
                                                    context_->lethal_boundary_violation = msg->data;
+                                                   refreshFleetYieldLocked(*context_);
                                                  });
 
     // mowglinext#637 phase 2: map_server's area-list generation counter, so
@@ -755,6 +762,7 @@ private:
 
   void setupServiceServer()
   {
+    fleet_yield_service_ = std::make_unique<FleetYieldService>(*this, context_);
     blade_control_service_ = std::make_unique<BladeControlService>(*this, context_);
     coverage_orientation_service_ = std::make_unique<CoverageOrientationService>(*this, context_);
     using HighLevelControl = mowgli_interfaces::srv::HighLevelControl;
@@ -788,6 +796,7 @@ private:
           bool cleared_dock_failure_latch = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
+            context_->fleet_yield.revoke();  // Every accepted external command, even repeat STOP.
             // Play pressed while parked in a charge hold (CHARGING /
             // CRITICAL_BATTERY_CHARGING): current_command is already 1 there,
             // so the assignment below is a no-op and the tree would keep
@@ -910,6 +919,7 @@ private:
           bool cleared_dock_failure_latch = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
+            context_->fleet_yield.revoke();
             context_->target_area_index = static_cast<int>(req->area);
             context_->resume_after_incomplete_end = false;
             context_->blade_direction.clearOperatorInhibit();
@@ -950,6 +960,10 @@ private:
         [this](const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
                std_srvs::srv::Trigger::Response::SharedPtr resp)
         {
+          {
+            std::lock_guard<std::mutex> lock(context_->context_mutex);
+            context_->fleet_yield.revoke();  // Fence immediately, not at the deferred reset tick.
+          }
           clear_resume_requested_.store(true);
           RCLCPP_INFO(get_logger(),
                       "Coverage resume clear requested — applied before the next BT tick");
@@ -1510,10 +1524,7 @@ private:
     coverage_orientation_service_->processPending();
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
-      if (mowgli_interfaces::updateMaintenanceActive())
-      {
-        context_->current_command = 8;  // COMMAND_STOP: hold position, never auto-resume.
-      }
+      refreshFleetYieldLocked(*context_);
       updateLocalizationHealthLocked();
     }
 
@@ -1561,6 +1572,7 @@ private:
       context_->area_completed_swaths.clear();
       context_->area_swath_count.clear();
       context_->area_resume_pose_index.clear();
+      context_->area_unit_progress.clear();
       context_->area_path_pose_count.clear();
       context_->area_plan_fingerprint.clear();
       context_->completed_areas.clear();
@@ -1628,6 +1640,7 @@ private:
   // ------------------------------------------------------------------
 
   std::shared_ptr<BTContext> context_;
+  std::unique_ptr<FleetYieldService> fleet_yield_service_;
   std::unique_ptr<BladeControlService> blade_control_service_;
   std::unique_ptr<CoverageOrientationService> coverage_orientation_service_;
 

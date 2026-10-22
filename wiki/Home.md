@@ -12,6 +12,7 @@ Welcome to the MowgliNext documentation wiki — the reference hub for the open-
 | [Configuration](Configuration) | All YAML parameters explained |
 | [Deployment](Deployment) | Docker Compose setup and troubleshooting |
 | [Simulation](Simulation) | Webots simulation and E2E test |
+| [Diagnostics and Session Monitoring](Diagnostics-and-Session-Monitoring) | Record and analyse a mowing session, GNSS container capture, motion test scripts |
 | [Sensors](Sensors) | GPS and LiDAR driver setup |
 | [Firmware](Firmware) | STM32 integration and COBS protocol |
 | [Behavior Trees](Behavior-Trees) | BT nodes, tree structure, control flow |
