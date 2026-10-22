@@ -28,6 +28,58 @@ beforeEach(() => {
         ? {parameters: args.body.parameters} : {}}));
 });
 
+it('keeps a newer draft when the retired root StrictMode initial load resolves late', async () => {
+    const finish: Array<(value: unknown) => void> = [];
+    mocks.api.settings.yamlList.mockImplementation(() => new Promise(resolve => finish.push(resolve)));
+    const view = renderHook(useSettingsManager, {reactStrictMode: true});
+    expect(finish).toHaveLength(2);
+    await act(() => Promise.resolve( finish[1]({data: {ticks_per_meter: 48}})));
+    expect(view.result.current.loading).toBe(false);
+    act(() => view.result.current.handleChange('ticks_per_meter', 75));
+    expect(view.result.current.dirtyCount).toBe(1);
+    await act(() => Promise.resolve( finish[0]({data: {ticks_per_meter: 48}})));
+    expect(view.result.current.values.ticks_per_meter).toBe(75);
+    expect(view.result.current.dirtyCount).toBe(1);
+    expect(mocks.api.settings.yamlCreate).not.toHaveBeenCalled();
+    view.unmount();
+});
+
+it('keeps edits made while the active initial load is pending', async () => {
+    let finish!: (value: unknown) => void;
+    mocks.api.settings.yamlList.mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+    const {result, rerender} = renderHook(useSettingsManager);
+    act(() => result.current.handleChange('ticks_per_meter', 75));
+    act(() => result.current.handleBulkChange({chassis_width: .6, removed_parameter: null}));
+    await act(() => Promise.resolve( finish({data: {ticks_per_meter: 48, chassis_width: .45, untouched: 'server', removed_parameter: 1}})));
+    expect(result.current.values).toMatchObject({ticks_per_meter: 75, chassis_width: .6, untouched: 'server', removed_parameter: null});
+    expect(result.current.dirtyCount).toBe(3);
+    rerender();
+    expect(mocks.api.settings.yamlList).toHaveBeenCalledTimes(1);
+});
+
+it('waits for the active root StrictMode load and ignores a retired failure', async () => {
+    const requests: Array<{resolve: (value: unknown) => void; reject: (error: Error) => void}> = [];
+    mocks.api.settings.yamlList.mockImplementation(() => new Promise((resolve, reject) => requests.push({resolve, reject})));
+    const {result} = renderHook(useSettingsManager, {reactStrictMode: true});
+    expect(requests).toHaveLength(2);
+    await act(() => Promise.resolve( requests[0].reject(new Error('retired read'))));
+    expect(result.current.loading).toBe(true);
+    expect(mocks.notification.error).not.toHaveBeenCalled();
+    await act(() => Promise.resolve( requests[1].resolve({data: {ticks_per_meter: 48}})));
+    expect(result.current.loading).toBe(false);
+    expect(result.current.values.ticks_per_meter).toBe(48);
+    expect(result.current.dirtyCount).toBe(0);
+});
+
+it('ignores an initial-load rejection after unmount', async () => {
+    let reject!: (error: Error) => void;
+    mocks.api.settings.yamlList.mockImplementation(() => new Promise((_resolve, fail) => {reject = fail;}));
+    const view = renderHook(useSettingsManager);
+    view.unmount();
+    await act(() => Promise.resolve( reject(new Error('unmounted read'))));
+    expect(mocks.notification.error).not.toHaveBeenCalled();
+});
+
 it.each(["mavros", "mowgli", "openmower"])("saves display-only edits without live push or ROS restart on %s", async backend => {
     mocks.hardware.backend = backend;
     const {result} = renderHook(() => useSettingsManager());

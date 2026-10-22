@@ -961,6 +961,8 @@ func listDriveReportPaths(ctx context.Context, dockerProvider types.IDockerProvi
 }
 
 func persistRobotYamlUpdates(dbProvider types.IDBProvider, payload map[string]any) error {
+	settingsYAMLWriteMu.Lock()
+	defer settingsYAMLWriteMu.Unlock()
 	mavros := activeHardwareBackendForDB(dbProvider) == "mavros"
 	configFilePath, err := dbProvider.Get("system.mower.yamlConfigFile")
 	if err != nil {

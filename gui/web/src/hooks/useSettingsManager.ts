@@ -456,22 +456,36 @@ export const useSettingsManager = () => {
         notification.error({message: t('settingsSections.toasts.loadFailed'), description: errorMessage(error)});
     });
 
+    const adoptInitialValues = useEffectEvent((data: SettingsValues) => {
+        const baseline = savedValues;
+        setSavedValues(data);
+        setLocalValues(current => {
+            const merged = {...data};
+            for (const [key, value] of Object.entries(current)) {
+                if (!valuesMatch(value, baseline[key])) merged[key] = value;
+            }
+            return merged;
+        });
+        initialLoadDone.current = true;
+    });
+
     useEffect(() => {
+        let active = true;
         void (async () => {
             try {
                 setLoading(true);
                 const res = await guiApi.settings.yamlList();
+                if (!active) return;
                 if (res.error) throw new Error(apiErrorMessage(res.error));
                 const data = (res.data) || {};
-                setSavedValues(data);
-                setLocalValues(data);
-                initialLoadDone.current = true;
+                adoptInitialValues(data);
             } catch (e) {
-                reportLoadError(e);
+                if (active) reportLoadError(e);
             } finally {
-                setLoading(false);
+                if (active) setLoading(false);
             }
         })();
+        return () => { active = false; };
     }, [guiApi.settings]);
 
     // The reset value follows the draft preset, including before Save.

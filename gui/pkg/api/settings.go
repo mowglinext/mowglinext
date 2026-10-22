@@ -23,6 +23,11 @@ import (
 
 const latLonDecimalPlaces = 9
 
+// Serialize GUI read/merge/write transactions and their runtime sidecars.
+// Same-key edits are ordered by transaction acquisition (last writer wins).
+// This mutex does not coordinate ROS or other processes sharing the file.
+var settingsYAMLWriteMu sync.Mutex
+
 var fixedPrecisionEnvKeys = map[string]bool{
 	"OM_DATUM_LAT":  true,
 	"OM_DATUM_LONG": true,
@@ -1489,6 +1494,8 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			c.JSON(400, ErrorResponse{Error: err.Error()})
 			return
 		}
+		settingsYAMLWriteMu.Lock()
+		defer settingsYAMLWriteMu.Unlock()
 
 		configFilePath, err := dbProvider.Get("system.mower.yamlConfigFile")
 		if err != nil {
