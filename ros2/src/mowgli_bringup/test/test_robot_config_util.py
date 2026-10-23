@@ -60,6 +60,66 @@ def _template_params() -> dict:
     return doc.get("mowgli", {}).get("ros__parameters", {})
 
 
+def _velocity_region(config, linear):
+    return next(config[name] for name in config["velocity_polygons"]
+                if config[name]["linear_min"] <= linear <= config[name]["linear_max"])
+
+
+@pytest.mark.parametrize("params,padding", [({}, 0.01),
+    ({"chassis_length": 0.9, "chassis_width": 0.7, "chassis_center_x": 0.3}, 0.03),
+    ({"chassis_length": 0.6013, "chassis_width": 0.4517}, 0.0),
+    ({"chassis_width": 0.04}, 0.2)])
+def test_collision_catcher_preserves_forward_and_padded_body(params, padding):
+    front, rear, half = _util.chassis_footprint(params)
+    config = _util.collision_monitor_velocity_polygons(front, rear, half, padding)
+    parse = lambda name: yaml.safe_load(config[name]["points"])
+    f, r, h = (float(f"{v:.3f}") for v in (front, rear, half))
+    body = [[f + padding, h + padding], [f + padding, -h - padding],
+            [r - padding, -h - padding], [r - padding, h + padding]]
+    assert parse("rotation") == body
+    assert parse("forward") == [[float(f"{front + .12:.3f}"), h],
+        [float(f"{front + .12:.3f}"), -h], [float(f"{front - .02:.3f}"), -h],
+        [float(f"{front - .02:.3f}"), h]]
+    # Reverse must retain all four padded corners and add only a rear extension.
+    reverse = parse("reverse")
+    def contains(point):
+        x, y = point
+        inside = False
+        for a, b in zip(reverse, reverse[1:] + reverse[:1]):
+            cross = (x - a[0]) * (b[1] - a[1]) - (y - a[1]) * (b[0] - a[0])
+            if abs(cross) < 1e-12 and min(a[0], b[0]) <= x <= max(a[0], b[0]) \
+                    and min(a[1], b[1]) <= y <= max(a[1], b[1]):
+                return True
+            if (a[1] > y) != (b[1] > y) and \
+                    x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]:
+                inside = not inside
+        return inside
+    assert all(contains(corner) for corner in body)
+    assert max(x for x, y in reverse) == f + padding
+    assert min(x for x, y in reverse) <= r - padding
+    assert max(abs(y) for x, y in reverse) == h + padding
+    assert config["type"] == "velocity_polygon" and config["holonomic"] is False
+
+
+def test_collision_catcher_selects_exact_zero_and_all_finite_signed_inputs():
+    config = _util.collision_monitor_velocity_polygons(.53, -.17, .275, .01)
+    for value in (0.0, -0.0):
+        assert _velocity_region(config, value) is config["rotation"]
+    for value in (-sys.float_info.max, -1001.0, -1e-12, -math.ulp(0.0)):
+        assert _velocity_region(config, value) is config["reverse"]
+    for value in (sys.float_info.max, 1001.0, 1e-12, math.ulp(0.0)):
+        assert _velocity_region(config, value) is config["forward"]
+
+
+@pytest.mark.parametrize("geometry", [(math.nan, -.17, .275, .01),
+    (.53, -math.inf, .275, .01), (.53, -.17, math.inf, .01),
+    (.53, -.17, .275, math.nan), (.53, -.17, .275, -.01),
+    (.53, .53, .275, .01), (.53, -.17, 0, .01), (.53, -.17, .0001, .01)])
+def test_collision_catcher_rejects_invalid_geometry(geometry):
+    with pytest.raises(ValueError):
+        _util.collision_monitor_velocity_polygons(*geometry)
+
+
 def _write_sparse(params: dict) -> str:
     """Write a sparse runtime config to a temp file, return its path."""
     tmp = tempfile.NamedTemporaryFile(

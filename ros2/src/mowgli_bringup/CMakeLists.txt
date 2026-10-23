@@ -51,6 +51,9 @@ if(BUILD_TESTING)
   add_launch_test(test/test_navsat_status_universal.launch.py
     TIMEOUT 45
   )
+  add_launch_test(test/test_collision_monitor_direction.launch.py
+    TIMEOUT 90
+  )
 
   # Static config-validation tests for nav2_params.yaml. Cheap (no nodes
   # spun up) and they guard against regressions like the 2026-05-08
@@ -64,7 +67,16 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gnss_launch_config test/test_gnss_launch_config.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_sim_localization_geometry test/test_sim_localization_geometry.py
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_sim_gps_quality_launch test/test_sim_gps_quality_launch.py
+    TIMEOUT 30
+  )
   ament_add_pytest_test(test_foxglove_launch_config test/test_foxglove_launch_config.py
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_motion_footprint_launch test/test_motion_footprint_launch.py
     TIMEOUT 30
   )
   # The GNSS sidecar's embedded launcher (install/compose/docker-compose.gps.yml)
@@ -76,6 +88,9 @@ if(BUILD_TESTING)
   # template-only defaults, sparse overrides + fall-through, reset-to-default,
   # and full-config backward compat.
   ament_add_pytest_test(test_robot_config_util test/test_robot_config_util.py
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_collision_monitor_launch test/test_collision_monitor_launch.py
     TIMEOUT 30
   )
   ament_add_pytest_test(test_urdf_xacro test/test_urdf_xacro.py

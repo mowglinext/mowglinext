@@ -63,6 +63,7 @@
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
+#include "nav2_msgs/srv/get_costmap.hpp"
 #include "tf2_ros/buffer.hpp"
 #include <gtest/gtest.h>
 
@@ -278,6 +279,23 @@ protected:
     server_node = rclcpp::Node::make_shared("fake_nav2");
     follow = std::make_unique<FakeActionServer<Follow>>(server_node, "/follow_path");
     navigate = std::make_unique<FakeActionServer<Navigate>>(server_node, "/navigate_to_pose");
+    // Valid-map recovery controls need the production snapshot service. Missing
+    // service behavior is covered separately by test_follow_strip_detour_costmap.
+    costmap_service = server_node->create_service<nav2_msgs::srv::GetCostmap>(
+        "/global_costmap/get_costmap",
+        [](std::shared_ptr<nav2_msgs::srv::GetCostmap::Request>,
+           std::shared_ptr<nav2_msgs::srv::GetCostmap::Response> response)
+        {
+          auto& map = response->map;
+          map.header.frame_id = "map";
+          map.metadata.resolution = 0.1;
+          map.metadata.size_x = 120;
+          map.metadata.size_y = 40;
+          map.metadata.origin.position.x = -1.0;
+          map.metadata.origin.position.y = -2.0;
+          map.metadata.origin.orientation.w = 1.0;
+          map.data.resize(4800, 0);
+        });
     createBladeService();
 
     startExecutor();
@@ -452,6 +470,7 @@ protected:
   std::unique_ptr<FakeActionServer<Navigate>> navigate;
   rclcpp::Node::SharedPtr blade_node;
   rclcpp::Service<MowerControl>::SharedPtr blade_service;
+  rclcpp::Service<nav2_msgs::srv::GetCostmap>::SharedPtr costmap_service;
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> blade_executor;
   std::atomic<bool> blade_stopping{false};
   std::thread blade_spinner;

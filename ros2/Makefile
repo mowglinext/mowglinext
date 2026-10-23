@@ -130,8 +130,7 @@ e2e-test-no-lidar: sim-stop build
 	SIM_LOG=/tmp/mowgli-e2e-no-lidar-sim.log; \
 	: > "$$SIM_LOG"; \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
-	  headless:=true use_rviz:=false use_lidar:=false \
-	  simulate_gps_degradation:=false > >(tee "$$SIM_LOG") 2>&1 & \
+	  headless:=true use_rviz:=false use_lidar:=false > >(tee "$$SIM_LOG") 2>&1 & \
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
 	echo "Waiting for Nav2 lifecycle activation..."; \

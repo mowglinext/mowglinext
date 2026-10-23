@@ -117,6 +117,14 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
 
+  ament_add_pytest_test(test_cutting_tool_frame
+    test/test_cutting_tool_frame.py
+  )
+  ament_add_pytest_test(test_fake_hardware_blade_status
+    test/test_fake_hardware_blade_status.py
+    ENV ROS_DOMAIN_ID=186
+    TIMEOUT 30
+  )
   ament_add_pytest_test(test_sim_navsat_rtk_fix
     test/test_sim_navsat_rtk_fix.py
   )
@@ -125,6 +133,12 @@ if(BUILD_TESTING)
   )
   ament_add_pytest_test(test_e2e_ground_truth
     test/test_e2e_ground_truth.py
+  )
+  ament_add_pytest_test(test_sim_mission_geometry
+    test/test_sim_mission_geometry.py
+  )
+  ament_add_pytest_test(test_e2e_no_lidar_validation
+    test/test_e2e_no_lidar_validation.py
   )
   ament_add_pytest_test(test_nav2_readiness_gate
     test/test_nav2_readiness_gate.py

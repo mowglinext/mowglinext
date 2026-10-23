@@ -47,6 +47,7 @@
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
+#include "nav2_msgs/srv/get_costmap.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -343,15 +344,24 @@ private:
   BT::NodeStatus yieldToFleet(const std::shared_ptr<BTContext>& ctx, bool mid_pass);
   // Detour-and-continue: on a FollowCoveragePath obstacle-abort, try to salvage
   // the REST of the current segment instead of abandoning it. Confirms (via the
-  // latest global costmap) that a lethal cell really lies ahead, searches FORWARD
+  // freshly requested global costmap) that a lethal cell really lies ahead, searches FORWARD
   // for the first footprint-clear pose past the obstacle (>= min skip distance),
   // trims the current unit to that pose, and dispatches the EXISTING blade-off
   // NavigateToPose transit toward it (the Nav2 global planner routes around the
   // obstacle). transit_active_ then re-dispatches FollowCoveragePath (blade on)
-  // for the remainder. Returns true when a detour was started (caller returns
-  // RUNNING); false when it should fall back to the abort-to-next path (no
-  // costmap, abort not obstacle-related, no clear resume, or budget exhausted).
-  bool tryStartDetour(const std::shared_ptr<BTContext>& ctx);
+  // for the remainder. Pending keeps the failed action episode alive with the
+  // blade off; Started dispatches a detour. Declined retains the established
+  // fallback policy. Unavailable preserves reached progress and fails this unit
+  // conservatively, without substituting an old snapshot or skipping ahead.
+  enum class DetourAttempt
+  {
+    kPending,
+    kStarted,
+    kDeclined,
+    kUnavailable
+  };
+  DetourAttempt tryStartDetour(const std::shared_ptr<BTContext>& ctx);
+  void cancelDetourCostmapRequest();
   // A detour's resume transit failed and no further detour is possible: resume
   // the SAME unit past the blocked stretch (blocked_stretch.hpp) instead of
   // dropping the rest of it. False when nothing drivable is left or the
@@ -555,13 +565,16 @@ private:
   uint32_t area_idx_ = 0;
 
   // --- Detour-and-continue state (obstacle blocking an un-skirtable segment) ---
-  // Latest global costmap, used to (a) confirm an abort is obstacle-related and
-  // (b) find a footprint-clear resume pose past the obstacle. Latched
-  // (transient_local) subscription; updated on the node's single MutuallyExclusive
-  // callback group so it is serialized against the BT tick (no extra mutex — see
-  // bt_context.hpp). Null until the first costmap arrives → detour falls back.
-  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
-  nav_msgs::msg::OccupancyGrid::SharedPtr latest_costmap_;
+  // One fresh full snapshot per detour decision. The global publisher sends
+  // deltas, so its retained full grid cannot establish current clearance. The
+  // future is polled only by this pass; no callback captures this node. Halt,
+  // yield, unit changes and a new pass remove/forget the outstanding request.
+  using GetCostmap = nav2_msgs::srv::GetCostmap;
+  rclcpp::Client<GetCostmap>::SharedPtr detour_costmap_client_;
+  std::optional<rclcpp::Client<GetCostmap>::FutureAndRequestId> detour_costmap_request_;
+  bool detour_costmap_waiting_{false};
+  std::chrono::steady_clock::time_point detour_costmap_started_;
+  static constexpr double kDetourCostmapWaitSec = 3.0;
 
   // --- Coverage controller rejoin (FTC turn fallback) ------------------------
   // FTC republishes the rest of the unit on the goal checker's plan topic when
@@ -571,7 +584,7 @@ private:
   // so this node also hears its own dispatches: only a message STAMPED after the
   // goal in flight was sent counts (FTC stamps its republish with now(); a
   // dispatched unit carries the coverage plan's older stamp). Serialized
-  // against the tick like latest_costmap_ (one MutuallyExclusive group).
+  // against the tick (one MutuallyExclusive group).
   struct ControllerRejoin
   {
     rclcpp::Time stamp;
@@ -660,7 +673,7 @@ private:
 
   // Arc-length the resume cursor is stepped FORWARD past a NON-obstacle FTC abort
   // (issue #389). When tryStartDetour declines (no lethal cell ahead / budget
-  // spent / no costmap) the abort is not a skirtable obstacle, so persisting the
+  // spent / no clear resume) the abort is not a skirtable obstacle, so persisting the
   // cursor AT the abort pose makes the next dispatch resume on the identical pose
   // and re-abort there forever (deterministic ~20 % stall, capping every
   // sub-path). Skipping this far ahead lands the re-dispatch beyond the offending

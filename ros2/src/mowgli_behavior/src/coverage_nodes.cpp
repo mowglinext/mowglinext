@@ -28,6 +28,7 @@
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/coverage_preview.hpp"
+#include "mowgli_behavior/detour_costmap_snapshot.hpp"
 #include "mowgli_behavior/mow_coverage_plausibility.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
 #include "mowgli_behavior/strip_progress.hpp"
@@ -275,6 +276,7 @@ std::size_t forwardSkipIndex(const std::vector<geometry_msgs::msg::PoseStamped>&
 
 BT::NodeStatus FollowStrip::onStart()
 {
+  cancelDetourCostmapRequest();
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   // A prior halted/terminal pass must never leave a live status overlay behind.
   ctx->coverage_scan_paused = false;
@@ -561,17 +563,11 @@ BT::NodeStatus FollowStrip::onStart()
           }
         });
   }
-  // Detour-and-continue: subscribe (latched) to the global costmap so an
-  // obstacle-abort can be confirmed and a clear resume pose found. Created once.
-  if (!costmap_sub_)
+  // Costmap2DPublisher exposes get_costmap in the costmap node namespace.
+  // Request it per decision: the retained published full grid omits later deltas.
+  if (!detour_costmap_client_)
   {
-    costmap_sub_ = ctx->node->create_subscription<nav_msgs::msg::OccupancyGrid>(
-        "/global_costmap/costmap",
-        rclcpp::QoS(1).transient_local().reliable(),
-        [this](nav_msgs::msg::OccupancyGrid::SharedPtr msg)
-        {
-          latest_costmap_ = std::move(msg);
-        });
+    detour_costmap_client_ = ctx->node->create_client<GetCostmap>("/global_costmap/get_costmap");
   }
   // Per-segment detour budget + footprint radius from ports (see providedPorts).
   {
@@ -1225,6 +1221,7 @@ BT::NodeStatus FollowStrip::onRunning()
   // every swath was skipped (nothing got mowed).
   auto advance = [&]() -> BT::NodeStatus
   {
+    cancelDetourCostmapRequest();
     // Whatever way the current unit ended — mowed, booked, skipped — its blade-off transit goal
     // must not outlive it (field 2026-10-09: the orphan kept the navigator busy for 7 minutes).
     cancelTransit(ctx, "leaving the unit");
@@ -1433,7 +1430,7 @@ BT::NodeStatus FollowStrip::onRunning()
   // (IsScanStale max_age_sec in main_tree.xml). See scan_pause.hpp.
   if (swath_goal_sent_ && !transit_active_ && !transit_pending_)
   {
-    stepScanPause(ctx);
+    stepScanPause(ctx, /*allow_resume=*/!detour_costmap_waiting_);
   }
 
   // A required blade-off transit could not be dispatched because navigate_to_pose
@@ -1590,14 +1587,19 @@ BT::NodeStatus FollowStrip::onRunning()
       const bool had_detour_in_flight = last_detour_stuck_point_.has_value();
       const geometry_msgs::msg::Point prior_stuck_point =
           had_detour_in_flight ? *last_detour_stuck_point_ : geometry_msgs::msg::Point{};
+      DetourAttempt detour = DetourAttempt::kDeclined;
+      if (!start_pose_blocked && had_detour_in_flight)
+      {
+        detour = tryStartDetour(ctx);
+        if (detour == DetourAttempt::kPending || detour == DetourAttempt::kStarted)
+        {
+          return BT::NodeStatus::RUNNING;
+        }
+      }
       transit_active_ = false;
       transit_abort_seen_ = false;
       last_detour_stuck_point_.reset();
       nav_handle_.reset();
-      if (!start_pose_blocked && had_detour_in_flight && tryStartDetour(ctx))
-      {
-        return BT::NodeStatus::RUNNING;
-      }
       if (!start_pose_blocked)
       {
         // issue #732: remember this target for the rest of the session so a
@@ -1636,7 +1638,8 @@ BT::NodeStatus FollowStrip::onRunning()
       // holds for EVERY transit into the unit, not only a detour's: later the
       // same day a non-obstacle abort's resume transit (0.7 m, refused by RPP
       // beside the hedge) still dropped the remaining 5296 poses of the rings.
-      if (!start_pose_blocked && resumeUnitPastBlockedStretch(ctx))
+      if (!start_pose_blocked && detour != DetourAttempt::kUnavailable &&
+          resumeUnitPastBlockedStretch(ctx))
       {
         return BT::NodeStatus::RUNNING;
       }
@@ -1733,7 +1736,10 @@ BT::NodeStatus FollowStrip::onRunning()
   if (status == action_msgs::msg::GoalStatus::STATUS_ABORTED ||
       status == action_msgs::msg::GoalStatus::STATUS_CANCELED)
   {
-    logSegmentTracking(ctx, "ended early");
+    if (!detour_costmap_waiting_)
+    {
+      logSegmentTracking(ctx, "ended early");
+    }
     const std::size_t trim_offset = (swath_idx_ < swath_resume_start_indices_.size())
                                         ? swath_resume_start_indices_[swath_idx_]
                                         : 0;
@@ -1766,13 +1772,27 @@ BT::NodeStatus FollowStrip::onRunning()
                   detours_used_);
       detours_used_ = 0;
     }
-    if (tryStartDetour(ctx))
+    const DetourAttempt detour = tryStartDetour(ctx);
+    if (detour == DetourAttempt::kPending)
+    {
+      return BT::NodeStatus::RUNNING;
+    }
+    if (detour == DetourAttempt::kStarted)
     {
       follow_handle_.reset();
       return BT::NodeStatus::RUNNING;
     }
+    if (detour == DetourAttempt::kUnavailable)
+    {
+      // Failure to acquire current geometry is not a non-obstacle abort.
+      // Keep the reached cursor, without stepping over an unverified span.
+      persistResumeCursor(ctx);
+      follow_handle_.reset();
+      ++swaths_skipped_;
+      return advance();
+    }
     // NON-OBSTACLE / un-detourable abort (issue #389). tryStartDetour declined
-    // (no lethal cell ahead, budget spent, or no costmap), so the abort is not a
+    // (no lethal cell ahead, budget spent, or no clear resume), so the abort is not a
     // skirtable obstacle. Persisting the resume cursor AT the abort pose makes the
     // next dispatch resume on the identical pose and re-abort there — a
     // deterministic stall that caps the sub-path at the abort fraction forever
@@ -1904,6 +1924,7 @@ BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, 
 
 void FollowStrip::abortActiveGoals(const std::shared_ptr<BTContext>& ctx)
 {
+  cancelDetourCostmapRequest();
   blade_dispatch_pending_ = false;
   // abandonGoal() also reaches a goal the server has not answered yet (no handle to cancel).
   abandonGoal(follow_client_,
@@ -2147,6 +2168,7 @@ bool FollowStrip::bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx)
 
 void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx)
 {
+  cancelDetourCostmapRequest();
   // Trim the current unit to [idx, end). Fold idx into its resume offset so the
   // absolute cursor stays a consistent index into the concatenation.
   const auto& poses = swaths_[swath_idx_].poses;
@@ -2405,7 +2427,17 @@ FollowStrip::DigRecoveryStep FollowStrip::stepDigRecovery(const std::shared_ptr<
   return DigRecoveryStep::kBusy;
 }
 
-bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
+void FollowStrip::cancelDetourCostmapRequest()
+{
+  if (detour_costmap_request_ && detour_costmap_client_)
+  {
+    detour_costmap_client_->remove_pending_request(detour_costmap_request_->request_id);
+  }
+  detour_costmap_request_.reset();
+  detour_costmap_waiting_ = false;
+}
+
+FollowStrip::DetourAttempt FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
 {
   // Budget: never loop forever detouring obstacle after obstacle on one segment.
   if (detours_used_ >= max_detours_per_segment_)
@@ -2415,30 +2447,67 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
                 max_detours_per_segment_,
                 swath_idx_ + 1,
                 swaths_.size());
-    return false;
+    cancelDetourCostmapRequest();
+    return DetourAttempt::kDeclined;
   }
   if (swath_idx_ >= swaths_.size() || swaths_[swath_idx_].poses.size() < 2)
   {
-    return false;
+    cancelDetourCostmapRequest();
+    return DetourAttempt::kDeclined;
   }
 
-  // Snapshot the latest global costmap into the ROS-free view. No costmap yet
-  // (subscription just settling / global_costmap silent) → cannot confirm an
-  // obstacle → fall back (never detour blind).
-  auto grid = latest_costmap_;
-  if (!grid || grid->info.width == 0 || grid->info.height == 0)
+  if (!detour_costmap_waiting_)
   {
-    RCLCPP_WARN(ctx->node->get_logger(),
-                "FollowStrip: no global costmap available — cannot detour, falling back to skip");
-    return false;
+    detour_costmap_waiting_ = true;
+    detour_costmap_started_ = std::chrono::steady_clock::now();
+    setBladeEnabled(false);
   }
-  DetourCostmap cm;
-  cm.origin_x = grid->info.origin.position.x;
-  cm.origin_y = grid->info.origin.position.y;
-  cm.resolution = grid->info.resolution;
-  cm.width = grid->info.width;
-  cm.height = grid->info.height;
-  cm.data = grid->data;  // copy (global costmap is a bounded, modest grid)
+  const auto unavailable = [&]()
+  {
+    cancelDetourCostmapRequest();
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: current global costmap acquisition failed — preserving reached "
+                "cursor and skipping this unit for now");
+    return DetourAttempt::kUnavailable;
+  };
+  if (std::chrono::steady_clock::now() - detour_costmap_started_ >=
+      std::chrono::duration<double>(kDetourCostmapWaitSec))
+  {
+    return unavailable();
+  }
+  std::optional<DetourCostmap> snapshot;
+  try
+  {
+    if (!detour_costmap_request_)
+    {
+      if (!detour_costmap_client_ || !detour_costmap_client_->service_is_ready())
+      {
+        return DetourAttempt::kPending;
+      }
+      detour_costmap_request_ =
+          detour_costmap_client_->async_send_request(std::make_shared<GetCostmap::Request>());
+    }
+    if (detour_costmap_request_->wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+    {
+      return DetourAttempt::kPending;
+    }
+    const auto response = detour_costmap_request_->get();
+    if (response)
+    {
+      snapshot = detourCostmapSnapshot(response->map);
+    }
+  }
+  catch (const std::exception& e)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(), "FollowStrip: GetCostmap failed: %s", e.what());
+    return unavailable();
+  }
+  cancelDetourCostmapRequest();
+  if (!snapshot)
+  {
+    return unavailable();
+  }
+  const DetourCostmap& cm = *snapshot;
 
   DetourResumeCfg cfg;
   cfg.min_skip_dist_m = kDetourMinSkipM;
@@ -2461,6 +2530,32 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
 
   const auto& poses = swaths_[swath_idx_].poses;
   const std::size_t stuck = std::min(path_progress_idx_, poses.size() - 1);
+  // footprintClear converts disc bounds to int64 cell coordinates. Validate
+  // those conversions before any candidate can authorize a transit.
+  const double radius = std::max(cfg.footprint_radius_m, cfg.wedge_radius_m);
+  if (!std::isfinite(radius) || radius < 0.0)
+  {
+    return unavailable();
+  }
+  const double inverse_resolution = 1.0 / cm.resolution;
+  for (const auto& pose : poses)
+  {
+    // Use the same reciprocal multiplication and floor as footprintClear.
+    // Division can round below an int64 limit while that expression reaches it.
+    for (const double coordinate :
+         {std::floor((pose.pose.position.x - radius - cm.origin_x) * inverse_resolution),
+          std::floor((pose.pose.position.x + radius - cm.origin_x) * inverse_resolution),
+          std::floor((pose.pose.position.y - radius - cm.origin_y) * inverse_resolution),
+          std::floor((pose.pose.position.y + radius - cm.origin_y) * inverse_resolution)})
+    {
+      if (!std::isfinite(coordinate) ||
+          coordinate <= static_cast<double>(std::numeric_limits<int64_t>::min()) ||
+          coordinate >= static_cast<double>(std::numeric_limits<int64_t>::max()))
+      {
+        return unavailable();
+      }
+    }
+  }
   // A detour's TRANSIT TARGET (the resume pose found below) is re-derived from
   // the live costmap and can drift past session_failed_transit_targets' merge
   // radius between dispatch attempts, so it alone does not reliably stop a
@@ -2480,9 +2575,16 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
                 "retrying — skipping",
                 swath_idx_ + 1,
                 swaths_.size());
-    return false;
+    return DetourAttempt::kDeclined;
   }
-  const DetourDecision d = decideDetour(cm, poses, stuck, cfg);
+  const DetourDecision d = decideDetour(cm,
+                                        poses,
+                                        stuck,
+                                        cfg,
+                                        [&](double x, double y)
+                                        {
+                                          return detourTransitTargetCenterClear(cm, x, y);
+                                        });
 
   if (!d.obstacle_confirmed)
   {
@@ -2493,7 +2595,7 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
                 "not detouring",
                 swath_idx_ + 1,
                 swaths_.size());
-    return false;
+    return DetourAttempt::kDeclined;
   }
   if (!d.resume_idx.has_value())
   {
@@ -2503,7 +2605,7 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
                 swath_idx_ + 1,
                 swaths_.size(),
                 kDetourMaxSearchM);
-    return false;
+    return DetourAttempt::kDeclined;
   }
   const std::size_t idx = *d.resume_idx;
   // Captured BEFORE trimUnitAt mutates swaths_[swath_idx_].poses (poses is a
@@ -2544,7 +2646,7 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
   swath_goal_sent_ = false;
   transit_pending_ = false;
   transit_active_ = false;
-  return sendCurrentSwath(ctx);
+  return sendCurrentSwath(ctx) ? DetourAttempt::kStarted : DetourAttempt::kDeclined;
 }
 
 bool FollowStrip::resumeUnitPastBlockedStretch(const std::shared_ptr<BTContext>& ctx)

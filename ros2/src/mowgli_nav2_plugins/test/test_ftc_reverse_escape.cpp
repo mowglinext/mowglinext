@@ -86,6 +86,36 @@ TEST(ReverseEscape, AdvanceIgnoresNegativeDt)
   EXPECT_DOUBLE_EQ(d, 0.10);
 }
 
+TEST(ReverseEscape, ZeroStepStillCapsADecreasedBudget)
+{
+  mnp::ReverseEscapeCfg cfg;
+  cfg.max_dist_m = 0.20;
+  EXPECT_DOUBLE_EQ(mnp::ReverseEscapeAdvance(cfg, 0.25, 0.0, 0.1), cfg.max_dist_m);
+  EXPECT_DOUBLE_EQ(mnp::ReverseEscapeAdvance(cfg, 0.25, -0.10, 0.0), cfg.max_dist_m);
+  EXPECT_DOUBLE_EQ(mnp::ReverseEscapeAdvance(cfg, 0.25, -0.10, -1.0), cfg.max_dist_m);
+}
+
+TEST(ReverseEscape, PositiveConsumptionCannotDisappearAtFloatingPointLimits)
+{
+  mnp::ReverseEscapeCfg cfg;
+  const double below_cap = std::nextafter(cfg.max_dist_m, 0.0);
+  const double sub_ulp_step = (cfg.max_dist_m - below_cap) / 4.0;
+  EXPECT_DOUBLE_EQ(mnp::ReverseEscapeAdvance(cfg, below_cap, sub_ulp_step, 1.0), cfg.max_dist_m);
+  EXPECT_GT(mnp::ReverseEscapeAdvance(cfg, 0.0, std::numeric_limits<double>::denorm_min(), 0.01),
+            0.0);
+  EXPECT_DOUBLE_EQ(mnp::ReverseEscapeAdvance(cfg, below_cap, 0.0, 0.01), below_cap);
+}
+
+TEST(ReverseEscape, NonfinitePositiveStepExhaustsTheBudget)
+{
+  mnp::ReverseEscapeCfg cfg;
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_DOUBLE_EQ(mnp::ReverseEscapeAdvance(cfg, 0.0, infinity, 0.1), cfg.max_dist_m);
+  EXPECT_DOUBLE_EQ(mnp::ReverseEscapeAdvance(cfg, 0.0, nan, 0.1), cfg.max_dist_m);
+  EXPECT_DOUBLE_EQ(mnp::ReverseEscapeAdvance(cfg, 0.0, 0.1, nan), cfg.max_dist_m);
+}
+
 // Integration-style: reversing tick by tick reaches the cap, then the decision
 // flips to kExhausted — the full escape lifecycle the controller drives.
 TEST(ReverseEscape, ReversesUntilCapThenGivesUp)

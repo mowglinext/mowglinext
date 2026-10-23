@@ -14,18 +14,23 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
+#include <tuple>
 #include <vector>
 
+#include <nav2_core/controller_exceptions.hpp>
 #include <nav2_costmap_2d/cost_values.hpp>
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <nav2_ros_common/lifecycle_node.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "motion_fixture.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
 #include <gtest/gtest.h>
 #include <rcl/time.h>
@@ -34,9 +39,37 @@ namespace mowgli_nav2_plugins
 {
 struct FTCSpeedLimitTestAccess
 {
+  static bool GeometryReady(FTCController& controller)
+  {
+    std::lock_guard<std::mutex> lock(controller.authorization_mutex_);
+    return controller.authorization_ != nullptr;
+  }
+  static bool BoundaryReady(FTCController& controller)
+  {
+    std::lock_guard<std::mutex> lock(controller.boundary_mutex_);
+    return controller.boundary_costmap_ != nullptr;
+  }
   static bool TurnFallbackReversing(const FTCController& controller)
   {
     return controller.turnFallbackReversing();
+  }
+  static double TurnFallbackReverseTarget(const FTCController& controller)
+  {
+    return controller.turn_fallback_.reverse_target_m;
+  }
+  static bool TurnFallbackRunning(const FTCController& controller)
+  {
+    return controller.turn_fallback_.phase == FTCController::TurnFallbackPhase::kRunning;
+  }
+  static double WorkingPlanStartX(const FTCController& controller)
+  {
+    return controller.global_plan_.front().pose.position.x;
+  }
+  static void SetCurrentRosElapsed(FTCController& controller, double ros_dt)
+  {
+    // Inject only the stored prior ROS instant. The node clock and the fresh
+    // TF stamps stay unchanged, isolating one shortened accounting interval.
+    controller.last_time_ = controller.clock_->now() - rclcpp::Duration::from_seconds(ros_dt);
   }
 
   static bool Stalled(const FTCController& controller)
@@ -144,12 +177,19 @@ protected:
     tf_ = costmap_->getTfBuffer();
     clock_ = node_->get_clock();
     ASSERT_EQ(rcl_enable_ros_time_override(clock_->get_clock_handle()), RCL_RET_OK);
+    ASSERT_EQ(rcl_enable_ros_time_override(costmap_->get_clock()->get_clock_handle()), RCL_RET_OK);
     SetTime();
     SetTransform("map", "odom", 0.0, true);
     SetTransform("base_footprint", "base_link", 0.0, true);
     SetTransform("odom", "base_footprint", 0.0, false);
     controller_.configure(node_, kPlugin, tf_, costmap_);
     controller_.activate();
+    ASSERT_TRUE(mowgli_nav2_plugins::test::supplyLawn(
+        node_,
+        [this]()
+        {
+          return mowgli_nav2_plugins::FTCSpeedLimitTestAccess::GeometryReady(controller_);
+        }));
     controller_.newPathReceived(StraightPlan());
   }
 
@@ -170,9 +210,9 @@ protected:
     ASSERT_TRUE(node_->set_parameter({std::string(kPlugin) + "." + key, value}).successful);
   }
 
-  double Tick()
+  double Tick(double elapsed_s = 0.10)
   {
-    time_ns_ += 100000000;
+    time_ns_ += static_cast<int64_t>(std::llround(elapsed_s * 1e9));
     SetTime();
     SetTransform("odom", "base_footprint", robot_x_, false);
     geometry_msgs::msg::Twist measured;
@@ -210,6 +250,8 @@ protected:
   void SetTime()
   {
     ASSERT_EQ(rcl_set_ros_time_override(clock_->get_clock_handle(), time_ns_), RCL_RET_OK);
+    ASSERT_EQ(rcl_set_ros_time_override(costmap_->get_clock()->get_clock_handle(), time_ns_),
+              RCL_RET_OK);
   }
 
   void SetTransform(const std::string& parent, const std::string& child, double x, bool fixed)
@@ -368,6 +410,239 @@ TEST_F(FtcSpeedLimit, ReverseEscapeObeysTheSignedExternalCap)
   EXPECT_LT(reverse, 0.0);
 }
 
+class FtcReverseBudget
+    : public FtcSpeedLimit,
+      public ::testing::WithParamInterface<std::tuple<double, double, bool, double>>
+{
+};
+
+TEST_P(FtcReverseBudget, ReverseEscapeDoesNotCommandPastItsRemainingDistanceBudget)
+{
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  const double budget = std::get<3>(GetParam());
+  SetParameter("obstacle_reverse_max_dist_m", budget);
+  robot_x_ = 2.0;
+  measured_speed_ = 0.0;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  controller_.newPathReceived(StraightPlan(robot_x_));
+  Wall(3.0);
+
+  double reverse_distance = 0.0;
+  bool reversed = false;
+  bool stopped = false;
+  double elapsed_s = 0.10;
+  for (int i = 0; i < 128; ++i)
+  {
+    const double hold_s = std::get<2>(GetParam()) && i % 2 != 0 ? 0.10 : std::get<1>(GetParam());
+    const double command = Tick(elapsed_s);
+    elapsed_s = hold_s;
+    if (command < 0.0)
+    {
+      reversed = true;
+      reverse_distance -= command * hold_s;
+      robot_x_ += command * hold_s;
+      // Hold the command for a supported interval with ideal actuation.
+      // Check both accurate and under-reported odometry; a distance budget
+      // must not permit unbounded commanded reversing when feedback freezes.
+      measured_speed_ = command * std::get<0>(GetParam());
+      EXPECT_LE(reverse_distance, budget)
+          << "The next held command must fit the remaining reverse budget";
+    }
+    else if (reversed)
+    {
+      stopped = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(reversed);
+  EXPECT_TRUE(stopped);
+  // Conservative pre-taper charging intentionally hands off before using all
+  // physical travel. Preserve useful progress, including >80% at shipped scale.
+  EXPECT_GT(reverse_distance, budget * (budget > 0.10 ? 0.80 : 0.50));
+}
+
+INSTANTIATE_TEST_SUITE_P(ReverseFeedback,
+                         FtcReverseBudget,
+                         ::testing::Values(std::tuple{1.0, 0.05, false, 0.100},
+                                           std::tuple{1.0, 0.10, false, 0.100},
+                                           std::tuple{1.0, 0.20, false, 0.100},
+                                           std::tuple{1.0, 0.50, false, 0.100},
+                                           std::tuple{1.0, 0.05, true, 0.100},
+                                           std::tuple{0.0, 0.05, false, 0.100},
+                                           std::tuple{0.0, 0.10, false, 0.100},
+                                           std::tuple{0.0, 0.20, false, 0.100},
+                                           std::tuple{0.0, 0.50, false, 0.100},
+                                           std::tuple{0.0, 0.05, true, 0.100},
+                                           std::tuple{1.0, 0.05, false, 0.295},
+                                           std::tuple{1.0, 0.10, false, 0.295},
+                                           std::tuple{1.0, 0.20, false, 0.295},
+                                           std::tuple{1.0, 0.50, false, 0.295},
+                                           std::tuple{1.0, 0.05, true, 0.295},
+                                           std::tuple{0.0, 0.05, false, 0.295},
+                                           std::tuple{0.0, 0.10, false, 0.295},
+                                           std::tuple{0.0, 0.20, false, 0.295},
+                                           std::tuple{0.0, 0.50, false, 0.295},
+                                           std::tuple{0.0, 0.05, true, 0.295}));
+
+class FtcReverseBoundary : public FtcSpeedLimit
+{
+protected:
+  void SetUp() override
+  {
+    FtcSpeedLimit::SetUp();
+    fixture_ = std::make_shared<rclcpp::Node>("reverse_boundary_fixture");
+    boundary_pub_ =
+        fixture_->create_publisher<nav_msgs::msg::OccupancyGrid>("/global_costmap/costmap",
+                                                                 rclcpp::QoS(1).transient_local());
+    executor_.add_node(node_->get_node_base_interface());
+    executor_.add_node(fixture_);
+    SetParameter("check_obstacles", true);
+    SetParameter("enable_obstacle_deviation", true);
+    SetParameter("confine_deviation_to_zone", true);
+    SetParameter("obstacle_reverse_max_dist_m", 0.10);
+    robot_x_ = 2.0;
+    measured_speed_ = 0.0;
+    SetTransform("odom", "base_footprint", robot_x_, false);
+    controller_.newPathReceived(StraightPlan(robot_x_));
+    Wall(3.0);
+    PublishBoundary(true);
+  }
+
+  void PublishBoundary(bool valid)
+  {
+    nav_msgs::msg::OccupancyGrid message;
+    if (valid)
+    {
+      message.header.frame_id = "map";
+      message.info.width = 400;
+      message.info.height = 400;
+      message.info.resolution = 0.05;
+      message.info.origin.position.x = -5.0;
+      message.info.origin.position.y = -5.0;
+      message.info.origin.orientation.w = 1.0;
+      message.data.assign(160000, 0);
+    }
+    boundary_pub_->publish(message);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      executor_.spin_some();
+      if (mowgli_nav2_plugins::FTCSpeedLimitTestAccess::BoundaryReady(controller_) == valid)
+      {
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    FAIL() << "Boundary snapshot was not delivered through the production topic";
+  }
+
+  double EngageReverse()
+  {
+    for (int i = 0; i < 30; ++i)
+    {
+      const double command = Tick();
+      if (command < 0.0)
+      {
+        return command;
+      }
+    }
+    ADD_FAILURE() << "Expected legal reverse escape before invalidating boundary";
+    return 0.0;
+  }
+
+  std::shared_ptr<rclcpp::Node> fixture_;
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr boundary_pub_;
+  rclcpp::executors::SingleThreadedExecutor executor_;
+};
+
+TEST_F(FtcReverseBoundary, BoundaryLossHoldsAndRestoringItDoesNotRefillReverseBudget)
+{
+  double command = EngageReverse();
+  ASSERT_LT(command, 0.0);
+  double reverse_distance = -command * 0.10;
+  robot_x_ += command * 0.10;
+  PublishBoundary(false);
+  ASSERT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::GeometryReady(controller_));
+  for (int i = 0; i < 5; ++i)
+  {
+    command = Tick();
+    EXPECT_DOUBLE_EQ(command, 0.0) << "A missing required guard must not reuse an old rear check";
+    reverse_distance -= std::min(0.0, command) * 0.10;
+    robot_x_ += command * 0.10;
+  }
+  PublishBoundary(true);
+  bool resumed = false;
+  bool stopped = false;
+  for (int i = 0; i < 32; ++i)
+  {
+    command = Tick();
+    if (command < 0.0)
+    {
+      resumed = true;
+      reverse_distance -= command * 0.10;
+      robot_x_ += command * 0.10;
+    }
+    else if (resumed)
+    {
+      stopped = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(resumed);
+  EXPECT_TRUE(stopped);
+  EXPECT_GT(reverse_distance, 0.05);
+  EXPECT_LE(reverse_distance, 0.10) << "Boundary loss/restoration must not refill the budget";
+}
+
+TEST_F(FtcReverseBoundary, MissingRequiredBoundaryKeepsTheExistingAbortDeadline)
+{
+  SetParameter("obstacle_wait_timeout_s", 0.30);
+  ASSERT_LT(EngageReverse(), 0.0);
+  PublishBoundary(false);
+  EXPECT_DOUBLE_EQ(Tick(), 0.0);
+  EXPECT_DOUBLE_EQ(Tick(), 0.0);
+  EXPECT_DOUBLE_EQ(Tick(), 0.0);
+  EXPECT_THROW(Tick(0.20), nav2_core::ControllerException);
+}
+
+TEST_F(FtcReverseBoundary, BoundaryLossAfterExhaustionDoesNotFreezeTheAbortDeadline)
+{
+  SetParameter("obstacle_wait_timeout_s", 0.30);
+  ASSERT_LT(EngageReverse(), 0.0);
+  bool held_after_reverse = false;
+  for (int i = 0; i < 32; ++i)
+  {
+    if (Tick() == 0.0)
+    {
+      held_after_reverse = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(held_after_reverse);
+  PublishBoundary(false);
+  EXPECT_THROW(Tick(0.50), nav2_core::ControllerException);
+}
+
+TEST_F(FtcReverseBoundary, RestoredBoundaryAndClearPathReleaseTheReverseHold)
+{
+  ASSERT_LT(EngageReverse(), 0.0);
+  PublishBoundary(false);
+  EXPECT_DOUBLE_EQ(Tick(), 0.0);
+  costmap_->getCostmap()->resetMap(0, 0, 400, 400);
+  PublishBoundary(true);
+  bool followed_forward = false;
+  for (int i = 0; i < 40; ++i)
+  {
+    if (Tick() > 0.0)
+    {
+      followed_forward = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(followed_forward);
+}
+
 TEST_F(FtcSpeedLimit, TurnFallbackReverseObeysTheSignedExternalCap)
 {
   SetParameter("check_obstacles", true);
@@ -408,4 +683,264 @@ TEST_F(FtcSpeedLimit, TurnFallbackReverseObeysTheSignedExternalCap)
   }
   EXPECT_TRUE(saw_fallback_reverse);
 }
+
+class FtcTurnFallbackBudget : public FtcSpeedLimit,
+                              public ::testing::WithParamInterface<std::tuple<double, double>>
+{
+};
+
+TEST_P(FtcTurnFallbackBudget, ReverseFitsItsTargetAndReplansFromTheActualRetreat)
+{
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  SetParameter("turn_fallback_enabled", true);
+  robot_x_ = 2.85;
+  measured_speed_ = 0.0;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  plan.poses.push_back(MakePose(2.85));
+  plan.poses.push_back(MakePose(2.90));
+  plan.poses.push_back(MakePose(2.95));
+  const int steps = static_cast<int>(std::ceil(M_PI * 0.30 / 0.05));
+  for (int i = 0; i <= steps; ++i)
+  {
+    const double angle = -M_PI / 2.0 + M_PI * i / steps;
+    plan.poses.push_back(
+        MakePose(3.0 + 0.30 * std::cos(angle), 0.30 + 0.30 * std::sin(angle), angle + M_PI / 2.0));
+  }
+  for (double x = 2.95; x >= 0.0; x -= 0.05)
+  {
+    plan.poses.push_back(MakePose(x, 0.60, M_PI));
+  }
+  controller_.newPathReceived(plan);
+  Wall(3.45);
+
+  double command = 0.0;
+  for (int i = 0; i < 30 && command >= 0.0; ++i)
+  {
+    command = Tick();
+  }
+  ASSERT_LT(command, 0.0) << "The production lattice must engage a legal fallback reverse";
+  ASSERT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReversing(controller_));
+  const double target =
+      mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReverseTarget(controller_);
+  ASSERT_GT(target, 0.0);
+  ASSERT_LE(target, 0.40);
+
+  const double feedback_scale = std::get<0>(GetParam());
+  const double hold_s = std::get<1>(GetParam());
+  double distance = 0.0;
+  bool stopped = false;
+  for (int i = 0; i < 128; ++i)
+  {
+    ASSERT_LT(command, 0.0);
+    distance -= command * hold_s;
+    robot_x_ += command * hold_s;
+    measured_speed_ = command * feedback_scale;
+    EXPECT_LE(distance, target) << "The next held fallback command must fit its selected target";
+    EXPECT_LE(distance, 0.40) << "Fallback execution must retain the configured reverse ceiling";
+    command = Tick(hold_s);
+    if (!mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReversing(controller_))
+    {
+      stopped = true;
+      EXPECT_DOUBLE_EQ(command, 0.0) << "Replanning must stop before the new pivot starts";
+      break;
+    }
+  }
+  EXPECT_TRUE(stopped);
+  EXPECT_GT(distance, target * 0.80) << "Conservative accounting must preserve necessary retreat";
+  ASSERT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackRunning(controller_))
+      << "The safe retreat must replan the pivot/connector rather than abandon recovery";
+  EXPECT_NEAR(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::WorkingPlanStartX(controller_),
+              robot_x_,
+              1e-9)
+      << "The restored working path must start at the actual retreated pose";
+}
+
+INSTANTIATE_TEST_SUITE_P(FallbackFeedback,
+                         FtcTurnFallbackBudget,
+                         ::testing::Values(std::tuple{0.0, 0.10},
+                                           std::tuple{0.5, 0.10},
+                                           std::tuple{1.0, 0.10},
+                                           std::tuple{0.0, 0.50},
+                                           std::tuple{0.5, 0.50},
+                                           std::tuple{1.0, 0.50}));
+
+// These controls measure actual command-hold time independently of the ROS
+// clock. No OS clock changes, stale TF or altered authorization are involved.
+class FtcReverseClockBudget : public FtcSpeedLimit,
+                              public ::testing::WithParamInterface<std::tuple<double, int>>
+{
+protected:
+  void SetUp() override
+  {
+    FtcSpeedLimit::SetUp();
+    // Exercise physical/system-time mode, not a plant driven by simulated time.
+    // Restore fresh TF after switching off the original fixture overrides.
+    ASSERT_EQ(rcl_disable_ros_time_override(clock_->get_clock_handle()), RCL_RET_OK);
+    ASSERT_EQ(rcl_disable_ros_time_override(costmap_->get_clock()->get_clock_handle()), RCL_RET_OK);
+    ASSERT_FALSE(clock_->ros_time_is_active());
+    ASSERT_FALSE(costmap_->get_clock()->ros_time_is_active());
+    time_ns_ = clock_->now().nanoseconds();
+    SetTransform("map", "odom", 0.0, true);
+    SetTransform("base_footprint", "base_link", 0.0, true);
+    SetTransform("odom", "base_footprint", robot_x_, false);
+    controller_.newPathReceived(StraightPlan());
+  }
+
+  double Tick()
+  {
+    time_ns_ = clock_->now().nanoseconds();
+    SetTransform("odom", "base_footprint", robot_x_, false);
+    geometry_msgs::msg::Twist measured;
+    measured.linear.x = measured_speed_;
+    return controller_
+        .computeVelocityCommands(Pose{}, measured, nullptr, nav_msgs::msg::Path{}, Pose{})
+        .twist.linear.x;
+  }
+
+  double HoldCommand()
+  {
+    const auto started = std::chrono::steady_clock::now();
+    std::this_thread::sleep_until(started + std::chrono::milliseconds(100));
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+  }
+
+  void InjectElapsed()
+  {
+    const int clock_case = std::get<1>(GetParam());
+    if (clock_case != 0)
+    {
+      mowgli_nav2_plugins::FTCSpeedLimitTestAccess::SetCurrentRosElapsed(controller_,
+                                                                         clock_case == 1 ? -0.10
+                                                                                         : 0.001);
+    }
+  }
+
+  double EngageFallback()
+  {
+    SetParameter("check_obstacles", true);
+    SetParameter("enable_obstacle_deviation", true);
+    SetParameter("turn_fallback_enabled", true);
+    robot_x_ = 2.85;
+    measured_speed_ = 0.0;
+    SetTransform("odom", "base_footprint", robot_x_, false);
+    nav_msgs::msg::Path plan;
+    plan.header.frame_id = "map";
+    plan.poses.push_back(MakePose(2.85));
+    plan.poses.push_back(MakePose(2.90));
+    plan.poses.push_back(MakePose(2.95));
+    const int steps = static_cast<int>(std::ceil(M_PI * 0.30 / 0.05));
+    for (int i = 0; i <= steps; ++i)
+    {
+      const double angle = -M_PI / 2.0 + M_PI * i / steps;
+      plan.poses.push_back(MakePose(3.0 + 0.30 * std::cos(angle),
+                                    0.30 + 0.30 * std::sin(angle),
+                                    angle + M_PI / 2.0));
+    }
+    for (double x = 2.95; x >= 0.0; x -= 0.05)
+    {
+      plan.poses.push_back(MakePose(x, 0.60, M_PI));
+    }
+    controller_.newPathReceived(plan);
+    Wall(3.45);
+    double command = 0.0;
+    for (int i = 0; i < 30 && command >= 0.0; ++i)
+    {
+      command = Tick();
+    }
+    return command;
+  }
+};
+
+TEST_P(FtcReverseClockBudget, OneShortRosIntervalCannotRefundFallbackCommandTravel)
+{
+  double command = EngageFallback();
+  ASSERT_LT(command, 0.0);
+  ASSERT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReversing(controller_));
+  const double target =
+      mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReverseTarget(controller_);
+  ASSERT_GT(target, 0.0);
+  ASSERT_LE(target, 0.40);
+  double distance = 0.0;
+  bool stopped = false;
+  for (int i = 0; i < 128; ++i)
+  {
+    ASSERT_LT(command, 0.0);
+    const double hold_s = HoldCommand();
+    ASSERT_LE(hold_s, 0.50) << "Clock control requires a supported actual hold interval";
+    distance -= command * hold_s;
+    robot_x_ += command * hold_s;
+    measured_speed_ = command * std::get<0>(GetParam());
+    EXPECT_LE(distance, target) << "A ROS clock step cannot refund held fallback travel";
+    EXPECT_LE(distance, 0.40) << "Fallback execution must retain the configured reverse ceiling";
+    if (i == 0)
+    {
+      InjectElapsed();
+    }
+    command = Tick();
+    if (!mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReversing(controller_))
+    {
+      stopped = true;
+      EXPECT_DOUBLE_EQ(command, 0.0);
+      break;
+    }
+  }
+  EXPECT_TRUE(stopped);
+  EXPECT_GT(distance, target * 0.80);
+  ASSERT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackRunning(controller_));
+  EXPECT_NEAR(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::WorkingPlanStartX(controller_),
+              robot_x_,
+              1e-9);
+}
+
+TEST_P(FtcReverseClockBudget, RepeatedShortRosIntervalsCannotRefundEscapeCommandTravel)
+{
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  SetParameter("obstacle_reverse_max_dist_m", 0.10);
+  robot_x_ = 2.0;
+  measured_speed_ = 0.0;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  controller_.newPathReceived(StraightPlan(robot_x_));
+  Wall(3.0);
+  double command = 0.0;
+  for (int i = 0; i < 30 && command >= 0.0; ++i)
+  {
+    command = Tick();
+  }
+  ASSERT_LT(command, 0.0);
+  ASSERT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::TurnFallbackReversing(controller_));
+  double distance = 0.0;
+  bool stopped = false;
+  for (int i = 0; i < 128; ++i)
+  {
+    ASSERT_LT(command, 0.0);
+    const double hold_s = HoldCommand();
+    ASSERT_LE(hold_s, 0.50) << "Clock control requires a supported actual hold interval";
+    distance -= command * hold_s;
+    robot_x_ += command * hold_s;
+    measured_speed_ = command * std::get<0>(GetParam());
+    EXPECT_LE(distance, 0.10) << "ROS clock undercount cannot refund held escape travel";
+    InjectElapsed();
+    command = Tick();
+    if (command >= 0.0)
+    {
+      stopped = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(stopped);
+  EXPECT_GT(distance, 0.05);
+}
+
+INSTANTIATE_TEST_SUITE_P(ClockFeedback,
+                         FtcReverseClockBudget,
+                         ::testing::Values(std::tuple{0.0, 0},
+                                           std::tuple{1.0, 0},
+                                           std::tuple{0.0, 1},
+                                           std::tuple{1.0, 1},
+                                           std::tuple{0.0, 2},
+                                           std::tuple{1.0, 2}));
 }  // namespace

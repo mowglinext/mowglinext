@@ -502,6 +502,9 @@ void MapServerNode::publish_transit_geometry()
   for (const auto& area : areas_)
   {
     append(area.polygon, "area", 0.01);
+    // Backwards-compatible extension of #905's transit union: an execution
+    // consumer must distinguish coverage permission from navigation permission.
+    snapshot.markers.back().text = area.is_navigation_area ? "navigation" : "mowing";
     for (const auto& obstacle : area.obstacles)
       if (!obstacle.pending)
         append(obstacle.polygon, "obstacle", std::max(0.0, keepout_obstacle_margin_m_));

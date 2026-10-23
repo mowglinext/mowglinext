@@ -18,6 +18,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       cmake \
+      libboost-dev \
       python3-colcon-common-extensions \
       ros-lyrical-ament-cmake \
       ros-lyrical-diagnostic-msgs \
@@ -31,7 +32,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       ros-lyrical-rosidl-default-runtime \
       ros-lyrical-rtcm-msgs \
       ros-lyrical-sensor-msgs \
-      ros-lyrical-std-msgs
+      ros-lyrical-std-msgs \
+      ros-lyrical-visualization-msgs
 
 WORKDIR /ws/src
 COPY ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces

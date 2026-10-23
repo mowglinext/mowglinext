@@ -97,7 +97,7 @@
 | `sim-stop` | `scripts/sim-stop.sh` |
 | `sim` | `sim-stop` then `ros2 launch mowgli_bringup sim_full_system.launch.py headless:=true use_rviz:=false` with `DISPLAY=:99` |
 | `e2e-test` | `sim-stop build` → launch sim in background → poll `ros2/scripts/wait_for_nav2_active.sh` for Nav2 lifecycle-active (kills sim, exits 1 on timeout — commit `09cbad2b`, replacing a fixed `sleep 90`) → `python3 src/e2e_test.py` → kill + `sim-stop`, exits with the test's code |
-| `e2e-test-no-lidar` | same with `use_lidar:=false simulate_gps_degradation:=false` and `src/e2e_test_no_lidar.py` |
+| `e2e-test-no-lidar` | same with `use_lidar:=false` and `src/e2e_test_no_lidar.py` |
 | `docker` / `docker-sim` | `docker build --target runtime\|simulation -t mowgli-ros2[-sim]:latest .` (context `ros2/` — **wrong context**, see Pitfalls) |
 | `lint` / `format` / `format-check` | cppcheck + cpplint / `clang-format -i` / `--dry-run --Werror` over `src/` (**includes** `opennav_coverage`, unlike `format.sh`) |
 | `deploy` | `rsync install/ pi@mowgli.local:/opt/mowgli_ros2/install/` + `sudo systemctl restart mowgli` |

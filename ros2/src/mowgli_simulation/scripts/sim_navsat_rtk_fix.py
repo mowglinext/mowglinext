@@ -103,7 +103,7 @@ def _parse_pattern(spec: str) -> List[_Segment]:
     for raw in spec.split(';'):
         part = raw.strip()
         if not part:
-            continue
+            raise ValueError('quality_pattern contains an empty segment')
         if ',' not in part:
             raise ValueError(f"bad segment '{part}': expected 'duration,REGIME'")
         dur_s, name = part.split(',', 1)
@@ -112,17 +112,27 @@ def _parse_pattern(spec: str) -> List[_Segment]:
             raise ValueError(
                 f"unknown regime '{regime}'; valid: {sorted(QUALITY_REGIMES)}"
             )
-        out.append(_Segment(float(dur_s.strip()), regime))
-    if any(s.duration_s <= 0.0 for s in out):
-        raise ValueError('segment durations must be > 0')
+        try:
+            duration_s = float(dur_s.strip())
+        except ValueError as exc:
+            raise ValueError(
+                f"bad segment '{part}': duration must be a finite number"
+            ) from exc
+        if not math.isfinite(duration_s) or duration_s <= 0.0:
+            raise ValueError('segment durations must be finite and > 0')
+        out.append(_Segment(duration_s, regime))
+    if not math.isfinite(sum(segment.duration_s for segment in out)):
+        raise ValueError('quality_pattern total duration must be finite')
     return out
 
 
 def _build_gnss_status(
-    header, regime: str, sigma_xy: float, sigma_z: float
+    header, regime: str, sigma_xy: float, sigma_z: float,
+    observation_sequence: int,
 ) -> GnssStatus:
     status = GnssStatus()
     status.header = header
+    status.position_observation_sequence = observation_sequence
     status.backend = 'simulation'
     status.receiver_vendor = 'Webots'
     status.fix_valid = regime != 'NO_FIX'
@@ -217,11 +227,10 @@ class SimNavSatRtkFix(Node):
         try:
             self._segments = _parse_pattern(pattern_spec)
         except ValueError as exc:
-            self.get_logger().error(
-                "Bad quality_pattern '%s': %s — falling back to always-FIXED"
-                % (pattern_spec, exc)
-            )
-            self._segments = []
+            message = f'Invalid quality_pattern {pattern_spec!r}: {exc}'
+            self.get_logger().error(message)
+            self.destroy_node()
+            raise ValueError(message) from exc
 
         self._cycle_total_s = sum(s.duration_s for s in self._segments) or 0.0
         self._start_t: Optional[float] = None  # ros time at first fix
@@ -260,6 +269,12 @@ class SimNavSatRtkFix(Node):
             sub_qos,
         )
         self._ground_truth: Optional[PoseStamped] = None
+        self._last_truth_stamp_ns: Optional[int] = None
+        self._ground_truth_generation = 0
+        self._last_published_truth_generation = 0
+        self._last_fix_stamp_ns: Optional[int] = None
+        self._last_ros_now_ns: Optional[int] = None
+        self._position_observation_sequence = 0
 
         # Diagnostics — surface the regime distribution observed.
         self._regime_counts: dict[str, int] = dict.fromkeys(QUALITY_REGIMES, 0)
@@ -316,14 +331,44 @@ class SimNavSatRtkFix(Node):
     # Callback
     # ------------------------------------------------------------------
 
+    def _check_clock_epoch(self) -> int:
+        now_ns = self.get_clock().now().nanoseconds
+        if self._last_ros_now_ns is not None and now_ns < self._last_ros_now_ns:
+            self._ground_truth = None
+            self._last_truth_stamp_ns = None
+            self._last_fix_stamp_ns = None
+            self._last_published_truth_generation = self._ground_truth_generation
+        self._last_ros_now_ns = now_ns
+        return now_ns
+
     def _on_ground_truth(self, msg: PoseStamped) -> None:
+        self._check_clock_epoch()
+        stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        if (stamp_ns <= 0 or (self._last_truth_stamp_ns is not None
+                              and stamp_ns <= self._last_truth_stamp_ns)):
+            return
+        self._last_truth_stamp_ns = stamp_ns
+        self._ground_truth_generation += 1
         self._ground_truth = msg
 
     def _on_fix(self, msg: NavSatFix) -> None:
-        if self._ground_truth is None:
+        ros_now_ns = self._check_clock_epoch()
+        if (self._ground_truth is None
+                or self._ground_truth_generation == self._last_published_truth_generation):
             return
 
-        ros_now_s = self.get_clock().now().nanoseconds * 1e-9
+        stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        # Identity belongs to a new simulator sensor acquisition, not callback
+        # arrival or position value. Cached/replayed raw fixes must not acquire
+        # fresh RTK authority. Keep the source stamp for exact fix/status pairing.
+        if (stamp_ns <= 0 or stamp_ns > ros_now_ns
+                or (self._last_fix_stamp_ns is not None
+                    and stamp_ns <= self._last_fix_stamp_ns)):
+            return
+        self._last_fix_stamp_ns = stamp_ns
+        self._last_published_truth_generation = self._ground_truth_generation
+        self._position_observation_sequence += 1
+        ros_now_s = ros_now_ns * 1e-9
         regime = self._current_regime(ros_now_s)
         status_code, sigma_xy, sigma_z = QUALITY_REGIMES[regime]
         self._regime_counts[regime] += 1
@@ -364,7 +409,10 @@ class SimNavSatRtkFix(Node):
         )
         self._pub.publish(out)
         self._status_pub.publish(
-            _build_gnss_status(out.header, regime, sigma_xy, sigma_z)
+            _build_gnss_status(
+                out.header, regime, sigma_xy, sigma_z,
+                self._position_observation_sequence,
+            )
         )
 
     def _log_stats(self) -> None:

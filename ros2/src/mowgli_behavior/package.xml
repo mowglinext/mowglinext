@@ -24,6 +24,7 @@
   <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
   <depend>action_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
@@ -39,6 +40,7 @@
   <test_depend>rclpy</test_depend>
   <test_depend>tf2_ros_py</test_depend>
   <test_depend>tinyxml2</test_depend>
+  <test_depend>nav2_costmap_2d</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
