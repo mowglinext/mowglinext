@@ -40,19 +40,25 @@ MAVROS plugin forwards to the flight controller.
 `image.env` is the authoritative MowgliNext default for the external image:
 
 ```text
-ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:latest
+ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:sha-9fd16a4234699c2c1c99a0c2547d9db02e496f17-lyrical@sha256:9b206989a287770278f7451d09b07653bf5a32282d512be04dda031188be9cd6
 ```
 
-During active MowgliMAVROS development, MowgliNext follows the
-multi-architecture `latest` image published from MowgliMAVROS `main`. The
-workflow currently builds both linux/amd64 and linux/arm64 and publishes
-`latest` from the primary Lyrical build.
+The reference is pinned by tag AND digest to the multi-architecture
+(linux/amd64 + linux/arm64) Lyrical index that MowgliMAVROS CI published from
+commit `9fd16a4234699c2c1c99a0c2547d9db02e496f17` (the commit the
+`ros2/src/external/mowglimavros` submodule is pinned to). It no longer floats
+on `latest`: the sidecar publishes `/gps/status` from its own copy of
+`mowgli_interfaces/msg/GnssStatus`, so a sidecar built against a different
+message definition silently breaks the topic (type-hash mismatch, no
+messages) for `mowgli-ros2`.
 
-This floating reference is intentional while the MAVROS/GNSS integration is
-still evolving, so MowgliNext can consume new sidecar fixes without a manual
-repin after every build. Before production/release acceptance, replace
-`latest` with an immutable digest and validate that exact image on the target
-hardware.
+**Upgrade note:** `GnssStatus.msg` gained `source_id` and
+`source_incarnation`. The MAVROS sidecar and `mowgli-ros2` MUST be updated
+together — an older sidecar (anything pulled from `latest` before this pin)
+cannot talk `/gps/status` to a newer `mowgli-ros2`, and vice versa. When
+re-pinning, bump the submodule, `.github/submodule-pins.txt`, this file's
+`image.env` reference, `docker/.env.example`, `docker/README.md` and the
+tests that assert the reference, all in one change.
 
 `install/lib/config.sh` sources that file, then writes `MAVROS_IMAGE` to the
 generated `docker/.env`. `install/compose/docker-compose.mavros.yml` remains

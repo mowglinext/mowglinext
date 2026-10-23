@@ -189,7 +189,7 @@ ships; the full installer writes many more (`GNSS_*`, `LIDAR_TYPE`,
 | `MOWGLI_ROS2_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowgli-ros2:main` | Full ROS2 stack |
 | `GPS_IMAGE` | `ghcr.io/mowglinext/mowglinext/gps:main` | Universal GNSS sidecar + NTRIP client |
 | `LIDAR_IMAGE` | `ghcr.io/mowglinext/mowglinext/lidar-ldlidar:main` | LD19 LiDAR driver |
-| `MAVROS_IMAGE` | `ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:latest` | MAVROS bridge |
+| `MAVROS_IMAGE` | `ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:sha-9fd16a4234699c2c1c99a0c2547d9db02e496f17-lyrical@sha256:9b206989a287770278f7451d09b07653bf5a32282d512be04dda031188be9cd6` | MAVROS bridge |
 | `GUI_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web GUI |
 | `OPENMOWER_IMAGE` | `ghcr.io/mowglinext/mowglinext/openmower:main` | OpenMower electronics bridge (`HARDWARE_BACKEND=openmower`) |
 For Universal GNSS, set `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...` — note that
@@ -506,6 +506,20 @@ To force an immediate Watchtower check:
 ```bash
 docker exec mowgli-watchtower /watchtower --run-once
 ```
+
+### MAVROS sidecar and `mowgli-ros2` must be updated together
+
+`MAVROS_IMAGE` is pinned (tag + digest) to the sidecar built from the
+MowgliMAVROS commit the `ros2/src/external/mowglimavros` submodule points at.
+The sidecar publishes `/gps/status` from its own copy of
+`mowgli_interfaces/msg/GnssStatus`, which gained `source_id` and
+`source_incarnation`. An old sidecar (for example one still pulled from
+`:latest`) next to a new `mowgli-ros2` — or the reverse — has mismatched
+message types and `/gps/status` stops flowing. On a MAVROS install, re-run the
+installer (or copy the new `MAVROS_IMAGE` value from `.env.example`) so both
+images move in the same update. The GUI's in-place updater does not manage the
+MAVROS sidecar (`install/deployment.json` has no MAVROS component), so a
+GUI-only update leaves the old sidecar running.
 
 ---
 
