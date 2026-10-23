@@ -38,7 +38,7 @@ it('rejects two GeoJSON holes on import and refuses an older rehydrated draft wi
     await hook.result.current.handleSaveMap();
     expect(put).not.toHaveBeenCalled();
     expect(features['garden-A'].geometry.coordinates).toEqual(rings);
-    expect(options.notification.error).toHaveBeenCalledExactlyOnceWith({message: 'mapFiles.failedToSaveArea', description: 'mapFiles.unsupportedGeometry'});
+    expect(options.notification.error).toHaveBeenCalledExactlyOnceWith({message: 'mapFiles.failedToSaveArea', description: 'mapFiles.unsupportedGeometry mapFiles.affectedPolygons'});
     expect(options.setEditMap).not.toHaveBeenCalled(); expect(options.setHasUnsavedChanges).not.toHaveBeenCalled();
     expect(options.setDockDirty).not.toHaveBeenCalled(); expect(options.notification.success).not.toHaveBeenCalled();
 });

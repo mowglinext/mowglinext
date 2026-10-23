@@ -21,7 +21,8 @@ import type {Api, MowgliMapArea, MowgliReplaceMapReq} from "../../../api/Api.ts"
 import {BACKUP_CORRIDORS_KEY, BACKUP_ORIGINALS_KEY, parseMapBackup} from "../utils/mapBackup.ts";
 import {originalsForObstacles, type ObstacleOriginal} from "../utils/obstacleOriginals.ts";
 import {getQuaternionFromHeading, isRingInsidePolygon, itranspose} from "../../../utils/map.tsx";
-import {MapGeometryError, assertSupportedMapPolygon, projectMapPolygon, projectMapPosition} from '../utils/mapGeometryContract';
+import {MapGeometryError, assertSupportedMapPolygon, projectMapPosition} from '../utils/mapGeometryContract';
+import {baselineRings, prepareSavePolygon, type RosPoint} from '../utils/mapSaveGeometry';
 
 interface UseMapFilesOptions {
     features: Record<string, MowingFeature>;
@@ -76,6 +77,21 @@ export function useMapFiles({
 }: UseMapFilesOptions) {
     const {t} = useTranslation();
 
+    const featureName = (feature: MowingFeatureBase | undefined) =>
+        String(feature?.properties?.name || feature?.id || t('mapFiles.unnamedPolygon'));
+
+    // Human name of a polygon for save errors/warnings: the area's name, or an
+    // obstacle's 1-based position within its parent area.
+    const polygonLabel = (feature: MowingFeatureBase, obstacles: readonly ObstacleFeature[]) => {
+        if (feature instanceof ObstacleFeature) {
+            const parent: MowingFeatureBase | undefined = feature.getMowingArea();
+            const siblings = obstacles.filter(o => o.getMowingArea()?.id === parent?.id);
+            return t('mapFiles.polygonObstacle', {index: siblings.indexOf(feature) + 1, area: featureName(parent)});
+        }
+        const key = feature instanceof NavigationFeature ? 'mapFiles.polygonNavigation' : 'mapFiles.polygonArea';
+        return t(key, {name: featureName(feature)});
+    };
+
     const geometryErrorMessage = (error: unknown) => error instanceof MapGeometryError
         ? t(error.reason === 'unsupported' ? 'mapFiles.unsupportedGeometry' : 'mapFiles.invalidGeometry')
         : errorMessage(error);
@@ -107,11 +123,33 @@ export function useMapFiles({
 
         // Validate every polygon and the edited dock before any ROS call. A
         // draft/history entry may bypass the file decoder; never drop its rings.
-        let preparedAreas: Array<{feature: MowingFeatureBase; points: ReturnType<typeof projectMapPolygon>}>;
-        let preparedObstacles: Array<{feature: ObstacleFeature; points: ReturnType<typeof projectMapPolygon>}>;
+        // An invalid ring the operator did not touch (identical to the loaded
+        // map) is sent back unchanged with a warning instead of blocking the save.
+        const baseline = baselineRings(map);
+        const failures: Array<{label: string; error: unknown}> = [];
+        const preExistingInvalid: string[] = [];
+        const prepare = <F extends MowingFeatureBase>(feature: F): Array<{feature: F; points: RosPoint[]}> => {
+            try {
+                const {points, isPreExistingInvalid} = prepareSavePolygon(feature.geometry, baseline, offsetX, offsetY, datum);
+                if (isPreExistingInvalid) preExistingInvalid.push(polygonLabel(feature, obstacleFeatures));
+                return [{feature, points}];
+            } catch (error) {
+                failures.push({label: polygonLabel(feature, obstacleFeatures), error});
+                return [];
+            }
+        };
+        const preparedAreas = areaFeatures.flatMap(prepare);
+        const preparedObstacles = obstacleFeatures.flatMap(prepare);
+        if (failures.length > 0) {
+            notification.error({
+                message: t('mapFiles.failedToSaveArea'),
+                description: `${geometryErrorMessage(failures[0].error)} ${t('mapFiles.affectedPolygons', {
+                    polygons: failures.map(f => f.label).join(', '),
+                })}`,
+            });
+            return;
+        }
         try {
-            preparedAreas = areaFeatures.map(feature => ({feature, points: projectMapPolygon(feature.geometry, offsetX, offsetY, datum)}));
-            preparedObstacles = obstacleFeatures.map(feature => ({feature, points: projectMapPolygon(feature.geometry, offsetX, offsetY, datum)}));
             const dock = features.dock;
             if (dockDirty && dock instanceof DockFeatureBase) {
                 projectMapPosition(dock.getCoordinates(), offsetX, offsetY, datum);
@@ -262,6 +300,12 @@ export function useMapFiles({
             notification.success({
                 message: t('mapFiles.areaSaved'),
             });
+            if (preExistingInvalid.length > 0) {
+                notification.warning({
+                    message: t('mapFiles.preExistingInvalidGeometryTitle'),
+                    description: t('mapFiles.preExistingInvalidGeometry', {polygons: preExistingInvalid.join(', ')}),
+                });
+            }
             setHasUnsavedChanges(false);
             setEditMap(false);
         } catch (e) {
