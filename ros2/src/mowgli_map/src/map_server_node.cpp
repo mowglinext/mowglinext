@@ -657,6 +657,11 @@ void MapServerNode::rebuild_dock_polygons()
   // direction); the body sits in -X, behind the docked robot's reference
   // point. The corridor extends further in -X.
   //
+  // The transit planner recovers the dock heading from exactly this layout
+  // (`transit::dockFrame`: corridor directly behind the body, +X toward the
+  // station) to keep a dock-body exit leg from closing on the station. Keep
+  // the corridor adjacent to the body.
+  //
   // Clear first so a re-placement (on_set_docking_point) replaces, not appends.
   dock_body_polygon_.points.clear();
   dock_corridor_polygon_.points.clear();

@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <future>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -159,6 +160,33 @@ ResumeLocation resolveResumeLocation(const std::vector<nav_msgs::msg::Path>& uni
                                      std::size_t cursor,
                                      std::size_t total_poses);
 
+/// Where inside a unit it resumes after being interrupted `local` poses in: the furthest progress
+/// is replayed from `kCoverageResumeReplayPoses` before the end (an interruption is not completion,
+/// and the tail must stay longer than the goal checker's proximity-only short-path exception).
+/// 0 for a unit that was never entered. The one rule behind both the global cursor
+/// (resolveResumeLocation) and the per-unit progress (BTContext::area_unit_progress).
+std::size_t resumeOffsetForUnit(std::size_t unit_poses, std::size_t local);
+
+/// The pose index each unit's FIRST follow goal starts at, one entry per unit. This is the ONE
+/// rule both FollowStrip::onStart (which trims every unit at its entry) and resolveFirstDrive (the
+/// first transit goal) apply, so the transit always lands where the first follow goal starts and
+/// the robot never drives back along a unit it was just sent past.
+///
+/// A unit's start is the FURTHER of
+///  - the persisted cursor's offset, when `cursor_valid` and the cursor lands in that unit
+///    (resolveResumeLocation), and
+///  - its own recorded progress (`unit_progress`, BTContext::area_unit_progress; null when the
+///    plan is stale), through resumeOffsetForUnit, for a unit not recorded in `done`.
+/// The cursor can sit BEHIND the unit's progress (sendFollowGoal resets the cursor to the trim
+/// offset while the progress never moves backwards), which is why neither may win unconditionally.
+std::vector<std::size_t> resolveUnitStartOffsets(
+    const std::vector<nav_msgs::msg::Path>& units,
+    const std::set<std::size_t>& done,
+    bool cursor_valid,
+    std::size_t cursor,
+    std::size_t total_poses,
+    const std::map<std::size_t, std::size_t>* unit_progress);
+
 /// Where FollowStrip drives FIRST: `unit` is the first unit not recorded in `done` (see
 /// nextUndoneUnit); `local` is the resume offset when the persisted cursor lands in that very unit,
 /// 0 (its front) otherwise. A cursor that lands in a LATER unit is trimmed when that unit is
@@ -173,11 +201,16 @@ struct FirstDrive
 
 /// The single mapping behind both FollowStrip's first unit and PlanCoverageArea's first transit
 /// goal. `cursor_valid` is false when the persisted cursor must be ignored (stale plan).
+///
+/// `unit_progress` (unit -> poses driven, BTContext::area_unit_progress; null when the plan is
+/// stale) gives the first unit its OWN resume offset; `local` is resolveUnitStartOffsets' entry
+/// for `unit`, i.e. exactly where FollowStrip's first follow goal starts.
 FirstDrive resolveFirstDrive(const std::vector<nav_msgs::msg::Path>& units,
                              const std::set<std::size_t>& done,
                              bool cursor_valid,
                              std::size_t cursor,
-                             std::size_t total_poses);
+                             std::size_t total_poses,
+                             const std::map<std::size_t, std::size_t>* unit_progress = nullptr);
 
 // ---------------------------------------------------------------------------
 // refreshSwathProgress — publish the GUI-facing live swath progress for the
@@ -396,6 +429,9 @@ private:
   // restarting the whole path (and so GetNextUnmowedArea sees the progress and
   // does not abandon the area).
   void persistResumeCursor(const std::shared_ptr<BTContext>& ctx);
+  /// Record that the current unit got `local` poses in (BTContext::area_unit_progress); never
+  /// moves backwards.
+  void noteUnitProgress(const std::shared_ptr<BTContext>& ctx, std::size_t local);
   // Smooth live coverage percent (0..100) from the current pose cursor
   // (swath_base_[swath_idx_] + swath_resume_start_indices_[swath_idx_] +
   // path_progress_idx_) over

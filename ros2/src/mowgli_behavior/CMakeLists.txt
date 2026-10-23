@@ -170,6 +170,30 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
+  ament_add_ros_isolated_gtest(test_fleet_yield_services
+    test/test_fleet_yield_services.cpp
+    ${blade_service_sources}
+  )
+  target_include_directories(test_fleet_yield_services PUBLIC include)
+  target_link_libraries(test_fleet_yield_services
+    ${ament_index_cpp_TARGETS}
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
+  )
+
   ament_add_ros_isolated_gtest(test_blade_direction
     test/test_blade_direction.cpp
     src/utility_nodes.cpp

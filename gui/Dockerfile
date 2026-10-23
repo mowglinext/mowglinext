@@ -79,7 +79,7 @@ RUN pio pkg install -g \
       -t "platformio/tool-openocd" \
       --skip-dependencies \
  && pio pkg install -g \
-      -t "toolchain-gccarmnoneeabi@~1.90301.0" \
+      -t "platformio/toolchain-gccarmnoneeabi@1.100301.220327" \
       --skip-dependencies \
     || true
 

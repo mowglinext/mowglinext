@@ -51,6 +51,7 @@ set(srv_files
   "srv/EmergencyStop.srv"
   "srv/GetMowingArea.srv"
   "srv/HighLevelControl.srv"
+  "srv/FleetYield.srv"
   "srv/MowerControl.srv"
   "srv/SetDockingPoint.srv"
   "srv/TriggerReplan.srv"
