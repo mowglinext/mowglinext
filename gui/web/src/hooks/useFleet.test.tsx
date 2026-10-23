@@ -493,26 +493,28 @@ const highLevelInvalid = [
     {name: 'boolean topic', value: false},
 ];
 describe('useFleet HighLevelStatus publication boundary', () => {
-    it.each(highLevelInvalid)('rejects $name and keeps both robots and coordination until recovery', async ({value}) => {
+    it.each(highLevelInvalid)('hides only the peer with $name and keeps publishing the others', async ({value}) => {
         let robots: unknown = [{identity: {id: 'a', name: 'Alpha'}}, {identity: {id: 'b', name: 'Beta'}}];
         let coordination: unknown = {settings: {yield_distance_m: 7}, status: {}};
         fetchMock.mockImplementation(url => Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots') ? robots : coordination))));
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const {result} = await mountedFleet();
-        const previous = result.current.robots;
-        const previousCoordination = result.current.coordination;
         robots = [{identity: {id: 'new'}, topics: {highLevelStatus: value}}, {identity: {id: 'b', name: 'New Beta'}}];
         coordination = {settings: {yield_distance_m: 12}, status: {}};
         await act(() => result.current.refresh());
-        expect(result.current.robots).toBe(previous);
-        expect(result.current.coordination).toBe(previousCoordination);
-        expect(result.current.error).toBe('Invalid fleet highLevelStatus response');
-        expect(result.current.loading).toBe(false);
-        robots = [{identity: {id: 'recovered'}, topics: {highLevelStatus: {state: 999, state_name: 'FUTURE'}}}];
         await act(() => result.current.refresh());
-        expect(result.current.robots[0].identity.id).toBe('recovered');
+        expect(result.current.robots.map(r => r.identity.name)).toEqual(['New Beta']);
+        expect(result.current.rejectedRobots).toEqual(['new']);
         expect(result.current.coordination.settings.yield_distance_m).toBe(12);
         expect(result.current.error).toBeUndefined();
-        expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
+        expect(result.current.loading).toBe(false);
+        expect(warn).toHaveBeenCalledOnce();
+        expect(String(warn.mock.calls[0][0])).toContain('Invalid fleet highLevelStatus response');
+        robots = [{identity: {id: 'new'}, topics: {highLevelStatus: {state: 999, state_name: 'FUTURE'}}}];
+        await act(() => result.current.refresh());
+        expect(result.current.robots[0].identity.id).toBe('new');
+        expect(result.current.rejectedRobots).toEqual([]);
+        expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
     });
     it.each(highLevelFields)('keeps a missing or null %s with its existing fallback', async field => {
         let topic: unknown = {};
@@ -532,12 +534,14 @@ describe('useFleet HighLevelStatus publication boundary', () => {
         expect(result.current.error).toBeUndefined();
         expect(result.current.robots).toHaveLength(1);
     });
-    it.each(['state', 'current_area', 'coverage_percent'])('rejects nonfinite %s decoded from an actual JSON number', async field => {
+    it.each(['state', 'current_area', 'coverage_percent'])('hides a peer with nonfinite %s decoded from an actual JSON number', async field => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
         fetchMock.mockImplementation(url => Promise.resolve(new Response(requestUrl(url).endsWith('/robots')
-            ? `[{"identity":{"id":"a"},"topics":{"highLevelStatus":{"${field}":1e999}}}]` : '{}')));
+            ? `[{"identity":{"id":"a"},"topics":{"highLevelStatus":{"${field}":1e999}}},{"identity":{"id":"b"}}]` : '{}')));
         const {result} = await mountedFleet();
-        expect(result.current.robots).toEqual([]);
-        expect(result.current.error).toBe('Invalid fleet highLevelStatus response');
+        expect(result.current.robots.map(r => r.identity.id)).toEqual(['b']);
+        expect(result.current.rejectedRobots).toEqual(['a']);
+        expect(result.current.error).toBeUndefined();
     });
     it('does not apply HighLevelStatus validation to the peer hook or its valid poses', async () => {
         const raw = [{identity: {id: 'a', name: 'Alpha'}, online: true, self: false,
@@ -561,25 +565,25 @@ const fleetGnssInvalid = [
     ...[[], 'bad', 0, false].map((value, index) => ({name: `topic shape ${index}`, value})),
 ];
 describe('useFleet GNSS publication boundary', () => {
-    it.each(fleetGnssInvalid)('rejects $name and preserves the entire previous snapshot until recovery', async ({value}) => {
+    it.each(fleetGnssInvalid)('hides only the peer with $name and keeps publishing the others', async ({value}) => {
         let robots: unknown = [{identity: {id: 'a', name: 'Alpha'}}, {identity: {id: 'b', name: 'Beta'}}];
         let coordination: unknown = {settings: {yield_distance_m: 7}, status: {}};
         fetchMock.mockImplementation(url => Promise.resolve(new Response(JSON.stringify(requestUrl(url).endsWith('/robots') ? robots : coordination))));
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const {result} = await mountedFleet();
-        const previous = result.current.robots;
-        const previousCoordination = result.current.coordination;
-        robots = [{identity: {id: 'a'}, topics: {gnssStatus: value}}, {identity: {id: 'b', name: 'New Beta'}}];
+        robots = [{identity: {id: 'a', name: 'Alpha'}, topics: {gnssStatus: value}}, {identity: {id: 'b', name: 'New Beta'}}];
         coordination = {settings: {yield_distance_m: 12}, status: {}};
         await act(() => result.current.refresh());
-        expect(result.current.robots).toBe(previous);
-        expect(result.current.coordination).toBe(previousCoordination);
-        expect(result.current.loading).toBe(false);
-        expect(result.current.error).toBe('Invalid fleet gnssStatus response');
-        robots = [{identity: {id: 'recovered'}, topics: {gnssStatus: fleetGnssBase}}];
-        await act(() => result.current.refresh());
-        expect(result.current.robots[0].identity.id).toBe('recovered');
+        expect(result.current.robots.map(r => r.identity.name)).toEqual(['New Beta']);
+        expect(result.current.rejectedRobots).toEqual(['Alpha']);
         expect(result.current.coordination.settings.yield_distance_m).toBe(12);
+        expect(result.current.loading).toBe(false);
         expect(result.current.error).toBeUndefined();
+        expect(String(warn.mock.calls[0][0])).toContain('Invalid fleet gnssStatus response');
+        robots = [{identity: {id: 'a', name: 'Alpha'}, topics: {gnssStatus: fleetGnssBase}}];
+        await act(() => result.current.refresh());
+        expect(result.current.robots[0].identity.id).toBe('a');
+        expect(result.current.rejectedRobots).toEqual([]);
         expect(requests()).toEqual(['GET /robots', 'GET /coordination', 'GET /robots', 'GET /coordination']);
     });
     it.each([
@@ -606,12 +610,14 @@ describe('useFleet GNSS publication boundary', () => {
         expect(result.current.error).toBeUndefined();
         expect(result.current.robots).toHaveLength(1);
     });
-    it.each(['fix_type', 'rtk_mode', 'capability_flags', 'value_flags'])('rejects JSON overflow in %s', async field => {
+    it.each(['fix_type', 'rtk_mode', 'capability_flags', 'value_flags'])('hides a peer with JSON overflow in %s', async field => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
         fetchMock.mockImplementation(url => Promise.resolve(new Response(requestUrl(url).endsWith('/robots')
             ? `[{"identity":{"id":"a"},"topics":{"gnssStatus":{"${field}":1e999}}}]` : '{}')));
         const {result} = await mountedFleet();
         expect(result.current.robots).toEqual([]);
-        expect(result.current.error).toBe('Invalid fleet gnssStatus response');
+        expect(result.current.rejectedRobots).toEqual(['a']);
+        expect(result.current.error).toBeUndefined();
     });
     it('leaves the peer hook and its valid positions independent from GNSS validation', async () => {
         const robots = [{identity: {id: 'a'}, online: true, self: false, topics: {gnssStatus: {fix_valid: 'false'},
@@ -628,6 +634,7 @@ describe('useFleet GNSS publication boundary', () => {
 
 describe('useFleet GNSS publication ordering', () => {
     it.each(['new-error', 'new-success'])('keeps the latest accepted result with %s', async mode => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
         const reads: Array<(response: Response) => void> = [];
         fetchMock.mockImplementation(() => new Promise(resolve => {reads.push(resolve);}));
         const hook = renderHook(() => useFleet());
@@ -641,8 +648,9 @@ describe('useFleet GNSS publication ordering', () => {
         await act(async () => {reads[4](new Response(JSON.stringify(mode === 'new-error' ? bad : good('Recent')))); reads[5](new Response('{}')); await recent;});
         await act(async () => {reads[2](new Response(JSON.stringify(mode === 'new-error' ? good('Old') : bad))); reads[3](new Response('{}')); await old;});
         if (mode === 'new-error') {
-            expect(hook.result.current.robots).toBe(previous);
-            expect(hook.result.current.error).toBe('Invalid fleet gnssStatus response');
+            expect(hook.result.current.robots).not.toBe(previous);
+            expect(hook.result.current.robots).toEqual([]);
+            expect(hook.result.current.rejectedRobots).toEqual(['a']);
         } else {
             expect(hook.result.current.robots[0].identity.name).toBe('Recent');
             expect(hook.result.current.error).toBeUndefined();

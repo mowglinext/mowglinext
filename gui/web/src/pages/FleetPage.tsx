@@ -104,6 +104,9 @@ export default function FleetPage() {
             {fleet.error && (
                 <Alert type="warning" showIcon message={t("fleetPage.pollError")} description={fleet.error}/>
             )}
+            {fleet.rejectedRobots.length > 0 && (
+                <Alert type="warning" showIcon message={t("fleetPage.rejectedRobots", {names: fleet.rejectedRobots.join(", ")})}/>
+            )}
 
             <Row gutter={[16, 16]}>
                 {rows.map(row => (

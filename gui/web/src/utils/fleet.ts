@@ -83,35 +83,58 @@ export function parseFleetRobots(payload: unknown): FleetRobotWire[] {
     return robots;
 }
 
+const HIGH_LEVEL_STATUS_ERROR = "Invalid fleet highLevelStatus response";
+const GNSS_STATUS_ERROR = "Invalid fleet gnssStatus response";
+
+function isValidHighLevelStatus(robot: FleetRobotWire): boolean {
+    const value = robot.topics?.highLevelStatus;
+    if (value == null) return true;
+    return isJsonObject(value)
+        && ["state", "current_area", "coverage_percent"].every(key =>
+            value[key] == null || (typeof value[key] === "number" && Number.isFinite(value[key])))
+        && ["state_name", "sub_state_name"].every(key => value[key] == null || typeof value[key] === "string")
+        && ["emergency", "is_charging"].every(key => value[key] == null || typeof value[key] === "boolean");
+}
+
+function isValidGnssStatus(robot: FleetRobotWire): boolean {
+    const value = robot.topics?.gnssStatus;
+    if (value == null) return true;
+    return isJsonObject(value)
+        && ["fix_type", "rtk_mode"].every(key =>
+            value[key] == null || (typeof value[key] === "number" && Number.isFinite(value[key])))
+        && ["fix_valid", "dead_reckoning"].every(key => value[key] == null || typeof value[key] === "boolean")
+        && ["capability_flags", "value_flags"].every(key => value[key] == null
+            || (typeof value[key] === "number" && Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 0xffffffff));
+}
+
 /** Fleet-page-only validation; peer-map consumers do not use this topic. */
 export function validateFleetHighLevelStatus(robots: FleetRobotWire[]): void {
-    for (const robot of robots) {
-        const value = robot.topics?.highLevelStatus;
-        if (value == null) continue;
-        if (!isJsonObject(value)
-            || !["state", "current_area", "coverage_percent"].every(key =>
-                value[key] == null || (typeof value[key] === "number" && Number.isFinite(value[key])))
-            || !["state_name", "sub_state_name"].every(key => value[key] == null || typeof value[key] === "string")
-            || !["emergency", "is_charging"].every(key => value[key] == null || typeof value[key] === "boolean")) {
-            throw new Error("Invalid fleet highLevelStatus response");
-        }
-    }
+    if (!robots.every(isValidHighLevelStatus)) throw new Error(HIGH_LEVEL_STATUS_ERROR);
 }
 
 /** Validate only Fleet's display inputs, preserving shared GNSS decisions. */
 export function validateFleetGnssStatus(robots: FleetRobotWire[]): void {
+    if (!robots.every(isValidGnssStatus)) throw new Error(GNSS_STATUS_ERROR);
+}
+
+export interface RejectedFleetRobot {
+    robot: FleetRobotWire;
+    reason: string;
+}
+
+/**
+ * Split a snapshot into the robots the Fleet page can display and the ones
+ * whose display topics are malformed. One bad peer must not blank the others.
+ */
+export function partitionFleetRobots(robots: FleetRobotWire[]): {robots: FleetRobotWire[]; rejected: RejectedFleetRobot[]} {
+    const valid: FleetRobotWire[] = [];
+    const rejected: RejectedFleetRobot[] = [];
     for (const robot of robots) {
-        const value = robot.topics?.gnssStatus;
-        if (value == null) continue;
-        if (!isJsonObject(value)
-            || !["fix_type", "rtk_mode"].every(key =>
-                value[key] == null || (typeof value[key] === "number" && Number.isFinite(value[key])))
-            || !["fix_valid", "dead_reckoning"].every(key => value[key] == null || typeof value[key] === "boolean")
-            || !["capability_flags", "value_flags"].every(key => value[key] == null
-                || (typeof value[key] === "number" && Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 0xffffffff))) {
-            throw new Error("Invalid fleet gnssStatus response");
-        }
+        if (!isValidHighLevelStatus(robot)) rejected.push({robot, reason: HIGH_LEVEL_STATUS_ERROR});
+        else if (!isValidGnssStatus(robot)) rejected.push({robot, reason: GNSS_STATUS_ERROR});
+        else valid.push(robot);
     }
+    return {robots: valid, rejected};
 }
 
 function topic<T>(row: FleetRobotWire, key: string): T | undefined {

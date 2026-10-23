@@ -36,7 +36,7 @@ vi.mock('antd', async importOriginal => {
 });
 vi.mock('../hooks/useFleet.ts', async importOriginal => {
     const original = await importOriginal<typeof import('../hooks/useFleet.ts')>();
-    return {...original, useFleet: () => mock.realFleet ? original.useFleet() : {...mock, error: undefined, loading: false}};
+    return {...original, useFleet: () => mock.realFleet ? original.useFleet() : {...mock, error: undefined, loading: false, rejectedRobots: []}};
 });
 vi.mock('../hooks/useSettings.ts', () => ({useSettings: () => ({settings: {}})}));
 vi.mock('../theme/ThemeContext.tsx', () => ({useThemeMode: () => ({colors: getColors('dark')})}));
@@ -375,8 +375,9 @@ describe('FleetPage HighLevelStatus publication boundary', () => {
         {name: 'object coverage', value: {state: 2, coverage_percent: {bad: true}}},
         {name: 'infinite coverage', value: {state: 2, coverage_percent: '__OVERFLOW__'}},
         {name: 'object area', value: {state: 2, current_area: {bad: true}}},
-    ])('rejects $name before rendering and recovers without changing the command target', async ({value}) => {
+    ])('hides only the peer with $name and recovers without changing the command target', async ({value}) => {
         vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
         mock.realFleet = true;
         let robots: unknown = [robot('alpha'), robot('bravo')];
         let coordination: unknown = {settings: {yield_distance_m: 7}, status: {}};
@@ -392,16 +393,14 @@ describe('FleetPage HighLevelStatus publication boundary', () => {
         coordination = {settings: {yield_distance_m: 12}, status: {}};
         await act(() => vi.advanceTimersByTimeAsync(2000));
         expect(caught).not.toHaveBeenCalled();
-        expect(screen.getByTestId('fleet-card-alpha')).toBeVisible();
-        const bravo = screen.getByTestId('fleet-card-bravo');
-        expect(within(bravo).getByText('bravo', {exact: true})).toBeVisible();
-        expect(screen.getByText('Invalid fleet highLevelStatus response')).toBeVisible();
-        expect(within(screen.getByTestId('fleet-card-alpha')).getByText('Idle', {exact: true})).toBeVisible();
-        expect(screen.getAllByRole('spinbutton')[0]).toHaveValue('7.0');
+        expect(screen.queryByTestId('fleet-card-alpha')).not.toBeInTheDocument();
+        expect(within(screen.getByTestId('fleet-card-bravo')).getByText('New Bravo', {exact: true})).toBeVisible();
+        expect(screen.getByText(en.fleetPage.rejectedRobots.replace('{{names}}', 'alpha'))).toBeVisible();
+        expect(screen.getAllByRole('spinbutton')[0]).toHaveValue('12.0');
         robots = [{...robot('alpha'), topics: {highLevelStatus: {state: 999, state_name: 'FUTURE_STATE'}}}, robot('bravo')];
         await act(() => vi.advanceTimersByTimeAsync(2000));
         expect(await screen.findByText('FUTURE_STATE')).toBeVisible();
-        expect(screen.queryByText('Invalid fleet highLevelStatus response')).not.toBeInTheDocument();
+        expect(screen.queryByText(en.fleetPage.rejectedRobots.replace('{{names}}', 'alpha'))).not.toBeInTheDocument();
         fireEvent.click(within(screen.getByTestId('fleet-card-bravo')).getByRole('button', {name: /Start mowing$/}));
         await waitFor(() => expect(mock.success).toHaveBeenCalledOnce());
         const commands = fetchMock.mock.calls.filter(([url]) => urlOf(url).includes('/call/'));
@@ -422,8 +421,9 @@ describe('FleetPage GNSS publication boundary', () => {
         {name: 'fractional mask', gnss: {...base, value_flags: 1.5}},
         {name: 'text enum', gnss: {...base, rtk_mode: '3'}},
         {name: 'JSON overflow enum', gnss: {...base, fix_type: '__OVERFLOW__'}},
-    ])('rejects $name before rendering and permits recovery with unchanged commands', async ({gnss}) => {
+    ])('hides only the peer with $name and permits recovery with unchanged commands', async ({gnss}) => {
         vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
         mock.realFleet = true;
         let robots: unknown = [robot('alpha'), robot('bravo')];
         const urlOf = (url: Parameters<typeof fetch>[0]) => typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
@@ -435,15 +435,14 @@ describe('FleetPage GNSS publication boundary', () => {
         await screen.findByTestId('fleet-card-alpha');
         robots = [{...robot('alpha'), topics: {gnssStatus: gnss}}, {...robot('bravo'), identity: {id: 'bravo', name: 'New Bravo'}}];
         await act(() => vi.advanceTimersByTimeAsync(2000));
-        const alpha = screen.getByTestId('fleet-card-alpha');
-        expect(alpha.textContent).not.toContain('FIX');
-        expect(within(screen.getByTestId('fleet-card-bravo')).getByText('bravo', {exact: true})).toBeVisible();
-        expect(screen.getByText('Invalid fleet gnssStatus response')).toBeVisible();
+        expect(screen.queryByTestId('fleet-card-alpha')).not.toBeInTheDocument();
+        expect(within(screen.getByTestId('fleet-card-bravo')).getByText('New Bravo', {exact: true})).toBeVisible();
+        expect(screen.getByText(en.fleetPage.rejectedRobots.replace('{{names}}', 'alpha'))).toBeVisible();
         expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
         robots = [{...robot('alpha'), topics: {gnssStatus: base}}, robot('bravo')];
         await act(() => vi.advanceTimersByTimeAsync(2000));
         expect(screen.getByTestId('fleet-card-alpha').textContent).toContain('FIX');
-        expect(screen.queryByText('Invalid fleet gnssStatus response')).not.toBeInTheDocument();
+        expect(screen.queryByText(en.fleetPage.rejectedRobots.replace('{{names}}', 'alpha'))).not.toBeInTheDocument();
         fireEvent.click(within(screen.getByTestId('fleet-card-bravo')).getByRole('button', {name: /Start mowing$/}));
         await waitFor(() => expect(mock.success).toHaveBeenCalledOnce());
         const commands = fetchMock.mock.calls.filter(([url]) => urlOf(url).includes('/call/'));

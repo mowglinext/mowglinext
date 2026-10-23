@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {httpBase} from "../utils/apiHost.ts";
-import {parseFleetRobots, validateFleetHighLevelStatus, validateFleetGnssStatus} from "../utils/fleet.ts";
-import type {FleetPeerWire, FleetRobotWire} from "../utils/fleet.ts";
+import {parseFleetRobots, partitionFleetRobots} from "../utils/fleet.ts";
+import type {FleetPeerWire, FleetRobotWire, RejectedFleetRobot} from "../utils/fleet.ts";
 import {isJsonObject} from "../utils/json.ts";
 import {requestErrorMessage} from "../utils/errors.ts";
 
@@ -98,6 +98,19 @@ interface FleetState {
     coordination: FleetCoordination;
     loading: boolean;
     error?: string;
+    /** Names of robots left out of the last snapshot for malformed status. */
+    rejectedRobots: string[];
+}
+
+/**
+ * Log each newly malformed robot once; returns the ids now malformed so a
+ * robot that recovers and breaks again is reported again.
+ */
+function reportRejections(reported: ReadonlySet<string>, rejected: RejectedFleetRobot[]): Set<string> {
+    for (const {robot, reason} of rejected) {
+        if (!reported.has(robot.identity.id)) console.warn(`Fleet: hiding robot "${robot.identity.id}": ${reason}`, robot.topics);
+    }
+    return new Set(rejected.map(({robot}) => robot.identity.id));
 }
 
 async function readJson(res: Response, strict = false): Promise<unknown> {
@@ -132,8 +145,11 @@ async function request(path: string, init?: RequestInit, strictJson = false): Pr
  * the UI never waits a full poll interval to reflect what it just did.
  */
 export function useFleet(pollMs: number = FLEET_POLL_MS) {
-    const [state, setState] = useState<FleetState>({robots: [], coordination: EMPTY_COORDINATION, loading: true});
+    const [state, setState] = useState<FleetState>({robots: [], coordination: EMPTY_COORDINATION, loading: true, rejectedRobots: []});
     const nextCycle = useRef(0);
+    // Robot ids already reported, so a peer stuck sending bad data logs once.
+    const reportedRejections = useRef(new Set<string>());
+
     const activeLifetime = useRef<{lastPublished: number} | null>(null);
 
     const refresh = useCallback(async () => {
@@ -148,16 +164,16 @@ export function useFleet(pollMs: number = FLEET_POLL_MS) {
                 ),
             ]);
             if (!lifetime || activeLifetime.current !== lifetime || cycle <= lifetime.lastPublished) return;
-            const nextRobots = parseFleetRobots(robots);
-            validateFleetHighLevelStatus(nextRobots);
-            validateFleetGnssStatus(nextRobots);
+            const {robots: nextRobots, rejected} = partitionFleetRobots(parseFleetRobots(robots));
+            reportedRejections.current = reportRejections(reportedRejections.current, rejected);
+            const rejectedRobots = rejected.map(({robot}) => robot.identity.name || robot.identity.id);
             // Advance outside the React updater, which may be replayed. A
             // pending newer cycle alone must not invalidate this publication.
             lifetime.lastPublished = cycle;
             if ("error" in coordination) {
-                setState(prev => ({...prev, robots: nextRobots, loading: false, error: coordination.error}));
+                setState(prev => ({...prev, robots: nextRobots, rejectedRobots, loading: false, error: coordination.error}));
             } else {
-                setState({robots: nextRobots, coordination: coordination.value, loading: false});
+                setState({robots: nextRobots, coordination: coordination.value, loading: false, rejectedRobots});
             }
         } catch (e: unknown) {
             if (!lifetime || activeLifetime.current !== lifetime || cycle <= lifetime.lastPublished) return;

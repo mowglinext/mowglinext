@@ -4944,6 +4944,7 @@
     "peerAddWarningUnusable": "La demande d'ajout a renvoyé un avertissement inexploitable. Vérifiez la liste des robots et l'état de l'enregistrement réciproque.",
     "peerRemoved": "Robot retiré de la flotte",
     "pollError": "État de la flotte indisponible",
+    "rejectedRobots": "Masqué : état illisible reçu de {{names}}. Les autres robots sont affichés normalement.",
     "apiMismatch": "Version logicielle différente",
     "battery": "Batterie",
     "gps": "GPS",

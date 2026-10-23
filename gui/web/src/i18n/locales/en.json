@@ -4944,6 +4944,7 @@
     "peerAddWarningUnusable": "The add request returned an unusable warning. Check the fleet list and reciprocal registration status.",
     "peerRemoved": "Robot removed from the fleet",
     "pollError": "Fleet snapshot unavailable",
+    "rejectedRobots": "Hidden: unreadable status received from {{names}}. The other robots are shown normally.",
     "apiMismatch": "Different software version",
     "battery": "Battery",
     "gps": "GPS",
